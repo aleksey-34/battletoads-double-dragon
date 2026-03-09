@@ -54,6 +54,25 @@ After push, your `REPO_URL` is:
 
 - `https://github.com/aleksey-34/battletoads-double-dragon.git`
 
+## PRIVATE repo access for VPS
+
+Current repo visibility: `PRIVATE`.
+VPS cannot clone private repo without credentials.
+
+Option A (simplest): make repository public
+
+```bash
+gh repo edit aleksey-34/battletoads-double-dragon --visibility public --accept-visibility-change-consequences
+```
+
+Option B: keep private and use token URL in setup/deploy
+
+```bash
+REPO_URL="https://<GITHUB_TOKEN>@github.com/aleksey-34/battletoads-double-dragon.git"
+```
+
+Token should have scope: `repo`.
+
 Recommended periodic verified releases:
 
 ```bash
