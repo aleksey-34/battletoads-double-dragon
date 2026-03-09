@@ -29,6 +29,11 @@ type OrderOptions = {
   reduceOnly?: boolean;
 };
 
+type MarketDataOptions = {
+  startMs?: number;
+  endMs?: number;
+};
+
 const clients: { [key: string]: ExchangeClientEntry } = {};
 const ccxtClients: { [key: string]: CcxtClientEntry } = {};
 const cache = new Map<string, { data: any; timestamp: number }>();
@@ -57,6 +62,34 @@ const detectExchange = (exchange: string): 'bybit' | 'bitget' | 'bingx' => {
   }
 
   return 'bybit';
+};
+
+const intervalToMs = (interval: string): number => {
+  const value = String(interval || '').trim();
+
+  if (value.endsWith('m')) {
+    const minutes = Number.parseInt(value.replace('m', ''), 10);
+    return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 * 1000 : 60 * 1000;
+  }
+
+  if (value.endsWith('h')) {
+    const hours = Number.parseInt(value.replace('h', ''), 10);
+    return Number.isFinite(hours) && hours > 0 ? hours * 60 * 60 * 1000 : 60 * 60 * 1000;
+  }
+
+  if (value === '1d') {
+    return 24 * 60 * 60 * 1000;
+  }
+
+  if (value === '1w') {
+    return 7 * 24 * 60 * 60 * 1000;
+  }
+
+  if (value === '1M') {
+    return 30 * 24 * 60 * 60 * 1000;
+  }
+
+  return 60 * 60 * 1000;
 };
 
 const loadCcxtModule = (): any => {
@@ -338,36 +371,121 @@ export const getAllSymbols = async (apiKeyName: string) => {
   }
 };
 
-export const getMarketData = async (apiKeyName: string, symbol: string, interval: string, limit: number = 100) => {
+export const getMarketData = async (
+  apiKeyName: string,
+  symbol: string,
+  interval: string,
+  limit: number = 100,
+  options?: MarketDataOptions
+) => {
   logger.info(`Fetching market data for ${apiKeyName}, symbol: ${symbol}, interval: ${interval}, limit: ${limit}`);
   if (!apiKeyName || !symbol || !interval) {
     throw new Error('Missing required parameters: apiKeyName, symbol, interval');
   }
 
+  const intervalMs = intervalToMs(interval);
+  const startMs = Number.isFinite(Number(options?.startMs)) ? Number(options?.startMs) : undefined;
+  const endMs = Number.isFinite(Number(options?.endMs)) ? Number(options?.endMs) : undefined;
+  const hasRange = startMs !== undefined || endMs !== undefined;
+
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
     const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
-    const safeLimit = Math.max(1, Math.min(1000, Number.isFinite(limit) ? limit : 100));
+    const requestedLimit = Number.isFinite(limit) ? Math.floor(limit) : 100;
+    const safeLimit = Math.max(1, Math.min(hasRange ? 50000 : 1000, requestedLimit));
 
     try {
-      const candles = await entry.limiter.schedule(() =>
-        entry.client.fetchOHLCV(ccxtSymbol, interval, undefined, safeLimit)
-      );
+      if (!hasRange) {
+        const candles = await entry.limiter.schedule(() =>
+          entry.client.fetchOHLCV(ccxtSymbol, interval, undefined, safeLimit)
+        );
 
-      const normalized = Array.isArray(candles)
-        ? candles
-          .filter((candle: any) => Array.isArray(candle) && candle.length >= 5)
-          .map((candle: any[]) => [
-            candle[0],
-            candle[1],
-            candle[2],
-            candle[3],
-            candle[4],
-            candle[5] || 0,
-          ])
-        : [];
+        const normalized = Array.isArray(candles)
+          ? candles
+            .filter((candle: any) => Array.isArray(candle) && candle.length >= 5)
+            .map((candle: any[]) => [
+              candle[0],
+              candle[1],
+              candle[2],
+              candle[3],
+              candle[4],
+              candle[5] || 0,
+            ])
+          : [];
 
-      logger.info(`Fetched market data for ${symbol} via ccxt, received ${normalized.length} candles`);
+        logger.info(`Fetched market data for ${symbol} via ccxt, received ${normalized.length} candles`);
+        return normalized;
+      }
+
+      const effectiveEnd = endMs !== undefined ? endMs : Date.now();
+      const effectiveStart = startMs !== undefined
+        ? startMs
+        : Math.max(0, effectiveEnd - intervalMs * safeLimit);
+
+      const byTime = new Map<number, any[]>();
+      const pageLimit = 1000;
+      const maxPages = Math.max(1, Math.ceil((effectiveEnd - effectiveStart) / Math.max(intervalMs, 1) / pageLimit) + 5);
+      let since = effectiveStart;
+
+      for (let page = 0; page < maxPages; page += 1) {
+        const candles = await entry.limiter.schedule(() =>
+          entry.client.fetchOHLCV(ccxtSymbol, interval, since, pageLimit)
+        );
+
+        const list = Array.isArray(candles) ? candles : [];
+        if (list.length === 0) {
+          break;
+        }
+
+        let lastTs = -1;
+        for (const candle of list) {
+          if (!Array.isArray(candle) || candle.length < 5) {
+            continue;
+          }
+
+          const ts = Number(candle[0]);
+          if (!Number.isFinite(ts)) {
+            continue;
+          }
+
+          lastTs = Math.max(lastTs, ts);
+
+          if (ts < effectiveStart || ts > effectiveEnd) {
+            continue;
+          }
+
+          if (!byTime.has(ts)) {
+            byTime.set(ts, [
+              candle[0],
+              candle[1],
+              candle[2],
+              candle[3],
+              candle[4],
+              candle[5] || 0,
+            ]);
+          }
+        }
+
+        if (!Number.isFinite(lastTs) || lastTs < 0) {
+          break;
+        }
+
+        const nextSince = lastTs + intervalMs;
+        if (nextSince <= since) {
+          break;
+        }
+
+        since = nextSince;
+        if (since > effectiveEnd) {
+          break;
+        }
+      }
+
+      const normalized = Array.from(byTime.entries())
+        .sort((left, right) => left[0] - right[0])
+        .map((entryItem) => entryItem[1]);
+
+      logger.info(`Fetched ranged market data for ${symbol} via ccxt, received ${normalized.length} candles`);
       return normalized;
     } catch (error) {
       const err = error as Error;
@@ -382,25 +500,102 @@ export const getMarketData = async (apiKeyName: string, symbol: string, interval
   // For hours, multiply by 60
   let finalInterval = bybitInterval;
   if (interval.endsWith('h')) {
-    finalInterval = (parseInt(bybitInterval) * 60).toString();
+    finalInterval = (parseInt(bybitInterval, 10) * 60).toString();
   }
   logger.info(`Converted interval ${interval} to ${finalInterval}`);
   try {
-    const data = await limiter.schedule(() =>
-      client.getKline({
-        category: 'linear',
-        symbol: symbol.toUpperCase(),
-        interval: finalInterval as any, // Bybit API accepts string
-        limit,
-      })
-    );
+    if (!hasRange) {
+      const data = await limiter.schedule(() =>
+        client.getKline({
+          category: 'linear',
+          symbol: symbol.toUpperCase(),
+          interval: finalInterval as any, // Bybit API accepts string
+          limit,
+        })
+      );
 
-    if (!isBybitSuccess(data)) {
-      throw formatBybitError(data, `market data ${symbol}`);
+      if (!isBybitSuccess(data)) {
+        throw formatBybitError(data, `market data ${symbol}`);
+      }
+
+      const candles = Array.isArray(data?.result?.list) ? data.result.list : [];
+      logger.info(`Fetched market data for ${symbol}, received ${candles.length} candles`);
+      return candles;
     }
 
-    const candles = Array.isArray(data?.result?.list) ? data.result.list : [];
-    logger.info(`Fetched market data for ${symbol}, received ${candles.length} candles`);
+    const requestedLimit = Number.isFinite(limit) ? Math.floor(limit) : 100;
+    const safeLimit = Math.max(1, Math.min(50000, requestedLimit));
+    const effectiveEnd = endMs !== undefined ? endMs : Date.now();
+    const effectiveStart = startMs !== undefined
+      ? startMs
+      : Math.max(0, effectiveEnd - intervalMs * safeLimit);
+
+    const byTime = new Map<number, any[]>();
+    let windowEnd = effectiveEnd;
+
+    for (let page = 0; page < 400; page += 1) {
+      const data = await limiter.schedule(() =>
+        client.getKline({
+          category: 'linear',
+          symbol: symbol.toUpperCase(),
+          interval: finalInterval as any,
+          limit: 1000,
+          start: effectiveStart,
+          end: windowEnd,
+        } as any)
+      );
+
+      if (!isBybitSuccess(data)) {
+        throw formatBybitError(data, `market data ${symbol}`);
+      }
+
+      const list = Array.isArray(data?.result?.list) ? data.result.list : [];
+      if (list.length === 0) {
+        break;
+      }
+
+      let oldestTs = Number.POSITIVE_INFINITY;
+
+      for (const candle of list) {
+        if (!Array.isArray(candle) || candle.length < 5) {
+          continue;
+        }
+
+        const ts = Number(candle[0]);
+        if (!Number.isFinite(ts)) {
+          continue;
+        }
+
+        oldestTs = Math.min(oldestTs, ts);
+
+        if (ts < effectiveStart || ts > effectiveEnd) {
+          continue;
+        }
+
+        if (!byTime.has(ts)) {
+          byTime.set(ts, candle);
+        }
+      }
+
+      if (!Number.isFinite(oldestTs) || oldestTs <= effectiveStart) {
+        break;
+      }
+
+      if (oldestTs >= windowEnd) {
+        break;
+      }
+
+      windowEnd = oldestTs - 1;
+      if (windowEnd < effectiveStart) {
+        break;
+      }
+    }
+
+    const candles = Array.from(byTime.entries())
+      .sort((left, right) => right[0] - left[0])
+      .map((entryItem) => entryItem[1]);
+
+    logger.info(`Fetched ranged market data for ${symbol}, received ${candles.length} candles`);
     return candles;
   } catch (error) {
     const err = error as Error;

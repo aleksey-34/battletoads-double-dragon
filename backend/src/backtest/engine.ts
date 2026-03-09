@@ -2,6 +2,9 @@ import { Strategy } from '../config/settings';
 import { getStrategies } from '../bot/strategy';
 import { calculateSyntheticOHLC } from '../bot/synthetic';
 import { db } from '../utils/database';
+import fs from 'fs';
+import path from 'path';
+import logger from '../utils/logger';
 
 export type BacktestMode = 'single' | 'portfolio';
 
@@ -47,6 +50,11 @@ export type BacktestSummary = {
   interval: string;
   barsRequested: number;
   barsProcessed: number;
+  dateFromMs: number | null;
+  dateToMs: number | null;
+  warmupBars: number;
+  skippedStrategies: number;
+  processedStrategies: number;
   initialBalance: number;
   finalEquity: number;
   totalReturnPercent: number;
@@ -68,6 +76,10 @@ export type BacktestRunRequest = {
   strategyId?: number;
   strategyIds?: number[];
   bars?: number;
+  dateFrom?: string | number;
+  dateTo?: string | number;
+  warmupBars?: number;
+  skipMissingSymbols?: boolean;
   initialBalance?: number;
   commissionPercent?: number;
   slippagePercent?: number;
@@ -80,6 +92,22 @@ export type BacktestRunResult = {
   equityCurve: BacktestPoint[];
   trades: BacktestTrade[];
   runId?: number;
+};
+
+type NormalizedBacktestRequest = {
+  apiKeyName: string;
+  mode: BacktestMode;
+  strategyId: number;
+  strategyIds: number[];
+  bars: number;
+  dateFromMs: number | null;
+  dateToMs: number | null;
+  warmupBars: number;
+  skipMissingSymbols: boolean;
+  initialBalance: number;
+  commissionPercent: number;
+  slippagePercent: number;
+  fundingRatePercent: number;
 };
 
 export type BacktestRunListItem = {
@@ -107,6 +135,65 @@ const asNumber = (value: any, fallback: number): number => {
 
 const clamp = (value: number, min: number, max: number): number => {
   return Math.min(max, Math.max(min, value));
+};
+
+const parseTimestampMs = (value: any): number | null => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value > 9999999999 ? Math.floor(value) : Math.floor(value * 1000);
+  }
+
+  const text = String(value).trim();
+  if (!text) {
+    return null;
+  }
+
+  const numeric = Number(text);
+  if (Number.isFinite(numeric)) {
+    return numeric > 9999999999 ? Math.floor(numeric) : Math.floor(numeric * 1000);
+  }
+
+  const parsed = Date.parse(text);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+
+  return Math.floor(parsed);
+};
+
+const normalizeDateCachePart = (value: any): string => {
+  return String(value || '').trim().toUpperCase();
+};
+
+const intervalToMs = (interval: string): number => {
+  const value = String(interval || '').trim();
+
+  if (value.endsWith('m')) {
+    const minutes = Number.parseInt(value.replace('m', ''), 10);
+    return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 * 1000 : 60 * 1000;
+  }
+
+  if (value.endsWith('h')) {
+    const hours = Number.parseInt(value.replace('h', ''), 10);
+    return Number.isFinite(hours) && hours > 0 ? hours * 60 * 60 * 1000 : 60 * 60 * 1000;
+  }
+
+  if (value === '1d') {
+    return 24 * 60 * 60 * 1000;
+  }
+
+  if (value === '1w') {
+    return 7 * 24 * 60 * 60 * 1000;
+  }
+
+  if (value === '1M') {
+    return 30 * 24 * 60 * 60 * 1000;
+  }
+
+  return 60 * 60 * 1000;
 };
 
 const parseCandle = (item: any): ParsedCandle | null => {
@@ -198,6 +285,8 @@ type RuntimeStrategy = {
   entryPrice: number | null;
   notional: number;
   openTrade: OpenTradeState | null;
+  startIndex: number;
+  endIndex: number;
 };
 
 type BacktestContext = {
@@ -388,13 +477,21 @@ type StrategyEvent = {
   timeMs: number;
 };
 
+type RuntimeLoadResult = {
+  runtimes: RuntimeStrategy[];
+  skipped: Array<{ strategyId: number; strategyName: string; reason: string }>;
+};
+
+const syntheticCandleCache = new Map<string, ParsedCandle[]>();
+
 const buildEvents = (runtimes: RuntimeStrategy[]): StrategyEvent[] => {
   const events: StrategyEvent[] = [];
 
   runtimes.forEach((runtime, strategyIndex) => {
-    const length = Math.max(2, Math.floor(asNumber(runtime.strategy.price_channel_length, 50)));
+    const startIndex = Math.max(0, runtime.startIndex);
+    const endIndex = Math.min(runtime.candles.length - 1, runtime.endIndex);
 
-    for (let index = length; index < runtime.candles.length; index += 1) {
+    for (let index = startIndex; index <= endIndex; index += 1) {
       events.push({
         strategyIndex,
         candleIndex: index,
@@ -414,58 +511,157 @@ const buildEvents = (runtimes: RuntimeStrategy[]): StrategyEvent[] => {
 };
 
 const loadRuntimeStrategies = async (
-  apiKeyName: string,
-  strategies: Strategy[],
-  barsRequested: number
-): Promise<RuntimeStrategy[]> => {
+  request: NormalizedBacktestRequest,
+  strategies: Strategy[]
+): Promise<RuntimeLoadResult> => {
   const runtimes: RuntimeStrategy[] = [];
+  const skipped: Array<{ strategyId: number; strategyName: string; reason: string }> = [];
 
   for (const strategy of strategies) {
     const length = Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 50)));
-    const candlesLimit = Math.max(length + 40, barsRequested);
+    const interval = String(strategy.interval || '1h');
+    const intervalMs = intervalToMs(interval);
+    const warmupBars = Math.max(0, Math.floor(request.warmupBars));
 
-    const raw = await calculateSyntheticOHLC(
-      apiKeyName,
-      strategy.base_symbol,
-      strategy.quote_symbol,
+    const rangeBars = request.dateFromMs !== null && request.dateToMs !== null
+      ? Math.max(1, Math.ceil((request.dateToMs - request.dateFromMs) / Math.max(intervalMs, 1)) + 1)
+      : request.bars;
+
+    const candlesLimit = Math.max(length + warmupBars + 40, rangeBars + warmupBars + 20, request.bars);
+    const fetchStartMs = request.dateFromMs !== null
+      ? Math.max(0, request.dateFromMs - (warmupBars + length) * intervalMs)
+      : null;
+    const fetchEndMs = request.dateToMs;
+
+    const cacheKey = [
+      request.apiKeyName,
+      normalizeDateCachePart(strategy.base_symbol),
+      normalizeDateCachePart(strategy.quote_symbol),
       asNumber(strategy.base_coef, 1),
       asNumber(strategy.quote_coef, 1),
-      strategy.interval,
-      candlesLimit
-    );
+      interval,
+      candlesLimit,
+      fetchStartMs ?? '',
+      fetchEndMs ?? '',
+    ].join('|');
 
-    const candles = (Array.isArray(raw) ? raw : [])
-      .map((item) => parseCandle(item))
-      .filter((item): item is ParsedCandle => !!item)
-      .sort((a, b) => a.timeMs - b.timeMs);
+    let candles = syntheticCandleCache.get(cacheKey);
 
-    if (candles.length <= length) {
-      throw new Error(
-        `Not enough candles for strategy ${strategy.name} (${strategy.base_symbol}/${strategy.quote_symbol}): got ${candles.length}, need > ${length}`
+    if (!candles) {
+      const raw = await calculateSyntheticOHLC(
+        request.apiKeyName,
+        strategy.base_symbol,
+        strategy.quote_symbol,
+        asNumber(strategy.base_coef, 1),
+        asNumber(strategy.quote_coef, 1),
+        interval,
+        candlesLimit,
+        {
+          startMs: fetchStartMs === null ? undefined : fetchStartMs,
+          endMs: fetchEndMs === null ? undefined : fetchEndMs,
+        }
       );
+
+      candles = (Array.isArray(raw) ? raw : [])
+        .map((item) => parseCandle(item))
+        .filter((item): item is ParsedCandle => !!item)
+        .sort((a, b) => a.timeMs - b.timeMs);
+
+      syntheticCandleCache.set(cacheKey, candles);
+    }
+
+    if (!candles || candles.length <= length) {
+      const reason = `Not enough candles: got ${candles ? candles.length : 0}, need > ${length}`;
+      if (request.skipMissingSymbols) {
+        skipped.push({ strategyId: Number(strategy.id), strategyName: strategy.name, reason });
+        continue;
+      }
+      throw new Error(
+        `Not enough candles for strategy ${strategy.name} (${strategy.base_symbol}/${strategy.quote_symbol}): ${reason}`
+      );
+    }
+
+    if (request.dateFromMs !== null) {
+      const firstAvailable = candles[0]?.timeMs;
+      if (Number.isFinite(firstAvailable) && firstAvailable > request.dateFromMs) {
+        const reason = `Pair history starts at ${new Date(firstAvailable).toISOString()}, after requested start`;
+        if (request.skipMissingSymbols) {
+          skipped.push({ strategyId: Number(strategy.id), strategyName: strategy.name, reason });
+          continue;
+        }
+        throw new Error(`Strategy ${strategy.name}: ${reason}`);
+      }
+    }
+
+    let firstInRangeIndex = 0;
+    if (request.dateFromMs !== null) {
+      const dateFromMs = request.dateFromMs;
+      firstInRangeIndex = candles.findIndex((item) => item.timeMs >= dateFromMs);
+      if (firstInRangeIndex < 0) {
+        const reason = 'No candles in selected date range';
+        if (request.skipMissingSymbols) {
+          skipped.push({ strategyId: Number(strategy.id), strategyName: strategy.name, reason });
+          continue;
+        }
+        throw new Error(`Strategy ${strategy.name}: ${reason}`);
+      }
+    }
+
+    let lastInRangeIndex = candles.length - 1;
+    if (request.dateToMs !== null) {
+      for (let idx = candles.length - 1; idx >= 0; idx -= 1) {
+        if (candles[idx].timeMs <= request.dateToMs) {
+          lastInRangeIndex = idx;
+          break;
+        }
+      }
+    }
+
+    const startIndex = Math.max(length, firstInRangeIndex + warmupBars);
+    const endIndex = Math.min(candles.length - 1, lastInRangeIndex);
+
+    if (endIndex <= startIndex) {
+      const reason = 'No executable candles after warmup in selected date range';
+      if (request.skipMissingSymbols) {
+        skipped.push({ strategyId: Number(strategy.id), strategyName: strategy.name, reason });
+        continue;
+      }
+      throw new Error(`Strategy ${strategy.name}: ${reason}`);
     }
 
     runtimes.push({
       strategy,
       candles,
-      currentPrice: candles[length].close,
+      currentPrice: candles[startIndex].close,
       state: 'flat',
       entryPrice: null,
       notional: 0,
       openTrade: null,
+      startIndex,
+      endIndex,
     });
   }
 
-  return runtimes;
+  return {
+    runtimes,
+    skipped,
+  };
 };
 
-const normalizeRequest = (raw: BacktestRunRequest): Required<BacktestRunRequest> => {
+const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest => {
   const mode: BacktestMode = raw.mode === 'portfolio' ? 'portfolio' : 'single';
   const bars = Math.max(120, Math.floor(asNumber(raw.bars, 1200)));
+  const warmupBars = Math.max(0, Math.min(5000, Math.floor(asNumber(raw.warmupBars, 0))));
   const initialBalance = Math.max(10, asNumber(raw.initialBalance, 1000));
   const commissionPercent = clamp(asNumber(raw.commissionPercent, 0.06), 0, 5);
   const slippagePercent = clamp(asNumber(raw.slippagePercent, 0.03), 0, 5);
   const fundingRatePercent = clamp(asNumber(raw.fundingRatePercent, 0), -5, 5);
+  const dateFromMs = parseTimestampMs(raw.dateFrom);
+  const dateToMs = parseTimestampMs(raw.dateTo);
+
+  if (dateFromMs !== null && dateToMs !== null && dateToMs <= dateFromMs) {
+    throw new Error('dateTo must be later than dateFrom');
+  }
 
   return {
     apiKeyName: String(raw.apiKeyName || '').trim(),
@@ -475,6 +671,10 @@ const normalizeRequest = (raw: BacktestRunRequest): Required<BacktestRunRequest>
       ? raw.strategyIds.map((value) => Number(value)).filter((value) => Number.isFinite(value) && value > 0)
       : [],
     bars,
+    dateFromMs,
+    dateToMs,
+    warmupBars,
+    skipMissingSymbols: raw.skipMissingSymbols !== false,
     initialBalance,
     commissionPercent,
     slippagePercent,
@@ -482,7 +682,7 @@ const normalizeRequest = (raw: BacktestRunRequest): Required<BacktestRunRequest>
   };
 };
 
-const pickStrategiesForRequest = async (request: Required<BacktestRunRequest>): Promise<Strategy[]> => {
+const pickStrategiesForRequest = async (request: NormalizedBacktestRequest): Promise<Strategy[]> => {
   const all = await getStrategies(request.apiKeyName);
 
   if (request.mode === 'single') {
@@ -523,7 +723,16 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
   }
 
   const strategies = await pickStrategiesForRequest(request);
-  const runtimes = await loadRuntimeStrategies(request.apiKeyName, strategies, request.bars);
+  const runtimeLoad = await loadRuntimeStrategies(request, strategies);
+  const runtimes = runtimeLoad.runtimes;
+
+  if (runtimes.length === 0) {
+    if (runtimeLoad.skipped.length > 0) {
+      throw new Error(`No runnable strategies in selected range. Skipped: ${runtimeLoad.skipped.map((item) => `#${item.strategyId} ${item.reason}`).join('; ')}`);
+    }
+    throw new Error('No runnable strategies for backtest');
+  }
+
   const events = buildEvents(runtimes);
 
   if (events.length === 0) {
@@ -664,10 +873,10 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       ? 999
       : 0;
 
-  const strategyIds = strategies.map((item) => Number(item.id));
-  const strategyNames = strategies.map((item) => item.name);
+  const strategyIds = runtimes.map((item) => Number(item.strategy.id));
+  const strategyNames = runtimes.map((item) => item.strategy.name);
 
-  const uniqueIntervals = Array.from(new Set(strategies.map((item) => String(item.interval || '1h'))));
+  const uniqueIntervals = Array.from(new Set(runtimes.map((item) => String(item.strategy.interval || '1h'))));
   const interval = uniqueIntervals.length === 1 ? uniqueIntervals[0] : 'mixed';
 
   const summary: BacktestSummary = {
@@ -678,6 +887,11 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     interval,
     barsRequested: request.bars,
     barsProcessed: events.length,
+    dateFromMs: request.dateFromMs,
+    dateToMs: request.dateToMs,
+    warmupBars: request.warmupBars,
+    skippedStrategies: runtimeLoad.skipped.length,
+    processedStrategies: runtimes.length,
     initialBalance: request.initialBalance,
     finalEquity,
     totalReturnPercent: request.initialBalance > 0 ? ((finalEquity / request.initialBalance) - 1) * 100 : 0,
@@ -693,12 +907,127 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     fundingRatePercent: request.fundingRatePercent,
   };
 
+  const requestEcho: BacktestRunRequest = {
+    apiKeyName: request.apiKeyName,
+    mode: request.mode,
+    strategyId: request.mode === 'single' ? request.strategyId : undefined,
+    strategyIds: request.mode === 'portfolio' ? request.strategyIds : undefined,
+    bars: request.bars,
+    dateFrom: request.dateFromMs ?? undefined,
+    dateTo: request.dateToMs ?? undefined,
+    warmupBars: request.warmupBars,
+    skipMissingSymbols: request.skipMissingSymbols,
+    initialBalance: request.initialBalance,
+    commissionPercent: request.commissionPercent,
+    slippagePercent: request.slippagePercent,
+    fundingRatePercent: request.fundingRatePercent,
+  };
+
   return {
-    request,
+    request: requestEcho,
     summary,
     equityCurve,
     trades: ctx.trades,
   };
+};
+
+const escapeHtml = (value: any): string => {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+};
+
+const renderBacktestReportHtml = (runId: number, result: BacktestRunResult): string => {
+  const summary = result.summary;
+  const tradesRows = result.trades
+    .map((trade) => {
+      return `<tr>
+  <td>${escapeHtml(trade.strategyId)}</td>
+  <td>${escapeHtml(trade.strategyName)}</td>
+  <td>${escapeHtml(trade.side)}</td>
+  <td>${escapeHtml(new Date(trade.entryTime).toISOString())}</td>
+  <td>${escapeHtml(new Date(trade.exitTime).toISOString())}</td>
+  <td>${escapeHtml(trade.entryPrice.toFixed(6))}</td>
+  <td>${escapeHtml(trade.exitPrice.toFixed(6))}</td>
+  <td>${escapeHtml(trade.notional.toFixed(2))}</td>
+  <td>${escapeHtml(trade.netPnl.toFixed(2))}</td>
+  <td>${escapeHtml(trade.pnlPercent.toFixed(3))}%</td>
+  <td>${escapeHtml(trade.reason)}</td>
+</tr>`;
+    })
+    .join('\n');
+
+  const equityRows = result.equityCurve
+    .slice(-500)
+    .map((point) => `<tr><td>${escapeHtml(new Date(point.time * 1000).toISOString())}</td><td>${escapeHtml(point.equity.toFixed(2))}</td></tr>`)
+    .join('\n');
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Backtest Report #${escapeHtml(runId)}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; color: #111827; }
+    h1, h2 { margin: 8px 0 12px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-bottom: 16px; }
+    .card { border: 1px solid #d1d5db; border-radius: 8px; padding: 10px; background: #f9fafb; }
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 12px; }
+    th, td { border: 1px solid #d1d5db; padding: 6px; text-align: left; }
+    th { background: #f3f4f6; }
+  </style>
+</head>
+<body>
+  <h1>Backtest Report #${escapeHtml(runId)}</h1>
+  <div>Generated: ${escapeHtml(new Date().toISOString())}</div>
+  <div>API key: <strong>${escapeHtml(summary.apiKeyName)}</strong> | Mode: <strong>${escapeHtml(summary.mode)}</strong></div>
+  <div>Strategies: ${escapeHtml(summary.strategyNames.join(', '))}</div>
+
+  <div class="grid">
+    <div class="card"><strong>Initial</strong><br/>${escapeHtml(summary.initialBalance.toFixed(2))}</div>
+    <div class="card"><strong>Final</strong><br/>${escapeHtml(summary.finalEquity.toFixed(2))}</div>
+    <div class="card"><strong>Return</strong><br/>${escapeHtml(summary.totalReturnPercent.toFixed(3))}%</div>
+    <div class="card"><strong>Max DD</strong><br/>${escapeHtml(summary.maxDrawdownPercent.toFixed(3))}%</div>
+    <div class="card"><strong>Trades</strong><br/>${escapeHtml(summary.tradesCount)}</div>
+    <div class="card"><strong>Win Rate</strong><br/>${escapeHtml(summary.winRatePercent.toFixed(3))}%</div>
+    <div class="card"><strong>Profit Factor</strong><br/>${escapeHtml(summary.profitFactor.toFixed(3))}</div>
+    <div class="card"><strong>Bars Processed</strong><br/>${escapeHtml(summary.barsProcessed)}</div>
+  </div>
+
+  <h2>Trades</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th><th>Strategy</th><th>Side</th><th>Entry</th><th>Exit</th><th>Entry Px</th><th>Exit Px</th><th>Notional</th><th>Net PnL</th><th>PnL %</th><th>Reason</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${tradesRows || '<tr><td colspan="11">No trades</td></tr>'}
+    </tbody>
+  </table>
+
+  <h2>Equity Curve (last 500 points)</h2>
+  <table>
+    <thead><tr><th>Time</th><th>Equity</th></tr></thead>
+    <tbody>
+      ${equityRows || '<tr><td colspan="2">No points</td></tr>'}
+    </tbody>
+  </table>
+</body>
+</html>`;
+};
+
+const saveBacktestReportFile = async (runId: number, result: BacktestRunResult): Promise<string> => {
+  const reportsDir = path.join(process.cwd(), 'logs', 'backtests');
+  await fs.promises.mkdir(reportsDir, { recursive: true });
+
+  const filePath = path.join(reportsDir, `backtest_run_${runId}.html`);
+  const html = renderBacktestReportHtml(runId, result);
+  await fs.promises.writeFile(filePath, html, 'utf-8');
+  return filePath;
 };
 
 export const saveBacktestRun = async (result: BacktestRunResult): Promise<number> => {
@@ -751,7 +1080,18 @@ export const saveBacktestRun = async (result: BacktestRunResult): Promise<number
     ]
   );
 
-  return Number(insert?.lastID || 0);
+  const runId = Number(insert?.lastID || 0);
+  if (runId > 0) {
+    try {
+      const reportPath = await saveBacktestReportFile(runId, result);
+      logger.info(`Backtest report saved: ${reportPath}`);
+    } catch (error) {
+      const err = error as Error;
+      logger.warn(`Failed to save backtest report file for run ${runId}: ${err.message}`);
+    }
+  }
+
+  return runId;
 };
 
 const parseJsonArray = <T>(value: any, fallback: T[]): T[] => {
@@ -827,6 +1167,11 @@ export const getBacktestRun = async (id: number): Promise<BacktestRunResult | nu
     interval: String(row.interval || ''),
     barsRequested: asNumber(row.bars, 0),
     barsProcessed: 0,
+    dateFromMs: null,
+    dateToMs: null,
+    warmupBars: 0,
+    skippedStrategies: 0,
+    processedStrategies: parseJsonArray<number>(row.strategy_ids, []).length,
     initialBalance: asNumber(row.initial_balance, 0),
     finalEquity: asNumber(row.final_equity, 0),
     totalReturnPercent: asNumber(row.total_return_percent, 0),

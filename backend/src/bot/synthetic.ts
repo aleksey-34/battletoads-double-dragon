@@ -19,6 +19,11 @@ type SyntheticCandle = {
   quoteVolume: number;
 };
 
+type SyntheticQueryOptions = {
+  startMs?: number;
+  endMs?: number;
+};
+
 const intervalToMinutes = (interval: string): number => {
   const normalized = interval.trim();
 
@@ -140,7 +145,8 @@ export async function calculateSyntheticOHLC(
   baseCoef: number,
   quoteCoef: number,
   interval: string,
-  limit: number
+  limit: number,
+  options?: SyntheticQueryOptions
 ) {
   const safeInterval = interval || '1h';
   const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 100;
@@ -149,10 +155,13 @@ export async function calculateSyntheticOHLC(
   const targetMinutes = intervalToMinutes(safeInterval);
   const sourceMinutes = intervalToMinutes(sourceInterval);
   const ratio = Math.max(1, Math.round(targetMinutes / sourceMinutes));
-  const sourceLimit = Math.min(1000, Math.max(safeLimit * ratio + 5, safeLimit));
+  const hasRange = Number.isFinite(Number(options?.startMs)) || Number.isFinite(Number(options?.endMs));
+  const sourceLimit = hasRange
+    ? Math.max(safeLimit * ratio + 5, safeLimit)
+    : Math.min(1000, Math.max(safeLimit * ratio + 5, safeLimit));
 
-  const baseData = await getMarketData(apiKeyName, base, sourceInterval, sourceLimit);
-  const quoteData = await getMarketData(apiKeyName, quote, sourceInterval, sourceLimit);
+  const baseData = await getMarketData(apiKeyName, base, sourceInterval, sourceLimit, options);
+  const quoteData = await getMarketData(apiKeyName, quote, sourceInterval, sourceLimit, options);
 
   if (!baseData || !Array.isArray(baseData) || baseData.length === 0) {
     throw new Error(`Нет данных по базовой паре: ${base}`);

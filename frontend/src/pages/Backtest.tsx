@@ -4,11 +4,13 @@ import {
   Button,
   Card,
   Col,
+  Input,
   InputNumber,
   Row,
   Select,
   Space,
   Statistic,
+  Switch,
   Table,
   Tag,
   Typography,
@@ -65,6 +67,11 @@ type BacktestSummary = {
   interval: string;
   barsRequested: number;
   barsProcessed: number;
+  dateFromMs: number | null;
+  dateToMs: number | null;
+  warmupBars: number;
+  skippedStrategies: number;
+  processedStrategies: number;
   initialBalance: number;
   finalEquity: number;
   totalReturnPercent: number;
@@ -86,6 +93,10 @@ type BacktestRequest = {
   strategyId?: number;
   strategyIds?: number[];
   bars: number;
+  dateFrom?: string | number;
+  dateTo?: string | number;
+  warmupBars?: number;
+  skipMissingSymbols?: boolean;
   initialBalance: number;
   commissionPercent: number;
   slippagePercent: number;
@@ -142,6 +153,10 @@ const Backtest: React.FC = () => {
   const [strategyIds, setStrategyIds] = useState<number[]>([]);
 
   const [bars, setBars] = useState<number>(1200);
+  const [dateFrom, setDateFrom] = useState<string>('');
+  const [dateTo, setDateTo] = useState<string>('');
+  const [warmupBars, setWarmupBars] = useState<number>(0);
+  const [skipMissingSymbols, setSkipMissingSymbols] = useState<boolean>(true);
   const [initialBalance, setInitialBalance] = useState<number>(1000);
   const [commissionPercent, setCommissionPercent] = useState<number>(0.06);
   const [slippagePercent, setSlippagePercent] = useState<number>(0.03);
@@ -272,6 +287,10 @@ const Backtest: React.FC = () => {
         apiKeyName,
         mode,
         bars,
+        dateFrom: dateFrom || undefined,
+        dateTo: dateTo || undefined,
+        warmupBars,
+        skipMissingSymbols,
         initialBalance,
         commissionPercent,
         slippagePercent,
@@ -378,7 +397,7 @@ const Backtest: React.FC = () => {
 
           <Row gutter={[12, 12]}>
             <Col xs={24} md={12}>
-              <Typography.Text strong>Bars</Typography.Text>
+              <Typography.Text strong>Bars (fallback)</Typography.Text>
               <InputNumber
                 style={{ width: '100%', marginTop: 6 }}
                 min={120}
@@ -398,6 +417,47 @@ const Backtest: React.FC = () => {
                 value={initialBalance}
                 onChange={(value) => setInitialBalance(Number(value || 1000))}
               />
+            </Col>
+          </Row>
+
+          <Row gutter={[12, 12]}>
+            <Col xs={24} md={12}>
+              <Typography.Text strong>Date From (UTC/local parse)</Typography.Text>
+              <Input
+                style={{ width: '100%', marginTop: 6 }}
+                placeholder="2026-01-01T00:00:00Z"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Typography.Text strong>Date To (UTC/local parse)</Typography.Text>
+              <Input
+                style={{ width: '100%', marginTop: 6 }}
+                placeholder="2026-03-01T00:00:00Z"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+              />
+            </Col>
+          </Row>
+
+          <Row gutter={[12, 12]}>
+            <Col xs={24} md={12}>
+              <Typography.Text strong>Warmup / Freeze Bars</Typography.Text>
+              <InputNumber
+                style={{ width: '100%', marginTop: 6 }}
+                min={0}
+                max={5000}
+                step={1}
+                value={warmupBars}
+                onChange={(value) => setWarmupBars(Number(value || 0))}
+              />
+            </Col>
+            <Col xs={24} md={12}>
+              <Typography.Text strong>Skip pairs without full history</Typography.Text>
+              <div style={{ marginTop: 10 }}>
+                <Switch checked={skipMissingSymbols} onChange={(checked) => setSkipMissingSymbols(checked)} />
+              </div>
             </Col>
           </Row>
 
@@ -491,12 +551,17 @@ const Backtest: React.FC = () => {
             <Col xs={12} md={6}><Statistic title="Win Rate" value={summary.winRatePercent} precision={2} suffix="%" /></Col>
             <Col xs={12} md={6}><Statistic title="Profit Factor" value={summary.profitFactor} precision={2} /></Col>
             <Col xs={12} md={6}><Statistic title="Bars" value={summary.barsProcessed} /></Col>
+            <Col xs={12} md={6}><Statistic title="Processed Strategies" value={summary.processedStrategies ?? summary.strategyIds.length} /></Col>
+            <Col xs={12} md={6}><Statistic title="Skipped Strategies" value={summary.skippedStrategies ?? 0} /></Col>
           </Row>
 
           <Space style={{ marginTop: 12 }} wrap>
             <Tag color={summary.mode === 'portfolio' ? 'gold' : 'blue'}>{summary.mode.toUpperCase()}</Tag>
             <Tag>{summary.apiKeyName}</Tag>
             <Tag>{summary.interval}</Tag>
+            {summary.dateFromMs ? <Tag>From {new Date(summary.dateFromMs).toLocaleString()}</Tag> : null}
+            {summary.dateToMs ? <Tag>To {new Date(summary.dateToMs).toLocaleString()}</Tag> : null}
+            <Tag>Warmup {summary.warmupBars ?? 0}</Tag>
             <Tag>Commission {formatPercent(summary.commissionPercent, 3)}</Tag>
             <Tag>Slippage {formatPercent(summary.slippagePercent, 3)}</Tag>
             <Tag>Funding {formatPercent(summary.fundingRatePercent, 3)}</Tag>
