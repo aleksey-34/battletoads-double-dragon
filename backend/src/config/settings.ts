@@ -61,6 +61,9 @@ export interface Strategy {
   last_signal?: string | null;
   last_action?: string | null;
   last_error?: string | null;
+  lot_long_usdt?: number | null;
+  lot_short_usdt?: number | null;
+  lot_balance_usdt?: number | null;
   created_at?: string;
   updated_at?: string;
 }

@@ -255,6 +255,30 @@ const extractUsdtBalance = (balances: any[]): number => {
   return Number.isFinite(fallbackUsd) && fallbackUsd > 0 ? fallbackUsd : 0;
 };
 
+const computeSignalTotalNotional = (
+  strategy: Pick<Strategy, 'max_deposit' | 'fixed_lot' | 'reinvest_percent' | 'leverage' | 'lot_long_percent' | 'lot_short_percent'>,
+  availableBalance: number,
+  signal: 'long' | 'short'
+): number => {
+  const safeAvailable = Number.isFinite(availableBalance) && availableBalance > 0 ? availableBalance : 0;
+
+  const cappedBalance = strategy.max_deposit > 0
+    ? Math.min(safeAvailable, strategy.max_deposit)
+    : safeAvailable;
+
+  const lotPercent = signal === 'long' ? strategy.lot_long_percent : strategy.lot_short_percent;
+  const lotFraction = Math.max(0, lotPercent) / 100;
+  const reinvestFactor = strategy.fixed_lot ? 1 : 1 + Math.max(0, strategy.reinvest_percent) / 100;
+
+  const baseCapital = strategy.fixed_lot
+    ? (strategy.max_deposit > 0 ? strategy.max_deposit : cappedBalance)
+    : cappedBalance;
+
+  const totalNotional = baseCapital * lotFraction * reinvestFactor * Math.max(1, strategy.leverage);
+
+  return Number.isFinite(totalNotional) && totalNotional > 0 ? totalNotional : 0;
+};
+
 const decimalPlaces = (value: string): number => {
   const normalized = String(value || '');
   const scientific = normalized.toLowerCase().match(/e-(\d+)$/);
@@ -629,7 +653,34 @@ export const getStrategies = async (apiKeyName: string): Promise<Strategy[]> => 
     [apiKeyName]
   );
 
-  return rows.map(normalizeStrategy);
+  const normalized = rows.map(normalizeStrategy);
+
+  let availableBalance: number | null = null;
+
+  try {
+    const balances = await getBalances(apiKeyName);
+    availableBalance = extractUsdtBalance(balances);
+  } catch (error) {
+    logger.warn(`Could not compute lot preview balance for ${apiKeyName}: ${formatActionError(error)}`);
+  }
+
+  return normalized.map((strategy) => {
+    if (availableBalance === null) {
+      return {
+        ...strategy,
+        lot_long_usdt: null,
+        lot_short_usdt: null,
+        lot_balance_usdt: null,
+      };
+    }
+
+    return {
+      ...strategy,
+      lot_long_usdt: computeSignalTotalNotional(strategy, availableBalance, 'long'),
+      lot_short_usdt: computeSignalTotalNotional(strategy, availableBalance, 'short'),
+      lot_balance_usdt: availableBalance,
+    };
+  });
 };
 
 export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): Promise<Strategy> => {
@@ -1335,19 +1386,7 @@ export const executeStrategy = async (
     throw new Error('No available balance for strategy execution');
   }
 
-  const cappedBalance = mergedStrategy.max_deposit > 0
-    ? Math.min(availableBalance, mergedStrategy.max_deposit)
-    : availableBalance;
-
-  const lotPercent = signal === 'long' ? mergedStrategy.lot_long_percent : mergedStrategy.lot_short_percent;
-  const lotFraction = Math.max(0, lotPercent) / 100;
-  const reinvestFactor = mergedStrategy.fixed_lot ? 1 : 1 + Math.max(0, mergedStrategy.reinvest_percent) / 100;
-
-  const baseCapital = mergedStrategy.fixed_lot
-    ? (mergedStrategy.max_deposit > 0 ? mergedStrategy.max_deposit : cappedBalance)
-    : cappedBalance;
-
-  const totalNotional = baseCapital * lotFraction * reinvestFactor * Math.max(1, mergedStrategy.leverage);
+  const totalNotional = computeSignalTotalNotional(mergedStrategy, availableBalance, signal);
 
   if (!Number.isFinite(totalNotional) || totalNotional <= 0) {
     throw new Error('Calculated trade notional is invalid');

@@ -82,6 +82,9 @@ type DDStrategy = {
   last_signal?: string | null;
   last_action?: string | null;
   last_error?: string | null;
+  lot_long_usdt?: number | null;
+  lot_short_usdt?: number | null;
+  lot_balance_usdt?: number | null;
 };
 
 type CopyBlockResponse = {
@@ -641,6 +644,9 @@ const parseStrategy = (raw: any): DDStrategy => {
     last_signal: raw?.last_signal ?? null,
     last_action: raw?.last_action ?? null,
     last_error: raw?.last_error ?? null,
+    lot_long_usdt: raw?.lot_long_usdt !== undefined && raw?.lot_long_usdt !== null ? readNumber(raw?.lot_long_usdt, 0) : null,
+    lot_short_usdt: raw?.lot_short_usdt !== undefined && raw?.lot_short_usdt !== null ? readNumber(raw?.lot_short_usdt, 0) : null,
+    lot_balance_usdt: raw?.lot_balance_usdt !== undefined && raw?.lot_balance_usdt !== null ? readNumber(raw?.lot_balance_usdt, 0) : null,
   };
 };
 
@@ -2686,6 +2692,19 @@ const Dashboard: React.FC = () => {
                                                     <strong>TP type:</strong> Trailing
                                                     {' '}| <strong>SL type:</strong> Center
                                                     {donchianCenterValue !== null ? ` (${formatOHLCValue(donchianCenterValue)})` : ''}
+                                                  </div>
+                                                )
+                                                : null}
+
+                                              {strategy.show_indicators
+                                                ? (
+                                                  <div style={{ marginBottom: 6 }}>
+                                                    <strong>Lot (USDT):</strong>
+                                                    {' '}LONG: {strategy.lot_long_usdt !== null && strategy.lot_long_usdt !== undefined ? formatCompactNumber(strategy.lot_long_usdt, 2) : '-'}
+                                                    {' '}| SHORT: {strategy.lot_short_usdt !== null && strategy.lot_short_usdt !== undefined ? formatCompactNumber(strategy.lot_short_usdt, 2) : '-'}
+                                                    {strategy.lot_balance_usdt !== null && strategy.lot_balance_usdt !== undefined
+                                                      ? ` | Balance: ${formatCompactNumber(strategy.lot_balance_usdt, 2)}`
+                                                      : ''}
                                                   </div>
                                                 )
                                                 : null}
