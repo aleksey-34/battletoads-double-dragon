@@ -89,6 +89,34 @@ const safeNumber = (value: any, fallback: number): number => {
 
 const normalizeSymbol = (value: string): string => String(value || '').trim().toUpperCase();
 
+const validateStrategyBinding = (binding: Pick<Strategy, 'base_symbol' | 'quote_symbol' | 'interval' | 'base_coef' | 'quote_coef'>): void => {
+  const base = normalizeSymbol(binding.base_symbol);
+  const quote = normalizeSymbol(binding.quote_symbol);
+  const interval = String(binding.interval || '').trim();
+  const baseCoef = Number(binding.base_coef);
+  const quoteCoef = Number(binding.quote_coef);
+
+  if (!base || !quote) {
+    throw new Error('Strategy requires both base and quote symbols');
+  }
+
+  if (base === quote) {
+    throw new Error('Base and quote symbols must be different');
+  }
+
+  if (!interval) {
+    throw new Error('Strategy interval is required');
+  }
+
+  if (!Number.isFinite(baseCoef) || !Number.isFinite(quoteCoef)) {
+    throw new Error('Strategy coefficients must be finite numbers');
+  }
+
+  if (Math.abs(quoteCoef) < 1e-12) {
+    throw new Error('Quote coefficient must not be zero');
+  }
+};
+
 const normalizeSymbolKey = (value: any): string => {
   return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 };
@@ -471,7 +499,7 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
     detection_source: draft.detection_source === 'wick' ? 'wick' : 'close',
     base_symbol: normalizeSymbol(String(draft.base_symbol || DEFAULT_STRATEGY.base_symbol)),
     quote_symbol: normalizeSymbol(String(draft.quote_symbol || DEFAULT_STRATEGY.quote_symbol)),
-    interval: String(draft.interval || DEFAULT_STRATEGY.interval),
+    interval: String(draft.interval || DEFAULT_STRATEGY.interval).trim() || DEFAULT_STRATEGY.interval,
     base_coef: safeNumber(draft.base_coef, DEFAULT_STRATEGY.base_coef),
     quote_coef: safeNumber(draft.quote_coef, DEFAULT_STRATEGY.quote_coef),
     long_enabled: safeBoolean(draft.long_enabled, DEFAULT_STRATEGY.long_enabled),
@@ -489,6 +517,8 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
     last_action: null,
     last_error: null,
   };
+
+  validateStrategyBinding(strategy);
 
   const result: any = await db.run(
     `INSERT INTO strategies (
@@ -607,7 +637,7 @@ export const updateStrategy = async (
     detection_source: patch.detection_source === 'wick' ? 'wick' : patch.detection_source === 'close' ? 'close' : existing.detection_source,
     base_symbol: patch.base_symbol !== undefined ? normalizeSymbol(String(patch.base_symbol)) : existing.base_symbol,
     quote_symbol: patch.quote_symbol !== undefined ? normalizeSymbol(String(patch.quote_symbol)) : existing.quote_symbol,
-    interval: patch.interval !== undefined ? String(patch.interval) : existing.interval,
+    interval: patch.interval !== undefined ? String(patch.interval).trim() || existing.interval : existing.interval,
     base_coef: patch.base_coef !== undefined ? safeNumber(patch.base_coef, existing.base_coef) : existing.base_coef,
     quote_coef: patch.quote_coef !== undefined ? safeNumber(patch.quote_coef, existing.quote_coef) : existing.quote_coef,
     long_enabled: patch.long_enabled !== undefined ? safeBoolean(patch.long_enabled, existing.long_enabled) : existing.long_enabled,
@@ -628,6 +658,8 @@ export const updateStrategy = async (
     last_action: patch.last_action !== undefined ? patch.last_action : existing.last_action,
     last_error: patch.last_error !== undefined ? patch.last_error : existing.last_error,
   };
+
+  validateStrategyBinding(merged);
 
   await writeStrategy(merged);
   const updated = await getStrategyRow(apiKeyName, strategyId);

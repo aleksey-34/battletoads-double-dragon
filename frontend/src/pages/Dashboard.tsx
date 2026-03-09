@@ -1120,8 +1120,25 @@ const Dashboard: React.FC = () => {
   const saveStrategy = async (keyName: string, strategy: DDStrategy) => {
     const actionKey = strategyActionKey(keyName, strategy.id, 'save');
 
+    const normalizedBase = String(strategy.base_symbol || '').trim().toUpperCase();
+    const normalizedQuote = String(strategy.quote_symbol || '').trim().toUpperCase();
+    const normalizedInterval = String(strategy.interval || '').trim() || '1h';
+
+    if (!normalizedBase || !normalizedQuote) {
+      message.error('Strategy pair is required: set both Trade Base and Trade Quote');
+      return;
+    }
+
+    if (normalizedBase === normalizedQuote) {
+      message.error('Strategy pair invalid: Trade Base and Trade Quote must be different');
+      return;
+    }
+
     const payload: Partial<DDStrategy> = {
       ...strategy,
+      base_symbol: normalizedBase,
+      quote_symbol: normalizedQuote,
+      interval: normalizedInterval,
     };
 
     try {
@@ -1984,8 +2001,8 @@ const Dashboard: React.FC = () => {
                     Add strategy
                   </Button>
                   {settings.type === 'synthetic'
-                    ? <Tag color="blue">Chart binding: {settings.base}/{settings.quote} ({settings.interval})</Tag>
-                    : <Tag color="orange">Select Synthetic chart for strategy</Tag>}
+                    ? <Tag color="blue">Chart preview binding: {settings.base}/{settings.quote} ({settings.interval})</Tag>
+                    : <Tag color="orange">Select Synthetic chart for preview</Tag>}
 
                   {apiKeys.length > 1 ? (
                     <>
@@ -2047,6 +2064,14 @@ const Dashboard: React.FC = () => {
                           const pairSymbols = [strategy.base_symbol, strategy.quote_symbol]
                             .map((symbol) => String(symbol || '').toUpperCase())
                             .filter((symbol, index, array) => Boolean(symbol) && array.indexOf(symbol) === index);
+                          const strategySymbolOptions = Array.from(
+                            new Set(
+                              [
+                                ...pairSymbols,
+                                ...(symbols[keyName] || []).map((symbol) => String(symbol || '').toUpperCase()),
+                              ].filter((symbol) => Boolean(symbol))
+                            )
+                          );
                           const orderedPairRows = pairSymbols.map((symbol) => {
                             const position = strategyPositions.find(
                               (item: any) => String(item?.symbol || '').toUpperCase() === symbol
@@ -2146,6 +2171,12 @@ const Dashboard: React.FC = () => {
                                     {strategy.show_settings ? (
                                       <>
                                         <Card size="small" title="Chart menu (shared with key)">
+                                          <Alert
+                                            type="info"
+                                            showIcon
+                                            message="This chart menu is shared per API key and is used for chart preview only. Trading pair is set in Strategy Settings below."
+                                            style={{ marginBottom: 8 }}
+                                          />
                                           <Form
                                             layout="horizontal"
                                             className="strategy-compact-form strategy-inline-form"
@@ -2308,6 +2339,80 @@ const Dashboard: React.FC = () => {
                                               <Input
                                                 value={strategy.name}
                                                 onChange={(e) => updateStrategyDraft(keyName, strategy.id, { name: e.target.value })}
+                                                disabled={!keyActive}
+                                              />
+                                            </Form.Item>
+
+                                            <Form.Item label="Trade Base">
+                                              <Select
+                                                value={strategy.base_symbol}
+                                                onChange={(value) => updateStrategyDraft(keyName, strategy.id, { base_symbol: String(value || '').toUpperCase() })}
+                                                showSearch
+                                                disabled={!keyActive}
+                                                notFoundContent={symbolsError[keyName] ? symbolsError[keyName] : 'No pairs'}
+                                              >
+                                                {strategySymbolOptions.map((symbol) => (
+                                                  <Option key={`strategy-base-${strategy.id}-${symbol}`} value={symbol}>{symbol}</Option>
+                                                ))}
+                                              </Select>
+                                            </Form.Item>
+
+                                            <Form.Item label="Trade Quote">
+                                              <Select
+                                                value={strategy.quote_symbol}
+                                                onChange={(value) => updateStrategyDraft(keyName, strategy.id, { quote_symbol: String(value || '').toUpperCase() })}
+                                                showSearch
+                                                disabled={!keyActive}
+                                                notFoundContent={symbolsError[keyName] ? symbolsError[keyName] : 'No pairs'}
+                                              >
+                                                {strategySymbolOptions.map((symbol) => (
+                                                  <Option key={`strategy-quote-${strategy.id}-${symbol}`} value={symbol}>{symbol}</Option>
+                                                ))}
+                                              </Select>
+                                            </Form.Item>
+
+                                            <Form.Item label="Trade TF">
+                                              <Select
+                                                value={strategy.interval}
+                                                onChange={(value) => updateStrategyDraft(keyName, strategy.id, { interval: String(value || '1h') })}
+                                                disabled={!keyActive}
+                                              >
+                                                <Option value="1m">1m</Option>
+                                                <Option value="3m">3m</Option>
+                                                <Option value="5m">5m</Option>
+                                                <Option value="15m">15m</Option>
+                                                <Option value="30m">30m</Option>
+                                                <Option value="1h">1h</Option>
+                                                <Option value="2h">2h</Option>
+                                                <Option value="4h">4h</Option>
+                                                <Option value="6h">6h</Option>
+                                                <Option value="12h">12h</Option>
+                                                <Option value="1d">1d</Option>
+                                                <Option value="1w">1w</Option>
+                                                <Option value="1M">1M</Option>
+                                              </Select>
+                                            </Form.Item>
+
+                                            <Form.Item label="Base Coef">
+                                              <InputNumber
+                                                value={strategy.base_coef}
+                                                min={-999}
+                                                max={999}
+                                                step={0.1}
+                                                style={{ width: '100%' }}
+                                                onChange={(value) => updateStrategyDraft(keyName, strategy.id, { base_coef: Number(value) || 1 })}
+                                                disabled={!keyActive}
+                                              />
+                                            </Form.Item>
+
+                                            <Form.Item label="Quote Coef">
+                                              <InputNumber
+                                                value={strategy.quote_coef}
+                                                min={-999}
+                                                max={999}
+                                                step={0.1}
+                                                style={{ width: '100%' }}
+                                                onChange={(value) => updateStrategyDraft(keyName, strategy.id, { quote_coef: Number(value) || 1 })}
                                                 disabled={!keyActive}
                                               />
                                             </Form.Item>
