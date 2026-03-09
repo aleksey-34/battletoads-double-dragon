@@ -1,0 +1,1307 @@
+import { RestClientV5 } from 'bybit-api';
+import Bottleneck from 'bottleneck';
+import logger from '../utils/logger';
+import { ApiKey } from '../config/settings';
+
+type ExchangeClientEntry = {
+  client: RestClientV5;
+  demoClient?: RestClientV5;
+  limiter: Bottleneck;
+  preferDemo: boolean;
+};
+
+type CcxtClientEntry = {
+  exchange: 'bitget' | 'bingx';
+  client: any;
+  limiter: Bottleneck;
+  symbolMap: Map<string, string>;
+};
+
+type NormalizedBalance = {
+  coin: string;
+  walletBalance: string;
+  availableBalance: string;
+  usdValue: string;
+  accountType: string;
+};
+
+type OrderOptions = {
+  reduceOnly?: boolean;
+};
+
+const clients: { [key: string]: ExchangeClientEntry } = {};
+const ccxtClients: { [key: string]: CcxtClientEntry } = {};
+const cache = new Map<string, { data: any; timestamp: number }>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 min
+
+const normalizeSymbolKey = (value: any): string => {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+};
+
+const toUiSymbol = (value: any): string => {
+  const raw = String(value || '').toUpperCase();
+  const beforeColon = raw.split(':')[0];
+  const withoutSlash = beforeColon.replace('/', '');
+  return withoutSlash.replace(/[^A-Z0-9]/g, '');
+};
+
+const detectExchange = (exchange: string): 'bybit' | 'bitget' | 'bingx' => {
+  const normalized = String(exchange || '').trim().toLowerCase();
+
+  if (normalized.includes('bitget')) {
+    return 'bitget';
+  }
+
+  if (normalized.includes('bingx') || normalized.includes('bing x')) {
+    return 'bingx';
+  }
+
+  return 'bybit';
+};
+
+const loadCcxtModule = (): any => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  return require('ccxt');
+};
+
+const getCcxtClientEntry = (apiKeyName: string): CcxtClientEntry => {
+  const entry = ccxtClients[apiKeyName];
+  if (!entry?.client) {
+    throw new Error(`CCXT client not initialized for key: ${apiKeyName}`);
+  }
+  return entry;
+};
+
+const ensureCcxtSymbolMap = async (entry: CcxtClientEntry): Promise<Map<string, string>> => {
+  if (entry.symbolMap.size > 0) {
+    return entry.symbolMap;
+  }
+
+  const markets = await entry.limiter.schedule(() => entry.client.loadMarkets());
+  const values = Object.values(markets || {}) as any[];
+
+  for (const market of values) {
+    const symbol = String(market?.symbol || '');
+    const id = String(market?.id || '');
+
+    const normalizedSymbol = normalizeSymbolKey(symbol);
+    const normalizedId = normalizeSymbolKey(id);
+
+    if (normalizedSymbol) {
+      entry.symbolMap.set(normalizedSymbol, symbol);
+    }
+
+    if (normalizedId) {
+      entry.symbolMap.set(normalizedId, symbol);
+    }
+  }
+
+  return entry.symbolMap;
+};
+
+const resolveCcxtSymbol = async (entry: CcxtClientEntry, symbol: string): Promise<string> => {
+  const normalized = normalizeSymbolKey(symbol);
+  if (!normalized) {
+    return symbol;
+  }
+
+  const symbolMap = await ensureCcxtSymbolMap(entry);
+  return symbolMap.get(normalized) || symbol;
+};
+
+const isBybitSuccess = (response: any): boolean => {
+  return response?.retCode === 0 || response?.retCode === undefined;
+};
+
+const formatBybitError = (response: any, context: string): Error => {
+  if (response?.retCode !== undefined) {
+    return new Error(`Bybit error (${context}): ${response.retMsg || `code ${response.retCode}`}`);
+  }
+  return new Error(`Bybit error (${context}): unknown response`);
+};
+
+const shouldFallbackToDemo = (value: any): boolean => {
+  const retCode = Number(value?.retCode);
+  const message = String(value?.retMsg ?? value?.message ?? '');
+  return retCode === 10003 || /api key is invalid/i.test(message);
+};
+
+const callPrivateWithDemoFallback = async <T>(
+  apiKeyName: string,
+  operation: string,
+  requestFn: (client: RestClientV5) => Promise<T>
+): Promise<T> => {
+  const entry = getClientEntry(apiKeyName);
+  const execute = async (client: RestClientV5) => entry.limiter.schedule(() => requestFn(client));
+
+  const primaryClient = entry.preferDemo && entry.demoClient ? entry.demoClient : entry.client;
+
+  try {
+    const primaryResponse: any = await execute(primaryClient);
+    if (isBybitSuccess(primaryResponse)) {
+      return primaryResponse;
+    }
+
+    if (!entry.preferDemo && entry.demoClient && shouldFallbackToDemo(primaryResponse)) {
+      const demoResponse: any = await execute(entry.demoClient);
+      if (isBybitSuccess(demoResponse)) {
+        entry.preferDemo = true;
+        logger.warn(`Switched ${apiKeyName} to demo trading endpoint for ${operation}`);
+      }
+      return demoResponse;
+    }
+
+    return primaryResponse;
+  } catch (error) {
+    if (!entry.preferDemo && entry.demoClient && shouldFallbackToDemo(error)) {
+      const demoResponse: any = await execute(entry.demoClient);
+      if (isBybitSuccess(demoResponse)) {
+        entry.preferDemo = true;
+        logger.warn(`Switched ${apiKeyName} to demo trading endpoint for ${operation} after exception`);
+        return demoResponse;
+      }
+      throw formatBybitError(demoResponse, operation);
+    }
+    throw error;
+  }
+};
+
+const getClientEntry = (apiKeyName: string): ExchangeClientEntry => {
+  const entry = clients[apiKeyName];
+  if (!entry?.client) {
+    throw new Error(`Client not initialized for key: ${apiKeyName}`);
+  }
+  return entry;
+};
+
+export const initExchangeClient = (apiKey: ApiKey) => {
+  logger.info(`Initializing client for key: ${apiKey.name}`);
+  const speedLimit = Math.max(1, Number(apiKey.speed_limit) || 10);
+  const limiter = new Bottleneck({
+    minTime: 1000 / speedLimit, // requests per second
+  });
+
+  const exchange = detectExchange(apiKey.exchange);
+
+  if (exchange !== 'bybit') {
+    const ccxt = loadCcxtModule();
+    const ExchangeClass = exchange === 'bitget' ? ccxt.bitget : ccxt.bingx;
+
+    if (!ExchangeClass) {
+      throw new Error(`Exchange ${exchange} is not available in ccxt`);
+    }
+
+    const client = new ExchangeClass({
+      apiKey: apiKey.api_key,
+      secret: apiKey.secret,
+      password: apiKey.passphrase || undefined,
+      enableRateLimit: true,
+      options: {
+        defaultType: 'swap',
+      },
+    });
+
+    if (apiKey.testnet && typeof client.setSandboxMode === 'function') {
+      client.setSandboxMode(true);
+    }
+
+    ccxtClients[apiKey.name] = {
+      exchange,
+      client,
+      limiter,
+      symbolMap: new Map<string, string>(),
+    };
+
+    delete clients[apiKey.name];
+
+    logger.info(`Client initialized for key: ${apiKey.name}, exchange=${exchange}`);
+    return;
+  }
+
+  const testnet = Boolean(apiKey.testnet);
+  const demo = Boolean(apiKey.demo);
+
+  const client = new RestClientV5({
+    key: apiKey.api_key,
+    secret: apiKey.secret,
+    testnet,
+    demoTrading: demo,
+  });
+
+  const demoClient = !testnet && !demo
+    ? new RestClientV5({
+      key: apiKey.api_key,
+      secret: apiKey.secret,
+      testnet: false,
+      demoTrading: true,
+    })
+    : undefined;
+
+  clients[apiKey.name] = {
+    client,
+    demoClient,
+    limiter,
+    preferDemo: demo,
+  };
+
+  delete ccxtClients[apiKey.name];
+
+  logger.info(`Client initialized for key: ${apiKey.name}, testnet=${testnet}, demo=${demo}`);
+};
+
+export const removeExchangeClient = (apiKeyName: string) => {
+  if (clients[apiKeyName]) {
+    delete clients[apiKeyName];
+    logger.info(`Client removed for key: ${apiKeyName}`);
+  }
+
+  if (ccxtClients[apiKeyName]) {
+    delete ccxtClients[apiKeyName];
+    logger.info(`CCXT client removed for key: ${apiKeyName}`);
+  }
+};
+
+// Получить все доступные торговые пары (symbols) с Bybit
+export const getAllSymbols = async (apiKeyName: string) => {
+  const cacheKey = `symbols_${apiKeyName}`;
+  const cached = cache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+
+    try {
+      const markets = await entry.limiter.schedule(() => entry.client.loadMarkets());
+      const list = Object.values(markets || {}) as any[];
+
+      const symbols = list
+        .filter((market) => {
+          const isContract = market?.contract === true || market?.swap === true || market?.future === true;
+          const isActive = market?.active !== false;
+          return isContract && isActive;
+        })
+        .map((market) => toUiSymbol(market?.id || market?.symbol))
+        .filter((symbol) => Boolean(symbol));
+
+      const sorted = Array.from(new Set(symbols)).sort();
+      cache.set(cacheKey, { data: sorted, timestamp: Date.now() });
+      return sorted;
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error fetching all symbols for ${apiKeyName} (ccxt): ${err.message}`);
+      throw error;
+    }
+  }
+
+  const { client, limiter } = getClientEntry(apiKeyName);
+  const symbols = new Set<string>();
+  let cursor: string | undefined;
+
+  try {
+    // Bybit returns paginated symbols list; pull all pages to populate selector fully.
+    for (let page = 0; page < 20; page++) {
+      const data = await limiter.schedule(() =>
+        client.getInstrumentsInfo({
+          category: 'linear',
+          limit: 1000,
+          cursor,
+        } as any)
+      );
+
+      if (data?.retCode && data.retCode !== 0) {
+        throw new Error(data.retMsg || `Bybit symbols error code: ${data.retCode}`);
+      }
+
+      const list = Array.isArray(data?.result?.list) ? data.result.list : [];
+      list.forEach((item: any) => {
+        if (item?.symbol) {
+          symbols.add(String(item.symbol).toUpperCase());
+        }
+      });
+
+      const nextCursor = data?.result?.nextPageCursor;
+      if (!nextCursor || nextCursor === cursor) {
+        break;
+      }
+      cursor = nextCursor;
+    }
+
+    const sorted = Array.from(symbols).sort();
+    cache.set(cacheKey, { data: sorted, timestamp: Date.now() });
+    return sorted;
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error fetching all symbols for ${apiKeyName}: ${err.message}`);
+    throw error;
+  }
+};
+
+export const getMarketData = async (apiKeyName: string, symbol: string, interval: string, limit: number = 100) => {
+  logger.info(`Fetching market data for ${apiKeyName}, symbol: ${symbol}, interval: ${interval}, limit: ${limit}`);
+  if (!apiKeyName || !symbol || !interval) {
+    throw new Error('Missing required parameters: apiKeyName, symbol, interval');
+  }
+
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+    const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
+    const safeLimit = Math.max(1, Math.min(1000, Number.isFinite(limit) ? limit : 100));
+
+    try {
+      const candles = await entry.limiter.schedule(() =>
+        entry.client.fetchOHLCV(ccxtSymbol, interval, undefined, safeLimit)
+      );
+
+      const normalized = Array.isArray(candles)
+        ? candles
+          .filter((candle: any) => Array.isArray(candle) && candle.length >= 5)
+          .map((candle: any[]) => [
+            candle[0],
+            candle[1],
+            candle[2],
+            candle[3],
+            candle[4],
+            candle[5] || 0,
+          ])
+        : [];
+
+      logger.info(`Fetched market data for ${symbol} via ccxt, received ${normalized.length} candles`);
+      return normalized;
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error fetching market data for ${symbol} via ccxt: ${err.message}`);
+      throw error;
+    }
+  }
+
+  const { client, limiter } = getClientEntry(apiKeyName);
+  // Convert interval to Bybit format
+  const bybitInterval = interval.replace('m', '').replace('h', '').replace('d', 'D').replace('w', 'W').replace('M', 'M');
+  // For hours, multiply by 60
+  let finalInterval = bybitInterval;
+  if (interval.endsWith('h')) {
+    finalInterval = (parseInt(bybitInterval) * 60).toString();
+  }
+  logger.info(`Converted interval ${interval} to ${finalInterval}`);
+  try {
+    const data = await limiter.schedule(() =>
+      client.getKline({
+        category: 'linear',
+        symbol: symbol.toUpperCase(),
+        interval: finalInterval as any, // Bybit API accepts string
+        limit,
+      })
+    );
+
+    if (!isBybitSuccess(data)) {
+      throw formatBybitError(data, `market data ${symbol}`);
+    }
+
+    const candles = Array.isArray(data?.result?.list) ? data.result.list : [];
+    logger.info(`Fetched market data for ${symbol}, received ${candles.length} candles`);
+    return candles;
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error fetching market data for ${symbol}: ${err.message}`);
+    throw error;
+  }
+};
+
+export const placeOrder = async (
+  apiKeyName: string,
+  symbol: string,
+  side: 'Buy' | 'Sell',
+  qty: string,
+  price?: string,
+  options?: OrderOptions
+) => {
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+    const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
+    const amount = Number.parseFloat(String(qty || '0'));
+    const numericPrice = price !== undefined ? Number.parseFloat(String(price)) : undefined;
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error(`Invalid qty for order: ${qty}`);
+    }
+
+    const orderType = numericPrice && numericPrice > 0 ? 'limit' : 'market';
+    const params: any = {};
+    if (options?.reduceOnly) {
+      params.reduceOnly = true;
+      params.closePosition = true;
+    }
+
+    try {
+      const order = await entry.limiter.schedule(() =>
+        entry.client.createOrder(
+          ccxtSymbol,
+          orderType,
+          side === 'Buy' ? 'buy' : 'sell',
+          amount,
+          orderType === 'limit' ? numericPrice : undefined,
+          params
+        )
+      );
+
+      logger.info(`Placed ccxt order: ${side} ${qty} ${symbol}`);
+      return order;
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error placing ccxt order: ${err.message}`);
+      throw error;
+    }
+  }
+
+  try {
+    const order: any = await callPrivateWithDemoFallback(apiKeyName, 'submitOrder', (client) =>
+      client.submitOrder({
+        category: 'linear',
+        symbol: symbol.toUpperCase(),
+        side,
+        orderType: price ? 'Limit' : 'Market',
+        qty,
+        price,
+        reduceOnly: options?.reduceOnly ? true : undefined,
+      })
+    );
+
+    if (!isBybitSuccess(order)) {
+      throw formatBybitError(order, 'submitOrder');
+    }
+
+    logger.info(`Placed order: ${side} ${qty} ${symbol}`);
+    return order.result;
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error placing order: ${err.message}`);
+    throw error;
+  }
+};
+
+export const getOrderStatus = async (apiKeyName: string, orderId: string) => {
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+
+    try {
+      if (typeof entry.client.fetchOrder === 'function') {
+        return await entry.limiter.schedule(() => entry.client.fetchOrder(orderId));
+      }
+
+      const openOrders = await entry.limiter.schedule(() => entry.client.fetchOpenOrders());
+      const matched = (Array.isArray(openOrders) ? openOrders : []).find((order: any) => String(order?.id || '') === String(orderId));
+      if (matched) {
+        return matched;
+      }
+
+      throw new Error(`Order not found: ${orderId}`);
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error getting ccxt order status: ${err.message}`);
+      throw error;
+    }
+  }
+
+  try {
+    const status: any = await callPrivateWithDemoFallback(apiKeyName, 'getOrderHistory', (client) =>
+      (client as any).getOrderHistory({
+        category: 'linear',
+        orderId,
+      })
+    );
+
+    if (!isBybitSuccess(status)) {
+      throw formatBybitError(status, 'getOrderHistory');
+    }
+
+    return status.result.list[0];
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error getting order status: ${err.message}`);
+    throw error;
+  }
+};
+
+export const getBalances = async (apiKeyName: string) => {
+  logger.info(`Fetching balances for ${apiKeyName}`);
+
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+
+    try {
+      const payload: any = await entry.limiter.schedule(() => entry.client.fetchBalance());
+      const total = payload?.total || {};
+      const free = payload?.free || {};
+
+      const balances: NormalizedBalance[] = Object.keys(total)
+        .map((coin) => {
+          const walletValue = Number(total[coin] ?? 0);
+          const freeValue = Number(free[coin] ?? walletValue ?? 0);
+
+          if (!Number.isFinite(walletValue) || walletValue <= 0) {
+            return null;
+          }
+
+          const stable = ['USDT', 'USDC', 'USD'].includes(String(coin).toUpperCase());
+
+          return {
+            coin: String(coin).toUpperCase(),
+            walletBalance: String(walletValue),
+            availableBalance: String(Number.isFinite(freeValue) ? freeValue : walletValue),
+            usdValue: stable ? String(walletValue) : '0',
+            accountType: 'swap',
+          };
+        })
+        .filter((item): item is NormalizedBalance => !!item);
+
+      return balances;
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error getting balances via ccxt for ${apiKeyName}: ${err.message}`);
+      throw error;
+    }
+  }
+
+  const accountTypes = ['UNIFIED', 'SPOT', 'CONTRACT', 'FUND', 'OPTION'];
+  let hadSuccessfulResponse = false;
+  let firstApiError: Error | null = null;
+  let lastTransportError: Error | null = null;
+
+  const normalizeBalances = (response: any, accountType: string): NormalizedBalance[] => {
+    const accountList = Array.isArray(response?.result?.list) ? response.result.list : [];
+    const flattened: NormalizedBalance[] = [];
+
+    for (const account of accountList) {
+      const coins = Array.isArray(account?.coin) ? account.coin : [];
+      for (const coin of coins) {
+        const walletBalanceRaw = String(coin?.walletBalance ?? '0');
+        const availableBalanceRaw = String(
+          coin?.availableToWithdraw || coin?.availableBalance || coin?.free || coin?.walletBalance || '0'
+        );
+        const usdValueRaw = String(coin?.usdValue ?? coin?.equity ?? '0');
+
+        const walletBalance = Number.parseFloat(walletBalanceRaw);
+        const availableBalance = Number.parseFloat(availableBalanceRaw);
+        const usdValue = Number.parseFloat(usdValueRaw);
+
+        if (
+          Number.isFinite(walletBalance) &&
+          Number.isFinite(availableBalance) &&
+          Number.isFinite(usdValue) &&
+          walletBalance <= 0 &&
+          availableBalance <= 0 &&
+          usdValue <= 0
+        ) {
+          continue;
+        }
+
+        if (!coin?.coin) {
+          continue;
+        }
+
+        flattened.push({
+          coin: String(coin.coin),
+          walletBalance: walletBalanceRaw,
+          availableBalance: availableBalanceRaw,
+          usdValue: usdValueRaw,
+          accountType,
+        });
+      }
+    }
+
+    return flattened;
+  };
+
+  for (const type of accountTypes) {
+    try {
+      logger.info(`Trying getWalletBalance with accountType: ${type}`);
+      const balancesResponse: any = await callPrivateWithDemoFallback(apiKeyName, `getWalletBalance:${type}`, (client) =>
+        client.getWalletBalance({
+          accountType: type as any,
+        })
+      );
+
+      if (balancesResponse?.retCode && balancesResponse.retCode !== 0) {
+        const apiError = new Error(
+          `Bybit error (${type}): ${balancesResponse.retMsg || `code ${balancesResponse.retCode}`}`
+        );
+        logger.warn(`Balances API warning for ${apiKeyName} (${type}): ${apiError.message}`);
+        if (!firstApiError) {
+          firstApiError = apiError;
+        }
+        continue;
+      }
+
+      hadSuccessfulResponse = true;
+      const normalized = normalizeBalances(balancesResponse, type);
+      logger.info(`Fetched balances for ${apiKeyName} (${type}), count: ${normalized.length}`);
+      if (normalized.length > 0) {
+        return normalized;
+      }
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error getting balances for ${apiKeyName} (${type}): ${err.message}`);
+      lastTransportError = err;
+    }
+  }
+
+  if (hadSuccessfulResponse) {
+    logger.info(`Fetched balances for ${apiKeyName}, count: 0`);
+    return [];
+  }
+
+  throw firstApiError || lastTransportError || new Error('Не удалось получить балансы ни по одному типу аккаунта');
+};
+
+export const getPositions = async (apiKeyName: string, symbol?: string) => {
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+
+    try {
+      const resolvedSymbol = symbol ? await resolveCcxtSymbol(entry, symbol) : undefined;
+
+      let positions: any[] = [];
+      if (typeof entry.client.fetchPositions === 'function') {
+        const raw = await entry.limiter.schedule(() =>
+          entry.client.fetchPositions(resolvedSymbol ? [resolvedSymbol] : undefined)
+        );
+        positions = Array.isArray(raw) ? raw : [];
+      } else if (resolvedSymbol && typeof entry.client.fetchPosition === 'function') {
+        const single = await entry.limiter.schedule(() => entry.client.fetchPosition(resolvedSymbol));
+        positions = single ? [single] : [];
+      }
+
+      const normalized = positions
+        .map((position: any) => {
+          const sizeRaw = Number(
+            position?.contracts ??
+            position?.info?.size ??
+            position?.info?.positionAmt ??
+            position?.info?.positionSize ??
+            0
+          );
+
+          if (!Number.isFinite(sizeRaw) || Math.abs(sizeRaw) <= 0) {
+            return null;
+          }
+
+          const sideRaw = String(position?.side || position?.info?.holdSide || '').toLowerCase();
+          const side = sideRaw.includes('long') || sideRaw === 'buy' ? 'Buy' : 'Sell';
+
+          const entryPrice = Number(position?.entryPrice ?? position?.info?.entryPrice ?? position?.info?.openPrice ?? 0);
+          const markPrice = Number(position?.markPrice ?? position?.info?.markPrice ?? position?.info?.markPx ?? entryPrice);
+          const explicitNotional = Number(position?.notional);
+          const derivedNotional = Number(sizeRaw) * (Number.isFinite(markPrice) ? markPrice : 0);
+          const notional = Number.isFinite(explicitNotional) ? explicitNotional : Math.abs(derivedNotional);
+          const leverage = Number(position?.leverage ?? position?.info?.leverage ?? 1);
+          const liquidation = Number(position?.liquidationPrice ?? position?.info?.liquidationPrice ?? position?.info?.liqPx ?? 0);
+          const upnl = Number(position?.unrealizedPnl ?? position?.info?.unrealizedPnl ?? position?.info?.upl ?? 0);
+
+          return {
+            symbol: toUiSymbol(position?.info?.symbol || position?.symbol || resolvedSymbol || symbol),
+            side,
+            size: String(Math.abs(sizeRaw)),
+            avgPrice: String(Number.isFinite(entryPrice) ? entryPrice : 0),
+            markPrice: String(Number.isFinite(markPrice) ? markPrice : 0),
+            liqPrice: Number.isFinite(liquidation) && liquidation > 0 ? String(liquidation) : '',
+            unrealisedPnl: String(Number.isFinite(upnl) ? upnl : 0),
+            leverage: String(Number.isFinite(leverage) && leverage > 0 ? leverage : 1),
+            positionValue: String(Number.isFinite(notional) ? Math.abs(notional) : 0),
+          };
+        })
+        .filter((item): item is any => !!item);
+
+      const deduped = Array.from(
+        new Map(
+          normalized.map((position: any) => [
+            `${position.symbol}_${position.side}`,
+            position,
+          ])
+        ).values()
+      );
+
+      if (symbol) {
+        const symbolKey = normalizeSymbolKey(symbol);
+        return deduped.filter((position: any) => normalizeSymbolKey(position.symbol) === symbolKey);
+      }
+
+      return deduped;
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error getting positions via ccxt for ${apiKeyName}: ${err.message}`);
+      throw error;
+    }
+  }
+
+  const requests = symbol
+    ? [
+      {
+        category: 'linear',
+        symbol: symbol.toUpperCase(),
+        limit: 200,
+      },
+    ]
+    : [
+      {
+        category: 'linear',
+        settleCoin: 'USDT',
+        limit: 200,
+      },
+      {
+        category: 'linear',
+        settleCoin: 'USDC',
+        limit: 200,
+      },
+      {
+        category: 'inverse',
+        limit: 200,
+      },
+    ];
+
+  const collected: any[] = [];
+  let firstApiError: Error | null = null;
+
+  for (const request of requests) {
+    try {
+      const response: any = await callPrivateWithDemoFallback(apiKeyName, `getPositionInfo:${JSON.stringify(request)}`, (client) =>
+        client.getPositionInfo(request as any)
+      );
+
+      if (!isBybitSuccess(response)) {
+        const apiError = formatBybitError(response, 'getPositionInfo');
+        if (!firstApiError) {
+          firstApiError = apiError;
+        }
+        continue;
+      }
+
+      const list = Array.isArray(response?.result?.list) ? response.result.list : [];
+      collected.push(...list);
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error getting positions for ${apiKeyName}: ${err.message}`);
+      if (!firstApiError) {
+        firstApiError = err;
+      }
+    }
+  }
+
+  if (collected.length === 0 && firstApiError) {
+    throw firstApiError;
+  }
+
+  const nonZero = collected.filter((position: any) => {
+    const size = Number.parseFloat(String(position?.size ?? '0'));
+    return Number.isFinite(size) && size > 0;
+  });
+
+  const deduped = Array.from(
+    new Map(
+      nonZero.map((position: any) => [
+        `${position?.symbol || ''}_${position?.positionIdx || ''}_${position?.side || ''}`,
+        position,
+      ])
+    ).values()
+  );
+
+  return deduped;
+};
+
+export const get24hVolume = async (apiKeyName: string, symbol: string) => {
+  const key = `volume_${apiKeyName}_${symbol}`;
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+    const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
+
+    try {
+      const ticker: any = await entry.limiter.schedule(() => entry.client.fetchTicker(ccxtSymbol));
+      const volume = ticker?.quoteVolume ?? ticker?.baseVolume ?? 0;
+      cache.set(key, { data: volume, timestamp: Date.now() });
+      return volume;
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error getting 24h volume via ccxt: ${err.message}`);
+      throw error;
+    }
+  }
+
+  const { client, limiter } = getClientEntry(apiKeyName);
+  try {
+    const data = await limiter.schedule(() =>
+      client.getTickers({
+        category: 'linear',
+        symbol: symbol.toUpperCase(),
+      })
+    );
+
+    if (!isBybitSuccess(data)) {
+      throw formatBybitError(data, 'getTickers');
+    }
+
+    const volume = data.result.list[0]?.volume24h;
+    cache.set(key, { data: volume, timestamp: Date.now() });
+    return volume;
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error getting 24h volume: ${err.message}`);
+    throw error;
+  }
+};
+
+export const getInstrumentInfo = async (apiKeyName: string, symbol: string) => {
+  const key = `info_${apiKeyName}_${symbol}`;
+  const cached = cache.get(key);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+    const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
+
+    try {
+      const markets: any = await entry.limiter.schedule(() => entry.client.loadMarkets());
+      const market = markets?.[ccxtSymbol] || null;
+
+      if (!market) {
+        throw new Error(`Instrument not found: ${symbol}`);
+      }
+
+      const precisionAmount = Number(market?.precision?.amount);
+      const derivedStep = Number.isFinite(precisionAmount)
+        ? Math.pow(10, -Math.max(0, precisionAmount))
+        : NaN;
+      const minOrderQty = Number(market?.limits?.amount?.min ?? 0);
+      const maxOrderQty = Number(market?.limits?.amount?.max ?? 0);
+      const qtyStep = Number.isFinite(derivedStep) && derivedStep > 0
+        ? derivedStep
+        : Number.isFinite(minOrderQty) && minOrderQty > 0
+          ? minOrderQty
+          : 0.001;
+
+      const info = {
+        symbol: toUiSymbol(market?.id || market?.symbol),
+        lotSizeFilter: {
+          qtyStep: String(qtyStep),
+          minOrderQty: String(Number.isFinite(minOrderQty) ? minOrderQty : 0),
+          maxOrderQty: String(Number.isFinite(maxOrderQty) ? maxOrderQty : 0),
+        },
+      };
+
+      cache.set(key, { data: info, timestamp: Date.now() });
+      return info;
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error getting instrument info via ccxt: ${err.message}`);
+      throw error;
+    }
+  }
+
+  const { client, limiter } = getClientEntry(apiKeyName);
+  try {
+    const data = await limiter.schedule(() =>
+      client.getInstrumentsInfo({
+        category: 'linear',
+        symbol: symbol.toUpperCase(),
+      })
+    );
+
+    if (!isBybitSuccess(data)) {
+      throw formatBybitError(data, 'getInstrumentsInfo');
+    }
+
+    const info = data.result.list[0];
+    cache.set(key, { data: info, timestamp: Date.now() });
+    return info;
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error getting instrument info: ${err.message}`);
+    throw error;
+  }
+};
+
+export const closePosition = async (apiKeyName: string, symbol: string, qty: string, currentSide: 'Buy' | 'Sell' = 'Buy') => {
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+    const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
+    const amount = Number.parseFloat(String(qty || '0'));
+
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new Error(`Invalid close qty for ${symbol}`);
+    }
+
+    const closeSide = currentSide === 'Buy' ? 'sell' : 'buy';
+
+    try {
+      const order = await entry.limiter.schedule(() =>
+        entry.client.createOrder(
+          ccxtSymbol,
+          'market',
+          closeSide,
+          amount,
+          undefined,
+          {
+            reduceOnly: true,
+            closePosition: true,
+          }
+        )
+      );
+
+      logger.info(`Closed position via ccxt: ${qty} ${symbol}`);
+      return order;
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error closing position via ccxt: ${err.message}`);
+      throw error;
+    }
+  }
+
+  try {
+    const closeSide: 'Buy' | 'Sell' = currentSide === 'Buy' ? 'Sell' : 'Buy';
+    const close: any = await callPrivateWithDemoFallback(apiKeyName, 'closePosition', (client) =>
+      client.submitOrder({
+        category: 'linear',
+        symbol: symbol.toUpperCase(),
+        side: closeSide,
+        orderType: 'Market',
+        qty,
+        reduceOnly: true,
+      })
+    );
+
+    if (!isBybitSuccess(close)) {
+      throw formatBybitError(close, 'closePosition');
+    }
+
+    logger.info(`Closed position: ${qty} ${symbol}`);
+    return close.result;
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error closing position: ${err.message}`);
+    throw error;
+  }
+};
+
+export const closePositionPercent = async (
+  apiKeyName: string,
+  symbol: string,
+  side: 'Buy' | 'Sell',
+  percent: number
+) => {
+  const safePercent = Number.isFinite(percent) ? Math.min(100, Math.max(0.1, percent)) : 100;
+  const positions = await getPositions(apiKeyName, symbol);
+  const target = positions.find((position: any) => {
+    return (
+      String(position?.symbol || '').toUpperCase() === symbol.toUpperCase() &&
+      String(position?.side || '') === side &&
+      Number.parseFloat(String(position?.size || '0')) > 0
+    );
+  });
+
+  if (!target) {
+    throw new Error(`Position not found for ${symbol} side ${side}`);
+  }
+
+  const currentSize = Number.parseFloat(String(target.size || '0'));
+  const qtyToClose = (currentSize * safePercent) / 100;
+
+  if (!Number.isFinite(qtyToClose) || qtyToClose <= 0) {
+    throw new Error(`Invalid close size for ${symbol}`);
+  }
+
+  const qty = qtyToClose.toFixed(8).replace(/\.?0+$/, '');
+  return closePosition(apiKeyName, symbol, qty, side);
+};
+
+export const applySymbolRiskSettings = async (
+  apiKeyName: string,
+  symbol: string,
+  marginType: 'cross' | 'isolated',
+  leverage: number
+) => {
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+    const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
+    const safeLeverage = Math.max(1, Number.isFinite(leverage) ? leverage : 1);
+
+    try {
+      if (typeof entry.client.setLeverage === 'function') {
+        await entry.limiter.schedule(() => entry.client.setLeverage(safeLeverage, ccxtSymbol));
+      }
+    } catch (error) {
+      logger.warn(`Could not set leverage via ccxt for ${symbol}: ${(error as Error).message}`);
+    }
+
+    try {
+      if (typeof entry.client.setMarginMode === 'function') {
+        await entry.limiter.schedule(() => entry.client.setMarginMode(marginType, ccxtSymbol));
+      }
+    } catch (error) {
+      logger.warn(`Could not set margin mode via ccxt for ${symbol}: ${(error as Error).message}`);
+    }
+
+    return {
+      leverage: String(safeLeverage),
+      marginType,
+    };
+  }
+
+  const safeLeverage = Math.max(1, Number.isFinite(leverage) ? leverage : 1);
+  const leverageValue = safeLeverage.toFixed(2).replace(/\.?0+$/, '');
+
+  const leverageResponse: any = await callPrivateWithDemoFallback(apiKeyName, 'setLeverage', (client) =>
+    client.setLeverage({
+      category: 'linear',
+      symbol: symbol.toUpperCase(),
+      buyLeverage: leverageValue,
+      sellLeverage: leverageValue,
+    } as any)
+  );
+
+  if (!isBybitSuccess(leverageResponse)) {
+    throw formatBybitError(leverageResponse, `setLeverage:${symbol}`);
+  }
+
+  const tradeMode = marginType === 'isolated' ? 1 : 0;
+
+  const marginResponse: any = await callPrivateWithDemoFallback(apiKeyName, 'switchIsolatedMargin', (client) =>
+    client.switchIsolatedMargin({
+      category: 'linear',
+      symbol: symbol.toUpperCase(),
+      tradeMode,
+      buyLeverage: leverageValue,
+      sellLeverage: leverageValue,
+    } as any)
+  );
+
+  // Bybit may return "not modified" style codes when mode is already set.
+  if (!isBybitSuccess(marginResponse) && Number(marginResponse?.retCode) !== 110026) {
+    throw formatBybitError(marginResponse, `switchIsolatedMargin:${symbol}`);
+  }
+
+  return {
+    leverage: leverageValue,
+    marginType,
+  };
+};
+
+export const getOpenOrders = async (apiKeyName: string, symbol?: string) => {
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+
+    try {
+      const resolvedSymbol = symbol ? await resolveCcxtSymbol(entry, symbol) : undefined;
+      const orders = await entry.limiter.schedule(() => entry.client.fetchOpenOrders(resolvedSymbol));
+      const list = Array.isArray(orders) ? orders : [];
+
+      return list.map((order: any) => {
+        const sideRaw = String(order?.side || order?.info?.side || '').toLowerCase();
+        return {
+          orderId: String(order?.id || order?.info?.orderId || ''),
+          symbol: toUiSymbol(order?.info?.symbol || order?.symbol || resolvedSymbol || symbol),
+          side: sideRaw === 'buy' ? 'Buy' : 'Sell',
+          orderType: String(order?.type || order?.info?.orderType || 'market'),
+          qty: String(order?.amount ?? order?.info?.size ?? 0),
+          price: String(order?.price ?? order?.info?.price ?? 0),
+          orderStatus: String(order?.status || order?.info?.status || 'open'),
+          reduceOnly: Boolean(order?.reduceOnly || order?.info?.reduceOnly),
+          createdTime: String(order?.timestamp || order?.info?.cTime || Date.now()),
+        };
+      });
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error loading open orders via ccxt for ${apiKeyName}: ${err.message}`);
+      throw error;
+    }
+  }
+
+  const requests = symbol
+    ? [
+      {
+        category: 'linear',
+        symbol: String(symbol).toUpperCase(),
+        openOnly: 0,
+        limit: 200,
+      },
+    ]
+    : [
+      {
+        category: 'linear',
+        settleCoin: 'USDT',
+        openOnly: 0,
+        limit: 200,
+      },
+      {
+        category: 'linear',
+        settleCoin: 'USDC',
+        openOnly: 0,
+        limit: 200,
+      },
+      {
+        category: 'inverse',
+        openOnly: 0,
+        limit: 200,
+      },
+    ];
+
+  const collected: any[] = [];
+  let firstError: Error | null = null;
+
+  for (const request of requests) {
+    try {
+      const response: any = await callPrivateWithDemoFallback(apiKeyName, `getActiveOrders:${JSON.stringify(request)}`, (client) =>
+        client.getActiveOrders(request as any)
+      );
+
+      if (!isBybitSuccess(response)) {
+        const apiError = formatBybitError(response, 'getActiveOrders');
+        if (!firstError) {
+          firstError = apiError;
+        }
+        continue;
+      }
+
+      const list = Array.isArray(response?.result?.list) ? response.result.list : [];
+      collected.push(...list);
+    } catch (error) {
+      if (!firstError) {
+        firstError = error as Error;
+      }
+    }
+  }
+
+  if (collected.length === 0 && firstError) {
+    throw firstError;
+  }
+
+  const deduped = Array.from(
+    new Map(
+      collected.map((order: any) => [
+        String(order?.orderId || `${order?.symbol || ''}_${order?.createdTime || ''}`),
+        order,
+      ])
+    ).values()
+  );
+
+  return deduped;
+};
+
+export const cancelAllOrders = async (apiKeyName: string, symbol?: string) => {
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+
+    try {
+      const resolvedSymbol = symbol ? await resolveCcxtSymbol(entry, symbol) : undefined;
+
+      if (typeof entry.client.cancelAllOrders === 'function') {
+        const result = await entry.limiter.schedule(() => entry.client.cancelAllOrders(resolvedSymbol));
+        return {
+          cancelledGroups: 1,
+          details: [result || { success: true }],
+        };
+      }
+
+      const openOrders = await entry.limiter.schedule(() => entry.client.fetchOpenOrders(resolvedSymbol));
+      const list = Array.isArray(openOrders) ? openOrders : [];
+
+      for (const order of list) {
+        const orderId = String(order?.id || order?.info?.orderId || '');
+        const orderSymbol = String(order?.symbol || resolvedSymbol || '');
+        if (!orderId) {
+          continue;
+        }
+        await entry.limiter.schedule(() => entry.client.cancelOrder(orderId, orderSymbol || undefined));
+      }
+
+      return {
+        cancelledGroups: 1,
+        details: [{ cancelled: list.length }],
+      };
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error cancelling orders via ccxt for ${apiKeyName}: ${err.message}`);
+      throw error;
+    }
+  }
+
+  const requests = symbol
+    ? [
+      {
+        category: 'linear',
+        symbol: String(symbol).toUpperCase(),
+      },
+    ]
+    : [
+      {
+        category: 'linear',
+        settleCoin: 'USDT',
+      },
+      {
+        category: 'linear',
+        settleCoin: 'USDC',
+      },
+      {
+        category: 'inverse',
+      },
+    ];
+
+  const results: any[] = [];
+  let firstError: Error | null = null;
+
+  for (const request of requests) {
+    try {
+      const response: any = await callPrivateWithDemoFallback(apiKeyName, `cancelAllOrders:${JSON.stringify(request)}`, (client) =>
+        client.cancelAllOrders(request as any)
+      );
+
+      if (!isBybitSuccess(response)) {
+        const apiError = formatBybitError(response, 'cancelAllOrders');
+        if (!firstError) {
+          firstError = apiError;
+        }
+        continue;
+      }
+
+      results.push(response?.result || { success: true });
+    } catch (error) {
+      if (!firstError) {
+        firstError = error as Error;
+      }
+    }
+  }
+
+  if (results.length === 0 && firstError) {
+    throw firstError;
+  }
+
+  return {
+    cancelledGroups: results.length,
+    details: results,
+  };
+};
+
+export const closeAllPositions = async (apiKeyName: string) => {
+  const positions = await getPositions(apiKeyName);
+  const actionable = positions.filter((position: any) => Number.parseFloat(String(position?.size || '0')) > 0);
+
+  for (const position of actionable) {
+    const symbol = String(position?.symbol || '').toUpperCase();
+    const qty = String(position?.size || '0');
+    const side = String(position?.side || '') as 'Buy' | 'Sell';
+
+    if (!symbol || !qty || qty === '0') {
+      continue;
+    }
+
+    await closePosition(apiKeyName, symbol, qty, side);
+  }
+
+  return { closed: actionable.length };
+};
