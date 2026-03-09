@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Button, Switch, Row, Col, Form, Input, Select, Collapse, Spin, Alert, Space, InputNumber, Tag, Popconfirm, message, Divider, FloatButton, Badge } from 'antd';
+import { Card, Button, Switch, Row, Col, Form, Input, Select, Collapse, Spin, Alert, Space, InputNumber, Tag, Popconfirm, message, Divider, Badge } from 'antd';
 import axios from 'axios';
 import ChartComponent, { HoverOHLC, OverlayLine } from '../components/ChartComponent';
 import StatusIndicator from '../components/StatusIndicator';
@@ -2945,7 +2945,6 @@ const Dashboard: React.FC = () => {
         </Popconfirm>
       </Space>
       <Collapse activeKey={activePanel} onChange={handlePanelChange} items={collapseItems} />
-      <FloatButton.BackTop visibilityHeight={320} />
     </div>
   );
 };

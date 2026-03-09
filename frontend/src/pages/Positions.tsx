@@ -416,7 +416,7 @@ const Positions: React.FC = () => {
   const shouldShowOrders = viewMode === 'orders' || viewMode === 'both';
 
   return (
-    <div>
+    <div className="positions-page">
       <Space style={{ marginBottom: 8 }}>
         <Button loading={refreshAllLoading} onClick={() => { void refreshAllPositions(); }}>
           Refresh all

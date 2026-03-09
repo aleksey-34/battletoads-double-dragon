@@ -1,6 +1,6 @@
 import React from 'react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
-import { Layout, Menu } from 'antd';
+import { Layout, Menu, FloatButton } from 'antd';
 import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
 import Positions from './pages/Positions';
@@ -36,6 +36,7 @@ function App() {
             <Route path="/backtest" element={<Backtest />} />
           </Routes>
         </Content>
+        <FloatButton.BackTop visibilityHeight={280} />
       </Layout>
     </Router>
   );
