@@ -1135,6 +1135,7 @@ const Dashboard: React.FC = () => {
     }
 
     const payload: Partial<DDStrategy> = {
+      id: strategy.id,
       name: strategy.name,
       display_on_chart: strategy.display_on_chart,
       show_settings: strategy.show_settings,
@@ -1167,6 +1168,7 @@ const Dashboard: React.FC = () => {
       const res = await axios.put(`http://localhost:3001/api/strategies/${keyName}/${strategy.id}`, payload);
       const updated = parseStrategy(res.data);
       updateStrategyDraft(keyName, strategy.id, updated);
+      await fetchStrategies(keyName, { silent: true });
       message.success(`Strategy ${strategy.name} saved`);
     } catch (error: any) {
       console.error(error);

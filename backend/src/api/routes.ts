@@ -456,9 +456,19 @@ router.post('/strategies/:apiKeyName', async (req, res) => {
 
 router.put('/strategies/:apiKeyName/:strategyId', async (req, res) => {
   const { apiKeyName, strategyId } = req.params;
+  const routeStrategyId = Number.parseInt(strategyId, 10);
   const strategyPatch: Partial<Strategy> = req.body;
+
+  const bodyStrategyIdRaw = (req.body || {}).id;
+  if (bodyStrategyIdRaw !== undefined && bodyStrategyIdRaw !== null) {
+    const bodyStrategyId = Number.parseInt(String(bodyStrategyIdRaw), 10);
+    if (!Number.isFinite(bodyStrategyId) || bodyStrategyId !== routeStrategyId) {
+      return res.status(400).json({ error: 'Strategy ID mismatch between URL and body' });
+    }
+  }
+
   try {
-    const updated = await updateStrategy(apiKeyName, Number.parseInt(strategyId, 10), strategyPatch);
+    const updated = await updateStrategy(apiKeyName, routeStrategyId, strategyPatch);
     res.json(updated);
   } catch (error) {
     const err = error as Error;

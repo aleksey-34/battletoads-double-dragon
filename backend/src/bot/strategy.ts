@@ -89,6 +89,13 @@ const safeNumber = (value: any, fallback: number): number => {
 
 const normalizeSymbol = (value: string): string => String(value || '').trim().toUpperCase();
 
+const normalizeInterval = (value: any): string => String(value || '').trim();
+
+const normalizeCoef = (value: any): number => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : 0;
+};
+
 const validateStrategyBinding = (binding: Pick<Strategy, 'base_symbol' | 'quote_symbol' | 'interval' | 'base_coef' | 'quote_coef'>): void => {
   const base = normalizeSymbol(binding.base_symbol);
   const quote = normalizeSymbol(binding.quote_symbol);
@@ -671,10 +678,91 @@ export const updateStrategy = async (
   const setClause = updates.map((item) => `${item.column} = ?`).join(', ');
   const params = updates.map((item) => item.value);
 
-  await db.run(
-    `UPDATE strategies SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND api_key_id = ?`,
-    [...params, strategyId, existing.api_key_id]
-  );
+  if (!bindingTouched) {
+    const updateResult: any = await db.run(
+      `UPDATE strategies SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND api_key_id = ?`,
+      [...params, strategyId, existing.api_key_id]
+    );
+
+    if (Number(updateResult?.changes || 0) !== 1) {
+      throw new Error(`Strategy update failed or affected unexpected rows: strategyId=${strategyId}`);
+    }
+  } else {
+    let transactionStarted = false;
+
+    try {
+      await db.exec('BEGIN IMMEDIATE');
+      transactionStarted = true;
+
+      const beforeRows = await db.all(
+        `SELECT id, base_symbol, quote_symbol, interval, base_coef, quote_coef
+         FROM strategies
+         WHERE api_key_id = ?`,
+        [existing.api_key_id]
+      );
+
+      const beforeById = new Map<number, any>();
+      (Array.isArray(beforeRows) ? beforeRows : []).forEach((row: any) => {
+        beforeById.set(Number(row.id), row);
+      });
+
+      const updateResult: any = await db.run(
+        `UPDATE strategies SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND api_key_id = ?`,
+        [...params, strategyId, existing.api_key_id]
+      );
+
+      if (Number(updateResult?.changes || 0) !== 1) {
+        throw new Error(`Strategy update failed or affected unexpected rows: strategyId=${strategyId}`);
+      }
+
+      const afterRows = await db.all(
+        `SELECT id, base_symbol, quote_symbol, interval, base_coef, quote_coef
+         FROM strategies
+         WHERE api_key_id = ?`,
+        [existing.api_key_id]
+      );
+
+      const offenders: number[] = [];
+
+      (Array.isArray(afterRows) ? afterRows : []).forEach((afterRow: any) => {
+        const rowId = Number(afterRow.id);
+        if (rowId === strategyId) {
+          return;
+        }
+
+        const beforeRow = beforeById.get(rowId);
+        if (!beforeRow) {
+          return;
+        }
+
+        const bindingChanged = (
+          normalizeSymbol(beforeRow.base_symbol) !== normalizeSymbol(afterRow.base_symbol)
+          || normalizeSymbol(beforeRow.quote_symbol) !== normalizeSymbol(afterRow.quote_symbol)
+          || normalizeInterval(beforeRow.interval) !== normalizeInterval(afterRow.interval)
+          || Math.abs(normalizeCoef(beforeRow.base_coef) - normalizeCoef(afterRow.base_coef)) > 1e-12
+          || Math.abs(normalizeCoef(beforeRow.quote_coef) - normalizeCoef(afterRow.quote_coef)) > 1e-12
+        );
+
+        if (bindingChanged) {
+          offenders.push(rowId);
+        }
+      });
+
+      if (offenders.length > 0) {
+        throw new Error(
+          `Unsafe update blocked: binding fields changed for other strategies in api_key_id=${existing.api_key_id} (ids: ${offenders.join(', ')})`
+        );
+      }
+
+      await db.exec('COMMIT');
+      transactionStarted = false;
+    } catch (error) {
+      if (transactionStarted) {
+        await db.exec('ROLLBACK');
+      }
+      throw error;
+    }
+  }
 
   const updated = await getStrategyRow(apiKeyName, strategyId);
   return normalizeStrategy(updated);
