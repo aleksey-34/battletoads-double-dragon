@@ -4,6 +4,7 @@ import {
   cancelAllOrders,
   closePosition,
   getBalances,
+  getAllSymbols,
   getInstrumentInfo,
   getMarketData,
   getPositions,
@@ -95,6 +96,10 @@ const safeNumber = (value: any, fallback: number): number => {
 };
 
 const normalizeSymbol = (value: string): string => String(value || '').trim().toUpperCase();
+
+const normalizeSymbolKey = (value: any): string => {
+  return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+};
 
 const normalizeStrategy = (row: any): Strategy => {
   return {
@@ -671,6 +676,23 @@ export const executeStrategy = async (
     quote_coef: chartOverride?.quoteCoef !== undefined ? safeNumber(chartOverride.quoteCoef, strategy.quote_coef) : strategy.quote_coef,
   };
 
+  const executionBindingPatch: Partial<Strategy> = {};
+  if (chartOverride?.base) {
+    executionBindingPatch.base_symbol = mergedStrategy.base_symbol;
+  }
+  if (chartOverride?.quote) {
+    executionBindingPatch.quote_symbol = mergedStrategy.quote_symbol;
+  }
+  if (chartOverride?.interval) {
+    executionBindingPatch.interval = mergedStrategy.interval;
+  }
+  if (chartOverride?.baseCoef !== undefined) {
+    executionBindingPatch.base_coef = mergedStrategy.base_coef;
+  }
+  if (chartOverride?.quoteCoef !== undefined) {
+    executionBindingPatch.quote_coef = mergedStrategy.quote_coef;
+  }
+
   if (!mergedStrategy.base_symbol || !mergedStrategy.quote_symbol) {
     throw new Error('Strategy requires both base and quote symbols');
   }
@@ -725,7 +747,7 @@ export const executeStrategy = async (
     await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
 
     const updated = await updateStrategy(apiKeyName, strategyId, {
-      ...mergedStrategy,
+      ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
       last_action: 'desync_closed_mixed',
@@ -749,7 +771,7 @@ export const executeStrategy = async (
     await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
 
     const updated = await updateStrategy(apiKeyName, strategyId, {
-      ...mergedStrategy,
+      ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
       last_action: 'desync_closed_state_mismatch',
@@ -774,7 +796,7 @@ export const executeStrategy = async (
       await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
 
       const updated = await updateStrategy(apiKeyName, strategyId, {
-        ...mergedStrategy,
+        ...executionBindingPatch,
         state: 'flat',
         entry_ratio: null,
         last_action: 'desync_closed_against_signal',
@@ -794,7 +816,7 @@ export const executeStrategy = async (
     }
 
     const synced = await updateStrategy(apiKeyName, strategyId, {
-      ...mergedStrategy,
+      ...executionBindingPatch,
       state: livePairState,
       entry_ratio: currentRatio,
       last_action: `state_resynced_${livePairState}`,
@@ -817,7 +839,7 @@ export const executeStrategy = async (
     await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
 
     const updated = await updateStrategy(apiKeyName, strategyId, {
-      ...mergedStrategy,
+      ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
       last_action: `take_profit_long@${currentRatio}`,
@@ -842,7 +864,7 @@ export const executeStrategy = async (
     await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
 
     const updated = await updateStrategy(apiKeyName, strategyId, {
-      ...mergedStrategy,
+      ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
       last_action: `take_profit_short@${currentRatio}`,
@@ -867,7 +889,7 @@ export const executeStrategy = async (
     await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
 
     const updated = await updateStrategy(apiKeyName, strategyId, {
-      ...mergedStrategy,
+      ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
       last_action: `stop_loss_long@${currentRatio}`,
@@ -892,7 +914,7 @@ export const executeStrategy = async (
     await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
 
     const updated = await updateStrategy(apiKeyName, strategyId, {
-      ...mergedStrategy,
+      ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
       last_action: `stop_loss_short@${currentRatio}`,
@@ -914,7 +936,7 @@ export const executeStrategy = async (
 
   if (signal === 'none') {
     const updated = await updateStrategy(apiKeyName, strategyId, {
-      ...mergedStrategy,
+      ...executionBindingPatch,
       last_signal: 'none',
       last_action: `no_signal@${currentRatio}`,
       last_error: null,
@@ -933,7 +955,7 @@ export const executeStrategy = async (
 
   if (state === signal) {
     const updated = await updateStrategy(apiKeyName, strategyId, {
-      ...mergedStrategy,
+      ...executionBindingPatch,
       last_signal: signal,
       last_action: `hold_${signal}@${currentRatio}`,
       last_error: null,
@@ -995,6 +1017,26 @@ export const executeStrategy = async (
   const baseQty = await normalizeQtyByStep(apiKeyName, mergedStrategy.base_symbol, rawBaseQty);
   const quoteQty = await normalizeQtyByStep(apiKeyName, mergedStrategy.quote_symbol, rawQuoteQty);
 
+  const latestBeforeOpen = normalizeStrategy(await getStrategyRow(apiKeyName, strategyId));
+  if (!latestBeforeOpen.is_active) {
+    const updated = await updateStrategy(apiKeyName, strategyId, {
+      ...executionBindingPatch,
+      last_signal: signal,
+      last_action: `paused_before_open@${currentRatio}`,
+      last_error: null,
+    });
+
+    return {
+      result: 'Strategy paused before opening a new position',
+      action: 'paused_before_open',
+      strategy: updated,
+      currentRatio,
+      donchianHigh,
+      donchianLow,
+      donchianCenter,
+    };
+  }
+
   try {
     await applySymbolRiskSettings(apiKeyName, mergedStrategy.base_symbol, mergedStrategy.margin_type, mergedStrategy.leverage);
     await applySymbolRiskSettings(apiKeyName, mergedStrategy.quote_symbol, mergedStrategy.margin_type, mergedStrategy.leverage);
@@ -1023,7 +1065,7 @@ export const executeStrategy = async (
   }
 
   const updated = await updateStrategy(apiKeyName, strategyId, {
-    ...mergedStrategy,
+    ...executionBindingPatch,
     state: signal,
     entry_ratio: currentRatio,
     last_signal: signal,
@@ -1143,28 +1185,59 @@ export const closeStrategyPositions = async (apiKeyName: string, strategyId: num
 };
 
 export const setAllStrategiesActive = async (apiKeyName: string, isActive: boolean) => {
-  const list = await getStrategies(apiKeyName);
+  const { db } = await import('../utils/database');
+  const apiKeyId = await getApiKeyId(apiKeyName);
+  const result: any = await db.run(
+    `UPDATE strategies
+     SET is_active = ?,
+         last_action = ?,
+         last_error = NULL,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE api_key_id = ?`,
+    [isActive ? 1 : 0, isActive ? 'resumed_all' : 'paused_all', apiKeyId]
+  );
 
-  for (const strategy of list) {
-    if (!strategy.id) {
-      continue;
-    }
-
-    await updateStrategy(apiKeyName, Number(strategy.id), {
-      is_active: isActive,
-      last_action: isActive ? 'resumed_all' : 'paused_all',
-      last_error: null,
-    });
-  }
+  const updated = Number(result?.changes || 0);
 
   return {
-    updated: list.length,
+    updated,
   };
 };
 
 type CopyStrategiesOptions = {
   replaceTarget?: boolean;
   preserveActive?: boolean;
+  syncSymbols?: boolean;
+};
+
+type CopyChartSuggestion = {
+  base: string;
+  quote: string;
+  interval: string;
+  baseCoef: number;
+  quoteCoef: number;
+};
+
+const buildTargetSymbolMap = (symbols: string[]): Map<string, string> => {
+  const map = new Map<string, string>();
+  for (const symbol of symbols) {
+    const normalized = normalizeSymbolKey(symbol);
+    if (!normalized) {
+      continue;
+    }
+    if (!map.has(normalized)) {
+      map.set(normalized, String(symbol).toUpperCase());
+    }
+  }
+  return map;
+};
+
+const mapStrategySymbolForTarget = (symbol: string, symbolMap: Map<string, string>): string | null => {
+  const normalized = normalizeSymbolKey(symbol);
+  if (!normalized) {
+    return null;
+  }
+  return symbolMap.get(normalized) || null;
 };
 
 export const copyStrategyBlock = async (
@@ -1186,56 +1259,141 @@ export const copyStrategyBlock = async (
 
   const replaceTarget = options?.replaceTarget !== false;
   const preserveActive = options?.preserveActive === true;
+  const syncSymbols = options?.syncSymbols !== false;
 
   const { db } = await import('../utils/database');
   const targetApiKeyId = await getApiKeyId(targetApiKeyName);
 
+  let targetSymbolMap = new Map<string, string>();
+  let symbolValidationEnabled = false;
+
+  if (syncSymbols) {
+    try {
+      const targetSymbols = await getAllSymbols(targetApiKeyName);
+      targetSymbolMap = buildTargetSymbolMap(Array.isArray(targetSymbols) ? targetSymbols : []);
+      symbolValidationEnabled = targetSymbolMap.size > 0;
+    } catch (error) {
+      logger.warn(`Symbol sync skipped for copy ${sourceApiKeyName} -> ${targetApiKeyName}: ${formatActionError(error)}`);
+    }
+  }
+
   let deleted = 0;
-  if (replaceTarget) {
-    const removeResult: any = await db.run('DELETE FROM strategies WHERE api_key_id = ?', [targetApiKeyId]);
-    deleted = Number(removeResult?.changes || 0);
-  }
-
   let copied = 0;
-  for (const source of sourceStrategies) {
-    await createStrategy(targetApiKeyName, {
-      name: source.name,
-      strategy_type: 'DD_BattleToads',
-      is_active: preserveActive ? source.is_active : false,
-      display_on_chart: source.display_on_chart,
-      show_settings: source.show_settings,
-      show_chart: source.show_chart,
-      show_indicators: source.show_indicators,
-      show_positions_on_chart: source.show_positions_on_chart,
-      show_values_each_bar: source.show_values_each_bar,
-      auto_update: source.auto_update,
-      take_profit_percent: source.take_profit_percent,
-      price_channel_length: source.price_channel_length,
-      detection_source: source.detection_source,
-      base_symbol: source.base_symbol,
-      quote_symbol: source.quote_symbol,
-      interval: source.interval,
-      base_coef: source.base_coef,
-      quote_coef: source.quote_coef,
-      long_enabled: source.long_enabled,
-      short_enabled: source.short_enabled,
-      lot_long_percent: source.lot_long_percent,
-      lot_short_percent: source.lot_short_percent,
-      max_deposit: source.max_deposit,
-      margin_type: source.margin_type,
-      leverage: source.leverage,
-      fixed_lot: source.fixed_lot,
-      reinvest_percent: source.reinvest_percent,
-    });
+  let adjustedSymbols = 0;
+  let disabledStrategies = 0;
+  const issues: string[] = [];
+  let chartSuggestion: CopyChartSuggestion | null = null;
+  let transactionStarted = false;
 
-    copied += 1;
+  try {
+    await db.exec('BEGIN IMMEDIATE TRANSACTION');
+    transactionStarted = true;
+
+    if (replaceTarget) {
+      const removeResult: any = await db.run('DELETE FROM strategies WHERE api_key_id = ?', [targetApiKeyId]);
+      deleted = Number(removeResult?.changes || 0);
+    }
+
+    for (const source of sourceStrategies) {
+      const sourceBase = normalizeSymbol(source.base_symbol);
+      const sourceQuote = normalizeSymbol(source.quote_symbol);
+
+      const mappedBase = symbolValidationEnabled
+        ? mapStrategySymbolForTarget(sourceBase, targetSymbolMap)
+        : sourceBase;
+      const mappedQuote = symbolValidationEnabled
+        ? mapStrategySymbolForTarget(sourceQuote, targetSymbolMap)
+        : sourceQuote;
+
+      const pairValid = symbolValidationEnabled
+        ? Boolean(mappedBase && mappedQuote && mappedBase !== mappedQuote)
+        : Boolean(sourceBase && sourceQuote && sourceBase !== sourceQuote);
+
+      const targetBase = mappedBase || sourceBase;
+      const targetQuote = mappedQuote || sourceQuote;
+
+      if (targetBase !== sourceBase || targetQuote !== sourceQuote) {
+        adjustedSymbols += 1;
+      }
+
+      const created = await createStrategy(targetApiKeyName, {
+        name: source.name,
+        strategy_type: 'DD_BattleToads',
+        is_active: pairValid ? (preserveActive ? source.is_active : false) : false,
+        display_on_chart: source.display_on_chart,
+        show_settings: source.show_settings,
+        show_chart: source.show_chart,
+        show_indicators: source.show_indicators,
+        show_positions_on_chart: source.show_positions_on_chart,
+        show_values_each_bar: source.show_values_each_bar,
+        auto_update: source.auto_update,
+        take_profit_percent: source.take_profit_percent,
+        price_channel_length: source.price_channel_length,
+        detection_source: source.detection_source,
+        base_symbol: targetBase,
+        quote_symbol: targetQuote,
+        interval: source.interval,
+        base_coef: source.base_coef,
+        quote_coef: source.quote_coef,
+        long_enabled: source.long_enabled,
+        short_enabled: source.short_enabled,
+        lot_long_percent: source.lot_long_percent,
+        lot_short_percent: source.lot_short_percent,
+        max_deposit: source.max_deposit,
+        margin_type: source.margin_type,
+        leverage: source.leverage,
+        fixed_lot: source.fixed_lot,
+        reinvest_percent: source.reinvest_percent,
+      });
+
+      if (!pairValid) {
+        disabledStrategies += 1;
+        const issue = `Strategy ${source.name}: pair ${sourceBase}/${sourceQuote} is not available on ${targetApiKeyName}`;
+        issues.push(issue);
+
+        if (created.id) {
+          await updateStrategy(targetApiKeyName, Number(created.id), {
+            is_active: false,
+            state: 'flat',
+            entry_ratio: null,
+            last_action: 'copied_symbol_mismatch',
+            last_error: issue,
+          });
+        }
+      } else if (!chartSuggestion) {
+        chartSuggestion = {
+          base: targetBase,
+          quote: targetQuote,
+          interval: source.interval,
+          baseCoef: source.base_coef,
+          quoteCoef: source.quote_coef,
+        };
+      }
+
+      copied += 1;
+    }
+
+    await db.exec('COMMIT');
+    transactionStarted = false;
+  } catch (error) {
+    if (transactionStarted) {
+      await db.exec('ROLLBACK');
+    }
+    throw error;
   }
 
-  logger.info(`Copied strategy block from ${sourceApiKeyName} to ${targetApiKeyName}, copied=${copied}, deleted=${deleted}`);
+  logger.info(
+    `Copied strategy block from ${sourceApiKeyName} to ${targetApiKeyName}, copied=${copied}, deleted=${deleted}, adjusted=${adjustedSymbols}, disabled=${disabledStrategies}`
+  );
 
   return {
     copied,
     deleted,
+    adjustedSymbols,
+    disabledStrategies,
+    symbolValidationEnabled,
+    issues,
+    chartSuggestion,
   };
 };
 

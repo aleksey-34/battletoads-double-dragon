@@ -106,15 +106,73 @@ export const saveApiKey = async (key: ApiKey) => {
 
 export const saveRiskSettings = async (settings: RiskSettings) => {
   await db.run(
-    'INSERT OR REPLACE INTO risk_settings (api_key_id, long_enabled, short_enabled, lot_long_percent, lot_short_percent, max_deposit, margin_type, leverage, fixed_lot, reinvest_percent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    [settings.api_key_id, settings.long_enabled, settings.short_enabled, settings.lot_long_percent, settings.lot_short_percent, settings.max_deposit, settings.margin_type, settings.leverage, settings.fixed_lot, settings.reinvest_percent]
+    `INSERT INTO risk_settings (
+      api_key_id,
+      long_enabled,
+      short_enabled,
+      lot_long_percent,
+      lot_short_percent,
+      max_deposit,
+      margin_type,
+      leverage,
+      fixed_lot,
+      reinvest_percent
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(api_key_id) DO UPDATE SET
+      long_enabled = excluded.long_enabled,
+      short_enabled = excluded.short_enabled,
+      lot_long_percent = excluded.lot_long_percent,
+      lot_short_percent = excluded.lot_short_percent,
+      max_deposit = excluded.max_deposit,
+      margin_type = excluded.margin_type,
+      leverage = excluded.leverage,
+      fixed_lot = excluded.fixed_lot,
+      reinvest_percent = excluded.reinvest_percent`,
+    [
+      settings.api_key_id,
+      settings.long_enabled ? 1 : 0,
+      settings.short_enabled ? 1 : 0,
+      settings.lot_long_percent,
+      settings.lot_short_percent,
+      settings.max_deposit,
+      settings.margin_type,
+      settings.leverage,
+      settings.fixed_lot ? 1 : 0,
+      settings.reinvest_percent,
+    ]
   );
 };
 
 export const saveChartSettings = async (settings: ChartSettings) => {
   await db.run(
-    'INSERT OR REPLACE INTO chart_settings (api_key_id, display_chart, mono_chart_symbol, mono_chart_tf, synthetic_base, synthetic_quote, synthetic_formula, synthetic_tf) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-    [settings.api_key_id, settings.display_chart, settings.mono_chart_symbol, settings.mono_chart_tf, settings.synthetic_base, settings.synthetic_quote, settings.synthetic_formula, settings.synthetic_tf]
+    `INSERT INTO chart_settings (
+      api_key_id,
+      display_chart,
+      mono_chart_symbol,
+      mono_chart_tf,
+      synthetic_base,
+      synthetic_quote,
+      synthetic_formula,
+      synthetic_tf
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(api_key_id) DO UPDATE SET
+      display_chart = excluded.display_chart,
+      mono_chart_symbol = excluded.mono_chart_symbol,
+      mono_chart_tf = excluded.mono_chart_tf,
+      synthetic_base = excluded.synthetic_base,
+      synthetic_quote = excluded.synthetic_quote,
+      synthetic_formula = excluded.synthetic_formula,
+      synthetic_tf = excluded.synthetic_tf`,
+    [
+      settings.api_key_id,
+      settings.display_chart ? 1 : 0,
+      settings.mono_chart_symbol,
+      settings.mono_chart_tf,
+      settings.synthetic_base,
+      settings.synthetic_quote,
+      settings.synthetic_formula,
+      settings.synthetic_tf,
+    ]
   );
 };
 

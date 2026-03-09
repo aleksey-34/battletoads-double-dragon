@@ -117,8 +117,66 @@ export const initDB = async () => {
       FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
     );
 
+    CREATE TABLE IF NOT EXISTS backtest_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      api_key_name TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      strategy_ids TEXT NOT NULL,
+      strategy_names TEXT NOT NULL,
+      interval TEXT DEFAULT '1h',
+      bars INTEGER DEFAULT 0,
+      initial_balance REAL DEFAULT 0,
+      final_equity REAL DEFAULT 0,
+      total_return_percent REAL DEFAULT 0,
+      max_drawdown_percent REAL DEFAULT 0,
+      trades_count INTEGER DEFAULT 0,
+      win_rate_percent REAL DEFAULT 0,
+      profit_factor REAL DEFAULT 0,
+      commission_percent REAL DEFAULT 0,
+      slippage_percent REAL DEFAULT 0,
+      funding_rate_percent REAL DEFAULT 0,
+      request_json TEXT,
+      summary_json TEXT,
+      equity_curve_json TEXT,
+      trades_json TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS idx_monitoring_snapshots_api_time
       ON monitoring_snapshots (api_key_id, recorded_at);
+
+    CREATE INDEX IF NOT EXISTS idx_backtest_runs_created_at
+      ON backtest_runs (created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_backtest_runs_api_key_name
+      ON backtest_runs (api_key_name);
+  `);
+
+  // Keep only the most recent row per API key before enforcing unique constraints.
+  await db.exec(`
+    DELETE FROM risk_settings
+    WHERE api_key_id IS NOT NULL
+      AND id NOT IN (
+        SELECT MAX(id)
+        FROM risk_settings
+        GROUP BY api_key_id
+      );
+
+    DELETE FROM chart_settings
+    WHERE api_key_id IS NOT NULL
+      AND id NOT IN (
+        SELECT MAX(id)
+        FROM chart_settings
+        GROUP BY api_key_id
+      );
+  `);
+
+  await db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_risk_settings_api_key_unique
+      ON risk_settings (api_key_id);
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_chart_settings_api_key_unique
+      ON chart_settings (api_key_id);
   `);
 
   await ensureColumn('api_keys', 'testnet BOOLEAN DEFAULT 0');

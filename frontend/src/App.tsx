@@ -6,6 +6,7 @@ import Settings from './pages/Settings';
 import Positions from './pages/Positions';
 import Login from './pages/Login';
 import Logs from './pages/Logs';
+import Backtest from './pages/Backtest';
 import './App.css';
 
 const { Header, Content } = Layout;
@@ -16,6 +17,7 @@ function App() {
     { key: '2', label: <Link to="/settings">Settings</Link> },
     { key: '3', label: <Link to="/positions">Positions</Link> },
     { key: '4', label: <Link to="/logs">Logs</Link> },
+    { key: '5', label: <Link to="/backtest">Backtest</Link> },
   ];
 
   return (
@@ -31,6 +33,7 @@ function App() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/positions" element={<Positions />} />
             <Route path="/logs" element={<Logs />} />
+            <Route path="/backtest" element={<Backtest />} />
           </Routes>
         </Content>
       </Layout>

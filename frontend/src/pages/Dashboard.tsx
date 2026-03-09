@@ -84,6 +84,22 @@ type DDStrategy = {
   last_error?: string | null;
 };
 
+type CopyBlockResponse = {
+  copied?: number;
+  deleted?: number;
+  adjustedSymbols?: number;
+  disabledStrategies?: number;
+  symbolValidationEnabled?: boolean;
+  issues?: string[];
+  chartSuggestion?: {
+    base: string;
+    quote: string;
+    interval: string;
+    baseCoef: number;
+    quoteCoef: number;
+  } | null;
+};
+
 const defaultChartSetting = (): ChartSetting => ({
   type: 'mono',
   symbol: 'BTCUSDT',
@@ -1103,22 +1119,10 @@ const Dashboard: React.FC = () => {
 
   const saveStrategy = async (keyName: string, strategy: DDStrategy) => {
     const actionKey = strategyActionKey(keyName, strategy.id, 'save');
-    const chartBinding = getSyntheticBindingFromChart(keyName);
-
-    if (!chartBinding) {
-      message.warning('Synthetic chart (base/quote/TF) is required in Chart Settings to save strategy');
-      return;
-    }
 
     const payload: Partial<DDStrategy> = {
       ...strategy,
     };
-
-    payload.base_symbol = chartBinding.base;
-    payload.quote_symbol = chartBinding.quote;
-    payload.interval = chartBinding.interval;
-    payload.base_coef = chartBinding.baseCoef;
-    payload.quote_coef = chartBinding.quoteCoef;
 
     try {
       setStrategyActionLoading((prev) => ({ ...prev, [actionKey]: true }));
@@ -1136,12 +1140,6 @@ const Dashboard: React.FC = () => {
 
   const executeStrategyNow = async (keyName: string, strategy: DDStrategy) => {
     const actionKey = strategyActionKey(keyName, strategy.id, 'execute');
-    const chartBinding = getSyntheticBindingFromChart(keyName);
-
-    if (!chartBinding) {
-      message.warning('Synthetic chart with base/quote is required to run DD_BattleToads');
-      return;
-    }
 
     try {
       setStrategyActionLoading((prev) => ({ ...prev, [actionKey]: true }));
@@ -1152,9 +1150,7 @@ const Dashboard: React.FC = () => {
         });
       }
 
-      const res = await axios.post(`http://localhost:3001/api/execute-strategy/${keyName}/${strategy.id}`, {
-        chart: chartBinding,
-      });
+      const res = await axios.post(`http://localhost:3001/api/execute-strategy/${keyName}/${strategy.id}`);
       const resultText = res?.data?.result || 'Strategy executed';
       message.success(resultText);
       await fetchStrategies(keyName);
@@ -1322,12 +1318,37 @@ const Dashboard: React.FC = () => {
         targetApiKey: targetKeyName,
         replaceTarget: true,
         preserveActive: false,
+        syncSymbols: true,
       });
 
-      const copied = Number(res?.data?.copied || 0);
-      const deleted = Number(res?.data?.deleted || 0);
-      message.success(`Copied ${copied} strategies from ${sourceKeyName} to ${targetKeyName} (replaced ${deleted})`);
+      const payload = (res?.data || {}) as CopyBlockResponse;
+      const copied = Number(payload.copied || 0);
+      const deleted = Number(payload.deleted || 0);
+      const adjusted = Number(payload.adjustedSymbols || 0);
+      const disabled = Number(payload.disabledStrategies || 0);
+      const issues = Array.isArray(payload.issues) ? payload.issues : [];
+
+      message.success(
+        `Copied ${copied} strategies from ${sourceKeyName} to ${targetKeyName} (replaced ${deleted}, adjusted ${adjusted}, disabled ${disabled})`
+      );
+
+      if (issues.length > 0) {
+        message.warning(issues[0]);
+      }
+
       await fetchStrategies(targetKeyName);
+
+      const suggestion = payload.chartSuggestion;
+      if (suggestion && suggestion.base && suggestion.quote) {
+        updateChartSetting(targetKeyName, {
+          type: 'synthetic',
+          base: suggestion.base,
+          quote: suggestion.quote,
+          interval: suggestion.interval || '1h',
+          baseCoef: Number(suggestion.baseCoef) || 1,
+          quoteCoef: Number(suggestion.quoteCoef) || 1,
+        });
+      }
     } catch (error: any) {
       console.error(error);
       message.error(error?.response?.data?.error || 'Failed to copy strategy block');

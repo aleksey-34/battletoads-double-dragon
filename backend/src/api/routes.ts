@@ -34,6 +34,7 @@ import {
   copyStrategyBlock,
 } from '../bot/strategy';
 import { getMonitoringLatest, getMonitoringSnapshots, recordMonitoringSnapshot } from '../bot/monitoring';
+import { getBacktestRun, listBacktestRuns, runBacktest, saveBacktestRun } from '../backtest/engine';
 import { loadSettings, saveApiKey, saveRiskSettings, saveChartSettings, ApiKey, RiskSettings, ChartSettings, Strategy } from '../config/settings';
 import { db } from '../utils/database';
 import { authenticate } from '../utils/auth';
@@ -268,7 +269,16 @@ router.put('/chart-settings/:apiKeyName', async (req, res) => {
   const { apiKeyName } = req.params;
   const settings: ChartSettings = req.body;
   try {
-    await saveChartSettings(settings);
+    const apiKey = await db.get('SELECT id FROM api_keys WHERE name = ?', [apiKeyName]);
+    if (!apiKey) {
+      return res.status(404).json({ error: 'API key not found' });
+    }
+
+    await saveChartSettings({
+      ...settings,
+      api_key_id: Number(apiKey.id),
+    });
+
     res.json({ success: true });
   } catch (error) {
     const err = error as Error;
@@ -284,6 +294,7 @@ router.post('/strategies/copy-block', async (req, res) => {
     targetApiKey,
     replaceTarget,
     preserveActive,
+    syncSymbols,
   } = req.body || {};
 
   if (!sourceApiKey || !targetApiKey) {
@@ -294,6 +305,7 @@ router.post('/strategies/copy-block', async (req, res) => {
     const result = await copyStrategyBlock(String(sourceApiKey), String(targetApiKey), {
       replaceTarget: replaceTarget !== false,
       preserveActive: preserveActive === true,
+      syncSymbols: syncSymbols !== false,
     });
     res.json({ success: true, ...result });
   } catch (error) {
@@ -311,6 +323,72 @@ router.get('/strategies/:apiKeyName', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Error loading strategies: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/backtest/strategies/:apiKeyName', async (req, res) => {
+  const { apiKeyName } = req.params;
+  try {
+    const strategies = await getStrategies(apiKeyName);
+    res.json(strategies);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading backtest strategies: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/backtest/run', async (req, res) => {
+  try {
+    const saveResult = req.body?.saveResult !== false;
+    const result = await runBacktest(req.body || {});
+    let runId: number | null = null;
+
+    if (saveResult) {
+      runId = await saveBacktestRun(result);
+      result.runId = runId;
+    }
+
+    res.json({ success: true, runId, result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error running backtest: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/backtest/runs', async (req, res) => {
+  const apiKeyName = req.query.apiKeyName ? String(req.query.apiKeyName) : undefined;
+  const limitRaw = Number.parseInt(String(req.query.limit || '20'), 10);
+  const limit = Number.isFinite(limitRaw) ? limitRaw : 20;
+
+  try {
+    const rows = await listBacktestRuns(limit, apiKeyName);
+    res.json(rows);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading backtest runs: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/backtest/runs/:id', async (req, res) => {
+  const id = Number.parseInt(String(req.params.id || '0'), 10);
+
+  if (!Number.isFinite(id) || id <= 0) {
+    return res.status(400).json({ error: 'Invalid run id' });
+  }
+
+  try {
+    const run = await getBacktestRun(id);
+    if (!run) {
+      return res.status(404).json({ error: 'Backtest run not found' });
+    }
+    res.json(run);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading backtest run ${id}: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
