@@ -318,8 +318,14 @@ const Backtest: React.FC = () => {
       await loadHistory();
     } catch (error: any) {
       console.error(error);
-      setErrorText(error?.response?.data?.error || error?.message || 'Backtest failed');
-      message.error(error?.response?.data?.error || 'Backtest failed');
+      const statusCode = Number(error?.response?.status || 0);
+      const backendError = error?.response?.data?.error || error?.message || 'Backtest failed';
+      const userMessage = statusCode === 429
+        ? 'Backtest already running. Wait until it finishes to avoid overloading live trading.'
+        : backendError;
+
+      setErrorText(userMessage);
+      message.error(userMessage);
     } finally {
       setRunLoading(false);
     }

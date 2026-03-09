@@ -44,6 +44,7 @@ import fs from 'fs';
 import path from 'path';
 
 const router = Router();
+let backtestRunInProgress = false;
 
 // Применить аутентификацию ко всем маршрутам
 router.use(authenticate);
@@ -340,7 +341,14 @@ router.get('/backtest/strategies/:apiKeyName', async (req, res) => {
 });
 
 router.post('/backtest/run', async (req, res) => {
+  if (backtestRunInProgress) {
+    return res.status(429).json({
+      error: 'Backtest already running. Wait for current run to finish before starting a new one.',
+    });
+  }
+
   try {
+    backtestRunInProgress = true;
     const saveResult = req.body?.saveResult !== false;
     const result = await runBacktest(req.body || {});
     let runId: number | null = null;
@@ -355,6 +363,8 @@ router.post('/backtest/run', async (req, res) => {
     const err = error as Error;
     logger.error(`Error running backtest: ${err.message}`);
     res.status(500).json({ error: err.message });
+  } finally {
+    backtestRunInProgress = false;
   }
 });
 

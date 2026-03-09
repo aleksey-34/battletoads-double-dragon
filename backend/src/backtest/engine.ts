@@ -164,6 +164,16 @@ const parseTimestampMs = (value: any): number | null => {
   return Math.floor(parsed);
 };
 
+const eventLoopYield = async (): Promise<void> => {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+};
+
+const maybeYieldByCounter = async (counter: number, chunk: number = 250): Promise<void> => {
+  if (counter > 0 && counter % chunk === 0) {
+    await eventLoopYield();
+  }
+};
+
 const normalizeDateCachePart = (value: any): string => {
   return String(value || '').trim().toUpperCase();
 };
@@ -516,8 +526,12 @@ const loadRuntimeStrategies = async (
 ): Promise<RuntimeLoadResult> => {
   const runtimes: RuntimeStrategy[] = [];
   const skipped: Array<{ strategyId: number; strategyName: string; reason: string }> = [];
+  let strategyCounter = 0;
 
   for (const strategy of strategies) {
+    strategyCounter += 1;
+    await maybeYieldByCounter(strategyCounter, 3);
+
     const length = Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 50)));
     const interval = String(strategy.interval || '1h');
     const intervalMs = intervalToMs(interval);
@@ -767,7 +781,12 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     maxDrawdownPercent = Math.max(maxDrawdownPercent, drawdownPct);
   };
 
+  let processedEvents = 0;
+
   for (const event of events) {
+    processedEvents += 1;
+    await maybeYieldByCounter(processedEvents, 250);
+
     const runtime = runtimes[event.strategyIndex];
     const strategy = runtime.strategy;
     const candle = runtime.candles[event.candleIndex];
