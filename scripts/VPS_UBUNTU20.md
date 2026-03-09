@@ -112,6 +112,29 @@ REPO_URL="https://github.com/aleksey-34/battletoads-double-dragon.git"
 DOMAIN=176.57.184.98 ADMIN_PASSWORD='strong-password' bash setup_vps_ubuntu20.sh "$REPO_URL" /opt/battletoads-double-dragon main
 ```
 
+If your Termius session may disconnect, run setup in background with log:
+
+```bash
+cd /root
+PKG="$(ls -1t btdd_vps_git_bundle_*.tar.gz | head -n 1)"
+DIR="${PKG%.tar.gz}"
+rm -rf "$DIR"
+tar -xzf "$PKG"
+cd "$DIR"
+REPO_URL="https://github.com/aleksey-34/battletoads-double-dragon.git"
+nohup env DOMAIN=176.57.184.98 ADMIN_PASSWORD='strong-password' \
+	bash ./setup_vps_ubuntu20.sh "$REPO_URL" /opt/battletoads-double-dragon main \
+	> /root/btdd_setup.log 2>&1 &
+
+tail -n 80 /root/btdd_setup.log
+```
+
+Check progress later:
+
+```bash
+tail -f /root/btdd_setup.log
+```
+
 If your repository is private, use URL with access token or SSH URL with configured deploy key.
 
 ### 4) Verify services
