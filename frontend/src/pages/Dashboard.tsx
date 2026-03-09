@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Button, Switch, Row, Col, Form, Input, Select, Collapse, Spin, Alert, Space, InputNumber, Tag, Popconfirm, message, Divider } from 'antd';
+import { Card, Button, Switch, Row, Col, Form, Input, Select, Collapse, Spin, Alert, Space, InputNumber, Tag, Popconfirm, message, Divider, FloatButton, Badge } from 'antd';
 import axios from 'axios';
 import ChartComponent, { HoverOHLC, OverlayLine } from '../components/ChartComponent';
 import StatusIndicator from '../components/StatusIndicator';
@@ -1644,6 +1644,10 @@ const Dashboard: React.FC = () => {
     const monitoringError = monitoringErrorByKey[keyName] || '';
     const copySourceKey = copySourceByTargetKey[keyName] || '';
     const copyLoading = copyActionLoadingByKey[keyName] || false;
+    const totalStrategies = keyStrategies.length;
+    const runningStrategies = keyStrategies.filter((strategy) => strategy.is_active).length;
+    const pausedStrategies = Math.max(0, totalStrategies - runningStrategies);
+    const errorStrategies = keyStrategies.filter((strategy) => Boolean(String(strategy.last_error || '').trim())).length;
 
     return {
       key: String(key.id),
@@ -1652,6 +1656,10 @@ const Dashboard: React.FC = () => {
           <span>{key.name} ({key.exchange})</span>
           <StatusIndicator status={keyStatus.status} message={keyStatus.message} />
           <span style={{ fontSize: 12, color: '#666666' }}>API: {keyStatusText}</span>
+          <Tag color="blue">strategies: {totalStrategies}</Tag>
+          <Tag color="green">running: {runningStrategies}</Tag>
+          <Tag color="orange">paused: {pausedStrategies}</Tag>
+          {errorStrategies > 0 ? <Tag color="red">errors: {errorStrategies}</Tag> : null}
         </div>
       ),
       children: (
@@ -2100,6 +2108,12 @@ const Dashboard: React.FC = () => {
                             : strategy.is_active
                               ? { color: 'green', label: 'active', text: String(strategy.last_action || 'running') }
                               : { color: 'orange', label: 'paused', text: String(strategy.last_action || 'paused') };
+                          const strategyBadgeStatus: 'error' | 'processing' | 'default' = strategy.last_error
+                            ? 'error'
+                            : strategy.is_active
+                              ? 'processing'
+                              : 'default';
+                          const strategyBadgeText = strategy.last_error ? 'ERR' : strategy.is_active ? 'RUN' : 'PAUSE';
                           const donchian = strategy.show_indicators
                             ? buildDonchianSnapshot(
                               Array.isArray(keyChartData) ? keyChartData : [],
@@ -2151,6 +2165,7 @@ const Dashboard: React.FC = () => {
                             label: (
                               <Space wrap>
                                 <span>{strategy.name}</span>
+                                <Badge status={strategyBadgeStatus} text={strategyBadgeText} />
                                 <Tag color={strategyStatus.color}>{strategyStatus.label}</Tag>
                                 <Tag color={strategy.state === 'long' ? 'green' : strategy.state === 'short' ? 'red' : 'default'}>
                                   state: {strategy.state}
@@ -3009,6 +3024,7 @@ const Dashboard: React.FC = () => {
         </Popconfirm>
       </Space>
       <Collapse activeKey={activePanel} onChange={handlePanelChange} items={collapseItems} />
+      <FloatButton.BackTop visibilityHeight={320} />
     </div>
   );
 };
