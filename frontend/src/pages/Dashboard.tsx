@@ -1135,10 +1135,31 @@ const Dashboard: React.FC = () => {
     }
 
     const payload: Partial<DDStrategy> = {
-      ...strategy,
+      name: strategy.name,
+      display_on_chart: strategy.display_on_chart,
+      show_settings: strategy.show_settings,
+      show_chart: strategy.show_chart,
+      show_indicators: strategy.show_indicators,
+      show_positions_on_chart: strategy.show_positions_on_chart,
+      show_values_each_bar: strategy.show_values_each_bar,
+      auto_update: strategy.auto_update,
+      take_profit_percent: strategy.take_profit_percent,
+      price_channel_length: strategy.price_channel_length,
+      detection_source: strategy.detection_source,
       base_symbol: normalizedBase,
       quote_symbol: normalizedQuote,
       interval: normalizedInterval,
+      base_coef: strategy.base_coef,
+      quote_coef: strategy.quote_coef,
+      long_enabled: strategy.long_enabled,
+      short_enabled: strategy.short_enabled,
+      lot_long_percent: strategy.lot_long_percent,
+      lot_short_percent: strategy.lot_short_percent,
+      max_deposit: strategy.max_deposit,
+      margin_type: strategy.margin_type,
+      leverage: strategy.leverage,
+      fixed_lot: strategy.fixed_lot,
+      reinvest_percent: strategy.reinvest_percent,
     };
 
     try {

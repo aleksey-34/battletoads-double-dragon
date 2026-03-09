@@ -188,83 +188,6 @@ const getStrategyRow = async (apiKeyName: string, strategyId: number): Promise<a
   return row;
 };
 
-const writeStrategy = async (strategy: Strategy): Promise<void> => {
-  const { db } = await import('../utils/database');
-  await db.run(
-    `UPDATE strategies SET
-      name = ?,
-      strategy_type = ?,
-      is_active = ?,
-      display_on_chart = ?,
-      show_settings = ?,
-      show_chart = ?,
-      show_indicators = ?,
-      show_positions_on_chart = ?,
-      show_values_each_bar = ?,
-      auto_update = ?,
-      take_profit_percent = ?,
-      price_channel_length = ?,
-      detection_source = ?,
-      base_symbol = ?,
-      quote_symbol = ?,
-      interval = ?,
-      base_coef = ?,
-      quote_coef = ?,
-      long_enabled = ?,
-      short_enabled = ?,
-      lot_long_percent = ?,
-      lot_short_percent = ?,
-      max_deposit = ?,
-      margin_type = ?,
-      leverage = ?,
-      fixed_lot = ?,
-      reinvest_percent = ?,
-      state = ?,
-      entry_ratio = ?,
-      last_signal = ?,
-      last_action = ?,
-      last_error = ?,
-      updated_at = CURRENT_TIMESTAMP
-     WHERE id = ? AND api_key_id = ?`,
-    [
-      strategy.name,
-      'DD_BattleToads',
-      strategy.is_active ? 1 : 0,
-      strategy.display_on_chart ? 1 : 0,
-      strategy.show_settings ? 1 : 0,
-      strategy.show_chart ? 1 : 0,
-      strategy.show_indicators ? 1 : 0,
-      strategy.show_positions_on_chart ? 1 : 0,
-      strategy.show_values_each_bar ? 1 : 0,
-      strategy.auto_update ? 1 : 0,
-      strategy.take_profit_percent,
-      strategy.price_channel_length,
-      strategy.detection_source,
-      strategy.base_symbol,
-      strategy.quote_symbol,
-      strategy.interval,
-      strategy.base_coef,
-      strategy.quote_coef,
-      strategy.long_enabled ? 1 : 0,
-      strategy.short_enabled ? 1 : 0,
-      strategy.lot_long_percent,
-      strategy.lot_short_percent,
-      strategy.max_deposit,
-      strategy.margin_type,
-      strategy.leverage,
-      strategy.fixed_lot ? 1 : 0,
-      strategy.reinvest_percent,
-      strategy.state || 'flat',
-      strategy.entry_ratio ?? null,
-      strategy.last_signal ?? null,
-      strategy.last_action ?? null,
-      strategy.last_error ?? null,
-      strategy.id,
-      strategy.api_key_id,
-    ]
-  );
-};
-
 const parseSyntheticCandle = (item: any): ParsedSyntheticCandle | null => {
   const timeMs = Number(item?.time);
   const open = Number(item?.open);
@@ -609,59 +532,150 @@ export const updateStrategy = async (
 ): Promise<Strategy> => {
   const existing = normalizeStrategy(await getStrategyRow(apiKeyName, strategyId));
 
-  const merged: Strategy = {
-    ...existing,
-    name: patch.name !== undefined ? String(patch.name) : existing.name,
-    strategy_type: 'DD_BattleToads',
-    is_active: patch.is_active !== undefined ? safeBoolean(patch.is_active, existing.is_active) : existing.is_active,
-    display_on_chart: patch.display_on_chart !== undefined ? safeBoolean(patch.display_on_chart, existing.display_on_chart) : existing.display_on_chart,
-    show_settings: patch.show_settings !== undefined ? safeBoolean(patch.show_settings, existing.show_settings) : existing.show_settings,
-    show_chart: patch.show_chart !== undefined ? safeBoolean(patch.show_chart, existing.show_chart) : existing.show_chart,
-    show_indicators:
-      patch.show_indicators !== undefined ? safeBoolean(patch.show_indicators, existing.show_indicators) : existing.show_indicators,
-    show_positions_on_chart:
-      patch.show_positions_on_chart !== undefined
-        ? safeBoolean(patch.show_positions_on_chart, existing.show_positions_on_chart)
-        : existing.show_positions_on_chart,
-    show_values_each_bar:
-      patch.show_values_each_bar !== undefined
-        ? safeBoolean(patch.show_values_each_bar, existing.show_values_each_bar)
-        : existing.show_values_each_bar,
-    auto_update: patch.auto_update !== undefined ? safeBoolean(patch.auto_update, existing.auto_update) : existing.auto_update,
-    take_profit_percent:
-      patch.take_profit_percent !== undefined ? safeNumber(patch.take_profit_percent, existing.take_profit_percent) : existing.take_profit_percent,
-    price_channel_length:
-      patch.price_channel_length !== undefined
-        ? Math.max(2, Math.floor(safeNumber(patch.price_channel_length, existing.price_channel_length)))
-        : existing.price_channel_length,
-    detection_source: patch.detection_source === 'wick' ? 'wick' : patch.detection_source === 'close' ? 'close' : existing.detection_source,
-    base_symbol: patch.base_symbol !== undefined ? normalizeSymbol(String(patch.base_symbol)) : existing.base_symbol,
-    quote_symbol: patch.quote_symbol !== undefined ? normalizeSymbol(String(patch.quote_symbol)) : existing.quote_symbol,
-    interval: patch.interval !== undefined ? String(patch.interval).trim() || existing.interval : existing.interval,
-    base_coef: patch.base_coef !== undefined ? safeNumber(patch.base_coef, existing.base_coef) : existing.base_coef,
-    quote_coef: patch.quote_coef !== undefined ? safeNumber(patch.quote_coef, existing.quote_coef) : existing.quote_coef,
-    long_enabled: patch.long_enabled !== undefined ? safeBoolean(patch.long_enabled, existing.long_enabled) : existing.long_enabled,
-    short_enabled: patch.short_enabled !== undefined ? safeBoolean(patch.short_enabled, existing.short_enabled) : existing.short_enabled,
-    lot_long_percent:
-      patch.lot_long_percent !== undefined ? safeNumber(patch.lot_long_percent, existing.lot_long_percent) : existing.lot_long_percent,
-    lot_short_percent:
-      patch.lot_short_percent !== undefined ? safeNumber(patch.lot_short_percent, existing.lot_short_percent) : existing.lot_short_percent,
-    max_deposit: patch.max_deposit !== undefined ? safeNumber(patch.max_deposit, existing.max_deposit) : existing.max_deposit,
-    margin_type: patch.margin_type === 'isolated' ? 'isolated' : patch.margin_type === 'cross' ? 'cross' : existing.margin_type,
-    leverage: patch.leverage !== undefined ? Math.max(1, safeNumber(patch.leverage, existing.leverage)) : existing.leverage,
-    fixed_lot: patch.fixed_lot !== undefined ? safeBoolean(patch.fixed_lot, existing.fixed_lot) : existing.fixed_lot,
-    reinvest_percent:
-      patch.reinvest_percent !== undefined ? safeNumber(patch.reinvest_percent, existing.reinvest_percent) : existing.reinvest_percent,
-    state: patch.state !== undefined ? patch.state : existing.state,
-    entry_ratio: patch.entry_ratio !== undefined ? patch.entry_ratio : existing.entry_ratio,
-    last_signal: patch.last_signal !== undefined ? patch.last_signal : existing.last_signal,
-    last_action: patch.last_action !== undefined ? patch.last_action : existing.last_action,
-    last_error: patch.last_error !== undefined ? patch.last_error : existing.last_error,
+  const updates: Array<{ column: string; value: any }> = [];
+  const pushUpdate = (column: string, value: any) => {
+    updates.push({ column, value });
   };
 
-  validateStrategyBinding(merged);
+  if (patch.name !== undefined) {
+    pushUpdate('name', String(patch.name || '').trim() || existing.name);
+  }
+  if (patch.is_active !== undefined) {
+    pushUpdate('is_active', safeBoolean(patch.is_active, existing.is_active) ? 1 : 0);
+  }
+  if (patch.display_on_chart !== undefined) {
+    pushUpdate('display_on_chart', safeBoolean(patch.display_on_chart, existing.display_on_chart) ? 1 : 0);
+  }
+  if (patch.show_settings !== undefined) {
+    pushUpdate('show_settings', safeBoolean(patch.show_settings, existing.show_settings) ? 1 : 0);
+  }
+  if (patch.show_chart !== undefined) {
+    pushUpdate('show_chart', safeBoolean(patch.show_chart, existing.show_chart) ? 1 : 0);
+  }
+  if (patch.show_indicators !== undefined) {
+    pushUpdate('show_indicators', safeBoolean(patch.show_indicators, existing.show_indicators) ? 1 : 0);
+  }
+  if (patch.show_positions_on_chart !== undefined) {
+    pushUpdate(
+      'show_positions_on_chart',
+      safeBoolean(patch.show_positions_on_chart, existing.show_positions_on_chart) ? 1 : 0
+    );
+  }
+  if (patch.show_values_each_bar !== undefined) {
+    pushUpdate('show_values_each_bar', safeBoolean(patch.show_values_each_bar, existing.show_values_each_bar) ? 1 : 0);
+  }
+  if (patch.auto_update !== undefined) {
+    pushUpdate('auto_update', safeBoolean(patch.auto_update, existing.auto_update) ? 1 : 0);
+  }
+  if (patch.take_profit_percent !== undefined) {
+    pushUpdate('take_profit_percent', safeNumber(patch.take_profit_percent, existing.take_profit_percent));
+  }
+  if (patch.price_channel_length !== undefined) {
+    pushUpdate(
+      'price_channel_length',
+      Math.max(2, Math.floor(safeNumber(patch.price_channel_length, existing.price_channel_length)))
+    );
+  }
+  if (patch.detection_source !== undefined) {
+    const nextDetection = patch.detection_source === 'wick' ? 'wick' : patch.detection_source === 'close' ? 'close' : existing.detection_source;
+    pushUpdate('detection_source', nextDetection);
+  }
+  if (patch.base_symbol !== undefined) {
+    pushUpdate('base_symbol', normalizeSymbol(String(patch.base_symbol)));
+  }
+  if (patch.quote_symbol !== undefined) {
+    pushUpdate('quote_symbol', normalizeSymbol(String(patch.quote_symbol)));
+  }
+  if (patch.interval !== undefined) {
+    pushUpdate('interval', String(patch.interval || '').trim() || existing.interval);
+  }
+  if (patch.base_coef !== undefined) {
+    pushUpdate('base_coef', safeNumber(patch.base_coef, existing.base_coef));
+  }
+  if (patch.quote_coef !== undefined) {
+    pushUpdate('quote_coef', safeNumber(patch.quote_coef, existing.quote_coef));
+  }
+  if (patch.long_enabled !== undefined) {
+    pushUpdate('long_enabled', safeBoolean(patch.long_enabled, existing.long_enabled) ? 1 : 0);
+  }
+  if (patch.short_enabled !== undefined) {
+    pushUpdate('short_enabled', safeBoolean(patch.short_enabled, existing.short_enabled) ? 1 : 0);
+  }
+  if (patch.lot_long_percent !== undefined) {
+    pushUpdate('lot_long_percent', safeNumber(patch.lot_long_percent, existing.lot_long_percent));
+  }
+  if (patch.lot_short_percent !== undefined) {
+    pushUpdate('lot_short_percent', safeNumber(patch.lot_short_percent, existing.lot_short_percent));
+  }
+  if (patch.max_deposit !== undefined) {
+    pushUpdate('max_deposit', safeNumber(patch.max_deposit, existing.max_deposit));
+  }
+  if (patch.margin_type !== undefined) {
+    const nextMarginType = patch.margin_type === 'isolated' ? 'isolated' : patch.margin_type === 'cross' ? 'cross' : existing.margin_type;
+    pushUpdate('margin_type', nextMarginType);
+  }
+  if (patch.leverage !== undefined) {
+    pushUpdate('leverage', Math.max(1, safeNumber(patch.leverage, existing.leverage)));
+  }
+  if (patch.fixed_lot !== undefined) {
+    pushUpdate('fixed_lot', safeBoolean(patch.fixed_lot, existing.fixed_lot) ? 1 : 0);
+  }
+  if (patch.reinvest_percent !== undefined) {
+    pushUpdate('reinvest_percent', safeNumber(patch.reinvest_percent, existing.reinvest_percent));
+  }
+  if (patch.state !== undefined) {
+    const nextState = patch.state === 'long' || patch.state === 'short' || patch.state === 'flat' ? patch.state : existing.state;
+    pushUpdate('state', nextState);
+  }
+  if (patch.entry_ratio !== undefined) {
+    if (patch.entry_ratio === null) {
+      pushUpdate('entry_ratio', null);
+    } else {
+      const currentEntry = existing.entry_ratio === null || existing.entry_ratio === undefined ? 0 : existing.entry_ratio;
+      pushUpdate('entry_ratio', safeNumber(patch.entry_ratio, currentEntry));
+    }
+  }
+  if (patch.last_signal !== undefined) {
+    pushUpdate('last_signal', patch.last_signal ?? null);
+  }
+  if (patch.last_action !== undefined) {
+    pushUpdate('last_action', patch.last_action ?? null);
+  }
+  if (patch.last_error !== undefined) {
+    pushUpdate('last_error', patch.last_error ?? null);
+  }
 
-  await writeStrategy(merged);
+  const bindingTouched = (
+    patch.base_symbol !== undefined
+    || patch.quote_symbol !== undefined
+    || patch.interval !== undefined
+    || patch.base_coef !== undefined
+    || patch.quote_coef !== undefined
+  );
+
+  if (bindingTouched) {
+    validateStrategyBinding({
+      base_symbol: patch.base_symbol !== undefined ? normalizeSymbol(String(patch.base_symbol)) : existing.base_symbol,
+      quote_symbol: patch.quote_symbol !== undefined ? normalizeSymbol(String(patch.quote_symbol)) : existing.quote_symbol,
+      interval: patch.interval !== undefined ? String(patch.interval || '').trim() || existing.interval : existing.interval,
+      base_coef: patch.base_coef !== undefined ? safeNumber(patch.base_coef, existing.base_coef) : existing.base_coef,
+      quote_coef: patch.quote_coef !== undefined ? safeNumber(patch.quote_coef, existing.quote_coef) : existing.quote_coef,
+    });
+  }
+
+  if (updates.length === 0) {
+    return existing;
+  }
+
+  const { db } = await import('../utils/database');
+  const setClause = updates.map((item) => `${item.column} = ?`).join(', ');
+  const params = updates.map((item) => item.value);
+
+  await db.run(
+    `UPDATE strategies SET ${setClause}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND api_key_id = ?`,
+    [...params, strategyId, existing.api_key_id]
+  );
+
   const updated = await getStrategyRow(apiKeyName, strategyId);
   return normalizeStrategy(updated);
 };
