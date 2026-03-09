@@ -595,18 +595,6 @@ const loadRuntimeStrategies = async (
       );
     }
 
-    if (request.dateFromMs !== null) {
-      const firstAvailable = candles[0]?.timeMs;
-      if (Number.isFinite(firstAvailable) && firstAvailable > request.dateFromMs) {
-        const reason = `Pair history starts at ${new Date(firstAvailable).toISOString()}, after requested start`;
-        if (request.skipMissingSymbols) {
-          skipped.push({ strategyId: Number(strategy.id), strategyName: strategy.name, reason });
-          continue;
-        }
-        throw new Error(`Strategy ${strategy.name}: ${reason}`);
-      }
-    }
-
     let firstInRangeIndex = 0;
     if (request.dateFromMs !== null) {
       const dateFromMs = request.dateFromMs;
@@ -688,7 +676,7 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     dateFromMs,
     dateToMs,
     warmupBars,
-    skipMissingSymbols: raw.skipMissingSymbols !== false,
+    skipMissingSymbols: raw.skipMissingSymbols === true,
     initialBalance,
     commissionPercent,
     slippagePercent,

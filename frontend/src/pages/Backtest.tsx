@@ -4,7 +4,7 @@ import {
   Button,
   Card,
   Col,
-  Input,
+  DatePicker,
   InputNumber,
   Row,
   Select,
@@ -16,6 +16,7 @@ import {
   Typography,
   message,
 } from 'antd';
+import type { Dayjs } from 'dayjs';
 import axios from 'axios';
 import ChartComponent from '../components/ChartComponent';
 
@@ -153,10 +154,10 @@ const Backtest: React.FC = () => {
   const [strategyIds, setStrategyIds] = useState<number[]>([]);
 
   const [bars, setBars] = useState<number>(1200);
-  const [dateFrom, setDateFrom] = useState<string>('');
-  const [dateTo, setDateTo] = useState<string>('');
+  const [dateFrom, setDateFrom] = useState<Dayjs | null>(null);
+  const [dateTo, setDateTo] = useState<Dayjs | null>(null);
   const [warmupBars, setWarmupBars] = useState<number>(0);
-  const [skipMissingSymbols, setSkipMissingSymbols] = useState<boolean>(true);
+  const [skipMissingSymbols, setSkipMissingSymbols] = useState<boolean>(false);
   const [initialBalance, setInitialBalance] = useState<number>(1000);
   const [commissionPercent, setCommissionPercent] = useState<number>(0.06);
   const [slippagePercent, setSlippagePercent] = useState<number>(0.03);
@@ -287,8 +288,8 @@ const Backtest: React.FC = () => {
         apiKeyName,
         mode,
         bars,
-        dateFrom: dateFrom || undefined,
-        dateTo: dateTo || undefined,
+        dateFrom: dateFrom ? dateFrom.valueOf() : undefined,
+        dateTo: dateTo ? dateTo.valueOf() : undefined,
         warmupBars,
         skipMissingSymbols,
         initialBalance,
@@ -412,6 +413,9 @@ const Backtest: React.FC = () => {
                 value={bars}
                 onChange={(value) => setBars(Number(value || 1200))}
               />
+              <Typography.Text type="secondary" style={{ display: 'block', marginTop: 6, fontSize: 12 }}>
+                Used when Date From/To are not set, and as extra fetch depth for indicator warmup.
+              </Typography.Text>
             </Col>
 
             <Col xs={24} md={12}>
@@ -428,21 +432,25 @@ const Backtest: React.FC = () => {
 
           <Row gutter={[12, 12]}>
             <Col xs={24} md={12}>
-              <Typography.Text strong>Date From (UTC/local parse)</Typography.Text>
-              <Input
+              <Typography.Text strong>Date From</Typography.Text>
+              <DatePicker
+                showTime
+                format="YYYY-MM-DD HH:mm:ss"
                 style={{ width: '100%', marginTop: 6 }}
-                placeholder="2026-01-01T00:00:00Z"
+                placeholder="Select start date"
                 value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
+                onChange={(value) => setDateFrom(value)}
               />
             </Col>
             <Col xs={24} md={12}>
-              <Typography.Text strong>Date To (UTC/local parse)</Typography.Text>
-              <Input
+              <Typography.Text strong>Date To</Typography.Text>
+              <DatePicker
+                showTime
+                format="YYYY-MM-DD HH:mm:ss"
                 style={{ width: '100%', marginTop: 6 }}
-                placeholder="2026-03-01T00:00:00Z"
+                placeholder="Select end date"
                 value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
+                onChange={(value) => setDateTo(value)}
               />
             </Col>
           </Row>
@@ -460,10 +468,13 @@ const Backtest: React.FC = () => {
               />
             </Col>
             <Col xs={24} md={12}>
-              <Typography.Text strong>Skip pairs without full history</Typography.Text>
+              <Typography.Text strong>Skip pairs with unusable history</Typography.Text>
               <div style={{ marginTop: 10 }}>
                 <Switch checked={skipMissingSymbols} onChange={(checked) => setSkipMissingSymbols(checked)} />
               </div>
+              <Typography.Text type="secondary" style={{ display: 'block', marginTop: 6, fontSize: 12 }}>
+                Off by default: pairs start from first available candles and warm up before trading.
+              </Typography.Text>
             </Col>
           </Row>
 

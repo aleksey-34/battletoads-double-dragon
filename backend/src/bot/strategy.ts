@@ -257,39 +257,264 @@ const extractUsdtBalance = (balances: any[]): number => {
 
 const decimalPlaces = (value: string): number => {
   const normalized = String(value || '');
+  const scientific = normalized.toLowerCase().match(/e-(\d+)$/);
+  if (scientific) {
+    const parsed = Number.parseInt(scientific[1], 10);
+    return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
+  }
+
   if (!normalized.includes('.')) {
     return 0;
   }
   return normalized.split('.')[1].replace(/0+$/, '').length;
 };
 
-const normalizeQtyByStep = async (apiKeyName: string, symbol: string, rawQty: number): Promise<string> => {
-  if (!Number.isFinite(rawQty) || rawQty <= 0) {
-    throw new Error(`Invalid qty for ${symbol}`);
-  }
+type QtyRules = {
+  symbol: string;
+  qtyStep: number;
+  minQty: number;
+  maxQty: number;
+  decimals: number;
+};
 
+type QtyCandidate = {
+  qty: number;
+  notional: number;
+  text: string;
+};
+
+type BalancedQtyPlan = {
+  baseQty: string;
+  quoteQty: string;
+  baseNotional: number;
+  quoteNotional: number;
+  totalNotional: number;
+  shareError: number;
+  totalDeviation: number;
+  oversize: number;
+  baseTargetNotional: number;
+  quoteTargetNotional: number;
+};
+
+const SIZING_EPSILON = 1e-9;
+const MAX_SHARE_ERROR = 0.03;
+const MAX_LEG_DEVIATION = 0.3;
+const MAX_OVERSIZE_DEVIATION = 0.2;
+const MAX_TOTAL_DEVIATION = 0.3;
+
+const normalizeQtyValue = (value: number, decimals: number): number => {
+  const safeDecimals = Math.max(0, Math.min(12, decimals));
+  return Number(value.toFixed(safeDecimals));
+};
+
+const formatQty = (qty: number, decimals: number): string => {
+  return normalizeQtyValue(qty, decimals).toFixed(Math.max(0, decimals)).replace(/\.?0+$/, '');
+};
+
+const loadQtyRules = async (apiKeyName: string, symbol: string): Promise<QtyRules> => {
   const info = await getInstrumentInfo(apiKeyName, symbol);
+
   const qtyStepRaw = String(info?.lotSizeFilter?.qtyStep || '0.001');
   const minQtyRaw = String(info?.lotSizeFilter?.minOrderQty || '0');
+  const maxQtyRaw = String(info?.lotSizeFilter?.maxOrderQty || '0');
 
   const qtyStep = Number.parseFloat(qtyStepRaw);
   const minQty = Number.parseFloat(minQtyRaw);
+  const maxQty = Number.parseFloat(maxQtyRaw);
 
-  let normalized = rawQty;
-  if (Number.isFinite(qtyStep) && qtyStep > 0) {
-    normalized = Math.floor(rawQty / qtyStep) * qtyStep;
+  const safeStep = Number.isFinite(qtyStep) && qtyStep > 0 ? qtyStep : 0.001;
+  const safeMin = Number.isFinite(minQty) && minQty > 0 ? minQty : 0;
+  const safeMax = Number.isFinite(maxQty) && maxQty > 0 ? maxQty : Number.POSITIVE_INFINITY;
+
+  return {
+    symbol,
+    qtyStep: safeStep,
+    minQty: safeMin,
+    maxQty: safeMax,
+    decimals: Math.max(0, decimalPlaces(qtyStepRaw)),
+  };
+};
+
+const qtyFromUnits = (units: number, rules: QtyRules): number => {
+  if (!Number.isFinite(units) || units <= 0) {
+    return 0;
   }
 
-  if (Number.isFinite(minQty) && minQty > 0) {
-    normalized = Math.max(normalized, minQty);
+  return normalizeQtyValue(units * rules.qtyStep, Math.max(rules.decimals, 8));
+};
+
+const buildQtyCandidates = (rawQty: number, price: number, rules: QtyRules): QtyCandidate[] => {
+  if (!Number.isFinite(rawQty) || rawQty <= 0) {
+    throw new Error(`Invalid raw qty for ${rules.symbol}`);
   }
 
-  if (!Number.isFinite(normalized) || normalized <= 0) {
-    throw new Error(`Normalized qty is invalid for ${symbol}`);
+  if (!Number.isFinite(price) || price <= 0) {
+    throw new Error(`Invalid market price for ${rules.symbol}`);
   }
 
-  const decimals = Math.max(0, decimalPlaces(qtyStepRaw));
-  return normalized.toFixed(decimals).replace(/\.?0+$/, '');
+  const step = rules.qtyStep;
+  const maxUnits = Number.isFinite(rules.maxQty)
+    ? Math.floor((rules.maxQty + SIZING_EPSILON) / step)
+    : Number.POSITIVE_INFINITY;
+  const minUnitsByFilter = Math.max(1, Math.ceil((rules.minQty - SIZING_EPSILON) / step));
+  const centerUnits = rawQty / step;
+  const floorUnits = Math.floor(centerUnits + SIZING_EPSILON);
+  const ceilUnits = Math.ceil(centerUnits - SIZING_EPSILON);
+
+  const rawStart = Math.max(minUnitsByFilter, floorUnits - 3);
+  const rawEnd = Math.max(rawStart, ceilUnits + 3);
+
+  const unitSet = new Set<number>();
+  for (let units = rawStart; units <= rawEnd; units += 1) {
+    if (units >= minUnitsByFilter && units > 0 && units <= maxUnits) {
+      unitSet.add(units);
+    }
+  }
+
+  if (minUnitsByFilter <= maxUnits) {
+    unitSet.add(minUnitsByFilter);
+  }
+  if (floorUnits >= minUnitsByFilter && floorUnits <= maxUnits) {
+    unitSet.add(floorUnits);
+  }
+  if (ceilUnits >= minUnitsByFilter && ceilUnits <= maxUnits) {
+    unitSet.add(ceilUnits);
+  }
+
+  const candidates = Array.from(unitSet)
+    .map((units) => qtyFromUnits(units, rules))
+    .filter((qty) => Number.isFinite(qty) && qty > 0)
+    .filter((qty) => qty + SIZING_EPSILON >= rules.minQty)
+    .filter((qty) => qty <= rules.maxQty + SIZING_EPSILON)
+    .map((qty) => ({
+      qty,
+      notional: qty * price,
+      text: formatQty(qty, rules.decimals),
+    }))
+    .sort((left, right) => left.qty - right.qty);
+
+  if (candidates.length === 0) {
+    throw new Error(`Unable to build qty candidates for ${rules.symbol}`);
+  }
+
+  return candidates;
+};
+
+const buildBalancedQtyPlan = async (
+  apiKeyName: string,
+  baseSymbol: string,
+  quoteSymbol: string,
+  basePrice: number,
+  quotePrice: number,
+  totalNotional: number,
+  baseWeight: number,
+  quoteWeight: number
+): Promise<BalancedQtyPlan> => {
+  if (!Number.isFinite(totalNotional) || totalNotional <= 0) {
+    throw new Error('Trade notional must be positive');
+  }
+
+  if (!Number.isFinite(baseWeight) || !Number.isFinite(quoteWeight) || baseWeight <= 0 || quoteWeight <= 0) {
+    throw new Error('Both synthetic leg coefficients must be non-zero for balanced execution');
+  }
+
+  const totalWeight = baseWeight + quoteWeight;
+  if (!Number.isFinite(totalWeight) || totalWeight <= 0) {
+    throw new Error('Synthetic coefficient weights are invalid');
+  }
+
+  const baseTargetNotional = totalNotional * (baseWeight / totalWeight);
+  const quoteTargetNotional = totalNotional * (quoteWeight / totalWeight);
+  const rawBaseQty = baseTargetNotional / basePrice;
+  const rawQuoteQty = quoteTargetNotional / quotePrice;
+
+  const [baseRules, quoteRules] = await Promise.all([
+    loadQtyRules(apiKeyName, baseSymbol),
+    loadQtyRules(apiKeyName, quoteSymbol),
+  ]);
+
+  const baseCandidates = buildQtyCandidates(rawBaseQty, basePrice, baseRules);
+  const quoteCandidates = buildQtyCandidates(rawQuoteQty, quotePrice, quoteRules);
+
+  const targetBaseShare = baseWeight / totalWeight;
+
+  let best: {
+    base: QtyCandidate;
+    quote: QtyCandidate;
+    totalActual: number;
+    baseShare: number;
+    shareError: number;
+    totalDeviation: number;
+    oversize: number;
+    baseLegDeviation: number;
+    quoteLegDeviation: number;
+    score: number;
+  } | null = null;
+
+  for (const baseCandidate of baseCandidates) {
+    for (const quoteCandidate of quoteCandidates) {
+      const totalActual = baseCandidate.notional + quoteCandidate.notional;
+      if (!Number.isFinite(totalActual) || totalActual <= 0) {
+        continue;
+      }
+
+      const baseShare = baseCandidate.notional / totalActual;
+      const shareError = Math.abs(baseShare - targetBaseShare);
+      const totalDeviation = Math.abs(totalActual - totalNotional) / Math.max(totalNotional, SIZING_EPSILON);
+      const oversize = Math.max(0, (totalActual - totalNotional) / Math.max(totalNotional, SIZING_EPSILON));
+      const baseLegDeviation = Math.abs(baseCandidate.notional - baseTargetNotional) / Math.max(baseTargetNotional, SIZING_EPSILON);
+      const quoteLegDeviation = Math.abs(quoteCandidate.notional - quoteTargetNotional) / Math.max(quoteTargetNotional, SIZING_EPSILON);
+
+      const score = shareError * 1000 + oversize * 200 + totalDeviation * 10;
+
+      if (!best || score < best.score) {
+        best = {
+          base: baseCandidate,
+          quote: quoteCandidate,
+          totalActual,
+          baseShare,
+          shareError,
+          totalDeviation,
+          oversize,
+          baseLegDeviation,
+          quoteLegDeviation,
+          score,
+        };
+      }
+    }
+  }
+
+  if (!best) {
+    throw new Error('Unable to find a valid balanced quantity plan');
+  }
+
+  if (
+    best.shareError > MAX_SHARE_ERROR
+    || best.baseLegDeviation > MAX_LEG_DEVIATION
+    || best.quoteLegDeviation > MAX_LEG_DEVIATION
+    || best.totalDeviation > MAX_TOTAL_DEVIATION
+    || best.oversize > MAX_OVERSIZE_DEVIATION
+  ) {
+    throw new Error(
+      `Order size too small for balanced pair execution: shareError=${(best.shareError * 100).toFixed(2)}%, `
+      + `baseDev=${(best.baseLegDeviation * 100).toFixed(2)}%, quoteDev=${(best.quoteLegDeviation * 100).toFixed(2)}%, `
+      + `totalDev=${(best.totalDeviation * 100).toFixed(2)}%, oversize=${(best.oversize * 100).toFixed(2)}%. `
+      + 'Increase lot/max_deposit or leverage.'
+    );
+  }
+
+  return {
+    baseQty: best.base.text,
+    quoteQty: best.quote.text,
+    baseNotional: best.base.notional,
+    quoteNotional: best.quote.notional,
+    totalNotional: best.totalActual,
+    shareError: best.shareError,
+    totalDeviation: best.totalDeviation,
+    oversize: best.oversize,
+    baseTargetNotional,
+    quoteTargetNotional,
+  };
 };
 
 const computeSignal = (
@@ -1128,25 +1353,27 @@ export const executeStrategy = async (
     throw new Error('Calculated trade notional is invalid');
   }
 
-  const basePrice = await getLatestMarketClose(apiKeyName, mergedStrategy.base_symbol);
-  const quotePrice = await getLatestMarketClose(apiKeyName, mergedStrategy.quote_symbol);
+  const [basePrice, quotePrice] = await Promise.all([
+    getLatestMarketClose(apiKeyName, mergedStrategy.base_symbol),
+    getLatestMarketClose(apiKeyName, mergedStrategy.quote_symbol),
+  ]);
 
   const baseWeight = Math.abs(mergedStrategy.base_coef);
   const quoteWeight = Math.abs(mergedStrategy.quote_coef);
-  const totalWeight = baseWeight + quoteWeight;
 
-  if (!Number.isFinite(totalWeight) || totalWeight <= 0) {
-    throw new Error('Synthetic coefficient weights are invalid');
-  }
+  const qtyPlan = await buildBalancedQtyPlan(
+    apiKeyName,
+    mergedStrategy.base_symbol,
+    mergedStrategy.quote_symbol,
+    basePrice,
+    quotePrice,
+    totalNotional,
+    baseWeight,
+    quoteWeight
+  );
 
-  const baseNotional = totalNotional * (baseWeight / totalWeight);
-  const quoteNotional = totalNotional * (quoteWeight / totalWeight);
-
-  const rawBaseQty = baseNotional / basePrice;
-  const rawQuoteQty = quoteNotional / quotePrice;
-
-  const baseQty = await normalizeQtyByStep(apiKeyName, mergedStrategy.base_symbol, rawBaseQty);
-  const quoteQty = await normalizeQtyByStep(apiKeyName, mergedStrategy.quote_symbol, rawQuoteQty);
+  const baseQty = qtyPlan.baseQty;
+  const quoteQty = qtyPlan.quoteQty;
 
   const latestBeforeOpen = normalizeStrategy(await getStrategyRow(apiKeyName, strategyId));
   if (!latestBeforeOpen.is_active) {
@@ -1203,6 +1430,13 @@ export const executeStrategy = async (
     last_action: `opened_${signal}@${currentRatio}`,
     last_error: null,
   });
+
+  logger.info(
+    `Strategy ${strategyId} leg balancing: target=${totalNotional.toFixed(2)} USDT, `
+    + `base ${qtyPlan.baseTargetNotional.toFixed(2)} -> ${qtyPlan.baseNotional.toFixed(2)}, `
+    + `quote ${qtyPlan.quoteTargetNotional.toFixed(2)} -> ${qtyPlan.quoteNotional.toFixed(2)}, `
+    + `shareError=${(qtyPlan.shareError * 100).toFixed(2)}%, totalDeviation=${(qtyPlan.totalDeviation * 100).toFixed(2)}%`
+  );
 
   logger.info(`Executed DD_BattleToads strategy ${strategyId} for ${apiKeyName}: ${signal}`);
   return {

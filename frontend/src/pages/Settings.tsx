@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Form, Input, Button, Select, message, Card, List, Popconfirm, Switch, InputNumber, Alert, Tag, Space } from 'antd';
+import { Form, Input, Button, Select, message, Card, List, Popconfirm, Switch, InputNumber, Alert, Tag, Space, Typography } from 'antd';
 import axios from 'axios';
 
 const { Option } = Select;
@@ -260,10 +260,28 @@ const Settings: React.FC = () => {
                 </Popconfirm>
               ]}
             >
-              <List.Item.Meta
-                title={item.name}
-                description={`Exchange: ${item.exchange} | Testnet: ${Boolean(item.testnet) ? 'Yes' : 'No'} | Demo: ${Boolean(item.demo) ? 'Yes' : 'No'}`}
-              />
+              <div
+                style={{
+                  width: '100%',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 12,
+                }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <Typography.Text strong>{item.name}</Typography.Text>
+                  <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
+                    ID #{item.id}
+                  </Typography.Text>
+                </div>
+
+                <Space size={6} wrap>
+                  <Tag>{item.exchange}</Tag>
+                  <Tag color={item.testnet ? 'gold' : 'default'}>Testnet: {item.testnet ? 'On' : 'Off'}</Tag>
+                  <Tag color={item.demo ? 'blue' : 'default'}>Demo: {item.demo ? 'On' : 'Off'}</Tag>
+                </Space>
+              </div>
             </List.Item>
           )}
         />
