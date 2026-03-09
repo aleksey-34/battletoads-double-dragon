@@ -39,7 +39,7 @@ git init
 git add .
 git commit -m "chore: initial verified release"
 git branch -M main
-git remote add origin https://github.com/YOUR_USER/YOUR_REPO.git
+git remote add origin https://github.com/aleksey-34/battletoads-double-dragon.git
 git push -u origin main
 ```
 
@@ -47,12 +47,12 @@ Or use helper script:
 
 ```bash
 cd /home/yakovbyakov/BattleToads_DoubleDragon/battletoads-double-dragon
-bash scripts/bootstrap_git_repo.sh https://github.com/YOUR_USER/YOUR_REPO.git main
+bash scripts/bootstrap_git_repo.sh https://github.com/aleksey-34/battletoads-double-dragon.git main
 ```
 
 After push, your `REPO_URL` is:
 
-- `https://github.com/YOUR_USER/YOUR_REPO.git`
+- `https://github.com/aleksey-34/battletoads-double-dragon.git`
 
 Recommended periodic verified releases:
 
@@ -89,7 +89,7 @@ PKG="$(ls -1t btdd_vps_git_bundle_*.tar.gz | head -n 1)"
 echo "$PKG"
 tar -xzf "$PKG"
 cd "${PKG%.tar.gz}"
-REPO_URL="https://github.com/REAL_OWNER/REAL_REPO.git"
+REPO_URL="https://github.com/aleksey-34/battletoads-double-dragon.git"
 DOMAIN=176.57.184.98 ADMIN_PASSWORD='strong-password' bash setup_vps_ubuntu20.sh "$REPO_URL" /opt/battletoads-double-dragon main
 ```
 
@@ -119,11 +119,11 @@ sudo APP_DIR=/opt/battletoads-double-dragon BRANCH=main bash /opt/battletoads-do
 
 ```bash
 cd /home/yakovbyakov/BattleToads_DoubleDragon/battletoads-double-dragon
-ADMIN_PASSWORD='strong-password' bash scripts/deploy_vps_from_local.sh root@176.57.184.98 https://github.com/REAL_OWNER/REAL_REPO.git 176.57.184.98 main /opt/battletoads-double-dragon
+ADMIN_PASSWORD='strong-password' bash scripts/deploy_vps_from_local.sh root@176.57.184.98 https://github.com/aleksey-34/battletoads-double-dragon.git 176.57.184.98 main /opt/battletoads-double-dragon
 ```
 
 Optional SSH key/port:
 
 ```bash
-SSH_OPTS='-i ~/.ssh/id_rsa -p 22' ADMIN_PASSWORD='strong-password' bash scripts/deploy_vps_from_local.sh root@176.57.184.98 https://github.com/REAL_OWNER/REAL_REPO.git 176.57.184.98 main /opt/battletoads-double-dragon
+SSH_OPTS='-i ~/.ssh/id_rsa -p 22' ADMIN_PASSWORD='strong-password' bash scripts/deploy_vps_from_local.sh root@176.57.184.98 https://github.com/aleksey-34/battletoads-double-dragon.git 176.57.184.98 main /opt/battletoads-double-dragon
 ```
