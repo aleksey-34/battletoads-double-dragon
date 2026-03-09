@@ -8,6 +8,10 @@ log() {
   echo "[update-vps] $*"
 }
 
+git_no_prompt() {
+  GIT_TERMINAL_PROMPT=0 git "$@"
+}
+
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "Run this script as root (sudo)."
   exit 1
@@ -19,9 +23,14 @@ if [[ ! -d "${APP_DIR}/.git" ]]; then
 fi
 
 log "Pulling latest code (${BRANCH})"
-git -C "${APP_DIR}" fetch --all --prune
-git -C "${APP_DIR}" checkout "${BRANCH}"
-git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
+if ! git_no_prompt -C "${APP_DIR}" fetch --all --prune; then
+  echo "Git fetch failed in non-interactive mode."
+  echo "If repository is private, configure credentials/token for this VPS."
+  exit 1
+fi
+
+git_no_prompt -C "${APP_DIR}" checkout "${BRANCH}"
+git_no_prompt -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
 
 log "Updating backend"
 cd "${APP_DIR}/backend"

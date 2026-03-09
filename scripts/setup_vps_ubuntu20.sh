@@ -15,6 +15,24 @@ log() {
   echo "[setup-vps] $*"
 }
 
+mask_repo_url() {
+  local raw="${1:-}"
+  echo "${raw}" | sed -E 's#(https?://)[^/@]+@#\1***@#'
+}
+
+git_no_prompt() {
+  GIT_TERMINAL_PROMPT=0 git "$@"
+}
+
+repo_access_hint() {
+  echo ""
+  echo "Repository access failed (non-interactive)."
+  echo "If repo is PRIVATE, use one of options:"
+  echo "1) Make repo public"
+  echo "2) Use token URL: https://<GITHUB_TOKEN>@github.com/owner/repo.git"
+  echo ""
+}
+
 require_root() {
   if [[ "$(id -u)" -ne 0 ]]; then
     echo "Run this script as root (sudo)."
@@ -43,14 +61,24 @@ ensure_node() {
 }
 
 sync_repo() {
+  local safe_repo_url
+  safe_repo_url="$(mask_repo_url "${REPO_URL}")"
+
   if [[ -d "${APP_DIR}/.git" ]]; then
     log "Updating existing repository in ${APP_DIR}"
-    git -C "${APP_DIR}" fetch --all --prune
-    git -C "${APP_DIR}" checkout "${BRANCH}"
-    git -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
+    if ! git_no_prompt -C "${APP_DIR}" fetch --all --prune; then
+      repo_access_hint
+      exit 1
+    fi
+
+    git_no_prompt -C "${APP_DIR}" checkout "${BRANCH}"
+    git_no_prompt -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
   else
-    log "Cloning repository ${REPO_URL} into ${APP_DIR}"
-    git clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_DIR}"
+    log "Cloning repository ${safe_repo_url} into ${APP_DIR}"
+    if ! git_no_prompt clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_DIR}"; then
+      repo_access_hint
+      exit 1
+    fi
   fi
 }
 
