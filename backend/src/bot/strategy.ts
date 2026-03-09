@@ -19,14 +19,6 @@ type StrategyDraft = Partial<Strategy> & {
   name?: string;
 };
 
-type ChartBindingOverride = {
-  base?: string;
-  quote?: string;
-  interval?: string;
-  baseCoef?: number;
-  quoteCoef?: number;
-};
-
 type ParsedSyntheticCandle = {
   timeMs: number;
   open: number;
@@ -654,8 +646,7 @@ export const deleteStrategy = async (apiKeyName: string, strategyId: number): Pr
 
 export const executeStrategy = async (
   apiKeyName: string,
-  strategyId: number,
-  chartOverride?: ChartBindingOverride
+  strategyId: number
 ) => {
   const existingRow = await getStrategyRow(apiKeyName, strategyId);
   const strategy = normalizeStrategy(existingRow);
@@ -669,29 +660,11 @@ export const executeStrategy = async (
 
   const mergedStrategy: Strategy = {
     ...strategy,
-    base_symbol: chartOverride?.base ? normalizeSymbol(chartOverride.base) : strategy.base_symbol,
-    quote_symbol: chartOverride?.quote ? normalizeSymbol(chartOverride.quote) : strategy.quote_symbol,
-    interval: chartOverride?.interval ? String(chartOverride.interval) : strategy.interval,
-    base_coef: chartOverride?.baseCoef !== undefined ? safeNumber(chartOverride.baseCoef, strategy.base_coef) : strategy.base_coef,
-    quote_coef: chartOverride?.quoteCoef !== undefined ? safeNumber(chartOverride.quoteCoef, strategy.quote_coef) : strategy.quote_coef,
   };
 
+  // Execution must follow persisted strategy settings only.
+  // This prevents stale UI/chart payloads from silently mutating strategy pairs.
   const executionBindingPatch: Partial<Strategy> = {};
-  if (chartOverride?.base) {
-    executionBindingPatch.base_symbol = mergedStrategy.base_symbol;
-  }
-  if (chartOverride?.quote) {
-    executionBindingPatch.quote_symbol = mergedStrategy.quote_symbol;
-  }
-  if (chartOverride?.interval) {
-    executionBindingPatch.interval = mergedStrategy.interval;
-  }
-  if (chartOverride?.baseCoef !== undefined) {
-    executionBindingPatch.base_coef = mergedStrategy.base_coef;
-  }
-  if (chartOverride?.quoteCoef !== undefined) {
-    executionBindingPatch.quote_coef = mergedStrategy.quote_coef;
-  }
 
   if (!mergedStrategy.base_symbol || !mergedStrategy.quote_symbol) {
     throw new Error('Strategy requires both base and quote symbols');

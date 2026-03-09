@@ -471,9 +471,8 @@ router.delete('/strategies/:apiKeyName/:strategyId', async (req, res) => {
 
 router.post('/execute-strategy/:apiKeyName/:strategyId', async (req, res) => {
   const { apiKeyName, strategyId } = req.params;
-  const { chart } = req.body;
   try {
-    const result = await executeStrategy(apiKeyName, parseInt(strategyId), chart);
+    const result = await executeStrategy(apiKeyName, parseInt(strategyId));
     res.json(result);
   } catch (error) {
     const err = error as Error;
