@@ -27,6 +27,12 @@ export const initDB = async () => {
     }
   };
 
+  // Stage 2 cleanup: chart settings moved to frontend local storage, remove legacy table/index.
+  await db.exec(`
+    DROP INDEX IF EXISTS idx_chart_settings_api_key_unique;
+    DROP TABLE IF EXISTS chart_settings;
+  `);
+
   // Создание таблиц
   await db.exec(`
     CREATE TABLE IF NOT EXISTS api_keys (
