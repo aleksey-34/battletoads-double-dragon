@@ -417,7 +417,7 @@ const Positions: React.FC = () => {
 
   return (
     <div>
-      <Space style={{ marginBottom: 12 }}>
+      <Space style={{ marginBottom: 8 }}>
         <Button loading={refreshAllLoading} onClick={() => { void refreshAllPositions(); }}>
           Refresh all
         </Button>
@@ -433,21 +433,26 @@ const Positions: React.FC = () => {
       </Space>
 
       {Object.entries(apiKeysByExchange).map(([exchange, keys]) => (
-        <Card key={exchange} title={`Exchange: ${exchange}`} style={{ marginBottom: 16 }}>
+        <Card key={exchange} title={`Exchange: ${exchange}`} size="small" style={{ marginBottom: 12 }}>
           <Space direction="vertical" style={{ width: '100%' }}>
             {keys.map((key) => {
               const manualDraft = manualOrderDraftByKey[key.name] || { symbol: 'BTCUSDT', side: 'Buy' as const, qty: 0.001 };
+              const keyPositions = positionsByKey[key.name] || [];
+              const keyOrders = ordersByKey[key.name] || [];
+              const positionsLoading = Boolean(loadingByKey[key.name]);
+              const ordersLoading = Boolean(loadingByKey[`orders:${key.name}`]);
               return (
                 <Card
                   key={key.id}
                   type="inner"
                   title={`${key.name}`}
+                  size="small"
                   style={{ width: '100%' }}
-                  bodyStyle={{ padding: 12 }}
+                  bodyStyle={{ padding: 10 }}
                 >
-                  <Space wrap style={{ marginBottom: 12 }}>
+                  <Space wrap style={{ marginBottom: 8 }}>
                     <Button
-                      loading={Boolean(loadingByKey[key.name]) || Boolean(loadingByKey[`orders:${key.name}`])}
+                      loading={positionsLoading || ordersLoading}
                       onClick={() => {
                         void fetchPositions(key.name);
                         void fetchOrders(key.name);
@@ -477,7 +482,7 @@ const Positions: React.FC = () => {
                     </Popconfirm>
                   </Space>
 
-                  <Card size="small" title="Quick Manual Order" style={{ marginBottom: 12 }}>
+                  <Card size="small" title="Quick Manual Order" style={{ marginBottom: 8 }} bodyStyle={{ padding: 10 }}>
                     <Space wrap>
                       <Input
                         style={{ width: 130 }}
@@ -548,31 +553,45 @@ const Positions: React.FC = () => {
 
                   {shouldShowPositions ? (
                     <>
-                      <Divider style={{ margin: '10px 0' }}>Positions</Divider>
-                      <Table
-                        size="small"
-                        rowKey={(row) => `${row.symbol}_${row.side}_${row.avgPrice}`}
-                        dataSource={positionsByKey[key.name] || []}
-                        columns={getColumns(key.name)}
-                        loading={loadingByKey[key.name]}
-                        pagination={{ pageSize: 8 }}
-                        scroll={{ x: 980 }}
-                      />
+                      <Divider style={{ margin: '6px 0' }}>Positions</Divider>
+                      {positionsLoading || keyPositions.length > 0 ? (
+                        <Table
+                          size="small"
+                          rowKey={(row) => `${row.symbol}_${row.side}_${row.avgPrice}`}
+                          dataSource={keyPositions}
+                          columns={getColumns(key.name)}
+                          loading={positionsLoading}
+                          locale={{ emptyText: '' }}
+                          pagination={keyPositions.length > 8 ? { pageSize: 8, size: 'small' } : false}
+                          scroll={{ x: 980 }}
+                        />
+                      ) : (
+                        <div style={{ fontSize: 12, color: '#6b7280', padding: '2px 0 6px' }}>
+                          No open positions
+                        </div>
+                      )}
                     </>
                   ) : null}
 
                   {shouldShowOrders ? (
                     <>
-                      <Divider style={{ margin: '10px 0' }}>Open Orders</Divider>
-                      <Table
-                        size="small"
-                        rowKey={(row) => row.orderId}
-                        dataSource={ordersByKey[key.name] || []}
-                        columns={orderColumns}
-                        loading={loadingByKey[`orders:${key.name}`]}
-                        pagination={{ pageSize: 8 }}
-                        scroll={{ x: 900 }}
-                      />
+                      <Divider style={{ margin: '6px 0' }}>Open Orders</Divider>
+                      {ordersLoading || keyOrders.length > 0 ? (
+                        <Table
+                          size="small"
+                          rowKey={(row) => row.orderId}
+                          dataSource={keyOrders}
+                          columns={orderColumns}
+                          loading={ordersLoading}
+                          locale={{ emptyText: '' }}
+                          pagination={keyOrders.length > 8 ? { pageSize: 8, size: 'small' } : false}
+                          scroll={{ x: 900 }}
+                        />
+                      ) : (
+                        <div style={{ fontSize: 12, color: '#6b7280', padding: '2px 0 4px' }}>
+                          No open orders
+                        </div>
+                      )}
                     </>
                   ) : null}
                 </Card>

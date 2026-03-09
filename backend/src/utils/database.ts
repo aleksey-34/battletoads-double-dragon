@@ -55,20 +55,6 @@ export const initDB = async () => {
       FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
     );
 
-    CREATE TABLE IF NOT EXISTS chart_settings (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      api_key_id INTEGER,
-      display_chart BOOLEAN DEFAULT 1,
-      mono_chart_symbol TEXT,
-      mono_chart_tf TEXT,
-      synthetic_base TEXT,
-      synthetic_quote TEXT,
-      synthetic_formula TEXT,
-      synthetic_tf TEXT,
-      min_daily_volume REAL DEFAULT 0,
-      FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
-    );
-
     CREATE TABLE IF NOT EXISTS strategies (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT,
@@ -169,21 +155,11 @@ export const initDB = async () => {
         GROUP BY api_key_id
       );
 
-    DELETE FROM chart_settings
-    WHERE api_key_id IS NOT NULL
-      AND id NOT IN (
-        SELECT MAX(id)
-        FROM chart_settings
-        GROUP BY api_key_id
-      );
   `);
 
   await db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_risk_settings_api_key_unique
       ON risk_settings (api_key_id);
-
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_chart_settings_api_key_unique
-      ON chart_settings (api_key_id);
   `);
 
   await ensureColumn('api_keys', 'testnet BOOLEAN DEFAULT 0');

@@ -35,7 +35,7 @@ import {
 } from '../bot/strategy';
 import { getMonitoringLatest, getMonitoringSnapshots, recordMonitoringSnapshot } from '../bot/monitoring';
 import { getBacktestRun, listBacktestRuns, runBacktest, saveBacktestRun } from '../backtest/engine';
-import { loadSettings, saveApiKey, saveRiskSettings, saveChartSettings, ApiKey, RiskSettings, ChartSettings, Strategy } from '../config/settings';
+import { loadSettings, saveApiKey, saveRiskSettings, ApiKey, RiskSettings, Strategy } from '../config/settings';
 import { db } from '../utils/database';
 import { authenticate } from '../utils/auth';
 import logger from '../utils/logger';
@@ -205,7 +205,6 @@ router.delete('/api-keys/:id', async (req, res) => {
       return res.status(404).json({ error: 'API key not found' });
     }
 
-    await db.run('DELETE FROM chart_settings WHERE api_key_id = ?', [apiKeyId]);
     await db.run('DELETE FROM risk_settings WHERE api_key_id = ?', [apiKeyId]);
     await db.run('DELETE FROM strategies WHERE api_key_id = ?', [apiKeyId]);
     await db.run('DELETE FROM monitoring_snapshots WHERE api_key_id = ?', [apiKeyId]);
@@ -281,44 +280,6 @@ router.put('/risk-settings/:apiKeyName', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Error updating risk settings: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Маршруты для чартов
-router.get('/chart-settings/:apiKeyName', async (req, res) => {
-  const { apiKeyName } = req.params;
-  try {
-    const { apiKeys, chartSettings } = await loadSettings();
-    const apiKey = apiKeys.find(k => k.name === apiKeyName);
-    if (!apiKey) return res.status(404).json({ error: 'API key not found' });
-    const settings = chartSettings.filter(s => s.api_key_id === apiKey.id);
-    res.json(settings);
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`Error loading chart settings: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.put('/chart-settings/:apiKeyName', async (req, res) => {
-  const { apiKeyName } = req.params;
-  const settings: ChartSettings = req.body;
-  try {
-    const apiKey = await db.get('SELECT id FROM api_keys WHERE name = ?', [apiKeyName]);
-    if (!apiKey) {
-      return res.status(404).json({ error: 'API key not found' });
-    }
-
-    await saveChartSettings({
-      ...settings,
-      api_key_id: Number(apiKey.id),
-    });
-
-    res.json({ success: true });
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`Error updating chart settings: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

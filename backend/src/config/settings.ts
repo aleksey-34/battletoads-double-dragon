@@ -26,19 +26,6 @@ export interface RiskSettings {
   reinvest_percent: number;
 }
 
-export interface ChartSettings {
-  id?: number;
-  api_key_id: number;
-  display_chart: boolean;
-  mono_chart_symbol?: string;
-  mono_chart_tf?: string;
-  synthetic_base?: string;
-  synthetic_quote?: string;
-  synthetic_formula?: string;
-  synthetic_tf?: string;
-  min_daily_volume?: number;
-}
-
 export interface Strategy {
   id?: number;
   name: string;
@@ -82,10 +69,9 @@ export const loadSettings = async () => {
   // Загрузка настроек из БД
   const apiKeys = await db.all('SELECT * FROM api_keys');
   const riskSettings = await db.all('SELECT * FROM risk_settings');
-  const chartSettings = await db.all('SELECT * FROM chart_settings');
   const strategies = await db.all('SELECT * FROM strategies');
 
-  return { apiKeys, riskSettings, chartSettings, strategies };
+  return { apiKeys, riskSettings, strategies };
 };
 
 export const saveApiKey = async (key: ApiKey) => {
@@ -139,39 +125,6 @@ export const saveRiskSettings = async (settings: RiskSettings) => {
       settings.leverage,
       settings.fixed_lot ? 1 : 0,
       settings.reinvest_percent,
-    ]
-  );
-};
-
-export const saveChartSettings = async (settings: ChartSettings) => {
-  await db.run(
-    `INSERT INTO chart_settings (
-      api_key_id,
-      display_chart,
-      mono_chart_symbol,
-      mono_chart_tf,
-      synthetic_base,
-      synthetic_quote,
-      synthetic_formula,
-      synthetic_tf
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(api_key_id) DO UPDATE SET
-      display_chart = excluded.display_chart,
-      mono_chart_symbol = excluded.mono_chart_symbol,
-      mono_chart_tf = excluded.mono_chart_tf,
-      synthetic_base = excluded.synthetic_base,
-      synthetic_quote = excluded.synthetic_quote,
-      synthetic_formula = excluded.synthetic_formula,
-      synthetic_tf = excluded.synthetic_tf`,
-    [
-      settings.api_key_id,
-      settings.display_chart ? 1 : 0,
-      settings.mono_chart_symbol,
-      settings.mono_chart_tf,
-      settings.synthetic_base,
-      settings.synthetic_quote,
-      settings.synthetic_formula,
-      settings.synthetic_tf,
     ]
   );
 };
