@@ -986,18 +986,33 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const getSyntheticBindingFromChart = (keyName: string) => {
-    const settings = chartSettings[keyName] || defaultChartSetting();
-    if (settings.type !== 'synthetic' || !settings.base || !settings.quote) {
-      return null;
+  const getDefaultStrategyBinding = (keyName: string) => {
+    const keyStrategies = strategiesByKey[keyName] || [];
+    const sourceStrategy = keyStrategies[0];
+
+    if (sourceStrategy) {
+      return {
+        base: String(sourceStrategy.base_symbol || 'BTCUSDT').toUpperCase(),
+        quote: String(sourceStrategy.quote_symbol || 'ETHUSDT').toUpperCase(),
+        interval: String(sourceStrategy.interval || '1h'),
+        baseCoef: Number(sourceStrategy.base_coef) || 1,
+        quoteCoef: Number(sourceStrategy.quote_coef) || 1,
+      };
     }
 
+    const availableSymbols = Array.from(
+      new Set((symbols[keyName] || []).map((symbol) => String(symbol || '').toUpperCase()).filter((symbol) => Boolean(symbol)))
+    );
+
+    const base = availableSymbols[0] || 'BTCUSDT';
+    const quote = availableSymbols.find((symbol) => symbol !== base) || (base === 'ETHUSDT' ? 'BTCUSDT' : 'ETHUSDT');
+
     return {
-      base: settings.base,
-      quote: settings.quote,
-      interval: settings.interval,
-      baseCoef: settings.baseCoef || 1,
-      quoteCoef: settings.quoteCoef || 1,
+      base,
+      quote,
+      interval: '1h',
+      baseCoef: 1,
+      quoteCoef: 1,
     };
   };
 
@@ -1056,11 +1071,7 @@ const Dashboard: React.FC = () => {
   };
 
   const addStrategy = async (keyName: string) => {
-    const chartBinding = getSyntheticBindingFromChart(keyName);
-    if (!chartBinding) {
-      message.warning('Select synthetic chart (base/quote) in Chart Settings for DD_BattleToads');
-      return;
-    }
+    const strategyBinding = getDefaultStrategyBinding(keyName);
 
     const name = (newStrategyNameByKey[keyName] || '').trim() || 'DD_BattleToads';
 
@@ -1080,11 +1091,11 @@ const Dashboard: React.FC = () => {
         take_profit_percent: 7.5,
         price_channel_length: 50,
         detection_source: 'close',
-        base_symbol: chartBinding.base,
-        quote_symbol: chartBinding.quote,
-        interval: chartBinding.interval,
-        base_coef: chartBinding.baseCoef,
-        quote_coef: chartBinding.quoteCoef,
+        base_symbol: strategyBinding.base,
+        quote_symbol: strategyBinding.quote,
+        interval: strategyBinding.interval,
+        base_coef: strategyBinding.baseCoef,
+        quote_coef: strategyBinding.quoteCoef,
         long_enabled: true,
         short_enabled: true,
         lot_long_percent: 100,
@@ -2070,9 +2081,8 @@ const Dashboard: React.FC = () => {
                   >
                     Add strategy
                   </Button>
-                  {settings.type === 'synthetic'
-                    ? <Tag color="blue">Chart preview binding: {settings.base}/{settings.quote} ({settings.interval})</Tag>
-                    : <Tag color="orange">Select Synthetic chart for preview</Tag>}
+                  <Tag color="blue">Chart preview is configured once in API key Chart Settings</Tag>
+                  <Tag color="green">Trading pair is configured per strategy below</Tag>
 
                   {apiKeys.length > 1 ? (
                     <>
@@ -2247,165 +2257,14 @@ const Dashboard: React.FC = () => {
                                   <Col xs={24} lg={8}>
                                     {strategy.show_settings ? (
                                       <>
-                                        <Card size="small" title="Chart menu (shared with key)">
-                                          <Alert
-                                            type="info"
-                                            showIcon
-                                            message="This chart menu is shared per API key and is used for chart preview only. Trading pair is set in Strategy Settings below."
-                                            style={{ marginBottom: 8 }}
-                                          />
-                                          <Form
-                                            layout="horizontal"
-                                            className="strategy-compact-form strategy-inline-form"
-                                            labelCol={{ span: 10 }}
-                                            wrapperCol={{ span: 14 }}
-                                          >
-                                            <Form.Item label="Chart Type">
-                                              <Select
-                                                value={settings.type}
-                                                onChange={(value) => updateChartSetting(keyName, { type: value as DashboardChartType })}
-                                                disabled={!keyActive}
-                                              >
-                                                <Option value="mono">Mono</Option>
-                                                <Option value="synthetic">Synthetic</Option>
-                                              </Select>
-                                            </Form.Item>
+                                        <Alert
+                                          type="info"
+                                          showIcon
+                                          message="Chart preview settings are configured in the API key Chart Settings block above."
+                                          style={{ marginBottom: 10 }}
+                                        />
 
-                                            {settings.type === 'synthetic'
-                                              ? (
-                                                <>
-                                                  <Form.Item label="Base">
-                                                    <Select
-                                                      value={settings.base}
-                                                      onChange={(value) => updateChartSetting(keyName, { base: value })}
-                                                      showSearch
-                                                      disabled={!keyActive}
-                                                      notFoundContent={symbolsError[keyName] ? symbolsError[keyName] : 'No pairs'}
-                                                    >
-                                                      {(symbols[keyName] || []).map((symbol) => (
-                                                        <Option key={symbol} value={symbol}>{symbol}</Option>
-                                                      ))}
-                                                    </Select>
-                                                  </Form.Item>
-
-                                                  <Form.Item label="Quote">
-                                                    <Select
-                                                      value={settings.quote}
-                                                      onChange={(value) => updateChartSetting(keyName, { quote: value })}
-                                                      showSearch
-                                                      disabled={!keyActive}
-                                                      notFoundContent={symbolsError[keyName] ? symbolsError[keyName] : 'No pairs'}
-                                                    >
-                                                      {(symbols[keyName] || []).map((symbol) => (
-                                                        <Option key={symbol} value={symbol}>{symbol}</Option>
-                                                      ))}
-                                                    </Select>
-                                                  </Form.Item>
-
-                                                  <Form.Item label="Base Coef">
-                                                    <InputNumber
-                                                      value={settings.baseCoef}
-                                                      min={-999}
-                                                      max={999}
-                                                      step={0.1}
-                                                      style={{ width: '100%' }}
-                                                      onChange={(value) => updateChartSetting(keyName, { baseCoef: Number(value) || 1 })}
-                                                      disabled={!keyActive}
-                                                    />
-                                                  </Form.Item>
-
-                                                  <Form.Item label="Quote Coef">
-                                                    <InputNumber
-                                                      value={settings.quoteCoef}
-                                                      min={-999}
-                                                      max={999}
-                                                      step={0.1}
-                                                      style={{ width: '100%' }}
-                                                      onChange={(value) => updateChartSetting(keyName, { quoteCoef: Number(value) || 1 })}
-                                                      disabled={!keyActive}
-                                                    />
-                                                  </Form.Item>
-                                                </>
-                                              )
-                                              : (
-                                                <Form.Item label="Symbol">
-                                                  <Select
-                                                    value={settings.symbol}
-                                                    onChange={(value) => updateChartSetting(keyName, { symbol: value })}
-                                                    showSearch
-                                                    disabled={!keyActive}
-                                                    notFoundContent={symbolsError[keyName] ? symbolsError[keyName] : 'No pairs'}
-                                                  >
-                                                    {(symbols[keyName] || []).map((symbol) => (
-                                                      <Option key={symbol} value={symbol}>{symbol}</Option>
-                                                    ))}
-                                                  </Select>
-                                                </Form.Item>
-                                              )}
-
-                                            <Form.Item label="Interval">
-                                              <Select
-                                                value={settings.interval}
-                                                onChange={(value) => updateChartSetting(keyName, { interval: value })}
-                                                disabled={!keyActive}
-                                              >
-                                                <Option value="1m">1m</Option>
-                                                <Option value="3m">3m</Option>
-                                                <Option value="5m">5m</Option>
-                                                <Option value="15m">15m</Option>
-                                                <Option value="30m">30m</Option>
-                                                <Option value="1h">1h</Option>
-                                                <Option value="2h">2h</Option>
-                                                <Option value="4h">4h</Option>
-                                                <Option value="6h">6h</Option>
-                                                <Option value="12h">12h</Option>
-                                                <Option value="1d">1d</Option>
-                                                <Option value="1w">1w</Option>
-                                                <Option value="1M">1M</Option>
-                                              </Select>
-                                            </Form.Item>
-
-                                            <Form.Item label="Render">
-                                              <Select
-                                                value={settings.chartType}
-                                                onChange={(value) => updateChartSetting(keyName, { chartType: value as ChartType })}
-                                                disabled={!keyActive}
-                                              >
-                                                <Option value="line">Line</Option>
-                                                <Option value="candlestick">Candlestick</Option>
-                                              </Select>
-                                            </Form.Item>
-
-                                            <Form.Item label="Update (sec)">
-                                              <InputNumber
-                                                value={settings.updateSec}
-                                                min={0}
-                                                max={86400}
-                                                style={{ width: '100%' }}
-                                                onChange={(value) => updateChartSetting(keyName, { updateSec: Number(value) || 0 })}
-                                                disabled={!keyActive}
-                                              />
-                                            </Form.Item>
-
-                                            <Form.Item label="Load">
-                                              <Button
-                                                size="small"
-                                                loading={chartLoadingKey === keyName}
-                                                disabled={!keyActive}
-                                                onClick={() => {
-                                                  void loadChartForKey(keyName);
-                                                }}
-                                              >
-                                                Load chart
-                                              </Button>
-                                            </Form.Item>
-                                          </Form>
-                                          {keySyntheticError && settings.type === 'synthetic'
-                                            ? <Alert type="error" message={keySyntheticError} showIcon style={{ marginTop: 8 }} />
-                                            : null}
-                                        </Card>
-
-                                        <Card size="small" title="Strategy Settings" style={{ marginTop: 10 }}>
+                                        <Card size="small" title="Strategy Settings">
                                           <Form
                                             layout="horizontal"
                                             className="strategy-compact-form strategy-inline-form"
