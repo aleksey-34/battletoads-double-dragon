@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import routes from './api/routes';
-import { initDB } from './utils/database';
+import { initDB, getDbFilePath } from './utils/database';
 import logger from './utils/logger';
 import { runAutoStrategiesCycle } from './bot/strategy';
 
@@ -17,7 +17,7 @@ import { initExchangeClient } from './bot/exchange';
 
 const startServer = async () => {
   await initDB();
-  logger.info('Database initialized');
+  logger.info(`Database initialized: ${getDbFilePath()}`);
 
   // Инициализация клиентов Bybit для всех ключей
   try {

@@ -1120,9 +1120,43 @@ const Dashboard: React.FC = () => {
   const saveStrategy = async (keyName: string, strategy: DDStrategy) => {
     const actionKey = strategyActionKey(keyName, strategy.id, 'save');
 
-    const normalizedBase = String(strategy.base_symbol || '').trim().toUpperCase();
-    const normalizedQuote = String(strategy.quote_symbol || '').trim().toUpperCase();
-    const normalizedInterval = String(strategy.interval || '').trim() || '1h';
+    const currentStrategies = strategiesByKey[keyName] || [];
+    const invalidIdExists = currentStrategies.some((item) => !Number.isFinite(Number(item.id)) || Number(item.id) <= 0);
+    const seenIds = new Set<number>();
+    const duplicateIds = new Set<number>();
+
+    currentStrategies.forEach((item) => {
+      const id = Number(item.id);
+      if (!Number.isFinite(id) || id <= 0) {
+        return;
+      }
+
+      if (seenIds.has(id)) {
+        duplicateIds.add(id);
+      }
+
+      seenIds.add(id);
+    });
+
+    if (invalidIdExists || duplicateIds.size > 0) {
+      const duplicateText = duplicateIds.size > 0 ? ` Duplicate IDs: ${Array.from(duplicateIds).join(', ')}` : '';
+      message.error(`Unsafe strategies state detected. Save blocked.${duplicateText} Refreshing from backend...`);
+      await fetchStrategies(keyName);
+      return;
+    }
+
+    const strategyToSave = currentStrategies.find((item) => item.id === strategy.id) || strategy;
+    const strategyId = Number(strategyToSave.id);
+
+    if (!Number.isFinite(strategyId) || strategyId <= 0) {
+      message.error('Invalid strategy id. Refreshing from backend...');
+      await fetchStrategies(keyName);
+      return;
+    }
+
+    const normalizedBase = String(strategyToSave.base_symbol || '').trim().toUpperCase();
+    const normalizedQuote = String(strategyToSave.quote_symbol || '').trim().toUpperCase();
+    const normalizedInterval = String(strategyToSave.interval || '').trim() || '1h';
 
     if (!normalizedBase || !normalizedQuote) {
       message.error('Strategy pair is required: set both Trade Base and Trade Quote');
@@ -1135,41 +1169,46 @@ const Dashboard: React.FC = () => {
     }
 
     const payload: Partial<DDStrategy> = {
-      id: strategy.id,
-      name: strategy.name,
-      display_on_chart: strategy.display_on_chart,
-      show_settings: strategy.show_settings,
-      show_chart: strategy.show_chart,
-      show_indicators: strategy.show_indicators,
-      show_positions_on_chart: strategy.show_positions_on_chart,
-      show_values_each_bar: strategy.show_values_each_bar,
-      auto_update: strategy.auto_update,
-      take_profit_percent: strategy.take_profit_percent,
-      price_channel_length: strategy.price_channel_length,
-      detection_source: strategy.detection_source,
+      id: strategyId,
+      name: strategyToSave.name,
+      display_on_chart: strategyToSave.display_on_chart,
+      show_settings: strategyToSave.show_settings,
+      show_chart: strategyToSave.show_chart,
+      show_indicators: strategyToSave.show_indicators,
+      show_positions_on_chart: strategyToSave.show_positions_on_chart,
+      show_values_each_bar: strategyToSave.show_values_each_bar,
+      auto_update: strategyToSave.auto_update,
+      take_profit_percent: strategyToSave.take_profit_percent,
+      price_channel_length: strategyToSave.price_channel_length,
+      detection_source: strategyToSave.detection_source,
       base_symbol: normalizedBase,
       quote_symbol: normalizedQuote,
       interval: normalizedInterval,
-      base_coef: strategy.base_coef,
-      quote_coef: strategy.quote_coef,
-      long_enabled: strategy.long_enabled,
-      short_enabled: strategy.short_enabled,
-      lot_long_percent: strategy.lot_long_percent,
-      lot_short_percent: strategy.lot_short_percent,
-      max_deposit: strategy.max_deposit,
-      margin_type: strategy.margin_type,
-      leverage: strategy.leverage,
-      fixed_lot: strategy.fixed_lot,
-      reinvest_percent: strategy.reinvest_percent,
+      base_coef: strategyToSave.base_coef,
+      quote_coef: strategyToSave.quote_coef,
+      long_enabled: strategyToSave.long_enabled,
+      short_enabled: strategyToSave.short_enabled,
+      lot_long_percent: strategyToSave.lot_long_percent,
+      lot_short_percent: strategyToSave.lot_short_percent,
+      max_deposit: strategyToSave.max_deposit,
+      margin_type: strategyToSave.margin_type,
+      leverage: strategyToSave.leverage,
+      fixed_lot: strategyToSave.fixed_lot,
+      reinvest_percent: strategyToSave.reinvest_percent,
     };
 
     try {
       setStrategyActionLoading((prev) => ({ ...prev, [actionKey]: true }));
-      const res = await axios.put(`http://localhost:3001/api/strategies/${keyName}/${strategy.id}`, payload);
+      const res = await axios.put(`http://localhost:3001/api/strategies/${keyName}/${strategyId}`, payload);
       const updated = parseStrategy(res.data);
-      updateStrategyDraft(keyName, strategy.id, updated);
+
+      if (updated.id !== strategyId) {
+        throw new Error(`Unexpected strategy id in response: expected ${strategyId}, got ${updated.id}`);
+      }
+
+      updateStrategyDraft(keyName, strategyId, updated);
       await fetchStrategies(keyName, { silent: true });
-      message.success(`Strategy ${strategy.name} saved`);
+      message.success(`Strategy ${strategyToSave.name} saved`);
     } catch (error: any) {
       console.error(error);
       message.error(error?.response?.data?.error || 'Failed to save strategy');

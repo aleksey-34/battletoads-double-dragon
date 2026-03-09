@@ -46,6 +46,41 @@ import path from 'path';
 const router = Router();
 let backtestRunInProgress = false;
 
+const STRATEGY_PATCH_ALLOWED_FIELDS = new Set<string>([
+  'id',
+  'name',
+  'is_active',
+  'display_on_chart',
+  'show_settings',
+  'show_chart',
+  'show_indicators',
+  'show_positions_on_chart',
+  'show_values_each_bar',
+  'auto_update',
+  'take_profit_percent',
+  'price_channel_length',
+  'detection_source',
+  'base_symbol',
+  'quote_symbol',
+  'interval',
+  'base_coef',
+  'quote_coef',
+  'long_enabled',
+  'short_enabled',
+  'lot_long_percent',
+  'lot_short_percent',
+  'max_deposit',
+  'margin_type',
+  'leverage',
+  'fixed_lot',
+  'reinvest_percent',
+  'state',
+  'entry_ratio',
+  'last_signal',
+  'last_action',
+  'last_error',
+]);
+
 // Применить аутентификацию ко всем маршрутам
 router.use(authenticate);
 
@@ -457,9 +492,27 @@ router.post('/strategies/:apiKeyName', async (req, res) => {
 router.put('/strategies/:apiKeyName/:strategyId', async (req, res) => {
   const { apiKeyName, strategyId } = req.params;
   const routeStrategyId = Number.parseInt(strategyId, 10);
-  const strategyPatch: Partial<Strategy> = req.body;
 
-  const bodyStrategyIdRaw = (req.body || {}).id;
+  if (!Number.isFinite(routeStrategyId) || routeStrategyId <= 0) {
+    return res.status(400).json({ error: 'Invalid strategy id in URL' });
+  }
+
+  const incomingPatch = req.body && typeof req.body === 'object' ? req.body : {};
+  const strategyPatch: Partial<Strategy> = {};
+
+  for (const [field, value] of Object.entries(incomingPatch)) {
+    if (!STRATEGY_PATCH_ALLOWED_FIELDS.has(field)) {
+      return res.status(400).json({ error: `Unsupported strategy field: ${field}` });
+    }
+
+    if (field === 'id') {
+      continue;
+    }
+
+    (strategyPatch as any)[field] = value;
+  }
+
+  const bodyStrategyIdRaw = incomingPatch.id;
   if (bodyStrategyIdRaw !== undefined && bodyStrategyIdRaw !== null) {
     const bodyStrategyId = Number.parseInt(String(bodyStrategyIdRaw), 10);
     if (!Number.isFinite(bodyStrategyId) || bodyStrategyId !== routeStrategyId) {
@@ -468,7 +521,10 @@ router.put('/strategies/:apiKeyName/:strategyId', async (req, res) => {
   }
 
   try {
-    const updated = await updateStrategy(apiKeyName, routeStrategyId, strategyPatch);
+    const updated = await updateStrategy(apiKeyName, routeStrategyId, strategyPatch, {
+      allowBindingUpdate: true,
+      source: 'api_put_strategy',
+    });
     res.json(updated);
   } catch (error) {
     const err = error as Error;

@@ -535,9 +535,14 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
 export const updateStrategy = async (
   apiKeyName: string,
   strategyId: number,
-  patch: Partial<Strategy>
+  patch: Partial<Strategy>,
+  options?: {
+    allowBindingUpdate?: boolean;
+    source?: string;
+  }
 ): Promise<Strategy> => {
   const existing = normalizeStrategy(await getStrategyRow(apiKeyName, strategyId));
+  const updateSource = String(options?.source || 'unspecified');
 
   const updates: Array<{ column: string; value: any }> = [];
   const pushUpdate = (column: string, value: any) => {
@@ -660,6 +665,12 @@ export const updateStrategy = async (
     || patch.quote_coef !== undefined
   );
 
+  if (bindingTouched && options?.allowBindingUpdate !== true) {
+    throw new Error(
+      `Binding update denied for strategyId=${strategyId}, apiKey=${apiKeyName}, source=${updateSource}`
+    );
+  }
+
   if (bindingTouched) {
     validateStrategyBinding({
       base_symbol: patch.base_symbol !== undefined ? normalizeSymbol(String(patch.base_symbol)) : existing.base_symbol,
@@ -749,6 +760,9 @@ export const updateStrategy = async (
       });
 
       if (offenders.length > 0) {
+        logger.error(
+          `Unsafe binding update blocked: strategyId=${strategyId}, apiKey=${apiKeyName}, source=${updateSource}, offenders=${offenders.join(',')}`
+        );
         throw new Error(
           `Unsafe update blocked: binding fields changed for other strategies in api_key_id=${existing.api_key_id} (ids: ${offenders.join(', ')})`
         );
@@ -765,7 +779,17 @@ export const updateStrategy = async (
   }
 
   const updated = await getStrategyRow(apiKeyName, strategyId);
-  return normalizeStrategy(updated);
+  const normalizedUpdated = normalizeStrategy(updated);
+
+  if (bindingTouched) {
+    logger.info(
+      `Strategy binding updated: source=${updateSource}, apiKey=${apiKeyName}, strategyId=${strategyId}, `
+      + `${existing.base_symbol}/${existing.quote_symbol}@${existing.interval} -> `
+      + `${normalizedUpdated.base_symbol}/${normalizedUpdated.quote_symbol}@${normalizedUpdated.interval}`
+    );
+  }
+
+  return normalizedUpdated;
 };
 
 export const deleteStrategy = async (apiKeyName: string, strategyId: number): Promise<void> => {

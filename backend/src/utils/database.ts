@@ -1,11 +1,18 @@
 import sqlite3 from 'sqlite3';
 import { open, Database } from 'sqlite';
+import path from 'path';
 
 let db: Database<sqlite3.Database, sqlite3.Statement>;
+let dbFilePath = '';
+
+export const getDbFilePath = (): string => dbFilePath;
 
 export const initDB = async () => {
+  const envDbFile = String(process.env.DB_FILE || '').trim();
+  dbFilePath = envDbFile || path.resolve(__dirname, '../../database.db');
+
   db = await open({
-    filename: './database.db',
+    filename: dbFilePath,
     driver: sqlite3.Database,
   });
 
