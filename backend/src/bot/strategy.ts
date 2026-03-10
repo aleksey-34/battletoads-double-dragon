@@ -322,11 +322,20 @@ type BalancedQtyPlan = {
   quoteTargetNotional: number;
 };
 
+type LiveLegBalanceSnapshot = {
+  baseNotional: number;
+  quoteNotional: number;
+  expectedBaseShare: number;
+  actualBaseShare: number;
+  shareError: number;
+};
+
 const SIZING_EPSILON = 1e-9;
 const MAX_SHARE_ERROR = 0.03;
 const MAX_LEG_DEVIATION = 0.3;
 const MAX_OVERSIZE_DEVIATION = 0.2;
 const MAX_TOTAL_DEVIATION = 0.3;
+const MAX_POST_OPEN_SHARE_ERROR = 0.08;
 
 const normalizeQtyValue = (value: number, decimals: number): number => {
   const safeDecimals = Math.max(0, Math.min(12, decimals));
@@ -540,6 +549,106 @@ const buildBalancedQtyPlan = async (
     oversize: best.oversize,
     baseTargetNotional,
     quoteTargetNotional,
+  };
+};
+
+const sleepMs = async (ms: number): Promise<void> => {
+  await new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms)));
+};
+
+const extractPositionNotional = (position: any): number => {
+  const explicit = Number(position?.positionValue);
+  if (Number.isFinite(explicit) && explicit > 0) {
+    return Math.abs(explicit);
+  }
+
+  const size = Number(position?.size);
+  const markPrice = Number(position?.markPrice);
+  if (Number.isFinite(size) && size > 0 && Number.isFinite(markPrice) && markPrice > 0) {
+    return Math.abs(size * markPrice);
+  }
+
+  const entryPrice = Number(position?.avgPrice ?? position?.entryPrice);
+  if (Number.isFinite(size) && size > 0 && Number.isFinite(entryPrice) && entryPrice > 0) {
+    return Math.abs(size * entryPrice);
+  }
+
+  return 0;
+};
+
+const validateLiveLegBalance = (
+  basePosition: any,
+  quotePosition: any,
+  baseWeight: number,
+  quoteWeight: number,
+  maxShareError: number
+): { ok: boolean; snapshot: LiveLegBalanceSnapshot } => {
+  const safeBaseWeight = Math.abs(baseWeight);
+  const safeQuoteWeight = Math.abs(quoteWeight);
+  const totalWeight = safeBaseWeight + safeQuoteWeight;
+
+  const baseNotional = extractPositionNotional(basePosition);
+  const quoteNotional = extractPositionNotional(quotePosition);
+  const totalNotional = baseNotional + quoteNotional;
+
+  const expectedBaseShare = totalWeight > SIZING_EPSILON
+    ? safeBaseWeight / totalWeight
+    : 0.5;
+  const actualBaseShare = totalNotional > SIZING_EPSILON
+    ? baseNotional / totalNotional
+    : 0;
+  const shareError = Math.abs(actualBaseShare - expectedBaseShare);
+
+  return {
+    ok: totalNotional > SIZING_EPSILON && shareError <= Math.max(0, maxShareError),
+    snapshot: {
+      baseNotional,
+      quoteNotional,
+      expectedBaseShare,
+      actualBaseShare,
+      shareError,
+    },
+  };
+};
+
+const loadPairPositionsForValidation = async (
+  apiKeyName: string,
+  baseSymbol: string,
+  quoteSymbol: string,
+  attempts: number = 3,
+  waitMs: number = 300
+): Promise<{ basePosition: any | null; quotePosition: any | null }> => {
+  const safeAttempts = Math.max(1, Math.floor(attempts));
+
+  for (let attempt = 0; attempt < safeAttempts; attempt += 1) {
+    const positions = await getPositions(apiKeyName);
+
+    const basePosition = positions.find((position: any) => {
+      return (
+        String(position?.symbol || '').toUpperCase() === baseSymbol.toUpperCase()
+        && Number.parseFloat(String(position?.size || '0')) > 0
+      );
+    }) || null;
+
+    const quotePosition = positions.find((position: any) => {
+      return (
+        String(position?.symbol || '').toUpperCase() === quoteSymbol.toUpperCase()
+        && Number.parseFloat(String(position?.size || '0')) > 0
+      );
+    }) || null;
+
+    if (basePosition && quotePosition) {
+      return { basePosition, quotePosition };
+    }
+
+    if (attempt < safeAttempts - 1) {
+      await sleepMs(waitMs);
+    }
+  }
+
+  return {
+    basePosition: null,
+    quotePosition: null,
   };
 };
 
@@ -1470,6 +1579,87 @@ export const executeStrategy = async (
       logger.error(`Rollback failed for ${mergedStrategy.base_symbol}: ${formatActionError(rollbackError)}`);
     }
     throw error;
+  }
+
+  const livePairAfterOpen = await loadPairPositionsForValidation(
+    apiKeyName,
+    mergedStrategy.base_symbol,
+    mergedStrategy.quote_symbol,
+    3,
+    350
+  );
+
+  if (!livePairAfterOpen.basePosition || !livePairAfterOpen.quotePosition) {
+    await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
+    await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
+
+    const updated = await updateStrategy(apiKeyName, strategyId, {
+      ...executionBindingPatch,
+      state: 'flat',
+      entry_ratio: null,
+      last_signal: signal,
+      last_action: 'desync_closed_post_open_missing_leg',
+      last_error: 'Opened pair validation failed: one or both legs are missing after entry',
+    });
+
+    logger.warn(
+      `Post-open validation failed (missing leg): strategy=${strategyId}, apiKey=${apiKeyName}, `
+      + `base=${mergedStrategy.base_symbol}, quote=${mergedStrategy.quote_symbol}`
+    );
+
+    return {
+      result: 'Pair opened with missing leg and was closed',
+      action: 'desync_closed_post_open_missing_leg',
+      strategy: updated,
+      currentRatio,
+      donchianHigh,
+      donchianLow,
+      donchianCenter,
+    };
+  }
+
+  const liveBalanceCheck = validateLiveLegBalance(
+    livePairAfterOpen.basePosition,
+    livePairAfterOpen.quotePosition,
+    baseWeight,
+    quoteWeight,
+    MAX_POST_OPEN_SHARE_ERROR
+  );
+
+  if (!liveBalanceCheck.ok) {
+    await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
+    await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
+
+    const liveSnapshot = liveBalanceCheck.snapshot;
+    const mismatchReason =
+      `Opened pair weight mismatch: base=${liveSnapshot.baseNotional.toFixed(4)} `
+      + `quote=${liveSnapshot.quoteNotional.toFixed(4)} `
+      + `expectedShare=${(liveSnapshot.expectedBaseShare * 100).toFixed(2)}% `
+      + `actualShare=${(liveSnapshot.actualBaseShare * 100).toFixed(2)}% `
+      + `shareError=${(liveSnapshot.shareError * 100).toFixed(2)}%`;
+
+    const updated = await updateStrategy(apiKeyName, strategyId, {
+      ...executionBindingPatch,
+      state: 'flat',
+      entry_ratio: null,
+      last_signal: signal,
+      last_action: 'desync_closed_post_open_weight_mismatch',
+      last_error: mismatchReason,
+    });
+
+    logger.warn(
+      `Post-open validation failed (weight mismatch): strategy=${strategyId}, apiKey=${apiKeyName}, ${mismatchReason}`
+    );
+
+    return {
+      result: 'Pair opened with weight mismatch and was closed',
+      action: 'desync_closed_post_open_weight_mismatch',
+      strategy: updated,
+      currentRatio,
+      donchianHigh,
+      donchianLow,
+      donchianCenter,
+    };
   }
 
   const updated = await updateStrategy(apiKeyName, strategyId, {
