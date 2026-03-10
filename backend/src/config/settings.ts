@@ -59,6 +59,7 @@ export interface Strategy {
   reinvest_percent: number;
   state?: 'flat' | 'long' | 'short';
   entry_ratio?: number | null;
+  tp_anchor_ratio?: number | null;
   last_signal?: string | null;
   last_action?: string | null;
   last_error?: string | null;

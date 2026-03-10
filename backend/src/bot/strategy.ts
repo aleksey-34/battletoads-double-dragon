@@ -27,6 +27,14 @@ type ParsedSyntheticCandle = {
   close: number;
 };
 
+type StrategyExecutionSource = 'manual' | 'auto';
+
+type ExecuteStrategyOptions = {
+  source?: StrategyExecutionSource;
+  closedBarOnly?: boolean;
+  dedupeClosedBar?: boolean;
+};
+
 const DEFAULT_STRATEGY: Omit<Strategy, 'api_key_id' | 'id'> = {
   name: 'DD_BattleToads',
   strategy_type: 'DD_BattleToads',
@@ -58,6 +66,7 @@ const DEFAULT_STRATEGY: Omit<Strategy, 'api_key_id' | 'id'> = {
   reinvest_percent: 0,
   state: 'flat',
   entry_ratio: null,
+  tp_anchor_ratio: null,
   last_signal: null,
   last_action: null,
   last_error: null,
@@ -95,6 +104,34 @@ const normalizeInterval = (value: any): string => String(value || '').trim();
 const normalizeCoef = (value: any): number => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : 0;
+};
+
+const intervalToMs = (interval: string): number => {
+  const value = String(interval || '').trim();
+
+  if (value.endsWith('m')) {
+    const minutes = Number.parseInt(value.replace('m', ''), 10);
+    return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 * 1000 : 60 * 1000;
+  }
+
+  if (value.endsWith('h')) {
+    const hours = Number.parseInt(value.replace('h', ''), 10);
+    return Number.isFinite(hours) && hours > 0 ? hours * 60 * 60 * 1000 : 60 * 60 * 1000;
+  }
+
+  if (value === '1d') {
+    return 24 * 60 * 60 * 1000;
+  }
+
+  if (value === '1w') {
+    return 7 * 24 * 60 * 60 * 1000;
+  }
+
+  if (value === '1M') {
+    return 30 * 24 * 60 * 60 * 1000;
+  }
+
+  return 60 * 60 * 1000;
 };
 
 const validateStrategyBinding = (binding: Pick<Strategy, 'base_symbol' | 'quote_symbol' | 'interval' | 'base_coef' | 'quote_coef'>): void => {
@@ -163,6 +200,7 @@ const normalizeStrategy = (row: any): Strategy => {
     reinvest_percent: safeNumber(row.reinvest_percent, DEFAULT_STRATEGY.reinvest_percent),
     state: String(row.state || 'flat') === 'long' ? 'long' : String(row.state || 'flat') === 'short' ? 'short' : 'flat',
     entry_ratio: row.entry_ratio === null || row.entry_ratio === undefined ? null : safeNumber(row.entry_ratio, 0),
+    tp_anchor_ratio: row.tp_anchor_ratio === null || row.tp_anchor_ratio === undefined ? null : safeNumber(row.tp_anchor_ratio, 0),
     last_signal: row.last_signal === undefined ? null : row.last_signal,
     last_action: row.last_action === undefined ? null : row.last_action,
     last_error: row.last_error === undefined ? null : row.last_error,
@@ -336,6 +374,10 @@ const MAX_LEG_DEVIATION = 0.3;
 const MAX_OVERSIZE_DEVIATION = 0.2;
 const MAX_TOTAL_DEVIATION = 0.3;
 const MAX_POST_OPEN_SHARE_ERROR = 0.08;
+const BAR_CLOSE_FRESHNESS_MS = 1500;
+const TRAILING_RATIO_EPSILON = 1e-12;
+
+const processedClosedBarByStrategy = new Map<string, number>();
 
 const normalizeQtyValue = (value: number, decimals: number): number => {
   const safeDecimals = Math.max(0, Math.min(12, decimals));
@@ -652,6 +694,47 @@ const loadPairPositionsForValidation = async (
   };
 };
 
+type ExecutionCandleContext = {
+  candlesForSignal: ParsedSyntheticCandle[];
+  evaluatedBarTimeMs: number;
+};
+
+const resolveExecutionCandleContext = (
+  candles: ParsedSyntheticCandle[],
+  interval: string,
+  closedBarOnly: boolean
+): ExecutionCandleContext => {
+  if (!Array.isArray(candles) || candles.length === 0) {
+    throw new Error('No synthetic candles available for execution');
+  }
+
+  if (!closedBarOnly) {
+    const latest = candles[candles.length - 1];
+    return {
+      candlesForSignal: candles,
+      evaluatedBarTimeMs: latest.timeMs,
+    };
+  }
+
+  const intervalMs = Math.max(60 * 1000, intervalToMs(interval));
+  let closedIndex = candles.length - 1;
+  const latest = candles[closedIndex];
+  const latestClosesAt = latest.timeMs + intervalMs;
+
+  if (latestClosesAt > Date.now() + BAR_CLOSE_FRESHNESS_MS) {
+    closedIndex -= 1;
+  }
+
+  if (closedIndex < 0) {
+    throw new Error('No closed candles available for execution');
+  }
+
+  return {
+    candlesForSignal: candles.slice(0, closedIndex + 1),
+    evaluatedBarTimeMs: candles[closedIndex].timeMs,
+  };
+};
+
 const computeSignal = (
   candles: ParsedSyntheticCandle[],
   length: number,
@@ -831,6 +914,7 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
     reinvest_percent: safeNumber(draft.reinvest_percent, DEFAULT_STRATEGY.reinvest_percent),
     state: 'flat',
     entry_ratio: null,
+    tp_anchor_ratio: null,
     last_signal: null,
     last_action: null,
     last_error: null,
@@ -871,13 +955,14 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
       reinvest_percent,
       state,
       entry_ratio,
+      tp_anchor_ratio,
       last_signal,
       last_action,
       last_error,
       created_at,
       updated_at
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )`,
     [
@@ -912,6 +997,7 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
       strategy.reinvest_percent,
       strategy.state,
       strategy.entry_ratio,
+      strategy.tp_anchor_ratio,
       strategy.last_signal,
       strategy.last_action,
       strategy.last_error,
@@ -1041,6 +1127,14 @@ export const updateStrategy = async (
     } else {
       const currentEntry = existing.entry_ratio === null || existing.entry_ratio === undefined ? 0 : existing.entry_ratio;
       pushUpdate('entry_ratio', safeNumber(patch.entry_ratio, currentEntry));
+    }
+  }
+  if (patch.tp_anchor_ratio !== undefined) {
+    if (patch.tp_anchor_ratio === null) {
+      pushUpdate('tp_anchor_ratio', null);
+    } else {
+      const currentAnchor = existing.tp_anchor_ratio === null || existing.tp_anchor_ratio === undefined ? 0 : existing.tp_anchor_ratio;
+      pushUpdate('tp_anchor_ratio', safeNumber(patch.tp_anchor_ratio, currentAnchor));
     }
   }
   if (patch.last_signal !== undefined) {
@@ -1200,10 +1294,15 @@ export const deleteStrategy = async (apiKeyName: string, strategyId: number): Pr
 
 export const executeStrategy = async (
   apiKeyName: string,
-  strategyId: number
+  strategyId: number,
+  options?: ExecuteStrategyOptions
 ) => {
   const existingRow = await getStrategyRow(apiKeyName, strategyId);
   const strategy = normalizeStrategy(existingRow);
+
+  const executionSource: StrategyExecutionSource = options?.source || 'manual';
+  const closedBarOnly = options?.closedBarOnly !== false;
+  const dedupeClosedBar = options?.dedupeClosedBar === true;
 
   if (!strategy.is_active) {
     return {
@@ -1245,17 +1344,72 @@ export const executeStrategy = async (
     .filter((item): item is ParsedSyntheticCandle => !!item)
     .sort((a, b) => a.timeMs - b.timeMs);
 
-  const { signal, currentRatio, donchianHigh, donchianLow, donchianCenter } = computeSignal(
+  const candleContext = resolveExecutionCandleContext(
     candles,
+    mergedStrategy.interval,
+    closedBarOnly
+  );
+
+  const { signal, currentRatio, donchianHigh, donchianLow, donchianCenter } = computeSignal(
+    candleContext.candlesForSignal,
     mergedStrategy.price_channel_length,
     mergedStrategy.detection_source,
     mergedStrategy.long_enabled,
     mergedStrategy.short_enabled
   );
 
-  const takeProfitFactor = 1 + Math.max(0, mergedStrategy.take_profit_percent) / 100;
+  const takeProfitPercent = Math.max(0, mergedStrategy.take_profit_percent);
   const state = mergedStrategy.state || 'flat';
   const entryRatio = mergedStrategy.entry_ratio;
+  const evaluatedBarTimeMs = candleContext.evaluatedBarTimeMs;
+  const evaluatedBarIso = new Date(evaluatedBarTimeMs).toISOString();
+  const processedBarCacheKey = `${apiKeyName}:${strategyId}`;
+
+  const markProcessedBar = (): void => {
+    if (!dedupeClosedBar) {
+      return;
+    }
+
+    processedClosedBarByStrategy.set(processedBarCacheKey, evaluatedBarTimeMs);
+  };
+
+  const returnWithProcessedBar = <T>(payload: T): T => {
+    markProcessedBar();
+    return payload;
+  };
+
+  const persistTpAnchorRatio = async (nextAnchor: number | null): Promise<void> => {
+    const currentAnchorRaw = mergedStrategy.tp_anchor_ratio;
+    const currentAnchor = Number(currentAnchorRaw);
+
+    if (nextAnchor === null) {
+      if (currentAnchorRaw === null || currentAnchorRaw === undefined) {
+        return;
+      }
+
+      await updateStrategy(apiKeyName, strategyId, {
+        ...executionBindingPatch,
+        tp_anchor_ratio: null,
+      });
+      mergedStrategy.tp_anchor_ratio = null;
+      return;
+    }
+
+    const normalizedAnchor = Number(nextAnchor);
+    if (!Number.isFinite(normalizedAnchor) || normalizedAnchor <= 0) {
+      return;
+    }
+
+    if (Number.isFinite(currentAnchor) && Math.abs(currentAnchor - normalizedAnchor) <= TRAILING_RATIO_EPSILON) {
+      return;
+    }
+
+    await updateStrategy(apiKeyName, strategyId, {
+      ...executionBindingPatch,
+      tp_anchor_ratio: normalizedAnchor,
+    });
+    mergedStrategy.tp_anchor_ratio = normalizedAnchor;
+  };
 
   const livePositions = await getPositions(apiKeyName);
   const liveBase = livePositions.find((position: any) => {
@@ -1277,12 +1431,13 @@ export const executeStrategy = async (
       ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
+      tp_anchor_ratio: null,
       last_action: 'desync_closed_mixed',
       last_error: null,
     });
 
     logger.warn(`Detected mixed pair state for strategy ${strategyId}; positions were closed`);
-    return {
+    return returnWithProcessedBar({
       result: 'Mixed pair positions detected and closed',
       action: 'desync_closed_mixed',
       strategy: updated,
@@ -1290,7 +1445,7 @@ export const executeStrategy = async (
       donchianHigh,
       donchianLow,
       donchianCenter,
-    };
+    });
   }
 
   if (state !== 'flat' && livePairState !== 'flat' && state !== livePairState) {
@@ -1301,12 +1456,13 @@ export const executeStrategy = async (
       ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
+      tp_anchor_ratio: null,
       last_action: 'desync_closed_state_mismatch',
       last_error: null,
     });
 
     logger.warn(`Detected wrong-side live state for strategy ${strategyId}; positions were closed`);
-    return {
+    return returnWithProcessedBar({
       result: 'Live pair state mismatched strategy state and was closed',
       action: 'desync_closed_state_mismatch',
       strategy: updated,
@@ -1314,7 +1470,7 @@ export const executeStrategy = async (
       donchianHigh,
       donchianLow,
       donchianCenter,
-    };
+    });
   }
 
   if (state === 'flat' && livePairState !== 'flat') {
@@ -1326,12 +1482,13 @@ export const executeStrategy = async (
         ...executionBindingPatch,
         state: 'flat',
         entry_ratio: null,
+        tp_anchor_ratio: null,
         last_action: 'desync_closed_against_signal',
         last_error: null,
       });
 
       logger.warn(`Closed manual/out-of-sync positions against current signal for strategy ${strategyId}`);
-      return {
+      return returnWithProcessedBar({
         result: 'Out-of-sync positions against current signal were closed',
         action: 'desync_closed_against_signal',
         strategy: updated,
@@ -1339,18 +1496,19 @@ export const executeStrategy = async (
         donchianHigh,
         donchianLow,
         donchianCenter,
-      };
+      });
     }
 
     const synced = await updateStrategy(apiKeyName, strategyId, {
       ...executionBindingPatch,
       state: livePairState,
       entry_ratio: currentRatio,
+      tp_anchor_ratio: currentRatio,
       last_action: `state_resynced_${livePairState}`,
       last_error: null,
     });
 
-    return {
+    return returnWithProcessedBar({
       result: 'Strategy state resynced from live pair positions',
       action: `state_resynced_${livePairState}`,
       strategy: synced,
@@ -1358,57 +1516,108 @@ export const executeStrategy = async (
       donchianHigh,
       donchianLow,
       donchianCenter,
-    };
+    });
   }
 
-  if (state === 'long' && entryRatio && currentRatio >= entryRatio * takeProfitFactor) {
-    await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
-    await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
-
-    const updated = await updateStrategy(apiKeyName, strategyId, {
-      ...executionBindingPatch,
-      state: 'flat',
-      entry_ratio: null,
-      last_action: `take_profit_long@${currentRatio}`,
-      last_signal: 'long',
-      last_error: null,
-    });
-
-    logger.info(`DD_BattleToads TP long triggered for strategy ${strategyId} (${apiKeyName})`);
-    return {
-      result: 'Take-profit hit for long synthetic position',
-      action: 'take_profit_long',
-      strategy: updated,
-      currentRatio,
-      donchianHigh,
-      donchianLow,
-      donchianCenter,
-    };
+  if (dedupeClosedBar) {
+    const lastProcessedBarTimeMs = processedClosedBarByStrategy.get(processedBarCacheKey);
+    if (lastProcessedBarTimeMs === evaluatedBarTimeMs) {
+      return {
+        result: `Bar ${evaluatedBarIso} already processed`,
+        action: 'bar_already_processed',
+        executionSource,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      };
+    }
   }
 
-  if (state === 'short' && entryRatio && currentRatio <= entryRatio / takeProfitFactor) {
-    await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
-    await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
+  if (state === 'long' && takeProfitPercent > 0) {
+    const anchorFromStorage = Number(mergedStrategy.tp_anchor_ratio);
+    let trailingAnchor = Number.isFinite(anchorFromStorage) && anchorFromStorage > 0
+      ? anchorFromStorage
+      : (entryRatio && entryRatio > 0 ? entryRatio : currentRatio);
 
-    const updated = await updateStrategy(apiKeyName, strategyId, {
-      ...executionBindingPatch,
-      state: 'flat',
-      entry_ratio: null,
-      last_action: `take_profit_short@${currentRatio}`,
-      last_signal: 'short',
-      last_error: null,
-    });
+    const nextAnchor = Math.max(trailingAnchor, currentRatio);
+    if (!Number.isFinite(anchorFromStorage) || Math.abs(nextAnchor - anchorFromStorage) > TRAILING_RATIO_EPSILON) {
+      await persistTpAnchorRatio(nextAnchor);
+    }
 
-    logger.info(`DD_BattleToads TP short triggered for strategy ${strategyId} (${apiKeyName})`);
-    return {
-      result: 'Take-profit hit for short synthetic position',
-      action: 'take_profit_short',
-      strategy: updated,
-      currentRatio,
-      donchianHigh,
-      donchianLow,
-      donchianCenter,
-    };
+    trailingAnchor = Number.isFinite(Number(mergedStrategy.tp_anchor_ratio))
+      ? Number(mergedStrategy.tp_anchor_ratio)
+      : nextAnchor;
+
+    const trailingStop = trailingAnchor * (1 - takeProfitPercent / 100);
+    if (Number.isFinite(trailingStop) && currentRatio <= trailingStop) {
+      await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
+      await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
+
+      const updated = await updateStrategy(apiKeyName, strategyId, {
+        ...executionBindingPatch,
+        state: 'flat',
+        entry_ratio: null,
+        tp_anchor_ratio: null,
+        last_action: `take_profit_long@${currentRatio}`,
+        last_signal: 'long',
+        last_error: null,
+      });
+
+      logger.info(`DD_BattleToads trailing TP long triggered for strategy ${strategyId} (${apiKeyName})`);
+      return returnWithProcessedBar({
+        result: 'Take-profit hit for long synthetic position',
+        action: 'take_profit_long',
+        strategy: updated,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
+  }
+
+  if (state === 'short' && takeProfitPercent > 0) {
+    const anchorFromStorage = Number(mergedStrategy.tp_anchor_ratio);
+    let trailingAnchor = Number.isFinite(anchorFromStorage) && anchorFromStorage > 0
+      ? anchorFromStorage
+      : (entryRatio && entryRatio > 0 ? entryRatio : currentRatio);
+
+    const nextAnchor = Math.min(trailingAnchor, currentRatio);
+    if (!Number.isFinite(anchorFromStorage) || Math.abs(nextAnchor - anchorFromStorage) > TRAILING_RATIO_EPSILON) {
+      await persistTpAnchorRatio(nextAnchor);
+    }
+
+    trailingAnchor = Number.isFinite(Number(mergedStrategy.tp_anchor_ratio))
+      ? Number(mergedStrategy.tp_anchor_ratio)
+      : nextAnchor;
+
+    const trailingStop = trailingAnchor * (1 + takeProfitPercent / 100);
+    if (Number.isFinite(trailingStop) && currentRatio >= trailingStop) {
+      await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
+      await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
+
+      const updated = await updateStrategy(apiKeyName, strategyId, {
+        ...executionBindingPatch,
+        state: 'flat',
+        entry_ratio: null,
+        tp_anchor_ratio: null,
+        last_action: `take_profit_short@${currentRatio}`,
+        last_signal: 'short',
+        last_error: null,
+      });
+
+      logger.info(`DD_BattleToads trailing TP short triggered for strategy ${strategyId} (${apiKeyName})`);
+      return returnWithProcessedBar({
+        result: 'Take-profit hit for short synthetic position',
+        action: 'take_profit_short',
+        strategy: updated,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
   }
 
   if (state === 'long' && entryRatio && currentRatio <= donchianCenter) {
@@ -1419,13 +1628,14 @@ export const executeStrategy = async (
       ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
+      tp_anchor_ratio: null,
       last_action: `stop_loss_long@${currentRatio}`,
       last_signal: 'long',
       last_error: null,
     });
 
     logger.info(`DD_BattleToads SL long triggered for strategy ${strategyId} (${apiKeyName})`);
-    return {
+    return returnWithProcessedBar({
       result: 'Stop-loss (center) hit for long synthetic position',
       action: 'stop_loss_long',
       strategy: updated,
@@ -1433,7 +1643,7 @@ export const executeStrategy = async (
       donchianHigh,
       donchianLow,
       donchianCenter,
-    };
+    });
   }
 
   if (state === 'short' && entryRatio && currentRatio >= donchianCenter) {
@@ -1444,13 +1654,14 @@ export const executeStrategy = async (
       ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
+      tp_anchor_ratio: null,
       last_action: `stop_loss_short@${currentRatio}`,
       last_signal: 'short',
       last_error: null,
     });
 
     logger.info(`DD_BattleToads SL short triggered for strategy ${strategyId} (${apiKeyName})`);
-    return {
+    return returnWithProcessedBar({
       result: 'Stop-loss (center) hit for short synthetic position',
       action: 'stop_loss_short',
       strategy: updated,
@@ -1458,7 +1669,7 @@ export const executeStrategy = async (
       donchianHigh,
       donchianLow,
       donchianCenter,
-    };
+    });
   }
 
   if (signal === 'none') {
@@ -1469,7 +1680,7 @@ export const executeStrategy = async (
       last_error: null,
     });
 
-    return {
+    return returnWithProcessedBar({
       result: 'No Donchian signal',
       action: 'no_signal',
       strategy: updated,
@@ -1477,7 +1688,7 @@ export const executeStrategy = async (
       donchianHigh,
       donchianLow,
       donchianCenter,
-    };
+    });
   }
 
   if (state === signal) {
@@ -1488,7 +1699,7 @@ export const executeStrategy = async (
       last_error: null,
     });
 
-    return {
+    return returnWithProcessedBar({
       result: `Signal ${signal} already in position`,
       action: `hold_${signal}`,
       strategy: updated,
@@ -1496,7 +1707,7 @@ export const executeStrategy = async (
       donchianHigh,
       donchianLow,
       donchianCenter,
-    };
+    });
   }
 
   const balances = await getBalances(apiKeyName);
@@ -1543,7 +1754,7 @@ export const executeStrategy = async (
       last_error: null,
     });
 
-    return {
+    return returnWithProcessedBar({
       result: 'Strategy paused before opening a new position',
       action: 'paused_before_open',
       strategy: updated,
@@ -1551,7 +1762,7 @@ export const executeStrategy = async (
       donchianHigh,
       donchianLow,
       donchianCenter,
-    };
+    });
   }
 
   try {
@@ -1597,6 +1808,7 @@ export const executeStrategy = async (
       ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
+      tp_anchor_ratio: null,
       last_signal: signal,
       last_action: 'desync_closed_post_open_missing_leg',
       last_error: 'Opened pair validation failed: one or both legs are missing after entry',
@@ -1607,7 +1819,7 @@ export const executeStrategy = async (
       + `base=${mergedStrategy.base_symbol}, quote=${mergedStrategy.quote_symbol}`
     );
 
-    return {
+    return returnWithProcessedBar({
       result: 'Pair opened with missing leg and was closed',
       action: 'desync_closed_post_open_missing_leg',
       strategy: updated,
@@ -1615,7 +1827,7 @@ export const executeStrategy = async (
       donchianHigh,
       donchianLow,
       donchianCenter,
-    };
+    });
   }
 
   const liveBalanceCheck = validateLiveLegBalance(
@@ -1642,6 +1854,7 @@ export const executeStrategy = async (
       ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
+      tp_anchor_ratio: null,
       last_signal: signal,
       last_action: 'desync_closed_post_open_weight_mismatch',
       last_error: mismatchReason,
@@ -1651,7 +1864,7 @@ export const executeStrategy = async (
       `Post-open validation failed (weight mismatch): strategy=${strategyId}, apiKey=${apiKeyName}, ${mismatchReason}`
     );
 
-    return {
+    return returnWithProcessedBar({
       result: 'Pair opened with weight mismatch and was closed',
       action: 'desync_closed_post_open_weight_mismatch',
       strategy: updated,
@@ -1659,13 +1872,14 @@ export const executeStrategy = async (
       donchianHigh,
       donchianLow,
       donchianCenter,
-    };
+    });
   }
 
   const updated = await updateStrategy(apiKeyName, strategyId, {
     ...executionBindingPatch,
     state: signal,
     entry_ratio: currentRatio,
+    tp_anchor_ratio: currentRatio,
     last_signal: signal,
     last_action: `opened_${signal}@${currentRatio}`,
     last_error: null,
@@ -1679,7 +1893,7 @@ export const executeStrategy = async (
   );
 
   logger.info(`Executed DD_BattleToads strategy ${strategyId} for ${apiKeyName}: ${signal}`);
-  return {
+  return returnWithProcessedBar({
     result: 'Strategy executed',
     action: `opened_${signal}`,
     signal,
@@ -1691,7 +1905,7 @@ export const executeStrategy = async (
     donchianLow,
     donchianCenter,
     strategy: updated,
-  };
+  });
 };
 
 export const pauseStrategy = async (apiKeyName: string, strategyId: number) => {
@@ -1712,6 +1926,7 @@ export const stopStrategy = async (apiKeyName: string, strategyId: number) => {
     is_active: false,
     state: 'flat',
     entry_ratio: null,
+    tp_anchor_ratio: null,
     last_action: 'stopped',
     last_error: null,
   });
@@ -1781,6 +1996,7 @@ export const closeStrategyPositions = async (apiKeyName: string, strategyId: num
   const updated = await updateStrategy(apiKeyName, strategyId, {
     state: 'flat',
     entry_ratio: null,
+    tp_anchor_ratio: null,
     last_action: 'positions_closed',
     last_error: null,
   });
@@ -1962,6 +2178,7 @@ export const copyStrategyBlock = async (
             is_active: false,
             state: 'flat',
             entry_ratio: null,
+            tp_anchor_ratio: null,
             last_action: 'copied_symbol_mismatch',
             last_error: issue,
           });
@@ -2026,7 +2243,11 @@ export const runAutoStrategiesCycle = async () => {
     }
 
     try {
-      await executeStrategy(apiKeyName, strategyId);
+      await executeStrategy(apiKeyName, strategyId, {
+        source: 'auto',
+        closedBarOnly: true,
+        dedupeClosedBar: true,
+      });
       processed += 1;
     } catch (error) {
       failed += 1;

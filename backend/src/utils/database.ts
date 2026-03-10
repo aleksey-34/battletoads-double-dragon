@@ -94,6 +94,7 @@ export const initDB = async () => {
       reinvest_percent REAL DEFAULT 0.0,
       state TEXT DEFAULT 'flat',
       entry_ratio REAL,
+      tp_anchor_ratio REAL,
       last_signal TEXT,
       last_action TEXT,
       last_error TEXT,
@@ -199,6 +200,7 @@ export const initDB = async () => {
   await ensureColumn('strategies', 'reinvest_percent REAL DEFAULT 0.0');
   await ensureColumn('strategies', "state TEXT DEFAULT 'flat'");
   await ensureColumn('strategies', 'entry_ratio REAL');
+  await ensureColumn('strategies', 'tp_anchor_ratio REAL');
   await ensureColumn('strategies', 'last_signal TEXT');
   await ensureColumn('strategies', 'last_action TEXT');
   await ensureColumn('strategies', 'last_error TEXT');

@@ -293,6 +293,7 @@ type RuntimeStrategy = {
   currentPrice: number;
   state: PositionState;
   entryPrice: number | null;
+  tpAnchorPrice: number | null;
   notional: number;
   openTrade: OpenTradeState | null;
   startIndex: number;
@@ -373,6 +374,7 @@ const closePosition = (
   if (!runtime.openTrade || !runtime.entryPrice || runtime.notional <= 0 || runtime.state === 'flat') {
     runtime.state = 'flat';
     runtime.entryPrice = null;
+    runtime.tpAnchorPrice = null;
     runtime.notional = 0;
     runtime.openTrade = null;
     return;
@@ -419,6 +421,7 @@ const closePosition = (
 
   runtime.state = 'flat';
   runtime.entryPrice = null;
+  runtime.tpAnchorPrice = null;
   runtime.notional = 0;
   runtime.openTrade = null;
 };
@@ -467,6 +470,7 @@ const openPosition = (
 
   runtime.state = signal;
   runtime.entryPrice = entryPrice;
+  runtime.tpAnchorPrice = marketPrice;
   runtime.notional = notional;
   runtime.openTrade = {
     side: signal,
@@ -636,6 +640,7 @@ const loadRuntimeStrategies = async (
       currentPrice: candles[startIndex].close,
       state: 'flat',
       entryPrice: null,
+      tpAnchorPrice: null,
       notional: 0,
       openTrade: null,
       startIndex,
@@ -793,18 +798,40 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
 
     const state = runtime.state;
     const entryPrice = runtime.entryPrice;
-    const takeProfitFactor = 1 + Math.max(0, asNumber(strategy.take_profit_percent, 0)) / 100;
+    const takeProfitPercent = Math.max(0, asNumber(strategy.take_profit_percent, 0));
 
-    if (state === 'long' && entryPrice && signalPayload.current >= entryPrice * takeProfitFactor) {
-      closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'take_profit_long');
-      pushEquityPoint(event.timeMs);
-      continue;
+    if (state === 'long' && takeProfitPercent > 0) {
+      const existingAnchor = Number(runtime.tpAnchorPrice);
+      const anchorBase = Number.isFinite(existingAnchor) && existingAnchor > 0
+        ? existingAnchor
+        : (entryPrice && entryPrice > 0 ? entryPrice : signalPayload.current);
+
+      const nextAnchor = Math.max(anchorBase, signalPayload.current);
+      runtime.tpAnchorPrice = nextAnchor;
+
+      const trailingStop = nextAnchor * (1 - takeProfitPercent / 100);
+      if (Number.isFinite(trailingStop) && signalPayload.current <= trailingStop) {
+        closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'take_profit_long');
+        pushEquityPoint(event.timeMs);
+        continue;
+      }
     }
 
-    if (state === 'short' && entryPrice && signalPayload.current <= entryPrice / takeProfitFactor) {
-      closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'take_profit_short');
-      pushEquityPoint(event.timeMs);
-      continue;
+    if (state === 'short' && takeProfitPercent > 0) {
+      const existingAnchor = Number(runtime.tpAnchorPrice);
+      const anchorBase = Number.isFinite(existingAnchor) && existingAnchor > 0
+        ? existingAnchor
+        : (entryPrice && entryPrice > 0 ? entryPrice : signalPayload.current);
+
+      const nextAnchor = Math.min(anchorBase, signalPayload.current);
+      runtime.tpAnchorPrice = nextAnchor;
+
+      const trailingStop = nextAnchor * (1 + takeProfitPercent / 100);
+      if (Number.isFinite(trailingStop) && signalPayload.current >= trailingStop) {
+        closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'take_profit_short');
+        pushEquityPoint(event.timeMs);
+        continue;
+      }
     }
 
     if (state === 'long' && entryPrice && signalPayload.current <= signalPayload.donchianCenter) {

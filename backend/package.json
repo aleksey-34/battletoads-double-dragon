@@ -5,7 +5,8 @@
   "scripts": {
     "start": "ts-node src/server.ts",
     "build": "tsc",
-    "dev": "ts-node --watch src/server.ts"
+    "dev": "ts-node --watch src/server.ts",
+    "compare:tv": "ts-node src/backtest/compareTvTrades.ts"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
