@@ -432,7 +432,6 @@ const openPosition = (
   portfolioEquityNow: number
 ): boolean => {
   const strategy = runtime.strategy;
-  const leverage = Math.max(1, asNumber(strategy.leverage, 1));
 
   const lotPercent = signal === 'long'
     ? asNumber(strategy.lot_long_percent, 0)
@@ -456,7 +455,7 @@ const openPosition = (
     ? (maxDeposit > 0 ? maxDeposit : portfolioEquityNow)
     : cappedBalance;
 
-  const notional = baseCapital * lotFraction * reinvestFactor * leverage;
+  const notional = baseCapital * lotFraction * reinvestFactor;
   if (!Number.isFinite(notional) || notional <= 0) {
     return false;
   }
