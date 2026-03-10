@@ -72,6 +72,7 @@ export const initDB = async () => {
       show_chart BOOLEAN DEFAULT 1,
       show_indicators BOOLEAN DEFAULT 1,
       show_positions_on_chart BOOLEAN DEFAULT 1,
+      show_trades_on_chart BOOLEAN DEFAULT 0,
       show_values_each_bar BOOLEAN DEFAULT 0,
       auto_update BOOLEAN DEFAULT 1,
       take_profit_percent REAL DEFAULT 7.5,
@@ -177,6 +178,7 @@ export const initDB = async () => {
   await ensureColumn('strategies', 'show_chart BOOLEAN DEFAULT 1');
   await ensureColumn('strategies', 'show_indicators BOOLEAN DEFAULT 1');
   await ensureColumn('strategies', 'show_positions_on_chart BOOLEAN DEFAULT 1');
+  await ensureColumn('strategies', 'show_trades_on_chart BOOLEAN DEFAULT 0');
   await ensureColumn('strategies', 'show_values_each_bar BOOLEAN DEFAULT 0');
   await ensureColumn('strategies', 'auto_update BOOLEAN DEFAULT 1');
   await ensureColumn('strategies', 'price_channel_length INTEGER DEFAULT 50');

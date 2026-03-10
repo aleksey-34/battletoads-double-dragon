@@ -51,7 +51,22 @@ type OrderRow = {
   createdTime: string;
 };
 
-type ViewMode = 'positions' | 'orders' | 'both';
+type TradeRow = {
+  tradeId: string;
+  orderId: string;
+  symbol: string;
+  side: string;
+  qty: string;
+  price: string;
+  notional: string;
+  fee: string;
+  feeCurrency: string;
+  realizedPnl: string;
+  isMaker: boolean;
+  timestamp: string;
+};
+
+type ViewMode = 'positions' | 'orders' | 'trades' | 'all';
 
 type ManualOrderDraft = {
   symbol: string;
@@ -76,12 +91,13 @@ const formatCompact = (value: any, digits: number = 4): string => {
 const Positions: React.FC = () => {
   const [positionsByKey, setPositionsByKey] = useState<{ [key: string]: PositionRow[] }>({});
   const [ordersByKey, setOrdersByKey] = useState<{ [key: string]: OrderRow[] }>({});
+  const [tradesByKey, setTradesByKey] = useState<{ [key: string]: TradeRow[] }>({});
   const [loadingByKey, setLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [errorByKey, setErrorByKey] = useState<{ [key: string]: string }>({});
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [actionLoading, setActionLoading] = useState<{ [key: string]: boolean }>({});
   const [refreshAllLoading, setRefreshAllLoading] = useState<boolean>(false);
-  const [viewMode, setViewMode] = useState<ViewMode>('both');
+  const [viewMode, setViewMode] = useState<ViewMode>('all');
   const [manualOrderDraftByKey, setManualOrderDraftByKey] = useState<{ [key: string]: ManualOrderDraft }>({});
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -119,6 +135,7 @@ const Positions: React.FC = () => {
       for (const key of keys) {
         void fetchPositions(key.name);
         void fetchOrders(key.name);
+        void fetchTrades(key.name);
       }
     } catch (error) {
       console.error(error);
@@ -193,6 +210,44 @@ const Positions: React.FC = () => {
     }
   };
 
+  const fetchTrades = async (apiKeyName: string) => {
+    setLoadingByKey((prev) => ({ ...prev, [`trades:${apiKeyName}`]: true }));
+
+    try {
+      const res = await axios.get(`http://localhost:3001/api/trades/${apiKeyName}`, {
+        params: {
+          limit: 200,
+        },
+      });
+
+      const normalized = (Array.isArray(res.data) ? res.data : []).map((trade: any, index: number) => ({
+        tradeId: String(trade.tradeId || `trade_${index}`),
+        orderId: String(trade.orderId || ''),
+        symbol: String(trade.symbol || ''),
+        side: String(trade.side || ''),
+        qty: String(trade.qty || '0'),
+        price: String(trade.price || '0'),
+        notional: String(trade.notional || '0'),
+        fee: String(trade.fee || '0'),
+        feeCurrency: String(trade.feeCurrency || ''),
+        realizedPnl: String(trade.realizedPnl || '0'),
+        isMaker: Boolean(trade.isMaker),
+        timestamp: String(trade.timestamp || ''),
+      }));
+
+      setTradesByKey((prev) => ({ ...prev, [apiKeyName]: normalized }));
+    } catch (error: any) {
+      console.error(error);
+      setTradesByKey((prev) => ({ ...prev, [apiKeyName]: [] }));
+      setErrorByKey((prev) => ({
+        ...prev,
+        [apiKeyName]: error.response?.data?.error || 'Failed to load trade history',
+      }));
+    } finally {
+      setLoadingByKey((prev) => ({ ...prev, [`trades:${apiKeyName}`]: false }));
+    }
+  };
+
   const closePositionPart = async (apiKeyName: string, row: PositionRow, percent: number) => {
     const actionKey = `${apiKeyName}:${row.symbol}:${row.side}:${percent}`;
 
@@ -234,6 +289,7 @@ const Positions: React.FC = () => {
       await Promise.all([
         fetchPositions(apiKeyName),
         fetchOrders(apiKeyName),
+        fetchTrades(apiKeyName),
       ]);
     } catch (error: any) {
       console.error(error);
@@ -265,6 +321,7 @@ const Positions: React.FC = () => {
       await Promise.all([
         fetchOrders(apiKeyName),
         fetchPositions(apiKeyName),
+        fetchTrades(apiKeyName),
       ]);
     } catch (error: any) {
       console.error(error);
@@ -280,8 +337,9 @@ const Positions: React.FC = () => {
       for (const key of apiKeys) {
         await fetchPositions(key.name);
         await fetchOrders(key.name);
+        await fetchTrades(key.name);
       }
-      message.success('Positions and orders refreshed for all API keys');
+      message.success('Positions, orders and trades refreshed for all API keys');
     } catch (error) {
       console.error(error);
       message.error('Failed to refresh all positions');
@@ -401,6 +459,75 @@ const Positions: React.FC = () => {
     },
   ];
 
+  const tradeColumns = [
+    {
+      title: 'Time',
+      dataIndex: 'timestamp',
+      key: 'timestamp',
+      render: (value: string) => {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric) || numeric <= 0) {
+          return '-';
+        }
+
+        const date = new Date(numeric > 9999999999 ? numeric : numeric * 1000);
+        return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
+      },
+    },
+    { title: 'Symbol', dataIndex: 'symbol', key: 'symbol' },
+    {
+      title: 'Side',
+      dataIndex: 'side',
+      key: 'side',
+      render: (side: string) => {
+        const isBuy = String(side || '').toLowerCase() === 'buy';
+        return <Tag color={isBuy ? 'green' : 'red'}>{side}</Tag>;
+      },
+    },
+    {
+      title: 'Qty',
+      dataIndex: 'qty',
+      key: 'qty',
+      render: (value: string) => formatCompact(value, 6),
+    },
+    {
+      title: 'Price',
+      dataIndex: 'price',
+      key: 'price',
+      render: (value: string) => formatCompact(value, 6),
+    },
+    {
+      title: 'Notional',
+      dataIndex: 'notional',
+      key: 'notional',
+      render: (value: string) => formatCompact(value, 2),
+    },
+    {
+      title: 'Fee',
+      key: 'fee',
+      render: (_: unknown, row: TradeRow) => {
+        const feeValue = formatCompact(row.fee, 6);
+        return `${feeValue}${row.feeCurrency ? ` ${row.feeCurrency}` : ''}`;
+      },
+    },
+    {
+      title: 'Realized PnL',
+      dataIndex: 'realizedPnl',
+      key: 'realizedPnl',
+      render: (value: string) => {
+        const numeric = toNumber(value);
+        const color = numeric > 0 ? '#16a34a' : numeric < 0 ? '#dc2626' : '#4b5563';
+        return <span style={{ color, fontWeight: 600 }}>{formatCompact(numeric, 4)}</span>;
+      },
+    },
+    {
+      title: 'Maker',
+      dataIndex: 'isMaker',
+      key: 'isMaker',
+      render: (value: boolean) => <Tag color={value ? 'blue' : 'default'}>{value ? 'Maker' : 'Taker'}</Tag>,
+    },
+  ];
+
   const apiKeysByExchange = useMemo(() => {
     return apiKeys.reduce((acc, apiKey) => {
       const exchange = apiKey.exchange || 'Unknown';
@@ -412,8 +539,9 @@ const Positions: React.FC = () => {
     }, {} as { [exchange: string]: ApiKey[] });
   }, [apiKeys]);
 
-  const shouldShowPositions = viewMode === 'positions' || viewMode === 'both';
-  const shouldShowOrders = viewMode === 'orders' || viewMode === 'both';
+  const shouldShowPositions = viewMode === 'positions' || viewMode === 'all';
+  const shouldShowOrders = viewMode === 'orders' || viewMode === 'all';
+  const shouldShowTrades = viewMode === 'trades' || viewMode === 'all';
 
   return (
     <div className="positions-page">
@@ -427,7 +555,8 @@ const Positions: React.FC = () => {
           options={[
             { label: 'Positions', value: 'positions' },
             { label: 'Orders', value: 'orders' },
-            { label: 'Positions + Orders', value: 'both' },
+            { label: 'Trades', value: 'trades' },
+            { label: 'All', value: 'all' },
           ]}
         />
       </Space>
@@ -439,8 +568,10 @@ const Positions: React.FC = () => {
               const manualDraft = manualOrderDraftByKey[key.name] || { symbol: 'BTCUSDT', side: 'Buy' as const, qty: 0.001 };
               const keyPositions = positionsByKey[key.name] || [];
               const keyOrders = ordersByKey[key.name] || [];
+              const keyTrades = tradesByKey[key.name] || [];
               const positionsLoading = Boolean(loadingByKey[key.name]);
               const ordersLoading = Boolean(loadingByKey[`orders:${key.name}`]);
+              const tradesLoading = Boolean(loadingByKey[`trades:${key.name}`]);
               return (
                 <Card
                   key={key.id}
@@ -456,6 +587,7 @@ const Positions: React.FC = () => {
                       onClick={() => {
                         void fetchPositions(key.name);
                         void fetchOrders(key.name);
+                        void fetchTrades(key.name);
                       }}
                     >
                       Refresh
@@ -590,6 +722,28 @@ const Positions: React.FC = () => {
                       ) : (
                         <div style={{ fontSize: 12, color: '#6b7280', padding: '2px 0 4px' }}>
                           No open orders
+                        </div>
+                      )}
+                    </>
+                  ) : null}
+
+                  {shouldShowTrades ? (
+                    <>
+                      <Divider style={{ margin: '6px 0' }}>Recent Trades</Divider>
+                      {tradesLoading || keyTrades.length > 0 ? (
+                        <Table
+                          size="small"
+                          rowKey={(row) => `${row.tradeId}_${row.timestamp}_${row.symbol}`}
+                          dataSource={keyTrades}
+                          columns={tradeColumns}
+                          loading={tradesLoading}
+                          locale={{ emptyText: '' }}
+                          pagination={keyTrades.length > 10 ? { pageSize: 10, size: 'small' } : false}
+                          scroll={{ x: 1040 }}
+                        />
+                      ) : (
+                        <div style={{ fontSize: 12, color: '#6b7280', padding: '2px 0 4px' }}>
+                          No recent trades
                         </div>
                       )}
                     </>

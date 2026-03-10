@@ -36,6 +36,7 @@ const DEFAULT_STRATEGY: Omit<Strategy, 'api_key_id' | 'id'> = {
   show_chart: true,
   show_indicators: true,
   show_positions_on_chart: true,
+  show_trades_on_chart: false,
   show_values_each_bar: false,
   auto_update: true,
   take_profit_percent: 7.5,
@@ -140,6 +141,7 @@ const normalizeStrategy = (row: any): Strategy => {
     show_chart: safeBoolean(row.show_chart, true),
     show_indicators: safeBoolean(row.show_indicators, true),
     show_positions_on_chart: safeBoolean(row.show_positions_on_chart, true),
+    show_trades_on_chart: safeBoolean(row.show_trades_on_chart, false),
     show_values_each_bar: safeBoolean(row.show_values_each_bar, false),
     auto_update: safeBoolean(row.auto_update, true),
     take_profit_percent: safeNumber(row.take_profit_percent, DEFAULT_STRATEGY.take_profit_percent),
@@ -256,7 +258,7 @@ const extractUsdtBalance = (balances: any[]): number => {
 };
 
 const computeSignalTotalNotional = (
-  strategy: Pick<Strategy, 'max_deposit' | 'fixed_lot' | 'reinvest_percent' | 'leverage' | 'lot_long_percent' | 'lot_short_percent'>,
+  strategy: Pick<Strategy, 'max_deposit' | 'fixed_lot' | 'reinvest_percent' | 'lot_long_percent' | 'lot_short_percent'>,
   availableBalance: number,
   signal: 'long' | 'short'
 ): number => {
@@ -274,7 +276,7 @@ const computeSignalTotalNotional = (
     ? (strategy.max_deposit > 0 ? strategy.max_deposit : cappedBalance)
     : cappedBalance;
 
-  const totalNotional = baseCapital * lotFraction * reinvestFactor * Math.max(1, strategy.leverage);
+  const totalNotional = baseCapital * lotFraction * reinvestFactor;
 
   return Number.isFinite(totalNotional) && totalNotional > 0 ? totalNotional : 0;
 };
@@ -523,7 +525,7 @@ const buildBalancedQtyPlan = async (
       `Order size too small for balanced pair execution: shareError=${(best.shareError * 100).toFixed(2)}%, `
       + `baseDev=${(best.baseLegDeviation * 100).toFixed(2)}%, quoteDev=${(best.quoteLegDeviation * 100).toFixed(2)}%, `
       + `totalDev=${(best.totalDeviation * 100).toFixed(2)}%, oversize=${(best.oversize * 100).toFixed(2)}%. `
-      + 'Increase lot/max_deposit or leverage.'
+      + 'Increase lot percent or max_deposit.'
     );
   }
 
@@ -698,6 +700,7 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
     show_chart: safeBoolean(draft.show_chart, DEFAULT_STRATEGY.show_chart),
     show_indicators: safeBoolean(draft.show_indicators, DEFAULT_STRATEGY.show_indicators),
     show_positions_on_chart: safeBoolean(draft.show_positions_on_chart, DEFAULT_STRATEGY.show_positions_on_chart),
+    show_trades_on_chart: safeBoolean(draft.show_trades_on_chart, DEFAULT_STRATEGY.show_trades_on_chart || false),
     show_values_each_bar: safeBoolean(draft.show_values_each_bar, DEFAULT_STRATEGY.show_values_each_bar),
     auto_update: safeBoolean(draft.auto_update, DEFAULT_STRATEGY.auto_update),
     take_profit_percent: safeNumber(draft.take_profit_percent, DEFAULT_STRATEGY.take_profit_percent),
@@ -737,6 +740,7 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
       show_chart,
       show_indicators,
       show_positions_on_chart,
+      show_trades_on_chart,
       show_values_each_bar,
       auto_update,
       take_profit_percent,
@@ -764,7 +768,7 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
       created_at,
       updated_at
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )`,
     [
@@ -777,6 +781,7 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
       strategy.show_chart ? 1 : 0,
       strategy.show_indicators ? 1 : 0,
       strategy.show_positions_on_chart ? 1 : 0,
+      strategy.show_trades_on_chart ? 1 : 0,
       strategy.show_values_each_bar ? 1 : 0,
       strategy.auto_update ? 1 : 0,
       strategy.take_profit_percent,
@@ -847,6 +852,12 @@ export const updateStrategy = async (
     pushUpdate(
       'show_positions_on_chart',
       safeBoolean(patch.show_positions_on_chart, existing.show_positions_on_chart) ? 1 : 0
+    );
+  }
+  if (patch.show_trades_on_chart !== undefined) {
+    pushUpdate(
+      'show_trades_on_chart',
+      safeBoolean(patch.show_trades_on_chart, existing.show_trades_on_chart || false) ? 1 : 0
     );
   }
   if (patch.show_values_each_bar !== undefined) {
@@ -1729,6 +1740,7 @@ export const copyStrategyBlock = async (
         show_chart: source.show_chart,
         show_indicators: source.show_indicators,
         show_positions_on_chart: source.show_positions_on_chart,
+        show_trades_on_chart: source.show_trades_on_chart,
         show_values_each_bar: source.show_values_each_bar,
         auto_update: source.auto_update,
         take_profit_percent: source.take_profit_percent,

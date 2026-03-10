@@ -37,6 +37,7 @@ export interface Strategy {
   show_chart: boolean;
   show_indicators: boolean;
   show_positions_on_chart: boolean;
+  show_trades_on_chart?: boolean;
   show_values_each_bar: boolean;
   auto_update: boolean;
   take_profit_percent: number;

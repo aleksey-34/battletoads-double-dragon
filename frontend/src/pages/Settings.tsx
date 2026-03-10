@@ -271,9 +271,6 @@ const Settings: React.FC = () => {
               >
                 <div style={{ minWidth: 0 }}>
                   <Typography.Text strong>{item.name}</Typography.Text>
-                  <Typography.Text type="secondary" style={{ display: 'block', fontSize: 12 }}>
-                    ID #{item.id}
-                  </Typography.Text>
                 </div>
 
                 <Space size={6} wrap>

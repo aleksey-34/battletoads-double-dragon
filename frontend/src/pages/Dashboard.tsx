@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Button, Switch, Row, Col, Form, Input, Select, Collapse, Spin, Alert, Space, InputNumber, Tag, Popconfirm, message, Divider, Badge } from 'antd';
 import axios from 'axios';
-import ChartComponent, { HoverOHLC, OverlayLine } from '../components/ChartComponent';
+import ChartComponent, { HoverOHLC, OverlayLine, ChartMarker } from '../components/ChartComponent';
 import StatusIndicator from '../components/StatusIndicator';
 
 /* eslint-disable react-hooks/exhaustive-deps */
@@ -66,6 +66,7 @@ type DDStrategy = {
   show_settings: boolean;
   show_indicators: boolean;
   show_positions_on_chart: boolean;
+  show_trades_on_chart: boolean;
   show_values_each_bar: boolean;
   auto_update: boolean;
   long_enabled: boolean;
@@ -85,6 +86,21 @@ type DDStrategy = {
   lot_long_usdt?: number | null;
   lot_short_usdt?: number | null;
   lot_balance_usdt?: number | null;
+};
+
+type TradeHistoryRow = {
+  tradeId: string;
+  orderId: string;
+  symbol: string;
+  side: 'Buy' | 'Sell';
+  qty: string;
+  price: string;
+  notional: string;
+  fee: string;
+  feeCurrency: string;
+  realizedPnl: string;
+  isMaker: boolean;
+  timestamp: string;
 };
 
 type CopyBlockResponse = {
@@ -199,6 +215,49 @@ const formatCompactNumber = (value: number | string, digits: number = 2) => {
     return String(value);
   }
   return numeric.toFixed(digits).replace(/\.?0+$/, '');
+};
+
+const normalizeTimestampMs = (value: any): number | null => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return null;
+  }
+  return numeric > 9999999999 ? Math.floor(numeric) : Math.floor(numeric * 1000);
+};
+
+const buildStrategyTradeMarkers = (
+  trades: TradeHistoryRow[],
+  symbols: string[]
+): ChartMarker[] => {
+  if (!Array.isArray(trades) || trades.length === 0 || symbols.length === 0) {
+    return [];
+  }
+
+  const symbolSet = new Set(symbols.map((symbol) => String(symbol || '').toUpperCase()));
+
+  return trades
+    .filter((trade) => symbolSet.has(String(trade.symbol || '').toUpperCase()))
+    .map((trade, index) => {
+      const timeMs = normalizeTimestampMs(trade.timestamp);
+      if (timeMs === null) {
+        return null;
+      }
+
+      const sideRaw = String(trade.side || '').toLowerCase();
+      const isBuy = sideRaw === 'buy';
+
+      return {
+        id: `${trade.tradeId || trade.orderId || `trade-${index}`}-${trade.symbol}-${timeMs}`,
+        time: timeMs,
+        color: isBuy ? '#16a34a' : '#dc2626',
+        shape: isBuy ? 'arrowUp' : 'arrowDown',
+        position: isBuy ? 'belowBar' : 'aboveBar',
+        text: `${isBuy ? 'B' : 'S'} ${trade.symbol}`,
+      } as ChartMarker;
+    })
+    .filter((marker): marker is ChartMarker => !!marker)
+    .sort((left, right) => left.time - right.time)
+    .slice(-120);
 };
 
 type DonchianSnapshot = {
@@ -628,6 +687,7 @@ const parseStrategy = (raw: any): DDStrategy => {
     show_settings: readBoolean(raw?.show_settings, true),
     show_indicators: readBoolean(raw?.show_indicators, true),
     show_positions_on_chart: readBoolean(raw?.show_positions_on_chart, true),
+    show_trades_on_chart: readBoolean(raw?.show_trades_on_chart, false),
     show_values_each_bar: readBoolean(raw?.show_values_each_bar, false),
     auto_update: readBoolean(raw?.auto_update, true),
     long_enabled: readBoolean(raw?.long_enabled, true),
@@ -660,6 +720,7 @@ const Dashboard: React.FC = () => {
   const [apiKeyToggles, setApiKeyToggles] = useState<{ [key: string]: boolean }>({});
   const [balances, setBalances] = useState<{ [key: string]: any[] }>({});
   const [positionsByKey, setPositionsByKey] = useState<{ [key: string]: any[] }>({});
+  const [tradesByKey, setTradesByKey] = useState<{ [key: string]: TradeHistoryRow[] }>({});
   const [chartSettings, setChartSettings] = useState<{ [key: string]: ChartSetting }>({});
   const [activePanel, setActivePanel] = useState<string[]>([]);
   const [chartLoadingKey, setChartLoadingKey] = useState<string | null>(null);
@@ -748,6 +809,7 @@ const Dashboard: React.FC = () => {
     const hasVisibleMainSettings = selectedSettings.showSettings !== false;
     const hasVisibleMonitoring = selectedSettings.showMonitoring !== false;
     const hasVisibleStrategyChart = selectedStrategies.some((strategy) => strategy.show_chart);
+    const hasTradeMarkersEnabled = selectedStrategies.some((strategy) => strategy.show_chart && strategy.show_trades_on_chart);
     const hasVisibleStrategyBlock = selectedStrategies.some((strategy) => strategy.show_settings || strategy.show_chart);
     const hasAnyVisibleBlock = hasVisibleMainChart || hasVisibleMainSettings || hasVisibleStrategyBlock;
     const shouldRefreshChart = hasVisibleMainChart || hasVisibleStrategyChart;
@@ -755,8 +817,9 @@ const Dashboard: React.FC = () => {
       (strategy) => strategy.auto_update && (strategy.show_settings || strategy.show_chart)
     );
     const shouldRefreshMonitoring = hasVisibleMonitoring;
+    const shouldRefreshTrades = hasTradeMarkersEnabled;
 
-    if (!shouldRefreshChart && !shouldRefreshStrategies && !shouldRefreshMonitoring) {
+    if (!shouldRefreshChart && !shouldRefreshStrategies && !shouldRefreshMonitoring && !shouldRefreshTrades) {
       return;
     }
 
@@ -771,6 +834,10 @@ const Dashboard: React.FC = () => {
 
       if (shouldRefreshMonitoring) {
         void fetchMonitoring(selectedApiKey, { capture: true, silent: true });
+      }
+
+      if (shouldRefreshTrades) {
+        void fetchTradesForKey(selectedApiKey, { silent: true });
       }
     }, selectedSettings.updateSec * 1000);
 
@@ -841,6 +908,7 @@ const Dashboard: React.FC = () => {
           void fetchKeyStatus(key.name);
           void fetchBalances(key.name);
           void fetchPositionsForKey(key.name);
+          void fetchTradesForKey(key.name, { silent: true });
           void fetchSymbols(key.name);
           void fetchStrategies(key.name);
           void fetchMonitoring(key.name, { capture: true });
@@ -856,6 +924,7 @@ const Dashboard: React.FC = () => {
             ...prev,
             [key.name]: { points: [], latest: null },
           }));
+          setTradesByKey((prev) => ({ ...prev, [key.name]: [] }));
           setMonitoringErrorByKey((prev) => ({ ...prev, [key.name]: '' }));
           void fetchStrategies(key.name);
         }
@@ -906,6 +975,28 @@ const Dashboard: React.FC = () => {
     } catch (error) {
       console.error(error);
       setPositionsByKey((prev) => ({ ...prev, [keyName]: [] }));
+    }
+  };
+
+  const fetchTradesForKey = async (keyName: string, options?: { silent?: boolean }) => {
+    if (!isApiKeyActive(keyName)) {
+      return;
+    }
+
+    try {
+      const res = await axios.get(`http://localhost:3001/api/trades/${keyName}`, {
+        params: {
+          limit: 240,
+        },
+      });
+
+      const payload = Array.isArray(res.data) ? res.data : [];
+      setTradesByKey((prev) => ({ ...prev, [keyName]: payload }));
+    } catch (error) {
+      if (options?.silent !== true) {
+        console.error(error);
+      }
+      setTradesByKey((prev) => ({ ...prev, [keyName]: [] }));
     }
   };
 
@@ -1092,6 +1183,7 @@ const Dashboard: React.FC = () => {
         show_chart: true,
         show_indicators: true,
         show_positions_on_chart: true,
+        show_trades_on_chart: false,
         show_values_each_bar: false,
         auto_update: true,
         take_profit_percent: 7.5,
@@ -1193,6 +1285,7 @@ const Dashboard: React.FC = () => {
       show_chart: strategyToSave.show_chart,
       show_indicators: strategyToSave.show_indicators,
       show_positions_on_chart: strategyToSave.show_positions_on_chart,
+      show_trades_on_chart: strategyToSave.show_trades_on_chart,
       show_values_each_bar: strategyToSave.show_values_each_bar,
       auto_update: strategyToSave.auto_update,
       take_profit_percent: strategyToSave.take_profit_percent,
@@ -1249,7 +1342,10 @@ const Dashboard: React.FC = () => {
       const res = await axios.post(`http://localhost:3001/api/execute-strategy/${keyName}/${strategy.id}`);
       const resultText = res?.data?.result || 'Strategy executed';
       message.success(resultText);
-      await fetchStrategies(keyName);
+      await Promise.all([
+        fetchStrategies(keyName),
+        fetchTradesForKey(keyName, { silent: true }),
+      ]);
       if (selectedApiKey === keyName) {
         void loadChartForKey(keyName);
       }
@@ -1282,7 +1378,10 @@ const Dashboard: React.FC = () => {
       setStrategyActionLoading((prev) => ({ ...prev, [actionKey]: true }));
       await axios.post(`http://localhost:3001/api/stop-strategy/${keyName}/${strategy.id}`);
       message.success(`Strategy ${strategy.name} stopped`);
-      await fetchStrategies(keyName);
+      await Promise.all([
+        fetchStrategies(keyName),
+        fetchTradesForKey(keyName, { silent: true }),
+      ]);
     } catch (error: any) {
       console.error(error);
       message.error(error?.response?.data?.error || 'Failed to stop strategy');
@@ -1315,6 +1414,7 @@ const Dashboard: React.FC = () => {
       await Promise.all([
         fetchStrategies(keyName),
         fetchPositionsForKey(keyName),
+        fetchTradesForKey(keyName, { silent: true }),
       ]);
     } catch (error: any) {
       console.error(error);
@@ -1355,6 +1455,7 @@ const Dashboard: React.FC = () => {
       await Promise.all([
         fetchStrategies(keyName),
         fetchPositionsForKey(keyName),
+        fetchTradesForKey(keyName, { silent: true }),
         fetchMonitoring(keyName, { capture: true }),
       ]);
     } catch (error: any) {
@@ -1384,6 +1485,7 @@ const Dashboard: React.FC = () => {
         if (isApiKeyActive(key.name)) {
           void fetchStrategies(key.name);
           void fetchPositionsForKey(key.name);
+          void fetchTradesForKey(key.name, { silent: true });
           void fetchMonitoring(key.name, { capture: true, silent: true });
         }
       }
@@ -1462,6 +1564,7 @@ const Dashboard: React.FC = () => {
         fetchKeyStatus(keyName),
         fetchBalances(keyName),
         fetchPositionsForKey(keyName),
+        fetchTradesForKey(keyName, { silent: true }),
         fetchSymbols(keyName),
         fetchStrategies(keyName),
         ...(keySettings.showMonitoring !== false ? [fetchMonitoring(keyName, { capture: true })] : []),
@@ -1546,6 +1649,7 @@ const Dashboard: React.FC = () => {
       void fetchKeyStatus(key.name);
       void fetchBalances(key.name);
       void fetchPositionsForKey(key.name);
+      void fetchTradesForKey(key.name, { silent: true });
       void fetchSymbols(key.name);
       void fetchStrategies(key.name);
       if (keySettings.showMonitoring !== false) {
@@ -1575,6 +1679,7 @@ const Dashboard: React.FC = () => {
       ...prev,
       [key.name]: { points: [], latest: null },
     }));
+    setTradesByKey((prev) => ({ ...prev, [key.name]: [] }));
     setMonitoringErrorByKey((prev) => ({ ...prev, [key.name]: '' }));
   };
 
@@ -1708,6 +1813,7 @@ const Dashboard: React.FC = () => {
     const keyStrategiesError = strategiesErrorByKey[keyName] || '';
     const keyBalances = balances[keyName] || [];
     const keyPositions = positionsByKey[keyName] || [];
+    const keyTrades = tradesByKey[keyName] || [];
     const marginStats = calculateMarginStats(keyBalances, keyPositions);
     const activeStrategyPanels = activeStrategyPanelsByKey[keyName] || [];
     const newStrategyName = newStrategyNameByKey[keyName] || '';
@@ -2232,6 +2338,9 @@ const Dashboard: React.FC = () => {
                                 ? Number(strategy.entry_ratio) / (1 + strategy.take_profit_percent / 100)
                                 : null
                             : null;
+                          const tradeMarkers = strategy.display_on_chart && strategy.show_trades_on_chart
+                            ? buildStrategyTradeMarkers(keyTrades, pairSymbols)
+                            : [];
                           const strategyOverlays: OverlayLine[] = [
                             ...(strategy.display_on_chart && strategy.show_indicators && donchian ? donchian.overlays : []),
                             ...(strategy.display_on_chart && strategy.show_indicators && tpWave ? tpWave.overlays : []),
@@ -2432,6 +2541,14 @@ const Dashboard: React.FC = () => {
                                                   <Switch
                                                     checked={strategy.show_positions_on_chart}
                                                     onChange={(checked) => updateStrategyDraft(keyName, strategy.id, { show_positions_on_chart: checked })}
+                                                    disabled={!keyActive}
+                                                  />
+                                                </div>
+                                                <div className="strategy-flag-item">
+                                                  <span>Show trades</span>
+                                                  <Switch
+                                                    checked={strategy.show_trades_on_chart}
+                                                    onChange={(checked) => updateStrategyDraft(keyName, strategy.id, { show_trades_on_chart: checked })}
                                                     disabled={!keyActive}
                                                   />
                                                 </div>
@@ -2768,6 +2885,7 @@ const Dashboard: React.FC = () => {
                                                 data={keyChartData}
                                                 type={settings.chartType}
                                                 overlayLines={strategyOverlays}
+                                                markers={tradeMarkers}
                                                 onHoverOHLC={(ohlc) => {
                                                   setHoverOHLCByKey((prev) => {
                                                     const current = prev[keyName];

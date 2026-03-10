@@ -20,7 +20,7 @@ export const updateRiskSettings = async (apiKeyName: string, settings: RiskSetti
 
 export const calculateLotSize = (balance: number, riskSettings: RiskSettings, side: 'long' | 'short'): number => {
   const percent = side === 'long' ? riskSettings.lot_long_percent : riskSettings.lot_short_percent;
-  return (balance * percent / 100) * riskSettings.leverage;
+  return (balance * percent / 100);
 };
 
 export const checkRiskLimits = (balance: number, riskSettings: RiskSettings): boolean => {

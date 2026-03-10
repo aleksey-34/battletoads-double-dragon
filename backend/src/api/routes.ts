@@ -13,6 +13,7 @@ import {
   getAllSymbols,
   removeExchangeClient,
   getOpenOrders,
+  getRecentTrades,
   cancelAllOrders,
   closeAllPositions,
 } from '../bot/exchange';
@@ -55,6 +56,7 @@ const STRATEGY_PATCH_ALLOWED_FIELDS = new Set<string>([
   'show_chart',
   'show_indicators',
   'show_positions_on_chart',
+  'show_trades_on_chart',
   'show_values_each_bar',
   'auto_update',
   'take_profit_percent',
@@ -657,6 +659,22 @@ router.get('/orders/:apiKeyName', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Error loading open orders for ${apiKeyName}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/trades/:apiKeyName', async (req, res) => {
+  const { apiKeyName } = req.params;
+  const symbol = req.query.symbol ? String(req.query.symbol) : undefined;
+  const limitRaw = Number.parseInt(String(req.query.limit || '200'), 10);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 200;
+
+  try {
+    const trades = await getRecentTrades(apiKeyName, symbol, limit);
+    res.json(trades);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading trade history for ${apiKeyName}: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

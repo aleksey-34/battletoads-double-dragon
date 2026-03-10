@@ -34,6 +34,21 @@ type MarketDataOptions = {
   endMs?: number;
 };
 
+type NormalizedTrade = {
+  tradeId: string;
+  orderId: string;
+  symbol: string;
+  side: 'Buy' | 'Sell';
+  qty: string;
+  price: string;
+  notional: string;
+  fee: string;
+  feeCurrency: string;
+  realizedPnl: string;
+  isMaker: boolean;
+  timestamp: string;
+};
+
 const clients: { [key: string]: ExchangeClientEntry } = {};
 const ccxtClients: { [key: string]: CcxtClientEntry } = {};
 const cache = new Map<string, { data: any; timestamp: number }>();
@@ -1075,6 +1090,13 @@ export const getInstrumentInfo = async (apiKeyName: string, symbol: string) => {
         : NaN;
       const minOrderQty = Number(market?.limits?.amount?.min ?? 0);
       const maxOrderQty = Number(market?.limits?.amount?.max ?? 0);
+      const maxLeverage = Number(
+        market?.limits?.leverage?.max
+        ?? market?.info?.maxLeverage
+        ?? market?.info?.leverageMax
+        ?? market?.info?.leverage_filter?.max_leverage
+        ?? 0
+      );
       const qtyStep = Number.isFinite(derivedStep) && derivedStep > 0
         ? derivedStep
         : Number.isFinite(minOrderQty) && minOrderQty > 0
@@ -1087,6 +1109,9 @@ export const getInstrumentInfo = async (apiKeyName: string, symbol: string) => {
           qtyStep: String(qtyStep),
           minOrderQty: String(Number.isFinite(minOrderQty) ? minOrderQty : 0),
           maxOrderQty: String(Number.isFinite(maxOrderQty) ? maxOrderQty : 0),
+        },
+        leverageFilter: {
+          maxLeverage: String(Number.isFinite(maxLeverage) && maxLeverage > 0 ? maxLeverage : 0),
         },
       };
 
@@ -1184,6 +1209,198 @@ export const closePosition = async (apiKeyName: string, symbol: string, qty: str
   }
 };
 
+const parseMaxLeverage = (info: any): number | null => {
+  const fromFilter = Number(info?.leverageFilter?.maxLeverage);
+  const fromNestedFilter = Number(info?.lotSizeFilter?.maxLeverage);
+  const fromAlt = Number(info?.maxLeverage);
+
+  const values = [fromFilter, fromNestedFilter, fromAlt];
+  const found = values.find((value) => Number.isFinite(value) && value > 0);
+
+  return found !== undefined ? found : null;
+};
+
+const resolveSafeLeverage = async (apiKeyName: string, symbol: string, requestedLeverage: number): Promise<number> => {
+  const safeRequested = Math.max(1, Number.isFinite(requestedLeverage) ? requestedLeverage : 1);
+
+  try {
+    const info = await getInstrumentInfo(apiKeyName, symbol);
+    const maxLeverage = parseMaxLeverage(info);
+
+    if (maxLeverage !== null && safeRequested > maxLeverage) {
+      logger.warn(
+        `Leverage capped for ${apiKeyName} ${symbol}: requested=${safeRequested}, maxAllowed=${maxLeverage}`
+      );
+      return maxLeverage;
+    }
+  } catch (error) {
+    logger.warn(`Could not load leverage limits for ${symbol}: ${(error as Error).message}`);
+  }
+
+  return safeRequested;
+};
+
+export const getRecentTrades = async (apiKeyName: string, symbol?: string, limit: number = 200): Promise<NormalizedTrade[]> => {
+  const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), 500) : 200;
+
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+
+    try {
+      const resolvedSymbol = symbol ? await resolveCcxtSymbol(entry, symbol) : undefined;
+      const trades = await entry.limiter.schedule(() => entry.client.fetchMyTrades(resolvedSymbol, undefined, safeLimit));
+      const list = Array.isArray(trades) ? trades : [];
+
+      return list
+        .map((trade: any) => {
+          const sideRaw = String(trade?.side || trade?.info?.side || '').toLowerCase();
+          const side: 'Buy' | 'Sell' = sideRaw === 'buy' ? 'Buy' : 'Sell';
+          const qty = Number(trade?.amount ?? trade?.info?.amount ?? trade?.info?.qty ?? trade?.info?.execQty ?? 0);
+          const price = Number(trade?.price ?? trade?.info?.price ?? trade?.info?.execPrice ?? 0);
+          const notionalRaw = Number(trade?.cost ?? trade?.info?.notional ?? trade?.info?.execValue ?? 0);
+          const fee = Number(trade?.fee?.cost ?? trade?.info?.fee ?? trade?.info?.execFee ?? 0);
+          const realizedPnl = Number(trade?.info?.closedPnl ?? trade?.info?.realizedPnl ?? trade?.info?.realizedProfit ?? 0);
+          const timestamp = Number(trade?.timestamp ?? trade?.info?.execTime ?? trade?.info?.tradeTime ?? 0);
+          const tradeId = String(trade?.id || trade?.info?.execId || trade?.info?.tradeId || '');
+          const orderId = String(trade?.order || trade?.info?.orderId || '');
+          const normalizedSymbol = toUiSymbol(trade?.info?.symbol || trade?.symbol || resolvedSymbol || symbol || '');
+          const feeCurrency = String(trade?.fee?.currency || trade?.info?.feeCurrency || trade?.info?.feeCoin || '');
+          const isMakerRaw = String(trade?.takerOrMaker || trade?.info?.isMaker || '').toLowerCase();
+          const isMaker = isMakerRaw === 'maker' || isMakerRaw === 'true';
+
+          const notional = Number.isFinite(notionalRaw) && notionalRaw > 0
+            ? Math.abs(notionalRaw)
+            : (Number.isFinite(price) && Number.isFinite(qty) ? Math.abs(price * qty) : 0);
+
+          return {
+            tradeId,
+            orderId,
+            symbol: normalizedSymbol,
+            side,
+            qty: String(Number.isFinite(qty) ? Math.abs(qty) : 0),
+            price: String(Number.isFinite(price) ? price : 0),
+            notional: String(Number.isFinite(notional) ? notional : 0),
+            fee: String(Number.isFinite(fee) ? Math.abs(fee) : 0),
+            feeCurrency,
+            realizedPnl: String(Number.isFinite(realizedPnl) ? realizedPnl : 0),
+            isMaker,
+            timestamp: String(Number.isFinite(timestamp) ? Math.floor(timestamp) : 0),
+          } as NormalizedTrade;
+        })
+        .filter((trade) => Boolean(trade.tradeId || trade.orderId || trade.timestamp !== '0'))
+        .sort((left, right) => Number(right.timestamp) - Number(left.timestamp))
+        .slice(0, safeLimit);
+    } catch (error) {
+      logger.error(`Error loading trades via ccxt for ${apiKeyName}: ${(error as Error).message}`);
+      throw error;
+    }
+  }
+
+  const requests = symbol
+    ? [
+      {
+        category: 'linear',
+        symbol: String(symbol).toUpperCase(),
+        limit: safeLimit,
+      },
+    ]
+    : [
+      {
+        category: 'linear',
+        settleCoin: 'USDT',
+        limit: safeLimit,
+      },
+      {
+        category: 'linear',
+        settleCoin: 'USDC',
+        limit: safeLimit,
+      },
+      {
+        category: 'inverse',
+        limit: safeLimit,
+      },
+    ];
+
+  const collected: any[] = [];
+  let firstError: Error | null = null;
+
+  for (const request of requests) {
+    try {
+      const response: any = await callPrivateWithDemoFallback(apiKeyName, `getExecutionList:${JSON.stringify(request)}`, (client) =>
+        client.getExecutionList(request as any)
+      );
+
+      if (!isBybitSuccess(response)) {
+        const apiError = formatBybitError(response, 'getExecutionList');
+        if (!firstError) {
+          firstError = apiError;
+        }
+        continue;
+      }
+
+      const list = Array.isArray(response?.result?.list) ? response.result.list : [];
+      collected.push(...list);
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error loading trades for ${apiKeyName}: ${err.message}`);
+      if (!firstError) {
+        firstError = err;
+      }
+    }
+  }
+
+  if (collected.length === 0 && firstError) {
+    throw firstError;
+  }
+
+  const normalized = collected
+    .map((trade: any) => {
+      const sideRaw = String(trade?.side || '').toLowerCase();
+      const side: 'Buy' | 'Sell' = sideRaw === 'buy' ? 'Buy' : 'Sell';
+      const qty = Number(trade?.execQty ?? trade?.qty ?? 0);
+      const price = Number(trade?.execPrice ?? trade?.price ?? 0);
+      const notionalRaw = Number(trade?.execValue ?? trade?.orderValue ?? 0);
+      const fee = Number(trade?.execFee ?? trade?.fee ?? 0);
+      const realizedPnl = Number(trade?.closedPnl ?? trade?.realizedPnl ?? 0);
+      const timestamp = Number(trade?.execTime ?? trade?.tradeTime ?? 0);
+      const tradeId = String(trade?.execId || trade?.tradeId || '');
+      const orderId = String(trade?.orderId || '');
+      const normalizedSymbol = toUiSymbol(trade?.symbol || symbol || '');
+      const feeCurrency = String(trade?.feeCurrency || trade?.feeCoin || '');
+      const isMaker = String(trade?.isMaker || '').toLowerCase() === 'true';
+
+      const notional = Number.isFinite(notionalRaw) && notionalRaw > 0
+        ? Math.abs(notionalRaw)
+        : (Number.isFinite(price) && Number.isFinite(qty) ? Math.abs(price * qty) : 0);
+
+      return {
+        tradeId,
+        orderId,
+        symbol: normalizedSymbol,
+        side,
+        qty: String(Number.isFinite(qty) ? Math.abs(qty) : 0),
+        price: String(Number.isFinite(price) ? price : 0),
+        notional: String(Number.isFinite(notional) ? notional : 0),
+        fee: String(Number.isFinite(fee) ? Math.abs(fee) : 0),
+        feeCurrency,
+        realizedPnl: String(Number.isFinite(realizedPnl) ? realizedPnl : 0),
+        isMaker,
+        timestamp: String(Number.isFinite(timestamp) ? Math.floor(timestamp) : 0),
+      } as NormalizedTrade;
+    })
+    .filter((trade) => Boolean(trade.tradeId || trade.orderId || trade.timestamp !== '0'));
+
+  const deduped = Array.from(
+    new Map(
+      normalized.map((trade) => [`${trade.tradeId}_${trade.symbol}_${trade.timestamp}`, trade])
+    ).values()
+  );
+
+  return deduped
+    .sort((left, right) => Number(right.timestamp) - Number(left.timestamp))
+    .slice(0, safeLimit);
+};
+
 export const closePositionPercent = async (
   apiKeyName: string,
   symbol: string,
@@ -1221,10 +1438,12 @@ export const applySymbolRiskSettings = async (
   marginType: 'cross' | 'isolated',
   leverage: number
 ) => {
+  const requestedLeverage = Math.max(1, Number.isFinite(leverage) ? leverage : 1);
+  const safeLeverage = await resolveSafeLeverage(apiKeyName, symbol, requestedLeverage);
+
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
     const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
-    const safeLeverage = Math.max(1, Number.isFinite(leverage) ? leverage : 1);
 
     try {
       if (typeof entry.client.setLeverage === 'function') {
@@ -1244,11 +1463,11 @@ export const applySymbolRiskSettings = async (
 
     return {
       leverage: String(safeLeverage),
+      requestedLeverage: String(requestedLeverage),
       marginType,
     };
   }
 
-  const safeLeverage = Math.max(1, Number.isFinite(leverage) ? leverage : 1);
   const leverageValue = safeLeverage.toFixed(2).replace(/\.?0+$/, '');
 
   const leverageResponse: any = await callPrivateWithDemoFallback(apiKeyName, 'setLeverage', (client) =>
@@ -1283,6 +1502,7 @@ export const applySymbolRiskSettings = async (
 
   return {
     leverage: leverageValue,
+    requestedLeverage: String(requestedLeverage),
     marginType,
   };
 };

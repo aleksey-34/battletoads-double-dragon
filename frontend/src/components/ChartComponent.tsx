@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef } from 'react';
-import { createChart, IChartApi, ISeriesApi, CandlestickData, LineData, LineSeries, CandlestickSeries } from 'lightweight-charts';
+import { createChart, IChartApi, ISeriesApi, CandlestickData, LineData, LineSeries, CandlestickSeries, createSeriesMarkers } from 'lightweight-charts';
 
 export interface HoverOHLC {
   time: number;
@@ -19,11 +19,21 @@ export interface OverlayLine {
   }>;
 }
 
+export interface ChartMarker {
+  id: string;
+  time: number;
+  color: string;
+  position?: 'aboveBar' | 'belowBar' | 'inBar';
+  shape?: 'arrowUp' | 'arrowDown' | 'circle' | 'square';
+  text?: string;
+}
+
 interface ChartComponentProps {
   data: any[];
   type?: 'candlestick' | 'line';
   onHoverOHLC?: (ohlc: HoverOHLC | null) => void;
   overlayLines?: OverlayLine[];
+  markers?: ChartMarker[];
 }
 
 const normalizeTime = (rawTime: any): number | null => {
@@ -97,11 +107,12 @@ const calculateChartHeight = (width: number): number => {
   return 400;
 };
 
-const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlestick', onHoverOHLC, overlayLines = [] }) => {
+const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlestick', onHoverOHLC, overlayLines = [], markers = [] }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | ISeriesApi<'Line'> | null>(null);
   const overlaySeriesRef = useRef<Map<string, ISeriesApi<'Line'>>>(new Map());
+  const markerPluginRef = useRef<any>(null);
   const onHoverRef = useRef<((ohlc: HoverOHLC | null) => void) | undefined>(onHoverOHLC);
   const lastHoverRef = useRef<HoverOHLC | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
@@ -157,11 +168,17 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
       seriesRef.current = lineSeries;
     }
 
+    markerPluginRef.current = createSeriesMarkers(seriesRef.current as any, []);
+
     return () => {
       if (resizeFrameRef.current !== null) {
         cancelAnimationFrame(resizeFrameRef.current);
         resizeFrameRef.current = null;
       }
+      if (markerPluginRef.current && typeof markerPluginRef.current.detach === 'function') {
+        markerPluginRef.current.detach();
+      }
+      markerPluginRef.current = null;
       overlaySeriesMap.clear();
       chart.remove();
     };
@@ -460,6 +477,33 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
       series.setData(normalized);
     }
   }, [overlayLines]);
+
+  useEffect(() => {
+    if (!markerPluginRef.current || typeof markerPluginRef.current.setMarkers !== 'function') {
+      return;
+    }
+
+    const normalized = (Array.isArray(markers) ? markers : [])
+      .map((marker) => {
+        const normalizedTime = normalizeTime(marker?.time);
+        if (normalizedTime === null) {
+          return null;
+        }
+
+        return {
+          time: normalizedTime as any,
+          position: marker.position || 'inBar',
+          shape: marker.shape || 'circle',
+          color: marker.color,
+          text: marker.text,
+          id: marker.id,
+        };
+      })
+      .filter((item): item is any => !!item)
+      .sort((a, b) => Number(a.time) - Number(b.time));
+
+    markerPluginRef.current.setMarkers(normalized);
+  }, [markers, data.length, type]);
 
   return <div ref={chartContainerRef} style={{ width: '100%', minHeight: 260 }} />;
 };
