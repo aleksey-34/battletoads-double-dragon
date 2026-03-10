@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { initDB } from '../utils/database';
 import { runBacktest, BacktestTrade } from './engine';
+import { loadSettings } from '../config/settings';
+import { initExchangeClient } from '../bot/exchange';
 
 type CliArgs = {
   apiKeyName: string;
@@ -16,6 +18,7 @@ type CliArgs = {
   fundingRatePercent?: number;
   outputPath?: string;
   limit: number;
+  normalizeOneWayTv: boolean;
 };
 
 type TvTrade = {
@@ -55,10 +58,27 @@ const parseNumber = (value: string | undefined): number | null => {
     return null;
   }
 
-  const cleaned = String(value)
+  let cleaned = String(value)
     .trim()
     .replace(/[$%\s]/g, '')
-    .replace(/,/g, '');
+    .replace(/'/g, '')
+    .replace(/"/g, '');
+
+  const hasComma = cleaned.includes(',');
+  const hasDot = cleaned.includes('.');
+
+  if (hasComma && hasDot) {
+    if (cleaned.lastIndexOf(',') > cleaned.lastIndexOf('.')) {
+      // Example: 1.234,56 -> decimal separator is comma.
+      cleaned = cleaned.replace(/\./g, '').replace(/,/g, '.');
+    } else {
+      // Example: 1,234.56 -> decimal separator is dot.
+      cleaned = cleaned.replace(/,/g, '');
+    }
+  } else if (hasComma) {
+    // Example: 22,7597
+    cleaned = cleaned.replace(/,/g, '.');
+  }
 
   if (!cleaned) {
     return null;
@@ -172,6 +192,17 @@ const parseTvTrades = (csvPath: string): TvTrade[] => {
   const headers = parseCsvLine(lines[0]).map((header) => normalizeHeader(header));
   const trades: TvTrade[] = [];
 
+  type TvEventRow = {
+    tradeNo: number | null;
+    eventType: string;
+    side: 'long' | 'short' | null;
+    timeMs: number | null;
+    price: number | null;
+    netPnl: number | null;
+  };
+
+  const eventRows: TvEventRow[] = [];
+
   for (let row = 1; row < lines.length; row += 1) {
     const cells = parseCsvLine(lines[row]);
     const map: Record<string, string> = {};
@@ -179,6 +210,41 @@ const parseTvTrades = (csvPath: string): TvTrade[] => {
     headers.forEach((header, index) => {
       map[header] = cells[index] || '';
     });
+
+    const tradeNo = parseNumber(
+      findFirst(map, ['tradenumber', 'trade', 'tradeno'])
+    );
+
+    const eventType = String(
+      findFirst(map, ['type', 'signal', 'action']) || ''
+    ).trim().toLowerCase();
+
+    const eventTime = parseTimeMs(
+      findFirst(map, ['dateandtime', 'datetime', 'time', 'date'])
+    );
+
+    const eventPrice = parseNumber(
+      findFirst(map, ['price', 'pricedoge', 'priceusdt', 'entryprice', 'exitprice'])
+    );
+
+    const eventSide = parseSide(
+      findFirst(map, ['signal', 'direction', 'side', 'type'])
+    );
+
+    const eventNetPnl = parseNumber(
+      findFirst(map, ['netpnl', 'netprofit', 'profitloss', 'profit', 'pnl', 'netpl', 'netpldoge'])
+    );
+
+    if (eventType) {
+      eventRows.push({
+        tradeNo,
+        eventType,
+        side: eventSide,
+        timeMs: eventTime,
+        price: eventPrice,
+        netPnl: eventNetPnl,
+      });
+    }
 
     const side = parseSide(
       findFirst(map, ['side', 'direction', 'position', 'type'])
@@ -205,7 +271,7 @@ const parseTvTrades = (csvPath: string): TvTrade[] => {
     );
 
     const netPnl = parseNumber(
-      findFirst(map, ['netpnl', 'netprofit', 'profitloss', 'profit', 'pnl'])
+      findFirst(map, ['netpnl', 'netprofit', 'profitloss', 'profit', 'pnl', 'netpl', 'netpldoge'])
     );
 
     trades.push({
@@ -217,6 +283,61 @@ const parseTvTrades = (csvPath: string): TvTrade[] => {
       exitPrice,
       netPnl,
     });
+  }
+
+  if (trades.length > 0) {
+    return trades;
+  }
+
+  // TradingView "List of Trades" often exports two rows per trade: Entry/Exit.
+  // This fallback reconstructs one trade from those event rows.
+  const grouped = new Map<number, { entry?: TvEventRow; exit?: TvEventRow }>();
+  let syntheticTradeNo = 1;
+
+  for (const row of eventRows) {
+    const tradeNo = Number.isFinite(row.tradeNo) && row.tradeNo !== null
+      ? Math.floor(Number(row.tradeNo))
+      : syntheticTradeNo++;
+
+    const current = grouped.get(tradeNo) || {};
+
+    if (row.eventType.includes('entry')) {
+      current.entry = row;
+    }
+
+    if (row.eventType.includes('exit') || row.eventType.includes('tp') || row.eventType.includes('sl')) {
+      current.exit = row;
+    }
+
+    grouped.set(tradeNo, current);
+  }
+
+  const rebuilt: TvTrade[] = Array.from(grouped.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([_, pair], index) => {
+      const entry = pair.entry;
+      const exit = pair.exit;
+      const side = (entry?.side || exit?.side || 'long') as 'long' | 'short';
+      const entryTime = entry?.timeMs || exit?.timeMs;
+
+      if (!entryTime || !Number.isFinite(entryTime)) {
+        return null;
+      }
+
+      return {
+        index,
+        side,
+        entryTime,
+        exitTime: exit?.timeMs || null,
+        entryPrice: entry?.price || null,
+        exitPrice: exit?.price || null,
+        netPnl: exit?.netPnl ?? entry?.netPnl ?? null,
+      };
+    })
+    .filter((item): item is TvTrade => item !== null);
+
+  if (rebuilt.length > 0) {
+    return rebuilt;
   }
 
   if (trades.length === 0) {
@@ -313,6 +434,41 @@ const compareTrades = (tvTrades: TvTrade[], btTrades: BacktestTrade[]): { summar
     },
     rows,
   };
+};
+
+const normalizeTvTradesForOneWay = (tvTrades: TvTrade[]): TvTrade[] => {
+  const nonZeroDuration = tvTrades.filter((trade) => {
+    if (trade.exitTime === null || trade.exitTime === undefined) {
+      return true;
+    }
+    return trade.exitTime !== trade.entryTime;
+  });
+
+  const sorted = [...nonZeroDuration].sort((left, right) => {
+    if (left.entryTime === right.entryTime) {
+      return left.index - right.index;
+    }
+    return left.entryTime - right.entryTime;
+  });
+
+  const collapsed: TvTrade[] = [];
+
+  for (let i = 0; i < sorted.length; ) {
+    let j = i + 1;
+    while (j < sorted.length && sorted[j].entryTime === sorted[i].entryTime) {
+      j += 1;
+    }
+
+    // Keep the last entry in this timestamp bucket to represent one executable entry state.
+    collapsed.push({
+      ...sorted[j - 1],
+      index: collapsed.length,
+    });
+
+    i = j;
+  }
+
+  return collapsed;
 };
 
 const printTopMismatches = (rows: TradeDiff[], limit: number): void => {
@@ -436,15 +592,32 @@ const parseArgs = (): CliArgs => {
     fundingRatePercent: toNumberIfPresent(map.get('funding')),
     outputPath: map.get('out') || undefined,
     limit: Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 30,
+    normalizeOneWayTv: map.get('normalize-one-way-tv') === 'true' || map.get('normalize-one-way-tv') === '1',
   };
+};
+
+const initClientForApiKey = async (apiKeyName: string): Promise<void> => {
+  const { apiKeys } = await loadSettings();
+  const list = Array.isArray(apiKeys) ? apiKeys : [];
+  const key = list.find((item: any) => String(item?.name || '').trim() === apiKeyName);
+
+  if (!key) {
+    throw new Error(`API key not found in database: ${apiKeyName}`);
+  }
+
+  initExchangeClient(key);
 };
 
 const main = async (): Promise<void> => {
   const args = parseArgs();
   const resolvedCsv = path.resolve(args.tvCsvPath);
-  const tvTrades = parseTvTrades(resolvedCsv);
+  const tvTradesRaw = parseTvTrades(resolvedCsv);
+  const tvTrades = args.normalizeOneWayTv
+    ? normalizeTvTradesForOneWay(tvTradesRaw)
+    : tvTradesRaw;
 
   await initDB();
+  await initClientForApiKey(args.apiKeyName);
 
   const backtest = await runBacktest({
     apiKeyName: args.apiKeyName,
@@ -464,6 +637,10 @@ const main = async (): Promise<void> => {
 
   console.log('TV vs Backtest comparison summary:');
   console.log(JSON.stringify(comparison.summary, null, 2));
+
+  if (args.normalizeOneWayTv) {
+    console.log(`TV one-way normalization: ${tvTradesRaw.length} -> ${tvTrades.length} trades`);
+  }
 
   printTopMismatches(comparison.rows, args.limit);
 

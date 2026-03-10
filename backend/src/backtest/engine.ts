@@ -689,7 +689,9 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
 };
 
 const pickStrategiesForRequest = async (request: NormalizedBacktestRequest): Promise<Strategy[]> => {
-  const all = await getStrategies(request.apiKeyName);
+  const all = await getStrategies(request.apiKeyName, {
+    includeLotPreview: false,
+  });
 
   if (request.mode === 'single') {
     const id = request.strategyId;
@@ -800,6 +802,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     const entryPrice = runtime.entryPrice;
     const takeProfitPercent = Math.max(0, asNumber(strategy.take_profit_percent, 0));
 
+    let closedOnCurrentBar = false;
+
     if (state === 'long' && takeProfitPercent > 0) {
       const existingAnchor = Number(runtime.tpAnchorPrice);
       const anchorBase = Number.isFinite(existingAnchor) && existingAnchor > 0
@@ -812,12 +816,11 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       const trailingStop = nextAnchor * (1 - takeProfitPercent / 100);
       if (Number.isFinite(trailingStop) && signalPayload.current <= trailingStop) {
         closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'take_profit_long');
-        pushEquityPoint(event.timeMs);
-        continue;
+        closedOnCurrentBar = true;
       }
     }
 
-    if (state === 'short' && takeProfitPercent > 0) {
+    if (!closedOnCurrentBar && state === 'short' && takeProfitPercent > 0) {
       const existingAnchor = Number(runtime.tpAnchorPrice);
       const anchorBase = Number.isFinite(existingAnchor) && existingAnchor > 0
         ? existingAnchor
@@ -829,21 +832,18 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       const trailingStop = nextAnchor * (1 + takeProfitPercent / 100);
       if (Number.isFinite(trailingStop) && signalPayload.current >= trailingStop) {
         closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'take_profit_short');
-        pushEquityPoint(event.timeMs);
-        continue;
+        closedOnCurrentBar = true;
       }
     }
 
-    if (state === 'long' && entryPrice && signalPayload.current <= signalPayload.donchianCenter) {
+    if (!closedOnCurrentBar && state === 'long' && entryPrice && signalPayload.current <= signalPayload.donchianCenter) {
       closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'stop_loss_long_center');
-      pushEquityPoint(event.timeMs);
-      continue;
+      closedOnCurrentBar = true;
     }
 
-    if (state === 'short' && entryPrice && signalPayload.current >= signalPayload.donchianCenter) {
+    if (!closedOnCurrentBar && state === 'short' && entryPrice && signalPayload.current >= signalPayload.donchianCenter) {
       closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'stop_loss_short_center');
-      pushEquityPoint(event.timeMs);
-      continue;
+      closedOnCurrentBar = true;
     }
 
     if (signalPayload.signal === 'none') {

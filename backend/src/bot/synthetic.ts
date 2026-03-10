@@ -47,33 +47,25 @@ const intervalToMinutes = (interval: string): number => {
 };
 
 const chooseSourceInterval = (targetInterval: string): string => {
-  const map: Record<string, string> = {
-    '1m': '1m',
-    '3m': '1m',
-    '5m': '1m',
-    '15m': '3m',
-    '30m': '5m',
-    '1h': '15m',
-    '2h': '15m',
-    '4h': '30m',
-    '6h': '30m',
-    '12h': '1h',
-    '1d': '4h',
-    '1w': '1d',
-    '1M': '1d',
-  };
-
-  return map[targetInterval] || targetInterval;
+  return String(targetInterval || '1h').trim() || '1h';
 };
 
 const getBucketStartMs = (timeMs: number, interval: string): number => {
+  const offsetMinutesRaw = Number(process.env.SYNTHETIC_BUCKET_OFFSET_MINUTES || 0);
+  const offsetMinutes = Number.isFinite(offsetMinutesRaw) ? Math.floor(offsetMinutesRaw) : 0;
+  const offsetMs = offsetMinutes * 60 * 1000;
+
   if (interval === '1M') {
-    const date = new Date(timeMs);
+    const date = new Date(timeMs - offsetMs);
     return Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1, 0, 0, 0, 0);
   }
 
   const intervalMs = intervalToMinutes(interval) * 60 * 1000;
-  return Math.floor(timeMs / intervalMs) * intervalMs;
+  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+    return timeMs;
+  }
+
+  return Math.floor((timeMs - offsetMs) / intervalMs) * intervalMs + offsetMs;
 };
 
 const parseCandle = (raw: any): ParsedCandle | null => {
