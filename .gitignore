@@ -30,6 +30,7 @@ backend/logs/
 
 # Generated deployment archives
 scripts/dist/
+results/
 
 # Misc
 *.tmp
