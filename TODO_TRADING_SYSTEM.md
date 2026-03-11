@@ -115,6 +115,22 @@ For best 3 symbols from baseline:
    - adjust params or pause weak members
    - rerun backtests with last 14 days
 
+Phase 5 check #1 (2026-03-11):
+- Active strategies: `3`
+- Active systems: `1`
+- Discovery-enabled systems: `1`
+- Reconciliation: `processed=3`, `failed=0`
+- Liquidity scan: `systems=1`, `suggestionsCreated=3`
+- Critical/pause recommendations: `0`
+- Stored reports: `6`
+- New suggestions: `3`
+- Snapshot: `results/btdd_d1_phase5_2026-03-11T05-36-42-152Z.json`
+
+Decision after check #1:
+- Continue soak for next 24-48h.
+- No strategy pause needed now.
+- Review liquidity suggestions manually before applying.
+
 ## Backtest Record Template (fill after each run)
 
 | symbol | len | tp | trades | winRate% | PF | maxDD% | return% | score | status |
