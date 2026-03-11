@@ -3,8 +3,16 @@
 ## Current Status (2026-03-11)
 - VPS code is updated and backend service is running.
 - New analytics/scheduler code is active.
-- `BTDD_D1` in VPS UI shows `strategies: 0`.
-- Trading systems are data in DB, not only code. Since no strategies exist yet on VPS for `BTDD_D1`, no system is visible.
+- `BTDD_D1` A+B run succeeded on VPS.
+- Trading system created and active: `AB BTDD_D1 Mono Portfolio`.
+- Selected members: `TRUUSDT`, `GRTUSDT`, `INJUSDT`.
+
+## Progress Checklist
+- [x] Phase 1 - Bootstrap Candidate Strategies
+- [x] Phase 2 - Baseline Backtests
+- [x] Phase 3 - Optimize Top-3
+- [x] Phase 4 - Build Trading System
+- [ ] Phase 5 - Live Demo Soak (24-48h)
 
 ## Main Goal
 - First: validate strategy behavior on real market data (demo mode, controlled risk).
@@ -22,6 +30,19 @@ node scripts/run_btdd_d1_ab_http.mjs
 
 Output file after run:
 - `results/btdd_d1_ab_results.json`
+
+## One-Command Phase 5 Check (VPS)
+Run from repository root on VPS:
+
+```bash
+AUTH_PASSWORD='<YOUR_DASHBOARD_PASSWORD>' \
+BASE_URL='http://127.0.0.1:3001/api' \
+API_KEY_NAME='BTDD_D1' \
+node scripts/run_btdd_d1_phase5_http.mjs
+```
+
+Output file after run:
+- `results/btdd_d1_phase5_<timestamp>.json`
 
 ## Execution Plan
 
@@ -101,20 +122,20 @@ For best 3 symbols from baseline:
 | TBD |  |  |  |  |  |  |  |  |
 | TBD |  |  |  |  |  |  |  |  |
 
-## Latest Run Snapshot (2026-03-11)
+## Latest Run Snapshot (2026-03-11, VPS)
 Source: `results/btdd_d1_ab_results.json`
 
 Baseline (len=50, tp=7.5):
 - `STXUSDT`: WR `0.00`, PF `0.00`, DD `4.83`, RET `-4.01`, SCORE `-7.39`
-- `TRUUSDT`: WR `50.00`, PF `2.11`, DD `2.04`, RET `2.06`, SCORE `24.18`
+- `TRUUSDT`: WR `50.00`, PF `2.10`, DD `2.04`, RET `2.05`, SCORE `24.15`
 - `VETUSDT`: WR `28.57`, PF `0.63`, DD `2.44`, RET `-0.60`, SCORE `5.43`
-- `GRTUSDT`: WR `33.33`, PF `1.40`, DD `3.28`, RET `0.89`, SCORE `14.28`
-- `INJUSDT`: WR `37.50`, PF `1.22`, DD `3.44`, RET `0.55`, SCORE `12.19`
+- `GRTUSDT`: WR `33.33`, PF `1.28`, DD `3.29`, RET `0.61`, SCORE `12.76`
+- `INJUSDT`: WR `37.50`, PF `1.14`, DD `3.45`, RET `0.35`, SCORE `11.18`
 
 Optimized top-3:
 - `TRUUSDT`: len `70`, tp `5`, WR `83.33`, PF `4.81`, DD `1.42`, RET `2.37`, SCORE `53.66`
 - `GRTUSDT`: len `70`, tp `7.5`, WR `33.33`, PF `2.43`, DD `2.34`, RET `2.01`, SCORE `26.32`
-- `INJUSDT`: len `70`, tp `10`, WR `40.00`, PF `1.97`, DD `3.76`, RET `1.78`, SCORE `20.85`
+- `INJUSDT`: len `70`, tp `10`, WR `20.00`, PF `1.97`, DD `3.76`, RET `1.77`, SCORE `19.81`
 
 Selected system members:
 - `TRUUSDT`
@@ -123,9 +144,9 @@ Selected system members:
 
 Portfolio summary (system backtest):
 - RET `6.15%`
-- PF `2.60`
+- PF `2.59`
 - DD `5.56%`
-- WR `57.14%`
+- WR `50.00%`
 - trades `14`
 
 ## Reference (previous local dry run, not VPS)

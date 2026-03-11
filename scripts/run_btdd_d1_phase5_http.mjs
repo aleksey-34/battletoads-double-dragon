@@ -1,0 +1,107 @@
+#!/usr/bin/env node
+
+import fs from 'fs';
+import path from 'path';
+
+const API_KEY_NAME = process.env.API_KEY_NAME || 'BTDD_D1';
+const API_BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3001/api';
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'defaultpassword';
+
+const RECON_PERIOD_HOURS = Number(process.env.RECON_PERIOD_HOURS || 24);
+const RECON_BARS = Number(process.env.RECON_BARS || 336);
+const LIQ_TOP_UNIVERSE = Number(process.env.LIQ_TOP_UNIVERSE || 80);
+const LIQ_ADD = Number(process.env.LIQ_ADD || 2);
+const LIQ_REPLACE = Number(process.env.LIQ_REPLACE || 1);
+
+const headers = {
+  Authorization: `Bearer ${AUTH_PASSWORD}`,
+  'Content-Type': 'application/json',
+};
+
+const api = async (method, route, body) => {
+  const res = await fetch(`${API_BASE_URL}${route}`, {
+    method,
+    headers,
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+
+  const text = await res.text();
+  let payload = {};
+
+  if (text) {
+    try {
+      payload = JSON.parse(text);
+    } catch (error) {
+      throw new Error(`${method} ${route} invalid JSON: ${text.slice(0, 300)}`);
+    }
+  }
+
+  if (!res.ok) {
+    const msg = payload?.error || `${res.status} ${res.statusText}`;
+    throw new Error(`${method} ${route} failed: ${msg}`);
+  }
+
+  return payload;
+};
+
+const main = async () => {
+  console.log(`[START] Phase5 check for ${API_KEY_NAME}`);
+
+  const strategies = await api('GET', `/strategies/${API_KEY_NAME}`);
+  const systems = await api('GET', `/trading-systems/${API_KEY_NAME}`);
+
+  const activeStrategies = (Array.isArray(strategies) ? strategies : []).filter((s) => s?.is_active === true);
+  const activeSystems = (Array.isArray(systems) ? systems : []).filter((s) => s?.is_active === true);
+
+  const reconciliation = await api('POST', `/analytics/${API_KEY_NAME}/reconciliation/run`, {
+    periodHours: RECON_PERIOD_HOURS,
+    backtestBars: RECON_BARS,
+    autoApplyAdjustments: false,
+    autoPauseOnCritical: false,
+  });
+
+  const liquidityScan = await api('POST', `/analytics/${API_KEY_NAME}/liquidity-scan/run`, {
+    topUniverseLimit: LIQ_TOP_UNIVERSE,
+    maxAddSuggestions: LIQ_ADD,
+    maxReplaceSuggestions: LIQ_REPLACE,
+  });
+
+  const reports = await api('GET', `/analytics/${API_KEY_NAME}/reconciliation/reports?limit=10`);
+  const suggestions = await api('GET', `/analytics/${API_KEY_NAME}/liquidity-suggestions?status=new&limit=20`);
+
+  const latestReport = Array.isArray(reports?.reports) && reports.reports.length > 0
+    ? reports.reports[0]
+    : null;
+
+  const output = {
+    timestamp: new Date().toISOString(),
+    apiKeyName: API_KEY_NAME,
+    activeStrategies: activeStrategies.length,
+    activeSystems: activeSystems.length,
+    reconciliation,
+    liquidityScan,
+    reportsCount: Number(reports?.count || 0),
+    suggestionsCount: Number(suggestions?.count || 0),
+    latestReport,
+  };
+
+  const outDir = path.resolve(process.cwd(), 'results');
+  fs.mkdirSync(outDir, { recursive: true });
+
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const outFile = path.join(outDir, `${API_KEY_NAME.toLowerCase()}_phase5_${stamp}.json`);
+  fs.writeFileSync(outFile, JSON.stringify(output, null, 2));
+
+  console.log('--- SUMMARY ---');
+  console.log(`Active strategies: ${activeStrategies.length}`);
+  console.log(`Active systems: ${activeSystems.length}`);
+  console.log(`Reconciliation: processed=${Number(reconciliation?.processed || 0)}, failed=${Number(reconciliation?.failed || 0)}`);
+  console.log(`Liquidity scan: systems=${Number(liquidityScan?.scannedSystems || 0)}, suggestionsCreated=${Number(liquidityScan?.createdSuggestions || 0)}`);
+  console.log(`Stored reports: ${Number(reports?.count || 0)}, new suggestions: ${Number(suggestions?.count || 0)}`);
+  console.log(`Saved snapshot: ${outFile}`);
+};
+
+main().catch((error) => {
+  console.error('[FAIL]', error?.message || error);
+  process.exit(1);
+});
