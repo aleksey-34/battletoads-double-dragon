@@ -61,6 +61,16 @@ const toRecord = (strategyId, strategyName, symbol, tier, priceChannelLength, ta
   };
 };
 
+const parseStrategyIdFromPayload = (payload) => {
+  const id = Number(payload?.strategy?.id || payload?.id || 0);
+  return Number.isFinite(id) && id > 0 ? id : 0;
+};
+
+const parseSystemIdFromPayload = (payload) => {
+  const id = Number(payload?.system?.id || payload?.id || 0);
+  return Number.isFinite(id) && id > 0 ? id : 0;
+};
+
 const api = async (method, route, body) => {
   const res = await fetch(`${API_BASE_URL}${route}`, {
     method,
@@ -136,9 +146,9 @@ const ensureCandidates = async () => {
     }
 
     const created = await api('POST', `/strategies/${API_KEY_NAME}`, strategyPayload);
-    const createdId = Number(created?.strategy?.id || 0);
+    const createdId = parseStrategyIdFromPayload(created);
     if (!createdId) {
-      throw new Error(`Failed to create strategy ${name}`);
+      throw new Error(`Failed to create strategy ${name}: unexpected response ${JSON.stringify(created).slice(0, 300)}`);
     }
 
     idsBySymbol.set(candidate.symbol, createdId);
@@ -163,9 +173,9 @@ const ensureTradingSystem = async (members) => {
       members,
     });
 
-    const systemId = Number(created?.system?.id || 0);
+    const systemId = parseSystemIdFromPayload(created);
     if (!systemId) {
-      throw new Error('Trading system create failed');
+      throw new Error(`Trading system create failed: unexpected response ${JSON.stringify(created).slice(0, 300)}`);
     }
 
     console.log(`[SYSTEM] Created system ${SYSTEM_NAME} (id=${systemId})`);
