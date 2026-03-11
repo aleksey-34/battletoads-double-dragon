@@ -12,6 +12,8 @@ const RECON_BARS = Number(process.env.RECON_BARS || 336);
 const LIQ_TOP_UNIVERSE = Number(process.env.LIQ_TOP_UNIVERSE || 80);
 const LIQ_ADD = Number(process.env.LIQ_ADD || 2);
 const LIQ_REPLACE = Number(process.env.LIQ_REPLACE || 1);
+const ENABLE_DISCOVERY = String(process.env.ENABLE_DISCOVERY || '0').trim() === '1';
+const DISCOVERY_INTERVAL_HOURS = Math.max(1, Number(process.env.DISCOVERY_INTERVAL_HOURS || 6));
 
 const headers = {
   Authorization: `Bearer ${AUTH_PASSWORD}`,
@@ -48,10 +50,29 @@ const main = async () => {
   console.log(`[START] Phase5 check for ${API_KEY_NAME}`);
 
   const strategies = await api('GET', `/strategies/${API_KEY_NAME}`);
-  const systems = await api('GET', `/trading-systems/${API_KEY_NAME}`);
+  let systemsPayload = await api('GET', `/trading-systems/${API_KEY_NAME}`);
+  let systems = Array.isArray(systemsPayload) ? systemsPayload : [];
 
   const activeStrategies = (Array.isArray(strategies) ? strategies : []).filter((s) => s?.is_active === true);
-  const activeSystems = (Array.isArray(systems) ? systems : []).filter((s) => s?.is_active === true);
+  let activeSystems = systems.filter((s) => s?.is_active === true);
+
+  let discoveryAutoEnabled = false;
+  let primarySystem = activeSystems[0] || systems[0] || null;
+
+  if (ENABLE_DISCOVERY && primarySystem?.id && primarySystem?.discovery_enabled !== true) {
+    await api('PUT', `/trading-systems/${API_KEY_NAME}/${Number(primarySystem.id)}`, {
+      discovery_enabled: true,
+      discovery_interval_hours: DISCOVERY_INTERVAL_HOURS,
+    });
+
+    discoveryAutoEnabled = true;
+    systemsPayload = await api('GET', `/trading-systems/${API_KEY_NAME}`);
+    systems = Array.isArray(systemsPayload) ? systemsPayload : [];
+    activeSystems = systems.filter((s) => s?.is_active === true);
+    primarySystem = activeSystems[0] || systems[0] || null;
+  }
+
+  const discoveryEnabledSystems = systems.filter((s) => s?.discovery_enabled === true);
 
   const reconciliation = await api('POST', `/analytics/${API_KEY_NAME}/reconciliation/run`, {
     periodHours: RECON_PERIOD_HOURS,
@@ -69,20 +90,53 @@ const main = async () => {
   const reports = await api('GET', `/analytics/${API_KEY_NAME}/reconciliation/reports?limit=10`);
   const suggestions = await api('GET', `/analytics/${API_KEY_NAME}/liquidity-suggestions?status=new&limit=20`);
 
+  let systemAnalysis = null;
+  let criticalRecommendations = 0;
+
+  if (primarySystem?.id) {
+    systemAnalysis = await api('POST', `/analytics/${API_KEY_NAME}/system/${Number(primarySystem.id)}/analysis`, {
+      periodHours: RECON_PERIOD_HOURS,
+    });
+
+    const analysisReports = Array.isArray(systemAnalysis?.reports) ? systemAnalysis.reports : [];
+    criticalRecommendations = analysisReports.filter((item) => {
+      const severity = String(item?.recommendation?.severity || '').toLowerCase();
+      const recommendation = String(item?.recommendation?.recommendation || '').toLowerCase();
+      return severity === 'critical' || recommendation === 'pause';
+    }).length;
+  }
+
   const latestReport = Array.isArray(reports?.reports) && reports.reports.length > 0
     ? reports.reports[0]
     : null;
+
+  const notes = [];
+  if (Number(liquidityScan?.scannedSystems || 0) === 0) {
+    notes.push('Liquidity scan skipped: no discovery-enabled trading systems. Enable discovery or run with ENABLE_DISCOVERY=1.');
+  }
+  if (criticalRecommendations > 0) {
+    notes.push(`System analysis has ${criticalRecommendations} critical/pause recommendations.`);
+  }
+  if (activeStrategies.length === 0) {
+    notes.push('No active strategies for this API key.');
+  }
 
   const output = {
     timestamp: new Date().toISOString(),
     apiKeyName: API_KEY_NAME,
     activeStrategies: activeStrategies.length,
     activeSystems: activeSystems.length,
+    discoveryEnabledSystems: discoveryEnabledSystems.length,
+    discoveryAutoEnabled,
+    primarySystemId: Number(primarySystem?.id || 0),
     reconciliation,
     liquidityScan,
+    criticalRecommendations,
     reportsCount: Number(reports?.count || 0),
     suggestionsCount: Number(suggestions?.count || 0),
+    systemAnalysis,
     latestReport,
+    notes,
   };
 
   const outDir = path.resolve(process.cwd(), 'results');
@@ -95,9 +149,14 @@ const main = async () => {
   console.log('--- SUMMARY ---');
   console.log(`Active strategies: ${activeStrategies.length}`);
   console.log(`Active systems: ${activeSystems.length}`);
+  console.log(`Discovery-enabled systems: ${discoveryEnabledSystems.length} (autoEnabled=${discoveryAutoEnabled})`);
   console.log(`Reconciliation: processed=${Number(reconciliation?.processed || 0)}, failed=${Number(reconciliation?.failed || 0)}`);
   console.log(`Liquidity scan: systems=${Number(liquidityScan?.scannedSystems || 0)}, suggestionsCreated=${Number(liquidityScan?.createdSuggestions || 0)}`);
+  console.log(`Critical/pause recommendations: ${criticalRecommendations}`);
   console.log(`Stored reports: ${Number(reports?.count || 0)}, new suggestions: ${Number(suggestions?.count || 0)}`);
+  if (notes.length > 0) {
+    console.log(`Notes: ${notes.join(' | ')}`);
+  }
   console.log(`Saved snapshot: ${outFile}`);
 };
 

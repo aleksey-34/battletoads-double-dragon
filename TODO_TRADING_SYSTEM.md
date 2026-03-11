@@ -41,6 +41,17 @@ API_KEY_NAME='BTDD_D1' \
 node scripts/run_btdd_d1_phase5_http.mjs
 ```
 
+If summary shows `Liquidity scan: systems=0`, run with discovery auto-enable:
+
+```bash
+AUTH_PASSWORD='<YOUR_DASHBOARD_PASSWORD>' \
+BASE_URL='http://127.0.0.1:3001/api' \
+API_KEY_NAME='BTDD_D1' \
+ENABLE_DISCOVERY='1' \
+DISCOVERY_INTERVAL_HOURS='6' \
+node scripts/run_btdd_d1_phase5_http.mjs
+```
+
 Output file after run:
 - `results/btdd_d1_phase5_<timestamp>.json`
 
