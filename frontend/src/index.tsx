@@ -40,8 +40,36 @@ axios.interceptors.request.use((config) => {
     config.url = `${apiBase}${url.slice('/api'.length)}`;
   }
 
+  const password = localStorage.getItem('password');
+  if (password) {
+    (config as any).headers = (config as any).headers || {};
+    const headers = (config as any).headers as any;
+    if (!headers.Authorization && !headers.authorization) {
+      headers.Authorization = `Bearer ${password}`;
+    }
+  }
+
   return config;
 });
+
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const status = Number(error?.response?.status || 0);
+    const url = String(error?.config?.url || '');
+
+    if (status === 401 && url.includes('/api')) {
+      localStorage.removeItem('password');
+      delete axios.defaults.headers.common.Authorization;
+
+      if (window.location.pathname !== '/login') {
+        window.location.href = '/login';
+      }
+    }
+
+    return Promise.reject(error);
+  }
+);
 
 const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
 root.render(

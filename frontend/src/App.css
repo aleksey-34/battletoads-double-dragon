@@ -77,6 +77,22 @@
   margin-top: 2px;
 }
 
+.app-header-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
+}
+
+.app-main-menu {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.app-account-menu {
+  flex: 0 0 auto;
+}
+
 .dashboard-page.theme-battletoads {
   --battle-primary: #1f7a3d;
   --battle-accent: #d9ff53;
@@ -144,6 +160,20 @@
 @media (max-width: 900px) {
   .strategy-flag-grid {
     grid-template-columns: 1fr;
+  }
+
+  .app-header-row {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: center;
+    gap: 8px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    min-height: auto;
+  }
+
+  .app-account-menu {
+    justify-content: flex-end;
   }
 }
 
