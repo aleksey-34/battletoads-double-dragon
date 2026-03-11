@@ -34,6 +34,16 @@ import {
   setAllStrategiesActive,
   copyStrategyBlock,
 } from '../bot/strategy';
+import {
+  createTradingSystem,
+  deleteTradingSystem,
+  getTradingSystem,
+  listTradingSystems,
+  replaceTradingSystemMembers,
+  runTradingSystemBacktest,
+  setTradingSystemActivation,
+  updateTradingSystem,
+} from '../bot/tradingSystems';
 import { getMonitoringLatest, getMonitoringSnapshots, recordMonitoringSnapshot } from '../bot/monitoring';
 import { getBacktestRun, listBacktestRuns, runBacktest, saveBacktestRun } from '../backtest/engine';
 import { loadSettings, saveApiKey, saveRiskSettings, ApiKey, RiskSettings, Strategy } from '../config/settings';
@@ -41,6 +51,7 @@ import { db } from '../utils/database';
 import { authenticate } from '../utils/auth';
 import logger from '../utils/logger';
 import { getGitUpdateJobStatus, getGitUpdateStatus, triggerGitUpdate } from '../system/updateManager';
+import analyticsRoutes from './analyticsRoutes';
 import fs from 'fs';
 import path from 'path';
 
@@ -59,9 +70,14 @@ const STRATEGY_PATCH_ALLOWED_FIELDS = new Set<string>([
   'show_trades_on_chart',
   'show_values_each_bar',
   'auto_update',
+  'strategy_type',
+  'market_mode',
   'take_profit_percent',
   'price_channel_length',
   'detection_source',
+  'zscore_entry',
+  'zscore_exit',
+  'zscore_stop',
   'base_symbol',
   'quote_symbol',
   'interval',
@@ -397,6 +413,162 @@ router.get('/backtest/runs/:id', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Error loading backtest run ${id}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/trading-systems/:apiKeyName', async (req, res) => {
+  const { apiKeyName } = req.params;
+  try {
+    const systems = await listTradingSystems(apiKeyName);
+    res.json(systems);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading trading systems: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/trading-systems/:apiKeyName/:systemId', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  try {
+    const system = await getTradingSystem(apiKeyName, parsedSystemId);
+    res.json(system);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading trading system: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/trading-systems/:apiKeyName', async (req, res) => {
+  const { apiKeyName } = req.params;
+  try {
+    const system = await createTradingSystem(apiKeyName, req.body || {});
+    res.json({ success: true, system });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error creating trading system: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/trading-systems/:apiKeyName/:systemId', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  try {
+    const system = await updateTradingSystem(apiKeyName, parsedSystemId, req.body || {});
+    res.json({ success: true, system });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error updating trading system: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/trading-systems/:apiKeyName/:systemId/members', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  const members = Array.isArray(req.body) ? req.body : req.body?.members;
+
+  try {
+    const system = await replaceTradingSystemMembers(apiKeyName, parsedSystemId, Array.isArray(members) ? members : []);
+    res.json({ success: true, system });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error replacing trading system members: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/trading-systems/:apiKeyName/:systemId/activation', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  try {
+    const system = await setTradingSystemActivation(
+      apiKeyName,
+      parsedSystemId,
+      req.body?.isActive === true,
+      req.body?.syncMembers === true
+    );
+    res.json({ success: true, system });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error applying trading system activation: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/trading-systems/:apiKeyName/:systemId/backtest', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  if (backtestRunInProgress) {
+    return res.status(429).json({
+      error: 'Backtest already running. Wait for current run to finish before starting a new one.',
+    });
+  }
+
+  try {
+    backtestRunInProgress = true;
+    const saveResult = req.body?.saveResult !== false;
+    const result = await runTradingSystemBacktest(apiKeyName, parsedSystemId, req.body || {});
+    let runId: number | null = null;
+
+    if (saveResult) {
+      runId = await saveBacktestRun(result);
+      result.runId = runId;
+    }
+
+    res.json({ success: true, runId, result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error running trading system backtest: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  } finally {
+    backtestRunInProgress = false;
+  }
+});
+
+router.delete('/trading-systems/:apiKeyName/:systemId', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  try {
+    await deleteTradingSystem(apiKeyName, parsedSystemId);
+    res.json({ success: true });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error deleting trading system: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -851,5 +1023,8 @@ router.get('/symbols/:apiKeyName', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Analytics routes for live reconciliation and drift analysis
+router.use('/analytics', analyticsRoutes);
 
 export default router;

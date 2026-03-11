@@ -26,11 +26,15 @@ export interface RiskSettings {
   reinvest_percent: number;
 }
 
+export type StrategyType = 'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout';
+export type MarketMode = 'synthetic' | 'mono';
+
 export interface Strategy {
   id?: number;
   name: string;
   api_key_id: number;
-  strategy_type?: 'DD_BattleToads';
+  strategy_type?: StrategyType;
+  market_mode: MarketMode;
   is_active: boolean;
   display_on_chart: boolean;
   show_settings: boolean;
@@ -43,6 +47,9 @@ export interface Strategy {
   take_profit_percent: number;
   price_channel_length: number;
   detection_source: 'wick' | 'close';
+  zscore_entry: number;
+  zscore_exit: number;
+  zscore_stop: number;
   base_symbol: string;
   quote_symbol: string;
   interval: string;
@@ -140,6 +147,7 @@ export const saveStrategy = async (strategy: Strategy) => {
       name,
       api_key_id,
       strategy_type,
+      market_mode,
       is_active,
       display_on_chart,
       show_settings,
@@ -151,6 +159,9 @@ export const saveStrategy = async (strategy: Strategy) => {
       take_profit_percent,
       price_channel_length,
       detection_source,
+      zscore_entry,
+      zscore_exit,
+      zscore_stop,
       base_symbol,
       quote_symbol,
       interval,
@@ -167,15 +178,17 @@ export const saveStrategy = async (strategy: Strategy) => {
       reinvest_percent,
       state,
       entry_ratio,
+      tp_anchor_ratio,
       last_signal,
       last_action,
       last_error,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
     [
       strategy.name,
       strategy.api_key_id,
       strategy.strategy_type || 'DD_BattleToads',
+      strategy.market_mode,
       strategy.is_active,
       strategy.display_on_chart,
       strategy.show_settings,
@@ -187,6 +200,9 @@ export const saveStrategy = async (strategy: Strategy) => {
       strategy.take_profit_percent,
       strategy.price_channel_length,
       strategy.detection_source,
+      strategy.zscore_entry,
+      strategy.zscore_exit,
+      strategy.zscore_stop,
       strategy.base_symbol,
       strategy.quote_symbol,
       strategy.interval,
@@ -203,6 +219,7 @@ export const saveStrategy = async (strategy: Strategy) => {
       strategy.reinvest_percent,
       strategy.state || 'flat',
       strategy.entry_ratio ?? null,
+      strategy.tp_anchor_ratio ?? null,
       strategy.last_signal ?? null,
       strategy.last_action ?? null,
       strategy.last_error ?? null,

@@ -1065,6 +1065,107 @@ export const get24hVolume = async (apiKeyName: string, symbol: string) => {
   }
 };
 
+export const getTickersSnapshot = async (apiKeyName: string) => {
+  type TickerSnapshotItem = {
+    symbol: string;
+    volume24h: number;
+    turnover24h: number;
+    lastPrice: number;
+    change24hPercent: number;
+  };
+
+  const cacheKey = `tickers_snapshot_${apiKeyName}`;
+  const cached = cache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    return cached.data;
+  }
+
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+
+    try {
+      const payload: any = await entry.limiter.schedule(() => entry.client.fetchTickers());
+      const sourceRows: unknown[] = Object.values(payload || {});
+      const mapped: Array<TickerSnapshotItem | null> = sourceRows
+        .map((ticker: any): TickerSnapshotItem | null => {
+          const symbol = toUiSymbol(ticker?.info?.symbol || ticker?.symbol || '');
+          const volume24h = Number(ticker?.baseVolume ?? 0);
+          const turnover24h = Number(ticker?.quoteVolume ?? 0);
+          const lastPrice = Number(ticker?.last ?? ticker?.close ?? 0);
+          const change24hPercent = Number(ticker?.percentage ?? 0);
+
+          if (!symbol) {
+            return null;
+          }
+
+          return {
+            symbol,
+            volume24h: Number.isFinite(volume24h) ? volume24h : 0,
+            turnover24h: Number.isFinite(turnover24h) ? turnover24h : 0,
+            lastPrice: Number.isFinite(lastPrice) ? lastPrice : 0,
+            change24hPercent: Number.isFinite(change24hPercent) ? change24hPercent : 0,
+          };
+        });
+
+      const result = mapped
+        .filter((item): item is TickerSnapshotItem => item !== null);
+
+      cache.set(cacheKey, { data: result, timestamp: Date.now() });
+      return result;
+    } catch (error) {
+      const err = error as Error;
+      logger.error(`Error loading tickers snapshot via ccxt: ${err.message}`);
+      throw error;
+    }
+  }
+
+  const { client, limiter } = getClientEntry(apiKeyName);
+
+  try {
+    const response: any = await limiter.schedule(() =>
+      client.getTickers({
+        category: 'linear',
+      })
+    );
+
+    if (!isBybitSuccess(response)) {
+      throw formatBybitError(response, 'getTickers');
+    }
+
+    const list: any[] = Array.isArray(response?.result?.list) ? response.result.list : [];
+    const mapped: Array<TickerSnapshotItem | null> = list
+      .map((item: any): TickerSnapshotItem | null => {
+        const symbol = toUiSymbol(item?.symbol || '');
+        const volume24h = Number(item?.volume24h ?? 0);
+        const turnover24h = Number(item?.turnover24h ?? 0);
+        const lastPrice = Number(item?.lastPrice ?? 0);
+        const change24hPercent = Number(item?.price24hPcnt ?? 0) * 100;
+
+        if (!symbol) {
+          return null;
+        }
+
+        return {
+          symbol,
+          volume24h: Number.isFinite(volume24h) ? volume24h : 0,
+          turnover24h: Number.isFinite(turnover24h) ? turnover24h : 0,
+          lastPrice: Number.isFinite(lastPrice) ? lastPrice : 0,
+          change24hPercent: Number.isFinite(change24hPercent) ? change24hPercent : 0,
+        };
+      });
+
+    const result = mapped
+      .filter((item): item is TickerSnapshotItem => item !== null);
+
+    cache.set(cacheKey, { data: result, timestamp: Date.now() });
+    return result;
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading tickers snapshot for ${apiKeyName}: ${err.message}`);
+    throw error;
+  }
+};
+
 export const getInstrumentInfo = async (apiKeyName: string, symbol: string) => {
   const key = `info_${apiKeyName}_${symbol}`;
   const cached = cache.get(key);

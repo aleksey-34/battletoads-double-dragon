@@ -34,3 +34,9 @@ scripts/dist/
 # Misc
 *.tmp
 *.swp
+
+# One-off run scripts and their outputs (not needed on VPS)
+backend/phase*.ts
+backend/phase*.js
+backend/phase*.json
+backend/ab_btdd_d1_results.json

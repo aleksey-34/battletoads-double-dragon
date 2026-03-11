@@ -6,6 +6,19 @@ Copy only commands from code blocks.
 Do not paste shell prompts (`user@host:~$`, `root@host:~#`) and do not paste command output back into terminal.
 Do not use `<owner>/<repo>` in shell commands. Use real values without `<` and `>`.
 
+## Works Without Laptop
+
+After deployment to VPS, the bot runs as a `systemd` service (`battletoads-backend`) on the server.
+Your laptop may be turned off; VPS keeps running 24/7.
+
+Useful checks on VPS:
+
+```bash
+sudo systemctl status battletoads-backend --no-pager
+sudo journalctl -u battletoads-backend -n 120 --no-pager
+sudo systemctl restart battletoads-backend
+```
+
 ## Where to get REPO_URL
 
 If project already has Git remote:
