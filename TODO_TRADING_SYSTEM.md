@@ -131,6 +131,23 @@ Decision after check #1:
 - No strategy pause needed now.
 - Review liquidity suggestions manually before applying.
 
+Phase 5 check #2 (2026-03-11 19:29 UTC):
+- Active strategies: `3`
+- Active systems: `1`
+- Discovery-enabled systems: `1` (`autoEnabled=false`)
+- Reconciliation: `processed=3`, `failed=0`
+- Liquidity scan: `systems=1`, `suggestionsCreated=0`
+- Critical/pause recommendations: `0`
+- Stored reports: `10`
+- New suggestions: `4`
+- Snapshot: `results/btdd_d1_phase5_2026-03-11T19-29-38-456Z.json`
+
+Decision after check #2:
+- Keep system active unchanged.
+- Continue soak to full 24-48h window.
+- Next checkpoint (check #3): run phase5 script again after ~12h.
+- If check #3 also has `critical/pause=0` and `reconciliation failed=0`, mark Phase 5 complete.
+
 ## Backtest Record Template (fill after each run)
 
 | symbol | len | tp | trades | winRate% | PF | maxDD% | return% | score | status |
