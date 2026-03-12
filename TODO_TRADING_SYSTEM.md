@@ -12,7 +12,7 @@
 - [x] Phase 2 - Baseline Backtests
 - [x] Phase 3 - Optimize Top-3
 - [x] Phase 4 - Build Trading System
-- [ ] Phase 5 - Live Demo Soak (24-48h)
+- [x] Phase 5 - Live Demo Soak (24-48h)
 
 ## Main Goal
 - First: validate strategy behavior on real market data (demo mode, controlled risk).
@@ -165,6 +165,24 @@ Decision after check #3:
 - Disable TRU member in trading system to remove stale critical signal from member analysis.
 - Re-check phase5 after member disable.
 
+Phase 5 check #4 (2026-03-12 15:06 UTC):
+- Active strategies: `2`
+- Active systems: `1`
+- Discovery-enabled systems: `1` (`autoEnabled=false`)
+- Reconciliation: `processed=2`, `failed=0`
+- Liquidity scan: `systems=1`, `suggestionsCreated=0`
+- Critical/pause recommendations (all members): `0`
+- Critical/pause recommendations (active only): `0`
+- Stored reports: `10`
+- New suggestions: `8`
+- Snapshot: `results/btdd_d1_phase5_2026-03-12T15-06-39-968Z.json`
+
+Decision after check #4:
+- Phase 5 is complete.
+- Active 2-member system is stable.
+- Continue running demo-live on `GRTUSDT` + `INJUSDT`.
+- Treat TRU as paused candidate for re-entry, not as active system member yet.
+
 If any checkpoint shows `critical/pause recommendations > 0`:
 1. Re-run phase5 script (latest version) to print the exact flagged strategy.
 2. Pause only the flagged strategy (do not stop entire system):
@@ -267,6 +285,11 @@ Promote from demo only if all are true:
 Current mode:
 - Run stable soak on 2 active members while TRU is paused.
 
+Current achieved system metrics:
+- Original 3-member portfolio backtest: `RET 6.15%`, `PF 2.59`, `DD 5.56%`, `WR 50.00%`, `trades 14`
+- Stable current live-demo composition: `GRTUSDT + INJUSDT`
+- Soak result after TRU removal: `reconciliation failed=0`, `critical(active only)=0`
+
 Goal:
 - Re-optimize paused TRU candidate and re-introduce only after clean checks.
 
@@ -284,7 +307,28 @@ node scripts/run_btdd_reopt_symbol_http.mjs
 Expected output:
 - `results/btdd_d1_truusdt_reopt_<timestamp>.json`
 
+Latest TRU reopt result:
+- Variants tested: `70`
+- Profitable variants: `65`
+- Robust variants (`PF>=1`, `DD<=12`): `65`
+- Best candidate: `len=90`, `tp=3`, `src=wick`, `WR=100.00`, `PF=999.00`, `DD=0.69`, `RET=2.64`
+
+Interpretation of TRU reopt:
+- The best score is very strong, but `PF=999` and `WR=100%` are likely sample-size-sensitive.
+- Do not re-enable TRU in live-demo only from this backtest line.
+- First use it as a paused candidate with one extra verification cycle.
+
 Re-entry gate for TRU:
 1. Reopt best config has `PF >= 1.2` and `DD <= 12` with positive return.
 2. TRU run in paused-candidate mode for one extra phase5 check cycle.
 3. If no new critical for TRU in next cycle, re-enable TRU member in system.
+
+When to start real trading:
+1. On this exact API key: never with real money, because it is a Bybit demo key.
+2. On real-money mainnet key: after one explicit promotion step using a separate non-demo Bybit API key.
+3. Recommended promotion moment: now for `soft-live` on the 2-member version if you accept reduced diversification and conservative size.
+4. Recommended capital/risk policy for first real-money launch:
+   - start with `GRTUSDT` + `INJUSDT` only
+   - keep TRU disabled until re-entry gate passes
+   - use lower size than demo plan for first 24h
+   - watch reconciliation every 12h during first real-money day
