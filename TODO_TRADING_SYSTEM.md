@@ -332,3 +332,43 @@ When to start real trading:
    - keep TRU disabled until re-entry gate passes
    - use lower size than demo plan for first 24h
    - watch reconciliation every 12h during first real-money day
+
+## Phase 7 - Sweep Candidate Portfolio (Diversification Path)
+Why screenshot pairs were missing in active TS:
+- A+B runner `scripts/run_btdd_d1_ab_http.mjs` uses hardcoded mono candidates (`STX/TRU/VET/GRT/INJ`) and does not import `third_strategy_sweep` JSON automatically.
+
+New automation added:
+- `scripts/run_btdd_import_sweep_candidates_http.mjs`
+- Reads latest `backend/logs/backtests/third_strategy_sweep_*.json`
+- Takes top unique synth + mono markets
+- Creates/updates strategies
+- Runs single backtests for each candidate
+- Builds separate candidate trading system
+- Runs portfolio backtest
+
+Local validation snapshots for sweep candidate system:
+- Short window (`bars=336`): portfolio `RET 2.23%`, `PF 1.41`, `DD 1.04%`, `WR 33.52%`, `trades 355`
+- Long window (`bars=2500`): portfolio `RET 10.67%`, `PF 1.56`, `DD 1.53%`, `WR 34.44%`, `trades 996`
+- Selected markets (long-window run): `ORDIUSDT/ZECUSDT`, `BERAUSDT`, `IPUSDT/ZECUSDT`, `IPUSDT`
+
+VPS command to build sweep candidate system (safe mode, no activation):
+
+```bash
+AUTH_PASSWORD='<YOUR_DASHBOARD_PASSWORD>' \
+BASE_URL='http://127.0.0.1:3001/api' \
+API_KEY_NAME='BTDD_D1' \
+TOP_SYNTH='3' \
+TOP_MONO='3' \
+MAX_MEMBERS='4' \
+BARS='2500' \
+ACTIVATE_SYSTEM='0' \
+node scripts/run_btdd_import_sweep_candidates_http.mjs
+```
+
+Expected output:
+- `results/btdd_d1_sweep_candidate_<timestamp>.json`
+
+Decision gate for applying sweep system:
+1. Sweep candidate portfolio must beat current stable 2-member system on risk-adjusted basis (`PF` and `DD`) on the same bar window.
+2. No critical active recommendations in one phase5 check cycle after activation.
+3. If gate passes, promote sweep system to active demo-live.
