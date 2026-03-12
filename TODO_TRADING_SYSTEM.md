@@ -262,3 +262,29 @@ Promote from demo only if all are true:
 - Reconciliation has no critical persistent drift
 - Portfolio drawdown remains within planned limit
 - At least 2 of 3 members keep PF >= 1 on rolling checks
+
+## Phase 6 - Stabilize and Reintroduce Third Member
+Current mode:
+- Run stable soak on 2 active members while TRU is paused.
+
+Goal:
+- Re-optimize paused TRU candidate and re-introduce only after clean checks.
+
+TRU reoptimization command (VPS):
+
+```bash
+AUTH_PASSWORD='<YOUR_DASHBOARD_PASSWORD>' \
+BASE_URL='http://127.0.0.1:3001/api' \
+API_KEY_NAME='BTDD_D1' \
+SYMBOL='TRUUSDT' \
+APPLY_BEST='1' \
+node scripts/run_btdd_reopt_symbol_http.mjs
+```
+
+Expected output:
+- `results/btdd_d1_truusdt_reopt_<timestamp>.json`
+
+Re-entry gate for TRU:
+1. Reopt best config has `PF >= 1.2` and `DD <= 12` with positive return.
+2. TRU run in paused-candidate mode for one extra phase5 check cycle.
+3. If no new critical for TRU in next cycle, re-enable TRU member in system.
