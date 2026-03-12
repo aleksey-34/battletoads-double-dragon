@@ -10,6 +10,7 @@ const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'defaultpassword';
 const PERIOD_HOURS = Math.max(1, Number(process.env.PERIOD_HOURS || 24));
 const MAX_TO_PAUSE = Math.max(1, Number(process.env.MAX_TO_PAUSE || 1));
 const DISABLE_MEMBER = String(process.env.DISABLE_MEMBER || '0').trim() === '1';
+const INCLUDE_PAUSED_FOR_MEMBER_DISABLE = String(process.env.INCLUDE_PAUSED_FOR_MEMBER_DISABLE || '1').trim() === '1';
 
 const headers = {
   Authorization: `Bearer ${AUTH_PASSWORD}`,
@@ -70,10 +71,8 @@ const main = async () => {
   });
 
   const reports = Array.isArray(analysis?.reports) ? analysis.reports : [];
-  const flagged = reports
+  const flaggedAll = reports
     .filter((report) => isCriticalOrPause(report))
-    .filter((report) => activeStrategyIds.has(Number(report?.strategyId || 0)))
-    .slice(0, MAX_TO_PAUSE)
     .map((report) => ({
       strategyId: Number(report?.strategyId || 0),
       strategyName: String(report?.strategyName || ''),
@@ -85,7 +84,15 @@ const main = async () => {
     }))
     .filter((item) => item.strategyId > 0);
 
-  if (flagged.length === 0) {
+  const flagged = flaggedAll
+    .filter((item) => activeStrategyIds.has(item.strategyId))
+    .slice(0, MAX_TO_PAUSE);
+
+  const disableTargets = DISABLE_MEMBER
+    ? (INCLUDE_PAUSED_FOR_MEMBER_DISABLE ? flaggedAll.slice(0, MAX_TO_PAUSE) : flagged)
+    : [];
+
+  if (flagged.length === 0 && disableTargets.length === 0) {
     console.log('No active critical/pause recommendations found. No action applied.');
     return;
   }
@@ -104,16 +111,20 @@ const main = async () => {
     );
   }
 
+  if (flagged.length === 0 && disableTargets.length > 0) {
+    console.log('No active flagged strategy to pause, but member disable targets were found.');
+  }
+
   let membersDisabled = [];
 
   if (DISABLE_MEMBER) {
     const fullSystem = await api('GET', `/trading-systems/${API_KEY_NAME}/${systemId}`);
     const members = Array.isArray(fullSystem?.members) ? fullSystem.members : [];
-    const pausedIds = new Set(paused.map((item) => item.strategyId));
+    const disableTargetIds = new Set(disableTargets.map((item) => item.strategyId));
 
     const nextMembers = members.map((member) => {
       const strategyId = Number(member?.strategy_id || 0);
-      const shouldDisable = pausedIds.has(strategyId);
+      const shouldDisable = disableTargetIds.has(strategyId);
 
       if (shouldDisable) {
         membersDisabled.push(strategyId);
@@ -148,6 +159,8 @@ const main = async () => {
     systemId,
     paused,
     disableMemberMode: DISABLE_MEMBER,
+    includePausedForMemberDisable: INCLUDE_PAUSED_FOR_MEMBER_DISABLE,
+    disableTargets,
     membersDisabled,
   };
 

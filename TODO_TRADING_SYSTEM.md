@@ -146,7 +146,24 @@ Decision after check #2:
 - Keep system active unchanged.
 - Continue soak to full 24-48h window.
 - Next checkpoint (check #3): run phase5 script again after ~12h.
-- If check #3 also has `critical/pause=0` and `reconciliation failed=0`, mark Phase 5 complete.
+
+Phase 5 check #3 (2026-03-12 03:25 UTC):
+- Active strategies: `2`
+- Active systems: `1`
+- Discovery-enabled systems: `1` (`autoEnabled=false`)
+- Reconciliation: `processed=2`, `failed=0`
+- Liquidity scan: `systems=1`, `suggestionsCreated=0`
+- Critical/pause recommendations: `1`
+- Flagged: `AB_DONCH TRUUSDT` (`rec=pause`, `severity=critical`, `samples=3`)
+- Stored reports: `10`
+- New suggestions: `4`
+- Snapshot: `results/btdd_d1_phase5_2026-03-12T03-25-26-157Z.json`
+
+Decision after check #3:
+- TRU strategy is already paused, but still appears in system analysis because member remains enabled.
+- Keep 2-strategy soak running.
+- Disable TRU member in trading system to remove stale critical signal from member analysis.
+- Re-check phase5 after member disable.
 
 If any checkpoint shows `critical/pause recommendations > 0`:
 1. Re-run phase5 script (latest version) to print the exact flagged strategy.
@@ -155,7 +172,7 @@ If any checkpoint shows `critical/pause recommendations > 0`:
 3. Continue soak with remaining members for 12h and re-check.
 4. Re-optimize paused strategy offline, then re-add only if stable.
 
-Helper command (auto-pause first active critical strategy):
+Helper command A (pause first active critical strategy):
 
 ```bash
 AUTH_PASSWORD='<YOUR_DASHBOARD_PASSWORD>' \
@@ -163,6 +180,18 @@ BASE_URL='http://127.0.0.1:3001/api' \
 API_KEY_NAME='BTDD_D1' \
 MAX_TO_PAUSE='1' \
 DISABLE_MEMBER='0' \
+node scripts/run_btdd_d1_apply_critical_pause_http.mjs
+```
+
+Helper command B (disable flagged member even if already paused):
+
+```bash
+AUTH_PASSWORD='<YOUR_DASHBOARD_PASSWORD>' \
+BASE_URL='http://127.0.0.1:3001/api' \
+API_KEY_NAME='BTDD_D1' \
+MAX_TO_PAUSE='1' \
+DISABLE_MEMBER='1' \
+INCLUDE_PAUSED_FOR_MEMBER_DISABLE='1' \
 node scripts/run_btdd_d1_apply_critical_pause_http.mjs
 ```
 

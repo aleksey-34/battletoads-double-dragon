@@ -54,6 +54,9 @@ const main = async () => {
   let systems = Array.isArray(systemsPayload) ? systemsPayload : [];
 
   const activeStrategies = (Array.isArray(strategies) ? strategies : []).filter((s) => s?.is_active === true);
+  const activeStrategyIdSet = new Set(
+    activeStrategies.map((item) => Number(item?.id || 0)).filter((id) => id > 0)
+  );
   let activeSystems = systems.filter((s) => s?.is_active === true);
 
   let discoveryAutoEnabled = false;
@@ -92,7 +95,9 @@ const main = async () => {
 
   let systemAnalysis = null;
   let criticalRecommendations = 0;
+  let criticalRecommendationsActive = 0;
   let criticalItems = [];
+  let criticalItemsActive = [];
 
   if (primarySystem?.id) {
     systemAnalysis = await api('POST', `/analytics/${API_KEY_NAME}/system/${Number(primarySystem.id)}/analysis`, {
@@ -115,6 +120,8 @@ const main = async () => {
     }));
 
     criticalRecommendations = criticalItems.length;
+    criticalItemsActive = criticalItems.filter((item) => activeStrategyIdSet.has(item.strategyId));
+    criticalRecommendationsActive = criticalItemsActive.length;
   }
 
   const latestReport = Array.isArray(reports?.reports) && reports.reports.length > 0
@@ -126,7 +133,10 @@ const main = async () => {
     notes.push('Liquidity scan skipped: no discovery-enabled trading systems. Enable discovery or run with ENABLE_DISCOVERY=1.');
   }
   if (criticalRecommendations > 0) {
-    notes.push(`System analysis has ${criticalRecommendations} critical/pause recommendations.`);
+    notes.push(`System analysis has ${criticalRecommendations} critical/pause recommendations (all members).`);
+  }
+  if (criticalRecommendationsActive > 0) {
+    notes.push(`Active strategies have ${criticalRecommendationsActive} critical/pause recommendations.`);
   }
   if (activeStrategies.length === 0) {
     notes.push('No active strategies for this API key.');
@@ -143,7 +153,9 @@ const main = async () => {
     reconciliation,
     liquidityScan,
     criticalRecommendations,
+    criticalRecommendationsActive,
     criticalItems,
+    criticalItemsActive,
     reportsCount: Number(reports?.count || 0),
     suggestionsCount: Number(suggestions?.count || 0),
     systemAnalysis,
@@ -164,11 +176,13 @@ const main = async () => {
   console.log(`Discovery-enabled systems: ${discoveryEnabledSystems.length} (autoEnabled=${discoveryAutoEnabled})`);
   console.log(`Reconciliation: processed=${Number(reconciliation?.processed || 0)}, failed=${Number(reconciliation?.failed || 0)}`);
   console.log(`Liquidity scan: systems=${Number(liquidityScan?.scannedSystems || 0)}, suggestionsCreated=${Number(liquidityScan?.createdSuggestions || 0)}`);
-  console.log(`Critical/pause recommendations: ${criticalRecommendations}`);
+  console.log(`Critical/pause recommendations (all members): ${criticalRecommendations}`);
+  console.log(`Critical/pause recommendations (active only): ${criticalRecommendationsActive}`);
   if (criticalItems.length > 0) {
     for (const item of criticalItems) {
+      const activeMark = activeStrategyIdSet.has(item.strategyId) ? 'active' : 'inactive';
       console.log(
-        `  - ${item.strategyName || item.symbol || item.strategyId} | rec=${item.recommendation} | severity=${item.severity} | samples=${item.samples}`
+        `  - ${item.strategyName || item.symbol || item.strategyId} | rec=${item.recommendation} | severity=${item.severity} | samples=${item.samples} | ${activeMark}`
       );
       if (item.rationale) {
         console.log(`    rationale: ${item.rationale}`);
