@@ -92,6 +92,7 @@ const main = async () => {
 
   let systemAnalysis = null;
   let criticalRecommendations = 0;
+  let criticalItems = [];
 
   if (primarySystem?.id) {
     systemAnalysis = await api('POST', `/analytics/${API_KEY_NAME}/system/${Number(primarySystem.id)}/analysis`, {
@@ -99,11 +100,21 @@ const main = async () => {
     });
 
     const analysisReports = Array.isArray(systemAnalysis?.reports) ? systemAnalysis.reports : [];
-    criticalRecommendations = analysisReports.filter((item) => {
+    criticalItems = analysisReports.filter((item) => {
       const severity = String(item?.recommendation?.severity || '').toLowerCase();
       const recommendation = String(item?.recommendation?.recommendation || '').toLowerCase();
       return severity === 'critical' || recommendation === 'pause';
-    }).length;
+    }).map((item) => ({
+      strategyId: Number(item?.strategyId || 0),
+      strategyName: String(item?.strategyName || ''),
+      symbol: String(item?.symbol || ''),
+      recommendation: String(item?.recommendation?.recommendation || ''),
+      severity: String(item?.recommendation?.severity || ''),
+      rationale: String(item?.recommendation?.rationale || ''),
+      samples: Number(item?.metrics?.samples_count || 0),
+    }));
+
+    criticalRecommendations = criticalItems.length;
   }
 
   const latestReport = Array.isArray(reports?.reports) && reports.reports.length > 0
@@ -132,6 +143,7 @@ const main = async () => {
     reconciliation,
     liquidityScan,
     criticalRecommendations,
+    criticalItems,
     reportsCount: Number(reports?.count || 0),
     suggestionsCount: Number(suggestions?.count || 0),
     systemAnalysis,
@@ -153,6 +165,16 @@ const main = async () => {
   console.log(`Reconciliation: processed=${Number(reconciliation?.processed || 0)}, failed=${Number(reconciliation?.failed || 0)}`);
   console.log(`Liquidity scan: systems=${Number(liquidityScan?.scannedSystems || 0)}, suggestionsCreated=${Number(liquidityScan?.createdSuggestions || 0)}`);
   console.log(`Critical/pause recommendations: ${criticalRecommendations}`);
+  if (criticalItems.length > 0) {
+    for (const item of criticalItems) {
+      console.log(
+        `  - ${item.strategyName || item.symbol || item.strategyId} | rec=${item.recommendation} | severity=${item.severity} | samples=${item.samples}`
+      );
+      if (item.rationale) {
+        console.log(`    rationale: ${item.rationale}`);
+      }
+    }
+  }
   console.log(`Stored reports: ${Number(reports?.count || 0)}, new suggestions: ${Number(suggestions?.count || 0)}`);
   if (notes.length > 0) {
     console.log(`Notes: ${notes.join(' | ')}`);

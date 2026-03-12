@@ -148,6 +148,13 @@ Decision after check #2:
 - Next checkpoint (check #3): run phase5 script again after ~12h.
 - If check #3 also has `critical/pause=0` and `reconciliation failed=0`, mark Phase 5 complete.
 
+If any checkpoint shows `critical/pause recommendations > 0`:
+1. Re-run phase5 script (latest version) to print the exact flagged strategy.
+2. Pause only the flagged strategy (do not stop entire system):
+   - `PUT /api/strategies/BTDD_D1/:strategyId` with `{ "is_active": false }`
+3. Continue soak with remaining members for 12h and re-check.
+4. Re-optimize paused strategy offline, then re-add only if stable.
+
 ## Backtest Record Template (fill after each run)
 
 | symbol | len | tp | trades | winRate% | PF | maxDD% | return% | score | status |
