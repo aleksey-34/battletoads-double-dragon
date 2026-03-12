@@ -2,10 +2,11 @@
 
 import fs from 'fs';
 import path from 'path';
+import { DEFAULT_API_KEY_NAME, DEFAULT_AUTH_PASSWORD, DEFAULT_BASE_URL } from './btdd_http_defaults.mjs';
 
-const API_KEY_NAME = process.env.API_KEY_NAME || 'BTDD_D1';
-const API_BASE_URL = process.env.BASE_URL || 'http://127.0.0.1:3001/api';
-const AUTH_PASSWORD = process.env.AUTH_PASSWORD || 'defaultpassword';
+const API_KEY_NAME = process.env.API_KEY_NAME || DEFAULT_API_KEY_NAME;
+const API_BASE_URL = process.env.BASE_URL || DEFAULT_BASE_URL;
+const AUTH_PASSWORD = process.env.AUTH_PASSWORD || DEFAULT_AUTH_PASSWORD;
 
 const STRATEGY_PREFIX = process.env.STRATEGY_PREFIX || 'AB_DONCH';
 const SYSTEM_NAME = process.env.SYSTEM_NAME || 'AB BTDD_D1 Mono Portfolio';
