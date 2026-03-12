@@ -372,3 +372,15 @@ Decision gate for applying sweep system:
 1. Sweep candidate portfolio must beat current stable 2-member system on risk-adjusted basis (`PF` and `DD`) on the same bar window.
 2. No critical active recommendations in one phase5 check cycle after activation.
 3. If gate passes, promote sweep system to active demo-live.
+
+Fast-track promotion command (AB -> SWEEP + immediate safety check):
+
+```bash
+node scripts/run_btdd_promote_sweep_fasttrack_http.mjs
+```
+
+Optional overrides:
+- `TARGET_SYSTEM_NAME='SWEEP BTDD_D1 Candidate Portfolio'`
+- `SOURCE_SYSTEM_NAME='AB BTDD_D1 Mono Portfolio'`
+- `DEACTIVATE_OTHER_ACTIVE='1'`
+- `RUN_PHASE5_CHECK='1'`
