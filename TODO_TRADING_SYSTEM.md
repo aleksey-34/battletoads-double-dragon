@@ -155,6 +155,17 @@ If any checkpoint shows `critical/pause recommendations > 0`:
 3. Continue soak with remaining members for 12h and re-check.
 4. Re-optimize paused strategy offline, then re-add only if stable.
 
+Helper command (auto-pause first active critical strategy):
+
+```bash
+AUTH_PASSWORD='<YOUR_DASHBOARD_PASSWORD>' \
+BASE_URL='http://127.0.0.1:3001/api' \
+API_KEY_NAME='BTDD_D1' \
+MAX_TO_PAUSE='1' \
+DISABLE_MEMBER='0' \
+node scripts/run_btdd_d1_apply_critical_pause_http.mjs
+```
+
 ## Backtest Record Template (fill after each run)
 
 | symbol | len | tp | trades | winRate% | PF | maxDD% | return% | score | status |
