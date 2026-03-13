@@ -373,6 +373,43 @@ Decision gate for applying sweep system:
 2. No critical active recommendations in one phase5 check cycle after activation.
 3. If gate passes, promote sweep system to active demo-live.
 
+## Phase 8 - Historical Portfolio Sweep (2025+)
+Goal:
+- Shift from slow live iteration to large historical optimization over mono+synth universe.
+- Evaluate all three strategy types (`DD_BattleToads`, `stat_arb_zscore`, `zz_breakout`) on one date range.
+- Build a candidate trading system from robust winners and validate with portfolio backtests.
+
+Main command (VPS, wide cloud, Jan 2025 -> now):
+
+```bash
+DATE_FROM='2025-01-01T00:00:00Z' \
+INTERVAL='4h' \
+TOP_SYNTH_UNIVERSE='14' \
+TOP_MONO_UNIVERSE='14' \
+MAX_VARIANTS_PER_MARKET_TYPE='10' \
+MAX_RUNS='360' \
+MAX_MEMBERS='6' \
+ROBUST_MIN_PF='1.15' \
+ROBUST_MAX_DD='22' \
+ROBUST_MIN_TRADES='40' \
+PORTFOLIO_WINDOWS_DAYS='365,180,90' \
+node scripts/run_btdd_historical_system_sweep_http.mjs
+```
+
+Output:
+- `results/btdd_d1_historical_sweep_<timestamp>.json`
+
+What script does:
+1. Builds market cloud from latest `third_strategy_sweep_*.json` + fallback markets.
+2. Runs single backtests for sampled parameter variants across all 3 strategy types.
+3. Filters robust candidates, applies diversity selection (type + mode), builds candidate trading system.
+4. Runs portfolio backtests on full range and rolling windows.
+
+Gate for promotion to demo-live:
+1. Portfolio full-range + 365d window keep `PF >= 1.2` with acceptable DD.
+2. At least one robust mono and one robust synth member in selected set.
+3. Then promote via fast-track and run phase5 monitoring cycle.
+
 Fast-track promotion command (AB -> SWEEP + immediate safety check):
 
 ```bash
