@@ -16,12 +16,16 @@ const BACKTEST_BARS = Math.max(120, Number(process.env.BACKTEST_BARS || 6000));
 const WARMUP_BARS = Math.max(0, Number(process.env.WARMUP_BARS || 400));
 const SKIP_MISSING_SYMBOLS = String(process.env.SKIP_MISSING_SYMBOLS || '1').trim() === '1';
 
+const EXHAUSTIVE_MODE = String(process.env.EXHAUSTIVE_MODE || '0').trim() === '1';
+const ALLOW_DUPLICATE_MARKETS = String(process.env.ALLOW_DUPLICATE_MARKETS || '0').trim() === '1';
+
 const INITIAL_BALANCE = Number(process.env.INITIAL_BALANCE || 10000);
 const COMMISSION = Number(process.env.COMMISSION || 0.1);
 const SLIPPAGE = Number(process.env.SLIPPAGE || 0.05);
 const FUNDING = Number(process.env.FUNDING || 0);
 
-const MAX_RUNS = Math.max(10, Number(process.env.MAX_RUNS || 240));
+const MAX_RUNS_RAW = Number(process.env.MAX_RUNS || 240);
+const MAX_RUNS = Number.isFinite(MAX_RUNS_RAW) ? Math.floor(MAX_RUNS_RAW) : 240;
 const MAX_VARIANTS_PER_MARKET_TYPE = Math.max(2, Number(process.env.MAX_VARIANTS_PER_MARKET_TYPE || 8));
 const MAX_MEMBERS = Math.max(2, Number(process.env.MAX_MEMBERS || 6));
 
@@ -351,7 +355,9 @@ function buildDonchianVariants(marketInfo, strategyType) {
     }
   }
 
-  return sampleEvenly(variants, MAX_VARIANTS_PER_MARKET_TYPE);
+  return EXHAUSTIVE_MODE
+    ? variants
+    : sampleEvenly(variants, MAX_VARIANTS_PER_MARKET_TYPE);
 }
 
 function buildStatArbVariants(marketInfo) {
@@ -385,7 +391,9 @@ function buildStatArbVariants(marketInfo) {
     }
   }
 
-  return sampleEvenly(variants, MAX_VARIANTS_PER_MARKET_TYPE);
+  return EXHAUSTIVE_MODE
+    ? variants
+    : sampleEvenly(variants, MAX_VARIANTS_PER_MARKET_TYPE);
 }
 
 function buildVariantBuckets(marketInfos) {
@@ -589,12 +597,19 @@ function selectMembers(records) {
 
   const selected = [];
   const usedIds = new Set();
+  const usedMarkets = new Set();
 
-  const add = (item) => {
+  const add = (item, allowDuplicateMarket = ALLOW_DUPLICATE_MARKETS) => {
     if (!item || usedIds.has(item.strategyId) || selected.length >= MAX_MEMBERS) {
       return;
     }
+
+    if (!allowDuplicateMarket && usedMarkets.has(item.market)) {
+      return;
+    }
+
     usedIds.add(item.strategyId);
+    usedMarkets.add(item.market);
     selected.push(item);
   };
 
@@ -607,6 +622,16 @@ function selectMembers(records) {
 
   for (const item of pool) {
     add(item);
+  }
+
+  // If strict uniqueness starves member count, relax market uniqueness as fallback.
+  if (!ALLOW_DUPLICATE_MARKETS && selected.length < Math.min(MAX_MEMBERS, 3)) {
+    for (const item of pool) {
+      add(item, true);
+      if (selected.length >= Math.min(MAX_MEMBERS, 3)) {
+        break;
+      }
+    }
   }
 
   return selected.slice(0, MAX_MEMBERS);
@@ -711,7 +736,9 @@ async function main() {
 
   console.log(`[START] Historical system sweep for ${API_KEY_NAME}`);
   console.log(`[RANGE] ${DATE_FROM} -> ${DATE_TO || 'now'}`);
-  console.log(`[SETUP] interval=${INTERVAL}, maxRuns=${MAX_RUNS}, maxVariantsPerMarketType=${MAX_VARIANTS_PER_MARKET_TYPE}`);
+  console.log(
+    `[SETUP] interval=${INTERVAL}, mode=${EXHAUSTIVE_MODE ? 'exhaustive' : 'sampled'}, maxRuns=${MAX_RUNS}, maxVariantsPerMarketType=${MAX_VARIANTS_PER_MARKET_TYPE}`
+  );
   console.log(`[SETUP] strategyTypes=${STRATEGY_TYPES.join(', ')}`);
 
   if (STRATEGY_TYPES.length === 0) {
@@ -736,9 +763,18 @@ async function main() {
   }
 
   const buckets = buildVariantBuckets(marketInfos);
-  const runPlan = roundRobinPick(buckets, MAX_RUNS);
+  const potentialRuns = buckets.reduce((sum, bucket) => sum + bucket.length, 0);
+  const runLimit = EXHAUSTIVE_MODE
+    ? (MAX_RUNS > 0 ? MAX_RUNS : potentialRuns)
+    : (MAX_RUNS > 0 ? Math.max(10, MAX_RUNS) : 240);
+  const runPlan = roundRobinPick(buckets, runLimit);
+  const coveragePercent = potentialRuns > 0
+    ? Number(((runPlan.length / potentialRuns) * 100).toFixed(2))
+    : 0;
 
-  console.log(`[PLAN] buckets=${buckets.length}, scheduledRuns=${runPlan.length}`);
+  console.log(
+    `[PLAN] buckets=${buckets.length}, potentialRuns=${potentialRuns}, scheduledRuns=${runPlan.length}, coverage=${coveragePercent}%`
+  );
 
   const strategies = await api('GET', `/strategies/${API_KEY_NAME}`);
   const existingByName = new Map(
@@ -843,6 +879,8 @@ async function main() {
       fundingRatePercent: FUNDING,
       maxRuns: MAX_RUNS,
       maxVariantsPerMarketType: MAX_VARIANTS_PER_MARKET_TYPE,
+      exhaustiveMode: EXHAUSTIVE_MODE,
+      allowDuplicateMarkets: ALLOW_DUPLICATE_MARKETS,
       maxMembers: MAX_MEMBERS,
       robust: {
         minProfitFactor: ROBUST_MIN_PF,
@@ -859,7 +897,9 @@ async function main() {
       monoMarkets: universe.monoMarkets,
     },
     counts: {
+      potentialRuns,
       scheduledRuns: runPlan.length,
+      coveragePercent,
       evaluated: evaluated.length,
       failures: failures.length,
       robust: evaluated.filter((item) => item.robust).length,
@@ -888,7 +928,9 @@ async function main() {
   const fullPortfolio = portfolioResults[0] || {};
 
   console.log('--- HISTORICAL SWEEP SUMMARY ---');
-  console.log(`Runs: scheduled=${runPlan.length}, evaluated=${evaluated.length}, failures=${failures.length}`);
+  console.log(
+    `Runs: potential=${potentialRuns}, scheduled=${runPlan.length}, coverage=${coveragePercent}%, evaluated=${evaluated.length}, failures=${failures.length}`
+  );
   console.log(`Robust candidates: ${evaluated.filter((item) => item.robust).length}`);
   console.log(`Selected members: ${selected.map((item) => `${item.market}:${item.strategyType}`).join(', ')}`);
   console.log(`System: ${SYSTEM_NAME} (id=${systemId})`);

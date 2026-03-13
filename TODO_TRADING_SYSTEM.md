@@ -379,7 +379,7 @@ Goal:
 - Evaluate all three strategy types (`DD_BattleToads`, `stat_arb_zscore`, `zz_breakout`) on one date range.
 - Build a candidate trading system from robust winners and validate with portfolio backtests.
 
-Main command (VPS, wide cloud, Jan 2025 -> now):
+Main sampled command (VPS, wide cloud, Jan 2025 -> now):
 
 ```bash
 DATE_FROM='2025-01-01T00:00:00Z' \
@@ -396,12 +396,34 @@ PORTFOLIO_WINDOWS_DAYS='365,180,90' \
 node scripts/run_btdd_historical_system_sweep_http.mjs
 ```
 
+Exhaustive mode (full grid over selected market cloud):
+
+```bash
+DATE_FROM='2025-01-01T00:00:00Z' \
+INTERVAL='4h' \
+TOP_SYNTH_UNIVERSE='14' \
+TOP_MONO_UNIVERSE='14' \
+EXHAUSTIVE_MODE='1' \
+MAX_RUNS='0' \
+MAX_MEMBERS='6' \
+ROBUST_MIN_PF='1.15' \
+ROBUST_MAX_DD='22' \
+ROBUST_MIN_TRADES='40' \
+PORTFOLIO_WINDOWS_DAYS='365,180,90' \
+node scripts/run_btdd_historical_system_sweep_http.mjs
+```
+
+Notes:
+- `EXHAUSTIVE_MODE=0` (default): sampled search (`MAX_VARIANTS_PER_MARKET_TYPE` + `MAX_RUNS` cap).
+- `EXHAUSTIVE_MODE=1`: full variant grid for selected universe. `MAX_RUNS=0` means "run all planned variants".
+- Script summary now prints `potentialRuns`, `scheduledRuns`, and `coverage%`.
+
 Output:
 - `results/btdd_d1_historical_sweep_<timestamp>.json`
 
 What script does:
 1. Builds market cloud from latest `third_strategy_sweep_*.json` + fallback markets.
-2. Runs single backtests for sampled parameter variants across all 3 strategy types.
+2. Runs single backtests for parameter variants across all 3 strategy types (sampled or exhaustive mode).
 3. Filters robust candidates, applies diversity selection (type + mode), builds candidate trading system.
 4. Runs portfolio backtests on full range and rolling windows.
 
