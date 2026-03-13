@@ -15,6 +15,7 @@ const LIQ_ADD = Number(process.env.LIQ_ADD || 2);
 const LIQ_REPLACE = Number(process.env.LIQ_REPLACE || 1);
 const ENABLE_DISCOVERY = String(process.env.ENABLE_DISCOVERY || '0').trim() === '1';
 const DISCOVERY_INTERVAL_HOURS = Math.max(1, Number(process.env.DISCOVERY_INTERVAL_HOURS || 6));
+const MIN_CRITICAL_SAMPLES = Math.max(1, Number(process.env.MIN_CRITICAL_SAMPLES || 3));
 
 const headers = {
   Authorization: `Bearer ${AUTH_PASSWORD}`,
@@ -99,6 +100,7 @@ const main = async () => {
   let criticalRecommendationsActive = 0;
   let criticalItems = [];
   let criticalItemsActive = [];
+  let criticalItemsIgnoredLowSamples = [];
 
   if (primarySystem?.id) {
     systemAnalysis = await api('POST', `/analytics/${API_KEY_NAME}/system/${Number(primarySystem.id)}/analysis`, {
@@ -106,7 +108,7 @@ const main = async () => {
     });
 
     const analysisReports = Array.isArray(systemAnalysis?.reports) ? systemAnalysis.reports : [];
-    criticalItems = analysisReports.filter((item) => {
+    const detectedCriticalItems = analysisReports.filter((item) => {
       const severity = String(item?.recommendation?.severity || '').toLowerCase();
       const recommendation = String(item?.recommendation?.recommendation || '').toLowerCase();
       return severity === 'critical' || recommendation === 'pause';
@@ -119,6 +121,9 @@ const main = async () => {
       rationale: String(item?.recommendation?.rationale || ''),
       samples: Number(item?.metrics?.samples_count || 0),
     }));
+
+    criticalItems = detectedCriticalItems.filter((item) => item.samples >= MIN_CRITICAL_SAMPLES);
+    criticalItemsIgnoredLowSamples = detectedCriticalItems.filter((item) => item.samples < MIN_CRITICAL_SAMPLES);
 
     criticalRecommendations = criticalItems.length;
     criticalItemsActive = criticalItems.filter((item) => activeStrategyIdSet.has(item.strategyId));
@@ -134,10 +139,13 @@ const main = async () => {
     notes.push('Liquidity scan skipped: no discovery-enabled trading systems. Enable discovery or run with ENABLE_DISCOVERY=1.');
   }
   if (criticalRecommendations > 0) {
-    notes.push(`System analysis has ${criticalRecommendations} critical/pause recommendations (all members).`);
+    notes.push(`System analysis has ${criticalRecommendations} critical/pause recommendations (all members, samples>=${MIN_CRITICAL_SAMPLES}).`);
   }
   if (criticalRecommendationsActive > 0) {
-    notes.push(`Active strategies have ${criticalRecommendationsActive} critical/pause recommendations.`);
+    notes.push(`Active strategies have ${criticalRecommendationsActive} critical/pause recommendations (samples>=${MIN_CRITICAL_SAMPLES}).`);
+  }
+  if (criticalItemsIgnoredLowSamples.length > 0) {
+    notes.push(`Ignored low-sample critical/pause recommendations: ${criticalItemsIgnoredLowSamples.length} (samples<${MIN_CRITICAL_SAMPLES}).`);
   }
   if (activeStrategies.length === 0) {
     notes.push('No active strategies for this API key.');
@@ -153,10 +161,12 @@ const main = async () => {
     primarySystemId: Number(primarySystem?.id || 0),
     reconciliation,
     liquidityScan,
+    minCriticalSamples: MIN_CRITICAL_SAMPLES,
     criticalRecommendations,
     criticalRecommendationsActive,
     criticalItems,
     criticalItemsActive,
+    criticalItemsIgnoredLowSamples,
     reportsCount: Number(reports?.count || 0),
     suggestionsCount: Number(suggestions?.count || 0),
     systemAnalysis,
@@ -177,8 +187,8 @@ const main = async () => {
   console.log(`Discovery-enabled systems: ${discoveryEnabledSystems.length} (autoEnabled=${discoveryAutoEnabled})`);
   console.log(`Reconciliation: processed=${Number(reconciliation?.processed || 0)}, failed=${Number(reconciliation?.failed || 0)}`);
   console.log(`Liquidity scan: systems=${Number(liquidityScan?.scannedSystems || 0)}, suggestionsCreated=${Number(liquidityScan?.createdSuggestions || 0)}`);
-  console.log(`Critical/pause recommendations (all members): ${criticalRecommendations}`);
-  console.log(`Critical/pause recommendations (active only): ${criticalRecommendationsActive}`);
+  console.log(`Critical/pause recommendations (all members, samples>=${MIN_CRITICAL_SAMPLES}): ${criticalRecommendations}`);
+  console.log(`Critical/pause recommendations (active only, samples>=${MIN_CRITICAL_SAMPLES}): ${criticalRecommendationsActive}`);
   if (criticalItems.length > 0) {
     for (const item of criticalItems) {
       const activeMark = activeStrategyIdSet.has(item.strategyId) ? 'active' : 'inactive';
@@ -189,6 +199,9 @@ const main = async () => {
         console.log(`    rationale: ${item.rationale}`);
       }
     }
+  }
+  if (criticalItemsIgnoredLowSamples.length > 0) {
+    console.log(`Ignored low-sample recommendations (<${MIN_CRITICAL_SAMPLES} samples): ${criticalItemsIgnoredLowSamples.length}`);
   }
   console.log(`Stored reports: ${Number(reports?.count || 0)}, new suggestions: ${Number(suggestions?.count || 0)}`);
   if (notes.length > 0) {
