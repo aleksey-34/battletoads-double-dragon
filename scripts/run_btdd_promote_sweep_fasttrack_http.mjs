@@ -16,8 +16,10 @@ const SOURCE_SYSTEM_ID = Number(process.env.SOURCE_SYSTEM_ID || 0);
 
 const DEACTIVATE_SOURCE = String(process.env.DEACTIVATE_SOURCE || '1').trim() === '1';
 const DEACTIVATE_OTHER_ACTIVE = String(process.env.DEACTIVATE_OTHER_ACTIVE || '0').trim() === '1';
+const STRICT_TARGET_ONLY = String(process.env.STRICT_TARGET_ONLY || '1').trim() === '1';
 const RUN_PHASE5_CHECK = String(process.env.RUN_PHASE5_CHECK || '1').trim() === '1';
 const FAIL_ON_ACTIVE_CRITICAL = String(process.env.FAIL_ON_ACTIVE_CRITICAL || '1').trim() === '1';
+const MIN_CRITICAL_SAMPLES = Math.max(1, Number(process.env.MIN_CRITICAL_SAMPLES || 3));
 
 const RECON_PERIOD_HOURS = Math.max(1, Number(process.env.RECON_PERIOD_HOURS || 24));
 const RECON_BARS = Math.max(120, Number(process.env.RECON_BARS || 336));
@@ -70,9 +72,9 @@ const findSourceSystem = (systems) => {
   return systems.find((item) => String(item?.name || '') === SOURCE_SYSTEM_NAME) || null;
 };
 
-const collectCriticalItems = (reports, activeStrategyIdSet) => {
+const collectCriticalItems = (reports, activeStrategyIdSet, minSamples) => {
   const list = Array.isArray(reports) ? reports : [];
-  const critical = list.filter((item) => {
+  const detected = list.filter((item) => {
     const severity = String(item?.recommendation?.severity || '').toLowerCase();
     const recommendation = String(item?.recommendation?.recommendation || '').toLowerCase();
     return severity === 'critical' || recommendation === 'pause';
@@ -87,9 +89,13 @@ const collectCriticalItems = (reports, activeStrategyIdSet) => {
     active: activeStrategyIdSet.has(Number(item?.strategyId || 0)),
   }));
 
+  const critical = detected.filter((item) => item.samples >= minSamples);
+  const ignoredLowSamples = detected.filter((item) => item.samples < minSamples);
+
   return {
     all: critical,
     activeOnly: critical.filter((item) => item.active === true),
+    ignoredLowSamples,
   };
 };
 
@@ -131,6 +137,13 @@ const main = async () => {
     }
   }
 
+  if (STRICT_TARGET_ONLY) {
+    await api('POST', `/strategies/${API_KEY_NAME}/bulk-activation`, {
+      isActive: false,
+    });
+    actions.push('paused all strategies for strict target-only switch');
+  }
+
   await api('POST', `/trading-systems/${API_KEY_NAME}/${Number(targetSystem.id)}/activation`, {
     isActive: true,
     syncMembers: true,
@@ -144,7 +157,7 @@ const main = async () => {
   let reconciliation = null;
   let liquidityScan = null;
   let analysis = null;
-  let critical = { all: [], activeOnly: [] };
+  let critical = { all: [], activeOnly: [], ignoredLowSamples: [] };
 
   if (RUN_PHASE5_CHECK) {
     reconciliation = await api('POST', `/analytics/${API_KEY_NAME}/reconciliation/run`, {
@@ -164,7 +177,7 @@ const main = async () => {
       periodHours: RECON_PERIOD_HOURS,
     });
 
-    critical = collectCriticalItems(analysis?.reports, activeStrategyIdSet);
+    critical = collectCriticalItems(analysis?.reports, activeStrategyIdSet, MIN_CRITICAL_SAMPLES);
   }
 
   const systemsAfterPayload = await api('GET', `/trading-systems/${API_KEY_NAME}`);
@@ -185,8 +198,10 @@ const main = async () => {
       runPhase5Check: RUN_PHASE5_CHECK,
       reconciliation,
       liquidityScan,
+      minCriticalSamples: MIN_CRITICAL_SAMPLES,
       criticalAll: critical.all,
       criticalActiveOnly: critical.activeOnly,
+      criticalIgnoredLowSamples: critical.ignoredLowSamples,
     },
   };
 
@@ -206,12 +221,15 @@ const main = async () => {
   if (RUN_PHASE5_CHECK) {
     console.log(`Reconciliation: processed=${Number(reconciliation?.processed || 0)}, failed=${Number(reconciliation?.failed || 0)}`);
     console.log(`Liquidity scan: systems=${Number(liquidityScan?.scannedSystems || 0)}, suggestionsCreated=${Number(liquidityScan?.createdSuggestions || 0)}`);
-    console.log(`Critical/pause recommendations (all members): ${critical.all.length}`);
-    console.log(`Critical/pause recommendations (active only): ${critical.activeOnly.length}`);
+    console.log(`Critical/pause recommendations (all members, samples>=${MIN_CRITICAL_SAMPLES}): ${critical.all.length}`);
+    console.log(`Critical/pause recommendations (active only, samples>=${MIN_CRITICAL_SAMPLES}): ${critical.activeOnly.length}`);
     if (critical.all.length > 0) {
       for (const item of critical.all) {
         console.log(`  - ${item.strategyName || item.symbol || item.strategyId} | rec=${item.recommendation} | severity=${item.severity} | samples=${item.samples} | ${item.active ? 'active' : 'inactive'}`);
       }
+    }
+    if (critical.ignoredLowSamples.length > 0) {
+      console.log(`Ignored low-sample recommendations (<${MIN_CRITICAL_SAMPLES} samples): ${critical.ignoredLowSamples.length}`);
     }
   }
 
