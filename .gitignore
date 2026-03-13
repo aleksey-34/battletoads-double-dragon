@@ -36,6 +36,9 @@ results/
 *.tmp
 *.swp
 
+# Per-machine script credentials (never commit)
+scripts/btdd_local.env
+
 # One-off run scripts and their outputs (not needed on VPS)
 backend/phase*.ts
 backend/phase*.js
