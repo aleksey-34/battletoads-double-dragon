@@ -854,6 +854,9 @@ const Dashboard: React.FC = () => {
       const keys: ApiKey[] = Array.isArray(res.data) ? res.data : [];
       setApiKeys(keys);
 
+      const hasSelectedKey = Boolean(selectedApiKey) && keys.some((key) => key.name === selectedApiKey);
+      const preferredKeyName = hasSelectedKey ? selectedApiKey : (keys[0]?.name || '');
+
       let storedToggles: { [key: string]: boolean } = {};
       const rawStoredToggles = localStorage.getItem('apiKeyToggles');
       if (rawStoredToggles) {
@@ -904,13 +907,18 @@ const Dashboard: React.FC = () => {
       }
 
       for (const key of keys) {
+        const panelOpened = activePanel.includes(String(key.id));
+        const shouldLoadFullStrategies = key.name === preferredKeyName || panelOpened;
+
         if (mergedToggles[key.name]) {
           void fetchKeyStatus(key.name);
           void fetchBalances(key.name);
           void fetchPositionsForKey(key.name);
           void fetchTradesForKey(key.name, { silent: true });
           void fetchSymbols(key.name);
-          void fetchStrategies(key.name);
+          if (shouldLoadFullStrategies) {
+            void fetchStrategies(key.name);
+          }
           void fetchMonitoring(key.name, { capture: true });
         } else {
           setKeyStatuses((prev) => ({ ...prev, [key.name]: { status: 'warning', message: 'Disabled' } }));
@@ -926,7 +934,6 @@ const Dashboard: React.FC = () => {
           }));
           setTradesByKey((prev) => ({ ...prev, [key.name]: [] }));
           setMonitoringErrorByKey((prev) => ({ ...prev, [key.name]: '' }));
-          void fetchStrategies(key.name);
         }
       }
     } catch (error) {
@@ -1483,7 +1490,9 @@ const Dashboard: React.FC = () => {
 
       for (const key of apiKeys) {
         if (isApiKeyActive(key.name)) {
-          void fetchStrategies(key.name);
+          if (key.name === selectedApiKey) {
+            void fetchStrategies(key.name);
+          }
           void fetchPositionsForKey(key.name);
           void fetchTradesForKey(key.name, { silent: true });
           void fetchMonitoring(key.name, { capture: true, silent: true });
@@ -1559,6 +1568,9 @@ const Dashboard: React.FC = () => {
     setAccountRefreshLoadingByKey((prev) => ({ ...prev, [keyName]: true }));
     try {
       const keySettings = chartSettings[keyName] || defaultChartSetting();
+      const keyMeta = apiKeys.find((item) => item.name === keyName);
+      const panelOpened = keyMeta ? activePanel.includes(String(keyMeta.id)) : false;
+      const shouldLoadFullStrategies = keyName === selectedApiKey || panelOpened;
 
       await Promise.all([
         fetchKeyStatus(keyName),
@@ -1566,7 +1578,7 @@ const Dashboard: React.FC = () => {
         fetchPositionsForKey(keyName),
         fetchTradesForKey(keyName, { silent: true }),
         fetchSymbols(keyName),
-        fetchStrategies(keyName),
+        ...(shouldLoadFullStrategies ? [fetchStrategies(keyName)] : []),
         ...(keySettings.showMonitoring !== false ? [fetchMonitoring(keyName, { capture: true })] : []),
       ]);
 
@@ -1651,7 +1663,9 @@ const Dashboard: React.FC = () => {
       void fetchPositionsForKey(key.name);
       void fetchTradesForKey(key.name, { silent: true });
       void fetchSymbols(key.name);
-      void fetchStrategies(key.name);
+      if (selectedApiKey === key.name) {
+        void fetchStrategies(key.name);
+      }
       if (keySettings.showMonitoring !== false) {
         void fetchMonitoring(key.name, { capture: true });
       }
@@ -1767,6 +1781,10 @@ const Dashboard: React.FC = () => {
     if (openedApiKey) {
       setSelectedApiKey(openedApiKey.name);
       localStorage.setItem('selectedApiKey', openedApiKey.name);
+
+      if (strategiesByKey[openedApiKey.name] === undefined) {
+        void fetchStrategies(openedApiKey.name);
+      }
 
       const openedSettings = chartSettings[openedApiKey.name] || defaultChartSetting();
       const openedStrategies = strategiesByKey[openedApiKey.name] || [];

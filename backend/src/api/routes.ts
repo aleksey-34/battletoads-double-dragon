@@ -51,6 +51,12 @@ import { db } from '../utils/database';
 import { authenticate } from '../utils/auth';
 import logger from '../utils/logger';
 import { getGitUpdateJobStatus, getGitUpdateStatus, triggerGitUpdate } from '../system/updateManager';
+import {
+  getPasswordRecoveryStatus,
+  PasswordRecoveryError,
+  requestPasswordRecoveryCode,
+  resetPasswordWithRecoveryCode,
+} from '../system/passwordRecovery';
 import analyticsRoutes from './analyticsRoutes';
 import saasRoutes from './saasRoutes';
 import fs from 'fs';
@@ -99,6 +105,48 @@ const STRATEGY_PATCH_ALLOWED_FIELDS = new Set<string>([
   'last_action',
   'last_error',
 ]);
+
+// Public auth-recovery routes (no password required)
+router.get('/auth/recovery/status', (_req, res) => {
+  try {
+    const status = getPasswordRecoveryStatus();
+    res.json(status);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error reading recovery status: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/auth/recovery/request', async (req, res) => {
+  try {
+    const result = await requestPasswordRecoveryCode({
+      ip: String(req.ip || ''),
+      userAgent: String(req.headers['user-agent'] || ''),
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    const err = error as Error;
+    const statusCode = error instanceof PasswordRecoveryError ? error.statusCode : 500;
+    logger.error(`Error requesting password recovery code: ${err.message}`);
+    res.status(statusCode).json({ error: err.message });
+  }
+});
+
+router.post('/auth/recovery/reset', async (req, res) => {
+  const code = String(req.body?.code || '');
+  const newPassword = String(req.body?.newPassword || '');
+
+  try {
+    const result = await resetPasswordWithRecoveryCode(code, newPassword);
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    const err = error as Error;
+    const statusCode = error instanceof PasswordRecoveryError ? error.statusCode : 500;
+    logger.error(`Error resetting password via recovery flow: ${err.message}`);
+    res.status(statusCode).json({ error: err.message });
+  }
+});
 
 // Применить аутентификацию ко всем маршрутам
 router.use(authenticate);

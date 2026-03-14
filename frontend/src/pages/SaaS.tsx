@@ -32,6 +32,7 @@ const { Paragraph, Text, Title } = Typography;
 type ProductMode = 'strategy_client' | 'algofund_client';
 type Level3 = 'low' | 'medium' | 'high';
 type RequestStatus = 'pending' | 'approved' | 'rejected';
+type SaasTabKey = 'admin' | 'strategy-client' | 'algofund';
 
 type EquityPoint = {
   time: number;
@@ -659,7 +660,11 @@ const strategyLevelOptions = [
   { label: 'High', value: 'high' },
 ];
 
-const SaaS: React.FC = () => {
+type SaaSProps = {
+  initialTab?: SaasTabKey;
+};
+
+const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin' }) => {
   const { language, t } = useI18n();
   const copy = COPY_BY_LANGUAGE[language];
   const [messageApi, contextHolder] = message.useMessage();
@@ -693,6 +698,7 @@ const SaaS: React.FC = () => {
   const [updateLoading, setUpdateLoading] = useState(false);
   const [updateRunLoading, setUpdateRunLoading] = useState(false);
   const [jobLoading, setJobLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState<SaasTabKey>(initialTab);
 
   const strategyTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client');
   const algofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
@@ -792,6 +798,10 @@ const SaaS: React.FC = () => {
     void fetchUpdateJob();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
   useEffect(() => {
     const activeState = String(updateJob?.activeState || '').toLowerCase();
@@ -1310,6 +1320,8 @@ const SaaS: React.FC = () => {
       <Spin spinning={summaryLoading && !summary}>
         <Tabs
           className="saas-tabs"
+          activeKey={activeTab}
+          onChange={(key) => setActiveTab(key as SaasTabKey)}
           items={[
             {
               key: 'admin',

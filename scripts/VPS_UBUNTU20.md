@@ -164,6 +164,43 @@ curl -I http://127.0.0.1
 - Browser URL: `http://176.57.184.98/`
 - Login password: same value as `ADMIN_PASSWORD` from setup command.
 
+## Reset dashboard password (VPS)
+
+If dashboard password is lost, reset hash in backend env and restart service.
+
+```bash
+NEW_PASSWORD='KU#HFSyw3geys2ska#FYE'
+APP_DIR='/opt/battletoads-double-dragon'
+HASH="$(cd "$APP_DIR/backend" && node -e "const bcrypt=require('bcrypt'); console.log(bcrypt.hashSync(process.argv[1], 10));" "$NEW_PASSWORD")"
+sudo sed -i "s|^PASSWORD_HASH=.*|PASSWORD_HASH=${HASH}|" /etc/battletoads-backend.env
+sudo rm -f "$APP_DIR/backend/.auth-password.json"
+sudo systemctl restart battletoads-backend.service
+sudo systemctl status battletoads-backend --no-pager
+```
+
+After restart, login with `NEW_PASSWORD`.
+
+## Telegram password recovery setup
+
+The login page supports password recovery by one-time code sent to Telegram.
+
+```bash
+sudo tee -a /etc/battletoads-backend.env >/dev/null <<'EOF'
+RECOVERY_TELEGRAM_BOT_TOKEN=<telegram_bot_token>
+RECOVERY_TELEGRAM_CHAT_ID=<telegram_chat_id>
+RECOVERY_CODE_TTL_MIN=10
+RECOVERY_COOLDOWN_SEC=60
+RECOVERY_MAX_ATTEMPTS=5
+EOF
+
+sudo systemctl restart battletoads-backend.service
+```
+
+Hints:
+- Create bot via `@BotFather`, copy token.
+- For personal chat id use helper bot like `@userinfobot`.
+- For group chat id, add bot to group and query updates via Telegram API.
+
 ## Update from Git later
 
 ```bash

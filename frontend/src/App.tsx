@@ -144,6 +144,9 @@ function AppShell() {
           <Route path="/logs" element={<Logs />} />
           <Route path="/backtest" element={<Backtest />} />
           <Route path="/saas" element={<SaaS />} />
+          <Route path="/saas/admin" element={<SaaS initialTab="admin" />} />
+          <Route path="/saas/strategy-client" element={<SaaS initialTab="strategy-client" />} />
+          <Route path="/saas/algofund" element={<SaaS initialTab="algofund" />} />
         </Routes>
       </Content>
       <FloatButton.BackTop visibilityHeight={280} />
