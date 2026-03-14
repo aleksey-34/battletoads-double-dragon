@@ -89,7 +89,7 @@ sync_repo() {
     git_no_prompt -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
   else
     log "Cloning repository ${safe_repo_url} into ${APP_DIR}"
-    if ! git_no_prompt clone --branch "${BRANCH}" --depth 1 "${REPO_URL}" "${APP_DIR}"; then
+    if ! git_no_prompt clone --branch "${BRANCH}" --depth 1 --no-single-branch "${REPO_URL}" "${APP_DIR}"; then
       repo_access_hint
       exit 1
     fi

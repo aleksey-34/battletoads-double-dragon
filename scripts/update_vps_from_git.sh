@@ -23,13 +23,25 @@ if [[ ! -d "${APP_DIR}/.git" ]]; then
 fi
 
 log "Pulling latest code (${BRANCH})"
-if ! git_no_prompt -C "${APP_DIR}" fetch --all --prune; then
+if ! git_no_prompt -C "${APP_DIR}" fetch --prune origin "+refs/heads/*:refs/remotes/origin/*"; then
   echo "Git fetch failed in non-interactive mode."
   echo "If repository is private, configure credentials/token for this VPS."
   exit 1
 fi
 
-git_no_prompt -C "${APP_DIR}" checkout "${BRANCH}"
+if ! git_no_prompt -C "${APP_DIR}" show-ref --verify --quiet "refs/remotes/origin/${BRANCH}"; then
+  echo "Remote branch origin/${BRANCH} not found."
+  echo "Available remote branches:"
+  git_no_prompt -C "${APP_DIR}" for-each-ref --format='%(refname:short)' refs/remotes/origin | sed 's#^#  - #' | head -n 60
+  exit 1
+fi
+
+if git_no_prompt -C "${APP_DIR}" show-ref --verify --quiet "refs/heads/${BRANCH}"; then
+  git_no_prompt -C "${APP_DIR}" checkout "${BRANCH}"
+else
+  git_no_prompt -C "${APP_DIR}" checkout -b "${BRANCH}" "origin/${BRANCH}"
+fi
+
 git_no_prompt -C "${APP_DIR}" pull --ff-only origin "${BRANCH}"
 
 log "Updating backend"
