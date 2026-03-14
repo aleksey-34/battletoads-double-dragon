@@ -110,6 +110,12 @@ const headers = {
   'Content-Type': 'application/json',
 };
 
+// Timeout per HTTP request (ms). Backtests can be slow, so allow generous time.
+const API_TIMEOUT_MS = Math.max(30_000, Number(process.env.API_TIMEOUT_MS || 180_000));
+// Max retries on transient network errors (not HTTP errors).
+const NET_RETRY_MAX = Math.max(0, Number(process.env.NET_RETRY_MAX || 3));
+const NET_RETRY_DELAY_MS = Math.max(500, Number(process.env.NET_RETRY_DELAY_MS || 3000));
+
 let flushCheckpointOnSignal = null;
 let signalHandlersRegistered = false;
 
@@ -361,12 +367,51 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const NET_ERROR_CODES = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND',
+  'ENETUNREACH', 'EPIPE', 'EAI_AGAIN', 'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_HEADERS_TIMEOUT',
+]);
+
+function isNetworkError(error) {
+  if (!error) return false;
+  const code = error?.code || error?.cause?.code || '';
+  if (code && NET_ERROR_CODES.has(code)) return true;
+  const msg = String(error?.message || '').toLowerCase();
+  return (
+    msg.includes('fetch failed') ||
+    msg.includes('network') ||
+    msg.includes('socket') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('aborted')
+  );
+}
+
 async function api(method, route, body, attempt = 1) {
-  const res = await fetch(`${API_BASE_URL}${route}`, {
-    method,
-    headers,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`timeout ${API_TIMEOUT_MS}ms`)), API_TIMEOUT_MS);
+
+  let res;
+  try {
+    res = await fetch(`${API_BASE_URL}${route}`, {
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (fetchError) {
+    clearTimeout(timer);
+    if (isNetworkError(fetchError) && attempt <= NET_RETRY_MAX) {
+      const waitMs = NET_RETRY_DELAY_MS * attempt;
+      console.log(`[NET-RETRY] ${method} ${route} attempt ${attempt}/${NET_RETRY_MAX}: ${fetchError?.message || fetchError}, retry in ${waitMs}ms`);
+      await sleep(waitMs);
+      return api(method, route, body, attempt + 1);
+    }
+    throw fetchError;
+  } finally {
+    clearTimeout(timer);
+  }
 
   const text = await res.text();
   let payload = {};
@@ -385,6 +430,13 @@ async function api(method, route, body, attempt = 1) {
     if (res.status === 429 && attempt < 6) {
       const waitMs = attempt * 1000;
       console.log(`[WAIT] ${method} ${route} got 429, retry in ${waitMs}ms`);
+      await sleep(waitMs);
+      return api(method, route, body, attempt + 1);
+    }
+
+    if (res.status >= 500 && res.status < 600 && attempt <= NET_RETRY_MAX) {
+      const waitMs = NET_RETRY_DELAY_MS * attempt;
+      console.log(`[SRV-RETRY] ${method} ${route} attempt ${attempt}/${NET_RETRY_MAX}: ${res.status}, retry in ${waitMs}ms`);
       await sleep(waitMs);
       return api(method, route, body, attempt + 1);
     }
