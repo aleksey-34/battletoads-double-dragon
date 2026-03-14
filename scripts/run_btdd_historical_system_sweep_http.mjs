@@ -270,9 +270,12 @@ function importProgressFromLog(logFilePath, runPlan, existingByName) {
 
       const strategyName = buildStrategyName(variant);
       const strategyId = Number(existingByName.get(strategyName) || 0);
-      if (!strategyId) {
+      // Keep metrics even if strategy row is missing in DB; we can resolve IDs later
+      // for selected members by re-ensuring strategy from variant.
+      const strategyIdResolved = strategyId > 0;
+      const strategyIdForRecord = strategyIdResolved ? strategyId : -(idx + 1);
+      if (!strategyIdResolved) {
         skippedMissingStrategyIds += 1;
-        continue;
       }
 
       const summary = {
@@ -284,7 +287,8 @@ function importProgressFromLog(logFilePath, runPlan, existingByName) {
       };
 
       evaluated.push({
-        strategyId,
+        strategyId: strategyIdForRecord,
+        strategyIdResolved,
         strategyName,
         created: false,
         strategyType: variant.strategyType,
@@ -1237,13 +1241,36 @@ async function main() {
     throw new Error('No selected members after evaluation');
   }
 
-  const members = selected.map((item, index) => ({
-    strategy_id: item.strategyId,
-    weight: index === 0 ? 1.25 : index === 1 ? 1.1 : 1.0,
-    member_role: index < 3 ? 'core' : 'satellite',
-    is_enabled: true,
-    notes: `historical_sweep ${item.strategyType} ${item.market}`,
-  }));
+  const members = [];
+  for (let index = 0; index < selected.length; index += 1) {
+    const item = selected[index];
+    let strategyId = Number(item.strategyId || 0);
+
+    if (strategyId <= 0) {
+      const runIndex = Number(item.runIndex);
+      const variant = Number.isInteger(runIndex) && runIndex >= 0 && runIndex < runPlan.length
+        ? runPlan[runIndex]
+        : null;
+
+      if (!variant) {
+        throw new Error(`Cannot resolve strategyId for selected member runIndex=${item.runIndex}`);
+      }
+
+      const ensured = await ensureStrategy(existingByName, variant);
+      strategyId = ensured.strategyId;
+      console.log(
+        `[RESUME-LOG] resolved missing strategyId for run ${runIndex + 1}/${runPlan.length}: ${ensured.strategyName} -> ${strategyId}`
+      );
+    }
+
+    members.push({
+      strategy_id: strategyId,
+      weight: index === 0 ? 1.25 : index === 1 ? 1.1 : 1.0,
+      member_role: index < 3 ? 'core' : 'satellite',
+      is_enabled: true,
+      notes: `historical_sweep ${item.strategyType} ${item.market}`,
+    });
+  }
 
   const systemId = await ensureSystem(members);
 
