@@ -1338,6 +1338,14 @@ async function main() {
 }
 
 main().catch((error) => {
+  try {
+    if (typeof flushCheckpointOnSignal === 'function') {
+      flushCheckpointOnSignal('fatal');
+    }
+  } catch (_checkpointError) {
+    // Best-effort checkpoint flush on fatal path.
+  }
+
   console.error('[FAIL]', error?.message || error);
   process.exit(1);
 });
