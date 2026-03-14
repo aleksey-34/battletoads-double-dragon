@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { DEFAULT_API_KEY_NAME, DEFAULT_AUTH_PASSWORD, DEFAULT_BASE_URL } from './btdd_http_defaults.mjs';
@@ -7,6 +8,8 @@ import { DEFAULT_API_KEY_NAME, DEFAULT_AUTH_PASSWORD, DEFAULT_BASE_URL } from '.
 const API_KEY_NAME = process.env.API_KEY_NAME || DEFAULT_API_KEY_NAME;
 const API_BASE_URL = process.env.BASE_URL || DEFAULT_BASE_URL;
 const AUTH_PASSWORD = process.env.AUTH_PASSWORD || DEFAULT_AUTH_PASSWORD;
+
+const TURBO_MODE = String(process.env.TURBO_MODE || '0').trim() === '1';
 
 const DATE_FROM = process.env.DATE_FROM || '2025-01-01T00:00:00Z';
 const DATE_TO = String(process.env.DATE_TO || '').trim();
@@ -28,6 +31,15 @@ const MAX_RUNS_RAW = Number(process.env.MAX_RUNS || 240);
 const MAX_RUNS = Number.isFinite(MAX_RUNS_RAW) ? Math.floor(MAX_RUNS_RAW) : 240;
 const MAX_VARIANTS_PER_MARKET_TYPE = Math.max(2, Number(process.env.MAX_VARIANTS_PER_MARKET_TYPE || 8));
 const MAX_MEMBERS = Math.max(2, Number(process.env.MAX_MEMBERS || 6));
+
+const RESUME_ENABLED = String(process.env.RESUME_ENABLED || '1').trim() === '1';
+const CHECKPOINT_EVERY = Math.max(1, Math.floor(Number(process.env.CHECKPOINT_EVERY || 1)));
+const CHECKPOINT_FILE = String(process.env.CHECKPOINT_FILE || '').trim();
+const RESUME_LOG_FILE = String(process.env.RESUME_LOG_FILE || '').trim();
+const UPDATE_EXISTING_STRATEGIES =
+  String(process.env.UPDATE_EXISTING_STRATEGIES || (TURBO_MODE ? '0' : '1')).trim() === '1';
+const WINDOW_BACKTESTS_ENABLED =
+  String(process.env.WINDOW_BACKTESTS_ENABLED || (TURBO_MODE ? '0' : '1')).trim() === '1';
 
 const TOP_SYNTH_UNIVERSE = Math.max(0, Number(process.env.TOP_SYNTH_UNIVERSE || 12));
 const TOP_MONO_UNIVERSE = Math.max(0, Number(process.env.TOP_MONO_UNIVERSE || 12));
@@ -98,6 +110,9 @@ const headers = {
   'Content-Type': 'application/json',
 };
 
+let flushCheckpointOnSignal = null;
+let signalHandlersRegistered = false;
+
 function parseNumberGrid(text) {
   return String(text || '')
     .split(',')
@@ -121,6 +136,225 @@ function parseMarketGrid(text) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function getDefaultCheckpointPath() {
+  return path.resolve(process.cwd(), 'results', `${API_KEY_NAME.toLowerCase()}_historical_sweep_checkpoint.json`);
+}
+
+function resolveCheckpointPath() {
+  if (CHECKPOINT_FILE) {
+    return path.resolve(process.cwd(), CHECKPOINT_FILE);
+  }
+  return getDefaultCheckpointPath();
+}
+
+function writeJsonAtomic(filePath, payload) {
+  const dir = path.dirname(filePath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tmpPath = `${filePath}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2));
+  fs.renameSync(tmpPath, filePath);
+}
+
+function buildPlanSignature(runPlan) {
+  const hasher = createHash('sha1');
+  for (const variant of runPlan) {
+    hasher.update(buildStrategyName(variant));
+    hasher.update('\n');
+  }
+  return hasher.digest('hex');
+}
+
+function parseCheckpoint(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+    return payload && typeof payload === 'object' ? payload : null;
+  } catch (error) {
+    console.log(`[WARN] Failed to parse checkpoint ${filePath}: ${error?.message || error}`);
+    return null;
+  }
+}
+
+function resolveOptionalPath(filePath) {
+  if (!filePath) {
+    return '';
+  }
+  return path.resolve(process.cwd(), filePath);
+}
+
+function parseLogProgressLine(line) {
+  const runMatch = line.match(
+    /^\[RUN\s+(\d+)\/(\d+)\]\s+(\S+)\s+(\S+)\s+(\S+)\s+L(\d+)\s+RET=([-+]?\d+(?:\.\d+)?)\s+PF=([-+]?\d+(?:\.\d+)?)\s+DD=([-+]?\d+(?:\.\d+)?)\s+WR=([-+]?\d+(?:\.\d+)?)\s+T=(\d+)\s+SCORE=([-+]?\d+(?:\.\d+)?)(?:\s+\[ROBUST\])?/
+  );
+
+  if (!runMatch) {
+    return null;
+  }
+
+  return {
+    kind: 'run',
+    index: Math.max(0, Number(runMatch[1]) - 1),
+    scheduled: Number(runMatch[2]),
+    strategyType: runMatch[3],
+    marketMode: runMatch[4],
+    market: runMatch[5],
+    length: Number(runMatch[6]),
+    ret: Number(runMatch[7]),
+    pf: Number(runMatch[8]),
+    dd: Number(runMatch[9]),
+    wr: Number(runMatch[10]),
+    trades: Number(runMatch[11]),
+    score: Number(runMatch[12]),
+    robust: line.includes('[ROBUST]'),
+  };
+}
+
+function parseLogFailureLine(line) {
+  const failMatch = line.match(/^\[FAIL\s+(\d+)\/(\d+)\]\s+(\S+)\s+(.+?):\s+(.*)$/);
+  if (!failMatch) {
+    return null;
+  }
+
+  return {
+    kind: 'fail',
+    index: Math.max(0, Number(failMatch[1]) - 1),
+    scheduled: Number(failMatch[2]),
+    strategyType: failMatch[3],
+    market: failMatch[4],
+    error: failMatch[5],
+  };
+}
+
+function importProgressFromLog(logFilePath, runPlan, existingByName) {
+  const resolvedPath = resolveOptionalPath(logFilePath);
+  if (!resolvedPath || !fs.existsSync(resolvedPath)) {
+    return {
+      logPath: resolvedPath,
+      completedIndices: [],
+      evaluated: [],
+      failures: [],
+      skippedMissingStrategyIds: 0,
+    };
+  }
+
+  const lines = fs.readFileSync(resolvedPath, 'utf-8').split(/\r?\n/);
+  const completed = new Set();
+  const evaluated = [];
+  const failures = [];
+  let skippedMissingStrategyIds = 0;
+
+  for (const line of lines) {
+    const parsedRun = parseLogProgressLine(line);
+    if (parsedRun) {
+      const idx = parsedRun.index;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= runPlan.length || completed.has(idx)) {
+        continue;
+      }
+
+      const variant = runPlan[idx];
+      if (!variant) {
+        continue;
+      }
+
+      const strategyName = buildStrategyName(variant);
+      const strategyId = Number(existingByName.get(strategyName) || 0);
+      if (!strategyId) {
+        skippedMissingStrategyIds += 1;
+        continue;
+      }
+
+      const summary = {
+        totalReturnPercent: parsedRun.ret,
+        profitFactor: parsedRun.pf,
+        maxDrawdownPercent: parsedRun.dd,
+        winRatePercent: parsedRun.wr,
+        tradesCount: parsedRun.trades,
+      };
+
+      evaluated.push({
+        strategyId,
+        strategyName,
+        created: false,
+        strategyType: variant.strategyType,
+        marketMode: variant.marketInfo.mode,
+        market: variant.marketInfo.market,
+        interval: variant.interval,
+        length: variant.length,
+        takeProfitPercent: variant.takeProfitPercent,
+        detectionSource: variant.detectionSource,
+        zscoreEntry: variant.zscoreEntry,
+        zscoreExit: variant.zscoreExit,
+        zscoreStop: variant.zscoreStop,
+        finalEquity: 0,
+        totalReturnPercent: Number(summary.totalReturnPercent || 0),
+        maxDrawdownPercent: Number(summary.maxDrawdownPercent || 0),
+        winRatePercent: Number(summary.winRatePercent || 0),
+        profitFactor: Number(summary.profitFactor || 0),
+        tradesCount: Number(summary.tradesCount || 0),
+        score: scoreSummary(summary),
+        robust: robustPass(summary),
+        runIndex: idx,
+        restoredFromLog: true,
+      });
+
+      completed.add(idx);
+      continue;
+    }
+
+    const parsedFail = parseLogFailureLine(line);
+    if (parsedFail) {
+      const idx = parsedFail.index;
+      if (!Number.isInteger(idx) || idx < 0 || idx >= runPlan.length || completed.has(idx)) {
+        continue;
+      }
+
+      const variant = runPlan[idx];
+      failures.push({
+        index: idx,
+        variant,
+        error: parsedFail.error || 'log-imported failure',
+        restoredFromLog: true,
+      });
+
+      completed.add(idx);
+    }
+  }
+
+  return {
+    logPath: resolvedPath,
+    completedIndices: [...completed].sort((a, b) => a - b),
+    evaluated,
+    failures,
+    skippedMissingStrategyIds,
+  };
+}
+
+function registerSignalHandlers() {
+  if (signalHandlersRegistered) {
+    return;
+  }
+
+  signalHandlersRegistered = true;
+
+  const handler = (signal) => {
+    try {
+      if (typeof flushCheckpointOnSignal === 'function') {
+        flushCheckpointOnSignal(`signal:${signal}`);
+      }
+    } catch (error) {
+      console.log(`[WARN] Checkpoint flush on ${signal} failed: ${error?.message || error}`);
+    }
+
+    process.exit(signal === 'SIGINT' ? 130 : 143);
+  };
+
+  process.on('SIGINT', () => handler('SIGINT'));
+  process.on('SIGTERM', () => handler('SIGTERM'));
 }
 
 function sleep(ms) {
@@ -516,7 +750,9 @@ async function ensureStrategy(existingByName, variant) {
 
   const existingId = Number(existingByName.get(name) || 0);
   if (existingId > 0) {
-    await api('PUT', `/strategies/${API_KEY_NAME}/${existingId}`, payload);
+    if (UPDATE_EXISTING_STRATEGIES) {
+      await api('PUT', `/strategies/${API_KEY_NAME}/${existingId}`, payload);
+    }
     return {
       strategyId: existingId,
       strategyName: name,
@@ -732,12 +968,17 @@ function buildWindowRequests() {
 }
 
 async function main() {
+  registerSignalHandlers();
+
   const startedAt = Date.now();
 
   console.log(`[START] Historical system sweep for ${API_KEY_NAME}`);
   console.log(`[RANGE] ${DATE_FROM} -> ${DATE_TO || 'now'}`);
   console.log(
     `[SETUP] interval=${INTERVAL}, mode=${EXHAUSTIVE_MODE ? 'exhaustive' : 'sampled'}, maxRuns=${MAX_RUNS}, maxVariantsPerMarketType=${MAX_VARIANTS_PER_MARKET_TYPE}`
+  );
+  console.log(
+    `[SETUP] turboMode=${TURBO_MODE}, resumeEnabled=${RESUME_ENABLED}, checkpointEvery=${CHECKPOINT_EVERY}, updateExisting=${UPDATE_EXISTING_STRATEGIES}, windowBacktests=${WINDOW_BACKTESTS_ENABLED}, resumeLog=${RESUME_LOG_FILE || 'none'}`
   );
   console.log(`[SETUP] strategyTypes=${STRATEGY_TYPES.join(', ')}`);
 
@@ -771,6 +1012,8 @@ async function main() {
   const coveragePercent = potentialRuns > 0
     ? Number(((runPlan.length / potentialRuns) * 100).toFixed(2))
     : 0;
+  const planSignature = buildPlanSignature(runPlan);
+  const checkpointPath = resolveCheckpointPath();
 
   console.log(
     `[PLAN] buckets=${buckets.length}, potentialRuns=${potentialRuns}, scheduledRuns=${runPlan.length}, coverage=${coveragePercent}%`
@@ -783,16 +1026,133 @@ async function main() {
 
   const evaluated = [];
   const failures = [];
+  const completed = new Set();
+  let resumedFromCheckpoint = false;
+  let skippedFromCheckpoint = 0;
+  let resumedFromLog = false;
+  let importedFromLog = 0;
+  let logImportMissingStrategyIds = 0;
+  let resumeLogPathUsed = '';
+  let sinceLastCheckpoint = 0;
+
+  const saveCheckpoint = (reason = 'progress') => {
+    if (!RESUME_ENABLED) {
+      return;
+    }
+
+    const payload = {
+      version: 1,
+      timestamp: nowIso(),
+      reason,
+      apiKeyName: API_KEY_NAME,
+      systemName: SYSTEM_NAME,
+      planSignature,
+      scheduledRuns: runPlan.length,
+      completedIndices: [...completed].sort((a, b) => a - b),
+      evaluated,
+      failures,
+    };
+
+    writeJsonAtomic(checkpointPath, payload);
+  };
+
+  flushCheckpointOnSignal = (reason) => {
+    saveCheckpoint(reason || 'signal');
+  };
+
+  if (RESUME_ENABLED) {
+    const checkpoint = parseCheckpoint(checkpointPath);
+    const samePlan =
+      checkpoint &&
+      checkpoint.planSignature === planSignature &&
+      Number(checkpoint.scheduledRuns || 0) === runPlan.length;
+
+    if (samePlan) {
+      if (Array.isArray(checkpoint.evaluated)) {
+        for (const row of checkpoint.evaluated) {
+          evaluated.push(row);
+        }
+      }
+
+      if (Array.isArray(checkpoint.failures)) {
+        for (const row of checkpoint.failures) {
+          failures.push(row);
+        }
+      }
+
+      if (Array.isArray(checkpoint.completedIndices)) {
+        for (const idx of checkpoint.completedIndices) {
+          const n = Number(idx);
+          if (Number.isInteger(n) && n >= 0 && n < runPlan.length) {
+            completed.add(n);
+          }
+        }
+      }
+
+      resumedFromCheckpoint = completed.size > 0;
+      skippedFromCheckpoint = completed.size;
+
+      if (resumedFromCheckpoint) {
+        console.log(
+          `[RESUME] checkpoint=${checkpointPath}, completed=${completed.size}/${runPlan.length}, evaluated=${evaluated.length}, failures=${failures.length}`
+        );
+      }
+    } else if (checkpoint) {
+      console.log('[RESUME] Existing checkpoint does not match current plan, starting fresh');
+    }
+  }
+
+  if (RESUME_LOG_FILE) {
+    const imported = importProgressFromLog(RESUME_LOG_FILE, runPlan, existingByName);
+    resumeLogPathUsed = imported.logPath || '';
+    logImportMissingStrategyIds = imported.skippedMissingStrategyIds || 0;
+
+    for (const row of imported.evaluated) {
+      const idx = Number(row?.runIndex);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= runPlan.length || completed.has(idx)) {
+        continue;
+      }
+      evaluated.push(row);
+      completed.add(idx);
+      importedFromLog += 1;
+    }
+
+    for (const row of imported.failures) {
+      const idx = Number(row?.index);
+      if (!Number.isInteger(idx) || idx < 0 || idx >= runPlan.length || completed.has(idx)) {
+        continue;
+      }
+      failures.push(row);
+      completed.add(idx);
+      importedFromLog += 1;
+    }
+
+    resumedFromLog = importedFromLog > 0;
+    if (resumedFromLog) {
+      console.log(
+        `[RESUME-LOG] log=${resumeLogPathUsed}, imported=${importedFromLog}, completedNow=${completed.size}/${runPlan.length}, missingStrategyIds=${logImportMissingStrategyIds}`
+      );
+    } else if (resumeLogPathUsed) {
+      console.log(`[RESUME-LOG] no importable progress found in ${resumeLogPathUsed}`);
+    }
+  }
 
   for (let i = 0; i < runPlan.length; i += 1) {
     const variant = runPlan[i];
     const runLabel = `${i + 1}/${runPlan.length}`;
 
+    if (completed.has(i)) {
+      continue;
+    }
+
     try {
       const ensured = await ensureStrategy(existingByName, variant);
       const summary = await runSingleBacktest(ensured.strategyId);
       const record = toRecord(ensured, summary);
+      record.runIndex = i;
       evaluated.push(record);
+      completed.add(i);
+      sinceLastCheckpoint += 1;
 
       console.log(
         `[RUN ${runLabel}] ${record.strategyType} ${record.marketMode} ${record.market} L${record.length} RET=${record.totalReturnPercent.toFixed(2)} PF=${record.profitFactor.toFixed(2)} DD=${record.maxDrawdownPercent.toFixed(2)} WR=${record.winRatePercent.toFixed(2)} T=${record.tradesCount} SCORE=${record.score.toFixed(2)}${record.robust ? ' [ROBUST]' : ''}`
@@ -804,7 +1164,14 @@ async function main() {
         variant,
         error: message,
       });
+      completed.add(i);
+      sinceLastCheckpoint += 1;
       console.log(`[FAIL ${runLabel}] ${variant.strategyType} ${variant.marketInfo.market}: ${message}`);
+    }
+
+    if (RESUME_ENABLED && (sinceLastCheckpoint >= CHECKPOINT_EVERY || i === runPlan.length - 1)) {
+      saveCheckpoint('progress');
+      sinceLastCheckpoint = 0;
     }
   }
 
@@ -830,23 +1197,25 @@ async function main() {
   const portfolioResults = [];
   portfolioResults.push(await runPortfolioBacktest(systemId, DATE_FROM, DATE_TO, 'full_range'));
 
-  const windows = buildWindowRequests();
-  for (const windowRequest of windows) {
-    try {
-      const result = await runPortfolioBacktest(
-        systemId,
-        windowRequest.dateFrom,
-        windowRequest.dateTo,
-        windowRequest.label
-      );
-      portfolioResults.push(result);
-    } catch (error) {
-      portfolioResults.push({
-        label: windowRequest.label,
-        dateFrom: windowRequest.dateFrom,
-        dateTo: windowRequest.dateTo,
-        error: error instanceof Error ? error.message : String(error),
-      });
+  if (WINDOW_BACKTESTS_ENABLED) {
+    const windows = buildWindowRequests();
+    for (const windowRequest of windows) {
+      try {
+        const result = await runPortfolioBacktest(
+          systemId,
+          windowRequest.dateFrom,
+          windowRequest.dateTo,
+          windowRequest.label
+        );
+        portfolioResults.push(result);
+      } catch (error) {
+        portfolioResults.push({
+          label: windowRequest.label,
+          dateFrom: windowRequest.dateFrom,
+          dateTo: windowRequest.dateTo,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 
@@ -880,6 +1249,12 @@ async function main() {
       maxRuns: MAX_RUNS,
       maxVariantsPerMarketType: MAX_VARIANTS_PER_MARKET_TYPE,
       exhaustiveMode: EXHAUSTIVE_MODE,
+      turboMode: TURBO_MODE,
+      resumeEnabled: RESUME_ENABLED,
+      checkpointEvery: CHECKPOINT_EVERY,
+      checkpointFile: checkpointPath,
+      updateExistingStrategies: UPDATE_EXISTING_STRATEGIES,
+      windowBacktestsEnabled: WINDOW_BACKTESTS_ENABLED,
       allowDuplicateMarkets: ALLOW_DUPLICATE_MARKETS,
       maxMembers: MAX_MEMBERS,
       robust: {
@@ -903,6 +1278,11 @@ async function main() {
       evaluated: evaluated.length,
       failures: failures.length,
       robust: evaluated.filter((item) => item.robust).length,
+      resumedFromCheckpoint,
+      skippedFromCheckpoint,
+      resumedFromLog,
+      importedFromLog,
+      logImportMissingStrategyIds,
       durationSec,
     },
     failures,
@@ -931,6 +1311,14 @@ async function main() {
   console.log(
     `Runs: potential=${potentialRuns}, scheduled=${runPlan.length}, coverage=${coveragePercent}%, evaluated=${evaluated.length}, failures=${failures.length}`
   );
+  if (resumedFromCheckpoint) {
+    console.log(`Resume: checkpoint=${checkpointPath}, skipped=${skippedFromCheckpoint}`);
+  }
+  if (resumedFromLog) {
+    console.log(
+      `ResumeLog: path=${resumeLogPathUsed}, imported=${importedFromLog}, missingStrategyIds=${logImportMissingStrategyIds}`
+    );
+  }
   console.log(`Robust candidates: ${evaluated.filter((item) => item.robust).length}`);
   console.log(`Selected members: ${selected.map((item) => `${item.market}:${item.strategyType}`).join(', ')}`);
   console.log(`System: ${SYSTEM_NAME} (id=${systemId})`);
@@ -940,6 +1328,13 @@ async function main() {
     );
   }
   console.log(`Saved: ${outFile}`);
+
+  if (RESUME_ENABLED && fs.existsSync(checkpointPath)) {
+    fs.unlinkSync(checkpointPath);
+    console.log(`Checkpoint cleared: ${checkpointPath}`);
+  }
+
+  flushCheckpointOnSignal = null;
 }
 
 main().catch((error) => {
