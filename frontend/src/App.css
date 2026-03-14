@@ -1,3 +1,131 @@
+.battletoads-theme {
+  --bt-bg-main: #e8ffd0;
+  --bt-bg-surface: #f7ffe7;
+  --bt-bg-accent: #fff6cc;
+  --bt-primary: #2f8f3f;
+  --bt-primary-strong: #1f6e31;
+  --bt-lime: #d8ff55;
+  --bt-orange: #ff922e;
+  --bt-border: #92d66a;
+  --bt-text-main: #20442b;
+  --bt-text-muted: #486a54;
+}
+
+.battletoads-theme body,
+body.battletoads-theme {
+  background:
+    radial-gradient(720px 260px at 0% -5%, rgba(216, 255, 85, 0.6), transparent 64%),
+    radial-gradient(640px 240px at 100% 8%, rgba(47, 143, 63, 0.28), transparent 68%),
+    linear-gradient(135deg, #e6ffd3 0%, #f6ffea 46%, #fff5d0 100%);
+  color: var(--bt-text-main);
+}
+
+.battletoads-theme .ant-layout {
+  background: transparent;
+}
+
+.battletoads-theme .ant-layout-header {
+  background: linear-gradient(92deg, #235d36 0%, #2f8f3f 46%, #3ba651 100%);
+  border-bottom: 2px solid rgba(216, 255, 85, 0.45);
+  box-shadow: 0 10px 24px rgba(25, 85, 44, 0.28);
+}
+
+.app-brand-title {
+  color: #f5ffd6 !important;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.app-language-select {
+  min-width: 120px;
+}
+
+.battletoads-theme .app-language-select .ant-select-selector {
+  background: #f8ffd7 !important;
+  border-color: #c9ee90 !important;
+}
+
+.battletoads-form-shell {
+  background: transparent;
+}
+
+.battletoads-theme .battletoads-card,
+.battletoads-theme .ant-card {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(246, 255, 227, 0.92));
+  border-color: var(--bt-border);
+  box-shadow: 0 7px 20px rgba(43, 117, 62, 0.18);
+}
+
+.battletoads-theme .ant-card-head {
+  background: linear-gradient(92deg, #f8ffd5 0%, #ecffc4 48%, #ffeec8 100%);
+  border-bottom-color: #c5e98d;
+}
+
+.battletoads-theme .battletoads-form .ant-form-item-label > label,
+.battletoads-theme .ant-form-item-label > label {
+  color: var(--bt-text-main);
+  font-weight: 600;
+}
+
+.battletoads-theme .battletoads-form .ant-input,
+.battletoads-theme .battletoads-form .ant-input-password,
+.battletoads-theme .battletoads-form .ant-input-number,
+.battletoads-theme .battletoads-form .ant-select-selector,
+.battletoads-theme .ant-input,
+.battletoads-theme .ant-input-password,
+.battletoads-theme .ant-input-number,
+.battletoads-theme .ant-select-selector {
+  background: #fbffe7;
+  border-color: #b9df83;
+  color: #21442d;
+}
+
+.battletoads-theme .battletoads-form .ant-input:focus,
+.battletoads-theme .battletoads-form .ant-input-focused,
+.battletoads-theme .battletoads-form .ant-input-number-focused,
+.battletoads-theme .battletoads-form .ant-select-focused .ant-select-selector,
+.battletoads-theme .ant-input:focus,
+.battletoads-theme .ant-input-focused,
+.battletoads-theme .ant-input-number-focused,
+.battletoads-theme .ant-select-focused .ant-select-selector {
+  border-color: var(--bt-primary);
+  box-shadow: 0 0 0 2px rgba(47, 143, 63, 0.18);
+}
+
+.battletoads-theme .ant-btn-primary {
+  background: linear-gradient(180deg, #309444 0%, #237934 100%);
+  border-color: #287f39;
+  box-shadow: 0 4px 10px rgba(32, 98, 50, 0.3);
+}
+
+.battletoads-theme .ant-btn-primary:hover,
+.battletoads-theme .ant-btn-primary:focus {
+  background: linear-gradient(180deg, #3ca851 0%, #2a8f3e 100%);
+  border-color: #2f8f3f;
+}
+
+.battletoads-theme .ant-btn-dangerous {
+  border-color: #ff7f3f;
+  color: #b64820;
+}
+
+.battletoads-theme .ant-tag {
+  border-color: #b6df83;
+  background: #f4ffde;
+  color: #285333;
+}
+
+.battletoads-theme .ant-switch-checked {
+  background: var(--bt-orange);
+}
+
+.battletoads-theme .ant-alert {
+  border-color: #c7e995;
+}
+
 .dashboard-compact-form .ant-form-item {
   margin-bottom: 8px;
 }
@@ -175,6 +303,10 @@
   .app-account-menu {
     justify-content: flex-end;
   }
+
+  .app-brand-title {
+    display: none;
+  }
 }
 
 @media (max-width: 768px) {
@@ -193,9 +325,7 @@
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: 'Trebuchet MS', 'Verdana', 'Tahoma', sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }

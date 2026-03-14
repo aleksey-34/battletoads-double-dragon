@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { Card, Spin, Alert } from 'antd';
 import axios from 'axios';
+import { useI18n } from '../i18n';
 
 const Logs: React.FC = () => {
+  const { t } = useI18n();
   const [logs, setLogs] = useState<string[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
 
@@ -29,17 +31,17 @@ const Logs: React.FC = () => {
   };
 
   return (
-    <div>
-      <h1>Logs</h1>
-      <Card>
+    <div className="battletoads-form-shell">
+      <h1>{t('logs.title', 'Logs')}</h1>
+      <Card className="battletoads-card">
         {loading ? (
-          <Spin />
+          <Spin tip={t('logs.loading', 'Loading logs...')} />
         ) : logs.length > 0 ? (
           <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
             {logs.join('\n')}
           </pre>
         ) : (
-          <Alert type="info" message="No logs available" showIcon />
+          <Alert type="info" message={t('logs.empty', 'No logs available')} showIcon />
         )}
       </Card>
     </div>

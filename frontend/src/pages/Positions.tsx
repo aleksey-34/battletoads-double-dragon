@@ -15,6 +15,7 @@ import {
   Divider,
 } from 'antd';
 import axios from 'axios';
+import { useI18n } from '../i18n';
 
 /* eslint-disable react-hooks/exhaustive-deps */
 
@@ -89,6 +90,7 @@ const formatCompact = (value: any, digits: number = 4): string => {
 };
 
 const Positions: React.FC = () => {
+  const { t } = useI18n();
   const [positionsByKey, setPositionsByKey] = useState<{ [key: string]: PositionRow[] }>({});
   const [ordersByKey, setOrdersByKey] = useState<{ [key: string]: OrderRow[] }>({});
   const [tradesByKey, setTradesByKey] = useState<{ [key: string]: TradeRow[] }>({});
@@ -173,7 +175,7 @@ const Positions: React.FC = () => {
       setPositionsByKey((prev) => ({ ...prev, [apiKeyName]: [] }));
       setErrorByKey((prev) => ({
         ...prev,
-        [apiKeyName]: error.response?.data?.error || 'Failed to load positions',
+        [apiKeyName]: error.response?.data?.error || t('positions.msg.loadPositionsFailed', 'Failed to load positions'),
       }));
     } finally {
       setLoadingByKey((prev) => ({ ...prev, [apiKeyName]: false }));
@@ -203,7 +205,7 @@ const Positions: React.FC = () => {
       setOrdersByKey((prev) => ({ ...prev, [apiKeyName]: [] }));
       setErrorByKey((prev) => ({
         ...prev,
-        [apiKeyName]: error.response?.data?.error || 'Failed to load open orders',
+        [apiKeyName]: error.response?.data?.error || t('positions.msg.loadOrdersFailed', 'Failed to load open orders'),
       }));
     } finally {
       setLoadingByKey((prev) => ({ ...prev, [`orders:${apiKeyName}`]: false }));
@@ -241,7 +243,7 @@ const Positions: React.FC = () => {
       setTradesByKey((prev) => ({ ...prev, [apiKeyName]: [] }));
       setErrorByKey((prev) => ({
         ...prev,
-        [apiKeyName]: error.response?.data?.error || 'Failed to load trade history',
+        [apiKeyName]: error.response?.data?.error || t('positions.msg.loadTradesFailed', 'Failed to load trade history'),
       }));
     } finally {
       setLoadingByKey((prev) => ({ ...prev, [`trades:${apiKeyName}`]: false }));
@@ -259,11 +261,23 @@ const Positions: React.FC = () => {
         percent,
       });
 
-      message.success(`Closed ${percent}% for ${row.symbol} (${row.side})`);
+      message.success(
+        t('positions.msg.closedPercent', 'Closed {percent}% for {symbol} ({side})', {
+          percent,
+          symbol: row.symbol,
+          side: row.side,
+        })
+      );
       await fetchPositions(apiKeyName);
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || `Failed to close ${percent}% of ${row.symbol}`);
+      message.error(
+        error?.response?.data?.error
+        || t('positions.msg.closePercentFailed', 'Failed to close {percent}% of {symbol}', {
+          percent,
+          symbol: row.symbol,
+        })
+      );
     } finally {
       setActionLoading((prev) => ({ ...prev, [actionKey]: false }));
     }
@@ -293,7 +307,7 @@ const Positions: React.FC = () => {
       ]);
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || `Failed action: ${action}`);
+      message.error(error?.response?.data?.error || t('positions.msg.actionFailed', 'Failed action: {action}', { action }));
     } finally {
       setActionLoading((prev) => ({ ...prev, [actionKey]: false }));
     }
@@ -302,7 +316,7 @@ const Positions: React.FC = () => {
   const placeManualOrder = async (apiKeyName: string) => {
     const draft = manualOrderDraftByKey[apiKeyName];
     if (!draft || !draft.symbol || !draft.qty || draft.qty <= 0) {
-      message.warning('Set symbol and qty before placing manual order');
+      message.warning(t('positions.msg.setSymbolQty', 'Set symbol and qty before placing manual order'));
       return;
     }
 
@@ -317,7 +331,7 @@ const Positions: React.FC = () => {
         price: draft.price && draft.price > 0 ? String(draft.price) : undefined,
       });
 
-      message.success(`Manual order placed for ${apiKeyName}`);
+      message.success(t('positions.msg.manualOrderPlaced', 'Manual order placed for {apiKey}', { apiKey: apiKeyName }));
       await Promise.all([
         fetchOrders(apiKeyName),
         fetchPositions(apiKeyName),
@@ -325,7 +339,7 @@ const Positions: React.FC = () => {
       ]);
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || 'Failed to place manual order');
+      message.error(error?.response?.data?.error || t('positions.msg.placeOrderFailed', 'Failed to place manual order'));
     } finally {
       setActionLoading((prev) => ({ ...prev, [actionKey]: false }));
     }
@@ -339,19 +353,19 @@ const Positions: React.FC = () => {
         await fetchOrders(key.name);
         await fetchTrades(key.name);
       }
-      message.success('Positions, orders and trades refreshed for all API keys');
+      message.success(t('positions.msg.refreshedAll', 'Positions, orders and trades refreshed for all API keys'));
     } catch (error) {
       console.error(error);
-      message.error('Failed to refresh all positions');
+      message.error(t('positions.msg.refreshAllFailed', 'Failed to refresh all positions'));
     } finally {
       setRefreshAllLoading(false);
     }
   };
 
   const getColumns = (apiKeyName: string) => [
-    { title: 'Symbol', dataIndex: 'symbol', key: 'symbol' },
+    { title: t('positions.col.symbol', 'Symbol'), dataIndex: 'symbol', key: 'symbol' },
     {
-      title: 'Side',
+      title: t('positions.col.side', 'Side'),
       dataIndex: 'side',
       key: 'side',
       render: (side: string) => {
@@ -360,24 +374,24 @@ const Positions: React.FC = () => {
         return <Tag color={isLong ? 'green' : 'red'}>{side}</Tag>;
       },
     },
-    { title: 'Size', dataIndex: 'size', key: 'size' },
-    { title: 'Entry Price', dataIndex: 'avgPrice', key: 'avgPrice' },
-    { title: 'Mark Price', dataIndex: 'markPrice', key: 'markPrice' },
-    { title: 'Liq Price', dataIndex: 'liqPrice', key: 'liqPrice' },
-    { title: 'Leverage', dataIndex: 'leverage', key: 'leverage' },
+    { title: t('positions.col.size', 'Size'), dataIndex: 'size', key: 'size' },
+    { title: t('positions.col.entryPrice', 'Entry Price'), dataIndex: 'avgPrice', key: 'avgPrice' },
+    { title: t('positions.col.markPrice', 'Mark Price'), dataIndex: 'markPrice', key: 'markPrice' },
+    { title: t('positions.col.liqPrice', 'Liq Price'), dataIndex: 'liqPrice', key: 'liqPrice' },
+    { title: t('positions.col.leverage', 'Leverage'), dataIndex: 'leverage', key: 'leverage' },
     {
-      title: 'Position Value',
+      title: t('positions.col.positionValue', 'Position Value'),
       dataIndex: 'positionValue',
       key: 'positionValue',
       render: (value: string) => formatCompact(value, 4),
     },
     {
-      title: 'Value (USDT)',
+      title: t('positions.col.valueUsdt', 'Value (USDT)'),
       dataIndex: 'positionValueUsdt',
       key: 'positionValueUsdt',
     },
     {
-      title: 'UPnL',
+      title: t('positions.col.upnl', 'UPnL'),
       dataIndex: 'unrealisedPnl',
       key: 'unrealisedPnl',
       render: (value: string) => {
@@ -387,7 +401,7 @@ const Positions: React.FC = () => {
       },
     },
     {
-      title: 'Actions',
+      title: t('positions.col.actions', 'Actions'),
       key: 'actions',
       render: (_: any, row: PositionRow) => {
         const key25 = `${apiKeyName}:${row.symbol}:${row.side}:25`;
@@ -397,13 +411,13 @@ const Positions: React.FC = () => {
         return (
           <Space wrap>
             <Button size="small" loading={Boolean(actionLoading[key25])} onClick={() => { void closePositionPart(apiKeyName, row, 25); }}>
-              Close 25%
+              {t('positions.close25', 'Close 25%')}
             </Button>
             <Button size="small" loading={Boolean(actionLoading[key50])} onClick={() => { void closePositionPart(apiKeyName, row, 50); }}>
-              Close 50%
+              {t('positions.close50', 'Close 50%')}
             </Button>
             <Button size="small" danger loading={Boolean(actionLoading[key100])} onClick={() => { void closePositionPart(apiKeyName, row, 100); }}>
-              Close 100%
+              {t('positions.close100', 'Close 100%')}
             </Button>
           </Space>
         );
@@ -412,9 +426,9 @@ const Positions: React.FC = () => {
   ];
 
   const orderColumns = [
-    { title: 'Symbol', dataIndex: 'symbol', key: 'symbol' },
+    { title: t('positions.col.symbol', 'Symbol'), dataIndex: 'symbol', key: 'symbol' },
     {
-      title: 'Side',
+      title: t('positions.col.side', 'Side'),
       dataIndex: 'side',
       key: 'side',
       render: (side: string) => {
@@ -423,28 +437,28 @@ const Positions: React.FC = () => {
         return <Tag color={isBuy ? 'green' : 'red'}>{side}</Tag>;
       },
     },
-    { title: 'Type', dataIndex: 'orderType', key: 'orderType' },
+    { title: t('positions.col.type', 'Type'), dataIndex: 'orderType', key: 'orderType' },
     {
-      title: 'Qty',
+      title: t('positions.col.qty', 'Qty'),
       dataIndex: 'qty',
       key: 'qty',
       render: (value: string) => formatCompact(value, 6),
     },
     {
-      title: 'Price',
+      title: t('positions.col.price', 'Price'),
       dataIndex: 'price',
       key: 'price',
       render: (value: string) => (value === '-' ? '-' : formatCompact(value, 6)),
     },
-    { title: 'Status', dataIndex: 'orderStatus', key: 'orderStatus' },
+    { title: t('positions.col.status', 'Status'), dataIndex: 'orderStatus', key: 'orderStatus' },
     {
-      title: 'Reduce',
+      title: t('positions.col.reduce', 'Reduce'),
       dataIndex: 'reduceOnly',
       key: 'reduceOnly',
-      render: (value: boolean) => <Tag color={value ? 'orange' : 'default'}>{value ? 'Yes' : 'No'}</Tag>,
+      render: (value: boolean) => <Tag color={value ? 'orange' : 'default'}>{value ? t('common.yes', 'Yes') : t('common.no', 'No')}</Tag>,
     },
     {
-      title: 'Created',
+      title: t('positions.col.created', 'Created'),
       dataIndex: 'createdTime',
       key: 'createdTime',
       render: (value: string) => {
@@ -461,7 +475,7 @@ const Positions: React.FC = () => {
 
   const tradeColumns = [
     {
-      title: 'Time',
+      title: t('positions.col.time', 'Time'),
       dataIndex: 'timestamp',
       key: 'timestamp',
       render: (value: string) => {
@@ -474,9 +488,9 @@ const Positions: React.FC = () => {
         return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString();
       },
     },
-    { title: 'Symbol', dataIndex: 'symbol', key: 'symbol' },
+    { title: t('positions.col.symbol', 'Symbol'), dataIndex: 'symbol', key: 'symbol' },
     {
-      title: 'Side',
+      title: t('positions.col.side', 'Side'),
       dataIndex: 'side',
       key: 'side',
       render: (side: string) => {
@@ -485,25 +499,25 @@ const Positions: React.FC = () => {
       },
     },
     {
-      title: 'Qty',
+      title: t('positions.col.qty', 'Qty'),
       dataIndex: 'qty',
       key: 'qty',
       render: (value: string) => formatCompact(value, 6),
     },
     {
-      title: 'Price',
+      title: t('positions.col.price', 'Price'),
       dataIndex: 'price',
       key: 'price',
       render: (value: string) => formatCompact(value, 6),
     },
     {
-      title: 'Notional',
+      title: t('positions.col.notional', 'Notional'),
       dataIndex: 'notional',
       key: 'notional',
       render: (value: string) => formatCompact(value, 2),
     },
     {
-      title: 'Fee',
+      title: t('positions.col.fee', 'Fee'),
       key: 'fee',
       render: (_: unknown, row: TradeRow) => {
         const feeValue = formatCompact(row.fee, 6);
@@ -511,7 +525,7 @@ const Positions: React.FC = () => {
       },
     },
     {
-      title: 'Realized PnL',
+      title: t('positions.col.realizedPnl', 'Realized PnL'),
       dataIndex: 'realizedPnl',
       key: 'realizedPnl',
       render: (value: string) => {
@@ -521,23 +535,23 @@ const Positions: React.FC = () => {
       },
     },
     {
-      title: 'Maker',
+      title: t('positions.col.maker', 'Maker'),
       dataIndex: 'isMaker',
       key: 'isMaker',
-      render: (value: boolean) => <Tag color={value ? 'blue' : 'default'}>{value ? 'Maker' : 'Taker'}</Tag>,
+      render: (value: boolean) => <Tag color={value ? 'blue' : 'default'}>{value ? t('positions.maker', 'Maker') : t('positions.taker', 'Taker')}</Tag>,
     },
   ];
 
   const apiKeysByExchange = useMemo(() => {
     return apiKeys.reduce((acc, apiKey) => {
-      const exchange = apiKey.exchange || 'Unknown';
+      const exchange = apiKey.exchange || t('common.unknown', 'Unknown');
       if (!acc[exchange]) {
         acc[exchange] = [];
       }
       acc[exchange].push(apiKey);
       return acc;
     }, {} as { [exchange: string]: ApiKey[] });
-  }, [apiKeys]);
+  }, [apiKeys, t]);
 
   const shouldShowPositions = viewMode === 'positions' || viewMode === 'all';
   const shouldShowOrders = viewMode === 'orders' || viewMode === 'all';
@@ -547,22 +561,22 @@ const Positions: React.FC = () => {
     <div className="positions-page">
       <Space style={{ marginBottom: 8 }}>
         <Button loading={refreshAllLoading} onClick={() => { void refreshAllPositions(); }}>
-          Refresh all
+          {t('positions.refreshAll', 'Refresh all')}
         </Button>
         <Segmented<ViewMode>
           value={viewMode}
           onChange={(value) => setViewMode(value as ViewMode)}
           options={[
-            { label: 'Positions', value: 'positions' },
-            { label: 'Orders', value: 'orders' },
-            { label: 'Trades', value: 'trades' },
-            { label: 'All', value: 'all' },
+            { label: t('positions.segment.positions', 'Positions'), value: 'positions' },
+            { label: t('positions.segment.orders', 'Orders'), value: 'orders' },
+            { label: t('positions.segment.trades', 'Trades'), value: 'trades' },
+            { label: t('positions.segment.all', 'All'), value: 'all' },
           ]}
         />
       </Space>
 
       {Object.entries(apiKeysByExchange).map(([exchange, keys]) => (
-        <Card key={exchange} title={`Exchange: ${exchange}`} size="small" style={{ marginBottom: 12 }}>
+        <Card className="battletoads-card" key={exchange} title={`${t('positions.exchange', 'Exchange')}: ${exchange}`} size="small" style={{ marginBottom: 12 }}>
           <Space direction="vertical" style={{ width: '100%' }}>
             {keys.map((key) => {
               const manualDraft = manualOrderDraftByKey[key.name] || { symbol: 'BTCUSDT', side: 'Buy' as const, qty: 0.001 };
@@ -574,6 +588,7 @@ const Positions: React.FC = () => {
               const tradesLoading = Boolean(loadingByKey[`trades:${key.name}`]);
               return (
                 <Card
+                  className="battletoads-card"
                   key={key.id}
                   type="inner"
                   title={`${key.name}`}
@@ -590,31 +605,39 @@ const Positions: React.FC = () => {
                         void fetchTrades(key.name);
                       }}
                     >
-                      Refresh
+                      {t('common.refresh', 'Refresh')}
                     </Button>
                     <Popconfirm
-                      title={`Cancel all orders for ${key.name}?`}
+                      title={t('positions.confirm.cancelAllOrders', 'Cancel all orders for {apiKey}?', { apiKey: key.name })}
                       onConfirm={() => {
-                        void runKeyAction(key.name, 'cancel-orders', `All orders cancelled for ${key.name}`);
+                        void runKeyAction(
+                          key.name,
+                          'cancel-orders',
+                          t('positions.msg.ordersCancelled', 'All orders cancelled for {apiKey}', { apiKey: key.name })
+                        );
                       }}
                     >
                       <Button loading={Boolean(actionLoading[`${key.name}:cancel-orders`])}>
-                        Cancel all orders
+                        {t('positions.cancelAllOrders', 'Cancel all orders')}
                       </Button>
                     </Popconfirm>
                     <Popconfirm
-                      title={`Close all positions for ${key.name}?`}
+                      title={t('positions.confirm.closeAllPositions', 'Close all positions for {apiKey}?', { apiKey: key.name })}
                       onConfirm={() => {
-                        void runKeyAction(key.name, 'close-positions', `All positions closed for ${key.name}`);
+                        void runKeyAction(
+                          key.name,
+                          'close-positions',
+                          t('positions.msg.positionsClosed', 'All positions closed for {apiKey}', { apiKey: key.name })
+                        );
                       }}
                     >
                       <Button danger loading={Boolean(actionLoading[`${key.name}:close-positions`])}>
-                        Close all positions
+                        {t('positions.closeAllPositions', 'Close all positions')}
                       </Button>
                     </Popconfirm>
                   </Space>
 
-                  <Card size="small" title="Quick Manual Order" style={{ marginBottom: 8 }} bodyStyle={{ padding: 10 }}>
+                  <Card className="battletoads-card" size="small" title={t('positions.quickManualOrder', 'Quick Manual Order')} style={{ marginBottom: 8 }} bodyStyle={{ padding: 10 }}>
                     <Space wrap>
                       <Input
                         style={{ width: 130 }}
@@ -626,7 +649,7 @@ const Positions: React.FC = () => {
                             [key.name]: { ...manualDraft, symbol: value },
                           }));
                         }}
-                        placeholder="BTCUSDT"
+                        placeholder={t('positions.placeholder.symbol', 'BTCUSDT')}
                       />
                       <Select
                         style={{ width: 90 }}
@@ -638,8 +661,8 @@ const Positions: React.FC = () => {
                           }));
                         }}
                       >
-                        <Option value="Buy">Buy</Option>
-                        <Option value="Sell">Sell</Option>
+                        <Option value="Buy">{t('positions.buy', 'Buy')}</Option>
+                        <Option value="Sell">{t('positions.sell', 'Sell')}</Option>
                       </Select>
                       <InputNumber
                         style={{ width: 120 }}
@@ -652,7 +675,7 @@ const Positions: React.FC = () => {
                             [key.name]: { ...manualDraft, qty: Number(value) || 0 },
                           }));
                         }}
-                        placeholder="Qty"
+                        placeholder={t('positions.placeholder.qty', 'Qty')}
                       />
                       <InputNumber
                         style={{ width: 140 }}
@@ -665,7 +688,7 @@ const Positions: React.FC = () => {
                             [key.name]: { ...manualDraft, price: value === null ? undefined : Number(value) },
                           }));
                         }}
-                        placeholder="Price (market if empty)"
+                        placeholder={t('positions.placeholder.price', 'Price (market if empty)')}
                       />
                       <Button
                         type="primary"
@@ -674,7 +697,7 @@ const Positions: React.FC = () => {
                           void placeManualOrder(key.name);
                         }}
                       >
-                        Place order
+                        {t('positions.placeOrder', 'Place order')}
                       </Button>
                     </Space>
                   </Card>
@@ -685,7 +708,7 @@ const Positions: React.FC = () => {
 
                   {shouldShowPositions ? (
                     <>
-                      <Divider style={{ margin: '6px 0' }}>Positions</Divider>
+                      <Divider style={{ margin: '6px 0' }}>{t('positions.segment.positions', 'Positions')}</Divider>
                       {positionsLoading || keyPositions.length > 0 ? (
                         <Table
                           size="small"
@@ -699,7 +722,7 @@ const Positions: React.FC = () => {
                         />
                       ) : (
                         <div style={{ fontSize: 12, color: '#6b7280', padding: '2px 0 6px' }}>
-                          No open positions
+                          {t('positions.empty.positions', 'No open positions')}
                         </div>
                       )}
                     </>
@@ -707,7 +730,7 @@ const Positions: React.FC = () => {
 
                   {shouldShowOrders ? (
                     <>
-                      <Divider style={{ margin: '6px 0' }}>Open Orders</Divider>
+                      <Divider style={{ margin: '6px 0' }}>{t('positions.openOrders', 'Open Orders')}</Divider>
                       {ordersLoading || keyOrders.length > 0 ? (
                         <Table
                           size="small"
@@ -721,7 +744,7 @@ const Positions: React.FC = () => {
                         />
                       ) : (
                         <div style={{ fontSize: 12, color: '#6b7280', padding: '2px 0 4px' }}>
-                          No open orders
+                          {t('positions.empty.orders', 'No open orders')}
                         </div>
                       )}
                     </>
@@ -729,7 +752,7 @@ const Positions: React.FC = () => {
 
                   {shouldShowTrades ? (
                     <>
-                      <Divider style={{ margin: '6px 0' }}>Recent Trades</Divider>
+                      <Divider style={{ margin: '6px 0' }}>{t('positions.recentTrades', 'Recent Trades')}</Divider>
                       {tradesLoading || keyTrades.length > 0 ? (
                         <Table
                           size="small"
@@ -743,7 +766,7 @@ const Positions: React.FC = () => {
                         />
                       ) : (
                         <div style={{ fontSize: 12, color: '#6b7280', padding: '2px 0 4px' }}>
-                          No recent trades
+                          {t('positions.empty.trades', 'No recent trades')}
                         </div>
                       )}
                     </>

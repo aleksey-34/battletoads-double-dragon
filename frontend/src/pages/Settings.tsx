@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Form, Input, Button, Select, message, Card, List, Popconfirm, Switch, InputNumber, Alert, Tag, Space, Typography } from 'antd';
 import axios from 'axios';
+import { useI18n } from '../i18n';
 
 const { Option } = Select;
 
@@ -55,6 +56,7 @@ type UpdateJob = {
 };
 
 const Settings: React.FC = () => {
+  const { t } = useI18n();
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
   const [editingKey, setEditingKey] = useState<ApiKeyRecord | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
@@ -111,7 +113,7 @@ const Settings: React.FC = () => {
       setUpdateStatus(res.data as UpdateStatus);
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || 'Failed to load git update status');
+      message.error(error?.response?.data?.error || t('settings.msg.statusLoadError', 'Failed to load git update status'));
     } finally {
       setUpdateLoading(false);
     }
@@ -124,7 +126,7 @@ const Settings: React.FC = () => {
       setUpdateJob(res.data as UpdateJob);
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || 'Failed to load git update job status');
+      message.error(error?.response?.data?.error || t('settings.msg.jobLoadError', 'Failed to load git update job status'));
     } finally {
       setJobLoading(false);
     }
@@ -135,7 +137,7 @@ const Settings: React.FC = () => {
     try {
       const res = await axios.post('http://localhost:3001/api/system/update/run');
       const unit = String(res?.data?.unit || 'btdd-git-update');
-      message.success(`Update started (${unit}). Backend may restart during deploy.`);
+      message.success(t('settings.msg.runStarted', 'Update started ({unit}). Backend may restart during deploy.', { unit }));
 
       setTimeout(() => {
         void fetchUpdateJob();
@@ -143,7 +145,7 @@ const Settings: React.FC = () => {
       }, 1200);
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || 'Failed to start git update');
+      message.error(error?.response?.data?.error || t('settings.msg.runError', 'Failed to start git update'));
     } finally {
       setUpdateRunLoading(false);
     }
@@ -152,10 +154,10 @@ const Settings: React.FC = () => {
   const deleteApiKey = async (id: number) => {
     try {
       await axios.delete(`http://localhost:3001/api/api-keys/${id}`);
-      message.success('API Key deleted');
+      message.success(t('settings.msg.apiKeyDeleted', 'API Key deleted'));
       fetchApiKeys();
     } catch (error) {
-      message.error('Error deleting API Key');
+      message.error(t('settings.msg.apiKeyDeleteError', 'Error deleting API Key'));
     }
   };
 
@@ -182,38 +184,38 @@ const Settings: React.FC = () => {
 
       if (editingKey) {
         await axios.put(`http://localhost:3001/api/api-keys/${editingKey.id}`, payload);
-        message.success('API Key updated');
+        message.success(t('settings.msg.apiKeyUpdated', 'API Key updated'));
         setEditingKey(null);
         form.resetFields();
       } else {
         await axios.post('http://localhost:3001/api/api-keys', payload);
-        message.success('API Key added');
+        message.success(t('settings.msg.apiKeyAdded', 'API Key added'));
       }
       fetchApiKeys();
     } catch (error) {
-      message.error('Error saving API Key');
+      message.error(t('settings.msg.apiKeySaveError', 'Error saving API Key'));
     }
   };
 
   return (
-    <div>
-      <Card title={editingKey ? "Edit API Key" : "Add API Key"}>
-        <Form form={form} onFinish={onFinishApiKey} initialValues={{ exchange: 'Bybit', passphrase: '', speed_limit: 10, testnet: false, demo: false }}>
-          <Form.Item name="name" rules={[{ required: true }]}>
-            <Input placeholder="Name" />
+    <div className="battletoads-form-shell">
+      <Card className="battletoads-card" title={editingKey ? t('settings.form.editApiKey', 'Edit API Key') : t('settings.form.addApiKey', 'Add API Key')}>
+        <Form className="battletoads-form" form={form} onFinish={onFinishApiKey} initialValues={{ exchange: 'Bybit', passphrase: '', speed_limit: 10, testnet: false, demo: false }}>
+          <Form.Item label={t('settings.form.name', 'Name')} name="name" rules={[{ required: true }]}>
+            <Input placeholder={t('settings.form.name', 'Name')} />
           </Form.Item>
-          <Form.Item name="exchange" rules={[{ required: true }]}>
-            <Select placeholder="Exchange">
+          <Form.Item label={t('settings.form.exchange', 'Exchange')} name="exchange" rules={[{ required: true }]}>
+            <Select placeholder={t('settings.form.exchange', 'Exchange')}>
               <Option value="Bybit">Bybit</Option>
               <Option value="Bitget">Bitget Futures</Option>
               <Option value="BingX">BingX Futures</Option>
             </Select>
           </Form.Item>
-          <Form.Item name="api_key" rules={[{ required: true }]}>
-            <Input placeholder="API Key" />
+          <Form.Item label={t('settings.form.apiKey', 'API Key')} name="api_key" rules={[{ required: true }]}>
+            <Input placeholder={t('settings.form.apiKey', 'API Key')} />
           </Form.Item>
-          <Form.Item name="secret" rules={[{ required: true }]}>
-            <Input.Password placeholder="Secret" />
+          <Form.Item label={t('settings.form.secret', 'Secret')} name="secret" rules={[{ required: true }]}>
+            <Input.Password placeholder={t('settings.form.secret', 'Secret')} />
           </Form.Item>
           <Form.Item shouldUpdate noStyle>
             {() => {
@@ -222,41 +224,42 @@ const Settings: React.FC = () => {
 
               return (
                 <Form.Item
+                  label="Passphrase"
                   name="passphrase"
-                  rules={needsPassphrase ? [{ required: true, message: 'Passphrase is required for Bitget' }] : []}
+                  rules={needsPassphrase ? [{ required: true, message: t('settings.form.passphraseRequiredBitget', 'Passphrase is required for Bitget') }] : []}
                 >
-                  <Input.Password placeholder="Passphrase (required for Bitget, optional otherwise)" />
+                  <Input.Password placeholder={t('settings.form.passphrase', 'Passphrase (required for Bitget, optional otherwise)')} />
                 </Form.Item>
               );
             }}
           </Form.Item>
-          <Form.Item name="speed_limit" rules={[{ required: false }]}>
-            <InputNumber min={1} max={200} style={{ width: '100%' }} placeholder="Speed Limit (req/sec), default 10" />
+          <Form.Item label="RPS" name="speed_limit" rules={[{ required: false }]}>
+            <InputNumber min={1} max={200} style={{ width: '100%' }} placeholder={t('settings.form.speedLimit', 'Speed Limit (req/sec), default 10')} />
           </Form.Item>
-          <Form.Item name="testnet" valuePropName="checked" label="Testnet">
+          <Form.Item name="testnet" valuePropName="checked" label={t('settings.form.testnet', 'Testnet')}>
             <Switch />
           </Form.Item>
-          <Form.Item name="demo" valuePropName="checked" label="Demo Trading (api-demo.bybit.com)">
+          <Form.Item name="demo" valuePropName="checked" label={t('settings.form.demo', 'Demo Trading (api-demo.bybit.com)')}>
             <Switch />
           </Form.Item>
-          <Button type="primary" htmlType="submit">{editingKey ? 'Update' : 'Add'}</Button>
-          {editingKey && <Button onClick={() => { setEditingKey(null); form.resetFields(); }}>Cancel</Button>}
+          <Button type="primary" htmlType="submit">{editingKey ? t('settings.form.update', 'Update') : t('settings.form.add', 'Add')}</Button>
+          {editingKey && <Button onClick={() => { setEditingKey(null); form.resetFields(); }}>{t('settings.form.cancel', 'Cancel')}</Button>}
         </Form>
       </Card>
-      <Card title="API Keys List" style={{ marginTop: 16 }}>
+      <Card className="battletoads-card" title={t('settings.list.title', 'API Keys List')} style={{ marginTop: 16 }}>
         <List
           dataSource={apiKeys}
           renderItem={item => (
             <List.Item
               actions={[
-                <Button onClick={() => editApiKey(item)}>Edit</Button>,
+                <Button onClick={() => editApiKey(item)}>{t('settings.list.edit', 'Edit')}</Button>,
                 <Popconfirm
-                  title="Delete this API key?"
+                  title={t('settings.list.deleteConfirm', 'Delete this API key?')}
                   onConfirm={() => deleteApiKey(item.id)}
-                  okText="Yes"
-                  cancelText="No"
+                  okText={t('settings.list.yes', 'Yes')}
+                  cancelText={t('settings.list.no', 'No')}
                 >
-                  <Button danger>Delete</Button>
+                  <Button danger>{t('settings.list.delete', 'Delete')}</Button>
                 </Popconfirm>
               ]}
             >
@@ -275,8 +278,8 @@ const Settings: React.FC = () => {
 
                 <Space size={6} wrap>
                   <Tag>{item.exchange}</Tag>
-                  <Tag color={item.testnet ? 'gold' : 'default'}>Testnet: {item.testnet ? 'On' : 'Off'}</Tag>
-                  <Tag color={item.demo ? 'blue' : 'default'}>Demo: {item.demo ? 'On' : 'Off'}</Tag>
+                  <Tag color={item.testnet ? 'gold' : 'default'}>{t('settings.list.testnet', 'Testnet')}: {item.testnet ? 'On' : 'Off'}</Tag>
+                  <Tag color={item.demo ? 'blue' : 'default'}>{t('settings.list.demo', 'Demo')}: {item.demo ? 'On' : 'Off'}</Tag>
                 </Space>
               </div>
             </List.Item>
@@ -284,13 +287,13 @@ const Settings: React.FC = () => {
         />
       </Card>
 
-      <Card title="Git Update (VPS)" style={{ marginTop: 16 }}>
+      <Card className="battletoads-card" title={t('settings.update.title', 'Git Update (VPS)')} style={{ marginTop: 16 }}>
         <Space wrap style={{ marginBottom: 12 }}>
           <Button loading={updateLoading} onClick={() => { void fetchUpdateStatus(true); }}>
-            Check updates
+            {t('settings.update.check', 'Check updates')}
           </Button>
           <Button loading={jobLoading} onClick={() => { void fetchUpdateJob(); }}>
-            Refresh job
+            {t('settings.update.refreshJob', 'Refresh job')}
           </Button>
           <Button
             type="primary"
@@ -298,21 +301,23 @@ const Settings: React.FC = () => {
             disabled={!updateStatus?.configured || !updateStatus?.updateEnabled}
             onClick={() => { void runGitUpdate(); }}
           >
-            Install from Git
+            {t('settings.update.install', 'Install from Git')}
           </Button>
 
           {updateStatus
             ? (
               <Tag color={updateStatus.updateAvailable ? 'gold' : 'green'}>
-                {updateStatus.updateAvailable ? `Update available (${updateStatus.behind})` : 'Up to date'}
+                {updateStatus.updateAvailable
+                  ? t('settings.update.available', 'Update available ({count})', { count: updateStatus.behind })
+                  : t('settings.update.upToDate', 'Up to date')}
               </Tag>
             )
             : null}
 
-          {updateStatus && !updateStatus.updateEnabled ? <Tag color="red">Update API disabled</Tag> : null}
+          {updateStatus && !updateStatus.updateEnabled ? <Tag color="red">{t('settings.update.disabled', 'Update API disabled')}</Tag> : null}
         </Space>
 
-        {!updateStatus ? <Alert type="info" showIcon message="Loading update status..." style={{ marginBottom: 10 }} /> : null}
+        {!updateStatus ? <Alert type="info" showIcon message={t('settings.update.loading', 'Loading update status...')} style={{ marginBottom: 10 }} /> : null}
 
         {updateStatus && !updateStatus.configured
           ? <Alert type="warning" showIcon message={updateStatus.message || 'Git repository is not configured on this server.'} style={{ marginBottom: 10 }} />
@@ -331,7 +336,7 @@ const Settings: React.FC = () => {
         ) : null}
 
         {updateStatus && updateStatus.pendingCommits && updateStatus.pendingCommits.length > 0 ? (
-          <Card size="small" title="What's new in Git" style={{ marginBottom: 10 }}>
+          <Card size="small" title={t('settings.update.whatsNew', "What's new in Git")} style={{ marginBottom: 10 }}>
             <List
               size="small"
               dataSource={updateStatus.pendingCommits}
@@ -348,7 +353,7 @@ const Settings: React.FC = () => {
         ) : null}
 
         {updateJob ? (
-          <Card size="small" title="Update Job">
+          <Card size="small" title={t('settings.update.job', 'Update Job')}>
             <div style={{ fontSize: 13 }}>
               <div><strong>Unit:</strong> {updateJob.unit}</div>
               <div><strong>State:</strong> {updateJob.activeState} / {updateJob.subState}</div>
