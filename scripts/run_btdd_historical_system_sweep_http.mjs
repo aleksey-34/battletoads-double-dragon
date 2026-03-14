@@ -27,8 +27,9 @@ const COMMISSION = Number(process.env.COMMISSION || 0.1);
 const SLIPPAGE = Number(process.env.SLIPPAGE || 0.05);
 const FUNDING = Number(process.env.FUNDING || 0);
 
-const MAX_RUNS_RAW = Number(process.env.MAX_RUNS || 240);
-const MAX_RUNS = Number.isFinite(MAX_RUNS_RAW) ? Math.floor(MAX_RUNS_RAW) : 240;
+// 0 = unlimited (in exhaustive mode → use full potentialRuns; in sampled mode → use 240 default)
+const MAX_RUNS_RAW = process.env.MAX_RUNS !== undefined ? Number(process.env.MAX_RUNS) : 0;
+const MAX_RUNS = Number.isFinite(MAX_RUNS_RAW) ? Math.max(0, Math.floor(MAX_RUNS_RAW)) : 0;
 const MAX_VARIANTS_PER_MARKET_TYPE = Math.max(2, Number(process.env.MAX_VARIANTS_PER_MARKET_TYPE || 8));
 const MAX_MEMBERS = Math.max(2, Number(process.env.MAX_MEMBERS || 6));
 
