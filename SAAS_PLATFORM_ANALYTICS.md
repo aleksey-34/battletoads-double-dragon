@@ -1,5 +1,40 @@
 # Аналитика SaaS-платформы и принятые решения
 
+## Актуальный статус после завершения VPS sweep (2026-03-14)
+Что уже сделано по факту:
+- Исторический sweep завершен на VPS и сохранен в `/opt/battletoads-double-dragon/results/btdd_d1_historical_sweep_2026-03-14T14-43-55-067Z.json`.
+- Из него собран клиентский каталог и сохранен в `/opt/battletoads-double-dragon/results/btdd_d1_client_catalog_2026-03-14T14-47-25-310Z.json`.
+- Реализован MVP SaaS-контура: backend `/api/saas/*`, новые SaaS-таблицы, фронтовая страница `/saas`, вкладки `Admin`, `Клиент стратегий`, `Алгофонд`.
+
+Период и конфигурация прогона:
+- Исторический диапазон: `DATE_FROM='2025-01-01T00:00:00Z'` -> до последней доступной истории на момент завершения sweep `2026-03-14`.
+- Таймфрейм: `4h`.
+- Портфельная проверка: полный диапазон + rolling окна `365/180/90` дней.
+
+Фактические результаты sweep:
+- `potentialRuns = 9108`
+- `scheduledRuns = 9108`
+- `evaluated = 9108`
+- `failures = 0`
+- `robust candidates = 3129`
+
+Что вышло по клиентским сетам стратегий:
+- Клиентский mono-set: `6` офферов.
+- Клиентский synth-set: `6` офферов.
+- В каталоге уже есть описания, метрики, downsampled equity и preset mapping под `risk` и `trade_frequency`.
+- Подтвержденные сильные кандидаты из shortlist: `IPUSDT` (`DD_BattleToads`, mono), `IPUSDT/ZECUSDT` (`DD_BattleToads`, synth), `VETUSDT/GRTUSDT` (`stat_arb_zscore`, synth), `BERAUSDT/ZECUSDT` (`DD_BattleToads`, synth), `ORDIUSDT/ZECUSDT` (`DD_BattleToads`, synth). Финальный selected set также содержал еще один member типа `stat_arb_zscore`.
+
+Что вышло по торговой системе:
+- Автоматически собран `adminTradingSystemDraft` на `6` членов.
+- Full-range портфельный результат по VPS summary: `RET около 15.43%`, `PF 2.71`, `DD 1.39%`, `WR 51.66%`, `362` сделок.
+- Практически это означает, что из sweep уже получен не только shortlist, но и рабочий черновик админской TS с валидированным портфельным профилем на полном диапазоне.
+
+Что еще не закрыто:
+- Финальная ручная фиксация состава админской TS как «боевого» набора.
+- Отдельный tenant-aware auth и полноценный RBAC.
+- Платежный контур Aptos/USDT и enforcement при неуплате.
+- Отдельный VPS deployment/update runbook для нового SaaS-контура.
+
 ## 0) Сначала проверяем, завершился ли текущий sweep
 После перезапуска терминала переменная `$LOG` теряется, поэтому проверяем по файловой системе:
 

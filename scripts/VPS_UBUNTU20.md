@@ -170,6 +170,54 @@ curl -I http://127.0.0.1
 sudo APP_DIR=/opt/battletoads-double-dragon BRANCH=main bash /opt/battletoads-double-dragon/scripts/update_vps_from_git.sh
 ```
 
+## First Start (Git-based, minimal)
+
+1) Push your current code to Git (`main` or target branch).
+2) Run setup on VPS:
+
+```bash
+cd /root
+SETUP_SCRIPT="$(find /root -maxdepth 3 -type f -name setup_vps_ubuntu20.sh | head -n 1)"
+echo "$SETUP_SCRIPT"
+REPO_URL="https://github.com/aleksey-34/battletoads-double-dragon.git"
+DOMAIN=176.57.184.98 ADMIN_PASSWORD='strong-password' bash "$SETUP_SCRIPT" "$REPO_URL" /opt/battletoads-double-dragon main
+```
+
+3) Verify env for UI Git Update API:
+
+```bash
+sudo grep -E 'ENABLE_GIT_UPDATE|APP_DIR|GIT_BRANCH|UPDATE_SCRIPT' /etc/battletoads-backend.env
+```
+
+Expected values:
+- `ENABLE_GIT_UPDATE=1`
+- `APP_DIR=/opt/battletoads-double-dragon`
+- `GIT_BRANCH=main`
+- `UPDATE_SCRIPT=/opt/battletoads-double-dragon/scripts/update_vps_from_git.sh`
+
+4) Restart backend once after env check:
+
+```bash
+sudo systemctl restart battletoads-backend.service
+sudo systemctl status battletoads-backend --no-pager
+```
+
+5) Open UI: `http://176.57.184.98/`, login with `ADMIN_PASSWORD`, then open `/saas`.
+
+## Git Update Buttons In /saas
+
+Each tab now has its own Git update controls:
+- `Admin` tab: full status + pending commits + job logs.
+- `Strategy Client` tab: check/update/job controls + status tags.
+- `Algofund` tab: check/update/job controls + status tags.
+
+Recommended click order in any tab:
+1) `Check updates`
+2) if status shows `Update available`, click `Install from Git`
+3) click `Refresh job` and wait until job is finished
+
+If UI shows `ahead` or `dirty`, clean VPS repo state first (or reset to clean Git state) before running update.
+
 ## Alternative: one-command deploy from local machine
 
 ```bash
@@ -182,3 +230,34 @@ Optional SSH key/port:
 ```bash
 SSH_OPTS='-i ~/.ssh/id_rsa -p 22' ADMIN_PASSWORD='strong-password' bash scripts/deploy_vps_from_local.sh root@176.57.184.98 https://github.com/aleksey-34/battletoads-double-dragon.git 176.57.184.98 main /opt/battletoads-double-dragon
 ```
+
+## Alternative: deploy current local working tree without commit
+
+Use this when the newest changes are only in the local workspace and are not pushed to Git yet.
+
+```bash
+cd /home/yakovbyakov/BattleToads_DoubleDragon/battletoads-double-dragon
+bash scripts/deploy_vps_current_tree.sh root@176.57.184.98 /opt/battletoads-double-dragon
+```
+
+Optional SSH key/port:
+
+```bash
+cd /home/yakovbyakov/BattleToads_DoubleDragon/battletoads-double-dragon
+SSH_OPTS='-i ~/.ssh/id_rsa -p 22' bash scripts/deploy_vps_current_tree.sh root@176.57.184.98 /opt/battletoads-double-dragon
+```
+
+Post-deploy SaaS smoke checks:
+
+```bash
+ssh root@176.57.184.98 "curl -s http://127.0.0.1:3001/api/saas/admin/summary -H 'Authorization: Bearer <ADMIN_PASSWORD>' | head -c 800"
+ssh root@176.57.184.98 "journalctl -u battletoads-backend.service -n 120 --no-pager"
+```
+
+Browser checks after deploy:
+- open `http://176.57.184.98/`
+- login with the existing dashboard password
+- open `/saas`
+- in `Admin`: click `Инициализировать demo tenants`, then `Опубликовать admin TS`
+- in `Клиент стратегий`: select `client-bot-01`, assign API key if needed, save, preview, then `Materialize на API key`
+- in `Алгофонд`: select `algofund-01`, set API key/risk, save, preview, then send `Запросить старт`

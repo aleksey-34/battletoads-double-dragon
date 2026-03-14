@@ -52,6 +52,7 @@ import { authenticate } from '../utils/auth';
 import logger from '../utils/logger';
 import { getGitUpdateJobStatus, getGitUpdateStatus, triggerGitUpdate } from '../system/updateManager';
 import analyticsRoutes from './analyticsRoutes';
+import saasRoutes from './saasRoutes';
 import fs from 'fs';
 import path from 'path';
 
@@ -1026,5 +1027,6 @@ router.get('/symbols/:apiKeyName', async (req, res) => {
 
 // Analytics routes for live reconciliation and drift analysis
 router.use('/analytics', analyticsRoutes);
+router.use('/saas', saasRoutes);
 
 export default router;

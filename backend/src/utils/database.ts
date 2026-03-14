@@ -290,6 +290,114 @@ export const initDB = async () => {
 
     CREATE INDEX IF NOT EXISTS idx_liquidity_scan_suggestions_status
       ON liquidity_scan_suggestions (api_key_id, status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT UNIQUE NOT NULL,
+      title TEXT NOT NULL,
+      product_mode TEXT NOT NULL,
+      price_usdt REAL DEFAULT 0,
+      max_deposit_total REAL DEFAULT 0,
+      risk_cap_max REAL DEFAULT 0,
+      max_strategies_total INTEGER DEFAULT 0,
+      allow_ts_start_stop_requests BOOLEAN DEFAULT 0,
+      features_json TEXT DEFAULT '{}',
+      is_active BOOLEAN DEFAULT 1,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS tenants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      display_name TEXT NOT NULL,
+      product_mode TEXT NOT NULL,
+      status TEXT DEFAULT 'active',
+      preferred_language TEXT DEFAULT 'ru',
+      assigned_api_key_name TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL,
+      plan_id INTEGER NOT NULL,
+      status TEXT DEFAULT 'active',
+      started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      expires_at TEXT,
+      notes TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+      FOREIGN KEY (plan_id) REFERENCES plans(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS strategy_client_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL UNIQUE,
+      selected_offer_ids_json TEXT DEFAULT '[]',
+      risk_level TEXT DEFAULT 'medium',
+      trade_frequency_level TEXT DEFAULT 'medium',
+      requested_enabled BOOLEAN DEFAULT 0,
+      actual_enabled BOOLEAN DEFAULT 0,
+      assigned_api_key_name TEXT DEFAULT '',
+      latest_preview_json TEXT DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS algofund_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL UNIQUE,
+      risk_multiplier REAL DEFAULT 1,
+      requested_enabled BOOLEAN DEFAULT 0,
+      actual_enabled BOOLEAN DEFAULT 0,
+      assigned_api_key_name TEXT DEFAULT '',
+      published_system_name TEXT DEFAULT '',
+      latest_preview_json TEXT DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS algofund_start_stop_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL,
+      request_type TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      note TEXT DEFAULT '',
+      decision_note TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      decided_at TEXT,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS saas_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER,
+      actor_mode TEXT DEFAULT 'admin',
+      action TEXT NOT NULL,
+      payload_json TEXT DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_plans_product_mode
+      ON plans (product_mode, is_active);
+
+    CREATE INDEX IF NOT EXISTS idx_tenants_product_mode
+      ON tenants (product_mode, status, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant
+      ON subscriptions (tenant_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_algofund_requests_tenant
+      ON algofund_start_stop_requests (tenant_id, status, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_saas_audit_tenant
+      ON saas_audit_log (tenant_id, created_at DESC);
   `);
 
   // Keep only the most recent row per API key before enforcing unique constraints.

@@ -285,6 +285,46 @@ body.battletoads-theme {
   padding-bottom: 6px !important;
 }
 
+.saas-page {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.saas-page-actions {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+.saas-tabs .ant-tabs-nav {
+  margin-bottom: 8px;
+}
+
+.saas-tabs .ant-tabs-tab {
+  border-radius: 999px !important;
+  padding-inline: 14px !important;
+}
+
+.saas-offer-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.saas-segment-wrap {
+  margin-top: 8px;
+}
+
+.saas-page .ant-descriptions-bordered .ant-descriptions-item-label {
+  width: 44%;
+}
+
+.saas-page .ant-statistic {
+  min-height: 84px;
+}
+
 @media (max-width: 900px) {
   .strategy-flag-grid {
     grid-template-columns: 1fr;
@@ -306,6 +346,10 @@ body.battletoads-theme {
 
   .app-brand-title {
     display: none;
+  }
+
+  .saas-page-actions {
+    justify-content: flex-start;
   }
 }
 
