@@ -1,88 +1,99 @@
-# TODO SaaS Admin and Client Platform
+# TODO SaaS-платформа: Админ + Клиент
 
-## Goal
-Build two product modes on one codebase:
-- Admin mode: full control panel for operations, clients, billing, strategies, backtest factory, server load.
-- Client mode: simplified strategy experience with payment-gated access and safe automation.
+## Цель
+Собираем два режима в одном продукте:
+- Админ-режим: максимум функций (клиенты, оплата, тарифы, стратегии, полный бектест, нагрузка VPS/API).
+- Клиентский режим: упрощенный интерфейс со стратегиями, оплатой, лимитами и безопасной автоматикой.
 
-## Confirmed Inputs From Current Work
-- Historical sweep produces mono and synthetic candidates across strategy types.
-- Trading system composition from selected candidates is already implemented.
-- Backtest engine supports fixed ranges and parameter optimization via sweep scripts.
-- Historical sweep now has checkpoint/resume and turbo mode in `scripts/run_btdd_historical_system_sweep_http.mjs`.
+## Порядок работ по текущей задаче
+- [ ] Дождаться завершения текущего `historical sweep` и зафиксировать итоговый JSON.
+- [ ] Из итогов sweep собрать клиентский каталог стратегий: mono/synth, описание, метрики, эквити-кривая.
+- [ ] Собрать твою (админскую) целевую торговую систему из лучших кандидатов и прогнать комплексный портфельный бектест.
+- [ ] Запустить SaaS-контур (админ + клиент) пока на одном VPS, с планом разделения на 2-3 сервера.
 
-## Phase 0: Product Boundaries and Security
-- [ ] Define tenant model: admin tenant vs client tenants.
-- [ ] Add RBAC roles: `platform_admin`, `client_owner`, `client_viewer`.
-- [ ] Split API surface into admin-only and client-safe routes.
-- [ ] Add audit logging for billing, plan changes, force pause, and close positions.
+## Что уже подтверждено
+- Sweep уже строит mono и synth кандидатов по 3 типам стратегий.
+- Автосборка Trading System из кандидатов уже реализована.
+- Бектестер поддерживает диапазон дат и параметрическую оптимизацию (grid sweep).
+- `scripts/run_btdd_historical_system_sweep_http.mjs` уже имеет `checkpoint/resume` и `turbo mode`.
 
-## Phase 1: Data Model for SaaS
-- [ ] Add tables: `tenants`, `users`, `user_tenants`, `plans`, `subscriptions`, `invoices`, `payments`, `wallet_bindings`, `plan_limits`.
-- [ ] Add `tenant_id` to `api_keys`, `strategies`, `trading_systems`, `monitoring_snapshots`.
-- [ ] Add indexes for tenant filters and billing lookups.
-- [ ] Add migration scripts with rollback notes.
+## Фаза 0: Границы продукта и безопасность
+- [ ] Ввести tenancy-модель (`платформа` и `клиентские тенанты`).
+- [ ] Ввести RBAC-роли: `platform_admin`, `client_owner`, `client_viewer`.
+- [ ] Разделить API на admin-only и client-safe маршруты.
+- [ ] Включить audit log для оплат, смены тарифа, принудительной паузы и закрытия позиций.
 
-## Phase 2: Billing and Payment Control
-- [ ] Add Aptos USDT payment watcher service (scheduled poll + confirmation depth).
-- [ ] Support invoice states: `pending`, `paid`, `overdue`, `grace`, `suspended`.
-- [ ] Add billing actions: notify client, pause bots, cancel orders, close positions.
-- [ ] Add grace period policy and idempotent suspension logic.
+## Фаза 1: SaaS-модель данных
+- [ ] Добавить таблицы: `tenants`, `users`, `user_tenants`, `plans`, `subscriptions`, `invoices`, `payments`, `wallet_bindings`, `plan_limits`.
+- [ ] Добавить `tenant_id` в `api_keys`, `strategies`, `trading_systems`, `monitoring_snapshots`.
+- [ ] Добавить индексы для tenant-фильтров, оплат и лимитов.
+- [ ] Оформить миграции с заметками rollback.
 
-## Phase 3: Plan Limits and Enforcement
-- [ ] Add middleware that enforces plan caps before writes and activation.
-- [ ] Caps to enforce: exchanges, API keys, strategies, max deposit, backtest request quota.
-- [ ] Add server-side guard rails for strategy count and exchange usage.
-- [ ] Show remaining limits in client UI.
+## Фаза 2: Оплата и биллинг-контур
+- [ ] Добавить watcher оплаты Aptos USDT (poll + подтверждения).
+- [ ] Статусы счета: `pending`, `paid`, `overdue`, `grace`, `suspended`.
+- [ ] Автодействия при неуплате: уведомить, пауза ботов, отмена ордеров, закрытие позиций.
+- [ ] Добавить grace-период и идемпотентную блокировку.
 
-## Phase 4: Client Strategy UX (No Advanced Settings)
-- [ ] Build strategy catalog with short description, risk notes, and equity chart preview.
-- [ ] Replace advanced config with two sliders per strategy:
-- `risk: lower <-> higher`
-- `trade_frequency: fewer <-> more`
-- [ ] Map slider positions to precomputed parameter presets.
-- [ ] Show predicted equity curve update from precomputed surfaces.
+## Фаза 3: Тарифные лимиты и enforcement
+- [ ] Проверки лимитов до записи/активации.
+- [ ] Лимиты: биржи, API-ключи, число стратегий, max deposit, квота запросов бектеста.
+- [ ] Ограничения на сервере (не только в UI).
+- [ ] Показ остатка лимитов в ЛК клиента.
 
-## Phase 5: Backtest Factory and Request Queue
-- [ ] Add queued backtest jobs: `queued`, `running`, `done`, `failed`, `canceled`.
-- [ ] Add periodic batch run for custom pair requests (e.g. daily or every 12h).
-- [ ] Add result artifacts: summary JSON, equity CSV, chart image, candidate list.
-- [ ] Add per-plan quota for custom pair requests.
+## Фаза 4: Клиентский UX стратегий (без сложных настроек)
+- [ ] Каталог стратегий: краткое описание, риск-профиль, метрики, эквити-график.
+- [ ] В UI оставить 2 управления:
+- `risk: меньше <-> больше`
+- `trade_frequency: меньше сделок <-> больше сделок`
+- [ ] Маппинг к предрассчитанным пресетам параметров.
+- [ ] Интерактивное обновление ожидаемой эквити-кривой и KPI.
 
-## Phase 6: Admin Control Plane
-- [ ] Client table: plan, status, last payment, active keys, active strategies, debt risk.
-- [ ] Actions: force pause, force resume, close all positions, cancel all orders, lock account.
-- [ ] Billing panel: invoice timeline, payment proof, retries, manual override.
-- [ ] Load panel: CPU, RAM, API RPS per exchange, queue depth, latency, error rates.
+## Фаза 5: Фабрика бектестов и очередь заявок
+- [ ] Очередь задач: `queued`, `running`, `done`, `failed`, `canceled`.
+- [ ] Пакетные запуски по заявкам клиентов (например, раз в 12-24 часа).
+- [ ] Артефакты: JSON summary, equity CSV/JSON, график, shortlist кандидатов.
+- [ ] Квоты на дополнительные пары по тарифу.
 
-## Phase 7: Notifications
-- [ ] Add notification channels: Telegram bot, email, in-app notifications.
-- [ ] Trigger events: upcoming expiry, overdue, suspended, resumed, backtest complete.
-- [ ] Add message templates for RU and EN.
+## Фаза 6: Админ-панель
+- [ ] Таблица клиентов: тариф, статус оплаты, активные ключи/стратегии, риск просрочки.
+- [ ] Действия: пауза/старт, cancel all, close all, lock account.
+- [ ] Биллинг-панель: история инвойсов и платежей, ручные корректировки.
+- [ ] Панель нагрузки: CPU/RAM, RPS к биржам, latency, queue depth, error rate.
 
-## Phase 8: Deployment Topology
-- [ ] Split roles into services:
-- `control-plane` (admin UI/API, billing)
-- `execution-plane` (live strategy cycles)
-- `research-plane` (backtests and optimization)
-- [ ] Start with one VPS profile and define migration path to 2+ servers.
-- [ ] Add queue (Redis or DB queue) to isolate heavy jobs from live trading.
+## Фаза 7: Уведомления
+- [ ] Каналы: Telegram, email, in-app.
+- [ ] Триггеры: срок оплаты, просрочка, блокировка, возобновление, готовность бектеста.
+- [ ] Шаблоны сообщений (RU как основной язык).
 
-## Phase 9: Compliance, Reliability, and QA
-- [ ] Add integration tests for suspension flow (pause + close positions).
-- [ ] Add backtest regression suite for catalog presets.
-- [ ] Add billing reconciliation tests for duplicate transactions.
-- [ ] Add chaos tests for restart/recovery (checkpoint resume).
+## Фаза 8: Развертывание
+- [ ] Сейчас: админ+клиент на одном VPS.
+- [ ] Далее: разделение на `control-plane`, `execution-plane`, `research-plane`.
+- [ ] Вынести тяжелые бектесты в отдельный worker/сервер.
 
-## Immediate Sprint (Start Now)
-- [ ] Create SaaS schema migrations (Phase 1 baseline tables).
-- [ ] Add tenant-aware auth and RBAC middleware skeleton.
-- [ ] Build payment watcher skeleton for Aptos USDT with mocked parser.
-- [ ] Define first strategy catalog format and two-slider preset mapping.
-- [ ] Add backtest job queue table and worker skeleton.
+## Фаза 9: Надежность и QA
+- [ ] Интеграционные тесты на сценарий неуплаты.
+- [ ] Регрессия бектеста для каталога стратегий.
+- [ ] Тесты сверки платежей (дубликаты/частичные платежи).
+- [ ] Restart/recovery тесты (`checkpoint/resume`).
 
-## Delivery Milestones
-- Milestone A (1-2 weeks): tenant model + plan limits + manual billing controls.
-- Milestone B (2-4 weeks): automated Aptos payment watcher + suspension workflow.
-- Milestone C (4-6 weeks): client strategy catalog with sliders + precomputed equity curves.
-- Milestone D (6-8 weeks): queued batch backtest factory + admin load dashboard.
+## Тарифные планы (утверждено на текущий этап)
+- [ ] `15 USDT/мес`: 1 биржа, 1 API-ключ, 1 стратегия (моно или синт), max deposit 1000 USDT.
+- [ ] `20 USDT/мес`: 1 биржа, 3 API-ключа, 3 стратегии (моно или синт), позы и ордера, max deposit 1000 USDT.
+- [ ] `25 USDT/мес`: 2 биржи, по 3 API-ключа, 3 стратегии (моно или синт), позы и ордера, мониторинг, max deposit 1000 USDT.
+- [ ] `30 USDT/мес`: 3 биржи, по 3 API-ключа, 3 стратегии (моно или синт), позы и ордера, мониторинг, max deposit 1000 USDT.
+- [ ] `50 USDT/мес`: 3 биржи, по 6 API-ключей, 3 mono + 3 synth стратегии, позы и ордера, мониторинг, max deposit 5000 USDT, комплексный бектест торговой системы и ее запуск, до 5 запросов на дополнительные пары (mono и для комплексной TS).
+- [ ] `100 USDT/мес`: все биржи, по 10 API-ключей, 3 mono + 3 synth стратегии, позы и ордера, мониторинг, max deposit 10000 USDT, комплексный бектест торговой системы и ее запуск, до 10 запросов на дополнительные пары, 1 запрос на дополнительную биржу в месяц.
+
+## Ближайший спринт (запуск работ)
+- [ ] Миграции SaaS-таблиц (Phase 1).
+- [ ] Скелет tenant-aware auth + RBAC.
+- [ ] Скелет Aptos USDT watcher.
+- [ ] Формат каталога клиентских стратегий + 2-слайдерный preset mapping.
+- [ ] Таблица очереди бектестов и worker-сервис.
+
+## Контрольные вехи
+- Этап A (1-2 недели): tenancy, лимиты, ручной биллинг-контур.
+- Этап B (2-4 недели): автооплата Aptos + автосуспенд.
+- Этап C (4-6 недель): клиентский каталог стратегий + интерактивная эквити.
+- Этап D (6-8 недель): очередь пакетных бектестов + админ-панель нагрузки.

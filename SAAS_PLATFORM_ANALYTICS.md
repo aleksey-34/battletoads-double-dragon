@@ -1,177 +1,164 @@
-# SaaS Platform Analytics and Decisions
+# Аналитика SaaS-платформы и принятые решения
 
-## 1) Direct Answers to Your Questions
+## 0) Сначала проверяем, завершился ли текущий sweep
+После перезапуска терминала переменная `$LOG` теряется, поэтому проверяем по файловой системе:
 
-### Will we get mono and synthetic strategies for parameter selection and trading system composition?
-Yes.
-- Current sweep logic already evaluates both mono and synthetic markets.
-- It outputs robust candidates and selected members for a trading system.
-- That means we can build strategy catalogs from real backtest outputs.
+```bash
+cd /opt/battletoads-double-dragon
+LOG=$(ls -t logs/historical_*.log 2>/dev/null | head -1)
+echo "LOG=$LOG"
+pgrep -af run_btdd_historical_system_sweep_http.mjs
+grep -oE '\[RUN [0-9]+/[0-9]+\]' "$LOG" | tail -1
+tail -n 80 "$LOG"
+```
 
-### Can all of this be backtested?
-Yes.
-- Single strategy and portfolio backtests are already available.
-- Fixed date range backtests are supported.
-- Optimization is supported through grid sweep scripts.
-- Latest upgrade adds checkpoint/resume so long jobs survive restarts.
+Признаки завершения:
+- в логе есть блок `--- HISTORICAL SWEEP SUMMARY ---`
+- в конце есть `Saved: results/...historical_sweep_...json`
+- процесс `run_btdd_historical_system_sweep_http.mjs` отсутствует в `pgrep`
 
-### Can backtester optimize, not only validate one range?
-Yes.
-- Optimization is done by parameter grids (`length`, TP, source, zscore params).
-- You can run exhaustive or sampled modes.
-- Candidate selection and portfolio assembly are already automated.
+## 1) Прямые ответы на твои вопросы
 
-## 2) Product Split: Admin vs Client
+### Получим ли мы mono/synth стратегии для подбора параметров и сборки TS?
+Да.
+- Sweep уже оценивает mono + synth рынки.
+- На выходе есть robust-кандидаты и `selectedMembers` для торговой системы.
 
-## Admin Product (maximum functionality)
-Scope:
-- Full API key and strategy management.
-- Full strategy settings and system composition.
-- Full backtest and optimization controls.
-- Billing and customer lifecycle management.
-- Server and exchange load observability.
+### Можно ли все это бектестить?
+Да.
+- Поддержаны single и portfolio backtest.
+- Поддержаны диапазоны дат.
+- Поддержана параметрическая оптимизация (grid sweep).
 
-Must-have backend modules:
-- Tenancy + RBAC.
-- Subscription and invoice engine.
-- Payment ingestion and reconciliation.
-- Plan enforcement middleware.
-- Operational controls (pause, cancel, close).
+### Бектестер может оптимизировать, а не только проверять один диапазон?
+Да.
+- Используются сетки параметров (`length`, `TP`, `source`, `zscore_*`).
+- Доступны режимы sampled/exhaustive.
+- Автоматически строится shortlist и кандидат TS.
 
-## Client Product (rental mode)
-Scope:
-- Simple strategy catalog.
-- Equity chart and short strategy explanation.
-- Two sliders per strategy: risk and trade frequency.
-- No advanced internal parameters exposed.
-- Plan-based limits visible in UI.
+## 2) Двухконтурный продукт
 
-Mechanics for sliders:
-- Offline: generate preset surfaces from historical sweeps.
-- Runtime: map slider values to nearest preset tuple.
-- Display: precomputed equity curve and key metrics update.
+## Админ-режим (максимум функций)
+Состав:
+- Управление клиентами, тарифами, оплатами, блокировками.
+- Полный контроль API-ключей, стратегий, торговых систем.
+- Полный контур бектестов и оптимизации.
+- Наблюдаемость нагрузки: VPS + API бирж + очередь задач.
 
-## 3) Data Needed for Client Sliders
-You will have most of the needed data after the running sweep, but production-ready slider UX needs one more layer:
-- Current sweep gives candidate-level metrics and equity summaries.
-- Slider UX requires a normalized catalog with dense parameter grid and chart artifacts.
-- Action: persist optimized result cubes per strategy family and market.
+Обязательные backend-модули:
+- tenancy + RBAC
+- подписки/инвойсы/платежи
+- enforcement лимитов по тарифам
+- аварийные действия (pause/cancel/close)
 
-Recommended result artifact per preset:
+## Клиентский режим (аренда)
+Состав:
+- Каталог стратегий с понятным описанием.
+- Эквити-график и ключевые метрики.
+- Только 2 регулятора: риск и частота сделок.
+- Без доступа к сложным внутренним параметрам.
+
+Механика слайдеров:
+- Offline считаем пресеты из sweep-результатов.
+- Runtime маппим значения слайдера в ближайший пресет.
+- UI показывает ожидаемую эквити-кривую и KPI.
+
+## 3) Что нужно для клиентского каталога после sweep
+После текущего прогона будет готова основа, но для production-каталога нужна нормализация:
+- единый формат пресетов по стратегиям и рынкам
+- стабильные метрики по rolling-окнам
+- эквити-кривые в компактном формате для UI
+
+Минимальный артефакт пресета:
 - `preset_id`
-- parameter tuple
-- return, PF, DD, win rate, trades
-- equity curve points (compressed)
-- confidence score (sample quality + stability windows)
+- параметры стратегии
+- `ret`, `pf`, `dd`, `win_rate`, `trades`
+- `equity_curve` (downsampled)
+- `confidence_score`
 
-## 4) Payment Model (Aptos USDT)
+## 4) Оплата и контроль неуплаты (Aptos USDT)
 
-Recommended flow:
-1. Client binds payout wallet in cabinet.
-2. Platform creates invoice with unique reference (memo/tag or dedicated address mapping).
-3. Watcher scans Aptos transactions and matches invoice.
-4. On match + confirmations => mark as paid and extend subscription.
-5. If unpaid after due date:
-- send warnings (T-3d, T-1d, overdue)
-- enter grace period (e.g. 48h)
-- then suspend automatically.
+Рекомендованный поток:
+1. Клиент привязывает кошелек в ЛК.
+2. Платформа создает инвойс с уникальным идентификатором.
+3. Watcher проверяет транзакции и подтверждения.
+4. При подтвержденной оплате продлевается подписка.
+5. При неуплате: предупреждения -> grace -> авто-блокировка.
 
-Suspension sequence (idempotent):
-1. Pause all strategies.
-2. Cancel all open orders.
-3. Close all open positions.
-4. Mark account state `suspended_non_payment`.
+Идемпотентный сценарий блокировки:
+1. Пауза стратегий.
+2. Отмена ордеров.
+3. Закрытие позиций.
+4. Статус аккаунта `suspended_non_payment`.
 
-Notification channels:
-- Primary: Telegram bot (fast and cheap).
-- Secondary: email.
-- Optional: in-app + webhook.
+Каналы уведомлений:
+- основной: Telegram
+- резерв: email
+- дополнительно: in-app/webhook
 
-## 5) Tariff Plan Review
+## 5) Тарифные планы (уточненная версия)
+Ниже зафиксированы твои текущие условия, их и берем в реализацию:
 
-Your current plan ladder has strong intent but needs cleanup.
-Main issues:
-- Price steps are tight in the 15/20/25/30 range, differences may look unclear.
-- Feature boundaries overlap too much between 25 and 30.
-- Expensive resources (custom backtests) should be quota-based, not only tier text.
+- `15 USDT/мес`: 1 биржа, 1 API-ключ, 1 стратегия (mono или synth), max deposit 1000 USDT.
+- `20 USDT/мес`: 1 биржа, 3 API-ключа, 3 стратегии (mono или synth), позиции и ордера, max deposit 1000 USDT.
+- `25 USDT/мес`: 2 биржи, по 3 API-ключа, 3 стратегии (mono или synth), позиции и ордера, мониторинг, max deposit 1000 USDT.
+- `30 USDT/мес`: 3 биржи, по 3 API-ключа, 3 стратегии (mono или synth), позиции и ордера, мониторинг, max deposit 1000 USDT.
+- `50 USDT/мес`: 3 биржи, по 6 API-ключей, 3 mono + 3 synth, позиции и ордера, мониторинг, max deposit 5000 USDT, возможность комплексного бектеста TS и ее запуска, до 5 запросов на дополнительные пары (в mono и для сборки TS).
+- `100 USDT/мес`: все биржи, по 10 API-ключей, 3 mono + 3 synth, позиции и ордера, мониторинг, max deposit 10000 USDT, возможность комплексного бектеста TS и ее запуска, до 10 запросов на дополнительные пары (в mono и для сборки TS), 1 запрос на дополнительную биржу в месяц.
 
-Recommendation: keep your prices but sharpen differentiators.
+Что важно добавить в enforcement по тарифам (технически):
+- `max_exchanges`
+- `max_api_keys`
+- `max_strategies_total`
+- `max_deposit_per_key`
+- `monthly_backtest_pair_requests`
+- `allow_complex_ts_backtest`
+- `allow_complex_ts_launch`
 
-### Revised interpretation of your tiers
-- 15 USDT: starter, 1 exchange, 1 key, 1 strategy, no custom backtests.
-- 20 USDT: small trader, up to 3 keys, up to 3 strategies, basic orders/positions view.
-- 25 USDT: multi-exchange entry, 2 exchanges, monitoring enabled.
-- 30 USDT: advanced multi-exchange, 3 exchanges, priority execution queue.
-- 50 USDT: pro, more keys, mono+synth pack, 5 custom pair requests per month.
-- 100 USDT: business, highest limits, 10 custom requests per month, 1 extra exchange request.
+## 6) Оценка емкости текущего VPS
+База оценки для текущего Contabo-профиля (порядка 4 vCPU / 8 GB):
 
-Important enforcement fields per plan:
-- max exchanges
-- max API keys
-- max active strategies
-- max deposit per API key
-- monthly backtest request credits
-- queue priority
+- Консервативно: `15-25` клиентских аккаунтов.
+- С оптимизацией scheduler + очереди: `30-45`.
+- При разделении control/execution/research: `50-80`.
 
-## 6) Capacity Estimate for Current VPS Class
-Assumption from current node:
-- 4 vCPU class, ~8 GB RAM (similar to shown Contabo profile).
-- Auto cycle every 30s.
-- Average client profile: 1-3 active strategies.
+Почему диапазон, а не фикс-число:
+- сильно влияет latency/лимиты бирж
+- влияет число активных стратегий на клиента
+- влияет частота циклов мониторинга/реконсиляции
 
-Estimated safe ranges for live trading workload (without heavy backtests):
-- Conservative: 15-25 client accounts.
-- With optimizations + stricter scheduling: 30-45 client accounts.
-- With split architecture (separate backtest worker host): 50-80 client accounts.
+Практический порог масштабирования:
+- CPU p95 > 65% или RAM > 75% стабильно 3 дня
+- рост exchange ошибок > 1%
+- рост задержки автоцикла/очереди
 
-Why range, not one number:
-- Depends on exchange latency and API rate limits.
-- Depends on strategy interval mix and active strategy count.
-- Depends on how often monitoring/reconciliation/discovery run.
+## 7) Оптимизации для ускорения и экономии ресурса
 
-Capacity rule of thumb:
-- Keep CPU p95 < 65%, RAM < 75%, exchange error rate < 1%.
-- If exceeded for 3 consecutive days, scale horizontally.
+Сразу:
+- тяжелые бектесты отделять от live execution
+- backtest queue (concurrency=1 на API key)
+- кэш исторических свечей
+- для low-tier увеличить интервалы фоновых циклов
+- отключить discovery там, где не нужен
 
-## 7) How to Make It Faster and Lighter
+Далее:
+- разделить на `control-plane`, `execution-plane`, `research-plane`
+- вынести очередь в Redis/worker слой
+- добавить отдельное хранилище метрик/снапшотов
 
-Immediate optimizations:
-- Keep heavy backtests off the live execution process.
-- Use queued backtest workers with concurrency=1 per API key.
-- Cache historical candles by symbol/interval/date window.
-- Increase scheduler intervals for low tiers.
-- Disable discovery scans for low tiers by default.
+## 8) Риски и контроль
+- Риск: ошибки распознавания on-chain оплаты.
+  - Контроль: подтверждения + ручной review queue.
+- Риск: невозможность закрытия позиций при сбое биржи.
+  - Контроль: retry policy + state machine аварийного режима.
+- Риск: клиент не понимает эффект слайдеров.
+  - Контроль: показывать ожидаемые диапазоны DD и сделок.
+- Риск: переоптимизация по истории.
+  - Контроль: robust-фильтры и проверка на rolling-окнах.
 
-Medium-term optimizations:
-- Split into three planes: control, execution, research.
-- Add Redis queue for backtests and billing checks.
-- Add read replicas or time-series store for monitoring snapshots.
-
-## 8) Suggested Infrastructure Split
-
-Stage 1 (now):
-- Single VPS, but separate worker process for backtests.
-
-Stage 2:
-- VPS A: admin/control + billing API + frontend.
-- VPS B: execution runtime (strategies, order management).
-- VPS C (optional): research/backtest workers.
-
-This prevents backtests from delaying live trading cycles.
-
-## 9) Execution Risks and Mitigation
-- Risk: billing false negatives on chain parsing.
-  - Mitigation: confirmation threshold + manual review queue.
-- Risk: forced close during exchange outage.
-  - Mitigation: retry policy + emergency state machine.
-- Risk: client confusion with simplified sliders.
-  - Mitigation: show expected DD/trade count bands per slider level.
-- Risk: noisy optimization overfitting.
-  - Mitigation: robustness filters + rolling window validation.
-
-## 10) What to Build First
-1. Tenancy, plan limits, and billing states in DB/API.
-2. Non-payment suspension workflow end-to-end.
-3. Client catalog page with equity previews from backtest artifacts.
-4. Queued periodic custom pair backtest requests.
-5. Admin load dashboard and scaling triggers.
+## 9) Что делаем первым (на одном VPS)
+1. Проверяем окончание текущего sweep, фиксируем JSON результата.
+2. Автособираем клиентский каталог mono/synth и твою TS-кандидатуру.
+3. Вводим SaaS-таблицы и RBAC-скелет.
+4. Добавляем контур оплаты Aptos + автосуспенд.
+5. Подключаем клиентский UI со слайдерами и интерактивной эквити.
