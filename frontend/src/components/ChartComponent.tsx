@@ -315,9 +315,10 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
           if (d && typeof d === 'object' && d.time !== undefined) {
             const normalizedTime = normalizeTime(d.time);
             if (normalizedTime === null) return null;
+            const nextValue = Number(d.value ?? d.close ?? d.equity);
             return {
               time: normalizedTime as any,
-              value: parseFloat(d.close),
+              value: nextValue,
             };
           }
 

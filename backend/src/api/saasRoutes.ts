@@ -10,7 +10,9 @@ import {
   requestAlgofundAction,
   resolveAlgofundRequest,
   seedDemoSaasData,
+  updatePlanAdminState,
   updateAlgofundState,
+  updateTenantAdminState,
   updateStrategyClientState,
 } from '../saas/service';
 
@@ -68,6 +70,52 @@ router.post('/admin/publish', async (_req, res) => {
   }
 });
 
+router.patch('/admin/tenants/:tenantId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const tenants = await updateTenantAdminState(tenantId, {
+      displayName: req.body.displayName,
+      status: req.body.status,
+      assignedApiKeyName: req.body.assignedApiKeyName,
+      planCode: req.body.planCode,
+    });
+    res.json({ success: true, tenants });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS tenant admin update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/admin/plans/:planCode', async (req, res) => {
+  const planCode = String(req.params.planCode || '').trim();
+  if (!planCode) {
+    return res.status(400).json({ error: 'Invalid planCode' });
+  }
+
+  try {
+    const plans = await updatePlanAdminState(planCode, {
+      title: req.body.title,
+      priceUsdt: toOptionalNumber(req.body.priceUsdt),
+      maxDepositTotal: toOptionalNumber(req.body.maxDepositTotal),
+      riskCapMax: toOptionalNumber(req.body.riskCapMax),
+      maxStrategiesTotal: toOptionalNumber(req.body.maxStrategiesTotal),
+      allowTsStartStopRequests: req.body.allowTsStartStopRequests !== undefined
+        ? toBool(req.body.allowTsStartStopRequests)
+        : undefined,
+    });
+    res.json({ success: true, plans });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS plan admin update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/strategy-clients/:tenantId', async (req, res) => {
   const tenantId = Number(req.params.tenantId);
   if (!Number.isFinite(tenantId)) {
@@ -121,7 +169,9 @@ router.post('/strategy-clients/:tenantId/preview', async (req, res) => {
       tenantId,
       String(req.body.offerId),
       req.body.riskLevel,
-      req.body.tradeFrequencyLevel
+      req.body.tradeFrequencyLevel,
+      toOptionalNumber(req.body.riskScore),
+      toOptionalNumber(req.body.tradeFrequencyScore)
     );
     res.json({ success: true, ...data });
   } catch (error) {
@@ -154,7 +204,11 @@ router.get('/algofund/:tenantId', async (req, res) => {
   }
 
   try {
-    const data = await getAlgofundState(tenantId, toOptionalNumber(req.query.riskMultiplier));
+    const data = await getAlgofundState(
+      tenantId,
+      toOptionalNumber(req.query.riskMultiplier),
+      toBool(req.query.allowPreviewAbovePlan)
+    );
     res.json(data);
   } catch (error) {
     const err = error as Error;

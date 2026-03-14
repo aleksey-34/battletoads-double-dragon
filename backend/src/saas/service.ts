@@ -18,6 +18,12 @@ export type ProductMode = 'strategy_client' | 'algofund_client';
 export type Level3 = 'low' | 'medium' | 'high';
 export type RequestStatus = 'pending' | 'approved' | 'rejected';
 
+type PeriodInfo = {
+  dateFrom: string | null;
+  dateTo: string | null;
+  interval: string | null;
+};
+
 type PlanSeed = {
   code: string;
   title: string;
@@ -261,6 +267,9 @@ type SweepData = {
   portfolioResults: Array<Record<string, unknown>>;
   evaluated: SweepRecord[];
   config: {
+    dateFrom?: string | null;
+    dateTo?: string | null;
+    interval?: string;
     initialBalance?: number;
     commissionPercent?: number;
     slippagePercent?: number;
@@ -285,12 +294,6 @@ type StrategyMaterializedRow = {
 
 const repoRoot = path.resolve(__dirname, '../../..');
 const resultsDir = path.join(repoRoot, 'results');
-const levelValue: Record<Level3, number> = {
-  low: 0,
-  medium: 1,
-  high: 2,
-};
-
 const strategyClientPlans: PlanSeed[] = [
   { code: 'strategy_15', title: 'Strategy Client 15', productMode: 'strategy_client', priceUsdt: 15, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 1, allowTsStartStopRequests: false, features: { monoOrSynth: 1 } },
   { code: 'strategy_20', title: 'Strategy Client 20', productMode: 'strategy_client', priceUsdt: 20, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 3, allowTsStartStopRequests: false, features: { monoOrSynth: 3 } },
@@ -317,6 +320,44 @@ const asNumber = (value: unknown, fallback = 0): number => {
 const asString = (value: unknown, fallback = ''): string => {
   const text = String(value ?? '').trim();
   return text || fallback;
+};
+
+const clampNumber = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+
+const levelToPreferenceScore = (level: Level3): number => {
+  if (level === 'low') return 0;
+  if (level === 'high') return 10;
+  return 5;
+};
+
+const preferenceScoreToLevel = (value: number): Level3 => {
+  if (value <= 3.33) return 'low';
+  if (value >= 6.67) return 'high';
+  return 'medium';
+};
+
+const normalizePreferenceScore = (value: unknown, fallbackLevel: Level3): number => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    return levelToPreferenceScore(fallbackLevel);
+  }
+  return clampNumber(numeric, 0, 10);
+};
+
+const buildPeriodInfo = (sweep: SweepData | null): PeriodInfo | null => {
+  if (!sweep) {
+    return null;
+  }
+
+  const dateFrom = asString(sweep.config?.dateFrom, '') || null;
+  const dateTo = asString(sweep.config?.dateTo, '') || asString(sweep.timestamp, '') || null;
+  const interval = asString(sweep.config?.interval, '') || null;
+
+  return {
+    dateFrom,
+    dateTo,
+    interval,
+  };
 };
 
 const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
@@ -385,17 +426,7 @@ const upsertPlan = async (plan: PlanSeed): Promise<void> => {
       code, title, product_mode, price_usdt, max_deposit_total, risk_cap_max,
       max_strategies_total, allow_ts_start_stop_requests, features_json, is_active, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    ON CONFLICT(code) DO UPDATE SET
-      title = excluded.title,
-      product_mode = excluded.product_mode,
-      price_usdt = excluded.price_usdt,
-      max_deposit_total = excluded.max_deposit_total,
-      risk_cap_max = excluded.risk_cap_max,
-      max_strategies_total = excluded.max_strategies_total,
-      allow_ts_start_stop_requests = excluded.allow_ts_start_stop_requests,
-      features_json = excluded.features_json,
-      is_active = 1,
-      updated_at = CURRENT_TIMESTAMP`,
+    ON CONFLICT(code) DO NOTHING`,
     [
       plan.code,
       plan.title,
@@ -418,13 +449,18 @@ const getPlanByCode = async (code: string): Promise<PlanRow> => {
   return row as PlanRow;
 };
 
+const listPlans = async (): Promise<PlanRow[]> => {
+  const rows = await db.all(
+    'SELECT * FROM plans WHERE is_active = 1 ORDER BY product_mode ASC, price_usdt ASC, id ASC'
+  );
+  return (Array.isArray(rows) ? rows : []) as PlanRow[];
+};
+
 const ensureTenant = async (slug: string, displayName: string, productMode: ProductMode, language: string, assignedApiKeyName: string): Promise<TenantRow> => {
   await db.run(
     `INSERT INTO tenants (slug, display_name, product_mode, status, preferred_language, assigned_api_key_name, created_at, updated_at)
      VALUES (?, ?, ?, 'active', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
      ON CONFLICT(slug) DO UPDATE SET
-       display_name = excluded.display_name,
-       product_mode = excluded.product_mode,
        preferred_language = CASE WHEN COALESCE(tenants.preferred_language, '') = '' THEN excluded.preferred_language ELSE tenants.preferred_language END,
        assigned_api_key_name = CASE WHEN COALESCE(tenants.assigned_api_key_name, '') = '' THEN excluded.assigned_api_key_name ELSE tenants.assigned_api_key_name END,
        updated_at = CURRENT_TIMESTAMP`,
@@ -439,6 +475,17 @@ const ensureTenant = async (slug: string, displayName: string, productMode: Prod
 };
 
 const ensureSubscription = async (tenantId: number, planId: number): Promise<void> => {
+  const row = await db.get('SELECT id FROM subscriptions WHERE tenant_id = ? ORDER BY id DESC LIMIT 1', [tenantId]);
+  if (!row) {
+    await db.run(
+      `INSERT INTO subscriptions (tenant_id, plan_id, status, started_at, notes, created_at, updated_at)
+       VALUES (?, ?, 'active', CURRENT_TIMESTAMP, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [tenantId, planId]
+    );
+  }
+};
+
+const setTenantSubscriptionPlan = async (tenantId: number, planId: number): Promise<void> => {
   const row = await db.get('SELECT id FROM subscriptions WHERE tenant_id = ? ORDER BY id DESC LIMIT 1', [tenantId]);
   if (!row) {
     await db.run(
@@ -656,8 +703,41 @@ const resolveOfferPreset = (offer: CatalogOffer, riskLevel: Level3, tradeFrequen
   sortedByDd.forEach((item, index) => ddRank.set(item.strategyId, index));
   sortedByTrades.forEach((item, index) => tradeRank.set(item.strategyId, index));
 
-  const targetDd = levelValue[riskLevel];
-  const targetTrades = levelValue[tradeFrequencyLevel];
+  const targetDd = (levelToPreferenceScore(riskLevel) / 10) * Math.max(sortedByDd.length - 1, 0);
+  const targetTrades = (levelToPreferenceScore(tradeFrequencyLevel) / 10) * Math.max(sortedByTrades.length - 1, 0);
+
+  return [...candidates].sort((left, right) => {
+    const leftScore = Math.abs((ddRank.get(left.strategyId) || 0) - targetDd) + Math.abs((tradeRank.get(left.strategyId) || 0) - targetTrades);
+    const rightScore = Math.abs((ddRank.get(right.strategyId) || 0) - targetDd) + Math.abs((tradeRank.get(right.strategyId) || 0) - targetTrades);
+    if (leftScore !== rightScore) {
+      return leftScore - rightScore;
+    }
+    return asNumber(right.score, 0) - asNumber(left.score, 0);
+  })[0];
+};
+
+const resolveOfferPresetByPreference = (
+  offer: CatalogOffer,
+  riskLevel: Level3,
+  tradeFrequencyLevel: Level3,
+  riskScore?: number,
+  tradeFrequencyScore?: number
+): CatalogPreset => {
+  const candidates = collectPresetCandidates(offer);
+  if (candidates.length === 0) {
+    return resolveOfferPreset(offer, riskLevel, tradeFrequencyLevel);
+  }
+
+  const sortedByDd = [...candidates].sort((left, right) => asNumber(left.metrics.dd, 0) - asNumber(right.metrics.dd, 0));
+  const sortedByTrades = [...candidates].sort((left, right) => asNumber(left.metrics.trades, 0) - asNumber(right.metrics.trades, 0));
+  const ddRank = new Map<number, number>();
+  const tradeRank = new Map<number, number>();
+
+  sortedByDd.forEach((item, index) => ddRank.set(item.strategyId, index));
+  sortedByTrades.forEach((item, index) => tradeRank.set(item.strategyId, index));
+
+  const targetDd = (normalizePreferenceScore(riskScore, riskLevel) / 10) * Math.max(sortedByDd.length - 1, 0);
+  const targetTrades = (normalizePreferenceScore(tradeFrequencyScore, tradeFrequencyLevel) / 10) * Math.max(sortedByTrades.length - 1, 0);
 
   return [...candidates].sort((left, right) => {
     const leftScore = Math.abs((ddRank.get(left.strategyId) || 0) - targetDd) + Math.abs((tradeRank.get(left.strategyId) || 0) - targetTrades);
@@ -846,6 +926,7 @@ export const getSaasAdminSummary = async () => {
   const recommendedSets = buildRecommendedSets(catalog);
   const tenants = await listTenantSummaries();
   const apiKeys = await getAvailableApiKeyNames();
+  const plans = await listPlans();
 
   return {
     sourceFiles: {
@@ -855,6 +936,7 @@ export const getSaasAdminSummary = async () => {
     catalog,
     sweepSummary: sweep ? {
       timestamp: sweep.timestamp,
+      period: buildPeriodInfo(sweep),
       counts: sweep.counts,
       selectedMembers: sweep.selectedMembers,
       topByMode: sweep.topByMode,
@@ -863,8 +945,100 @@ export const getSaasAdminSummary = async () => {
     } : null,
     recommendedSets,
     tenants,
+    plans,
     apiKeys,
   };
+};
+
+export const updateTenantAdminState = async (tenantId: number, payload: {
+  displayName?: string;
+  status?: string;
+  assignedApiKeyName?: string;
+  planCode?: string;
+}) => {
+  await ensureSaasSeedData();
+  const tenant = await getTenantById(tenantId);
+
+  const nextDisplayName = asString(payload.displayName, tenant.display_name);
+  const nextStatus = asString(payload.status, tenant.status || 'active');
+  const nextAssignedApiKeyName = asString(payload.assignedApiKeyName, tenant.assigned_api_key_name);
+
+  await db.run(
+    `UPDATE tenants
+     SET display_name = ?, status = ?, assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [nextDisplayName, nextStatus, nextAssignedApiKeyName, tenantId]
+  );
+
+  if (tenant.product_mode === 'strategy_client') {
+    await db.run(
+      `UPDATE strategy_client_profiles
+       SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [nextAssignedApiKeyName, tenantId]
+    );
+  } else {
+    await db.run(
+      `UPDATE algofund_profiles
+       SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [nextAssignedApiKeyName, tenantId]
+    );
+  }
+
+  if (payload.planCode) {
+    const plan = await getPlanByCode(payload.planCode);
+    if (plan.product_mode !== tenant.product_mode) {
+      throw new Error(`Plan ${payload.planCode} does not belong to tenant mode ${tenant.product_mode}`);
+    }
+    await setTenantSubscriptionPlan(tenantId, plan.id);
+  }
+
+  return listTenantSummaries();
+};
+
+export const updatePlanAdminState = async (planCode: string, payload: {
+  title?: string;
+  priceUsdt?: number;
+  maxDepositTotal?: number;
+  riskCapMax?: number;
+  maxStrategiesTotal?: number;
+  allowTsStartStopRequests?: boolean;
+}) => {
+  await ensureSaasSeedData();
+  const existing = await getPlanByCode(planCode);
+
+  const nextTitle = asString(payload.title, existing.title);
+  const nextPriceUsdt = Math.max(0, asNumber(payload.priceUsdt, existing.price_usdt));
+  const nextMaxDepositTotal = Math.max(0, asNumber(payload.maxDepositTotal, existing.max_deposit_total));
+  const nextRiskCapMax = Math.max(0, asNumber(payload.riskCapMax, existing.risk_cap_max));
+  const nextMaxStrategiesTotal = Math.max(0, Math.floor(asNumber(payload.maxStrategiesTotal, existing.max_strategies_total)));
+  const nextAllowTsStartStopRequests = payload.allowTsStartStopRequests !== undefined
+    ? (payload.allowTsStartStopRequests ? 1 : 0)
+    : Number(existing.allow_ts_start_stop_requests || 0);
+
+  await db.run(
+    `UPDATE plans
+     SET title = ?,
+         price_usdt = ?,
+         max_deposit_total = ?,
+         risk_cap_max = ?,
+         max_strategies_total = ?,
+         allow_ts_start_stop_requests = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE code = ?`,
+    [
+      nextTitle,
+      nextPriceUsdt,
+      nextMaxDepositTotal,
+      nextRiskCapMax,
+      nextMaxStrategiesTotal,
+      nextAllowTsStartStopRequests,
+      planCode,
+    ]
+  );
+
+  return listPlans();
 };
 
 const listTenantSummaries = async () => {
@@ -967,7 +1141,9 @@ export const previewStrategyClientOffer = async (
   tenantId: number,
   offerId: string,
   riskLevel?: Level3,
-  tradeFrequencyLevel?: Level3
+  tradeFrequencyLevel?: Level3,
+  riskScore?: number,
+  tradeFrequencyScore?: number
 ) => {
   const state = await getStrategyClientState(tenantId);
   if (!state.catalog) {
@@ -975,20 +1151,49 @@ export const previewStrategyClientOffer = async (
   }
 
   const sweep = loadLatestSweep();
+  const period = buildPeriodInfo(sweep);
   const offer = findOfferById(state.catalog, offerId);
   const resolvedRisk = riskLevel || (state.profile?.risk_level as Level3) || 'medium';
   const resolvedTradeFrequency = tradeFrequencyLevel || (state.profile?.trade_frequency_level as Level3) || 'medium';
-  const preset = resolveOfferPreset(offer, resolvedRisk, resolvedTradeFrequency);
+  const normalizedRiskScore = normalizePreferenceScore(riskScore, resolvedRisk);
+  const normalizedTradeFrequencyScore = normalizePreferenceScore(tradeFrequencyScore, resolvedTradeFrequency);
+  const preset = resolveOfferPresetByPreference(
+    offer,
+    resolvedRisk,
+    resolvedTradeFrequency,
+    normalizedRiskScore,
+    normalizedTradeFrequencyScore
+  );
+  const controls = {
+    riskScore: normalizedRiskScore,
+    tradeFrequencyScore: normalizedTradeFrequencyScore,
+    riskLevel: preferenceScoreToLevel(normalizedRiskScore),
+    tradeFrequencyLevel: preferenceScoreToLevel(normalizedTradeFrequencyScore),
+  };
   const baseEquity = offer.equity && offer.strategy.id === preset.strategyId ? offer.equity : null;
 
   if (baseEquity && Array.isArray(baseEquity.points) && baseEquity.points.length > 0) {
+    const preview = {
+      source: 'catalog_cache',
+      summary: baseEquity.summary,
+      equity: baseEquity,
+    };
+
+    const latestPreviewPayload = { offerId, preset, controls, period, preview };
+
+    await db.run(
+      `UPDATE strategy_client_profiles
+       SET latest_preview_json = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [JSON.stringify(latestPreviewPayload), tenantId]
+    );
+
     return {
       offer,
       preset,
-      preview: {
-        source: 'catalog_cache',
-        equity: baseEquity,
-      },
+      controls,
+      period,
+      preview,
     };
   }
 
@@ -1013,14 +1218,16 @@ export const previewStrategyClientOffer = async (
     trades: result.trades.slice(0, 30),
   };
 
+  const latestPreviewPayload = { offerId, preset, controls, period, preview };
+
   await db.run(
     `UPDATE strategy_client_profiles
      SET latest_preview_json = ?, updated_at = CURRENT_TIMESTAMP
      WHERE tenant_id = ?`,
-    [JSON.stringify({ offerId, preset, preview }), tenantId]
+    [JSON.stringify(latestPreviewPayload), tenantId]
   );
 
-  return { offer, preset, preview };
+  return { offer, preset, controls, period, preview };
 };
 
 export const materializeStrategyClient = async (tenantId: number, activate: boolean) => {
@@ -1199,7 +1406,7 @@ const materializeAlgofundSystem = async (
   };
 };
 
-export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier?: number) => {
+export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier?: number, allowPreviewAbovePlan = false) => {
   await ensureSaasSeedData();
   const tenant = await getTenantById(tenantId);
   if (tenant.product_mode !== 'algofund_client') {
@@ -1213,6 +1420,8 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
   }
 
   const sourceSystem = await ensurePublishedSourceSystem();
+  const sweep = loadLatestSweep();
+  const period = buildPeriodInfo(sweep);
   const basePreviewResult = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
     bars: 6000,
     warmupBars: 400,
@@ -1223,9 +1432,13 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
     fundingRatePercent: 0,
   });
 
+  const maxPreviewRiskMultiplier = allowPreviewAbovePlan
+    ? Math.max(10, asNumber(plan.risk_cap_max, 1))
+    : asNumber(plan.risk_cap_max, 1);
+
   const riskMultiplier = Math.max(0, Math.min(
     requestedRiskMultiplier !== undefined ? requestedRiskMultiplier : asNumber(profile.risk_multiplier, 1),
-    asNumber(plan.risk_cap_max, 1)
+    maxPreviewRiskMultiplier
   ));
 
   const scaledEquity = scaleEquityPreview(basePreviewResult.equityCurve, riskMultiplier);
@@ -1242,6 +1455,7 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
       totalReturnPercent: Number(totalReturnPercent.toFixed(2)),
       maxDrawdownPercent: Number((asNumber(basePreviewResult.summary.maxDrawdownPercent, 0) * riskMultiplier).toFixed(2)),
     },
+    period,
     equityCurve: scaledEquity,
   };
 
@@ -1371,6 +1585,7 @@ export const resolveAlgofundRequest = async (requestId: number, status: RequestS
 
 export const publishAdminTradingSystem = async () => {
   const sourceSystem = await ensurePublishedSourceSystem();
+  const period = buildPeriodInfo(loadLatestSweep());
   const preview = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
     bars: 6000,
     warmupBars: 400,
@@ -1383,7 +1598,10 @@ export const publishAdminTradingSystem = async () => {
 
   return {
     sourceSystem,
-    preview,
+    preview: {
+      ...preview,
+      period,
+    },
     catalog: loadLatestClientCatalog(),
   };
 };

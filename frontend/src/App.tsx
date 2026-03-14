@@ -25,15 +25,18 @@ function AppShell() {
   const navigate = useNavigate();
   const [authState, setAuthState] = useState<AuthState>('checking');
   const [authCheckLoading, setAuthCheckLoading] = useState(false);
+  const isClientSaasSurface = location.pathname.startsWith('/saas/strategy-client') || location.pathname.startsWith('/saas/algofund');
 
-  const menuItems = [
-    { key: '1', label: <Link to="/">{t('nav.dashboard', 'Dashboard')}</Link> },
-    { key: '2', label: <Link to="/settings">{t('nav.settings', 'Settings')}</Link> },
-    { key: '3', label: <Link to="/positions">{t('nav.positions', 'Positions')}</Link> },
-    { key: '4', label: <Link to="/logs">{t('nav.logs', 'Logs')}</Link> },
-    { key: '5', label: <Link to="/backtest">{t('nav.backtest', 'Backtest')}</Link> },
-    { key: '6', label: <Link to="/saas">{t('nav.saas', 'SaaS')}</Link> },
-  ];
+  const menuItems = isClientSaasSurface
+    ? []
+    : [
+        { key: '1', label: <Link to="/">{t('nav.dashboard', 'Dashboard')}</Link> },
+        { key: '2', label: <Link to="/settings">{t('nav.settings', 'Settings')}</Link> },
+        { key: '3', label: <Link to="/positions">{t('nav.positions', 'Positions')}</Link> },
+        { key: '4', label: <Link to="/logs">{t('nav.logs', 'Logs')}</Link> },
+        { key: '5', label: <Link to="/backtest">{t('nav.backtest', 'Backtest')}</Link> },
+        { key: '6', label: <Link to="/saas">{t('nav.saas', 'SaaS')}</Link> },
+      ];
 
   const selectedMenuKey = useMemo(() => {
     if (location.pathname.startsWith('/settings')) return '2';
@@ -112,7 +115,11 @@ function AppShell() {
       <Header style={{ color: 'white', paddingInline: 16 }}>
         <div className="app-header-row">
           <Typography.Text className="app-brand-title">{t('app.title', 'BattleToads Control')}</Typography.Text>
-          <Menu className="app-main-menu" theme="dark" mode="horizontal" selectedKeys={[selectedMenuKey]} items={menuItems} />
+          {menuItems.length > 0 ? (
+            <Menu className="app-main-menu" theme="dark" mode="horizontal" selectedKeys={[selectedMenuKey]} items={menuItems} />
+          ) : (
+            <div style={{ flex: 1 }} />
+          )}
           <Space className="app-account-menu" size={8}>
             <Select
               value={language}
@@ -143,10 +150,10 @@ function AppShell() {
           <Route path="/positions" element={<Positions />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/backtest" element={<Backtest />} />
-          <Route path="/saas" element={<SaaS />} />
-          <Route path="/saas/admin" element={<SaaS initialTab="admin" />} />
-          <Route path="/saas/strategy-client" element={<SaaS initialTab="strategy-client" />} />
-          <Route path="/saas/algofund" element={<SaaS initialTab="algofund" />} />
+          <Route path="/saas" element={<SaaS surfaceMode="admin" />} />
+          <Route path="/saas/admin" element={<SaaS initialTab="admin" surfaceMode="admin" />} />
+          <Route path="/saas/strategy-client" element={<SaaS initialTab="strategy-client" surfaceMode="strategy-client" />} />
+          <Route path="/saas/algofund" element={<SaaS initialTab="algofund" surfaceMode="algofund" />} />
         </Routes>
       </Content>
       <FloatButton.BackTop visibilityHeight={280} />
