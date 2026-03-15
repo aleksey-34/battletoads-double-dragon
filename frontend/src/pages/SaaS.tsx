@@ -111,6 +111,14 @@ type Plan = {
   allow_ts_start_stop_requests: number;
 };
 
+type TenantCapabilities = {
+  settings: boolean;
+  apiKeyUpdate: boolean;
+  monitoring: boolean;
+  backtest: boolean;
+  startStopRequests: boolean;
+};
+
 type UpdateCommit = {
   hash: string;
   shortHash: string;
@@ -152,6 +160,7 @@ type UpdateJob = {
 type TenantSummary = {
   tenant: Tenant;
   plan: Plan | null;
+  capabilities?: TenantCapabilities;
   strategyProfile?: {
     selectedOfferIds?: string[];
     latestPreview?: Record<string, unknown>;
@@ -245,6 +254,8 @@ type SaasSummary = {
 type StrategyClientState = {
   tenant: Tenant;
   plan: Plan | null;
+  capabilities?: TenantCapabilities;
+  monitoring?: TenantSummary['monitoring'];
   profile: {
     selectedOfferIds: string[];
     latestPreview?: Record<string, unknown>;
@@ -334,6 +345,7 @@ type AlgofundRequest = {
 type AlgofundState = {
   tenant: Tenant;
   plan: Plan | null;
+  capabilities?: TenantCapabilities;
   profile: {
     latestPreview?: Record<string, unknown>;
     risk_multiplier: number;
@@ -348,7 +360,7 @@ type AlgofundState = {
       apiKeyName: string;
       systemId: number;
       systemName: string;
-    };
+    } | null;
     summary?: {
       finalEquity?: number;
       totalReturnPercent?: number;
@@ -356,8 +368,10 @@ type AlgofundState = {
       winRatePercent?: number;
       profitFactor?: number;
       tradesCount?: number;
-    };
+    } | null;
     equityCurve?: EquityPoint[];
+    blockedByPlan?: boolean;
+    blockedReason?: string;
   };
   requests: AlgofundRequest[];
   catalog: SaasSummary['catalog'];
@@ -434,6 +448,18 @@ type Copy = {
   riskCap: string;
   period: string;
   connectedTenants: string;
+  tenantWorkspace: string;
+  planCapabilities: string;
+  capabilitySettings: string;
+  capabilityApiKeyUpdate: string;
+  capabilityMonitoring: string;
+  capabilityBacktest: string;
+  capabilityStartStop: string;
+  openSettings: string;
+  openMonitoring: string;
+  openBacktest: string;
+  backtestLockedHint: string;
+  settingsLockedHint: string;
   priceUsdt: string;
   saveTenant: string;
   savePlan: string;
@@ -518,6 +544,18 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     riskCap: 'Потолок риска',
     period: 'Период',
     connectedTenants: 'Подключенные клиенты',
+    tenantWorkspace: 'Кабинет клиента',
+    planCapabilities: 'Возможности тарифа',
+    capabilitySettings: 'Настройки',
+    capabilityApiKeyUpdate: 'Смена API key',
+    capabilityMonitoring: 'Мониторинг',
+    capabilityBacktest: 'Бэктест/Preview',
+    capabilityStartStop: 'Старт/Стоп заявки',
+    openSettings: 'Открыть Settings',
+    openMonitoring: 'Открыть Monitoring',
+    openBacktest: 'Открыть Backtest',
+    backtestLockedHint: 'Backtest/Preview недоступен на текущем тарифе',
+    settingsLockedHint: 'Изменение настроек недоступно на текущем тарифе',
     priceUsdt: 'Цена, USDT/мес',
     saveTenant: 'Сохранить tenant',
     savePlan: 'Сохранить тариф',
@@ -600,6 +638,18 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     riskCap: 'Risk cap',
     period: 'Period',
     connectedTenants: 'Connected tenants',
+    tenantWorkspace: 'Client workspace',
+    planCapabilities: 'Plan capabilities',
+    capabilitySettings: 'Settings',
+    capabilityApiKeyUpdate: 'API key update',
+    capabilityMonitoring: 'Monitoring',
+    capabilityBacktest: 'Backtest/Preview',
+    capabilityStartStop: 'Start/Stop requests',
+    openSettings: 'Open Settings',
+    openMonitoring: 'Open Monitoring',
+    openBacktest: 'Open Backtest',
+    backtestLockedHint: 'Backtest/Preview is not available for the current plan',
+    settingsLockedHint: 'Settings update is not available for the current plan',
     priceUsdt: 'Price, USDT/mo',
     saveTenant: 'Save tenant',
     savePlan: 'Save plan',
@@ -682,6 +732,18 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     riskCap: 'Risk limiti',
     period: 'Periyot',
     connectedTenants: 'Bagli tenantlar',
+    tenantWorkspace: 'Musteri paneli',
+    planCapabilities: 'Plan ozellikleri',
+    capabilitySettings: 'Ayarlar',
+    capabilityApiKeyUpdate: 'API key guncelleme',
+    capabilityMonitoring: 'Monitoring',
+    capabilityBacktest: 'Backtest/Onizleme',
+    capabilityStartStop: 'Baslat/Durdur talepleri',
+    openSettings: 'Settings ac',
+    openMonitoring: 'Monitoring ac',
+    openBacktest: 'Backtest ac',
+    backtestLockedHint: 'Bu planda Backtest/Onizleme kapali',
+    settingsLockedHint: 'Bu planda ayar guncelleme kapali',
     priceUsdt: 'Fiyat, USDT/ay',
     saveTenant: 'Tenant kaydet',
     savePlan: 'Plani kaydet',
@@ -892,6 +954,26 @@ const requestStatusTag = (copy: Copy, status: RequestStatus) => {
   return <Tag color="processing">{copy.pending}</Tag>;
 };
 
+const capabilityTag = (label: string, enabled: boolean) => (
+  <Tag color={enabled ? 'success' : 'default'}>{label}: {enabled ? 'on' : 'off'}</Tag>
+);
+
+const renderCapabilityTags = (copy: Copy, capabilities?: TenantCapabilities) => {
+  if (!capabilities) {
+    return null;
+  }
+
+  return (
+    <Space wrap>
+      {capabilityTag(copy.capabilitySettings, Boolean(capabilities.settings))}
+      {capabilityTag(copy.capabilityApiKeyUpdate, Boolean(capabilities.apiKeyUpdate))}
+      {capabilityTag(copy.capabilityMonitoring, Boolean(capabilities.monitoring))}
+      {capabilityTag(copy.capabilityBacktest, Boolean(capabilities.backtest))}
+      {capabilityTag(copy.capabilityStartStop, Boolean(capabilities.startStopRequests))}
+    </Space>
+  );
+};
+
 const strategyLevelMarks = {
   0: 'Low',
   5: 'Medium',
@@ -1042,6 +1124,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const algofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
   const selectedStrategyTenantSummary = strategyTenants.find((item) => item.tenant.id === strategyTenantId) || null;
   const selectedAlgofundTenantSummary = algofundTenants.find((item) => item.tenant.id === algofundTenantId) || null;
+  const strategyCapabilities = strategyState?.capabilities || selectedStrategyTenantSummary?.capabilities;
+  const algofundCapabilities = algofundState?.capabilities || selectedAlgofundTenantSummary?.capabilities;
+  const strategySettingsEnabled = strategyCapabilities ? Boolean(strategyCapabilities.settings) : true;
+  const algofundSettingsEnabled = algofundCapabilities ? Boolean(algofundCapabilities.settings) : true;
+  const strategyMonitoringEnabled = strategyCapabilities ? Boolean(strategyCapabilities.monitoring) : true;
+  const algofundMonitoringEnabled = algofundCapabilities ? Boolean(algofundCapabilities.monitoring) : true;
+  const strategyBacktestEnabled = strategyCapabilities ? Boolean(strategyCapabilities.backtest) : true;
+  const algofundBacktestEnabled = algofundCapabilities ? Boolean(algofundCapabilities.backtest) : true;
+  const algofundStartStopEnabled = algofundCapabilities ? Boolean(algofundCapabilities.startStopRequests) : true;
+  const strategyApiKeyEditable = isAdminSurface && Boolean(strategyCapabilities?.apiKeyUpdate ?? true);
+  const algofundApiKeyEditable = isAdminSurface && Boolean(algofundCapabilities?.apiKeyUpdate ?? true);
   const strategyPlanOptions = (summary?.plans || [])
     .filter((plan) => plan.product_mode === 'strategy_client')
     .map((plan) => ({ value: plan.code, label: `${plan.title} · ${formatMoney(plan.price_usdt)}` }));
@@ -1242,6 +1335,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!strategyTenantId || !strategyPreviewOfferId) {
       return;
     }
+    if (!strategyBacktestEnabled) {
+      if (!silent) {
+        messageApi.warning(copy.backtestLockedHint);
+      }
+      return;
+    }
     setStrategyPreviewLoading(true);
     try {
       const response = await axios.post<StrategyPreviewResponse>(`/api/saas/strategy-clients/${strategyTenantId}/preview`, {
@@ -1260,11 +1359,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     } finally {
       setStrategyPreviewLoading(false);
     }
-  }, [copy.previewReady, messageApi, strategyPreviewOfferId, strategyRiskInput, strategyState, strategyTenantId, strategyTradeInput]);
+  }, [copy.backtestLockedHint, copy.previewReady, messageApi, strategyBacktestEnabled, strategyPreviewOfferId, strategyRiskInput, strategyState, strategyTenantId, strategyTradeInput]);
 
   const runStrategySelectionPreview = useCallback(async (silent = false) => {
     if (!strategyTenantId || strategyOfferIds.length === 0) {
       setStrategySelectionPreview(null);
+      return;
+    }
+    if (!strategyBacktestEnabled) {
+      setStrategySelectionPreview(null);
+      if (!silent) {
+        messageApi.warning(copy.backtestLockedHint);
+      }
       return;
     }
 
@@ -1289,10 +1395,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     } finally {
       setStrategySelectionPreviewLoading(false);
     }
-  }, [copy.previewReady, messageApi, strategyOfferIds, strategyRiskInput, strategyTenantId, strategyTradeInput]);
+  }, [copy.backtestLockedHint, copy.previewReady, messageApi, strategyBacktestEnabled, strategyOfferIds, strategyRiskInput, strategyTenantId, strategyTradeInput]);
 
   useEffect(() => {
-    if (!strategyTenantId || !strategyPreviewOfferId || !strategyState) {
+    if (!strategyTenantId || !strategyPreviewOfferId || !strategyState || !strategyBacktestEnabled) {
       return;
     }
 
@@ -1301,10 +1407,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }, 350);
 
     return () => window.clearTimeout(timer);
-  }, [runStrategyPreview, strategyPreviewOfferId, strategyState, strategyTenantId]);
+  }, [runStrategyPreview, strategyBacktestEnabled, strategyPreviewOfferId, strategyState, strategyTenantId]);
 
   useEffect(() => {
-    if (!strategyTenantId || !strategyState) {
+    if (!strategyTenantId || !strategyState || !strategyBacktestEnabled) {
       return;
     }
 
@@ -1318,7 +1424,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }, 350);
 
     return () => window.clearTimeout(timer);
-  }, [runStrategySelectionPreview, strategyOfferIds, strategyState, strategyTenantId]);
+  }, [runStrategySelectionPreview, strategyBacktestEnabled, strategyOfferIds, strategyState, strategyTenantId]);
 
   useEffect(() => {
     if (!algofundTenantId || !algofundState || algofundLoading) {
@@ -1344,6 +1450,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const saveStrategyProfile = async () => {
     if (!strategyTenantId) {
+      return;
+    }
+    if (!strategySettingsEnabled) {
+      messageApi.warning(copy.settingsLockedHint);
       return;
     }
     const nextRiskLevel = sliderValueToLevel(strategyRiskInput);
@@ -1389,6 +1499,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!algofundTenantId) {
       return;
     }
+    if (!algofundSettingsEnabled) {
+      messageApi.warning(copy.settingsLockedHint);
+      return;
+    }
     setActionLoading('algofund-save');
     try {
       const response = await axios.patch(`/api/saas/algofund/${algofundTenantId}`, {
@@ -1407,6 +1521,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const refreshAlgofundPreview = async () => {
     if (!algofundTenantId) {
+      return;
+    }
+    if (!algofundBacktestEnabled) {
+      messageApi.warning(copy.backtestLockedHint);
       return;
     }
     await loadAlgofundTenant(algofundTenantId, algofundRiskMultiplier, isAdminSurface);
@@ -1698,19 +1816,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: copy.apiKey,
       key: 'apiKey',
-      render: (_, row) => row.tenant.assigned_api_key_name || '—',
+      render: (_, row) => (
+        <Space wrap>
+          <Text>{row.tenant.assigned_api_key_name || '—'}</Text>
+          {row.capabilities && !row.capabilities.apiKeyUpdate ? <Tag color="default">readonly</Tag> : null}
+        </Space>
+      ),
+    },
+    {
+      title: copy.planCapabilities,
+      key: 'capabilities',
+      width: 240,
+      render: (_, row) => renderCapabilityTags(copy, row.capabilities),
     },
     {
       title: copy.monitoring,
       key: 'monitoring',
-      render: (_, row) => row.monitoring ? (
+      render: (_, row) => row.capabilities?.monitoring ? (row.monitoring ? (
         <Space size={4} wrap>
           <Tag color="blue">Eq {formatMoney(row.monitoring.equity_usd)}</Tag>
           <Tag color="geekblue">PnL {formatMoney(row.monitoring.unrealized_pnl)}</Tag>
           <Tag color="orange">DD {formatPercent(row.monitoring.drawdown_percent)}</Tag>
           <Tag color="purple">ML {formatPercent(row.monitoring.margin_load_percent)}</Tag>
         </Space>
-      ) : '—',
+      ) : <Tag color="default">off</Tag>) : <Tag color="default">off</Tag>,
     },
     {
       title: copy.status,
@@ -1910,6 +2039,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const strategyPreviewMetrics = strategyPreview?.preset?.metrics || strategyPreviewOffer?.metrics;
   const strategyPreviewPoints = strategyPreview?.preview ? toLineSeriesData(strategyPreview.preview.equity) : [];
   const strategySelectionPreviewSummary = strategySelectionPreview?.preview?.summary || undefined;
+  const strategySelectionPreviewOffers = Array.isArray(strategySelectionPreview?.selectedOffers)
+    ? strategySelectionPreview.selectedOffers
+    : [];
   const strategySelectionPreviewPoints = strategySelectionPreview?.preview ? toLineSeriesData(strategySelectionPreview.preview.equity) : [];
   const algofundPreviewPoints = algofundState?.preview ? toLineSeriesData(algofundState.preview.equityCurve) : [];
   const publishPreviewPoints = publishResponse?.preview ? toLineSeriesData(publishResponse.preview.equityCurve) : [];
@@ -2202,7 +2334,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Spin spinning={strategyLoading && !strategyState}>
                     {strategyState ? (
                       <>
-                        <Card className="battletoads-card" title={copy.connectedTenants}>
+                        <Card className="battletoads-card" title={copy.tenantWorkspace}>
                           <Row gutter={[16, 16]} align="middle">
                             {isAdminSurface ? (
                               <Col xs={24} md={6}>
@@ -2226,7 +2358,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Col xs={24} md={isAdminSurface ? 6 : 8}>
                               <Text strong>{copy.apiKey}</Text>
                               {isAdminSurface ? (
-                                <Select style={{ width: '100%', marginTop: 8 }} value={strategyApiKeyName || undefined} onChange={setStrategyApiKeyName} options={apiKeyOptions} />
+                                <Select
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  value={strategyApiKeyName || undefined}
+                                  onChange={setStrategyApiKeyName}
+                                  options={apiKeyOptions}
+                                  disabled={!strategyApiKeyEditable}
+                                />
                               ) : (
                                 <div style={{ marginTop: 8 }}><Text>{strategyApiKeyName || '—'}</Text></div>
                               )}
@@ -2240,14 +2378,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               )}
                             </Col>
                           </Row>
+                          <Space wrap style={{ marginTop: 12 }}>
+                            <Text strong>{copy.planCapabilities}:</Text>
+                            {renderCapabilityTags(copy, strategyCapabilities)}
+                          </Space>
                           <Space wrap style={{ marginTop: 16 }}>
                             <Tag color="blue">{copy.depositCap}: {formatMoney(strategyState.plan?.max_deposit_total)}</Tag>
                             <Tag color="cyan">{copy.strategyLimit}: {formatNumber(strategyState.plan?.max_strategies_total, 0)}</Tag>
                             <Tag color="gold">{copy.tenantStatus}: {isAdminSurface ? strategyTenantStatus : strategyState.tenant.status}</Tag>
-                            {selectedStrategyTenantSummary?.monitoring ? <Tag color="green">Eq {formatMoney(selectedStrategyTenantSummary.monitoring.equity_usd)}</Tag> : null}
-                            {selectedStrategyTenantSummary?.monitoring ? <Tag color="geekblue">{copy.unrealizedPnl}: {formatMoney(selectedStrategyTenantSummary.monitoring.unrealized_pnl)}</Tag> : null}
-                            {selectedStrategyTenantSummary?.monitoring ? <Tag color="orange">DD {formatPercent(selectedStrategyTenantSummary.monitoring.drawdown_percent)}</Tag> : null}
-                            {selectedStrategyTenantSummary?.monitoring ? <Tag color="purple">{copy.marginLoad}: {formatPercent(selectedStrategyTenantSummary.monitoring.margin_load_percent)}</Tag> : null}
+                            {strategyMonitoringEnabled && selectedStrategyTenantSummary?.monitoring ? <Tag color="green">Eq {formatMoney(selectedStrategyTenantSummary.monitoring.equity_usd)}</Tag> : null}
+                            {strategyMonitoringEnabled && selectedStrategyTenantSummary?.monitoring ? <Tag color="geekblue">{copy.unrealizedPnl}: {formatMoney(selectedStrategyTenantSummary.monitoring.unrealized_pnl)}</Tag> : null}
+                            {strategyMonitoringEnabled && selectedStrategyTenantSummary?.monitoring ? <Tag color="orange">DD {formatPercent(selectedStrategyTenantSummary.monitoring.drawdown_percent)}</Tag> : null}
+                            {strategyMonitoringEnabled && selectedStrategyTenantSummary?.monitoring ? <Tag color="purple">{copy.marginLoad}: {formatPercent(selectedStrategyTenantSummary.monitoring.margin_load_percent)}</Tag> : null}
+                            {!strategyMonitoringEnabled ? <Tag color="default">{copy.monitoring}: off</Tag> : null}
+                          </Space>
+                          <Space wrap style={{ marginTop: 12 }}>
+                            <Button size="small" href="/settings" disabled={!strategySettingsEnabled}>{copy.openSettings}</Button>
+                            <Button size="small" href="/positions" disabled={!strategyMonitoringEnabled}>{copy.openMonitoring}</Button>
+                            <Button size="small" href="/backtest" disabled={!strategyBacktestEnabled}>{copy.openBacktest}</Button>
                           </Space>
                           {isAdminSurface ? (
                             <Space wrap style={{ marginTop: 12 }}>
@@ -2271,6 +2419,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           ) : null}
                         </Card>
 
+                        {!strategyBacktestEnabled ? <Alert type="warning" showIcon message={copy.backtestLockedHint} /> : null}
+
                         <Card className="battletoads-card">
                           <Row gutter={[16, 16]}>
                             <Col xs={24} lg={12}>
@@ -2290,7 +2440,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Tag color="processing">{copy.tradeFrequency}: {strategyPersistedTradeBucket}</Tag>
                           </Space>
                           <Space wrap style={{ marginTop: 16 }}>
-                            <Button type="primary" onClick={() => void saveStrategyProfile()} loading={actionLoading === 'strategy-save'}>{copy.saveProfile}</Button>
+                            <Button type="primary" onClick={() => void saveStrategyProfile()} loading={actionLoading === 'strategy-save'} disabled={!strategySettingsEnabled}>{copy.saveProfile}</Button>
                             <Button onClick={() => void runMaterialize()} loading={actionLoading === 'strategy-materialize'}>{copy.materialize}</Button>
                           </Space>
                         </Card>
@@ -2305,11 +2455,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           extra={strategySelectionPreviewLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}
                         >
                           <Spin spinning={strategySelectionPreviewLoading}>
-                            {strategySelectionPreview && strategySelectionPreview.selectedOffers.length > 0 ? (
+                            {!strategyBacktestEnabled ? (
+                              <Alert type="warning" showIcon message={copy.backtestLockedHint} />
+                            ) : strategySelectionPreview && strategySelectionPreviewOffers.length > 0 ? (
                               <Row gutter={[16, 16]}>
                                 <Col xs={24} lg={8}>
                                   <Descriptions column={1} size="small" bordered>
-                                    <Descriptions.Item label="Offers">{strategySelectionPreview.selectedOffers.length}</Descriptions.Item>
+                                    <Descriptions.Item label="Offers">{strategySelectionPreviewOffers.length}</Descriptions.Item>
                                     <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategySelectionPreviewPeriod)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.finalEquity}>{formatMoney(strategySelectionPreviewDerivedSummary?.finalEquity ?? (strategySelectionPreviewSummary as any)?.finalEquity)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.returnLabel}>{formatPercent(strategySelectionPreviewDerivedSummary?.totalReturnPercent ?? (strategySelectionPreviewSummary as any)?.totalReturnPercent)}</Descriptions.Item>
@@ -2321,7 +2473,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 </Col>
                                 <Col xs={24} lg={16}>
                                   <Space wrap style={{ marginBottom: 12 }}>
-                                    {strategySelectionPreview.selectedOffers.map((item) => (
+                                    {strategySelectionPreviewOffers.map((item) => (
                                       <Tag key={item.offerId} color={item.mode === 'mono' ? 'green' : 'blue'}>
                                         {item.market} · {formatNumber(item.score)}
                                       </Tag>
@@ -2349,7 +2501,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                             <Col xs={24} md={14}>
                               <Space wrap style={{ marginTop: 28 }}>
-                                <Button type="primary" onClick={() => void runStrategyPreview()} loading={strategyPreviewLoading}>{copy.preview}</Button>
+                                <Button type="primary" onClick={() => void runStrategyPreview()} loading={strategyPreviewLoading} disabled={!strategyBacktestEnabled}>{copy.preview}</Button>
                                 {strategyState.profile?.actual_enabled ? <Tag color="success">live enabled</Tag> : <Tag color="default">live disabled</Tag>}
                                 {strategyState.profile?.requested_enabled ? <Tag color="processing">requested active</Tag> : null}
                               </Space>
@@ -2357,7 +2509,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Row>
 
                           <Spin spinning={strategyPreviewLoading}>
-                            {strategyPreview ? (
+                            {!strategyBacktestEnabled ? (
+                              <Alert style={{ marginTop: 12 }} type="warning" showIcon message={copy.backtestLockedHint} />
+                            ) : strategyPreview ? (
                               <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
                                 <Col xs={24} lg={8}>
                                   <Descriptions column={1} size="small" bordered>
@@ -2419,7 +2573,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Spin spinning={algofundLoading && !algofundState}>
                     {algofundState ? (
                       <>
-                        <Card className="battletoads-card" title={copy.connectedTenants}>
+                        <Card className="battletoads-card" title={copy.tenantWorkspace}>
                           <Row gutter={[16, 16]} align="middle">
                             {isAdminSurface ? (
                               <Col xs={24} md={6}>
@@ -2443,7 +2597,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Col xs={24} md={isAdminSurface ? 6 : 8}>
                               <Text strong>{copy.apiKey}</Text>
                               {isAdminSurface ? (
-                                <Select style={{ width: '100%', marginTop: 8 }} value={algofundApiKeyName || undefined} onChange={setAlgofundApiKeyName} options={apiKeyOptions} />
+                                <Select
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  value={algofundApiKeyName || undefined}
+                                  onChange={setAlgofundApiKeyName}
+                                  options={apiKeyOptions}
+                                  disabled={!algofundApiKeyEditable}
+                                />
                               ) : (
                                 <div style={{ marginTop: 8 }}><Text>{algofundApiKeyName || '—'}</Text></div>
                               )}
@@ -2457,14 +2617,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               )}
                             </Col>
                           </Row>
+                          <Space wrap style={{ marginTop: 12 }}>
+                            <Text strong>{copy.planCapabilities}:</Text>
+                            {renderCapabilityTags(copy, algofundCapabilities)}
+                          </Space>
                           <Space wrap style={{ marginTop: 16 }}>
                             <Tag color="blue">{copy.depositCap}: {formatMoney(algofundState.plan?.max_deposit_total)}</Tag>
                             <Tag color="gold">{copy.riskCap}: {formatNumber(algofundState.plan?.risk_cap_max)}</Tag>
                             <Tag color="cyan">{copy.tenantStatus}: {isAdminSurface ? algofundTenantStatus : algofundState.tenant.status}</Tag>
-                            {selectedAlgofundTenantSummary?.monitoring ? <Tag color="green">Eq {formatMoney(selectedAlgofundTenantSummary.monitoring.equity_usd)}</Tag> : null}
-                            {selectedAlgofundTenantSummary?.monitoring ? <Tag color="geekblue">{copy.unrealizedPnl}: {formatMoney(selectedAlgofundTenantSummary.monitoring.unrealized_pnl)}</Tag> : null}
-                            {selectedAlgofundTenantSummary?.monitoring ? <Tag color="orange">DD {formatPercent(selectedAlgofundTenantSummary.monitoring.drawdown_percent)}</Tag> : null}
-                            {selectedAlgofundTenantSummary?.monitoring ? <Tag color="purple">{copy.marginLoad}: {formatPercent(selectedAlgofundTenantSummary.monitoring.margin_load_percent)}</Tag> : null}
+                            {algofundMonitoringEnabled && selectedAlgofundTenantSummary?.monitoring ? <Tag color="green">Eq {formatMoney(selectedAlgofundTenantSummary.monitoring.equity_usd)}</Tag> : null}
+                            {algofundMonitoringEnabled && selectedAlgofundTenantSummary?.monitoring ? <Tag color="geekblue">{copy.unrealizedPnl}: {formatMoney(selectedAlgofundTenantSummary.monitoring.unrealized_pnl)}</Tag> : null}
+                            {algofundMonitoringEnabled && selectedAlgofundTenantSummary?.monitoring ? <Tag color="orange">DD {formatPercent(selectedAlgofundTenantSummary.monitoring.drawdown_percent)}</Tag> : null}
+                            {algofundMonitoringEnabled && selectedAlgofundTenantSummary?.monitoring ? <Tag color="purple">{copy.marginLoad}: {formatPercent(selectedAlgofundTenantSummary.monitoring.margin_load_percent)}</Tag> : null}
+                            {!algofundMonitoringEnabled ? <Tag color="default">{copy.monitoring}: off</Tag> : null}
+                          </Space>
+                          <Space wrap style={{ marginTop: 12 }}>
+                            <Button size="small" href="/settings" disabled={!algofundSettingsEnabled}>{copy.openSettings}</Button>
+                            <Button size="small" href="/positions" disabled={!algofundMonitoringEnabled}>{copy.openMonitoring}</Button>
+                            <Button size="small" href="/backtest" disabled={!algofundBacktestEnabled}>{copy.openBacktest}</Button>
                           </Space>
                           {isAdminSurface ? (
                             <Space wrap style={{ marginTop: 12 }}>
@@ -2488,6 +2658,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           ) : null}
                         </Card>
 
+                        {!algofundBacktestEnabled ? <Alert type="warning" showIcon message={copy.backtestLockedHint} /> : null}
+
                         <Card className="battletoads-card">
                           <Row gutter={[16, 16]} align="middle">
                             <Col xs={24} lg={16}>
@@ -2510,8 +2682,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                             <Col xs={24} lg={8}>
                               <Space wrap style={{ marginTop: 24 }}>
-                                <Button type="primary" onClick={() => void saveAlgofundProfile()} loading={actionLoading === 'algofund-save'}>{copy.saveProfile}</Button>
-                                <Button onClick={() => void refreshAlgofundPreview()}>{copy.preview}</Button>
+                                <Button type="primary" onClick={() => void saveAlgofundProfile()} loading={actionLoading === 'algofund-save'} disabled={!algofundSettingsEnabled}>{copy.saveProfile}</Button>
+                                <Button onClick={() => void refreshAlgofundPreview()} disabled={!algofundBacktestEnabled}>{copy.preview}</Button>
                               </Space>
                             </Col>
                           </Row>
@@ -2520,22 +2692,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                         <Card className="battletoads-card" title={copy.previewTitle} extra={algofundLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}>
                           <Spin spinning={algofundLoading}>
-                            <Row gutter={[16, 16]}>
-                              <Col xs={24} lg={8}>
-                                <Descriptions column={1} size="small" bordered>
-                                  <Descriptions.Item label={copy.sourceSystem}>{algofundState.preview?.sourceSystem?.systemName || '—'}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.period}>{formatPeriodLabel(algofundPreviewPeriod)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.finalEquity}>{formatMoney(algofundPreviewDerivedSummary?.finalEquity ?? algofundState.preview?.summary?.finalEquity)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.returnLabel}>{formatPercent(algofundPreviewDerivedSummary?.totalReturnPercent ?? algofundState.preview?.summary?.totalReturnPercent)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.drawdown}>{formatPercent(algofundPreviewDerivedSummary?.maxDrawdownPercent ?? algofundState.preview?.summary?.maxDrawdownPercent)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.profitFactor}>{formatNumber(algofundState.preview?.summary?.profitFactor)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.trades}>{formatNumber(algofundState.preview?.summary?.tradesCount, 0)}</Descriptions.Item>
-                                </Descriptions>
-                              </Col>
-                              <Col xs={24} lg={16}>
-                                {algofundPreviewPoints.length > 0 ? <ChartComponent data={algofundPreviewPoints} type="line" /> : <Empty description={copy.previewTitle} />}
-                              </Col>
-                            </Row>
+                            {!algofundBacktestEnabled ? (
+                              <Alert type="warning" showIcon message={copy.backtestLockedHint} />
+                            ) : (
+                              <Row gutter={[16, 16]}>
+                                <Col xs={24} lg={8}>
+                                  <Descriptions column={1} size="small" bordered>
+                                    <Descriptions.Item label={copy.sourceSystem}>{algofundState.preview?.sourceSystem?.systemName || '—'}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.period}>{formatPeriodLabel(algofundPreviewPeriod)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(algofundPreviewDerivedSummary?.finalEquity ?? algofundState.preview?.summary?.finalEquity)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(algofundPreviewDerivedSummary?.totalReturnPercent ?? algofundState.preview?.summary?.totalReturnPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(algofundPreviewDerivedSummary?.maxDrawdownPercent ?? algofundState.preview?.summary?.maxDrawdownPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.profitFactor}>{formatNumber(algofundState.preview?.summary?.profitFactor)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.trades}>{formatNumber(algofundState.preview?.summary?.tradesCount, 0)}</Descriptions.Item>
+                                  </Descriptions>
+                                </Col>
+                                <Col xs={24} lg={16}>
+                                  {algofundPreviewPoints.length > 0 ? <ChartComponent data={algofundPreviewPoints} type="line" /> : <Empty description={copy.previewTitle} />}
+                                </Col>
+                              </Row>
+                            )}
                           </Spin>
                         </Card>
 
@@ -2544,10 +2720,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Col xs={24} lg={16}>
                               <Input.TextArea rows={3} value={algofundNote} onChange={(event) => setAlgofundNote(event.target.value)} placeholder={copy.note} />
                               <Space wrap style={{ marginTop: 12 }}>
-                                <Button type="primary" onClick={() => void sendAlgofundRequest('start')} loading={actionLoading === 'algofund-start'}>{copy.requestStart}</Button>
-                                <Button danger onClick={() => void sendAlgofundRequest('stop')} loading={actionLoading === 'algofund-stop'}>{copy.requestStop}</Button>
+                                <Button type="primary" onClick={() => void sendAlgofundRequest('start')} loading={actionLoading === 'algofund-start'} disabled={!algofundStartStopEnabled}>{copy.requestStart}</Button>
+                                <Button danger onClick={() => void sendAlgofundRequest('stop')} loading={actionLoading === 'algofund-stop'} disabled={!algofundStartStopEnabled}>{copy.requestStop}</Button>
                                 {algofundState.profile?.actual_enabled ? <Tag color="success">live enabled</Tag> : <Tag color="default">live disabled</Tag>}
                                 {algofundState.profile?.requested_enabled ? <Tag color="processing">requested start</Tag> : null}
+                                {!algofundStartStopEnabled ? <Tag color="default">{copy.capabilityStartStop}: off</Tag> : null}
                               </Space>
                             </Col>
                             <Col xs={24} lg={8}>

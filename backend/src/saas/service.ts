@@ -49,6 +49,14 @@ type PlanRow = {
   features_json: string;
 };
 
+type TenantCapabilities = {
+  settings: boolean;
+  apiKeyUpdate: boolean;
+  monitoring: boolean;
+  backtest: boolean;
+  startStopRequests: boolean;
+};
+
 type TenantRow = {
   id: number;
   slug: string;
@@ -370,6 +378,61 @@ const safeJsonParse = <T>(value: string | null | undefined, fallback: T): T => {
   } catch (_error) {
     return fallback;
   }
+};
+
+const boolFromFeature = (value: unknown, fallback: boolean): boolean => {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on', 'enabled'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off', 'disabled'].includes(normalized)) {
+    return false;
+  }
+
+  return fallback;
+};
+
+const getPlanFeatures = (plan: PlanRow | null): Record<string, unknown> => {
+  return safeJsonParse<Record<string, unknown>>(plan?.features_json, {});
+};
+
+const resolvePlanCapabilities = (plan: PlanRow | null): TenantCapabilities => {
+  if (!plan) {
+    return {
+      settings: false,
+      apiKeyUpdate: false,
+      monitoring: false,
+      backtest: false,
+      startStopRequests: false,
+    };
+  }
+
+  const features = getPlanFeatures(plan);
+  const defaultMonitoring = asNumber(plan.price_usdt, 0) >= 20;
+  const defaultBacktest = plan.product_mode === 'strategy_client'
+    ? asNumber(plan.max_strategies_total, 0) >= 3
+    : asNumber(plan.price_usdt, 0) >= 50;
+
+  return {
+    settings: boolFromFeature(features.settings, true),
+    apiKeyUpdate: boolFromFeature(features.apiKeyUpdate, true),
+    monitoring: boolFromFeature(features.monitoring, defaultMonitoring),
+    backtest: boolFromFeature(features.backtest, defaultBacktest),
+    startStopRequests: boolFromFeature(features.startStopRequests, Number(plan.allow_ts_start_stop_requests || 0) === 1),
+  };
 };
 
 const findLatestFile = (matcher: RegExp): string => {
@@ -1080,12 +1143,16 @@ const listTenantSummaries = async () => {
 
   for (const tenant of (Array.isArray(rows) ? rows : []) as TenantRow[]) {
     const plan = await getPlanForTenant(tenant.id);
+    const capabilities = resolvePlanCapabilities(plan);
     const strategyProfile = await getStrategyClientProfile(tenant.id);
     const algofundProfile = await getAlgofundProfile(tenant.id);
-    const monitoring = tenant.assigned_api_key_name ? await getMonitoringLatest(tenant.assigned_api_key_name).catch(() => null) : null;
+    const monitoring = capabilities.monitoring && tenant.assigned_api_key_name
+      ? await getMonitoringLatest(tenant.assigned_api_key_name).catch(() => null)
+      : null;
     out.push({
       tenant,
       plan,
+      capabilities,
       strategyProfile: strategyProfile ? {
         ...strategyProfile,
         selectedOfferIds: safeJsonParse<string[]>(strategyProfile.selected_offer_ids_json, []),
@@ -1109,13 +1176,19 @@ export const getStrategyClientState = async (tenantId: number) => {
     throw new Error('Tenant is not a strategy client');
   }
   const plan = await getPlanForTenant(tenantId);
+  const capabilities = resolvePlanCapabilities(plan);
   const profile = await getStrategyClientProfile(tenantId);
   const catalog = loadLatestClientCatalog();
   const recommendedSets = buildRecommendedSets(catalog);
+  const monitoring = capabilities.monitoring && tenant.assigned_api_key_name
+    ? await getMonitoringLatest(tenant.assigned_api_key_name).catch(() => null)
+    : null;
 
   return {
     tenant,
     plan,
+    capabilities,
+    monitoring,
     profile: profile ? {
       ...profile,
       selectedOfferIds: safeJsonParse<string[]>(profile.selected_offer_ids_json, []),
@@ -1179,6 +1252,10 @@ export const previewStrategyClientOffer = async (
   tradeFrequencyScore?: number
 ) => {
   const state = await getStrategyClientState(tenantId);
+  if (!state.capabilities?.backtest) {
+    throw new Error('Backtest preview is not available for the current plan');
+  }
+
   if (!state.catalog) {
     throw new Error('Client catalog JSON not found in results/.');
   }
@@ -1274,6 +1351,10 @@ export const previewStrategyClientSelection = async (
   }
 ) => {
   const state = await getStrategyClientState(tenantId);
+  if (!state.capabilities?.backtest) {
+    throw new Error('Backtest preview is not available for the current plan');
+  }
+
   if (!state.catalog) {
     throw new Error('Client catalog JSON not found in results/.');
   }
@@ -1559,9 +1640,42 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
     throw new Error('Algofund plan/profile not found');
   }
 
-  const sourceSystem = await ensurePublishedSourceSystem();
+  const capabilities = resolvePlanCapabilities(plan);
+  const maxPreviewRiskMultiplier = allowPreviewAbovePlan
+    ? Math.max(10, asNumber(plan.risk_cap_max, 1))
+    : asNumber(plan.risk_cap_max, 1);
+  const riskMultiplier = Math.max(0, Math.min(
+    requestedRiskMultiplier !== undefined ? requestedRiskMultiplier : asNumber(profile.risk_multiplier, 1),
+    maxPreviewRiskMultiplier
+  ));
+
   const sweep = loadLatestSweep();
   const period = buildPeriodInfo(sweep);
+
+  if (!capabilities.backtest) {
+    return {
+      tenant,
+      plan,
+      capabilities,
+      profile: {
+        ...profile,
+        latestPreview: safeJsonParse<Record<string, unknown>>(profile.latest_preview_json, {}),
+      },
+      preview: {
+        riskMultiplier,
+        sourceSystem: null,
+        summary: null,
+        period,
+        equityCurve: [],
+        blockedByPlan: true,
+        blockedReason: 'Backtest preview is not available for the current plan',
+      },
+      requests: await getAlgofundRequestsByTenant(tenantId),
+      catalog: loadLatestClientCatalog(),
+    };
+  }
+
+  const sourceSystem = await ensurePublishedSourceSystem();
   const basePreviewResult = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
     bars: 6000,
     warmupBars: 400,
@@ -1571,15 +1685,6 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
     slippagePercent: 0.05,
     fundingRatePercent: 0,
   });
-
-  const maxPreviewRiskMultiplier = allowPreviewAbovePlan
-    ? Math.max(10, asNumber(plan.risk_cap_max, 1))
-    : asNumber(plan.risk_cap_max, 1);
-
-  const riskMultiplier = Math.max(0, Math.min(
-    requestedRiskMultiplier !== undefined ? requestedRiskMultiplier : asNumber(profile.risk_multiplier, 1),
-    maxPreviewRiskMultiplier
-  ));
 
   const scaledEquity = scaleEquityPreview(basePreviewResult.equityCurve, riskMultiplier);
   const latest = scaledEquity.length > 0 ? scaledEquity[scaledEquity.length - 1] : null;
@@ -1609,6 +1714,7 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
   return {
     tenant,
     plan,
+    capabilities,
     profile: {
       ...profile,
       latestPreview: safeJsonParse<Record<string, unknown>>(profile.latest_preview_json, {}),
@@ -1652,9 +1758,15 @@ export const updateAlgofundState = async (tenantId: number, payload: { riskMulti
 
 export const requestAlgofundAction = async (tenantId: number, requestType: 'start' | 'stop', note: string) => {
   const tenant = await getTenantById(tenantId);
+  const plan = await getPlanForTenant(tenantId);
   const profile = await getAlgofundProfile(tenantId);
-  if (!profile) {
+  if (!profile || !plan) {
     throw new Error(`Algofund profile not found for tenant ${tenant.slug}`);
+  }
+
+  const capabilities = resolvePlanCapabilities(plan);
+  if (!capabilities.startStopRequests) {
+    throw new Error('Start/stop requests are not available for the current plan');
   }
 
   await db.run(
@@ -1691,6 +1803,11 @@ export const resolveAlgofundRequest = async (requestId: number, status: RequestS
   const profile = await getAlgofundProfile(row.tenant_id);
   if (!plan || !profile) {
     throw new Error('Algofund plan/profile not found');
+  }
+
+  const capabilities = resolvePlanCapabilities(plan);
+  if (status === 'approved' && !capabilities.startStopRequests) {
+    throw new Error('Start/stop requests are not available for the current plan');
   }
 
   if (status === 'approved') {
