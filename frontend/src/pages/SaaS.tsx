@@ -428,6 +428,7 @@ type Copy = {
   requestResolved: string;
   publishReady: string;
   seedReady: string;
+  emergencyStop: string;
 };
 
 const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
@@ -508,6 +509,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     requestResolved: 'Запрос обработан',
     publishReady: 'Admin TS опубликован',
     seedReady: 'Demo tenants обновлены',
+    emergencyStop: 'Стоп + закрыть позиции',
   },
   en: {
     title: 'SaaS Control Room',
@@ -586,6 +588,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     requestResolved: 'Request resolved',
     publishReady: 'Admin TS published',
     seedReady: 'Demo tenants refreshed',
+    emergencyStop: 'Stop + close positions',
   },
   tr: {
     title: 'SaaS Control Room',
@@ -664,6 +667,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     requestResolved: 'Talep cozuldu',
     publishReady: 'Admin TS yayinlandi',
     seedReady: 'Demo tenantlar guncellendi',
+    emergencyStop: 'Durdur + pozisyonlari kapat',
   },
 };
 
@@ -1009,8 +1013,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!algofundState?.profile) {
       return;
     }
-    setAlgofundRiskMultiplier(Number(algofundState.preview?.riskMultiplier ?? algofundState.profile.risk_multiplier ?? 1));
-    setAlgofundApiKeyName(algofundState.profile.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || '');
+    setAlgofundRiskMultiplier(Number(algofundState.preview?.riskMultiplier ?? algofundState.profile?.risk_multiplier ?? 1));
+    setAlgofundApiKeyName(algofundState.profile?.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || '');
     setAlgofundTenantDisplayName(algofundState.tenant.display_name || '');
     setAlgofundTenantStatus(algofundState.tenant.status || 'active');
     setAlgofundTenantPlanCode(algofundState.plan?.code || '');
@@ -1053,21 +1057,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   }, [runStrategyPreview, strategyPreviewOfferId, strategyState, strategyTenantId]);
 
   useEffect(() => {
-    if (!algofundTenantId || !algofundState) {
+    if (!algofundTenantId || !algofundState || algofundLoading) {
       return;
     }
 
     const currentPreviewRisk = Number(algofundState.preview?.riskMultiplier ?? algofundState.profile?.risk_multiplier ?? 1);
-    if (Math.abs(currentPreviewRisk - algofundRiskMultiplier) < 0.0001) {
+    const targetRisk = Number(algofundRiskMultiplier);
+    if (!Number.isFinite(targetRisk)) {
+      return;
+    }
+
+    if (Math.abs(currentPreviewRisk - targetRisk) < 0.01) {
       return;
     }
 
     const timer = window.setTimeout(() => {
-      void loadAlgofundTenant(algofundTenantId, algofundRiskMultiplier, isAdminSurface);
-    }, 400);
+      void loadAlgofundTenant(algofundTenantId, Number(targetRisk.toFixed(2)), isAdminSurface);
+    }, 500);
 
     return () => window.clearTimeout(timer);
-  }, [algofundRiskMultiplier, algofundTenantId, algofundState, isAdminSurface]);
+  }, [algofundLoading, algofundRiskMultiplier, algofundTenantId, algofundState, isAdminSurface]);
 
   const saveStrategyProfile = async () => {
     if (!strategyTenantId) {
@@ -1158,6 +1167,48 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       await loadStrategyTenant(strategyTenantId);
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to save tenant'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const emergencyStopStrategy = async () => {
+    const apiKeyName = strategyApiKeyName || strategyState?.tenant?.assigned_api_key_name;
+    if (!apiKeyName) {
+      messageApi.warning('No API key assigned to this tenant');
+      return;
+    }
+    setActionLoading('strategy-emergency');
+    try {
+      await axios.post(`/api/api-keys/${encodeURIComponent(apiKeyName)}/actions`, { action: 'pause-bots' });
+      await axios.post(`/api/api-keys/${encodeURIComponent(apiKeyName)}/actions`, { action: 'close-positions' });
+      messageApi.success(`Bots paused and positions closed for ${apiKeyName}`);
+      if (strategyTenantId) {
+        await loadStrategyTenant(strategyTenantId);
+      }
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Emergency stop failed'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const emergencyStopAlgofund = async () => {
+    const apiKeyName = algofundApiKeyName || algofundState?.tenant?.assigned_api_key_name;
+    if (!apiKeyName) {
+      messageApi.warning('No API key assigned to this tenant');
+      return;
+    }
+    setActionLoading('algofund-emergency');
+    try {
+      await axios.post(`/api/api-keys/${encodeURIComponent(apiKeyName)}/actions`, { action: 'pause-bots' });
+      await axios.post(`/api/api-keys/${encodeURIComponent(apiKeyName)}/actions`, { action: 'close-positions' });
+      messageApi.success(`Bots paused and positions closed for ${apiKeyName}`);
+      if (algofundTenantId) {
+        await loadAlgofundTenant(algofundTenantId, undefined, isAdminSurface);
+      }
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Emergency stop failed'));
     } finally {
       setActionLoading('');
     }
@@ -1709,6 +1760,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       <Spin spinning={summaryLoading && !summary}>
         <Tabs
           className="saas-tabs"
+          destroyInactiveTabPane
           activeKey={activeTab}
           onChange={(key) => setActiveTab(key as SaasTabKey)}
           items={[
@@ -1922,6 +1974,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Button type="primary" onClick={() => void saveStrategyTenantAdmin()} loading={actionLoading === 'strategy-tenant-save'}>
                                 {copy.saveTenant}
                               </Button>
+                              <Button danger onClick={() => void emergencyStopStrategy()} loading={actionLoading === 'strategy-emergency'}>
+                                {copy.emergencyStop}
+                              </Button>
                             </Space>
                           ) : null}
                         </Card>
@@ -2096,6 +2151,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Button type="primary" onClick={() => void saveAlgofundTenantAdmin()} loading={actionLoading === 'algofund-tenant-save'}>
                                 {copy.saveTenant}
                               </Button>
+                              <Button danger onClick={() => void emergencyStopAlgofund()} loading={actionLoading === 'algofund-emergency'}>
+                                {copy.emergencyStop}
+                              </Button>
                             </Space>
                           ) : null}
                         </Card>
@@ -2156,14 +2214,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Space wrap style={{ marginTop: 12 }}>
                                 <Button type="primary" onClick={() => void sendAlgofundRequest('start')} loading={actionLoading === 'algofund-start'}>{copy.requestStart}</Button>
                                 <Button danger onClick={() => void sendAlgofundRequest('stop')} loading={actionLoading === 'algofund-stop'}>{copy.requestStop}</Button>
-                                {algofundState.profile.actual_enabled ? <Tag color="success">live enabled</Tag> : <Tag color="default">live disabled</Tag>}
-                                {algofundState.profile.requested_enabled ? <Tag color="processing">requested start</Tag> : null}
+                                {algofundState.profile?.actual_enabled ? <Tag color="success">live enabled</Tag> : <Tag color="default">live disabled</Tag>}
+                                {algofundState.profile?.requested_enabled ? <Tag color="processing">requested start</Tag> : null}
                               </Space>
                             </Col>
                             <Col xs={24} lg={8}>
                               <Descriptions column={1} size="small" bordered>
                                 <Descriptions.Item label={copy.status}>{algofundState.tenant.status}</Descriptions.Item>
-                                <Descriptions.Item label={copy.apiKey}>{algofundState.profile.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || '—'}</Descriptions.Item>
+                                <Descriptions.Item label={copy.apiKey}>{algofundState.profile?.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || '—'}</Descriptions.Item>
                                 <Descriptions.Item label={copy.riskCap}>{formatNumber(algofundState.plan?.risk_cap_max)}</Descriptions.Item>
                               </Descriptions>
                             </Col>

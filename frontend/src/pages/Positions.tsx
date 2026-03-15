@@ -116,7 +116,7 @@ const Positions: React.FC = () => {
 
   const fetchApiKeys = async () => {
     try {
-      const res = await axios.get('http://localhost:3001/api/api-keys');
+      const res = await axios.get('/api/api-keys');
       const keys: ApiKey[] = Array.isArray(res.data) ? res.data : [];
       setApiKeys(keys);
 
@@ -149,7 +149,7 @@ const Positions: React.FC = () => {
     setErrorByKey((prev) => ({ ...prev, [apiKeyName]: '' }));
 
     try {
-      const res = await axios.get(`http://localhost:3001/api/positions/${apiKeyName}`);
+      const res = await axios.get(`/api/positions/${apiKeyName}`);
       const normalized = (Array.isArray(res.data) ? res.data : []).map((pos: any) => ({
         symbol: pos.symbol,
         side: pos.side,
@@ -186,7 +186,7 @@ const Positions: React.FC = () => {
     setLoadingByKey((prev) => ({ ...prev, [`orders:${apiKeyName}`]: true }));
 
     try {
-      const res = await axios.get(`http://localhost:3001/api/orders/${apiKeyName}`);
+      const res = await axios.get(`/api/orders/${apiKeyName}`);
       const normalized = (Array.isArray(res.data) ? res.data : []).map((order: any) => ({
         orderId: String(order.orderId || order.orderLinkId || `${order.symbol}_${order.createdTime || Date.now()}`),
         symbol: String(order.symbol || ''),
@@ -216,7 +216,7 @@ const Positions: React.FC = () => {
     setLoadingByKey((prev) => ({ ...prev, [`trades:${apiKeyName}`]: true }));
 
     try {
-      const res = await axios.get(`http://localhost:3001/api/trades/${apiKeyName}`, {
+      const res = await axios.get(`/api/trades/${apiKeyName}`, {
         params: {
           limit: 200,
         },
@@ -255,7 +255,7 @@ const Positions: React.FC = () => {
 
     try {
       setActionLoading((prev) => ({ ...prev, [actionKey]: true }));
-      await axios.post(`http://localhost:3001/api/positions/${apiKeyName}/close-percent`, {
+      await axios.post(`/api/positions/${apiKeyName}/close-percent`, {
         symbol: row.symbol,
         side: row.side,
         percent,
@@ -294,9 +294,9 @@ const Positions: React.FC = () => {
       setActionLoading((prev) => ({ ...prev, [actionKey]: true }));
 
       if (action === 'cancel-orders') {
-        await axios.post(`http://localhost:3001/api/orders/${apiKeyName}/cancel-all`);
+        await axios.post(`/api/orders/${apiKeyName}/cancel-all`);
       } else {
-        await axios.post(`http://localhost:3001/api/positions/${apiKeyName}/close-all`);
+        await axios.post(`/api/positions/${apiKeyName}/close-all`);
       }
 
       message.success(successText);
@@ -324,7 +324,7 @@ const Positions: React.FC = () => {
 
     try {
       setActionLoading((prev) => ({ ...prev, [actionKey]: true }));
-      await axios.post(`http://localhost:3001/api/manual-order/${apiKeyName}`, {
+      await axios.post(`/api/manual-order/${apiKeyName}`, {
         symbol: draft.symbol,
         side: draft.side,
         qty: String(draft.qty),
