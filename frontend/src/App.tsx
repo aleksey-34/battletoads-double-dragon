@@ -12,6 +12,7 @@ import Login from './pages/Login';
 import Logs from './pages/Logs';
 import Backtest from './pages/Backtest';
 import SaaS from './pages/SaaS';
+import TradingSystems from './pages/TradingSystems';
 import { I18nProvider, useI18n, UILanguage } from './i18n';
 import './App.css';
 
@@ -35,7 +36,8 @@ function AppShell() {
         { key: '3', label: <Link to="/positions">{t('nav.positions', 'Positions')}</Link> },
         { key: '4', label: <Link to="/logs">{t('nav.logs', 'Logs')}</Link> },
         { key: '5', label: <Link to="/backtest">{t('nav.backtest', 'Backtest')}</Link> },
-        { key: '6', label: <Link to="/saas">{t('nav.saas', 'SaaS')}</Link> },
+        { key: '6', label: <Link to="/trading-systems">Trading Systems</Link> },
+        { key: '7', label: <Link to="/saas">{t('nav.saas', 'SaaS')}</Link> },
       ];
 
   const selectedMenuKey = useMemo(() => {
@@ -43,7 +45,8 @@ function AppShell() {
     if (location.pathname.startsWith('/positions')) return '3';
     if (location.pathname.startsWith('/logs')) return '4';
     if (location.pathname.startsWith('/backtest')) return '5';
-    if (location.pathname.startsWith('/saas')) return '6';
+    if (location.pathname.startsWith('/trading-systems')) return '6';
+    if (location.pathname.startsWith('/saas')) return '7';
     return '1';
   }, [location.pathname]);
 
@@ -150,6 +153,7 @@ function AppShell() {
           <Route path="/positions" element={<Positions />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/backtest" element={<Backtest />} />
+          <Route path="/trading-systems" element={<TradingSystems />} />
           <Route path="/saas" element={<SaaS surfaceMode="admin" />} />
           <Route path="/saas/admin" element={<SaaS initialTab="admin" surfaceMode="admin" />} />
           <Route path="/saas/strategy-client" element={<SaaS initialTab="strategy-client" surfaceMode="strategy-client" />} />

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Button,
@@ -6,6 +6,7 @@ import {
   Col,
   DatePicker,
   InputNumber,
+  Popconfirm,
   Row,
   Select,
   Space,
@@ -170,6 +171,7 @@ const Backtest: React.FC = () => {
   const [runLoading, setRunLoading] = useState<boolean>(false);
   const [historyLoading, setHistoryLoading] = useState<boolean>(false);
   const [errorText, setErrorText] = useState<string>('');
+  const [deletingRunId, setDeletingRunId] = useState<number | null>(null);
 
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [historyRows, setHistoryRows] = useState<BacktestRunRow[]>([]);
@@ -184,6 +186,7 @@ const Backtest: React.FC = () => {
     axios.defaults.headers.common.Authorization = `Bearer ${password}`;
     void loadApiKeys();
     void loadHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -195,12 +198,13 @@ const Backtest: React.FC = () => {
     }
 
     void loadStrategies(apiKeyName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKeyName]);
 
-  const loadApiKeys = async () => {
+  const loadApiKeys = useCallback(async () => {
     setLoadingApiKeys(true);
     try {
-      const res = await axios.get('http://localhost:3001/api/api-keys');
+      const res = await axios.get('/api/api-keys');
       const rows = Array.isArray(res.data) ? (res.data as ApiKeyRecord[]) : [];
       setApiKeys(rows);
 
@@ -213,14 +217,14 @@ const Backtest: React.FC = () => {
     } finally {
       setLoadingApiKeys(false);
     }
-  };
+  }, [t]);
 
-  const loadStrategies = async (selectedApiKeyName: string) => {
+  const loadStrategies = useCallback(async (selectedApiKeyName: string) => {
     setLoadingStrategies(true);
     setErrorText('');
 
     try {
-      const res = await axios.get(`http://localhost:3001/api/backtest/strategies/${selectedApiKeyName}`);
+      const res = await axios.get(`/api/backtest/strategies/${selectedApiKeyName}`);
       const rows = Array.isArray(res.data) ? (res.data as StrategyRecord[]) : [];
       setStrategies(rows);
 
@@ -246,12 +250,12 @@ const Backtest: React.FC = () => {
     } finally {
       setLoadingStrategies(false);
     }
-  };
+  }, [t]);
 
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const res = await axios.get('http://localhost:3001/api/backtest/runs', {
+      const res = await axios.get('/api/backtest/runs', {
         params: {
           limit: 30,
         },
@@ -264,7 +268,7 @@ const Backtest: React.FC = () => {
     } finally {
       setHistoryLoading(false);
     }
-  };
+  }, [t]);
 
   const runBacktest = async () => {
     if (!apiKeyName) {
@@ -306,7 +310,7 @@ const Backtest: React.FC = () => {
         payload.strategyIds = strategyIds;
       }
 
-      const res = await axios.post('http://localhost:3001/api/backtest/run', {
+      const res = await axios.post('/api/backtest/run', {
         ...payload,
         saveResult: true,
       });
@@ -338,12 +342,29 @@ const Backtest: React.FC = () => {
 
   const loadRunById = async (id: number) => {
     try {
-      const res = await axios.get(`http://localhost:3001/api/backtest/runs/${id}`);
+      const res = await axios.get(`/api/backtest/runs/${id}`);
       setResult(res.data as BacktestResult);
       message.success(t('backtest.msg.loadedRun', 'Loaded run #{id}', { id }));
     } catch (error: any) {
       console.error(error);
       message.error(error?.response?.data?.error || t('backtest.msg.loadRunFailed', 'Failed to load run #{id}', { id }));
+    }
+  };
+
+  const deleteRunById = async (id: number) => {
+    setDeletingRunId(id);
+    try {
+      await axios.delete(`/api/backtest/runs/${id}`);
+      if (result?.runId === id) {
+        setResult(null);
+      }
+      await loadHistory();
+      message.success(t('backtest.msg.deletedRun', 'Deleted run #{id}', { id }));
+    } catch (error: any) {
+      console.error(error);
+      message.error(error?.response?.data?.error || t('backtest.msg.deleteRunFailed', 'Failed to delete run #{id}', { id }));
+    } finally {
+      setDeletingRunId(null);
     }
   };
 
@@ -735,9 +756,19 @@ const Backtest: React.FC = () => {
               title: t('backtest.col.action', 'Action'),
               key: 'action',
               render: (_: unknown, row: BacktestRunRow) => (
-                <Button size="small" onClick={() => { void loadRunById(row.id); }}>
-                  {t('backtest.load', 'Load')}
-                </Button>
+                <Space wrap>
+                  <Button size="small" onClick={() => { void loadRunById(row.id); }}>
+                    {t('backtest.load', 'Load')}
+                  </Button>
+                  <Popconfirm
+                    title={t('backtest.deleteConfirm', 'Delete run #{id}?', { id: row.id })}
+                    onConfirm={() => { void deleteRunById(row.id); }}
+                  >
+                    <Button size="small" danger loading={deletingRunId === row.id}>
+                      {t('backtest.delete', 'Delete')}
+                    </Button>
+                  </Popconfirm>
+                </Space>
               ),
             },
           ]}

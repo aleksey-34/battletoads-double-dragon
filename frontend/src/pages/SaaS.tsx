@@ -278,6 +278,32 @@ type StrategyPreviewResponse = {
   };
 };
 
+type StrategySelectionPreviewResponse = {
+  period?: PeriodInfo | null;
+  controls?: {
+    riskScore?: number;
+    tradeFrequencyScore?: number;
+    riskLevel?: Level3;
+    tradeFrequencyLevel?: Level3;
+  };
+  selectedOffers: Array<{
+    offerId: string;
+    titleRu: string;
+    market: string;
+    mode: 'mono' | 'synth';
+    strategyId: number;
+    strategyName: string;
+    score: number;
+    metrics: MetricSet;
+  }>;
+  preview: {
+    source?: string;
+    summary?: Record<string, unknown> | null;
+    equity?: EquityPoint[] | { points?: EquityPoint[]; summary?: Record<string, unknown> };
+    trades?: Array<Record<string, unknown>>;
+  };
+};
+
 type MaterializedStrategy = {
   id?: number;
   name: string;
@@ -389,6 +415,7 @@ type Copy = {
   monitoring: string;
   requestQueue: string;
   previewTitle: string;
+  selectedOffersPreview: string;
   publishedTsPreview: string;
   noTenant: string;
   sourceSystem: string;
@@ -417,6 +444,8 @@ type Copy = {
   planGrid: string;
   previewUsesNearestPreset: string;
   previewPlanCapHint: string;
+  previewRefreshing: string;
+  openTradingSystems: string;
   persistedBucket: string;
   pending: string;
   approved: string;
@@ -470,6 +499,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     monitoring: 'Monitoring',
     requestQueue: 'Очередь запросов',
     previewTitle: 'Preview ожиданий',
+    selectedOffersPreview: 'Preview выбранных офферов',
     publishedTsPreview: 'Preview опубликованного admin TS',
     noTenant: 'Тенант этого типа пока не найден.',
     sourceSystem: 'Source system',
@@ -498,6 +528,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     planGrid: 'Тарифная сетка',
     previewUsesNearestPreset: 'Preview использует ближайший пресет и при сохранении маппится в low / medium / high.',
     previewPlanCapHint: 'В админ-режиме preview можно смотреть выше лимита тарифа, но сохранение все равно ограничивается тарифным cap.',
+    previewRefreshing: 'Пересчитываем preview...',
+    openTradingSystems: 'Открыть Trading Systems',
     persistedBucket: 'Сохраняемый bucket',
     pending: 'Ожидает',
     approved: 'Одобрено',
@@ -549,6 +581,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     monitoring: 'Monitoring',
     requestQueue: 'Request queue',
     previewTitle: 'Expectation preview',
+    selectedOffersPreview: 'Selected offers preview',
     publishedTsPreview: 'Published admin TS preview',
     noTenant: 'No tenant of this type is available yet.',
     sourceSystem: 'Source system',
@@ -577,6 +610,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     planGrid: 'Plan grid',
     previewUsesNearestPreset: 'Preview uses the nearest preset and save still maps to low / medium / high.',
     previewPlanCapHint: 'In admin mode you can preview above the plan cap, but saving still respects the subscribed cap.',
+    previewRefreshing: 'Refreshing preview...',
+    openTradingSystems: 'Open Trading Systems',
     persistedBucket: 'Saved bucket',
     pending: 'Pending',
     approved: 'Approved',
@@ -628,6 +663,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     monitoring: 'Monitoring',
     requestQueue: 'Talep kuyrugu',
     previewTitle: 'Beklenti onizlemesi',
+    selectedOffersPreview: 'Secilen teklifler onizlemesi',
     publishedTsPreview: 'Yayinlanan admin TS onizlemesi',
     noTenant: 'Bu tipte tenant yok.',
     sourceSystem: 'Source system',
@@ -656,6 +692,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     planGrid: 'Plan tablosu',
     previewUsesNearestPreset: 'Onizleme en yakin preseti kullanir ve kayit sirasinda yine low / medium / high olarak saklanir.',
     previewPlanCapHint: 'Admin modunda plan limitinin ustunu onizleyebilirsiniz, ancak kayit yine mevcut plan limitine gore yapilir.',
+    previewRefreshing: 'Onizleme guncelleniyor...',
+    openTradingSystems: 'Trading Systems ac',
     persistedBucket: 'Kaydedilecek bucket',
     pending: 'Bekliyor',
     approved: 'Onaylandi',
@@ -892,6 +930,27 @@ const formatDateShort = (value?: string | null): string => {
   return date.toISOString().slice(0, 10);
 };
 
+const formatPeriodCoverage = (period?: PeriodInfo | null): string => {
+  if (!period?.dateFrom || !period?.dateTo) {
+    return '';
+  }
+
+  const fromMs = Date.parse(period.dateFrom);
+  const toMs = Date.parse(period.dateTo);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) {
+    return '';
+  }
+
+  const diffMs = toMs - fromMs;
+  const days = diffMs / (24 * 60 * 60 * 1000);
+  if (days >= 1) {
+    return ` · ${Math.round(days)}d`;
+  }
+
+  const hours = diffMs / (60 * 60 * 1000);
+  return ` · ${Math.max(1, Math.round(hours))}h`;
+};
+
 const formatPeriodLabel = (period?: PeriodInfo | null): string => {
   if (!period) {
     return '—';
@@ -900,7 +959,8 @@ const formatPeriodLabel = (period?: PeriodInfo | null): string => {
   const from = formatDateShort(period.dateFrom);
   const to = formatDateShort(period.dateTo);
   const interval = period.interval ? ` · ${period.interval}` : '';
-  return `${from} -> ${to}${interval}`;
+  const coverage = formatPeriodCoverage(period);
+  return `${from} -> ${to}${interval}${coverage}`;
 };
 
 export const hydrateStrategyPreview = (
@@ -958,6 +1018,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [strategyPreviewOfferId, setStrategyPreviewOfferId] = useState('');
   const [strategyPreview, setStrategyPreview] = useState<StrategyPreviewResponse | null>(null);
   const [strategyPreviewLoading, setStrategyPreviewLoading] = useState(false);
+  const [strategySelectionPreview, setStrategySelectionPreview] = useState<StrategySelectionPreviewResponse | null>(null);
+  const [strategySelectionPreviewLoading, setStrategySelectionPreviewLoading] = useState(false);
   const [materializeResponse, setMaterializeResponse] = useState<MaterializeResponse | null>(null);
   const [algofundRiskMultiplier, setAlgofundRiskMultiplier] = useState(1);
   const [algofundApiKeyName, setAlgofundApiKeyName] = useState('');
@@ -1200,6 +1262,35 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   }, [copy.previewReady, messageApi, strategyPreviewOfferId, strategyRiskInput, strategyState, strategyTenantId, strategyTradeInput]);
 
+  const runStrategySelectionPreview = useCallback(async (silent = false) => {
+    if (!strategyTenantId || strategyOfferIds.length === 0) {
+      setStrategySelectionPreview(null);
+      return;
+    }
+
+    setStrategySelectionPreviewLoading(true);
+    try {
+      const response = await axios.post<StrategySelectionPreviewResponse>(`/api/saas/strategy-clients/${strategyTenantId}/selection-preview`, {
+        selectedOfferIds: strategyOfferIds,
+        riskLevel: sliderValueToLevel(strategyRiskInput),
+        tradeFrequencyLevel: sliderValueToLevel(strategyTradeInput),
+        riskScore: strategyRiskInput,
+        tradeFrequencyScore: strategyTradeInput,
+      });
+      setStrategySelectionPreview(response.data);
+      if (!silent) {
+        messageApi.success(copy.previewReady);
+      }
+    } catch (error: any) {
+      setStrategySelectionPreview(null);
+      if (!silent) {
+        messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to build selected offers preview'));
+      }
+    } finally {
+      setStrategySelectionPreviewLoading(false);
+    }
+  }, [copy.previewReady, messageApi, strategyOfferIds, strategyRiskInput, strategyTenantId, strategyTradeInput]);
+
   useEffect(() => {
     if (!strategyTenantId || !strategyPreviewOfferId || !strategyState) {
       return;
@@ -1211,6 +1302,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     return () => window.clearTimeout(timer);
   }, [runStrategyPreview, strategyPreviewOfferId, strategyState, strategyTenantId]);
+
+  useEffect(() => {
+    if (!strategyTenantId || !strategyState) {
+      return;
+    }
+
+    if (strategyOfferIds.length === 0) {
+      setStrategySelectionPreview(null);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void runStrategySelectionPreview(true);
+    }, 350);
+
+    return () => window.clearTimeout(timer);
+  }, [runStrategySelectionPreview, strategyOfferIds, strategyState, strategyTenantId]);
 
   useEffect(() => {
     if (!algofundTenantId || !algofundState || algofundLoading) {
@@ -1615,9 +1723,25 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       key: 'action',
       width: 170,
       render: (_, row) => row.tenant.product_mode === 'strategy_client' ? (
-        <Button size="small" onClick={() => setStrategyTenantId(row.tenant.id)}>{copy.openStrategyClient}</Button>
+        <Button
+          size="small"
+          onClick={() => {
+            setStrategyTenantId(row.tenant.id);
+            setActiveTab('strategy-client');
+          }}
+        >
+          {copy.openStrategyClient}
+        </Button>
       ) : (
-        <Button size="small" onClick={() => setAlgofundTenantId(row.tenant.id)}>{copy.openAlgofund}</Button>
+        <Button
+          size="small"
+          onClick={() => {
+            setAlgofundTenantId(row.tenant.id);
+            setActiveTab('algofund');
+          }}
+        >
+          {copy.openAlgofund}
+        </Button>
       ),
     },
   ];
@@ -1785,13 +1909,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const strategyPreviewOffer = strategyPreview?.offer || (strategyPreview?.offerId ? (strategyState?.offers || []).find((offer) => offer.offerId === strategyPreview.offerId) || null : null);
   const strategyPreviewMetrics = strategyPreview?.preset?.metrics || strategyPreviewOffer?.metrics;
   const strategyPreviewPoints = strategyPreview?.preview ? toLineSeriesData(strategyPreview.preview.equity) : [];
+  const strategySelectionPreviewSummary = strategySelectionPreview?.preview?.summary || undefined;
+  const strategySelectionPreviewPoints = strategySelectionPreview?.preview ? toLineSeriesData(strategySelectionPreview.preview.equity) : [];
   const algofundPreviewPoints = algofundState?.preview ? toLineSeriesData(algofundState.preview.equityCurve) : [];
   const publishPreviewPoints = publishResponse?.preview ? toLineSeriesData(publishResponse.preview.equityCurve) : [];
   const strategyPreviewDerivedSummary = summarizeLineSeries(strategyPreviewPoints);
+  const strategySelectionPreviewDerivedSummary = summarizeLineSeries(strategySelectionPreviewPoints);
   const algofundPreviewDerivedSummary = summarizeLineSeries(algofundPreviewPoints);
   const publishPreviewDerivedSummary = summarizeLineSeries(publishPreviewPoints);
   const summaryPeriod = summary?.sweepSummary?.period || null;
   const strategyPreviewPeriod = strategyPreview?.period || summaryPeriod;
+  const strategySelectionPreviewPeriod = strategySelectionPreview?.period || summaryPeriod;
   const algofundPreviewPeriod = algofundState?.preview?.period || summaryPeriod;
   const publishPreviewPeriod = publishResponse?.preview?.period || summaryPeriod;
   const strategyPersistedRiskBucket = sliderValueToLevel(strategyRiskInput);
@@ -1989,7 +2117,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       </Card>
                     </Col>
                     <Col xs={24} xl={10}>
-                      <Card className="battletoads-card" title={copy.adminTsDraft}>
+                      <Card className="battletoads-card" title={copy.adminTsDraft} extra={<Button size="small" href="/trading-systems">{copy.openTradingSystems}</Button>}>
                         <List
                           dataSource={summary?.catalog?.adminTradingSystemDraft?.members || []}
                           locale={{ emptyText: <Empty description={copy.noCatalog} /> }}
@@ -2171,7 +2299,44 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           <Table rowKey="offerId" columns={offerColumns} dataSource={strategyState.offers || []} pagination={false} scroll={{ x: 920 }} />
                         </Card>
 
-                        <Card className="battletoads-card" title={copy.previewTitle}>
+                        <Card
+                          className="battletoads-card"
+                          title={copy.selectedOffersPreview}
+                          extra={strategySelectionPreviewLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}
+                        >
+                          <Spin spinning={strategySelectionPreviewLoading}>
+                            {strategySelectionPreview && strategySelectionPreview.selectedOffers.length > 0 ? (
+                              <Row gutter={[16, 16]}>
+                                <Col xs={24} lg={8}>
+                                  <Descriptions column={1} size="small" bordered>
+                                    <Descriptions.Item label="Offers">{strategySelectionPreview.selectedOffers.length}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategySelectionPreviewPeriod)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(strategySelectionPreviewDerivedSummary?.finalEquity ?? (strategySelectionPreviewSummary as any)?.finalEquity)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(strategySelectionPreviewDerivedSummary?.totalReturnPercent ?? (strategySelectionPreviewSummary as any)?.totalReturnPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(strategySelectionPreviewDerivedSummary?.maxDrawdownPercent ?? (strategySelectionPreviewSummary as any)?.maxDrawdownPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.profitFactor}>{formatNumber((strategySelectionPreviewSummary as any)?.profitFactor)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.trades}>{formatNumber((strategySelectionPreviewSummary as any)?.tradesCount, 0)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.persistedBucket}>{strategySelectionPreview.controls?.riskLevel || strategyPersistedRiskBucket} / {strategySelectionPreview.controls?.tradeFrequencyLevel || strategyPersistedTradeBucket}</Descriptions.Item>
+                                  </Descriptions>
+                                </Col>
+                                <Col xs={24} lg={16}>
+                                  <Space wrap style={{ marginBottom: 12 }}>
+                                    {strategySelectionPreview.selectedOffers.map((item) => (
+                                      <Tag key={item.offerId} color={item.mode === 'mono' ? 'green' : 'blue'}>
+                                        {item.market} · {formatNumber(item.score)}
+                                      </Tag>
+                                    ))}
+                                  </Space>
+                                  {strategySelectionPreviewPoints.length > 0 ? <ChartComponent data={strategySelectionPreviewPoints} type="line" /> : <Empty description={copy.selectedOffersPreview} />}
+                                </Col>
+                              </Row>
+                            ) : (
+                              <Empty description={copy.selectedOffersPreview} />
+                            )}
+                          </Spin>
+                        </Card>
+
+                        <Card className="battletoads-card" title={copy.previewTitle} extra={strategyPreviewLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}>
                           <Row gutter={[16, 16]} align="middle">
                             <Col xs={24} md={10}>
                               <Text strong>{copy.chooseOffer}</Text>
@@ -2191,28 +2356,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
 
-                          {strategyPreview ? (
-                            <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
-                              <Col xs={24} lg={8}>
-                                <Descriptions column={1} size="small" bordered>
-                                  <Descriptions.Item label="Offer">{strategyPreviewOffer?.titleRu || '—'}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategyPreviewPeriod)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.score}>{formatNumber(strategyPreview?.preset?.score ?? strategyPreviewMetrics?.score)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.finalEquity}>{formatMoney(strategyPreviewDerivedSummary?.finalEquity ?? (strategyPreviewSummary as any)?.finalEquity)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.returnLabel}>{formatPercent(strategyPreviewDerivedSummary?.totalReturnPercent ?? (strategyPreviewSummary as any)?.totalReturnPercent ?? strategyPreviewMetrics?.ret)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.drawdown}>{formatPercent(strategyPreviewDerivedSummary?.maxDrawdownPercent ?? (strategyPreviewSummary as any)?.maxDrawdownPercent ?? strategyPreviewMetrics?.dd)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.profitFactor}>{formatNumber((strategyPreviewSummary as any)?.profitFactor ?? strategyPreviewMetrics?.pf)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.trades}>{formatNumber((strategyPreviewSummary as any)?.tradesCount ?? strategyPreviewMetrics?.trades, 0)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.persistedBucket}>{strategyPreview.controls?.riskLevel || strategyPersistedRiskBucket} / {strategyPreview.controls?.tradeFrequencyLevel || strategyPersistedTradeBucket}</Descriptions.Item>
-                                </Descriptions>
-                              </Col>
-                              <Col xs={24} lg={16}>
-                                {strategyPreviewPoints.length > 0 ? <ChartComponent data={strategyPreviewPoints} type="line" /> : <Empty description={copy.noCatalog} />}
-                              </Col>
-                            </Row>
-                          ) : (
-                            <Empty style={{ marginTop: 16 }} description={copy.previewTitle} />
-                          )}
+                          <Spin spinning={strategyPreviewLoading}>
+                            {strategyPreview ? (
+                              <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
+                                <Col xs={24} lg={8}>
+                                  <Descriptions column={1} size="small" bordered>
+                                    <Descriptions.Item label="Offer">{strategyPreviewOffer?.titleRu || '—'}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategyPreviewPeriod)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.score}>{formatNumber(strategyPreview?.preset?.score ?? strategyPreviewMetrics?.score)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(strategyPreviewDerivedSummary?.finalEquity ?? (strategyPreviewSummary as any)?.finalEquity)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(strategyPreviewDerivedSummary?.totalReturnPercent ?? (strategyPreviewSummary as any)?.totalReturnPercent ?? strategyPreviewMetrics?.ret)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(strategyPreviewDerivedSummary?.maxDrawdownPercent ?? (strategyPreviewSummary as any)?.maxDrawdownPercent ?? strategyPreviewMetrics?.dd)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.profitFactor}>{formatNumber((strategyPreviewSummary as any)?.profitFactor ?? strategyPreviewMetrics?.pf)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.trades}>{formatNumber((strategyPreviewSummary as any)?.tradesCount ?? strategyPreviewMetrics?.trades, 0)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.persistedBucket}>{strategyPreview.controls?.riskLevel || strategyPersistedRiskBucket} / {strategyPreview.controls?.tradeFrequencyLevel || strategyPersistedTradeBucket}</Descriptions.Item>
+                                  </Descriptions>
+                                </Col>
+                                <Col xs={24} lg={16}>
+                                  {strategyPreviewPoints.length > 0 ? <ChartComponent data={strategyPreviewPoints} type="line" /> : <Empty description={copy.noCatalog} />}
+                                </Col>
+                              </Row>
+                            ) : (
+                              <Empty style={{ marginTop: 16 }} description={copy.previewTitle} />
+                            )}
+                          </Spin>
                         </Card>
 
                         {materializeResponse?.strategies?.length ? (
@@ -2351,23 +2518,25 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>{copy.previewPlanCapHint}</Paragraph>
                         </Card>
 
-                        <Card className="battletoads-card" title={copy.previewTitle}>
-                          <Row gutter={[16, 16]}>
-                            <Col xs={24} lg={8}>
-                              <Descriptions column={1} size="small" bordered>
-                                <Descriptions.Item label={copy.sourceSystem}>{algofundState.preview?.sourceSystem?.systemName || '—'}</Descriptions.Item>
-                                <Descriptions.Item label={copy.period}>{formatPeriodLabel(algofundPreviewPeriod)}</Descriptions.Item>
-                                <Descriptions.Item label={copy.finalEquity}>{formatMoney(algofundPreviewDerivedSummary?.finalEquity ?? algofundState.preview?.summary?.finalEquity)}</Descriptions.Item>
-                                <Descriptions.Item label={copy.returnLabel}>{formatPercent(algofundPreviewDerivedSummary?.totalReturnPercent ?? algofundState.preview?.summary?.totalReturnPercent)}</Descriptions.Item>
-                                <Descriptions.Item label={copy.drawdown}>{formatPercent(algofundPreviewDerivedSummary?.maxDrawdownPercent ?? algofundState.preview?.summary?.maxDrawdownPercent)}</Descriptions.Item>
-                                <Descriptions.Item label={copy.profitFactor}>{formatNumber(algofundState.preview?.summary?.profitFactor)}</Descriptions.Item>
-                                <Descriptions.Item label={copy.trades}>{formatNumber(algofundState.preview?.summary?.tradesCount, 0)}</Descriptions.Item>
-                              </Descriptions>
-                            </Col>
-                            <Col xs={24} lg={16}>
-                              {algofundPreviewPoints.length > 0 ? <ChartComponent data={algofundPreviewPoints} type="line" /> : <Empty description={copy.previewTitle} />}
-                            </Col>
-                          </Row>
+                        <Card className="battletoads-card" title={copy.previewTitle} extra={algofundLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}>
+                          <Spin spinning={algofundLoading}>
+                            <Row gutter={[16, 16]}>
+                              <Col xs={24} lg={8}>
+                                <Descriptions column={1} size="small" bordered>
+                                  <Descriptions.Item label={copy.sourceSystem}>{algofundState.preview?.sourceSystem?.systemName || '—'}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.period}>{formatPeriodLabel(algofundPreviewPeriod)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.finalEquity}>{formatMoney(algofundPreviewDerivedSummary?.finalEquity ?? algofundState.preview?.summary?.finalEquity)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.returnLabel}>{formatPercent(algofundPreviewDerivedSummary?.totalReturnPercent ?? algofundState.preview?.summary?.totalReturnPercent)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.drawdown}>{formatPercent(algofundPreviewDerivedSummary?.maxDrawdownPercent ?? algofundState.preview?.summary?.maxDrawdownPercent)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.profitFactor}>{formatNumber(algofundState.preview?.summary?.profitFactor)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.trades}>{formatNumber(algofundState.preview?.summary?.tradesCount, 0)}</Descriptions.Item>
+                                </Descriptions>
+                              </Col>
+                              <Col xs={24} lg={16}>
+                                {algofundPreviewPoints.length > 0 ? <ChartComponent data={algofundPreviewPoints} type="line" /> : <Empty description={copy.previewTitle} />}
+                              </Col>
+                            </Row>
+                          </Spin>
                         </Card>
 
                         <Card className="battletoads-card" title="Client requests">
