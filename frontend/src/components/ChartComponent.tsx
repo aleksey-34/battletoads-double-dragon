@@ -37,11 +37,45 @@ interface ChartComponentProps {
 }
 
 const normalizeTime = (rawTime: any): number | null => {
+  if (rawTime === null || rawTime === undefined || rawTime === '') {
+    return null;
+  }
+
   const numeric = Number(rawTime);
   if (!Number.isFinite(numeric)) {
     return null;
   }
-  return numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
+
+  const normalized = numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
+  return normalized > 0 ? normalized : null;
+};
+
+const normalizeNumeric = (rawValue: any): number | null => {
+  if (rawValue === null || rawValue === undefined || rawValue === '') {
+    return null;
+  }
+
+  const numeric = Number(rawValue);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const dedupeByTime = <T extends { time: any }>(rows: T[]): T[] => {
+  if (rows.length <= 1) {
+    return rows;
+  }
+
+  const out: T[] = [];
+  for (const row of rows) {
+    const currentTime = Number(row.time);
+    const last = out[out.length - 1];
+    if (last && Number(last.time) === currentTime) {
+      out[out.length - 1] = row;
+      continue;
+    }
+    out.push(row);
+  }
+
+  return out;
 };
 
 const extractCrosshairTime = (time: any): number | null => {
@@ -163,12 +197,12 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
     if (type === 'candlestick') {
       const candlestickSeries = chart.addSeries(CandlestickSeries, {});
       seriesRef.current = candlestickSeries;
+      markerPluginRef.current = createSeriesMarkers(candlestickSeries as any, []);
     } else {
       const lineSeries = chart.addSeries(LineSeries, {});
       seriesRef.current = lineSeries;
+      markerPluginRef.current = null;
     }
-
-    markerPluginRef.current = createSeriesMarkers(seriesRef.current as any, []);
 
     return () => {
       if (resizeFrameRef.current !== null) {
@@ -239,9 +273,16 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
   }, [type]);
 
   useEffect(() => {
-    if (!seriesRef.current) return;
+    if (!seriesRef.current) {
+      return;
+    }
 
-    if (!data.length) {
+    if (!Array.isArray(data) || data.length === 0) {
+      if (type === 'candlestick') {
+        (seriesRef.current as ISeriesApi<'Candlestick'>).setData([]);
+      } else {
+        (seriesRef.current as ISeriesApi<'Line'>).setData([]);
+      }
       emitHover(null);
       return;
     }
@@ -249,46 +290,71 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
     let chartData: CandlestickData[] | LineData[] = [];
 
     if (type === 'candlestick') {
-      const processedCandles = data
-        .map((d: any) => {
-          if (Array.isArray(d) && d.length >= 5) {
-            const normalizedTime = normalizeTime(d[0]);
-            if (normalizedTime === null) return null;
-            return {
-              time: normalizedTime as any,
-              open: parseFloat(d[1]),
-              high: parseFloat(d[2]),
-              low: parseFloat(d[3]),
-              close: parseFloat(d[4]),
-            };
-          }
+      const processedCandles = dedupeByTime(
+        data
+          .map((d: any) => {
+            if (Array.isArray(d) && d.length >= 5) {
+              const normalizedTime = normalizeTime(d[0]);
+              const open = normalizeNumeric(d[1]);
+              const high = normalizeNumeric(d[2]);
+              const low = normalizeNumeric(d[3]);
+              const close = normalizeNumeric(d[4]);
 
-          if (d && typeof d === 'object' && d.time !== undefined) {
-            const normalizedTime = normalizeTime(d.time);
-            if (normalizedTime === null) return null;
-            return {
-              time: normalizedTime as any,
-              open: parseFloat(d.open),
-              high: parseFloat(d.high),
-              low: parseFloat(d.low),
-              close: parseFloat(d.close),
-            };
-          }
+              if (normalizedTime === null || open === null || high === null || low === null || close === null) {
+                return null;
+              }
 
-          return null;
-        })
-        .filter(
-          (point): point is CandlestickData =>
-            !!point &&
-            Number.isFinite(point.open) &&
-            Number.isFinite(point.high) &&
-            Number.isFinite(point.low) &&
-            Number.isFinite(point.close)
-        )
-        .sort((a, b) => Number(a.time) - Number(b.time));
+              return {
+                time: normalizedTime as any,
+                open,
+                high,
+                low,
+                close,
+              };
+            }
+
+            if (d && typeof d === 'object' && d.time !== undefined) {
+              const normalizedTime = normalizeTime(d.time);
+              const open = normalizeNumeric(d.open);
+              const high = normalizeNumeric(d.high);
+              const low = normalizeNumeric(d.low);
+              const close = normalizeNumeric(d.close);
+
+              if (normalizedTime === null || open === null || high === null || low === null || close === null) {
+                return null;
+              }
+
+              return {
+                time: normalizedTime as any,
+                open,
+                high,
+                low,
+                close,
+              };
+            }
+
+            return null;
+          })
+          .filter(
+            (point): point is CandlestickData =>
+              !!point &&
+              Number.isFinite(point.open) &&
+              Number.isFinite(point.high) &&
+              Number.isFinite(point.low) &&
+              Number.isFinite(point.close)
+          )
+          .sort((a, b) => Number(a.time) - Number(b.time))
+      );
 
       chartData = processedCandles;
-      (seriesRef.current as ISeriesApi<'Candlestick'>).setData(chartData as CandlestickData[]);
+      try {
+        (seriesRef.current as ISeriesApi<'Candlestick'>).setData(chartData as CandlestickData[]);
+      } catch (error) {
+        console.error('[ChartComponent] Failed to set candlestick data', error);
+        (seriesRef.current as ISeriesApi<'Candlestick'>).setData([]);
+        emitHover(null);
+        return;
+      }
 
       const latest = processedCandles[processedCandles.length - 1];
       if (latest) {
@@ -301,36 +367,54 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
         });
       }
     } else {
-      const processedLine = data
-        .map((d: any) => {
-          if (Array.isArray(d) && d.length >= 5) {
-            const normalizedTime = normalizeTime(d[0]);
-            if (normalizedTime === null) return null;
-            return {
-              time: normalizedTime as any,
-              value: parseFloat(d[4]),
-            };
-          }
+      const processedLine = dedupeByTime(
+        data
+          .map((d: any) => {
+            if (Array.isArray(d) && d.length >= 5) {
+              const normalizedTime = normalizeTime(d[0]);
+              const value = normalizeNumeric(d[4]);
 
-          if (d && typeof d === 'object' && d.time !== undefined) {
-            const normalizedTime = normalizeTime(d.time);
-            if (normalizedTime === null) return null;
-            const nextValue = Number(d.value ?? d.close ?? d.equity);
-            return {
-              time: normalizedTime as any,
-              value: nextValue,
-            };
-          }
+              if (normalizedTime === null || value === null) {
+                return null;
+              }
 
-          return null;
-        })
-        .filter(
-          (point): point is LineData => !!point && Number.isFinite(point.value)
-        )
-        .sort((a, b) => Number(a.time) - Number(b.time));
+              return {
+                time: normalizedTime as any,
+                value,
+              };
+            }
+
+            if (d && typeof d === 'object' && d.time !== undefined) {
+              const normalizedTime = normalizeTime(d.time);
+              const value = normalizeNumeric(d.value ?? d.close ?? d.equity);
+
+              if (normalizedTime === null || value === null) {
+                return null;
+              }
+
+              return {
+                time: normalizedTime as any,
+                value,
+              };
+            }
+
+            return null;
+          })
+          .filter(
+            (point): point is LineData => !!point && Number.isFinite(point.value)
+          )
+          .sort((a, b) => Number(a.time) - Number(b.time))
+      );
 
       chartData = processedLine;
-      (seriesRef.current as ISeriesApi<'Line'>).setData(chartData as LineData[]);
+      try {
+        (seriesRef.current as ISeriesApi<'Line'>).setData(chartData as LineData[]);
+      } catch (error) {
+        console.error('[ChartComponent] Failed to set line data', error);
+        (seriesRef.current as ISeriesApi<'Line'>).setData([]);
+        emitHover(null);
+        return;
+      }
 
       const latest = processedLine[processedLine.length - 1];
       if (latest) {
@@ -434,12 +518,13 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
         continue;
       }
 
-      const normalized = (Array.isArray(line.data) ? line.data : [])
+      const normalized = dedupeByTime(
+        (Array.isArray(line.data) ? line.data : [])
         .map((point) => {
           const normalizedTime = normalizeTime(point.time);
-          const value = Number(point.value);
+            const value = normalizeNumeric(point.value);
 
-          if (normalizedTime === null || !Number.isFinite(value)) {
+            if (normalizedTime === null || value === null || !Number.isFinite(value)) {
             return null;
           }
 
@@ -449,7 +534,8 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
           };
         })
         .filter((item): item is LineData => !!item)
-        .sort((a, b) => Number(a.time) - Number(b.time));
+          .sort((a, b) => Number(a.time) - Number(b.time))
+      );
 
       if (normalized.length === 0) {
         const existing = overlaySeriesRef.current.get(line.id);
@@ -475,11 +561,21 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
         color: line.color,
         lineWidth: (line.lineWidth || 2) as any,
       });
-      series.setData(normalized);
+      try {
+        series.setData(normalized);
+      } catch (error) {
+        console.error(`[ChartComponent] Failed to set overlay line data for ${line.id}`, error);
+        chart.removeSeries(series);
+        overlaySeriesRef.current.delete(line.id);
+      }
     }
   }, [overlayLines]);
 
   useEffect(() => {
+    if (type !== 'candlestick') {
+      return;
+    }
+
     if (!markerPluginRef.current || typeof markerPluginRef.current.setMarkers !== 'function') {
       return;
     }

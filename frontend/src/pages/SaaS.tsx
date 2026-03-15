@@ -40,6 +40,11 @@ type EquityPoint = {
   value?: number;
 };
 
+type LinePoint = {
+  time: number;
+  value: number;
+};
+
 type MetricSet = {
   ret?: number;
   pf?: number;
@@ -683,23 +688,144 @@ const formatNumber = (value: unknown, digits = 2): string => {
 const formatPercent = (value: unknown, digits = 2): string => `${formatNumber(value, digits)}%`;
 const formatMoney = (value: unknown): string => `$${formatNumber(value, 2)}`;
 
+const toFiniteNumberOrNull = (value: unknown): number | null => {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const normalizeSeriesTime = (value: unknown): number | null => {
+  const numeric = toFiniteNumberOrNull(value);
+  if (numeric === null) {
+    return null;
+  }
+
+  const normalized = numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
+  return normalized > 0 ? normalized : null;
+};
+
+const dedupeLinePoints = (points: LinePoint[]): LinePoint[] => {
+  if (points.length <= 1) {
+    return points;
+  }
+
+  const out: LinePoint[] = [];
+  for (const point of points) {
+    const last = out[out.length - 1];
+    if (last && last.time === point.time) {
+      out[out.length - 1] = point;
+      continue;
+    }
+    out.push(point);
+  }
+
+  return out;
+};
+
+type NormalizedEquityPoint = {
+  time: number;
+  equity: number;
+};
+
 const extractEquityPoints = (payload: unknown): EquityPoint[] => {
   if (!payload) {
     return [];
   }
+
   if (Array.isArray(payload)) {
-    return payload
-      .map((item) => ({
-        time: Number((item as EquityPoint).time),
-        equity: Number((item as EquityPoint).equity ?? (item as EquityPoint).value),
-      }))
-      .filter((item) => Number.isFinite(item.time) && Number.isFinite(item.equity));
+    const normalized = payload
+      .map((item) => {
+        if (Array.isArray(item) && item.length >= 2) {
+          const time = normalizeSeriesTime(item[0]);
+          const equity = toFiniteNumberOrNull(item[1]);
+
+          if (time === null || equity === null) {
+            return null;
+          }
+
+          return { time, equity };
+        }
+
+        if (!item || typeof item !== 'object') {
+          return null;
+        }
+
+        const row = item as Record<string, unknown>;
+        const time = normalizeSeriesTime(row.time);
+        const equity = toFiniteNumberOrNull(row.equity ?? row.value ?? row.close);
+
+        if (time === null || equity === null) {
+          return null;
+        }
+
+        return { time, equity };
+      })
+      .filter((item): item is NormalizedEquityPoint => !!item)
+      .sort((left, right) => left.time - right.time);
+
+    return normalized;
   }
+
   const objectPayload = payload as { points?: EquityPoint[]; equityCurve?: EquityPoint[] };
   return extractEquityPoints(objectPayload.points || objectPayload.equityCurve || []);
 };
 
-const toLineSeriesData = (payload: unknown) => extractEquityPoints(payload).map((point) => ({ time: point.time, value: Number(point.equity || 0) }));
+const toLineSeriesData = (payload: unknown): LinePoint[] => {
+  const points = extractEquityPoints(payload)
+    .map((point) => {
+      const value = toFiniteNumberOrNull(point.equity ?? point.value);
+      if (value === null || !Number.isFinite(point.time)) {
+        return null;
+      }
+
+      return {
+        time: point.time,
+        value,
+      };
+    })
+    .filter((point): point is LinePoint => !!point)
+    .sort((left, right) => left.time - right.time);
+
+  return dedupeLinePoints(points);
+};
+
+const summarizeLineSeries = (points: LinePoint[]) => {
+  if (!Array.isArray(points) || points.length === 0) {
+    return null;
+  }
+
+  const initialEquity = points[0].value;
+  const finalEquity = points[points.length - 1].value;
+
+  let peak = initialEquity;
+  let maxDrawdownPercent = 0;
+  for (const point of points) {
+    if (point.value > peak) {
+      peak = point.value;
+    }
+
+    if (peak > 0) {
+      const drawdown = ((peak - point.value) / peak) * 100;
+      if (Number.isFinite(drawdown) && drawdown > maxDrawdownPercent) {
+        maxDrawdownPercent = drawdown;
+      }
+    }
+  }
+
+  const totalReturnPercent = initialEquity !== 0
+    ? ((finalEquity - initialEquity) / Math.abs(initialEquity)) * 100
+    : 0;
+
+  return {
+    initialEquity,
+    finalEquity,
+    totalReturnPercent,
+    maxDrawdownPercent,
+  };
+};
 
 const metricColor = (value: number, kind: 'return' | 'drawdown' | 'pf') => {
   if (kind === 'drawdown') {
@@ -1661,6 +1787,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const strategyPreviewPoints = strategyPreview?.preview ? toLineSeriesData(strategyPreview.preview.equity) : [];
   const algofundPreviewPoints = algofundState?.preview ? toLineSeriesData(algofundState.preview.equityCurve) : [];
   const publishPreviewPoints = publishResponse?.preview ? toLineSeriesData(publishResponse.preview.equityCurve) : [];
+  const strategyPreviewDerivedSummary = summarizeLineSeries(strategyPreviewPoints);
+  const algofundPreviewDerivedSummary = summarizeLineSeries(algofundPreviewPoints);
+  const publishPreviewDerivedSummary = summarizeLineSeries(publishPreviewPoints);
   const summaryPeriod = summary?.sweepSummary?.period || null;
   const strategyPreviewPeriod = strategyPreview?.period || summaryPeriod;
   const algofundPreviewPeriod = algofundState?.preview?.period || summaryPeriod;
@@ -1918,8 +2047,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Descriptions.Item label={copy.sourceSystem}>{publishResponse.sourceSystem?.systemName || '—'}</Descriptions.Item>
                             <Descriptions.Item label={copy.apiKey}>{publishResponse.sourceSystem?.apiKeyName || '—'}</Descriptions.Item>
                             <Descriptions.Item label={copy.period}>{formatPeriodLabel(publishPreviewPeriod)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.returnLabel}>{formatPercent(publishResponse.preview.summary?.totalReturnPercent)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.drawdown}>{formatPercent(publishResponse.preview.summary?.maxDrawdownPercent)}</Descriptions.Item>
+                            <Descriptions.Item label={copy.finalEquity}>{formatMoney(publishPreviewDerivedSummary?.finalEquity ?? publishResponse.preview.summary?.finalEquity)}</Descriptions.Item>
+                            <Descriptions.Item label={copy.returnLabel}>{formatPercent(publishPreviewDerivedSummary?.totalReturnPercent ?? publishResponse.preview.summary?.totalReturnPercent)}</Descriptions.Item>
+                            <Descriptions.Item label={copy.drawdown}>{formatPercent(publishPreviewDerivedSummary?.maxDrawdownPercent ?? publishResponse.preview.summary?.maxDrawdownPercent)}</Descriptions.Item>
                             <Descriptions.Item label={copy.profitFactor}>{formatNumber(publishResponse.preview.summary?.profitFactor)}</Descriptions.Item>
                           </Descriptions>
                         </Col>
@@ -2068,8 +2198,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Descriptions.Item label="Offer">{strategyPreviewOffer?.titleRu || '—'}</Descriptions.Item>
                                   <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategyPreviewPeriod)}</Descriptions.Item>
                                   <Descriptions.Item label={copy.score}>{formatNumber(strategyPreview?.preset?.score ?? strategyPreviewMetrics?.score)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.returnLabel}>{formatPercent((strategyPreviewSummary as any)?.totalReturnPercent ?? strategyPreviewMetrics?.ret)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.drawdown}>{formatPercent((strategyPreviewSummary as any)?.maxDrawdownPercent ?? strategyPreviewMetrics?.dd)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.finalEquity}>{formatMoney(strategyPreviewDerivedSummary?.finalEquity ?? (strategyPreviewSummary as any)?.finalEquity)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.returnLabel}>{formatPercent(strategyPreviewDerivedSummary?.totalReturnPercent ?? (strategyPreviewSummary as any)?.totalReturnPercent ?? strategyPreviewMetrics?.ret)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.drawdown}>{formatPercent(strategyPreviewDerivedSummary?.maxDrawdownPercent ?? (strategyPreviewSummary as any)?.maxDrawdownPercent ?? strategyPreviewMetrics?.dd)}</Descriptions.Item>
                                   <Descriptions.Item label={copy.profitFactor}>{formatNumber((strategyPreviewSummary as any)?.profitFactor ?? strategyPreviewMetrics?.pf)}</Descriptions.Item>
                                   <Descriptions.Item label={copy.trades}>{formatNumber((strategyPreviewSummary as any)?.tradesCount ?? strategyPreviewMetrics?.trades, 0)}</Descriptions.Item>
                                   <Descriptions.Item label={copy.persistedBucket}>{strategyPreview.controls?.riskLevel || strategyPersistedRiskBucket} / {strategyPreview.controls?.tradeFrequencyLevel || strategyPersistedTradeBucket}</Descriptions.Item>
@@ -2226,9 +2357,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Descriptions column={1} size="small" bordered>
                                 <Descriptions.Item label={copy.sourceSystem}>{algofundState.preview?.sourceSystem?.systemName || '—'}</Descriptions.Item>
                                 <Descriptions.Item label={copy.period}>{formatPeriodLabel(algofundPreviewPeriod)}</Descriptions.Item>
-                                <Descriptions.Item label={copy.finalEquity}>{formatMoney(algofundState.preview?.summary?.finalEquity)}</Descriptions.Item>
-                                <Descriptions.Item label={copy.returnLabel}>{formatPercent(algofundState.preview?.summary?.totalReturnPercent)}</Descriptions.Item>
-                                <Descriptions.Item label={copy.drawdown}>{formatPercent(algofundState.preview?.summary?.maxDrawdownPercent)}</Descriptions.Item>
+                                <Descriptions.Item label={copy.finalEquity}>{formatMoney(algofundPreviewDerivedSummary?.finalEquity ?? algofundState.preview?.summary?.finalEquity)}</Descriptions.Item>
+                                <Descriptions.Item label={copy.returnLabel}>{formatPercent(algofundPreviewDerivedSummary?.totalReturnPercent ?? algofundState.preview?.summary?.totalReturnPercent)}</Descriptions.Item>
+                                <Descriptions.Item label={copy.drawdown}>{formatPercent(algofundPreviewDerivedSummary?.maxDrawdownPercent ?? algofundState.preview?.summary?.maxDrawdownPercent)}</Descriptions.Item>
                                 <Descriptions.Item label={copy.profitFactor}>{formatNumber(algofundState.preview?.summary?.profitFactor)}</Descriptions.Item>
                                 <Descriptions.Item label={copy.trades}>{formatNumber(algofundState.preview?.summary?.tradesCount, 0)}</Descriptions.Item>
                               </Descriptions>
