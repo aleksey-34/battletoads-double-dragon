@@ -45,7 +45,7 @@ import {
   updateTradingSystem,
 } from '../bot/tradingSystems';
 import { getMonitoringLatest, getMonitoringSnapshots, recordMonitoringSnapshot } from '../bot/monitoring';
-import { getBacktestRun, listBacktestRuns, runBacktest, saveBacktestRun } from '../backtest/engine';
+import { deleteBacktestRun, getBacktestRun, listBacktestRuns, runBacktest, saveBacktestRun } from '../backtest/engine';
 import { loadSettings, saveApiKey, saveRiskSettings, ApiKey, RiskSettings, Strategy } from '../config/settings';
 import { db } from '../utils/database';
 import { authenticate } from '../utils/auth';
@@ -462,6 +462,26 @@ router.get('/backtest/runs/:id', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Error loading backtest run ${id}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/backtest/runs/:id', async (req, res) => {
+  const id = Number.parseInt(String(req.params.id || '0'), 10);
+
+  if (!Number.isFinite(id) || id <= 0) {
+    return res.status(400).json({ error: 'Invalid run id' });
+  }
+
+  try {
+    const deleted = await deleteBacktestRun(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Backtest run not found' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error deleting backtest run ${id}: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

@@ -1429,3 +1429,21 @@ export const getBacktestRun = async (id: number): Promise<BacktestRunResult | nu
     trades,
   };
 };
+
+export const deleteBacktestRun = async (id: number): Promise<boolean> => {
+  const runId = Math.floor(asNumber(id, 0));
+  if (!Number.isFinite(runId) || runId <= 0) {
+    return false;
+  }
+
+  const result: any = await db.run('DELETE FROM backtest_runs WHERE id = ?', [runId]);
+
+  const reportPath = path.join(process.cwd(), 'logs', 'backtests', `backtest_run_${runId}.html`);
+  try {
+    await fs.promises.unlink(reportPath);
+  } catch {
+    // Report file is optional and may be absent.
+  }
+
+  return Number(result?.changes || 0) > 0;
+};

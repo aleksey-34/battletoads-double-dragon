@@ -5,6 +5,7 @@ import {
   getSaasAdminSummary,
   getStrategyClientState,
   materializeStrategyClient,
+  previewStrategyClientSelection,
   previewStrategyClientOffer,
   publishAdminTradingSystem,
   requestAlgofundAction,
@@ -177,6 +178,28 @@ router.post('/strategy-clients/:tenantId/preview', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS strategy client preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/strategy-clients/:tenantId/selection-preview', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const data = await previewStrategyClientSelection(tenantId, {
+      selectedOfferIds: Array.isArray(req.body.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
+      riskLevel: req.body.riskLevel,
+      tradeFrequencyLevel: req.body.tradeFrequencyLevel,
+      riskScore: toOptionalNumber(req.body.riskScore),
+      tradeFrequencyScore: toOptionalNumber(req.body.tradeFrequencyScore),
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy client selection preview error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

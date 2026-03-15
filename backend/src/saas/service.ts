@@ -1263,6 +1263,113 @@ export const previewStrategyClientOffer = async (
   return { offer, preset, controls, period, preview };
 };
 
+export const previewStrategyClientSelection = async (
+  tenantId: number,
+  payload?: {
+    selectedOfferIds?: string[];
+    riskLevel?: Level3;
+    tradeFrequencyLevel?: Level3;
+    riskScore?: number;
+    tradeFrequencyScore?: number;
+  }
+) => {
+  const state = await getStrategyClientState(tenantId);
+  if (!state.catalog) {
+    throw new Error('Client catalog JSON not found in results/.');
+  }
+
+  const sweep = loadLatestSweep();
+  const period = buildPeriodInfo(sweep);
+  const resolvedRisk = payload?.riskLevel || (state.profile?.risk_level as Level3) || 'medium';
+  const resolvedTradeFrequency = payload?.tradeFrequencyLevel || (state.profile?.trade_frequency_level as Level3) || 'medium';
+  const normalizedRiskScore = normalizePreferenceScore(payload?.riskScore, resolvedRisk);
+  const normalizedTradeFrequencyScore = normalizePreferenceScore(payload?.tradeFrequencyScore, resolvedTradeFrequency);
+  const controls = {
+    riskScore: normalizedRiskScore,
+    tradeFrequencyScore: normalizedTradeFrequencyScore,
+    riskLevel: preferenceScoreToLevel(normalizedRiskScore),
+    tradeFrequencyLevel: preferenceScoreToLevel(normalizedTradeFrequencyScore),
+  };
+
+  const fallbackOfferIds = Array.isArray(state.profile?.selectedOfferIds)
+    ? state.profile.selectedOfferIds
+    : [];
+  const selectedOfferIds = Array.isArray(payload?.selectedOfferIds)
+    ? payload.selectedOfferIds.map((item) => String(item || '').trim()).filter(Boolean)
+    : fallbackOfferIds;
+
+  if (selectedOfferIds.length === 0) {
+    return {
+      period,
+      controls,
+      selectedOffers: [],
+      preview: {
+        source: 'portfolio_backtest_empty',
+        summary: null,
+        equity: [],
+        trades: [],
+      },
+    };
+  }
+
+  const selectedOffers = selectedOfferIds.map((offerId) => {
+    const offer = findOfferById(state.catalog as CatalogData, offerId);
+    const preset = resolveOfferPresetByPreference(
+      offer,
+      resolvedRisk,
+      resolvedTradeFrequency,
+      normalizedRiskScore,
+      normalizedTradeFrequencyScore
+    );
+
+    return {
+      offerId,
+      offer,
+      preset,
+    };
+  });
+
+  const uniqueStrategyIds = Array.from(new Set(selectedOffers.map((item) => Number(item.preset.strategyId)).filter((item) => Number.isFinite(item) && item > 0)));
+
+  if (uniqueStrategyIds.length === 0) {
+    throw new Error('Selected offers did not resolve to valid strategies');
+  }
+
+  const result = await runBacktest({
+    apiKeyName: state.catalog.apiKeyName,
+    mode: 'portfolio',
+    strategyIds: uniqueStrategyIds,
+    bars: asNumber(sweep?.config?.backtestBars, 6000),
+    warmupBars: asNumber(sweep?.config?.warmupBars, 400),
+    skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
+    initialBalance: asNumber(sweep?.config?.initialBalance, 10000),
+    commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
+    slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
+    fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
+  });
+
+  return {
+    period,
+    controls,
+    selectedOffers: selectedOffers.map((item) => ({
+      offerId: item.offerId,
+      titleRu: item.offer.titleRu,
+      market: item.offer.strategy.market,
+      mode: item.offer.strategy.mode,
+      strategyId: item.preset.strategyId,
+      strategyName: item.preset.strategyName,
+      score: item.preset.score,
+      metrics: item.preset.metrics,
+    })),
+    preview: {
+      source: 'portfolio_backtest',
+      summary: result.summary,
+      equity: result.equityCurve,
+      trades: result.trades.slice(0, 50),
+    },
+  };
+};
+
 export const materializeStrategyClient = async (tenantId: number, activate: boolean) => {
   const state = await getStrategyClientState(tenantId);
   const profile = state.profile as (StrategyClientProfileRow & { selectedOfferIds: string[] }) | null;
