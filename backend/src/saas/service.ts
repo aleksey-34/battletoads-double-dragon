@@ -642,6 +642,39 @@ const findOfferById = (catalog: CatalogData, offerId: string): CatalogOffer => {
   return offer;
 };
 
+const findOfferByIdOrNull = (catalog: CatalogData | null, offerId?: string | null): CatalogOffer | null => {
+  if (!catalog || !offerId) {
+    return null;
+  }
+
+  return getAllOffers(catalog).find((item) => item.offerId === offerId) || null;
+};
+
+const hydrateStoredStrategyPreview = (catalog: CatalogData | null, payload: string | null | undefined): Record<string, unknown> => {
+  const parsed = safeJsonParse<Record<string, unknown>>(payload, {});
+  const offerId = asString(parsed.offerId);
+  const embeddedOffer = parsed.offer as CatalogOffer | undefined;
+
+  if (embeddedOffer?.offerId && embeddedOffer?.titleRu) {
+    return {
+      ...parsed,
+      offerId: offerId || embeddedOffer.offerId,
+      offer: embeddedOffer,
+    };
+  }
+
+  const hydratedOffer = findOfferByIdOrNull(catalog, offerId);
+  if (!hydratedOffer) {
+    return parsed;
+  }
+
+  return {
+    ...parsed,
+    offerId: offerId || hydratedOffer.offerId,
+    offer: hydratedOffer,
+  };
+};
+
 const findSweepRecordByStrategyId = (sweep: SweepData | null, strategyId: number): SweepRecord | null => {
   const rows = sweep?.evaluated || [];
   return rows.find((item) => Number(item.strategyId) === Number(strategyId)) || null;
@@ -1086,7 +1119,7 @@ export const getStrategyClientState = async (tenantId: number) => {
     profile: profile ? {
       ...profile,
       selectedOfferIds: safeJsonParse<string[]>(profile.selected_offer_ids_json, []),
-      latestPreview: safeJsonParse<Record<string, unknown>>(profile.latest_preview_json, {}),
+      latestPreview: hydrateStoredStrategyPreview(catalog, profile.latest_preview_json),
     } : null,
     catalog,
     offers: catalog ? getAllOffers(catalog) : [],
@@ -1179,7 +1212,7 @@ export const previewStrategyClientOffer = async (
       equity: baseEquity,
     };
 
-    const latestPreviewPayload = { offerId, preset, controls, period, preview };
+    const latestPreviewPayload = { offerId, offer, preset, controls, period, preview };
 
     await db.run(
       `UPDATE strategy_client_profiles
@@ -1218,7 +1251,7 @@ export const previewStrategyClientOffer = async (
     trades: result.trades.slice(0, 30),
   };
 
-  const latestPreviewPayload = { offerId, preset, controls, period, preview };
+  const latestPreviewPayload = { offerId, offer, preset, controls, period, preview };
 
   await db.run(
     `UPDATE strategy_client_profiles

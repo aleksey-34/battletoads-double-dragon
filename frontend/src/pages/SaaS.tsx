@@ -255,8 +255,9 @@ type StrategyClientState = {
 };
 
 type StrategyPreviewResponse = {
-  offer: CatalogOffer;
-  preset: CatalogPreset;
+  offerId?: string;
+  offer?: CatalogOffer | null;
+  preset?: CatalogPreset | null;
   period?: PeriodInfo | null;
   controls?: {
     riskScore?: number;
@@ -776,6 +777,35 @@ const formatPeriodLabel = (period?: PeriodInfo | null): string => {
   return `${from} -> ${to}${interval}`;
 };
 
+export const hydrateStrategyPreview = (
+  payload: Record<string, unknown> | StrategyPreviewResponse | null | undefined,
+  offers: CatalogOffer[]
+): StrategyPreviewResponse | null => {
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+
+  const candidate = payload as StrategyPreviewResponse;
+  if (!candidate.preview) {
+    return null;
+  }
+
+  const embeddedOffer = candidate.offer && typeof candidate.offer.titleRu === 'string'
+    ? candidate.offer
+    : null;
+  const offerId = typeof candidate.offerId === 'string'
+    ? candidate.offerId
+    : embeddedOffer?.offerId;
+  const resolvedOffer = embeddedOffer || (offerId ? offers.find((offer) => offer.offerId === offerId) || null : null);
+
+  return {
+    ...candidate,
+    offerId,
+    offer: resolvedOffer,
+    preset: candidate.preset || null,
+  };
+};
+
 const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin' }) => {
   const { language, t } = useI18n();
   const copy = COPY_BY_LANGUAGE[language];
@@ -1005,8 +1035,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setStrategyTenantStatus(strategyState.tenant.status || 'active');
     setStrategyTenantPlanCode(strategyState.plan?.code || '');
     setStrategyPreviewOfferId((current) => (current && selected.includes(current) ? current : selected[0] || strategyState.offers[0]?.offerId || ''));
-    const latestPreview = strategyState.profile.latestPreview as StrategyPreviewResponse | null | undefined;
-    setStrategyPreview(latestPreview?.preview ? latestPreview : null);
+    const latestPreview = hydrateStrategyPreview(strategyState.profile.latestPreview as StrategyPreviewResponse | null | undefined, strategyState.offers || []);
+    setStrategyPreview(latestPreview);
   }, [strategyState]);
 
   useEffect(() => {
@@ -1033,7 +1063,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         riskScore: strategyRiskInput,
         tradeFrequencyScore: strategyTradeInput,
       });
-      setStrategyPreview(response.data);
+      setStrategyPreview(hydrateStrategyPreview(response.data, strategyState?.offers || []));
       if (!silent) {
         messageApi.success(copy.previewReady);
       }
@@ -1042,7 +1072,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     } finally {
       setStrategyPreviewLoading(false);
     }
-  }, [copy.previewReady, messageApi, strategyPreviewOfferId, strategyRiskInput, strategyTenantId, strategyTradeInput]);
+  }, [copy.previewReady, messageApi, strategyPreviewOfferId, strategyRiskInput, strategyState, strategyTenantId, strategyTradeInput]);
 
   useEffect(() => {
     if (!strategyTenantId || !strategyPreviewOfferId || !strategyState) {
@@ -1626,6 +1656,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const strategyPreviewSummary = strategyPreview?.preview?.summary || (strategyPreview?.preview?.equity && !Array.isArray(strategyPreview.preview.equity)
     ? strategyPreview.preview.equity.summary
     : undefined);
+  const strategyPreviewOffer = strategyPreview?.offer || (strategyPreview?.offerId ? (strategyState?.offers || []).find((offer) => offer.offerId === strategyPreview.offerId) || null : null);
+  const strategyPreviewMetrics = strategyPreview?.preset?.metrics || strategyPreviewOffer?.metrics;
   const strategyPreviewPoints = strategyPreview?.preview ? toLineSeriesData(strategyPreview.preview.equity) : [];
   const algofundPreviewPoints = algofundState?.preview ? toLineSeriesData(algofundState.preview.equityCurve) : [];
   const publishPreviewPoints = publishResponse?.preview ? toLineSeriesData(publishResponse.preview.equityCurve) : [];
@@ -1760,7 +1792,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       <Spin spinning={summaryLoading && !summary}>
         <Tabs
           className="saas-tabs"
-          destroyInactiveTabPane
+          destroyOnHidden
           activeKey={activeTab}
           onChange={(key) => setActiveTab(key as SaasTabKey)}
           items={[
@@ -2033,13 +2065,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
                               <Col xs={24} lg={8}>
                                 <Descriptions column={1} size="small" bordered>
-                                  <Descriptions.Item label="Offer">{strategyPreview.offer.titleRu}</Descriptions.Item>
+                                  <Descriptions.Item label="Offer">{strategyPreviewOffer?.titleRu || '—'}</Descriptions.Item>
                                   <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategyPreviewPeriod)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.score}>{formatNumber(strategyPreview.preset.score)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.returnLabel}>{formatPercent((strategyPreviewSummary as any)?.totalReturnPercent ?? strategyPreview.preset.metrics.ret)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.drawdown}>{formatPercent((strategyPreviewSummary as any)?.maxDrawdownPercent ?? strategyPreview.preset.metrics.dd)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.profitFactor}>{formatNumber((strategyPreviewSummary as any)?.profitFactor ?? strategyPreview.preset.metrics.pf)}</Descriptions.Item>
-                                  <Descriptions.Item label={copy.trades}>{formatNumber((strategyPreviewSummary as any)?.tradesCount ?? strategyPreview.preset.metrics.trades, 0)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.score}>{formatNumber(strategyPreview?.preset?.score ?? strategyPreviewMetrics?.score)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.returnLabel}>{formatPercent((strategyPreviewSummary as any)?.totalReturnPercent ?? strategyPreviewMetrics?.ret)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.drawdown}>{formatPercent((strategyPreviewSummary as any)?.maxDrawdownPercent ?? strategyPreviewMetrics?.dd)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.profitFactor}>{formatNumber((strategyPreviewSummary as any)?.profitFactor ?? strategyPreviewMetrics?.pf)}</Descriptions.Item>
+                                  <Descriptions.Item label={copy.trades}>{formatNumber((strategyPreviewSummary as any)?.tradesCount ?? strategyPreviewMetrics?.trades, 0)}</Descriptions.Item>
                                   <Descriptions.Item label={copy.persistedBucket}>{strategyPreview.controls?.riskLevel || strategyPersistedRiskBucket} / {strategyPreview.controls?.tradeFrequencyLevel || strategyPersistedTradeBucket}</Descriptions.Item>
                                 </Descriptions>
                               </Col>

@@ -201,10 +201,103 @@ Hints:
 - For personal chat id use helper bot like `@userinfobot`.
 - For group chat id, add bot to group and query updates via Telegram API.
 
-## Update from Git later
+## Daily Update Workflows
+
+Current production-like branch in this repository:
+
+- `feature/tv-engine-refactor`
+
+Main unified launcher:
+
+- local repo: `./deploy.sh`
+- VPS repo: `/opt/battletoads-double-dragon/deploy.sh`
+
+### A. Recommended: update from local machine through Git
+
+Use this when changes are already committed or should become the new canonical Git state.
+
+1) Commit and push from local machine:
 
 ```bash
-sudo APP_DIR=/opt/battletoads-double-dragon BRANCH=main bash /opt/battletoads-double-dragon/scripts/update_vps_from_git.sh
+cd /home/yakovbyakov/BattleToads_DoubleDragon/battletoads-double-dragon
+git status --short
+git add .
+git commit -m "fix: describe your update"
+git push origin feature/tv-engine-refactor
+```
+
+2) Deploy that branch to VPS from local machine:
+
+```bash
+cd /home/yakovbyakov/BattleToads_DoubleDragon/battletoads-double-dragon
+bash ./deploy.sh local root@176.57.184.98 feature/tv-engine-refactor /opt/battletoads-double-dragon
+```
+
+If current local branch is already the correct one and default host/path are fine:
+
+```bash
+cd /home/yakovbyakov/BattleToads_DoubleDragon/battletoads-double-dragon
+bash ./deploy.sh local
+```
+
+### B. Fast temporary update: deploy current local tree without commit
+
+Use this when the newest fixes are only local and you need them on VPS immediately.
+
+```bash
+cd /home/yakovbyakov/BattleToads_DoubleDragon/battletoads-double-dragon
+bash ./deploy.sh local-tree root@176.57.184.98 /opt/battletoads-double-dragon
+```
+
+This syncs the current workspace to VPS with `rsync`, then builds backend/frontend there and restarts services.
+
+Important:
+
+- this path is good for emergency verification
+- later you should still commit and push, otherwise future Git-based updates may overwrite those VPS-only synced changes
+
+### C. Update directly on VPS
+
+Use this when the target commit is already in Git and the VPS only needs pull/build/restart.
+
+```bash
+sudo bash /opt/battletoads-double-dragon/deploy.sh vps feature/tv-engine-refactor /opt/battletoads-double-dragon
+```
+
+Direct fallback without wrapper:
+
+```bash
+sudo APP_DIR=/opt/battletoads-double-dragon BRANCH=feature/tv-engine-refactor \
+bash /opt/battletoads-double-dragon/scripts/update_vps_from_git.sh
+```
+
+### D. Install a short VPS command once
+
+```bash
+sudo bash /opt/battletoads-double-dragon/deploy.sh install-bin
+sudo btdd-deploy vps feature/tv-engine-refactor /opt/battletoads-double-dragon
+```
+
+This creates:
+
+- `/usr/local/bin/btdd-deploy` -> `/opt/battletoads-double-dragon/deploy.sh`
+
+### E. Verify deployed revision
+
+From local machine:
+
+```bash
+ssh root@176.57.184.98 "git -C /opt/battletoads-double-dragon log --oneline -n 3"
+ssh root@176.57.184.98 "systemctl status battletoads-backend.service --no-pager | head -n 30"
+ssh root@176.57.184.98 "journalctl -u battletoads-backend.service -n 120 --no-pager"
+```
+
+Or directly on VPS:
+
+```bash
+git -C /opt/battletoads-double-dragon log --oneline -n 3
+systemctl status battletoads-backend.service --no-pager | head -n 30
+journalctl -u battletoads-backend.service -n 120 --no-pager
 ```
 
 ## First Start (Git-based, minimal)
@@ -255,46 +348,57 @@ Recommended click order in any tab:
 
 If UI shows `ahead` or `dirty`, clean VPS repo state first (or reset to clean Git state) before running update.
 
-## Alternative: one-command deploy from local machine
+## /saas Git Update Buttons
+
+The frontend update controls work only if backend env points to the correct app dir, branch, and update script.
+
+Check on VPS:
 
 ```bash
-cd /home/yakovbyakov/BattleToads_DoubleDragon/battletoads-double-dragon
-ADMIN_PASSWORD='strong-password' bash scripts/deploy_vps_from_local.sh root@176.57.184.98 https://github.com/aleksey-34/battletoads-double-dragon.git 176.57.184.98 main /opt/battletoads-double-dragon
+sudo grep -E 'ENABLE_GIT_UPDATE|APP_DIR|GIT_BRANCH|UPDATE_SCRIPT' /etc/battletoads-backend.env
 ```
 
-Optional SSH key/port:
+Expected values for this project right now:
+
+- `ENABLE_GIT_UPDATE=1`
+- `APP_DIR=/opt/battletoads-double-dragon`
+- `GIT_BRANCH=feature/tv-engine-refactor`
+- `UPDATE_SCRIPT=/opt/battletoads-double-dragon/scripts/update_vps_from_git.sh`
+
+If branch/path are wrong, fix them and restart backend:
 
 ```bash
-SSH_OPTS='-i ~/.ssh/id_rsa -p 22' ADMIN_PASSWORD='strong-password' bash scripts/deploy_vps_from_local.sh root@176.57.184.98 https://github.com/aleksey-34/battletoads-double-dragon.git 176.57.184.98 main /opt/battletoads-double-dragon
+sudo sed -i 's|^ENABLE_GIT_UPDATE=.*|ENABLE_GIT_UPDATE=1|' /etc/battletoads-backend.env
+sudo sed -i 's|^APP_DIR=.*|APP_DIR=/opt/battletoads-double-dragon|' /etc/battletoads-backend.env
+sudo sed -i 's|^GIT_BRANCH=.*|GIT_BRANCH=feature/tv-engine-refactor|' /etc/battletoads-backend.env
+sudo sed -i 's|^UPDATE_SCRIPT=.*|UPDATE_SCRIPT=/opt/battletoads-double-dragon/scripts/update_vps_from_git.sh|' /etc/battletoads-backend.env
+sudo systemctl restart battletoads-backend.service
 ```
 
-## Alternative: deploy current local working tree without commit
+Then in `/saas`:
 
-Use this when the newest changes are only in the local workspace and are not pushed to Git yet.
+1) click `Check updates`
+2) if update is available, click `Install from Git`
+3) click `Refresh job`
+4) verify backend restarted cleanly
 
-```bash
-cd /home/yakovbyakov/BattleToads_DoubleDragon/battletoads-double-dragon
-bash scripts/deploy_vps_current_tree.sh root@176.57.184.98 /opt/battletoads-double-dragon
-```
+## SaaS Smoke Checks After Update
 
-Optional SSH key/port:
-
-```bash
-cd /home/yakovbyakov/BattleToads_DoubleDragon/battletoads-double-dragon
-SSH_OPTS='-i ~/.ssh/id_rsa -p 22' bash scripts/deploy_vps_current_tree.sh root@176.57.184.98 /opt/battletoads-double-dragon
-```
-
-Post-deploy SaaS smoke checks:
+API checks on VPS:
 
 ```bash
-ssh root@176.57.184.98 "curl -s http://127.0.0.1:3001/api/saas/admin/summary -H 'Authorization: Bearer <ADMIN_PASSWORD>' | head -c 800"
-ssh root@176.57.184.98 "journalctl -u battletoads-backend.service -n 120 --no-pager"
+curl -s http://127.0.0.1:3001/api/saas/admin/summary -H 'Authorization: Bearer YOUR_PASSWORD' | head -c 1000
+journalctl -u battletoads-backend.service -n 120 --no-pager
 ```
 
 Browser checks after deploy:
+
 - open `http://176.57.184.98/`
 - login with the existing dashboard password
-- open `/saas`
+- open `/saas/admin`
+- open `/saas/strategy-client`
+- open `/saas/algofund`
+- verify pages render and are not blank
 - in `Admin`: click `Инициализировать demo tenants`, then `Опубликовать admin TS`
 - in `Клиент стратегий`: select `client-bot-01`, assign API key if needed, save, preview, then `Materialize на API key`
 - in `Алгофонд`: select `algofund-01`, set API key/risk, save, preview, then send `Запросить старт`
