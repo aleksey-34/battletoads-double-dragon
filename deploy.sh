@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Guard against sourcing this script in an interactive shell.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  echo "Do not source deploy.sh. Run it as a command:"
+  echo "  bash /opt/battletoads-double-dragon/deploy.sh vps <branch> /opt/battletoads-double-dragon"
+  return 1 2>/dev/null || exit 1
+fi
+
 resolve_self_path() {
   local source="${BASH_SOURCE[0]}"
   while [[ -h "${source}" ]]; do
@@ -11,7 +18,9 @@ resolve_self_path() {
       source="${dir}/${source}"
     fi
   done
-  cd -P "$(dirname "${source}")" >/dev/null 2>&1 && pwd
+  (
+    cd -P "$(dirname "${source}")" >/dev/null 2>&1 && pwd
+  )
 }
 
 ROOT_DIR="$(resolve_self_path)"
