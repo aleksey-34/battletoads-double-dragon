@@ -134,6 +134,18 @@ const defaultChartSetting = (): ChartSetting => ({
   showMonitoring: true,
 });
 
+const AUTO_UPDATE_MIN_SEC = 5;
+const AUTO_UPDATE_MAX_SEC = 3600;
+
+const normalizeUpdateSec = (rawValue: unknown): number => {
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return 0;
+  }
+
+  return Math.min(AUTO_UPDATE_MAX_SEC, Math.max(AUTO_UPDATE_MIN_SEC, Math.round(numeric)));
+};
+
 type ParsedCandlePoint = {
   time: number;
   open: number;
@@ -800,7 +812,12 @@ const Dashboard: React.FC = () => {
     }
 
     const selectedSettings = chartSettings[selectedApiKey] || defaultChartSetting();
-    if (!selectedSettings || selectedSettings.updateSec <= 0) {
+    if (!selectedSettings) {
+      return;
+    }
+
+    const normalizedUpdateSec = normalizeUpdateSec(selectedSettings.updateSec);
+    if (normalizedUpdateSec <= 0) {
       return;
     }
 
@@ -839,7 +856,7 @@ const Dashboard: React.FC = () => {
       if (shouldRefreshTrades) {
         void fetchTradesForKey(selectedApiKey, { silent: true });
       }
-    }, selectedSettings.updateSec * 1000);
+    }, normalizedUpdateSec * 1000);
 
     return () => window.clearInterval(intervalId);
   }, [selectedApiKey, chartSettings, apiKeyToggles, strategiesByKey]);
@@ -850,9 +867,12 @@ const Dashboard: React.FC = () => {
 
   const fetchApiKeys = async () => {
     try {
-      const res = await axios.get('http://localhost:3001/api/api-keys');
+      const res = await axios.get('/api/api-keys');
       const keys: ApiKey[] = Array.isArray(res.data) ? res.data : [];
       setApiKeys(keys);
+
+      const hasSelectedKey = Boolean(selectedApiKey) && keys.some((key) => key.name === selectedApiKey);
+      const preferredKeyName = hasSelectedKey ? selectedApiKey : (keys[0]?.name || '');
 
       let storedToggles: { [key: string]: boolean } = {};
       const rawStoredToggles = localStorage.getItem('apiKeyToggles');
@@ -876,9 +896,14 @@ const Dashboard: React.FC = () => {
       setChartSettings((prev) => {
         const next = { ...prev };
         keys.forEach((key) => {
-          next[key.name] = {
+          const merged = {
             ...defaultChartSetting(),
             ...(next[key.name] || {}),
+          };
+
+          merged.updateSec = normalizeUpdateSec(merged.updateSec);
+          next[key.name] = {
+            ...merged,
           };
         });
         persistChartSettings(next);
@@ -904,13 +929,18 @@ const Dashboard: React.FC = () => {
       }
 
       for (const key of keys) {
+        const panelOpened = activePanel.includes(String(key.id));
+        const shouldLoadFullStrategies = key.name === preferredKeyName || panelOpened;
+
         if (mergedToggles[key.name]) {
           void fetchKeyStatus(key.name);
           void fetchBalances(key.name);
           void fetchPositionsForKey(key.name);
           void fetchTradesForKey(key.name, { silent: true });
           void fetchSymbols(key.name);
-          void fetchStrategies(key.name);
+          if (shouldLoadFullStrategies) {
+            void fetchStrategies(key.name);
+          }
           void fetchMonitoring(key.name, { capture: true });
         } else {
           setKeyStatuses((prev) => ({ ...prev, [key.name]: { status: 'warning', message: 'Disabled' } }));
@@ -926,7 +956,6 @@ const Dashboard: React.FC = () => {
           }));
           setTradesByKey((prev) => ({ ...prev, [key.name]: [] }));
           setMonitoringErrorByKey((prev) => ({ ...prev, [key.name]: '' }));
-          void fetchStrategies(key.name);
         }
       }
     } catch (error) {
@@ -936,7 +965,7 @@ const Dashboard: React.FC = () => {
 
   const fetchKeyStatus = async (keyName: string) => {
     try {
-      const res = await axios.get(`http://localhost:3001/api/key-status/${keyName}`);
+      const res = await axios.get(`/api/key-status/${keyName}`);
       setKeyStatuses((prev) => ({ ...prev, [keyName]: res.data }));
     } catch {
       setKeyStatuses((prev) => ({
@@ -952,7 +981,7 @@ const Dashboard: React.FC = () => {
     }
 
     try {
-      const res = await axios.get(`http://localhost:3001/api/balances/${keyName}`);
+      const res = await axios.get(`/api/balances/${keyName}`);
       const payload = Array.isArray(res.data) ? res.data : [];
       setBalances((prev) => ({ ...prev, [keyName]: payload }));
       setBalancesError((prev) => ({ ...prev, [keyName]: '' }));
@@ -969,7 +998,7 @@ const Dashboard: React.FC = () => {
     }
 
     try {
-      const res = await axios.get(`http://localhost:3001/api/positions/${keyName}`);
+      const res = await axios.get(`/api/positions/${keyName}`);
       const payload = Array.isArray(res.data) ? res.data : [];
       setPositionsByKey((prev) => ({ ...prev, [keyName]: payload }));
     } catch (error) {
@@ -984,7 +1013,7 @@ const Dashboard: React.FC = () => {
     }
 
     try {
-      const res = await axios.get(`http://localhost:3001/api/trades/${keyName}`, {
+      const res = await axios.get(`/api/trades/${keyName}`, {
         params: {
           limit: 240,
         },
@@ -1017,7 +1046,7 @@ const Dashboard: React.FC = () => {
     }
 
     try {
-      const res = await axios.get(`http://localhost:3001/api/monitoring/${keyName}`, {
+      const res = await axios.get(`/api/monitoring/${keyName}`, {
         params: {
           limit: 240,
           capture: capture ? 1 : 0,
@@ -1064,7 +1093,7 @@ const Dashboard: React.FC = () => {
     }
 
     try {
-      const res = await axios.get(`http://localhost:3001/api/symbols/${keyName}`);
+      const res = await axios.get(`/api/symbols/${keyName}`);
       const payload = Array.isArray(res.data) ? res.data : [];
       setSymbols((prev) => ({ ...prev, [keyName]: payload }));
       setSymbolsError((prev) => ({ ...prev, [keyName]: '' }));
@@ -1124,7 +1153,7 @@ const Dashboard: React.FC = () => {
     }
 
     try {
-      const res = await axios.get(`http://localhost:3001/api/strategies/${keyName}`);
+      const res = await axios.get(`/api/strategies/${keyName}`);
       const payload = Array.isArray(res.data) ? res.data.map(parseStrategy) : [];
       setStrategiesByKey((prev) => ({ ...prev, [keyName]: payload }));
       setActiveStrategyPanelsByKey((prev) => {
@@ -1175,7 +1204,7 @@ const Dashboard: React.FC = () => {
     try {
       setStrategyActionLoading((prev) => ({ ...prev, [`${keyName}:new`]: true }));
 
-      const createRes = await axios.post(`http://localhost:3001/api/strategies/${keyName}`, {
+      const createRes = await axios.post(`/api/strategies/${keyName}`, {
         name,
         strategy_type: 'DD_BattleToads',
         display_on_chart: true,
@@ -1309,7 +1338,7 @@ const Dashboard: React.FC = () => {
 
     try {
       setStrategyActionLoading((prev) => ({ ...prev, [actionKey]: true }));
-      const res = await axios.put(`http://localhost:3001/api/strategies/${keyName}/${strategyId}`, payload);
+      const res = await axios.put(`/api/strategies/${keyName}/${strategyId}`, payload);
       const updated = parseStrategy(res.data);
 
       if (updated.id !== strategyId) {
@@ -1334,12 +1363,12 @@ const Dashboard: React.FC = () => {
       setStrategyActionLoading((prev) => ({ ...prev, [actionKey]: true }));
 
       if (!strategy.is_active) {
-        await axios.put(`http://localhost:3001/api/strategies/${keyName}/${strategy.id}`, {
+        await axios.put(`/api/strategies/${keyName}/${strategy.id}`, {
           is_active: true,
         });
       }
 
-      const res = await axios.post(`http://localhost:3001/api/execute-strategy/${keyName}/${strategy.id}`);
+      const res = await axios.post(`/api/execute-strategy/${keyName}/${strategy.id}`);
       const resultText = res?.data?.result || 'Strategy executed';
       message.success(resultText);
       await Promise.all([
@@ -1361,7 +1390,7 @@ const Dashboard: React.FC = () => {
     const actionKey = strategyActionKey(keyName, strategy.id, 'pause');
     try {
       setStrategyActionLoading((prev) => ({ ...prev, [actionKey]: true }));
-      await axios.post(`http://localhost:3001/api/pause-strategy/${keyName}/${strategy.id}`);
+      await axios.post(`/api/pause-strategy/${keyName}/${strategy.id}`);
       message.success(`Strategy ${strategy.name} paused`);
       await fetchStrategies(keyName);
     } catch (error: any) {
@@ -1376,7 +1405,7 @@ const Dashboard: React.FC = () => {
     const actionKey = strategyActionKey(keyName, strategy.id, 'stop');
     try {
       setStrategyActionLoading((prev) => ({ ...prev, [actionKey]: true }));
-      await axios.post(`http://localhost:3001/api/stop-strategy/${keyName}/${strategy.id}`);
+      await axios.post(`/api/stop-strategy/${keyName}/${strategy.id}`);
       message.success(`Strategy ${strategy.name} stopped`);
       await Promise.all([
         fetchStrategies(keyName),
@@ -1394,7 +1423,7 @@ const Dashboard: React.FC = () => {
     const actionKey = strategyActionKey(keyName, strategy.id, 'cancel-orders');
     try {
       setStrategyActionLoading((prev) => ({ ...prev, [actionKey]: true }));
-      await axios.post(`http://localhost:3001/api/strategies/${keyName}/${strategy.id}/cancel-orders`);
+      await axios.post(`/api/strategies/${keyName}/${strategy.id}/cancel-orders`);
       message.success(`Orders cancelled for ${strategy.name}`);
       await fetchStrategies(keyName);
     } catch (error: any) {
@@ -1409,7 +1438,7 @@ const Dashboard: React.FC = () => {
     const actionKey = strategyActionKey(keyName, strategy.id, 'close-positions');
     try {
       setStrategyActionLoading((prev) => ({ ...prev, [actionKey]: true }));
-      await axios.post(`http://localhost:3001/api/strategies/${keyName}/${strategy.id}/close-positions`);
+      await axios.post(`/api/strategies/${keyName}/${strategy.id}/close-positions`);
       message.success(`Pair positions closed for ${strategy.name}`);
       await Promise.all([
         fetchStrategies(keyName),
@@ -1428,7 +1457,7 @@ const Dashboard: React.FC = () => {
     const actionKey = strategyActionKey(keyName, strategy.id, 'delete');
     try {
       setStrategyActionLoading((prev) => ({ ...prev, [actionKey]: true }));
-      await axios.delete(`http://localhost:3001/api/strategies/${keyName}/${strategy.id}`);
+      await axios.delete(`/api/strategies/${keyName}/${strategy.id}`);
       message.success(`Strategy ${strategy.name} deleted`);
       await fetchStrategies(keyName);
     } catch (error: any) {
@@ -1447,7 +1476,7 @@ const Dashboard: React.FC = () => {
     const loadingKey = `${keyName}:${action}`;
     try {
       setKeyActionLoading((prev) => ({ ...prev, [loadingKey]: true }));
-      await axios.post(`http://localhost:3001/api/api-keys/${keyName}/actions`, {
+      await axios.post(`/api/api-keys/${keyName}/actions`, {
         action,
       });
       message.success(successMessage);
@@ -1473,7 +1502,7 @@ const Dashboard: React.FC = () => {
     const loadingKey = `global:${action}`;
     try {
       setGlobalActionLoading((prev) => ({ ...prev, [loadingKey]: true }));
-      const res = await axios.post('http://localhost:3001/api/controls/global', { action });
+      const res = await axios.post('/api/controls/global', { action });
 
       if (res.status === 207 || res?.data?.errors?.length) {
         message.warning(`Global action finished with partial errors: ${res?.data?.errors?.length || 0}`);
@@ -1483,7 +1512,9 @@ const Dashboard: React.FC = () => {
 
       for (const key of apiKeys) {
         if (isApiKeyActive(key.name)) {
-          void fetchStrategies(key.name);
+          if (key.name === selectedApiKey) {
+            void fetchStrategies(key.name);
+          }
           void fetchPositionsForKey(key.name);
           void fetchTradesForKey(key.name, { silent: true });
           void fetchMonitoring(key.name, { capture: true, silent: true });
@@ -1511,7 +1542,7 @@ const Dashboard: React.FC = () => {
 
     try {
       setCopyActionLoadingByKey((prev) => ({ ...prev, [targetKeyName]: true }));
-      const res = await axios.post('http://localhost:3001/api/strategies/copy-block', {
+      const res = await axios.post('/api/strategies/copy-block', {
         sourceApiKey: sourceKeyName,
         targetApiKey: targetKeyName,
         replaceTarget: true,
@@ -1559,6 +1590,9 @@ const Dashboard: React.FC = () => {
     setAccountRefreshLoadingByKey((prev) => ({ ...prev, [keyName]: true }));
     try {
       const keySettings = chartSettings[keyName] || defaultChartSetting();
+      const keyMeta = apiKeys.find((item) => item.name === keyName);
+      const panelOpened = keyMeta ? activePanel.includes(String(keyMeta.id)) : false;
+      const shouldLoadFullStrategies = keyName === selectedApiKey || panelOpened;
 
       await Promise.all([
         fetchKeyStatus(keyName),
@@ -1566,7 +1600,7 @@ const Dashboard: React.FC = () => {
         fetchPositionsForKey(keyName),
         fetchTradesForKey(keyName, { silent: true }),
         fetchSymbols(keyName),
-        fetchStrategies(keyName),
+        ...(shouldLoadFullStrategies ? [fetchStrategies(keyName)] : []),
         ...(keySettings.showMonitoring !== false ? [fetchMonitoring(keyName, { capture: true })] : []),
       ]);
 
@@ -1607,15 +1641,22 @@ const Dashboard: React.FC = () => {
   };
 
   const updateChartSetting = (keyName: string, patch: Partial<ChartSetting>) => {
+    const normalizedPatch: Partial<ChartSetting> = patch.updateSec === undefined
+      ? patch
+      : {
+          ...patch,
+          updateSec: normalizeUpdateSec(patch.updateSec),
+        };
+
     const dataAffectingFields = new Set(['type', 'symbol', 'base', 'quote', 'baseCoef', 'quoteCoef', 'interval']);
-    const shouldResetChart = Object.keys(patch).some((field) => dataAffectingFields.has(field));
+    const shouldResetChart = Object.keys(normalizedPatch).some((field) => dataAffectingFields.has(field));
 
     setChartSettings((prev) => {
       const next = {
         ...prev,
         [keyName]: {
           ...(prev[keyName] || defaultChartSetting()),
-          ...patch,
+          ...normalizedPatch,
         },
       };
       persistChartSettings(next);
@@ -1651,7 +1692,9 @@ const Dashboard: React.FC = () => {
       void fetchPositionsForKey(key.name);
       void fetchTradesForKey(key.name, { silent: true });
       void fetchSymbols(key.name);
-      void fetchStrategies(key.name);
+      if (selectedApiKey === key.name) {
+        void fetchStrategies(key.name);
+      }
       if (keySettings.showMonitoring !== false) {
         void fetchMonitoring(key.name, { capture: true });
       }
@@ -1711,7 +1754,7 @@ const Dashboard: React.FC = () => {
           return;
         }
 
-        const res = await axios.get(`http://localhost:3001/api/synthetic-chart/${keyName}`, {
+        const res = await axios.get(`/api/synthetic-chart/${keyName}`, {
           params: {
             base: settings.base,
             quote: settings.quote,
@@ -1724,7 +1767,7 @@ const Dashboard: React.FC = () => {
         payload = Array.isArray(res.data) ? res.data : [];
       } else {
         const symbol = settings.symbol || 'BTCUSDT';
-        const res = await axios.get(`http://localhost:3001/api/market-data/${keyName}`, {
+        const res = await axios.get(`/api/market-data/${keyName}`, {
           params: {
             symbol,
             interval: settings.interval || '1h',
@@ -1767,6 +1810,10 @@ const Dashboard: React.FC = () => {
     if (openedApiKey) {
       setSelectedApiKey(openedApiKey.name);
       localStorage.setItem('selectedApiKey', openedApiKey.name);
+
+      if (strategiesByKey[openedApiKey.name] === undefined) {
+        void fetchStrategies(openedApiKey.name);
+      }
 
       const openedSettings = chartSettings[openedApiKey.name] || defaultChartSetting();
       const openedStrategies = strategiesByKey[openedApiKey.name] || [];
@@ -2104,8 +2151,10 @@ const Dashboard: React.FC = () => {
                     <Form.Item label="Update (sec)">
                       <Input
                         type="number"
+                        min={0}
+                        step={1}
                         value={settings.updateSec}
-                        onChange={(e) => updateChartSetting(keyName, { updateSec: Number(e.target.value) || 0 })}
+                        onChange={(e) => updateChartSetting(keyName, { updateSec: normalizeUpdateSec(e.target.value) })}
                         disabled={!keyActive}
                       />
                     </Form.Item>

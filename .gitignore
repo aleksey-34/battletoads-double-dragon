@@ -14,7 +14,6 @@ frontend/build/
 logs/
 backend/logs/
 *.log
-results/
 
 # Local databases and state
 *.db
@@ -28,11 +27,20 @@ results/
 *.pem
 *.key
 *.p12
-scripts/btdd_local.env
 
 # Generated deployment archives
 scripts/dist/
+results/
 
 # Misc
 *.tmp
 *.swp
+
+# Per-machine script credentials (never commit)
+scripts/btdd_local.env
+
+# One-off run scripts and their outputs (not needed on VPS)
+backend/phase*.ts
+backend/phase*.js
+backend/phase*.json
+backend/ab_btdd_d1_results.json

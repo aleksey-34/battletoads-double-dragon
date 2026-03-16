@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Button,
@@ -6,6 +6,7 @@ import {
   Col,
   DatePicker,
   InputNumber,
+  Popconfirm,
   Row,
   Select,
   Space,
@@ -19,6 +20,7 @@ import {
 import type { Dayjs } from 'dayjs';
 import axios from 'axios';
 import ChartComponent from '../components/ChartComponent';
+import { useI18n } from '../i18n';
 
 type BacktestMode = 'single' | 'portfolio';
 
@@ -145,6 +147,7 @@ const formatPercent = (value: number, digits: number = 2): string => {
 };
 
 const Backtest: React.FC = () => {
+  const { t } = useI18n();
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
   const [apiKeyName, setApiKeyName] = useState<string>('');
   const [strategies, setStrategies] = useState<StrategyRecord[]>([]);
@@ -168,6 +171,7 @@ const Backtest: React.FC = () => {
   const [runLoading, setRunLoading] = useState<boolean>(false);
   const [historyLoading, setHistoryLoading] = useState<boolean>(false);
   const [errorText, setErrorText] = useState<string>('');
+  const [deletingRunId, setDeletingRunId] = useState<number | null>(null);
 
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [historyRows, setHistoryRows] = useState<BacktestRunRow[]>([]);
@@ -182,6 +186,7 @@ const Backtest: React.FC = () => {
     axios.defaults.headers.common.Authorization = `Bearer ${password}`;
     void loadApiKeys();
     void loadHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -193,12 +198,13 @@ const Backtest: React.FC = () => {
     }
 
     void loadStrategies(apiKeyName);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKeyName]);
 
-  const loadApiKeys = async () => {
+  const loadApiKeys = useCallback(async () => {
     setLoadingApiKeys(true);
     try {
-      const res = await axios.get('http://localhost:3001/api/api-keys');
+      const res = await axios.get('/api/api-keys');
       const rows = Array.isArray(res.data) ? (res.data as ApiKeyRecord[]) : [];
       setApiKeys(rows);
 
@@ -207,18 +213,18 @@ const Backtest: React.FC = () => {
       }
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || 'Failed to load API keys');
+      message.error(error?.response?.data?.error || t('backtest.msg.loadApiKeysFailed', 'Failed to load API keys'));
     } finally {
       setLoadingApiKeys(false);
     }
-  };
+  }, [t]);
 
-  const loadStrategies = async (selectedApiKeyName: string) => {
+  const loadStrategies = useCallback(async (selectedApiKeyName: string) => {
     setLoadingStrategies(true);
     setErrorText('');
 
     try {
-      const res = await axios.get(`http://localhost:3001/api/backtest/strategies/${selectedApiKeyName}`);
+      const res = await axios.get(`/api/backtest/strategies/${selectedApiKeyName}`);
       const rows = Array.isArray(res.data) ? (res.data as StrategyRecord[]) : [];
       setStrategies(rows);
 
@@ -237,19 +243,19 @@ const Backtest: React.FC = () => {
       }
     } catch (error: any) {
       console.error(error);
-      setErrorText(error?.response?.data?.error || 'Failed to load strategies for selected API key');
+      setErrorText(error?.response?.data?.error || t('backtest.msg.loadStrategiesFailed', 'Failed to load strategies for selected API key'));
       setStrategies([]);
       setStrategyId(null);
       setStrategyIds([]);
     } finally {
       setLoadingStrategies(false);
     }
-  };
+  }, [t]);
 
-  const loadHistory = async () => {
+  const loadHistory = useCallback(async () => {
     setHistoryLoading(true);
     try {
-      const res = await axios.get('http://localhost:3001/api/backtest/runs', {
+      const res = await axios.get('/api/backtest/runs', {
         params: {
           limit: 30,
         },
@@ -258,25 +264,25 @@ const Backtest: React.FC = () => {
       setHistoryRows(rows);
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || 'Failed to load backtest history');
+      message.error(error?.response?.data?.error || t('backtest.msg.loadHistoryFailed', 'Failed to load backtest history'));
     } finally {
       setHistoryLoading(false);
     }
-  };
+  }, [t]);
 
   const runBacktest = async () => {
     if (!apiKeyName) {
-      message.warning('Select API key first');
+      message.warning(t('backtest.msg.selectApiKeyFirst', 'Select API key first'));
       return;
     }
 
     if (mode === 'single' && !strategyId) {
-      message.warning('Choose strategy for single mode');
+      message.warning(t('backtest.msg.selectSingleStrategy', 'Choose strategy for single mode'));
       return;
     }
 
     if (mode === 'portfolio' && strategyIds.length === 0) {
-      message.warning('Choose at least one strategy for portfolio mode');
+      message.warning(t('backtest.msg.selectPortfolioStrategies', 'Choose at least one strategy for portfolio mode'));
       return;
     }
 
@@ -304,25 +310,27 @@ const Backtest: React.FC = () => {
         payload.strategyIds = strategyIds;
       }
 
-      const res = await axios.post('http://localhost:3001/api/backtest/run', {
+      const res = await axios.post('/api/backtest/run', {
         ...payload,
         saveResult: true,
       });
 
       const data = res.data?.result as BacktestResult | undefined;
       if (!data) {
-        throw new Error('Backtest API returned empty result');
+        throw new Error(t('backtest.msg.emptyResult', 'Backtest API returned empty result'));
       }
 
       setResult(data);
-      message.success(`Backtest finished${data.runId ? ` (run #${data.runId})` : ''}`);
+      message.success(t('backtest.msg.finished', 'Backtest finished{runSuffix}', {
+        runSuffix: data.runId ? ` (run #${data.runId})` : '',
+      }));
       await loadHistory();
     } catch (error: any) {
       console.error(error);
       const statusCode = Number(error?.response?.status || 0);
-      const backendError = error?.response?.data?.error || error?.message || 'Backtest failed';
+      const backendError = error?.response?.data?.error || error?.message || t('backtest.msg.failed', 'Backtest failed');
       const userMessage = statusCode === 429
-        ? 'Backtest already running. Wait until it finishes to avoid overloading live trading.'
+        ? t('backtest.msg.alreadyRunning', 'Backtest already running. Wait until it finishes to avoid overloading live trading.')
         : backendError;
 
       setErrorText(userMessage);
@@ -334,12 +342,29 @@ const Backtest: React.FC = () => {
 
   const loadRunById = async (id: number) => {
     try {
-      const res = await axios.get(`http://localhost:3001/api/backtest/runs/${id}`);
+      const res = await axios.get(`/api/backtest/runs/${id}`);
       setResult(res.data as BacktestResult);
-      message.success(`Loaded run #${id}`);
+      message.success(t('backtest.msg.loadedRun', 'Loaded run #{id}', { id }));
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || `Failed to load run #${id}`);
+      message.error(error?.response?.data?.error || t('backtest.msg.loadRunFailed', 'Failed to load run #{id}', { id }));
+    }
+  };
+
+  const deleteRunById = async (id: number) => {
+    setDeletingRunId(id);
+    try {
+      await axios.delete(`/api/backtest/runs/${id}`);
+      if (result?.runId === id) {
+        setResult(null);
+      }
+      await loadHistory();
+      message.success(t('backtest.msg.deletedRun', 'Deleted run #{id}', { id }));
+    } catch (error: any) {
+      console.error(error);
+      message.error(error?.response?.data?.error || t('backtest.msg.deleteRunFailed', 'Failed to delete run #{id}', { id }));
+    } finally {
+      setDeletingRunId(null);
     }
   };
 
@@ -367,19 +392,19 @@ const Backtest: React.FC = () => {
   const summary = result?.summary || null;
 
   return (
-    <div>
-      <Card title="Backtest Runner" extra={<Button onClick={() => { void loadHistory(); }} loading={historyLoading}>Refresh history</Button>}>
+    <div className="battletoads-form-shell">
+      <Card className="battletoads-card" title={t('backtest.runnerTitle', 'Backtest Runner')} extra={<Button onClick={() => { void loadHistory(); }} loading={historyLoading}>{t('backtest.refreshHistory', 'Refresh history')}</Button>}>
         <Space direction="vertical" style={{ width: '100%' }} size={14}>
           {errorText ? <Alert type="error" showIcon message={errorText} /> : null}
 
           <Row gutter={[12, 12]}>
             <Col xs={24} md={12}>
-              <Typography.Text strong>API Key</Typography.Text>
+              <Typography.Text strong>{t('backtest.apiKey', 'API Key')}</Typography.Text>
               <Select
                 style={{ width: '100%', marginTop: 6 }}
                 loading={loadingApiKeys}
                 value={apiKeyName || undefined}
-                placeholder="Select API key"
+                placeholder={t('backtest.selectApiKey', 'Select API key')}
                 onChange={(value) => setApiKeyName(value)}
                 options={apiKeys.map((item) => ({
                   label: `${item.name} (${item.exchange})`,
@@ -389,14 +414,14 @@ const Backtest: React.FC = () => {
             </Col>
 
             <Col xs={24} md={12}>
-              <Typography.Text strong>Mode</Typography.Text>
+              <Typography.Text strong>{t('backtest.mode', 'Mode')}</Typography.Text>
               <Select
                 style={{ width: '100%', marginTop: 6 }}
                 value={mode}
                 onChange={(value: BacktestMode) => setMode(value)}
                 options={[
-                  { label: 'Single Strategy', value: 'single' },
-                  { label: 'Portfolio (shared balance)', value: 'portfolio' },
+                  { label: t('backtest.mode.single', 'Single Strategy'), value: 'single' },
+                  { label: t('backtest.mode.portfolio', 'Portfolio (shared balance)'), value: 'portfolio' },
                 ]}
               />
             </Col>
@@ -404,7 +429,7 @@ const Backtest: React.FC = () => {
 
           <Row gutter={[12, 12]}>
             <Col xs={24} md={12}>
-              <Typography.Text strong>Bars (fallback)</Typography.Text>
+              <Typography.Text strong>{t('backtest.barsFallback', 'Bars (fallback)')}</Typography.Text>
               <InputNumber
                 style={{ width: '100%', marginTop: 6 }}
                 min={120}
@@ -414,12 +439,12 @@ const Backtest: React.FC = () => {
                 onChange={(value) => setBars(Number(value || 1200))}
               />
               <Typography.Text type="secondary" style={{ display: 'block', marginTop: 6, fontSize: 12 }}>
-                Used when Date From/To are not set, and as extra fetch depth for indicator warmup.
+                {t('backtest.barsHint', 'Used when Date From/To are not set, and as extra fetch depth for indicator warmup.')}
               </Typography.Text>
             </Col>
 
             <Col xs={24} md={12}>
-              <Typography.Text strong>Initial Balance</Typography.Text>
+              <Typography.Text strong>{t('backtest.initialBalance', 'Initial Balance')}</Typography.Text>
               <InputNumber
                 style={{ width: '100%', marginTop: 6 }}
                 min={10}
@@ -432,23 +457,23 @@ const Backtest: React.FC = () => {
 
           <Row gutter={[12, 12]}>
             <Col xs={24} md={12}>
-              <Typography.Text strong>Date From</Typography.Text>
+              <Typography.Text strong>{t('backtest.dateFrom', 'Date From')}</Typography.Text>
               <DatePicker
                 showTime
                 format="YYYY-MM-DD HH:mm:ss"
                 style={{ width: '100%', marginTop: 6 }}
-                placeholder="Select start date"
+                placeholder={t('backtest.selectStartDate', 'Select start date')}
                 value={dateFrom}
                 onChange={(value) => setDateFrom(value)}
               />
             </Col>
             <Col xs={24} md={12}>
-              <Typography.Text strong>Date To</Typography.Text>
+              <Typography.Text strong>{t('backtest.dateTo', 'Date To')}</Typography.Text>
               <DatePicker
                 showTime
                 format="YYYY-MM-DD HH:mm:ss"
                 style={{ width: '100%', marginTop: 6 }}
-                placeholder="Select end date"
+                placeholder={t('backtest.selectEndDate', 'Select end date')}
                 value={dateTo}
                 onChange={(value) => setDateTo(value)}
               />
@@ -457,7 +482,7 @@ const Backtest: React.FC = () => {
 
           <Row gutter={[12, 12]}>
             <Col xs={24} md={12}>
-              <Typography.Text strong>Warmup / Freeze Bars</Typography.Text>
+              <Typography.Text strong>{t('backtest.warmupBars', 'Warmup / Freeze Bars')}</Typography.Text>
               <InputNumber
                 style={{ width: '100%', marginTop: 6 }}
                 min={0}
@@ -468,37 +493,37 @@ const Backtest: React.FC = () => {
               />
             </Col>
             <Col xs={24} md={12}>
-              <Typography.Text strong>Skip pairs with unusable history</Typography.Text>
+              <Typography.Text strong>{t('backtest.skipUnusableHistory', 'Skip pairs with unusable history')}</Typography.Text>
               <div style={{ marginTop: 10 }}>
                 <Switch checked={skipMissingSymbols} onChange={(checked) => setSkipMissingSymbols(checked)} />
               </div>
               <Typography.Text type="secondary" style={{ display: 'block', marginTop: 6, fontSize: 12 }}>
-                Off by default: pairs start from first available candles and warm up before trading.
+                {t('backtest.skipHint', 'Off by default: pairs start from first available candles and warm up before trading.')}
               </Typography.Text>
             </Col>
           </Row>
 
           {mode === 'single' ? (
             <div>
-              <Typography.Text strong>Strategy</Typography.Text>
+              <Typography.Text strong>{t('backtest.strategy', 'Strategy')}</Typography.Text>
               <Select
                 style={{ width: '100%', marginTop: 6 }}
                 loading={loadingStrategies}
                 value={strategyId || undefined}
-                placeholder="Select strategy"
+                placeholder={t('backtest.selectStrategy', 'Select strategy')}
                 options={strategyOptions}
                 onChange={(value) => setStrategyId(Number(value))}
               />
             </div>
           ) : (
             <div>
-              <Typography.Text strong>Strategies (shared balance pool)</Typography.Text>
+              <Typography.Text strong>{t('backtest.portfolioStrategies', 'Strategies (shared balance pool)')}</Typography.Text>
               <Select
                 mode="multiple"
                 style={{ width: '100%', marginTop: 6 }}
                 loading={loadingStrategies}
                 value={strategyIds}
-                placeholder="Select one or more strategies"
+                placeholder={t('backtest.selectMultipleStrategies', 'Select one or more strategies')}
                 options={strategyOptions}
                 onChange={(values) => setStrategyIds(values.map((value) => Number(value)))}
               />
@@ -507,7 +532,7 @@ const Backtest: React.FC = () => {
 
           <Row gutter={[12, 12]}>
             <Col xs={24} md={8}>
-              <Typography.Text strong>Commission %</Typography.Text>
+              <Typography.Text strong>{t('backtest.commission', 'Commission %')}</Typography.Text>
               <InputNumber
                 style={{ width: '100%', marginTop: 6 }}
                 min={0}
@@ -518,7 +543,7 @@ const Backtest: React.FC = () => {
               />
             </Col>
             <Col xs={24} md={8}>
-              <Typography.Text strong>Slippage %</Typography.Text>
+              <Typography.Text strong>{t('backtest.slippage', 'Slippage %')}</Typography.Text>
               <InputNumber
                 style={{ width: '100%', marginTop: 6 }}
                 min={0}
@@ -529,7 +554,7 @@ const Backtest: React.FC = () => {
               />
             </Col>
             <Col xs={24} md={8}>
-              <Typography.Text strong>Funding % per Event</Typography.Text>
+              <Typography.Text strong>{t('backtest.fundingPerEvent', 'Funding % per Event')}</Typography.Text>
               <InputNumber
                 style={{ width: '100%', marginTop: 6 }}
                 min={-5}
@@ -543,7 +568,7 @@ const Backtest: React.FC = () => {
 
           <Space>
             <Button type="primary" loading={runLoading} onClick={() => { void runBacktest(); }}>
-              Run Backtest
+              {t('backtest.run', 'Run Backtest')}
             </Button>
             <Button
               onClick={() => {
@@ -551,37 +576,37 @@ const Backtest: React.FC = () => {
                 setErrorText('');
               }}
             >
-              Clear Result
+              {t('backtest.clear', 'Clear Result')}
             </Button>
           </Space>
         </Space>
       </Card>
 
       {summary ? (
-        <Card title="Backtest Summary" style={{ marginTop: 16 }}>
+        <Card className="battletoads-card" title={t('backtest.summary', 'Backtest Summary')} style={{ marginTop: 16 }}>
           <Row gutter={[12, 12]}>
-            <Col xs={12} md={6}><Statistic title="Initial" value={summary.initialBalance} precision={2} /></Col>
-            <Col xs={12} md={6}><Statistic title="Final" value={summary.finalEquity} precision={2} /></Col>
-            <Col xs={12} md={6}><Statistic title="Return" value={summary.totalReturnPercent} precision={2} suffix="%" /></Col>
-            <Col xs={12} md={6}><Statistic title="Max DD" value={summary.maxDrawdownPercent} precision={2} suffix="%" /></Col>
-            <Col xs={12} md={6}><Statistic title="Trades" value={summary.tradesCount} /></Col>
-            <Col xs={12} md={6}><Statistic title="Win Rate" value={summary.winRatePercent} precision={2} suffix="%" /></Col>
-            <Col xs={12} md={6}><Statistic title="Profit Factor" value={summary.profitFactor} precision={2} /></Col>
-            <Col xs={12} md={6}><Statistic title="Bars" value={summary.barsProcessed} /></Col>
-            <Col xs={12} md={6}><Statistic title="Processed Strategies" value={summary.processedStrategies ?? summary.strategyIds.length} /></Col>
-            <Col xs={12} md={6}><Statistic title="Skipped Strategies" value={summary.skippedStrategies ?? 0} /></Col>
+            <Col xs={12} md={6}><Statistic title={t('backtest.stat.initial', 'Initial')} value={summary.initialBalance} precision={2} /></Col>
+            <Col xs={12} md={6}><Statistic title={t('backtest.stat.final', 'Final')} value={summary.finalEquity} precision={2} /></Col>
+            <Col xs={12} md={6}><Statistic title={t('backtest.stat.return', 'Return')} value={summary.totalReturnPercent} precision={2} suffix="%" /></Col>
+            <Col xs={12} md={6}><Statistic title={t('backtest.stat.maxDd', 'Max DD')} value={summary.maxDrawdownPercent} precision={2} suffix="%" /></Col>
+            <Col xs={12} md={6}><Statistic title={t('backtest.stat.trades', 'Trades')} value={summary.tradesCount} /></Col>
+            <Col xs={12} md={6}><Statistic title={t('backtest.stat.winRate', 'Win Rate')} value={summary.winRatePercent} precision={2} suffix="%" /></Col>
+            <Col xs={12} md={6}><Statistic title={t('backtest.stat.profitFactor', 'Profit Factor')} value={summary.profitFactor} precision={2} /></Col>
+            <Col xs={12} md={6}><Statistic title={t('backtest.stat.bars', 'Bars')} value={summary.barsProcessed} /></Col>
+            <Col xs={12} md={6}><Statistic title={t('backtest.stat.processedStrategies', 'Processed Strategies')} value={summary.processedStrategies ?? summary.strategyIds.length} /></Col>
+            <Col xs={12} md={6}><Statistic title={t('backtest.stat.skippedStrategies', 'Skipped Strategies')} value={summary.skippedStrategies ?? 0} /></Col>
           </Row>
 
           <Space style={{ marginTop: 12 }} wrap>
             <Tag color={summary.mode === 'portfolio' ? 'gold' : 'blue'}>{summary.mode.toUpperCase()}</Tag>
             <Tag>{summary.apiKeyName}</Tag>
             <Tag>{summary.interval}</Tag>
-            {summary.dateFromMs ? <Tag>From {new Date(summary.dateFromMs).toLocaleString()}</Tag> : null}
-            {summary.dateToMs ? <Tag>To {new Date(summary.dateToMs).toLocaleString()}</Tag> : null}
-            <Tag>Warmup {summary.warmupBars ?? 0}</Tag>
-            <Tag>Commission {formatPercent(summary.commissionPercent, 3)}</Tag>
-            <Tag>Slippage {formatPercent(summary.slippagePercent, 3)}</Tag>
-            <Tag>Funding {formatPercent(summary.fundingRatePercent, 3)}</Tag>
+            {summary.dateFromMs ? <Tag>{t('backtest.from', 'From')} {new Date(summary.dateFromMs).toLocaleString()}</Tag> : null}
+            {summary.dateToMs ? <Tag>{t('backtest.to', 'To')} {new Date(summary.dateToMs).toLocaleString()}</Tag> : null}
+            <Tag>{t('backtest.warmup', 'Warmup')} {summary.warmupBars ?? 0}</Tag>
+            <Tag>{t('backtest.commissionShort', 'Commission')} {formatPercent(summary.commissionPercent, 3)}</Tag>
+            <Tag>{t('backtest.slippageShort', 'Slippage')} {formatPercent(summary.slippagePercent, 3)}</Tag>
+            <Tag>{t('backtest.fundingShort', 'Funding')} {formatPercent(summary.fundingRatePercent, 3)}</Tag>
           </Space>
 
           <Typography.Paragraph style={{ marginTop: 12, marginBottom: 0 }}>
@@ -590,13 +615,13 @@ const Backtest: React.FC = () => {
         </Card>
       ) : null}
 
-      <Card title="Equity Curve" style={{ marginTop: 16 }}>
+      <Card className="battletoads-card" title={t('backtest.equityCurve', 'Equity Curve')} style={{ marginTop: 16 }}>
         {equityChartData.length > 0
           ? <ChartComponent data={equityChartData} type="line" />
-          : <Alert type="info" showIcon message="Run a backtest or load history to display equity curve." />}
+          : <Alert type="info" showIcon message={t('backtest.equityHint', 'Run a backtest or load history to display equity curve.')} />}
       </Card>
 
-      <Card title="Trades" style={{ marginTop: 16 }}>
+      <Card className="battletoads-card" title={t('backtest.trades', 'Trades')} style={{ marginTop: 16 }}>
         <Table<BacktestTrade>
           dataSource={result?.trades || []}
           rowKey={(row) => `${row.entryTime}_${row.exitTime}_${row.strategyId}_${row.side}`}
@@ -605,47 +630,47 @@ const Backtest: React.FC = () => {
           scroll={{ x: 1200 }}
           columns={[
             {
-              title: 'Strategy',
+              title: t('backtest.col.strategy', 'Strategy'),
               dataIndex: 'strategyName',
               key: 'strategyName',
               render: (value: string, row: BacktestTrade) => `#${row.strategyId} ${value}`,
             },
             {
-              title: 'Side',
+              title: t('backtest.col.side', 'Side'),
               dataIndex: 'side',
               key: 'side',
               render: (value: 'long' | 'short') => <Tag color={value === 'long' ? 'green' : 'red'}>{value}</Tag>,
             },
             {
-              title: 'Entry',
+              title: t('backtest.col.entry', 'Entry'),
               key: 'entry',
               render: (_: unknown, row: BacktestTrade) => new Date(row.entryTime).toLocaleString(),
             },
             {
-              title: 'Exit',
+              title: t('backtest.col.exit', 'Exit'),
               key: 'exit',
               render: (_: unknown, row: BacktestTrade) => new Date(row.exitTime).toLocaleString(),
             },
             {
-              title: 'Entry Px',
+              title: t('backtest.col.entryPrice', 'Entry Px'),
               dataIndex: 'entryPrice',
               key: 'entryPrice',
               render: (value: number) => formatNumber(value, 6),
             },
             {
-              title: 'Exit Px',
+              title: t('backtest.col.exitPrice', 'Exit Px'),
               dataIndex: 'exitPrice',
               key: 'exitPrice',
               render: (value: number) => formatNumber(value, 6),
             },
             {
-              title: 'Notional',
+              title: t('backtest.col.notional', 'Notional'),
               dataIndex: 'notional',
               key: 'notional',
               render: (value: number) => formatNumber(value, 2),
             },
             {
-              title: 'Net PnL',
+              title: t('backtest.col.netPnl', 'Net PnL'),
               dataIndex: 'netPnl',
               key: 'netPnl',
               render: (value: number) => (
@@ -655,25 +680,25 @@ const Backtest: React.FC = () => {
               ),
             },
             {
-              title: 'PnL %',
+              title: t('backtest.col.pnlPercent', 'PnL %'),
               dataIndex: 'pnlPercent',
               key: 'pnlPercent',
               render: (value: number) => formatPercent(value, 2),
             },
             {
-              title: 'Fees',
+              title: t('backtest.col.fees', 'Fees'),
               dataIndex: 'fees',
               key: 'fees',
               render: (value: number) => formatNumber(value, 3),
             },
             {
-              title: 'Funding',
+              title: t('backtest.col.funding', 'Funding'),
               dataIndex: 'funding',
               key: 'funding',
               render: (value: number) => formatNumber(value, 3),
             },
             {
-              title: 'Reason',
+              title: t('backtest.col.reason', 'Reason'),
               dataIndex: 'reason',
               key: 'reason',
             },
@@ -681,7 +706,7 @@ const Backtest: React.FC = () => {
         />
       </Card>
 
-      <Card title="Backtest History" style={{ marginTop: 16 }}>
+      <Card className="battletoads-card" title={t('backtest.history', 'Backtest History')} style={{ marginTop: 16 }}>
         <Table<BacktestRunRow>
           dataSource={historyRows}
           rowKey={(row) => String(row.id)}
@@ -690,50 +715,60 @@ const Backtest: React.FC = () => {
           pagination={{ pageSize: 10 }}
           scroll={{ x: 1200 }}
           columns={[
-            { title: 'Run', dataIndex: 'id', key: 'id', width: 80 },
+            { title: t('backtest.col.run', 'Run'), dataIndex: 'id', key: 'id', width: 80 },
             {
-              title: 'Created',
+              title: t('backtest.col.created', 'Created'),
               dataIndex: 'created_at',
               key: 'created_at',
               render: (value: string) => value ? new Date(value).toLocaleString() : '-',
             },
-            { title: 'API Key', dataIndex: 'api_key_name', key: 'api_key_name' },
+            { title: t('backtest.col.apiKey', 'API Key'), dataIndex: 'api_key_name', key: 'api_key_name' },
             {
-              title: 'Mode',
+              title: t('backtest.col.mode', 'Mode'),
               dataIndex: 'mode',
               key: 'mode',
               render: (value: BacktestMode) => <Tag color={value === 'portfolio' ? 'gold' : 'blue'}>{value}</Tag>,
             },
             {
-              title: 'Strategies',
+              title: t('backtest.col.strategies', 'Strategies'),
               dataIndex: 'strategy_names',
               key: 'strategy_names',
               render: (value: string[]) => (Array.isArray(value) ? value.join(', ') : '-'),
             },
             {
-              title: 'Return',
+              title: t('backtest.col.return', 'Return'),
               dataIndex: 'total_return_percent',
               key: 'total_return_percent',
               render: (value: number) => formatPercent(value, 2),
             },
             {
-              title: 'Max DD',
+              title: t('backtest.col.maxDd', 'Max DD'),
               dataIndex: 'max_drawdown_percent',
               key: 'max_drawdown_percent',
               render: (value: number) => formatPercent(value, 2),
             },
             {
-              title: 'Trades',
+              title: t('backtest.col.trades', 'Trades'),
               dataIndex: 'trades_count',
               key: 'trades_count',
             },
             {
-              title: 'Action',
+              title: t('backtest.col.action', 'Action'),
               key: 'action',
               render: (_: unknown, row: BacktestRunRow) => (
-                <Button size="small" onClick={() => { void loadRunById(row.id); }}>
-                  Load
-                </Button>
+                <Space wrap>
+                  <Button size="small" onClick={() => { void loadRunById(row.id); }}>
+                    {t('backtest.load', 'Load')}
+                  </Button>
+                  <Popconfirm
+                    title={t('backtest.deleteConfirm', 'Delete run #{id}?', { id: row.id })}
+                    onConfirm={() => { void deleteRunById(row.id); }}
+                  >
+                    <Button size="small" danger loading={deletingRunId === row.id}>
+                      {t('backtest.delete', 'Delete')}
+                    </Button>
+                  </Popconfirm>
+                </Space>
               ),
             },
           ]}

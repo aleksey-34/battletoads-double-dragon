@@ -1,5 +1,6 @@
-import { Strategy } from '../config/settings';
+import { MarketMode, Strategy, StrategyType } from '../config/settings';
 import { getStrategies } from '../bot/strategy';
+import { getMarketData } from '../bot/exchange';
 import { calculateSyntheticOHLC } from '../bot/synthetic';
 import { db } from '../utils/database';
 import fs from 'fs';
@@ -207,6 +208,26 @@ const intervalToMs = (interval: string): number => {
 };
 
 const parseCandle = (item: any): ParsedCandle | null => {
+  if (Array.isArray(item) && item.length >= 5) {
+    const timeMs = Number(item[0]);
+    const open = Number(item[1]);
+    const high = Number(item[2]);
+    const low = Number(item[3]);
+    const close = Number(item[4]);
+
+    if (!Number.isFinite(timeMs) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
+      return null;
+    }
+
+    return {
+      timeMs,
+      open,
+      high,
+      low,
+      close,
+    };
+  }
+
   const timeMs = Number(item?.time);
   const open = Number(item?.open);
   const high = Number(item?.high);
@@ -226,14 +247,21 @@ const parseCandle = (item: any): ParsedCandle | null => {
   };
 };
 
-const computeSignalAtIndex = (
+type BacktestSignalPayload = {
+  signal: Signal;
+  current: number;
+  donchianCenter: number;
+  zScore: number | null;
+};
+
+const computeDonchianSignalAtIndex = (
   candles: ParsedCandle[],
   index: number,
   length: number,
   source: DetectionSource,
   longEnabled: boolean,
   shortEnabled: boolean
-): { signal: Signal; current: number; donchianCenter: number } => {
+): BacktestSignalPayload => {
   if (index < length || index >= candles.length) {
     throw new Error(`Invalid index for signal calculation: ${index}`);
   }
@@ -260,6 +288,7 @@ const computeSignalAtIndex = (
       signal: 'long',
       current: current.close,
       donchianCenter,
+      zScore: null,
     };
   }
 
@@ -268,6 +297,7 @@ const computeSignalAtIndex = (
       signal: 'short',
       current: current.close,
       donchianCenter,
+      zScore: null,
     };
   }
 
@@ -275,7 +305,85 @@ const computeSignalAtIndex = (
     signal: 'none',
     current: current.close,
     donchianCenter,
+    zScore: null,
   };
+};
+
+const computeStatArbSignalAtIndex = (
+  candles: ParsedCandle[],
+  index: number,
+  length: number,
+  zscoreEntry: number,
+  longEnabled: boolean,
+  shortEnabled: boolean
+): BacktestSignalPayload => {
+  if (index < length || index >= candles.length) {
+    throw new Error(`Invalid index for signal calculation: ${index}`);
+  }
+
+  const current = candles[index];
+  const window = candles.slice(index - length, index);
+
+  if (window.length < length) {
+    throw new Error(`Not enough candles for z-score signal: need ${length}, got ${window.length}`);
+  }
+
+  const series = window.map((bar) => bar.close);
+  const avg = mean(series);
+  const sigma = stddev(series);
+
+  if (!Number.isFinite(sigma) || sigma <= 1e-12) {
+    return {
+      signal: 'none',
+      current: current.close,
+      donchianCenter: avg,
+      zScore: 0,
+    };
+  }
+
+  const zScore = (current.close - avg) / sigma;
+
+  if (shortEnabled && zScore >= zscoreEntry) {
+    return {
+      signal: 'short',
+      current: current.close,
+      donchianCenter: avg,
+      zScore,
+    };
+  }
+
+  if (longEnabled && zScore <= -zscoreEntry) {
+    return {
+      signal: 'long',
+      current: current.close,
+      donchianCenter: avg,
+      zScore,
+    };
+  }
+
+  return {
+    signal: 'none',
+    current: current.close,
+    donchianCenter: avg,
+    zScore,
+  };
+};
+
+const computeSignalAtIndex = (
+  strategyType: StrategyType,
+  candles: ParsedCandle[],
+  index: number,
+  length: number,
+  source: DetectionSource,
+  zscoreEntry: number,
+  longEnabled: boolean,
+  shortEnabled: boolean
+): BacktestSignalPayload => {
+  if (strategyType === 'stat_arb_zscore') {
+    return computeStatArbSignalAtIndex(candles, index, length, zscoreEntry, longEnabled, shortEnabled);
+  }
+
+  return computeDonchianSignalAtIndex(candles, index, length, source, longEnabled, shortEnabled);
 };
 
 type OpenTradeState = {
@@ -495,6 +603,52 @@ type RuntimeLoadResult = {
   skipped: Array<{ strategyId: number; strategyName: string; reason: string }>;
 };
 
+const normalizeStrategyType = (value: any): StrategyType => {
+  const normalized = String(value || '').trim();
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout') {
+    return normalized;
+  }
+  return 'DD_BattleToads';
+};
+
+const normalizeMarketMode = (value: any): MarketMode => {
+  return String(value || '').trim() === 'mono' ? 'mono' : 'synthetic';
+};
+
+const normalizeZscoreEntry = (value: any): number => {
+  return Math.max(0.1, asNumber(value, 2.0));
+};
+
+const normalizeZscoreExit = (value: any, entry: number): number => {
+  const raw = Math.max(0, asNumber(value, 0.5));
+  return Math.min(raw, Math.max(0, entry - 0.05));
+};
+
+const normalizeZscoreStop = (value: any, entry: number): number => {
+  return Math.max(entry + 0.05, asNumber(value, 3.5));
+};
+
+const mean = (values: number[]): number => {
+  if (values.length === 0) {
+    return 0;
+  }
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+};
+
+const stddev = (values: number[]): number => {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const avg = mean(values);
+  const variance = values.reduce((sum, value) => {
+    const delta = value - avg;
+    return sum + delta * delta;
+  }, 0) / values.length;
+
+  return Math.sqrt(Math.max(0, variance));
+};
+
 const syntheticCandleCache = new Map<string, ParsedCandle[]>();
 
 const buildEvents = (runtimes: RuntimeStrategy[]): StrategyEvent[] => {
@@ -552,6 +706,7 @@ const loadRuntimeStrategies = async (
 
     const cacheKey = [
       request.apiKeyName,
+      normalizeMarketMode(strategy.market_mode),
       normalizeDateCachePart(strategy.base_symbol),
       normalizeDateCachePart(strategy.quote_symbol),
       asNumber(strategy.base_coef, 1),
@@ -563,21 +718,33 @@ const loadRuntimeStrategies = async (
     ].join('|');
 
     let candles = syntheticCandleCache.get(cacheKey);
+    const marketMode = normalizeMarketMode(strategy.market_mode);
 
     if (!candles) {
-      const raw = await calculateSyntheticOHLC(
-        request.apiKeyName,
-        strategy.base_symbol,
-        strategy.quote_symbol,
-        asNumber(strategy.base_coef, 1),
-        asNumber(strategy.quote_coef, 1),
-        interval,
-        candlesLimit,
-        {
-          startMs: fetchStartMs === null ? undefined : fetchStartMs,
-          endMs: fetchEndMs === null ? undefined : fetchEndMs,
-        }
-      );
+      const raw = marketMode === 'mono'
+        ? await getMarketData(
+          request.apiKeyName,
+          strategy.base_symbol,
+          interval,
+          candlesLimit,
+          {
+            startMs: fetchStartMs === null ? undefined : fetchStartMs,
+            endMs: fetchEndMs === null ? undefined : fetchEndMs,
+          }
+        )
+        : await calculateSyntheticOHLC(
+          request.apiKeyName,
+          strategy.base_symbol,
+          strategy.quote_symbol,
+          asNumber(strategy.base_coef, 1),
+          asNumber(strategy.quote_coef, 1),
+          interval,
+          candlesLimit,
+          {
+            startMs: fetchStartMs === null ? undefined : fetchStartMs,
+            endMs: fetchEndMs === null ? undefined : fetchEndMs,
+          }
+        );
 
       candles = (Array.isArray(raw) ? raw : [])
         .map((item) => parseCandle(item))
@@ -594,7 +761,7 @@ const loadRuntimeStrategies = async (
         continue;
       }
       throw new Error(
-        `Not enough candles for strategy ${strategy.name} (${strategy.base_symbol}/${strategy.quote_symbol}): ${reason}`
+        `Not enough candles for strategy ${strategy.name} (${marketMode === 'mono' ? strategy.base_symbol : `${strategy.base_symbol}/${strategy.quote_symbol}`}): ${reason}`
       );
     }
 
@@ -783,67 +950,98 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
 
     const runtime = runtimes[event.strategyIndex];
     const strategy = runtime.strategy;
+    const strategyType = normalizeStrategyType(strategy.strategy_type);
     const candle = runtime.candles[event.candleIndex];
     runtime.currentPrice = candle.close;
 
     applyFunding(ctx, runtime);
 
     const length = Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 50)));
+    const zscoreEntry = normalizeZscoreEntry(strategy.zscore_entry);
     const signalPayload = computeSignalAtIndex(
+      strategyType,
       runtime.candles,
       event.candleIndex,
       length,
       strategy.detection_source,
+      zscoreEntry,
       strategy.long_enabled,
       strategy.short_enabled
     );
 
+    const isStatArb = strategyType === 'stat_arb_zscore';
+    const zscoreExit = normalizeZscoreExit(strategy.zscore_exit, zscoreEntry);
+    const zscoreStop = normalizeZscoreStop(strategy.zscore_stop, zscoreEntry);
     const state = runtime.state;
     const entryPrice = runtime.entryPrice;
     const takeProfitPercent = Math.max(0, asNumber(strategy.take_profit_percent, 0));
 
     let closedOnCurrentBar = false;
 
-    if (state === 'long' && takeProfitPercent > 0) {
-      const existingAnchor = Number(runtime.tpAnchorPrice);
-      const anchorBase = Number.isFinite(existingAnchor) && existingAnchor > 0
-        ? existingAnchor
-        : (entryPrice && entryPrice > 0 ? entryPrice : signalPayload.current);
+    if (isStatArb) {
+      const hasZScore = Number.isFinite(signalPayload.zScore);
 
-      const nextAnchor = Math.max(anchorBase, signalPayload.current);
-      runtime.tpAnchorPrice = nextAnchor;
-
-      const trailingStop = nextAnchor * (1 - takeProfitPercent / 100);
-      if (Number.isFinite(trailingStop) && signalPayload.current <= trailingStop) {
-        closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'take_profit_long');
+      if (state === 'long' && hasZScore && Number(signalPayload.zScore) <= -zscoreStop) {
+        closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'zscore_stop_long');
         closedOnCurrentBar = true;
       }
-    }
 
-    if (!closedOnCurrentBar && state === 'short' && takeProfitPercent > 0) {
-      const existingAnchor = Number(runtime.tpAnchorPrice);
-      const anchorBase = Number.isFinite(existingAnchor) && existingAnchor > 0
-        ? existingAnchor
-        : (entryPrice && entryPrice > 0 ? entryPrice : signalPayload.current);
-
-      const nextAnchor = Math.min(anchorBase, signalPayload.current);
-      runtime.tpAnchorPrice = nextAnchor;
-
-      const trailingStop = nextAnchor * (1 + takeProfitPercent / 100);
-      if (Number.isFinite(trailingStop) && signalPayload.current >= trailingStop) {
-        closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'take_profit_short');
+      if (!closedOnCurrentBar && state === 'short' && hasZScore && Number(signalPayload.zScore) >= zscoreStop) {
+        closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'zscore_stop_short');
         closedOnCurrentBar = true;
       }
-    }
 
-    if (!closedOnCurrentBar && state === 'long' && entryPrice && signalPayload.current <= signalPayload.donchianCenter) {
-      closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'stop_loss_long_center');
-      closedOnCurrentBar = true;
-    }
+      if (!closedOnCurrentBar && state === 'long' && hasZScore && Number(signalPayload.zScore) >= -zscoreExit) {
+        closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'mean_revert_exit_long');
+        closedOnCurrentBar = true;
+      }
 
-    if (!closedOnCurrentBar && state === 'short' && entryPrice && signalPayload.current >= signalPayload.donchianCenter) {
-      closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'stop_loss_short_center');
-      closedOnCurrentBar = true;
+      if (!closedOnCurrentBar && state === 'short' && hasZScore && Number(signalPayload.zScore) <= zscoreExit) {
+        closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'mean_revert_exit_short');
+        closedOnCurrentBar = true;
+      }
+    } else {
+      if (state === 'long' && takeProfitPercent > 0) {
+        const existingAnchor = Number(runtime.tpAnchorPrice);
+        const anchorBase = Number.isFinite(existingAnchor) && existingAnchor > 0
+          ? existingAnchor
+          : (entryPrice && entryPrice > 0 ? entryPrice : signalPayload.current);
+
+        const nextAnchor = Math.max(anchorBase, signalPayload.current);
+        runtime.tpAnchorPrice = nextAnchor;
+
+        const trailingStop = nextAnchor * (1 - takeProfitPercent / 100);
+        if (Number.isFinite(trailingStop) && signalPayload.current <= trailingStop) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'take_profit_long');
+          closedOnCurrentBar = true;
+        }
+      }
+
+      if (!closedOnCurrentBar && state === 'short' && takeProfitPercent > 0) {
+        const existingAnchor = Number(runtime.tpAnchorPrice);
+        const anchorBase = Number.isFinite(existingAnchor) && existingAnchor > 0
+          ? existingAnchor
+          : (entryPrice && entryPrice > 0 ? entryPrice : signalPayload.current);
+
+        const nextAnchor = Math.min(anchorBase, signalPayload.current);
+        runtime.tpAnchorPrice = nextAnchor;
+
+        const trailingStop = nextAnchor * (1 + takeProfitPercent / 100);
+        if (Number.isFinite(trailingStop) && signalPayload.current >= trailingStop) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'take_profit_short');
+          closedOnCurrentBar = true;
+        }
+      }
+
+      if (!closedOnCurrentBar && state === 'long' && entryPrice && signalPayload.current <= signalPayload.donchianCenter) {
+        closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'stop_loss_long_center');
+        closedOnCurrentBar = true;
+      }
+
+      if (!closedOnCurrentBar && state === 'short' && entryPrice && signalPayload.current >= signalPayload.donchianCenter) {
+        closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'stop_loss_short_center');
+        closedOnCurrentBar = true;
+      }
     }
 
     if (signalPayload.signal === 'none') {
@@ -1230,4 +1428,22 @@ export const getBacktestRun = async (id: number): Promise<BacktestRunResult | nu
     equityCurve,
     trades,
   };
+};
+
+export const deleteBacktestRun = async (id: number): Promise<boolean> => {
+  const runId = Math.floor(asNumber(id, 0));
+  if (!Number.isFinite(runId) || runId <= 0) {
+    return false;
+  }
+
+  const result: any = await db.run('DELETE FROM backtest_runs WHERE id = ?', [runId]);
+
+  const reportPath = path.join(process.cwd(), 'logs', 'backtests', `backtest_run_${runId}.html`);
+  try {
+    await fs.promises.unlink(reportPath);
+  } catch {
+    // Report file is optional and may be absent.
+  }
+
+  return Number(result?.changes || 0) > 0;
 };
