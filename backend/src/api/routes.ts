@@ -34,13 +34,48 @@ import {
   setAllStrategiesActive,
   copyStrategyBlock,
 } from '../bot/strategy';
+import {
+  createTradingSystem,
+  deleteTradingSystem,
+  getTradingSystem,
+  listTradingSystems,
+  replaceTradingSystemMembers,
+  runTradingSystemBacktest,
+  setTradingSystemActivation,
+  updateTradingSystem,
+} from '../bot/tradingSystems';
 import { getMonitoringLatest, getMonitoringSnapshots, recordMonitoringSnapshot } from '../bot/monitoring';
-import { getBacktestRun, listBacktestRuns, runBacktest, saveBacktestRun } from '../backtest/engine';
+import { deleteBacktestRun, getBacktestRun, listBacktestRuns, runBacktest, saveBacktestRun } from '../backtest/engine';
 import { loadSettings, saveApiKey, saveRiskSettings, ApiKey, RiskSettings, Strategy } from '../config/settings';
 import { db } from '../utils/database';
-import { authenticate } from '../utils/auth';
+import {
+  authenticate,
+  authenticateClient,
+  completeClientOnboarding,
+  getClientAuthPayloadFromSession,
+  loginClientUser,
+  registerClientUser,
+  revokeClientSession,
+} from '../utils/auth';
 import logger from '../utils/logger';
 import { getGitUpdateJobStatus, getGitUpdateStatus, triggerGitUpdate } from '../system/updateManager';
+import {
+  getPasswordRecoveryStatus,
+  PasswordRecoveryError,
+  requestPasswordRecoveryCode,
+  resetPasswordWithRecoveryCode,
+} from '../system/passwordRecovery';
+import {
+  getAlgofundState,
+  getStrategyClientState,
+  previewStrategyClientOffer,
+  previewStrategyClientSelection,
+  requestAlgofundAction,
+  updateAlgofundState,
+  updateStrategyClientState,
+} from '../saas/service';
+import analyticsRoutes from './analyticsRoutes';
+import saasRoutes from './saasRoutes';
 import fs from 'fs';
 import path from 'path';
 
@@ -59,9 +94,14 @@ const STRATEGY_PATCH_ALLOWED_FIELDS = new Set<string>([
   'show_trades_on_chart',
   'show_values_each_bar',
   'auto_update',
+  'strategy_type',
+  'market_mode',
   'take_profit_percent',
   'price_channel_length',
   'detection_source',
+  'zscore_entry',
+  'zscore_exit',
+  'zscore_stop',
   'base_symbol',
   'quote_symbol',
   'interval',
@@ -82,6 +122,456 @@ const STRATEGY_PATCH_ALLOWED_FIELDS = new Set<string>([
   'last_action',
   'last_error',
 ]);
+
+const CLIENT_GUIDES_ROOT_DIR = path.resolve(__dirname, '../../..', 'docs', 'exchange-guides');
+
+const CLIENT_EXCHANGE_GUIDES: Record<string, { id: string; title: string; fileName: string }> = {
+  bybit: {
+    id: 'bybit',
+    title: 'Bybit API Key Quick Guide',
+    fileName: 'bybit-api-key-quick-guide.md',
+  },
+  binance: {
+    id: 'binance',
+    title: 'Binance API Key Quick Guide',
+    fileName: 'binance-api-key-quick-guide.md',
+  },
+  bingx: {
+    id: 'bingx',
+    title: 'BingX API Key Quick Guide',
+    fileName: 'bingx-api-key-quick-guide.md',
+  },
+};
+
+const toOptionalNumber = (value: unknown): number | undefined => {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : undefined;
+};
+
+const toOptionalBool = (value: unknown): boolean | undefined => {
+  if (value === undefined || value === null || value === '') {
+    return undefined;
+  }
+
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return undefined;
+};
+
+const resolveClientAuthErrorStatus = (message: string): number => {
+  const normalized = String(message || '').toLowerCase();
+
+  if (normalized.includes('invalid email or password')) {
+    return 401;
+  }
+
+  if (normalized.includes('disabled') || normalized.includes('not active')) {
+    return 403;
+  }
+
+  if (normalized.includes('valid email') || normalized.includes('already exists') || normalized.includes('password')) {
+    return 400;
+  }
+
+  return 500;
+};
+
+// Public auth-recovery routes (no password required)
+router.get('/auth/recovery/status', (_req, res) => {
+  try {
+    const status = getPasswordRecoveryStatus();
+    res.json(status);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error reading recovery status: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/auth/recovery/request', async (req, res) => {
+  try {
+    const result = await requestPasswordRecoveryCode({
+      ip: String(req.ip || ''),
+      userAgent: String(req.headers['user-agent'] || ''),
+    });
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    const err = error as Error;
+    const statusCode = error instanceof PasswordRecoveryError ? error.statusCode : 500;
+    logger.error(`Error requesting password recovery code: ${err.message}`);
+    res.status(statusCode).json({ error: err.message });
+  }
+});
+
+router.post('/auth/recovery/reset', async (req, res) => {
+  const code = String(req.body?.code || '');
+  const newPassword = String(req.body?.newPassword || '');
+
+  try {
+    const result = await resetPasswordWithRecoveryCode(code, newPassword);
+    res.json({ success: true, ...result });
+  } catch (error: any) {
+    const err = error as Error;
+    const statusCode = error instanceof PasswordRecoveryError ? error.statusCode : 500;
+    logger.error(`Error resetting password via recovery flow: ${err.message}`);
+    res.status(statusCode).json({ error: err.message });
+  }
+});
+
+router.post('/auth/client/register', async (req, res) => {
+  try {
+    const result = await registerClientUser(
+      {
+        email: req.body?.email,
+        password: req.body?.password,
+        fullName: req.body?.fullName,
+        companyName: req.body?.companyName,
+        preferredLanguage: req.body?.preferredLanguage,
+        productMode: req.body?.productMode,
+      },
+      {
+        ip: String(req.ip || ''),
+        userAgent: String(req.headers['user-agent'] || ''),
+      }
+    );
+
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const err = error as Error;
+    const statusCode = resolveClientAuthErrorStatus(err.message);
+    logger.error(`Client self-registration error: ${err.message}`);
+    res.status(statusCode).json({ error: err.message });
+  }
+});
+
+router.post('/auth/client/login', async (req, res) => {
+  try {
+    const result = await loginClientUser(
+      {
+        email: req.body?.email,
+        password: req.body?.password,
+      },
+      {
+        ip: String(req.ip || ''),
+        userAgent: String(req.headers['user-agent'] || ''),
+      }
+    );
+
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const err = error as Error;
+    const statusCode = resolveClientAuthErrorStatus(err.message);
+    logger.error(`Client login error: ${err.message}`);
+    res.status(statusCode).json({ error: err.message });
+  }
+});
+
+router.get('/auth/client/me', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    res.json({ success: true, ...getClientAuthPayloadFromSession(session) });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client me error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/auth/client/logout', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (session?.token) {
+      await revokeClientSession(session.token);
+    }
+    res.json({ success: true });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client logout error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/auth/client/onboarding/complete', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user?.id) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    await completeClientOnboarding(Number(session.user.id));
+    res.json({ success: true });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client onboarding completion error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/client/guides', authenticateClient, async (_req, res) => {
+  const guides = Object.values(CLIENT_EXCHANGE_GUIDES).map((guide) => ({
+    id: guide.id,
+    title: guide.title,
+    downloadUrl: `/api/client/guides/${guide.id}`,
+  }));
+
+  res.json({ success: true, guides });
+});
+
+router.get('/client/guides/:exchangeId', authenticateClient, async (req, res) => {
+  const exchangeId = String(req.params.exchangeId || '').trim().toLowerCase();
+  const guide = CLIENT_EXCHANGE_GUIDES[exchangeId];
+
+  if (!guide) {
+    return res.status(404).json({ error: 'Guide not found' });
+  }
+
+  const filePath = path.join(CLIENT_GUIDES_ROOT_DIR, guide.fileName);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Guide file not found' });
+  }
+
+  res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+  res.setHeader('Content-Disposition', `attachment; filename="${guide.fileName}"`);
+  res.sendFile(filePath);
+});
+
+router.get('/client/workspace', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const tenantId = Number(session.user.tenantId);
+    const productMode = session.user.productMode;
+
+    if (productMode === 'strategy_client') {
+      const strategyState = await getStrategyClientState(tenantId);
+      return res.json({
+        success: true,
+        auth: getClientAuthPayloadFromSession(session),
+        productMode,
+        strategyState,
+        algofundState: null,
+      });
+    }
+
+    const algofundState = await getAlgofundState(tenantId, toOptionalNumber(req.query.riskMultiplier), false);
+    return res.json({
+      success: true,
+      auth: getClientAuthPayloadFromSession(session),
+      productMode,
+      strategyState: null,
+      algofundState,
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client workspace load error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/client/strategy/state', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    if (session.user.productMode !== 'strategy_client') {
+      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
+    }
+
+    const state = await getStrategyClientState(Number(session.user.tenantId));
+    res.json({ success: true, state });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client strategy workspace state error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/client/strategy/profile', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    if (session.user.productMode !== 'strategy_client') {
+      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
+    }
+
+    const state = await updateStrategyClientState(Number(session.user.tenantId), {
+      selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
+      riskLevel: req.body?.riskLevel,
+      tradeFrequencyLevel: req.body?.tradeFrequencyLevel,
+      requestedEnabled: toOptionalBool(req.body?.requestedEnabled),
+    });
+
+    res.json({ success: true, state });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client strategy profile save error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/client/strategy/preview', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    if (session.user.productMode !== 'strategy_client') {
+      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
+    }
+
+    const offerId = String(req.body?.offerId || '').trim();
+    if (!offerId) {
+      return res.status(400).json({ error: 'offerId is required' });
+    }
+
+    const preview = await previewStrategyClientOffer(
+      Number(session.user.tenantId),
+      offerId,
+      req.body?.riskLevel,
+      req.body?.tradeFrequencyLevel,
+      toOptionalNumber(req.body?.riskScore),
+      toOptionalNumber(req.body?.tradeFrequencyScore)
+    );
+
+    res.json({ success: true, ...preview });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client strategy preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/client/strategy/selection-preview', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    if (session.user.productMode !== 'strategy_client') {
+      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
+    }
+
+    const preview = await previewStrategyClientSelection(Number(session.user.tenantId), {
+      selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
+      riskLevel: req.body?.riskLevel,
+      tradeFrequencyLevel: req.body?.tradeFrequencyLevel,
+      riskScore: toOptionalNumber(req.body?.riskScore),
+      tradeFrequencyScore: toOptionalNumber(req.body?.tradeFrequencyScore),
+    });
+
+    res.json({ success: true, ...preview });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client strategy selection preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/client/algofund/state', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    if (session.user.productMode !== 'algofund_client') {
+      return res.status(403).json({ error: 'Algofund workspace is not available for this account' });
+    }
+
+    const state = await getAlgofundState(
+      Number(session.user.tenantId),
+      toOptionalNumber(req.query.riskMultiplier),
+      false
+    );
+
+    res.json({ success: true, state });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client algofund workspace state error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/client/algofund/profile', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    if (session.user.productMode !== 'algofund_client') {
+      return res.status(403).json({ error: 'Algofund workspace is not available for this account' });
+    }
+
+    const state = await updateAlgofundState(Number(session.user.tenantId), {
+      riskMultiplier: toOptionalNumber(req.body?.riskMultiplier),
+    });
+
+    res.json({ success: true, state });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client algofund profile save error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/client/algofund/request', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    if (session.user.productMode !== 'algofund_client') {
+      return res.status(403).json({ error: 'Algofund workspace is not available for this account' });
+    }
+
+    const requestType = String(req.body?.requestType || '').trim().toLowerCase() === 'stop'
+      ? 'stop'
+      : 'start';
+
+    const state = await requestAlgofundAction(
+      Number(session.user.tenantId),
+      requestType,
+      String(req.body?.note || '')
+    );
+
+    res.json({ success: true, state });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client algofund action request error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Применить аутентификацию ко всем маршрутам
 router.use(authenticate);
@@ -397,6 +887,182 @@ router.get('/backtest/runs/:id', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Error loading backtest run ${id}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/backtest/runs/:id', async (req, res) => {
+  const id = Number.parseInt(String(req.params.id || '0'), 10);
+
+  if (!Number.isFinite(id) || id <= 0) {
+    return res.status(400).json({ error: 'Invalid run id' });
+  }
+
+  try {
+    const deleted = await deleteBacktestRun(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Backtest run not found' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error deleting backtest run ${id}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/trading-systems/:apiKeyName', async (req, res) => {
+  const { apiKeyName } = req.params;
+  try {
+    const systems = await listTradingSystems(apiKeyName);
+    res.json(systems);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading trading systems: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/trading-systems/:apiKeyName/:systemId', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  try {
+    const system = await getTradingSystem(apiKeyName, parsedSystemId);
+    res.json(system);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading trading system: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/trading-systems/:apiKeyName', async (req, res) => {
+  const { apiKeyName } = req.params;
+  try {
+    const system = await createTradingSystem(apiKeyName, req.body || {});
+    res.json({ success: true, system });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error creating trading system: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/trading-systems/:apiKeyName/:systemId', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  try {
+    const system = await updateTradingSystem(apiKeyName, parsedSystemId, req.body || {});
+    res.json({ success: true, system });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error updating trading system: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/trading-systems/:apiKeyName/:systemId/members', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  const members = Array.isArray(req.body) ? req.body : req.body?.members;
+
+  try {
+    const system = await replaceTradingSystemMembers(apiKeyName, parsedSystemId, Array.isArray(members) ? members : []);
+    res.json({ success: true, system });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error replacing trading system members: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/trading-systems/:apiKeyName/:systemId/activation', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  try {
+    const system = await setTradingSystemActivation(
+      apiKeyName,
+      parsedSystemId,
+      req.body?.isActive === true,
+      req.body?.syncMembers === true
+    );
+    res.json({ success: true, system });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error applying trading system activation: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/trading-systems/:apiKeyName/:systemId/backtest', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  if (backtestRunInProgress) {
+    return res.status(429).json({
+      error: 'Backtest already running. Wait for current run to finish before starting a new one.',
+    });
+  }
+
+  try {
+    backtestRunInProgress = true;
+    const saveResult = req.body?.saveResult !== false;
+    const result = await runTradingSystemBacktest(apiKeyName, parsedSystemId, req.body || {});
+    let runId: number | null = null;
+
+    if (saveResult) {
+      runId = await saveBacktestRun(result);
+      result.runId = runId;
+    }
+
+    res.json({ success: true, runId, result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error running trading system backtest: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  } finally {
+    backtestRunInProgress = false;
+  }
+});
+
+router.delete('/trading-systems/:apiKeyName/:systemId', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  try {
+    await deleteTradingSystem(apiKeyName, parsedSystemId);
+    res.json({ success: true });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error deleting trading system: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -851,5 +1517,9 @@ router.get('/symbols/:apiKeyName', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Analytics routes for live reconciliation and drift analysis
+router.use('/analytics', analyticsRoutes);
+router.use('/saas', saasRoutes);
 
 export default router;

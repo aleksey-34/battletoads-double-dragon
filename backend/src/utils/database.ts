@@ -66,6 +66,7 @@ export const initDB = async () => {
       name TEXT,
       api_key_id INTEGER,
       strategy_type TEXT DEFAULT 'DD_BattleToads',
+      market_mode TEXT DEFAULT 'synthetic',
       is_active BOOLEAN DEFAULT 1,
       display_on_chart BOOLEAN DEFAULT 1,
       show_settings BOOLEAN DEFAULT 1,
@@ -78,6 +79,9 @@ export const initDB = async () => {
       take_profit_percent REAL DEFAULT 7.5,
       price_channel_length INTEGER DEFAULT 50,
       detection_source TEXT DEFAULT 'close',
+      zscore_entry REAL DEFAULT 2.0,
+      zscore_exit REAL DEFAULT 0.5,
+      zscore_stop REAL DEFAULT 3.5,
       base_symbol TEXT,
       quote_symbol TEXT,
       interval TEXT DEFAULT '1h',
@@ -143,6 +147,35 @@ export const initDB = async () => {
       created_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS trading_systems (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      api_key_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      is_active BOOLEAN DEFAULT 0,
+      auto_sync_members BOOLEAN DEFAULT 0,
+      discovery_enabled BOOLEAN DEFAULT 0,
+      discovery_interval_hours INTEGER DEFAULT 24,
+      max_members INTEGER DEFAULT 8,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS trading_system_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      system_id INTEGER NOT NULL,
+      strategy_id INTEGER NOT NULL,
+      weight REAL DEFAULT 1.0,
+      member_role TEXT DEFAULT 'core',
+      is_enabled BOOLEAN DEFAULT 1,
+      notes TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (system_id) REFERENCES trading_systems(id),
+      FOREIGN KEY (strategy_id) REFERENCES strategies(id),
+      UNIQUE(system_id, strategy_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_monitoring_snapshots_api_time
       ON monitoring_snapshots (api_key_id, recorded_at);
 
@@ -151,6 +184,257 @@ export const initDB = async () => {
 
     CREATE INDEX IF NOT EXISTS idx_backtest_runs_api_key_name
       ON backtest_runs (api_key_name);
+
+    CREATE INDEX IF NOT EXISTS idx_trading_systems_api_key_id
+      ON trading_systems (api_key_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_trading_system_members_system_id
+      ON trading_system_members (system_id, is_enabled);
+
+    CREATE TABLE IF NOT EXISTS live_trade_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      strategy_id INTEGER NOT NULL,
+      trade_type TEXT NOT NULL CHECK(trade_type IN ('entry', 'exit')),
+      side TEXT NOT NULL CHECK(side IN ('long', 'short')),
+      entry_time INTEGER NOT NULL,
+      entry_price REAL NOT NULL,
+      position_size REAL NOT NULL,
+      actual_price REAL NOT NULL,
+      actual_time INTEGER NOT NULL,
+      actual_fee REAL DEFAULT 0,
+      slippage_percent REAL DEFAULT 0,
+      source_trade_id TEXT,
+      source_order_id TEXT,
+      source_symbol TEXT,
+      backtest_predicted_price REAL,
+      backtest_predicted_time INTEGER,
+      backtest_predicted_fee REAL,
+      created_at INTEGER DEFAULT (CAST(strftime('%s','now') * 1000 AS INTEGER)),
+      FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS backtest_predictions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      strategy_id INTEGER NOT NULL,
+      side TEXT NOT NULL CHECK(side IN ('long', 'short')),
+      predicted_entry_price REAL NOT NULL,
+      predicted_entry_time INTEGER NOT NULL,
+      predicted_exit_price REAL NOT NULL,
+      predicted_exit_time INTEGER NOT NULL,
+      predicted_pnl REAL NOT NULL,
+      predicted_pnl_percent REAL NOT NULL,
+      predicted_slippage_percent REAL DEFAULT 0.05,
+      created_at INTEGER DEFAULT (CAST(strftime('%s','now') * 1000 AS INTEGER)),
+      FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS drift_alerts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      strategy_id INTEGER NOT NULL,
+      metric_name TEXT NOT NULL,
+      severity TEXT NOT NULL CHECK(severity IN ('warning', 'critical')),
+      value REAL NOT NULL,
+      threshold REAL NOT NULL,
+      drift_percent REAL NOT NULL,
+      description TEXT NOT NULL,
+      created_at INTEGER DEFAULT (CAST(strftime('%s','now') * 1000 AS INTEGER)),
+      FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS reconciliation_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      api_key_id INTEGER NOT NULL,
+      strategy_id INTEGER NOT NULL,
+      period_hours INTEGER NOT NULL,
+      samples_count INTEGER DEFAULT 0,
+      metrics_json TEXT NOT NULL,
+      recommendation_json TEXT NOT NULL,
+      action_note TEXT DEFAULT '',
+      created_at INTEGER DEFAULT (CAST(strftime('%s','now') * 1000 AS INTEGER)),
+      FOREIGN KEY (api_key_id) REFERENCES api_keys(id),
+      FOREIGN KEY (strategy_id) REFERENCES strategies(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS liquidity_scan_suggestions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      api_key_id INTEGER NOT NULL,
+      system_id INTEGER NOT NULL,
+      symbol TEXT NOT NULL,
+      market_mode TEXT NOT NULL DEFAULT 'mono',
+      suggested_action TEXT NOT NULL,
+      score REAL DEFAULT 0,
+      details_json TEXT DEFAULT '{}',
+      status TEXT DEFAULT 'new',
+      created_at INTEGER DEFAULT (CAST(strftime('%s','now') * 1000 AS INTEGER)),
+      FOREIGN KEY (api_key_id) REFERENCES api_keys(id),
+      FOREIGN KEY (system_id) REFERENCES trading_systems(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_live_trade_events_strategy_time
+      ON live_trade_events (strategy_id, actual_time DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_backtest_predictions_strategy_time
+      ON backtest_predictions (strategy_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_drift_alerts_strategy_time
+      ON drift_alerts (strategy_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_reconciliation_reports_api_key_time
+      ON reconciliation_reports (api_key_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_reconciliation_reports_strategy_time
+      ON reconciliation_reports (strategy_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_liquidity_scan_suggestions_system_time
+      ON liquidity_scan_suggestions (system_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_liquidity_scan_suggestions_status
+      ON liquidity_scan_suggestions (api_key_id, status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      code TEXT UNIQUE NOT NULL,
+      title TEXT NOT NULL,
+      product_mode TEXT NOT NULL,
+      price_usdt REAL DEFAULT 0,
+      max_deposit_total REAL DEFAULT 0,
+      risk_cap_max REAL DEFAULT 0,
+      max_strategies_total INTEGER DEFAULT 0,
+      allow_ts_start_stop_requests BOOLEAN DEFAULT 0,
+      features_json TEXT DEFAULT '{}',
+      is_active BOOLEAN DEFAULT 1,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS tenants (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL,
+      display_name TEXT NOT NULL,
+      product_mode TEXT NOT NULL,
+      status TEXT DEFAULT 'active',
+      preferred_language TEXT DEFAULT 'ru',
+      assigned_api_key_name TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS client_users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL,
+      email TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      password_hash TEXT NOT NULL,
+      full_name TEXT DEFAULT '',
+      preferred_language TEXT DEFAULT 'en',
+      status TEXT DEFAULT 'active',
+      onboarding_completed_at TEXT,
+      last_login_at TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS client_sessions (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      revoked_at TEXT,
+      last_seen_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      ip TEXT DEFAULT '',
+      user_agent TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES client_users(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS subscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL,
+      plan_id INTEGER NOT NULL,
+      status TEXT DEFAULT 'active',
+      started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      expires_at TEXT,
+      notes TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+      FOREIGN KEY (plan_id) REFERENCES plans(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS strategy_client_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL UNIQUE,
+      selected_offer_ids_json TEXT DEFAULT '[]',
+      risk_level TEXT DEFAULT 'medium',
+      trade_frequency_level TEXT DEFAULT 'medium',
+      requested_enabled BOOLEAN DEFAULT 0,
+      actual_enabled BOOLEAN DEFAULT 0,
+      assigned_api_key_name TEXT DEFAULT '',
+      latest_preview_json TEXT DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS algofund_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL UNIQUE,
+      risk_multiplier REAL DEFAULT 1,
+      requested_enabled BOOLEAN DEFAULT 0,
+      actual_enabled BOOLEAN DEFAULT 0,
+      assigned_api_key_name TEXT DEFAULT '',
+      published_system_name TEXT DEFAULT '',
+      latest_preview_json TEXT DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS algofund_start_stop_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL,
+      request_type TEXT NOT NULL,
+      status TEXT DEFAULT 'pending',
+      note TEXT DEFAULT '',
+      decision_note TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      decided_at TEXT,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS saas_audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER,
+      actor_mode TEXT DEFAULT 'admin',
+      action TEXT NOT NULL,
+      payload_json TEXT DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_plans_product_mode
+      ON plans (product_mode, is_active);
+
+    CREATE INDEX IF NOT EXISTS idx_tenants_product_mode
+      ON tenants (product_mode, status, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_client_users_tenant
+      ON client_users (tenant_id, status, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_client_sessions_user
+      ON client_sessions (user_id, revoked_at, expires_at);
+
+    CREATE INDEX IF NOT EXISTS idx_client_sessions_hash
+      ON client_sessions (token_hash);
+
+    CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant
+      ON subscriptions (tenant_id, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_algofund_requests_tenant
+      ON algofund_start_stop_requests (tenant_id, status, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_saas_audit_tenant
+      ON saas_audit_log (tenant_id, created_at DESC);
   `);
 
   // Keep only the most recent row per API key before enforcing unique constraints.
@@ -174,6 +458,7 @@ export const initDB = async () => {
   await ensureColumn('api_keys', 'demo BOOLEAN DEFAULT 0');
   await ensureColumn('api_keys', "passphrase TEXT DEFAULT ''");
   await ensureColumn('strategies', "strategy_type TEXT DEFAULT 'DD_BattleToads'");
+  await ensureColumn('strategies', "market_mode TEXT DEFAULT 'synthetic'");
   await ensureColumn('strategies', 'show_settings BOOLEAN DEFAULT 1');
   await ensureColumn('strategies', 'take_profit_percent REAL DEFAULT 7.5');
   await ensureColumn('strategies', 'show_chart BOOLEAN DEFAULT 1');
@@ -184,6 +469,9 @@ export const initDB = async () => {
   await ensureColumn('strategies', 'auto_update BOOLEAN DEFAULT 1');
   await ensureColumn('strategies', 'price_channel_length INTEGER DEFAULT 50');
   await ensureColumn('strategies', "detection_source TEXT DEFAULT 'close'");
+  await ensureColumn('strategies', 'zscore_entry REAL DEFAULT 2.0');
+  await ensureColumn('strategies', 'zscore_exit REAL DEFAULT 0.5');
+  await ensureColumn('strategies', 'zscore_stop REAL DEFAULT 3.5');
   await ensureColumn('strategies', 'base_symbol TEXT');
   await ensureColumn('strategies', 'quote_symbol TEXT');
   await ensureColumn('strategies', "interval TEXT DEFAULT '1h'");
@@ -206,6 +494,14 @@ export const initDB = async () => {
   await ensureColumn('strategies', 'last_error TEXT');
   await ensureColumn('strategies', 'created_at TEXT DEFAULT CURRENT_TIMESTAMP');
   await ensureColumn('strategies', 'updated_at TEXT DEFAULT CURRENT_TIMESTAMP');
+  await ensureColumn('live_trade_events', 'source_trade_id TEXT');
+  await ensureColumn('live_trade_events', 'source_order_id TEXT');
+  await ensureColumn('live_trade_events', 'source_symbol TEXT');
+
+  await db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_live_trade_events_source_trade_id
+      ON live_trade_events (source_trade_id);
+  `);
 };
 
 export { db };

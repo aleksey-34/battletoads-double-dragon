@@ -14,6 +14,7 @@ frontend/build/
 logs/
 backend/logs/
 *.log
+results/
 
 # Local databases and state
 *.db
@@ -27,6 +28,7 @@ backend/logs/
 *.pem
 *.key
 *.p12
+scripts/btdd_local.env
 
 # Generated deployment archives
 scripts/dist/

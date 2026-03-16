@@ -1,4 +1,4 @@
-import { Strategy } from '../config/settings';
+import { MarketMode, Strategy, StrategyType } from '../config/settings';
 import {
   applySymbolRiskSettings,
   cancelAllOrders,
@@ -35,9 +35,35 @@ type ExecuteStrategyOptions = {
   dedupeClosedBar?: boolean;
 };
 
+const normalizeStrategyType = (value: any): StrategyType => {
+  const normalized = String(value || '').trim();
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout') {
+    return normalized;
+  }
+  return 'DD_BattleToads';
+};
+
+const normalizeMarketMode = (value: any): MarketMode => {
+  return String(value || '').trim() === 'mono' ? 'mono' : 'synthetic';
+};
+
+const normalizeZscoreEntry = (value: any, fallback: number): number => {
+  return Math.max(0.1, safeNumber(value, fallback));
+};
+
+const normalizeZscoreExit = (value: any, fallback: number, entry: number): number => {
+  const raw = Math.max(0, safeNumber(value, fallback));
+  return Math.min(raw, Math.max(0, entry - 0.05));
+};
+
+const normalizeZscoreStop = (value: any, fallback: number, entry: number): number => {
+  return Math.max(entry + 0.05, safeNumber(value, fallback));
+};
+
 const DEFAULT_STRATEGY: Omit<Strategy, 'api_key_id' | 'id'> = {
   name: 'DD_BattleToads',
   strategy_type: 'DD_BattleToads',
+  market_mode: 'synthetic',
   is_active: true,
   display_on_chart: true,
   show_settings: true,
@@ -50,6 +76,9 @@ const DEFAULT_STRATEGY: Omit<Strategy, 'api_key_id' | 'id'> = {
   take_profit_percent: 7.5,
   price_channel_length: 50,
   detection_source: 'close',
+  zscore_entry: 2.0,
+  zscore_exit: 0.5,
+  zscore_stop: 3.5,
   base_symbol: 'BTCUSDT',
   quote_symbol: 'ETHUSDT',
   interval: '1h',
@@ -134,26 +163,39 @@ const intervalToMs = (interval: string): number => {
   return 60 * 60 * 1000;
 };
 
-const validateStrategyBinding = (binding: Pick<Strategy, 'base_symbol' | 'quote_symbol' | 'interval' | 'base_coef' | 'quote_coef'>): void => {
+const validateStrategyBinding = (binding: Pick<Strategy, 'market_mode' | 'base_symbol' | 'quote_symbol' | 'interval' | 'base_coef' | 'quote_coef'>): void => {
   const base = normalizeSymbol(binding.base_symbol);
   const quote = normalizeSymbol(binding.quote_symbol);
   const interval = String(binding.interval || '').trim();
   const baseCoef = Number(binding.base_coef);
   const quoteCoef = Number(binding.quote_coef);
+  const marketMode = normalizeMarketMode((binding as Partial<Strategy>).market_mode);
 
-  if (!base || !quote) {
-    throw new Error('Strategy requires both base and quote symbols');
-  }
-
-  if (base === quote) {
-    throw new Error('Base and quote symbols must be different');
+  if (!base) {
+    throw new Error('Strategy requires a base symbol');
   }
 
   if (!interval) {
     throw new Error('Strategy interval is required');
   }
 
-  if (!Number.isFinite(baseCoef) || !Number.isFinite(quoteCoef)) {
+  if (!Number.isFinite(baseCoef)) {
+    throw new Error('Strategy coefficients must be finite numbers');
+  }
+
+  if (marketMode === 'mono') {
+    return;
+  }
+
+  if (!quote) {
+    throw new Error('Synthetic strategy requires a quote symbol');
+  }
+
+  if (base === quote) {
+    throw new Error('Base and quote symbols must be different');
+  }
+
+  if (!Number.isFinite(quoteCoef)) {
     throw new Error('Strategy coefficients must be finite numbers');
   }
 
@@ -167,11 +209,18 @@ const normalizeSymbolKey = (value: any): string => {
 };
 
 const normalizeStrategy = (row: any): Strategy => {
+  const strategyType = normalizeStrategyType(row.strategy_type);
+  const marketMode = normalizeMarketMode(row.market_mode);
+  const zscoreEntry = normalizeZscoreEntry(row.zscore_entry, DEFAULT_STRATEGY.zscore_entry);
+  const zscoreExit = normalizeZscoreExit(row.zscore_exit, DEFAULT_STRATEGY.zscore_exit, zscoreEntry);
+  const zscoreStop = normalizeZscoreStop(row.zscore_stop, DEFAULT_STRATEGY.zscore_stop, zscoreEntry);
+
   return {
     id: Number(row.id),
     name: String(row.name || DEFAULT_STRATEGY.name),
     api_key_id: Number(row.api_key_id),
-    strategy_type: 'DD_BattleToads',
+    strategy_type: strategyType,
+    market_mode: marketMode,
     is_active: safeBoolean(row.is_active, true),
     display_on_chart: safeBoolean(row.display_on_chart, true),
     show_settings: safeBoolean(row.show_settings, true),
@@ -184,11 +233,16 @@ const normalizeStrategy = (row: any): Strategy => {
     take_profit_percent: safeNumber(row.take_profit_percent, DEFAULT_STRATEGY.take_profit_percent),
     price_channel_length: Math.max(2, Math.floor(safeNumber(row.price_channel_length, DEFAULT_STRATEGY.price_channel_length))),
     detection_source: String(row.detection_source || DEFAULT_STRATEGY.detection_source) === 'wick' ? 'wick' : 'close',
+    zscore_entry: zscoreEntry,
+    zscore_exit: zscoreExit,
+    zscore_stop: zscoreStop,
     base_symbol: normalizeSymbol(String(row.base_symbol || DEFAULT_STRATEGY.base_symbol)),
-    quote_symbol: normalizeSymbol(String(row.quote_symbol || DEFAULT_STRATEGY.quote_symbol)),
+    quote_symbol: marketMode === 'mono'
+      ? normalizeSymbol(String(row.quote_symbol || ''))
+      : normalizeSymbol(String(row.quote_symbol || DEFAULT_STRATEGY.quote_symbol)),
     interval: String(row.interval || DEFAULT_STRATEGY.interval),
     base_coef: safeNumber(row.base_coef, DEFAULT_STRATEGY.base_coef),
-    quote_coef: safeNumber(row.quote_coef, DEFAULT_STRATEGY.quote_coef),
+    quote_coef: marketMode === 'mono' ? safeNumber(row.quote_coef, 0) : safeNumber(row.quote_coef, DEFAULT_STRATEGY.quote_coef),
     long_enabled: safeBoolean(row.long_enabled, true),
     short_enabled: safeBoolean(row.short_enabled, true),
     lot_long_percent: safeNumber(row.lot_long_percent, DEFAULT_STRATEGY.lot_long_percent),
@@ -247,6 +301,80 @@ const parseSyntheticCandle = (item: any): ParsedSyntheticCandle | null => {
   }
 
   return { timeMs, open, high, low, close };
+};
+
+const parseMarketDataCandle = (item: any): ParsedSyntheticCandle | null => {
+  if (!Array.isArray(item) || item.length < 5) {
+    return null;
+  }
+
+  const timeMs = Number(item[0]);
+  const open = Number(item[1]);
+  const high = Number(item[2]);
+  const low = Number(item[3]);
+  const close = Number(item[4]);
+
+  if (!Number.isFinite(timeMs) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
+    return null;
+  }
+
+  return { timeMs, open, high, low, close };
+};
+
+const getStrategySymbols = (strategy: Pick<Strategy, 'market_mode' | 'base_symbol' | 'quote_symbol'>): string[] => {
+  const marketMode = normalizeMarketMode(strategy.market_mode);
+  if (marketMode === 'mono') {
+    return [strategy.base_symbol].filter((symbol) => Boolean(String(symbol || '').trim()));
+  }
+
+  return Array.from(
+    new Set(
+      [strategy.base_symbol, strategy.quote_symbol].filter((symbol) => Boolean(String(symbol || '').trim()))
+    )
+  );
+};
+
+const loadStrategyCandles = async (
+  apiKeyName: string,
+  strategy: Pick<Strategy, 'market_mode' | 'base_symbol' | 'quote_symbol' | 'base_coef' | 'quote_coef' | 'interval'>,
+  limit: number,
+  options?: {
+    startMs?: number;
+    endMs?: number;
+  }
+): Promise<ParsedSyntheticCandle[]> => {
+  const marketMode = normalizeMarketMode(strategy.market_mode);
+
+  if (marketMode === 'mono') {
+    const raw = await getMarketData(
+      apiKeyName,
+      strategy.base_symbol,
+      strategy.interval,
+      limit,
+      options
+    );
+
+    return (Array.isArray(raw) ? raw : [])
+      .map((item) => parseMarketDataCandle(item))
+      .filter((item): item is ParsedSyntheticCandle => !!item)
+      .sort((a, b) => a.timeMs - b.timeMs);
+  }
+
+  const raw = await calculateSyntheticOHLC(
+    apiKeyName,
+    strategy.base_symbol,
+    strategy.quote_symbol,
+    strategy.base_coef,
+    strategy.quote_coef,
+    strategy.interval,
+    limit,
+    options
+  );
+
+  return (Array.isArray(raw) ? raw : [])
+    .map((item) => parseSyntheticCandle(item))
+    .filter((item): item is ParsedSyntheticCandle => !!item)
+    .sort((a, b) => a.timeMs - b.timeMs);
 };
 
 const getLatestMarketClose = async (apiKeyName: string, symbol: string): Promise<number> => {
@@ -358,6 +486,14 @@ type BalancedQtyPlan = {
   oversize: number;
   baseTargetNotional: number;
   quoteTargetNotional: number;
+};
+
+type SingleQtyPlan = {
+  qty: string;
+  notional: number;
+  targetNotional: number;
+  totalDeviation: number;
+  oversize: number;
 };
 
 type LiveLegBalanceSnapshot = {
@@ -594,6 +730,62 @@ const buildBalancedQtyPlan = async (
   };
 };
 
+const buildSingleQtyPlan = async (
+  apiKeyName: string,
+  symbol: string,
+  price: number,
+  targetNotional: number
+): Promise<SingleQtyPlan> => {
+  if (!Number.isFinite(targetNotional) || targetNotional <= 0) {
+    throw new Error('Trade notional must be positive');
+  }
+
+  const rules = await loadQtyRules(apiKeyName, symbol);
+  const rawQty = targetNotional / price;
+  const candidates = buildQtyCandidates(rawQty, price, rules);
+
+  let best: {
+    candidate: QtyCandidate;
+    totalDeviation: number;
+    oversize: number;
+    score: number;
+  } | null = null;
+
+  for (const candidate of candidates) {
+    const totalDeviation = Math.abs(candidate.notional - targetNotional) / Math.max(targetNotional, SIZING_EPSILON);
+    const oversize = Math.max(0, (candidate.notional - targetNotional) / Math.max(targetNotional, SIZING_EPSILON));
+    const score = oversize * 200 + totalDeviation * 10;
+
+    if (!best || score < best.score) {
+      best = {
+        candidate,
+        totalDeviation,
+        oversize,
+        score,
+      };
+    }
+  }
+
+  if (!best) {
+    throw new Error(`Unable to find a valid quantity plan for ${symbol}`);
+  }
+
+  if (best.totalDeviation > MAX_TOTAL_DEVIATION || best.oversize > MAX_OVERSIZE_DEVIATION) {
+    throw new Error(
+      `Order size too small for mono execution: totalDeviation=${(best.totalDeviation * 100).toFixed(2)}%, `
+      + `oversize=${(best.oversize * 100).toFixed(2)}%. Increase lot percent or max_deposit.`
+    );
+  }
+
+  return {
+    qty: best.candidate.text,
+    notional: best.candidate.notional,
+    targetNotional,
+    totalDeviation: best.totalDeviation,
+    oversize: best.oversize,
+  };
+};
+
 const sleepMs = async (ms: number): Promise<void> => {
   await new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms)));
 };
@@ -694,6 +886,35 @@ const loadPairPositionsForValidation = async (
   };
 };
 
+const loadSinglePositionForValidation = async (
+  apiKeyName: string,
+  symbol: string,
+  attempts: number = 3,
+  waitMs: number = 300
+): Promise<any | null> => {
+  const safeAttempts = Math.max(1, Math.floor(attempts));
+
+  for (let attempt = 0; attempt < safeAttempts; attempt += 1) {
+    const positions = await getPositions(apiKeyName);
+    const position = positions.find((item: any) => {
+      return (
+        String(item?.symbol || '').toUpperCase() === symbol.toUpperCase()
+        && Number.parseFloat(String(item?.size || '0')) > 0
+      );
+    }) || null;
+
+    if (position) {
+      return position;
+    }
+
+    if (attempt < safeAttempts - 1) {
+      await sleepMs(waitMs);
+    }
+  }
+
+  return null;
+};
+
 type ExecutionCandleContext = {
   candlesForSignal: ParsedSyntheticCandle[];
   evaluatedBarTimeMs: number;
@@ -735,13 +956,43 @@ const resolveExecutionCandleContext = (
   };
 };
 
-const computeSignal = (
+type ComputedSignal = {
+  signal: StrategySignal;
+  currentRatio: number;
+  donchianHigh: number;
+  donchianLow: number;
+  donchianCenter: number;
+  zScore: number | null;
+};
+
+const mean = (values: number[]): number => {
+  if (values.length === 0) {
+    return 0;
+  }
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+};
+
+const stddev = (values: number[]): number => {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  const avg = mean(values);
+  const variance = values.reduce((sum, value) => {
+    const delta = value - avg;
+    return sum + delta * delta;
+  }, 0) / values.length;
+
+  return Math.sqrt(Math.max(0, variance));
+};
+
+const computeDonchianSignal = (
   candles: ParsedSyntheticCandle[],
   length: number,
   detectionSource: 'wick' | 'close',
   longEnabled: boolean,
   shortEnabled: boolean
-): { signal: StrategySignal; currentRatio: number; donchianHigh: number; donchianLow: number; donchianCenter: number } => {
+): ComputedSignal => {
   if (candles.length < length + 1) {
     throw new Error(`Not enough candles for Donchian channel: need ${length + 1}, got ${candles.length}`);
   }
@@ -770,6 +1021,7 @@ const computeSignal = (
       donchianHigh,
       donchianLow,
       donchianCenter,
+      zScore: null,
     };
   }
 
@@ -780,6 +1032,7 @@ const computeSignal = (
       donchianHigh,
       donchianLow,
       donchianCenter,
+      zScore: null,
     };
   }
 
@@ -789,7 +1042,104 @@ const computeSignal = (
     donchianHigh,
     donchianLow,
     donchianCenter,
+    zScore: null,
   };
+};
+
+const computeStatArbSignal = (
+  candles: ParsedSyntheticCandle[],
+  lookbackLength: number,
+  zscoreEntry: number,
+  longEnabled: boolean,
+  shortEnabled: boolean
+): ComputedSignal => {
+  if (candles.length < lookbackLength + 1) {
+    throw new Error(`Not enough candles for z-score window: need ${lookbackLength + 1}, got ${candles.length}`);
+  }
+
+  const current = candles[candles.length - 1];
+  const window = candles.slice(candles.length - 1 - lookbackLength, candles.length - 1);
+  const series = window.map((item) => item.close);
+
+  const avg = mean(series);
+  const sigma = stddev(series);
+  const currentRatio = current.close;
+
+  const donchianCenter = avg;
+  const donchianHigh = avg + sigma;
+  const donchianLow = avg - sigma;
+
+  if (!Number.isFinite(sigma) || sigma <= 1e-12) {
+    return {
+      signal: 'none',
+      currentRatio,
+      donchianHigh,
+      donchianLow,
+      donchianCenter,
+      zScore: 0,
+    };
+  }
+
+  const zScore = (currentRatio - avg) / sigma;
+
+  if (shortEnabled && zScore >= zscoreEntry) {
+    return {
+      signal: 'short',
+      currentRatio,
+      donchianHigh,
+      donchianLow,
+      donchianCenter,
+      zScore,
+    };
+  }
+
+  if (longEnabled && zScore <= -zscoreEntry) {
+    return {
+      signal: 'long',
+      currentRatio,
+      donchianHigh,
+      donchianLow,
+      donchianCenter,
+      zScore,
+    };
+  }
+
+  return {
+    signal: 'none',
+    currentRatio,
+    donchianHigh,
+    donchianLow,
+    donchianCenter,
+    zScore,
+  };
+};
+
+const computeSignal = (
+  strategyType: StrategyType,
+  candles: ParsedSyntheticCandle[],
+  length: number,
+  detectionSource: 'wick' | 'close',
+  zscoreEntry: number,
+  longEnabled: boolean,
+  shortEnabled: boolean
+): ComputedSignal => {
+  if (strategyType === 'stat_arb_zscore') {
+    return computeStatArbSignal(
+      candles,
+      length,
+      zscoreEntry,
+      longEnabled,
+      shortEnabled
+    );
+  }
+
+  return computeDonchianSignal(
+    candles,
+    length,
+    detectionSource,
+    longEnabled,
+    shortEnabled
+  );
 };
 
 const closeAllForSymbol = async (apiKeyName: string, symbol: string): Promise<void> => {
@@ -804,6 +1154,43 @@ const closeAllForSymbol = async (apiKeyName: string, symbol: string): Promise<vo
   for (const position of relevant) {
     await closePosition(apiKeyName, symbol, String(position.size), position.side as 'Buy' | 'Sell');
   }
+};
+
+const closeStrategyExposure = async (
+  apiKeyName: string,
+  strategy: Pick<Strategy, 'market_mode' | 'base_symbol' | 'quote_symbol'>
+): Promise<void> => {
+  const symbols = getStrategySymbols(strategy);
+  for (const symbol of symbols) {
+    await closeAllForSymbol(apiKeyName, symbol);
+  }
+};
+
+const cancelStrategyWorkingOrders = async (
+  apiKeyName: string,
+  strategy: Pick<Strategy, 'market_mode' | 'base_symbol' | 'quote_symbol'>
+): Promise<void> => {
+  const symbols = getStrategySymbols(strategy);
+  for (const symbol of symbols) {
+    await cancelAllOrders(apiKeyName, symbol);
+  }
+};
+
+const inferMonoStateFromPosition = (
+  position: any | null
+): 'flat' | 'long' | 'short' | 'mixed' => {
+  if (!position) {
+    return 'flat';
+  }
+
+  const side = String(position?.side || '').toLowerCase();
+  if (side === 'buy') {
+    return 'long';
+  }
+  if (side === 'sell') {
+    return 'short';
+  }
+  return 'mixed';
 };
 
 const inferSyntheticStateFromPair = (
@@ -895,11 +1282,24 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
   const { db } = await import('../utils/database');
   const apiKeyId = await getApiKeyId(apiKeyName);
 
+  const strategyType = normalizeStrategyType(draft.strategy_type || DEFAULT_STRATEGY.strategy_type);
+  const marketMode = normalizeMarketMode(draft.market_mode || DEFAULT_STRATEGY.market_mode);
+  const zscoreEntry = normalizeZscoreEntry(draft.zscore_entry, DEFAULT_STRATEGY.zscore_entry);
+  const zscoreExit = normalizeZscoreExit(draft.zscore_exit, DEFAULT_STRATEGY.zscore_exit, zscoreEntry);
+  const zscoreStop = normalizeZscoreStop(draft.zscore_stop, DEFAULT_STRATEGY.zscore_stop, zscoreEntry);
+  const baseSymbol = normalizeSymbol(String(draft.base_symbol || DEFAULT_STRATEGY.base_symbol));
+  const quoteSymbol = marketMode === 'mono'
+    ? normalizeSymbol(String(draft.quote_symbol || ''))
+    : normalizeSymbol(String(draft.quote_symbol || DEFAULT_STRATEGY.quote_symbol));
+  const baseCoef = safeNumber(draft.base_coef, DEFAULT_STRATEGY.base_coef);
+  const quoteCoef = marketMode === 'mono' ? safeNumber(draft.quote_coef, 0) : safeNumber(draft.quote_coef, DEFAULT_STRATEGY.quote_coef);
+
   const strategy: Strategy = {
     ...DEFAULT_STRATEGY,
     name: String(draft.name || DEFAULT_STRATEGY.name),
     api_key_id: apiKeyId,
-    strategy_type: 'DD_BattleToads',
+    strategy_type: strategyType,
+    market_mode: marketMode,
     is_active: safeBoolean(draft.is_active, DEFAULT_STRATEGY.is_active),
     display_on_chart: safeBoolean(draft.display_on_chart, DEFAULT_STRATEGY.display_on_chart),
     show_settings: safeBoolean(draft.show_settings, DEFAULT_STRATEGY.show_settings),
@@ -912,11 +1312,14 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
     take_profit_percent: safeNumber(draft.take_profit_percent, DEFAULT_STRATEGY.take_profit_percent),
     price_channel_length: Math.max(2, Math.floor(safeNumber(draft.price_channel_length, DEFAULT_STRATEGY.price_channel_length))),
     detection_source: draft.detection_source === 'wick' ? 'wick' : 'close',
-    base_symbol: normalizeSymbol(String(draft.base_symbol || DEFAULT_STRATEGY.base_symbol)),
-    quote_symbol: normalizeSymbol(String(draft.quote_symbol || DEFAULT_STRATEGY.quote_symbol)),
+    zscore_entry: zscoreEntry,
+    zscore_exit: zscoreExit,
+    zscore_stop: zscoreStop,
+    base_symbol: baseSymbol,
+    quote_symbol: quoteSymbol,
     interval: String(draft.interval || DEFAULT_STRATEGY.interval).trim() || DEFAULT_STRATEGY.interval,
-    base_coef: safeNumber(draft.base_coef, DEFAULT_STRATEGY.base_coef),
-    quote_coef: safeNumber(draft.quote_coef, DEFAULT_STRATEGY.quote_coef),
+    base_coef: baseCoef,
+    quote_coef: quoteCoef,
     long_enabled: safeBoolean(draft.long_enabled, DEFAULT_STRATEGY.long_enabled),
     short_enabled: safeBoolean(draft.short_enabled, DEFAULT_STRATEGY.short_enabled),
     lot_long_percent: safeNumber(draft.lot_long_percent, DEFAULT_STRATEGY.lot_long_percent),
@@ -941,6 +1344,7 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
       name,
       api_key_id,
       strategy_type,
+      market_mode,
       is_active,
       display_on_chart,
       show_settings,
@@ -953,6 +1357,9 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
       take_profit_percent,
       price_channel_length,
       detection_source,
+      zscore_entry,
+      zscore_exit,
+      zscore_stop,
       base_symbol,
       quote_symbol,
       interval,
@@ -976,13 +1383,14 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
       created_at,
       updated_at
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )`,
     [
       strategy.name,
       strategy.api_key_id,
       strategy.strategy_type,
+      strategy.market_mode,
       strategy.is_active ? 1 : 0,
       strategy.display_on_chart ? 1 : 0,
       strategy.show_settings ? 1 : 0,
@@ -995,6 +1403,9 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
       strategy.take_profit_percent,
       strategy.price_channel_length,
       strategy.detection_source,
+      strategy.zscore_entry,
+      strategy.zscore_exit,
+      strategy.zscore_stop,
       strategy.base_symbol,
       strategy.quote_symbol,
       strategy.interval,
@@ -1039,6 +1450,8 @@ export const updateStrategy = async (
     updates.push({ column, value });
   };
 
+  const requestedMarketMode = patch.market_mode !== undefined ? normalizeMarketMode(patch.market_mode) : existing.market_mode;
+
   if (patch.name !== undefined) {
     pushUpdate('name', String(patch.name || '').trim() || existing.name);
   }
@@ -1078,6 +1491,16 @@ export const updateStrategy = async (
   if (patch.take_profit_percent !== undefined) {
     pushUpdate('take_profit_percent', safeNumber(patch.take_profit_percent, existing.take_profit_percent));
   }
+  if (patch.strategy_type !== undefined) {
+    pushUpdate('strategy_type', normalizeStrategyType(patch.strategy_type));
+  }
+  if (patch.market_mode !== undefined) {
+    pushUpdate('market_mode', requestedMarketMode);
+    if (requestedMarketMode === 'mono') {
+      pushUpdate('quote_symbol', normalizeSymbol(String(patch.quote_symbol || '')));
+      pushUpdate('quote_coef', patch.quote_coef !== undefined ? safeNumber(patch.quote_coef, 0) : 0);
+    }
+  }
   if (patch.price_channel_length !== undefined) {
     pushUpdate(
       'price_channel_length',
@@ -1088,11 +1511,26 @@ export const updateStrategy = async (
     const nextDetection = patch.detection_source === 'wick' ? 'wick' : patch.detection_source === 'close' ? 'close' : existing.detection_source;
     pushUpdate('detection_source', nextDetection);
   }
+  if (patch.zscore_entry !== undefined) {
+    const nextEntry = normalizeZscoreEntry(patch.zscore_entry, existing.zscore_entry);
+    const exitSource = patch.zscore_exit !== undefined ? patch.zscore_exit : existing.zscore_exit;
+    const stopSource = patch.zscore_stop !== undefined ? patch.zscore_stop : existing.zscore_stop;
+    pushUpdate('zscore_entry', nextEntry);
+    pushUpdate('zscore_exit', normalizeZscoreExit(exitSource, existing.zscore_exit, nextEntry));
+    pushUpdate('zscore_stop', normalizeZscoreStop(stopSource, existing.zscore_stop, nextEntry));
+  } else {
+    if (patch.zscore_exit !== undefined) {
+      pushUpdate('zscore_exit', normalizeZscoreExit(patch.zscore_exit, existing.zscore_exit, existing.zscore_entry));
+    }
+    if (patch.zscore_stop !== undefined) {
+      pushUpdate('zscore_stop', normalizeZscoreStop(patch.zscore_stop, existing.zscore_stop, existing.zscore_entry));
+    }
+  }
   if (patch.base_symbol !== undefined) {
     pushUpdate('base_symbol', normalizeSymbol(String(patch.base_symbol)));
   }
   if (patch.quote_symbol !== undefined) {
-    pushUpdate('quote_symbol', normalizeSymbol(String(patch.quote_symbol)));
+    pushUpdate('quote_symbol', requestedMarketMode === 'mono' ? normalizeSymbol(String(patch.quote_symbol || '')) : normalizeSymbol(String(patch.quote_symbol)));
   }
   if (patch.interval !== undefined) {
     pushUpdate('interval', String(patch.interval || '').trim() || existing.interval);
@@ -1101,7 +1539,7 @@ export const updateStrategy = async (
     pushUpdate('base_coef', safeNumber(patch.base_coef, existing.base_coef));
   }
   if (patch.quote_coef !== undefined) {
-    pushUpdate('quote_coef', safeNumber(patch.quote_coef, existing.quote_coef));
+    pushUpdate('quote_coef', requestedMarketMode === 'mono' ? safeNumber(patch.quote_coef, 0) : safeNumber(patch.quote_coef, existing.quote_coef));
   }
   if (patch.long_enabled !== undefined) {
     pushUpdate('long_enabled', safeBoolean(patch.long_enabled, existing.long_enabled) ? 1 : 0);
@@ -1162,7 +1600,8 @@ export const updateStrategy = async (
   }
 
   const bindingTouched = (
-    patch.base_symbol !== undefined
+    patch.market_mode !== undefined
+    || patch.base_symbol !== undefined
     || patch.quote_symbol !== undefined
     || patch.interval !== undefined
     || patch.base_coef !== undefined
@@ -1177,11 +1616,16 @@ export const updateStrategy = async (
 
   if (bindingTouched) {
     validateStrategyBinding({
+      market_mode: requestedMarketMode,
       base_symbol: patch.base_symbol !== undefined ? normalizeSymbol(String(patch.base_symbol)) : existing.base_symbol,
-      quote_symbol: patch.quote_symbol !== undefined ? normalizeSymbol(String(patch.quote_symbol)) : existing.quote_symbol,
+      quote_symbol: patch.quote_symbol !== undefined
+        ? (requestedMarketMode === 'mono' ? normalizeSymbol(String(patch.quote_symbol || '')) : normalizeSymbol(String(patch.quote_symbol)))
+        : existing.quote_symbol,
       interval: patch.interval !== undefined ? String(patch.interval || '').trim() || existing.interval : existing.interval,
       base_coef: patch.base_coef !== undefined ? safeNumber(patch.base_coef, existing.base_coef) : existing.base_coef,
-      quote_coef: patch.quote_coef !== undefined ? safeNumber(patch.quote_coef, existing.quote_coef) : existing.quote_coef,
+      quote_coef: patch.quote_coef !== undefined
+        ? (requestedMarketMode === 'mono' ? safeNumber(patch.quote_coef, 0) : safeNumber(patch.quote_coef, existing.quote_coef))
+        : existing.quote_coef,
     });
   }
 
@@ -1328,35 +1772,32 @@ export const executeStrategy = async (
   const mergedStrategy: Strategy = {
     ...strategy,
   };
+  const marketMode = normalizeMarketMode(mergedStrategy.market_mode);
+  const isMono = marketMode === 'mono';
+  const positionLabel = isMono ? 'position' : 'synthetic position';
 
   // Execution must follow persisted strategy settings only.
   // This prevents stale UI/chart payloads from silently mutating strategy pairs.
   const executionBindingPatch: Partial<Strategy> = {};
 
-  if (!mergedStrategy.base_symbol || !mergedStrategy.quote_symbol) {
-    throw new Error('Strategy requires both base and quote symbols');
+  if (!mergedStrategy.base_symbol) {
+    throw new Error('Strategy requires a base symbol');
   }
 
-  if (mergedStrategy.base_symbol === mergedStrategy.quote_symbol) {
+  if (!isMono && !mergedStrategy.quote_symbol) {
+    throw new Error('Synthetic strategy requires a quote symbol');
+  }
+
+  if (!isMono && mergedStrategy.base_symbol === mergedStrategy.quote_symbol) {
     throw new Error('Base and quote symbols must be different');
   }
 
-  const lookback = Math.max(mergedStrategy.price_channel_length + 30, 120);
+  const signalLength = Math.max(2, Math.floor(mergedStrategy.price_channel_length));
+  const lookback = mergedStrategy.strategy_type === 'stat_arb_zscore'
+    ? Math.max(signalLength + 90, 220)
+    : Math.max(signalLength + 30, 120);
 
-  const syntheticRaw = await calculateSyntheticOHLC(
-    apiKeyName,
-    mergedStrategy.base_symbol,
-    mergedStrategy.quote_symbol,
-    mergedStrategy.base_coef,
-    mergedStrategy.quote_coef,
-    mergedStrategy.interval,
-    lookback
-  );
-
-  const candles = syntheticRaw
-    .map(parseSyntheticCandle)
-    .filter((item): item is ParsedSyntheticCandle => !!item)
-    .sort((a, b) => a.timeMs - b.timeMs);
+  const candles = await loadStrategyCandles(apiKeyName, mergedStrategy, lookback);
 
   const candleContext = resolveExecutionCandleContext(
     candles,
@@ -1364,18 +1805,33 @@ export const executeStrategy = async (
     closedBarOnly
   );
 
-  const { signal, currentRatio, donchianHigh, donchianLow, donchianCenter } = computeSignal(
+  const { signal, currentRatio, donchianHigh, donchianLow, donchianCenter, zScore } = computeSignal(
+    mergedStrategy.strategy_type || 'DD_BattleToads',
     candleContext.candlesForSignal,
-    mergedStrategy.price_channel_length,
+    signalLength,
     mergedStrategy.detection_source,
+    mergedStrategy.zscore_entry,
     mergedStrategy.long_enabled,
     mergedStrategy.short_enabled
   );
 
+  const isStatArb = mergedStrategy.strategy_type === 'stat_arb_zscore';
+  const zscoreExit = normalizeZscoreExit(mergedStrategy.zscore_exit, DEFAULT_STRATEGY.zscore_exit, mergedStrategy.zscore_entry);
+  const zscoreStop = normalizeZscoreStop(mergedStrategy.zscore_stop, DEFAULT_STRATEGY.zscore_stop, mergedStrategy.zscore_entry);
+
   const takeProfitPercent = Math.max(0, mergedStrategy.take_profit_percent);
   let state: 'flat' | 'long' | 'short' = mergedStrategy.state || 'flat';
   let entryRatio: number | null = mergedStrategy.entry_ratio ?? null;
-  let closedAction: 'take_profit_long' | 'take_profit_short' | 'stop_loss_long' | 'stop_loss_short' | null = null;
+  type StrategyCloseAction =
+    | 'take_profit_long'
+    | 'take_profit_short'
+    | 'stop_loss_long'
+    | 'stop_loss_short'
+    | 'mean_revert_exit_long'
+    | 'mean_revert_exit_short'
+    | 'zscore_stop_long'
+    | 'zscore_stop_short';
+  let closedAction: StrategyCloseAction | null = null;
   let closedResult: string | null = null;
   const evaluatedBarTimeMs = candleContext.evaluatedBarTimeMs;
   const evaluatedBarIso = new Date(evaluatedBarTimeMs).toISOString();
@@ -1428,7 +1884,7 @@ export const executeStrategy = async (
   };
 
   const persistFlatAfterExit = async (
-    action: 'take_profit_long' | 'take_profit_short' | 'stop_loss_long' | 'stop_loss_short',
+    action: StrategyCloseAction,
     signalSnapshot: StrategySignal
   ): Promise<void> => {
     await updateStrategy(apiKeyName, strategyId, {
@@ -1453,16 +1909,19 @@ export const executeStrategy = async (
     return String(position?.symbol || '').toUpperCase() === mergedStrategy.base_symbol.toUpperCase()
       && Number.parseFloat(String(position?.size || '0')) > 0;
   }) || null;
-  const liveQuote = livePositions.find((position: any) => {
-    return String(position?.symbol || '').toUpperCase() === mergedStrategy.quote_symbol.toUpperCase()
-      && Number.parseFloat(String(position?.size || '0')) > 0;
-  }) || null;
+  const liveQuote = !isMono
+    ? livePositions.find((position: any) => {
+      return String(position?.symbol || '').toUpperCase() === mergedStrategy.quote_symbol.toUpperCase()
+        && Number.parseFloat(String(position?.size || '0')) > 0;
+    }) || null
+    : null;
 
-  const livePairState = inferSyntheticStateFromPair(liveBase, liveQuote);
+  const livePairState = isMono
+    ? inferMonoStateFromPosition(liveBase)
+    : inferSyntheticStateFromPair(liveBase, liveQuote);
 
   if (livePairState === 'mixed') {
-    await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
-    await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
+    await closeStrategyExposure(apiKeyName, mergedStrategy);
 
     const updated = await updateStrategy(apiKeyName, strategyId, {
       ...executionBindingPatch,
@@ -1486,8 +1945,7 @@ export const executeStrategy = async (
   }
 
   if (state !== 'flat' && livePairState !== 'flat' && state !== livePairState) {
-    await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
-    await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
+    await closeStrategyExposure(apiKeyName, mergedStrategy);
 
     const updated = await updateStrategy(apiKeyName, strategyId, {
       ...executionBindingPatch,
@@ -1512,8 +1970,7 @@ export const executeStrategy = async (
 
   if (state === 'flat' && livePairState !== 'flat') {
     if (signal !== 'none' && signal !== livePairState) {
-      await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
-      await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
+      await closeStrategyExposure(apiKeyName, mergedStrategy);
 
       const updated = await updateStrategy(apiKeyName, strategyId, {
         ...executionBindingPatch,
@@ -1571,85 +2028,118 @@ export const executeStrategy = async (
     }
   }
 
-  if (!closedAction && state === 'long' && takeProfitPercent > 0) {
-    const anchorFromStorage = Number(mergedStrategy.tp_anchor_ratio);
-    let trailingAnchor = Number.isFinite(anchorFromStorage) && anchorFromStorage > 0
-      ? anchorFromStorage
-      : (entryRatio && entryRatio > 0 ? entryRatio : currentRatio);
+  if (isStatArb) {
+    const hasZScore = Number.isFinite(zScore);
 
-    const nextAnchor = Math.max(trailingAnchor, currentRatio);
-    if (!Number.isFinite(anchorFromStorage) || Math.abs(nextAnchor - anchorFromStorage) > TRAILING_RATIO_EPSILON) {
-      await persistTpAnchorRatio(nextAnchor);
+    if (!closedAction && state === 'long' && hasZScore && Number(zScore) <= -zscoreStop) {
+      await closeStrategyExposure(apiKeyName, mergedStrategy);
+
+      await persistFlatAfterExit('zscore_stop_long', 'long');
+      closedAction = 'zscore_stop_long';
+      closedResult = `Z-score stop hit for long ${positionLabel} (z=${Number(zScore).toFixed(3)})`;
     }
 
-    trailingAnchor = Number.isFinite(Number(mergedStrategy.tp_anchor_ratio))
-      ? Number(mergedStrategy.tp_anchor_ratio)
-      : nextAnchor;
+    if (!closedAction && state === 'short' && hasZScore && Number(zScore) >= zscoreStop) {
+      await closeStrategyExposure(apiKeyName, mergedStrategy);
 
-    const trailingStop = trailingAnchor * (1 - takeProfitPercent / 100);
-    if (Number.isFinite(trailingStop) && currentRatio <= trailingStop) {
-      await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
-      await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
-
-      await persistFlatAfterExit('take_profit_long', 'long');
-      closedAction = 'take_profit_long';
-      closedResult = 'Take-profit hit for long synthetic position';
-
-      logger.info(`DD_BattleToads trailing TP long triggered for strategy ${strategyId} (${apiKeyName})`);
-    }
-  }
-
-  if (!closedAction && state === 'short' && takeProfitPercent > 0) {
-    const anchorFromStorage = Number(mergedStrategy.tp_anchor_ratio);
-    let trailingAnchor = Number.isFinite(anchorFromStorage) && anchorFromStorage > 0
-      ? anchorFromStorage
-      : (entryRatio && entryRatio > 0 ? entryRatio : currentRatio);
-
-    const nextAnchor = Math.min(trailingAnchor, currentRatio);
-    if (!Number.isFinite(anchorFromStorage) || Math.abs(nextAnchor - anchorFromStorage) > TRAILING_RATIO_EPSILON) {
-      await persistTpAnchorRatio(nextAnchor);
+      await persistFlatAfterExit('zscore_stop_short', 'short');
+      closedAction = 'zscore_stop_short';
+      closedResult = `Z-score stop hit for short ${positionLabel} (z=${Number(zScore).toFixed(3)})`;
     }
 
-    trailingAnchor = Number.isFinite(Number(mergedStrategy.tp_anchor_ratio))
-      ? Number(mergedStrategy.tp_anchor_ratio)
-      : nextAnchor;
+    if (!closedAction && state === 'long' && hasZScore && Number(zScore) >= -zscoreExit) {
+      await closeStrategyExposure(apiKeyName, mergedStrategy);
 
-    const trailingStop = trailingAnchor * (1 + takeProfitPercent / 100);
-    if (Number.isFinite(trailingStop) && currentRatio >= trailingStop) {
-      await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
-      await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
-
-      await persistFlatAfterExit('take_profit_short', 'short');
-      closedAction = 'take_profit_short';
-      closedResult = 'Take-profit hit for short synthetic position';
-
-      logger.info(`DD_BattleToads trailing TP short triggered for strategy ${strategyId} (${apiKeyName})`);
+      await persistFlatAfterExit('mean_revert_exit_long', 'long');
+      closedAction = 'mean_revert_exit_long';
+      closedResult = `Mean-reversion exit for long ${positionLabel} (z=${Number(zScore).toFixed(3)})`;
     }
-  }
 
-  if (!closedAction && state === 'long' && entryRatio && currentRatio <= donchianCenter) {
-    await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
-    await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
+    if (!closedAction && state === 'short' && hasZScore && Number(zScore) <= zscoreExit) {
+      await closeStrategyExposure(apiKeyName, mergedStrategy);
 
-    await persistFlatAfterExit('stop_loss_long', 'long');
-    closedAction = 'stop_loss_long';
-    closedResult = 'Stop-loss (center) hit for long synthetic position';
+      await persistFlatAfterExit('mean_revert_exit_short', 'short');
+      closedAction = 'mean_revert_exit_short';
+      closedResult = `Mean-reversion exit for short ${positionLabel} (z=${Number(zScore).toFixed(3)})`;
+    }
+  } else {
+    if (!closedAction && state === 'long' && takeProfitPercent > 0) {
+      const anchorFromStorage = Number(mergedStrategy.tp_anchor_ratio);
+      let trailingAnchor = Number.isFinite(anchorFromStorage) && anchorFromStorage > 0
+        ? anchorFromStorage
+        : (entryRatio && entryRatio > 0 ? entryRatio : currentRatio);
 
-    logger.info(`DD_BattleToads SL long triggered for strategy ${strategyId} (${apiKeyName})`);
-  }
+      const nextAnchor = Math.max(trailingAnchor, currentRatio);
+      if (!Number.isFinite(anchorFromStorage) || Math.abs(nextAnchor - anchorFromStorage) > TRAILING_RATIO_EPSILON) {
+        await persistTpAnchorRatio(nextAnchor);
+      }
 
-  if (!closedAction && state === 'short' && entryRatio && currentRatio >= donchianCenter) {
-    await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
-    await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
+      trailingAnchor = Number.isFinite(Number(mergedStrategy.tp_anchor_ratio))
+        ? Number(mergedStrategy.tp_anchor_ratio)
+        : nextAnchor;
 
-    await persistFlatAfterExit('stop_loss_short', 'short');
-    closedAction = 'stop_loss_short';
-    closedResult = 'Stop-loss (center) hit for short synthetic position';
+      const trailingStop = trailingAnchor * (1 - takeProfitPercent / 100);
+      if (Number.isFinite(trailingStop) && currentRatio <= trailingStop) {
+        await closeStrategyExposure(apiKeyName, mergedStrategy);
 
-    logger.info(`DD_BattleToads SL short triggered for strategy ${strategyId} (${apiKeyName})`);
+        await persistFlatAfterExit('take_profit_long', 'long');
+        closedAction = 'take_profit_long';
+        closedResult = `Take-profit hit for long ${positionLabel}`;
+
+        logger.info(`DD_BattleToads trailing TP long triggered for strategy ${strategyId} (${apiKeyName})`);
+      }
+    }
+
+    if (!closedAction && state === 'short' && takeProfitPercent > 0) {
+      const anchorFromStorage = Number(mergedStrategy.tp_anchor_ratio);
+      let trailingAnchor = Number.isFinite(anchorFromStorage) && anchorFromStorage > 0
+        ? anchorFromStorage
+        : (entryRatio && entryRatio > 0 ? entryRatio : currentRatio);
+
+      const nextAnchor = Math.min(trailingAnchor, currentRatio);
+      if (!Number.isFinite(anchorFromStorage) || Math.abs(nextAnchor - anchorFromStorage) > TRAILING_RATIO_EPSILON) {
+        await persistTpAnchorRatio(nextAnchor);
+      }
+
+      trailingAnchor = Number.isFinite(Number(mergedStrategy.tp_anchor_ratio))
+        ? Number(mergedStrategy.tp_anchor_ratio)
+        : nextAnchor;
+
+      const trailingStop = trailingAnchor * (1 + takeProfitPercent / 100);
+      if (Number.isFinite(trailingStop) && currentRatio >= trailingStop) {
+        await closeStrategyExposure(apiKeyName, mergedStrategy);
+
+        await persistFlatAfterExit('take_profit_short', 'short');
+        closedAction = 'take_profit_short';
+        closedResult = `Take-profit hit for short ${positionLabel}`;
+
+        logger.info(`DD_BattleToads trailing TP short triggered for strategy ${strategyId} (${apiKeyName})`);
+      }
+    }
+
+    if (!closedAction && state === 'long' && entryRatio && currentRatio <= donchianCenter) {
+      await closeStrategyExposure(apiKeyName, mergedStrategy);
+
+      await persistFlatAfterExit('stop_loss_long', 'long');
+      closedAction = 'stop_loss_long';
+      closedResult = `Stop-loss (center) hit for long ${positionLabel}`;
+
+      logger.info(`DD_BattleToads SL long triggered for strategy ${strategyId} (${apiKeyName})`);
+    }
+
+    if (!closedAction && state === 'short' && entryRatio && currentRatio >= donchianCenter) {
+      await closeStrategyExposure(apiKeyName, mergedStrategy);
+
+      await persistFlatAfterExit('stop_loss_short', 'short');
+      closedAction = 'stop_loss_short';
+      closedResult = `Stop-loss (center) hit for short ${positionLabel}`;
+
+      logger.info(`DD_BattleToads SL short triggered for strategy ${strategyId} (${apiKeyName})`);
+    }
   }
 
   if (signal === 'none') {
+    const noSignalResult = isStatArb ? 'No z-score signal' : 'No Donchian signal';
     const noSignalAction = closedAction
       ? `${closedAction}_then_no_signal@${currentRatio}`
       : `no_signal@${currentRatio}`;
@@ -1669,7 +2159,7 @@ export const executeStrategy = async (
     });
 
     return returnWithProcessedBar({
-      result: closedResult || 'No Donchian signal',
+      result: closedResult || noSignalResult,
       action: closedAction ? `${closedAction}_no_signal` : 'no_signal',
       strategy: updated,
       currentRatio,
@@ -1757,27 +2247,41 @@ export const executeStrategy = async (
     throw new Error('Calculated trade notional is invalid');
   }
 
-  const [basePrice, quotePrice] = await Promise.all([
-    getLatestMarketClose(apiKeyName, mergedStrategy.base_symbol),
-    getLatestMarketClose(apiKeyName, mergedStrategy.quote_symbol),
-  ]);
+  const basePrice = await getLatestMarketClose(apiKeyName, mergedStrategy.base_symbol);
+  let quotePrice: number | null = null;
+  let qtyPlan: BalancedQtyPlan | null = null;
+  let singleQtyPlan: SingleQtyPlan | null = null;
+  let baseQty = '';
+  let quoteQty: string | null = null;
 
-  const baseWeight = Math.abs(mergedStrategy.base_coef);
-  const quoteWeight = Math.abs(mergedStrategy.quote_coef);
+  if (isMono) {
+    singleQtyPlan = await buildSingleQtyPlan(
+      apiKeyName,
+      mergedStrategy.base_symbol,
+      basePrice,
+      totalNotional
+    );
+    baseQty = singleQtyPlan.qty;
+  } else {
+    quotePrice = await getLatestMarketClose(apiKeyName, mergedStrategy.quote_symbol);
 
-  const qtyPlan = await buildBalancedQtyPlan(
-    apiKeyName,
-    mergedStrategy.base_symbol,
-    mergedStrategy.quote_symbol,
-    basePrice,
-    quotePrice,
-    totalNotional,
-    baseWeight,
-    quoteWeight
-  );
+    const baseWeight = Math.abs(mergedStrategy.base_coef);
+    const quoteWeight = Math.abs(mergedStrategy.quote_coef);
 
-  const baseQty = qtyPlan.baseQty;
-  const quoteQty = qtyPlan.quoteQty;
+    qtyPlan = await buildBalancedQtyPlan(
+      apiKeyName,
+      mergedStrategy.base_symbol,
+      mergedStrategy.quote_symbol,
+      basePrice,
+      quotePrice,
+      totalNotional,
+      baseWeight,
+      quoteWeight
+    );
+
+    baseQty = qtyPlan.baseQty;
+    quoteQty = qtyPlan.quoteQty;
+  }
 
   const latestBeforeOpen = normalizeStrategy(await getStrategyRow(apiKeyName, strategyId));
   if (!latestBeforeOpen.is_active) {
@@ -1809,113 +2313,148 @@ export const executeStrategy = async (
   }
 
   try {
-    await applySymbolRiskSettings(apiKeyName, mergedStrategy.base_symbol, mergedStrategy.margin_type, mergedStrategy.leverage);
-    await applySymbolRiskSettings(apiKeyName, mergedStrategy.quote_symbol, mergedStrategy.margin_type, mergedStrategy.leverage);
+    for (const symbol of getStrategySymbols(mergedStrategy)) {
+      await applySymbolRiskSettings(apiKeyName, symbol, mergedStrategy.margin_type, mergedStrategy.leverage);
+    }
   } catch (error) {
     logger.warn(`Could not apply risk settings for strategy ${strategyId}: ${formatActionError(error)}`);
   }
 
-  await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
-  await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
+  await closeStrategyExposure(apiKeyName, mergedStrategy);
 
   const baseSide: 'Buy' | 'Sell' = signal === 'long' ? 'Buy' : 'Sell';
-  const quoteSide: 'Buy' | 'Sell' = signal === 'long' ? 'Sell' : 'Buy';
+  const quoteSide: 'Buy' | 'Sell' | null = isMono ? null : (signal === 'long' ? 'Sell' : 'Buy');
 
   const baseOrder = await placeOrder(apiKeyName, mergedStrategy.base_symbol, baseSide, baseQty);
 
-  try {
-    await placeOrder(apiKeyName, mergedStrategy.quote_symbol, quoteSide, quoteQty);
-  } catch (error) {
-    // Rollback the first leg if the second fails to avoid stale directional exposure.
+  if (!isMono && quoteSide && quoteQty) {
     try {
-      await closePosition(apiKeyName, mergedStrategy.base_symbol, baseQty, baseSide);
-    } catch (rollbackError) {
-      logger.error(`Rollback failed for ${mergedStrategy.base_symbol}: ${formatActionError(rollbackError)}`);
+      await placeOrder(apiKeyName, mergedStrategy.quote_symbol, quoteSide, quoteQty);
+    } catch (error) {
+      try {
+        await closePosition(apiKeyName, mergedStrategy.base_symbol, baseQty, baseSide);
+      } catch (rollbackError) {
+        logger.error(`Rollback failed for ${mergedStrategy.base_symbol}: ${formatActionError(rollbackError)}`);
+      }
+      throw error;
     }
-    throw error;
-  }
 
-  const livePairAfterOpen = await loadPairPositionsForValidation(
-    apiKeyName,
-    mergedStrategy.base_symbol,
-    mergedStrategy.quote_symbol,
-    3,
-    350
-  );
-
-  if (!livePairAfterOpen.basePosition || !livePairAfterOpen.quotePosition) {
-    await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
-    await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
-
-    const updated = await updateStrategy(apiKeyName, strategyId, {
-      ...executionBindingPatch,
-      state: 'flat',
-      entry_ratio: null,
-      tp_anchor_ratio: null,
-      last_signal: signal,
-      last_action: 'desync_closed_post_open_missing_leg',
-      last_error: 'Opened pair validation failed: one or both legs are missing after entry',
-    });
-
-    logger.warn(
-      `Post-open validation failed (missing leg): strategy=${strategyId}, apiKey=${apiKeyName}, `
-      + `base=${mergedStrategy.base_symbol}, quote=${mergedStrategy.quote_symbol}`
+    const livePairAfterOpen = await loadPairPositionsForValidation(
+      apiKeyName,
+      mergedStrategy.base_symbol,
+      mergedStrategy.quote_symbol,
+      3,
+      350
     );
 
-    return returnWithProcessedBar({
-      result: 'Pair opened with missing leg and was closed',
-      action: 'desync_closed_post_open_missing_leg',
-      strategy: updated,
-      currentRatio,
-      donchianHigh,
-      donchianLow,
-      donchianCenter,
-    });
-  }
+    if (!livePairAfterOpen.basePosition || !livePairAfterOpen.quotePosition || !qtyPlan) {
+      await closeStrategyExposure(apiKeyName, mergedStrategy);
 
-  const liveBalanceCheck = validateLiveLegBalance(
-    livePairAfterOpen.basePosition,
-    livePairAfterOpen.quotePosition,
-    baseWeight,
-    quoteWeight,
-    MAX_POST_OPEN_SHARE_ERROR
-  );
+      const updated = await updateStrategy(apiKeyName, strategyId, {
+        ...executionBindingPatch,
+        state: 'flat',
+        entry_ratio: null,
+        tp_anchor_ratio: null,
+        last_signal: signal,
+        last_action: 'desync_closed_post_open_missing_leg',
+        last_error: 'Opened pair validation failed: one or both legs are missing after entry',
+      });
 
-  if (!liveBalanceCheck.ok) {
-    await closeAllForSymbol(apiKeyName, mergedStrategy.base_symbol);
-    await closeAllForSymbol(apiKeyName, mergedStrategy.quote_symbol);
+      logger.warn(
+        `Post-open validation failed (missing leg): strategy=${strategyId}, apiKey=${apiKeyName}, `
+        + `base=${mergedStrategy.base_symbol}, quote=${mergedStrategy.quote_symbol}`
+      );
 
-    const liveSnapshot = liveBalanceCheck.snapshot;
-    const mismatchReason =
-      `Opened pair weight mismatch: base=${liveSnapshot.baseNotional.toFixed(4)} `
-      + `quote=${liveSnapshot.quoteNotional.toFixed(4)} `
-      + `expectedShare=${(liveSnapshot.expectedBaseShare * 100).toFixed(2)}% `
-      + `actualShare=${(liveSnapshot.actualBaseShare * 100).toFixed(2)}% `
-      + `shareError=${(liveSnapshot.shareError * 100).toFixed(2)}%`;
+      return returnWithProcessedBar({
+        result: 'Pair opened with missing leg and was closed',
+        action: 'desync_closed_post_open_missing_leg',
+        strategy: updated,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
 
-    const updated = await updateStrategy(apiKeyName, strategyId, {
-      ...executionBindingPatch,
-      state: 'flat',
-      entry_ratio: null,
-      tp_anchor_ratio: null,
-      last_signal: signal,
-      last_action: 'desync_closed_post_open_weight_mismatch',
-      last_error: mismatchReason,
-    });
-
-    logger.warn(
-      `Post-open validation failed (weight mismatch): strategy=${strategyId}, apiKey=${apiKeyName}, ${mismatchReason}`
+    const liveBalanceCheck = validateLiveLegBalance(
+      livePairAfterOpen.basePosition,
+      livePairAfterOpen.quotePosition,
+      Math.abs(mergedStrategy.base_coef),
+      Math.abs(mergedStrategy.quote_coef),
+      MAX_POST_OPEN_SHARE_ERROR
     );
 
-    return returnWithProcessedBar({
-      result: 'Pair opened with weight mismatch and was closed',
-      action: 'desync_closed_post_open_weight_mismatch',
-      strategy: updated,
-      currentRatio,
-      donchianHigh,
-      donchianLow,
-      donchianCenter,
-    });
+    if (!liveBalanceCheck.ok) {
+      await closeStrategyExposure(apiKeyName, mergedStrategy);
+
+      const liveSnapshot = liveBalanceCheck.snapshot;
+      const mismatchReason =
+        `Opened pair weight mismatch: base=${liveSnapshot.baseNotional.toFixed(4)} `
+        + `quote=${liveSnapshot.quoteNotional.toFixed(4)} `
+        + `expectedShare=${(liveSnapshot.expectedBaseShare * 100).toFixed(2)}% `
+        + `actualShare=${(liveSnapshot.actualBaseShare * 100).toFixed(2)}% `
+        + `shareError=${(liveSnapshot.shareError * 100).toFixed(2)}%`;
+
+      const updated = await updateStrategy(apiKeyName, strategyId, {
+        ...executionBindingPatch,
+        state: 'flat',
+        entry_ratio: null,
+        tp_anchor_ratio: null,
+        last_signal: signal,
+        last_action: 'desync_closed_post_open_weight_mismatch',
+        last_error: mismatchReason,
+      });
+
+      logger.warn(
+        `Post-open validation failed (weight mismatch): strategy=${strategyId}, apiKey=${apiKeyName}, ${mismatchReason}`
+      );
+
+      return returnWithProcessedBar({
+        result: 'Pair opened with weight mismatch and was closed',
+        action: 'desync_closed_post_open_weight_mismatch',
+        strategy: updated,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
+  } else {
+    const livePositionAfterOpen = await loadSinglePositionForValidation(
+      apiKeyName,
+      mergedStrategy.base_symbol,
+      3,
+      350
+    );
+
+    if (!livePositionAfterOpen) {
+      await closeStrategyExposure(apiKeyName, mergedStrategy);
+
+      const updated = await updateStrategy(apiKeyName, strategyId, {
+        ...executionBindingPatch,
+        state: 'flat',
+        entry_ratio: null,
+        tp_anchor_ratio: null,
+        last_signal: signal,
+        last_action: 'desync_closed_post_open_missing_leg',
+        last_error: 'Opened mono validation failed: live position is missing after entry',
+      });
+
+      logger.warn(
+        `Post-open validation failed (mono missing position): strategy=${strategyId}, apiKey=${apiKeyName}, `
+        + `base=${mergedStrategy.base_symbol}`
+      );
+
+      return returnWithProcessedBar({
+        result: 'Position opened but was not confirmed and was closed',
+        action: 'desync_closed_post_open_missing_leg',
+        strategy: updated,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
   }
 
   const updated = await updateStrategy(apiKeyName, strategyId, {
@@ -1930,14 +2469,23 @@ export const executeStrategy = async (
     last_error: null,
   });
 
-  logger.info(
-    `Strategy ${strategyId} leg balancing: target=${totalNotional.toFixed(2)} USDT, `
-    + `base ${qtyPlan.baseTargetNotional.toFixed(2)} -> ${qtyPlan.baseNotional.toFixed(2)}, `
-    + `quote ${qtyPlan.quoteTargetNotional.toFixed(2)} -> ${qtyPlan.quoteNotional.toFixed(2)}, `
-    + `shareError=${(qtyPlan.shareError * 100).toFixed(2)}%, totalDeviation=${(qtyPlan.totalDeviation * 100).toFixed(2)}%`
-  );
+  if (singleQtyPlan) {
+    logger.info(
+      `Strategy ${strategyId} mono sizing: target=${singleQtyPlan.targetNotional.toFixed(2)} USDT, `
+      + `actual=${singleQtyPlan.notional.toFixed(2)}, totalDeviation=${(singleQtyPlan.totalDeviation * 100).toFixed(2)}%`
+    );
+  }
 
-  logger.info(`Executed DD_BattleToads strategy ${strategyId} for ${apiKeyName}: ${signal}`);
+  if (qtyPlan) {
+    logger.info(
+      `Strategy ${strategyId} leg balancing: target=${totalNotional.toFixed(2)} USDT, `
+      + `base ${qtyPlan.baseTargetNotional.toFixed(2)} -> ${qtyPlan.baseNotional.toFixed(2)}, `
+      + `quote ${qtyPlan.quoteTargetNotional.toFixed(2)} -> ${qtyPlan.quoteNotional.toFixed(2)}, `
+      + `shareError=${(qtyPlan.shareError * 100).toFixed(2)}%, totalDeviation=${(qtyPlan.totalDeviation * 100).toFixed(2)}%`
+    );
+  }
+
+  logger.info(`Executed ${mergedStrategy.strategy_type} strategy ${strategyId} for ${apiKeyName}: ${signal} (${marketMode})`);
   return returnWithProcessedBar({
     result: 'Strategy executed',
     action: closedAction ? `reopened_${signal}_after_${closedAction}` : `opened_${signal}`,
@@ -1964,8 +2512,7 @@ export const pauseStrategy = async (apiKeyName: string, strategyId: number) => {
 
 export const stopStrategy = async (apiKeyName: string, strategyId: number) => {
   const row = normalizeStrategy(await getStrategyRow(apiKeyName, strategyId));
-  await closeAllForSymbol(apiKeyName, row.base_symbol);
-  await closeAllForSymbol(apiKeyName, row.quote_symbol);
+  await closeStrategyExposure(apiKeyName, row);
 
   const updated = await updateStrategy(apiKeyName, strategyId, {
     is_active: false,
@@ -2020,8 +2567,7 @@ export const placeManualOrder = async (
 export const cancelStrategyOrders = async (apiKeyName: string, strategyId: number) => {
   const strategy = normalizeStrategy(await getStrategyRow(apiKeyName, strategyId));
 
-  await cancelAllOrders(apiKeyName, strategy.base_symbol);
-  await cancelAllOrders(apiKeyName, strategy.quote_symbol);
+  await cancelStrategyWorkingOrders(apiKeyName, strategy);
 
   const updated = await updateStrategy(apiKeyName, strategyId, {
     last_action: 'orders_cancelled',
@@ -2035,8 +2581,7 @@ export const cancelStrategyOrders = async (apiKeyName: string, strategyId: numbe
 export const closeStrategyPositions = async (apiKeyName: string, strategyId: number) => {
   const strategy = normalizeStrategy(await getStrategyRow(apiKeyName, strategyId));
 
-  await closeAllForSymbol(apiKeyName, strategy.base_symbol);
-  await closeAllForSymbol(apiKeyName, strategy.quote_symbol);
+  await closeStrategyExposure(apiKeyName, strategy);
 
   const updated = await updateStrategy(apiKeyName, strategyId, {
     state: 'flat',
@@ -2046,7 +2591,7 @@ export const closeStrategyPositions = async (apiKeyName: string, strategyId: num
     last_error: null,
   });
 
-  logger.info(`Closed pair positions for strategy ${strategyId}`);
+  logger.info(`Closed strategy exposure for strategy ${strategyId}`);
   return updated;
 };
 
@@ -2163,6 +2708,7 @@ export const copyStrategyBlock = async (
     for (const source of sourceStrategies) {
       const sourceBase = normalizeSymbol(source.base_symbol);
       const sourceQuote = normalizeSymbol(source.quote_symbol);
+      const sourceMarketMode = normalizeMarketMode(source.market_mode);
 
       const mappedBase = symbolValidationEnabled
         ? mapStrategySymbolForTarget(sourceBase, targetSymbolMap)
@@ -2171,12 +2717,14 @@ export const copyStrategyBlock = async (
         ? mapStrategySymbolForTarget(sourceQuote, targetSymbolMap)
         : sourceQuote;
 
-      const pairValid = symbolValidationEnabled
-        ? Boolean(mappedBase && mappedQuote && mappedBase !== mappedQuote)
-        : Boolean(sourceBase && sourceQuote && sourceBase !== sourceQuote);
+      const pairValid = sourceMarketMode === 'mono'
+        ? (symbolValidationEnabled ? Boolean(mappedBase) : Boolean(sourceBase))
+        : (symbolValidationEnabled
+          ? Boolean(mappedBase && mappedQuote && mappedBase !== mappedQuote)
+          : Boolean(sourceBase && sourceQuote && sourceBase !== sourceQuote));
 
       const targetBase = mappedBase || sourceBase;
-      const targetQuote = mappedQuote || sourceQuote;
+      const targetQuote = sourceMarketMode === 'mono' ? '' : (mappedQuote || sourceQuote);
 
       if (targetBase !== sourceBase || targetQuote !== sourceQuote) {
         adjustedSymbols += 1;
@@ -2184,7 +2732,8 @@ export const copyStrategyBlock = async (
 
       const created = await createStrategy(targetApiKeyName, {
         name: source.name,
-        strategy_type: 'DD_BattleToads',
+        strategy_type: source.strategy_type || 'DD_BattleToads',
+        market_mode: source.market_mode,
         is_active: pairValid ? (preserveActive ? source.is_active : false) : false,
         display_on_chart: source.display_on_chart,
         show_settings: source.show_settings,
@@ -2197,6 +2746,9 @@ export const copyStrategyBlock = async (
         take_profit_percent: source.take_profit_percent,
         price_channel_length: source.price_channel_length,
         detection_source: source.detection_source,
+        zscore_entry: source.zscore_entry,
+        zscore_exit: source.zscore_exit,
+        zscore_stop: source.zscore_stop,
         base_symbol: targetBase,
         quote_symbol: targetQuote,
         interval: source.interval,
@@ -2234,7 +2786,7 @@ export const copyStrategyBlock = async (
           quote: targetQuote,
           interval: source.interval,
           baseCoef: source.base_coef,
-          quoteCoef: source.quote_coef,
+          quoteCoef: sourceMarketMode === 'mono' ? 0 : source.quote_coef,
         };
       }
 
