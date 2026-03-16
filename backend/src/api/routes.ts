@@ -1336,6 +1336,12 @@ router.get('/trades/:apiKeyName', async (req, res) => {
   const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 200;
 
   try {
+    // Some exchanges (e.g. BingX/Bitget via ccxt) require symbol for my trades.
+    // Return empty list instead of 500 to keep dashboard responsive.
+    if (!symbol) {
+      return res.json([]);
+    }
+
     const trades = await getRecentTrades(apiKeyName, symbol, limit);
     res.json(trades);
   } catch (error) {
