@@ -465,6 +465,8 @@ type Copy = {
   savePlan: string;
   unrealizedPnl: string;
   marginLoad: string;
+  depositLoad: string;
+  liquidationRisk: string;
   displayName: string;
   tenantStatus: string;
   planGrid: string;
@@ -561,6 +563,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     savePlan: 'Сохранить тариф',
     unrealizedPnl: 'Нереализ. PnL',
     marginLoad: 'Загрузка маржи',
+    depositLoad: 'Загрузка депозита',
+    liquidationRisk: 'Риск ликвидации',
     displayName: 'Имя клиента',
     tenantStatus: 'Статус tenant',
     planGrid: 'Тарифная сетка',
@@ -655,6 +659,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     savePlan: 'Save plan',
     unrealizedPnl: 'Unrealized PnL',
     marginLoad: 'Margin load',
+    depositLoad: 'Deposit load',
+    liquidationRisk: 'Liquidation risk',
     displayName: 'Client name',
     tenantStatus: 'Tenant status',
     planGrid: 'Plan grid',
@@ -749,6 +755,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     savePlan: 'Plani kaydet',
     unrealizedPnl: 'Gerceklesmemis PnL',
     marginLoad: 'Marjin yuklenmesi',
+    depositLoad: 'Depozit yuklenmesi',
+    liquidationRisk: 'Likidasyon riski',
     displayName: 'Musteri adi',
     tenantStatus: 'Tenant durumu',
     planGrid: 'Plan tablosu',
@@ -787,6 +795,30 @@ const formatNumber = (value: unknown, digits = 2): string => {
 
 const formatPercent = (value: unknown, digits = 2): string => `${formatNumber(value, digits)}%`;
 const formatMoney = (value: unknown): string => `$${formatNumber(value, 2)}`;
+
+const calcDepositLoadPercent = (row: TenantSummary): number | null => {
+  const equity = Number(row.monitoring?.equity_usd ?? NaN);
+  const cap = Number(row.plan?.max_deposit_total ?? NaN);
+  if (!Number.isFinite(equity) || !Number.isFinite(cap) || cap <= 0) {
+    return null;
+  }
+  return (equity / cap) * 100;
+};
+
+const calcLiquidationRisk = (row: TenantSummary): { level: 'low' | 'medium' | 'high'; color: string; bufferPercent: number | null } => {
+  const marginLoad = Number(row.monitoring?.margin_load_percent ?? 0);
+  const drawdown = Number(row.monitoring?.drawdown_percent ?? 0);
+  const score = marginLoad * 0.75 + drawdown * 0.35;
+  const bufferPercent = Number.isFinite(marginLoad) ? Math.max(0, 100 - marginLoad) : null;
+
+  if (marginLoad >= 85 || drawdown >= 35 || score >= 85) {
+    return { level: 'high', color: 'red', bufferPercent };
+  }
+  if (marginLoad >= 65 || drawdown >= 20 || score >= 60) {
+    return { level: 'medium', color: 'gold', bufferPercent };
+  }
+  return { level: 'low', color: 'green', bufferPercent };
+};
 
 const toFiniteNumberOrNull = (value: unknown): number | null => {
   if (value === null || value === undefined || value === '') {
@@ -1838,6 +1870,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           <Tag color="geekblue">PnL {formatMoney(row.monitoring.unrealized_pnl)}</Tag>
           <Tag color="orange">DD {formatPercent(row.monitoring.drawdown_percent)}</Tag>
           <Tag color="purple">ML {formatPercent(row.monitoring.margin_load_percent)}</Tag>
+          {calcDepositLoadPercent(row) !== null ? <Tag color="cyan">{copy.depositLoad}: {formatPercent(calcDepositLoadPercent(row))}</Tag> : null}
+          {(() => {
+            const liq = calcLiquidationRisk(row);
+            return <Tag color={liq.color}>{copy.liquidationRisk}: {liq.level}{liq.bufferPercent !== null ? ` (${formatPercent(liq.bufferPercent)} buf)` : ''}</Tag>;
+          })()}
         </Space>
       ) : <Tag color="default">off</Tag>) : <Tag color="default">off</Tag>,
     },
@@ -2390,6 +2427,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             {strategyMonitoringEnabled && selectedStrategyTenantSummary?.monitoring ? <Tag color="geekblue">{copy.unrealizedPnl}: {formatMoney(selectedStrategyTenantSummary.monitoring.unrealized_pnl)}</Tag> : null}
                             {strategyMonitoringEnabled && selectedStrategyTenantSummary?.monitoring ? <Tag color="orange">DD {formatPercent(selectedStrategyTenantSummary.monitoring.drawdown_percent)}</Tag> : null}
                             {strategyMonitoringEnabled && selectedStrategyTenantSummary?.monitoring ? <Tag color="purple">{copy.marginLoad}: {formatPercent(selectedStrategyTenantSummary.monitoring.margin_load_percent)}</Tag> : null}
+                            {strategyMonitoringEnabled && selectedStrategyTenantSummary ? (() => {
+                              const load = calcDepositLoadPercent(selectedStrategyTenantSummary);
+                              return load !== null ? <Tag color="cyan">{copy.depositLoad}: {formatPercent(load)}</Tag> : null;
+                            })() : null}
+                            {strategyMonitoringEnabled && selectedStrategyTenantSummary ? (() => {
+                              const liq = calcLiquidationRisk(selectedStrategyTenantSummary);
+                              return <Tag color={liq.color}>{copy.liquidationRisk}: {liq.level}{liq.bufferPercent !== null ? ` (${formatPercent(liq.bufferPercent)} buf)` : ''}</Tag>;
+                            })() : null}
                             {!strategyMonitoringEnabled ? <Tag color="default">{copy.monitoring}: off</Tag> : null}
                           </Space>
                           <Space wrap style={{ marginTop: 12 }}>
@@ -2629,6 +2674,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             {algofundMonitoringEnabled && selectedAlgofundTenantSummary?.monitoring ? <Tag color="geekblue">{copy.unrealizedPnl}: {formatMoney(selectedAlgofundTenantSummary.monitoring.unrealized_pnl)}</Tag> : null}
                             {algofundMonitoringEnabled && selectedAlgofundTenantSummary?.monitoring ? <Tag color="orange">DD {formatPercent(selectedAlgofundTenantSummary.monitoring.drawdown_percent)}</Tag> : null}
                             {algofundMonitoringEnabled && selectedAlgofundTenantSummary?.monitoring ? <Tag color="purple">{copy.marginLoad}: {formatPercent(selectedAlgofundTenantSummary.monitoring.margin_load_percent)}</Tag> : null}
+                            {algofundMonitoringEnabled && selectedAlgofundTenantSummary ? (() => {
+                              const load = calcDepositLoadPercent(selectedAlgofundTenantSummary);
+                              return load !== null ? <Tag color="cyan">{copy.depositLoad}: {formatPercent(load)}</Tag> : null;
+                            })() : null}
+                            {algofundMonitoringEnabled && selectedAlgofundTenantSummary ? (() => {
+                              const liq = calcLiquidationRisk(selectedAlgofundTenantSummary);
+                              return <Tag color={liq.color}>{copy.liquidationRisk}: {liq.level}{liq.bufferPercent !== null ? ` (${formatPercent(liq.bufferPercent)} buf)` : ''}</Tag>;
+                            })() : null}
                             {!algofundMonitoringEnabled ? <Tag color="default">{copy.monitoring}: off</Tag> : null}
                           </Space>
                           <Space wrap style={{ marginTop: 12 }}>
