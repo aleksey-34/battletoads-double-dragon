@@ -1225,18 +1225,33 @@ const formatActionError = (error: unknown): string => {
 
 type GetStrategiesOptions = {
   includeLotPreview?: boolean;
+  limit?: number;
+  offset?: number;
 };
 
 export const getStrategies = async (apiKeyName: string, options?: GetStrategiesOptions): Promise<Strategy[]> => {
   const { db } = await import('../utils/database');
-  const rows = await db.all(
-    `SELECT s.*
-     FROM strategies s
-     JOIN api_keys a ON a.id = s.api_key_id
-     WHERE a.name = ?
-     ORDER BY s.id DESC`,
-    [apiKeyName]
-  );
+  const limitRaw = Number(options?.limit);
+  const offsetRaw = Number(options?.offset);
+  const hasLimit = Number.isFinite(limitRaw) && limitRaw > 0;
+  const limit = hasLimit ? Math.floor(limitRaw) : 0;
+  const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? Math.floor(offsetRaw) : 0;
+
+  const sqlParts = [
+    `SELECT s.*`,
+    `FROM strategies s`,
+    `JOIN api_keys a ON a.id = s.api_key_id`,
+    `WHERE a.name = ?`,
+    `ORDER BY s.id DESC`,
+  ];
+  const params: any[] = [apiKeyName];
+
+  if (hasLimit) {
+    sqlParts.push('LIMIT ? OFFSET ?');
+    params.push(limit, offset);
+  }
+
+  const rows = await db.all(sqlParts.join('\n'), params);
 
   const normalized = rows.map(normalizeStrategy);
 

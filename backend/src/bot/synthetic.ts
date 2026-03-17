@@ -140,6 +140,8 @@ export async function calculateSyntheticOHLC(
   limit: number,
   options?: SyntheticQueryOptions
 ) {
+  const safeBaseCoef = Number.isFinite(baseCoef) && baseCoef > 0 ? baseCoef : 1;
+  const safeQuoteCoef = Number.isFinite(quoteCoef) && quoteCoef > 0 ? quoteCoef : 1;
   const safeInterval = interval || '1h';
   const safeLimit = Number.isFinite(limit) && limit > 0 ? limit : 100;
   const sourceInterval = chooseSourceInterval(safeInterval);
@@ -183,7 +185,7 @@ export async function calculateSyntheticOHLC(
       continue;
     }
 
-    const subSynthetic = buildSyntheticSubCandle(baseCandle, quoteCandle, baseCoef, quoteCoef);
+    const subSynthetic = buildSyntheticSubCandle(baseCandle, quoteCandle, safeBaseCoef, safeQuoteCoef);
     if (!subSynthetic) {
       continue;
     }
@@ -206,9 +208,11 @@ export async function calculateSyntheticOHLC(
     existing.quoteVolume += subSynthetic.quoteVolume;
   }
 
-  const aggregated = Array.from(buckets.values())
-    .sort((a, b) => b.timeMs - a.timeMs)
-    .slice(0, safeLimit)
+  const aggregatedAsc = Array.from(buckets.values())
+    .sort((a, b) => a.timeMs - b.timeMs);
+
+  const aggregated = aggregatedAsc
+    .slice(-safeLimit)
     .map((candle) => ({
       open: candle.open,
       high: candle.high,

@@ -807,7 +807,32 @@ router.post('/strategies/copy-block', async (req, res) => {
 router.get('/strategies/:apiKeyName', async (req, res) => {
   const { apiKeyName } = req.params;
   try {
-    const strategies = await getStrategies(apiKeyName);
+    const includeLotPreview = String(req.query.includeLotPreview || '1').trim() !== '0';
+    const limitRaw = Number.parseInt(String(req.query.limit || ''), 10);
+    const offsetRaw = Number.parseInt(String(req.query.offset || '0'), 10);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 2000) : undefined;
+    const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
+
+    const strategies = await getStrategies(apiKeyName, {
+      includeLotPreview,
+      limit,
+      offset,
+    });
+
+    if (limit !== undefined) {
+      const totalRow = await db.get(
+        `SELECT COUNT(*) AS total
+         FROM strategies s
+         JOIN api_keys a ON a.id = s.api_key_id
+         WHERE a.name = ?`,
+        [apiKeyName]
+      );
+      const total = Number(totalRow?.total || 0);
+      res.setHeader('X-Total-Count', String(total));
+      res.setHeader('X-Limit-Applied', String(limit));
+      res.setHeader('X-Offset-Applied', String(offset));
+    }
+
     res.json(strategies);
   } catch (error) {
     const err = error as Error;

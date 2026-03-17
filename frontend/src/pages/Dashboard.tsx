@@ -137,6 +137,7 @@ const defaultChartSetting = (): ChartSetting => ({
 const AUTO_UPDATE_MIN_SEC = 5;
 const AUTO_UPDATE_MAX_SEC = 3600;
 const STRATEGY_RENDER_CHUNK = 120;
+const STRATEGY_FETCH_LIMIT = 400;
 
 const normalizeUpdateSec = (rawValue: unknown): number => {
   const numeric = Number(rawValue);
@@ -743,6 +744,8 @@ const Dashboard: React.FC = () => {
   const [symbolsError, setSymbolsError] = useState<{ [key: string]: string }>({});
   const [strategiesByKey, setStrategiesByKey] = useState<{ [key: string]: DDStrategy[] }>({});
   const [strategyRenderLimitByKey, setStrategyRenderLimitByKey] = useState<{ [key: string]: number }>({});
+  const [strategiesTotalByKey, setStrategiesTotalByKey] = useState<{ [key: string]: number }>({});
+  const [fullStrategiesLoadedByKey, setFullStrategiesLoadedByKey] = useState<{ [key: string]: boolean }>({});
   const [strategiesLoadingByKey, setStrategiesLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [strategiesErrorByKey, setStrategiesErrorByKey] = useState<{ [key: string]: string }>({});
   const [activeStrategyPanelsByKey, setActiveStrategyPanelsByKey] = useState<{ [key: string]: string[] }>({});
@@ -1204,8 +1207,9 @@ const Dashboard: React.FC = () => {
     });
   };
 
-  const fetchStrategies = async (keyName: string, options?: { silent?: boolean }) => {
+  const fetchStrategies = async (keyName: string, options?: { silent?: boolean; full?: boolean }) => {
     const silent = options?.silent === true;
+    const full = options?.full === true || fullStrategiesLoadedByKey[keyName] === true;
     const requestLockKey = `strategies:${keyName}`;
 
     if (!acquireRequestLock(requestLockKey)) {
@@ -1218,9 +1222,19 @@ const Dashboard: React.FC = () => {
     }
 
     try {
-      const res = await axios.get(`/api/strategies/${keyName}`);
+      const res = await axios.get(`/api/strategies/${keyName}`, {
+        params: {
+          includeLotPreview: 0,
+          ...(full ? {} : { limit: STRATEGY_FETCH_LIMIT, offset: 0 }),
+        },
+      });
       const payload = Array.isArray(res.data) ? res.data.map(parseStrategy) : [];
+      const totalHeader = Number(res.headers?.['x-total-count']);
+      const total = Number.isFinite(totalHeader) && totalHeader >= 0 ? totalHeader : payload.length;
+
       setStrategiesByKey((prev) => ({ ...prev, [keyName]: payload }));
+      setStrategiesTotalByKey((prev) => ({ ...prev, [keyName]: total }));
+      setFullStrategiesLoadedByKey((prev) => ({ ...prev, [keyName]: full || payload.length >= total }));
       setStrategyRenderLimitByKey((prev) => {
         const previousLimit = Number(prev[keyName] || 0);
         const defaultLimit = Math.min(payload.length, STRATEGY_RENDER_CHUNK);
@@ -1942,6 +1956,10 @@ const Dashboard: React.FC = () => {
     const keyHoverOHLC = hoverOHLCByKey[keyName];
     const keySyntheticError = syntheticErrorByKey[keyName] || '';
     const keyStrategies = strategiesByKey[keyName] || [];
+    const keyStrategiesTotal = Number.isFinite(strategiesTotalByKey[keyName])
+      ? Math.max(strategiesTotalByKey[keyName], keyStrategies.length)
+      : keyStrategies.length;
+    const keyFullLoaded = fullStrategiesLoadedByKey[keyName] === true;
     const keyStrategiesLoading = strategiesLoadingByKey[keyName] || false;
     const keyStrategiesError = strategiesErrorByKey[keyName] || '';
     const keyBalances = balances[keyName] || [];
@@ -1977,7 +1995,7 @@ const Dashboard: React.FC = () => {
           <span>{key.name} ({key.exchange})</span>
           <StatusIndicator status={keyStatus.status} message={keyStatus.message} />
           <span style={{ fontSize: 12, color: '#666666' }}>API: {keyStatusText}</span>
-          <Tag color="blue">strategies: {totalStrategies}</Tag>
+          <Tag color="blue">strategies: {keyStrategiesTotal}</Tag>
           <Tag color="green">running: {runningStrategies}</Tag>
           <Tag color="orange">paused: {pausedStrategies}</Tag>
           {errorStrategies > 0 ? <Tag color="red">errors: {errorStrategies}</Tag> : null}
@@ -2334,6 +2352,17 @@ const Dashboard: React.FC = () => {
                   <Tag color="blue">Chart preview is configured once in API key Chart Settings</Tag>
                   <Tag color="green">Trading pair is configured per strategy below</Tag>
                   <Tag color="cyan">rendered: {visibleStrategies.length}/{totalStrategies}</Tag>
+                  {!keyFullLoaded ? <Tag color="gold">light mode: {totalStrategies}/{keyStrategiesTotal}</Tag> : null}
+                  {!keyFullLoaded ? (
+                    <Button
+                      size="small"
+                      onClick={() => {
+                        void fetchStrategies(keyName, { full: true });
+                      }}
+                    >
+                      Load all strategies
+                    </Button>
+                  ) : null}
                   {hasHiddenStrategies ? (
                     <Button
                       size="small"
