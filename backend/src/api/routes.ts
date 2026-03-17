@@ -21,6 +21,8 @@ import { calculateSyntheticOHLC } from '../bot/synthetic';
 import { getRiskSettings, updateRiskSettings } from '../bot/risk';
 import {
   getStrategies,
+  getStrategySummaries,
+  getStrategyById,
   createStrategy,
   updateStrategy,
   deleteStrategy,
@@ -837,6 +839,60 @@ router.get('/strategies/:apiKeyName', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Error loading strategies: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/strategies/:apiKeyName/summary', async (req, res) => {
+  const { apiKeyName } = req.params;
+  try {
+    const limitRaw = Number.parseInt(String(req.query.limit || ''), 10);
+    const offsetRaw = Number.parseInt(String(req.query.offset || '0'), 10);
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 5000) : undefined;
+    const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
+
+    const summaries = await getStrategySummaries(apiKeyName, {
+      limit,
+      offset,
+    });
+
+    if (limit !== undefined) {
+      const totalRow = await db.get(
+        `SELECT COUNT(*) AS total
+         FROM strategies s
+         JOIN api_keys a ON a.id = s.api_key_id
+         WHERE a.name = ?`,
+        [apiKeyName]
+      );
+      const total = Number(totalRow?.total || 0);
+      res.setHeader('X-Total-Count', String(total));
+      res.setHeader('X-Limit-Applied', String(limit));
+      res.setHeader('X-Offset-Applied', String(offset));
+    }
+
+    res.json(summaries);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading strategy summaries: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/strategies/:apiKeyName/:strategyId', async (req, res) => {
+  const { apiKeyName, strategyId } = req.params;
+  const strategyIdNum = Number.parseInt(String(strategyId || ''), 10);
+
+  if (!Number.isFinite(strategyIdNum) || strategyIdNum <= 0) {
+    return res.status(400).json({ error: 'Invalid strategyId' });
+  }
+
+  try {
+    const includeLotPreview = String(req.query.includeLotPreview || '0').trim() !== '0';
+    const strategy = await getStrategyById(apiKeyName, strategyIdNum, { includeLotPreview });
+    res.json(strategy);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading strategy ${strategyIdNum}: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

@@ -1229,6 +1229,11 @@ type GetStrategiesOptions = {
   offset?: number;
 };
 
+export type StrategySummary = Pick<
+  Strategy,
+  'id' | 'name' | 'strategy_type' | 'is_active' | 'base_symbol' | 'quote_symbol' | 'interval' | 'state' | 'last_action' | 'last_error'
+>;
+
 export const getStrategies = async (apiKeyName: string, options?: GetStrategiesOptions): Promise<Strategy[]> => {
   const { db } = await import('../utils/database');
   const limitRaw = Number(options?.limit);
@@ -1291,6 +1296,86 @@ export const getStrategies = async (apiKeyName: string, options?: GetStrategiesO
       lot_balance_usdt: availableBalance,
     };
   });
+};
+
+export const getStrategySummaries = async (
+  apiKeyName: string,
+  options?: { limit?: number; offset?: number }
+): Promise<StrategySummary[]> => {
+  const { db } = await import('../utils/database');
+  const limitRaw = Number(options?.limit);
+  const offsetRaw = Number(options?.offset);
+  const hasLimit = Number.isFinite(limitRaw) && limitRaw > 0;
+  const limit = hasLimit ? Math.floor(limitRaw) : 0;
+  const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? Math.floor(offsetRaw) : 0;
+
+  const sqlParts = [
+    `SELECT s.id, s.name, s.strategy_type, s.is_active, s.base_symbol, s.quote_symbol, s.interval, s.state, s.last_action, s.last_error`,
+    `FROM strategies s`,
+    `JOIN api_keys a ON a.id = s.api_key_id`,
+    `WHERE a.name = ?`,
+    `ORDER BY s.id DESC`,
+  ];
+  const params: any[] = [apiKeyName];
+
+  if (hasLimit) {
+    sqlParts.push('LIMIT ? OFFSET ?');
+    params.push(limit, offset);
+  }
+
+  const rows = await db.all(sqlParts.join('\n'), params);
+
+  return rows.map((row: any) => ({
+    id: Number(row.id),
+    name: String(row.name || DEFAULT_STRATEGY.name),
+    strategy_type: normalizeStrategyType(row.strategy_type),
+    is_active: safeBoolean(row.is_active, true),
+    base_symbol: normalizeSymbol(String(row.base_symbol || DEFAULT_STRATEGY.base_symbol)),
+    quote_symbol: normalizeSymbol(String(row.quote_symbol || DEFAULT_STRATEGY.quote_symbol)),
+    interval: String(row.interval || DEFAULT_STRATEGY.interval),
+    state: String(row.state || 'flat') === 'long' ? 'long' : String(row.state || 'flat') === 'short' ? 'short' : 'flat',
+    last_action: row.last_action === undefined ? null : row.last_action,
+    last_error: row.last_error === undefined ? null : row.last_error,
+  }));
+};
+
+export const getStrategyById = async (
+  apiKeyName: string,
+  strategyId: number,
+  options?: { includeLotPreview?: boolean }
+): Promise<Strategy> => {
+  const row = await getStrategyRow(apiKeyName, strategyId);
+  const normalized = normalizeStrategy(row);
+  const includeLotPreview = options?.includeLotPreview !== false;
+
+  if (!includeLotPreview) {
+    return {
+      ...normalized,
+      lot_long_usdt: null,
+      lot_short_usdt: null,
+      lot_balance_usdt: null,
+    };
+  }
+
+  try {
+    const balances = await getBalances(apiKeyName);
+    const availableBalance = extractUsdtBalance(balances);
+
+    return {
+      ...normalized,
+      lot_long_usdt: computeSignalTotalNotional(normalized, availableBalance, 'long'),
+      lot_short_usdt: computeSignalTotalNotional(normalized, availableBalance, 'short'),
+      lot_balance_usdt: availableBalance,
+    };
+  } catch (error) {
+    logger.warn(`Could not compute lot preview for strategy ${strategyId} (${apiKeyName}): ${formatActionError(error)}`);
+    return {
+      ...normalized,
+      lot_long_usdt: null,
+      lot_short_usdt: null,
+      lot_balance_usdt: null,
+    };
+  }
 };
 
 export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): Promise<Strategy> => {

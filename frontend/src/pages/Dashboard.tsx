@@ -136,7 +136,7 @@ const defaultChartSetting = (): ChartSetting => ({
 
 const AUTO_UPDATE_MIN_SEC = 5;
 const AUTO_UPDATE_MAX_SEC = 3600;
-const STRATEGY_FETCH_LIMIT = 400;
+const STRATEGY_FETCH_LIMIT = 120;
 const STRATEGY_RENDER_CHUNK = 80;
 
 const normalizeUpdateSec = (rawValue: unknown): number => {
@@ -748,6 +748,8 @@ const Dashboard: React.FC = () => {
   const [fullStrategiesLoadedByKey, setFullStrategiesLoadedByKey] = useState<{ [key: string]: boolean }>({});
   const [strategiesLoadingByKey, setStrategiesLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [strategiesErrorByKey, setStrategiesErrorByKey] = useState<{ [key: string]: string }>({});
+  const [strategyDetailsLoadedByKey, setStrategyDetailsLoadedByKey] = useState<{ [key: string]: { [strategyId: string]: boolean } }>({});
+  const [strategyDetailsLoadingByKey, setStrategyDetailsLoadingByKey] = useState<{ [key: string]: { [strategyId: string]: boolean } }>({});
   const [activeStrategyPanelsByKey, setActiveStrategyPanelsByKey] = useState<{ [key: string]: string[] }>({});
   const [newStrategyNameByKey, setNewStrategyNameByKey] = useState<{ [key: string]: string }>({});
   const [strategyActionLoading, setStrategyActionLoading] = useState<{ [key: string]: boolean }>({});
@@ -1222,9 +1224,8 @@ const Dashboard: React.FC = () => {
     }
 
     try {
-      const res = await axios.get(`/api/strategies/${keyName}`, {
+      const res = await axios.get(`/api/strategies/${keyName}/summary`, {
         params: {
-          includeLotPreview: 0,
           ...(full ? {} : { limit: STRATEGY_FETCH_LIMIT, offset: 0 }),
         },
       });
@@ -1233,6 +1234,8 @@ const Dashboard: React.FC = () => {
       const total = Number.isFinite(totalHeader) && totalHeader >= 0 ? totalHeader : payload.length;
 
       setStrategiesByKey((prev) => ({ ...prev, [keyName]: payload }));
+      setStrategyDetailsLoadedByKey((prev) => ({ ...prev, [keyName]: {} }));
+      setStrategyDetailsLoadingByKey((prev) => ({ ...prev, [keyName]: {} }));
       setStrategiesTotalByKey((prev) => ({ ...prev, [keyName]: total }));
       setFullStrategiesLoadedByKey((prev) => ({ ...prev, [keyName]: full || payload.length >= total }));
       setStrategyRenderLimitByKey((prev) => {
@@ -1277,6 +1280,61 @@ const Dashboard: React.FC = () => {
       if (!silent) {
         setStrategiesLoadingByKey((prev) => ({ ...prev, [keyName]: false }));
       }
+    }
+  };
+
+  const fetchStrategyDetails = async (keyName: string, strategyId: number, options?: { silent?: boolean }) => {
+    const strategyIdKey = String(strategyId);
+    const loadedMap = strategyDetailsLoadedByKey[keyName] || {};
+    const loadingMap = strategyDetailsLoadingByKey[keyName] || {};
+
+    if (loadedMap[strategyIdKey] || loadingMap[strategyIdKey]) {
+      return;
+    }
+
+    setStrategyDetailsLoadingByKey((prev) => ({
+      ...prev,
+      [keyName]: {
+        ...(prev[keyName] || {}),
+        [strategyIdKey]: true,
+      },
+    }));
+
+    try {
+      const res = await axios.get(`/api/strategies/${keyName}/${strategyId}`, {
+        params: {
+          includeLotPreview: 0,
+        },
+      });
+
+      const detailed = parseStrategy(res.data);
+      setStrategiesByKey((prev) => {
+        const list = prev[keyName] || [];
+        return {
+          ...prev,
+          [keyName]: list.map((strategy) => (strategy.id === strategyId ? { ...strategy, ...detailed } : strategy)),
+        };
+      });
+
+      setStrategyDetailsLoadedByKey((prev) => ({
+        ...prev,
+        [keyName]: {
+          ...(prev[keyName] || {}),
+          [strategyIdKey]: true,
+        },
+      }));
+    } catch (error) {
+      if (options?.silent !== true) {
+        console.error(error);
+      }
+    } finally {
+      setStrategyDetailsLoadingByKey((prev) => ({
+        ...prev,
+        [keyName]: {
+          ...(prev[keyName] || {}),
+          [strategyIdKey]: false,
+        },
+      }));
     }
   };
 
@@ -1973,6 +2031,8 @@ const Dashboard: React.FC = () => {
     const monitoringError = monitoringErrorByKey[keyName] || '';
     const copySourceKey = copySourceByTargetKey[keyName] || '';
     const copyLoading = copyActionLoadingByKey[keyName] || false;
+    const detailsLoadedForKey = strategyDetailsLoadedByKey[keyName] || {};
+    const detailsLoadingForKey = strategyDetailsLoadingByKey[keyName] || {};
     const totalStrategies = keyStrategies.length;
     const strategyRenderLimit = Math.min(totalStrategies, Math.max(STRATEGY_RENDER_CHUNK, Number(strategyRenderLimitByKey[keyName] || STRATEGY_RENDER_CHUNK)));
     const visibleStrategies = keyStrategies.slice(0, strategyRenderLimit);
@@ -2419,8 +2479,17 @@ const Dashboard: React.FC = () => {
                         destroyInactivePanel
                         onChange={(key) => {
                           const panels = Array.isArray(key) ? key.map((item) => String(item)) : key ? [String(key)] : [];
+                          const prevPanels = activeStrategyPanelsByKey[keyName] || [];
+                          const openedPanels = panels.filter((panelId) => !prevPanels.includes(panelId));
                           setActiveStrategyPanelsByKey((prev) => {
                             return { ...prev, [keyName]: panels };
+                          });
+
+                          openedPanels.forEach((panelId) => {
+                            const strategyId = Number(panelId);
+                            if (Number.isFinite(strategyId) && strategyId > 0) {
+                              void fetchStrategyDetails(keyName, strategyId, { silent: true });
+                            }
                           });
                         }}
                         items={visibleStrategies.map((strategy) => {
@@ -2468,6 +2537,9 @@ const Dashboard: React.FC = () => {
                               : 'default';
                           const strategyBadgeText = strategy.last_error ? 'ERR' : strategy.is_active ? 'RUN' : 'PAUSE';
                           const isExpandedStrategyPanel = activeStrategyPanels.includes(String(strategy.id));
+                          const strategyIdKey = String(strategy.id);
+                          const detailsLoaded = detailsLoadedForKey[strategyIdKey] === true;
+                          const detailsLoading = detailsLoadingForKey[strategyIdKey] === true;
 
                           return {
                             key: String(strategy.id),
@@ -2488,6 +2560,12 @@ const Dashboard: React.FC = () => {
                             children: (() => {
                               if (!isExpandedStrategyPanel) {
                                 return <div style={{ color: '#6b7280' }}>Expand strategy to load full controls and chart preview.</div>;
+                              }
+
+                              if (!detailsLoaded) {
+                                return detailsLoading
+                                  ? <Spin size="small" />
+                                  : <Alert type="info" showIcon message="Loading strategy details..." />;
                               }
 
                               // ── body vars (only run for visible + expanded items) ──
