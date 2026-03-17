@@ -65,6 +65,7 @@ type UpdateRequestEvent = {
 
 const UPDATE_REQUEST_LOG_KEY = 'btdd_update_request_log_v1';
 const MAX_UPDATE_REQUEST_LOG = 20;
+const SETTINGS_UI_MARKER = 'ui-check-2026-03-18-a';
 
 const readUpdateRequestLog = (): UpdateRequestEvent[] => {
   try {
@@ -435,6 +436,9 @@ const Settings: React.FC = () => {
       </Card>
 
       <Card className="battletoads-card" title={t('settings.update.title', 'Git Update (VPS)')} style={{ marginTop: 16 }}>
+        <div style={{ marginBottom: 8, fontSize: 12, color: '#6b7280' }}>
+          UI marker: {SETTINGS_UI_MARKER}
+        </div>
         <Space wrap style={{ marginBottom: 12 }}>
           <Button loading={updateLoading} onClick={() => { void fetchUpdateStatus(true); }}>
             {t('settings.update.check', 'Check updates')}
