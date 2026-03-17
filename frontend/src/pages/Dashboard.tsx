@@ -3,6 +3,7 @@ import { Card, Button, Switch, Row, Col, Form, Input, Select, Collapse, Spin, Al
 import axios from 'axios';
 import ChartComponent, { HoverOHLC, OverlayLine, ChartMarker } from '../components/ChartComponent';
 import StatusIndicator from '../components/StatusIndicator';
+import StrategyVirtualList from '../components/StrategyVirtualList';
 
 /* eslint-disable react-hooks/exhaustive-deps */
 
@@ -136,7 +137,6 @@ const defaultChartSetting = (): ChartSetting => ({
 
 const AUTO_UPDATE_MIN_SEC = 5;
 const AUTO_UPDATE_MAX_SEC = 3600;
-const STRATEGY_RENDER_CHUNK = 120;
 const STRATEGY_FETCH_LIMIT = 400;
 
 const normalizeUpdateSec = (rawValue: unknown): number => {
@@ -743,7 +743,6 @@ const Dashboard: React.FC = () => {
   const [balancesError, setBalancesError] = useState<{ [key: string]: string }>({});
   const [symbolsError, setSymbolsError] = useState<{ [key: string]: string }>({});
   const [strategiesByKey, setStrategiesByKey] = useState<{ [key: string]: DDStrategy[] }>({});
-  const [strategyRenderLimitByKey, setStrategyRenderLimitByKey] = useState<{ [key: string]: number }>({});
   const [strategiesTotalByKey, setStrategiesTotalByKey] = useState<{ [key: string]: number }>({});
   const [fullStrategiesLoadedByKey, setFullStrategiesLoadedByKey] = useState<{ [key: string]: boolean }>({});
   const [strategiesLoadingByKey, setStrategiesLoadingByKey] = useState<{ [key: string]: boolean }>({});
@@ -1178,35 +1177,6 @@ const Dashboard: React.FC = () => {
 
   const strategyActionKey = (keyName: string, strategyId: number, action: string) => `${keyName}:${strategyId}:${action}`;
 
-  const increaseStrategyRenderLimit = (keyName: string, total: number) => {
-    setStrategyRenderLimitByKey((prev) => {
-      const current = Math.max(STRATEGY_RENDER_CHUNK, Number(prev[keyName] || STRATEGY_RENDER_CHUNK));
-      const nextValue = Math.min(Math.max(total, STRATEGY_RENDER_CHUNK), current + STRATEGY_RENDER_CHUNK);
-
-      if (nextValue === current) {
-        return prev;
-      }
-
-      return {
-        ...prev,
-        [keyName]: nextValue,
-      };
-    });
-  };
-
-  const resetStrategyRenderLimit = (keyName: string, total: number) => {
-    setStrategyRenderLimitByKey((prev) => {
-      const nextValue = Math.min(Math.max(total, 0), STRATEGY_RENDER_CHUNK);
-      if (prev[keyName] === nextValue) {
-        return prev;
-      }
-      return {
-        ...prev,
-        [keyName]: nextValue,
-      };
-    });
-  };
-
   const fetchStrategies = async (keyName: string, options?: { silent?: boolean; full?: boolean }) => {
     const silent = options?.silent === true;
     const full = options?.full === true || fullStrategiesLoadedByKey[keyName] === true;
@@ -1235,20 +1205,6 @@ const Dashboard: React.FC = () => {
       setStrategiesByKey((prev) => ({ ...prev, [keyName]: payload }));
       setStrategiesTotalByKey((prev) => ({ ...prev, [keyName]: total }));
       setFullStrategiesLoadedByKey((prev) => ({ ...prev, [keyName]: full || payload.length >= total }));
-      setStrategyRenderLimitByKey((prev) => {
-        const previousLimit = Number(prev[keyName] || 0);
-        const defaultLimit = Math.min(payload.length, STRATEGY_RENDER_CHUNK);
-        const nextLimit = previousLimit > 0 ? Math.min(previousLimit, payload.length) : defaultLimit;
-
-        if (previousLimit === nextLimit) {
-          return prev;
-        }
-
-        return {
-          ...prev,
-          [keyName]: nextLimit,
-        };
-      });
       setActiveStrategyPanelsByKey((prev) => {
         const currentPanels = prev[keyName] || [];
         const existingIds = new Set(payload.map((strategy) => String(strategy.id)));
@@ -1937,13 +1893,6 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const handleStrategyPanelChange = (keyName: string, key: string | string[]) => {
-    const panels = Array.isArray(key) ? key.map((item) => String(item)) : key ? [String(key)] : [];
-    setActiveStrategyPanelsByKey((prev) => ({
-      ...prev,
-      [keyName]: panels,
-    }));
-  };
 
   const collapseItems = apiKeys.map((key) => {
     const keyName = key.name;
@@ -1981,9 +1930,6 @@ const Dashboard: React.FC = () => {
     const copySourceKey = copySourceByTargetKey[keyName] || '';
     const copyLoading = copyActionLoadingByKey[keyName] || false;
     const totalStrategies = keyStrategies.length;
-    const strategyRenderLimit = Math.min(totalStrategies, Math.max(STRATEGY_RENDER_CHUNK, Number(strategyRenderLimitByKey[keyName] || STRATEGY_RENDER_CHUNK)));
-    const visibleStrategies = keyStrategies.slice(0, strategyRenderLimit);
-    const hasHiddenStrategies = totalStrategies > visibleStrategies.length;
     const runningStrategies = keyStrategies.filter((strategy) => strategy.is_active).length;
     const pausedStrategies = Math.max(0, totalStrategies - runningStrategies);
     const errorStrategies = keyStrategies.filter((strategy) => Boolean(String(strategy.last_error || '').trim())).length;
@@ -2351,7 +2297,7 @@ const Dashboard: React.FC = () => {
                   </Button>
                   <Tag color="blue">Chart preview is configured once in API key Chart Settings</Tag>
                   <Tag color="green">Trading pair is configured per strategy below</Tag>
-                  <Tag color="cyan">rendered: {visibleStrategies.length}/{totalStrategies}</Tag>
+                  <Tag color="cyan">total: {totalStrategies}</Tag>
                   {!keyFullLoaded ? <Tag color="gold">light mode: {totalStrategies}/{keyStrategiesTotal}</Tag> : null}
                   {!keyFullLoaded ? (
                     <Button
@@ -2361,22 +2307,6 @@ const Dashboard: React.FC = () => {
                       }}
                     >
                       Load all strategies
-                    </Button>
-                  ) : null}
-                  {hasHiddenStrategies ? (
-                    <Button
-                      size="small"
-                      onClick={() => increaseStrategyRenderLimit(keyName, totalStrategies)}
-                    >
-                      Show +{STRATEGY_RENDER_CHUNK}
-                    </Button>
-                  ) : null}
-                  {visibleStrategies.length > STRATEGY_RENDER_CHUNK ? (
-                    <Button
-                      size="small"
-                      onClick={() => resetStrategyRenderLimit(keyName, totalStrategies)}
-                    >
-                      Show less
                     </Button>
                   ) : null}
 
@@ -2421,18 +2351,19 @@ const Dashboard: React.FC = () => {
                   : keyStrategies.length === 0
                     ? <Alert type="info" showIcon message="No strategy selected: balance, chart and positions remain visible." />
                     : (
-                      <Collapse
-                        activeKey={activeStrategyPanels}
-                        onChange={(key) => handleStrategyPanelChange(keyName, key)}
-                        items={visibleStrategies.map((strategy) => {
-                          const saveLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'save')]);
-                          const executeLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'execute')]);
-                          const pauseLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'pause')]);
-                          const stopLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'stop')]);
-                          const cancelOrdersLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'cancel-orders')]);
-                          const closePositionsLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'close-positions')]);
-                          const deleteLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'delete')]);
-                          const isExpandedStrategyPanel = activeStrategyPanels.includes(String(strategy.id));
+                      <StrategyVirtualList
+                        activeKeys={activeStrategyPanels}
+                        onToggleKey={(strategyId) => {
+                          setActiveStrategyPanelsByKey((prev) => {
+                            const current = prev[keyName] || [];
+                            const next = current.includes(strategyId)
+                              ? current.filter((id) => id !== strategyId)
+                              : [...current, strategyId];
+                            return { ...prev, [keyName]: next };
+                          });
+                        }}
+                        items={keyStrategies.map((strategy) => {
+                          // ── label vars (lightweight, run for all visible items) ──
                           const strategyPositions = keyPositions.filter((position: any) => {
                             const symbol = String(position?.symbol || '').toUpperCase();
                             const size = Number.parseFloat(String(position?.size || '0'));
@@ -2441,14 +2372,6 @@ const Dashboard: React.FC = () => {
                           const pairSymbols = [strategy.base_symbol, strategy.quote_symbol]
                             .map((symbol) => String(symbol || '').toUpperCase())
                             .filter((symbol, index, array) => Boolean(symbol) && array.indexOf(symbol) === index);
-                          const strategySymbolOptions = Array.from(
-                            new Set(
-                              [
-                                ...pairSymbols,
-                                ...(symbols[keyName] || []).map((symbol) => String(symbol || '').toUpperCase()),
-                              ].filter((symbol) => Boolean(symbol))
-                            )
-                          );
                           const orderedPairRows = pairSymbols.map((symbol) => {
                             const position = strategyPositions.find(
                               (item: any) => String(item?.symbol || '').toUpperCase() === symbol
@@ -2483,54 +2406,6 @@ const Dashboard: React.FC = () => {
                               ? 'processing'
                               : 'default';
                           const strategyBadgeText = strategy.last_error ? 'ERR' : strategy.is_active ? 'RUN' : 'PAUSE';
-                          const donchian = isExpandedStrategyPanel && strategy.show_indicators
-                            ? buildDonchianSnapshot(
-                              Array.isArray(keyChartData) ? keyChartData : [],
-                              strategy.price_channel_length,
-                              strategy.detection_source,
-                              `${keyName}:${strategy.id}`
-                            )
-                            : null;
-                          const donchianHighValue = donchian
-                            ? pickOverlayValueAtTime(donchian.highSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
-                            : null;
-                          const donchianLowValue = donchian
-                            ? pickOverlayValueAtTime(donchian.lowSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
-                            : null;
-                          const donchianCenterValue = donchian
-                            ? pickOverlayValueAtTime(donchian.centerSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
-                            : null;
-                          const tpWave = isExpandedStrategyPanel && strategy.show_indicators
-                            ? buildTpWaveSnapshot(donchian, strategy.take_profit_percent, `${keyName}:${strategy.id}`)
-                            : null;
-                          const tpLongWaveValue = tpWave
-                            ? pickOverlayValueAtTime(tpWave.longSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
-                            : null;
-                          const tpShortWaveValue = tpWave
-                            ? pickOverlayValueAtTime(tpWave.shortSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
-                            : null;
-                          const entryOverlay = isExpandedStrategyPanel && strategy.show_positions_on_chart && strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
-                            ? buildEntryOverlay(
-                              Array.isArray(keyChartData) ? keyChartData : [],
-                              `${keyName}:${strategy.id}:entry`,
-                              Number(strategy.entry_ratio)
-                            )
-                            : null;
-                          const activeTpRatio = strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
-                            ? strategy.state === 'long'
-                              ? Number(strategy.entry_ratio) * (1 + strategy.take_profit_percent / 100)
-                              : strategy.state === 'short'
-                                ? Number(strategy.entry_ratio) / (1 + strategy.take_profit_percent / 100)
-                                : null
-                            : null;
-                          const tradeMarkers = isExpandedStrategyPanel && strategy.display_on_chart && strategy.show_trades_on_chart
-                            ? buildStrategyTradeMarkers(keyTrades, pairSymbols)
-                            : [];
-                          const strategyOverlays: OverlayLine[] = [
-                            ...(strategy.display_on_chart && strategy.show_indicators && donchian ? donchian.overlays : []),
-                            ...(strategy.display_on_chart && strategy.show_indicators && tpWave ? tpWave.overlays : []),
-                            ...(strategy.display_on_chart && strategy.show_positions_on_chart && entryOverlay ? [entryOverlay] : []),
-                          ];
 
                           return {
                             key: String(strategy.id),
@@ -2548,7 +2423,72 @@ const Dashboard: React.FC = () => {
                                 <span style={{ color: '#4b5563', fontSize: 12 }}>{collapsedPairSummary || 'Pair positions: flat'}</span>
                               </Space>
                             ),
-                            children: (
+                            renderBody: () => {
+                              // ── body vars (only run for visible + expanded items) ──
+                              const saveLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'save')]);
+                              const executeLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'execute')]);
+                              const pauseLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'pause')]);
+                              const stopLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'stop')]);
+                              const cancelOrdersLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'cancel-orders')]);
+                              const closePositionsLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'close-positions')]);
+                              const deleteLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'delete')]);
+                              const strategySymbolOptions = Array.from(
+                                new Set(
+                                  [
+                                    ...pairSymbols,
+                                    ...(symbols[keyName] || []).map((symbol) => String(symbol || '').toUpperCase()),
+                                  ].filter((symbol) => Boolean(symbol))
+                                )
+                              );
+                              const donchian = strategy.show_indicators
+                                ? buildDonchianSnapshot(
+                                  Array.isArray(keyChartData) ? keyChartData : [],
+                                  strategy.price_channel_length,
+                                  strategy.detection_source,
+                                  `${keyName}:${strategy.id}`
+                                )
+                                : null;
+                              const donchianHighValue = donchian
+                                ? pickOverlayValueAtTime(donchian.highSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
+                                : null;
+                              const donchianLowValue = donchian
+                                ? pickOverlayValueAtTime(donchian.lowSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
+                                : null;
+                              const donchianCenterValue = donchian
+                                ? pickOverlayValueAtTime(donchian.centerSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
+                                : null;
+                              const tpWave = strategy.show_indicators
+                                ? buildTpWaveSnapshot(donchian, strategy.take_profit_percent, `${keyName}:${strategy.id}`)
+                                : null;
+                              const tpLongWaveValue = tpWave
+                                ? pickOverlayValueAtTime(tpWave.longSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
+                                : null;
+                              const tpShortWaveValue = tpWave
+                                ? pickOverlayValueAtTime(tpWave.shortSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
+                                : null;
+                              const entryOverlay = strategy.show_positions_on_chart && strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
+                                ? buildEntryOverlay(
+                                  Array.isArray(keyChartData) ? keyChartData : [],
+                                  `${keyName}:${strategy.id}:entry`,
+                                  Number(strategy.entry_ratio)
+                                )
+                                : null;
+                              const activeTpRatio = strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
+                                ? strategy.state === 'long'
+                                  ? Number(strategy.entry_ratio) * (1 + strategy.take_profit_percent / 100)
+                                  : strategy.state === 'short'
+                                    ? Number(strategy.entry_ratio) / (1 + strategy.take_profit_percent / 100)
+                                    : null
+                                : null;
+                              const tradeMarkers = strategy.display_on_chart && strategy.show_trades_on_chart
+                                ? buildStrategyTradeMarkers(keyTrades, pairSymbols)
+                                : [];
+                              const strategyOverlays: OverlayLine[] = [
+                                ...(strategy.display_on_chart && strategy.show_indicators && donchian ? donchian.overlays : []),
+                                ...(strategy.display_on_chart && strategy.show_indicators && tpWave ? tpWave.overlays : []),
+                                ...(strategy.display_on_chart && strategy.show_positions_on_chart && entryOverlay ? [entryOverlay] : []),
+                              ];
+                              return (
                               <>
                                 {strategy.last_action ? <Alert type="info" showIcon message={`Last action: ${strategy.last_action}`} style={{ marginBottom: 12 }} /> : null}
                                 {strategy.last_error ? <Alert type="error" showIcon message={strategy.last_error} style={{ marginBottom: 12 }} /> : null}
@@ -3087,7 +3027,8 @@ const Dashboard: React.FC = () => {
                                   </Col>
                                 </Row>
                               </>
-                            ),
+                              );
+                            },
                           };
                         })}
                       />

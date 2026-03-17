@@ -77,6 +77,7 @@ const Settings: React.FC = () => {
     fetchApiKeys();
     void fetchUpdateStatus(true);
     void fetchUpdateJob();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -91,6 +92,7 @@ const Settings: React.FC = () => {
     }, 5000);
 
     return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [updateJob?.activeState]);
 
   const fetchApiKeys = async () => {
