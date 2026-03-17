@@ -7,6 +7,10 @@ const execFileAsync = promisify(execFile);
 const MAX_BUFFER = 4 * 1024 * 1024;
 const UPDATE_UNIT_NAME = 'btdd-git-update';
 
+const stripAnsi = (value: string): string => {
+  return String(value || '').replace(/\x1b\[[0-9;]*m/g, '');
+};
+
 export type UpdateCommit = {
   hash: string;
   shortHash: string;
@@ -54,12 +58,12 @@ const command = async (cmd: string, args: string[], cwd?: string): Promise<{ std
     });
 
     return {
-      stdout: String(stdout || '').trim(),
-      stderr: String(stderr || '').trim(),
+      stdout: stripAnsi(String(stdout || '')).trim(),
+      stderr: stripAnsi(String(stderr || '')).trim(),
     };
   } catch (error: any) {
-    const stderr = String(error?.stderr || '').trim();
-    const stdout = String(error?.stdout || '').trim();
+    const stderr = stripAnsi(String(error?.stderr || '')).trim();
+    const stdout = stripAnsi(String(error?.stdout || '')).trim();
     const message = stderr || stdout || String(error?.message || 'Unknown command error');
     throw new Error(`${cmd} ${args.join(' ')} failed: ${message}`);
   }
@@ -289,16 +293,38 @@ export const triggerGitUpdate = async (): Promise<{ started: boolean; unit: stri
   const branch = status.branch || 'main';
   const remoteCmd = `APP_DIR=${shellQuote(status.appDir)} BRANCH=${shellQuote(branch)} bash ${shellQuote(scriptPath)}`;
 
-  const runResult = await command('systemd-run', [
-    '--unit',
-    UPDATE_UNIT_NAME,
-    '--collect',
-    '--property',
-    'Type=oneshot',
-    '/bin/bash',
-    '-lc',
-    remoteCmd,
-  ]);
+  let runResult: { stdout: string; stderr: string };
+  try {
+    runResult = await command('systemd-run', [
+      '--unit',
+      UPDATE_UNIT_NAME,
+      '--collect',
+      '--property',
+      'Type=oneshot',
+      '/bin/bash',
+      '-lc',
+      remoteCmd,
+    ]);
+  } catch (error: any) {
+    const baseError = String(error?.message || 'Failed to start git update job.').trim();
+
+    try {
+      const job = await getGitUpdateJobStatus();
+      const logLines = String(job.logs || '')
+        .split('\n')
+        .map((line) => stripAnsi(line).trim())
+        .filter(Boolean);
+      const tail = logLines.slice(-6).join(' | ');
+
+      if (tail) {
+        throw new Error(`${baseError} | Job tail: ${tail}`);
+      }
+    } catch {
+      // Fallback to original error if job status cannot be read.
+    }
+
+    throw new Error(baseError);
+  }
 
   const output = [runResult.stdout, runResult.stderr].filter(Boolean).join('\n').trim();
   return {
