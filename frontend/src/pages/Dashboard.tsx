@@ -2416,6 +2416,7 @@ const Dashboard: React.FC = () => {
                     : (
                       <Collapse
                         activeKey={activeStrategyPanels}
+                        destroyInactivePanel
                         onChange={(key) => {
                           const panels = Array.isArray(key) ? key.map((item) => String(item)) : key ? [String(key)] : [];
                           setActiveStrategyPanelsByKey((prev) => {
@@ -2466,6 +2467,7 @@ const Dashboard: React.FC = () => {
                               ? 'processing'
                               : 'default';
                           const strategyBadgeText = strategy.last_error ? 'ERR' : strategy.is_active ? 'RUN' : 'PAUSE';
+                          const isExpandedStrategyPanel = activeStrategyPanels.includes(String(strategy.id));
 
                           return {
                             key: String(strategy.id),
@@ -2484,6 +2486,10 @@ const Dashboard: React.FC = () => {
                               </Space>
                             ),
                             children: (() => {
+                              if (!isExpandedStrategyPanel) {
+                                return <div style={{ color: '#6b7280' }}>Expand strategy to load full controls and chart preview.</div>;
+                              }
+
                               // ── body vars (only run for visible + expanded items) ──
                               const saveLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'save')]);
                               const executeLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'execute')]);
