@@ -3,7 +3,6 @@ import { Card, Button, Switch, Row, Col, Form, Input, Select, Collapse, Spin, Al
 import axios from 'axios';
 import ChartComponent, { HoverOHLC, OverlayLine, ChartMarker } from '../components/ChartComponent';
 import StatusIndicator from '../components/StatusIndicator';
-import StrategyVirtualList from '../components/StrategyVirtualList';
 
 /* eslint-disable react-hooks/exhaustive-deps */
 
@@ -2351,15 +2350,12 @@ const Dashboard: React.FC = () => {
                   : keyStrategies.length === 0
                     ? <Alert type="info" showIcon message="No strategy selected: balance, chart and positions remain visible." />
                     : (
-                      <StrategyVirtualList
-                        activeKeys={activeStrategyPanels}
-                        onToggleKey={(strategyId) => {
+                      <Collapse
+                        activeKey={activeStrategyPanels}
+                        onChange={(key) => {
+                          const panels = Array.isArray(key) ? key.map((item) => String(item)) : key ? [String(key)] : [];
                           setActiveStrategyPanelsByKey((prev) => {
-                            const current = prev[keyName] || [];
-                            const next = current.includes(strategyId)
-                              ? current.filter((id) => id !== strategyId)
-                              : [...current, strategyId];
-                            return { ...prev, [keyName]: next };
+                            return { ...prev, [keyName]: panels };
                           });
                         }}
                         items={keyStrategies.map((strategy) => {
@@ -2423,7 +2419,7 @@ const Dashboard: React.FC = () => {
                                 <span style={{ color: '#4b5563', fontSize: 12 }}>{collapsedPairSummary || 'Pair positions: flat'}</span>
                               </Space>
                             ),
-                            renderBody: () => {
+                            children: (() => {
                               // ── body vars (only run for visible + expanded items) ──
                               const saveLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'save')]);
                               const executeLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'execute')]);
@@ -3028,7 +3024,7 @@ const Dashboard: React.FC = () => {
                                 </Row>
                               </>
                               );
-                            },
+                            })(),
                           };
                         })}
                       />
