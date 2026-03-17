@@ -55,6 +55,25 @@ type UpdateJob = {
   logs: string;
 };
 
+const extractApiErrorMessage = (error: any, fallback: string): string => {
+  const apiError = error?.response?.data?.error;
+  if (typeof apiError === 'string' && apiError.trim()) {
+    return apiError.trim();
+  }
+
+  const apiText = error?.response?.data;
+  if (typeof apiText === 'string' && apiText.trim()) {
+    return apiText.trim();
+  }
+
+  const messageText = error?.message;
+  if (typeof messageText === 'string' && messageText.trim()) {
+    return messageText.trim();
+  }
+
+  return fallback;
+};
+
 const Settings: React.FC = () => {
   const { t } = useI18n();
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
@@ -115,7 +134,7 @@ const Settings: React.FC = () => {
       setUpdateStatus(res.data as UpdateStatus);
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || t('settings.msg.statusLoadError', 'Failed to load git update status'));
+      message.error(extractApiErrorMessage(error, t('settings.msg.statusLoadError', 'Failed to load git update status')));
     } finally {
       setUpdateLoading(false);
     }
@@ -128,7 +147,7 @@ const Settings: React.FC = () => {
       setUpdateJob(res.data as UpdateJob);
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || t('settings.msg.jobLoadError', 'Failed to load git update job status'));
+      message.error(extractApiErrorMessage(error, t('settings.msg.jobLoadError', 'Failed to load git update job status')));
     } finally {
       setJobLoading(false);
     }
@@ -147,7 +166,7 @@ const Settings: React.FC = () => {
       }, 1200);
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || t('settings.msg.runError', 'Failed to start git update'));
+      message.error(extractApiErrorMessage(error, t('settings.msg.runError', 'Failed to start git update')));
     } finally {
       setUpdateRunLoading(false);
     }

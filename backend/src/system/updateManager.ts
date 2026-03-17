@@ -65,6 +65,14 @@ const command = async (cmd: string, args: string[], cwd?: string): Promise<{ std
   }
 };
 
+const ignoreCommandError = async (cmd: string, args: string[], cwd?: string): Promise<void> => {
+  try {
+    await command(cmd, args, cwd);
+  } catch {
+    // Best-effort cleanup only.
+  }
+};
+
 const parseCommitLine = (line: string): UpdateCommit | null => {
   const parts = String(line || '').split('|');
   if (parts.length < 4) {
@@ -259,6 +267,15 @@ export const triggerGitUpdate = async (): Promise<{ started: boolean; unit: stri
   }
 
   await command('which', ['systemd-run']);
+
+  const currentJob = await getGitUpdateJobStatus();
+  const activeState = String(currentJob.activeState || '').toLowerCase();
+  if (activeState === 'active' || activeState === 'activating') {
+    throw new Error(`Git update job is already running (${UPDATE_UNIT_NAME}: ${currentJob.activeState}/${currentJob.subState}).`);
+  }
+
+  await ignoreCommandError('systemctl', ['stop', UPDATE_UNIT_NAME]);
+  await ignoreCommandError('systemctl', ['reset-failed', UPDATE_UNIT_NAME]);
 
   const branch = status.branch || 'main';
   const remoteCmd = `APP_DIR=${shellQuote(status.appDir)} BRANCH=${shellQuote(branch)} bash ${shellQuote(scriptPath)}`;
