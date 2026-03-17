@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Card, Button, Switch, Row, Col, Form, Input, Select, Collapse, Spin, Alert, Space, InputNumber, Tag, Popconfirm, message, Divider, Badge } from 'antd';
 import axios from 'axios';
 import ChartComponent, { HoverOHLC, OverlayLine, ChartMarker } from '../components/ChartComponent';
@@ -756,8 +756,21 @@ const Dashboard: React.FC = () => {
   const [copySourceByTargetKey, setCopySourceByTargetKey] = useState<{ [key: string]: string }>({});
   const [copyActionLoadingByKey, setCopyActionLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [uiTheme, setUiTheme] = useState<'classic' | 'battletoads'>('classic');
+  const requestLocksRef = useRef<Record<string, boolean>>({});
 
   const isApiKeyActive = (keyName: string): boolean => apiKeyToggles[keyName] ?? true;
+  const acquireRequestLock = (lockKey: string): boolean => {
+    if (requestLocksRef.current[lockKey]) {
+      return false;
+    }
+
+    requestLocksRef.current[lockKey] = true;
+    return true;
+  };
+
+  const releaseRequestLock = (lockKey: string) => {
+    delete requestLocksRef.current[lockKey];
+  };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -931,6 +944,7 @@ const Dashboard: React.FC = () => {
       for (const key of keys) {
         const panelOpened = activePanel.includes(String(key.id));
         const shouldLoadFullStrategies = key.name === preferredKeyName || panelOpened;
+        const keySettings = chartSettings[key.name] || defaultChartSetting();
 
         if (mergedToggles[key.name]) {
           void fetchKeyStatus(key.name);
@@ -941,7 +955,9 @@ const Dashboard: React.FC = () => {
           if (shouldLoadFullStrategies) {
             void fetchStrategies(key.name);
           }
-          void fetchMonitoring(key.name, { capture: true });
+          if (shouldLoadFullStrategies && keySettings.showMonitoring !== false) {
+            void fetchMonitoring(key.name, { capture: true });
+          }
         } else {
           setKeyStatuses((prev) => ({ ...prev, [key.name]: { status: 'warning', message: 'Disabled' } }));
           setBalances((prev) => ({ ...prev, [key.name]: [] }));
@@ -1012,6 +1028,11 @@ const Dashboard: React.FC = () => {
       return;
     }
 
+    const requestLockKey = `trades:${keyName}`;
+    if (!acquireRequestLock(requestLockKey)) {
+      return;
+    }
+
     try {
       const res = await axios.get(`/api/trades/${keyName}`, {
         params: {
@@ -1026,6 +1047,8 @@ const Dashboard: React.FC = () => {
         console.error(error);
       }
       setTradesByKey((prev) => ({ ...prev, [keyName]: [] }));
+    } finally {
+      releaseRequestLock(requestLockKey);
     }
   };
 
@@ -1039,6 +1062,11 @@ const Dashboard: React.FC = () => {
 
     const capture = options?.capture === true;
     const silent = options?.silent === true;
+    const requestLockKey = `monitoring:${keyName}`;
+
+    if (!acquireRequestLock(requestLockKey)) {
+      return;
+    }
 
     if (!silent) {
       setMonitoringLoadingByKey((prev) => ({ ...prev, [keyName]: true }));
@@ -1081,6 +1109,7 @@ const Dashboard: React.FC = () => {
         }));
       }
     } finally {
+      releaseRequestLock(requestLockKey);
       if (!silent) {
         setMonitoringLoadingByKey((prev) => ({ ...prev, [keyName]: false }));
       }
@@ -1146,6 +1175,11 @@ const Dashboard: React.FC = () => {
 
   const fetchStrategies = async (keyName: string, options?: { silent?: boolean }) => {
     const silent = options?.silent === true;
+    const requestLockKey = `strategies:${keyName}`;
+
+    if (!acquireRequestLock(requestLockKey)) {
+      return;
+    }
 
     if (!silent) {
       setStrategiesLoadingByKey((prev) => ({ ...prev, [keyName]: true }));
@@ -1180,6 +1214,7 @@ const Dashboard: React.FC = () => {
         [keyName]: error?.response?.data?.error || 'Failed to load strategies',
       }));
     } finally {
+      releaseRequestLock(requestLockKey);
       if (!silent) {
         setStrategiesLoadingByKey((prev) => ({ ...prev, [keyName]: false }));
       }
@@ -1732,6 +1767,11 @@ const Dashboard: React.FC = () => {
     }
 
     const silent = options?.silent === true;
+    const requestLockKey = `chart:${keyName}`;
+
+    if (!acquireRequestLock(requestLockKey)) {
+      return;
+    }
 
     const settings = chartSettings[keyName] || defaultChartSetting();
 
@@ -1790,6 +1830,7 @@ const Dashboard: React.FC = () => {
         setSyntheticErrorByKey((prev) => ({ ...prev, [keyName]: message }));
       }
     } finally {
+      releaseRequestLock(requestLockKey);
       if (!silent) {
         setChartLoadingKey((prev) => (prev === keyName ? null : prev));
       }
