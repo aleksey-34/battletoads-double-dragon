@@ -55,6 +55,44 @@ type UpdateJob = {
   logs: string;
 };
 
+type UpdateRequestEvent = {
+  id: string;
+  at: string;
+  level: 'info' | 'success' | 'error';
+  message: string;
+  details?: string;
+};
+
+const UPDATE_REQUEST_LOG_KEY = 'btdd_update_request_log_v1';
+const MAX_UPDATE_REQUEST_LOG = 20;
+
+const readUpdateRequestLog = (): UpdateRequestEvent[] => {
+  try {
+    const raw = localStorage.getItem(UPDATE_REQUEST_LOG_KEY);
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .filter((item) => item && typeof item === 'object')
+      .map((item) => ({
+        id: String(item.id || ''),
+        at: String(item.at || ''),
+        level: (item.level === 'success' || item.level === 'error' ? item.level : 'info') as 'info' | 'success' | 'error',
+        message: String(item.message || ''),
+        details: item.details ? String(item.details) : undefined,
+      }))
+      .filter((item) => Boolean(item.id) && Boolean(item.at) && Boolean(item.message));
+  } catch {
+    return [];
+  }
+};
+
 const extractApiErrorMessage = (error: any, fallback: string): string => {
   const apiError = error?.response?.data?.error;
   if (typeof apiError === 'string' && apiError.trim()) {
@@ -83,7 +121,35 @@ const Settings: React.FC = () => {
   const [updateLoading, setUpdateLoading] = useState<boolean>(false);
   const [updateRunLoading, setUpdateRunLoading] = useState<boolean>(false);
   const [jobLoading, setJobLoading] = useState<boolean>(false);
+  const [updateRequestLog, setUpdateRequestLog] = useState<UpdateRequestEvent[]>(() => readUpdateRequestLog());
   const [form] = Form.useForm();
+
+  const appendUpdateRequestLog = (event: Omit<UpdateRequestEvent, 'id' | 'at'>) => {
+    const nextEvent: UpdateRequestEvent = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      at: new Date().toISOString(),
+      ...event,
+    };
+
+    setUpdateRequestLog((prev) => {
+      const next = [nextEvent, ...prev].slice(0, MAX_UPDATE_REQUEST_LOG);
+      try {
+        localStorage.setItem(UPDATE_REQUEST_LOG_KEY, JSON.stringify(next));
+      } catch {
+        // Ignore localStorage quota or access errors.
+      }
+      return next;
+    });
+  };
+
+  const clearUpdateRequestLog = () => {
+    setUpdateRequestLog([]);
+    try {
+      localStorage.removeItem(UPDATE_REQUEST_LOG_KEY);
+    } catch {
+      // Ignore localStorage access errors.
+    }
+  };
 
   useEffect(() => {
     const password = localStorage.getItem('password');
@@ -155,6 +221,12 @@ const Settings: React.FC = () => {
 
   const runGitUpdate = async () => {
     setUpdateRunLoading(true);
+    appendUpdateRequestLog({
+      level: 'info',
+      message: 'Install from Git clicked',
+      details: 'Request sent to /api/system/update/run',
+    });
+
     try {
       const res = await axios.post('http://localhost:3001/api/system/update/run');
       const started = Boolean(res?.data?.started);
@@ -162,9 +234,20 @@ const Settings: React.FC = () => {
       const backendMessage = String(res?.data?.message || '').trim();
 
       if (!started) {
-        message.info(backendMessage || t('settings.update.upToDate', 'Up to date'));
+        const text = backendMessage || t('settings.update.upToDate', 'Up to date');
+        message.info(text);
+        appendUpdateRequestLog({
+          level: 'info',
+          message: text,
+          details: `Unit: ${unit}`,
+        });
       } else {
         message.success(t('settings.msg.runStarted', 'Update started ({unit}). Backend may restart during deploy.', { unit }));
+        appendUpdateRequestLog({
+          level: 'success',
+          message: `Update started (${unit})`,
+          details: backendMessage || undefined,
+        });
       }
 
       setTimeout(() => {
@@ -173,7 +256,43 @@ const Settings: React.FC = () => {
       }, 1200);
     } catch (error: any) {
       console.error(error);
-      message.error(extractApiErrorMessage(error, t('settings.msg.runError', 'Failed to start git update')));
+      const errorText = extractApiErrorMessage(error, t('settings.msg.runError', 'Failed to start git update'));
+      const status = Number(error?.response?.status);
+      const method = String(error?.config?.method || '').toUpperCase();
+      const url = String(error?.config?.url || '');
+      const errorCode = String(error?.code || '');
+      const responseData = error?.response?.data;
+      const backendErrorText = typeof responseData?.error === 'string'
+        ? responseData.error
+        : typeof responseData === 'string'
+          ? responseData
+          : '';
+
+      const detailsParts: string[] = [];
+      if (Number.isFinite(status)) {
+        detailsParts.push(`HTTP ${status}`);
+      }
+      if (method || url) {
+        detailsParts.push(`${method || 'REQUEST'} ${url || '/api/system/update/run'}`);
+      }
+      if (errorCode) {
+        detailsParts.push(`code=${errorCode}`);
+      }
+      if (backendErrorText && backendErrorText !== errorText) {
+        detailsParts.push(backendErrorText);
+      }
+
+      message.error(errorText);
+      appendUpdateRequestLog({
+        level: 'error',
+        message: errorText,
+        details: detailsParts.join(' | ') || undefined,
+      });
+
+      setTimeout(() => {
+        void fetchUpdateJob();
+        void fetchUpdateStatus(false);
+      }, 800);
     } finally {
       setUpdateRunLoading(false);
     }
@@ -379,6 +498,41 @@ const Settings: React.FC = () => {
             />
           </Card>
         ) : null}
+
+        <Card
+          size="small"
+          title="Update Request Log (UI)"
+          style={{ marginBottom: 10 }}
+          extra={(
+            <Button size="small" onClick={clearUpdateRequestLog} disabled={updateRequestLog.length === 0}>
+              Clear
+            </Button>
+          )}
+        >
+          {updateRequestLog.length === 0
+            ? <Alert type="info" showIcon message="No captured update request errors yet." />
+            : (
+              <List
+                size="small"
+                dataSource={updateRequestLog}
+                renderItem={(event) => {
+                  const tagColor = event.level === 'success' ? 'green' : event.level === 'error' ? 'red' : 'blue';
+                  const atLabel = Number.isFinite(Date.parse(event.at))
+                    ? new Date(event.at).toLocaleString()
+                    : event.at;
+
+                  return (
+                    <List.Item>
+                      <List.Item.Meta
+                        title={<Space><Tag color={tagColor}>{event.level.toUpperCase()}</Tag><span>{event.message}</span></Space>}
+                        description={event.details ? `${atLabel} | ${event.details}` : atLabel}
+                      />
+                    </List.Item>
+                  );
+                }}
+              />
+            )}
+        </Card>
 
         {updateJob ? (
           <Card size="small" title={t('settings.update.job', 'Update Job')}>
