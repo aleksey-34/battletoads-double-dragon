@@ -420,11 +420,23 @@ export const setTradingSystemActivation = async (
 export const runTradingSystemBacktest = async (
   apiKeyName: string,
   systemId: number,
-  requestPatch?: Partial<BacktestRunRequest>
+  requestPatch?: Partial<BacktestRunRequest> & {
+    memberWeights?: Record<string, number>;
+    enabledMembers?: Record<string, boolean>;
+  }
 ): Promise<BacktestRunResult> => {
   const system = await getTradingSystem(apiKeyName, systemId);
+
+  const enabledMembersPatch = requestPatch?.enabledMembers || {};
+  const memberWeightsPatch = requestPatch?.memberWeights || {};
+
+  const enabledMembers = system.members.filter((member) => {
+    const override = enabledMembersPatch[String(member.strategy_id)];
+    return override === undefined ? member.is_enabled : override === true;
+  });
+
   const strategyIds = system.members
-    .filter((member) => member.is_enabled)
+    .filter((member) => enabledMembers.some((enabled) => enabled.strategy_id === member.strategy_id))
     .map((member) => Number(member.strategy_id))
     .filter((id) => Number.isFinite(id) && id > 0);
 
@@ -432,11 +444,29 @@ export const runTradingSystemBacktest = async (
     throw new Error(`Trading system ${systemId} has no enabled members to backtest`);
   }
 
+  const weightedMembers = enabledMembers.map((member) => {
+    const overrideWeight = Number(memberWeightsPatch[String(member.strategy_id)]);
+    const weight = Number.isFinite(overrideWeight) ? overrideWeight : Number(member.weight);
+    return Math.max(0, weight);
+  });
+
+  const avgWeight = weightedMembers.length > 0
+    ? weightedMembers.reduce((sum, value) => sum + value, 0) / weightedMembers.length
+    : 1;
+
+  const normalizedRiskMultiplier = Number.isFinite(avgWeight) && avgWeight > 0 ? avgWeight : 1;
+
+  const incomingInitial = Number(requestPatch?.initialBalance);
+  const initialBalance = Number.isFinite(incomingInitial) && incomingInitial > 0
+    ? incomingInitial
+    : 1000 * normalizedRiskMultiplier;
+
   return runBacktest({
     ...(requestPatch || {}),
     apiKeyName,
     mode: 'portfolio',
     strategyIds,
+    initialBalance,
     strategyId: undefined,
   });
 };

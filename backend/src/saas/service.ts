@@ -1252,21 +1252,39 @@ export const previewStrategyClientOffer = async (
   tradeFrequencyScore?: number
 ) => {
   const state = await getStrategyClientState(tenantId);
-  if (!state.capabilities?.backtest) {
-    throw new Error('Backtest preview is not available for the current plan');
-  }
-
-  if (!state.catalog) {
-    throw new Error('Client catalog JSON not found in results/.');
-  }
-
   const sweep = loadLatestSweep();
   const period = buildPeriodInfo(sweep);
-  const offer = findOfferById(state.catalog, offerId);
   const resolvedRisk = riskLevel || (state.profile?.risk_level as Level3) || 'medium';
   const resolvedTradeFrequency = tradeFrequencyLevel || (state.profile?.trade_frequency_level as Level3) || 'medium';
   const normalizedRiskScore = normalizePreferenceScore(riskScore, resolvedRisk);
   const normalizedTradeFrequencyScore = normalizePreferenceScore(tradeFrequencyScore, resolvedTradeFrequency);
+  const controls = {
+    riskScore: normalizedRiskScore,
+    tradeFrequencyScore: normalizedTradeFrequencyScore,
+    riskLevel: preferenceScoreToLevel(normalizedRiskScore),
+    tradeFrequencyLevel: preferenceScoreToLevel(normalizedTradeFrequencyScore),
+  };
+
+  if (!state.capabilities?.backtest || !state.catalog) {
+    const latestPreview = (state.profile?.latestPreview || {}) as Record<string, any>;
+    const cachedPreview = (latestPreview.preview || latestPreview) as Record<string, any>;
+
+    return {
+      offer: null,
+      preset: null,
+      controls,
+      period,
+      preview: {
+        source: 'cached_preview_fallback',
+        summary: cachedPreview.summary || null,
+        equity: cachedPreview.equity || [],
+        trades: cachedPreview.trades || [],
+        blockedByPlan: !state.capabilities?.backtest,
+      },
+    };
+  }
+
+  const offer = findOfferById(state.catalog, offerId);
   const preset = resolveOfferPresetByPreference(
     offer,
     resolvedRisk,
@@ -1274,12 +1292,6 @@ export const previewStrategyClientOffer = async (
     normalizedRiskScore,
     normalizedTradeFrequencyScore
   );
-  const controls = {
-    riskScore: normalizedRiskScore,
-    tradeFrequencyScore: normalizedTradeFrequencyScore,
-    riskLevel: preferenceScoreToLevel(normalizedRiskScore),
-    tradeFrequencyLevel: preferenceScoreToLevel(normalizedTradeFrequencyScore),
-  };
   const baseEquity = offer.equity && offer.strategy.id === preset.strategyId ? offer.equity : null;
 
   if (baseEquity && Array.isArray(baseEquity.points) && baseEquity.points.length > 0) {
@@ -1351,14 +1363,6 @@ export const previewStrategyClientSelection = async (
   }
 ) => {
   const state = await getStrategyClientState(tenantId);
-  if (!state.capabilities?.backtest) {
-    throw new Error('Backtest preview is not available for the current plan');
-  }
-
-  if (!state.catalog) {
-    throw new Error('Client catalog JSON not found in results/.');
-  }
-
   const sweep = loadLatestSweep();
   const period = buildPeriodInfo(sweep);
   const resolvedRisk = payload?.riskLevel || (state.profile?.risk_level as Level3) || 'medium';
@@ -1371,6 +1375,24 @@ export const previewStrategyClientSelection = async (
     riskLevel: preferenceScoreToLevel(normalizedRiskScore),
     tradeFrequencyLevel: preferenceScoreToLevel(normalizedTradeFrequencyScore),
   };
+
+  if (!state.capabilities?.backtest || !state.catalog) {
+    const latestPreview = (state.profile?.latestPreview || {}) as Record<string, any>;
+    const cachedPreview = (latestPreview.preview || latestPreview) as Record<string, any>;
+
+    return {
+      period,
+      controls,
+      selectedOffers: [],
+      preview: {
+        source: 'cached_preview_fallback',
+        summary: cachedPreview.summary || null,
+        equity: cachedPreview.equity || [],
+        trades: cachedPreview.trades || [],
+        blockedByPlan: !state.capabilities?.backtest,
+      },
+    };
+  }
 
   const fallbackOfferIds = Array.isArray(state.profile?.selectedOfferIds)
     ? state.profile.selectedOfferIds

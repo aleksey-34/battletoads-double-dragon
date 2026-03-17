@@ -506,8 +506,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     algofund: 'Алгофонд',
     latestCatalog: 'Последний client catalog',
     latestSweep: 'Последний historical sweep',
-    noCatalog: 'Файл client catalog не найден в results/. Сначала прогоните catalog builder на VPS или локально.',
-    noSweep: 'Файл historical sweep не найден в results/. Без него не получится materialize клиентские стратегии.',
+    noCatalog: 'Каталог стратегий временно недоступен. Проверьте сборку каталога в админ-контуре.',
+    noSweep: 'Исторический sweep временно недоступен. Материализация будет доступна после обновления данных.',
     recommendedSets: 'Рекомендуемые наборы',
     adminTsDraft: 'Черновик admin trading system',
     tenants: 'Тестовые tenants',
@@ -556,7 +556,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     openSettings: 'Открыть Settings',
     openMonitoring: 'Открыть Monitoring',
     openBacktest: 'Открыть Backtest',
-    backtestLockedHint: 'Backtest/Preview недоступен на текущем тарифе',
+    backtestLockedHint: 'Расширенный backtest недоступен на текущем тарифе. Показывается упрощенный preview.',
     settingsLockedHint: 'Изменение настроек недоступно на текущем тарифе',
     priceUsdt: 'Цена, USDT/мес',
     saveTenant: 'Сохранить tenant',
@@ -602,8 +602,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     algofund: 'Algofund',
     latestCatalog: 'Latest client catalog',
     latestSweep: 'Latest historical sweep',
-    noCatalog: 'Client catalog JSON was not found in results/. Run the catalog builder first.',
-    noSweep: 'Historical sweep JSON was not found in results/. Strategy materialization requires it.',
+    noCatalog: 'Strategy catalog is temporarily unavailable. Check catalog build in admin mode.',
+    noSweep: 'Historical sweep is temporarily unavailable. Materialization will be enabled after data refresh.',
     recommendedSets: 'Recommended sets',
     adminTsDraft: 'Admin trading system draft',
     tenants: 'Demo tenants',
@@ -652,7 +652,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     openSettings: 'Open Settings',
     openMonitoring: 'Open Monitoring',
     openBacktest: 'Open Backtest',
-    backtestLockedHint: 'Backtest/Preview is not available for the current plan',
+    backtestLockedHint: 'Extended backtest is not available for this plan. Simplified preview is shown.',
     settingsLockedHint: 'Settings update is not available for the current plan',
     priceUsdt: 'Price, USDT/mo',
     saveTenant: 'Save tenant',
@@ -698,8 +698,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     algofund: 'Algofund',
     latestCatalog: 'Son client catalog',
     latestSweep: 'Son historical sweep',
-    noCatalog: 'results/ icinde client catalog JSON bulunamadi. Once catalog builder calistirin.',
-    noSweep: 'results/ icinde historical sweep JSON bulunamadi. Materialize icin gerekli.',
+    noCatalog: 'Strateji katalogu gecici olarak kullanilamiyor. Admin modunda katalog build kontrol edin.',
+    noSweep: 'Historical sweep gecici olarak kullanilamiyor. Veri yenilenince materialize acilacak.',
     recommendedSets: 'Onerilen setler',
     adminTsDraft: 'Admin trading system taslagi',
     tenants: 'Demo tenantlar',
@@ -748,7 +748,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     openSettings: 'Settings ac',
     openMonitoring: 'Monitoring ac',
     openBacktest: 'Backtest ac',
-    backtestLockedHint: 'Bu planda Backtest/Onizleme kapali',
+    backtestLockedHint: 'Bu planda gelismis backtest kapali. Basit onizleme gosteriliyor.',
     settingsLockedHint: 'Bu planda ayar guncelleme kapali',
     priceUsdt: 'Fiyat, USDT/ay',
     saveTenant: 'Tenant kaydet',
@@ -1367,12 +1367,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!strategyTenantId || !strategyPreviewOfferId) {
       return;
     }
-    if (!strategyBacktestEnabled) {
-      if (!silent) {
-        messageApi.warning(copy.backtestLockedHint);
-      }
-      return;
-    }
     setStrategyPreviewLoading(true);
     try {
       const response = await axios.post<StrategyPreviewResponse>(`/api/saas/strategy-clients/${strategyTenantId}/preview`, {
@@ -1391,18 +1385,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     } finally {
       setStrategyPreviewLoading(false);
     }
-  }, [copy.backtestLockedHint, copy.previewReady, messageApi, strategyBacktestEnabled, strategyPreviewOfferId, strategyRiskInput, strategyState, strategyTenantId, strategyTradeInput]);
+  }, [copy.previewReady, messageApi, strategyPreviewOfferId, strategyRiskInput, strategyState, strategyTenantId, strategyTradeInput]);
 
   const runStrategySelectionPreview = useCallback(async (silent = false) => {
     if (!strategyTenantId || strategyOfferIds.length === 0) {
       setStrategySelectionPreview(null);
-      return;
-    }
-    if (!strategyBacktestEnabled) {
-      setStrategySelectionPreview(null);
-      if (!silent) {
-        messageApi.warning(copy.backtestLockedHint);
-      }
       return;
     }
 
@@ -1427,10 +1414,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     } finally {
       setStrategySelectionPreviewLoading(false);
     }
-  }, [copy.backtestLockedHint, copy.previewReady, messageApi, strategyBacktestEnabled, strategyOfferIds, strategyRiskInput, strategyTenantId, strategyTradeInput]);
+  }, [copy.previewReady, messageApi, strategyOfferIds, strategyRiskInput, strategyTenantId, strategyTradeInput]);
 
   useEffect(() => {
-    if (!strategyTenantId || !strategyPreviewOfferId || !strategyState || !strategyBacktestEnabled) {
+    if (!strategyTenantId || !strategyPreviewOfferId || !strategyState) {
       return;
     }
 
@@ -1439,10 +1426,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }, 350);
 
     return () => window.clearTimeout(timer);
-  }, [runStrategyPreview, strategyBacktestEnabled, strategyPreviewOfferId, strategyState, strategyTenantId]);
+  }, [runStrategyPreview, strategyPreviewOfferId, strategyState, strategyTenantId]);
 
   useEffect(() => {
-    if (!strategyTenantId || !strategyState || !strategyBacktestEnabled) {
+    if (!strategyTenantId || !strategyState) {
       return;
     }
 
@@ -1456,7 +1443,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }, 350);
 
     return () => window.clearTimeout(timer);
-  }, [runStrategySelectionPreview, strategyBacktestEnabled, strategyOfferIds, strategyState, strategyTenantId]);
+  }, [runStrategySelectionPreview, strategyOfferIds, strategyState, strategyTenantId]);
 
   useEffect(() => {
     if (!algofundTenantId || !algofundState || algofundLoading) {
@@ -1553,10 +1540,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const refreshAlgofundPreview = async () => {
     if (!algofundTenantId) {
-      return;
-    }
-    if (!algofundBacktestEnabled) {
-      messageApi.warning(copy.backtestLockedHint);
       return;
     }
     await loadAlgofundTenant(algofundTenantId, algofundRiskMultiplier, isAdminSurface);
@@ -2364,7 +2347,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               label: copy.strategyClient,
               children: (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  {isAdminSurface ? renderGitUpdateCard(copy.strategyClient, true) : null}
                   {strategyTenants.length === 0 ? <Alert type="info" showIcon message={copy.noTenant} /> : null}
                   {strategyError ? <Alert type="error" showIcon message={strategyError} /> : null}
 
@@ -2500,9 +2482,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           extra={strategySelectionPreviewLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}
                         >
                           <Spin spinning={strategySelectionPreviewLoading}>
-                            {!strategyBacktestEnabled ? (
-                              <Alert type="warning" showIcon message={copy.backtestLockedHint} />
-                            ) : strategySelectionPreview && strategySelectionPreviewOffers.length > 0 ? (
+                            {strategySelectionPreview && strategySelectionPreviewOffers.length > 0 ? (
                               <Row gutter={[16, 16]}>
                                 <Col xs={24} lg={8}>
                                   <Descriptions column={1} size="small" bordered>
@@ -2546,7 +2526,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                             <Col xs={24} md={14}>
                               <Space wrap style={{ marginTop: 28 }}>
-                                <Button type="primary" onClick={() => void runStrategyPreview()} loading={strategyPreviewLoading} disabled={!strategyBacktestEnabled}>{copy.preview}</Button>
+                                <Button type="primary" onClick={() => void runStrategyPreview()} loading={strategyPreviewLoading}>{copy.preview}</Button>
                                 {strategyState.profile?.actual_enabled ? <Tag color="success">live enabled</Tag> : <Tag color="default">live disabled</Tag>}
                                 {strategyState.profile?.requested_enabled ? <Tag color="processing">requested active</Tag> : null}
                               </Space>
@@ -2554,9 +2534,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Row>
 
                           <Spin spinning={strategyPreviewLoading}>
-                            {!strategyBacktestEnabled ? (
-                              <Alert style={{ marginTop: 12 }} type="warning" showIcon message={copy.backtestLockedHint} />
-                            ) : strategyPreview ? (
+                            {strategyPreview ? (
                               <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
                                 <Col xs={24} lg={8}>
                                   <Descriptions column={1} size="small" bordered>
@@ -2611,7 +2589,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               label: copy.algofund,
               children: (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  {isAdminSurface ? renderGitUpdateCard(copy.algofund, true) : null}
                   {algofundTenants.length === 0 ? <Alert type="info" showIcon message={copy.noTenant} /> : null}
                   {algofundError ? <Alert type="error" showIcon message={algofundError} /> : null}
 
@@ -2736,7 +2713,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Col xs={24} lg={8}>
                               <Space wrap style={{ marginTop: 24 }}>
                                 <Button type="primary" onClick={() => void saveAlgofundProfile()} loading={actionLoading === 'algofund-save'} disabled={!algofundSettingsEnabled}>{copy.saveProfile}</Button>
-                                <Button onClick={() => void refreshAlgofundPreview()} disabled={!algofundBacktestEnabled}>{copy.preview}</Button>
+                                <Button onClick={() => void refreshAlgofundPreview()}>{copy.preview}</Button>
                               </Space>
                             </Col>
                           </Row>
@@ -2745,9 +2722,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                         <Card className="battletoads-card" title={copy.previewTitle} extra={algofundLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}>
                           <Spin spinning={algofundLoading}>
-                            {!algofundBacktestEnabled ? (
-                              <Alert type="warning" showIcon message={copy.backtestLockedHint} />
-                            ) : (
+                            {
                               <Row gutter={[16, 16]}>
                                 <Col xs={24} lg={8}>
                                   <Descriptions column={1} size="small" bordered>
@@ -2764,7 +2739,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   {algofundPreviewPoints.length > 0 ? <ChartComponent data={algofundPreviewPoints} type="line" /> : <Empty description={copy.previewTitle} />}
                                 </Col>
                               </Row>
-                            )}
+                            }
                           </Spin>
                         </Card>
 

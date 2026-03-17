@@ -10,10 +10,13 @@ import {
   Popconfirm,
   Row,
   Select,
+  Slider,
   Space,
   Spin,
+  Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd';
@@ -76,12 +79,23 @@ type BacktestSummary = {
   profitFactor: number;
   strategyNames: string[];
   interval: string;
+  barsRequested?: number;
+  barsProcessed?: number;
+  dateFromMs?: number;
+  dateToMs?: number;
+  warmupBars?: number;
 };
 
 type BacktestResult = {
   runId?: number;
   summary: BacktestSummary;
   equityCurve: BacktestPoint[];
+};
+
+type BacktestTuning = {
+  riskMultiplier: number;
+  targetTrades: number;
+  bars: number;
 };
 
 type AnalysisReport = {
@@ -281,6 +295,12 @@ const TradingSystems: React.FC = () => {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null);
   const [suggestions, setSuggestions] = useState<LiquiditySuggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [memberDraftsByStrategyId, setMemberDraftsByStrategyId] = useState<Record<number, { weight: number; is_enabled: boolean }>>({});
+  const [backtestTuning, setBacktestTuning] = useState<BacktestTuning>({
+    riskMultiplier: 1,
+    targetTrades: 160,
+    bars: 1200,
+  });
 
   useEffect(() => {
     const password = localStorage.getItem('password');
@@ -310,6 +330,7 @@ const TradingSystems: React.FC = () => {
   useEffect(() => {
     if (!apiKeyName || !selectedSystemId) {
       setSelectedSystem(null);
+      setMemberDraftsByStrategyId({});
       return;
     }
 
@@ -372,8 +393,29 @@ const TradingSystems: React.FC = () => {
 
     setSystemActionLoading('backtest');
     try {
+      const memberWeights = Object.fromEntries(
+        Object.entries(memberDraftsByStrategyId).map(([strategyId, draft]) => [
+          String(strategyId),
+          Number(draft.weight),
+        ])
+      );
+
+      const enabledMembers = Object.fromEntries(
+        Object.entries(memberDraftsByStrategyId).map(([strategyId, draft]) => [
+          String(strategyId),
+          draft.is_enabled,
+        ])
+      );
+
+      const tunedBars = Math.max(240, Math.floor(backtestTuning.bars));
+      const tunedInitialBalance = Math.max(100, Number((1000 * Math.max(0.25, backtestTuning.riskMultiplier)).toFixed(2)));
+
       const response = await axios.post(`/api/trading-systems/${encodeURIComponent(apiKeyName)}/${selectedSystemId}/backtest`, {
         saveResult: true,
+        bars: tunedBars,
+        initialBalance: tunedInitialBalance,
+        memberWeights,
+        enabledMembers,
       });
       const result = response.data?.result as BacktestResult | undefined;
       if (!result) {
@@ -383,6 +425,37 @@ const TradingSystems: React.FC = () => {
       message.success('Trading system backtest finished');
     } catch (error: any) {
       message.error(String(error?.response?.data?.error || error?.message || 'Failed to run trading system backtest'));
+    } finally {
+      setSystemActionLoading('');
+    }
+  };
+
+  const saveMemberDrafts = async () => {
+    if (!apiKeyName || !selectedSystemId || !selectedSystem) {
+      return;
+    }
+
+    const members = (selectedSystem.members || []).map((member) => {
+      const draft = memberDraftsByStrategyId[member.strategy_id];
+      return {
+        strategy_id: member.strategy_id,
+        member_role: member.member_role,
+        notes: member.notes,
+        is_enabled: draft ? draft.is_enabled : member.is_enabled,
+        weight: draft ? Math.max(0, Number(draft.weight)) : Number(member.weight),
+      };
+    });
+
+    setSystemActionLoading('members-save');
+    try {
+      await axios.put(`/api/trading-systems/${encodeURIComponent(apiKeyName)}/${selectedSystemId}/members`, {
+        members,
+      });
+      message.success('Trading system members updated');
+      await loadSystem(apiKeyName, selectedSystemId);
+      await loadSystems(apiKeyName);
+    } catch (error: any) {
+      message.error(String(error?.response?.data?.error || error?.message || 'Failed to update trading system members'));
     } finally {
       setSystemActionLoading('');
     }
@@ -503,6 +576,67 @@ const TradingSystems: React.FC = () => {
     [selectedSystemId, suggestions]
   );
 
+  useEffect(() => {
+    const nextDrafts: Record<number, { weight: number; is_enabled: boolean }> = {};
+    for (const member of selectedSystem?.members || []) {
+      nextDrafts[member.strategy_id] = {
+        weight: Number(member.weight || 0),
+        is_enabled: Boolean(member.is_enabled),
+      };
+    }
+    setMemberDraftsByStrategyId(nextDrafts);
+  }, [selectedSystem]);
+
+  const memberWeightChartData = useMemo(() => {
+    const members = selectedSystem?.members || [];
+    const start = Math.floor(Date.now() / 1000);
+
+    return members
+      .map((member, index) => {
+        const draft = memberDraftsByStrategyId[member.strategy_id];
+        const weight = Number(draft ? draft.weight : member.weight);
+        if (!Number.isFinite(weight)) {
+          return null;
+        }
+
+        return {
+          time: start + index * 60,
+          value: Math.max(0, weight),
+        };
+      })
+      .filter((item): item is { time: number; value: number } => !!item);
+  }, [memberDraftsByStrategyId, selectedSystem]);
+
+  const systemSummary = useMemo(() => {
+    const members = selectedSystem?.members || [];
+    const enabledMembers = members.filter((member) => memberDraftsByStrategyId[member.strategy_id]?.is_enabled ?? member.is_enabled);
+    const totalWeight = enabledMembers.reduce((sum, member) => {
+      const draft = memberDraftsByStrategyId[member.strategy_id];
+      return sum + Math.max(0, Number(draft ? draft.weight : member.weight));
+    }, 0);
+
+    return {
+      membersCount: members.length,
+      enabledCount: enabledMembers.length,
+      totalWeight,
+    };
+  }, [memberDraftsByStrategyId, selectedSystem]);
+
+  const explainRecommendation = (row: AnalysisReport): string => {
+    const metrics = row.metrics || {};
+    const samples = Number(metrics.samples_count || 0);
+    if (samples <= 0) {
+      return 'Нет live-сделок в выбранном периоде. Рекомендация построена без статистической базы, поэтому это информационный статус.';
+    }
+
+    const pnlDrift = Number(metrics.realized_vs_predicted_pnl_percent || 0);
+    const slip = Number(metrics.actual_avg_slippage_percent || 0);
+    const winLive = Number(metrics.win_rate_live || 0);
+    const winBacktest = Number(metrics.win_rate_backtest || 0);
+
+    return `Сэмплов: ${formatNumber(samples, 0)}. Drift PnL: ${formatPercent(pnlDrift, 2)}. Slippage: ${formatPercent(slip * 100, 3)}. WinRate live/backtest: ${formatPercent(winLive * 100, 1)} / ${formatPercent(winBacktest * 100, 1)}.`;
+  };
+
   return (
     <div className="battletoads-form-shell">
       <Card className="battletoads-card" bordered={false}>
@@ -527,9 +661,15 @@ const TradingSystems: React.FC = () => {
           </Col>
           <Col xs={24} lg={12}>
             <Space wrap style={{ marginTop: 30 }}>
-              <Button onClick={() => void loadSystems(apiKeyName)} loading={systemsLoading}>{copy.refresh}</Button>
-              <Button onClick={() => void loadSuggestions(apiKeyName)} loading={suggestionsLoading}>{copy.suggestions}</Button>
-              <Button onClick={() => void runLiquidityScan()} loading={systemActionLoading === 'scan'}>{copy.scan}</Button>
+              <Tooltip title="Обновить список систем и выбранную карточку">
+                <Button onClick={() => void loadSystems(apiKeyName)} loading={systemsLoading}>{copy.refresh}</Button>
+              </Tooltip>
+              <Tooltip title="Подтянуть текущие liquidity suggestions">
+                <Button onClick={() => void loadSuggestions(apiKeyName)} loading={suggestionsLoading}>{copy.suggestions}</Button>
+              </Tooltip>
+              <Tooltip title="Запустить новый скан ликвидности по рынку">
+                <Button onClick={() => void runLiquidityScan()} loading={systemActionLoading === 'scan'}>{copy.scan}</Button>
+              </Tooltip>
             </Space>
           </Col>
         </Row>
@@ -539,16 +679,17 @@ const TradingSystems: React.FC = () => {
         <Col xs={24} xl={10}>
           <Card className="battletoads-card" title={copy.systems}>
             <Table<TradingSystem>
+              size="small"
               rowKey={(row) => String(row.id)}
               dataSource={systems}
               loading={systemsLoading}
               pagination={false}
               locale={{ emptyText: <Empty description={copy.noSystems} /> }}
-              scroll={{ x: 720 }}
               columns={[
                 {
                   title: 'Name',
                   key: 'name',
+                  ellipsis: true,
                   render: (_value, row) => (
                     <Space direction="vertical" size={0}>
                       <Text strong>{row.name}</Text>
@@ -559,9 +700,9 @@ const TradingSystems: React.FC = () => {
                 {
                   title: copy.status,
                   key: 'status',
-                  width: 180,
+                  width: 160,
                   render: (_value, row) => (
-                    <Space wrap>
+                    <Space direction="vertical" size={4}>
                       <Tag color={row.is_active ? 'success' : 'default'}>{copy.active}: {row.is_active ? 'yes' : 'no'}</Tag>
                       <Tag color={row.discovery_enabled ? 'processing' : 'default'}>{copy.discovery}: {row.discovery_enabled ? 'on' : 'off'}</Tag>
                     </Space>
@@ -570,7 +711,7 @@ const TradingSystems: React.FC = () => {
                 {
                   title: copy.action,
                   key: 'action',
-                  width: 180,
+                  width: 150,
                   render: (_value, row) => (
                     <Space wrap>
                       <Button size="small" onClick={() => setSelectedSystemId(Number(row.id))}>{copy.open}</Button>
@@ -593,14 +734,54 @@ const TradingSystems: React.FC = () => {
             title={selectedSystem?.name || copy.members}
             extra={selectedSystem ? (
               <Space wrap>
-                <Button onClick={() => void runSystemBacktest()} loading={systemActionLoading === 'backtest'}>{copy.backtest}</Button>
-                <Button onClick={() => void runSystemAnalysis()} loading={systemActionLoading === 'analysis'}>{copy.analysis}</Button>
+                <Tooltip title="Записать новые веса/статусы блоков в торговую систему">
+                  <Button onClick={() => void saveMemberDrafts()} loading={systemActionLoading === 'members-save'}>Сохранить блоки</Button>
+                </Tooltip>
+                <Tooltip title="Бэктест учитывает текущие веса блоков и параметры ниже">
+                  <Button onClick={() => void runSystemBacktest()} loading={systemActionLoading === 'backtest'}>{copy.backtest}</Button>
+                </Tooltip>
+                <Tooltip title="Сравнение с live-данными и рекомендации по каждой стратегии">
+                  <Button onClick={() => void runSystemAnalysis()} loading={systemActionLoading === 'analysis'}>{copy.analysis}</Button>
+                </Tooltip>
               </Space>
             ) : null}
           >
             <Spin spinning={systemLoading} tip={copy.loading}>
               {selectedSystem ? (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  <Row gutter={[12, 12]}>
+                    <Col xs={12} md={8}><Card size="small"><Text type="secondary">Members</Text><div><Text strong>{systemSummary.membersCount}</Text></div></Card></Col>
+                    <Col xs={12} md={8}><Card size="small"><Text type="secondary">Enabled</Text><div><Text strong>{systemSummary.enabledCount}</Text></div></Card></Col>
+                    <Col xs={24} md={8}><Card size="small"><Text type="secondary">Total weight</Text><div><Text strong>{formatNumber(systemSummary.totalWeight, 3)}</Text></div></Card></Col>
+                  </Row>
+
+                  <Card size="small" title="Параметры запуска backtest">
+                    <Row gutter={[12, 12]}>
+                      <Col xs={24} md={8}>
+                        <Text strong>Риск-множитель: {formatNumber(backtestTuning.riskMultiplier, 2)}</Text>
+                        <Slider min={0.25} max={3} step={0.05} value={backtestTuning.riskMultiplier} onChange={(value) => setBacktestTuning((prev) => ({ ...prev, riskMultiplier: Number(value) || 1 }))} />
+                      </Col>
+                      <Col xs={24} md={8}>
+                        <Text strong>Цель по сделкам: {formatNumber(backtestTuning.targetTrades, 0)}</Text>
+                        <Slider min={20} max={500} step={5} value={backtestTuning.targetTrades} onChange={(value) => {
+                          const target = Number(value) || 160;
+                          setBacktestTuning((prev) => ({
+                            ...prev,
+                            targetTrades: target,
+                            bars: Math.max(240, target * 8),
+                          }));
+                        }} />
+                      </Col>
+                      <Col xs={24} md={8}>
+                        <Text strong>Глубина (bars)</Text>
+                        <InputNumber min={240} max={20000} step={20} style={{ width: '100%', marginTop: 8 }} value={backtestTuning.bars} onChange={(value) => setBacktestTuning((prev) => ({ ...prev, bars: Math.max(240, Number(value || 1200)) }))} />
+                      </Col>
+                    </Row>
+                    <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                      Период бэктеста определяется глубиной candles (bars) и интервалом стратегий. Чем больше bars, тем длиннее исторический отрезок.
+                    </Paragraph>
+                  </Card>
+
                   <Descriptions column={1} bordered size="small">
                     <Descriptions.Item label="ID">{selectedSystem.id}</Descriptions.Item>
                     <Descriptions.Item label={copy.status}>{selectedSystem.is_active ? 'active' : 'inactive'}</Descriptions.Item>
@@ -611,14 +792,15 @@ const TradingSystems: React.FC = () => {
                   </Descriptions>
 
                   <Table<TradingSystemMember>
+                    size="small"
                     rowKey={(row) => `${row.system_id}-${row.strategy_id}`}
                     dataSource={selectedSystem.members || []}
                     pagination={false}
-                    scroll={{ x: 860 }}
                     columns={[
                       {
                         title: 'Strategy',
                         key: 'strategy',
+                        ellipsis: true,
                         render: (_value, row) => (
                           <Space direction="vertical" size={0}>
                             <Text strong>{row.strategy?.name || `#${row.strategy_id}`}</Text>
@@ -630,30 +812,69 @@ const TradingSystems: React.FC = () => {
                         title: copy.weights,
                         dataIndex: 'weight',
                         key: 'weight',
-                        width: 100,
-                        render: (value) => formatNumber(value, 3),
+                        width: 140,
+                        render: (_value, row) => (
+                          <InputNumber
+                            min={0}
+                            max={50}
+                            step={0.05}
+                            style={{ width: 120 }}
+                            value={memberDraftsByStrategyId[row.strategy_id]?.weight ?? Number(row.weight)}
+                            onChange={(value) => {
+                              const nextWeight = Number(value ?? 0);
+                              setMemberDraftsByStrategyId((prev) => ({
+                                ...prev,
+                                [row.strategy_id]: {
+                                  weight: Number.isFinite(nextWeight) ? nextWeight : 0,
+                                  is_enabled: prev[row.strategy_id]?.is_enabled ?? Boolean(row.is_enabled),
+                                },
+                              }));
+                            }}
+                          />
+                        ),
                       },
                       {
                         title: copy.role,
                         dataIndex: 'member_role',
                         key: 'member_role',
-                        width: 110,
+                        width: 90,
                         render: (value) => <Tag>{String(value || 'core')}</Tag>,
                       },
                       {
                         title: copy.status,
                         dataIndex: 'is_enabled',
                         key: 'is_enabled',
-                        width: 110,
-                        render: (value) => <Tag color={value ? 'success' : 'default'}>{value ? 'enabled' : 'disabled'}</Tag>,
+                        width: 120,
+                        render: (_value, row) => (
+                          <Switch
+                            size="small"
+                            checked={memberDraftsByStrategyId[row.strategy_id]?.is_enabled ?? Boolean(row.is_enabled)}
+                            onChange={(checked) => {
+                              setMemberDraftsByStrategyId((prev) => ({
+                                ...prev,
+                                [row.strategy_id]: {
+                                  weight: prev[row.strategy_id]?.weight ?? Number(row.weight),
+                                  is_enabled: checked,
+                                },
+                              }));
+                            }}
+                          />
+                        ),
                       },
                       {
                         title: copy.notes,
                         dataIndex: 'notes',
                         key: 'notes',
+                        ellipsis: true,
                       },
                     ]}
                   />
+
+                  {memberWeightChartData.length > 1 ? (
+                    <Card size="small" title="Профиль весов блоков">
+                      <ChartComponent data={memberWeightChartData} type="line" />
+                    </Card>
+                  ) : null}
                 </Space>
               ) : (
                 <Empty description={copy.noSystems} />
@@ -677,7 +898,14 @@ const TradingSystems: React.FC = () => {
             <Tag>Trades: {formatNumber(backtestResult.summary.tradesCount, 0)}</Tag>
             <Tag>PF: {formatNumber(backtestResult.summary.profitFactor)}</Tag>
             <Tag>WR: {formatPercent(backtestResult.summary.winRatePercent)}</Tag>
+            <Tag>Bars: {formatNumber(backtestResult.summary.barsRequested, 0)}</Tag>
+            <Tag>Processed: {formatNumber(backtestResult.summary.barsProcessed, 0)}</Tag>
           </Space>
+
+          <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+            Period: {backtestResult.summary.dateFromMs ? new Date(backtestResult.summary.dateFromMs).toISOString().slice(0, 10) : 'auto'} {' to '} {backtestResult.summary.dateToMs ? new Date(backtestResult.summary.dateToMs).toISOString().slice(0, 10) : 'auto'}.
+            Warmup: {formatNumber(backtestResult.summary.warmupBars, 0)} bars.
+          </Paragraph>
 
           <div style={{ marginTop: 16 }}>
             {equityChartData.length > 0 ? <ChartComponent data={equityChartData} type="line" /> : <Empty description={copy.backtest} />}
@@ -687,15 +915,32 @@ const TradingSystems: React.FC = () => {
 
       {analysisResult ? (
         <Card className="battletoads-card" title={copy.analysis} style={{ marginTop: 16 }}>
+          <Alert
+            style={{ marginBottom: 12 }}
+            type="info"
+            showIcon
+            message={`Пояснение: confidence показывает надежность рекомендации, severity - срочность. При samples=0 вывод носит справочный характер.`}
+          />
           <Table<AnalysisReport>
+            size="small"
             rowKey={(row) => String(row.strategyId)}
             dataSource={analysisResult.reports || []}
             pagination={false}
-            scroll={{ x: 980 }}
+            expandable={{
+              expandedRowRender: (row) => (
+                <Descriptions size="small" bordered column={1}>
+                  <Descriptions.Item label="Объяснение">{explainRecommendation(row)}</Descriptions.Item>
+                  <Descriptions.Item label="Live samples">{formatNumber((row.metrics || {}).samples_count, 0)}</Descriptions.Item>
+                  <Descriptions.Item label="PnL drift">{formatPercent(Number((row.metrics || {}).realized_vs_predicted_pnl_percent || 0), 2)}</Descriptions.Item>
+                  <Descriptions.Item label="Execution cost">{formatNumber((row.metrics || {}).total_execution_cost, 4)}</Descriptions.Item>
+                </Descriptions>
+              ),
+            }}
             columns={[
               {
                 title: 'Strategy',
                 key: 'strategy',
+                ellipsis: true,
                 render: (_value, row) => (
                   <Space direction="vertical" size={0}>
                     <Text strong>{row.strategyName}</Text>
@@ -720,6 +965,12 @@ const TradingSystems: React.FC = () => {
                 key: 'confidence',
                 width: 120,
                 render: (_value, row) => formatPercent(Number(row.recommendation?.confidence || 0) * 100, 0),
+              },
+              {
+                title: 'Samples',
+                key: 'samples',
+                width: 100,
+                render: (_value, row) => formatNumber((row.metrics || {}).samples_count, 0),
               },
               {
                 title: copy.rationale,
