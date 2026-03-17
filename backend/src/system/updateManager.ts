@@ -247,7 +247,7 @@ export const getGitUpdateStatus = async (refreshRemote: boolean = true): Promise
   };
 };
 
-export const triggerGitUpdate = async (): Promise<{ started: boolean; unit: string; commandOutput: string }> => {
+export const triggerGitUpdate = async (): Promise<{ started: boolean; unit: string; commandOutput: string; message?: string }> => {
   if (process.env.ENABLE_GIT_UPDATE !== '1') {
     throw new Error('Git update is disabled. Set ENABLE_GIT_UPDATE=1 in backend env.');
   }
@@ -259,6 +259,15 @@ export const triggerGitUpdate = async (): Promise<{ started: boolean; unit: stri
 
   if (!status.originUrl) {
     throw new Error('Git origin URL is not configured.');
+  }
+
+  if (status.behind <= 0 && status.ahead <= 0 && status.dirtyCount <= 0) {
+    return {
+      started: false,
+      unit: UPDATE_UNIT_NAME,
+      commandOutput: '',
+      message: 'Already up to date. No deploy job started.',
+    };
   }
 
   const scriptPath = process.env.UPDATE_SCRIPT || path.join(status.appDir, 'scripts', 'update_vps_from_git.sh');
@@ -296,6 +305,7 @@ export const triggerGitUpdate = async (): Promise<{ started: boolean; unit: stri
     started: true,
     unit: UPDATE_UNIT_NAME,
     commandOutput: output,
+    message: 'Git update job started.',
   };
 };
 

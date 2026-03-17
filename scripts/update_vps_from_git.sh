@@ -5,6 +5,8 @@ APP_DIR="${APP_DIR:-/opt/battletoads-double-dragon}"
 BRANCH="${BRANCH:-main}"
 SERVICE_NAME="${SERVICE_NAME:-battletoads-backend}"
 BACKEND_DIR="${BACKEND_DIR:-$APP_DIR/backend}"
+FRONTEND_DIR="${FRONTEND_DIR:-$APP_DIR/frontend}"
+BUILD_FRONTEND="${BUILD_FRONTEND:-1}"
 
 log() {
 	printf '[btdd-update] %s\n' "$*"
@@ -30,6 +32,9 @@ require_cmd systemctl
 
 [[ -d "$APP_DIR/.git" ]] || fail "Not a git repository: $APP_DIR"
 [[ -d "$BACKEND_DIR" ]] || fail "Backend directory not found: $BACKEND_DIR"
+if [[ "$BUILD_FRONTEND" == "1" ]]; then
+	[[ -d "$FRONTEND_DIR" ]] || fail "Frontend directory not found: $FRONTEND_DIR"
+fi
 
 cd "$APP_DIR"
 
@@ -54,6 +59,12 @@ cd "$BACKEND_DIR"
 
 run npm ci --silent
 run npm run build
+
+if [[ "$BUILD_FRONTEND" == "1" ]]; then
+	cd "$FRONTEND_DIR"
+	run npm ci --silent
+	run npm run build
+fi
 
 run systemctl restart "$SERVICE_NAME"
 service_state="$(systemctl is-active "$SERVICE_NAME" || true)"

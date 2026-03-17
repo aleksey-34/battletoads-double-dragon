@@ -157,8 +157,15 @@ const Settings: React.FC = () => {
     setUpdateRunLoading(true);
     try {
       const res = await axios.post('http://localhost:3001/api/system/update/run');
+      const started = Boolean(res?.data?.started);
       const unit = String(res?.data?.unit || 'btdd-git-update');
-      message.success(t('settings.msg.runStarted', 'Update started ({unit}). Backend may restart during deploy.', { unit }));
+      const backendMessage = String(res?.data?.message || '').trim();
+
+      if (!started) {
+        message.info(backendMessage || t('settings.update.upToDate', 'Up to date'));
+      } else {
+        message.success(t('settings.msg.runStarted', 'Update started ({unit}). Backend may restart during deploy.', { unit }));
+      }
 
       setTimeout(() => {
         void fetchUpdateJob();
@@ -319,7 +326,7 @@ const Settings: React.FC = () => {
           <Button
             type="primary"
             loading={updateRunLoading}
-            disabled={!updateStatus?.configured || !updateStatus?.updateEnabled}
+            disabled={!updateStatus?.configured || !updateStatus?.updateEnabled || !updateStatus?.updateAvailable}
             onClick={() => { void runGitUpdate(); }}
           >
             {t('settings.update.install', 'Install from Git')}
