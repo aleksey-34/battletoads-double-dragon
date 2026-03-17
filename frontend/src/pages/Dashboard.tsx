@@ -136,6 +136,7 @@ const defaultChartSetting = (): ChartSetting => ({
 
 const AUTO_UPDATE_MIN_SEC = 5;
 const AUTO_UPDATE_MAX_SEC = 3600;
+const STRATEGY_RENDER_CHUNK = 120;
 
 const normalizeUpdateSec = (rawValue: unknown): number => {
   const numeric = Number(rawValue);
@@ -741,6 +742,7 @@ const Dashboard: React.FC = () => {
   const [balancesError, setBalancesError] = useState<{ [key: string]: string }>({});
   const [symbolsError, setSymbolsError] = useState<{ [key: string]: string }>({});
   const [strategiesByKey, setStrategiesByKey] = useState<{ [key: string]: DDStrategy[] }>({});
+  const [strategyRenderLimitByKey, setStrategyRenderLimitByKey] = useState<{ [key: string]: number }>({});
   const [strategiesLoadingByKey, setStrategiesLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [strategiesErrorByKey, setStrategiesErrorByKey] = useState<{ [key: string]: string }>({});
   const [activeStrategyPanelsByKey, setActiveStrategyPanelsByKey] = useState<{ [key: string]: string[] }>({});
@@ -1173,6 +1175,35 @@ const Dashboard: React.FC = () => {
 
   const strategyActionKey = (keyName: string, strategyId: number, action: string) => `${keyName}:${strategyId}:${action}`;
 
+  const increaseStrategyRenderLimit = (keyName: string, total: number) => {
+    setStrategyRenderLimitByKey((prev) => {
+      const current = Math.max(STRATEGY_RENDER_CHUNK, Number(prev[keyName] || STRATEGY_RENDER_CHUNK));
+      const nextValue = Math.min(Math.max(total, STRATEGY_RENDER_CHUNK), current + STRATEGY_RENDER_CHUNK);
+
+      if (nextValue === current) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        [keyName]: nextValue,
+      };
+    });
+  };
+
+  const resetStrategyRenderLimit = (keyName: string, total: number) => {
+    setStrategyRenderLimitByKey((prev) => {
+      const nextValue = Math.min(Math.max(total, 0), STRATEGY_RENDER_CHUNK);
+      if (prev[keyName] === nextValue) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [keyName]: nextValue,
+      };
+    });
+  };
+
   const fetchStrategies = async (keyName: string, options?: { silent?: boolean }) => {
     const silent = options?.silent === true;
     const requestLockKey = `strategies:${keyName}`;
@@ -1190,6 +1221,20 @@ const Dashboard: React.FC = () => {
       const res = await axios.get(`/api/strategies/${keyName}`);
       const payload = Array.isArray(res.data) ? res.data.map(parseStrategy) : [];
       setStrategiesByKey((prev) => ({ ...prev, [keyName]: payload }));
+      setStrategyRenderLimitByKey((prev) => {
+        const previousLimit = Number(prev[keyName] || 0);
+        const defaultLimit = Math.min(payload.length, STRATEGY_RENDER_CHUNK);
+        const nextLimit = previousLimit > 0 ? Math.min(previousLimit, payload.length) : defaultLimit;
+
+        if (previousLimit === nextLimit) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          [keyName]: nextLimit,
+        };
+      });
       setActiveStrategyPanelsByKey((prev) => {
         const currentPanels = prev[keyName] || [];
         const existingIds = new Set(payload.map((strategy) => String(strategy.id)));
@@ -1918,6 +1963,9 @@ const Dashboard: React.FC = () => {
     const copySourceKey = copySourceByTargetKey[keyName] || '';
     const copyLoading = copyActionLoadingByKey[keyName] || false;
     const totalStrategies = keyStrategies.length;
+    const strategyRenderLimit = Math.min(totalStrategies, Math.max(STRATEGY_RENDER_CHUNK, Number(strategyRenderLimitByKey[keyName] || STRATEGY_RENDER_CHUNK)));
+    const visibleStrategies = keyStrategies.slice(0, strategyRenderLimit);
+    const hasHiddenStrategies = totalStrategies > visibleStrategies.length;
     const runningStrategies = keyStrategies.filter((strategy) => strategy.is_active).length;
     const pausedStrategies = Math.max(0, totalStrategies - runningStrategies);
     const errorStrategies = keyStrategies.filter((strategy) => Boolean(String(strategy.last_error || '').trim())).length;
@@ -2285,6 +2333,23 @@ const Dashboard: React.FC = () => {
                   </Button>
                   <Tag color="blue">Chart preview is configured once in API key Chart Settings</Tag>
                   <Tag color="green">Trading pair is configured per strategy below</Tag>
+                  <Tag color="cyan">rendered: {visibleStrategies.length}/{totalStrategies}</Tag>
+                  {hasHiddenStrategies ? (
+                    <Button
+                      size="small"
+                      onClick={() => increaseStrategyRenderLimit(keyName, totalStrategies)}
+                    >
+                      Show +{STRATEGY_RENDER_CHUNK}
+                    </Button>
+                  ) : null}
+                  {visibleStrategies.length > STRATEGY_RENDER_CHUNK ? (
+                    <Button
+                      size="small"
+                      onClick={() => resetStrategyRenderLimit(keyName, totalStrategies)}
+                    >
+                      Show less
+                    </Button>
+                  ) : null}
 
                   {apiKeys.length > 1 ? (
                     <>
@@ -2330,7 +2395,7 @@ const Dashboard: React.FC = () => {
                       <Collapse
                         activeKey={activeStrategyPanels}
                         onChange={(key) => handleStrategyPanelChange(keyName, key)}
-                        items={keyStrategies.map((strategy) => {
+                        items={visibleStrategies.map((strategy) => {
                           const saveLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'save')]);
                           const executeLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'execute')]);
                           const pauseLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'pause')]);
@@ -2338,6 +2403,7 @@ const Dashboard: React.FC = () => {
                           const cancelOrdersLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'cancel-orders')]);
                           const closePositionsLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'close-positions')]);
                           const deleteLoading = Boolean(strategyActionLoading[strategyActionKey(keyName, strategy.id, 'delete')]);
+                          const isExpandedStrategyPanel = activeStrategyPanels.includes(String(strategy.id));
                           const strategyPositions = keyPositions.filter((position: any) => {
                             const symbol = String(position?.symbol || '').toUpperCase();
                             const size = Number.parseFloat(String(position?.size || '0'));
@@ -2388,7 +2454,7 @@ const Dashboard: React.FC = () => {
                               ? 'processing'
                               : 'default';
                           const strategyBadgeText = strategy.last_error ? 'ERR' : strategy.is_active ? 'RUN' : 'PAUSE';
-                          const donchian = strategy.show_indicators
+                          const donchian = isExpandedStrategyPanel && strategy.show_indicators
                             ? buildDonchianSnapshot(
                               Array.isArray(keyChartData) ? keyChartData : [],
                               strategy.price_channel_length,
@@ -2405,7 +2471,7 @@ const Dashboard: React.FC = () => {
                           const donchianCenterValue = donchian
                             ? pickOverlayValueAtTime(donchian.centerSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
                             : null;
-                          const tpWave = strategy.show_indicators
+                          const tpWave = isExpandedStrategyPanel && strategy.show_indicators
                             ? buildTpWaveSnapshot(donchian, strategy.take_profit_percent, `${keyName}:${strategy.id}`)
                             : null;
                           const tpLongWaveValue = tpWave
@@ -2414,7 +2480,7 @@ const Dashboard: React.FC = () => {
                           const tpShortWaveValue = tpWave
                             ? pickOverlayValueAtTime(tpWave.shortSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
                             : null;
-                          const entryOverlay = strategy.show_positions_on_chart && strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
+                          const entryOverlay = isExpandedStrategyPanel && strategy.show_positions_on_chart && strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
                             ? buildEntryOverlay(
                               Array.isArray(keyChartData) ? keyChartData : [],
                               `${keyName}:${strategy.id}:entry`,
@@ -2428,7 +2494,7 @@ const Dashboard: React.FC = () => {
                                 ? Number(strategy.entry_ratio) / (1 + strategy.take_profit_percent / 100)
                                 : null
                             : null;
-                          const tradeMarkers = strategy.display_on_chart && strategy.show_trades_on_chart
+                          const tradeMarkers = isExpandedStrategyPanel && strategy.display_on_chart && strategy.show_trades_on_chart
                             ? buildStrategyTradeMarkers(keyTrades, pairSymbols)
                             : [];
                           const strategyOverlays: OverlayLine[] = [
