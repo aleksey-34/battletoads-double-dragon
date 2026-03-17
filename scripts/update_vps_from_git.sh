@@ -17,6 +17,8 @@ fail() {
 	exit 1
 }
 
+# NOTE: Keep this script deterministic for one-click VPS deploys from Settings.
+
 run() {
 	log "+ $*"
 	"$@"
