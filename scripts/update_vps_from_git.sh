@@ -65,7 +65,8 @@ run npm run build
 if [[ "$BUILD_FRONTEND" == "1" ]]; then
 	cd "$FRONTEND_DIR"
 	run npm ci --silent
-	run npm run build
+	# CRA treats warnings as errors when CI=true; force production build without CI strict mode on VPS deploy.
+	run env CI=false npm run build
 fi
 
 run systemctl restart "$SERVICE_NAME"
