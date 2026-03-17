@@ -31,6 +31,7 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "test:e2e:smoke": "playwright test tests/e2e/update-smoke.spec.js --config=playwright.config.js",
+    "test:e2e:navigation": "playwright test tests/e2e/navigation-smoke.spec.js --config=playwright.config.js",
     "checkup:e2e": "npm run build && npm run test:e2e:smoke"
   },
   "eslintConfig": {
