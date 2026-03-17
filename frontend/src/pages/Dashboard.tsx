@@ -137,6 +137,7 @@ const defaultChartSetting = (): ChartSetting => ({
 const AUTO_UPDATE_MIN_SEC = 5;
 const AUTO_UPDATE_MAX_SEC = 3600;
 const STRATEGY_FETCH_LIMIT = 400;
+const STRATEGY_RENDER_CHUNK = 80;
 
 const normalizeUpdateSec = (rawValue: unknown): number => {
   const numeric = Number(rawValue);
@@ -742,6 +743,7 @@ const Dashboard: React.FC = () => {
   const [balancesError, setBalancesError] = useState<{ [key: string]: string }>({});
   const [symbolsError, setSymbolsError] = useState<{ [key: string]: string }>({});
   const [strategiesByKey, setStrategiesByKey] = useState<{ [key: string]: DDStrategy[] }>({});
+  const [strategyRenderLimitByKey, setStrategyRenderLimitByKey] = useState<{ [key: string]: number }>({});
   const [strategiesTotalByKey, setStrategiesTotalByKey] = useState<{ [key: string]: number }>({});
   const [fullStrategiesLoadedByKey, setFullStrategiesLoadedByKey] = useState<{ [key: string]: boolean }>({});
   const [strategiesLoadingByKey, setStrategiesLoadingByKey] = useState<{ [key: string]: boolean }>({});
@@ -1176,9 +1178,38 @@ const Dashboard: React.FC = () => {
 
   const strategyActionKey = (keyName: string, strategyId: number, action: string) => `${keyName}:${strategyId}:${action}`;
 
+  const increaseStrategyRenderLimit = (keyName: string, total: number) => {
+    setStrategyRenderLimitByKey((prev) => {
+      const current = Math.max(STRATEGY_RENDER_CHUNK, Number(prev[keyName] || STRATEGY_RENDER_CHUNK));
+      const nextValue = Math.min(Math.max(total, STRATEGY_RENDER_CHUNK), current + STRATEGY_RENDER_CHUNK);
+
+      if (nextValue === current) {
+        return prev;
+      }
+
+      return {
+        ...prev,
+        [keyName]: nextValue,
+      };
+    });
+  };
+
+  const resetStrategyRenderLimit = (keyName: string, total: number) => {
+    setStrategyRenderLimitByKey((prev) => {
+      const nextValue = Math.min(Math.max(total, 0), STRATEGY_RENDER_CHUNK);
+      if (prev[keyName] === nextValue) {
+        return prev;
+      }
+      return {
+        ...prev,
+        [keyName]: nextValue,
+      };
+    });
+  };
+
   const fetchStrategies = async (keyName: string, options?: { silent?: boolean; full?: boolean }) => {
     const silent = options?.silent === true;
-    const full = options?.full === true || fullStrategiesLoadedByKey[keyName] === true;
+    const full = options?.full === true;
     const requestLockKey = `strategies:${keyName}`;
 
     if (!acquireRequestLock(requestLockKey)) {
@@ -1204,6 +1235,20 @@ const Dashboard: React.FC = () => {
       setStrategiesByKey((prev) => ({ ...prev, [keyName]: payload }));
       setStrategiesTotalByKey((prev) => ({ ...prev, [keyName]: total }));
       setFullStrategiesLoadedByKey((prev) => ({ ...prev, [keyName]: full || payload.length >= total }));
+      setStrategyRenderLimitByKey((prev) => {
+        const previousLimit = Number(prev[keyName] || 0);
+        const defaultLimit = Math.min(payload.length, STRATEGY_RENDER_CHUNK);
+        const nextLimit = previousLimit > 0 ? Math.min(previousLimit, payload.length) : defaultLimit;
+
+        if (previousLimit === nextLimit) {
+          return prev;
+        }
+
+        return {
+          ...prev,
+          [keyName]: nextLimit,
+        };
+      });
       setActiveStrategyPanelsByKey((prev) => {
         const currentPanels = prev[keyName] || [];
         const existingIds = new Set(payload.map((strategy) => String(strategy.id)));
@@ -1929,6 +1974,9 @@ const Dashboard: React.FC = () => {
     const copySourceKey = copySourceByTargetKey[keyName] || '';
     const copyLoading = copyActionLoadingByKey[keyName] || false;
     const totalStrategies = keyStrategies.length;
+    const strategyRenderLimit = Math.min(totalStrategies, Math.max(STRATEGY_RENDER_CHUNK, Number(strategyRenderLimitByKey[keyName] || STRATEGY_RENDER_CHUNK)));
+    const visibleStrategies = keyStrategies.slice(0, strategyRenderLimit);
+    const hasHiddenStrategies = totalStrategies > visibleStrategies.length;
     const runningStrategies = keyStrategies.filter((strategy) => strategy.is_active).length;
     const pausedStrategies = Math.max(0, totalStrategies - runningStrategies);
     const errorStrategies = keyStrategies.filter((strategy) => Boolean(String(strategy.last_error || '').trim())).length;
@@ -2296,7 +2344,7 @@ const Dashboard: React.FC = () => {
                   </Button>
                   <Tag color="blue">Chart preview is configured once in API key Chart Settings</Tag>
                   <Tag color="green">Trading pair is configured per strategy below</Tag>
-                  <Tag color="cyan">total: {totalStrategies}</Tag>
+                  <Tag color="cyan">rendered: {visibleStrategies.length}/{totalStrategies}</Tag>
                   {!keyFullLoaded ? <Tag color="gold">light mode: {totalStrategies}/{keyStrategiesTotal}</Tag> : null}
                   {!keyFullLoaded ? (
                     <Button
@@ -2306,6 +2354,22 @@ const Dashboard: React.FC = () => {
                       }}
                     >
                       Load all strategies
+                    </Button>
+                  ) : null}
+                  {hasHiddenStrategies ? (
+                    <Button
+                      size="small"
+                      onClick={() => increaseStrategyRenderLimit(keyName, totalStrategies)}
+                    >
+                      Show +{STRATEGY_RENDER_CHUNK}
+                    </Button>
+                  ) : null}
+                  {visibleStrategies.length > STRATEGY_RENDER_CHUNK ? (
+                    <Button
+                      size="small"
+                      onClick={() => resetStrategyRenderLimit(keyName, totalStrategies)}
+                    >
+                      Show less
                     </Button>
                   ) : null}
 
@@ -2358,7 +2422,7 @@ const Dashboard: React.FC = () => {
                             return { ...prev, [keyName]: panels };
                           });
                         }}
-                        items={keyStrategies.map((strategy) => {
+                        items={visibleStrategies.map((strategy) => {
                           // ── label vars (lightweight, run for all visible items) ──
                           const strategyPositions = keyPositions.filter((position: any) => {
                             const symbol = String(position?.symbol || '').toUpperCase();
