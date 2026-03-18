@@ -52,6 +52,15 @@ type TradingSystemMember = {
   strategy?: StrategySummary | null;
 };
 
+type TradingSystemMetrics = {
+  equity_usd: number;
+  unrealized_pnl: number;
+  margin_load_percent: number;
+  drawdown_percent: number;
+  effective_leverage: number;
+  recorded_at?: string;
+};
+
 type TradingSystem = {
   id?: number;
   name: string;
@@ -62,6 +71,7 @@ type TradingSystem = {
   discovery_interval_hours: number;
   max_members: number;
   members: TradingSystemMember[];
+  metrics?: TradingSystemMetrics;
 };
 
 type BacktestPoint = {
@@ -754,6 +764,69 @@ const TradingSystems: React.FC = () => {
                     <Col xs={12} md={8}><Card size="small"><Text type="secondary">Enabled</Text><div><Text strong>{systemSummary.enabledCount}</Text></div></Card></Col>
                     <Col xs={24} md={8}><Card size="small"><Text type="secondary">Total weight</Text><div><Text strong>{formatNumber(systemSummary.totalWeight, 3)}</Text></div></Card></Col>
                   </Row>
+
+                  {selectedSystem.metrics ? (
+                    <Card size="small" title="Live Metrics" style={{ backgroundColor: '#fafafa' }}>
+                      <Row gutter={[12, 12]}>
+                        <Col xs={12} sm={12} md={8}>
+                          <Card size="small" bordered>
+                            <Text type="secondary">Equity</Text>
+                            <div><Text strong style={{ fontSize: 16 }}>${formatNumber(selectedSystem.metrics.equity_usd, 2)}</Text></div>
+                          </Card>
+                        </Col>
+                        <Col xs={12} sm={12} md={8}>
+                          <Card size="small" bordered>
+                            <Text type="secondary">Unrealized PnL</Text>
+                            <div>
+                              <Text 
+                                strong 
+                                style={{ 
+                                  fontSize: 16,
+                                  color: selectedSystem.metrics.unrealized_pnl >= 0 ? '#52c41a' : '#ff4d4f'
+                                }}
+                              >
+                                ${formatNumber(selectedSystem.metrics.unrealized_pnl, 2)}
+                              </Text>
+                            </div>
+                          </Card>
+                        </Col>
+                        <Col xs={12} sm={12} md={8}>
+                          <Card size="small" bordered>
+                            <Text type="secondary">Drawdown</Text>
+                            <div>
+                              <Text 
+                                strong 
+                                style={{ 
+                                  fontSize: 16,
+                                  color: selectedSystem.metrics.drawdown_percent > 20 ? '#ff4d4f' : (selectedSystem.metrics.drawdown_percent > 10 ? '#faad14' : '#52c41a')
+                                }}
+                              >
+                                {formatPercent(selectedSystem.metrics.drawdown_percent, 2)}
+                              </Text>
+                            </div>
+                          </Card>
+                        </Col>
+                        <Col xs={12} sm={12} md={8}>
+                          <Card size="small" bordered>
+                            <Text type="secondary">Margin Load</Text>
+                            <div><Text strong style={{ fontSize: 16 }}>{formatPercent(selectedSystem.metrics.margin_load_percent, 2)}</Text></div>
+                          </Card>
+                        </Col>
+                        <Col xs={12} sm={12} md={8}>
+                          <Card size="small" bordered>
+                            <Text type="secondary">Leverage</Text>
+                            <div><Text strong style={{ fontSize: 16 }}>{formatNumber(selectedSystem.metrics.effective_leverage, 2)}x</Text></div>
+                          </Card>
+                        </Col>
+                        <Col xs={24} sm={12} md={8}>
+                          <Card size="small" bordered>
+                            <Text type="secondary">Updated</Text>
+                            <div><Text type="secondary" style={{ fontSize: 12 }}>{selectedSystem.metrics.recorded_at ? new Date(selectedSystem.metrics.recorded_at).toLocaleTimeString() : '—'}</Text></div>
+                          </Card>
+                        </Col>
+                      </Row>
+                    </Card>
+                  ) : null}
 
                   <Card size="small" title="Параметры запуска backtest">
                     <Row gutter={[12, 12]}>

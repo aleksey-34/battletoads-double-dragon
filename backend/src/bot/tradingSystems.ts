@@ -15,6 +15,15 @@ export type TradingSystemMember = {
   strategy?: Strategy | null;
 };
 
+export type TradingSystemMetrics = {
+  equity_usd: number;
+  unrealized_pnl: number;
+  margin_load_percent: number;
+  drawdown_percent: number;
+  effective_leverage: number;
+  recorded_at?: string;
+};
+
 export type TradingSystem = {
   id?: number;
   api_key_id: number;
@@ -28,6 +37,7 @@ export type TradingSystem = {
   created_at?: string;
   updated_at?: string;
   members: TradingSystemMember[];
+  metrics?: TradingSystemMetrics;
 };
 
 export type TradingSystemMemberDraft = {
@@ -79,7 +89,31 @@ const normalizeRole = (value: any): string => {
   return normalized || 'core';
 };
 
-const normalizeSystemRow = (row: any, members: TradingSystemMember[]): TradingSystem => {
+const getTradingSystemMetrics = async (apiKeyId: number): Promise<TradingSystemMetrics | undefined> => {
+  const row = await db.get(
+    `SELECT equity_usd, unrealized_pnl, margin_load_percent, drawdown_percent, effective_leverage, recorded_at
+     FROM monitoring_snapshots
+     WHERE api_key_id = ?
+     ORDER BY datetime(recorded_at) DESC
+     LIMIT 1`,
+    [apiKeyId]
+  );
+
+  if (!row) {
+    return undefined;
+  }
+
+  return {
+    equity_usd: safeNumber(row.equity_usd, 0),
+    unrealized_pnl: safeNumber(row.unrealized_pnl, 0),
+    margin_load_percent: safeNumber(row.margin_load_percent, 0),
+    drawdown_percent: safeNumber(row.drawdown_percent, 0),
+    effective_leverage: safeNumber(row.effective_leverage, 0),
+    recorded_at: row.recorded_at,
+  };
+};
+
+const normalizeSystemRow = (row: any, members: TradingSystemMember[], metrics?: TradingSystemMetrics): TradingSystem => {
   return {
     id: Number(row.id),
     api_key_id: Number(row.api_key_id),
@@ -93,6 +127,7 @@ const normalizeSystemRow = (row: any, members: TradingSystemMember[]): TradingSy
     created_at: row.created_at,
     updated_at: row.updated_at,
     members,
+    metrics,
   };
 };
 
@@ -166,7 +201,21 @@ const loadTradingSystemsWithMembers = async (apiKeyName: string, rows: any[]): P
     membersBySystemId.set(systemId, list);
   }
 
-  return systems.map((row) => normalizeSystemRow(row, membersBySystemId.get(Number(row.id)) || []));
+  // Load metrics for each system (by api_key_id)
+  const metricsMap = new Map<number, TradingSystemMetrics | undefined>();
+  for (const row of systems) {
+    const apiKeyId = Number(row.api_key_id);
+    if (!metricsMap.has(apiKeyId)) {
+      const metrics = await getTradingSystemMetrics(apiKeyId);
+      metricsMap.set(apiKeyId, metrics);
+    }
+  }
+
+  return systems.map((row) => {
+    const apiKeyId = Number(row.api_key_id);
+    const metrics = metricsMap.get(apiKeyId);
+    return normalizeSystemRow(row, membersBySystemId.get(Number(row.id)) || [], metrics);
+  });
 };
 
 const validateMembers = async (
