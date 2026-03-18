@@ -2537,7 +2537,7 @@ const Dashboard: React.FC = () => {
                       void fetchStrategies(keyName, { runtimeOnly: next });
                     }}
                   >
-                    {(runtimeOnlyByKey[keyName] ?? true) ? 'Runtime only' : 'All strategies'}
+                    {(runtimeOnlyByKey[keyName] ?? true) ? 'Show candidates' : 'Hide candidates'}
                   </Button>
                   <Button
                     size="small"
@@ -2597,7 +2597,15 @@ const Dashboard: React.FC = () => {
                 {keyStrategiesLoading
                   ? <Spin />
                   : keyStrategies.length === 0
-                    ? <Alert type="info" showIcon message="No strategy selected: balance, chart and positions remain visible." />
+                    ? (
+                      <Alert
+                        type="info"
+                        showIcon
+                        message={(runtimeOnlyByKey[keyName] ?? true)
+                          ? 'No runtime strategies yet. Click "Show candidates" to choose and add strategies.'
+                          : 'No strategy selected: balance, chart and positions remain visible.'}
+                      />
+                    )
                     : (
                       <Collapse
                         activeKey={activeStrategyPanels}
