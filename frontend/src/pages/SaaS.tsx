@@ -2166,6 +2166,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return <Tag color="success">{t('settings.update.upToDate', 'Up to date')}</Tag>;
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const renderGitUpdateCard = (scopeLabel: string, compact: boolean) => (
     <Card
       className="battletoads-card"
@@ -2273,7 +2274,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               label: copy.admin,
               children: (
                 <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  {renderGitUpdateCard(copy.admin, false)}
                   {!summary?.catalog ? <Alert type="warning" showIcon message={copy.noCatalog} /> : null}
                   {!summary?.sweepSummary ? <Alert type="warning" showIcon message={copy.noSweep} /> : null}
                   {summaryPeriod ? <Alert type="info" showIcon message={`${copy.period}: ${formatPeriodLabel(summaryPeriod)}`} /> : null}

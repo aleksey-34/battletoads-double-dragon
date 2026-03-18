@@ -488,6 +488,7 @@ export const runTradingSystemBacktest = async (
   requestPatch?: Partial<BacktestRunRequest> & {
     memberWeights?: Record<string, number>;
     enabledMembers?: Record<string, boolean>;
+    riskMultiplier?: number;
   }
 ): Promise<BacktestRunResult> => {
   const system = await getTradingSystem(apiKeyName, systemId);
@@ -509,24 +510,17 @@ export const runTradingSystemBacktest = async (
     throw new Error(`Trading system ${systemId} has no enabled members to backtest`);
   }
 
-  const weightedMembers = enabledMembers.map((member) => {
-    const overrideWeight = Number(memberWeightsPatch[String(member.strategy_id)]);
-    const weight = Number.isFinite(overrideWeight) ? overrideWeight : Number(member.weight);
-    return Math.max(0, weight);
-  });
-
-  const avgWeight = weightedMembers.length > 0
-    ? weightedMembers.reduce((sum, value) => sum + value, 0) / weightedMembers.length
-    : 1;
-
-  const normalizedRiskMultiplier = Number.isFinite(avgWeight) && avgWeight > 0 ? avgWeight : 1;
-
   const incomingInitial = Number(requestPatch?.initialBalance);
   const initialBalance = Number.isFinite(incomingInitial) && incomingInitial > 0
     ? incomingInitial
-    : 1000 * normalizedRiskMultiplier;
+    : 1000;
 
-  return runBacktest({
+  const incomingRiskMultiplier = Number(requestPatch?.riskMultiplier);
+  const riskMultiplier = Number.isFinite(incomingRiskMultiplier)
+    ? Math.max(0.25, Math.min(3, incomingRiskMultiplier))
+    : 1;
+
+  const baseResult = await runBacktest({
     ...(requestPatch || {}),
     apiKeyName,
     mode: 'portfolio',
@@ -534,4 +528,50 @@ export const runTradingSystemBacktest = async (
     initialBalance,
     strategyId: undefined,
   });
+
+  if (Math.abs(riskMultiplier - 1) < 1e-9 || !Array.isArray(baseResult.equityCurve) || baseResult.equityCurve.length === 0) {
+    return baseResult;
+  }
+
+  const initial = Number(baseResult.summary.initialBalance);
+  const scaledEquityCurve = baseResult.equityCurve
+    .map((point) => ({
+      ...point,
+      equity: Number((initial + (Number(point.equity) - initial) * riskMultiplier).toFixed(6)),
+    }))
+    .sort((left, right) => Number(left.time) - Number(right.time));
+
+  let peak = initial;
+  let maxDrawdownAbsolute = 0;
+  let maxDrawdownPercent = 0;
+
+  for (const point of scaledEquityCurve) {
+    const equity = Number(point.equity);
+    if (equity > peak) {
+      peak = equity;
+    }
+    const drawdownAbs = peak - equity;
+    const drawdownPct = peak > 0 ? (drawdownAbs / peak) * 100 : 0;
+    if (drawdownAbs > maxDrawdownAbsolute) {
+      maxDrawdownAbsolute = drawdownAbs;
+    }
+    if (drawdownPct > maxDrawdownPercent) {
+      maxDrawdownPercent = drawdownPct;
+    }
+  }
+
+  const finalEquity = Number(scaledEquityCurve[scaledEquityCurve.length - 1]?.equity ?? initial);
+  const totalReturnPercent = initial > 0 ? ((finalEquity / initial) - 1) * 100 : 0;
+
+  return {
+    ...baseResult,
+    equityCurve: scaledEquityCurve,
+    summary: {
+      ...baseResult.summary,
+      finalEquity: Number(finalEquity.toFixed(6)),
+      totalReturnPercent: Number(totalReturnPercent.toFixed(6)),
+      maxDrawdownAbsolute: Number(maxDrawdownAbsolute.toFixed(6)),
+      maxDrawdownPercent: Number(maxDrawdownPercent.toFixed(6)),
+    },
+  };
 };

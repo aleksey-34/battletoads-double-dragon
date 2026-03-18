@@ -79,6 +79,12 @@ type BacktestPoint = {
   equity: number;
 };
 
+type MonitoringPoint = {
+  recorded_at?: string;
+  margin_load_percent?: number;
+  drawdown_percent?: number;
+};
+
 type BacktestSummary = {
   initialBalance: number;
   finalEquity: number;
@@ -305,6 +311,7 @@ const TradingSystems: React.FC = () => {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null);
   const [suggestions, setSuggestions] = useState<LiquiditySuggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [monitoringPoints, setMonitoringPoints] = useState<MonitoringPoint[]>([]);
   const [memberDraftsByStrategyId, setMemberDraftsByStrategyId] = useState<Record<number, { weight: number; is_enabled: boolean }>>({});
   const [backtestTuning, setBacktestTuning] = useState<BacktestTuning>({
     riskMultiplier: 1,
@@ -334,6 +341,7 @@ const TradingSystems: React.FC = () => {
 
     void loadSystems(apiKeyName);
     void loadSuggestions(apiKeyName);
+    void loadMonitoring(apiKeyName);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKeyName]);
 
@@ -383,6 +391,23 @@ const TradingSystems: React.FC = () => {
     }
   }, []);
 
+  const loadMonitoring = useCallback(async (nextApiKeyName: string) => {
+    if (!nextApiKeyName) {
+      setMonitoringPoints([]);
+      return;
+    }
+
+    try {
+      const response = await axios.get(`/api/monitoring/${encodeURIComponent(nextApiKeyName)}`, {
+        params: { limit: 240 },
+      });
+      const points = Array.isArray(response.data?.points) ? response.data.points : [];
+      setMonitoringPoints(points);
+    } catch {
+      setMonitoringPoints([]);
+    }
+  }, []);
+
   const loadSystem = useCallback(async (nextApiKeyName: string, systemId: number) => {
     setSystemLoading(true);
     try {
@@ -418,12 +443,12 @@ const TradingSystems: React.FC = () => {
       );
 
       const tunedBars = Math.max(240, Math.floor(backtestTuning.bars));
-      const tunedInitialBalance = Math.max(100, Number((1000 * Math.max(0.25, backtestTuning.riskMultiplier)).toFixed(2)));
 
       const response = await axios.post(`/api/trading-systems/${encodeURIComponent(apiKeyName)}/${selectedSystemId}/backtest`, {
         saveResult: true,
         bars: tunedBars,
-        initialBalance: tunedInitialBalance,
+        initialBalance: 1000,
+        riskMultiplier: Math.max(0.25, Math.min(3, Number(backtestTuning.riskMultiplier) || 1)),
         memberWeights,
         enabledMembers,
       });
@@ -574,11 +599,62 @@ const TradingSystems: React.FC = () => {
     }
   };
 
+  const setSystemActivation = async (isActive: boolean) => {
+    if (!apiKeyName || !selectedSystemId) {
+      return;
+    }
+
+    setSystemActionLoading('activation');
+    try {
+      await axios.post(`/api/trading-systems/${encodeURIComponent(apiKeyName)}/${selectedSystemId}/activation`, {
+        isActive,
+        syncMembers: false,
+      });
+      message.success(isActive ? 'Trading system activated' : 'Trading system deactivated');
+      await loadSystem(apiKeyName, selectedSystemId);
+      await loadSystems(apiKeyName);
+    } catch (error: any) {
+      message.error(String(error?.response?.data?.error || error?.message || 'Failed to update trading system activation'));
+    } finally {
+      setSystemActionLoading('');
+    }
+  };
+
   const equityChartData = useMemo(
     () => (backtestResult?.equityCurve || [])
       .map((point) => ({ time: point.time, value: point.equity }))
       .sort((left, right) => left.time - right.time),
     [backtestResult]
+  );
+
+  const drawdownChartData = useMemo(() => {
+    if (equityChartData.length === 0) {
+      return [] as Array<{ time: number; value: number }>;
+    }
+
+    let peak = Number(equityChartData[0].value);
+    return equityChartData.map((point) => {
+      const value = Number(point.value);
+      if (value > peak) {
+        peak = value;
+      }
+      const drawdownPercent = peak > 0 ? ((peak - value) / peak) * 100 : 0;
+      return {
+        time: point.time,
+        value: Number(drawdownPercent.toFixed(6)),
+      };
+    });
+  }, [equityChartData]);
+
+  const marginLoadChartData = useMemo(
+    () => (monitoringPoints || [])
+      .map((point) => ({
+        time: point.recorded_at ? Math.floor(new Date(point.recorded_at).getTime() / 1000) : 0,
+        value: Number(point.margin_load_percent || 0),
+      }))
+      .filter((point) => Number.isFinite(point.time) && point.time > 0)
+      .sort((left, right) => left.time - right.time),
+    [monitoringPoints]
   );
 
   const visibleSuggestions = useMemo(
@@ -596,26 +672,6 @@ const TradingSystems: React.FC = () => {
     }
     setMemberDraftsByStrategyId(nextDrafts);
   }, [selectedSystem]);
-
-  const memberWeightChartData = useMemo(() => {
-    const members = selectedSystem?.members || [];
-    const start = Math.floor(Date.now() / 1000);
-
-    return members
-      .map((member, index) => {
-        const draft = memberDraftsByStrategyId[member.strategy_id];
-        const weight = Number(draft ? draft.weight : member.weight);
-        if (!Number.isFinite(weight)) {
-          return null;
-        }
-
-        return {
-          time: start + index * 60,
-          value: Math.max(0, weight),
-        };
-      })
-      .filter((item): item is { time: number; value: number } => !!item);
-  }, [memberDraftsByStrategyId, selectedSystem]);
 
   const systemSummary = useMemo(() => {
     const members = selectedSystem?.members || [];
@@ -672,7 +728,7 @@ const TradingSystems: React.FC = () => {
           <Col xs={24} lg={12}>
             <Space wrap style={{ marginTop: 30 }}>
               <Tooltip title="Обновить список систем и выбранную карточку">
-                <Button onClick={() => void loadSystems(apiKeyName)} loading={systemsLoading}>{copy.refresh}</Button>
+                <Button onClick={() => { void loadSystems(apiKeyName); void loadMonitoring(apiKeyName); }} loading={systemsLoading}>{copy.refresh}</Button>
               </Tooltip>
               <Tooltip title="Подтянуть текущие liquidity suggestions">
                 <Button onClick={() => void loadSuggestions(apiKeyName)} loading={suggestionsLoading}>{copy.suggestions}</Button>
@@ -744,6 +800,11 @@ const TradingSystems: React.FC = () => {
             title={selectedSystem?.name || copy.members}
             extra={selectedSystem ? (
               <Space wrap>
+                <Tooltip title="Включить/выключить торговую систему целиком (статус active/inactive)">
+                  <Button onClick={() => void setSystemActivation(!selectedSystem.is_active)} loading={systemActionLoading === 'activation'}>
+                    {selectedSystem.is_active ? 'Deactivate system' : 'Activate system'}
+                  </Button>
+                </Tooltip>
                 <Tooltip title="Записать новые веса/статусы блоков в торговую систему">
                   <Button onClick={() => void saveMemberDrafts()} loading={systemActionLoading === 'members-save'}>Сохранить блоки</Button>
                 </Tooltip>
@@ -870,6 +931,12 @@ const TradingSystems: React.FC = () => {
                     <Descriptions.Item label="Description">{selectedSystem.description || '—'}</Descriptions.Item>
                   </Descriptions>
 
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="Status=active: система участвует в торговом контуре. Discovery: авто-поиск кандидатов/обновлений состава. Auto sync: при включении/выключении системы автоматически синхронизировать статусы стратегий-участников."
+                  />
+
                   <Table<TradingSystemMember>
                     size="small"
                     rowKey={(row) => `${row.system_id}-${row.strategy_id}`}
@@ -948,12 +1015,6 @@ const TradingSystems: React.FC = () => {
                       },
                     ]}
                   />
-
-                  {memberWeightChartData.length > 1 ? (
-                    <Card size="small" title="Профиль весов блоков">
-                      <ChartComponent data={memberWeightChartData} type="line" />
-                    </Card>
-                  ) : null}
                 </Space>
               ) : (
                 <Empty description={copy.noSystems} />
@@ -989,6 +1050,19 @@ const TradingSystems: React.FC = () => {
           <div style={{ marginTop: 16 }}>
             {equityChartData.length > 0 ? <ChartComponent data={equityChartData} type="line" /> : <Empty description={copy.backtest} />}
           </div>
+
+          <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+            <Col xs={24} xl={12}>
+              <Card size="small" title="График просадки (DD)">
+                {drawdownChartData.length > 0 ? <ChartComponent data={drawdownChartData} type="line" /> : <Empty description="Нет данных DD" />}
+              </Card>
+            </Col>
+            <Col xs={24} xl={12}>
+              <Card size="small" title="График загрузки маржи (live monitoring)">
+                {marginLoadChartData.length > 0 ? <ChartComponent data={marginLoadChartData} type="line" /> : <Empty description="Нет history по margin load" />}
+              </Card>
+            </Col>
+          </Row>
         </Card>
       ) : null}
 
