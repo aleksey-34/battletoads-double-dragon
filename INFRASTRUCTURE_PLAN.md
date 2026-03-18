@@ -677,8 +677,8 @@ CLIENT: Открывает стратегический ЛК
 ### Фаза 6 — Auth/RBAC ❌
 - [x] `requireRole('platform_admin')` guard (инкрементально: `requirePlatformAdmin` с fallback по dashboard password)
 - [x] Research routes: admin-only
-- [ ] Tenant isolation на всех client routes
-- [ ] Audit log для критических действий
+- [x] Tenant isolation на всех client routes
+- [x] Audit log для критических действий
 
 ---
 

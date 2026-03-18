@@ -35,6 +35,7 @@ import {
   updateSchedulerJob,
 } from '../research/schedulerService';
 import { importHistoricalArtifactsToResearch } from '../research/importService';
+import { db } from '../utils/database';
 import logger from '../utils/logger';
 
 const router = Router();
@@ -163,6 +164,11 @@ router.post('/profiles/:id/publish', async (req, res) => {
       publishedBy: 'admin',
       notes: body.notes,
     });
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (NULL, 'platform_admin', 'research_publish_profile', ?, CURRENT_TIMESTAMP)`,
+      [JSON.stringify({ profileId: id, apiKeyName: body.apiKeyName, notes: body.notes || '' })]
+    );
     res.json({ success: true, ...result });
   } catch (err) {
     const error = err as Error;
@@ -176,6 +182,11 @@ router.delete('/profiles/:id/publish', async (req, res) => {
     const id = Number(req.params.id);
     const body = req.body as { notes?: string };
     await revokePublishedProfile(id, { publishedBy: 'admin', notes: body?.notes });
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (NULL, 'platform_admin', 'research_revoke_profile', ?, CURRENT_TIMESTAMP)`,
+      [JSON.stringify({ profileId: id, notes: body?.notes || '' })]
+    );
     res.json({ success: true, revoked: id });
   } catch (err) {
     const error = err as Error;
@@ -364,7 +375,11 @@ router.post('/sweeps/import-from-file', async (req, res) => {
       sweepName: body.sweepName,
       description: body.description,
     });
-
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (NULL, 'platform_admin', 'research_import_artifacts', ?, CURRENT_TIMESTAMP)`,
+      [JSON.stringify({ catalogFilePath: body.catalogFilePath, sweepFilePath: body.sweepFilePath || null, sweepName: body.sweepName || null, imported: result.imported, skipped: result.skipped })]
+    );
     res.json({ success: true, ...result });
   } catch (err) {
     const error = err as Error;
