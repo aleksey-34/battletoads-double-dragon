@@ -1308,20 +1308,24 @@ const getBestExistingSourceSystem = async (): Promise<{ apiKeyName: string; syst
        ts.name AS system_name,
        ak.name AS api_key_name,
        COALESCE(ts.is_active, 0) AS is_active,
+       COALESCE(ts.discovery_enabled, 0) AS discovery_enabled,
        SUM(CASE WHEN COALESCE(tsm.is_enabled, 1) = 1 THEN 1 ELSE 0 END) AS enabled_members
      FROM trading_systems ts
      JOIN api_keys ak ON ak.id = ts.api_key_id
      LEFT JOIN trading_system_members tsm ON tsm.system_id = ts.id
-     GROUP BY ts.id, ts.name, ak.name, ts.is_active, ts.updated_at
+     GROUP BY ts.id, ts.name, ak.name, ts.is_active, ts.discovery_enabled, ts.updated_at
      ORDER BY
-       CASE
-         WHEN UPPER(COALESCE(ts.name, '')) LIKE '%HISTSWEEP%' THEN 3
-         WHEN UPPER(COALESCE(ts.name, '')) LIKE '%SWEEP%' THEN 2
-         WHEN UPPER(COALESCE(ts.name, '')) LIKE 'ALGOFUND_MASTER::%' THEN 1
-         ELSE 0
-       END DESC,
        COALESCE(ts.is_active, 0) DESC,
        enabled_members DESC,
+       CASE
+         WHEN UPPER(COALESCE(ts.name, '')) LIKE 'ALGOFUND_MASTER::%' THEN 5
+         WHEN UPPER(COALESCE(ts.name, '')) LIKE '%PORTFOLIO%' THEN 4
+         WHEN UPPER(COALESCE(ts.name, '')) LIKE '%SWEEP%' AND UPPER(COALESCE(ts.name, '')) NOT LIKE '%CANDIDATE%' THEN 3
+         WHEN UPPER(COALESCE(ts.name, '')) LIKE '%HISTSWEEP%' AND UPPER(COALESCE(ts.name, '')) NOT LIKE '%CANDIDATE%' THEN 2
+         WHEN UPPER(COALESCE(ts.name, '')) LIKE '%CANDIDATE%' THEN 0
+         ELSE 1
+       END DESC,
+       COALESCE(ts.discovery_enabled, 0) DESC,
        datetime(ts.updated_at) DESC,
        ts.id DESC
      LIMIT 1`
