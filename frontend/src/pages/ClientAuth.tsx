@@ -179,14 +179,14 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                   { type: 'email', message: t('client.auth.emailInvalid', 'Enter valid email') },
                 ]}
               >
-                <Input placeholder="name@company.com" />
+                <Input type="email" inputMode="email" autoComplete="email" placeholder="name@company.com" />
               </Form.Item>
               <Form.Item
                 label={t('client.auth.password', 'Password')}
                 name="password"
                 rules={[{ required: true, message: t('client.auth.passwordRequired', 'Password is required') }]}
               >
-                <Input.Password placeholder={t('client.auth.password', 'Password')} />
+                <Input.Password autoComplete="current-password" placeholder={t('client.auth.password', 'Password')} />
               </Form.Item>
               <Form.Item style={{ marginBottom: 0 }}>
                 <Button type="primary" htmlType="submit" loading={loading} block>
@@ -223,7 +223,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                   { type: 'email', message: t('client.auth.emailInvalid', 'Enter valid email') },
                 ]}
               >
-                <Input placeholder="name@company.com" />
+                <Input type="email" inputMode="email" autoComplete="email" placeholder="name@company.com" />
               </Form.Item>
               <Form.Item
                 label={t('client.auth.productMode', 'Workspace type')}
@@ -245,7 +245,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                   { min: 10, message: t('client.auth.passwordMin', 'Password must be at least 10 characters') },
                 ]}
               >
-                <Input.Password placeholder={t('client.auth.passwordPlaceholder', 'Strong password (10+ chars)')} />
+                <Input.Password autoComplete="new-password" placeholder={t('client.auth.passwordPlaceholder', 'Strong password (10+ chars)')} />
               </Form.Item>
               <Form.Item
                 label={t('client.auth.confirmPassword', 'Confirm password')}
@@ -263,7 +263,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                   }),
                 ]}
               >
-                <Input.Password placeholder={t('client.auth.confirmPasswordPlaceholder', 'Repeat your password')} />
+                <Input.Password autoComplete="new-password" placeholder={t('client.auth.confirmPasswordPlaceholder', 'Repeat your password')} />
               </Form.Item>
               <Form.Item style={{ marginBottom: 0 }}>
                 <Button type="primary" htmlType="submit" loading={loading} block>

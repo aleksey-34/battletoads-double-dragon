@@ -186,7 +186,7 @@ function AppShell() {
   })();
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout style={{ minHeight: '100vh' }} className="app-root-layout">
       <Header style={{ color: 'white', paddingInline: 16 }}>
         <div className="app-header-row">
           <Typography.Text className="app-brand-title">{t('app.title', 'BattleToads Control')}</Typography.Text>

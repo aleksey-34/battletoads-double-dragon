@@ -407,3 +407,56 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
     monospace;
 }
+
+/* ── Mobile / Safari fixes ─────────────────────────────────────────────── */
+
+/* Dynamic viewport height: overrides '100vh' set inline on the root Layout.
+   Prevents content cut-off by the iOS Safari browser chrome. */
+.app-root-layout {
+  min-height: 100dvh;
+}
+
+/* Prevent iOS Safari auto-zoom when focusing inputs < 16px font.
+   Ant Design defaults to 14px — we override on narrow screens only. */
+@media (max-width: 768px) {
+  .ant-input,
+  .ant-input-affix-wrapper input,
+  .ant-input-number-input,
+  .ant-select-selector,
+  textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Safe area insets: keep content away from notch and home indicator bar
+   on iPhone X+ / Dynamic Island devices.
+   Requires viewport-fit=cover in index.html (already set). */
+.ant-layout-content {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.ant-layout-header {
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+}
+
+/* Client cabinet: ensure bottom card doesn't disappear under home indicator */
+.client-cabinet-page {
+  padding-bottom: max(22px, env(safe-area-inset-bottom));
+}
+
+/* Small phone breakpoint (iPhone SE 375px, Galaxy A 360px) */
+@media (max-width: 390px) {
+  .client-auth-shell {
+    margin-top: 8px;
+    padding: 0 2px;
+  }
+
+  .client-auth-card .ant-space {
+    row-gap: 8px !important;
+  }
+
+  .app-brand-title {
+    display: none;
+  }
+}
