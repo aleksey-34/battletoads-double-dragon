@@ -560,6 +560,125 @@ const buildFallbackSweepSummary = (catalog: CatalogData | null) => {
   };
 };
 
+const buildFallbackSweepRecordFromOffer = (offer: CatalogOffer): SweepRecord | null => {
+  const strategyId = Number(offer?.strategy?.id || 0);
+  if (!Number.isFinite(strategyId) || strategyId <= 0) {
+    return null;
+  }
+
+  const strategyParams = offer.strategy?.params || {
+    interval: '4h',
+    length: 50,
+    takeProfitPercent: 0,
+    detectionSource: 'close',
+    zscoreEntry: 2,
+    zscoreExit: 0.5,
+    zscoreStop: 3,
+  };
+
+  return {
+    strategyId,
+    strategyName: asString(offer.strategy?.name, `Strategy ${strategyId}`),
+    strategyType: asString(offer.strategy?.type, 'DD_BattleToads'),
+    marketMode: offer.strategy?.mode === 'mono' ? 'mono' : 'synthetic',
+    market: asString(offer.strategy?.market, ''),
+    interval: asString(strategyParams.interval, '4h'),
+    length: asNumber(strategyParams.length, 50),
+    takeProfitPercent: asNumber(strategyParams.takeProfitPercent, 0),
+    detectionSource: asString(strategyParams.detectionSource, 'close'),
+    zscoreEntry: asNumber(strategyParams.zscoreEntry, 2),
+    zscoreExit: asNumber(strategyParams.zscoreExit, 0.5),
+    zscoreStop: asNumber(strategyParams.zscoreStop, 3),
+    totalReturnPercent: asNumber(offer.metrics?.ret, 0),
+    maxDrawdownPercent: asNumber(offer.metrics?.dd, 0),
+    winRatePercent: asNumber(offer.metrics?.wr, 0),
+    profitFactor: asNumber(offer.metrics?.pf, 1),
+    tradesCount: Math.max(0, Math.floor(asNumber(offer.metrics?.trades, 0))),
+    score: asNumber(offer.metrics?.score, 0),
+    robust: offer.metrics?.robust !== false,
+  };
+};
+
+const buildFallbackSweepData = (catalog: CatalogData | null): SweepData | null => {
+  const offers = catalog ? getAllOffers(catalog) : [];
+  const evaluated = offers
+    .map((offer) => buildFallbackSweepRecordFromOffer(offer))
+    .filter((item): item is SweepRecord => !!item)
+    .sort((left, right) => asNumber(right.score, 0) - asNumber(left.score, 0));
+
+  if (evaluated.length === 0) {
+    return null;
+  }
+
+  const topAll = evaluated.slice(0, 24);
+  const mono = topAll.filter((item) => asString(item.marketMode) === 'mono');
+  const synth = topAll.filter((item) => asString(item.marketMode) !== 'mono');
+  const draftMembers = catalog?.adminTradingSystemDraft?.members || [];
+  const draftWeights = new Map<number, number>();
+  draftMembers.forEach((member) => {
+    draftWeights.set(Number(member.strategyId), asNumber(member.weight, 0));
+  });
+  const selectedMembers = draftMembers
+    .map((member) => evaluated.find((row) => Number(row.strategyId) === Number(member.strategyId)) || null)
+    .filter((row): row is SweepRecord => !!row);
+
+  return {
+    timestamp: new Date().toISOString(),
+    apiKeyName: asString(catalog?.apiKeyName, ''),
+    counts: {
+      potentialRuns: evaluated.length,
+      scheduledRuns: evaluated.length,
+      coveragePercent: 100,
+      evaluated: evaluated.length,
+      failures: 0,
+      robust: evaluated.filter((item) => item.robust).length,
+      resumedFromCheckpoint: false,
+      skippedFromCheckpoint: 0,
+      resumedFromLog: false,
+      importedFromLog: 0,
+      logImportMissingStrategyIds: 0,
+      durationSec: 0,
+    },
+    topAll,
+    topByMode: {
+      mono,
+      synth,
+    },
+    selectedMembers,
+    tradingSystem: {
+      id: 0,
+      name: asString(catalog?.adminTradingSystemDraft?.name, 'SAAS Admin TS (fallback)'),
+      members: selectedMembers.map((item, index) => ({
+        strategy_id: Number(item.strategyId),
+        weight: Number(asNumber(draftWeights.get(Number(item.strategyId)), index === 0 ? 1 : 0.8).toFixed(4)),
+        member_role: index < 3 ? 'core' : 'satellite',
+        is_enabled: true,
+        notes: 'fallback sweep',
+      })),
+    },
+    portfolioResults: [],
+    evaluated,
+    config: {
+      initialBalance: 10000,
+      backtestBars: 6000,
+      warmupBars: 400,
+      skipMissingSymbols: true,
+      commissionPercent: 0.1,
+      slippagePercent: 0.05,
+      fundingRatePercent: 0,
+    },
+  };
+};
+
+const loadCatalogAndSweepWithFallback = async (): Promise<{ catalog: CatalogData | null; sweep: SweepData | null }> => {
+  const sourceCatalog = loadLatestClientCatalog();
+  const sourceSweep = loadLatestSweep();
+  const apiKeys = await getAvailableApiKeyNames();
+  const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
+  const sweep = sourceSweep || buildFallbackSweepData(catalog);
+  return { catalog, sweep };
+};
+
 const getAvailableApiKeyNames = async (): Promise<string[]> => {
   const rows = await db.all('SELECT name FROM api_keys ORDER BY id ASC');
   return (Array.isArray(rows) ? rows : []).map((row) => asString((row as { name?: string }).name)).filter(Boolean);
@@ -2116,9 +2235,9 @@ export const materializeStrategyClient = async (tenantId: number, activate: bool
     throw new Error('Assign an API key to this strategy client first');
   }
 
-  const sweep = loadLatestSweep();
+  const { sweep } = await loadCatalogAndSweepWithFallback();
   if (!sweep) {
-    throw new Error('Historical sweep JSON not found in results/.');
+    throw new Error('Historical sweep data unavailable (results and fallback sources are missing).');
   }
 
   const selectedRecords = selectedOfferIds.map((offerId) => {
@@ -2176,10 +2295,9 @@ const materializeAlgofundSystem = async (
   profile: AlgofundProfileRow,
   activate: boolean
 ) => {
-  const catalog = loadLatestClientCatalog();
-  const sweep = loadLatestSweep();
+  const { catalog, sweep } = await loadCatalogAndSweepWithFallback();
   if (!catalog || !sweep) {
-    throw new Error('Catalog or sweep JSON missing in results/.');
+    throw new Error('Catalog or sweep data unavailable (results and fallback sources are missing).');
   }
 
   const assignedApiKeyName = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);

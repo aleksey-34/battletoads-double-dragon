@@ -119,44 +119,6 @@ type TenantCapabilities = {
   startStopRequests: boolean;
 };
 
-type UpdateCommit = {
-  hash: string;
-  shortHash: string;
-  date: string;
-  subject: string;
-};
-
-type UpdateStatus = {
-  configured: boolean;
-  updateEnabled: boolean;
-  repoDir: string;
-  appDir: string;
-  branch: string;
-  originUrl: string;
-  localHash: string;
-  remoteHash: string;
-  ahead: number;
-  behind: number;
-  dirtyCount: number;
-  updateAvailable: boolean;
-  latestCommit: UpdateCommit | null;
-  pendingCommits: UpdateCommit[];
-  message?: string;
-};
-
-type UpdateJob = {
-  unit: string;
-  exists: boolean;
-  loadState: string;
-  activeState: string;
-  subState: string;
-  result: string;
-  execMainStatus: string;
-  startedAt: string;
-  exitedAt: string;
-  logs: string;
-};
-
 type TenantSummary = {
   tenant: Tenant;
   plan: Plan | null;
@@ -1140,7 +1102,7 @@ export const hydrateStrategyPreview = (
 };
 
 const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin' }) => {
-  const { language, t } = useI18n();
+  const { language } = useI18n();
   const copy = COPY_BY_LANGUAGE[language];
   const isAdminSurface = surfaceMode === 'admin';
   const [messageApi, contextHolder] = message.useMessage();
@@ -1180,11 +1142,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [publishResponse, setPublishResponse] = useState<AdminPublishResponse | null>(null);
   const [planDrafts, setPlanDrafts] = useState<Record<string, Plan>>({});
   const [actionLoading, setActionLoading] = useState<string>('');
-  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
-  const [updateJob, setUpdateJob] = useState<UpdateJob | null>(null);
-  const [updateLoading, setUpdateLoading] = useState(false);
-  const [updateRunLoading, setUpdateRunLoading] = useState(false);
-  const [jobLoading, setJobLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<SaasTabKey>(initialTab);
 
   const strategyTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client');
@@ -1259,83 +1216,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
-  const fetchUpdateStatus = async (refreshRemote: boolean = true) => {
-    setUpdateLoading(true);
-    try {
-      const response = await axios.get<UpdateStatus>('/api/system/update/status', {
-        params: {
-          refresh: refreshRemote ? 1 : 0,
-        },
-      });
-      setUpdateStatus(response.data);
-    } catch (error: any) {
-      messageApi.error(error?.response?.data?.error || t('settings.msg.statusLoadError', 'Failed to load git update status'));
-    } finally {
-      setUpdateLoading(false);
-    }
-  };
-
-  const fetchUpdateJob = async () => {
-    setJobLoading(true);
-    try {
-      const response = await axios.get<UpdateJob>('/api/system/update/job');
-      setUpdateJob(response.data);
-    } catch (error: any) {
-      messageApi.error(error?.response?.data?.error || t('settings.msg.jobLoadError', 'Failed to load git update job status'));
-    } finally {
-      setJobLoading(false);
-    }
-  };
-
-  const runGitUpdate = async () => {
-    setUpdateRunLoading(true);
-    try {
-      const response = await axios.post('/api/system/update/run');
-      const unit = String(response?.data?.unit || 'btdd-git-update');
-      messageApi.success(t('settings.msg.runStarted', 'Update started ({unit}). Backend may restart during deploy.', { unit }));
-
-      window.setTimeout(() => {
-        void fetchUpdateJob();
-        void fetchUpdateStatus(true);
-      }, 1200);
-    } catch (error: any) {
-      messageApi.error(error?.response?.data?.error || t('settings.msg.runError', 'Failed to start git update'));
-    } finally {
-      setUpdateRunLoading(false);
-    }
-  };
-
   useEffect(() => {
     void loadSummary();
-    if (isAdminSurface) {
-      void fetchUpdateStatus(true);
-      void fetchUpdateJob();
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdminSurface]);
 
   useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab]);
-
-  useEffect(() => {
-    if (!isAdminSurface) {
-      return;
-    }
-
-    const activeState = String(updateJob?.activeState || '').toLowerCase();
-    if (activeState !== 'active' && activeState !== 'activating') {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      void fetchUpdateJob();
-      void fetchUpdateStatus(false);
-    }, 5000);
-
-    return () => window.clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdminSurface, updateJob?.activeState]);
 
   useEffect(() => {
     if (!summary) {
@@ -2139,32 +2027,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const publishPreviewPeriod = publishResponse?.preview?.period || summaryPeriod;
   const strategyPersistedRiskBucket = sliderValueToLevel(strategyRiskInput);
   const strategyPersistedTradeBucket = sliderValueToLevel(strategyTradeInput);
-  const jobActiveState = String(updateJob?.activeState || '').toLowerCase();
-  const updateJobRunning = jobActiveState === 'active' || jobActiveState === 'activating';
-  const hasLocalServerChanges = Number(updateStatus?.dirtyCount || 0) > 0 || Number(updateStatus?.ahead || 0) > 0;
-  const canRunGitUpdate = Boolean(
-    updateStatus?.configured &&
-    updateStatus?.updateEnabled &&
-    updateStatus?.updateAvailable &&
-    !hasLocalServerChanges
-  );
-
-  const renderUpdateStatusTag = () => {
-    if (!updateStatus) {
-      return <Tag color="processing">{t('settings.update.loading', 'Loading update status...')}</Tag>;
-    }
-
-    if (!updateStatus.updateEnabled) {
-      return <Tag color="warning">{t('settings.update.disabled', 'Update API disabled')}</Tag>;
-    }
-
-    if (updateStatus.updateAvailable) {
-      const count = Number(updateStatus.behind || updateStatus.pendingCommits?.length || 0);
-      return <Tag color="gold">{t('settings.update.available', 'Update available ({count})', { count })}</Tag>;
-    }
-
-    return <Tag color="success">{t('settings.update.upToDate', 'Up to date')}</Tag>;
-  };
 
   return (
     <div className="saas-page">
