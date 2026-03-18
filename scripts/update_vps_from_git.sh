@@ -3,10 +3,18 @@ set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/battletoads-double-dragon}"
 BRANCH="${BRANCH:-main}"
+# Режим деплоя: single (старый единый сервис) | multi (три отдельных сервиса)
+DEPLOY_MODE="${DEPLOY_MODE:-single}"
 SERVICE_NAME="${SERVICE_NAME:-battletoads-backend}"
 BACKEND_DIR="${BACKEND_DIR:-$APP_DIR/backend}"
 FRONTEND_DIR="${FRONTEND_DIR:-$APP_DIR/frontend}"
 BUILD_FRONTEND="${BUILD_FRONTEND:-1}"
+
+# В multi-режиме рестартуем эти три сервиса
+MULTI_SERVICES="${MULTI_SERVICES:-btdd-api btdd-runtime btdd-research}"
+# Какие сервисы перезапускать при деплое API (runtime обычно не трогаем)
+# Установите RESTART_RUNTIME=0 чтобы не перезапускать торговый контур при обновлении API
+RESTART_RUNTIME="${RESTART_RUNTIME:-1}"
 
 log() {
 	printf '[btdd-update] %s\n' "$*"
@@ -69,9 +77,30 @@ if [[ "$BUILD_FRONTEND" == "1" ]]; then
 	run env CI=false npm run build
 fi
 
-run systemctl restart "$SERVICE_NAME"
-service_state="$(systemctl is-active "$SERVICE_NAME" || true)"
-[[ "$service_state" == "active" ]] || fail "Service $SERVICE_NAME is not active after restart"
+# ── Рестарт сервисов ──────────────────────────────────────────────────────────
+if [[ "$DEPLOY_MODE" == "multi" ]]; then
+	log "Multi-service mode: перезапуск трёх сервисов"
+	for svc in $MULTI_SERVICES; do
+		if [[ "$svc" == "btdd-runtime" && "$RESTART_RUNTIME" == "0" ]]; then
+			log "Пропускаем перезапуск $svc (RESTART_RUNTIME=0)"
+			continue
+		fi
+		if systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+			run systemctl restart "$svc"
+			state="$(systemctl is-active "$svc" || true)"
+			[[ "$state" == "active" ]] || fail "Service $svc is not active after restart (state: $state)"
+			log "Service $svc state: $state"
+		else
+			log "WARN: $svc не включён, пропускаем"
+		fi
+	done
+else
+	# Обратная совместимость: одиночный сервис (старый режим)
+	run systemctl restart "$SERVICE_NAME"
+	service_state="$(systemctl is-active "$SERVICE_NAME" || true)"
+	[[ "$service_state" == "active" ]] || fail "Service $SERVICE_NAME is not active after restart"
+	log "Service $SERVICE_NAME state: $service_state"
+fi
 
-log "Service $SERVICE_NAME state: $service_state"
 log "Deploy finished successfully"
+

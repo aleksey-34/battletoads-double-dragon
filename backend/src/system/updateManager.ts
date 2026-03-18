@@ -291,7 +291,9 @@ export const triggerGitUpdate = async (): Promise<{ started: boolean; unit: stri
   await ignoreCommandError('systemctl', ['reset-failed', UPDATE_UNIT_NAME]);
 
   const branch = status.branch || 'main';
-  const remoteCmd = `APP_DIR=${shellQuote(status.appDir)} BRANCH=${shellQuote(branch)} bash ${shellQuote(scriptPath)}`;
+  const deployMode = process.env.DEPLOY_MODE || 'single';
+  const restartRuntime = process.env.RESTART_RUNTIME || '1';
+  const remoteCmd = `APP_DIR=${shellQuote(status.appDir)} BRANCH=${shellQuote(branch)} DEPLOY_MODE=${deployMode} RESTART_RUNTIME=${restartRuntime} bash ${shellQuote(scriptPath)}`;
 
   let runResult: { stdout: string; stderr: string };
   try {

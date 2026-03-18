@@ -547,13 +547,16 @@ scripts/
 
 ### 🚀 Фаза 7 — VPS Process Isolation (пост-альфа)
 ```
-Цель: три отдельных systemd-сервиса
+[x] Реализовано:
 
-btdd-runtime.service   ← исключительно торговый цикл
-btdd-research.service  ← sweep + preview + backtest workers
-btdd-api.service       ← Express API + frontend serve
+btdd-runtime.service   ← исключительно торговый цикл (runtime-main.ts)
+btdd-research.service  ← sweep + preview workers (research-main.ts)
+btdd-api.service       ← Express API + frontend serve (server.ts, BTDD_DISABLE_TRADING=1 + BTDD_DISABLE_RESEARCH_WORKERS=1)
 
-Деплой runtime-обновлений без остановки торговли.
+Деплой runtime-обновлений без остановки торговли: RESTART_RUNTIME=0
+Скрипт установки: scripts/btdd_setup_services.sh
+Деплой: scripts/update_vps_from_git.sh с DEPLOY_MODE=multi
+Документация: scripts/VPS_UBUNTU20.md
 ```
 
 ---

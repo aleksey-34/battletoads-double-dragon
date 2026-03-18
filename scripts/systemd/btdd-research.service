@@ -1,0 +1,30 @@
+[Unit]
+Description=BTDD Research — Preview Worker + Research Scheduler
+Documentation=https://github.com/aleksey-34/battletoads-double-dragon
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/battletoads-double-dragon/backend
+
+# Переменные окружения из общего .env файла
+EnvironmentFile=-/opt/battletoads-double-dragon/.env
+
+# Environment=RESEARCH_DB_PATH=/opt/battletoads-double-dragon/data/research.db
+
+ExecStart=/usr/bin/node /opt/battletoads-double-dragon/backend/dist/research-main.js
+Restart=always
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=btdd-research
+
+# Безопасность (research допускает более широкий доступ для sweep/exchange)
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
