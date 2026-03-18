@@ -328,6 +328,10 @@ const asNumber = (value: unknown, fallback = 0): number => {
   return Number.isFinite(numeric) ? numeric : fallback;
 };
 
+const SAAS_PREVIEW_BARS = Math.max(240, Math.floor(asNumber(process.env.SAAS_PREVIEW_BARS, 1200)));
+const SAAS_PREVIEW_WARMUP_BARS = Math.max(0, Math.floor(asNumber(process.env.SAAS_PREVIEW_WARMUP_BARS, 0)));
+const SAAS_PREVIEW_INITIAL_BALANCE = Math.max(1, asNumber(process.env.SAAS_PREVIEW_INITIAL_BALANCE, 10000));
+
 const asString = (value: unknown, fallback = ''): string => {
   const text = String(value ?? '').trim();
   return text || fallback;
@@ -2420,10 +2424,10 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
 
   const sourceSystem = await ensurePublishedSourceSystem(tenantId);
   const basePreviewResult = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
-    bars: 6000,
-    warmupBars: 400,
+    bars: SAAS_PREVIEW_BARS,
+    warmupBars: SAAS_PREVIEW_WARMUP_BARS,
     skipMissingSymbols: true,
-    initialBalance: 10000,
+    initialBalance: SAAS_PREVIEW_INITIAL_BALANCE,
     commissionPercent: 0.1,
     slippagePercent: 0.05,
     fundingRatePercent: 0,
@@ -2588,10 +2592,10 @@ export const publishAdminTradingSystem = async () => {
   const sourceSystem = await ensurePublishedSourceSystem(undefined);
   const period = buildPeriodInfo(loadLatestSweep());
   const preview = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
-    bars: 6000,
-    warmupBars: 400,
+    bars: SAAS_PREVIEW_BARS,
+    warmupBars: SAAS_PREVIEW_WARMUP_BARS,
     skipMissingSymbols: true,
-    initialBalance: 10000,
+    initialBalance: SAAS_PREVIEW_INITIAL_BALANCE,
     commissionPercent: 0.1,
     slippagePercent: 0.05,
     fundingRatePercent: 0,
