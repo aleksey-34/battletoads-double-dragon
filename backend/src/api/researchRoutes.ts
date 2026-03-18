@@ -5,7 +5,7 @@
  * Research DB is initialized lazily on first request.
  */
 import { Router } from 'express';
-import { authenticate } from '../utils/auth';
+import { requirePlatformAdmin } from '../utils/auth';
 import { initResearchDb } from '../research/db';
 import {
   listProfiles,
@@ -34,6 +34,7 @@ import {
   runSchedulerJobNow,
   updateSchedulerJob,
 } from '../research/schedulerService';
+import { importHistoricalArtifactsToResearch } from '../research/importService';
 import logger from '../utils/logger';
 
 const router = Router();
@@ -48,8 +49,8 @@ router.use(async (_req, _res, next) => {
   }
 });
 
-// ── All research routes require admin auth ─────────────────────────────────────
-router.use(authenticate);
+// ── All research routes require platform admin auth ───────────────────────────
+router.use(requirePlatformAdmin);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PROFILES
@@ -334,6 +335,37 @@ router.post('/sweeps/:id/import-candidates', async (req, res) => {
     }
     const result = await importSweepCandidates(sweepRunId, candidates);
     res.json(result);
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Manual one-shot import of existing historical artifacts into research.db.
+ * Useful for bootstrapping Phase 2 from already generated JSON files.
+ */
+router.post('/sweeps/import-from-file', async (req, res) => {
+  try {
+    const body = req.body as {
+      catalogFilePath?: string;
+      sweepFilePath?: string;
+      sweepName?: string;
+      description?: string;
+    };
+
+    if (!body.catalogFilePath) {
+      return res.status(400).json({ error: 'catalogFilePath is required' });
+    }
+
+    const result = await importHistoricalArtifactsToResearch({
+      catalogFilePath: body.catalogFilePath,
+      sweepFilePath: body.sweepFilePath,
+      sweepName: body.sweepName,
+      description: body.description,
+    });
+
+    res.json({ success: true, ...result });
   } catch (err) {
     const error = err as Error;
     res.status(500).json({ error: error.message });

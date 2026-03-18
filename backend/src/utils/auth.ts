@@ -705,3 +705,34 @@ export const authenticate = (req: any, res: any, next: any) => {
   }
   next();
 };
+
+/**
+ * Phase 6 incremental RBAC guard.
+ *
+ * Backward-compatible behavior:
+ * - If ADMIN_PLATFORM_TOKEN is not configured, falls back to existing dashboard password auth.
+ * - If ADMIN_PLATFORM_TOKEN is configured, request must provide this token in Authorization Bearer.
+ */
+export const requirePlatformAdmin = (req: any, res: any, next: any) => {
+  const platformToken = String(process.env.ADMIN_PLATFORM_TOKEN || '').trim();
+  if (!platformToken) {
+    return authenticate(req, res, next);
+  }
+
+  const authHeader = String(req?.headers?.authorization || '').trim();
+  if (!authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const token = authHeader.slice(7).trim();
+  if (!token || token !== platformToken) {
+    return res.status(403).json({ error: 'Forbidden: platform_admin required' });
+  }
+
+  req.adminAuth = {
+    role: 'platform_admin',
+    authMode: 'platform_token',
+  };
+
+  next();
+};

@@ -16,6 +16,9 @@
   - `GET /api/research/observability/db`;
 - background worker `researchSchedulerWorker` (периодический запуск due job);
 - Research UI: карточка управления scheduler + базовая DB observability.
+- manual bootstrap import endpoint:
+  - `POST /api/research/sweeps/import-from-file`
+  - импортирует существующие `client_catalog`/`historical_sweep` JSON в `research.db`.
 
 ---
 
