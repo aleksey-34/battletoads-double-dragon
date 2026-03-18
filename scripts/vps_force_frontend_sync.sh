@@ -37,7 +37,10 @@ git reset --hard "origin/$BRANCH"
 
 echo "[vps-sync] Building frontend..."
 cd "$FRONTEND_DIR"
-npm ci --silent
+if ! npm ci; then
+  echo "[vps-sync] npm ci failed, retrying with npm install --legacy-peer-deps"
+  npm install --legacy-peer-deps
+fi
 env CI=false npm run build
 
 echo "[vps-sync] Syncing build to nginx root..."
