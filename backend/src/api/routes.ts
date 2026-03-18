@@ -56,10 +56,13 @@ import {
   completeClientOnboarding,
   getClientAuthPayloadFromSession,
   loginClientUser,
+  requirePlatformAdmin,
   registerClientUser,
   revokeClientSession,
 } from '../utils/auth';
 import logger from '../utils/logger';
+import { initResearchDb } from '../research/db';
+import { getPreset, listOfferIds } from '../research/presetBuilder';
 import { getGitUpdateJobStatus, getGitUpdateStatus, triggerGitUpdate } from '../system/updateManager';
 import {
   getPasswordRecoveryStatus,
@@ -522,6 +525,69 @@ router.post('/client/strategy/selection-preview', authenticateClient, async (req
   }
 });
 
+router.get('/client/catalog', authenticateClient, async (_req, res) => {
+  try {
+    await initResearchDb();
+    const offerIds = await listOfferIds();
+
+    const items = await Promise.all(
+      offerIds.map(async (offerId) => {
+        const preset = await getPreset(offerId, 'medium', 'medium');
+        return {
+          offerId,
+          defaultRisk: 'medium',
+          defaultFreq: 'medium',
+          metrics: preset?.metrics || {},
+          equity_curve: preset?.equity_curve || [],
+          hasPreset: !!preset,
+        };
+      })
+    );
+
+    res.json({ success: true, offers: items });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client catalog load error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/client/catalog/:offerId/preset', authenticateClient, async (req, res) => {
+  try {
+    const offerId = String(req.params.offerId || '').trim();
+    if (!offerId) {
+      return res.status(400).json({ error: 'offerId is required' });
+    }
+
+    const risk = String(req.query.risk || 'medium').trim().toLowerCase();
+    const freq = String(req.query.freq || 'medium').trim().toLowerCase();
+    if (!isLevel3(risk)) {
+      return res.status(400).json({ error: 'risk must be one of: low | medium | high' });
+    }
+    if (!isLevel3(freq)) {
+      return res.status(400).json({ error: 'freq must be one of: low | medium | high' });
+    }
+
+    await initResearchDb();
+    const preset = await getPreset(offerId, risk, freq);
+    if (!preset) {
+      return res.status(404).json({ error: `Preset not found for offerId=${offerId} risk=${risk} freq=${freq}` });
+    }
+
+    res.json({
+      success: true,
+      offerId,
+      risk,
+      freq,
+      ...preset,
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client preset load error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/client/algofund/state', authenticateClient, async (req, res) => {
   try {
     const session = (req as any).clientAuth;
@@ -599,8 +665,8 @@ router.post('/client/algofund/request', authenticateClient, async (req, res) => 
   }
 });
 
-// Применить аутентификацию ко всем маршрутам
-router.use(authenticate);
+// Применить platform-admin guard ко всем admin маршрутам
+router.use(requirePlatformAdmin);
 
 // Получить последние строки логов
 router.get('/logs', async (req, res) => {

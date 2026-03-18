@@ -654,7 +654,7 @@ CLIENT: Открывает стратегический ЛК
 
 ### Фаза 2 — Research DB ⚠️
 - [x] `research/db.ts` + схема
-- [ ] Import существующего sweep JSON → research DB
+- [x] Import существующего sweep JSON → research DB (manual endpoint + UI: `/api/research/sweeps/import-from-file`)
 - [x] `researchRoutes.ts` базовые маршруты
 - [x] Research страница в frontend
 
@@ -675,8 +675,8 @@ CLIENT: Открывает стратегический ЛК
 - [ ] Equity curve из artifact JSON
 
 ### Фаза 6 — Auth/RBAC ❌
-- [ ] `requireRole('platform_admin')` guard
-- [ ] Research routes: admin-only
+- [x] `requireRole('platform_admin')` guard (инкрементально: `requirePlatformAdmin` с fallback по dashboard password)
+- [x] Research routes: admin-only
 - [ ] Tenant isolation на всех client routes
 - [ ] Audit log для критических действий
 

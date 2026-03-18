@@ -141,7 +141,10 @@ function SweepPanel({ onSweepSelect }: { onSweepSelect: (id: number | null) => v
   const [loading, setLoading] = useState(false);
   const [importingId, setImportingId] = useState<number | null>(null);
   const [registerModal, setRegisterModal] = useState(false);
+  const [importArtifactsModal, setImportArtifactsModal] = useState(false);
+  const [importArtifactsLoading, setImportArtifactsLoading] = useState(false);
   const [registerForm] = Form.useForm();
+  const [importArtifactsForm] = Form.useForm();
 
   const fetchSweeps = useCallback(async () => {
     setLoading(true);
@@ -185,6 +188,33 @@ function SweepPanel({ onSweepSelect }: { onSweepSelect: (id: number | null) => v
     }
   };
 
+  const handleImportArtifacts = async (values: {
+    catalogFilePath: string;
+    sweepFilePath?: string;
+    sweepName?: string;
+    description?: string;
+  }) => {
+    setImportArtifactsLoading(true);
+    try {
+      const res = await axios.post<{
+        sweepRunId: number;
+        imported: number;
+        skipped: number;
+        candidates: number;
+      }>('/api/research/sweeps/import-from-file', values);
+      message.success(
+        `Imported ${res.data.imported}/${res.data.candidates} candidates into sweep #${res.data.sweepRunId}`
+      );
+      setImportArtifactsModal(false);
+      importArtifactsForm.resetFields();
+      void fetchSweeps();
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || 'Artifacts import failed');
+    } finally {
+      setImportArtifactsLoading(false);
+    }
+  };
+
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 60 },
     {
@@ -225,9 +255,14 @@ function SweepPanel({ onSweepSelect }: { onSweepSelect: (id: number | null) => v
     <Card
       title="Sweep Runs"
       extra={
-        <Button type="primary" size="small" onClick={() => setRegisterModal(true)}>
-          + Register sweep
-        </Button>
+        <Space>
+          <Button size="small" onClick={() => setImportArtifactsModal(true)}>
+            Import artifacts
+          </Button>
+          <Button type="primary" size="small" onClick={() => setRegisterModal(true)}>
+            + Register sweep
+          </Button>
+        </Space>
       }
     >
       <Table
@@ -256,6 +291,41 @@ function SweepPanel({ onSweepSelect }: { onSweepSelect: (id: number | null) => v
           </Form.Item>
           <Form.Item name="catalogPath" label="Catalog JSON path (on server)" rules={[{ required: true }]}>
             <Input placeholder="/opt/battletoads-double-dragon/sweeps/catalog.json" />
+          </Form.Item>
+        </Form>
+      </Modal>
+
+      <Modal
+        title="Import Historical Artifacts"
+        open={importArtifactsModal}
+        onCancel={() => setImportArtifactsModal(false)}
+        onOk={() => importArtifactsForm.submit()}
+        okText="Import"
+        confirmLoading={importArtifactsLoading}
+      >
+        <Form
+          form={importArtifactsForm}
+          layout="vertical"
+          onFinish={(v) => void handleImportArtifacts(v)}
+          initialValues={{
+            sweepName: `manual_import_${new Date().toISOString().slice(0, 10)}`,
+          }}
+        >
+          <Form.Item
+            name="catalogFilePath"
+            label="client_catalog JSON path"
+            rules={[{ required: true }]}
+          >
+            <Input placeholder="/opt/battletoads-double-dragon/results/*_client_catalog_*.json" />
+          </Form.Item>
+          <Form.Item name="sweepFilePath" label="historical_sweep JSON path (optional)">
+            <Input placeholder="/opt/battletoads-double-dragon/results/*_historical_sweep_*.json" />
+          </Form.Item>
+          <Form.Item name="sweepName" label="Sweep name (optional)">
+            <Input />
+          </Form.Item>
+          <Form.Item name="description" label="Description (optional)">
+            <Input.TextArea rows={2} />
           </Form.Item>
         </Form>
       </Modal>
