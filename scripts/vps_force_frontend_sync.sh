@@ -6,6 +6,7 @@ BRANCH="${BRANCH:-feature/research-sweep-spec-and-scheduler}"
 FRONTEND_DIR="${FRONTEND_DIR:-$APP_DIR/frontend}"
 BACKEND_DIR="${BACKEND_DIR:-$APP_DIR/backend}"
 BUILD_BACKEND="${BUILD_BACKEND:-1}"
+API_SERVICE="${API_SERVICE:-}"
 
 # Detect nginx static root from config; fallback to known defaults.
 detect_nginx_root() {
@@ -31,6 +32,7 @@ echo "[vps-sync] BRANCH=$BRANCH"
 echo "[vps-sync] FRONTEND_DIR=$FRONTEND_DIR"
 echo "[vps-sync] BACKEND_DIR=$BACKEND_DIR"
 echo "[vps-sync] BUILD_BACKEND=$BUILD_BACKEND"
+echo "[vps-sync] API_SERVICE=${API_SERVICE:-<auto>}"
 echo "[vps-sync] NGINX_ROOT=$NGINX_ROOT"
 
 echo "[vps-sync] Fetching and resetting git branch..."
@@ -49,22 +51,30 @@ if [[ "$BUILD_BACKEND" == "1" ]]; then
   npm run build
 
   echo "[vps-sync] Restarting backend API service..."
-  if systemctl list-unit-files | grep -q '^btdd-api.service'; then
-    systemctl restart btdd-api
-    systemctl is-active --quiet btdd-api
-    echo "[vps-sync] btdd-api is active"
-  elif systemctl list-unit-files | grep -q '^battletoads-backend.service'; then
-    systemctl restart battletoads-backend
-    systemctl is-active --quiet battletoads-backend
-    echo "[vps-sync] battletoads-backend is active"
+  if [[ -n "$API_SERVICE" ]]; then
+    systemctl restart "$API_SERVICE"
+    systemctl is-active --quiet "$API_SERVICE"
+    echo "[vps-sync] $API_SERVICE is active"
   else
-    echo "[vps-sync] WARN: no known backend API service found (btdd-api/battletoads-backend)"
+    detected_service="$(systemctl list-units --all --type=service --no-legend 2>/dev/null \
+      | awk '{print $1}' \
+      | grep -E '^(btdd-api|battletoads-backend|btdd-backend)\.service$' \
+      | head -1 || true)"
+
+    if [[ -n "$detected_service" ]]; then
+      systemctl restart "$detected_service"
+      systemctl is-active --quiet "$detected_service"
+      echo "[vps-sync] $detected_service is active"
+    else
+      echo "[vps-sync] WARN: no known backend API service found (btdd-api/battletoads-backend/btdd-backend)"
+      echo "[vps-sync] TIP: set API_SERVICE=<your-service>.service when running this script"
+    fi
   fi
 fi
 
 echo "[vps-sync] Building frontend..."
 cd "$FRONTEND_DIR"
-if ! npm ci; then
+if ! npm ci --silent 2>/dev/null; then
   echo "[vps-sync] npm ci failed, retrying with npm install --legacy-peer-deps"
   npm install --legacy-peer-deps
 fi
