@@ -795,12 +795,62 @@ const findOfferByIdOrNull = (catalog: CatalogData | null, offerId?: string | nul
   return getAllOffers(catalog).find((item) => item.offerId === offerId) || null;
 };
 
+const toCatalogPreset = (
+  preset: { config: Record<string, unknown>; metrics: Record<string, unknown> } | null,
+  fallback: { strategyId: number; strategyName: string; params: CatalogPreset['params']; metrics: CatalogMetricSet & { score?: number } }
+): CatalogPreset | null => {
+  if (!preset) {
+    return null;
+  }
+
+  const config = (preset.config || {}) as Record<string, unknown>;
+  const metrics = (preset.metrics || {}) as Record<string, unknown>;
+
+  return {
+    strategyId: asNumber(config.strategyId, fallback.strategyId),
+    strategyName: asString(config.name, fallback.strategyName),
+    score: asNumber(metrics.score, asNumber(fallback.metrics.score, fallback.metrics.ret)),
+    metrics: {
+      ret: asNumber(metrics.ret, fallback.metrics.ret),
+      pf: asNumber(metrics.pf, fallback.metrics.pf),
+      dd: asNumber(metrics.dd, fallback.metrics.dd),
+      wr: asNumber(metrics.wr, fallback.metrics.wr),
+      trades: asNumber(metrics.trades, fallback.metrics.trades),
+    },
+    params: {
+      interval: asString(config.interval, fallback.params.interval),
+      length: asNumber(config.price_channel_length, fallback.params.length),
+      takeProfitPercent: asNumber(config.take_profit_percent, fallback.params.takeProfitPercent),
+      detectionSource: asString(config.detection_source, fallback.params.detectionSource),
+      zscoreEntry: asNumber(config.zscore_entry, fallback.params.zscoreEntry),
+      zscoreExit: asNumber(config.zscore_exit, fallback.params.zscoreExit),
+      zscoreStop: asNumber(config.zscore_stop, fallback.params.zscoreStop),
+    },
+  };
+};
+
 const buildPresetBackedOffers = async (catalog: CatalogData | null): Promise<CatalogOffer[]> => {
   try {
     await initResearchDb();
     const offerIds = await listOfferIds();
     const offers = await Promise.all(offerIds.map(async (offerId) => {
-      const preset = await getPreset(offerId, 'medium', 'medium');
+      const [
+        riskLow,
+        riskMedium,
+        riskHigh,
+        freqLow,
+        freqMedium,
+        freqHigh,
+      ] = await Promise.all([
+        getPreset(offerId, 'low', 'medium'),
+        getPreset(offerId, 'medium', 'medium'),
+        getPreset(offerId, 'high', 'medium'),
+        getPreset(offerId, 'medium', 'low'),
+        getPreset(offerId, 'medium', 'medium'),
+        getPreset(offerId, 'medium', 'high'),
+      ]);
+
+      const preset = riskMedium || freqMedium || riskLow || riskHigh || freqLow || freqHigh;
       if (!preset) {
         return null;
       }
@@ -808,6 +858,40 @@ const buildPresetBackedOffers = async (catalog: CatalogData | null): Promise<Cat
       const legacy = findOfferByIdOrNull(catalog, offerId);
       const config = (preset.config || {}) as Record<string, unknown>;
       const metrics = (preset.metrics || {}) as Record<string, unknown>;
+
+      const fallbackPresetMeta = {
+        strategyId: Number(config.strategyId || legacy?.strategy?.id || 0),
+        strategyName: String(config.name || legacy?.strategy?.name || offerId),
+        params: {
+          interval: String(config.interval || legacy?.strategy?.params?.interval || '1h'),
+          length: Number(config.price_channel_length || legacy?.strategy?.params?.length || 50),
+          takeProfitPercent: Number(config.take_profit_percent || legacy?.strategy?.params?.takeProfitPercent || 0),
+          detectionSource: String(config.detection_source || legacy?.strategy?.params?.detectionSource || 'close'),
+          zscoreEntry: Number(config.zscore_entry || legacy?.strategy?.params?.zscoreEntry || 2),
+          zscoreExit: Number(config.zscore_exit || legacy?.strategy?.params?.zscoreExit || 0.5),
+          zscoreStop: Number(config.zscore_stop || legacy?.strategy?.params?.zscoreStop || 3),
+        },
+        metrics: {
+          ret: asNumber(metrics.ret, legacy?.metrics?.ret || 0),
+          pf: asNumber(metrics.pf, legacy?.metrics?.pf || 1),
+          dd: asNumber(metrics.dd, legacy?.metrics?.dd || 0),
+          wr: asNumber(metrics.wr, legacy?.metrics?.wr || 0),
+          trades: asNumber(metrics.trades, legacy?.metrics?.trades || 0),
+          score: asNumber(metrics.score, legacy?.metrics?.score || 0),
+        },
+      };
+
+      const riskPresets = {
+        low: toCatalogPreset(riskLow, fallbackPresetMeta) || legacy?.sliderPresets?.risk?.low || null,
+        medium: toCatalogPreset(riskMedium || freqMedium, fallbackPresetMeta) || legacy?.sliderPresets?.risk?.medium || null,
+        high: toCatalogPreset(riskHigh, fallbackPresetMeta) || legacy?.sliderPresets?.risk?.high || null,
+      } as Record<Level3, CatalogPreset | null>;
+
+      const tradeFrequencyPresets = {
+        low: toCatalogPreset(freqLow, fallbackPresetMeta) || legacy?.sliderPresets?.tradeFrequency?.low || null,
+        medium: toCatalogPreset(freqMedium || riskMedium, fallbackPresetMeta) || legacy?.sliderPresets?.tradeFrequency?.medium || null,
+        high: toCatalogPreset(freqHigh, fallbackPresetMeta) || legacy?.sliderPresets?.tradeFrequency?.high || null,
+      } as Record<Level3, CatalogPreset | null>;
 
       return {
         offerId,
@@ -838,7 +922,10 @@ const buildPresetBackedOffers = async (catalog: CatalogData | null): Promise<Cat
           score: asNumber(metrics.score, legacy?.metrics?.score || 0),
           robust: legacy?.metrics?.robust,
         },
-        sliderPresets: legacy?.sliderPresets,
+        sliderPresets: {
+          risk: riskPresets,
+          tradeFrequency: tradeFrequencyPresets,
+        },
         equity: {
           points: Array.isArray(preset.equity_curve)
             ? preset.equity_curve.map((value, index) => ({ time: index + 1, equity: asNumber(value, 0) }))
@@ -1526,7 +1613,7 @@ export const previewStrategyClientOffer = async (
     tradeFrequencyLevel: preferenceScoreToLevel(normalizedTradeFrequencyScore),
   };
 
-  if (!state.capabilities?.backtest || !state.catalog) {
+  if (!state.catalog) {
     const latestPreview = (state.profile?.latestPreview || {}) as Record<string, any>;
     const cachedPreview = (latestPreview.preview || latestPreview) as Record<string, any>;
 
@@ -1580,7 +1667,8 @@ export const previewStrategyClientOffer = async (
     };
   }
 
-  if (CLIENT_STRICT_PRESET_MODE) {
+  const presetOnlyMode = CLIENT_STRICT_PRESET_MODE || !state.capabilities?.backtest;
+  if (presetOnlyMode) {
     const preview = {
       source: 'preset_lookup_no_live',
       summary: buildPresetOnlySingleSummary(initialBalance, preset, offer.strategy.market, offer.strategy.name),
@@ -1670,7 +1758,7 @@ export const previewStrategyClientSelection = async (
     tradeFrequencyLevel: preferenceScoreToLevel(normalizedTradeFrequencyScore),
   };
 
-  if (!state.capabilities?.backtest || !state.catalog) {
+  if (!state.catalog) {
     const latestPreview = (state.profile?.latestPreview || {}) as Record<string, any>;
     const cachedPreview = (latestPreview.preview || latestPreview) as Record<string, any>;
 
@@ -1732,7 +1820,8 @@ export const previewStrategyClientSelection = async (
     throw new Error('Selected offers did not resolve to valid strategies');
   }
 
-  if (CLIENT_STRICT_PRESET_MODE) {
+  const presetOnlyMode = CLIENT_STRICT_PRESET_MODE || !state.capabilities?.backtest;
+  if (presetOnlyMode) {
     return {
       period,
       controls,
@@ -1995,29 +2084,6 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
   const sweep = loadLatestSweep();
   const period = buildPeriodInfo(sweep);
 
-  if (!capabilities.backtest) {
-    return {
-      tenant,
-      plan,
-      capabilities,
-      profile: {
-        ...profile,
-        latestPreview: safeJsonParse<Record<string, unknown>>(profile.latest_preview_json, {}),
-      },
-      preview: {
-        riskMultiplier,
-        sourceSystem: null,
-        summary: null,
-        period,
-        equityCurve: [],
-        blockedByPlan: true,
-        blockedReason: 'Backtest preview is not available for the current plan',
-      },
-      requests: await getAlgofundRequestsByTenant(tenantId),
-      catalog: loadLatestClientCatalog(),
-    };
-  }
-
   const sourceSystem = await ensurePublishedSourceSystem();
   const basePreviewResult = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
     bars: 6000,
@@ -2045,6 +2111,7 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
     },
     period,
     equityCurve: scaledEquity,
+    blockedByPlan: false,
   };
 
   await db.run(
