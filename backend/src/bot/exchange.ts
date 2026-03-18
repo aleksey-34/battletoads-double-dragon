@@ -52,6 +52,7 @@ type NormalizedTrade = {
 const clients: { [key: string]: ExchangeClientEntry } = {};
 const ccxtClients: { [key: string]: CcxtClientEntry } = {};
 const cache = new Map<string, { data: any; timestamp: number }>();
+const bingxOneWayAttempted = new Set<string>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 min
 
 const normalizeSymbolKey = (value: any): string => {
@@ -155,6 +156,50 @@ const resolveCcxtSymbol = async (entry: CcxtClientEntry, symbol: string): Promis
 
   const symbolMap = await ensureCcxtSymbolMap(entry);
   return symbolMap.get(normalized) || symbol;
+};
+
+const getBingxPositionSide = (side: 'Buy' | 'Sell'): 'LONG' | 'SHORT' => {
+  return side === 'Buy' ? 'LONG' : 'SHORT';
+};
+
+const tryEnsureBingxOneWayMode = async (
+  apiKeyName: string,
+  entry: CcxtClientEntry,
+  ccxtSymbol: string
+): Promise<void> => {
+  if (entry.exchange !== 'bingx') {
+    return;
+  }
+
+  const lockKey = `${apiKeyName}:${ccxtSymbol}`;
+  if (bingxOneWayAttempted.has(lockKey)) {
+    return;
+  }
+  bingxOneWayAttempted.add(lockKey);
+
+  try {
+    if (typeof entry.client.fetchPositions !== 'function') {
+      return;
+    }
+
+    const positionsRaw = await entry.limiter.schedule(() => entry.client.fetchPositions([ccxtSymbol]));
+    const hasOpenPosition = Array.isArray(positionsRaw) && positionsRaw.some((position: any) => {
+      const size = Number(position?.contracts ?? position?.info?.positionAmt ?? position?.info?.size ?? 0);
+      return Number.isFinite(size) && Math.abs(size) > 0;
+    });
+
+    if (hasOpenPosition) {
+      return;
+    }
+
+    if (typeof entry.client.setPositionMode === 'function') {
+      await entry.limiter.schedule(() => entry.client.setPositionMode(false, ccxtSymbol));
+      logger.info(`BingX one-way mode enabled for ${apiKeyName} ${ccxtSymbol}`);
+    }
+  } catch (error) {
+    const err = error as Error;
+    logger.warn(`BingX one-way mode switch skipped for ${apiKeyName} ${ccxtSymbol}: ${err.message}`);
+  }
 };
 
 const isBybitSuccess = (response: any): boolean => {
@@ -639,12 +684,16 @@ export const placeOrder = async (
 
     const orderType = numericPrice && numericPrice > 0 ? 'limit' : 'market';
     const params: any = {};
+    if (entry.exchange === 'bingx') {
+      params.positionSide = getBingxPositionSide(side);
+    }
     if (options?.reduceOnly) {
       params.reduceOnly = true;
       params.closePosition = true;
     }
 
     try {
+      await tryEnsureBingxOneWayMode(apiKeyName, entry, ccxtSymbol);
       const order = await entry.limiter.schedule(() =>
         entry.client.createOrder(
           ccxtSymbol,
@@ -1259,8 +1308,16 @@ export const closePosition = async (apiKeyName: string, symbol: string, qty: str
     }
 
     const closeSide = currentSide === 'Buy' ? 'sell' : 'buy';
+    const params: any = {
+      reduceOnly: true,
+      closePosition: true,
+    };
+    if (entry.exchange === 'bingx') {
+      params.positionSide = currentSide === 'Buy' ? 'LONG' : 'SHORT';
+    }
 
     try {
+      await tryEnsureBingxOneWayMode(apiKeyName, entry, ccxtSymbol);
       const order = await entry.limiter.schedule(() =>
         entry.client.createOrder(
           ccxtSymbol,
@@ -1268,10 +1325,7 @@ export const closePosition = async (apiKeyName: string, symbol: string, qty: str
           closeSide,
           amount,
           undefined,
-          {
-            reduceOnly: true,
-            closePosition: true,
-          }
+          params
         )
       );
 

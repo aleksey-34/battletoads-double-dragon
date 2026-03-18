@@ -69,10 +69,15 @@ type TradeRow = {
 
 type ViewMode = 'positions' | 'orders' | 'trades' | 'all';
 
+type ManualAmountMode = 'coin' | 'usdt';
+type ManualOrderType = 'market' | 'limit';
+
 type ManualOrderDraft = {
   symbol: string;
   side: 'Buy' | 'Sell';
-  qty: number;
+  amount: number;
+  amountMode: ManualAmountMode;
+  orderType: ManualOrderType;
   price?: number;
 };
 
@@ -87,6 +92,25 @@ const formatCompact = (value: any, digits: number = 4): string => {
     return String(value ?? '-');
   }
   return numeric.toFixed(digits).replace(/\.?0+$/, '');
+};
+
+const extractLastClosePrice = (payload: any): number | null => {
+  if (!Array.isArray(payload) || payload.length === 0) {
+    return null;
+  }
+
+  const last = payload[payload.length - 1];
+  if (Array.isArray(last) && last.length >= 5) {
+    const close = Number(last[4]);
+    return Number.isFinite(close) && close > 0 ? close : null;
+  }
+
+  if (last && typeof last === 'object') {
+    const close = Number(last.close);
+    return Number.isFinite(close) && close > 0 ? close : null;
+  }
+
+  return null;
 };
 
 const Positions: React.FC = () => {
@@ -127,7 +151,9 @@ const Positions: React.FC = () => {
             next[key.name] = {
               symbol: 'BTCUSDT',
               side: 'Buy',
-              qty: 0.001,
+              amount: 0.001,
+              amountMode: 'coin',
+              orderType: 'market',
             };
           }
         }
@@ -315,8 +341,15 @@ const Positions: React.FC = () => {
 
   const placeManualOrder = async (apiKeyName: string) => {
     const draft = manualOrderDraftByKey[apiKeyName];
-    if (!draft || !draft.symbol || !draft.qty || draft.qty <= 0) {
+    if (!draft || !draft.symbol || !draft.amount || draft.amount <= 0) {
       message.warning(t('positions.msg.setSymbolQty', 'Set symbol and qty before placing manual order'));
+      return;
+    }
+
+    const normalizedSymbol = String(draft.symbol || '').trim().toUpperCase();
+    const normalizedPrice = draft.price && draft.price > 0 ? draft.price : undefined;
+    if (draft.orderType === 'limit' && !normalizedPrice) {
+      message.warning(t('positions.msg.setLimitPrice', 'Set limit price for a limit order'));
       return;
     }
 
@@ -324,11 +357,38 @@ const Positions: React.FC = () => {
 
     try {
       setActionLoading((prev) => ({ ...prev, [actionKey]: true }));
+
+      let qty = draft.amount;
+      if (draft.amountMode === 'usdt') {
+        let conversionPrice = normalizedPrice;
+
+        if (!conversionPrice) {
+          const marketRes = await axios.get(`/api/market-data/${apiKeyName}`, {
+            params: {
+              symbol: normalizedSymbol,
+              interval: '1m',
+              limit: 1,
+            },
+          });
+          conversionPrice = extractLastClosePrice(marketRes.data) || undefined;
+        }
+
+        if (!conversionPrice || conversionPrice <= 0) {
+          throw new Error('Cannot convert USDT amount to coin qty: price unavailable');
+        }
+
+        qty = draft.amount / conversionPrice;
+      }
+
+      if (!Number.isFinite(qty) || qty <= 0) {
+        throw new Error('Invalid qty after amount conversion');
+      }
+
       await axios.post(`/api/manual-order/${apiKeyName}`, {
-        symbol: draft.symbol,
+        symbol: normalizedSymbol,
         side: draft.side,
-        qty: String(draft.qty),
-        price: draft.price && draft.price > 0 ? String(draft.price) : undefined,
+        qty: String(qty),
+        price: draft.orderType === 'limit' && normalizedPrice ? String(normalizedPrice) : undefined,
       });
 
       message.success(t('positions.msg.manualOrderPlaced', 'Manual order placed for {apiKey}', { apiKey: apiKeyName }));
@@ -579,7 +639,20 @@ const Positions: React.FC = () => {
         <Card className="battletoads-card" key={exchange} title={`${t('positions.exchange', 'Exchange')}: ${exchange}`} size="small" style={{ marginBottom: 12 }}>
           <Space direction="vertical" style={{ width: '100%' }}>
             {keys.map((key) => {
-              const manualDraft = manualOrderDraftByKey[key.name] || { symbol: 'BTCUSDT', side: 'Buy' as const, qty: 0.001 };
+              const manualDraft = manualOrderDraftByKey[key.name] || {
+                symbol: 'BTCUSDT',
+                side: 'Buy' as const,
+                amount: 0.001,
+                amountMode: 'coin' as const,
+                orderType: 'market' as const,
+              };
+              const limitPrice = Number(manualDraft.price);
+              const hasLimitPrice = Number.isFinite(limitPrice) && limitPrice > 0;
+              const previewQty = manualDraft.amountMode === 'coin'
+                ? manualDraft.amount
+                : hasLimitPrice
+                  ? manualDraft.amount / limitPrice
+                  : null;
               const keyPositions = positionsByKey[key.name] || [];
               const keyOrders = ordersByKey[key.name] || [];
               const keyTrades = tradesByKey[key.name] || [];
@@ -664,31 +737,64 @@ const Positions: React.FC = () => {
                         <Option value="Buy">{t('positions.buy', 'Buy')}</Option>
                         <Option value="Sell">{t('positions.sell', 'Sell')}</Option>
                       </Select>
-                      <InputNumber
-                        style={{ width: 120 }}
-                        min={0}
-                        step={0.001}
-                        value={manualDraft.qty}
+                      <Select
+                        style={{ width: 105 }}
+                        value={manualDraft.orderType}
                         onChange={(value) => {
                           setManualOrderDraftByKey((prev) => ({
                             ...prev,
-                            [key.name]: { ...manualDraft, qty: Number(value) || 0 },
+                            [key.name]: {
+                              ...manualDraft,
+                              orderType: value as ManualOrderType,
+                              price: value === 'market' ? undefined : manualDraft.price,
+                            },
                           }));
                         }}
-                        placeholder={t('positions.placeholder.qty', 'Qty')}
+                      >
+                        <Option value="market">Market</Option>
+                        <Option value="limit">Limit</Option>
+                      </Select>
+                      <Select
+                        style={{ width: 105 }}
+                        value={manualDraft.amountMode}
+                        onChange={(value) => {
+                          setManualOrderDraftByKey((prev) => ({
+                            ...prev,
+                            [key.name]: { ...manualDraft, amountMode: value as ManualAmountMode },
+                          }));
+                        }}
+                      >
+                        <Option value="coin">Coin</Option>
+                        <Option value="usdt">USDT</Option>
+                      </Select>
+                      <InputNumber
+                        style={{ width: 120 }}
+                        min={0}
+                        step={manualDraft.amountMode === 'coin' ? 0.001 : 1}
+                        value={manualDraft.amount}
+                        onChange={(value) => {
+                          setManualOrderDraftByKey((prev) => ({
+                            ...prev,
+                            [key.name]: { ...manualDraft, amount: Number(value) || 0 },
+                          }));
+                        }}
+                        placeholder={manualDraft.amountMode === 'coin' ? t('positions.placeholder.qty', 'Qty') : t('positions.placeholder.usdt', 'USDT amount')}
                       />
                       <InputNumber
                         style={{ width: 140 }}
                         min={0}
                         step={0.01}
                         value={manualDraft.price}
+                        disabled={manualDraft.orderType === 'market'}
                         onChange={(value) => {
                           setManualOrderDraftByKey((prev) => ({
                             ...prev,
                             [key.name]: { ...manualDraft, price: value === null ? undefined : Number(value) },
                           }));
                         }}
-                        placeholder={t('positions.placeholder.price', 'Price (market if empty)')}
+                        placeholder={manualDraft.orderType === 'limit'
+                          ? t('positions.placeholder.price', 'Limit price')
+                          : t('positions.placeholder.priceMarket', 'Price auto (market)')}
                       />
                       <Button
                         type="primary"
@@ -700,6 +806,16 @@ const Positions: React.FC = () => {
                         {t('positions.placeOrder', 'Place order')}
                       </Button>
                     </Space>
+                    <div style={{ marginTop: 6, fontSize: 12, color: '#6b7280' }}>
+                      Qty preview:{' '}
+                      {previewQty !== null && Number.isFinite(previewQty) && previewQty > 0
+                        ? formatCompact(previewQty, 8)
+                        : manualDraft.amountMode === 'usdt'
+                          ? (manualDraft.orderType === 'limit'
+                            ? 'set limit price to preview exact qty'
+                            : 'will be estimated from latest market price at submit')
+                          : '-'}
+                    </div>
                   </Card>
 
                   {errorByKey[key.name] ? (

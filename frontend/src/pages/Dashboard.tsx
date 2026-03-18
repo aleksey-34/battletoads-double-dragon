@@ -234,6 +234,27 @@ const formatCompactNumber = (value: number | string, digits: number = 2) => {
   return numeric.toFixed(digits).replace(/\.?0+$/, '');
 };
 
+const resolveLotUsdt = (
+  runtimeLotUsdt: number | null | undefined,
+  maxDeposit: number,
+  lotPercent: number
+): { value: number | null; estimated: boolean } => {
+  if (runtimeLotUsdt !== null && runtimeLotUsdt !== undefined && Number.isFinite(Number(runtimeLotUsdt))) {
+    return { value: Number(runtimeLotUsdt), estimated: false };
+  }
+
+  const deposit = Number(maxDeposit);
+  const percent = Number(lotPercent);
+  if (!Number.isFinite(deposit) || !Number.isFinite(percent) || deposit <= 0 || percent < 0) {
+    return { value: null, estimated: false };
+  }
+
+  return {
+    value: (deposit * percent) / 100,
+    estimated: true,
+  };
+};
+
 const normalizeTimestampMs = (value: any): number | null => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric) || numeric <= 0) {
@@ -953,6 +974,16 @@ const Dashboard: React.FC = () => {
         return next;
       });
 
+      setRuntimeOnlyByKey((prev) => {
+        const next = { ...prev };
+        keys.forEach((key) => {
+          if (next[key.name] === undefined) {
+            next[key.name] = true;
+          }
+        });
+        return next;
+      });
+
       if (keys.length > 0 && (!selectedApiKey || !keys.some((key) => key.name === selectedApiKey))) {
         setSelectedApiKey(keys[0].name);
         localStorage.setItem('selectedApiKey', keys[0].name);
@@ -1223,7 +1254,7 @@ const Dashboard: React.FC = () => {
     const silent = options?.silent === true;
     const full = options?.full === true;
     const includeArchived = options?.includeArchived ?? showArchivedByKey[keyName] ?? false;
-    const runtimeOnly = options?.runtimeOnly ?? runtimeOnlyByKey[keyName] ?? false;
+    const runtimeOnly = options?.runtimeOnly ?? runtimeOnlyByKey[keyName] ?? true;
     const requestLockKey = `strategies:${keyName}`;
 
     if (!acquireRequestLock(requestLockKey)) {
@@ -2499,14 +2530,14 @@ const Dashboard: React.FC = () => {
                   </Button>
                   <Button
                     size="small"
-                    type={(runtimeOnlyByKey[keyName] ?? false) ? 'primary' : 'default'}
+                    type={(runtimeOnlyByKey[keyName] ?? true) ? 'primary' : 'default'}
                     onClick={() => {
-                      const next = !(runtimeOnlyByKey[keyName] ?? false);
+                      const next = !(runtimeOnlyByKey[keyName] ?? true);
                       setRuntimeOnlyByKey((prev) => ({ ...prev, [keyName]: next }));
                       void fetchStrategies(keyName, { runtimeOnly: next });
                     }}
                   >
-                    {(runtimeOnlyByKey[keyName] ?? false) ? 'Runtime only' : 'All strategies'}
+                    {(runtimeOnlyByKey[keyName] ?? true) ? 'Runtime only' : 'All strategies'}
                   </Button>
                   <Button
                     size="small"
@@ -2740,6 +2771,8 @@ const Dashboard: React.FC = () => {
                                     ? Number(strategy.entry_ratio) / (1 + strategy.take_profit_percent / 100)
                                     : null
                                 : null;
+                              const longLotUsdt = resolveLotUsdt(strategy.lot_long_usdt, strategy.max_deposit, strategy.lot_long_percent);
+                              const shortLotUsdt = resolveLotUsdt(strategy.lot_short_usdt, strategy.max_deposit, strategy.lot_short_percent);
                               const tradeMarkers = strategy.display_on_chart && strategy.show_trades_on_chart
                                 ? buildStrategyTradeMarkers(keyTrades, pairSymbols)
                                 : [];
@@ -3202,8 +3235,8 @@ const Dashboard: React.FC = () => {
                                                 ? (
                                                   <div style={{ marginBottom: 6 }}>
                                                     <strong>Lot (USDT):</strong>
-                                                    {' '}LONG: {strategy.lot_long_usdt !== null && strategy.lot_long_usdt !== undefined ? formatCompactNumber(strategy.lot_long_usdt, 2) : '-'}
-                                                    {' '}| SHORT: {strategy.lot_short_usdt !== null && strategy.lot_short_usdt !== undefined ? formatCompactNumber(strategy.lot_short_usdt, 2) : '-'}
+                                                    {' '}LONG: {longLotUsdt.value !== null ? `${formatCompactNumber(longLotUsdt.value, 2)}${longLotUsdt.estimated ? ' (est.)' : ''}` : '-'}
+                                                    {' '}| SHORT: {shortLotUsdt.value !== null ? `${formatCompactNumber(shortLotUsdt.value, 2)}${shortLotUsdt.estimated ? ' (est.)' : ''}` : '-'}
                                                     {strategy.lot_balance_usdt !== null && strategy.lot_balance_usdt !== undefined
                                                       ? ` | Balance: ${formatCompactNumber(strategy.lot_balance_usdt, 2)}`
                                                       : ''}
