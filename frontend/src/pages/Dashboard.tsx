@@ -1223,7 +1223,7 @@ const Dashboard: React.FC = () => {
     const silent = options?.silent === true;
     const full = options?.full === true;
     const includeArchived = options?.includeArchived ?? showArchivedByKey[keyName] ?? false;
-    const runtimeOnly = options?.runtimeOnly ?? runtimeOnlyByKey[keyName] ?? true;
+    const runtimeOnly = options?.runtimeOnly ?? runtimeOnlyByKey[keyName] ?? false;
     const requestLockKey = `strategies:${keyName}`;
 
     if (!acquireRequestLock(requestLockKey)) {
@@ -2499,14 +2499,14 @@ const Dashboard: React.FC = () => {
                   </Button>
                   <Button
                     size="small"
-                    type={(runtimeOnlyByKey[keyName] ?? true) ? 'primary' : 'default'}
+                    type={(runtimeOnlyByKey[keyName] ?? false) ? 'primary' : 'default'}
                     onClick={() => {
-                      const next = !(runtimeOnlyByKey[keyName] ?? true);
+                      const next = !(runtimeOnlyByKey[keyName] ?? false);
                       setRuntimeOnlyByKey((prev) => ({ ...prev, [keyName]: next }));
                       void fetchStrategies(keyName, { runtimeOnly: next });
                     }}
                   >
-                    {(runtimeOnlyByKey[keyName] ?? true) ? 'Runtime only' : 'All strategies'}
+                    {(runtimeOnlyByKey[keyName] ?? false) ? 'Runtime only' : 'All strategies'}
                   </Button>
                   <Button
                     size="small"
