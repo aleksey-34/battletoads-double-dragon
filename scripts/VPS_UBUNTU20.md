@@ -107,6 +107,39 @@ journalctl -u btdd-api -u btdd-runtime -u btdd-research -f --no-pager
 
 ---
 
+## Диагностика одной командой (без скриншотов)
+
+Используйте готовый скрипт отчета, который пишет лог в `/tmp` и выводит его в терминал:
+
+```bash
+cd /opt/battletoads-double-dragon
+bash scripts/vps_doctor.sh --ask-password
+```
+
+Полезные опции:
+
+```bash
+# Если нужно автоматически синхронизировать frontend/build в root nginx
+bash scripts/vps_doctor.sh --ask-password --sync-frontend
+
+# Если нужно сбросить пароль админки и сразу проверить auth
+bash scripts/vps_doctor.sh --reset-password 'NewStrongPass123' --admin-password 'NewStrongPass123'
+```
+
+В конце скрипт печатает путь вида:
+
+```bash
+diagnostics_log=/tmp/btdd_diag_YYYY-MM-DD_HHMMSS.log
+```
+
+Отправляйте текст так:
+
+```bash
+cat /tmp/btdd_diag_YYYY-MM-DD_HHMMSS.log
+```
+
+---
+
 ## Управление сервисами
 
 ```bash
@@ -130,7 +163,7 @@ sudo systemctl stop btdd-api btdd-runtime btdd-research
 | Переменная | Описание | Default |
 |-----------|----------|---------|
 | `PORT` | HTTP порт API | `3001` |
-| `DB_PATH` | Путь к main.db | автоопределение |
+| `DB_FILE` | Путь к SQLite main DB-файлу | `backend/database.db` |
 | `RESEARCH_DB_PATH` | Путь к research.db | `./data/research.db` |
 | `BTDD_DISABLE_TRADING` | `1` = выключить торговые циклы в этом процессе | `0` |
 | `BTDD_DISABLE_RESEARCH_WORKERS` | `1` = выключить research workers в этом процессе | `0` |
