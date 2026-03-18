@@ -28,14 +28,8 @@ export type TradingSystem = {
   created_at?: string;
   updated_at?: string;
   members: TradingSystemMember[];
-  // Live metrics (from latest monitoring snapshot)
-  latestEquity?: number;
-  latestUnrealizedPnl?: number;
-  latestMarginLoad?: number;
-  latestDrawdownPercent?: number;
-  latestNotionalUsd?: number;
-  metricsUpdatedAt?: string;
 };
+
 export type TradingSystemMemberDraft = {
   strategy_id: number;
   weight?: number;
