@@ -1,6 +1,7 @@
 import { BacktestRunRequest, BacktestRunResult, runBacktest } from '../backtest/engine';
 import { Strategy } from '../config/settings';
 import { db } from '../utils/database';
+import { getMonitoringLatest, recordMonitoringSnapshot } from './monitoring';
 import { getStrategies, updateStrategy } from './strategy';
 
 export type TradingSystemMember = {
@@ -89,16 +90,7 @@ const normalizeRole = (value: any): string => {
   return normalized || 'core';
 };
 
-const getTradingSystemMetrics = async (apiKeyId: number): Promise<TradingSystemMetrics | undefined> => {
-  const row = await db.get(
-    `SELECT equity_usd, unrealized_pnl, margin_load_percent, drawdown_percent, effective_leverage, recorded_at
-     FROM monitoring_snapshots
-     WHERE api_key_id = ?
-     ORDER BY datetime(recorded_at) DESC
-     LIMIT 1`,
-    [apiKeyId]
-  );
-
+const normalizeMetricsRow = (row: any): TradingSystemMetrics | undefined => {
   if (!row) {
     return undefined;
   }
@@ -111,6 +103,30 @@ const getTradingSystemMetrics = async (apiKeyId: number): Promise<TradingSystemM
     effective_leverage: safeNumber(row.effective_leverage, 0),
     recorded_at: row.recorded_at,
   };
+};
+
+const getTradingSystemMetrics = async (apiKeyName: string, apiKeyId: number): Promise<TradingSystemMetrics | undefined> => {
+  const latest = await db.get(
+    `SELECT equity_usd, unrealized_pnl, margin_load_percent, drawdown_percent, effective_leverage, recorded_at
+     FROM monitoring_snapshots
+     WHERE api_key_id = ?
+     ORDER BY datetime(recorded_at) DESC
+     LIMIT 1`,
+    [apiKeyId]
+  );
+
+  if (latest) {
+    return normalizeMetricsRow(latest);
+  }
+
+  // If no historical snapshot exists yet, try to create one on demand.
+  try {
+    await recordMonitoringSnapshot(apiKeyName);
+    const created = await getMonitoringLatest(apiKeyName);
+    return normalizeMetricsRow(created);
+  } catch {
+    return undefined;
+  }
 };
 
 const normalizeSystemRow = (row: any, members: TradingSystemMember[], metrics?: TradingSystemMetrics): TradingSystem => {
@@ -206,7 +222,7 @@ const loadTradingSystemsWithMembers = async (apiKeyName: string, rows: any[]): P
   for (const row of systems) {
     const apiKeyId = Number(row.api_key_id);
     if (!metricsMap.has(apiKeyId)) {
-      const metrics = await getTradingSystemMetrics(apiKeyId);
+      const metrics = await getTradingSystemMetrics(apiKeyName, apiKeyId);
       metricsMap.set(apiKeyId, metrics);
     }
   }

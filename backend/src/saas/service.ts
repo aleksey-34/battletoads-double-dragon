@@ -482,6 +482,84 @@ const getAllOffers = (catalog: CatalogData): CatalogOffer[] => [
   ...(catalog?.clientCatalog?.synth || []),
 ];
 
+const buildFallbackCatalogFromPresets = async (
+  sourceCatalog: CatalogData | null,
+  apiKeys: string[]
+): Promise<CatalogData> => {
+  const offers = await buildPresetBackedOffers(sourceCatalog);
+  const mono = offers.filter((item) => item.strategy.mode === 'mono');
+  const synth = offers.filter((item) => item.strategy.mode !== 'mono');
+  const topMembers = [...offers]
+    .sort((left, right) => asNumber(right.metrics?.score, 0) - asNumber(left.metrics?.score, 0))
+    .slice(0, 6)
+    .map((offer, index) => ({
+      strategyId: asNumber(offer.strategy?.id, index + 1),
+      strategyName: asString(offer.strategy?.name, `Preset ${index + 1}`),
+      strategyType: asString(offer.strategy?.type, 'DD_BattleToads'),
+      marketMode: asString(offer.strategy?.mode, 'mono'),
+      market: asString(offer.strategy?.market, '-'),
+      score: asNumber(offer.metrics?.score, 0),
+      weight: Number((1 / Math.max(1, Math.min(6, offers.length))).toFixed(4)),
+    }));
+
+  return {
+    timestamp: new Date().toISOString(),
+    apiKeyName: sourceCatalog?.apiKeyName || apiKeys[0] || '',
+    source: {
+      sweepFile: sourceCatalog?.source?.sweepFile || 'fallback:preset-db',
+      sweepTimestamp: sourceCatalog?.source?.sweepTimestamp || null,
+    },
+    counts: {
+      evaluated: offers.length,
+      robust: offers.length,
+      monoCatalog: mono.length,
+      synthCatalog: synth.length,
+      adminTsMembers: topMembers.length,
+      durationSec: 0,
+    },
+    clientCatalog: {
+      mono,
+      synth,
+    },
+    adminTradingSystemDraft: {
+      name: 'SAAS Admin TS (fallback)',
+      members: topMembers,
+      sourcePortfolioSummary: [],
+    },
+  };
+};
+
+const buildFallbackSweepSummary = (catalog: CatalogData | null) => {
+  const offers = catalog ? getAllOffers(catalog) : [];
+  const nowIso = new Date().toISOString();
+
+  return {
+    timestamp: nowIso,
+    period: null,
+    counts: {
+      potentialRuns: offers.length,
+      scheduledRuns: offers.length,
+      coveragePercent: 100,
+      evaluated: offers.length,
+      failures: 0,
+      robust: offers.length,
+      resumedFromCheckpoint: false,
+      skippedFromCheckpoint: 0,
+      resumedFromLog: false,
+      importedFromLog: 0,
+      logImportMissingStrategyIds: 0,
+      durationSec: 0,
+    },
+    selectedMembers: [],
+    topByMode: {
+      mono: [],
+      synth: [],
+    },
+    topAll: [],
+    portfolioFull: null,
+  };
+};
+
 const getAvailableApiKeyNames = async (): Promise<string[]> => {
   const rows = await db.all('SELECT name FROM api_keys ORDER BY id ASC');
   return (Array.isArray(rows) ? rows : []).map((row) => asString((row as { name?: string }).name)).filter(Boolean);
@@ -1194,11 +1272,23 @@ const scaleEquityPreview = (
 
 export const getSaasAdminSummary = async () => {
   await ensureSaasSeedData();
-  const catalog = loadLatestClientCatalog();
-  const sweep = loadLatestSweep();
+  const sourceCatalog = loadLatestClientCatalog();
+  const sourceSweep = loadLatestSweep();
+  const apiKeys = await getAvailableApiKeyNames();
+  const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
+  const sweepSummary = sourceSweep
+    ? {
+      timestamp: sourceSweep.timestamp,
+      period: buildPeriodInfo(sourceSweep),
+      counts: sourceSweep.counts,
+      selectedMembers: sourceSweep.selectedMembers,
+      topByMode: sourceSweep.topByMode,
+      topAll: sourceSweep.topAll.slice(0, 12),
+      portfolioFull: sourceSweep.portfolioResults?.[0] || null,
+    }
+    : buildFallbackSweepSummary(catalog);
   const recommendedSets = buildRecommendedSets(catalog);
   const tenants = await listTenantSummaries();
-  const apiKeys = await getAvailableApiKeyNames();
   const plans = await listPlans();
 
   return {
@@ -1207,15 +1297,7 @@ export const getSaasAdminSummary = async () => {
       latestSweepPath: getLatestSweepPath(),
     },
     catalog,
-    sweepSummary: sweep ? {
-      timestamp: sweep.timestamp,
-      period: buildPeriodInfo(sweep),
-      counts: sweep.counts,
-      selectedMembers: sweep.selectedMembers,
-      topByMode: sweep.topByMode,
-      topAll: sweep.topAll.slice(0, 12),
-      portfolioFull: sweep.portfolioResults?.[0] || null,
-    } : null,
+    sweepSummary,
     recommendedSets,
     tenants,
     plans,
