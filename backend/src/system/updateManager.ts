@@ -293,7 +293,8 @@ export const triggerGitUpdate = async (): Promise<{ started: boolean; unit: stri
   const branch = status.branch || 'main';
   const deployMode = process.env.DEPLOY_MODE || 'single';
   const restartRuntime = process.env.RESTART_RUNTIME || '1';
-  const remoteCmd = `APP_DIR=${shellQuote(status.appDir)} BRANCH=${shellQuote(branch)} DEPLOY_MODE=${deployMode} RESTART_RUNTIME=${restartRuntime} bash ${shellQuote(scriptPath)}`;
+  const allowDirtyTracked = process.env.ALLOW_DIRTY_TRACKED || '0';
+  const remoteCmd = `APP_DIR=${shellQuote(status.appDir)} BRANCH=${shellQuote(branch)} DEPLOY_MODE=${deployMode} RESTART_RUNTIME=${restartRuntime} ALLOW_DIRTY_TRACKED=${allowDirtyTracked} bash ${shellQuote(scriptPath)}`;
 
   let runResult: { stdout: string; stderr: string };
   try {

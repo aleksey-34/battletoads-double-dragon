@@ -15,6 +15,9 @@ MULTI_SERVICES="${MULTI_SERVICES:-btdd-api btdd-runtime btdd-research}"
 # Какие сервисы перезапускать при деплое API (runtime обычно не трогаем)
 # Установите RESTART_RUNTIME=0 чтобы не перезапускать торговый контур при обновлении API
 RESTART_RUNTIME="${RESTART_RUNTIME:-1}"
+# 1 => не блокировать деплой при изменениях tracked-файлов и принудительно
+# выбросить локальные правки через git reset --hard origin/<branch>.
+ALLOW_DIRTY_TRACKED="${ALLOW_DIRTY_TRACKED:-0}"
 
 log() {
 	printf '[btdd-update] %s\n' "$*"
@@ -58,7 +61,11 @@ run git fetch --prune origin
 # но блокируем деплой при изменениях tracked-файлов.
 dirty_count="$(git status --porcelain --untracked-files=no | wc -l | tr -d ' ')"
 if [[ "$dirty_count" != "0" ]]; then
-	fail "Repository has local changes ($dirty_count). Refusing to deploy."
+	if [[ "$ALLOW_DIRTY_TRACKED" == "1" ]]; then
+		log "WARN: Repository has local tracked changes ($dirty_count). Proceeding because ALLOW_DIRTY_TRACKED=1."
+	else
+		fail "Repository has local changes ($dirty_count). Refusing to deploy."
+	fi
 fi
 
 run git checkout "$BRANCH"

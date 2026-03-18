@@ -563,12 +563,12 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     capabilitySettings: 'Настройки',
     capabilityApiKeyUpdate: 'Смена API key',
     capabilityMonitoring: 'Мониторинг',
-    capabilityBacktest: 'Бэктест/Preview',
+    capabilityBacktest: 'Бэктест',
     capabilityStartStop: 'Старт/Стоп заявки',
     openSettings: 'Открыть Settings',
     openMonitoring: 'Открыть Monitoring',
     openBacktest: 'Открыть Backtest',
-    backtestLockedHint: 'Расширенный backtest недоступен на текущем тарифе. Показывается упрощенный preview.',
+    backtestLockedHint: 'Backtest недоступен на текущем тарифе. Preview остаётся доступным.',
     settingsLockedHint: 'Изменение настроек недоступно на текущем тарифе',
     priceUsdt: 'Цена, USDT/мес',
     saveTenant: 'Сохранить tenant',
@@ -662,12 +662,12 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     capabilitySettings: 'Settings',
     capabilityApiKeyUpdate: 'API key update',
     capabilityMonitoring: 'Monitoring',
-    capabilityBacktest: 'Backtest/Preview',
+    capabilityBacktest: 'Backtest',
     capabilityStartStop: 'Start/Stop requests',
     openSettings: 'Open Settings',
     openMonitoring: 'Open Monitoring',
     openBacktest: 'Open Backtest',
-    backtestLockedHint: 'Extended backtest is not available for this plan. Simplified preview is shown.',
+    backtestLockedHint: 'Backtest is not available on the current plan. Preview remains available.',
     settingsLockedHint: 'Settings update is not available for the current plan',
     priceUsdt: 'Price, USDT/mo',
     saveTenant: 'Save tenant',
@@ -761,12 +761,12 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     capabilitySettings: 'Ayarlar',
     capabilityApiKeyUpdate: 'API key guncelleme',
     capabilityMonitoring: 'Monitoring',
-    capabilityBacktest: 'Backtest/Onizleme',
+    capabilityBacktest: 'Backtest',
     capabilityStartStop: 'Baslat/Durdur talepleri',
     openSettings: 'Settings ac',
     openMonitoring: 'Monitoring ac',
     openBacktest: 'Backtest ac',
-    backtestLockedHint: 'Bu planda gelismis backtest kapali. Basit onizleme gosteriliyor.',
+    backtestLockedHint: 'Bu planda backtest kapali. Onizleme kullanilmaya devam eder.',
     settingsLockedHint: 'Bu planda ayar guncelleme kapali',
     priceUsdt: 'Fiyat, USDT/ay',
     saveTenant: 'Tenant kaydet',
@@ -1050,6 +1050,18 @@ const sliderValueToLevel = (value: number): Level3 => {
   if (value <= 3.33) return 'low';
   if (value >= 6.67) return 'high';
   return 'medium';
+};
+const snapToLevelValue = (value: number): number => {
+  if (!Number.isFinite(value)) {
+    return 5;
+  }
+  if (value <= 2.5) {
+    return 0;
+  }
+  if (value >= 7.5) {
+    return 10;
+  }
+  return 5;
 };
 
 const formatDateShort = (value?: string | null): string => {
@@ -2516,6 +2528,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           ) : null}
                         </Card>
 
+                        {!strategyBacktestEnabled ? <Alert type="warning" showIcon message={copy.backtestLockedHint} /> : null}
+
                         <Card className="battletoads-card">
                           <Row gutter={[16, 16]}>
                             <Col xs={24} lg={12}>
@@ -2524,8 +2538,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <InputNumber min={0} max={10} step={0.1} style={{ width: '100%' }} value={strategyRiskInput} onChange={(value) => setStrategyRiskInput(clampPreviewValue(Number(value ?? 0)))} />
                             </Col>
                             <Col xs={24} lg={12}>
-                              <Text strong>{copy.tradeFrequency}: {sliderValueToLevel(strategyTradeInput)}</Text>
-                              <Slider min={0} max={10} step={null} marks={strategyLevelMarks} value={strategyTradeInput} onChange={(value) => setStrategyTradeInput(Number(value))} />
+                              <Text strong>{copy.tradeFrequency}: {formatNumber(strategyTradeInput, 1)}</Text>
+                              <Slider min={0} max={10} step={null} marks={strategyLevelMarks} value={strategyTradeInput} onChange={(value) => setStrategyTradeInput(snapToLevelValue(Number(value)))} />
+                              <InputNumber min={0} max={10} step={5} style={{ width: '100%' }} value={strategyTradeInput} onChange={(value) => setStrategyTradeInput(snapToLevelValue(Number(value ?? 5)))} />
                             </Col>
                           </Row>
                           <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 8 }}>{copy.previewUsesNearestPreset}</Paragraph>
@@ -2773,6 +2788,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </>
                           ) : null}
                         </Card>
+
+                        {!algofundBacktestEnabled ? <Alert type="warning" showIcon message={copy.backtestLockedHint} /> : null}
 
                         <Card className="battletoads-card">
                           <Row gutter={[16, 16]} align="middle">
