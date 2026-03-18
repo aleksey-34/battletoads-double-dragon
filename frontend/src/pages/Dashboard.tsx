@@ -756,6 +756,7 @@ const Dashboard: React.FC = () => {
   const [strategiesErrorByKey, setStrategiesErrorByKey] = useState<{ [key: string]: string }>({});
   const [strategyDetailsLoadedByKey, setStrategyDetailsLoadedByKey] = useState<{ [key: string]: { [strategyId: string]: boolean } }>({});
   const [strategyDetailsLoadingByKey, setStrategyDetailsLoadingByKey] = useState<{ [key: string]: { [strategyId: string]: boolean } }>({});
+  const [strategyDetailsErrorByKey, setStrategyDetailsErrorByKey] = useState<{ [key: string]: { [strategyId: string]: string } }>({});
   const [activeStrategyPanelsByKey, setActiveStrategyPanelsByKey] = useState<{ [key: string]: string[] }>({});
   const [newStrategyNameByKey, setNewStrategyNameByKey] = useState<{ [key: string]: string }>({});
   const [strategyActionLoading, setStrategyActionLoading] = useState<{ [key: string]: boolean }>({});
@@ -769,6 +770,7 @@ const Dashboard: React.FC = () => {
   const [copySourceByTargetKey, setCopySourceByTargetKey] = useState<{ [key: string]: string }>({});
   const [copyActionLoadingByKey, setCopyActionLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [showArchivedByKey, setShowArchivedByKey] = useState<{ [key: string]: boolean }>({});
+  const [runtimeOnlyByKey, setRuntimeOnlyByKey] = useState<{ [key: string]: boolean }>({});
   const [archiveActionLoadingByKey, setArchiveActionLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [uiTheme, setUiTheme] = useState<'classic' | 'battletoads'>('classic');
   const requestLocksRef = useRef<Record<string, boolean>>({});
@@ -1217,10 +1219,11 @@ const Dashboard: React.FC = () => {
     });
   };
 
-  const fetchStrategies = async (keyName: string, options?: { silent?: boolean; full?: boolean; includeArchived?: boolean }) => {
+  const fetchStrategies = async (keyName: string, options?: { silent?: boolean; full?: boolean; includeArchived?: boolean; runtimeOnly?: boolean }) => {
     const silent = options?.silent === true;
     const full = options?.full === true;
     const includeArchived = options?.includeArchived ?? showArchivedByKey[keyName] ?? false;
+    const runtimeOnly = options?.runtimeOnly ?? runtimeOnlyByKey[keyName] ?? true;
     const requestLockKey = `strategies:${keyName}`;
 
     if (!acquireRequestLock(requestLockKey)) {
@@ -1236,7 +1239,7 @@ const Dashboard: React.FC = () => {
       const res = await axios.get(`/api/strategies/${keyName}/summary`, {
         params: {
           ...(full ? {} : { limit: STRATEGY_FETCH_LIMIT, offset: 0 }),
-          runtimeOnly: '1',
+          runtimeOnly: runtimeOnly ? '1' : '0',
           ...(includeArchived ? { includeArchived: '1' } : {}),
         },
       });
@@ -1247,6 +1250,7 @@ const Dashboard: React.FC = () => {
       setStrategiesByKey((prev) => ({ ...prev, [keyName]: payload }));
       setStrategyDetailsLoadedByKey((prev) => ({ ...prev, [keyName]: {} }));
       setStrategyDetailsLoadingByKey((prev) => ({ ...prev, [keyName]: {} }));
+      setStrategyDetailsErrorByKey((prev) => ({ ...prev, [keyName]: {} }));
       setStrategiesTotalByKey((prev) => ({ ...prev, [keyName]: total }));
       setFullStrategiesLoadedByKey((prev) => ({ ...prev, [keyName]: full || payload.length >= total }));
       setStrategyRenderLimitByKey((prev) => {
@@ -1310,6 +1314,13 @@ const Dashboard: React.FC = () => {
         [strategyIdKey]: true,
       },
     }));
+    setStrategyDetailsErrorByKey((prev) => ({
+      ...prev,
+      [keyName]: {
+        ...(prev[keyName] || {}),
+        [strategyIdKey]: '',
+      },
+    }));
 
     try {
       const res = await axios.get(`/api/strategies/${keyName}/${strategyId}`, {
@@ -1335,6 +1346,15 @@ const Dashboard: React.FC = () => {
         },
       }));
     } catch (error) {
+      const fallback = 'Failed to load strategy details';
+      const errorMessage = (error as any)?.response?.data?.error || (error as any)?.message || fallback;
+      setStrategyDetailsErrorByKey((prev) => ({
+        ...prev,
+        [keyName]: {
+          ...(prev[keyName] || {}),
+          [strategyIdKey]: String(errorMessage),
+        },
+      }));
       if (options?.silent !== true) {
         console.error(error);
       }
@@ -2066,6 +2086,7 @@ const Dashboard: React.FC = () => {
     const copyLoading = copyActionLoadingByKey[keyName] || false;
     const detailsLoadedForKey = strategyDetailsLoadedByKey[keyName] || {};
     const detailsLoadingForKey = strategyDetailsLoadingByKey[keyName] || {};
+    const detailsErrorForKey = strategyDetailsErrorByKey[keyName] || {};
     const totalStrategies = keyStrategies.length;
     const strategyRenderLimit = Math.min(totalStrategies, Math.max(STRATEGY_RENDER_CHUNK, Number(strategyRenderLimitByKey[keyName] || STRATEGY_RENDER_CHUNK)));
     const visibleStrategies = keyStrategies.slice(0, strategyRenderLimit);
@@ -2478,6 +2499,17 @@ const Dashboard: React.FC = () => {
                   </Button>
                   <Button
                     size="small"
+                    type={(runtimeOnlyByKey[keyName] ?? true) ? 'primary' : 'default'}
+                    onClick={() => {
+                      const next = !(runtimeOnlyByKey[keyName] ?? true);
+                      setRuntimeOnlyByKey((prev) => ({ ...prev, [keyName]: next }));
+                      void fetchStrategies(keyName, { runtimeOnly: next });
+                    }}
+                  >
+                    {(runtimeOnlyByKey[keyName] ?? true) ? 'Runtime only' : 'All strategies'}
+                  </Button>
+                  <Button
+                    size="small"
                     danger
                     loading={archiveActionLoadingByKey[keyName]}
                     onClick={() => void bulkArchiveStrategies(keyName, true)}
@@ -2602,6 +2634,7 @@ const Dashboard: React.FC = () => {
                           const strategyIdKey = String(strategy.id);
                           const detailsLoaded = detailsLoadedForKey[strategyIdKey] === true;
                           const detailsLoading = detailsLoadingForKey[strategyIdKey] === true;
+                          const detailsError = String(detailsErrorForKey[strategyIdKey] || '').trim();
 
                           return {
                             key: String(strategy.id),
@@ -2630,7 +2663,25 @@ const Dashboard: React.FC = () => {
                               if (!detailsLoaded) {
                                 return detailsLoading
                                   ? <Spin size="small" />
-                                  : <Alert type="info" showIcon message="Loading strategy details..." />;
+                                  : detailsError
+                                    ? (
+                                      <Alert
+                                        type="error"
+                                        showIcon
+                                        message={detailsError}
+                                        action={(
+                                          <Button
+                                            size="small"
+                                            onClick={() => {
+                                              void fetchStrategyDetails(keyName, strategy.id, { silent: false });
+                                            }}
+                                          >
+                                            Retry
+                                          </Button>
+                                        )}
+                                      />
+                                    )
+                                    : <Alert type="info" showIcon message="Loading strategy details..." />;
                               }
 
                               // ── body vars (only run for visible + expanded items) ──
