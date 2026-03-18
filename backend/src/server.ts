@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import routes from './api/routes';
+import researchRoutes from './api/researchRoutes';
 import { initDB, getDbFilePath } from './utils/database';
 import logger from './utils/logger';
 import { runAutoStrategiesCycle } from './bot/strategy';
@@ -12,6 +13,7 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json());
 app.use('/api', routes);
+app.use('/api/research', researchRoutes);
 
 import { loadSettings } from './config/settings';
 import { initExchangeClient } from './bot/exchange';

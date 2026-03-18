@@ -1232,7 +1232,11 @@ type GetStrategiesOptions = {
 export type StrategySummary = Pick<
   Strategy,
   'id' | 'name' | 'strategy_type' | 'is_active' | 'base_symbol' | 'quote_symbol' | 'interval' | 'state' | 'last_action' | 'last_error'
->;
+> & {
+  is_runtime: boolean;
+  is_archived: boolean;
+  origin: string;
+};
 
 export const getStrategies = async (apiKeyName: string, options?: GetStrategiesOptions): Promise<Strategy[]> => {
   const { db } = await import('../utils/database');
@@ -1300,7 +1304,7 @@ export const getStrategies = async (apiKeyName: string, options?: GetStrategiesO
 
 export const getStrategySummaries = async (
   apiKeyName: string,
-  options?: { limit?: number; offset?: number }
+  options?: { limit?: number; offset?: number; includeArchived?: boolean; runtimeOnly?: boolean }
 ): Promise<StrategySummary[]> => {
   const { db } = await import('../utils/database');
   const limitRaw = Number(options?.limit);
@@ -1310,13 +1314,23 @@ export const getStrategySummaries = async (
   const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? Math.floor(offsetRaw) : 0;
 
   const sqlParts = [
-    `SELECT s.id, s.name, s.strategy_type, s.is_active, s.base_symbol, s.quote_symbol, s.interval, s.state, s.last_action, s.last_error`,
+    `SELECT s.id, s.name, s.strategy_type, s.is_active, s.base_symbol, s.quote_symbol, s.interval, s.state, s.last_action, s.last_error,
+     COALESCE(s.is_runtime, 0) AS is_runtime, COALESCE(s.is_archived, 0) AS is_archived, COALESCE(s.origin, 'manual') AS origin`,
     `FROM strategies s`,
     `JOIN api_keys a ON a.id = s.api_key_id`,
     `WHERE a.name = ?`,
-    `ORDER BY s.id DESC`,
   ];
   const params: any[] = [apiKeyName];
+
+  if (!options?.includeArchived) {
+    sqlParts.push(`AND COALESCE(s.is_archived, 0) = 0`);
+  }
+
+  if (options?.runtimeOnly) {
+    sqlParts.push(`AND COALESCE(s.is_runtime, 0) = 1`);
+  }
+
+  sqlParts.push(`ORDER BY s.is_active DESC, s.id DESC`);
 
   if (hasLimit) {
     sqlParts.push('LIMIT ? OFFSET ?');
@@ -1336,6 +1350,9 @@ export const getStrategySummaries = async (
     state: String(row.state || 'flat') === 'long' ? 'long' : String(row.state || 'flat') === 'short' ? 'short' : 'flat',
     last_action: row.last_action === undefined ? null : row.last_action,
     last_error: row.last_error === undefined ? null : row.last_error,
+    is_runtime: safeBoolean(row.is_runtime, false),
+    is_archived: safeBoolean(row.is_archived, false),
+    origin: String(row.origin || 'manual'),
   }));
 };
 

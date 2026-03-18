@@ -850,19 +850,28 @@ router.get('/strategies/:apiKeyName/summary', async (req, res) => {
     const offsetRaw = Number.parseInt(String(req.query.offset || '0'), 10);
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 5000) : undefined;
     const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
+    const includeArchived = String(req.query.includeArchived || '0').trim() !== '0';
+    const runtimeOnly = String(req.query.runtimeOnly || '0').trim() !== '0';
 
     const summaries = await getStrategySummaries(apiKeyName, {
       limit,
       offset,
+      includeArchived,
+      runtimeOnly,
     });
 
     if (limit !== undefined) {
+      const countParams: any[] = [apiKeyName];
+      let countWhere = `WHERE a.name = ?`;
+      if (!includeArchived) {
+        countWhere += ` AND COALESCE(s.is_archived, 0) = 0`;
+      }
       const totalRow = await db.get(
         `SELECT COUNT(*) AS total
          FROM strategies s
          JOIN api_keys a ON a.id = s.api_key_id
-         WHERE a.name = ?`,
-        [apiKeyName]
+         ${countWhere}`,
+        countParams
       );
       const total = Number(totalRow?.total || 0);
       res.setHeader('X-Total-Count', String(total));
@@ -874,6 +883,71 @@ router.get('/strategies/:apiKeyName/summary', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Error loading strategy summaries: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk-archive paused strategies (research candidates cleanup)
+router.post('/strategies/:apiKeyName/bulk-archive', async (req, res) => {
+  const { apiKeyName } = req.params;
+  try {
+    const apiKeyRow = await db.get('SELECT id FROM api_keys WHERE name = ?', [apiKeyName]);
+    if (!apiKeyRow?.id) {
+      return res.status(404).json({ error: `API key not found: ${apiKeyName}` });
+    }
+    const apiKeyId = Number(apiKeyRow.id);
+
+    // dryRun: only count, don't modify
+    const dryRun = String(req.body?.dryRun ?? req.query.dryRun ?? '0').trim() !== '0';
+    // olderThanDays: archive paused strategies older than N days (default 7)
+    const olderThanDaysRaw = Number(req.body?.olderThanDays ?? req.query.olderThanDays ?? 7);
+    const olderThanDays = Number.isFinite(olderThanDaysRaw) && olderThanDaysRaw >= 0 ? Math.floor(olderThanDaysRaw) : 7;
+
+    const cutoffDate = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+
+    const candidatesRows = await db.all(
+      `SELECT id, name FROM strategies
+       WHERE api_key_id = ?
+         AND COALESCE(is_active, 1) = 0
+         AND COALESCE(is_runtime, 0) = 0
+         AND COALESCE(is_archived, 0) = 0
+         AND (updated_at < ? OR updated_at IS NULL)
+       ORDER BY id ASC`,
+      [apiKeyId, cutoffDate]
+    );
+
+    const candidates = Array.isArray(candidatesRows) ? candidatesRows : [];
+    const count = candidates.length;
+
+    if (dryRun || count === 0) {
+      return res.json({
+        dryRun: true,
+        count,
+        olderThanDays,
+        cutoffDate,
+        sample: candidates.slice(0, 10).map((r: any) => ({ id: r.id, name: r.name })),
+      });
+    }
+
+    const ids = candidates.map((r: any) => Number(r.id));
+    // Archive in batches of 500 to avoid query size limits
+    const BATCH = 500;
+    let archived = 0;
+    for (let i = 0; i < ids.length; i += BATCH) {
+      const batch = ids.slice(i, i + BATCH);
+      const placeholders = batch.map(() => '?').join(',');
+      const result: any = await db.run(
+        `UPDATE strategies SET is_archived = 1, updated_at = CURRENT_TIMESTAMP WHERE id IN (${placeholders})`,
+        batch
+      );
+      archived += Number(result?.changes || 0);
+    }
+
+    logger.info(`Bulk-archived ${archived} paused strategies for API key ${apiKeyName}`);
+    res.json({ dryRun: false, archived, olderThanDays, cutoffDate });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Bulk-archive error for ${apiKeyName}: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

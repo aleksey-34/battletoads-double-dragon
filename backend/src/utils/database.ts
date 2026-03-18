@@ -494,6 +494,12 @@ export const initDB = async () => {
   await ensureColumn('strategies', 'last_error TEXT');
   await ensureColumn('strategies', 'created_at TEXT DEFAULT CURRENT_TIMESTAMP');
   await ensureColumn('strategies', 'updated_at TEXT DEFAULT CURRENT_TIMESTAMP');
+  // Circuit-separation fields (Phase 1)
+  await ensureColumn('strategies', 'is_runtime BOOLEAN DEFAULT 0');
+  await ensureColumn('strategies', 'is_archived BOOLEAN DEFAULT 0');
+  await ensureColumn('strategies', "origin TEXT DEFAULT 'manual'");  // 'manual'|'sweep_candidate'|'published'
+  await ensureColumn('strategies', 'source_profile_id INTEGER');
+  await ensureColumn('strategies', 'published_at TEXT');
   await ensureColumn('live_trade_events', 'source_trade_id TEXT');
   await ensureColumn('live_trade_events', 'source_order_id TEXT');
   await ensureColumn('live_trade_events', 'source_symbol TEXT');

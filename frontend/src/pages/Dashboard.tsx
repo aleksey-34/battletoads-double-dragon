@@ -86,6 +86,9 @@ type DDStrategy = {
   lot_long_usdt?: number | null;
   lot_short_usdt?: number | null;
   lot_balance_usdt?: number | null;
+  is_runtime?: boolean;
+  is_archived?: boolean;
+  origin?: string;
 };
 
 type TradeHistoryRow = {
@@ -721,6 +724,9 @@ const parseStrategy = (raw: any): DDStrategy => {
     lot_long_usdt: raw?.lot_long_usdt !== undefined && raw?.lot_long_usdt !== null ? readNumber(raw?.lot_long_usdt, 0) : null,
     lot_short_usdt: raw?.lot_short_usdt !== undefined && raw?.lot_short_usdt !== null ? readNumber(raw?.lot_short_usdt, 0) : null,
     lot_balance_usdt: raw?.lot_balance_usdt !== undefined && raw?.lot_balance_usdt !== null ? readNumber(raw?.lot_balance_usdt, 0) : null,
+    is_runtime: readBoolean(raw?.is_runtime, false),
+    is_archived: readBoolean(raw?.is_archived, false),
+    origin: String(raw?.origin || 'manual'),
   };
 };
 
@@ -762,6 +768,8 @@ const Dashboard: React.FC = () => {
   const [globalActionLoading, setGlobalActionLoading] = useState<{ [key: string]: boolean }>({});
   const [copySourceByTargetKey, setCopySourceByTargetKey] = useState<{ [key: string]: string }>({});
   const [copyActionLoadingByKey, setCopyActionLoadingByKey] = useState<{ [key: string]: boolean }>({});
+  const [showArchivedByKey, setShowArchivedByKey] = useState<{ [key: string]: boolean }>({});
+  const [archiveActionLoadingByKey, setArchiveActionLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [uiTheme, setUiTheme] = useState<'classic' | 'battletoads'>('classic');
   const requestLocksRef = useRef<Record<string, boolean>>({});
 
@@ -1209,9 +1217,10 @@ const Dashboard: React.FC = () => {
     });
   };
 
-  const fetchStrategies = async (keyName: string, options?: { silent?: boolean; full?: boolean }) => {
+  const fetchStrategies = async (keyName: string, options?: { silent?: boolean; full?: boolean; includeArchived?: boolean }) => {
     const silent = options?.silent === true;
     const full = options?.full === true;
+    const includeArchived = options?.includeArchived ?? showArchivedByKey[keyName] ?? false;
     const requestLockKey = `strategies:${keyName}`;
 
     if (!acquireRequestLock(requestLockKey)) {
@@ -1227,6 +1236,7 @@ const Dashboard: React.FC = () => {
       const res = await axios.get(`/api/strategies/${keyName}/summary`, {
         params: {
           ...(full ? {} : { limit: STRATEGY_FETCH_LIMIT, offset: 0 }),
+          ...(includeArchived ? { includeArchived: '1' } : {}),
         },
       });
       const payload = Array.isArray(res.data) ? res.data.map(parseStrategy) : [];
@@ -1617,6 +1627,28 @@ const Dashboard: React.FC = () => {
       message.error(error?.response?.data?.error || 'Failed to delete strategy');
     } finally {
       setStrategyActionLoading((prev) => ({ ...prev, [actionKey]: false }));
+    }
+  };
+
+  const bulkArchiveStrategies = async (keyName: string, dryRun: boolean) => {
+    setArchiveActionLoadingByKey((prev) => ({ ...prev, [keyName]: true }));
+    try {
+      const res = await axios.post(`/api/strategies/${keyName}/bulk-archive`, {
+        dryRun,
+        olderThanDays: 0,
+      });
+      const data = res.data as { dryRun: boolean; count?: number; archived?: number; sample?: { id: number; name: string }[] };
+      if (dryRun) {
+        const sample = (data.sample || []).slice(0, 5).map((s) => s.name).join(', ');
+        message.info(`Dry run: ${data.count ?? 0} paused strategies will be archived${sample ? ` (e.g. ${sample}...)` : ''}`);
+      } else {
+        message.success(`Archived ${data.archived ?? 0} paused strategies for ${keyName}`);
+        void fetchStrategies(keyName);
+      }
+    } catch (error: any) {
+      message.error(error?.response?.data?.error || 'Bulk archive failed');
+    } finally {
+      setArchiveActionLoadingByKey((prev) => ({ ...prev, [keyName]: false }));
     }
   };
 
@@ -2432,6 +2464,35 @@ const Dashboard: React.FC = () => {
                       Show less
                     </Button>
                   ) : null}
+                  <Button
+                    size="small"
+                    type={showArchivedByKey[keyName] ? 'primary' : 'default'}
+                    onClick={() => {
+                      const next = !showArchivedByKey[keyName];
+                      setShowArchivedByKey((prev) => ({ ...prev, [keyName]: next }));
+                      void fetchStrategies(keyName, { includeArchived: next });
+                    }}
+                  >
+                    {showArchivedByKey[keyName] ? 'Hide archived' : 'Show archived'}
+                  </Button>
+                  <Button
+                    size="small"
+                    danger
+                    loading={archiveActionLoadingByKey[keyName]}
+                    onClick={() => void bulkArchiveStrategies(keyName, true)}
+                  >
+                    Dry-run archive paused
+                  </Button>
+                  <Button
+                    size="small"
+                    danger
+                    loading={archiveActionLoadingByKey[keyName]}
+                    onClick={() => {
+                      void bulkArchiveStrategies(keyName, false);
+                    }}
+                  >
+                    Archive all paused
+                  </Button>
 
                   {apiKeys.length > 1 ? (
                     <>
@@ -2548,6 +2609,9 @@ const Dashboard: React.FC = () => {
                                 <span>{strategy.name}</span>
                                 <Badge status={strategyBadgeStatus} text={strategyBadgeText} />
                                 <Tag color={strategyStatus.color}>{strategyStatus.label}</Tag>
+                                {strategy.is_runtime ? <Tag color="purple">runtime</Tag> : null}
+                                {strategy.is_archived ? <Tag color="default">archived</Tag> : null}
+                                {strategy.origin && strategy.origin !== 'manual' ? <Tag color="geekblue">{strategy.origin}</Tag> : null}
                                 <Tag color={strategy.state === 'long' ? 'green' : strategy.state === 'short' ? 'red' : 'default'}>
                                   state: {strategy.state}
                                 </Tag>
