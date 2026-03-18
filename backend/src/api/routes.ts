@@ -956,6 +956,9 @@ router.get('/strategies/:apiKeyName/summary', async (req, res) => {
       if (!includeArchived) {
         countWhere += ` AND COALESCE(s.is_archived, 0) = 0`;
       }
+      if (runtimeOnly) {
+        countWhere += ` AND COALESCE(s.is_runtime, 0) = 1`;
+      }
       const totalRow = await db.get(
         `SELECT COUNT(*) AS total
          FROM strategies s

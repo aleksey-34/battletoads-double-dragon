@@ -1236,6 +1236,7 @@ const Dashboard: React.FC = () => {
       const res = await axios.get(`/api/strategies/${keyName}/summary`, {
         params: {
           ...(full ? {} : { limit: STRATEGY_FETCH_LIMIT, offset: 0 }),
+          runtimeOnly: '1',
           ...(includeArchived ? { includeArchived: '1' } : {}),
         },
       });
