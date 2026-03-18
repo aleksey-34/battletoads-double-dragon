@@ -367,8 +367,15 @@ const fileInfo = (filePath: string): { path: string; exists: boolean; sizeBytes:
   }
 };
 
+const parseUtcMs = (value: unknown): number | null => {
+  const parsed = Date.parse(String(value || ''));
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 export const getResearchDbObservability = async (): Promise<Record<string, unknown>> => {
   const researchDb = getResearchDb();
+  const nowIso = toIsoNow();
+  const nowMs = Date.parse(nowIso);
 
   const researchTables = [
     'strategy_profiles',
@@ -413,8 +420,30 @@ export const getResearchDbObservability = async (): Promise<Record<string, unkno
     }
   }
 
+  const latestSweep = await researchDb.get(
+    `SELECT id, name, status, COALESCE(completed_at, created_at) AS sweep_at_utc
+     FROM sweep_runs
+     ORDER BY id DESC
+     LIMIT 1`
+  ) as { id?: number; name?: string; status?: string; sweep_at_utc?: string | null } | undefined;
+
+  const sweepAtMs = parseUtcMs(latestSweep?.sweep_at_utc || null);
+  const sweepLagHours = sweepAtMs !== null
+    ? Number(((nowMs - sweepAtMs) / 3_600_000).toFixed(2))
+    : null;
+
+  const schedulerSnapshot = await researchDb.get(
+    `SELECT job_key, is_enabled, last_status, last_run_at, next_run_at, run_count, last_error
+     FROM research_scheduler_jobs
+     WHERE job_key = 'daily_incremental_sweep'
+     LIMIT 1`
+  ) as Record<string, unknown> | undefined;
+
+  const totalMainRows = Object.values(mainCounts).reduce<number>((acc, v) => acc + (typeof v === 'number' ? v : 0), 0);
+  const totalResearchRows = Object.values(researchCounts).reduce<number>((acc, v) => acc + (typeof v === 'number' ? v : 0), 0);
+
   return {
-    atUtc: toIsoNow(),
+    atUtc: nowIso,
     files: {
       mainDb: fileInfo(getDbFilePath()),
       researchDb: fileInfo(getResearchDbFilePath()),
@@ -422,6 +451,15 @@ export const getResearchDbObservability = async (): Promise<Record<string, unkno
     rowCounts: {
       main: mainCounts,
       research: researchCounts,
+      totals: {
+        main: totalMainRows,
+        research: totalResearchRows,
+      },
+    },
+    freshness: {
+      latestSweep: latestSweep || null,
+      latestSweepLagHours: sweepLagHours,
+      scheduler: schedulerSnapshot || null,
     },
   };
 };

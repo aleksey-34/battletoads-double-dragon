@@ -13,6 +13,7 @@ import {
 import { getMonitoringLatest } from '../bot/monitoring';
 import { Strategy } from '../config/settings';
 import { db } from '../utils/database';
+import logger from '../utils/logger';
 
 export type ProductMode = 'strategy_client' | 'algofund_client';
 export type Level3 = 'low' | 'medium' | 'high';
@@ -331,6 +332,7 @@ const asString = (value: unknown, fallback = ''): string => {
 };
 
 const clampNumber = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
+const CLIENT_STRICT_PRESET_MODE = String(process.env.CLIENT_STRICT_PRESET_MODE || '1').trim() !== '0';
 
 const levelToPreferenceScore = (level: Level3): number => {
   if (level === 'low') return 0;
@@ -751,6 +753,114 @@ const getRiskLotPercent = (riskLevel: Level3): number => {
   return 10;
 };
 
+const toPresetOnlyEquity = (initialBalance: number, retPercent: number): Array<{ time: number; equity: number }> => {
+  const start = Number.isFinite(initialBalance) && initialBalance > 0 ? initialBalance : 10000;
+  const end = Number((start * (1 + (Number(retPercent) || 0) / 100)).toFixed(4));
+  const now = Date.now();
+  return [
+    { time: now - 1000, equity: start },
+    { time: now, equity: end },
+  ];
+};
+
+const buildPresetOnlySingleSummary = (
+  initialBalance: number,
+  preset: CatalogPreset,
+  market: string,
+  strategyName: string
+): Record<string, unknown> => {
+  const ret = asNumber(preset.metrics.ret, 0);
+  const end = Number((initialBalance * (1 + ret / 100)).toFixed(4));
+  return {
+    mode: 'single',
+    apiKeyName: 'preset_lookup',
+    strategyIds: [Number(preset.strategyId)],
+    strategyNames: [strategyName],
+    interval: asString(preset.params.interval, '1h'),
+    barsRequested: 0,
+    barsProcessed: 0,
+    dateFromMs: null,
+    dateToMs: null,
+    warmupBars: 0,
+    skippedStrategies: 0,
+    processedStrategies: 1,
+    initialBalance,
+    finalEquity: end,
+    totalReturnPercent: ret,
+    maxDrawdownPercent: asNumber(preset.metrics.dd, 0),
+    maxDrawdownAbsolute: Number((initialBalance * asNumber(preset.metrics.dd, 0) / 100).toFixed(4)),
+    tradesCount: Math.max(0, Math.floor(asNumber(preset.metrics.trades, 0))),
+    winRatePercent: asNumber(preset.metrics.wr, 0),
+    profitFactor: asNumber(preset.metrics.pf, 1),
+    grossProfit: 0,
+    grossLoss: 0,
+    commissionPercent: 0,
+    slippagePercent: 0,
+    fundingRatePercent: 0,
+    market,
+    approx: true,
+  };
+};
+
+const buildPresetOnlyPortfolioSummary = (
+  initialBalance: number,
+  selectedOffers: Array<{ offerId: string; offer: CatalogOffer; preset: CatalogPreset }>
+): Record<string, unknown> => {
+  const count = selectedOffers.length || 1;
+  const avgRet = selectedOffers.reduce((acc, item) => acc + asNumber(item.preset.metrics.ret, 0), 0) / count;
+  const avgPf = selectedOffers.reduce((acc, item) => acc + asNumber(item.preset.metrics.pf, 1), 0) / count;
+  const avgWr = selectedOffers.reduce((acc, item) => acc + asNumber(item.preset.metrics.wr, 0), 0) / count;
+  const maxDd = selectedOffers.reduce((acc, item) => Math.max(acc, asNumber(item.preset.metrics.dd, 0)), 0);
+  const totalTrades = selectedOffers.reduce((acc, item) => acc + Math.max(0, Math.floor(asNumber(item.preset.metrics.trades, 0))), 0);
+  const end = Number((initialBalance * (1 + avgRet / 100)).toFixed(4));
+
+  return {
+    mode: 'portfolio',
+    apiKeyName: 'preset_lookup',
+    strategyIds: selectedOffers.map((item) => Number(item.preset.strategyId)),
+    strategyNames: selectedOffers.map((item) => item.preset.strategyName),
+    interval: 'preset',
+    barsRequested: 0,
+    barsProcessed: 0,
+    dateFromMs: null,
+    dateToMs: null,
+    warmupBars: 0,
+    skippedStrategies: 0,
+    processedStrategies: count,
+    initialBalance,
+    finalEquity: end,
+    totalReturnPercent: avgRet,
+    maxDrawdownPercent: maxDd,
+    maxDrawdownAbsolute: Number((initialBalance * maxDd / 100).toFixed(4)),
+    tradesCount: totalTrades,
+    winRatePercent: avgWr,
+    profitFactor: avgPf,
+    grossProfit: 0,
+    grossLoss: 0,
+    commissionPercent: 0,
+    slippagePercent: 0,
+    fundingRatePercent: 0,
+    approx: true,
+  };
+};
+
+const markMaterializedRuntimeOrigin = async (
+  strategyId: number,
+  origin: 'saas_materialize' | 'saas_archived',
+  isRuntime: 0 | 1
+): Promise<void> => {
+  try {
+    await db.run(
+      `UPDATE strategies
+       SET origin = ?, is_runtime = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [origin, isRuntime, strategyId]
+    );
+  } catch (error) {
+    logger.warn(`Unable to mark strategy #${strategyId} origin/is_runtime: ${(error as Error).message}`);
+  }
+};
+
 const collectPresetCandidates = (offer: CatalogOffer): CatalogPreset[] => {
   const values = [
     offer.sliderPresets?.risk?.low,
@@ -923,6 +1033,7 @@ const upsertTenantStrategies = async (
         allowBindingUpdate: true,
         source: 'saas_materialize',
       });
+      await markMaterializedRuntimeOrigin(Number(updated.id), 'saas_materialize', 1);
       out.push({
         id: updated.id,
         name: updated.name,
@@ -937,6 +1048,9 @@ const upsertTenantStrategies = async (
     }
 
     const created = await createStrategy(apiKeyName, draft);
+    if (created?.id) {
+      await markMaterializedRuntimeOrigin(Number(created.id), 'saas_materialize', 1);
+    }
     out.push({
       id: created.id,
       name: created.name,
@@ -954,6 +1068,7 @@ const upsertTenantStrategies = async (
       continue;
     }
     await updateStrategy(apiKeyName, Number(row.id), { is_active: false }, { source: 'saas_disable_stale' });
+    await markMaterializedRuntimeOrigin(Number(row.id), 'saas_archived', 0);
   }
 
   return out;
@@ -1254,6 +1369,7 @@ export const previewStrategyClientOffer = async (
   const state = await getStrategyClientState(tenantId);
   const sweep = loadLatestSweep();
   const period = buildPeriodInfo(sweep);
+  const initialBalance = asNumber(sweep?.config?.initialBalance, 10000);
   const resolvedRisk = riskLevel || (state.profile?.risk_level as Level3) || 'medium';
   const resolvedTradeFrequency = tradeFrequencyLevel || (state.profile?.trade_frequency_level as Level3) || 'medium';
   const normalizedRiskScore = normalizePreferenceScore(riskScore, resolvedRisk);
@@ -1319,6 +1435,38 @@ export const previewStrategyClientOffer = async (
     };
   }
 
+  if (CLIENT_STRICT_PRESET_MODE) {
+    const preview = {
+      source: 'preset_lookup_no_live',
+      summary: buildPresetOnlySingleSummary(initialBalance, preset, offer.strategy.market, offer.strategy.name),
+      equity: {
+        source: 'preset_lookup_no_live',
+        generatedAt: new Date().toISOString(),
+        points: toPresetOnlyEquity(initialBalance, asNumber(preset.metrics.ret, 0)),
+        summary: {
+          finalEquity: Number((initialBalance * (1 + asNumber(preset.metrics.ret, 0) / 100)).toFixed(4)),
+          totalReturnPercent: asNumber(preset.metrics.ret, 0),
+          maxDrawdownPercent: asNumber(preset.metrics.dd, 0),
+          winRatePercent: asNumber(preset.metrics.wr, 0),
+          profitFactor: asNumber(preset.metrics.pf, 1),
+          tradesCount: Math.max(0, Math.floor(asNumber(preset.metrics.trades, 0))),
+        },
+      },
+      trades: [],
+      strictPresetMode: true,
+    };
+
+    const latestPreviewPayload = { offerId, offer, preset, controls, period, preview };
+    await db.run(
+      `UPDATE strategy_client_profiles
+       SET latest_preview_json = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [JSON.stringify(latestPreviewPayload), tenantId]
+    );
+
+    return { offer, preset, controls, period, preview };
+  }
+
   const record = findSweepRecordByStrategyId(sweep, preset.strategyId);
   const result = await runBacktest({
     apiKeyName: state.catalog.apiKeyName,
@@ -1365,6 +1513,7 @@ export const previewStrategyClientSelection = async (
   const state = await getStrategyClientState(tenantId);
   const sweep = loadLatestSweep();
   const period = buildPeriodInfo(sweep);
+  const initialBalance = asNumber(sweep?.config?.initialBalance, 10000);
   const resolvedRisk = payload?.riskLevel || (state.profile?.risk_level as Level3) || 'medium';
   const resolvedTradeFrequency = payload?.tradeFrequencyLevel || (state.profile?.trade_frequency_level as Level3) || 'medium';
   const normalizedRiskScore = normalizePreferenceScore(payload?.riskScore, resolvedRisk);
@@ -1436,6 +1585,33 @@ export const previewStrategyClientSelection = async (
 
   if (uniqueStrategyIds.length === 0) {
     throw new Error('Selected offers did not resolve to valid strategies');
+  }
+
+  if (CLIENT_STRICT_PRESET_MODE) {
+    return {
+      period,
+      controls,
+      selectedOffers: selectedOffers.map((item) => ({
+        offerId: item.offerId,
+        titleRu: item.offer.titleRu,
+        market: item.offer.strategy.market,
+        mode: item.offer.strategy.mode,
+        strategyId: item.preset.strategyId,
+        strategyName: item.preset.strategyName,
+        score: item.preset.score,
+        metrics: item.preset.metrics,
+      })),
+      preview: {
+        source: 'portfolio_preset_lookup',
+        summary: buildPresetOnlyPortfolioSummary(initialBalance, selectedOffers),
+        equity: toPresetOnlyEquity(
+          initialBalance,
+          selectedOffers.reduce((acc, item) => acc + asNumber(item.preset.metrics.ret, 0), 0) / Math.max(1, selectedOffers.length)
+        ),
+        trades: [],
+        strictPresetMode: true,
+      },
+    };
   }
 
   const result = await runBacktest({

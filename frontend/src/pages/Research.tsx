@@ -94,6 +94,25 @@ type DbObservability = {
   rowCounts: {
     main: Record<string, number | null>;
     research: Record<string, number | null>;
+    totals?: {
+      main?: number;
+      research?: number;
+    };
+  };
+  freshness?: {
+    latestSweep?: {
+      id?: number;
+      name?: string;
+      status?: string;
+      sweep_at_utc?: string | null;
+    } | null;
+    latestSweepLagHours?: number | null;
+    scheduler?: {
+      last_status?: string;
+      last_run_at?: string | null;
+      next_run_at?: string | null;
+      run_count?: number;
+    } | null;
   };
 };
 
@@ -646,6 +665,18 @@ export default function Research() {
               </Descriptions.Item>
               <Descriptions.Item label="research.db size">
                 {observability?.files?.researchDb?.sizeBytes ?? 0} bytes
+              </Descriptions.Item>
+              <Descriptions.Item label="main rows total">
+                {observability?.rowCounts?.totals?.main ?? 0}
+              </Descriptions.Item>
+              <Descriptions.Item label="research rows total">
+                {observability?.rowCounts?.totals?.research ?? 0}
+              </Descriptions.Item>
+              <Descriptions.Item label="latest sweep lag (hours)">
+                {observability?.freshness?.latestSweepLagHours ?? '—'}
+              </Descriptions.Item>
+              <Descriptions.Item label="latest sweep">
+                {observability?.freshness?.latestSweep?.name || '—'}
               </Descriptions.Item>
               <Descriptions.Item label="Observed at (UTC)">
                 {observability?.atUtc || '—'}
