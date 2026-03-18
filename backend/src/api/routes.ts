@@ -175,6 +175,10 @@ const toOptionalBool = (value: unknown): boolean | undefined => {
   return undefined;
 };
 
+const isLevel3 = (value: unknown): value is 'low' | 'medium' | 'high' => {
+  return value === 'low' || value === 'medium' || value === 'high';
+};
+
 const resolveClientAuthErrorStatus = (message: string): number => {
   const normalized = String(message || '').toLowerCase();
 
@@ -423,6 +427,13 @@ router.patch('/client/strategy/profile', authenticateClient, async (req, res) =>
       return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
     }
 
+    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+    }
+    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+    }
+
     const state = await updateStrategyClientState(Number(session.user.tenantId), {
       selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
       riskLevel: req.body?.riskLevel,
@@ -453,6 +464,12 @@ router.post('/client/strategy/preview', authenticateClient, async (req, res) => 
     if (!offerId) {
       return res.status(400).json({ error: 'offerId is required' });
     }
+    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+    }
+    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+    }
 
     const preview = await previewStrategyClientOffer(
       Number(session.user.tenantId),
@@ -480,6 +497,13 @@ router.post('/client/strategy/selection-preview', authenticateClient, async (req
 
     if (session.user.productMode !== 'strategy_client') {
       return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
+    }
+
+    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+    }
+    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
     }
 
     const preview = await previewStrategyClientSelection(Number(session.user.tenantId), {

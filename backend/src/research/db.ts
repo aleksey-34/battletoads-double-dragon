@@ -18,6 +18,8 @@ const DB_PATH =
   process.env.RESEARCH_DB_PATH ||
   path.resolve(process.cwd(), 'research.db');
 
+export const getResearchDbFilePath = (): string => DB_PATH;
+
 let _db: Database<sqlite3.Database, sqlite3.Statement> | null = null;
 
 export const getResearchDb = (): Database<sqlite3.Database, sqlite3.Statement> => {
@@ -181,6 +183,26 @@ const applySchema = async (db: Database<sqlite3.Database, sqlite3.Statement>): P
 
     CREATE INDEX IF NOT EXISTS idx_backtest_runs_status
       ON backtest_runs (status, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS research_scheduler_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_key TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      is_enabled BOOLEAN DEFAULT 1,
+      schedule_kind TEXT DEFAULT 'daily',
+      hour_utc INTEGER DEFAULT 3,
+      minute_utc INTEGER DEFAULT 15,
+      last_status TEXT DEFAULT 'idle',
+      last_run_at TEXT,
+      last_error TEXT DEFAULT '',
+      next_run_at TEXT,
+      run_count INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_research_scheduler_due
+      ON research_scheduler_jobs (is_enabled, next_run_at);
   `);
 };
 

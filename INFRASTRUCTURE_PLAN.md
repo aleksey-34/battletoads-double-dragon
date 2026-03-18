@@ -151,7 +151,7 @@ Admin нажимает [Publish to Runtime]
 | `algofund_profiles` | ✅ Реализована |
 | `algofund_start_stop_requests` | ✅ Реализована |
 | `saas_audit_log` | ✅ Реализована |
-| `client_presets` | ❌ Нужно создать (в research.db или main.db) |
+| `client_presets` | ⚠️ Реализована в `research.db`, но пока не подключена в `/api/client/catalog` |
 
 **Данные в клиентском контуре:**
 - Все KPI, эквити-кривые, описания — из `sweep_artifacts` / `client_presets`
@@ -545,17 +545,7 @@ scripts/
 
 ---
 
-### 🚀 Фаза 7 — Notifications (Telegram + in-app)
-| Задача | Описание |
-|--------|----------|
-| Telegram bot | Уведомления: стратегия упала, клиент оплатил, бектест готов |
-| In-app уведомления | Badge/toast в UI |
-| Billing triggers | Срок оплаты, просрочка, блокировка |
-| Algofund triggers | Start/stop request accepted/rejected |
-
----
-
-### 🚀 Фаза 8 — VPS Process Isolation (пост-альфа)
+### 🚀 Фаза 7 — VPS Process Isolation (пост-альфа)
 ```
 Цель: три отдельных systemd-сервиса
 
@@ -565,6 +555,16 @@ btdd-api.service       ← Express API + frontend serve
 
 Деплой runtime-обновлений без остановки торговли.
 ```
+
+---
+
+### 🚀 Фаза 8 — Notifications (Telegram + in-app)
+| Задача | Описание |
+|--------|----------|
+| Telegram bot | Уведомления: стратегия упала, клиент оплатил, бектест готов |
+| In-app уведомления | Badge/toast в UI |
+| Billing triggers | Срок оплаты, просрочка, блокировка |
+| Algofund triggers | Start/stop request accepted/rejected |
 
 ---
 
@@ -646,31 +646,31 @@ CLIENT: Открывает стратегический ЛК
 - [x] Admin SaaS UI: /saas page with 3 zones
 - [x] E2E smoke: all 7 tabs passing
 
-### Фаза 1 — Boundaries (блокер) ❌
-- [ ] `is_runtime` + `is_archived` + `origin` поля в strategies
-- [ ] Dashboard default filter: is_archived=0
-- [ ] Bulk-archive API + UI button
-- [ ] Пометить 2 активных стратегии as is_runtime=1
+### Фаза 1 — Boundaries (блокер) ⚠️
+- [x] `is_runtime` + `is_archived` + `origin` поля в strategies
+- [x] Dashboard default filter: is_archived=0
+- [x] Bulk-archive API + UI button
+- [ ] Пометить 2 активных стратегии as is_runtime=1 (операционный шаг на VPS)
 
-### Фаза 2 — Research DB ❌
-- [ ] `research/db.ts` + схема
+### Фаза 2 — Research DB ⚠️
+- [x] `research/db.ts` + схема
 - [ ] Import существующего sweep JSON → research DB
-- [ ] `researchRoutes.ts` базовые маршруты
-- [ ] Research страница в frontend
+- [x] `researchRoutes.ts` базовые маршруты
+- [x] Research страница в frontend
 
-### Фаза 3 — Preview Worker ❌
-- [ ] `workers/previewWorker.ts`
-- [ ] Очередь и статус preview jobs
-- [ ] Client KPI из presets (не live compute)
+### Фаза 3 — Preview Worker ⚠️
+- [x] `workers/previewWorker.ts`
+- [x] Очередь и статус preview jobs
+- [ ] Client KPI из presets (не live compute) — частично, ещё есть fallback на live backtest в SaaS service
 
-### Фаза 4 — Publish Gate ❌
-- [ ] `publishToRuntime()` функция
-- [ ] Publish/Revoke API endpoints
-- [ ] `PublishGateModal` UI компонент
-- [ ] `publish_log` запись каждого действия
+### Фаза 4 — Publish Gate ⚠️
+- [x] `publishToRuntime()` функция
+- [x] Publish/Revoke API endpoints
+- [ ] `PublishGateModal` UI компонент (пока базовый modal в Research.tsx)
+- [x] `publish_log` запись каждого действия
 
-### Фаза 5 — Client Presets ❌
-- [ ] `presetBuilder.ts` (3×3 матрица)
+### Фаза 5 — Client Presets ⚠️
+- [x] `presetBuilder.ts` (3×3 матрица)
 - [ ] Client catalog из presets (мгновенно, без compute)
 - [ ] Equity curve из artifact JSON
 
@@ -697,3 +697,13 @@ CLIENT: Открывает стратегический ЛК
 9. **`workers/previewWorker.ts`** — фоновый worker для KPI
 10. **`research/presetBuilder.ts`** — построение 3×3 client_presets
 11. Deploy → VPS alpha test
+
+---
+
+## 11. Доп. спецификация по Sweep/Backtest
+
+- Детальное описание текущей реализации multiplexer-sweep, ограничений и следующих решений: `SWEEP_BACKTEST_SPEC.md`.
+- В этом документе также зафиксированы:
+  - статус крутилки `tradeFrequency` (где реальное влияние, где эвристика),
+  - вариант ежедневного фонового sweep в `Research Circuit`,
+  - оценка сложности и роста объёма БД.

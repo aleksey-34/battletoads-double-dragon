@@ -38,6 +38,10 @@ const toOptionalNumber = (value: unknown): number | undefined => {
   return Number.isFinite(numeric) ? numeric : undefined;
 };
 
+const isLevel3 = (value: unknown): value is 'low' | 'medium' | 'high' => {
+  return value === 'low' || value === 'medium' || value === 'high';
+};
+
 router.get('/admin/summary', async (_req, res) => {
   try {
     const data = await getSaasAdminSummary();
@@ -140,6 +144,13 @@ router.patch('/strategy-clients/:tenantId', async (req, res) => {
   }
 
   try {
+    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+    }
+    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+    }
+
     const data = await updateStrategyClientState(tenantId, {
       selectedOfferIds: Array.isArray(req.body.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
       riskLevel: req.body.riskLevel,
@@ -164,6 +175,12 @@ router.post('/strategy-clients/:tenantId/preview', async (req, res) => {
   if (!req.body.offerId) {
     return res.status(400).json({ error: 'offerId is required' });
   }
+  if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+    return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+  }
+  if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+    return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+  }
 
   try {
     const data = await previewStrategyClientOffer(
@@ -186,6 +203,13 @@ router.post('/strategy-clients/:tenantId/selection-preview', async (req, res) =>
   const tenantId = Number(req.params.tenantId);
   if (!Number.isFinite(tenantId)) {
     return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+    return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+  }
+  if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+    return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
   }
 
   try {

@@ -71,6 +71,32 @@ type ApiKeyRecord = {
   exchange: string;
 };
 
+type SchedulerJob = {
+  id: number;
+  job_key: string;
+  title: string;
+  is_enabled: number;
+  hour_utc: number;
+  minute_utc: number;
+  last_status: string;
+  last_run_at: string | null;
+  last_error: string | null;
+  next_run_at: string | null;
+  run_count: number;
+};
+
+type DbObservability = {
+  atUtc: string;
+  files: {
+    mainDb: { path: string; exists: boolean; sizeBytes: number; mtimeUtc: string | null };
+    researchDb: { path: string; exists: boolean; sizeBytes: number; mtimeUtc: string | null };
+  };
+  rowCounts: {
+    main: Record<string, number | null>;
+    research: Record<string, number | null>;
+  };
+};
+
 // ─── Helper ─────────────────────────────────────────────────────────────────
 
 function statusColor(status: string): string {
@@ -101,8 +127,8 @@ function SweepPanel({ onSweepSelect }: { onSweepSelect: (id: number | null) => v
   const fetchSweeps = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await axios.get<{ sweeps: SweepRun[] }>('/api/research/sweeps');
-      setSweeps(res.data.sweeps || []);
+      const res = await axios.get<SweepRun[]>('/api/research/sweeps');
+      setSweeps(res.data || []);
     } catch {
       message.error('Failed to load sweep runs');
     } finally {
@@ -114,10 +140,10 @@ function SweepPanel({ onSweepSelect }: { onSweepSelect: (id: number | null) => v
 
   const handleRegister = async (values: { name: string; description: string; catalogPath: string }) => {
     try {
-      await axios.post('/api/research/sweeps', {
+      await axios.post('/api/research/sweeps/register', {
         name: values.name,
         description: values.description,
-        catalog_file_path: values.catalogPath,
+        catalogFilePath: values.catalogPath,
       });
       message.success('Sweep run registered');
       setRegisterModal(false);
@@ -270,6 +296,84 @@ export default function Research() {
 
   const [previewLoadingById, setPreviewLoadingById] = useState<Record<number, boolean>>({});
   const [previewJobResult, setPreviewJobResult] = useState<PreviewJob | null>(null);
+  const [schedulerLoading, setSchedulerLoading] = useState(false);
+  const [schedulerSaving, setSchedulerSaving] = useState(false);
+  const [schedulerRunNowLoading, setSchedulerRunNowLoading] = useState(false);
+  const [schedulerJob, setSchedulerJob] = useState<SchedulerJob | null>(null);
+  const [scheduleHourUtc, setScheduleHourUtc] = useState<number>(3);
+  const [scheduleMinuteUtc, setScheduleMinuteUtc] = useState<number>(15);
+  const [observability, setObservability] = useState<DbObservability | null>(null);
+
+  const fetchScheduler = useCallback(async () => {
+    setSchedulerLoading(true);
+    try {
+      const [jobsRes, obsRes] = await Promise.all([
+        axios.get<{ jobs: SchedulerJob[] }>('/api/research/scheduler'),
+        axios.get<DbObservability>('/api/research/observability/db'),
+      ]);
+      const job = (jobsRes.data.jobs || []).find((j) => j.job_key === 'daily_incremental_sweep') || null;
+      setSchedulerJob(job);
+      if (job) {
+        setScheduleHourUtc(Number(job.hour_utc));
+        setScheduleMinuteUtc(Number(job.minute_utc));
+      }
+      setObservability(obsRes.data);
+    } catch {
+      message.error('Failed to load scheduler/DB observability');
+    } finally {
+      setSchedulerLoading(false);
+    }
+  }, []);
+
+  const saveScheduler = async () => {
+    if (!schedulerJob) return;
+    setSchedulerSaving(true);
+    try {
+      await axios.patch('/api/research/scheduler/daily_incremental_sweep', {
+        isEnabled: schedulerJob.is_enabled === 1,
+        hourUtc: Math.max(0, Math.min(23, Math.floor(scheduleHourUtc))),
+        minuteUtc: Math.max(0, Math.min(59, Math.floor(scheduleMinuteUtc))),
+      });
+      message.success('Scheduler updated');
+      await fetchScheduler();
+    } catch {
+      message.error('Failed to update scheduler');
+    } finally {
+      setSchedulerSaving(false);
+    }
+  };
+
+  const toggleScheduler = async (enabled: boolean) => {
+    if (!schedulerJob) return;
+    setSchedulerSaving(true);
+    try {
+      await axios.patch('/api/research/scheduler/daily_incremental_sweep', {
+        isEnabled: enabled,
+        hourUtc: Number(scheduleHourUtc),
+        minuteUtc: Number(scheduleMinuteUtc),
+      });
+      message.success(enabled ? 'Scheduler enabled' : 'Scheduler disabled');
+      await fetchScheduler();
+    } catch {
+      message.error('Failed to toggle scheduler');
+    } finally {
+      setSchedulerSaving(false);
+    }
+  };
+
+  const runSchedulerNow = async () => {
+    setSchedulerRunNowLoading(true);
+    try {
+      const res = await axios.post<{ result?: { status?: string; details?: Record<string, unknown> } }>('/api/research/scheduler/daily_incremental_sweep/run-now');
+      message.success(`Scheduler run finished: ${res.data?.result?.status || 'ok'}`);
+      await fetchScheduler();
+      await fetchProfiles();
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || 'Scheduler run failed');
+    } finally {
+      setSchedulerRunNowLoading(false);
+    }
+  };
 
   // ── Fetch profiles ──────────────────────────────────────────────────────────
   const fetchProfiles = useCallback(async (pg = page) => {
@@ -290,6 +394,7 @@ export default function Research() {
 
   useEffect(() => { void fetchProfiles(1); setPage(1); }, [filterStatus, filterSweepId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void fetchProfiles(page); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void fetchScheduler(); }, [fetchScheduler]);
 
   // ── Fetch API keys for publish modal ───────────────────────────────────────
   useEffect(() => {
@@ -497,6 +602,60 @@ export default function Research() {
       <Paragraph type="secondary">
         Manage strategy profiles from sweep runs. Preview candidates, publish the best ones to the runtime circuit, build client presets.
       </Paragraph>
+
+      <Card
+        title="Research Scheduler (daily incremental sweep)"
+        loading={schedulerLoading}
+        extra={
+          <Space>
+            <Tag color={schedulerJob?.is_enabled ? 'success' : 'default'}>
+              {schedulerJob?.is_enabled ? 'enabled' : 'disabled'}
+            </Tag>
+            <Tag color={statusColor(String(schedulerJob?.last_status || 'idle'))}>
+              {schedulerJob?.last_status || 'idle'}
+            </Tag>
+          </Space>
+        }
+      >
+        <Row gutter={[16, 16]}>
+          <Col xs={24} md={14}>
+            <Space wrap>
+              <span>Time (UTC):</span>
+              <InputNumber min={0} max={23} value={scheduleHourUtc} onChange={(v) => setScheduleHourUtc(Number(v ?? 0))} />
+              <span>:</span>
+              <InputNumber min={0} max={59} value={scheduleMinuteUtc} onChange={(v) => setScheduleMinuteUtc(Number(v ?? 0))} />
+              <Button onClick={() => void saveScheduler()} loading={schedulerSaving}>Save</Button>
+              <Button onClick={() => void toggleScheduler(!(schedulerJob?.is_enabled === 1))} loading={schedulerSaving}>
+                {schedulerJob?.is_enabled === 1 ? 'Disable' : 'Enable'}
+              </Button>
+              <Button type="primary" onClick={() => void runSchedulerNow()} loading={schedulerRunNowLoading}>
+                Run now
+              </Button>
+            </Space>
+            <Space direction="vertical" size={2} style={{ marginTop: 12 }}>
+              <Text type="secondary">Next run: {schedulerJob?.next_run_at || '—'}</Text>
+              <Text type="secondary">Last run: {schedulerJob?.last_run_at || '—'}</Text>
+              <Text type="secondary">Run count: {schedulerJob?.run_count ?? 0}</Text>
+              {schedulerJob?.last_error ? <Text type="danger">Last error: {schedulerJob.last_error}</Text> : null}
+            </Space>
+          </Col>
+          <Col xs={24} md={10}>
+            <Descriptions size="small" column={1} bordered>
+              <Descriptions.Item label="main.db size">
+                {observability?.files?.mainDb?.sizeBytes ?? 0} bytes
+              </Descriptions.Item>
+              <Descriptions.Item label="research.db size">
+                {observability?.files?.researchDb?.sizeBytes ?? 0} bytes
+              </Descriptions.Item>
+              <Descriptions.Item label="Observed at (UTC)">
+                {observability?.atUtc || '—'}
+              </Descriptions.Item>
+            </Descriptions>
+          </Col>
+        </Row>
+      </Card>
+
+      <Divider />
 
       {/* Sweep section */}
       <SweepPanel onSweepSelect={handleSweepSelect} />

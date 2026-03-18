@@ -28,6 +28,12 @@ import {
   getPreset,
   listOfferIds,
 } from '../research/presetBuilder';
+import {
+  getResearchDbObservability,
+  listSchedulerJobs,
+  runSchedulerJobNow,
+  updateSchedulerJob,
+} from '../research/schedulerService';
 import logger from '../utils/logger';
 
 const router = Router();
@@ -385,6 +391,71 @@ router.post('/presets/:offerId/build', async (req, res) => {
       body.sweep_run_id ?? 0
     );
     res.json({ success: true, offerId });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RESEARCH SCHEDULER + OBSERVABILITY
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.get('/scheduler', async (_req, res) => {
+  try {
+    const jobs = await listSchedulerJobs();
+    res.json({ jobs });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.patch('/scheduler/:jobKey', async (req, res) => {
+  try {
+    const jobKey = String(req.params.jobKey || '');
+    if (jobKey !== 'daily_incremental_sweep') {
+      return res.status(400).json({ error: `Unsupported scheduler job key: ${jobKey}` });
+    }
+
+    const body = req.body as {
+      isEnabled?: boolean;
+      hourUtc?: number;
+      minuteUtc?: number;
+    };
+
+    const updated = await updateSchedulerJob('daily_incremental_sweep', {
+      is_enabled: body.isEnabled,
+      hour_utc: body.hourUtc,
+      minute_utc: body.minuteUtc,
+    });
+
+    res.json({ success: true, job: updated });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/scheduler/:jobKey/run-now', async (req, res) => {
+  try {
+    const jobKey = String(req.params.jobKey || '');
+    if (jobKey !== 'daily_incremental_sweep') {
+      return res.status(400).json({ error: `Unsupported scheduler job key: ${jobKey}` });
+    }
+
+    const result = await runSchedulerJobNow('daily_incremental_sweep');
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/observability/db', async (_req, res) => {
+  try {
+    const data = await getResearchDbObservability();
+    res.json(data);
   } catch (err) {
     const error = err as Error;
     res.status(500).json({ error: error.message });

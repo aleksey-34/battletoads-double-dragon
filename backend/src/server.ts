@@ -6,6 +6,7 @@ import { initDB, getDbFilePath } from './utils/database';
 import logger from './utils/logger';
 import { runAutoStrategiesCycle } from './bot/strategy';
 import { startPreviewWorker } from './workers/previewWorker';
+import { startResearchSchedulerWorker } from './workers/researchSchedulerWorker';
 import { runLiquidityScanCycle, runMonitoringCycle, runReconciliationCycle } from './automation/scheduler';
 
 const app = express();
@@ -42,6 +43,8 @@ const startServer = async () => {
 
     // Research circuit — preview job worker
     void startPreviewWorker();
+    // Research circuit — scheduled daily sweep sync
+    void startResearchSchedulerWorker();
   });
 
   const autoRunSecRaw = Number(process.env.STRATEGY_AUTORUN_SEC || 30);
