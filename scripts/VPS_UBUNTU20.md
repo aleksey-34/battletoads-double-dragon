@@ -45,6 +45,17 @@ cd /opt/battletoads-double-dragon
 sudo bash scripts/btdd_setup_services.sh
 ```
 
+Скрипт сам определяет пользователя сервиса:
+- если запуск через `sudo`, берёт `$SUDO_USER`
+- иначе берёт текущего пользователя
+
+Если нужно явно указать пользователя:
+
+```bash
+cd /opt/battletoads-double-dragon
+sudo SERVICE_USER=root bash scripts/btdd_setup_services.sh
+```
+
 Скрипт:
 - Собирает backend (`npm ci && npm run build`)
 - Копирует unit-файлы в `/etc/systemd/system/`

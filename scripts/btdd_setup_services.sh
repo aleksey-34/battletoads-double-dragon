@@ -20,7 +20,6 @@ APP_DIR="${APP_DIR:-/opt/battletoads-double-dragon}"
 BACKEND_DIR="$APP_DIR/backend"
 SYSTEMD_DIR="/etc/systemd/system"
 SCRIPTS_SYSTEMD_DIR="$APP_DIR/scripts/systemd"
-SERVICE_USER="${SERVICE_USER:-ubuntu}"
 DATA_DIR="${DATA_DIR:-$APP_DIR/data}"
 
 log() { printf '[btdd-setup] %s\n' "$*"; }
@@ -32,14 +31,20 @@ fail() { log "ERROR: $*"; exit 1; }
 command -v node >/dev/null 2>&1 || fail "Node.js не установлен"
 
 NODE_BIN="$(command -v node)"
+DEFAULT_SERVICE_USER="${SUDO_USER:-$(id -un)}"
+SERVICE_USER="${SERVICE_USER:-$DEFAULT_SERVICE_USER}"
+id "$SERVICE_USER" >/dev/null 2>&1 || fail "Пользователь не найден: $SERVICE_USER"
+SERVICE_GROUP="$(id -gn "$SERVICE_USER")"
+
 log "Node.js: $NODE_BIN ($(node --version))"
+log "Service user/group: $SERVICE_USER:$SERVICE_GROUP"
 
 # ── Директория для данных БД ──────────────────────────────────────────────────
 if [[ ! -d "$DATA_DIR" ]]; then
     log "Создаём $DATA_DIR"
     mkdir -p "$DATA_DIR"
-    chown "$SERVICE_USER:$SERVICE_USER" "$DATA_DIR"
 fi
+chown "$SERVICE_USER:$SERVICE_GROUP" "$DATA_DIR"
 
 # ── Сборка backend ────────────────────────────────────────────────────────────
 log "Сборка backend..."
@@ -70,6 +75,8 @@ for svc in btdd-api btdd-runtime btdd-research; do
     cp "$src" "$dst"
     # Подставляем реальный путь к node если отличается
     sed -i "s|/usr/bin/node|$NODE_BIN|g" "$dst"
+    sed -i "s|^User=.*$|User=$SERVICE_USER|" "$dst"
+    sed -i "s|^Group=.*$|Group=$SERVICE_GROUP|" "$dst"
     log "Установлен: $dst"
 done
 
