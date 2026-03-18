@@ -334,7 +334,7 @@ const asString = (value: unknown, fallback = ''): string => {
 };
 
 const clampNumber = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
-const CLIENT_STRICT_PRESET_MODE = String(process.env.CLIENT_STRICT_PRESET_MODE || '1').trim() !== '0';
+const CLIENT_STRICT_PRESET_MODE = String(process.env.CLIENT_STRICT_PRESET_MODE || '0').trim() !== '0';
 
 const levelToPreferenceScore = (level: Level3): number => {
   if (level === 'low') return 0;
@@ -829,6 +829,102 @@ const toCatalogPreset = (
   };
 };
 
+const buildSweepEquityPoints = (retPercent: number): Array<{ time: number; equity: number }> => {
+  const start = 10000;
+  const end = Number((start * (1 + (Number(retPercent) || 0) / 100)).toFixed(4));
+  const now = Date.now();
+  return [
+    { time: now - 1000, equity: start },
+    { time: now, equity: end },
+  ];
+};
+
+const buildSweepPreset = (record: SweepRecord, riskLevel: Level3, freqLevel: Level3): CatalogPreset => {
+  const riskMul = riskLevel === 'low' ? 0.75 : riskLevel === 'high' ? 1.35 : 1;
+  const freqMul = freqLevel === 'low' ? 0.75 : freqLevel === 'high' ? 1.3 : 1;
+
+  const scoreBase = asNumber(record.score, 0);
+  const ret = asNumber(record.totalReturnPercent, 0) * riskMul;
+  const dd = asNumber(record.maxDrawdownPercent, 0) * riskMul;
+  const trades = Math.max(1, Math.round(asNumber(record.tradesCount, 0) * freqMul));
+
+  return {
+    strategyId: Number(record.strategyId),
+    strategyName: asString(record.strategyName, `Strategy ${record.strategyId}`),
+    score: Number((scoreBase * (0.8 + 0.2 * riskMul)).toFixed(3)),
+    metrics: {
+      ret: Number(ret.toFixed(3)),
+      pf: Number(asNumber(record.profitFactor, 1).toFixed(3)),
+      dd: Number(dd.toFixed(3)),
+      wr: Number(asNumber(record.winRatePercent, 0).toFixed(3)),
+      trades,
+    },
+    params: {
+      interval: asString(record.interval, '4h'),
+      length: Math.max(2, Math.round(asNumber(record.length, 50) * (freqLevel === 'low' ? 1.25 : freqLevel === 'high' ? 0.8 : 1))),
+      takeProfitPercent: asNumber(record.takeProfitPercent, 0),
+      detectionSource: asString(record.detectionSource, 'close'),
+      zscoreEntry: asNumber(record.zscoreEntry, 2),
+      zscoreExit: asNumber(record.zscoreExit, 0.5),
+      zscoreStop: asNumber(record.zscoreStop, 3),
+    },
+  };
+};
+
+const buildOfferFromSweepRecord = (record: SweepRecord): CatalogOffer => {
+  const mode = asString(record.marketMode, 'mono') === 'synthetic' ? 'synth' : 'mono';
+  const mediumMedium = buildSweepPreset(record, 'medium', 'medium');
+  const metrics = {
+    ret: asNumber(record.totalReturnPercent, 0),
+    pf: asNumber(record.profitFactor, 1),
+    dd: asNumber(record.maxDrawdownPercent, 0),
+    wr: asNumber(record.winRatePercent, 0),
+    trades: Math.max(0, Math.floor(asNumber(record.tradesCount, 0))),
+    score: asNumber(record.score, 0),
+    robust: Boolean(record.robust),
+  };
+
+  return {
+    offerId: `offer_${mode}_${asString(record.strategyType, 'strategy').toLowerCase()}_${record.strategyId}`,
+    titleRu: `${mode.toUpperCase()} · ${asString(record.strategyType, 'Strategy')} · ${asString(record.market, '')}`,
+    descriptionRu: 'Auto-generated from historical sweep record',
+    strategy: {
+      id: Number(record.strategyId),
+      name: asString(record.strategyName, `Strategy ${record.strategyId}`),
+      type: asString(record.strategyType, 'DD_BattleToads'),
+      mode,
+      market: asString(record.market, ''),
+      params: mediumMedium.params,
+    },
+    metrics,
+    sliderPresets: {
+      risk: {
+        low: buildSweepPreset(record, 'low', 'medium'),
+        medium: mediumMedium,
+        high: buildSweepPreset(record, 'high', 'medium'),
+      },
+      tradeFrequency: {
+        low: buildSweepPreset(record, 'medium', 'low'),
+        medium: mediumMedium,
+        high: buildSweepPreset(record, 'medium', 'high'),
+      },
+    },
+    equity: {
+      source: 'sweep_fallback',
+      generatedAt: new Date().toISOString(),
+      points: buildSweepEquityPoints(metrics.ret),
+      summary: {
+        finalEquity: Number((10000 * (1 + metrics.ret / 100)).toFixed(4)),
+        totalReturnPercent: metrics.ret,
+        maxDrawdownPercent: metrics.dd,
+        winRatePercent: metrics.wr,
+        profitFactor: metrics.pf,
+        tradesCount: metrics.trades,
+      },
+    },
+  };
+};
+
 const buildPresetBackedOffers = async (catalog: CatalogData | null): Promise<CatalogOffer[]> => {
   try {
     await initResearchDb();
@@ -935,7 +1031,42 @@ const buildPresetBackedOffers = async (catalog: CatalogData | null): Promise<Cat
       } as CatalogOffer;
     }));
 
-    return offers.filter((item): item is CatalogOffer => !!item);
+    const presetOffers = offers.filter((item): item is CatalogOffer => !!item);
+    const byStrategyId = new Map<number, CatalogOffer>();
+
+    for (const offer of presetOffers) {
+      const strategyId = Number(offer.strategy?.id || 0);
+      if (strategyId > 0) {
+        byStrategyId.set(strategyId, offer);
+      }
+    }
+
+    const sweep = loadLatestSweep();
+    const sweepRecords = (sweep?.evaluated || [])
+      .filter((record) => Number(record.strategyId) > 0)
+      .sort((left, right) => asNumber(right.score, 0) - asNumber(left.score, 0))
+      .slice(0, 24);
+
+    for (const record of sweepRecords) {
+      const strategyId = Number(record.strategyId);
+      const existing = byStrategyId.get(strategyId);
+      const sweepOffer = buildOfferFromSweepRecord(record);
+
+      if (!existing) {
+        byStrategyId.set(strategyId, sweepOffer);
+        continue;
+      }
+
+      const looksEmpty = asNumber(existing.metrics?.ret, 0) === 0
+        && asNumber(existing.metrics?.score, 0) === 0
+        && asNumber(existing.metrics?.pf, 0) <= 1;
+
+      if (looksEmpty) {
+        byStrategyId.set(strategyId, sweepOffer);
+      }
+    }
+
+    return Array.from(byStrategyId.values()).sort((left, right) => asNumber(right.metrics?.score, 0) - asNumber(left.metrics?.score, 0));
   } catch (error) {
     logger.warn(`Preset-backed offers unavailable, using legacy catalog fallback: ${(error as Error).message}`);
     return catalog ? getAllOffers(catalog) : [];
@@ -1342,8 +1473,39 @@ const getBestExistingSourceSystem = async (): Promise<{ apiKeyName: string; syst
   };
 };
 
-const ensurePublishedSourceSystem = async (): Promise<{ apiKeyName: string; systemId: number; systemName: string }> => {
+const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyName: string; systemId: number; systemName: string }> => {
   const catalog = loadLatestClientCatalog();
+
+  if (tenantId) {
+    const [tenant, profile] = await Promise.all([
+      getTenantById(tenantId),
+      getAlgofundProfile(tenantId).catch(() => null),
+    ]);
+
+    if (tenant) {
+      const tenantApiKeyName = asString(profile?.assigned_api_key_name || tenant.assigned_api_key_name || catalog?.apiKeyName);
+      const preferredSystemName = asString(profile?.published_system_name || getAlgofundClientSystemName(tenant));
+
+      if (tenantApiKeyName) {
+        try {
+          const systems = await listTradingSystems(tenantApiKeyName);
+          const tenantSystem = systems.find((item) => asString(item.name) === preferredSystemName)
+            || systems.find((item) => asString(item.name) === getAlgofundClientSystemName(tenant));
+
+          if (tenantSystem?.id && tenantSystem.id > 0) {
+            return {
+              apiKeyName: tenantApiKeyName,
+              systemId: Number(tenantSystem.id),
+              systemName: asString(tenantSystem.name, preferredSystemName),
+            };
+          }
+        } catch (error) {
+          logger.warn(`Failed to lookup tenant algofund system: ${(error as Error).message}`);
+        }
+      }
+    }
+  }
+
   if (!catalog) {
     const fallback = await getBestExistingSourceSystem();
     if (fallback && fallback.apiKeyName && fallback.systemId > 0) {
@@ -2095,6 +2257,15 @@ const materializeAlgofundSystem = async (
     await setTradingSystemActivation(assignedApiKeyName, systemId, true, true);
   }
 
+  await db.run(
+    `UPDATE algofund_profiles
+     SET assigned_api_key_name = ?,
+         published_system_name = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE tenant_id = ?`,
+    [assignedApiKeyName, systemName, tenant.id]
+  );
+
   return {
     systemId,
     systemName,
@@ -2129,7 +2300,7 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
   const sweep = loadLatestSweep();
   const period = buildPeriodInfo(sweep);
 
-  const sourceSystem = await ensurePublishedSourceSystem();
+  const sourceSystem = await ensurePublishedSourceSystem(tenantId);
   const basePreviewResult = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
     bars: 6000,
     warmupBars: 400,
@@ -2296,7 +2467,7 @@ export const resolveAlgofundRequest = async (requestId: number, status: RequestS
 };
 
 export const publishAdminTradingSystem = async () => {
-  const sourceSystem = await ensurePublishedSourceSystem();
+  const sourceSystem = await ensurePublishedSourceSystem(undefined);
   const period = buildPeriodInfo(loadLatestSweep());
   const preview = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
     bars: 6000,
