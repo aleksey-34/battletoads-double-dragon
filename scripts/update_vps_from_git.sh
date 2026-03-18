@@ -90,8 +90,18 @@ if [[ "$BUILD_FRONTEND" == "1" ]]; then
 
 	if [[ "$SYNC_FRONTEND_NGINX" == "1" ]]; then
 		if command -v nginx >/dev/null 2>&1; then
-			NGINX_ROOT="$(nginx -T 2>&1 | awk '$1=="root"{gsub(";", "", $2); print $2; exit}')"
-			if [[ -n "$NGINX_ROOT" && -d "$NGINX_ROOT" ]]; then
+			# Sync into all configured nginx roots to avoid stale UI when active vhost
+			# is not the first `root` directive in nginx -T output.
+			mapfile -t NGINX_ROOTS < <(nginx -T 2>&1 \
+				| awk '$1=="root"{gsub(";", "", $2); if($2 ~ /^\//) print $2}' \
+				| sort -u)
+
+			SYNCED=0
+			for NGINX_ROOT in "${NGINX_ROOTS[@]:-}"; do
+				if [[ -z "$NGINX_ROOT" || ! -d "$NGINX_ROOT" ]]; then
+					continue
+				fi
+
 				if command -v rsync >/dev/null 2>&1; then
 					run rsync -a --delete "$FRONTEND_DIR/build/" "$NGINX_ROOT/"
 				else
@@ -99,10 +109,14 @@ if [[ "$BUILD_FRONTEND" == "1" ]]; then
 					run rm -rf "$NGINX_ROOT"/*
 					run cp -a "$FRONTEND_DIR/build/." "$NGINX_ROOT/"
 				fi
-				run systemctl reload nginx
 				log "Frontend synced to nginx root: $NGINX_ROOT"
+				SYNCED=1
+			done
+
+			if [[ "$SYNCED" == "1" ]]; then
+				run systemctl reload nginx
 			else
-				log "WARN: nginx root not detected, skip frontend sync"
+				log "WARN: nginx roots not detected or not accessible, skip frontend sync"
 			fi
 		else
 			log "WARN: nginx is not installed, skip frontend sync"
