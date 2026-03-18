@@ -2528,8 +2528,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           ) : null}
                         </Card>
 
-                        {!strategyBacktestEnabled ? <Alert type="warning" showIcon message={copy.backtestLockedHint} /> : null}
-
                         <Card className="battletoads-card">
                           <Row gutter={[16, 16]}>
                             <Col xs={24} lg={12}>
@@ -2788,8 +2786,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </>
                           ) : null}
                         </Card>
-
-                        {!algofundBacktestEnabled ? <Alert type="warning" showIcon message={copy.backtestLockedHint} /> : null}
 
                         <Card className="battletoads-card">
                           <Row gutter={[16, 16]} align="middle">

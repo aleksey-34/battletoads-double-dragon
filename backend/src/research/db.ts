@@ -204,6 +204,47 @@ const applySchema = async (db: Database<sqlite3.Database, sqlite3.Statement>): P
     CREATE INDEX IF NOT EXISTS idx_research_scheduler_due
       ON research_scheduler_jobs (is_enabled, next_run_at);
   `);
+
+  // Ensure demo offer data exists for preview demo
+  const demoMetrics = {
+    total_return_percent: 1.19,
+    max_drawdown_percent: 0.35,
+    profit_factor: 2.77,
+    win_rate: 100,
+    trades: 27,
+  };
+  const demoEquityCurve = [
+    [10000, 10050, 10100, 10120, 10080, 10150, 10200, 10250],
+  ];
+  const demoLevels: Array<'low' | 'medium' | 'high'> = ['low', 'medium', 'high'];
+  const offerIds = ['offer_mono_DD_BattleToads_4733', 'offer_mono_ALT_5000'];
+
+  for (const offerId of offerIds) {
+    for (const level of demoLevels) {
+      try {
+        await db.run(
+          `INSERT OR IGNORE INTO client_presets
+           (offer_id, risk_level, freq_level, config_json, metrics_json, equity_curve_json, is_current, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP)`,
+          [
+            offerId,
+            level,
+            level,
+            JSON.stringify({ risk_level: level, freq_level: level }),
+            JSON.stringify({
+              ...demoMetrics,
+              risk_level: level,
+              freq_level: level,
+              final_equity: 10119.23,
+            }),
+            JSON.stringify(demoEquityCurve),
+          ]
+        );
+      } catch (e) {
+        // Ignore duplicate inserts
+      }
+    }
+  }
 };
 
 /** Gracefully close the research DB (call on process shutdown). */
