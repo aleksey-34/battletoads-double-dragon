@@ -12,7 +12,7 @@
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                          BTDD Platform (VPS)                             │
 │                                                                          │
-│  ┌─────────────────────┐   ┌──────────────────────┐   ┌──────────────┐  │
+│  ┌─────────────────────┐   ┌─────────────────── ───┐   ┌──────────────┐  │
 │  │   RUNTIME CIRCUIT   │   │  RESEARCH CIRCUIT     │   │  PROD/CLIENT │  │
 │  │   (торговый контур) │   │  (исследоват. контур) │   │   CIRCUIT    │  │
 │  │                     │   │                       │   │  (клиентский)│  │
@@ -24,25 +24,25 @@
 │  │  DB: runtime.db     │   │  DB: research.db      │   │  DB: main.db │  │
 │  │                     │   │                       │   │  (saas-)     │  │
 │  └────────┬────────────┘   └──────────┬────────────┘   └──────┬───────┘  │
-│           │                           │                        │          │
-│           └──────────────┬────────────┘                        │          │
-│                          │                                     │          │
+│           │                           │                       │          │
+│           └──────────────┬────────────┘                       │          │
+│                          │                                    │          │
 │              ┌───────────▼────────────────────────────────────▼────────┐ │
 │              │          API GATEWAY (backend/src/server.ts)            │ │
-│              │                                                          │ │
-│              │  /api/admin/*     → runtime DB (R/W) + research (R/W)  │ │
-│              │  /api/research/*  → research DB (admin-only)           │ │
-│              │  /api/client/*    → saas + catalog (client auth)       │ │
-│              │  /api/saas/*      → saas management (admin)            │ │
-│              └──────────────────────────────┬───────────────────────── │ │
-│                                             │                           │ │
+│              │                                                         │ │
+│              │  /api/admin/*     → runtime DB (R/W) + research (R/W)   │ │
+│              │  /api/research/*  → research DB (admin-only)            │ │
+│              │  /api/client/*    → saas + catalog (client auth)        │ │
+│              │  /api/saas/*      → saas management (admin)             │ │
+│              └──────────────────────────────┬──────────────────────────│ │
+│                                             │                          │ │
 │              ┌──────────────────────────────▼───────────────────────┐  │ │
-│              │                  Frontend (React)                     │  │ │
-│              │  /dashboard      Runtime status + strategy control    │  │ │
-│              │  /backtest       Research: sweep results, re-run      │  │ │
-│              │  /saas           Client mgmt + catalog + algofund     │  │ │
-│              │  /research       NEW: profiles, sweep, publish gate   │  │ │
-│              └───────────────────────────────────────────────────────┘  │ │
+│              │                  Frontend (React)                    │  │ │
+│              │  /dashboard      Runtime status + strategy control   │  │ │
+│              │  /backtest       Research: sweep results, re-run     │  │ │
+│              │  /saas           Client mgmt + catalog + algofund    │  │ │
+│              │  /research       NEW: profiles, sweep, publish gate  │  │ │
+│              └──────────────────────────────────────────────────────┘  │ │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
 

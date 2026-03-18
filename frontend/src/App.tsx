@@ -13,6 +13,7 @@ import ClientAuth from './pages/ClientAuth';
 import ClientCabinet from './pages/ClientCabinet';
 import Logs from './pages/Logs';
 import Backtest from './pages/Backtest';
+import Research from './pages/Research';
 import SaaS from './pages/SaaS';
 import TradingSystems from './pages/TradingSystems';
 import { I18nProvider, useI18n, UILanguage } from './i18n';
@@ -46,6 +47,7 @@ function AppShell() {
         { key: '5', label: <Link to="/backtest">{t('nav.backtest', 'Backtest')}</Link> },
         { key: '6', label: <Link to="/trading-systems">Trading Systems</Link> },
         { key: '7', label: <Link to="/saas">{t('nav.saas', 'SaaS')}</Link> },
+        { key: '8', label: <Link to="/research">Research</Link> },
       ];
 
   const selectedMenuKey = useMemo(() => {
@@ -55,6 +57,7 @@ function AppShell() {
     if (location.pathname.startsWith('/backtest')) return '5';
     if (location.pathname.startsWith('/trading-systems')) return '6';
     if (location.pathname.startsWith('/saas')) return '7';
+    if (location.pathname.startsWith('/research')) return '8';
     return '1';
   }, [location.pathname]);
 
@@ -248,6 +251,7 @@ function AppShell() {
           <Route path="/saas/admin" element={<SaaS initialTab="admin" surfaceMode="admin" />} />
           <Route path="/saas/strategy-client" element={<SaaS initialTab="strategy-client" surfaceMode="strategy-client" />} />
           <Route path="/saas/algofund" element={<SaaS initialTab="algofund" surfaceMode="algofund" />} />
+          <Route path="/research" element={<Research />} />
         </Routes>
       </Content>
       <FloatButton.BackTop visibilityHeight={280} />

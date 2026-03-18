@@ -5,6 +5,7 @@ import researchRoutes from './api/researchRoutes';
 import { initDB, getDbFilePath } from './utils/database';
 import logger from './utils/logger';
 import { runAutoStrategiesCycle } from './bot/strategy';
+import { startPreviewWorker } from './workers/previewWorker';
 import { runLiquidityScanCycle, runMonitoringCycle, runReconciliationCycle } from './automation/scheduler';
 
 const app = express();
@@ -38,6 +39,9 @@ const startServer = async () => {
 
   app.listen(PORT, () => {
     logger.info(`Server running on http://localhost:${PORT}`);
+
+    // Research circuit — preview job worker
+    void startPreviewWorker();
   });
 
   const autoRunSecRaw = Number(process.env.STRATEGY_AUTORUN_SEC || 30);
