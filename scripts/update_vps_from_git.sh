@@ -9,6 +9,9 @@ SERVICE_NAME="${SERVICE_NAME:-battletoads-backend}"
 BACKEND_DIR="${BACKEND_DIR:-$APP_DIR/backend}"
 FRONTEND_DIR="${FRONTEND_DIR:-$APP_DIR/frontend}"
 BUILD_FRONTEND="${BUILD_FRONTEND:-1}"
+# 1 => после frontend build синхронизировать артефакты в nginx root и reload nginx.
+# Важно для VPS-контура, где nginx отдает статику напрямую и может оставаться старый UI.
+SYNC_FRONTEND_NGINX="${SYNC_FRONTEND_NGINX:-1}"
 
 # В multi-режиме рестартуем эти три сервиса
 MULTI_SERVICES="${MULTI_SERVICES:-btdd-api btdd-runtime btdd-research}"
@@ -84,6 +87,27 @@ if [[ "$BUILD_FRONTEND" == "1" ]]; then
 	run npm ci --silent
 	# CRA treats warnings as errors when CI=true; force production build without CI strict mode on VPS deploy.
 	run env CI=false npm run build
+
+	if [[ "$SYNC_FRONTEND_NGINX" == "1" ]]; then
+		if command -v nginx >/dev/null 2>&1; then
+			NGINX_ROOT="$(nginx -T 2>&1 | awk '$1=="root"{gsub(";", "", $2); print $2; exit}')"
+			if [[ -n "$NGINX_ROOT" && -d "$NGINX_ROOT" ]]; then
+				if command -v rsync >/dev/null 2>&1; then
+					run rsync -a --delete "$FRONTEND_DIR/build/" "$NGINX_ROOT/"
+				else
+					log "WARN: rsync not found, fallback to cp -a for nginx sync"
+					run rm -rf "$NGINX_ROOT"/*
+					run cp -a "$FRONTEND_DIR/build/." "$NGINX_ROOT/"
+				fi
+				run systemctl reload nginx
+				log "Frontend synced to nginx root: $NGINX_ROOT"
+			else
+				log "WARN: nginx root not detected, skip frontend sync"
+			fi
+		else
+			log "WARN: nginx is not installed, skip frontend sync"
+		fi
+	fi
 fi
 
 # ── Рестарт сервисов ──────────────────────────────────────────────────────────
