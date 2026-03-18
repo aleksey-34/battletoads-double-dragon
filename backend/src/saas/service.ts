@@ -14,6 +14,8 @@ import { getMonitoringLatest } from '../bot/monitoring';
 import { Strategy } from '../config/settings';
 import { db } from '../utils/database';
 import logger from '../utils/logger';
+import { initResearchDb } from '../research/db';
+import { getPreset, listOfferIds } from '../research/presetBuilder';
 
 export type ProductMode = 'strategy_client' | 'algofund_client';
 export type Level3 = 'low' | 'medium' | 'high';
@@ -715,6 +717,66 @@ const findOfferByIdOrNull = (catalog: CatalogData | null, offerId?: string | nul
   return getAllOffers(catalog).find((item) => item.offerId === offerId) || null;
 };
 
+const buildPresetBackedOffers = async (catalog: CatalogData | null): Promise<CatalogOffer[]> => {
+  try {
+    await initResearchDb();
+    const offerIds = await listOfferIds();
+    const offers = await Promise.all(offerIds.map(async (offerId) => {
+      const preset = await getPreset(offerId, 'medium', 'medium');
+      if (!preset) {
+        return null;
+      }
+
+      const legacy = findOfferByIdOrNull(catalog, offerId);
+      const config = (preset.config || {}) as Record<string, unknown>;
+      const metrics = (preset.metrics || {}) as Record<string, unknown>;
+
+      return {
+        offerId,
+        titleRu: legacy?.titleRu || String(config.name || offerId),
+        descriptionRu: legacy?.descriptionRu || 'Preset-backed offer',
+        strategy: {
+          id: Number(config.strategyId || legacy?.strategy?.id || 0),
+          name: String(config.name || legacy?.strategy?.name || offerId),
+          type: String(config.strategy_type || legacy?.strategy?.type || 'DD_BattleToads'),
+          mode: (String(config.market_mode || legacy?.strategy?.mode || 'mono') === 'synthetic' ? 'synth' : 'mono') as 'mono' | 'synth',
+          market: legacy?.strategy?.market || [config.base_symbol, config.quote_symbol].filter(Boolean).join('/'),
+          params: {
+            interval: String(config.interval || legacy?.strategy?.params?.interval || '1h'),
+            length: Number(config.price_channel_length || legacy?.strategy?.params?.length || 50),
+            takeProfitPercent: Number(config.take_profit_percent || legacy?.strategy?.params?.takeProfitPercent || 0),
+            detectionSource: String(config.detection_source || legacy?.strategy?.params?.detectionSource || 'close'),
+            zscoreEntry: Number(config.zscore_entry || legacy?.strategy?.params?.zscoreEntry || 2),
+            zscoreExit: Number(config.zscore_exit || legacy?.strategy?.params?.zscoreExit || 0.5),
+            zscoreStop: Number(config.zscore_stop || legacy?.strategy?.params?.zscoreStop || 3),
+          },
+        },
+        metrics: {
+          ret: asNumber(metrics.ret, legacy?.metrics?.ret || 0),
+          pf: asNumber(metrics.pf, legacy?.metrics?.pf || 1),
+          dd: asNumber(metrics.dd, legacy?.metrics?.dd || 0),
+          wr: asNumber(metrics.wr, legacy?.metrics?.wr || 0),
+          trades: asNumber(metrics.trades, legacy?.metrics?.trades || 0),
+          score: asNumber(metrics.score, legacy?.metrics?.score || 0),
+          robust: legacy?.metrics?.robust,
+        },
+        sliderPresets: legacy?.sliderPresets,
+        equity: {
+          points: Array.isArray(preset.equity_curve)
+            ? preset.equity_curve.map((value, index) => ({ time: index + 1, equity: asNumber(value, 0) }))
+            : [],
+          summary: legacy?.equity?.summary,
+        },
+      } as CatalogOffer;
+    }));
+
+    return offers.filter((item): item is CatalogOffer => !!item);
+  } catch (error) {
+    logger.warn(`Preset-backed offers unavailable, using legacy catalog fallback: ${(error as Error).message}`);
+    return catalog ? getAllOffers(catalog) : [];
+  }
+};
+
 const hydrateStoredStrategyPreview = (catalog: CatalogData | null, payload: string | null | undefined): Record<string, unknown> => {
   const parsed = safeJsonParse<Record<string, unknown>>(payload, {});
   const offerId = asString(parsed.offerId);
@@ -1294,6 +1356,7 @@ export const getStrategyClientState = async (tenantId: number) => {
   const capabilities = resolvePlanCapabilities(plan);
   const profile = await getStrategyClientProfile(tenantId);
   const catalog = loadLatestClientCatalog();
+  const presetOffers = await buildPresetBackedOffers(catalog);
   const recommendedSets = buildRecommendedSets(catalog);
   const monitoring = capabilities.monitoring && tenant.assigned_api_key_name
     ? await getMonitoringLatest(tenant.assigned_api_key_name).catch(() => null)
@@ -1310,7 +1373,7 @@ export const getStrategyClientState = async (tenantId: number) => {
       latestPreview: hydrateStoredStrategyPreview(catalog, profile.latest_preview_json),
     } : null,
     catalog,
-    offers: catalog ? getAllOffers(catalog) : [],
+    offers: presetOffers,
     recommendedSets,
   };
 };
