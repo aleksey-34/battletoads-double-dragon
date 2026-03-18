@@ -22,6 +22,7 @@ import {
   Tabs,
   Tag,
   Typography,
+  Modal,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import ChartComponent from '../components/ChartComponent';
@@ -466,6 +467,9 @@ type Copy = {
   createMagicLink: string;
   magicLinkReady: string;
   magicLinkExpires: string;
+  createClient: string;
+  createClientTitle: string;
+  createClientSuccess: string;
 };
 
 const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
@@ -567,6 +571,9 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     createMagicLink: 'Сгенерировать ссылку входа',
     magicLinkReady: 'Ссылка готова (одноразовая)',
     magicLinkExpires: 'Действительна до',
+    createClient: 'Создать клиента',
+    createClientTitle: 'Новый клиент',
+    createClientSuccess: 'Клиент создан',
   },
   en: {
     title: 'SaaS Control Room',
@@ -666,6 +673,9 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     createMagicLink: 'Create login link',
     magicLinkReady: 'Link ready (one-time use)',
     magicLinkExpires: 'Expires at',
+    createClient: 'Create client',
+    createClientTitle: 'New client',
+    createClientSuccess: 'Client created',
   },
   tr: {
     title: 'SaaS Control Room',
@@ -765,6 +775,9 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     createMagicLink: 'Giris linki olustur',
     magicLinkReady: 'Link hazir (tek kullanim)',
     magicLinkExpires: 'Son kullanim',
+    createClient: 'Musteri olustur',
+    createClientTitle: 'Yeni musteri',
+    createClientSuccess: 'Musteri olusturuldu',
   },
 };
 
@@ -1137,6 +1150,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [algofundTenantDisplayName, setAlgofundTenantDisplayName] = useState('');
   const [algofundTenantStatus, setAlgofundTenantStatus] = useState('active');
   const [algofundTenantPlanCode, setAlgofundTenantPlanCode] = useState('');
+  const [createTenantModalOpen, setCreateTenantModalOpen] = useState(false);
+  const [createTenantDisplayName, setCreateTenantDisplayName] = useState('');
+  const [createTenantProductMode, setCreateTenantProductMode] = useState<ProductMode>('strategy_client');
+  const [createTenantPlanCode, setCreateTenantPlanCode] = useState('');
+  const [createTenantApiKey, setCreateTenantApiKey] = useState('');
+  const [createTenantEmail, setCreateTenantEmail] = useState('');
   const [algofundNote, setAlgofundNote] = useState('');
   const [algofundDecisionNote, setAlgofundDecisionNote] = useState('');
   const [publishResponse, setPublishResponse] = useState<AdminPublishResponse | null>(null);
@@ -1699,6 +1718,36 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const createTenantAdmin = async () => {
+    if (!createTenantDisplayName.trim() || !createTenantPlanCode) {
+      messageApi.error('Display name and plan are required');
+      return;
+    }
+    setActionLoading('createTenant');
+    try {
+      await axios.post('/api/saas/admin/tenants', {
+        displayName: createTenantDisplayName,
+        productMode: createTenantProductMode,
+        planCode: createTenantPlanCode,
+        assignedApiKeyName: createTenantApiKey || undefined,
+        email: createTenantEmail || undefined,
+        language,
+      });
+      messageApi.success(copy.createClientSuccess);
+      setCreateTenantModalOpen(false);
+      setCreateTenantDisplayName('');
+      setCreateTenantProductMode('strategy_client');
+      setCreateTenantPlanCode('');
+      setCreateTenantApiKey('');
+      setCreateTenantEmail('');
+      await loadSummary();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to create tenant'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const offerColumns: ColumnsType<CatalogOffer> = [
     {
       title: copy.selectedOffers,
@@ -2041,6 +2090,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             <Space wrap className="saas-page-actions">
               <Button onClick={() => void loadSummary()} loading={summaryLoading}>{copy.refresh}</Button>
               {isAdminSurface ? <Button onClick={() => void seedDemoTenants()} loading={actionLoading === 'seed'}>{copy.seed}</Button> : null}
+              {isAdminSurface ? <Button type="dashed" onClick={() => setCreateTenantModalOpen(true)}>{copy.createClient}</Button> : null}
               {isAdminSurface ? <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>{copy.publish}</Button> : null}
             </Space>
           </Col>
@@ -2177,9 +2227,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Descriptions.Item label={copy.sourceSystem}>{publishResponse.sourceSystem?.systemName || '—'}</Descriptions.Item>
                             <Descriptions.Item label={copy.apiKey}>{publishResponse.sourceSystem?.apiKeyName || '—'}</Descriptions.Item>
                             <Descriptions.Item label={copy.period}>{formatPeriodLabel(publishPreviewPeriod)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.finalEquity}>{formatMoney(publishPreviewDerivedSummary?.finalEquity ?? publishResponse.preview.summary?.finalEquity)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.returnLabel}>{formatPercent(publishPreviewDerivedSummary?.totalReturnPercent ?? publishResponse.preview.summary?.totalReturnPercent)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.drawdown}>{formatPercent(publishPreviewDerivedSummary?.maxDrawdownPercent ?? publishResponse.preview.summary?.maxDrawdownPercent)}</Descriptions.Item>
+                            <Descriptions.Item label={copy.finalEquity}>{formatMoney(publishResponse.preview.summary?.finalEquity ?? publishPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
+                            <Descriptions.Item label={copy.returnLabel}>{formatPercent(publishResponse.preview.summary?.totalReturnPercent ?? publishPreviewDerivedSummary?.totalReturnPercent)}</Descriptions.Item>
+                            <Descriptions.Item label={copy.drawdown}>{formatPercent(publishResponse.preview.summary?.maxDrawdownPercent ?? publishPreviewDerivedSummary?.maxDrawdownPercent)}</Descriptions.Item>
                             <Descriptions.Item label={copy.profitFactor}>{formatNumber(publishResponse.preview.summary?.profitFactor)}</Descriptions.Item>
                           </Descriptions>
                         </Col>
@@ -2355,9 +2405,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Descriptions column={1} size="small" bordered>
                                     <Descriptions.Item label="Offers">{strategySelectionPreviewOffers.length}</Descriptions.Item>
                                     <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategySelectionPreviewPeriod)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(strategySelectionPreviewDerivedSummary?.finalEquity ?? (strategySelectionPreviewSummary as any)?.finalEquity)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(strategySelectionPreviewDerivedSummary?.totalReturnPercent ?? (strategySelectionPreviewSummary as any)?.totalReturnPercent)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(strategySelectionPreviewDerivedSummary?.maxDrawdownPercent ?? (strategySelectionPreviewSummary as any)?.maxDrawdownPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney((strategySelectionPreviewSummary as any)?.finalEquity ?? strategySelectionPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent((strategySelectionPreviewSummary as any)?.totalReturnPercent ?? strategySelectionPreviewDerivedSummary?.totalReturnPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.drawdown}>{formatPercent((strategySelectionPreviewSummary as any)?.maxDrawdownPercent ?? strategySelectionPreviewDerivedSummary?.maxDrawdownPercent)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.profitFactor}>{formatNumber((strategySelectionPreviewSummary as any)?.profitFactor)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.trades}>{formatNumber((strategySelectionPreviewSummary as any)?.tradesCount, 0)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.persistedBucket}>{strategySelectionPreview.controls?.riskLevel || strategyPersistedRiskBucket} / {strategySelectionPreview.controls?.tradeFrequencyLevel || strategyPersistedTradeBucket}</Descriptions.Item>
@@ -2408,9 +2458,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     <Descriptions.Item label="Offer">{strategyPreviewOffer?.titleRu || '—'}</Descriptions.Item>
                                     <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategyPreviewPeriod)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.score}>{formatNumber(strategyPreview?.preset?.score ?? strategyPreviewMetrics?.score)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(strategyPreviewDerivedSummary?.finalEquity ?? (strategyPreviewSummary as any)?.finalEquity)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(strategyPreviewDerivedSummary?.totalReturnPercent ?? (strategyPreviewSummary as any)?.totalReturnPercent ?? strategyPreviewMetrics?.ret)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(strategyPreviewDerivedSummary?.maxDrawdownPercent ?? (strategyPreviewSummary as any)?.maxDrawdownPercent ?? strategyPreviewMetrics?.dd)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney((strategyPreviewSummary as any)?.finalEquity ?? strategyPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent((strategyPreviewSummary as any)?.totalReturnPercent ?? strategyPreviewDerivedSummary?.totalReturnPercent ?? strategyPreviewMetrics?.ret)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.drawdown}>{formatPercent((strategyPreviewSummary as any)?.maxDrawdownPercent ?? strategyPreviewDerivedSummary?.maxDrawdownPercent ?? strategyPreviewMetrics?.dd)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.profitFactor}>{formatNumber((strategyPreviewSummary as any)?.profitFactor ?? strategyPreviewMetrics?.pf)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.trades}>{formatNumber((strategyPreviewSummary as any)?.tradesCount ?? strategyPreviewMetrics?.trades, 0)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.persistedBucket}>{strategyPreview.controls?.riskLevel || strategyPersistedRiskBucket} / {strategyPreview.controls?.tradeFrequencyLevel || strategyPersistedTradeBucket}</Descriptions.Item>
@@ -2612,9 +2662,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Descriptions column={1} size="small" bordered>
                                     <Descriptions.Item label={copy.sourceSystem}>{algofundState.preview?.sourceSystem?.systemName || '—'}</Descriptions.Item>
                                     <Descriptions.Item label={copy.period}>{formatPeriodLabel(algofundPreviewPeriod)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(algofundPreviewDerivedSummary?.finalEquity ?? algofundState.preview?.summary?.finalEquity)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(algofundPreviewDerivedSummary?.totalReturnPercent ?? algofundState.preview?.summary?.totalReturnPercent)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(algofundPreviewDerivedSummary?.maxDrawdownPercent ?? algofundState.preview?.summary?.maxDrawdownPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(algofundState.preview?.summary?.finalEquity ?? algofundPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(algofundState.preview?.summary?.totalReturnPercent ?? algofundPreviewDerivedSummary?.totalReturnPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(algofundState.preview?.summary?.maxDrawdownPercent ?? algofundPreviewDerivedSummary?.maxDrawdownPercent)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.profitFactor}>{formatNumber(algofundState.preview?.summary?.profitFactor)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.trades}>{formatNumber(algofundState.preview?.summary?.tradesCount, 0)}</Descriptions.Item>
                                   </Descriptions>
@@ -2666,6 +2716,37 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           ].filter((item) => isAdminSurface || item.key === surfaceMode)}
         />
       </Spin>
+      <Modal
+        title={copy.createClientTitle}
+        open={createTenantModalOpen}
+        onCancel={() => setCreateTenantModalOpen(false)}
+        onOk={() => void createTenantAdmin()}
+        confirmLoading={actionLoading === 'createTenant'}
+        okText={copy.createClient}
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size={12}>
+          <div>
+            <Text strong>{copy.displayName} *</Text>
+            <Input style={{ marginTop: 4 }} value={createTenantDisplayName} onChange={(e) => setCreateTenantDisplayName(e.target.value)} placeholder="AlphaFund Client" />
+          </div>
+          <div>
+            <Text strong>{copy.tenantMode} *</Text>
+            <Select style={{ width: '100%', marginTop: 4 }} value={createTenantProductMode} onChange={setCreateTenantProductMode} options={[{ value: 'strategy_client', label: copy.strategyClient }, { value: 'algofund_client', label: copy.algofund }]} />
+          </div>
+          <div>
+            <Text strong>{copy.plan} *</Text>
+            <Select style={{ width: '100%', marginTop: 4 }} value={createTenantPlanCode || undefined} onChange={(v) => setCreateTenantPlanCode(v || '')} options={(summary?.plans || []).filter((p) => p.product_mode === createTenantProductMode).map((p) => ({ value: p.code, label: p.title }))} />
+          </div>
+          <div>
+            <Text strong>{copy.apiKey}</Text>
+            <Select allowClear style={{ width: '100%', marginTop: 4 }} value={createTenantApiKey || undefined} onChange={(v) => setCreateTenantApiKey(v || '')} options={apiKeyOptions} />
+          </div>
+          <div>
+            <Text strong>Email</Text>
+            <Input type="email" style={{ marginTop: 4 }} value={createTenantEmail} onChange={(e) => setCreateTenantEmail(e.target.value)} placeholder="client@example.com" />
+          </div>
+        </Space>
+      </Modal>
     </div>
   );
 };

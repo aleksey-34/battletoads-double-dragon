@@ -70,7 +70,8 @@ type TenantRow = {
   assigned_api_key_name: string;
   created_at?: string;
   updated_at?: string;
-};
+    deposit_cap_override: number | null;
+  };
 
 type SubscriptionRow = {
   id: number;
@@ -1687,6 +1688,87 @@ const scaleEquityPreview = (
   }));
 };
 
+  export const createTenantByAdmin = async (payload: {
+    displayName: string;
+    productMode: ProductMode;
+    planCode: string;
+    assignedApiKeyName?: string;
+    language?: string;
+    email?: string;
+    fullName?: string;
+  }) => {
+    const displayName = asString(payload.displayName, '').trim();
+    if (!displayName) throw new Error('displayName is required');
+    if (payload.productMode !== 'strategy_client' && payload.productMode !== 'algofund_client') {
+      throw new Error('productMode must be strategy_client or algofund_client');
+    }
+
+    await ensureSaasSeedData();
+
+    const plan = await getPlanByCode(payload.planCode);
+    if (plan.product_mode !== payload.productMode) {
+      throw new Error(`Plan ${payload.planCode} does not belong to mode ${payload.productMode}`);
+    }
+
+    // Generate unique slug from display name
+    const baseSlug = displayName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 40) || 'tenant';
+
+    let slug = baseSlug;
+    let attempt = 0;
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const existing = await db.get('SELECT id FROM tenants WHERE slug = ?', [slug]);
+      if (!existing) break;
+      attempt++;
+      slug = `${baseSlug}-${attempt}`;
+    }
+
+    // Ensure deposit_cap_override column exists (idempotent migration)
+    await db.run(`ALTER TABLE tenants ADD COLUMN deposit_cap_override INTEGER DEFAULT NULL`).catch(() => { /* already exists */ });
+
+    const apiKeyName = asString(payload.assignedApiKeyName, '');
+    const language = asString(payload.language, 'ru');
+
+    await db.run(
+      `INSERT INTO tenants (slug, display_name, product_mode, status, preferred_language, assigned_api_key_name, deposit_cap_override, created_at, updated_at)
+       VALUES (?, ?, ?, 'active', ?, ?, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [slug, displayName, payload.productMode, language, apiKeyName]
+    );
+
+    const tenant = await db.get('SELECT * FROM tenants WHERE slug = ?', [slug]) as TenantRow;
+    if (!tenant) throw new Error('Failed to create tenant');
+
+    await ensureSubscription(tenant.id, plan.id);
+
+    if (payload.productMode === 'strategy_client') {
+      await ensureStrategyClientProfile(tenant.id, [], apiKeyName);
+    } else {
+      await ensureAlgofundProfile(tenant.id, apiKeyName);
+    }
+
+    // Optionally create a client user account if email is provided
+    if (payload.email) {
+      const email = String(payload.email).trim().toLowerCase();
+      const fullName = asString(payload.fullName, displayName);
+      const existingUser = await db.get('SELECT id FROM client_users WHERE email = ?', [email]).catch(() => null);
+      if (!existingUser) {
+        await db.run(
+          `INSERT INTO client_users (tenant_id, email, full_name, password_hash, onboarding_completed_at, created_at, updated_at)
+           VALUES (?, ?, ?, '', NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+          [tenant.id, email, fullName]
+        ).catch((err: Error) => logger.warn(`Could not create client user: ${err.message}`));
+      }
+    }
+
+    logger.info(`[SaaS] Created tenant: slug=${slug}, mode=${payload.productMode}, plan=${payload.planCode}`);
+
+    return listTenantSummaries();
+  };
+
 export const getSaasAdminSummary = async () => {
   await ensureSaasSeedData();
   const sourceCatalog = loadLatestClientCatalog();
@@ -1727,7 +1809,8 @@ export const updateTenantAdminState = async (tenantId: number, payload: {
   status?: string;
   assignedApiKeyName?: string;
   planCode?: string;
-}) => {
+    depositCapOverride?: number | null;
+  }) => {
   await ensureSaasSeedData();
   const tenant = await getTenantById(tenantId);
 
@@ -1735,12 +1818,20 @@ export const updateTenantAdminState = async (tenantId: number, payload: {
   const nextStatus = asString(payload.status, tenant.status || 'active');
   const nextAssignedApiKeyName = asString(payload.assignedApiKeyName, tenant.assigned_api_key_name);
 
-  await db.run(
-    `UPDATE tenants
-     SET display_name = ?, status = ?, assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
-    [nextDisplayName, nextStatus, nextAssignedApiKeyName, tenantId]
-  );
+    // deposit_cap_override: null = use plan default, number = per-tenant override
+    const nextDepositCapOverride = payload.depositCapOverride !== undefined
+      ? (payload.depositCapOverride === null || !Number.isFinite(Number(payload.depositCapOverride)) ? null : Math.max(0, Number(payload.depositCapOverride)))
+      : (tenant.deposit_cap_override ?? null);
+
+    // Ensure column exists (idempotent migration)
+    await db.run(`ALTER TABLE tenants ADD COLUMN deposit_cap_override INTEGER DEFAULT NULL`).catch(() => { /* already exists */ });
+
+    await db.run(
+      `UPDATE tenants
+       SET display_name = ?, status = ?, assigned_api_key_name = ?, deposit_cap_override = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [nextDisplayName, nextStatus, nextAssignedApiKeyName, nextDepositCapOverride, tenantId]
+    );
 
   if (tenant.product_mode === 'strategy_client') {
     await db.run(

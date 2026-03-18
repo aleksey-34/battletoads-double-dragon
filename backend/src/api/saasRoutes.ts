@@ -1,4 +1,4 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import logger from '../utils/logger';
 import { createClientMagicLink } from '../utils/auth';
 import {
@@ -16,6 +16,7 @@ import {
   updateAlgofundState,
   updateTenantAdminState,
   updateStrategyClientState,
+  createTenantByAdmin,
 } from '../saas/service';
 
 const router = Router();
@@ -72,6 +73,29 @@ router.post('/admin/publish', async (_req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS publish admin TS error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/tenants', async (req, res) => {
+  const { displayName, productMode, planCode, assignedApiKeyName, language, email, fullName } = req.body;
+  if (!displayName || !productMode || !planCode) {
+    return res.status(400).json({ error: 'displayName, productMode, and planCode are required' });
+  }
+  try {
+    const tenants = await createTenantByAdmin({
+      displayName: String(displayName),
+      productMode,
+      planCode: String(planCode),
+      assignedApiKeyName: assignedApiKeyName ? String(assignedApiKeyName) : undefined,
+      language: language ? String(language) : undefined,
+      email: email ? String(email) : undefined,
+      fullName: fullName ? String(fullName) : undefined,
+    });
+    res.json({ success: true, tenants });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS create tenant error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
