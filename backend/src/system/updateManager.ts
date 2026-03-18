@@ -213,7 +213,7 @@ export const getGitUpdateStatus = async (refreshRemote: boolean = true): Promise
     }
   }
 
-  const dirtyRaw = (await command('git', ['status', '--porcelain'], repoDir)).stdout;
+  const dirtyRaw = (await command('git', ['status', '--porcelain', '--untracked-files=no'], repoDir)).stdout;
   const dirtyCount = dirtyRaw ? dirtyRaw.split('\n').filter(Boolean).length : 0;
 
   const latestLine = (await command('git', ['log', '-1', '--pretty=format:%H|%h|%ad|%s', '--date=iso'], repoDir)).stdout;

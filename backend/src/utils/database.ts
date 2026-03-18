@@ -525,6 +525,23 @@ export const initDB = async () => {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_live_trade_events_source_trade_id
       ON live_trade_events (source_trade_id);
   `);
+
+  // One-time migration: fix strategy runtime/archive flags.
+  // Strategies that were actively running when is_runtime column was added need to be marked.
+  // Non-active sweep candidates (research leftovers) get archived so they vanish from the dashboard.
+  await db.exec(`
+    UPDATE strategies
+    SET is_runtime = 1
+    WHERE is_active = 1
+      AND COALESCE(is_archived, 0) = 0
+      AND COALESCE(is_runtime, 0) = 0;
+
+    UPDATE strategies
+    SET is_archived = 1
+    WHERE is_active = 0
+      AND COALESCE(is_runtime, 0) = 0
+      AND COALESCE(is_archived, 0) = 0;
+  `);
 };
 
 export { db };

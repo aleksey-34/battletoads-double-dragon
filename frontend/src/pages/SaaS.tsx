@@ -2516,8 +2516,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           ) : null}
                         </Card>
 
-                        {!strategyBacktestEnabled ? <Alert type="warning" showIcon message={copy.backtestLockedHint} /> : null}
-
                         <Card className="battletoads-card">
                           <Row gutter={[16, 16]}>
                             <Col xs={24} lg={12}>
@@ -2526,9 +2524,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <InputNumber min={0} max={10} step={0.1} style={{ width: '100%' }} value={strategyRiskInput} onChange={(value) => setStrategyRiskInput(clampPreviewValue(Number(value ?? 0)))} />
                             </Col>
                             <Col xs={24} lg={12}>
-                              <Text strong>{copy.tradeFrequency}: {formatNumber(strategyTradeInput, 1)}</Text>
-                              <Slider min={0} max={10} step={0.1} marks={strategyLevelMarks} value={strategyTradeInput} onChange={(value) => setStrategyTradeInput(clampPreviewValue(Number(value)))} />
-                              <InputNumber min={0} max={10} step={0.1} style={{ width: '100%' }} value={strategyTradeInput} onChange={(value) => setStrategyTradeInput(clampPreviewValue(Number(value ?? 0)))} />
+                              <Text strong>{copy.tradeFrequency}: {sliderValueToLevel(strategyTradeInput)}</Text>
+                              <Slider min={0} max={10} step={null} marks={strategyLevelMarks} value={strategyTradeInput} onChange={(value) => setStrategyTradeInput(Number(value))} />
                             </Col>
                           </Row>
                           <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 8 }}>{copy.previewUsesNearestPreset}</Paragraph>
@@ -2776,8 +2773,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </>
                           ) : null}
                         </Card>
-
-                        {!algofundBacktestEnabled ? <Alert type="warning" showIcon message={copy.backtestLockedHint} /> : null}
 
                         <Card className="battletoads-card">
                           <Row gutter={[16, 16]} align="middle">
