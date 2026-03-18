@@ -347,6 +347,20 @@ export const initDB = async () => {
       FOREIGN KEY (user_id) REFERENCES client_users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS client_magic_links (
+      id TEXT PRIMARY KEY,
+      tenant_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT,
+      note TEXT DEFAULT '',
+      created_by TEXT DEFAULT 'platform_admin',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+      FOREIGN KEY (user_id) REFERENCES client_users(id)
+    );
+
     CREATE TABLE IF NOT EXISTS subscriptions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL,
@@ -426,6 +440,9 @@ export const initDB = async () => {
 
     CREATE INDEX IF NOT EXISTS idx_client_sessions_hash
       ON client_sessions (token_hash);
+
+    CREATE INDEX IF NOT EXISTS idx_client_magic_links_hash
+      ON client_magic_links (token_hash);
 
     CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant
       ON subscriptions (tenant_id, created_at DESC);

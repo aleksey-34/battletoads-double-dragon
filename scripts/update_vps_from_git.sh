@@ -54,7 +54,9 @@ log "Local HEAD before update: $local_head"
 
 run git fetch --prune origin
 
-dirty_count="$(git status --porcelain | wc -l | tr -d ' ')"
+# Игнорируем untracked runtime-файлы (например backend/.auth-password.json, data/*),
+# но блокируем деплой при изменениях tracked-файлов.
+dirty_count="$(git status --porcelain --untracked-files=no | wc -l | tr -d ' ')"
 if [[ "$dirty_count" != "0" ]]; then
 	fail "Repository has local changes ($dirty_count). Refusing to deploy."
 fi

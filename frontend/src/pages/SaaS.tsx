@@ -331,6 +331,15 @@ type MaterializeResponse = {
   strategies: MaterializedStrategy[];
 };
 
+type ClientMagicLinkResponse = {
+  success: boolean;
+  token: string;
+  expiresAt: string;
+  loginUrl: string;
+  tenantId: number;
+  userId: number;
+};
+
 type AlgofundRequest = {
   id: number;
   tenant_id: number;
@@ -492,6 +501,9 @@ type Copy = {
   publishReady: string;
   seedReady: string;
   emergencyStop: string;
+  createMagicLink: string;
+  magicLinkReady: string;
+  magicLinkExpires: string;
 };
 
 const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
@@ -590,6 +602,9 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     publishReady: 'Admin TS опубликован',
     seedReady: 'Demo tenants обновлены',
     emergencyStop: 'Стоп + закрыть позиции',
+    createMagicLink: 'Сгенерировать ссылку входа',
+    magicLinkReady: 'Ссылка готова (одноразовая)',
+    magicLinkExpires: 'Действительна до',
   },
   en: {
     title: 'SaaS Control Room',
@@ -686,6 +701,9 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     publishReady: 'Admin TS published',
     seedReady: 'Demo tenants refreshed',
     emergencyStop: 'Stop + close positions',
+    createMagicLink: 'Create login link',
+    magicLinkReady: 'Link ready (one-time use)',
+    magicLinkExpires: 'Expires at',
   },
   tr: {
     title: 'SaaS Control Room',
@@ -782,6 +800,9 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     publishReady: 'Admin TS yayinlandi',
     seedReady: 'Demo tenantlar guncellendi',
     emergencyStop: 'Durdur + pozisyonlari kapat',
+    createMagicLink: 'Giris linki olustur',
+    magicLinkReady: 'Link hazir (tek kullanim)',
+    magicLinkExpires: 'Son kullanim',
   },
 };
 
@@ -1135,6 +1156,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [strategySelectionPreview, setStrategySelectionPreview] = useState<StrategySelectionPreviewResponse | null>(null);
   const [strategySelectionPreviewLoading, setStrategySelectionPreviewLoading] = useState(false);
   const [materializeResponse, setMaterializeResponse] = useState<MaterializeResponse | null>(null);
+  const [strategyMagicLink, setStrategyMagicLink] = useState<ClientMagicLinkResponse | null>(null);
+  const [algofundMagicLink, setAlgofundMagicLink] = useState<ClientMagicLinkResponse | null>(null);
   const [algofundRiskMultiplier, setAlgofundRiskMultiplier] = useState(1);
   const [algofundApiKeyName, setAlgofundApiKeyName] = useState('');
   const [algofundTenantDisplayName, setAlgofundTenantDisplayName] = useState('');
@@ -1585,6 +1608,34 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       }
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Emergency stop failed'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const createStrategyMagicLink = async () => {
+    if (!strategyTenantId) return;
+    setActionLoading('strategy-magic-link');
+    try {
+      const response = await axios.post<ClientMagicLinkResponse>(`/api/saas/admin/tenants/${strategyTenantId}/magic-link`);
+      setStrategyMagicLink(response.data);
+      messageApi.success(copy.magicLinkReady);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to create magic link'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const createAlgofundMagicLink = async () => {
+    if (!algofundTenantId) return;
+    setActionLoading('algofund-magic-link');
+    try {
+      const response = await axios.post<ClientMagicLinkResponse>(`/api/saas/admin/tenants/${algofundTenantId}/magic-link`);
+      setAlgofundMagicLink(response.data);
+      messageApi.success(copy.magicLinkReady);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to create magic link'));
     } finally {
       setActionLoading('');
     }
@@ -2425,24 +2476,43 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Button size="small" href="/backtest" disabled={!strategyBacktestEnabled}>{copy.openBacktest}</Button>
                           </Space>
                           {isAdminSurface ? (
-                            <Space wrap style={{ marginTop: 12 }}>
-                              <Select
-                                value={strategyTenantStatus}
-                                onChange={setStrategyTenantStatus}
-                                style={{ width: 180 }}
-                                options={[
-                                  { value: 'active', label: 'active' },
-                                  { value: 'suspended', label: 'suspended' },
-                                  { value: 'paused', label: 'paused' },
-                                ]}
-                              />
-                              <Button type="primary" onClick={() => void saveStrategyTenantAdmin()} loading={actionLoading === 'strategy-tenant-save'}>
-                                {copy.saveTenant}
-                              </Button>
-                              <Button danger onClick={() => void emergencyStopStrategy()} loading={actionLoading === 'strategy-emergency'}>
-                                {copy.emergencyStop}
-                              </Button>
-                            </Space>
+                            <>
+                              <Space wrap style={{ marginTop: 12 }}>
+                                <Select
+                                  value={strategyTenantStatus}
+                                  onChange={setStrategyTenantStatus}
+                                  style={{ width: 180 }}
+                                  options={[
+                                    { value: 'active', label: 'active' },
+                                    { value: 'suspended', label: 'suspended' },
+                                    { value: 'paused', label: 'paused' },
+                                  ]}
+                                />
+                                <Button type="primary" onClick={() => void saveStrategyTenantAdmin()} loading={actionLoading === 'strategy-tenant-save'}>
+                                  {copy.saveTenant}
+                                </Button>
+                                <Button danger onClick={() => void emergencyStopStrategy()} loading={actionLoading === 'strategy-emergency'}>
+                                  {copy.emergencyStop}
+                                </Button>
+                                <Button onClick={() => void createStrategyMagicLink()} loading={actionLoading === 'strategy-magic-link'}>
+                                  {copy.createMagicLink}
+                                </Button>
+                              </Space>
+                              {strategyMagicLink ? (
+                                <Alert
+                                  style={{ marginTop: 8 }}
+                                  type="info"
+                                  showIcon
+                                  message={copy.magicLinkReady}
+                                  description={
+                                    <>
+                                      <div><a href={strategyMagicLink.loginUrl} target="_blank" rel="noreferrer">{strategyMagicLink.loginUrl}</a></div>
+                                      <div>{copy.magicLinkExpires}: {new Date(strategyMagicLink.expiresAt).toLocaleString()}</div>
+                                    </>
+                                  }
+                                />
+                              ) : null}
+                            </>
                           ) : null}
                         </Card>
 
@@ -2667,24 +2737,43 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Button size="small" href="/backtest" disabled={!algofundBacktestEnabled}>{copy.openBacktest}</Button>
                           </Space>
                           {isAdminSurface ? (
-                            <Space wrap style={{ marginTop: 12 }}>
-                              <Select
-                                value={algofundTenantStatus}
-                                onChange={setAlgofundTenantStatus}
-                                style={{ width: 180 }}
-                                options={[
-                                  { value: 'active', label: 'active' },
-                                  { value: 'suspended', label: 'suspended' },
-                                  { value: 'paused', label: 'paused' },
-                                ]}
-                              />
-                              <Button type="primary" onClick={() => void saveAlgofundTenantAdmin()} loading={actionLoading === 'algofund-tenant-save'}>
-                                {copy.saveTenant}
-                              </Button>
-                              <Button danger onClick={() => void emergencyStopAlgofund()} loading={actionLoading === 'algofund-emergency'}>
-                                {copy.emergencyStop}
-                              </Button>
-                            </Space>
+                            <>
+                              <Space wrap style={{ marginTop: 12 }}>
+                                <Select
+                                  value={algofundTenantStatus}
+                                  onChange={setAlgofundTenantStatus}
+                                  style={{ width: 180 }}
+                                  options={[
+                                    { value: 'active', label: 'active' },
+                                    { value: 'suspended', label: 'suspended' },
+                                    { value: 'paused', label: 'paused' },
+                                  ]}
+                                />
+                                <Button type="primary" onClick={() => void saveAlgofundTenantAdmin()} loading={actionLoading === 'algofund-tenant-save'}>
+                                  {copy.saveTenant}
+                                </Button>
+                                <Button danger onClick={() => void emergencyStopAlgofund()} loading={actionLoading === 'algofund-emergency'}>
+                                  {copy.emergencyStop}
+                                </Button>
+                                <Button onClick={() => void createAlgofundMagicLink()} loading={actionLoading === 'algofund-magic-link'}>
+                                  {copy.createMagicLink}
+                                </Button>
+                              </Space>
+                              {algofundMagicLink ? (
+                                <Alert
+                                  style={{ marginTop: 8 }}
+                                  type="info"
+                                  showIcon
+                                  message={copy.magicLinkReady}
+                                  description={
+                                    <>
+                                      <div><a href={algofundMagicLink.loginUrl} target="_blank" rel="noreferrer">{algofundMagicLink.loginUrl}</a></div>
+                                      <div>{copy.magicLinkExpires}: {new Date(algofundMagicLink.expiresAt).toLocaleString()}</div>
+                                    </>
+                                  }
+                                />
+                              ) : null}
+                            </>
                           ) : null}
                         </Card>
 

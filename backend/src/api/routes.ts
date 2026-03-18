@@ -55,6 +55,7 @@ import {
   authenticateClient,
   completeClientOnboarding,
   getClientAuthPayloadFromSession,
+  loginClientByMagicToken,
   loginClientUser,
   requirePlatformAdmin,
   registerClientUser,
@@ -287,6 +288,20 @@ router.post('/auth/client/login', async (req, res) => {
     const statusCode = resolveClientAuthErrorStatus(err.message);
     logger.error(`Client login error: ${err.message}`);
     res.status(statusCode).json({ error: err.message });
+  }
+});
+
+router.post('/auth/client/magic-login', async (req, res) => {
+  try {
+    const result = await loginClientByMagicToken(String(req.body?.token || ''), {
+      ip: String(req.ip || ''),
+      userAgent: String(req.headers['user-agent'] || ''),
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client magic login error: ${err.message}`);
+    res.status(400).json({ error: err.message });
   }
 });
 

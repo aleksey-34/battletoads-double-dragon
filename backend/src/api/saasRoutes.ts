@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import logger from '../utils/logger';
+import { createClientMagicLink } from '../utils/auth';
 import {
   getAlgofundState,
   getSaasAdminSummary,
@@ -92,6 +93,25 @@ router.patch('/admin/tenants/:tenantId', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS tenant admin update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/tenants/:tenantId/magic-link', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const result = await createClientMagicLink(tenantId, {
+      ip: String(req.ip || ''),
+      userAgent: String(req.headers['user-agent'] || ''),
+    }, String(req.body?.note || ''));
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS magic link error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
