@@ -74,7 +74,17 @@ const applySchema = async (db: Database<sqlite3.Database, sqlite3.Statement>): P
       ON strategy_profiles (status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_profiles_sweep
       ON strategy_profiles (sweep_run_id, status);
+  `);
 
+  // Deduplication: prevent the same named profile being imported twice per sweep.
+  // Partial index (WHERE sweep_run_id IS NOT NULL) so manual profiles (NULL sweep) are unaffected.
+  await db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_unique_in_sweep
+      ON strategy_profiles (sweep_run_id, name)
+      WHERE sweep_run_id IS NOT NULL;
+  `);
+
+  await db.exec(`
     CREATE TABLE IF NOT EXISTS sweep_runs (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,

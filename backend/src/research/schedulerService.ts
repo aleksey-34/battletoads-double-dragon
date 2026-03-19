@@ -1,6 +1,6 @@
 import fs from 'fs';
 import { getDbFilePath, db as mainDb } from '../utils/database';
-import { loadLatestClientCatalog, loadLatestSweep } from '../saas/service';
+import { loadCatalogAndSweepWithFallback } from '../saas/service';
 import logger from '../utils/logger';
 import { getResearchDb, getResearchDbFilePath } from './db';
 import { importSweepCandidates, registerSweepRun } from './profileService';
@@ -191,19 +191,10 @@ const buildCandidatesFromCatalog = (catalog: any): Array<{
 
 const runDailyIncrementalSweep = async (): Promise<{ status: SchedulerStatus; details: Record<string, unknown> }> => {
   const researchDb = getResearchDb();
-  const sweep = loadLatestSweep();
-  const catalog = loadLatestClientCatalog();
+  const { sweep, catalog } = await loadCatalogAndSweepWithFallback();
 
-  if (!sweep || !catalog) {
-    return {
-      status: 'skipped',
-      details: {
-        reason: 'Latest sweep/client catalog JSON is missing in results/',
-      },
-    };
-  }
-
-  const dayKey = String(sweep.timestamp || toIsoNow()).slice(0, 10);
+  const sourceTimestamp = String(sweep?.timestamp || toIsoNow());
+  const dayKey = sourceTimestamp.slice(0, 10);
   const runName = `daily_sync_${dayKey}`;
 
   const existing = await researchDb.get('SELECT id FROM sweep_runs WHERE name = ? ORDER BY id DESC LIMIT 1', [runName]) as { id?: number } | undefined;
@@ -213,6 +204,34 @@ const runDailyIncrementalSweep = async (): Promise<{ status: SchedulerStatus; de
       details: {
         reason: `Daily sync already exists for ${dayKey}`,
         sweep_run_id: Number(existing.id),
+      },
+    };
+  }
+
+  if (!sweep || !catalog) {
+    const sweepRunId = await registerSweepRun({
+      name: runName,
+      description: 'Auto daily incremental sync (empty source snapshot)',
+      resultSummary: {
+        source: 'research_scheduler',
+        sourceTimestamp,
+        emptySource: true,
+        reason: 'No sweep/catalog data available (results files and DB fallback both empty)',
+      },
+      config: {
+        source: 'research_scheduler',
+        mode: 'daily_incremental_sync',
+      },
+    });
+
+    return {
+      status: 'done',
+      details: {
+        sweep_run_id: sweepRunId,
+        imported: 0,
+        skipped: 0,
+        candidates: 0,
+        emptySource: true,
       },
     };
   }
@@ -288,15 +307,19 @@ export const runSchedulerJobNow = async (jobKey: SchedulerJobKey): Promise<{ job
 
   try {
     const result = await runSchedulerJobByKey(jobKey);
+    // Store skip reason so the UI can show it instead of silent "skipped"
+    const skipReason = result.status === 'skipped'
+      ? String(result.details?.reason || 'Skipped: unknown reason')
+      : '';
     await db.run(
       `UPDATE research_scheduler_jobs
        SET last_status = ?,
-           last_error = '',
+           last_error = ?,
            run_count = run_count + 1,
            next_run_at = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE job_key = ?`,
-      [result.status, computeNextDailyRunAtUtc(hourUtc, minuteUtc), jobKey]
+      [result.status, skipReason, computeNextDailyRunAtUtc(hourUtc, minuteUtc), jobKey]
     );
 
     const updated = await db.get('SELECT * FROM research_scheduler_jobs WHERE job_key = ?', [jobKey]) as SchedulerJob | undefined;

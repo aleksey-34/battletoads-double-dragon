@@ -34,7 +34,7 @@ import {
   runSchedulerJobNow,
   updateSchedulerJob,
 } from '../research/schedulerService';
-import { importHistoricalArtifactsToResearch } from '../research/importService';
+import { importHistoricalArtifactsToResearch, importCandidatesFromSweepCatalog } from '../research/importService';
 import { db } from '../utils/database';
 import logger from '../utils/logger';
 
@@ -341,10 +341,27 @@ router.post('/sweeps/:id/import-candidates', async (req, res) => {
   try {
     const sweepRunId = Number(req.params.id);
     const candidates = req.body?.candidates;
-    if (!Array.isArray(candidates)) {
-      return res.status(400).json({ error: 'candidates array is required' });
+
+    // If candidates provided in body — use them directly
+    if (Array.isArray(candidates)) {
+      const result = await importSweepCandidates(sweepRunId, candidates);
+      return res.json(result);
     }
-    const result = await importSweepCandidates(sweepRunId, candidates);
+
+    // Otherwise read from the sweep's registered catalog_file_path
+    const { getResearchDb } = await import('../research/db');
+    const rdb = getResearchDb();
+    const sweep = await rdb.get('SELECT * FROM sweep_runs WHERE id = ?', [sweepRunId]) as { catalog_file_path?: string | null } | undefined;
+    if (!sweep) {
+      return res.status(404).json({ error: `Sweep not found: ${sweepRunId}` });
+    }
+    if (!sweep.catalog_file_path) {
+      return res.status(400).json({
+        error: 'Sweep has no catalog_file_path. Use "Import artifacts" button or provide a candidates array.',
+      });
+    }
+
+    const result = await importCandidatesFromSweepCatalog(sweepRunId, sweep.catalog_file_path);
     res.json(result);
   } catch (err) {
     const error = err as Error;

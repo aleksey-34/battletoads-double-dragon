@@ -108,6 +108,20 @@ const buildCandidatesFromCatalogJson = (catalog: any): Array<{
   return out;
 };
 
+/**
+ * Import candidates into an EXISTING sweep run from its catalog_file_path.
+ * Used by the "Import" button in the Sweep Runs table (no candidates body needed).
+ */
+export const importCandidatesFromSweepCatalog = async (
+  sweepRunId: number,
+  catalogFilePath: string
+): Promise<{ imported: number; skipped: number; candidates: number }> => {
+  const catalog = readJsonFile(catalogFilePath);
+  const candidates = buildCandidatesFromCatalogJson(catalog);
+  const result = await importSweepCandidates(sweepRunId, candidates);
+  return { imported: result.imported, skipped: result.skipped, candidates: candidates.length };
+};
+
 export const importHistoricalArtifactsToResearch = async (input: {
   catalogFilePath: string;
   sweepFilePath?: string;
