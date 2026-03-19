@@ -79,6 +79,7 @@ jest.mock('antd', () => {
   List.Item = ({ children }: any) => React.createElement('div', null, children);
   const Table = ({ dataSource = [] }: any) => React.createElement('div', { 'data-testid': 'table' }, String(dataSource.length));
   const Tabs = ({ items = [], activeKey }: any) => React.createElement('div', null, items.find((item: any) => item.key === activeKey)?.children || null);
+  const Modal = ({ open, children }: any) => (open ? React.createElement('div', null, children) : null);
   const messageApi = {
     success: jest.fn(),
     error: jest.fn(),
@@ -104,6 +105,7 @@ jest.mock('antd', () => {
     Statistic: ({ title, value, suffix }: any) => React.createElement('div', null, title, value, suffix),
     Table,
     Tabs,
+    Modal,
     Tag: SimpleSpan,
     Typography: {
       Paragraph: SimpleDiv,

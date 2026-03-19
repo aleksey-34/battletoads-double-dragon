@@ -22,7 +22,6 @@ import {
   Tabs,
   Tag,
   Typography,
-  Modal,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import ChartComponent from '../components/ChartComponent';
@@ -34,6 +33,7 @@ type ProductMode = 'strategy_client' | 'algofund_client';
 type Level3 = 'low' | 'medium' | 'high';
 type RequestStatus = 'pending' | 'approved' | 'rejected';
 type SaasTabKey = 'admin' | 'strategy-client' | 'algofund';
+type AdminTabKey = 'overview' | 'create-user';
 
 type EquityPoint = {
   time: number;
@@ -470,6 +470,11 @@ type Copy = {
   createClient: string;
   createClientTitle: string;
   createClientSuccess: string;
+  recommendedSetsHint: string;
+  adminTsDraftHint: string;
+  selectedOffersHint: string;
+  selectedOffersEmptyHint: string;
+  adminCreateHint: string;
 };
 
 const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
@@ -486,8 +491,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     latestSweep: 'Последний historical sweep',
     noCatalog: 'Каталог стратегий временно недоступен. Проверьте сборку каталога в админ-контуре.',
     noSweep: 'Исторический sweep временно недоступен. Материализация будет доступна после обновления данных.',
-    recommendedSets: 'Рекомендуемые наборы',
-    adminTsDraft: 'Черновик admin trading system',
+    recommendedSets: 'Наборы офферов из SWEEP',
+    adminTsDraft: 'Черновик портфеля Admin',
     tenants: 'Тестовые tenants',
     openStrategyClient: 'Открыть клиента стратегий',
     openAlgofund: 'Открыть Алгофонд',
@@ -501,15 +506,15 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     risk: 'Риск',
     tradeFrequency: 'Частота сделок',
     apiKey: 'API key',
-    selectedOffers: 'Выбранные офферы',
+    selectedOffers: 'Офферы для подключения',
     monitoring: 'Monitoring',
     requestQueue: 'Очередь запросов',
     previewTitle: 'Preview ожиданий',
-    selectedOffersPreview: 'Preview выбранных офферов',
+    selectedOffersPreview: 'SWEEP compare выбранных офферов (4D)',
     publishedTsPreview: 'Preview опубликованного admin TS',
     noTenant: 'Тенант этого типа пока не найден.',
     sourceSystem: 'Source system',
-    tenantMode: 'Режим',
+    tenantMode: 'Тип клиента',
     plan: 'Тариф',
     status: 'Статус',
     score: 'Score',
@@ -558,8 +563,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     stop: 'Стоп',
     note: 'Комментарий',
     decisionNote: 'Комментарий решения',
-    chooseTenant: 'Выберите тенанта',
-    chooseOffer: 'Выберите оффер',
+    chooseTenant: 'Выберите клиента (tenant)',
+    chooseOffer: 'Выберите оффер для одиночного preview',
     saveSuccess: 'Профиль обновлен',
     previewReady: 'Preview обновлен',
     materializeSuccess: 'Стратегии материализованы',
@@ -571,9 +576,14 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     createMagicLink: 'Сгенерировать ссылку входа',
     magicLinkReady: 'Ссылка готова (одноразовая)',
     magicLinkExpires: 'Действительна до',
-    createClient: 'Создать клиента',
-    createClientTitle: 'Новый клиент',
+    createClient: 'Создать нового пользователя',
+    createClientTitle: 'Создание пользователя через Admin',
     createClientSuccess: 'Клиент создан',
+    recommendedSetsHint: 'Это готовые подборки офферов из последнего SWEEP. Можно быстро выбрать набор и затем подключить его клиенту.',
+    adminTsDraftHint: 'Служебный черновик портфеля для админа. Нужен для публикации admin trading system и контроля состава.',
+    selectedOffersHint: 'Выбирайте офферы как товары. Если выбрано несколько, ниже строится SWEEP compare (4D), а не полный API backtest.',
+    selectedOffersEmptyHint: 'Офферы не найдены в preset-базе. Показываю fallback из последнего SWEEP/client catalog, если он доступен.',
+    adminCreateHint: 'Admin создает клиентов двух типов: Клиент стратегий и Алгофонд. После создания можно сразу открыть и настроить кабинет.',
   },
   en: {
     title: 'SaaS Control Room',
@@ -588,8 +598,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     latestSweep: 'Latest historical sweep',
     noCatalog: 'Strategy catalog is temporarily unavailable. Check catalog build in admin mode.',
     noSweep: 'Historical sweep is temporarily unavailable. Materialization will be enabled after data refresh.',
-    recommendedSets: 'Recommended sets',
-    adminTsDraft: 'Admin trading system draft',
+    recommendedSets: 'Sweep-based offer bundles',
+    adminTsDraft: 'Admin portfolio draft',
     tenants: 'Demo tenants',
     openStrategyClient: 'Open strategy client',
     openAlgofund: 'Open algofund',
@@ -603,15 +613,15 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     risk: 'Risk',
     tradeFrequency: 'Trade frequency',
     apiKey: 'API key',
-    selectedOffers: 'Selected offers',
+    selectedOffers: 'Offers to connect',
     monitoring: 'Monitoring',
     requestQueue: 'Request queue',
     previewTitle: 'Expectation preview',
-    selectedOffersPreview: 'Selected offers preview',
+    selectedOffersPreview: 'Selected offers SWEEP compare (4D)',
     publishedTsPreview: 'Published admin TS preview',
     noTenant: 'No tenant of this type is available yet.',
     sourceSystem: 'Source system',
-    tenantMode: 'Mode',
+    tenantMode: 'Client type',
     plan: 'Plan',
     status: 'Status',
     score: 'Score',
@@ -660,8 +670,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     stop: 'Stop',
     note: 'Note',
     decisionNote: 'Decision note',
-    chooseTenant: 'Select tenant',
-    chooseOffer: 'Select offer',
+    chooseTenant: 'Select client tenant',
+    chooseOffer: 'Select offer for single preview',
     saveSuccess: 'Profile updated',
     previewReady: 'Preview updated',
     materializeSuccess: 'Strategies materialized',
@@ -673,9 +683,14 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     createMagicLink: 'Create login link',
     magicLinkReady: 'Link ready (one-time use)',
     magicLinkExpires: 'Expires at',
-    createClient: 'Create client',
-    createClientTitle: 'New client',
+    createClient: 'Create new user',
+    createClientTitle: 'Admin user creation',
     createClientSuccess: 'Client created',
+    recommendedSetsHint: 'These are ready offer bundles generated from the latest SWEEP. Pick a bundle and connect it to a client.',
+    adminTsDraftHint: 'Internal admin portfolio draft used for publishing admin trading system and composition control.',
+    selectedOffersHint: 'Pick offers like products. When several are selected, the panel runs SWEEP compare (4D), not full API backtest.',
+    selectedOffersEmptyHint: 'No offers found in preset storage. Fallback from latest SWEEP/client catalog is used when available.',
+    adminCreateHint: 'Admin creates two client types: Strategy Client and Algofund. After creation you can open and configure immediately.',
   },
   tr: {
     title: 'SaaS Control Room',
@@ -690,8 +705,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     latestSweep: 'Son historical sweep',
     noCatalog: 'Strateji katalogu gecici olarak kullanilamiyor. Admin modunda katalog build kontrol edin.',
     noSweep: 'Historical sweep gecici olarak kullanilamiyor. Veri yenilenince materialize acilacak.',
-    recommendedSets: 'Onerilen setler',
-    adminTsDraft: 'Admin trading system taslagi',
+    recommendedSets: 'SWEEP teklif paketleri',
+    adminTsDraft: 'Admin portfoy taslagi',
     tenants: 'Demo tenantlar',
     openStrategyClient: 'Strategy client ac',
     openAlgofund: 'Algofund ac',
@@ -705,15 +720,15 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     risk: 'Risk',
     tradeFrequency: 'Islem sikligi',
     apiKey: 'API key',
-    selectedOffers: 'Secilen teklifler',
+    selectedOffers: 'Baglanacak teklifler',
     monitoring: 'Monitoring',
     requestQueue: 'Talep kuyrugu',
     previewTitle: 'Beklenti onizlemesi',
-    selectedOffersPreview: 'Secilen teklifler onizlemesi',
+    selectedOffersPreview: 'Secilen teklifler SWEEP compare (4D)',
     publishedTsPreview: 'Yayinlanan admin TS onizlemesi',
     noTenant: 'Bu tipte tenant yok.',
     sourceSystem: 'Source system',
-    tenantMode: 'Mod',
+    tenantMode: 'Musteri tipi',
     plan: 'Plan',
     status: 'Durum',
     score: 'Score',
@@ -762,8 +777,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     stop: 'Durdur',
     note: 'Not',
     decisionNote: 'Karar notu',
-    chooseTenant: 'Tenant secin',
-    chooseOffer: 'Teklif secin',
+    chooseTenant: 'Musteri tenant secin',
+    chooseOffer: 'Tekli onizleme icin teklif secin',
     saveSuccess: 'Profil guncellendi',
     previewReady: 'Onizleme guncellendi',
     materializeSuccess: 'Stratejiler olusturuldu',
@@ -775,9 +790,14 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     createMagicLink: 'Giris linki olustur',
     magicLinkReady: 'Link hazir (tek kullanim)',
     magicLinkExpires: 'Son kullanim',
-    createClient: 'Musteri olustur',
-    createClientTitle: 'Yeni musteri',
+    createClient: 'Yeni kullanici olustur',
+    createClientTitle: 'Admin kullanici olusturma',
     createClientSuccess: 'Musteri olusturuldu',
+    recommendedSetsHint: 'Bunlar son SWEEP sonucundan gelen hazir teklif paketleridir. Paketi secip musteriye baglayabilirsiniz.',
+    adminTsDraftHint: 'Admin trading system yayinlamasi ve kompozisyon kontrolu icin dahili portfoy taslagi.',
+    selectedOffersHint: 'Teklifleri urun gibi secin. Birden fazla secimde panel tam API backtest degil SWEEP compare (4D) calistirir.',
+    selectedOffersEmptyHint: 'Preset depoda teklif yok. Mumkunse son SWEEP/client catalog fallback gosterilir.',
+    adminCreateHint: 'Admin iki musteri tipi olusturur: Strateji Musterisi ve Algofund. Olusturduktan sonra hemen acip ayarlayabilirsiniz.',
   },
 };
 
@@ -850,6 +870,20 @@ const dedupeLinePoints = (points: LinePoint[]): LinePoint[] => {
     out.push(point);
   }
 
+  return out;
+};
+
+const dedupeOffersById = (offers: CatalogOffer[]): CatalogOffer[] => {
+  const out: CatalogOffer[] = [];
+  const seen = new Set<string>();
+  for (const offer of offers) {
+    const offerId = String(offer?.offerId || '').trim();
+    if (!offerId || seen.has(offerId)) {
+      continue;
+    }
+    seen.add(offerId);
+    out.push(offer);
+  }
   return out;
 };
 
@@ -1150,7 +1184,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [algofundTenantDisplayName, setAlgofundTenantDisplayName] = useState('');
   const [algofundTenantStatus, setAlgofundTenantStatus] = useState('active');
   const [algofundTenantPlanCode, setAlgofundTenantPlanCode] = useState('');
-  const [createTenantModalOpen, setCreateTenantModalOpen] = useState(false);
+  const [adminTab, setAdminTab] = useState<AdminTabKey>('overview');
   const [createTenantDisplayName, setCreateTenantDisplayName] = useState('');
   const [createTenantProductMode, setCreateTenantProductMode] = useState<ProductMode>('strategy_client');
   const [createTenantPlanCode, setCreateTenantPlanCode] = useState('');
@@ -1185,6 +1219,31 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     .filter((plan) => plan.product_mode === 'algofund_client')
     .map((plan) => ({ value: plan.code, label: `${plan.title} · ${formatMoney(plan.price_usdt)}` }));
   const apiKeyOptions = (summary?.apiKeys || []).map((name) => ({ label: name, value: name }));
+  const summaryCatalogOffers = dedupeOffersById([
+    ...(summary?.catalog?.clientCatalog?.mono || []),
+    ...(summary?.catalog?.clientCatalog?.synth || []),
+  ]);
+  const strategyRecommendedOffers = dedupeOffersById(
+    Object.values(strategyState?.recommendedSets || {}).reduce<CatalogOffer[]>((acc, items) => {
+      if (Array.isArray(items)) {
+        acc.push(...items);
+      }
+      return acc;
+    }, [])
+  );
+  const summaryRecommendedOffers = dedupeOffersById(
+    Object.values(summary?.recommendedSets || {}).reduce<CatalogOffer[]>((acc, items) => {
+      if (Array.isArray(items)) {
+        acc.push(...items);
+      }
+      return acc;
+    }, [])
+  );
+  const strategyOfferCatalog = dedupeOffersById(
+    (strategyState?.offers || []).length > 0
+      ? (strategyState?.offers || [])
+      : [...summaryCatalogOffers, ...strategyRecommendedOffers, ...summaryRecommendedOffers]
+  );
 
   const loadSummary = async () => {
     setSummaryLoading(true);
@@ -1281,6 +1340,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!strategyState?.profile) {
       return;
     }
+    const effectiveOffers = dedupeOffersById([
+      ...(strategyState.offers || []),
+      ...(strategyState.catalog?.clientCatalog?.mono || []),
+      ...(strategyState.catalog?.clientCatalog?.synth || []),
+      ...Object.values(strategyState.recommendedSets || {}).reduce<CatalogOffer[]>((acc, items) => {
+        if (Array.isArray(items)) {
+          acc.push(...items);
+        }
+        return acc;
+      }, []),
+    ]);
     const selected = Array.isArray(strategyState.profile.selectedOfferIds) ? strategyState.profile.selectedOfferIds : [];
     setStrategyOfferIds(selected);
     setStrategyRiskInput(levelToSliderValue(strategyState.profile.risk_level || 'medium'));
@@ -1289,8 +1359,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setStrategyTenantDisplayName(strategyState.tenant.display_name || '');
     setStrategyTenantStatus(strategyState.tenant.status || 'active');
     setStrategyTenantPlanCode(strategyState.plan?.code || '');
-    setStrategyPreviewOfferId((current) => (current && selected.includes(current) ? current : selected[0] || strategyState.offers[0]?.offerId || ''));
-    const latestPreview = hydrateStrategyPreview(strategyState.profile.latestPreview as StrategyPreviewResponse | null | undefined, strategyState.offers || []);
+    setStrategyPreviewOfferId((current) => (current && selected.includes(current) ? current : selected[0] || effectiveOffers[0]?.offerId || ''));
+    const latestPreview = hydrateStrategyPreview(strategyState.profile.latestPreview as StrategyPreviewResponse | null | undefined, effectiveOffers);
     setStrategyPreview(latestPreview);
   }, [strategyState]);
 
@@ -1318,7 +1388,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         riskScore: strategyRiskInput,
         tradeFrequencyScore: strategyTradeInput,
       });
-      setStrategyPreview(hydrateStrategyPreview(response.data, strategyState?.offers || []));
+      setStrategyPreview(hydrateStrategyPreview(response.data, strategyOfferCatalog));
       if (!silent) {
         messageApi.success(copy.previewReady);
       }
@@ -1327,7 +1397,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     } finally {
       setStrategyPreviewLoading(false);
     }
-  }, [copy.previewReady, messageApi, strategyPreviewOfferId, strategyRiskInput, strategyState, strategyTenantId, strategyTradeInput]);
+  }, [copy.previewReady, messageApi, strategyOfferCatalog, strategyPreviewOfferId, strategyRiskInput, strategyTenantId, strategyTradeInput]);
 
   const runStrategySelectionPreview = useCallback(async (silent = false) => {
     if (!strategyTenantId || strategyOfferIds.length === 0) {
@@ -1734,12 +1804,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         language,
       });
       messageApi.success(copy.createClientSuccess);
-      setCreateTenantModalOpen(false);
       setCreateTenantDisplayName('');
       setCreateTenantProductMode('strategy_client');
       setCreateTenantPlanCode('');
       setCreateTenantApiKey('');
       setCreateTenantEmail('');
+      setAdminTab('overview');
       await loadSummary();
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to create tenant'));
@@ -1747,64 +1817,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setActionLoading('');
     }
   };
-
-  const offerColumns: ColumnsType<CatalogOffer> = [
-    {
-      title: copy.selectedOffers,
-      key: 'selected',
-      width: 76,
-      render: (_, offer) => (
-        <Checkbox
-          checked={strategyOfferIds.includes(offer.offerId)}
-          onChange={(event) => {
-            const checked = event.target.checked;
-            setStrategyOfferIds((current) => {
-              if (checked) {
-                return Array.from(new Set([...current, offer.offerId]));
-              }
-              return current.filter((item) => item !== offer.offerId);
-            });
-          }}
-        />
-      ),
-    },
-    {
-      title: 'Offer',
-      key: 'offer',
-      render: (_, offer) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{offer.titleRu}</Text>
-          <Text type="secondary">{offer.strategy.mode.toUpperCase()} · {offer.strategy.type} · {offer.strategy.market}</Text>
-        </Space>
-      ),
-    },
-    {
-      title: copy.score,
-      dataIndex: ['metrics', 'score'],
-      width: 100,
-      render: (value) => <Tag color="cyan">{formatNumber(value)}</Tag>,
-    },
-    {
-      title: copy.returnLabel,
-      width: 110,
-      render: (_, offer) => <Tag color={metricColor(Number(offer.metrics.ret || 0), 'return')}>{formatPercent(offer.metrics.ret)}</Tag>,
-    },
-    {
-      title: copy.drawdown,
-      width: 110,
-      render: (_, offer) => <Tag color={metricColor(Number(offer.metrics.dd || 0), 'drawdown')}>{formatPercent(offer.metrics.dd)}</Tag>,
-    },
-    {
-      title: copy.profitFactor,
-      width: 100,
-      render: (_, offer) => <Tag color={metricColor(Number(offer.metrics.pf || 0), 'pf')}>{formatNumber(offer.metrics.pf)}</Tag>,
-    },
-    {
-      title: copy.trades,
-      width: 96,
-      render: (_, offer) => formatNumber(offer.metrics.trades, 0),
-    },
-  ];
 
   const tenantColumns: ColumnsType<TenantSummary> = [
     {
@@ -2090,7 +2102,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             <Space wrap className="saas-page-actions">
               <Button onClick={() => void loadSummary()} loading={summaryLoading}>{copy.refresh}</Button>
               {isAdminSurface ? <Button onClick={() => void seedDemoTenants()} loading={actionLoading === 'seed'}>{copy.seed}</Button> : null}
-              {isAdminSurface ? <Button type="dashed" onClick={() => setCreateTenantModalOpen(true)}>{copy.createClient}</Button> : null}
+              {isAdminSurface ? <Button type="dashed" onClick={() => { setActiveTab('admin'); setAdminTab('create-user'); }}>{copy.createClient}</Button> : null}
               {isAdminSurface ? <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>{copy.publish}</Button> : null}
             </Space>
           </Col>
@@ -2110,136 +2122,186 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               key: 'admin',
               label: copy.admin,
               children: (
-                <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  {!summary?.catalog ? <Alert type="warning" showIcon message={copy.noCatalog} /> : null}
-                  {!summary?.sweepSummary ? <Alert type="warning" showIcon message={copy.noSweep} /> : null}
-                  {summaryPeriod ? <Alert type="info" showIcon message={`${copy.period}: ${formatPeriodLabel(summaryPeriod)}`} /> : null}
+                <Tabs
+                  activeKey={adminTab}
+                  onChange={(key) => setAdminTab(key as AdminTabKey)}
+                  items={[
+                    {
+                      key: 'overview',
+                      label: 'Обзор',
+                      children: (
+                        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                          {!summary?.catalog ? <Alert type="warning" showIcon message={copy.noCatalog} /> : null}
+                          {!summary?.sweepSummary ? <Alert type="warning" showIcon message={copy.noSweep} /> : null}
+                          {summaryPeriod ? <Alert type="info" showIcon message={`${copy.period}: ${formatPeriodLabel(summaryPeriod)}`} /> : null}
 
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} md={8}>
-                      <Card className="battletoads-card">
-                        <Statistic title={copy.latestCatalog} value={summary?.catalog?.counts?.monoCatalog || 0} suffix={`mono / ${summary?.catalog?.counts?.synthCatalog || 0} synth`} />
-                        <Text type="secondary">{summary?.sourceFiles?.latestCatalogPath || 'results/*.json not found'}</Text>
-                      </Card>
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Card className="battletoads-card">
-                        <Statistic title={copy.latestSweep} value={summary?.sweepSummary?.counts?.evaluated || 0} suffix={`/ ${summary?.sweepSummary?.counts?.scheduledRuns || 0}`} />
-                        <Text type="secondary">{summary?.sourceFiles?.latestSweepPath || 'results/*.json not found'}</Text>
-                      </Card>
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Card className="battletoads-card">
-                        <Statistic title={copy.adminTsDraft} value={summary?.catalog?.adminTradingSystemDraft?.members?.length || 0} suffix="members" />
-                        <Text type="secondary">{summary?.catalog?.adminTradingSystemDraft?.name || '—'}</Text>
-                      </Card>
-                    </Col>
-                  </Row>
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} md={8}>
+                              <Card className="battletoads-card">
+                                <Statistic title={copy.latestCatalog} value={summary?.catalog?.counts?.monoCatalog || 0} suffix={`mono / ${summary?.catalog?.counts?.synthCatalog || 0} synth`} />
+                                <Text type="secondary">{summary?.sourceFiles?.latestCatalogPath || 'results/*.json not found'}</Text>
+                              </Card>
+                            </Col>
+                            <Col xs={24} md={8}>
+                              <Card className="battletoads-card">
+                                <Statistic title={copy.latestSweep} value={summary?.sweepSummary?.counts?.evaluated || 0} suffix={`/ ${summary?.sweepSummary?.counts?.scheduledRuns || 0}`} />
+                                <Text type="secondary">{summary?.sourceFiles?.latestSweepPath || 'results/*.json not found'}</Text>
+                              </Card>
+                            </Col>
+                            <Col xs={24} md={8}>
+                              <Card className="battletoads-card">
+                                <Statistic title={copy.adminTsDraft} value={summary?.catalog?.adminTradingSystemDraft?.members?.length || 0} suffix="members" />
+                                <Text type="secondary">{summary?.catalog?.adminTradingSystemDraft?.name || '—'}</Text>
+                              </Card>
+                            </Col>
+                          </Row>
 
-                  {summary?.sweepSummary?.portfolioFull ? (
-                    <Row gutter={[16, 16]}>
-                      <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.returnLabel} value={Number(summary.sweepSummary.portfolioFull.totalReturnPercent || 0)} precision={2} suffix="%" /></Card></Col>
-                      <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.drawdown} value={Number(summary.sweepSummary.portfolioFull.maxDrawdownPercent || 0)} precision={2} suffix="%" /></Card></Col>
-                      <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.profitFactor} value={Number(summary.sweepSummary.portfolioFull.profitFactor || 0)} precision={2} /></Card></Col>
-                      <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.trades} value={Number(summary.sweepSummary.portfolioFull.tradesCount || 0)} precision={0} /></Card></Col>
-                    </Row>
-                  ) : null}
+                          {summary?.sweepSummary?.portfolioFull ? (
+                            <Row gutter={[16, 16]}>
+                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.returnLabel} value={Number(summary.sweepSummary.portfolioFull.totalReturnPercent || 0)} precision={2} suffix="%" /></Card></Col>
+                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.drawdown} value={Number(summary.sweepSummary.portfolioFull.maxDrawdownPercent || 0)} precision={2} suffix="%" /></Card></Col>
+                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.profitFactor} value={Number(summary.sweepSummary.portfolioFull.profitFactor || 0)} precision={2} /></Card></Col>
+                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.trades} value={Number(summary.sweepSummary.portfolioFull.tradesCount || 0)} precision={0} /></Card></Col>
+                            </Row>
+                          ) : null}
 
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} xl={14}>
-                      <Card className="battletoads-card" title={copy.recommendedSets}>
-                        <List
-                          dataSource={Object.entries(summary?.recommendedSets || {})}
-                          locale={{ emptyText: <Empty description={copy.noCatalog} /> }}
-                          renderItem={([setName, offers]) => (
-                            <List.Item>
-                              <div style={{ width: '100%' }}>
-                                <Text strong>{setName}</Text>
-                                <div className="saas-offer-badges">
-                                  {(offers || []).map((offer) => (
-                                    <Tag key={offer.offerId} color={offer.strategy.mode === 'mono' ? 'green' : 'blue'}>
-                                      {offer.strategy.market} · {formatNumber(offer.metrics.score)}
-                                    </Tag>
-                                  ))}
-                                </div>
-                              </div>
-                            </List.Item>
-                          )}
-                        />
-                      </Card>
-                    </Col>
-                    <Col xs={24} xl={10}>
-                      <Card className="battletoads-card" title={copy.adminTsDraft} extra={<Button size="small" href="/trading-systems">{copy.openTradingSystems}</Button>}>
-                        <List
-                          dataSource={summary?.catalog?.adminTradingSystemDraft?.members || []}
-                          locale={{ emptyText: <Empty description={copy.noCatalog} /> }}
-                          renderItem={(member) => (
-                            <List.Item>
-                              <Space direction="vertical" size={0}>
-                                <Text strong>{member.strategyName}</Text>
-                                <Text type="secondary">{member.marketMode.toUpperCase()} · {member.market}</Text>
-                              </Space>
-                              <Space>
-                                <Tag color="cyan">{copy.score}: {formatNumber(member.score)}</Tag>
-                                <Tag color="purple">w {formatNumber(member.weight)}</Tag>
-                              </Space>
-                            </List.Item>
-                          )}
-                        />
-                      </Card>
-                    </Col>
-                  </Row>
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} xl={14}>
+                              <Card className="battletoads-card" title={copy.recommendedSets}>
+                                <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.recommendedSetsHint}</Paragraph>
+                                <List
+                                  dataSource={Object.entries(summary?.recommendedSets || {})}
+                                  locale={{ emptyText: <Empty description={copy.noCatalog} /> }}
+                                  renderItem={([setName, offers]) => (
+                                    <List.Item>
+                                      <div style={{ width: '100%' }}>
+                                        <Text strong>{setName}</Text>
+                                        <div className="saas-offer-badges">
+                                          {(offers || []).map((offer) => (
+                                            <Tag key={offer.offerId} color={offer.strategy.mode === 'mono' ? 'green' : 'blue'}>
+                                              {offer.strategy.market} · {formatNumber(offer.metrics.score)}
+                                            </Tag>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </List.Item>
+                                  )}
+                                />
+                              </Card>
+                            </Col>
+                            <Col xs={24} xl={10}>
+                              <Card className="battletoads-card" title={copy.adminTsDraft} extra={<Button size="small" href="/trading-systems">{copy.openTradingSystems}</Button>}>
+                                <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.adminTsDraftHint}</Paragraph>
+                                <List
+                                  dataSource={summary?.catalog?.adminTradingSystemDraft?.members || []}
+                                  locale={{ emptyText: <Empty description={copy.noCatalog} /> }}
+                                  renderItem={(member) => (
+                                    <List.Item>
+                                      <Space direction="vertical" size={0}>
+                                        <Text strong>{member.strategyName}</Text>
+                                        <Text type="secondary">{member.marketMode.toUpperCase()} · {member.market}</Text>
+                                      </Space>
+                                      <Space>
+                                        <Tag color="cyan">{copy.score}: {formatNumber(member.score)}</Tag>
+                                        <Tag color="purple">w {formatNumber(member.weight)}</Tag>
+                                      </Space>
+                                    </List.Item>
+                                  )}
+                                />
+                              </Card>
+                            </Col>
+                          </Row>
 
-                  <Card className="battletoads-card" title={copy.connectedTenants}>
-                    <Table rowKey={(row) => row.tenant.id} columns={tenantColumns} dataSource={summary?.tenants || []} pagination={false} scroll={{ x: 980 }} />
-                  </Card>
+                          <Card className="battletoads-card" title={copy.connectedTenants} extra={<Button type="primary" onClick={() => setAdminTab('create-user')}>{copy.createClient}</Button>}>
+                            <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.adminCreateHint}</Paragraph>
+                            <Table rowKey={(row) => row.tenant.id} columns={tenantColumns} dataSource={summary?.tenants || []} pagination={false} scroll={{ x: 980 }} />
+                          </Card>
 
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} xl={12}>
-                      <Card className="battletoads-card" title={`${copy.strategyClient} · ${copy.planGrid}`}>
-                        <Table
-                          rowKey="code"
-                          columns={planColumns}
-                          dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'strategy_client')}
-                          pagination={false}
-                          scroll={{ x: 980 }}
-                        />
-                      </Card>
-                    </Col>
-                    <Col xs={24} xl={12}>
-                      <Card className="battletoads-card" title={`${copy.algofund} · ${copy.planGrid}`}>
-                        <Table
-                          rowKey="code"
-                          columns={planColumns}
-                          dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'algofund_client')}
-                          pagination={false}
-                          scroll={{ x: 980 }}
-                        />
-                      </Card>
-                    </Col>
-                  </Row>
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} xl={12}>
+                              <Card className="battletoads-card" title={`${copy.strategyClient} · ${copy.planGrid}`}>
+                                <Table
+                                  rowKey="code"
+                                  columns={planColumns}
+                                  dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'strategy_client')}
+                                  pagination={false}
+                                  scroll={{ x: 980 }}
+                                />
+                              </Card>
+                            </Col>
+                            <Col xs={24} xl={12}>
+                              <Card className="battletoads-card" title={`${copy.algofund} · ${copy.planGrid}`}>
+                                <Table
+                                  rowKey="code"
+                                  columns={planColumns}
+                                  dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'algofund_client')}
+                                  pagination={false}
+                                  scroll={{ x: 980 }}
+                                />
+                              </Card>
+                            </Col>
+                          </Row>
 
-                  {publishResponse?.preview ? (
-                    <Card className="battletoads-card" title={copy.publishedTsPreview}>
-                      <Row gutter={[16, 16]}>
-                        <Col xs={24} lg={8}>
-                          <Descriptions column={1} size="small" bordered>
-                            <Descriptions.Item label={copy.sourceSystem}>{publishResponse.sourceSystem?.systemName || '—'}</Descriptions.Item>
-                            <Descriptions.Item label={copy.apiKey}>{publishResponse.sourceSystem?.apiKeyName || '—'}</Descriptions.Item>
-                            <Descriptions.Item label={copy.period}>{formatPeriodLabel(publishPreviewPeriod)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.finalEquity}>{formatMoney(publishResponse.preview.summary?.finalEquity ?? publishPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.returnLabel}>{formatPercent(publishResponse.preview.summary?.totalReturnPercent ?? publishPreviewDerivedSummary?.totalReturnPercent)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.drawdown}>{formatPercent(publishResponse.preview.summary?.maxDrawdownPercent ?? publishPreviewDerivedSummary?.maxDrawdownPercent)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.profitFactor}>{formatNumber(publishResponse.preview.summary?.profitFactor)}</Descriptions.Item>
-                          </Descriptions>
-                        </Col>
-                        <Col xs={24} lg={16}>
-                          {publishPreviewPoints.length > 0 ? <ChartComponent data={publishPreviewPoints} type="line" /> : <Empty description={copy.noCatalog} />}
-                        </Col>
-                      </Row>
-                    </Card>
-                  ) : null}
-                </Space>
+                          {publishResponse?.preview ? (
+                            <Card className="battletoads-card" title={copy.publishedTsPreview}>
+                              <Row gutter={[16, 16]}>
+                                <Col xs={24} lg={8}>
+                                  <Descriptions column={1} size="small" bordered>
+                                    <Descriptions.Item label={copy.sourceSystem}>{publishResponse.sourceSystem?.systemName || '—'}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.apiKey}>{publishResponse.sourceSystem?.apiKeyName || '—'}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.period}>{formatPeriodLabel(publishPreviewPeriod)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(publishResponse.preview.summary?.finalEquity ?? publishPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(publishResponse.preview.summary?.totalReturnPercent ?? publishPreviewDerivedSummary?.totalReturnPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(publishResponse.preview.summary?.maxDrawdownPercent ?? publishPreviewDerivedSummary?.maxDrawdownPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.profitFactor}>{formatNumber(publishResponse.preview.summary?.profitFactor)}</Descriptions.Item>
+                                  </Descriptions>
+                                </Col>
+                                <Col xs={24} lg={16}>
+                                  {publishPreviewPoints.length > 0 ? <ChartComponent data={publishPreviewPoints} type="line" /> : <Empty description={copy.noCatalog} />}
+                                </Col>
+                              </Row>
+                            </Card>
+                          ) : null}
+                        </Space>
+                      ),
+                    },
+                    {
+                      key: 'create-user',
+                      label: 'Создать пользователя',
+                      children: (
+                        <Card className="battletoads-card" title={copy.createClientTitle}>
+                          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                            <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.adminCreateHint}</Paragraph>
+                            <div>
+                              <Text strong>{copy.displayName} *</Text>
+                              <Input style={{ marginTop: 4 }} value={createTenantDisplayName} onChange={(e) => setCreateTenantDisplayName(e.target.value)} placeholder="AlphaFund Client" />
+                            </div>
+                            <div>
+                              <Text strong>{copy.tenantMode} *</Text>
+                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantProductMode} onChange={setCreateTenantProductMode} options={[{ value: 'strategy_client', label: copy.strategyClient }, { value: 'algofund_client', label: copy.algofund }]} />
+                            </div>
+                            <div>
+                              <Text strong>{copy.plan} *</Text>
+                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantPlanCode || undefined} onChange={(v) => setCreateTenantPlanCode(v || '')} options={(summary?.plans || []).filter((p) => p.product_mode === createTenantProductMode).map((p) => ({ value: p.code, label: p.title }))} />
+                            </div>
+                            <div>
+                              <Text strong>{copy.apiKey}</Text>
+                              <Select allowClear style={{ width: '100%', marginTop: 4 }} value={createTenantApiKey || undefined} onChange={(v) => setCreateTenantApiKey(v || '')} options={apiKeyOptions} />
+                            </div>
+                            <div>
+                              <Text strong>Email</Text>
+                              <Input type="email" style={{ marginTop: 4 }} value={createTenantEmail} onChange={(e) => setCreateTenantEmail(e.target.value)} placeholder="client@example.com" />
+                            </div>
+                            <Space>
+                              <Button type="primary" onClick={() => void createTenantAdmin()} loading={actionLoading === 'createTenant'}>{copy.createClient}</Button>
+                              <Button onClick={() => setAdminTab('overview')}>Назад к обзору</Button>
+                            </Space>
+                          </Space>
+                        </Card>
+                      ),
+                    },
+                  ]}
+                />
               ),
             },
             {
@@ -2390,7 +2452,55 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         </Card>
 
                         <Card className="battletoads-card" title={copy.selectedOffers}>
-                          <Table rowKey="offerId" columns={offerColumns} dataSource={strategyState.offers || []} pagination={false} scroll={{ x: 920 }} />
+                          <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.selectedOffersHint}</Paragraph>
+                          {strategyOfferCatalog.length === 0 ? (
+                            <>
+                              <Alert type="warning" showIcon message={copy.selectedOffersEmptyHint} style={{ marginBottom: 12 }} />
+                              <Empty description={copy.noCatalog} />
+                            </>
+                          ) : (
+                            <List
+                              grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
+                              dataSource={strategyOfferCatalog}
+                              renderItem={(offer) => {
+                                const checked = strategyOfferIds.includes(offer.offerId);
+                                return (
+                                  <List.Item key={offer.offerId}>
+                                    <Card
+                                      size="small"
+                                      className="battletoads-card"
+                                      title={<Text strong>{offer.titleRu}</Text>}
+                                      extra={(
+                                        <Checkbox
+                                          checked={checked}
+                                          onChange={(event) => {
+                                            const nextChecked = event.target.checked;
+                                            setStrategyOfferIds((current) => {
+                                              if (nextChecked) {
+                                                return Array.from(new Set([...current, offer.offerId]));
+                                              }
+                                              return current.filter((item) => item !== offer.offerId);
+                                            });
+                                          }}
+                                        />
+                                      )}
+                                    >
+                                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                        <Text type="secondary">{offer.strategy.mode.toUpperCase()} · {offer.strategy.type} · {offer.strategy.market}</Text>
+                                        <Space wrap>
+                                          <Tag color="cyan">{copy.score}: {formatNumber(offer.metrics.score)}</Tag>
+                                          <Tag color={metricColor(Number(offer.metrics.ret || 0), 'return')}>{copy.returnLabel}: {formatPercent(offer.metrics.ret)}</Tag>
+                                          <Tag color={metricColor(Number(offer.metrics.dd || 0), 'drawdown')}>{copy.drawdown}: {formatPercent(offer.metrics.dd)}</Tag>
+                                          <Tag color={metricColor(Number(offer.metrics.pf || 0), 'pf')}>{copy.profitFactor}: {formatNumber(offer.metrics.pf)}</Tag>
+                                          <Tag color="blue">{copy.trades}: {formatNumber(offer.metrics.trades, 0)}</Tag>
+                                        </Space>
+                                      </Space>
+                                    </Card>
+                                  </List.Item>
+                                );
+                              }}
+                            />
+                          )}
                         </Card>
 
                         <Card
@@ -2438,7 +2548,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 style={{ width: '100%', marginTop: 8 }}
                                 value={strategyPreviewOfferId || undefined}
                                 onChange={setStrategyPreviewOfferId}
-                                options={(strategyState.offers || []).map((offer) => ({ value: offer.offerId, label: `${offer.titleRu} · ${offer.strategy.market}` }))}
+                                options={strategyOfferCatalog.map((offer) => ({ value: offer.offerId, label: `${offer.titleRu} · ${offer.strategy.market}` }))}
                               />
                             </Col>
                             <Col xs={24} md={14}>
@@ -2716,37 +2826,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           ].filter((item) => isAdminSurface || item.key === surfaceMode)}
         />
       </Spin>
-      <Modal
-        title={copy.createClientTitle}
-        open={createTenantModalOpen}
-        onCancel={() => setCreateTenantModalOpen(false)}
-        onOk={() => void createTenantAdmin()}
-        confirmLoading={actionLoading === 'createTenant'}
-        okText={copy.createClient}
-      >
-        <Space direction="vertical" style={{ width: '100%' }} size={12}>
-          <div>
-            <Text strong>{copy.displayName} *</Text>
-            <Input style={{ marginTop: 4 }} value={createTenantDisplayName} onChange={(e) => setCreateTenantDisplayName(e.target.value)} placeholder="AlphaFund Client" />
-          </div>
-          <div>
-            <Text strong>{copy.tenantMode} *</Text>
-            <Select style={{ width: '100%', marginTop: 4 }} value={createTenantProductMode} onChange={setCreateTenantProductMode} options={[{ value: 'strategy_client', label: copy.strategyClient }, { value: 'algofund_client', label: copy.algofund }]} />
-          </div>
-          <div>
-            <Text strong>{copy.plan} *</Text>
-            <Select style={{ width: '100%', marginTop: 4 }} value={createTenantPlanCode || undefined} onChange={(v) => setCreateTenantPlanCode(v || '')} options={(summary?.plans || []).filter((p) => p.product_mode === createTenantProductMode).map((p) => ({ value: p.code, label: p.title }))} />
-          </div>
-          <div>
-            <Text strong>{copy.apiKey}</Text>
-            <Select allowClear style={{ width: '100%', marginTop: 4 }} value={createTenantApiKey || undefined} onChange={(v) => setCreateTenantApiKey(v || '')} options={apiKeyOptions} />
-          </div>
-          <div>
-            <Text strong>Email</Text>
-            <Input type="email" style={{ marginTop: 4 }} value={createTenantEmail} onChange={(e) => setCreateTenantEmail(e.target.value)} placeholder="client@example.com" />
-          </div>
-        </Space>
-      </Modal>
     </div>
   );
 };
