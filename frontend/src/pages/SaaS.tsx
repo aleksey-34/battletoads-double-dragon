@@ -405,6 +405,7 @@ type Copy = {
   selectedOffers: string;
   monitoring: string;
   requestQueue: string;
+  requestTenant: string;
   previewTitle: string;
   selectedOffersPreview: string;
   publishedTsPreview: string;
@@ -516,6 +517,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     selectedOffers: 'Офферы для подключения',
     monitoring: 'Monitoring',
     requestQueue: 'Очередь запросов',
+    requestTenant: 'Tenant',
     previewTitle: 'Preview ожиданий',
     selectedOffersPreview: 'SWEEP compare выбранных офферов (4D)',
     publishedTsPreview: 'Preview опубликованного admin TS',
@@ -625,6 +627,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     selectedOffers: 'Offers to connect',
     monitoring: 'Monitoring',
     requestQueue: 'Request queue',
+    requestTenant: 'Tenant',
     previewTitle: 'Expectation preview',
     selectedOffersPreview: 'Selected offers SWEEP compare (4D)',
     publishedTsPreview: 'Published admin TS preview',
@@ -734,6 +737,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     selectedOffers: 'Baglanacak teklifler',
     monitoring: 'Monitoring',
     requestQueue: 'Talep kuyrugu',
+    requestTenant: 'Tenant',
     previewTitle: 'Beklenti onizlemesi',
     selectedOffersPreview: 'Secilen teklifler SWEEP compare (4D)',
     publishedTsPreview: 'Yayinlanan admin TS onizlemesi',
@@ -2022,6 +2026,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   ];
 
   const requestColumns: ColumnsType<AlgofundRequest> = [
+    {
+      title: copy.requestTenant,
+      key: 'tenant',
+      width: 260,
+      render: (_, row) => {
+        const tenantName = String((row as any).tenant_display_name || algofundState?.tenant?.display_name || '').trim();
+        const tenantSlug = String((row as any).tenant_slug || algofundState?.tenant?.slug || '').trim();
+
+        if (tenantName && tenantSlug) {
+          return `${tenantName} (${tenantSlug})`;
+        }
+
+        return tenantName || tenantSlug || '—';
+      },
+    },
     {
       title: 'ID',
       dataIndex: 'id',

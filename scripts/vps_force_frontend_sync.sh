@@ -8,6 +8,43 @@ BACKEND_DIR="${BACKEND_DIR:-$APP_DIR/backend}"
 BUILD_BACKEND="${BUILD_BACKEND:-1}"
 API_SERVICE="${API_SERVICE:-}"
 
+pick_api_service() {
+  local candidates=("btdd-api.service" "btdd-backend.service" "battletoads-backend.service")
+  local service
+
+  for service in "${candidates[@]}"; do
+    if systemctl cat "$service" >/dev/null 2>&1 && systemctl is-active --quiet "$service"; then
+      echo "$service"
+      return
+    fi
+  done
+
+  for service in "${candidates[@]}"; do
+    if systemctl cat "$service" >/dev/null 2>&1; then
+      echo "$service"
+      return
+    fi
+  done
+
+  echo ""
+}
+
+stop_conflicting_api_services() {
+  local selected="$1"
+  local known=("btdd-api.service" "btdd-backend.service" "battletoads-backend.service")
+  local service
+
+  for service in "${known[@]}"; do
+    if [[ "$service" == "$selected" ]]; then
+      continue
+    fi
+    if systemctl is-active --quiet "$service"; then
+      echo "[vps-sync] Stopping conflicting API service: $service"
+      systemctl stop "$service" || true
+    fi
+  done
+}
+
 # Detect nginx static root from config; fallback to known defaults.
 detect_nginx_root() {
   local detected=""
@@ -52,16 +89,15 @@ if [[ "$BUILD_BACKEND" == "1" ]]; then
 
   echo "[vps-sync] Restarting backend API service..."
   if [[ -n "$API_SERVICE" ]]; then
+    stop_conflicting_api_services "$API_SERVICE"
     systemctl restart "$API_SERVICE"
     systemctl is-active --quiet "$API_SERVICE"
     echo "[vps-sync] $API_SERVICE is active"
   else
-    detected_service="$(systemctl list-units --all --type=service --no-legend 2>/dev/null \
-      | awk '{print $1}' \
-      | grep -E '^(btdd-api|battletoads-backend|btdd-backend)\.service$' \
-      | head -1 || true)"
+    detected_service="$(pick_api_service)"
 
     if [[ -n "$detected_service" ]]; then
+      stop_conflicting_api_services "$detected_service"
       systemctl restart "$detected_service"
       systemctl is-active --quiet "$detected_service"
       echo "[vps-sync] $detected_service is active"
