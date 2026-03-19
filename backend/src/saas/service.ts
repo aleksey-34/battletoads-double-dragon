@@ -12,7 +12,7 @@ import {
 } from '../bot/tradingSystems';
 import { getMonitoringLatest } from '../bot/monitoring';
 import { Strategy } from '../config/settings';
-import { db } from '../utils/database';
+import { db, initDB } from '../utils/database';
 import logger from '../utils/logger';
 import { initResearchDb } from '../research/db';
 import { getPreset, listOfferIds } from '../research/presetBuilder';
@@ -332,6 +332,7 @@ const asNumber = (value: unknown, fallback = 0): number => {
 const SAAS_PREVIEW_BARS = Math.max(240, Math.floor(asNumber(process.env.SAAS_PREVIEW_BARS, 1200)));
 const SAAS_PREVIEW_WARMUP_BARS = Math.max(0, Math.floor(asNumber(process.env.SAAS_PREVIEW_WARMUP_BARS, 0)));
 const SAAS_PREVIEW_INITIAL_BALANCE = Math.max(1, asNumber(process.env.SAAS_PREVIEW_INITIAL_BALANCE, 10000));
+const SAAS_ALGOFUND_BASELINE_INITIAL_BALANCE = Math.max(1, asNumber(process.env.SAAS_ALGOFUND_BASELINE_INITIAL_BALANCE, 1000));
 
 const asString = (value: unknown, fallback = ''): string => {
   const text = String(value ?? '').trim();
@@ -675,7 +676,11 @@ const buildFallbackSweepData = (catalog: CatalogData | null): SweepData | null =
   };
 };
 
-const loadCatalogAndSweepWithFallback = async (): Promise<{ catalog: CatalogData | null; sweep: SweepData | null }> => {
+export const loadCatalogAndSweepWithFallback = async (): Promise<{ catalog: CatalogData | null; sweep: SweepData | null }> => {
+  if (!db) {
+    await initDB();
+  }
+
   const sourceCatalog = loadLatestClientCatalog();
   const sourceSweep = loadLatestSweep();
   const apiKeys = await getAvailableApiKeyNames();
@@ -1674,20 +1679,6 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
   return { apiKeyName, systemId: Number(created.id), systemName };
 };
 
-const scaleEquityPreview = (
-  points: Array<{ time: number; equity: number }>,
-  riskMultiplier: number
-): Array<{ time: number; equity: number }> => {
-  if (!Array.isArray(points) || points.length === 0) {
-    return [];
-  }
-  const initial = asNumber(points[0].equity, 0);
-  return points.map((item) => ({
-    time: Number(item.time),
-    equity: Number((initial + (asNumber(item.equity, initial) - initial) * riskMultiplier).toFixed(4)),
-  }));
-};
-
   export const createTenantByAdmin = async (payload: {
     displayName: string;
     productMode: ProductMode;
@@ -2514,32 +2505,25 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
   const period = buildPeriodInfo(sweep);
 
   const sourceSystem = await ensurePublishedSourceSystem(tenantId);
-  const basePreviewResult = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
+  const previewResult = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
     bars: SAAS_PREVIEW_BARS,
     warmupBars: SAAS_PREVIEW_WARMUP_BARS,
     skipMissingSymbols: true,
-    initialBalance: SAAS_PREVIEW_INITIAL_BALANCE,
+    initialBalance: SAAS_ALGOFUND_BASELINE_INITIAL_BALANCE,
+    riskMultiplier,
     commissionPercent: 0.1,
     slippagePercent: 0.05,
     fundingRatePercent: 0,
   });
 
-  const scaledEquity = scaleEquityPreview(basePreviewResult.equityCurve, riskMultiplier);
-  const latest = scaledEquity.length > 0 ? scaledEquity[scaledEquity.length - 1] : null;
-  const initial = scaledEquity.length > 0 ? scaledEquity[0].equity : asNumber(basePreviewResult.summary.initialBalance, 10000);
-  const totalReturnPercent = initial > 0 && latest ? ((latest.equity - initial) / initial) * 100 : asNumber(basePreviewResult.summary.totalReturnPercent, 0) * riskMultiplier;
-
   const preview = {
     riskMultiplier,
     sourceSystem,
     summary: {
-      ...basePreviewResult.summary,
-      finalEquity: latest ? latest.equity : asNumber(basePreviewResult.summary.finalEquity, 0),
-      totalReturnPercent: Number(totalReturnPercent.toFixed(2)),
-      maxDrawdownPercent: Number((asNumber(basePreviewResult.summary.maxDrawdownPercent, 0) * riskMultiplier).toFixed(2)),
+      ...previewResult.summary,
     },
     period,
-    equityCurve: scaledEquity,
+    equityCurve: previewResult.equityCurve,
     blockedByPlan: false,
   };
 

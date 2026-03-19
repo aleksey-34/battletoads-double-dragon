@@ -534,18 +534,40 @@ export const runTradingSystemBacktest = async (
   }
 
   const initial = Number(baseResult.summary.initialBalance);
-  const scaledEquityCurve = baseResult.equityCurve
-    .map((point) => ({
+  const sortedBaseCurve = [...baseResult.equityCurve].sort((left, right) => Number(left.time) - Number(right.time));
+  const recomposedEquityCurve: typeof sortedBaseCurve = [];
+  let prevRiskEquity = Number.isFinite(initial) && initial > 0 ? initial : Number(sortedBaseCurve[0]?.equity || 1000);
+
+  for (let index = 0; index < sortedBaseCurve.length; index += 1) {
+    const point = sortedBaseCurve[index];
+    if (index === 0) {
+      const seeded = {
+        ...point,
+        equity: Number(prevRiskEquity.toFixed(6)),
+      };
+      recomposedEquityCurve.push(seeded);
+      continue;
+    }
+
+    const prevBase = Number(sortedBaseCurve[index - 1]?.equity ?? sortedBaseCurve[0]?.equity ?? prevRiskEquity);
+    const currBase = Number(point.equity);
+    const baseReturn = Number.isFinite(prevBase) && Math.abs(prevBase) > 1e-9
+      ? (currBase / prevBase) - 1
+      : 0;
+    const adjustedReturn = Math.max(-0.99, baseReturn * riskMultiplier);
+    prevRiskEquity = prevRiskEquity * (1 + adjustedReturn);
+
+    recomposedEquityCurve.push({
       ...point,
-      equity: Number((initial + (Number(point.equity) - initial) * riskMultiplier).toFixed(6)),
-    }))
-    .sort((left, right) => Number(left.time) - Number(right.time));
+      equity: Number(prevRiskEquity.toFixed(6)),
+    });
+  }
 
   let peak = initial;
   let maxDrawdownAbsolute = 0;
   let maxDrawdownPercent = 0;
 
-  for (const point of scaledEquityCurve) {
+  for (const point of recomposedEquityCurve) {
     const equity = Number(point.equity);
     if (equity > peak) {
       peak = equity;
@@ -560,12 +582,12 @@ export const runTradingSystemBacktest = async (
     }
   }
 
-  const finalEquity = Number(scaledEquityCurve[scaledEquityCurve.length - 1]?.equity ?? initial);
+  const finalEquity = Number(recomposedEquityCurve[recomposedEquityCurve.length - 1]?.equity ?? initial);
   const totalReturnPercent = initial > 0 ? ((finalEquity / initial) - 1) * 100 : 0;
 
   return {
     ...baseResult,
-    equityCurve: scaledEquityCurve,
+    equityCurve: recomposedEquityCurve,
     summary: {
       ...baseResult.summary,
       finalEquity: Number(finalEquity.toFixed(6)),
