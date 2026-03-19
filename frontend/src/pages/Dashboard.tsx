@@ -2560,7 +2560,7 @@ const Dashboard: React.FC = () => {
                       void fetchStrategies(keyName, { runtimeOnly: next });
                     }}
                   >
-                    {(runtimeOnlyByKey[keyName] ?? true) ? 'Show candidates' : 'Hide candidates'}
+                    {(runtimeOnlyByKey[keyName] ?? true) ? 'Show templates' : 'Hide templates'}
                   </Button>
                   <Button
                     size="small"
@@ -2625,7 +2625,7 @@ const Dashboard: React.FC = () => {
                         type="info"
                         showIcon
                         message={(runtimeOnlyByKey[keyName] ?? true)
-                          ? 'No runtime sets yet. Click "Show candidates" to choose and add sets.'
+                          ? 'No runtime sets yet. Click "Show templates" to choose and add sets.'
                           : 'No set selected: balance, chart and positions remain visible.'}
                       />
                     )
