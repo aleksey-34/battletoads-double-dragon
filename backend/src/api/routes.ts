@@ -680,6 +680,60 @@ router.post('/client/algofund/request', authenticateClient, async (req, res) => 
   }
 });
 
+router.post('/client/api-key', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const exchange = String(req.body?.exchange || '').trim().toLowerCase();
+    const apiKey = String(req.body?.apiKey || '').trim();
+    const secret = String(req.body?.secret || '').trim();
+    const passphrase = String(req.body?.passphrase || '').trim();
+    const testnet = Boolean(req.body?.testnet);
+    const demo = Boolean(req.body?.demo);
+
+    if (!exchange) {
+      return res.status(400).json({ error: 'exchange is required' });
+    }
+    if (!apiKey || !secret) {
+      return res.status(400).json({ error: 'apiKey and secret are required' });
+    }
+
+    const tenantId = Number(session.user.tenantId);
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const keyName = `tenant-${tenantId}-${exchange}-${suffix}`;
+
+    await saveApiKey({
+      name: keyName,
+      exchange,
+      api_key: apiKey,
+      secret,
+      passphrase,
+      speed_limit: 10,
+      testnet,
+      demo,
+    });
+
+    if (session.user.productMode === 'strategy_client') {
+      const state = await updateStrategyClientState(tenantId, {
+        assignedApiKeyName: keyName,
+      });
+      return res.json({ success: true, keyName, state, productMode: session.user.productMode });
+    }
+
+    const state = await updateAlgofundState(tenantId, {
+      assignedApiKeyName: keyName,
+    });
+    return res.json({ success: true, keyName, state, productMode: session.user.productMode });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client api key save error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Применить platform-admin guard ко всем admin маршрутам
 router.use(requirePlatformAdmin);
 

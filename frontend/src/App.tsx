@@ -45,9 +45,9 @@ function AppShell() {
         { key: '3', label: <Link to="/positions">{t('nav.positions', 'Positions')}</Link> },
         { key: '4', label: <Link to="/logs">{t('nav.logs', 'Logs')}</Link> },
         { key: '5', label: <Link to="/backtest">{t('nav.backtest', 'Backtest')}</Link> },
-        { key: '6', label: <Link to="/trading-systems">Trading Systems</Link> },
+        { key: '6', label: <Link to="/trading-systems">{t('nav.tradingSystems', 'Trading Systems')}</Link> },
         { key: '7', label: <Link to="/saas">{t('nav.saas', 'SaaS')}</Link> },
-        { key: '8', label: <Link to="/research">Research</Link> },
+        { key: '8', label: <Link to="/research">{t('nav.research', 'Research')}</Link> },
       ];
 
   const selectedMenuKey = useMemo(() => {

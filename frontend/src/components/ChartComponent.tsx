@@ -244,6 +244,8 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
 
         lastSizeRef.current = { width, height };
         chart.applyOptions({ width, height });
+        chart.timeScale().fitContent();
+        chart.timeScale().scrollToRealTime();
       });
     };
 

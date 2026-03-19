@@ -650,9 +650,9 @@ const TradingSystems: React.FC = () => {
     () => (monitoringPoints || [])
       .map((point) => ({
         time: point.recorded_at ? Math.floor(new Date(point.recorded_at).getTime() / 1000) : 0,
-        value: Number(point.margin_load_percent || 0),
+        value: Number(point.margin_load_percent),
       }))
-      .filter((point) => Number.isFinite(point.time) && point.time > 0)
+      .filter((point) => Number.isFinite(point.time) && point.time > 0 && Number.isFinite(point.value))
       .sort((left, right) => left.time - right.time),
     [monitoringPoints]
   );
@@ -1059,7 +1059,11 @@ const TradingSystems: React.FC = () => {
             </Col>
             <Col xs={24} xl={12}>
               <Card size="small" title="График загрузки маржи (live monitoring)">
-                {marginLoadChartData.length > 0 ? <ChartComponent data={marginLoadChartData} type="line" /> : <Empty description="Нет history по margin load" />}
+                {marginLoadChartData.length > 0 ? (
+                  <ChartComponent data={marginLoadChartData} type="line" />
+                ) : (
+                  <Empty description="Нет history по margin load: метрика еще не собиралась или система не торговала" />
+                )}
               </Card>
             </Col>
           </Row>

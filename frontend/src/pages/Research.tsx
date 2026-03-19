@@ -12,6 +12,7 @@ import {
   InputNumber,
   Modal,
   Popconfirm,
+  Progress,
   Row,
   Select,
   Space,
@@ -387,6 +388,8 @@ export default function Research() {
   const [schedulerLoading, setSchedulerLoading] = useState(false);
   const [schedulerSaving, setSchedulerSaving] = useState(false);
   const [schedulerRunNowLoading, setSchedulerRunNowLoading] = useState(false);
+  const [schedulerRunStartedAt, setSchedulerRunStartedAt] = useState<number | null>(null);
+  const [schedulerRunElapsedSec, setSchedulerRunElapsedSec] = useState(0);
   const [schedulerJob, setSchedulerJob] = useState<SchedulerJob | null>(null);
   const [scheduleHourUtc, setScheduleHourUtc] = useState<number>(3);
   const [scheduleMinuteUtc, setScheduleMinuteUtc] = useState<number>(15);
@@ -451,6 +454,8 @@ export default function Research() {
 
   const runSchedulerNow = async () => {
     setSchedulerRunNowLoading(true);
+    setSchedulerRunStartedAt(Date.now());
+    setSchedulerRunElapsedSec(0);
     try {
       const res = await axios.post<{ result?: { status?: string; details?: Record<string, unknown> } }>('/api/research/scheduler/daily_incremental_sweep/run-now');
       message.success(`Scheduler run finished: ${res.data?.result?.status || 'ok'}`);
@@ -460,8 +465,24 @@ export default function Research() {
       message.error(e?.response?.data?.error || 'Scheduler run failed');
     } finally {
       setSchedulerRunNowLoading(false);
+      setSchedulerRunStartedAt(null);
     }
   };
+
+  useEffect(() => {
+    if (!schedulerRunNowLoading || schedulerRunStartedAt === null) {
+      setSchedulerRunElapsedSec(0);
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      setSchedulerRunElapsedSec(Math.max(0, Math.floor((Date.now() - schedulerRunStartedAt) / 1000)));
+    }, 1000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [schedulerRunNowLoading, schedulerRunStartedAt]);
 
   // ── Fetch profiles ──────────────────────────────────────────────────────────
   const fetchProfiles = useCallback(async (pg = page) => {
@@ -726,6 +747,17 @@ export default function Research() {
               <Text type="secondary">Run count: {schedulerJob?.run_count ?? 0}</Text>
               {schedulerJob?.last_error ? <Text type="danger">Last error: {schedulerJob.last_error}</Text> : null}
             </Space>
+            {schedulerRunNowLoading ? (
+              <div style={{ marginTop: 12, maxWidth: 420 }}>
+                <Text type="secondary">Sweep is running... elapsed {schedulerRunElapsedSec}s</Text>
+                <Progress
+                  percent={Math.min(95, Math.max(5, schedulerRunElapsedSec * 2))}
+                  status="active"
+                  showInfo={false}
+                  strokeColor="#1677ff"
+                />
+              </div>
+            ) : null}
           </Col>
           <Col xs={24} md={10}>
             <Descriptions size="small" column={1} bordered>
