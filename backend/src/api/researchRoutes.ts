@@ -35,6 +35,14 @@ import {
   updateSchedulerJob,
 } from '../research/schedulerService';
 import { importHistoricalArtifactsToResearch, importCandidatesFromSweepCatalog } from '../research/importService';
+import {
+  listResearchSweepTasks,
+  listSweepPairs,
+  markResearchSweepTasks,
+  runSweepFromSelectedTasks,
+  setResearchSweepTaskSelection,
+  syncClientBacktestRequestsToResearchTasks,
+} from '../research/taskService';
 import { db } from '../utils/database';
 import logger from '../utils/logger';
 
@@ -306,6 +314,20 @@ router.get('/sweeps/:id', async (req, res) => {
   }
 });
 
+router.get('/sweeps/:id/pairs', async (req, res) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id) || id <= 0) {
+      return res.status(400).json({ error: 'Invalid sweep id' });
+    }
+    const pairs = await listSweepPairs(id);
+    res.json({ sweepRunId: id, pairs });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
 /**
  * Register a sweep run from an existing JSON file on the VPS filesystem.
  * Does NOT start a new sweep — that is done via the existing scripts.
@@ -397,6 +419,86 @@ router.post('/sweeps/import-from-file', async (req, res) => {
        VALUES (NULL, 'platform_admin', 'research_import_artifacts', ?, CURRENT_TIMESTAMP)`,
       [JSON.stringify({ catalogFilePath: body.catalogFilePath, sweepFilePath: body.sweepFilePath || null, sweepName: body.sweepName || null, imported: result.imported, skipped: result.skipped })]
     );
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TASKS FROM CLIENT REQUESTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.post('/tasks/backtest-requests/sync', async (_req, res) => {
+  try {
+    const result = await syncClientBacktestRequestsToResearchTasks();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/tasks/backtest-requests', async (req, res) => {
+  try {
+    const status = String(req.query.status || '').trim();
+    const onlySelected = String(req.query.onlySelected || '').trim() === '1';
+    const tasks = await listResearchSweepTasks({
+      status: status ? (status as any) : undefined,
+      onlySelected,
+      limit: req.query.limit ? Number(req.query.limit) : undefined,
+    });
+    res.json({ tasks });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.patch('/tasks/backtest-requests/selection', async (req, res) => {
+  try {
+    const taskIds = Array.isArray(req.body?.taskIds) ? req.body.taskIds.map((id: unknown) => Number(id)) : [];
+    const isSelected = Boolean(req.body?.isSelected);
+    const result = await setResearchSweepTaskSelection(taskIds, isSelected);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.patch('/tasks/backtest-requests/mark', async (req, res) => {
+  try {
+    const taskIds = Array.isArray(req.body?.taskIds) ? req.body.taskIds.map((id: unknown) => Number(id)) : [];
+    const status = String(req.body?.status || '').trim() as 'done' | 'ignored' | 'new';
+    if (!['done', 'ignored', 'new'].includes(status)) {
+      return res.status(400).json({ error: 'status must be one of: done | ignored | new' });
+    }
+    const result = await markResearchSweepTasks(taskIds, status);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/tasks/run-sweep', async (req, res) => {
+  try {
+    const result = await runSweepFromSelectedTasks({
+      taskIds: Array.isArray(req.body?.taskIds) ? req.body.taskIds.map((id: unknown) => Number(id)) : undefined,
+      dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
+      dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
+      interval: req.body?.interval ? String(req.body.interval) : undefined,
+      markDone: req.body?.markDone !== false,
+    });
+
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (NULL, 'platform_admin', 'research_run_sweep_from_tasks', ?, CURRENT_TIMESTAMP)`,
+      [JSON.stringify(result)]
+    );
+
     res.json({ success: true, ...result });
   } catch (err) {
     const error = err as Error;

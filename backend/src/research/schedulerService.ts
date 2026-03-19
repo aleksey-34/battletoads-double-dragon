@@ -404,6 +404,7 @@ export const getResearchDbObservability = async (): Promise<Record<string, unkno
     'strategy_profiles',
     'sweep_runs',
     'sweep_artifacts',
+    'research_sweep_tasks',
     'preview_jobs',
     'client_presets',
     'publish_log',
@@ -420,6 +421,7 @@ export const getResearchDbObservability = async (): Promise<Record<string, unkno
     'strategy_client_profiles',
     'algofund_profiles',
     'algofund_start_stop_requests',
+    'strategy_backtest_pair_requests',
     'saas_audit_log',
   ];
 

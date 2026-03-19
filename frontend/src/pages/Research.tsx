@@ -3,6 +3,7 @@ import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Col,
   Descriptions,
   Divider,
@@ -37,6 +38,33 @@ type SweepRun = {
   artifact_file_path: string | null;
   created_at: string;
   completed_at: string | null;
+};
+
+type SweepPair = {
+  market: string;
+  interval: string;
+  profiles: number;
+};
+
+type ResearchSweepTask = {
+  id: number;
+  source: string;
+  source_request_id: number | null;
+  tenant_id: number | null;
+  tenant_name: string;
+  base_symbol: string;
+  quote_symbol: string;
+  interval: string;
+  note: string;
+  request_status: string;
+  status: string;
+  is_selected: number;
+  requested_at: string | null;
+  selected_at: string | null;
+  last_sweep_run_id: number | null;
+  last_sweep_at: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 type StrategyProfile = {
@@ -143,6 +171,10 @@ function SweepPanel({ onSweepSelect }: { onSweepSelect: (id: number | null) => v
   const [registerModal, setRegisterModal] = useState(false);
   const [importArtifactsModal, setImportArtifactsModal] = useState(false);
   const [importArtifactsLoading, setImportArtifactsLoading] = useState(false);
+  const [pairsModalOpen, setPairsModalOpen] = useState(false);
+  const [pairsLoading, setPairsLoading] = useState(false);
+  const [pairsSweepId, setPairsSweepId] = useState<number | null>(null);
+  const [pairs, setPairs] = useState<SweepPair[]>([]);
   const [registerForm] = Form.useForm();
   const [importArtifactsForm] = Form.useForm();
 
@@ -215,6 +247,21 @@ function SweepPanel({ onSweepSelect }: { onSweepSelect: (id: number | null) => v
     }
   };
 
+  const openPairs = async (sweepId: number) => {
+    setPairsModalOpen(true);
+    setPairsSweepId(sweepId);
+    setPairsLoading(true);
+    try {
+      const res = await axios.get<{ pairs: SweepPair[] }>(`/api/research/sweeps/${sweepId}/pairs`);
+      setPairs(res.data?.pairs || []);
+    } catch {
+      message.error('Failed to load sweep pairs');
+      setPairs([]);
+    } finally {
+      setPairsLoading(false);
+    }
+  };
+
   const columns = [
     { title: 'ID', dataIndex: 'id', width: 60 },
     {
@@ -246,6 +293,7 @@ function SweepPanel({ onSweepSelect }: { onSweepSelect: (id: number | null) => v
               Import
             </Button>
           </Tooltip>
+          <Button size="small" onClick={() => void openPairs(row.id)}>Pairs</Button>
         </Space>
       ),
     },
@@ -329,6 +377,27 @@ function SweepPanel({ onSweepSelect }: { onSweepSelect: (id: number | null) => v
           </Form.Item>
         </Form>
       </Modal>
+
+      <Modal
+        title={`Sweep #${pairsSweepId || '—'} pairs`}
+        open={pairsModalOpen}
+        onCancel={() => setPairsModalOpen(false)}
+        footer={<Button onClick={() => setPairsModalOpen(false)}>Close</Button>}
+      >
+        <Table
+          dataSource={pairs}
+          rowKey={(row) => `${row.market}-${row.interval}`}
+          loading={pairsLoading}
+          size="small"
+          pagination={{ pageSize: 8 }}
+          columns={[
+            { title: 'Market', dataIndex: 'market' },
+            { title: 'Interval', dataIndex: 'interval', width: 100 },
+            { title: 'Profiles', dataIndex: 'profiles', width: 100 },
+          ]}
+          locale={{ emptyText: <Empty description="No pairs in this sweep" /> }}
+        />
+      </Modal>
     </Card>
   );
 }
@@ -394,6 +463,14 @@ export default function Research() {
   const [scheduleHourUtc, setScheduleHourUtc] = useState<number>(3);
   const [scheduleMinuteUtc, setScheduleMinuteUtc] = useState<number>(15);
   const [observability, setObservability] = useState<DbObservability | null>(null);
+  const [tasks, setTasks] = useState<ResearchSweepTask[]>([]);
+  const [tasksLoading, setTasksLoading] = useState(false);
+  const [taskSyncLoading, setTaskSyncLoading] = useState(false);
+  const [taskRunLoading, setTaskRunLoading] = useState(false);
+  const [taskInterval, setTaskInterval] = useState('1h');
+  const [taskDateFrom, setTaskDateFrom] = useState('');
+  const [taskDateTo, setTaskDateTo] = useState('');
+  const [taskMarkDone, setTaskMarkDone] = useState(true);
 
   const fetchScheduler = useCallback(async () => {
     setSchedulerLoading(true);
@@ -469,6 +546,85 @@ export default function Research() {
     }
   };
 
+  const fetchTasks = useCallback(async () => {
+    setTasksLoading(true);
+    try {
+      const res = await axios.get<{ tasks: ResearchSweepTask[] }>('/api/research/tasks/backtest-requests', {
+        params: { limit: 500 },
+      });
+      setTasks(res.data?.tasks || []);
+    } catch {
+      message.error('Failed to load sweep tasks');
+    } finally {
+      setTasksLoading(false);
+    }
+  }, []);
+
+  const syncTasks = async () => {
+    setTaskSyncLoading(true);
+    try {
+      const res = await axios.post<{ imported: number }>('/api/research/tasks/backtest-requests/sync');
+      message.success(`Synced tasks: +${res.data?.imported || 0}`);
+      await fetchTasks();
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || 'Failed to sync tasks');
+    } finally {
+      setTaskSyncLoading(false);
+    }
+  };
+
+  const updateSelection = async (taskId: number, isSelected: boolean) => {
+    try {
+      await axios.patch('/api/research/tasks/backtest-requests/selection', {
+        taskIds: [taskId],
+        isSelected,
+      });
+      setTasks((prev) => prev.map((row) => row.id === taskId
+        ? { ...row, is_selected: isSelected ? 1 : 0, status: isSelected ? 'selected' : 'new' }
+        : row));
+    } catch {
+      message.error('Failed to update task selection');
+    }
+  };
+
+  const runSweepFromTasks = async () => {
+    setTaskRunLoading(true);
+    try {
+      const selectedIds = tasks.filter((row) => row.is_selected === 1).map((row) => row.id);
+      const res = await axios.post('/api/research/tasks/run-sweep', {
+        taskIds: selectedIds,
+        dateFrom: taskDateFrom || undefined,
+        dateTo: taskDateTo || undefined,
+        interval: taskInterval || undefined,
+        markDone: taskMarkDone,
+      });
+      message.success(`Task sweep finished: #${res.data?.sweepRunId || 'n/a'}, imported ${res.data?.imported || 0}`);
+      await Promise.all([fetchTasks(), fetchScheduler(), fetchProfiles()]);
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || 'Task sweep failed');
+    } finally {
+      setTaskRunLoading(false);
+    }
+  };
+
+  const markTasks = async (status: 'done' | 'ignored' | 'new') => {
+    const selectedIds = tasks.filter((row) => row.is_selected === 1).map((row) => row.id);
+    if (!selectedIds.length) {
+      message.warning('Select tasks first');
+      return;
+    }
+    try {
+      await axios.patch('/api/research/tasks/backtest-requests/mark', {
+        taskIds: selectedIds,
+        status,
+      });
+      message.success(`Marked ${selectedIds.length} tasks as ${status}`);
+      await fetchTasks();
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || 'Failed to mark tasks');
+    }
+  };
+
   useEffect(() => {
     if (!schedulerRunNowLoading || schedulerRunStartedAt === null) {
       setSchedulerRunElapsedSec(0);
@@ -504,6 +660,7 @@ export default function Research() {
   useEffect(() => { void fetchProfiles(1); setPage(1); }, [filterStatus, filterSweepId]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void fetchProfiles(page); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void fetchScheduler(); }, [fetchScheduler]);
+  useEffect(() => { void fetchTasks(); }, [fetchTasks]);
 
   // ── Fetch API keys for publish modal ───────────────────────────────────────
   useEffect(() => {
@@ -785,6 +942,110 @@ export default function Research() {
             </Descriptions>
           </Col>
         </Row>
+      </Card>
+
+      <Divider />
+
+      <Card
+        title="Backtest Pair Requests -> Sweep Tasks"
+        extra={
+          <Space>
+            <Button onClick={() => void fetchTasks()} loading={tasksLoading}>Refresh</Button>
+            <Button onClick={() => void syncTasks()} loading={taskSyncLoading}>Sync from client requests</Button>
+          </Space>
+        }
+      >
+        <Space wrap style={{ marginBottom: 12 }}>
+          <span>Period:</span>
+          <Input
+            type="date"
+            style={{ width: 150 }}
+            value={taskDateFrom}
+            onChange={(e) => setTaskDateFrom(e.target.value)}
+          />
+          <span>to</span>
+          <Input
+            type="date"
+            style={{ width: 150 }}
+            value={taskDateTo}
+            onChange={(e) => setTaskDateTo(e.target.value)}
+          />
+          <Input
+            style={{ width: 90 }}
+            value={taskInterval}
+            onChange={(e) => setTaskInterval(e.target.value)}
+            placeholder="1h"
+          />
+          <Checkbox checked={taskMarkDone} onChange={(e) => setTaskMarkDone(e.target.checked)}>
+            Mark done after run
+          </Checkbox>
+          <Button type="primary" loading={taskRunLoading} onClick={() => void runSweepFromTasks()}>
+            Run sweep from selected
+          </Button>
+          <Button onClick={() => void markTasks('done')}>Mark done</Button>
+          <Button onClick={() => void markTasks('ignored')}>Mark ignored</Button>
+          <Button onClick={() => void markTasks('new')}>Reset to new</Button>
+        </Space>
+
+        <Table
+          dataSource={tasks}
+          rowKey="id"
+          loading={tasksLoading}
+          size="small"
+          pagination={{ pageSize: 12 }}
+          locale={{ emptyText: <Empty description="No tasks yet. Sync from client requests." /> }}
+          columns={[
+            {
+              title: '',
+              width: 44,
+              render: (_: unknown, row: ResearchSweepTask) => (
+                <Checkbox
+                  checked={row.is_selected === 1}
+                  onChange={(e) => void updateSelection(row.id, e.target.checked)}
+                />
+              ),
+            },
+            { title: 'ID', dataIndex: 'id', width: 65 },
+            {
+              title: 'Market',
+              render: (_: unknown, row: ResearchSweepTask) => [row.base_symbol, row.quote_symbol].filter(Boolean).join('/') || row.base_symbol,
+            },
+            { title: 'Interval', dataIndex: 'interval', width: 80 },
+            {
+              title: 'Tenant',
+              render: (_: unknown, row: ResearchSweepTask) => row.tenant_name || `#${row.tenant_id || '—'}`,
+            },
+            {
+              title: 'Status',
+              dataIndex: 'status',
+              width: 110,
+              render: (v: string) => <Tag color={statusColor(v)}>{v}</Tag>,
+            },
+            {
+              title: 'Request',
+              dataIndex: 'request_status',
+              width: 110,
+              render: (v: string) => <Tag>{v}</Tag>,
+            },
+            {
+              title: 'Requested',
+              dataIndex: 'requested_at',
+              width: 120,
+              render: (v: string | null) => (v || '').slice(0, 10) || '—',
+            },
+            {
+              title: 'Last sweep',
+              dataIndex: 'last_sweep_run_id',
+              width: 90,
+              render: (v: number | null) => (v ? `#${v}` : '—'),
+            },
+            {
+              title: 'Note',
+              dataIndex: 'note',
+              render: (v: string) => v || '—',
+            },
+          ]}
+        />
       </Card>
 
       <Divider />

@@ -416,6 +416,20 @@ export const initDB = async () => {
       FOREIGN KEY (tenant_id) REFERENCES tenants(id)
     );
 
+    CREATE TABLE IF NOT EXISTS strategy_backtest_pair_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL,
+      base_symbol TEXT NOT NULL,
+      quote_symbol TEXT DEFAULT '',
+      interval TEXT DEFAULT '1h',
+      note TEXT DEFAULT '',
+      status TEXT DEFAULT 'pending',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      decided_at TEXT,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
     CREATE TABLE IF NOT EXISTS saas_audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER,
@@ -449,6 +463,9 @@ export const initDB = async () => {
 
     CREATE INDEX IF NOT EXISTS idx_algofund_requests_tenant
       ON algofund_start_stop_requests (tenant_id, status, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_strategy_backtest_pair_requests_tenant
+      ON strategy_backtest_pair_requests (tenant_id, status, created_at DESC);
 
     CREATE INDEX IF NOT EXISTS idx_saas_audit_tenant
       ON saas_audit_log (tenant_id, created_at DESC);

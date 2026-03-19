@@ -467,6 +467,103 @@ router.patch('/client/strategy/profile', authenticateClient, async (req, res) =>
   }
 });
 
+router.get('/client/strategy/backtest-requests', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+    if (session.user.productMode !== 'strategy_client') {
+      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
+    }
+
+    const rows = await db.all(
+      `SELECT id, tenant_id, base_symbol, quote_symbol, interval, note, status, created_at, decided_at
+       FROM strategy_backtest_pair_requests
+       WHERE tenant_id = ?
+       ORDER BY id DESC
+       LIMIT 100`,
+      [Number(session.user.tenantId)]
+    );
+
+    res.json({ success: true, requests: rows || [] });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client strategy backtest request list error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/client/strategy/backtest-request', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+    if (session.user.productMode !== 'strategy_client') {
+      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
+    }
+
+    const market = String(req.body?.market || '').trim().toUpperCase();
+    const baseSymbolRaw = String(req.body?.baseSymbol || '').trim().toUpperCase();
+    const quoteSymbolRaw = String(req.body?.quoteSymbol || '').trim().toUpperCase();
+    const interval = String(req.body?.interval || '1h').trim();
+    const note = String(req.body?.note || '').trim().slice(0, 400);
+
+    let baseSymbol = baseSymbolRaw;
+    let quoteSymbol = quoteSymbolRaw;
+
+    if (!baseSymbol && market) {
+      if (market.includes('/')) {
+        const [base, quote] = market.split('/');
+        baseSymbol = String(base || '').trim().toUpperCase();
+        quoteSymbol = String(quote || '').trim().toUpperCase();
+      } else {
+        baseSymbol = market;
+      }
+    }
+
+    if (!baseSymbol) {
+      return res.status(400).json({ error: 'market or baseSymbol is required' });
+    }
+
+    const inserted = await db.run(
+      `INSERT INTO strategy_backtest_pair_requests (
+         tenant_id, base_symbol, quote_symbol, interval, note, status, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [Number(session.user.tenantId), baseSymbol, quoteSymbol, interval || '1h', note]
+    );
+
+    const requestId = Number(inserted?.lastID || 0);
+
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (?, 'client', 'client_strategy_backtest_pair_request', ?, CURRENT_TIMESTAMP)`,
+      [
+        Number(session.user.tenantId),
+        JSON.stringify({ requestId, baseSymbol, quoteSymbol, interval, note }),
+      ]
+    );
+
+    res.json({
+      success: true,
+      request: {
+        id: requestId,
+        tenant_id: Number(session.user.tenantId),
+        base_symbol: baseSymbol,
+        quote_symbol: quoteSymbol,
+        interval: interval || '1h',
+        note,
+        status: 'pending',
+      },
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client strategy backtest request create error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/client/strategy/preview', authenticateClient, async (req, res) => {
   try {
     const session = (req as any).clientAuth;

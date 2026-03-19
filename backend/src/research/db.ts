@@ -213,6 +213,31 @@ const applySchema = async (db: Database<sqlite3.Database, sqlite3.Statement>): P
 
     CREATE INDEX IF NOT EXISTS idx_research_scheduler_due
       ON research_scheduler_jobs (is_enabled, next_run_at);
+
+    CREATE TABLE IF NOT EXISTS research_sweep_tasks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source TEXT NOT NULL DEFAULT 'client_backtest_request',
+      source_request_id INTEGER,
+      tenant_id INTEGER,
+      tenant_name TEXT DEFAULT '',
+      base_symbol TEXT NOT NULL,
+      quote_symbol TEXT DEFAULT '',
+      interval TEXT DEFAULT '1h',
+      note TEXT DEFAULT '',
+      request_status TEXT DEFAULT 'pending',
+      status TEXT DEFAULT 'new',
+      is_selected BOOLEAN DEFAULT 0,
+      requested_at TEXT,
+      selected_at TEXT,
+      last_sweep_run_id INTEGER,
+      last_sweep_at TEXT,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE (source, source_request_id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_research_sweep_tasks_status
+      ON research_sweep_tasks (status, is_selected, created_at DESC);
   `);
 
   // Ensure demo offer data exists for preview demo

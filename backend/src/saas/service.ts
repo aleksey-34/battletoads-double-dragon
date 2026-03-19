@@ -1780,6 +1780,12 @@ export const getSaasAdminSummary = async () => {
   const recommendedSets = buildRecommendedSets(catalog);
   const tenants = await listTenantSummaries();
   const plans = await listPlans();
+  const backtestRequestCount = await db.get(
+    `SELECT
+       SUM(CASE WHEN status IN ('pending', 'approved', 'in_sweep') THEN 1 ELSE 0 END) AS pending,
+       COUNT(*) AS total
+     FROM strategy_backtest_pair_requests`
+  ) as { pending?: number; total?: number } | undefined;
 
   return {
     sourceFiles: {
@@ -1792,6 +1798,10 @@ export const getSaasAdminSummary = async () => {
     tenants,
     plans,
     apiKeys,
+    backtestPairRequests: {
+      pending: Number(backtestRequestCount?.pending || 0),
+      total: Number(backtestRequestCount?.total || 0),
+    },
   };
 };
 

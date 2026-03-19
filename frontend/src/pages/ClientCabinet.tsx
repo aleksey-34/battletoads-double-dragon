@@ -137,6 +137,18 @@ type AlgofundRequest = {
   created_at: string;
 };
 
+type StrategyBacktestPairRequest = {
+  id: number;
+  tenant_id: number;
+  base_symbol: string;
+  quote_symbol: string;
+  interval: string;
+  note: string;
+  status: 'pending' | 'approved' | 'in_sweep' | 'done' | 'rejected' | 'ignored';
+  created_at: string;
+  decided_at: string | null;
+};
+
 type AlgofundState = {
   tenant: Tenant;
   plan: Plan | null;
@@ -279,6 +291,10 @@ const ClientCabinet: React.FC = () => {
   const [strategyTradeInput, setStrategyTradeInput] = useState(5);
   const [strategySelectionPreview, setStrategySelectionPreview] = useState<StrategySelectionPreviewResponse | null>(null);
   const [strategySelectionPreviewLoading, setStrategySelectionPreviewLoading] = useState(false);
+  const [backtestRequests, setBacktestRequests] = useState<StrategyBacktestPairRequest[]>([]);
+  const [requestMarket, setRequestMarket] = useState('');
+  const [requestInterval, setRequestInterval] = useState('1h');
+  const [requestNote, setRequestNote] = useState('');
 
   const [algofundRiskMultiplier, setAlgofundRiskMultiplier] = useState(1);
   const [algofundNote, setAlgofundNote] = useState('');
@@ -332,6 +348,12 @@ const ClientCabinet: React.FC = () => {
 
     setAlgofundRiskMultiplier(toFinite(algofundState.profile.risk_multiplier, 1));
   }, [algofundState]);
+
+  useEffect(() => {
+    if (workspace?.productMode === 'strategy_client') {
+      void loadBacktestRequests();
+    }
+  }, [workspace?.productMode]);
 
   const logoutClient = async () => {
     try {
@@ -400,6 +422,40 @@ const ClientCabinet: React.FC = () => {
       setStrategySelectionPreview(null);
     } finally {
       setStrategySelectionPreviewLoading(false);
+    }
+  };
+
+  const loadBacktestRequests = async () => {
+    try {
+      const response = await axios.get<{ requests: StrategyBacktestPairRequest[] }>('/api/client/strategy/backtest-requests');
+      setBacktestRequests(response.data?.requests || []);
+    } catch {
+      // Optional endpoint on older backend versions.
+    }
+  };
+
+  const sendBacktestPairRequest = async () => {
+    const market = requestMarket.trim().toUpperCase();
+    if (!market) {
+      messageApi.warning('Enter market, for example SOLUSDT or BTC/ETH');
+      return;
+    }
+
+    setActionLoading('strategy-backtest-request');
+    try {
+      await axios.post('/api/client/strategy/backtest-request', {
+        market,
+        interval: requestInterval || '1h',
+        note: requestNote,
+      });
+      messageApi.success('Backtest pair request sent');
+      setRequestMarket('');
+      setRequestNote('');
+      await loadBacktestRequests();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to send request'));
+    } finally {
+      setActionLoading('');
     }
   };
 
@@ -791,6 +847,56 @@ const ClientCabinet: React.FC = () => {
                       <Empty description={t('client.strategy.previewEmpty', 'No preview chart yet')} />
                     )}
                   </Spin>
+                </Card>
+
+                <Card className="battletoads-card" title="Request New Pair Backtest">
+                  <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                    <Space wrap>
+                      <Input
+                        style={{ width: 240 }}
+                        placeholder="Market: SOLUSDT or BTC/ETH"
+                        value={requestMarket}
+                        onChange={(event) => setRequestMarket(event.target.value)}
+                      />
+                      <Input
+                        style={{ width: 90 }}
+                        placeholder="Interval"
+                        value={requestInterval}
+                        onChange={(event) => setRequestInterval(event.target.value)}
+                      />
+                    </Space>
+                    <Input.TextArea
+                      rows={2}
+                      value={requestNote}
+                      onChange={(event) => setRequestNote(event.target.value)}
+                      placeholder="Optional note for admin/research"
+                    />
+                    <Space wrap>
+                      <Button type="primary" loading={actionLoading === 'strategy-backtest-request'} onClick={() => void sendBacktestPairRequest()}>
+                        Send request
+                      </Button>
+                      <Button onClick={() => void loadBacktestRequests()}>Refresh list</Button>
+                    </Space>
+
+                    <List
+                      size="small"
+                      dataSource={backtestRequests}
+                      locale={{ emptyText: <Empty description="No pair requests yet" /> }}
+                      renderItem={(item) => (
+                        <List.Item>
+                          <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                            <Space wrap>
+                              <Typography.Text strong>{[item.base_symbol, item.quote_symbol].filter(Boolean).join('/') || item.base_symbol}</Typography.Text>
+                              <Tag>{item.interval}</Tag>
+                              <Tag color={item.status === 'done' ? 'success' : item.status === 'rejected' ? 'error' : 'processing'}>{item.status}</Tag>
+                              <Typography.Text type="secondary">#{item.id}</Typography.Text>
+                            </Space>
+                            {item.note ? <Typography.Text type="secondary">{item.note}</Typography.Text> : null}
+                          </Space>
+                        </List.Item>
+                      )}
+                    />
+                  </Space>
                 </Card>
               </>
             ) : null}
