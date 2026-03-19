@@ -47,11 +47,13 @@ type LastOHLC = {
 
 type DetectionSource = 'wick' | 'close';
 type MarginType = 'cross' | 'isolated';
+type StrategyKind = 'DD_BattleToads' | 'zz_breakout' | 'stat_arb_zscore';
 
 type DDStrategy = {
   id: number;
   name: string;
-  strategy_type: 'DD_BattleToads';
+  strategy_type: StrategyKind;
+  market_mode: 'mono' | 'synthetic';
   is_active: boolean;
   display_on_chart: boolean;
   take_profit_percent: number;
@@ -710,7 +712,12 @@ const parseStrategy = (raw: any): DDStrategy => {
   return {
     id: Number(raw?.id || 0),
     name: String(raw?.name || 'DD_BattleToads'),
-    strategy_type: 'DD_BattleToads',
+    strategy_type: String(raw?.strategy_type || 'DD_BattleToads') === 'zz_breakout'
+      ? 'zz_breakout'
+      : String(raw?.strategy_type || 'DD_BattleToads') === 'stat_arb_zscore'
+        ? 'stat_arb_zscore'
+        : 'DD_BattleToads',
+    market_mode: String(raw?.market_mode || 'synthetic') === 'mono' ? 'mono' : 'synthetic',
     is_active: readBoolean(raw?.is_active, true),
     display_on_chart: readBoolean(raw?.display_on_chart, true),
     take_profit_percent: readNumber(raw?.take_profit_percent, 7.5),
@@ -780,6 +787,7 @@ const Dashboard: React.FC = () => {
   const [strategyDetailsErrorByKey, setStrategyDetailsErrorByKey] = useState<{ [key: string]: { [strategyId: string]: string } }>({});
   const [activeStrategyPanelsByKey, setActiveStrategyPanelsByKey] = useState<{ [key: string]: string[] }>({});
   const [newStrategyNameByKey, setNewStrategyNameByKey] = useState<{ [key: string]: string }>({});
+  const [newSetStrategyTypeByKey, setNewSetStrategyTypeByKey] = useState<{ [key: string]: StrategyKind }>({});
   const [strategyActionLoading, setStrategyActionLoading] = useState<{ [key: string]: boolean }>({});
   const [accountRefreshLoadingByKey, setAccountRefreshLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [refreshAllAccountsLoading, setRefreshAllAccountsLoading] = useState<boolean>(false);
@@ -1190,30 +1198,22 @@ const Dashboard: React.FC = () => {
   };
 
   const getDefaultStrategyBinding = (keyName: string) => {
-    const keyStrategies = strategiesByKey[keyName] || [];
-    const sourceStrategy = keyStrategies[0];
-
-    if (sourceStrategy) {
+    const keySettings = chartSettings[keyName] || defaultChartSetting();
+    if (keySettings.type === 'synthetic') {
       return {
-        base: String(sourceStrategy.base_symbol || 'BTCUSDT').toUpperCase(),
-        quote: String(sourceStrategy.quote_symbol || 'ETHUSDT').toUpperCase(),
-        interval: String(sourceStrategy.interval || '1h'),
-        baseCoef: Number(sourceStrategy.base_coef) || 1,
-        quoteCoef: Number(sourceStrategy.quote_coef) || 1,
+        base: String(keySettings.base || 'BTCUSDT').toUpperCase(),
+        quote: String(keySettings.quote || 'ETHUSDT').toUpperCase(),
+        interval: String(keySettings.interval || '1h'),
+        baseCoef: Number(keySettings.baseCoef) || 1,
+        quoteCoef: Number(keySettings.quoteCoef) || 1,
       };
     }
 
-    const availableSymbols = Array.from(
-      new Set((symbols[keyName] || []).map((symbol) => String(symbol || '').toUpperCase()).filter((symbol) => Boolean(symbol)))
-    );
-
-    const base = availableSymbols[0] || 'BTCUSDT';
-    const quote = availableSymbols.find((symbol) => symbol !== base) || (base === 'ETHUSDT' ? 'BTCUSDT' : 'ETHUSDT');
-
+    const monoSymbol = String(keySettings.symbol || 'BTCUSDT').toUpperCase();
     return {
-      base,
-      quote,
-      interval: '1h',
+      base: monoSymbol,
+      quote: 'USDT',
+      interval: String(keySettings.interval || '1h'),
       baseCoef: 1,
       quoteCoef: 1,
     };
@@ -1412,15 +1412,18 @@ const Dashboard: React.FC = () => {
 
   const addStrategy = async (keyName: string) => {
     const strategyBinding = getDefaultStrategyBinding(keyName);
+    const settings = chartSettings[keyName] || defaultChartSetting();
 
-    const name = (newStrategyNameByKey[keyName] || '').trim() || 'DD_BattleToads';
+    const strategyType = newSetStrategyTypeByKey[keyName] || 'DD_BattleToads';
+    const name = (newStrategyNameByKey[keyName] || '').trim() || strategyType;
 
     try {
       setStrategyActionLoading((prev) => ({ ...prev, [`${keyName}:new`]: true }));
 
       const createRes = await axios.post(`/api/strategies/${keyName}`, {
         name,
-        strategy_type: 'DD_BattleToads',
+        strategy_type: strategyType,
+        market_mode: settings.type === 'mono' ? 'mono' : 'synthetic',
         display_on_chart: true,
         show_settings: true,
         show_chart: true,
@@ -1459,11 +1462,11 @@ const Dashboard: React.FC = () => {
       });
 
       setNewStrategyNameByKey((prev) => ({ ...prev, [keyName]: '' }));
-      message.success(`Strategy ${name} added`);
+      message.success(`Set ${name} added`);
       await fetchStrategies(keyName);
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || 'Failed to add strategy');
+      message.error(error?.response?.data?.error || 'Failed to add set');
     } finally {
       setStrategyActionLoading((prev) => ({ ...prev, [`${keyName}:new`]: false }));
     }
@@ -2103,6 +2106,7 @@ const Dashboard: React.FC = () => {
     const marginStats = calculateMarginStats(keyBalances, keyPositions);
     const activeStrategyPanels = activeStrategyPanelsByKey[keyName] || [];
     const newStrategyName = newStrategyNameByKey[keyName] || '';
+    const newSetStrategyType = newSetStrategyTypeByKey[keyName] || 'DD_BattleToads';
     const shownOHLC = keyHoverOHLC || keyLastOHLC;
     const ohlcTitle = keyHoverOHLC ? 'Hovered OHLC' : 'Last OHLC';
     const monitoringPayload = monitoringByKey[keyName] || { points: [], latest: null };
@@ -2125,6 +2129,17 @@ const Dashboard: React.FC = () => {
     const runningStrategies = keyStrategies.filter((strategy) => strategy.is_active).length;
     const pausedStrategies = Math.max(0, totalStrategies - runningStrategies);
     const errorStrategies = keyStrategies.filter((strategy) => Boolean(String(strategy.last_error || '').trim())).length;
+    const setTypeOptions: Array<{ value: StrategyKind; label: string }> = [
+      { value: 'DD_BattleToads', label: 'DD' },
+      { value: 'zz_breakout', label: 'ZZ' },
+      { value: 'stat_arb_zscore', label: 'HD' },
+    ];
+    const strategyTypeLabel = (value: StrategyKind): string => {
+      if (value === 'zz_breakout') return 'ZZ';
+      if (value === 'stat_arb_zscore') return 'HD';
+      return 'DD';
+    };
+    const currentModeLabel = settings.type === 'mono' ? 'mono' : 'synthetic';
 
     return {
       key: String(key.id),
@@ -2133,7 +2148,7 @@ const Dashboard: React.FC = () => {
           <span>{key.name} ({key.exchange})</span>
           <StatusIndicator status={keyStatus.status} message={keyStatus.message} />
           <span style={{ fontSize: 12, color: '#666666' }}>API: {keyStatusText}</span>
-          <Tag color="blue">strategies: {keyStrategiesTotal}</Tag>
+          <Tag color="blue">sets: {keyStrategiesTotal}</Tag>
           <Tag color="green">running: {runningStrategies}</Tag>
           <Tag color="orange">paused: {pausedStrategies}</Tag>
           {errorStrategies > 0 ? <Tag color="red">errors: {errorStrategies}</Tag> : null}
@@ -2468,14 +2483,21 @@ const Dashboard: React.FC = () => {
 
           <Row style={{ marginTop: 16 }}>
             <Col span={24}>
-              <Card title="Strategies: DD_BattleToads">
+              <Card title="Sets">
                 <Space style={{ marginBottom: 12 }} wrap>
                   <Input
-                    placeholder="Strategy name"
+                    placeholder="Set name"
                     value={newStrategyName}
                     onChange={(e) => setNewStrategyNameByKey((prev) => ({ ...prev, [keyName]: e.target.value }))}
                     style={{ width: 260 }}
                     disabled={!keyActive}
+                  />
+                  <Select
+                    value={newSetStrategyType}
+                    style={{ width: 180 }}
+                    onChange={(value) => setNewSetStrategyTypeByKey((prev) => ({ ...prev, [keyName]: value as StrategyKind }))}
+                    disabled={!keyActive}
+                    options={setTypeOptions}
                   />
                   <Button
                     type="primary"
@@ -2485,10 +2507,11 @@ const Dashboard: React.FC = () => {
                     loading={Boolean(strategyActionLoading[`${keyName}:new`] && keyActive)}
                     disabled={!keyActive}
                   >
-                    Add strategy
+                    Add set
                   </Button>
                   <Tag color="blue">Chart preview is configured once in API key Chart Settings</Tag>
-                  <Tag color="green">Trading pair is configured per strategy below</Tag>
+                  <Tag color="green">New set mode: {currentModeLabel} (from chart settings)</Tag>
+                  <Tag color="purple">Type: {strategyTypeLabel(newSetStrategyType)} | Name: set_name | Strategy: DD/ZZ/HD</Tag>
                   <Tag color="cyan">rendered: {visibleStrategies.length}/{totalStrategies}</Tag>
                   {!keyFullLoaded ? <Tag color="gold">light mode: {totalStrategies}/{keyStrategiesTotal}</Tag> : null}
                   {!keyFullLoaded ? (
@@ -2602,8 +2625,8 @@ const Dashboard: React.FC = () => {
                         type="info"
                         showIcon
                         message={(runtimeOnlyByKey[keyName] ?? true)
-                          ? 'No runtime strategies yet. Click "Show candidates" to choose and add strategies.'
-                          : 'No strategy selected: balance, chart and positions remain visible.'}
+                          ? 'No runtime sets yet. Click "Show candidates" to choose and add sets.'
+                          : 'No set selected: balance, chart and positions remain visible.'}
                       />
                     )
                     : (
@@ -2682,6 +2705,8 @@ const Dashboard: React.FC = () => {
                                 <span>{strategy.name}</span>
                                 <Badge status={strategyBadgeStatus} text={strategyBadgeText} />
                                 <Tag color={strategyStatus.color}>{strategyStatus.label}</Tag>
+                                <Tag color="geekblue">set type: {strategyTypeLabel(strategy.strategy_type)}</Tag>
+                                <Tag color={strategy.market_mode === 'mono' ? 'green' : 'blue'}>{strategy.market_mode}</Tag>
                                 {strategy.is_runtime ? <Tag color="purple">runtime</Tag> : null}
                                 {strategy.is_archived ? <Tag color="default">archived</Tag> : null}
                                 {strategy.origin && strategy.origin !== 'manual' ? <Tag color="geekblue">{strategy.origin}</Tag> : null}
