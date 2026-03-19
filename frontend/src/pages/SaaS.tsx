@@ -212,6 +212,10 @@ type SaasSummary = {
   tenants: TenantSummary[];
   plans: Plan[];
   apiKeys: string[];
+  backtestPairRequests?: {
+    pending: number;
+    total: number;
+  };
 };
 
 type StrategyClientState = {
@@ -334,6 +338,7 @@ type AlgofundState = {
       systemName: string;
     } | null;
     summary?: {
+      initialBalance?: number;
       finalEquity?: number;
       totalReturnPercent?: number;
       maxDrawdownPercent?: number;
@@ -445,6 +450,8 @@ type Copy = {
   previewUsesNearestPreset: string;
   previewPlanCapHint: string;
   previewRefreshing: string;
+  riskApplied: string;
+  initialBalance: string;
   openTradingSystems: string;
   persistedBucket: string;
   pending: string;
@@ -554,6 +561,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     previewUsesNearestPreset: 'Preview использует ближайший пресет и при сохранении маппится в low / medium / high.',
     previewPlanCapHint: 'В админ-режиме preview можно смотреть выше лимита тарифа, но сохранение все равно ограничивается тарифным cap.',
     previewRefreshing: 'Пересчитываем preview...',
+    riskApplied: 'Риск (множитель)',
+    initialBalance: 'Начальный баланс',
     openTradingSystems: 'Открыть Trading Systems',
     persistedBucket: 'Сохраняемый bucket',
     pending: 'Ожидает',
@@ -661,6 +670,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     previewUsesNearestPreset: 'Preview uses the nearest preset and save still maps to low / medium / high.',
     previewPlanCapHint: 'In admin mode you can preview above the plan cap, but saving still respects the subscribed cap.',
     previewRefreshing: 'Refreshing preview...',
+    riskApplied: 'Risk (multiplier)',
+    initialBalance: 'Initial balance',
     openTradingSystems: 'Open Trading Systems',
     persistedBucket: 'Saved bucket',
     pending: 'Pending',
@@ -768,6 +779,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     previewUsesNearestPreset: 'Onizleme en yakin preseti kullanir ve kayit sirasinda yine low / medium / high olarak saklanir.',
     previewPlanCapHint: 'Admin modunda plan limitinin ustunu onizleyebilirsiniz, ancak kayit yine mevcut plan limitine gore yapilir.',
     previewRefreshing: 'Onizleme guncelleniyor...',
+    riskApplied: 'Risk (carpan)',
+    initialBalance: 'Baslangic bakiyesi',
     openTradingSystems: 'Trading Systems ac',
     persistedBucket: 'Kaydedilecek bucket',
     pending: 'Bekliyor',
@@ -2156,6 +2169,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
 
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} md={12}>
+                              <Card
+                                className="battletoads-card"
+                                title="Client backtest pair requests"
+                                extra={<Button size="small" href="/research">Open Research</Button>}
+                              >
+                                <Space>
+                                  <Tag color="processing">pending: {Number(summary?.backtestPairRequests?.pending || 0)}</Tag>
+                                  <Tag>total: {Number(summary?.backtestPairRequests?.total || 0)}</Tag>
+                                </Space>
+                                <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                                  Build Sweep tasks from requests in Research page, select by checkbox, then run with period.
+                                </Paragraph>
+                              </Card>
+                            </Col>
+                          </Row>
+
                           {summary?.sweepSummary?.portfolioFull ? (
                             <Row gutter={[16, 16]}>
                               <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.returnLabel} value={Number(summary.sweepSummary.portfolioFull.totalReturnPercent || 0)} precision={2} suffix="%" /></Card></Col>
@@ -2772,6 +2803,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Descriptions column={1} size="small" bordered>
                                     <Descriptions.Item label={copy.sourceSystem}>{algofundState.preview?.sourceSystem?.systemName || '—'}</Descriptions.Item>
                                     <Descriptions.Item label={copy.period}>{formatPeriodLabel(algofundPreviewPeriod)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.riskApplied}>
+                                      <Tag color={Number(algofundState.preview?.riskMultiplier ?? 1) === 1 ? 'green' : 'blue'}>
+                                        {formatNumber(algofundState.preview?.riskMultiplier ?? algofundRiskMultiplier)}x
+                                      </Tag>
+                                      {Number(algofundState.preview?.riskMultiplier ?? 1) === 1 ? <span style={{ fontSize: 11, color: '#888', marginLeft: 4 }}>= Trading Systems baseline</span> : null}
+                                    </Descriptions.Item>
+                                    <Descriptions.Item label={copy.initialBalance}>{formatMoney(algofundState.preview?.summary?.initialBalance)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.finalEquity}>{formatMoney(algofundState.preview?.summary?.finalEquity ?? algofundPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.returnLabel}>{formatPercent(algofundState.preview?.summary?.totalReturnPercent ?? algofundPreviewDerivedSummary?.totalReturnPercent)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.drawdown}>{formatPercent(algofundState.preview?.summary?.maxDrawdownPercent ?? algofundPreviewDerivedSummary?.maxDrawdownPercent)}</Descriptions.Item>
