@@ -181,7 +181,7 @@ type Copy = {
 const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
   ru: {
     title: 'Trading Systems',
-    subtitle: 'Состав торговых систем, быстрый backtest, анализ и liquidity suggestions.',
+    subtitle: 'Ручные торговые системы (настройка админом): состав, веса, backtest, анализ и liquidity suggestions. Это отдельный слой от sweep-профилей.',
     apiKey: 'API-ключ',
     refresh: 'Обновить',
     systems: 'Системы',
@@ -212,7 +212,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
   },
   en: {
     title: 'Trading Systems',
-    subtitle: 'Trading system composition, quick backtests, analysis, and liquidity suggestions.',
+    subtitle: 'Manual trading systems (admin-configured): members, weights, backtests, analysis, and liquidity suggestions. This is separate from sweep profiles.',
     apiKey: 'API Key',
     refresh: 'Refresh',
     systems: 'Systems',
@@ -243,7 +243,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
   },
   tr: {
     title: 'Trading Systems',
-    subtitle: 'Trading system uyeleri, hizli backtest, analiz ve liquidity suggestions.',
+    subtitle: 'Manuel trading system katmani (admin ayari): uyeler, agirliklar, backtest, analiz ve liquidity suggestions. Sweep profillerinden ayridir.',
     apiKey: 'API Key',
     refresh: 'Yenile',
     systems: 'Sistemler',

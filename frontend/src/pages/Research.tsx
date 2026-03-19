@@ -709,7 +709,7 @@ export default function Research() {
     <div>
       <Title level={3}>Research Circuit</Title>
       <Paragraph type="secondary">
-        Manage strategy profiles from sweep runs. Preview candidates, publish the best ones to the runtime circuit, build client presets.
+        Manage strategy profiles from sweep runs. Sweep is the auto-selection/data pipeline for presets and offers; manual Trading Systems are configured separately in the Trading Systems menu.
       </Paragraph>
 
       <Card
