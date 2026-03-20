@@ -12,15 +12,18 @@ import {
   InputNumber,
   List,
   message,
+  Modal,
   Row,
   Select,
   Slider,
   Space,
   Spin,
   Statistic,
+  Switch,
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -33,7 +36,21 @@ type ProductMode = 'strategy_client' | 'algofund_client';
 type Level3 = 'low' | 'medium' | 'high';
 type RequestStatus = 'pending' | 'approved' | 'rejected';
 type SaasTabKey = 'admin' | 'strategy-client' | 'algofund';
-type AdminTabKey = 'overview' | 'create-user';
+type AdminTabKey = 'overview' | 'monitoring' | 'create-user';
+
+type TradingSystemListItem = {
+  id?: number;
+  name: string;
+  is_active: boolean;
+  updated_at?: string;
+  metrics?: {
+    equity_usd?: number;
+    unrealized_pnl?: number;
+    margin_load_percent?: number;
+    drawdown_percent?: number;
+    effective_leverage?: number;
+  };
+};
 
 type EquityPoint = {
   time: number;
@@ -145,7 +162,46 @@ type TenantSummary = {
     unrealized_pnl?: number;
     margin_load_percent?: number;
     drawdown_percent?: number;
+    effective_leverage?: number;
   } | null;
+};
+
+type MonitoringSnapshotPoint = {
+  recorded_at?: string;
+  equity_usd?: number;
+  margin_load_percent?: number;
+  effective_leverage?: number;
+  drawdown_percent?: number;
+};
+
+type TelegramControls = {
+  adminEnabled: boolean;
+  clientsEnabled: boolean;
+  tokenConfigured: boolean;
+  chatConfigured: boolean;
+};
+
+type LowLotRecommendation = {
+  apiKeyName: string;
+  strategyId: number;
+  strategyName: string;
+  pair: string;
+  mode: string;
+  maxDeposit: number;
+  leverage: number;
+  lotPercent: number;
+  lastError: string;
+  updatedAt: string;
+  suggestedDepositMin: number;
+  suggestedLotPercent: number;
+  tenants: Array<{ id: number; slug: string; displayName: string; mode: ProductMode }>;
+  replacementCandidates: Array<{ symbol: string; score: number; note: string }>;
+};
+
+type LowLotRecommendationResponse = {
+  generatedAt: string;
+  periodHours: number;
+  items: LowLotRecommendation[];
 };
 
 type SaasSummary = {
@@ -310,6 +366,8 @@ type ClientMagicLinkResponse = {
 type AlgofundRequest = {
   id: number;
   tenant_id: number;
+  tenant_display_name?: string;
+  tenant_slug?: string;
   request_type: 'start' | 'stop';
   status: RequestStatus;
   note: string;
@@ -328,7 +386,14 @@ type AlgofundState = {
     requested_enabled: number;
     actual_enabled: number;
     assigned_api_key_name: string;
+    published_system_name?: string;
   };
+  engine?: {
+    apiKeyName: string;
+    systemId: number;
+    systemName: string;
+    isActive: boolean;
+  } | null;
   preview: {
     riskMultiplier: number;
     period?: PeriodInfo | null;
@@ -483,6 +548,13 @@ type Copy = {
   selectedOffersHint: string;
   selectedOffersEmptyHint: string;
   adminCreateHint: string;
+  engineStatus: string;
+  engineSystemId: string;
+  engineRunning: string;
+  enginePending: string;
+  engineBlocked: string;
+  engineStopped: string;
+  engineNotMaterialized: string;
 };
 
 const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
@@ -595,6 +667,13 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     selectedOffersHint: 'Выбирайте офферы как товары. Если выбрано несколько, ниже строится SWEEP compare (4D), а не полный API backtest.',
     selectedOffersEmptyHint: 'Офферы не найдены в preset-базе. Показываю fallback из последнего SWEEP/client catalog, если он доступен.',
     adminCreateHint: 'Admin создает клиентов двух типов: Клиент стратегий и Алгофонд. После создания можно сразу открыть и настроить кабинет.',
+    engineStatus: 'Статус движка',
+    engineSystemId: 'System ID',
+    engineRunning: 'Торговый движок запущен',
+    enginePending: 'Запрос одобрен, запуск ожидается',
+    engineBlocked: 'Не удалось материализовать клиента в engine',
+    engineStopped: 'Торговый движок остановлен',
+    engineNotMaterialized: 'Клиент еще не заведен в торговый движок. Нужна materialization торговой системы.',
   },
   en: {
     title: 'SaaS Control Room',
@@ -705,6 +784,13 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     selectedOffersHint: 'Pick offers like products. When several are selected, the panel runs SWEEP compare (4D), not full API backtest.',
     selectedOffersEmptyHint: 'No offers found in preset storage. Fallback from latest SWEEP/client catalog is used when available.',
     adminCreateHint: 'Admin creates two client types: Strategy Client and Algofund. After creation you can open and configure immediately.',
+    engineStatus: 'Engine status',
+    engineSystemId: 'System ID',
+    engineRunning: 'Trading engine is running',
+    enginePending: 'Request approved, engine launch pending',
+    engineBlocked: 'Client could not be materialized into engine',
+    engineStopped: 'Trading engine is stopped',
+    engineNotMaterialized: 'This client is not materialized into the trading engine yet. Trading-system materialization is required.',
   },
   tr: {
     title: 'SaaS Control Room',
@@ -815,6 +901,13 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     selectedOffersHint: 'Teklifleri urun gibi secin. Birden fazla secimde panel tam API backtest degil SWEEP compare (4D) calistirir.',
     selectedOffersEmptyHint: 'Preset depoda teklif yok. Mumkunse son SWEEP/client catalog fallback gosterilir.',
     adminCreateHint: 'Admin iki musteri tipi olusturur: Strateji Musterisi ve Algofund. Olusturduktan sonra hemen acip ayarlayabilirsiniz.',
+    engineStatus: 'Engine durumu',
+    engineSystemId: 'System ID',
+    engineRunning: 'Trading engine calisiyor',
+    enginePending: 'Talep onaylandi, engine baslatma bekleniyor',
+    engineBlocked: 'Musteri engine icine materialize edilemedi',
+    engineStopped: 'Trading engine durdu',
+    engineNotMaterialized: 'Bu musteri henuz trading engine icine alinmadi. Trading system materialization gerekli.',
   },
 };
 
@@ -841,15 +934,20 @@ const calcDepositLoadPercent = (row: TenantSummary): number | null => {
 const calcLiquidationRisk = (row: TenantSummary): { level: 'low' | 'medium' | 'high'; color: string; bufferPercent: number | null } => {
   const marginLoad = Number(row.monitoring?.margin_load_percent ?? 0);
   const drawdown = Number(row.monitoring?.drawdown_percent ?? 0);
-  const score = marginLoad * 0.75 + drawdown * 0.35;
   const bufferPercent = Number.isFinite(marginLoad) ? Math.max(0, 100 - marginLoad) : null;
 
-  if (marginLoad >= 85 || drawdown >= 35 || score >= 85) {
+  // PRIMARY: margin_load is the main factor for liquidation risk
+  // HIGH: If margin_load >= 80% OR (margin_load >= 65% AND drawdown >= 35%)
+  if (marginLoad >= 80 || (marginLoad >= 65 && drawdown >= 35)) {
     return { level: 'high', color: 'red', bufferPercent };
   }
-  if (marginLoad >= 65 || drawdown >= 20 || score >= 60) {
+  
+  // MEDIUM: If margin_load >= 60% OR (margin_load >= 45% AND drawdown >= 25%)
+  if (marginLoad >= 60 || (marginLoad >= 45 && drawdown >= 25)) {
     return { level: 'medium', color: 'gold', bufferPercent };
   }
+  
+  // LOW: All other cases
   return { level: 'low', color: 'green', bufferPercent };
 };
 
@@ -1014,6 +1112,119 @@ const metricColor = (value: number, kind: 'return' | 'drawdown' | 'pf') => {
     return value >= 2 ? 'success' : value >= 1.3 ? 'processing' : 'warning';
   }
   return value >= 0 ? 'success' : 'error';
+};
+
+const summarizeOfferSet = (offers: CatalogOffer[]) => {
+  const rows = Array.isArray(offers) ? offers : [];
+  if (rows.length === 0) {
+    return {
+      avgRet: 0,
+      avgDd: 0,
+      avgPf: 0,
+      count: 0,
+    };
+  }
+
+  const totalRet = rows.reduce((acc, offer) => acc + Number(offer.metrics?.ret || 0), 0);
+  const totalPf = rows.reduce((acc, offer) => acc + Number(offer.metrics?.pf || 0), 0);
+  const maxDd = rows.reduce((acc, offer) => Math.max(acc, Number(offer.metrics?.dd || 0)), 0);
+
+  return {
+    avgRet: totalRet / rows.length,
+    avgDd: maxDd,
+    avgPf: totalPf / rows.length,
+    count: rows.length,
+  };
+};
+
+const describeOfferSet = (setName: string, offers: CatalogOffer[]): string => {
+  const summary = summarizeOfferSet(offers);
+  const markets = offers
+    .slice(0, 4)
+    .map((offer) => String(offer.strategy?.market || '').trim())
+    .filter(Boolean)
+    .join(', ');
+  const notes = offers
+    .slice(0, 2)
+    .map((offer) => String(offer.descriptionRu || '').trim())
+    .filter(Boolean)
+    .join(' | ');
+
+  return [
+    `${setName}: ${summary.count} offers`,
+    `Prof ${formatPercent(summary.avgRet)} / DD ${formatPercent(summary.avgDd)} / PF ${formatNumber(summary.avgPf)}`,
+    markets ? `Markets: ${markets}` : '',
+    notes,
+  ].filter(Boolean).join('\n');
+};
+
+const buildApiKeyLogComments = (rawLines: unknown, apiKeys: string[]): Record<string, string[]> => {
+  const lines = Array.isArray(rawLines) ? rawLines.map((item) => String(item || '')) : [];
+  const out: Record<string, string[]> = {};
+  for (const key of apiKeys) {
+    out[key] = [];
+  }
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!line.trim()) {
+      continue;
+    }
+
+    let level = '';
+    let message = line;
+    try {
+      const parsed = JSON.parse(line);
+      level = String(parsed?.level || '').toLowerCase();
+      message = String(parsed?.message || line);
+    } catch {
+      // Keep raw line if not JSON-formatted.
+    }
+
+    const normalizedMessage = message.toLowerCase();
+    const looksImportant = level === 'error'
+      || level === 'warn'
+      || /error|failed|not initialized|exception|insufficient|liquidat|109400|positionside/.test(normalizedMessage);
+
+    if (!looksImportant) {
+      continue;
+    }
+
+    for (const key of apiKeys) {
+      if (!normalizedMessage.includes(key.toLowerCase())) {
+        continue;
+      }
+      if (out[key].length >= 2) {
+        continue;
+      }
+
+      const compact = message.replace(/\s+/g, ' ').trim();
+      out[key].push(compact.length > 160 ? `${compact.slice(0, 157)}...` : compact);
+    }
+  }
+
+  return out;
+};
+
+const buildLotSizingHint = (notes: string[]): string | null => {
+  const joined = notes.join(' | ');
+  const oversizeMatch = joined.match(/oversize\s*=\s*(\d+(?:\.\d+)?)%/i);
+  if (!oversizeMatch) {
+    return null;
+  }
+
+  const oversize = Number(oversizeMatch[1]);
+  if (!Number.isFinite(oversize)) {
+    return 'Low lot size detected; consider increasing risk multiplier or replacing low-liquidity pair.';
+  }
+
+  if (oversize >= 180) {
+    return 'Lot too small for pair balancing (oversize > 180%). Suggest risk x2.0+ or replace pair.';
+  }
+  if (oversize >= 130) {
+    return 'Lot likely too small (oversize > 130%). Suggest risk x1.5+ or increase deposit.';
+  }
+  return 'Lot sizing warning detected. Suggest risk x1.2+ and re-check execution.';
 };
 
 const productModeTag = (mode: ProductMode) => {
@@ -1209,7 +1420,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [createTenantEmail, setCreateTenantEmail] = useState('');
   const [algofundNote, setAlgofundNote] = useState('');
   const [algofundDecisionNote, setAlgofundDecisionNote] = useState('');
+  const [retryMaterializeModalVisible, setRetryMaterializeModalVisible] = useState(false);
   const [publishResponse, setPublishResponse] = useState<AdminPublishResponse | null>(null);
+  const [monitoringSystemsByApiKey, setMonitoringSystemsByApiKey] = useState<Record<string, TradingSystemListItem[]>>({});
+  const [monitoringSystemSelected, setMonitoringSystemSelected] = useState<Record<number, number | undefined>>({});
+  const [monitoringLogCommentsByApiKey, setMonitoringLogCommentsByApiKey] = useState<Record<string, string[]>>({});
+  const [monitoringTabLoading, setMonitoringTabLoading] = useState(false);
+  const [monitoringModeFilter, setMonitoringModeFilter] = useState<'all' | ProductMode>('all');
+  const [telegramControls, setTelegramControls] = useState<TelegramControls | null>(null);
+  const [telegramControlsLoading, setTelegramControlsLoading] = useState(false);
+  const [lowLotRecommendations, setLowLotRecommendations] = useState<LowLotRecommendationResponse | null>(null);
+  const [lowLotLoading, setLowLotLoading] = useState(false);
+  const [monitoringChartOpen, setMonitoringChartOpen] = useState(false);
+  const [monitoringChartLoading, setMonitoringChartLoading] = useState(false);
+  const [monitoringChartApiKey, setMonitoringChartApiKey] = useState('');
+  const [monitoringChartPoints, setMonitoringChartPoints] = useState<LinePoint[]>([]);
+  const [monitoringChartLatest, setMonitoringChartLatest] = useState<MonitoringSnapshotPoint | null>(null);
   const [planDrafts, setPlanDrafts] = useState<Record<string, Plan>>({});
   const [actionLoading, setActionLoading] = useState<string>('');
   const [activeTab, setActiveTab] = useState<SaasTabKey>(initialTab);
@@ -1289,7 +1515,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
-  const loadAlgofundTenant = async (tenantId: number, nextRiskMultiplier?: number, allowPreviewAbovePlan = false) => {
+  const loadAlgofundTenant = async (tenantId: number, nextRiskMultiplier?: number, allowPreviewAbovePlan = false, forceRefreshPreview = false) => {
     setAlgofundLoading(true);
     setAlgofundError('');
     try {
@@ -1299,6 +1525,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       }
       if (allowPreviewAbovePlan) {
         params.set('allowPreviewAbovePlan', '1');
+      }
+      if (forceRefreshPreview) {
+        params.set('refreshPreview', '1');
       }
       const query = params.toString() ? `?${params.toString()}` : '';
       const response = await axios.get<AlgofundState>(`/api/saas/algofund/${tenantId}${query}`);
@@ -1319,6 +1548,151 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab]);
+
+  const loadTelegramControls = useCallback(async () => {
+    setTelegramControlsLoading(true);
+    try {
+      const response = await axios.get<TelegramControls>('/api/saas/admin/telegram-controls');
+      setTelegramControls(response.data);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load telegram controls'));
+    } finally {
+      setTelegramControlsLoading(false);
+    }
+  }, [messageApi]);
+
+  const patchTelegramControls = useCallback(async (patch: Partial<TelegramControls>) => {
+    setTelegramControlsLoading(true);
+    try {
+      const response = await axios.patch<TelegramControls>('/api/saas/admin/telegram-controls', patch);
+      setTelegramControls(response.data);
+      messageApi.success('Telegram control updated');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to update telegram controls'));
+    } finally {
+      setTelegramControlsLoading(false);
+    }
+  }, [messageApi]);
+
+  const loadLowLotRecommendations = useCallback(async () => {
+    setLowLotLoading(true);
+    try {
+      const response = await axios.get<LowLotRecommendationResponse>('/api/saas/admin/low-lot-recommendations', {
+        params: { hours: 72, limit: 40, perStrategyReplacementLimit: 3 },
+      });
+      setLowLotRecommendations(response.data);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load low-lot recommendations'));
+    } finally {
+      setLowLotLoading(false);
+    }
+  }, [messageApi]);
+
+  const loadMonitoringTabData = useCallback(async () => {
+    if (!summary) {
+      return;
+    }
+
+    const apiKeys = Array.from(new Set(
+      (summary.tenants || [])
+        .map((item) => String(item.tenant.assigned_api_key_name || item.strategyProfile?.assigned_api_key_name || item.algofundProfile?.assigned_api_key_name || '').trim())
+        .filter(Boolean)
+    ));
+
+    if (apiKeys.length === 0) {
+      setMonitoringSystemsByApiKey({});
+      return;
+    }
+
+    setMonitoringTabLoading(true);
+    try {
+      const entries: Array<[string, TradingSystemListItem[]]> = await Promise.all(
+        apiKeys.map(async (apiKeyName) => {
+          try {
+            const response = await axios.get<TradingSystemListItem[]>(`/api/trading-systems/${encodeURIComponent(apiKeyName)}`);
+            return [apiKeyName, Array.isArray(response.data) ? response.data : []];
+          } catch {
+            return [apiKeyName, []];
+          }
+        })
+      );
+
+      const nextMap: Record<string, TradingSystemListItem[]> = {};
+      for (const [apiKeyName, systems] of entries) {
+        nextMap[apiKeyName] = systems;
+      }
+      setMonitoringSystemsByApiKey(nextMap);
+
+      try {
+        const logsResponse = await axios.get<string[]>('/api/logs');
+        setMonitoringLogCommentsByApiKey(buildApiKeyLogComments(logsResponse.data, apiKeys));
+      } catch {
+        setMonitoringLogCommentsByApiKey({});
+      }
+
+      setMonitoringSystemSelected((current) => {
+        const next = { ...current };
+        for (const tenantSummary of summary.tenants || []) {
+          const tenantId = Number(tenantSummary.tenant.id);
+          if (Number.isFinite(tenantId) && next[tenantId] === undefined) {
+            const apiKeyName = String(tenantSummary.tenant.assigned_api_key_name || '').trim();
+            const systems = nextMap[apiKeyName] || [];
+            const defaultSystem = systems.find((item) => item.is_active) || systems[0];
+            next[tenantId] = defaultSystem?.id ? Number(defaultSystem.id) : undefined;
+          }
+        }
+        return next;
+      });
+    } finally {
+      setMonitoringTabLoading(false);
+    }
+  }, [summary]);
+
+  const openMonitoringChart = async (apiKeyName: string) => {
+    const key = String(apiKeyName || '').trim();
+    if (!key) {
+      return;
+    }
+
+    setMonitoringChartOpen(true);
+    setMonitoringChartApiKey(key);
+    setMonitoringChartLoading(true);
+    try {
+      const response = await axios.get<{ points?: MonitoringSnapshotPoint[]; latest?: MonitoringSnapshotPoint }>(
+        `/api/monitoring/${encodeURIComponent(key)}`,
+        { params: { limit: 240 } }
+      );
+
+      const rows = Array.isArray(response.data?.points) ? response.data.points : [];
+      const linePoints: LinePoint[] = rows
+        .map((row) => {
+          const time = normalizeSeriesTime(row?.recorded_at);
+          const value = toFiniteNumberOrNull(row?.equity_usd);
+          if (time === null || value === null) {
+            return null;
+          }
+          return { time, value };
+        })
+        .filter((item): item is LinePoint => item !== null);
+
+      setMonitoringChartPoints(linePoints);
+      setMonitoringChartLatest(response.data?.latest || null);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load monitoring chart'));
+      setMonitoringChartPoints([]);
+      setMonitoringChartLatest(null);
+    } finally {
+      setMonitoringChartLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'admin' && adminTab === 'monitoring') {
+      void loadMonitoringTabData();
+      void loadTelegramControls();
+      void loadLowLotRecommendations();
+    }
+  }, [activeTab, adminTab, loadMonitoringTabData, loadTelegramControls, loadLowLotRecommendations]);
 
   useEffect(() => {
     if (!summary) {
@@ -1445,34 +1819,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   }, [copy.previewReady, messageApi, strategyOfferIds, strategyRiskInput, strategyTenantId, strategyTradeInput]);
 
-  useEffect(() => {
-    if (!strategyTenantId || !strategyPreviewOfferId || !strategyState) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      void runStrategyPreview(true);
-    }, 350);
-
-    return () => window.clearTimeout(timer);
-  }, [runStrategyPreview, strategyPreviewOfferId, strategyState, strategyTenantId]);
-
-  useEffect(() => {
-    if (!strategyTenantId || !strategyState) {
-      return;
-    }
-
-    if (strategyOfferIds.length === 0) {
-      setStrategySelectionPreview(null);
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      void runStrategySelectionPreview(true);
-    }, 350);
-
-    return () => window.clearTimeout(timer);
-  }, [runStrategySelectionPreview, strategyOfferIds, strategyState, strategyTenantId]);
+  // Strategy previews are manual-only to avoid API storms on SaaS page load.
 
   useEffect(() => {
     if (!algofundTenantId || !algofundState || algofundLoading) {
@@ -1571,7 +1918,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!algofundTenantId) {
       return;
     }
-    await loadAlgofundTenant(algofundTenantId, algofundRiskMultiplier, isAdminSurface);
+    await loadAlgofundTenant(algofundTenantId, algofundRiskMultiplier, isAdminSurface, true);
     messageApi.success(copy.previewReady);
   };
 
@@ -1778,6 +2125,31 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const retryMaterialize = async () => {
+    if (!algofundTenantId) {
+      messageApi.error('No tenant selected');
+      return;
+    }
+    setActionLoading('retry-materialize');
+    try {
+      const response = await axios.post(`/api/saas/algofund/${algofundTenantId}/retry-materialize`);
+      const nextState = response.data as AlgofundState;
+      setAlgofundState(nextState);
+      if (Number(nextState?.profile?.actual_enabled || 0) === 1) {
+        messageApi.success('Materialization completed. The client system is now running in the trading engine.');
+      } else {
+        const reason = String(nextState?.preview?.blockedReason || '').trim();
+        messageApi.warning(reason || 'Materialization finished without engine start. Check Engine Status and Trading Systems.');
+      }
+      setRetryMaterializeModalVisible(false);
+      await loadSummary();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to retry materialization'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const seedDemoTenants = async () => {
     setActionLoading('seed');
     try {
@@ -1835,6 +2207,31 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const toggleTenantRequestedEnabled = async (row: TenantSummary, nextEnabled: boolean) => {
+    const tenantId = Number(row.tenant.id);
+    if (!Number.isFinite(tenantId) || tenantId <= 0) {
+      return;
+    }
+
+    setActionLoading(`monitor-toggle-${tenantId}`);
+    try {
+      if (row.tenant.product_mode === 'strategy_client') {
+        await axios.patch(`/api/saas/strategy-clients/${tenantId}`, { requestedEnabled: nextEnabled });
+      } else {
+        await axios.patch(`/api/saas/algofund/${tenantId}`, { requestedEnabled: nextEnabled });
+      }
+      messageApi.success(`Updated ${row.tenant.display_name}: requested ${nextEnabled ? 'ON' : 'OFF'}`);
+      await loadSummary();
+      if (activeTab === 'admin' && adminTab === 'monitoring') {
+        await loadMonitoringTabData();
+      }
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to update requested status'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const tenantColumns: ColumnsType<TenantSummary> = [
     {
       title: 'Tenant',
@@ -1882,6 +2279,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           <Tag color="geekblue">PnL {formatMoney(row.monitoring.unrealized_pnl)}</Tag>
           <Tag color="orange">DD {formatPercent(row.monitoring.drawdown_percent)}</Tag>
           <Tag color="purple">ML {formatPercent(row.monitoring.margin_load_percent)}</Tag>
+          {Number.isFinite(row.monitoring.effective_leverage) ? <Tag color="red">Lev {formatNumber(row.monitoring.effective_leverage, 2)}x</Tag> : null}
           {calcDepositLoadPercent(row) !== null ? <Tag color="cyan">{copy.depositLoad}: {formatPercent(calcDepositLoadPercent(row))}</Tag> : null}
           {(() => {
             const liq = calcLiquidationRisk(row);
@@ -2025,14 +2423,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     },
   ];
 
+  const confirmResolveRequest = (row: AlgofundRequest, status: 'approved' | 'rejected') => {
+    const actionText = status === 'approved' ? 'Approve' : 'Reject';
+    const typeText = row.request_type === 'start' ? 'start' : 'stop';
+
+    Modal.confirm({
+      title: `${actionText} ${typeText} request?`,
+      content: row.note ? `Client note: ${row.note}` : undefined,
+      okText: actionText,
+      okType: status === 'approved' ? 'primary' : 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        await resolveRequest(row.id, status);
+      },
+    });
+  };
+
   const requestColumns: ColumnsType<AlgofundRequest> = [
     {
       title: copy.requestTenant,
       key: 'tenant',
       width: 260,
       render: (_, row) => {
-        const tenantName = String((row as any).tenant_display_name || algofundState?.tenant?.display_name || '').trim();
-        const tenantSlug = String((row as any).tenant_slug || algofundState?.tenant?.slug || '').trim();
+        const tenantName = String(row.tenant_display_name || algofundState?.tenant?.display_name || '').trim();
+        const tenantSlug = String(row.tenant_slug || algofundState?.tenant?.slug || '').trim();
 
         if (tenantName && tenantSlug) {
           return `${tenantName} (${tenantSlug})`;
@@ -2063,6 +2477,32 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       dataIndex: 'note',
     },
     {
+      title: 'Result',
+      key: 'result',
+      width: 140,
+      render: (_, row) => {
+        if (row.status === 'pending') {
+          return <Tag color="default">Pending</Tag>;
+        }
+        if (row.status === 'rejected') {
+          return <Tag color="default">Rejected</Tag>;
+        }
+        if (row.status === 'approved') {
+          const isBlocked = row.decision_note && row.decision_note.includes('Auto-note: approved without materialization');
+          if (row.request_type === 'start') {
+            if (isBlocked) {
+              return <Tag color="red">Blocked</Tag>;
+            }
+            return <Tag color="success">Started</Tag>;
+          }
+          if (row.request_type === 'stop') {
+            return <Tag color="green">Stopped</Tag>;
+          }
+        }
+        return <Tag color="default">—</Tag>;
+      },
+    },
+    {
       title: 'Created',
       dataIndex: 'created_at',
       width: 180,
@@ -2077,7 +2517,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             size="small"
             type="primary"
             loading={actionLoading === `resolve-${row.id}`}
-            onClick={() => void resolveRequest(row.id, 'approved')}
+            onClick={() => confirmResolveRequest(row, 'approved')}
           >
             {copy.approve}
           </Button>
@@ -2085,7 +2525,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             size="small"
             danger
             loading={actionLoading === `resolve-${row.id}`}
-            onClick={() => void resolveRequest(row.id, 'rejected')}
+            onClick={() => confirmResolveRequest(row, 'rejected')}
           >
             {copy.reject}
           </Button>
@@ -2120,6 +2560,162 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const publishPreviewPeriod = publishResponse?.preview?.period || summaryPeriod;
   const strategyPersistedRiskBucket = sliderValueToLevel(strategyRiskInput);
   const strategyPersistedTradeBucket = sliderValueToLevel(strategyTradeInput);
+  const algofundEngineRunning = Boolean(algofundState?.profile?.actual_enabled);
+  const algofundEnginePending = Boolean(algofundState?.profile?.requested_enabled) && !algofundEngineRunning;
+  const algofundEngineBlockedReason = String(algofundState?.preview?.blockedReason || '').trim();
+  const algofundTradingSystemsHref = algofundState
+    ? `/trading-systems?apiKeyName=${encodeURIComponent(String(algofundState.engine?.apiKeyName || algofundState.profile?.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || ''))}${algofundState.engine?.systemId ? `&systemId=${algofundState.engine.systemId}` : ''}`
+    : '/trading-systems';
+
+  const monitoringRows = (summary?.tenants || [])
+    .filter((row) => monitoringModeFilter === 'all' || row.tenant.product_mode === monitoringModeFilter)
+    .map((row) => {
+      const profile = row.tenant.product_mode === 'strategy_client' ? row.strategyProfile : row.algofundProfile;
+      const requestedEnabled = Number(profile?.requested_enabled || 0) === 1;
+      const actualEnabled = Number(profile?.actual_enabled || 0) === 1;
+      const apiKeyName = String(profile?.assigned_api_key_name || row.tenant.assigned_api_key_name || '').trim();
+      const systems = monitoringSystemsByApiKey[apiKeyName] || [];
+      const logNotes = monitoringLogCommentsByApiKey[apiKeyName] || [];
+      const selectedSystemId = monitoringSystemSelected[row.tenant.id];
+      const selectedSystem = systems.find((system) => Number(system.id) === Number(selectedSystemId)) || null;
+      const liq = calcLiquidationRisk(row);
+      const comments: string[] = [];
+      if (!apiKeyName) comments.push('API key is not assigned');
+      if (requestedEnabled && !actualEnabled) comments.push('Requested ON, but engine is not started yet');
+      if (actualEnabled && liq.level === 'high') comments.push('High liquidation risk');
+      if (!row.monitoring) comments.push('Monitoring snapshot unavailable');
+      const lotHint = buildLotSizingHint(logNotes);
+      if (lotHint) comments.push(lotHint);
+
+      return {
+        ...row,
+        requestedEnabled,
+        actualEnabled,
+        apiKeyName,
+        systems,
+        logNotes,
+        selectedSystem,
+        comments: comments.join(' | ') || 'OK',
+      };
+    });
+
+  const monitoringColumns: ColumnsType<(typeof monitoringRows)[number]> = [
+    {
+      title: 'Client',
+      key: 'tenant',
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{row.tenant.display_name}</Text>
+          <Text type="secondary">{row.tenant.slug}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: 'Mode',
+      key: 'mode',
+      width: 130,
+      render: (_, row) => productModeTag(row.tenant.product_mode),
+    },
+    {
+      title: copy.apiKey,
+      key: 'apiKey',
+      width: 170,
+      render: (_, row) => row.apiKeyName || '—',
+    },
+    {
+      title: 'Requested',
+      key: 'requested',
+      width: 120,
+      render: (_, row) => (
+        <Switch
+          size="small"
+          checked={row.requestedEnabled}
+          loading={actionLoading === `monitor-toggle-${row.tenant.id}`}
+          onChange={(checked) => {
+            void toggleTenantRequestedEnabled(row, checked);
+          }}
+        />
+      ),
+    },
+    {
+      title: 'Engine',
+      key: 'engine',
+      width: 120,
+      render: (_, row) => row.actualEnabled ? <Tag color="success">running</Tag> : <Tag color="default">stopped</Tag>,
+    },
+    {
+      title: 'Monitoring',
+      key: 'monitoring',
+      width: 250,
+      render: (_, row) => row.monitoring ? (
+        <Space size={4} wrap>
+          <Tag color="blue">Eq {formatMoney(row.monitoring.equity_usd)}</Tag>
+          <Tag color="geekblue">PnL {formatMoney(row.monitoring.unrealized_pnl)}</Tag>
+          <Tag color="orange">DD {formatPercent(row.monitoring.drawdown_percent)}</Tag>
+        </Space>
+      ) : <Tag color="default">no data</Tag>,
+    },
+    {
+      title: 'Approved systems',
+      key: 'systems',
+      width: 360,
+      render: (_, row) => {
+        const options = row.systems.map((system) => ({
+          value: Number(system.id),
+          label: `${system.name}${system.is_active ? ' [active]' : ''} · PnL ${formatMoney(system.metrics?.unrealized_pnl)} · DD ${formatPercent(system.metrics?.drawdown_percent)}`,
+        }));
+
+        return (
+          <Space>
+            <Select
+              style={{ width: 280 }}
+              value={row.selectedSystem?.id ? Number(row.selectedSystem.id) : undefined}
+              onChange={(value) => {
+                setMonitoringSystemSelected((current) => ({ ...current, [row.tenant.id]: Number(value) }));
+              }}
+              options={options}
+              placeholder="No systems"
+              allowClear
+            />
+            <Button
+              size="small"
+              href={`/trading-systems?apiKeyName=${encodeURIComponent(row.apiKeyName)}${row.selectedSystem?.id ? `&systemId=${row.selectedSystem.id}` : ''}`}
+              disabled={!row.apiKeyName}
+            >
+              Open
+            </Button>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Comment',
+      key: 'comment',
+      render: (_, row) => row.comments,
+    },
+    {
+      title: 'Charts',
+      key: 'charts',
+      width: 120,
+      render: (_, row) => (
+        <Button
+          size="small"
+          disabled={!row.apiKeyName}
+          onClick={() => {
+            void openMonitoringChart(row.apiKeyName);
+          }}
+        >
+          Open chart
+        </Button>
+      ),
+    },
+    {
+      title: 'Log notes',
+      key: 'logNotes',
+      width: 360,
+      render: (_, row) => row.logNotes.length > 0 ? row.logNotes.join(' | ') : '—',
+    },
+  ];
 
   return (
     <div className="saas-page">
@@ -2222,20 +2818,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 <List
                                   dataSource={Object.entries(summary?.recommendedSets || {})}
                                   locale={{ emptyText: <Empty description={copy.noCatalog} /> }}
-                                  renderItem={([setName, offers]) => (
-                                    <List.Item>
-                                      <div style={{ width: '100%' }}>
-                                        <Text strong>{setName}</Text>
-                                        <div className="saas-offer-badges">
-                                          {(offers || []).map((offer) => (
-                                            <Tag key={offer.offerId} color={offer.strategy.mode === 'mono' ? 'green' : 'blue'}>
-                                              {offer.strategy.market} · {formatNumber(offer.metrics.score)}
-                                            </Tag>
-                                          ))}
+                                  renderItem={([setName, offers]) => {
+                                    const setSummary = summarizeOfferSet(offers || []);
+                                    return (
+                                      <List.Item>
+                                        <div style={{ width: '100%' }}>
+                                          <Space wrap>
+                                            <Tooltip title={describeOfferSet(setName, offers || [])}>
+                                              <Text strong style={{ cursor: 'help' }}>{setName}</Text>
+                                            </Tooltip>
+                                            <Tag color={metricColor(setSummary.avgRet, 'return')}>Prof {formatPercent(setSummary.avgRet)}</Tag>
+                                            <Tag color={metricColor(setSummary.avgDd, 'drawdown')}>DD {formatPercent(setSummary.avgDd)}</Tag>
+                                            <Tag color={metricColor(setSummary.avgPf, 'pf')}>PF {formatNumber(setSummary.avgPf)}</Tag>
+                                          </Space>
+                                          <div className="saas-offer-badges">
+                                            {(offers || []).map((offer) => (
+                                              <Tag key={offer.offerId} color={offer.strategy.mode === 'mono' ? 'green' : 'blue'}>
+                                                {offer.strategy.market} · {formatNumber(offer.metrics.score)} · prof {formatPercent(offer.metrics.ret)} / dd {formatPercent(offer.metrics.dd)}
+                                              </Tag>
+                                            ))}
+                                          </div>
                                         </div>
-                                      </div>
-                                    </List.Item>
-                                  )}
+                                      </List.Item>
+                                    );
+                                  }}
                                 />
                               </Card>
                             </Col>
@@ -2313,6 +2919,121 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Card>
                           ) : null}
                         </Space>
+                      ),
+                    },
+                    {
+                      key: 'monitoring',
+                      label: 'Мониторинг',
+                      children: (
+                        <Card className="battletoads-card" title="Живые клиенты и торговые движки">
+                          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                            <Paragraph type="secondary" style={{ marginTop: 0 }}>
+                              Сводка по strategy-client и algofund: состояние движка, краткие метрики, комментарии и выбор систем.
+                            </Paragraph>
+                            <Space wrap>
+                              <Select
+                                style={{ width: 260 }}
+                                value={monitoringModeFilter}
+                                onChange={(value) => setMonitoringModeFilter(value)}
+                                options={[
+                                  { value: 'all', label: 'Все режимы' },
+                                  { value: 'strategy_client', label: 'Strategy Client' },
+                                  { value: 'algofund_client', label: 'Algofund' },
+                                ]}
+                              />
+                              <Button onClick={() => void loadMonitoringTabData()} loading={monitoringTabLoading}>Обновить список систем</Button>
+                              <Button onClick={() => void loadLowLotRecommendations()} loading={lowLotLoading}>Обновить low-lot</Button>
+                              <Button onClick={() => void loadTelegramControls()} loading={telegramControlsLoading}>Обновить Telegram controls</Button>
+                            </Space>
+
+                            <Row gutter={[16, 16]}>
+                              <Col xs={24} xl={10}>
+                                <Card size="small" className="battletoads-card" title="Telegram controls">
+                                  <Space direction="vertical" style={{ width: '100%' }}>
+                                    <Space>
+                                      <Text>Admin reporter</Text>
+                                      <Switch
+                                        checked={Boolean(telegramControls?.adminEnabled)}
+                                        loading={telegramControlsLoading}
+                                        onChange={(checked) => {
+                                          void patchTelegramControls({ adminEnabled: checked });
+                                        }}
+                                      />
+                                    </Space>
+                                    <Space>
+                                      <Text>Client reporter</Text>
+                                      <Switch
+                                        checked={Boolean(telegramControls?.clientsEnabled)}
+                                        loading={telegramControlsLoading}
+                                        onChange={(checked) => {
+                                          void patchTelegramControls({ clientsEnabled: checked });
+                                        }}
+                                      />
+                                    </Space>
+                                    <Space wrap>
+                                      <Tag color={telegramControls?.tokenConfigured ? 'success' : 'default'}>token {telegramControls?.tokenConfigured ? 'ok' : 'missing'}</Tag>
+                                      <Tag color={telegramControls?.chatConfigured ? 'success' : 'default'}>chat_id {telegramControls?.chatConfigured ? 'ok' : 'missing'}</Tag>
+                                    </Space>
+                                  </Space>
+                                </Card>
+                              </Col>
+
+                              <Col xs={24} xl={14}>
+                                <Card size="small" className="battletoads-card" title="Low-lot recommendations (72h)">
+                                  <Table
+                                    size="small"
+                                    rowKey={(row) => `${row.apiKeyName}:${row.strategyId}`}
+                                    dataSource={lowLotRecommendations?.items || []}
+                                    pagination={{ pageSize: 5 }}
+                                    scroll={{ x: 900 }}
+                                    columns={[
+                                      {
+                                        title: 'Strategy',
+                                        key: 'strategy',
+                                        render: (_, row) => (
+                                          <Space direction="vertical" size={0}>
+                                            <Text strong>{row.strategyName}</Text>
+                                            <Text type="secondary">{row.apiKeyName} · {row.pair}</Text>
+                                          </Space>
+                                        ),
+                                      },
+                                      {
+                                        title: 'Current',
+                                        key: 'current',
+                                        render: (_, row) => `dep=${formatMoney(row.maxDeposit)} lot=${formatNumber(row.lotPercent, 1)}% lev=${formatNumber(row.leverage, 1)}`,
+                                      },
+                                      {
+                                        title: 'Recommend',
+                                        key: 'recommend',
+                                        render: (_, row) => (
+                                          <Space direction="vertical" size={0}>
+                                            <Text>min dep: {formatMoney(row.suggestedDepositMin)}</Text>
+                                            <Text>target lot: {formatNumber(row.suggestedLotPercent, 0)}%</Text>
+                                            <Text type="secondary">{row.replacementCandidates?.map((c) => c.symbol).filter(Boolean).join(', ') || 'replace by sweep candidate'}</Text>
+                                          </Space>
+                                        ),
+                                      },
+                                      {
+                                        title: 'Clients',
+                                        key: 'clients',
+                                        render: (_, row) => row.tenants?.length || 0,
+                                      },
+                                    ]}
+                                  />
+                                </Card>
+                              </Col>
+                            </Row>
+
+                            <Table
+                              rowKey={(row) => row.tenant.id}
+                              columns={monitoringColumns}
+                              dataSource={monitoringRows}
+                              pagination={{ pageSize: 8 }}
+                              scroll={{ x: 1500 }}
+                              loading={monitoringTabLoading && monitoringRows.length === 0}
+                            />
+                          </Space>
+                        </Card>
                       ),
                     },
                     {
@@ -2814,6 +3535,56 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>{copy.previewPlanCapHint}</Paragraph>
                         </Card>
 
+                        <Card className="battletoads-card" title={copy.engineStatus}>
+                          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                            <Space wrap>
+                              {algofundEngineRunning ? <Tag color="success">{copy.engineRunning}</Tag> : null}
+                              {algofundEnginePending ? <Tag color="processing">{copy.enginePending}</Tag> : null}
+                              {!algofundEngineRunning && !algofundEnginePending ? <Tag color="default">{copy.engineStopped}</Tag> : null}
+                              {algofundEngineBlockedReason ? <Tag color="warning">{copy.engineBlocked}</Tag> : null}
+                            </Space>
+                            <Descriptions column={1} size="small" bordered>
+                              <Descriptions.Item label={copy.engineStatus}>
+                                {algofundEngineRunning
+                                  ? copy.engineRunning
+                                  : algofundEnginePending
+                                    ? copy.enginePending
+                                    : copy.engineStopped}
+                              </Descriptions.Item>
+                              <Descriptions.Item label="Engine fact">{algofundEngineRunning ? 'STARTED' : 'NOT STARTED'}</Descriptions.Item>
+                              <Descriptions.Item label={copy.sourceSystem}>{algofundState.engine?.systemName || algofundState.profile?.published_system_name || '—'}</Descriptions.Item>
+                              <Descriptions.Item label={copy.engineSystemId}>{algofundState.engine?.systemId ?? '—'}</Descriptions.Item>
+                              <Descriptions.Item label={copy.apiKey}>{algofundState.engine?.apiKeyName || algofundState.profile?.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || '—'}</Descriptions.Item>
+                            </Descriptions>
+                            <Button href={algofundTradingSystemsHref}>{copy.openTradingSystems}</Button>
+                            {algofundEnginePending && !algofundEngineRunning ? (
+                              <>
+                                <Alert
+                                  type="warning"
+                                  showIcon
+                                  message={copy.engineNotMaterialized}
+                                  description={algofundEngineBlockedReason || undefined}
+                                />
+                                <Button
+                                  type="primary"
+                                  onClick={() => setRetryMaterializeModalVisible(true)}
+                                  loading={actionLoading === 'retry-materialize'}
+                                >
+                                  Retry materialization
+                                </Button>
+                              </>
+                            ) : null}
+                            {algofundEngineRunning ? (
+                              <Alert
+                                type="success"
+                                showIcon
+                                message={copy.engineRunning}
+                                description={algofundState.preview?.sourceSystem?.systemName || undefined}
+                              />
+                            ) : null}
+                          </Space>
+                        </Card>
+
                         <Card className="battletoads-card" title={copy.previewTitle} extra={algofundLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}>
                           <Spin spinning={algofundLoading}>
                             {
@@ -2883,6 +3654,54 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           ].filter((item) => isAdminSurface || item.key === surfaceMode)}
         />
       </Spin>
+
+      <Modal
+        title="Retry Algofund Materialization"
+        open={retryMaterializeModalVisible}
+        onCancel={() => setRetryMaterializeModalVisible(false)}
+        footer={null}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <p>
+            The system has been approved but materialization is blocked (catalog/sweep unavailable).
+            Click the button below to retry materialization. If catalog/sweep are now available, the system will start.
+          </p>
+          <div>
+            <Button
+              type="primary"
+              loading={actionLoading === 'retry-materialize'}
+              onClick={() => void retryMaterialize()}
+              style={{ width: '100%' }}
+            >
+              Retry Materialization Now
+            </Button>
+          </div>
+        </Space>
+      </Modal>
+
+      <Modal
+        title={`Monitoring chart: ${monitoringChartApiKey || '—'}`}
+        open={monitoringChartOpen}
+        onCancel={() => setMonitoringChartOpen(false)}
+        footer={<Button onClick={() => setMonitoringChartOpen(false)}>Close</Button>}
+        width={960}
+      >
+        <Spin spinning={monitoringChartLoading}>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Space wrap>
+              {monitoringChartLatest ? <Tag color="blue">Eq {formatMoney(monitoringChartLatest.equity_usd)}</Tag> : null}
+              {monitoringChartLatest ? <Tag color="purple">ML {formatPercent(monitoringChartLatest.margin_load_percent)}</Tag> : null}
+              {monitoringChartLatest ? <Tag color="red">Lev {formatNumber(monitoringChartLatest.effective_leverage, 2)}x</Tag> : null}
+              {monitoringChartLatest ? <Tag color="orange">DD {formatPercent(monitoringChartLatest.drawdown_percent)}</Tag> : null}
+            </Space>
+            {monitoringChartPoints.length > 0 ? (
+              <ChartComponent data={monitoringChartPoints} type="line" />
+            ) : (
+              <Empty description="No monitoring points" />
+            )}
+          </Space>
+        </Spin>
+      </Modal>
     </div>
   );
 };

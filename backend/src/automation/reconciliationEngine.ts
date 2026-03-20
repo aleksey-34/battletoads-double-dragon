@@ -74,14 +74,21 @@ const syncRecentTradesForStrategy = async (
     .map((trade) => String(trade.tradeId || '').trim())
     .filter((id) => id.length > 0);
 
+  const eventIds: string[] = [];
+  for (const tradeId of tradeIds) {
+    eventIds.push(tradeId);
+    eventIds.push(`${tradeId}:entry`);
+    eventIds.push(`${tradeId}:exit`);
+  }
+
   const existingIds = new Set<string>();
-  if (tradeIds.length > 0) {
-    const placeholders = tradeIds.map(() => '?').join(',');
+  if (eventIds.length > 0) {
+    const placeholders = eventIds.map(() => '?').join(',');
     const rows = await db.all(
       `SELECT source_trade_id
        FROM live_trade_events
        WHERE source_trade_id IN (${placeholders})`,
-      tradeIds
+      eventIds
     );
 
     for (const row of Array.isArray(rows) ? rows : []) {
@@ -97,27 +104,29 @@ const syncRecentTradesForStrategy = async (
   // Process oldest -> newest so timeline in db stays coherent.
   const ordered = [...trades].sort((a, b) => toFinite(a.timestamp) - toFinite(b.timestamp));
 
-  for (const trade of ordered) {
-    const tradeId = String(trade.tradeId || '').trim();
-    if (!tradeId || existingIds.has(tradeId)) {
-      continue;
+  const epsilon = 1e-9;
+  let positionSignedQty = 0;
+
+  const emitEvent = async (
+    sourceTradeId: string,
+    tradeType: 'entry' | 'exit',
+    side: 'long' | 'short',
+    timestamp: number,
+    price: number,
+    qty: number,
+    fee: number,
+    trade: TradeRow
+  ) => {
+    if (qty <= epsilon) {
+      return;
     }
-
-    const timestamp = toFinite(trade.timestamp, Date.now());
-    const price = toFinite(trade.price, 0);
-    const qty = Math.abs(toFinite(trade.qty, 0));
-    const fee = Math.abs(toFinite(trade.fee, 0));
-    const realizedPnl = toFinite(trade.realizedPnl, 0);
-
-    if (!(timestamp > 0 && price > 0 && qty > 0)) {
-      continue;
+    if (existingIds.has(sourceTradeId)) {
+      return;
     }
-
-    const tradeType: 'entry' | 'exit' = Math.abs(realizedPnl) > 0 ? 'exit' : 'entry';
 
     await recordLiveTradeEvent(strategyId, {
       trade_type: tradeType,
-      side: normalizeSide(trade.side),
+      side,
       entry_time: timestamp,
       entry_price: price,
       position_size: qty,
@@ -125,13 +134,60 @@ const syncRecentTradesForStrategy = async (
       actual_time: timestamp,
       actual_fee: fee,
       slippage_percent: 0,
-      source_trade_id: tradeId,
+      source_trade_id: sourceTradeId,
       source_order_id: String(trade.orderId || '').trim(),
       source_symbol: String(trade.symbol || symbol || '').trim(),
     });
 
     inserted += 1;
-    existingIds.add(tradeId);
+    existingIds.add(sourceTradeId);
+  };
+
+  for (const trade of ordered) {
+    const tradeId = String(trade.tradeId || '').trim();
+    if (!tradeId) {
+      continue;
+    }
+
+    const timestamp = toFinite(trade.timestamp, Date.now());
+    const price = toFinite(trade.price, 0);
+    const qty = Math.abs(toFinite(trade.qty, 0));
+    const fee = Math.abs(toFinite(trade.fee, 0));
+    if (!(timestamp > 0 && price > 0 && qty > 0)) {
+      continue;
+    }
+
+    const delta = trade.side === 'Buy' ? qty : -qty;
+    const prev = positionSignedQty;
+    const next = prev + delta;
+
+    if (Math.abs(prev) <= epsilon) {
+      const side = next >= 0 ? 'long' : 'short';
+      await emitEvent(`${tradeId}:entry`, 'entry', side, timestamp, price, Math.abs(next), fee, trade);
+      positionSignedQty = next;
+      continue;
+    }
+
+    const prevSide: 'long' | 'short' = prev >= 0 ? 'long' : 'short';
+    const nextSide: 'long' | 'short' = next >= 0 ? 'long' : 'short';
+    const prevAbs = Math.abs(prev);
+    const nextAbs = Math.abs(next);
+
+    // Same direction: either scale in (entry) or scale out (exit)
+    if (prevSide === nextSide || Math.abs(next) <= epsilon) {
+      if (nextAbs > prevAbs + epsilon) {
+        await emitEvent(`${tradeId}:entry`, 'entry', prevSide, timestamp, price, nextAbs - prevAbs, fee, trade);
+      } else if (nextAbs + epsilon < prevAbs) {
+        await emitEvent(`${tradeId}:exit`, 'exit', prevSide, timestamp, price, prevAbs - nextAbs, fee, trade);
+      }
+      positionSignedQty = next;
+      continue;
+    }
+
+    // Direction flip in one fill: close old side + open new side.
+    await emitEvent(`${tradeId}:exit`, 'exit', prevSide, timestamp, price, prevAbs, fee, trade);
+    await emitEvent(`${tradeId}:entry`, 'entry', nextSide, timestamp, price, nextAbs, fee, trade);
+    positionSignedQty = next;
   }
 
   return inserted;

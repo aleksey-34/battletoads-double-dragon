@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Col,
   Descriptions,
   Empty,
@@ -25,6 +26,13 @@ import ChartComponent from '../components/ChartComponent';
 import { useI18n } from '../i18n';
 
 const { Paragraph, Text, Title } = Typography;
+
+const initialTradingSystemsParams = new URLSearchParams(window.location.search);
+const initialApiKeyNameFromUrl = String(initialTradingSystemsParams.get('apiKeyName') || '').trim();
+const initialSystemIdFromUrlRaw = Number(initialTradingSystemsParams.get('systemId') || '');
+const initialSystemIdFromUrl = Number.isFinite(initialSystemIdFromUrlRaw) && initialSystemIdFromUrlRaw > 0
+  ? initialSystemIdFromUrlRaw
+  : null;
 
 type ApiKeyRecord = {
   id: number;
@@ -299,9 +307,9 @@ const TradingSystems: React.FC = () => {
   const { language } = useI18n();
   const copy = COPY_BY_LANGUAGE[language];
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
-  const [apiKeyName, setApiKeyName] = useState('');
+  const [apiKeyName, setApiKeyName] = useState(initialApiKeyNameFromUrl);
   const [systems, setSystems] = useState<TradingSystem[]>([]);
-  const [selectedSystemId, setSelectedSystemId] = useState<number | null>(null);
+  const [selectedSystemId, setSelectedSystemId] = useState<number | null>(initialSystemIdFromUrl);
   const [selectedSystem, setSelectedSystem] = useState<TradingSystem | null>(null);
   const [systemsLoading, setSystemsLoading] = useState(false);
   const [systemLoading, setSystemLoading] = useState(false);
@@ -311,6 +319,7 @@ const TradingSystems: React.FC = () => {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null);
   const [suggestions, setSuggestions] = useState<LiquiditySuggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [safeMembersApply, setSafeMembersApply] = useState(true);
   const [monitoringPoints, setMonitoringPoints] = useState<MonitoringPoint[]>([]);
   const [memberDraftsByStrategyId, setMemberDraftsByStrategyId] = useState<Record<number, { weight: number; is_enabled: boolean }>>({});
   const [backtestTuning, setBacktestTuning] = useState<BacktestTuning>({
@@ -483,10 +492,24 @@ const TradingSystems: React.FC = () => {
 
     setSystemActionLoading('members-save');
     try {
-      await axios.put(`/api/trading-systems/${encodeURIComponent(apiKeyName)}/${selectedSystemId}/members`, {
+      const response = await axios.put(`/api/trading-systems/${encodeURIComponent(apiKeyName)}/${selectedSystemId}/members`, {
         members,
+        safeApply: safeMembersApply,
+        options: {
+          safeApply: safeMembersApply,
+          cancelRemovedOrders: true,
+          closeRemovedPositions: true,
+          syncMemberActivation: true,
+        },
       });
       message.success('Trading system members updated');
+      const orchestration = response.data?.orchestration;
+      if (orchestration) {
+        const removedSymbols = Array.isArray(orchestration.removedSymbols) ? orchestration.removedSymbols.length : 0;
+        const closedPositions = Number(orchestration.closedPositions || 0);
+        const warnings = Array.isArray(orchestration.warnings) ? orchestration.warnings.length : 0;
+        message.info(`Safe apply: removedSymbols=${removedSymbols}, closedPositions=${closedPositions}, warnings=${warnings}`);
+      }
       await loadSystem(apiKeyName, selectedSystemId);
       await loadSystems(apiKeyName);
     } catch (error: any) {
@@ -808,6 +831,11 @@ const TradingSystems: React.FC = () => {
                 <Tooltip title="Записать новые веса/статусы блоков в торговую систему">
                   <Button onClick={() => void saveMemberDrafts()} loading={systemActionLoading === 'members-save'}>Сохранить блоки</Button>
                 </Tooltip>
+                <Tooltip title="Safe apply: отменить ордера и закрыть позиции по удаляемым парам перед применением нового состава">
+                  <Checkbox checked={safeMembersApply} onChange={(e) => setSafeMembersApply(e.target.checked)}>
+                    Safe apply
+                  </Checkbox>
+                </Tooltip>
                 <Tooltip title="Бэктест учитывает текущие веса блоков и параметры ниже">
                   <Button onClick={() => void runSystemBacktest()} loading={systemActionLoading === 'backtest'}>{copy.backtest}</Button>
                 </Tooltip>
@@ -919,6 +947,9 @@ const TradingSystems: React.FC = () => {
                     </Row>
                     <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
                       Период бэктеста определяется глубиной candles (bars) и интервалом стратегий. Чем больше bars, тем длиннее исторический отрезок.
+                    </Paragraph>
+                    <Paragraph type="secondary" style={{ marginTop: 6, marginBottom: 0 }}>
+                      Цель по сделкам влияет на подбор и оценку в бэктесте/свипе, но не является прямой крутилкой live-лотности в algofund.
                     </Paragraph>
                   </Card>
 

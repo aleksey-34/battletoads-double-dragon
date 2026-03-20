@@ -2,6 +2,7 @@ import { RestClientV5 } from 'bybit-api';
 import Bottleneck from 'bottleneck';
 import logger from '../utils/logger';
 import { ApiKey } from '../config/settings';
+import { db } from '../utils/database';
 
 type ExchangeClientEntry = {
   client: RestClientV5;
@@ -113,6 +114,25 @@ const loadCcxtModule = (): any => {
   return require('ccxt');
 };
 
+export const ensureExchangeClientInitialized = async (apiKeyName: string): Promise<void> => {
+  const name = String(apiKeyName || '').trim();
+  if (!name) {
+    return;
+  }
+
+  if (clients[name]?.client || ccxtClients[name]?.client) {
+    return;
+  }
+
+  const row = await db.get('SELECT * FROM api_keys WHERE name = ?', [name]);
+  if (!row) {
+    return;
+  }
+
+  initExchangeClient(row as ApiKey);
+  logger.info(`Lazy-initialized exchange client for key: ${name}`);
+};
+
 const getCcxtClientEntry = (apiKeyName: string): CcxtClientEntry => {
   const entry = ccxtClients[apiKeyName];
   if (!entry?.client) {
@@ -160,6 +180,25 @@ const resolveCcxtSymbol = async (entry: CcxtClientEntry, symbol: string): Promis
 
 const getBingxPositionSide = (side: 'Buy' | 'Sell'): 'LONG' | 'SHORT' => {
   return side === 'Buy' ? 'LONG' : 'SHORT';
+};
+
+const getBingxPositionSideCandidates = (
+  side: 'Buy' | 'Sell',
+  reduceOnly?: boolean
+): Array<'BOTH' | 'LONG' | 'SHORT' | undefined> => {
+  const directional = getBingxPositionSide(side);
+
+  if (reduceOnly) {
+    // In one-way mode BingX requires BOTH. In hedge mode LONG/SHORT can be required.
+    return ['BOTH', undefined, directional];
+  }
+
+  return [directional, 'BOTH', undefined];
+};
+
+const isBingxPositionSideError = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '').toLowerCase();
+  return message.includes('positionside') || message.includes('position side') || message.includes('109400') || message.includes('both');
 };
 
 const tryEnsureBingxOneWayMode = async (
@@ -683,30 +722,63 @@ export const placeOrder = async (
     }
 
     const orderType = numericPrice && numericPrice > 0 ? 'limit' : 'market';
-    const params: any = {};
-    if (entry.exchange === 'bingx') {
-      params.positionSide = getBingxPositionSide(side);
-    }
-    if (options?.reduceOnly) {
-      params.reduceOnly = true;
-      params.closePosition = true;
-    }
 
     try {
       await tryEnsureBingxOneWayMode(apiKeyName, entry, ccxtSymbol);
-      const order = await entry.limiter.schedule(() =>
-        entry.client.createOrder(
-          ccxtSymbol,
-          orderType,
-          side === 'Buy' ? 'buy' : 'sell',
-          amount,
-          orderType === 'limit' ? numericPrice : undefined,
-          params
-        )
-      );
 
-      logger.info(`Placed ccxt order: ${side} ${qty} ${symbol}`);
-      return order;
+      const submitOrderAttempt = async (positionSide?: 'BOTH' | 'LONG' | 'SHORT') => {
+        const params: any = {};
+        if (entry.exchange === 'bingx' && positionSide) {
+          params.positionSide = positionSide;
+        }
+        if (options?.reduceOnly) {
+          params.reduceOnly = true;
+          params.closePosition = true;
+        }
+
+        return entry.limiter.schedule(() =>
+          entry.client.createOrder(
+            ccxtSymbol,
+            orderType,
+            side === 'Buy' ? 'buy' : 'sell',
+            amount,
+            orderType === 'limit' ? numericPrice : undefined,
+            params
+          )
+        );
+      };
+
+      if (entry.exchange !== 'bingx') {
+        const order = await submitOrderAttempt();
+        logger.info(`Placed ccxt order: ${side} ${qty} ${symbol}`);
+        return order;
+      }
+
+      let lastError: Error | null = null;
+      for (const candidateSide of getBingxPositionSideCandidates(side, options?.reduceOnly)) {
+        try {
+          const order = await submitOrderAttempt(candidateSide);
+          logger.info(
+            `Placed BingX ccxt order: ${side} ${qty} ${symbol} (positionSide=${candidateSide || 'omitted'})`
+          );
+          return order;
+        } catch (error) {
+          lastError = error as Error;
+          if (!isBingxPositionSideError(error)) {
+            throw error;
+          }
+          logger.warn(
+            `BingX order retry for ${apiKeyName} ${symbol}: positionSide=${candidateSide || 'omitted'} failed (${lastError.message})`
+          );
+        }
+      }
+
+      if (lastError) {
+        throw lastError;
+      }
+
+      throw new Error(`Failed to place BingX order for ${symbol}`);
+
     } catch (error) {
       const err = error as Error;
       logger.error(`Error placing ccxt order: ${err.message}`);
@@ -1308,29 +1380,74 @@ export const closePosition = async (apiKeyName: string, symbol: string, qty: str
     }
 
     const closeSide = currentSide === 'Buy' ? 'sell' : 'buy';
-    const params: any = {
-      reduceOnly: true,
-      closePosition: true,
-    };
-    if (entry.exchange === 'bingx') {
-      params.positionSide = currentSide === 'Buy' ? 'LONG' : 'SHORT';
-    }
 
     try {
       await tryEnsureBingxOneWayMode(apiKeyName, entry, ccxtSymbol);
-      const order = await entry.limiter.schedule(() =>
-        entry.client.createOrder(
-          ccxtSymbol,
-          'market',
-          closeSide,
-          amount,
-          undefined,
-          params
-        )
-      );
 
-      logger.info(`Closed position via ccxt: ${qty} ${symbol}`);
-      return order;
+      const submitCloseOrder = async (
+        positionSide?: 'BOTH' | 'LONG' | 'SHORT',
+        withClosePosition = true
+      ) => {
+        const params: any = {
+          reduceOnly: true,
+        };
+        if (withClosePosition) {
+          params.closePosition = true;
+        }
+        if (entry.exchange === 'bingx' && positionSide) {
+          params.positionSide = positionSide;
+        }
+
+        return entry.limiter.schedule(() =>
+          entry.client.createOrder(
+            ccxtSymbol,
+            'market',
+            closeSide,
+            amount,
+            undefined,
+            params
+          )
+        );
+      };
+
+      if (entry.exchange !== 'bingx') {
+        const order = await submitCloseOrder();
+        logger.info(`Closed position via ccxt: ${qty} ${symbol}`);
+        return order;
+      }
+
+      const fallbackCandidates: Array<{ side?: 'BOTH' | 'LONG' | 'SHORT'; withClosePosition: boolean }> = [
+        { side: 'BOTH', withClosePosition: false },
+        { side: 'BOTH', withClosePosition: true },
+        { side: undefined, withClosePosition: false },
+        { side: currentSide === 'Buy' ? 'LONG' : 'SHORT', withClosePosition: false },
+        { side: currentSide === 'Buy' ? 'LONG' : 'SHORT', withClosePosition: true },
+      ];
+
+      let lastError: Error | null = null;
+      for (const candidate of fallbackCandidates) {
+        try {
+          const order = await submitCloseOrder(candidate.side, candidate.withClosePosition);
+          logger.info(
+            `Closed BingX position via ccxt: ${qty} ${symbol} (positionSide=${candidate.side || 'omitted'}, closePosition=${candidate.withClosePosition})`
+          );
+          return order;
+        } catch (error) {
+          lastError = error as Error;
+          if (!isBingxPositionSideError(error)) {
+            throw error;
+          }
+          logger.warn(
+            `BingX close retry for ${apiKeyName} ${symbol}: positionSide=${candidate.side || 'omitted'}, closePosition=${candidate.withClosePosition} failed (${lastError.message})`
+          );
+        }
+      }
+
+      if (lastError) {
+        throw lastError;
+      }
+
+      throw new Error(`Failed to close BingX position for ${symbol}`);
     } catch (error) {
       const err = error as Error;
       logger.error(`Error closing position via ccxt: ${err.message}`);

@@ -113,6 +113,14 @@ type SchedulerJob = {
   run_count: number;
 };
 
+type SchedulerGapStatus = {
+  fromDay: string;
+  toDay: string;
+  totalDays: number;
+  existingDays: number;
+  missingDays: string[];
+};
+
 type DbObservability = {
   atUtc: string;
   files: {
@@ -457,6 +465,9 @@ export default function Research() {
   const [schedulerLoading, setSchedulerLoading] = useState(false);
   const [schedulerSaving, setSchedulerSaving] = useState(false);
   const [schedulerRunNowLoading, setSchedulerRunNowLoading] = useState(false);
+  const [schedulerGapLoading, setSchedulerGapLoading] = useState(false);
+  const [schedulerBackfillLoading, setSchedulerBackfillLoading] = useState(false);
+  const [schedulerGapStatus, setSchedulerGapStatus] = useState<SchedulerGapStatus | null>(null);
   const [schedulerRunStartedAt, setSchedulerRunStartedAt] = useState<number | null>(null);
   const [schedulerRunElapsedSec, setSchedulerRunElapsedSec] = useState(0);
   const [schedulerJob, setSchedulerJob] = useState<SchedulerJob | null>(null);
@@ -467,6 +478,15 @@ export default function Research() {
   const [tasksLoading, setTasksLoading] = useState(false);
   const [taskSyncLoading, setTaskSyncLoading] = useState(false);
   const [taskRunLoading, setTaskRunLoading] = useState(false);
+  const [manualSweepModalOpen, setManualSweepModalOpen] = useState(false);
+  const [manualSweepLoading, setManualSweepLoading] = useState(false);
+  const [manualMarketsText, setManualMarketsText] = useState('');
+  const [manualDateFrom, setManualDateFrom] = useState('');
+  const [manualDateTo, setManualDateTo] = useState('');
+  const [manualInterval, setManualInterval] = useState('1h');
+  const [manualSweepName, setManualSweepName] = useState('');
+  const [manualSweepDescription, setManualSweepDescription] = useState('');
+  const [manualSweepNote, setManualSweepNote] = useState('');
   const [taskInterval, setTaskInterval] = useState('1h');
   const [taskDateFrom, setTaskDateFrom] = useState('');
   const [taskDateTo, setTaskDateTo] = useState('');
@@ -546,6 +566,37 @@ export default function Research() {
     }
   };
 
+  const checkSchedulerGap = async () => {
+    setSchedulerGapLoading(true);
+    try {
+      const res = await axios.get<SchedulerGapStatus>('/api/research/scheduler/daily_incremental_sweep/gap', {
+        params: { daysBack: 30 },
+      });
+      setSchedulerGapStatus(res.data);
+      const missing = Array.isArray(res.data?.missingDays) ? res.data.missingDays.length : 0;
+      message.info(`Gap check: missing days = ${missing}`);
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || 'Failed to check scheduler gap');
+    } finally {
+      setSchedulerGapLoading(false);
+    }
+  };
+
+  const backfillSchedulerGap = async () => {
+    setSchedulerBackfillLoading(true);
+    try {
+      const res = await axios.post<{ createdRuns?: number; missingDays?: number }>('/api/research/scheduler/daily_incremental_sweep/backfill-now', {
+        maxDays: 30,
+      });
+      message.success(`Backfill finished: created ${res.data?.createdRuns || 0} runs (missing ${res.data?.missingDays || 0})`);
+      await Promise.all([fetchScheduler(), checkSchedulerGap(), fetchProfiles()]);
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || 'Backfill failed');
+    } finally {
+      setSchedulerBackfillLoading(false);
+    }
+  };
+
   const fetchTasks = useCallback(async () => {
     setTasksLoading(true);
     try {
@@ -604,6 +655,45 @@ export default function Research() {
       message.error(e?.response?.data?.error || 'Task sweep failed');
     } finally {
       setTaskRunLoading(false);
+    }
+  };
+
+  const runManualSweep = async () => {
+    const markets = Array.from(new Set(
+      String(manualMarketsText || '')
+        .split(/[\n,;]+/)
+        .map((item) => item.trim().toUpperCase())
+        .filter(Boolean)
+    ));
+
+    if (markets.length === 0) {
+      message.warning('Add at least one market (example: BTC/USDT)');
+      return;
+    }
+
+    setManualSweepLoading(true);
+    try {
+      const res = await axios.post('/api/research/tasks/run-sweep/manual', {
+        markets,
+        dateFrom: manualDateFrom || undefined,
+        dateTo: manualDateTo || undefined,
+        interval: manualInterval || undefined,
+        sweepName: manualSweepName || undefined,
+        description: manualSweepDescription || undefined,
+        note: manualSweepNote || undefined,
+      });
+
+      message.success(`Manual sweep created: #${res.data?.sweepRunId || 'n/a'}, imported ${res.data?.imported || 0}`);
+      setManualSweepModalOpen(false);
+      setManualMarketsText('');
+      setManualSweepName('');
+      setManualSweepDescription('');
+      setManualSweepNote('');
+      await Promise.all([fetchScheduler(), fetchProfiles(), fetchTasks()]);
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || 'Manual sweep failed');
+    } finally {
+      setManualSweepLoading(false);
     }
   };
 
@@ -897,12 +987,23 @@ export default function Research() {
               <Button type="primary" onClick={() => void runSchedulerNow()} loading={schedulerRunNowLoading}>
                 Run now
               </Button>
+              <Button onClick={() => void checkSchedulerGap()} loading={schedulerGapLoading}>
+                Check gap (30d)
+              </Button>
+              <Button onClick={() => void backfillSchedulerGap()} loading={schedulerBackfillLoading}>
+                Backfill missing days
+              </Button>
             </Space>
             <Space direction="vertical" size={2} style={{ marginTop: 12 }}>
               <Text type="secondary">Next run: {schedulerJob?.next_run_at || '—'}</Text>
               <Text type="secondary">Last run: {schedulerJob?.last_run_at || '—'}</Text>
               <Text type="secondary">Run count: {schedulerJob?.run_count ?? 0}</Text>
               {schedulerJob?.last_error ? <Text type="danger">Last error: {schedulerJob.last_error}</Text> : null}
+              {schedulerGapStatus ? (
+                <Text type={schedulerGapStatus.missingDays.length > 0 ? 'warning' : 'secondary'}>
+                  Gap 30d: {schedulerGapStatus.existingDays}/{schedulerGapStatus.totalDays} days present, missing {schedulerGapStatus.missingDays.length}
+                </Text>
+              ) : null}
             </Space>
             {schedulerRunNowLoading ? (
               <div style={{ marginTop: 12, maxWidth: 420 }}>
@@ -952,6 +1053,9 @@ export default function Research() {
           <Space>
             <Button onClick={() => void fetchTasks()} loading={tasksLoading}>Refresh</Button>
             <Button onClick={() => void syncTasks()} loading={taskSyncLoading}>Sync from client requests</Button>
+            <Button type="primary" onClick={() => setManualSweepModalOpen(true)}>
+              New sweep by pairs/date
+            </Button>
           </Space>
         }
       >
@@ -1137,6 +1241,55 @@ export default function Research() {
         job={previewJobResult}
         onClose={() => setPreviewJobResult(null)}
       />
+
+      <Modal
+        title="Create Sweep From Pairs"
+        open={manualSweepModalOpen}
+        onCancel={() => setManualSweepModalOpen(false)}
+        onOk={() => void runManualSweep()}
+        okText="Run sweep"
+        confirmLoading={manualSweepLoading}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Input.TextArea
+            rows={5}
+            value={manualMarketsText}
+            onChange={(e) => setManualMarketsText(e.target.value)}
+            placeholder={'BTC/USDT\nETH/USDT\nSOL/USDT'}
+          />
+          <Space wrap>
+            <span>From:</span>
+            <Input type="date" style={{ width: 150 }} value={manualDateFrom} onChange={(e) => setManualDateFrom(e.target.value)} />
+            <span>To:</span>
+            <Input type="date" style={{ width: 150 }} value={manualDateTo} onChange={(e) => setManualDateTo(e.target.value)} />
+            <Input
+              style={{ width: 90 }}
+              value={manualInterval}
+              onChange={(e) => setManualInterval(e.target.value)}
+              placeholder="1h"
+            />
+          </Space>
+          <Input
+            value={manualSweepName}
+            onChange={(e) => setManualSweepName(e.target.value)}
+            placeholder="Sweep name (optional)"
+          />
+          <Input
+            value={manualSweepDescription}
+            onChange={(e) => setManualSweepDescription(e.target.value)}
+            placeholder="Description (optional)"
+          />
+          <Input.TextArea
+            rows={2}
+            value={manualSweepNote}
+            onChange={(e) => setManualSweepNote(e.target.value)}
+            placeholder="Note (optional)"
+          />
+          <Text type="secondary">
+            Enter one market per line or separate by comma/semicolon. Date range and interval are stored in sweep config.
+          </Text>
+        </Space>
+      </Modal>
     </div>
   );
 }

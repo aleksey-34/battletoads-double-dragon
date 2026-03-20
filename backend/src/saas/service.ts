@@ -115,6 +115,8 @@ type AlgofundRequestRow = {
   decision_note: string;
   created_at: string;
   decided_at: string | null;
+  tenant_display_name?: string;
+  tenant_slug?: string;
 };
 
 type CatalogMetricSet = {
@@ -902,7 +904,15 @@ const getAlgofundProfile = async (tenantId: number): Promise<AlgofundProfileRow 
 
 const getAlgofundRequestsByTenant = async (tenantId: number): Promise<AlgofundRequestRow[]> => {
   const rows = await db.all(
-    'SELECT * FROM algofund_start_stop_requests WHERE tenant_id = ? ORDER BY id DESC LIMIT 30',
+    `SELECT
+      r.*,
+      t.display_name AS tenant_display_name,
+      t.slug AS tenant_slug
+     FROM algofund_start_stop_requests r
+     JOIN tenants t ON t.id = r.tenant_id
+     WHERE r.tenant_id = ?
+     ORDER BY r.id DESC
+     LIMIT 30`,
     [tenantId]
   );
   return (Array.isArray(rows) ? rows : []) as AlgofundRequestRow[];
@@ -1760,6 +1770,191 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
     return listTenantSummaries();
   };
 
+type AdminTelegramControls = {
+  adminEnabled: boolean;
+  clientsEnabled: boolean;
+  tokenConfigured: boolean;
+  chatConfigured: boolean;
+};
+
+export type LowLotRecommendation = {
+  apiKeyName: string;
+  strategyId: number;
+  strategyName: string;
+  pair: string;
+  mode: string;
+  maxDeposit: number;
+  leverage: number;
+  lotPercent: number;
+  lastError: string;
+  updatedAt: string;
+  tenants: Array<{ id: number; slug: string; displayName: string; mode: ProductMode }>;
+  suggestedDepositMin: number;
+  suggestedLotPercent: number;
+  replacementCandidates: Array<{ symbol: string; score: number; note: string }>;
+};
+
+const getRuntimeFlag = async (key: string, fallback: string): Promise<string> => {
+  const row = await db.get('SELECT value FROM app_runtime_flags WHERE key = ?', [key]);
+  const value = String(row?.value || '').trim();
+  return value || fallback;
+};
+
+const setRuntimeFlag = async (key: string, value: string): Promise<void> => {
+  await db.run(
+    `INSERT INTO app_runtime_flags (key, value, updated_at)
+     VALUES (?, ?, CURRENT_TIMESTAMP)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+    [key, value]
+  );
+};
+
+export const getAdminTelegramControls = async (): Promise<AdminTelegramControls> => {
+  const [adminEnabledRaw, clientsEnabledRaw] = await Promise.all([
+    getRuntimeFlag('telegram.admin.enabled', '1'),
+    getRuntimeFlag('telegram.clients.enabled', '0'),
+  ]);
+
+  return {
+    adminEnabled: adminEnabledRaw !== '0',
+    clientsEnabled: clientsEnabledRaw !== '0',
+    tokenConfigured: Boolean(String(process.env.TELEGRAM_ADMIN_BOT_TOKEN || '').trim()),
+    chatConfigured: Boolean(String(process.env.TELEGRAM_ADMIN_CHAT_ID || '').trim()),
+  };
+};
+
+export const updateAdminTelegramControls = async (payload: {
+  adminEnabled?: boolean;
+  clientsEnabled?: boolean;
+}): Promise<AdminTelegramControls> => {
+  if (payload.adminEnabled !== undefined) {
+    await setRuntimeFlag('telegram.admin.enabled', payload.adminEnabled ? '1' : '0');
+  }
+  if (payload.clientsEnabled !== undefined) {
+    await setRuntimeFlag('telegram.clients.enabled', payload.clientsEnabled ? '1' : '0');
+  }
+
+  return getAdminTelegramControls();
+};
+
+export const getAdminLowLotRecommendations = async (options?: {
+  hours?: number;
+  limit?: number;
+  perStrategyReplacementLimit?: number;
+}): Promise<{ generatedAt: string; periodHours: number; items: LowLotRecommendation[] }> => {
+  const periodHours = Math.max(1, Math.floor(Number(options?.hours || 72) || 72));
+  const limit = Math.max(1, Math.min(200, Math.floor(Number(options?.limit || 50) || 50)));
+  const replLimit = Math.max(1, Math.min(5, Math.floor(Number(options?.perStrategyReplacementLimit || 3) || 3)));
+
+  const rows = await db.all(
+    `SELECT
+       a.id AS api_key_id,
+       a.name AS api_key_name,
+       s.id AS strategy_id,
+       s.name AS strategy_name,
+       COALESCE(s.market_mode, 'synthetic') AS market_mode,
+       COALESCE(s.base_symbol, '') AS base_symbol,
+       COALESCE(s.quote_symbol, '') AS quote_symbol,
+       COALESCE(s.max_deposit, 0) AS max_deposit,
+       COALESCE(s.leverage, 1) AS leverage,
+       COALESCE(s.lot_long_percent, 0) AS lot_long_percent,
+       COALESCE(s.lot_short_percent, 0) AS lot_short_percent,
+       COALESCE(s.last_error, '') AS last_error,
+       COALESCE(s.updated_at, '') AS updated_at
+     FROM strategies s
+     JOIN api_keys a ON a.id = s.api_key_id
+     WHERE COALESCE(s.last_error, '') <> ''
+       AND datetime(s.updated_at) >= datetime('now', ?)
+       AND lower(s.last_error) LIKE '%order size too small%'
+     ORDER BY datetime(s.updated_at) DESC
+     LIMIT ?`,
+    [`-${periodHours} hours`, limit]
+  );
+
+  const items: LowLotRecommendation[] = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const apiKeyId = Number(row?.api_key_id || 0);
+    const apiKeyName = String(row?.api_key_name || '');
+    const strategyId = Number(row?.strategy_id || 0);
+    const strategyName = String(row?.strategy_name || '');
+    const mode = String(row?.market_mode || 'synthetic');
+    const base = String(row?.base_symbol || '').toUpperCase();
+    const quote = String(row?.quote_symbol || '').toUpperCase();
+    const pair = quote ? `${base}/${quote}` : base;
+    const maxDeposit = Math.max(0, Number(row?.max_deposit || 0));
+    const leverage = Math.max(0, Number(row?.leverage || 0));
+    const lotPercent = Math.max(0, Number(row?.lot_long_percent || 0), Number(row?.lot_short_percent || 0));
+    const lastError = String(row?.last_error || '').trim();
+    const updatedAt = String(row?.updated_at || '');
+
+    const tenantRows = await db.all(
+      `SELECT id, slug, display_name, product_mode
+       FROM tenants
+       WHERE assigned_api_key_name = ?
+       ORDER BY id ASC`,
+      [apiKeyName]
+    );
+
+    const replacementRows = apiKeyId > 0
+      ? await db.all(
+        `SELECT symbol, score, details_json
+         FROM liquidity_scan_suggestions
+         WHERE api_key_id = ?
+           AND status IN ('new', 'approved')
+           AND (symbol = ? OR symbol = ?)
+         ORDER BY score DESC, created_at DESC
+         LIMIT ?`,
+        [apiKeyId, base, quote, replLimit]
+      )
+      : [];
+
+    const suggestedDepositMin = Math.max(150, Number((maxDeposit * 1.5).toFixed(2)));
+    const suggestedLotPercent = lotPercent < 40 ? 50 : Math.min(100, lotPercent + 20);
+
+    items.push({
+      apiKeyName,
+      strategyId,
+      strategyName,
+      pair,
+      mode,
+      maxDeposit,
+      leverage,
+      lotPercent,
+      lastError,
+      updatedAt,
+      tenants: (Array.isArray(tenantRows) ? tenantRows : []).map((tenant) => ({
+        id: Number(tenant.id),
+        slug: String(tenant.slug || ''),
+        displayName: String(tenant.display_name || ''),
+        mode: String(tenant.product_mode || 'strategy_client') as ProductMode,
+      })),
+      suggestedDepositMin,
+      suggestedLotPercent,
+      replacementCandidates: (Array.isArray(replacementRows) ? replacementRows : []).map((candidate) => {
+        const detailsRaw = String(candidate?.details_json || '{}');
+        let note = '';
+        try {
+          const details = JSON.parse(detailsRaw) as Record<string, unknown>;
+          note = String(details?.reason || details?.note || details?.message || '').trim();
+        } catch {
+          note = '';
+        }
+        return {
+          symbol: String(candidate?.symbol || ''),
+          score: Number(candidate?.score || 0),
+          note,
+        };
+      }),
+    });
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    periodHours,
+    items,
+  };
+};
+
 export const getSaasAdminSummary = async () => {
   await ensureSaasSeedData();
   const sourceCatalog = loadLatestClientCatalog();
@@ -2385,6 +2580,32 @@ export const materializeStrategyClient = async (tenantId: number, activate: bool
 
 const getAlgofundClientSystemName = (tenant: TenantRow): string => `ALGOFUND::${tenant.slug}`;
 
+const getAlgofundEngineState = async (
+  tenant: TenantRow,
+  profile: AlgofundProfileRow
+): Promise<{ apiKeyName: string; systemId: number; systemName: string; isActive: boolean } | null> => {
+  const apiKeyName = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
+  if (!apiKeyName) {
+    return null;
+  }
+
+  const preferredSystemName = asString(profile.published_system_name || getAlgofundClientSystemName(tenant));
+  const systems = await listTradingSystems(apiKeyName);
+  const existing = systems.find((item) => asString(item.name) === preferredSystemName)
+    || systems.find((item) => asString(item.name) === getAlgofundClientSystemName(tenant));
+
+  if (!existing?.id) {
+    return null;
+  }
+
+  return {
+    apiKeyName,
+    systemId: Number(existing.id),
+    systemName: asString(existing.name),
+    isActive: Boolean(existing.is_active),
+  };
+};
+
 const materializeAlgofundSystem = async (
   tenant: TenantRow,
   plan: PlanRow,
@@ -2489,7 +2710,12 @@ const materializeAlgofundSystem = async (
   };
 };
 
-export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier?: number, allowPreviewAbovePlan = false) => {
+export const getAlgofundState = async (
+  tenantId: number,
+  requestedRiskMultiplier?: number,
+  allowPreviewAbovePlan = false,
+  forceRefreshPreview = false
+) => {
   await ensureSaasSeedData();
   const tenant = await getTenantById(tenantId);
   if (tenant.product_mode !== 'algofund_client') {
@@ -2500,6 +2726,35 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
   const profile = await getAlgofundProfile(tenantId);
   if (!plan || !profile) {
     throw new Error('Algofund plan/profile not found');
+  }
+
+  const engine = await getAlgofundEngineState(tenant, profile);
+  const effectiveProfile: AlgofundProfileRow = {
+    ...profile,
+    actual_enabled: engine ? (engine.isActive ? 1 : 0) : profile.actual_enabled,
+    published_system_name: engine?.systemName || profile.published_system_name,
+    assigned_api_key_name: engine?.apiKeyName || profile.assigned_api_key_name,
+  };
+
+  if (
+    effectiveProfile.actual_enabled !== profile.actual_enabled
+    || effectiveProfile.published_system_name !== profile.published_system_name
+    || effectiveProfile.assigned_api_key_name !== profile.assigned_api_key_name
+  ) {
+    await db.run(
+      `UPDATE algofund_profiles
+       SET actual_enabled = ?,
+           published_system_name = ?,
+           assigned_api_key_name = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [
+        effectiveProfile.actual_enabled,
+        effectiveProfile.published_system_name,
+        effectiveProfile.assigned_api_key_name,
+        tenantId,
+      ]
+    );
   }
 
   const capabilities = resolvePlanCapabilities(plan);
@@ -2514,51 +2769,112 @@ export const getAlgofundState = async (tenantId: number, requestedRiskMultiplier
   const sweep = loadLatestSweep();
   const period = buildPeriodInfo(sweep);
 
-  const sourceSystem = await ensurePublishedSourceSystem(tenantId);
-  const previewResult = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
-    bars: SAAS_PREVIEW_BARS,
-    warmupBars: SAAS_PREVIEW_WARMUP_BARS,
-    skipMissingSymbols: true,
-    initialBalance: SAAS_ALGOFUND_BASELINE_INITIAL_BALANCE,
-    riskMultiplier,
-    commissionPercent: 0.1,
-    slippagePercent: 0.05,
-    fundingRatePercent: 0,
-  });
-
-  const preview = {
-    riskMultiplier,
-    sourceSystem,
-    summary: {
-      ...previewResult.summary,
-    },
-    period,
-    equityCurve: previewResult.equityCurve,
-    blockedByPlan: false,
+  let preview: {
+    riskMultiplier: number;
+    sourceSystem?: {
+      apiKeyName: string;
+      systemId: number;
+      systemName: string;
+    } | null;
+    summary?: Record<string, unknown> | null;
+    period?: PeriodInfo | null;
+    equityCurve?: Array<Record<string, unknown>>;
+    blockedByPlan: boolean;
+    blockedReason?: string;
   };
 
-  await db.run(
-    `UPDATE algofund_profiles
-     SET latest_preview_json = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE tenant_id = ?`,
-    [JSON.stringify(preview), tenantId]
-  );
+  const cachedPreview = safeJsonParse<any>(profile.latest_preview_json, null);
+  const hasCachedPreview = cachedPreview && typeof cachedPreview === 'object';
+  const shouldRefreshPreview = forceRefreshPreview || requestedRiskMultiplier !== undefined || !hasCachedPreview;
+
+  if (shouldRefreshPreview) {
+    try {
+      const sourceSystem = await ensurePublishedSourceSystem(tenantId);
+      const previewResult = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
+        bars: SAAS_PREVIEW_BARS,
+        warmupBars: SAAS_PREVIEW_WARMUP_BARS,
+        skipMissingSymbols: true,
+        initialBalance: SAAS_ALGOFUND_BASELINE_INITIAL_BALANCE,
+        riskMultiplier,
+        commissionPercent: 0.1,
+        slippagePercent: 0.05,
+        fundingRatePercent: 0,
+      });
+
+      preview = {
+        riskMultiplier,
+        sourceSystem,
+        summary: {
+          ...previewResult.summary,
+        },
+        period,
+        equityCurve: previewResult.equityCurve as Array<Record<string, unknown>>,
+        blockedByPlan: false,
+      };
+    } catch (error) {
+      const message = (error as Error).message || 'Algofund preview unavailable';
+      logger.warn(`Algofund preview unavailable for tenant ${tenantId}: ${message}`);
+      preview = {
+        riskMultiplier,
+        sourceSystem: null,
+        summary: null,
+        period,
+        equityCurve: [],
+        blockedByPlan: true,
+        blockedReason: message,
+      };
+    }
+
+    await db.run(
+      `UPDATE algofund_profiles
+       SET latest_preview_json = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [JSON.stringify(preview), tenantId]
+    );
+  } else {
+    preview = {
+      riskMultiplier: Number(cachedPreview?.riskMultiplier ?? riskMultiplier),
+      sourceSystem: cachedPreview?.sourceSystem || null,
+      summary: cachedPreview?.summary || null,
+      period: cachedPreview?.period || period,
+      equityCurve: Array.isArray(cachedPreview?.equityCurve) ? cachedPreview.equityCurve : [],
+      blockedByPlan: Boolean(cachedPreview?.blockedByPlan),
+      blockedReason: cachedPreview?.blockedReason ? String(cachedPreview.blockedReason) : undefined,
+    };
+
+    // If system is active, do not keep stale "blocked" markers from older preview failures.
+    if (Number(effectiveProfile.actual_enabled || 0) === 1) {
+      preview.blockedByPlan = false;
+      preview.blockedReason = undefined;
+      if (!preview.sourceSystem && asString(profile.published_system_name, '')) {
+        preview.sourceSystem = {
+          apiKeyName: asString(effectiveProfile.assigned_api_key_name || tenant.assigned_api_key_name, ''),
+          systemId: Number(engine?.systemId || 0),
+          systemName: asString(effectiveProfile.published_system_name, ''),
+        };
+      }
+    }
+  }
 
   return {
     tenant,
     plan,
     capabilities,
     profile: {
-      ...profile,
+      ...effectiveProfile,
       latestPreview: safeJsonParse<Record<string, unknown>>(profile.latest_preview_json, {}),
     },
+    engine,
     preview,
     requests: await getAlgofundRequestsByTenant(tenantId),
     catalog: loadLatestClientCatalog(),
   };
 };
 
-export const updateAlgofundState = async (tenantId: number, payload: { riskMultiplier?: number; assignedApiKeyName?: string }) => {
+export const updateAlgofundState = async (
+  tenantId: number,
+  payload: { riskMultiplier?: number; assignedApiKeyName?: string; requestedEnabled?: boolean }
+) => {
   const tenant = await getTenantById(tenantId);
   const profile = await getAlgofundProfile(tenantId);
   const plan = await getPlanForTenant(tenantId);
@@ -2571,12 +2887,15 @@ export const updateAlgofundState = async (tenantId: number, payload: { riskMulti
     asNumber(plan.risk_cap_max, 1)
   ));
   const nextApiKeyName = asString(payload.assignedApiKeyName, profile.assigned_api_key_name || tenant.assigned_api_key_name);
+  const nextRequestedEnabled = payload.requestedEnabled !== undefined
+    ? payload.requestedEnabled
+    : Number(profile.requested_enabled || 0) === 1;
 
   await db.run(
     `UPDATE algofund_profiles
-     SET risk_multiplier = ?, assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+     SET risk_multiplier = ?, assigned_api_key_name = ?, requested_enabled = ?, updated_at = CURRENT_TIMESTAMP
      WHERE tenant_id = ?`,
-    [nextRiskMultiplier, nextApiKeyName, tenantId]
+    [nextRiskMultiplier, nextApiKeyName, nextRequestedEnabled ? 1 : 0, tenantId]
   );
 
   await db.run(
@@ -2645,8 +2964,18 @@ export const resolveAlgofundRequest = async (requestId: number, status: RequestS
 
   if (status === 'approved') {
     if (row.request_type === 'start') {
-      await materializeAlgofundSystem(tenant, plan, { ...profile, requested_enabled: 1 }, true);
-      await db.run('UPDATE algofund_profiles SET actual_enabled = 1, requested_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
+      try {
+        await materializeAlgofundSystem(tenant, plan, { ...profile, requested_enabled: 1 }, true);
+        await db.run('UPDATE algofund_profiles SET actual_enabled = 1, requested_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
+      } catch (error) {
+        const reason = (error as Error).message || 'Materialization failed';
+        logger.warn(`Algofund request approve fallback for tenant ${row.tenant_id}: ${reason}`);
+        await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
+
+        const note = decisionNote.trim();
+        const suffix = `Auto-note: approved without materialization (${reason})`;
+        decisionNote = note ? `${note} | ${suffix}` : suffix;
+      }
     } else {
       const systems = await listTradingSystems(asString(profile.assigned_api_key_name || tenant.assigned_api_key_name));
       const existing = systems.find((item) => asString(item.name) === getAlgofundClientSystemName(tenant));
@@ -2671,6 +3000,31 @@ export const resolveAlgofundRequest = async (requestId: number, status: RequestS
   );
 
   return getAlgofundState(row.tenant_id);
+};
+
+export const retryMaterializeAlgofundSystem = async (tenantId: number) => {
+  const tenant = await getTenantById(tenantId);
+  const plan = await getPlanForTenant(tenantId);
+  const profile = await getAlgofundProfile(tenantId);
+  if (!plan || !profile) {
+    throw new Error('Algofund plan/profile not found');
+  }
+
+  if (!profile.requested_enabled) {
+    throw new Error('Materialization retry only available when start has been requested');
+  }
+
+  try {
+    await materializeAlgofundSystem(tenant, plan, { ...profile, requested_enabled: 1 }, true);
+    await db.run('UPDATE algofund_profiles SET actual_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [tenantId]);
+  } catch (error) {
+    const reason = (error as Error).message || 'Materialization failed';
+    logger.warn(`Algofund retry materialize failed for tenant ${tenant.slug}: ${reason}`);
+    // Keep actual_enabled = 0, blockedReason will be shown from preview
+    throw new Error(`Retry failed: ${reason}`);
+  }
+
+  return getAlgofundState(tenantId);
 };
 
 export const publishAdminTradingSystem = async () => {

@@ -2936,6 +2936,7 @@ export const copyStrategyBlock = async (
 
 export const runAutoStrategiesCycle = async () => {
   const { db } = await import('../utils/database');
+  const { ensureExchangeClientInitialized } = await import('./exchange');
   const rows = await db.all(
     `SELECT a.name AS api_key_name, s.id AS strategy_id
      FROM strategies s
@@ -2957,6 +2958,7 @@ export const runAutoStrategiesCycle = async () => {
     }
 
     try {
+      await ensureExchangeClientInitialized(apiKeyName);
       await executeStrategy(apiKeyName, strategyId, {
         source: 'auto',
         closedBarOnly: true,

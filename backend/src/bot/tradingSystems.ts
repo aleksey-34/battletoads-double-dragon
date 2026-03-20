@@ -1,6 +1,7 @@
 import { BacktestRunRequest, BacktestRunResult, runBacktest } from '../backtest/engine';
 import { Strategy } from '../config/settings';
 import { db } from '../utils/database';
+import { cancelAllOrders, closePosition, getPositions } from './exchange';
 import { getMonitoringLatest, recordMonitoringSnapshot } from './monitoring';
 import { getStrategies, updateStrategy } from './strategy';
 
@@ -47,6 +48,12 @@ export type TradingSystemMemberDraft = {
   member_role?: string;
   is_enabled?: boolean;
   notes?: string;
+};
+
+export type TradingSystemMembersSafeApplyOptions = {
+  cancelRemovedOrders?: boolean;
+  closeRemovedPositions?: boolean;
+  syncMemberActivation?: boolean;
 };
 
 export type TradingSystemDraft = {
@@ -454,6 +461,155 @@ export const replaceTradingSystemMembers = async (
   }
 
   return getTradingSystem(apiKeyName, systemId);
+};
+
+const collectMemberSymbols = (member: TradingSystemMember): string[] => {
+  const strategy = member.strategy;
+  if (!strategy) {
+    return [];
+  }
+
+  const base = String(strategy.base_symbol || '').trim().toUpperCase();
+  const quote = String(strategy.quote_symbol || '').trim().toUpperCase();
+  if (!base) {
+    return [];
+  }
+
+  if (String(strategy.market_mode || 'synthetic') === 'mono') {
+    return [base];
+  }
+
+  return [base, quote].filter(Boolean);
+};
+
+export const replaceTradingSystemMembersSafely = async (
+  apiKeyName: string,
+  systemId: number,
+  members: TradingSystemMemberDraft[],
+  options?: TradingSystemMembersSafeApplyOptions
+): Promise<{ system: TradingSystem; orchestration: Record<string, unknown> }> => {
+  const current = await getTradingSystem(apiKeyName, systemId);
+  const nextMembers = Array.isArray(members) ? members : [];
+  const settings = {
+    cancelRemovedOrders: options?.cancelRemovedOrders !== false,
+    closeRemovedPositions: options?.closeRemovedPositions !== false,
+    syncMemberActivation: options?.syncMemberActivation !== false,
+  };
+
+  const strategyMap = new Map<number, Strategy>();
+  const allStrategies = await getStrategies(apiKeyName, { includeLotPreview: false });
+  for (const strategy of allStrategies) {
+    if (strategy.id) {
+      strategyMap.set(Number(strategy.id), strategy);
+    }
+  }
+
+  const currentEnabledMembers = current.members.filter((member) => member.is_enabled);
+  const nextEnabledMembers = nextMembers
+    .filter((member) => safeBoolean(member.is_enabled, true))
+    .map((member) => ({
+      strategyId: Number(member.strategy_id),
+      strategy: strategyMap.get(Number(member.strategy_id)) || null,
+    }));
+
+  const currentStrategyIds = new Set(currentEnabledMembers.map((member) => Number(member.strategy_id)));
+  const nextStrategyIds = new Set(nextEnabledMembers.map((member) => Number(member.strategyId)).filter((id) => Number.isFinite(id) && id > 0));
+
+  const removedStrategyIds = Array.from(currentStrategyIds).filter((id) => !nextStrategyIds.has(id));
+  const addedStrategyIds = Array.from(nextStrategyIds).filter((id) => !currentStrategyIds.has(id));
+
+  const currentSymbols = new Set<string>();
+  for (const member of currentEnabledMembers) {
+    for (const symbol of collectMemberSymbols(member)) {
+      currentSymbols.add(symbol);
+    }
+  }
+
+  const nextSymbols = new Set<string>();
+  for (const item of nextEnabledMembers) {
+    if (!item.strategy) {
+      continue;
+    }
+    const base = String(item.strategy.base_symbol || '').trim().toUpperCase();
+    const quote = String(item.strategy.quote_symbol || '').trim().toUpperCase();
+    if (!base) {
+      continue;
+    }
+    if (String(item.strategy.market_mode || 'synthetic') === 'mono') {
+      nextSymbols.add(base);
+    } else {
+      nextSymbols.add(base);
+      if (quote) {
+        nextSymbols.add(quote);
+      }
+    }
+  }
+
+  const removedSymbols = Array.from(currentSymbols).filter((symbol) => !nextSymbols.has(symbol));
+  const warnings: string[] = [];
+
+  if (settings.cancelRemovedOrders) {
+    for (const symbol of removedSymbols) {
+      try {
+        await cancelAllOrders(apiKeyName, symbol);
+      } catch (error) {
+        warnings.push(`cancelAllOrders failed for ${symbol}: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  let closedPositions = 0;
+  if (settings.closeRemovedPositions) {
+    for (const symbol of removedSymbols) {
+      try {
+        const positions = await getPositions(apiKeyName, symbol);
+        const actionable = positions.filter((position: any) => Number.parseFloat(String(position?.size || '0')) > 0);
+        for (const position of actionable) {
+          const qty = String(position?.size || '0');
+          const side = String(position?.side || '') as 'Buy' | 'Sell';
+          if (!qty || qty === '0' || (side !== 'Buy' && side !== 'Sell')) {
+            continue;
+          }
+          await closePosition(apiKeyName, symbol, qty, side);
+          closedPositions += 1;
+        }
+      } catch (error) {
+        warnings.push(`close positions failed for ${symbol}: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  const system = await replaceTradingSystemMembers(apiKeyName, systemId, nextMembers);
+
+  if (settings.syncMemberActivation) {
+    for (const strategyId of removedStrategyIds) {
+      try {
+        await updateStrategy(apiKeyName, strategyId, { is_active: false }, { source: 'system_safe_replace_removed' });
+      } catch (error) {
+        warnings.push(`deactivate strategy ${strategyId} failed: ${(error as Error).message}`);
+      }
+    }
+
+    for (const strategyId of addedStrategyIds) {
+      try {
+        await updateStrategy(apiKeyName, strategyId, { is_active: Boolean(system.is_active) }, { source: 'system_safe_replace_added' });
+      } catch (error) {
+        warnings.push(`activate strategy ${strategyId} failed: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  return {
+    system,
+    orchestration: {
+      removedSymbols,
+      removedStrategyIds,
+      addedStrategyIds,
+      closedPositions,
+      warnings,
+      options: settings,
+    },
+  };
 };
 
 export const setTradingSystemActivation = async (

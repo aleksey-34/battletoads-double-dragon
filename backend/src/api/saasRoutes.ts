@@ -11,12 +11,16 @@ import {
   publishAdminTradingSystem,
   requestAlgofundAction,
   resolveAlgofundRequest,
+  retryMaterializeAlgofundSystem,
   seedDemoSaasData,
   updatePlanAdminState,
   updateAlgofundState,
   updateTenantAdminState,
   updateStrategyClientState,
   createTenantByAdmin,
+  getAdminLowLotRecommendations,
+  getAdminTelegramControls,
+  updateAdminTelegramControls,
 } from '../saas/service';
 
 const router = Router();
@@ -62,6 +66,49 @@ router.post('/admin/seed', async (_req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS seed error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/low-lot-recommendations', async (req, res) => {
+  try {
+    const hours = toOptionalNumber(req.query.hours);
+    const limit = toOptionalNumber(req.query.limit);
+    const perStrategyReplacementLimit = toOptionalNumber(req.query.perStrategyReplacementLimit);
+    const data = await getAdminLowLotRecommendations({
+      hours,
+      limit,
+      perStrategyReplacementLimit,
+    });
+    res.json(data);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS low-lot recommendations error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/telegram-controls', async (_req, res) => {
+  try {
+    const data = await getAdminTelegramControls();
+    res.json(data);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS telegram controls read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/admin/telegram-controls', async (req, res) => {
+  try {
+    const data = await updateAdminTelegramControls({
+      adminEnabled: req.body?.adminEnabled !== undefined ? toBool(req.body.adminEnabled) : undefined,
+      clientsEnabled: req.body?.clientsEnabled !== undefined ? toBool(req.body.clientsEnabled) : undefined,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS telegram controls update error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -298,7 +345,8 @@ router.get('/algofund/:tenantId', async (req, res) => {
     const data = await getAlgofundState(
       tenantId,
       toOptionalNumber(req.query.riskMultiplier),
-      toBool(req.query.allowPreviewAbovePlan)
+      toBool(req.query.allowPreviewAbovePlan),
+      toBool(req.query.refreshPreview)
     );
     res.json(data);
   } catch (error) {
@@ -318,6 +366,7 @@ router.patch('/algofund/:tenantId', async (req, res) => {
     const data = await updateAlgofundState(tenantId, {
       riskMultiplier: toOptionalNumber(req.body.riskMultiplier),
       assignedApiKeyName: req.body.assignedApiKeyName,
+      requestedEnabled: req.body.requestedEnabled !== undefined ? toBool(req.body.requestedEnabled) : undefined,
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -359,6 +408,22 @@ router.post('/algofund/requests/:requestId/resolve', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS algofund resolve error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/algofund/:tenantId/retry-materialize', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const data = await retryMaterializeAlgofundSystem(tenantId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund retry materialize error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

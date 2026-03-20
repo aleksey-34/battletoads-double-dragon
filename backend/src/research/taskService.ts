@@ -344,6 +344,125 @@ export const runSweepFromSelectedTasks = async (input?: {
   };
 };
 
+export const runSweepFromManualMarkets = async (input: {
+  markets: string[];
+  dateFrom?: string;
+  dateTo?: string;
+  interval?: string;
+  sweepName?: string;
+  description?: string;
+  note?: string;
+}): Promise<Record<string, unknown>> => {
+  const rdb = getResearchDb();
+  const rawMarkets = Array.isArray(input.markets) ? input.markets : [];
+  const normalizedMarkets = Array.from(new Set(
+    rawMarkets
+      .map((item) => String(item || '').trim().toUpperCase())
+      .filter(Boolean)
+  ));
+
+  if (normalizedMarkets.length === 0) {
+    throw new Error('markets is required (example: BTC/USDT, ETH/USDT)');
+  }
+
+  const period = (!input?.dateFrom || !input?.dateTo)
+    ? await resolveAutoPeriod()
+    : {
+      dateFrom: String(input.dateFrom),
+      dateTo: String(input.dateTo),
+      lagDays: null,
+    };
+
+  const intervalFallback = String(input.interval || '').trim() || '1h';
+  const sweepName = String(input.sweepName || '').trim()
+    || `manual_pair_sweep_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+  const description = String(input.description || '').trim() || 'Sweep generated from manual pair request';
+  const note = String(input.note || '').trim();
+
+  const sweepRunId = await registerSweepRun({
+    name: sweepName,
+    description,
+    resultSummary: {
+      source: 'research_manual_pairs',
+      requestedMarkets: normalizedMarkets.length,
+      period,
+    },
+    config: {
+      source: 'research_manual_pairs',
+      period,
+      interval: intervalFallback,
+      markets: normalizedMarkets,
+      note: note || undefined,
+    },
+  });
+
+  const candidates = normalizedMarkets
+    .map((market, index) => {
+      const parsed = parseMarket(market);
+      if (!parsed.base_symbol) {
+        return null;
+      }
+
+      const isSynthetic = Boolean(parsed.quote_symbol);
+      const finalMarket = [parsed.base_symbol, parsed.quote_symbol].filter(Boolean).join('/');
+
+      return {
+        name: `${finalMarket || parsed.base_symbol}-manual-${index + 1}`,
+        strategy_type: 'DD_BattleToads',
+        market_mode: isSynthetic ? 'synthetic' : 'mono',
+        base_symbol: parsed.base_symbol,
+        quote_symbol: parsed.quote_symbol || undefined,
+        interval: intervalFallback,
+        config: {
+          source: 'manual_pair_request',
+          market: finalMarket,
+          base_symbol: parsed.base_symbol,
+          quote_symbol: parsed.quote_symbol,
+          interval: intervalFallback,
+          dateFrom: period.dateFrom,
+          dateTo: period.dateTo,
+          note: note || undefined,
+        },
+        metrics: {
+          score: 0,
+        },
+      };
+    })
+    .filter((candidate): candidate is NonNullable<typeof candidate> => candidate !== null);
+
+  if (candidates.length === 0) {
+    throw new Error('No valid markets after parsing');
+  }
+
+  const importResult = await importSweepCandidates(sweepRunId, candidates);
+
+  await rdb.run(
+    `INSERT INTO sweep_artifacts (sweep_run_id, artifact_type, content_json, created_at)
+     VALUES (?, 'manual_pairs_request', ?, CURRENT_TIMESTAMP)`,
+    [
+      sweepRunId,
+      JSON.stringify({
+        markets: normalizedMarkets,
+        period,
+        interval: intervalFallback,
+        note: note || null,
+      }),
+    ]
+  ).catch(() => {
+    // Keep flow resilient if artifacts table is unavailable.
+  });
+
+  return {
+    sweepRunId,
+    period,
+    lagDays: period.lagDays,
+    markets: normalizedMarkets.length,
+    imported: importResult.imported,
+    skipped: importResult.skipped,
+    candidates: candidates.length,
+  };
+};
+
 export const listSweepPairs = async (sweepRunId: number): Promise<Array<{ market: string; interval: string; profiles: number }>> => {
   const rdb = getResearchDb();
   const rows = await rdb.all(

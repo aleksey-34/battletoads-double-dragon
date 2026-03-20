@@ -1,5 +1,6 @@
 import logger from '../utils/logger';
 import { db } from '../utils/database';
+import { ensureExchangeClientInitialized } from '../bot/exchange';
 import { recordMonitoringSnapshot } from '../bot/monitoring';
 import { runReconciliationForApiKey } from './reconciliationEngine';
 import { runLiquidityScanForApiKey } from './liquidityScanner';
@@ -37,6 +38,7 @@ export const runMonitoringCycle = async (): Promise<{ processed: number; failed:
 
   for (const apiKeyName of apiKeys) {
     try {
+      await ensureExchangeClientInitialized(apiKeyName);
       await recordMonitoringSnapshot(apiKeyName);
       processed += 1;
     } catch (error) {
@@ -62,6 +64,7 @@ export const runReconciliationCycle = async (
 
   for (const apiKeyName of apiKeys) {
     try {
+      await ensureExchangeClientInitialized(apiKeyName);
       const report = await runReconciliationForApiKey(apiKeyName, options);
       processed += report.processed > 0 ? 1 : 0;
       if (report.failed > 0) {
@@ -90,6 +93,7 @@ export const runLiquidityScanCycle = async (
 
   for (const apiKeyName of apiKeys) {
     try {
+      await ensureExchangeClientInitialized(apiKeyName);
       const result = await runLiquidityScanForApiKey(apiKeyName, options);
       processed += 1;
       suggestions += result.createdSuggestions;

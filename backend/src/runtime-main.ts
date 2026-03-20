@@ -26,6 +26,7 @@ import { loadSettings } from './config/settings';
 import { initExchangeClient } from './bot/exchange';
 import { runAutoStrategiesCycle } from './bot/strategy';
 import { runLiquidityScanCycle, runMonitoringCycle, runReconciliationCycle } from './automation/scheduler';
+import { startAdminTelegramReporter } from './notifications/adminTelegramReporter';
 
 const startRuntime = async () => {
   await initDB();
@@ -43,6 +44,12 @@ const startRuntime = async () => {
     });
   } catch (e) {
     logger.error('[runtime] Error initializing exchange clients: ' + (e as Error).message);
+  }
+
+  try {
+    await startAdminTelegramReporter();
+  } catch (e) {
+    logger.warn('[runtime] Telegram admin reporter failed to start: ' + (e as Error).message);
   }
 
   // ── Параметры циклов ────────────────────────────────────────────────────────

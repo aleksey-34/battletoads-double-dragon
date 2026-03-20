@@ -29,8 +29,10 @@ import {
   listOfferIds,
 } from '../research/presetBuilder';
 import {
+  analyzeDailySweepGap,
   getResearchDbObservability,
   listSchedulerJobs,
+  runDailySweepGapBackfill,
   runSchedulerJobNow,
   updateSchedulerJob,
 } from '../research/schedulerService';
@@ -39,6 +41,7 @@ import {
   listResearchSweepTasks,
   listSweepPairs,
   markResearchSweepTasks,
+  runSweepFromManualMarkets,
   runSweepFromSelectedTasks,
   setResearchSweepTaskSelection,
   syncClientBacktestRequestsToResearchTasks,
@@ -506,6 +509,33 @@ router.post('/tasks/run-sweep', async (req, res) => {
   }
 });
 
+router.post('/tasks/run-sweep/manual', async (req, res) => {
+  try {
+    const result = await runSweepFromManualMarkets({
+      markets: Array.isArray(req.body?.markets)
+        ? req.body.markets.map((item: unknown) => String(item))
+        : (req.body?.markets ? String(req.body.markets).split(/[\n,;]+/) : []),
+      dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
+      dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
+      interval: req.body?.interval ? String(req.body.interval) : undefined,
+      sweepName: req.body?.sweepName ? String(req.body.sweepName) : undefined,
+      description: req.body?.description ? String(req.body.description) : undefined,
+      note: req.body?.note ? String(req.body.note) : undefined,
+    });
+
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (NULL, 'platform_admin', 'research_run_sweep_manual_pairs', ?, CURRENT_TIMESTAMP)`,
+      [JSON.stringify(result)]
+    );
+
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // CLIENT PRESETS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -611,6 +641,38 @@ router.post('/scheduler/:jobKey/run-now', async (req, res) => {
     }
 
     const result = await runSchedulerJobNow('daily_incremental_sweep');
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/scheduler/:jobKey/gap', async (req, res) => {
+  try {
+    const jobKey = String(req.params.jobKey || '');
+    if (jobKey !== 'daily_incremental_sweep') {
+      return res.status(400).json({ error: `Unsupported scheduler job key: ${jobKey}` });
+    }
+
+    const daysBack = req.query.daysBack ? Number(req.query.daysBack) : 30;
+    const result = await analyzeDailySweepGap(daysBack);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/scheduler/:jobKey/backfill-now', async (req, res) => {
+  try {
+    const jobKey = String(req.params.jobKey || '');
+    if (jobKey !== 'daily_incremental_sweep') {
+      return res.status(400).json({ error: `Unsupported scheduler job key: ${jobKey}` });
+    }
+
+    const maxDays = req.body?.maxDays ? Number(req.body.maxDays) : 30;
+    const result = await runDailySweepGapBackfill(maxDays);
     res.json({ success: true, ...result });
   } catch (err) {
     const error = err as Error;

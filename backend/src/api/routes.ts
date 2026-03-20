@@ -42,6 +42,7 @@ import {
   getTradingSystem,
   listTradingSystems,
   replaceTradingSystemMembers,
+  replaceTradingSystemMembersSafely,
   runTradingSystemBacktest,
   setTradingSystemActivation,
   updateTradingSystem,
@@ -836,12 +837,22 @@ router.use(requirePlatformAdmin);
 
 // Получить последние строки логов
 router.get('/logs', async (req, res) => {
-  const logPath = path.join(__dirname, '../../logs/combined.log');
+  const combinedLogPath = path.join(__dirname, '../../logs/combined.log');
+  const errorLogPath = path.join(__dirname, '../../logs/error.log');
+
+  const readTailLines = (targetPath: string, maxLines: number): string[] => {
+    if (!fs.existsSync(targetPath)) {
+      return [];
+    }
+    const lines = fs.readFileSync(targetPath, 'utf-8').split('\n').filter((line) => String(line || '').trim());
+    return lines.slice(-Math.max(1, maxLines));
+  };
+
   try {
-    if (!fs.existsSync(logPath)) return res.json([]);
-    const data = fs.readFileSync(logPath, 'utf-8').split('\n');
-    const lastLines = data.slice(-100);
-    res.json(lastLines);
+    const combinedTail = readTailLines(combinedLogPath, 140);
+    const errorTail = readTailLines(errorLogPath, 160);
+    const merged = [...combinedTail, ...errorTail].slice(-220);
+    res.json(merged);
   } catch (error) {
     res.status(500).json({ error: 'Log read error' });
   }
@@ -1394,8 +1405,24 @@ router.put('/trading-systems/:apiKeyName/:systemId/members', async (req, res) =>
   }
 
   const members = Array.isArray(req.body) ? req.body : req.body?.members;
+  const safeApply = req.body?.safeApply === true || req.body?.options?.safeApply === true;
+  const safeOptions = {
+    cancelRemovedOrders: req.body?.options?.cancelRemovedOrders,
+    closeRemovedPositions: req.body?.options?.closeRemovedPositions,
+    syncMemberActivation: req.body?.options?.syncMemberActivation,
+  };
 
   try {
+    if (safeApply) {
+      const result = await replaceTradingSystemMembersSafely(
+        apiKeyName,
+        parsedSystemId,
+        Array.isArray(members) ? members : [],
+        safeOptions
+      );
+      return res.json({ success: true, ...result });
+    }
+
     const system = await replaceTradingSystemMembers(apiKeyName, parsedSystemId, Array.isArray(members) ? members : []);
     res.json({ success: true, system });
   } catch (error) {

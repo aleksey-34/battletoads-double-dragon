@@ -194,7 +194,9 @@ const runDailyIncrementalSweep = async (): Promise<{ status: SchedulerStatus; de
   const { sweep, catalog } = await loadCatalogAndSweepWithFallback();
 
   const sourceTimestamp = String(sweep?.timestamp || toIsoNow());
-  const dayKey = sourceTimestamp.slice(0, 10);
+  // Use current UTC day for scheduler idempotency.
+  // Source sweep timestamp can be stale (historical artifact), which would otherwise block new daily runs.
+  const dayKey = toIsoNow().slice(0, 10);
   const runName = `daily_sync_${dayKey}`;
 
   const existing = await researchDb.get('SELECT id FROM sweep_runs WHERE name = ? ORDER BY id DESC LIMIT 1', [runName]) as { id?: number } | undefined;
@@ -275,6 +277,199 @@ const runDailyIncrementalSweep = async (): Promise<{ status: SchedulerStatus; de
       skipped: importResult.skipped,
       candidates: candidates.length,
     },
+  };
+};
+
+const parseDayKey = (value: string): Date | null => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    return null;
+  }
+  const date = new Date(`${value}T00:00:00.000Z`);
+  return Number.isFinite(date.getTime()) ? date : null;
+};
+
+const toDayKey = (date: Date): string => date.toISOString().slice(0, 10);
+
+const listExistingDailySyncDays = async (): Promise<Set<string>> => {
+  const researchDb = getResearchDb();
+  const rows = await researchDb.all(
+    `SELECT name
+     FROM sweep_runs
+     WHERE name LIKE 'daily_sync_%'
+     ORDER BY id ASC`
+  ) as Array<{ name?: string }>;
+
+  const out = new Set<string>();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const name = String(row?.name || '').trim();
+    const day = name.startsWith('daily_sync_') ? name.slice('daily_sync_'.length) : '';
+    if (parseDayKey(day)) {
+      out.add(day);
+    }
+  }
+  return out;
+};
+
+const runDailyIncrementalSweepForDay = async (
+  dayKey: string,
+  sweep: any,
+  catalog: any
+): Promise<{ status: SchedulerStatus; details: Record<string, unknown> }> => {
+  const researchDb = getResearchDb();
+  const runName = `daily_sync_${dayKey}`;
+  const existing = await researchDb.get('SELECT id FROM sweep_runs WHERE name = ? ORDER BY id DESC LIMIT 1', [runName]) as { id?: number } | undefined;
+  if (existing?.id) {
+    return {
+      status: 'skipped',
+      details: {
+        reason: `Daily sync already exists for ${dayKey}`,
+        sweep_run_id: Number(existing.id),
+      },
+    };
+  }
+
+  if (!sweep || !catalog) {
+    const sweepRunId = await registerSweepRun({
+      name: runName,
+      description: `Auto daily incremental sync (empty source snapshot) for ${dayKey}`,
+      resultSummary: {
+        source: 'research_scheduler',
+        dayKey,
+        emptySource: true,
+      },
+      config: {
+        source: 'research_scheduler',
+        mode: 'daily_incremental_sync',
+        dayKey,
+      },
+    });
+
+    return {
+      status: 'done',
+      details: {
+        sweep_run_id: sweepRunId,
+        imported: 0,
+        skipped: 0,
+        candidates: 0,
+        emptySource: true,
+        dayKey,
+      },
+    };
+  }
+
+  const sweepRunId = await registerSweepRun({
+    name: runName,
+    description: `Auto daily incremental sync for ${dayKey}`,
+    resultSummary: {
+      source: 'research_scheduler',
+      dayKey,
+      sourceTimestamp: sweep?.timestamp || null,
+      counts: sweep?.counts || {},
+    },
+    config: {
+      source: 'research_scheduler',
+      mode: 'daily_incremental_sync',
+      dayKey,
+    },
+  });
+
+  const candidates = buildCandidatesFromCatalog(catalog);
+  const importResult = await importSweepCandidates(sweepRunId, candidates);
+
+  await researchDb.run(
+    `INSERT INTO sweep_artifacts (sweep_run_id, artifact_type, content_json, created_at)
+     VALUES (?, 'scheduler_daily_sync_summary', ?, CURRENT_TIMESTAMP)`,
+    [
+      sweepRunId,
+      JSON.stringify({
+        dayKey,
+        sourceTimestamp: sweep?.timestamp || null,
+        imported: importResult.imported,
+        skipped: importResult.skipped,
+        candidates: candidates.length,
+      }),
+    ]
+  );
+
+  return {
+    status: 'done',
+    details: {
+      sweep_run_id: sweepRunId,
+      imported: importResult.imported,
+      skipped: importResult.skipped,
+      candidates: candidates.length,
+      dayKey,
+    },
+  };
+};
+
+export const analyzeDailySweepGap = async (daysBack: number = 30): Promise<{
+  fromDay: string;
+  toDay: string;
+  totalDays: number;
+  existingDays: number;
+  missingDays: string[];
+}> => {
+  const safeDaysBack = Math.max(1, Math.min(365, Math.floor(Number(daysBack) || 30)));
+  const today = new Date();
+  today.setUTCHours(0, 0, 0, 0);
+  const from = new Date(today);
+  from.setUTCDate(from.getUTCDate() - safeDaysBack + 1);
+
+  const existing = await listExistingDailySyncDays();
+  const missingDays: string[] = [];
+
+  let cursor = new Date(from);
+  while (cursor.getTime() <= today.getTime()) {
+    const dayKey = toDayKey(cursor);
+    if (!existing.has(dayKey)) {
+      missingDays.push(dayKey);
+    }
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  return {
+    fromDay: toDayKey(from),
+    toDay: toDayKey(today),
+    totalDays: safeDaysBack,
+    existingDays: safeDaysBack - missingDays.length,
+    missingDays,
+  };
+};
+
+export const runDailySweepGapBackfill = async (maxDays: number = 30): Promise<{
+  analyzed: number;
+  existingDays: number;
+  missingDays: number;
+  createdRuns: number;
+  createdDayKeys: string[];
+  skippedDayKeys: string[];
+}> => {
+  const safeMaxDays = Math.max(1, Math.min(365, Math.floor(Number(maxDays) || 30)));
+  const gap = await analyzeDailySweepGap(safeMaxDays);
+  const { sweep, catalog } = await loadCatalogAndSweepWithFallback();
+
+  let createdRuns = 0;
+  const createdDayKeys: string[] = [];
+  const skippedDayKeys: string[] = [];
+
+  for (const dayKey of gap.missingDays) {
+    const result = await runDailyIncrementalSweepForDay(dayKey, sweep, catalog);
+    if (result.status === 'done') {
+      createdRuns += 1;
+      createdDayKeys.push(dayKey);
+    } else {
+      skippedDayKeys.push(dayKey);
+    }
+  }
+
+  return {
+    analyzed: gap.totalDays,
+    existingDays: gap.existingDays,
+    missingDays: gap.missingDays.length,
+    createdRuns,
+    createdDayKeys,
+    skippedDayKeys,
   };
 };
 

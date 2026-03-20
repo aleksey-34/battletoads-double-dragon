@@ -598,9 +598,47 @@ export const createClientMagicLink = async (
   requestMeta?: SessionRequestMeta,
   note?: string
 ): Promise<ClientMagicLinkResult> => {
-  const user = await fetchPrimaryClientUserByTenantId(tenantId);
+  let user = await fetchPrimaryClientUserByTenantId(tenantId);
   if (!user) {
-    throw new Error(`Active client user not found for tenant ${tenantId}`);
+    // Auto-create a placeholder client user from tenant data so the magic link can be issued
+    const tenant = await db.get(
+      'SELECT id, slug, display_name, status FROM tenants WHERE id = ? LIMIT 1',
+      [tenantId]
+    ) as { id: number; slug: string; display_name: string; status: string } | undefined;
+    if (!tenant) {
+      throw new Error(`Tenant ${tenantId} not found`);
+    }
+
+    // First try to reactivate an existing tenant user, if any.
+    const anyTenantUser = await db.get(
+      'SELECT id FROM client_users WHERE tenant_id = ? ORDER BY id ASC LIMIT 1',
+      [tenantId]
+    ) as { id?: number } | undefined;
+
+    if (anyTenantUser?.id) {
+      const fallbackPasswordHash = await bcrypt.hash(randomBytes(16).toString('hex'), 10);
+      await db.run(
+        `UPDATE client_users
+         SET status = 'active',
+             password_hash = CASE WHEN length(trim(coalesce(password_hash, ''))) = 0 THEN ? ELSE password_hash END,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [fallbackPasswordHash, Number(anyTenantUser.id)]
+      );
+    } else {
+      const placeholderEmail = `client+${tenant.id}-${tenant.slug}@algo.internal`;
+      const fallbackPasswordHash = await bcrypt.hash(randomBytes(16).toString('hex'), 10);
+      await db.run(
+        `INSERT OR IGNORE INTO client_users (tenant_id, email, full_name, password_hash, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [tenantId, placeholderEmail, String(tenant.display_name || tenant.slug), fallbackPasswordHash]
+      ).catch(() => {/* duplicate — ignore */});
+    }
+
+    user = await fetchPrimaryClientUserByTenantId(tenantId);
+    if (!user) {
+      throw new Error(`Active client user not found for tenant ${tenantId} and auto-create failed`);
+    }
   }
 
   if (String(user.tenant_status || 'active') !== 'active') {

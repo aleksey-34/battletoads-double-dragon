@@ -16,6 +16,12 @@ export const initDB = async () => {
     driver: sqlite3.Database,
   });
 
+  // Reduce SQLITE_BUSY spikes under concurrent read/write bursts from SaaS pages.
+  await db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA busy_timeout = 5000;
+  `);
+
   const ensureColumn = async (table: string, columnDefinition: string) => {
     try {
       await db.exec(`ALTER TABLE ${table} ADD COLUMN ${columnDefinition}`);
@@ -438,6 +444,12 @@ export const initDB = async () => {
       payload_json TEXT DEFAULT '{}',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS app_runtime_flags (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE INDEX IF NOT EXISTS idx_plans_product_mode
