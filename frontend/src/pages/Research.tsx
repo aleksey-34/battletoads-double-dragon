@@ -618,6 +618,25 @@ export default function Research() {
     }
   }, []);
 
+  const changeBackfillMode = async (value: 'light' | 'heavy') => {
+    setSchedulerBackfillMode(value);
+
+    if (!backfillJobStatus?.exists || backfillJobStatus.status !== 'running') {
+      return;
+    }
+
+    try {
+      await axios.patch('/api/research/scheduler/daily_incremental_sweep/backfill-mode', {
+        mode: value,
+        jobId: backfillJobStatus.id,
+      });
+      message.success(`Режим backfill переключен на ${value}. Новый режим применится на следующих днях.`);
+      await fetchBackfillStatus();
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || 'Не удалось переключить режим backfill');
+    }
+  };
+
   const backfillSchedulerGap = async () => {
     setSchedulerBackfillLoading(true);
     try {
@@ -646,7 +665,7 @@ export default function Research() {
       });
       setTasks(res.data?.tasks || []);
     } catch {
-      message.error('Failed to load sweep tasks');
+      message.error('Не удалось загрузить задачи sweep');
     } finally {
       setTasksLoading(false);
     }
@@ -691,10 +710,10 @@ export default function Research() {
         markDone: taskMarkDone,
         mode: sweepMode,
       });
-      message.success(`Task sweep (${res.data?.mode || sweepMode}) finished: #${res.data?.sweepRunId || 'n/a'}, imported ${res.data?.imported || 0}`);
+      message.success(`Task sweep (${res.data?.mode || sweepMode}) завершен: #${res.data?.sweepRunId || 'n/a'}, импортировано ${res.data?.imported || 0}`);
       await Promise.all([fetchTasks(), fetchScheduler(), fetchProfiles()]);
     } catch (e: any) {
-      message.error(e?.response?.data?.error || 'Task sweep failed');
+      message.error(e?.response?.data?.error || 'Task sweep завершился ошибкой');
     } finally {
       setTaskRunLoading(false);
     }
@@ -726,7 +745,7 @@ export default function Research() {
         mode: sweepMode,
       });
 
-      message.success(`Manual sweep (${res.data?.mode || sweepMode}) created: #${res.data?.sweepRunId || 'n/a'}, imported ${res.data?.imported || 0}`);
+      message.success(`Manual sweep (${res.data?.mode || sweepMode}) создан: #${res.data?.sweepRunId || 'n/a'}, импортировано ${res.data?.imported || 0}`);
       setManualSweepModalOpen(false);
       setManualMarketsText('');
       setManualSweepName('');
@@ -734,7 +753,7 @@ export default function Research() {
       setManualSweepNote('');
       await Promise.all([fetchScheduler(), fetchProfiles(), fetchTasks()]);
     } catch (e: any) {
-      message.error(e?.response?.data?.error || 'Manual sweep failed');
+      message.error(e?.response?.data?.error || 'Manual sweep завершился ошибкой');
     } finally {
       setManualSweepLoading(false);
     }
@@ -743,7 +762,7 @@ export default function Research() {
   const markTasks = async (status: 'done' | 'ignored' | 'new') => {
     const selectedIds = tasks.filter((row) => row.is_selected === 1).map((row) => row.id);
     if (!selectedIds.length) {
-      message.warning('Select tasks first');
+      message.warning('Сначала выберите задачи');
       return;
     }
     try {
@@ -760,7 +779,7 @@ export default function Research() {
 
   const generateHighFrequencySystem = async () => {
     if (!hfApiKeyName) {
-      message.warning('Select API key first');
+      message.warning('Сначала выберите API key');
       return;
     }
     setHfGenerateLoading(true);
@@ -833,6 +852,12 @@ export default function Research() {
       window.clearInterval(timer);
     };
   }, [backfillJobStatus, fetchBackfillStatus]);
+
+  useEffect(() => {
+    if (backfillJobStatus?.mode) {
+      setSchedulerBackfillMode(backfillJobStatus.mode);
+    }
+  }, [backfillJobStatus?.mode]);
 
   // ── Fetch API keys for publish modal ───────────────────────────────────────
   useEffect(() => {
@@ -1042,18 +1067,18 @@ export default function Research() {
 
   return (
     <div>
-      <Title level={3}>Research Circuit</Title>
+      <Title level={3}>Research</Title>
       <Paragraph type="secondary">
-        Manage strategy profiles from sweep runs. Sweep is the auto-selection/data pipeline for presets and offers; manual Trading Systems are configured separately in the Trading Systems menu.
+        Здесь управляются профили стратегий, собранные из sweep-прогонов. Это база кандидатов и пресетов для офферов, а ручные торговые системы настраиваются отдельно в разделе торговых систем.
       </Paragraph>
 
       <Card
-        title="Research Scheduler (daily incremental sweep)"
+        title="Планировщик Research (ежедневный incremental sweep)"
         loading={schedulerLoading}
         extra={
           <Space>
             <Tag color={schedulerJob?.is_enabled ? 'success' : 'default'}>
-              {schedulerJob?.is_enabled ? 'enabled' : 'disabled'}
+              {schedulerJob?.is_enabled ? 'включен' : 'выключен'}
             </Tag>
             <Tag color={statusColor(String(schedulerJob?.last_status || 'idle'))}>
               {schedulerJob?.last_status || 'idle'}
@@ -1064,49 +1089,49 @@ export default function Research() {
         <Row gutter={[16, 16]}>
           <Col xs={24} md={14}>
             <Space wrap>
-              <span>Time (UTC):</span>
+              <span>Время (UTC):</span>
               <InputNumber min={0} max={23} value={scheduleHourUtc} onChange={(v) => setScheduleHourUtc(Number(v ?? 0))} />
               <span>:</span>
               <InputNumber min={0} max={59} value={scheduleMinuteUtc} onChange={(v) => setScheduleMinuteUtc(Number(v ?? 0))} />
-              <Button onClick={() => void saveScheduler()} loading={schedulerSaving}>Save</Button>
+              <Button onClick={() => void saveScheduler()} loading={schedulerSaving}>Сохранить</Button>
               <Button onClick={() => void toggleScheduler(!(schedulerJob?.is_enabled === 1))} loading={schedulerSaving}>
-                {schedulerJob?.is_enabled === 1 ? 'Disable' : 'Enable'}
+                {schedulerJob?.is_enabled === 1 ? 'Выключить' : 'Включить'}
               </Button>
               <Button type="primary" onClick={() => void runSchedulerNow()} loading={schedulerRunNowLoading}>
-                Run now
+                Запустить сейчас
               </Button>
               <Button onClick={() => void checkSchedulerGap()} loading={schedulerGapLoading}>
-                Check gap (30d)
+                Проверить пробелы (30д)
               </Button>
               <Select
                 value={schedulerBackfillMode}
                 style={{ width: 130 }}
                 options={[
-                  { value: 'light', label: 'Backfill mode: light' },
-                  { value: 'heavy', label: 'Backfill mode: heavy' },
+                  { value: 'light', label: 'Режим: мягкий' },
+                  { value: 'heavy', label: 'Режим: жесткий' },
                 ]}
-                onChange={(value) => setSchedulerBackfillMode(value)}
+                onChange={(value) => void changeBackfillMode(value)}
               />
               <Button onClick={() => void backfillSchedulerGap()} loading={schedulerBackfillLoading}>
-                Backfill missing days
+                Добить пропущенные дни
               </Button>
             </Space>
             <Space direction="vertical" size={2} style={{ marginTop: 12 }}>
-              <Text type="secondary">Next run: {schedulerJob?.next_run_at || '—'}</Text>
-              <Text type="secondary">Last run: {schedulerJob?.last_run_at || '—'}</Text>
-              <Text type="secondary">Run count: {schedulerJob?.run_count ?? 0}</Text>
-              {schedulerJob?.last_error ? <Text type="danger">Last error: {schedulerJob.last_error}</Text> : null}
+              <Text type="secondary">Следующий запуск: {schedulerJob?.next_run_at || '—'}</Text>
+              <Text type="secondary">Последний запуск: {schedulerJob?.last_run_at || '—'}</Text>
+              <Text type="secondary">Количество запусков: {schedulerJob?.run_count ?? 0}</Text>
+              {schedulerJob?.last_error ? <Text type="danger">Последняя ошибка: {schedulerJob.last_error}</Text> : null}
               {schedulerGapStatus ? (
                 <Text type={schedulerGapStatus.missingDays.length > 0 ? 'warning' : 'secondary'}>
-                  Gap 30d: {schedulerGapStatus.existingDays}/{schedulerGapStatus.totalDays} days present, missing {schedulerGapStatus.missingDays.length}
+                  Пробел за 30д: заполнено {schedulerGapStatus.existingDays}/{schedulerGapStatus.totalDays}, отсутствует {schedulerGapStatus.missingDays.length}
                 </Text>
               ) : null}
               {backfillJobStatus?.exists ? (
                 <Text type={backfillJobStatus.status === 'failed' ? 'danger' : 'secondary'}>
-                  Backfill job #{backfillJobStatus.id || 'n/a'} [{backfillJobStatus.mode || 'light'}]: {backfillJobStatus.status || 'unknown'}; processed {backfillJobStatus.processed_days || 0}/{Math.max(1, Number(backfillJobStatus.missing_days || 0))}; created {backfillJobStatus.created_runs || 0}; skipped {backfillJobStatus.skipped_days || 0}; ETA {backfillJobStatus.eta_seconds || 0}s
+                  Backfill #{backfillJobStatus.id || 'n/a'} [{backfillJobStatus.mode === 'heavy' ? 'жесткий' : 'мягкий'}]: {backfillJobStatus.status || 'unknown'}; обработано {backfillJobStatus.processed_days || 0}/{Math.max(1, Number(backfillJobStatus.missing_days || 0))}; создано {backfillJobStatus.created_runs || 0}; пропущено {backfillJobStatus.skipped_days || 0}; ETA {backfillJobStatus.eta_seconds || 0}с
                 </Text>
               ) : null}
-              {backfillJobStatus?.error ? <Text type="danger">Backfill error: {backfillJobStatus.error}</Text> : null}
+              {backfillJobStatus?.error ? <Text type="danger">Ошибка backfill: {backfillJobStatus.error}</Text> : null}
             </Space>
             {backfillJobStatus?.exists ? (
               <div style={{ marginTop: 10, maxWidth: 520 }}>
@@ -1119,7 +1144,7 @@ export default function Research() {
             ) : null}
             {schedulerRunNowLoading ? (
               <div style={{ marginTop: 12, maxWidth: 420 }}>
-                <Text type="secondary">Sweep is running... elapsed {schedulerRunElapsedSec}s</Text>
+                <Text type="secondary">Sweep выполняется... прошло {schedulerRunElapsedSec}с</Text>
                 <Progress
                   percent={Math.min(95, Math.max(5, schedulerRunElapsedSec * 2))}
                   status="active"
@@ -1131,25 +1156,25 @@ export default function Research() {
           </Col>
           <Col xs={24} md={10}>
             <Descriptions size="small" column={1} bordered>
-              <Descriptions.Item label="main.db size">
+              <Descriptions.Item label="Размер main.db">
                 {observability?.files?.mainDb?.sizeBytes ?? 0} bytes
               </Descriptions.Item>
-              <Descriptions.Item label="research.db size">
+              <Descriptions.Item label="Размер research.db">
                 {observability?.files?.researchDb?.sizeBytes ?? 0} bytes
               </Descriptions.Item>
-              <Descriptions.Item label="main rows total">
+              <Descriptions.Item label="Строк в main.db">
                 {observability?.rowCounts?.totals?.main ?? 0}
               </Descriptions.Item>
-              <Descriptions.Item label="research rows total">
+              <Descriptions.Item label="Строк в research.db">
                 {observability?.rowCounts?.totals?.research ?? 0}
               </Descriptions.Item>
-              <Descriptions.Item label="latest sweep lag (hours)">
+              <Descriptions.Item label="Отставание последнего sweep (ч)">
                 {observability?.freshness?.latestSweepLagHours ?? '—'}
               </Descriptions.Item>
-              <Descriptions.Item label="latest sweep">
+              <Descriptions.Item label="Последний sweep">
                 {observability?.freshness?.latestSweep?.name || '—'}
               </Descriptions.Item>
-              <Descriptions.Item label="Observed at (UTC)">
+              <Descriptions.Item label="Срез на момент (UTC)">
                 {observability?.atUtc || '—'}
               </Descriptions.Item>
             </Descriptions>
@@ -1160,26 +1185,26 @@ export default function Research() {
       <Divider />
 
       <Card
-        title="Backtest Pair Requests -> Sweep Tasks"
+        title="Запросы пар на backtest -> задачи sweep"
         extra={
           <Space>
-            <Button onClick={() => void fetchTasks()} loading={tasksLoading}>Refresh</Button>
-            <Button onClick={() => void syncTasks()} loading={taskSyncLoading}>Sync from client requests</Button>
+            <Button onClick={() => void fetchTasks()} loading={tasksLoading}>Обновить</Button>
+            <Button onClick={() => void syncTasks()} loading={taskSyncLoading}>Подтянуть из клиентских запросов</Button>
             <Button type="primary" onClick={() => setManualSweepModalOpen(true)}>
-              New sweep by pairs/date
+              Новый sweep по парам/датам
             </Button>
           </Space>
         }
       >
         <Space wrap style={{ marginBottom: 12 }}>
-          <span>Period:</span>
+          <span>Период:</span>
           <Input
             type="date"
             style={{ width: 150 }}
             value={taskDateFrom}
             onChange={(e) => setTaskDateFrom(e.target.value)}
           />
-          <span>to</span>
+          <span>до</span>
           <Input
             type="date"
             style={{ width: 150 }}
@@ -1196,20 +1221,20 @@ export default function Research() {
             value={sweepMode}
             style={{ width: 140 }}
             options={[
-              { value: 'light', label: 'Sweep mode: light' },
-              { value: 'heavy', label: 'Sweep mode: heavy' },
+              { value: 'light', label: 'Режим sweep: мягкий' },
+              { value: 'heavy', label: 'Режим sweep: жесткий' },
             ]}
             onChange={(value) => setSweepMode(value)}
           />
           <Checkbox checked={taskMarkDone} onChange={(e) => setTaskMarkDone(e.target.checked)}>
-            Mark done after run
+            Пометить выполненными после запуска
           </Checkbox>
           <Button type="primary" loading={taskRunLoading} onClick={() => void runSweepFromTasks()}>
-            Run sweep from selected
+            Запустить sweep по выбранным
           </Button>
-          <Button onClick={() => void markTasks('done')}>Mark done</Button>
-          <Button onClick={() => void markTasks('ignored')}>Mark ignored</Button>
-          <Button onClick={() => void markTasks('new')}>Reset to new</Button>
+          <Button onClick={() => void markTasks('done')}>Пометить выполненными</Button>
+          <Button onClick={() => void markTasks('ignored')}>Игнорировать</Button>
+          <Button onClick={() => void markTasks('new')}>Сбросить в new</Button>
         </Space>
 
         <Table
@@ -1218,7 +1243,7 @@ export default function Research() {
           loading={tasksLoading}
           size="small"
           pagination={{ pageSize: 12 }}
-          locale={{ emptyText: <Empty description="No tasks yet. Sync from client requests." /> }}
+          locale={{ emptyText: <Empty description="Пока задач нет. Синхронизируйте клиентские запросы." /> }}
           columns={[
             {
               title: '',
@@ -1232,40 +1257,40 @@ export default function Research() {
             },
             { title: 'ID', dataIndex: 'id', width: 65 },
             {
-              title: 'Market',
+              title: 'Рынок',
               render: (_: unknown, row: ResearchSweepTask) => [row.base_symbol, row.quote_symbol].filter(Boolean).join('/') || row.base_symbol,
             },
-            { title: 'Interval', dataIndex: 'interval', width: 80 },
+            { title: 'Интервал', dataIndex: 'interval', width: 80 },
             {
-              title: 'Tenant',
+              title: 'Клиент',
               render: (_: unknown, row: ResearchSweepTask) => row.tenant_name || `#${row.tenant_id || '—'}`,
             },
             {
-              title: 'Status',
+              title: 'Статус',
               dataIndex: 'status',
               width: 110,
               render: (v: string) => <Tag color={statusColor(v)}>{v}</Tag>,
             },
             {
-              title: 'Request',
+              title: 'Запрос',
               dataIndex: 'request_status',
               width: 110,
               render: (v: string) => <Tag>{v}</Tag>,
             },
             {
-              title: 'Requested',
+              title: 'Запрошено',
               dataIndex: 'requested_at',
               width: 120,
               render: (v: string | null) => (v || '').slice(0, 10) || '—',
             },
             {
-              title: 'Last sweep',
+              title: 'Последний sweep',
               dataIndex: 'last_sweep_run_id',
               width: 90,
               render: (v: number | null) => (v ? `#${v}` : '—'),
             },
             {
-              title: 'Note',
+              title: 'Заметка',
               dataIndex: 'note',
               render: (v: string) => v || '—',
             },
@@ -1274,7 +1299,7 @@ export default function Research() {
       </Card>
 
       <Card
-        title="High-Frequency System Task (offers + TS for rhythm)"
+        title="Задача high-frequency системы (офферы + TS под ритм сделок)"
         style={{ marginTop: 16 }}
       >
         <Space wrap>
@@ -1285,7 +1310,7 @@ export default function Research() {
             options={apiKeys.map((row) => ({ value: row.name, label: row.name }))}
             onChange={(value) => setHfApiKeyName(value)}
           />
-          <span>Target trades/day:</span>
+          <span>Цель по сделкам/день:</span>
           <InputNumber
             min={1}
             max={50}
@@ -1296,17 +1321,17 @@ export default function Research() {
             value={sweepMode}
             style={{ width: 150 }}
             options={[
-              { value: 'light', label: 'Mode: light' },
-              { value: 'heavy', label: 'Mode: heavy' },
+              { value: 'light', label: 'Режим: мягкий' },
+              { value: 'heavy', label: 'Режим: жесткий' },
             ]}
             onChange={(value) => setSweepMode(value)}
           />
           <Button type="primary" loading={hfGenerateLoading} onClick={() => void generateHighFrequencySystem()}>
-            Generate TS + preview
+            Собрать TS + preview
           </Button>
         </Space>
         <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
-          Creates a new trading system from sweep candidates focused on trade rhythm, with PF/DD guardrails. `light` keeps limits stricter, `heavy` allows wider exploration.
+          Создаёт новую торговую систему из sweep-кандидатов с фокусом на ритм сделок и ограничениями по PF/DD. Мягкий режим бережнее по нагрузке, жесткий расширяет перебор.
         </Paragraph>
       </Card>
 
@@ -1321,7 +1346,7 @@ export default function Research() {
       <Card
         title={
           <Space>
-            <span>Strategy Profiles</span>
+            <span>Профили стратегий</span>
             <Badge count={total} showZero style={{ backgroundColor: '#1677ff' }} />
           </Space>
         }
@@ -1334,17 +1359,17 @@ export default function Research() {
             )}
             <Select
               allowClear
-              placeholder="Filter by status"
+              placeholder="Фильтр по статусу"
               style={{ width: 150 }}
               value={filterStatus || undefined}
               onChange={(v) => setFilterStatus(v ?? '')}
               options={[
-                { value: 'candidate', label: 'Candidate' },
-                { value: 'published', label: 'Published' },
-                { value: 'archived', label: 'Archived' },
+                { value: 'candidate', label: 'Кандидат' },
+                { value: 'published', label: 'Опубликован' },
+                { value: 'archived', label: 'Архив' },
               ]}
             />
-            <Button size="small" onClick={() => void fetchProfiles()}>Refresh</Button>
+            <Button size="small" onClick={() => void fetchProfiles()}>Обновить</Button>
           </Space>
         }
       >
@@ -1359,9 +1384,9 @@ export default function Research() {
             pageSize,
             total,
             onChange: (p) => setPage(p),
-            showTotal: (t) => `${t} profiles`,
+            showTotal: (t) => `${t} профилей`,
           }}
-          locale={{ emptyText: <Empty description="No profiles found. Import candidates from a sweep run." /> }}
+          locale={{ emptyText: <Empty description="Профили не найдены. Импортируйте кандидатов из sweep-прогона." /> }}
           rowClassName={(row) => row.status === 'published' ? 'ant-table-row-green' : ''}
         />
       </Card>

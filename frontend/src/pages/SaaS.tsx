@@ -562,120 +562,120 @@ type Copy = {
 const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
   ru: {
     title: 'SaaS Control Room',
-    subtitle: 'РћРґРёРЅ MVP-РєРѕРЅС‚СѓСЂ РґР»СЏ admin, strategy-client Рё РђР»РіРѕС„РѕРЅРґ РїРѕРІРµСЂС… РіРѕС‚РѕРІС‹С… sweep/catalog СЂРµР·СѓР»СЊС‚Р°С‚РѕРІ.',
-    refresh: 'РћР±РЅРѕРІРёС‚СЊ',
-    seed: 'РРЅРёС†РёР°Р»РёР·РёСЂРѕРІР°С‚СЊ demo tenants',
-    publish: 'РћРїСѓР±Р»РёРєРѕРІР°С‚СЊ admin TS',
+    subtitle: 'Единый MVP-контур для admin, strategy-client и Алгофонда поверх готовых результатов sweep/catalog.',
+    refresh: 'Обновить',
+    seed: 'Инициализировать demo tenants',
+    publish: 'Опубликовать admin TS',
     admin: 'Admin',
-    strategyClient: 'РљР»РёРµРЅС‚ СЃС‚СЂР°С‚РµРіРёР№',
-    algofund: 'РђР»РіРѕС„РѕРЅРґ',
-    latestCatalog: 'РџРѕСЃР»РµРґРЅРёР№ client catalog',
-    latestSweep: 'РџРѕСЃР»РµРґРЅРёР№ historical sweep',
-    noCatalog: 'РљР°С‚Р°Р»РѕРі СЃС‚СЂР°С‚РµРіРёР№ РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ. РџСЂРѕРІРµСЂСЊС‚Рµ СЃР±РѕСЂРєСѓ РєР°С‚Р°Р»РѕРіР° РІ Р°РґРјРёРЅ-РєРѕРЅС‚СѓСЂРµ.',
-    noSweep: 'РСЃС‚РѕСЂРёС‡РµСЃРєРёР№ sweep РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРµРЅ. РњР°С‚РµСЂРёР°Р»РёР·Р°С†РёСЏ Р±СѓРґРµС‚ РґРѕСЃС‚СѓРїРЅР° РїРѕСЃР»Рµ РѕР±РЅРѕРІР»РµРЅРёСЏ РґР°РЅРЅС‹С….',
-    recommendedSets: 'РќР°Р±РѕСЂС‹ РѕС„С„РµСЂРѕРІ РёР· SWEEP',
-    adminTsDraft: 'Р§РµСЂРЅРѕРІРёРє РїРѕСЂС‚С„РµР»СЏ Admin',
-    tenants: 'РўРµСЃС‚РѕРІС‹Рµ tenants',
-    openStrategyClient: 'РћС‚РєСЂС‹С‚СЊ РєР»РёРµРЅС‚Р° СЃС‚СЂР°С‚РµРіРёР№',
-    openAlgofund: 'РћС‚РєСЂС‹С‚СЊ РђР»РіРѕС„РѕРЅРґ',
-    saveProfile: 'РЎРѕС…СЂР°РЅРёС‚СЊ РїСЂРѕС„РёР»СЊ',
-    preview: 'РџРѕРєР°Р·Р°С‚СЊ preview',
-    materialize: 'Materialize РЅР° API key',
-    requestStart: 'Р—Р°РїСЂРѕСЃРёС‚СЊ СЃС‚Р°СЂС‚',
-    requestStop: 'Р—Р°РїСЂРѕСЃРёС‚СЊ СЃС‚РѕРї',
-    approve: 'РћРґРѕР±СЂРёС‚СЊ',
-    reject: 'РћС‚РєР»РѕРЅРёС‚СЊ',
-    risk: 'Р РёСЃРє',
-    tradeFrequency: 'Р§Р°СЃС‚РѕС‚Р° СЃРґРµР»РѕРє',
+    strategyClient: 'Клиент стратегий',
+    algofund: 'Алгофонд',
+    latestCatalog: 'Последний client catalog',
+    latestSweep: 'Последний historical sweep',
+    noCatalog: 'Каталог стратегий временно недоступен. Проверьте сборку каталога в админ-контуре.',
+    noSweep: 'Исторический sweep временно недоступен. Материализация станет доступна после обновления данных.',
+    recommendedSets: 'Наборы офферов из sweep',
+    adminTsDraft: 'Черновик портфеля admin',
+    tenants: 'Тестовые tenants',
+    openStrategyClient: 'Открыть клиента стратегий',
+    openAlgofund: 'Открыть Алгофонд',
+    saveProfile: 'Сохранить профиль',
+    preview: 'Показать preview',
+    materialize: 'Материализовать на API key',
+    requestStart: 'Запросить старт',
+    requestStop: 'Запросить стоп',
+    approve: 'Одобрить',
+    reject: 'Отклонить',
+    risk: 'Риск',
+    tradeFrequency: 'Частота сделок',
     apiKey: 'API key',
-    selectedOffers: 'РћС„С„РµСЂС‹ РґР»СЏ РїРѕРґРєР»СЋС‡РµРЅРёСЏ',
+    selectedOffers: 'Офферы для подключения',
     monitoring: 'Monitoring',
-    requestQueue: 'РћС‡РµСЂРµРґСЊ Р·Р°РїСЂРѕСЃРѕРІ',
+    requestQueue: 'Очередь запросов',
     requestTenant: 'Tenant',
-    previewTitle: 'Preview РѕР¶РёРґР°РЅРёР№',
-    selectedOffersPreview: 'SWEEP compare РІС‹Р±СЂР°РЅРЅС‹С… РѕС„С„РµСЂРѕРІ (4D)',
-    publishedTsPreview: 'Preview РѕРїСѓР±Р»РёРєРѕРІР°РЅРЅРѕРіРѕ admin TS',
-    noTenant: 'РўРµРЅР°РЅС‚ СЌС‚РѕРіРѕ С‚РёРїР° РїРѕРєР° РЅРµ РЅР°Р№РґРµРЅ.',
+    previewTitle: 'Preview ожиданий',
+    selectedOffersPreview: 'SWEEP compare выбранных офферов (4D)',
+    publishedTsPreview: 'Preview опубликованного admin TS',
+    noTenant: 'Тенант этого типа пока не найден.',
     sourceSystem: 'Source system',
-    tenantMode: 'РўРёРї РєР»РёРµРЅС‚Р°',
-    plan: 'РўР°СЂРёС„',
-    status: 'РЎС‚Р°С‚СѓСЃ',
+    tenantMode: 'Тип клиента',
+    plan: 'Тариф',
+    status: 'Статус',
     score: 'Score',
-    returnLabel: 'Р”РѕС…РѕРґРЅРѕСЃС‚СЊ',
-    drawdown: 'РњР°РєСЃ DD',
+    returnLabel: 'Доходность',
+    drawdown: 'Макс DD',
     profitFactor: 'PF',
-    trades: 'РЎРґРµР»РєРё',
+    trades: 'Сделки',
     winRate: 'Win Rate',
     finalEquity: 'Final equity',
-    depositCap: 'Р›РёРјРёС‚ РґРµРїРѕР·РёС‚Р°',
-    strategyLimit: 'Р›РёРјРёС‚ СЃС‚СЂР°С‚РµРіРёР№',
-    riskCap: 'РџРѕС‚РѕР»РѕРє СЂРёСЃРєР°',
-    period: 'РџРµСЂРёРѕРґ',
-    connectedTenants: 'РџРѕРґРєР»СЋС‡РµРЅРЅС‹Рµ РєР»РёРµРЅС‚С‹',
-    tenantWorkspace: 'РљР°Р±РёРЅРµС‚ РєР»РёРµРЅС‚Р°',
-    planCapabilities: 'Р’РѕР·РјРѕР¶РЅРѕСЃС‚Рё С‚Р°СЂРёС„Р°',
-    capabilitySettings: 'РќР°СЃС‚СЂРѕР№РєРё',
-    capabilityApiKeyUpdate: 'РЎРјРµРЅР° API key',
-    capabilityMonitoring: 'РњРѕРЅРёС‚РѕСЂРёРЅРі',
-    capabilityBacktest: 'Р‘СЌРєС‚РµСЃС‚',
-    capabilityStartStop: 'РЎС‚Р°СЂС‚/РЎС‚РѕРї Р·Р°СЏРІРєРё',
-    openSettings: 'РћС‚РєСЂС‹С‚СЊ Settings',
-    openMonitoring: 'РћС‚РєСЂС‹С‚СЊ Monitoring',
-    openBacktest: 'РћС‚РєСЂС‹С‚СЊ Backtest',
-    backtestLockedHint: 'Backtest РЅРµРґРѕСЃС‚СѓРїРµРЅ РЅР° С‚РµРєСѓС‰РµРј С‚Р°СЂРёС„Рµ. Preview РѕСЃС‚Р°С‘С‚СЃСЏ РґРѕСЃС‚СѓРїРЅС‹Рј.',
-    settingsLockedHint: 'РР·РјРµРЅРµРЅРёРµ РЅР°СЃС‚СЂРѕРµРє РЅРµРґРѕСЃС‚СѓРїРЅРѕ РЅР° С‚РµРєСѓС‰РµРј С‚Р°СЂРёС„Рµ',
-    priceUsdt: 'Р¦РµРЅР°, USDT/РјРµСЃ',
-    saveTenant: 'РЎРѕС…СЂР°РЅРёС‚СЊ tenant',
-    savePlan: 'РЎРѕС…СЂР°РЅРёС‚СЊ С‚Р°СЂРёС„',
-    unrealizedPnl: 'РќРµСЂРµР°Р»РёР·. PnL',
-    marginLoad: 'Р—Р°РіСЂСѓР·РєР° РјР°СЂР¶Рё',
-    depositLoad: 'Р—Р°РіСЂСѓР·РєР° РґРµРїРѕР·РёС‚Р°',
-    liquidationRisk: 'Р РёСЃРє Р»РёРєРІРёРґР°С†РёРё',
-    displayName: 'РРјСЏ РєР»РёРµРЅС‚Р°',
-    tenantStatus: 'РЎС‚Р°С‚СѓСЃ tenant',
-    planGrid: 'РўР°СЂРёС„РЅР°СЏ СЃРµС‚РєР°',
-    previewUsesNearestPreset: 'Preview РёСЃРїРѕР»СЊР·СѓРµС‚ Р±Р»РёР¶Р°Р№С€РёР№ РїСЂРµСЃРµС‚ Рё РїСЂРё СЃРѕС…СЂР°РЅРµРЅРёРё РјР°РїРїРёС‚СЃСЏ РІ low / medium / high.',
-    previewPlanCapHint: 'Р’ Р°РґРјРёРЅ-СЂРµР¶РёРјРµ preview РјРѕР¶РЅРѕ СЃРјРѕС‚СЂРµС‚СЊ РІС‹С€Рµ Р»РёРјРёС‚Р° С‚Р°СЂРёС„Р°, РЅРѕ СЃРѕС…СЂР°РЅРµРЅРёРµ РІСЃРµ СЂР°РІРЅРѕ РѕРіСЂР°РЅРёС‡РёРІР°РµС‚СЃСЏ С‚Р°СЂРёС„РЅС‹Рј cap.',
-    previewRefreshing: 'РџРµСЂРµСЃС‡РёС‚С‹РІР°РµРј preview...',
-    riskApplied: 'Р РёСЃРє (РјРЅРѕР¶РёС‚РµР»СЊ)',
-    initialBalance: 'РќР°С‡Р°Р»СЊРЅС‹Р№ Р±Р°Р»Р°РЅСЃ',
-    openTradingSystems: 'РћС‚РєСЂС‹С‚СЊ Trading Systems',
-    persistedBucket: 'РЎРѕС…СЂР°РЅСЏРµРјС‹Р№ bucket',
-    pending: 'РћР¶РёРґР°РµС‚',
-    approved: 'РћРґРѕР±СЂРµРЅРѕ',
-    rejected: 'РћС‚РєР»РѕРЅРµРЅРѕ',
-    start: 'РЎС‚Р°СЂС‚',
-    stop: 'РЎС‚РѕРї',
-    note: 'РљРѕРјРјРµРЅС‚Р°СЂРёР№',
-    decisionNote: 'РљРѕРјРјРµРЅС‚Р°СЂРёР№ СЂРµС€РµРЅРёСЏ',
-    chooseTenant: 'Р’С‹Р±РµСЂРёС‚Рµ РєР»РёРµРЅС‚Р° (tenant)',
-    chooseOffer: 'Р’С‹Р±РµСЂРёС‚Рµ РѕС„С„РµСЂ РґР»СЏ РѕРґРёРЅРѕС‡РЅРѕРіРѕ preview',
-    saveSuccess: 'РџСЂРѕС„РёР»СЊ РѕР±РЅРѕРІР»РµРЅ',
-    previewReady: 'Preview РѕР±РЅРѕРІР»РµРЅ',
-    materializeSuccess: 'РЎС‚СЂР°С‚РµРіРёРё РјР°С‚РµСЂРёР°Р»РёР·РѕРІР°РЅС‹',
-    requestSent: 'Р—Р°РїСЂРѕСЃ РѕС‚РїСЂР°РІР»РµРЅ',
-    requestResolved: 'Р—Р°РїСЂРѕСЃ РѕР±СЂР°Р±РѕС‚Р°РЅ',
-    publishReady: 'Admin TS РѕРїСѓР±Р»РёРєРѕРІР°РЅ',
-    seedReady: 'Demo tenants РѕР±РЅРѕРІР»РµРЅС‹',
-    emergencyStop: 'РЎС‚РѕРї + Р·Р°РєСЂС‹С‚СЊ РїРѕР·РёС†РёРё',
-    createMagicLink: 'РЎРіРµРЅРµСЂРёСЂРѕРІР°С‚СЊ СЃСЃС‹Р»РєСѓ РІС…РѕРґР°',
-    magicLinkReady: 'РЎСЃС‹Р»РєР° РіРѕС‚РѕРІР° (РѕРґРЅРѕСЂР°Р·РѕРІР°СЏ)',
-    magicLinkExpires: 'Р”РµР№СЃС‚РІРёС‚РµР»СЊРЅР° РґРѕ',
-    createClient: 'РЎРѕР·РґР°С‚СЊ РЅРѕРІРѕРіРѕ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ',
-    createClientTitle: 'РЎРѕР·РґР°РЅРёРµ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ С‡РµСЂРµР· Admin',
-    createClientSuccess: 'РљР»РёРµРЅС‚ СЃРѕР·РґР°РЅ',
-    recommendedSetsHint: 'Р­С‚Рѕ РіРѕС‚РѕРІС‹Рµ РїРѕРґР±РѕСЂРєРё РѕС„С„РµСЂРѕРІ РёР· РїРѕСЃР»РµРґРЅРµРіРѕ SWEEP. РњРѕР¶РЅРѕ Р±С‹СЃС‚СЂРѕ РІС‹Р±СЂР°С‚СЊ РЅР°Р±РѕСЂ Рё Р·Р°С‚РµРј РїРѕРґРєР»СЋС‡РёС‚СЊ РµРіРѕ РєР»РёРµРЅС‚Сѓ.',
-    adminTsDraftHint: 'РЎР»СѓР¶РµР±РЅС‹Р№ С‡РµСЂРЅРѕРІРёРє РїРѕСЂС‚С„РµР»СЏ РґР»СЏ Р°РґРјРёРЅР°. РќСѓР¶РµРЅ РґР»СЏ РїСѓР±Р»РёРєР°С†РёРё admin trading system Рё РєРѕРЅС‚СЂРѕР»СЏ СЃРѕСЃС‚Р°РІР°.',
-    selectedOffersHint: 'Р’С‹Р±РёСЂР°Р№С‚Рµ РѕС„С„РµСЂС‹ РєР°Рє С‚РѕРІР°СЂС‹. Р•СЃР»Рё РІС‹Р±СЂР°РЅРѕ РЅРµСЃРєРѕР»СЊРєРѕ, РЅРёР¶Рµ СЃС‚СЂРѕРёС‚СЃСЏ SWEEP compare (4D), Р° РЅРµ РїРѕР»РЅС‹Р№ API backtest.',
-    selectedOffersEmptyHint: 'РћС„С„РµСЂС‹ РЅРµ РЅР°Р№РґРµРЅС‹ РІ preset-Р±Р°Р·Рµ. РџРѕРєР°Р·С‹РІР°СЋ fallback РёР· РїРѕСЃР»РµРґРЅРµРіРѕ SWEEP/client catalog, РµСЃР»Рё РѕРЅ РґРѕСЃС‚СѓРїРµРЅ.',
-    adminCreateHint: 'Admin СЃРѕР·РґР°РµС‚ РєР»РёРµРЅС‚РѕРІ РґРІСѓС… С‚РёРїРѕРІ: РљР»РёРµРЅС‚ СЃС‚СЂР°С‚РµРіРёР№ Рё РђР»РіРѕС„РѕРЅРґ. РџРѕСЃР»Рµ СЃРѕР·РґР°РЅРёСЏ РјРѕР¶РЅРѕ СЃСЂР°Р·Сѓ РѕС‚РєСЂС‹С‚СЊ Рё РЅР°СЃС‚СЂРѕРёС‚СЊ РєР°Р±РёРЅРµС‚.',
-    engineStatus: 'РЎС‚Р°С‚СѓСЃ РґРІРёР¶РєР°',
+    depositCap: 'Лимит депозита',
+    strategyLimit: 'Лимит стратегий',
+    riskCap: 'Потолок риска',
+    period: 'Период',
+    connectedTenants: 'Подключенные клиенты',
+    tenantWorkspace: 'Кабинет клиента',
+    planCapabilities: 'Возможности тарифа',
+    capabilitySettings: 'Настройки',
+    capabilityApiKeyUpdate: 'Смена API key',
+    capabilityMonitoring: 'Мониторинг',
+    capabilityBacktest: 'Бэктест',
+    capabilityStartStop: 'Старт/стоп заявки',
+    openSettings: 'Открыть Settings',
+    openMonitoring: 'Открыть Monitoring',
+    openBacktest: 'Открыть Backtest',
+    backtestLockedHint: 'Backtest недоступен на текущем тарифе. Preview остаётся доступным.',
+    settingsLockedHint: 'Изменение настроек недоступно на текущем тарифе.',
+    priceUsdt: 'Цена, USDT/мес',
+    saveTenant: 'Сохранить tenant',
+    savePlan: 'Сохранить тариф',
+    unrealizedPnl: 'Нереализ. PnL',
+    marginLoad: 'Загрузка маржи',
+    depositLoad: 'Загрузка депозита',
+    liquidationRisk: 'Риск ликвидации',
+    displayName: 'Имя клиента',
+    tenantStatus: 'Статус tenant',
+    planGrid: 'Тарифная сетка',
+    previewUsesNearestPreset: 'Preview использует ближайший пресет и при сохранении всё равно маппится в low / medium / high.',
+    previewPlanCapHint: 'В админ-режиме preview можно смотреть выше лимита тарифа, но сохранение всё равно ограничивается тарифным cap.',
+    previewRefreshing: 'Пересчитываем preview...',
+    riskApplied: 'Риск (множитель)',
+    initialBalance: 'Начальный баланс',
+    openTradingSystems: 'Открыть Trading Systems',
+    persistedBucket: 'Сохраняемый bucket',
+    pending: 'Ожидает',
+    approved: 'Одобрено',
+    rejected: 'Отклонено',
+    start: 'Старт',
+    stop: 'Стоп',
+    note: 'Комментарий',
+    decisionNote: 'Комментарий решения',
+    chooseTenant: 'Выберите клиента (tenant)',
+    chooseOffer: 'Выберите оффер для одиночного preview',
+    saveSuccess: 'Профиль обновлен',
+    previewReady: 'Preview обновлен',
+    materializeSuccess: 'Стратегии материализованы',
+    requestSent: 'Запрос отправлен',
+    requestResolved: 'Запрос обработан',
+    publishReady: 'Admin TS опубликован',
+    seedReady: 'Demo tenants обновлены',
+    emergencyStop: 'Стоп + закрыть позиции',
+    createMagicLink: 'Сгенерировать ссылку входа',
+    magicLinkReady: 'Ссылка готова (одноразовая)',
+    magicLinkExpires: 'Действительна до',
+    createClient: 'Создать нового пользователя',
+    createClientTitle: 'Создание пользователя через Admin',
+    createClientSuccess: 'Клиент создан',
+    recommendedSetsHint: 'Это готовые подборки офферов из последнего SWEEP. Можно быстро выбрать набор и затем подключить его клиенту.',
+    adminTsDraftHint: 'Служебный черновик портфеля для admin. Нужен для публикации admin trading system и контроля состава.',
+    selectedOffersHint: 'Выбирайте офферы как товары. Если выбрано несколько, ниже строится SWEEP compare (4D), а не полный API backtest.',
+    selectedOffersEmptyHint: 'Офферы не найдены в preset-базе. Показываю fallback из последнего SWEEP/client catalog, если он доступен.',
+    adminCreateHint: 'Admin создаёт клиентов двух типов: Клиент стратегий и Алгофонд. После создания можно сразу открыть и настроить кабинет.',
+    engineStatus: 'Статус движка',
     engineSystemId: 'System ID',
-    engineRunning: 'РўРѕСЂРіРѕРІС‹Р№ РґРІРёР¶РѕРє Р·Р°РїСѓС‰РµРЅ',
-    enginePending: 'Р—Р°РїСЂРѕСЃ РѕРґРѕР±СЂРµРЅ, Р·Р°РїСѓСЃРє РѕР¶РёРґР°РµС‚СЃСЏ',
-    engineBlocked: 'РќРµ СѓРґР°Р»РѕСЃСЊ РјР°С‚РµСЂРёР°Р»РёР·РѕРІР°С‚СЊ РєР»РёРµРЅС‚Р° РІ engine',
-    engineStopped: 'РўРѕСЂРіРѕРІС‹Р№ РґРІРёР¶РѕРє РѕСЃС‚Р°РЅРѕРІР»РµРЅ',
-    engineNotMaterialized: 'РљР»РёРµРЅС‚ РµС‰Рµ РЅРµ Р·Р°РІРµРґРµРЅ РІ С‚РѕСЂРіРѕРІС‹Р№ РґРІРёР¶РѕРє. РќСѓР¶РЅР° materialization С‚РѕСЂРіРѕРІРѕР№ СЃРёСЃС‚РµРјС‹.',
+    engineRunning: 'Торговый движок запущен',
+    enginePending: 'Запрос одобрен, запуск ожидается',
+    engineBlocked: 'Не удалось материализовать клиента в engine',
+    engineStopped: 'Торговый движок остановлен',
+    engineNotMaterialized: 'Клиент ещё не заведён в торговый движок. Нужна materialization торговой системы.',
   },
   en: {
     title: 'SaaS Control Room',
@@ -1316,7 +1316,7 @@ const snapToLevelValue = (value: number): number => {
 
 const formatDateShort = (value?: string | null): string => {
   if (!value) {
-    return 'вЂ”';
+    return '—';
   }
 
   const date = new Date(value);
@@ -1341,21 +1341,21 @@ const formatPeriodCoverage = (period?: PeriodInfo | null): string => {
   const diffMs = toMs - fromMs;
   const days = diffMs / (24 * 60 * 60 * 1000);
   if (days >= 1) {
-    return ` В· ${Math.round(days)}d`;
+    return ` • ${Math.round(days)}d`;
   }
 
   const hours = diffMs / (60 * 60 * 1000);
-  return ` В· ${Math.max(1, Math.round(hours))}h`;
+  return ` • ${Math.max(1, Math.round(hours))}h`;
 };
 
 const formatPeriodLabel = (period?: PeriodInfo | null): string => {
   if (!period) {
-    return 'вЂ”';
+    return '—';
   }
 
   const from = formatDateShort(period.dateFrom);
   const to = formatDateShort(period.dateTo);
-  const interval = period.interval ? ` В· ${period.interval}` : '';
+  const interval = period.interval ? ` • ${period.interval}` : '';
   const coverage = formatPeriodCoverage(period);
   return `${from} -> ${to}${interval}${coverage}`;
 };
@@ -2300,14 +2300,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: copy.plan,
       key: 'plan',
-      render: (_, row) => row.plan ? `${row.plan.title} В· ${formatMoney(row.plan.price_usdt)}` : 'вЂ”',
+      render: (_, row) => row.plan ? `${row.plan.title} • ${formatMoney(row.plan.price_usdt)}` : '—',
     },
     {
       title: copy.apiKey,
       key: 'apiKey',
       render: (_, row) => (
         <Space wrap>
-          <Text>{row.tenant.assigned_api_key_name || 'вЂ”'}</Text>
+          <Text>{row.tenant.assigned_api_key_name || '—'}</Text>
           {row.capabilities && !row.capabilities.apiKeyUpdate ? <Tag color="default">readonly</Tag> : null}
         </Space>
       ),
@@ -2972,12 +2972,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     },
                     {
                       key: 'monitoring',
-                      label: 'РњРѕРЅРёС‚РѕСЂРёРЅРі',
+                      label: 'Мониторинг',
                       children: (
-                        <Card className="battletoads-card" title="Р–РёРІС‹Рµ РєР»РёРµРЅС‚С‹ Рё С‚РѕСЂРіРѕРІС‹Рµ РґРІРёР¶РєРё">
+                        <Card className="battletoads-card" title="Живые клиенты и торговые движки">
                           <Space direction="vertical" size={12} style={{ width: '100%' }}>
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                              РЎРІРѕРґРєР° РїРѕ strategy-client Рё algofund: СЃРѕСЃС‚РѕСЏРЅРёРµ РґРІРёР¶РєР°, РєСЂР°С‚РєРёРµ РјРµС‚СЂРёРєРё, РєРѕРјРјРµРЅС‚Р°СЂРёРё Рё РІС‹Р±РѕСЂ СЃРёСЃС‚РµРј.
+                              Сводка по strategy-client и algofund: состояние движка, краткие метрики, комментарии и выбор систем.
                             </Paragraph>
                             <Space wrap>
                               <Select
@@ -2985,14 +2985,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 value={monitoringModeFilter}
                                 onChange={(value) => setMonitoringModeFilter(value)}
                                 options={[
-                                  { value: 'all', label: 'Р’СЃРµ СЂРµР¶РёРјС‹' },
+                                  { value: 'all', label: 'Все режимы' },
                                   { value: 'strategy_client', label: 'Strategy Client' },
                                   { value: 'algofund_client', label: 'Algofund' },
                                 ]}
                               />
-                              <Button onClick={() => void loadMonitoringTabData()} loading={monitoringTabLoading}>РћР±РЅРѕРІРёС‚СЊ СЃРїРёСЃРѕРє СЃРёСЃС‚РµРј</Button>
-                              <Button onClick={() => void loadLowLotRecommendations()} loading={lowLotLoading}>РћР±РЅРѕРІРёС‚СЊ low-lot</Button>
-                              <Button onClick={() => void loadTelegramControls()} loading={telegramControlsLoading}>РћР±РЅРѕРІРёС‚СЊ Telegram controls</Button>
+                              <Button onClick={() => void loadMonitoringTabData()} loading={monitoringTabLoading}>Обновить список систем</Button>
+                              <Button onClick={() => void loadLowLotRecommendations()} loading={lowLotLoading}>Обновить low-lot</Button>
+                              <Button onClick={() => void loadTelegramControls()} loading={telegramControlsLoading}>Обновить Telegram controls</Button>
                             </Space>
 
                             <Row gutter={[16, 16]}>
@@ -3042,7 +3042,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         render: (_, row) => (
                                           <Space direction="vertical" size={0}>
                                             <Text strong>{row.strategyName}</Text>
-                                            <Text type="secondary">{row.apiKeyName} В· {row.pair}</Text>
+                                            <Text type="secondary">{row.apiKeyName} • {row.pair}</Text>
                                           </Space>
                                         ),
                                       },
@@ -3124,7 +3124,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     },
                     {
                       key: 'create-user',
-                      label: 'РЎРѕР·РґР°С‚СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЏ',
+                      label: 'Создать пользователя',
                       children: (
                         <Card className="battletoads-card" title={copy.createClientTitle}>
                           <Space direction="vertical" style={{ width: '100%' }} size={12}>
@@ -3151,7 +3151,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </div>
                             <Space>
                               <Button type="primary" onClick={() => void createTenantAdmin()} loading={actionLoading === 'createTenant'}>{copy.createClient}</Button>
-                              <Button onClick={() => setAdminTab('overview')}>РќР°Р·Р°Рґ Рє РѕР±Р·РѕСЂСѓ</Button>
+                              <Button onClick={() => setAdminTab('overview')}>Назад к обзору</Button>
                             </Space>
                           </Space>
                         </Card>
@@ -3204,7 +3204,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   disabled={!strategyApiKeyEditable}
                                 />
                               ) : (
-                                <div style={{ marginTop: 8 }}><Text>{strategyApiKeyName || 'вЂ”'}</Text></div>
+                                <div style={{ marginTop: 8 }}><Text>{strategyApiKeyName || '—'}</Text></div>
                               )}
                             </Col>
                             <Col xs={24} md={isAdminSurface ? 6 : 8}>
@@ -3212,7 +3212,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               {isAdminSurface ? (
                                 <Select style={{ width: '100%', marginTop: 8 }} value={strategyTenantPlanCode || undefined} onChange={setStrategyTenantPlanCode} options={strategyPlanOptions} />
                               ) : (
-                                <div style={{ marginTop: 8 }}><Text>{strategyState.plan ? `${strategyState.plan.title} В· ${formatMoney(strategyState.plan.price_usdt)}` : 'вЂ”'}</Text></div>
+                                <div style={{ marginTop: 8 }}><Text>{strategyState.plan ? `${strategyState.plan.title} • ${formatMoney(strategyState.plan.price_usdt)}` : '—'}</Text></div>
                               )}
                             </Col>
                           </Row>
@@ -3343,7 +3343,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       )}
                                     >
                                       <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                        <Text type="secondary">{offer.strategy.mode.toUpperCase()} В· {offer.strategy.type} В· {offer.strategy.market}</Text>
+                                        <Text type="secondary">{offer.strategy.mode.toUpperCase()} • {offer.strategy.type} • {offer.strategy.market}</Text>
                                         <Space wrap>
                                           <Tag color="cyan">{copy.score}: {formatNumber(offer.metrics.score)}</Tag>
                                           <Tag color={metricColor(Number(offer.metrics.ret || 0), 'return')}>{copy.returnLabel}: {formatPercent(offer.metrics.ret)}</Tag>
@@ -3384,7 +3384,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Space wrap style={{ marginBottom: 12 }}>
                                     {strategySelectionPreviewOffers.map((item) => (
                                       <Tag key={item.offerId} color={item.mode === 'mono' ? 'green' : 'blue'}>
-                                        {item.market} В· {formatNumber(item.score)}
+                                        {item.market} • {formatNumber(item.score)}
                                       </Tag>
                                     ))}
                                   </Space>
@@ -3405,7 +3405,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 style={{ width: '100%', marginTop: 8 }}
                                 value={strategyPreviewOfferId || undefined}
                                 onChange={setStrategyPreviewOfferId}
-                                options={strategyOfferCatalog.map((offer) => ({ value: offer.offerId, label: `${offer.titleRu} В· ${offer.strategy.market}` }))}
+                                options={strategyOfferCatalog.map((offer) => ({ value: offer.offerId, label: `${offer.titleRu} • ${offer.strategy.market}` }))}
                               />
                             </Col>
                             <Col xs={24} md={14}>
@@ -3422,7 +3422,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
                                 <Col xs={24} lg={8}>
                                   <Descriptions column={1} size="small" bordered>
-                                    <Descriptions.Item label="Offer">{strategyPreviewOffer?.titleRu || 'вЂ”'}</Descriptions.Item>
+                                    <Descriptions.Item label="Offer">{strategyPreviewOffer?.titleRu || '—'}</Descriptions.Item>
                                     <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategyPreviewPeriod)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.score}>{formatNumber(strategyPreview?.preset?.score ?? strategyPreviewMetrics?.score)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.finalEquity}>{formatMoney((strategyPreviewSummary as any)?.finalEquity ?? strategyPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
@@ -3451,7 +3451,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 <List.Item>
                                   <Space direction="vertical" size={0}>
                                     <Text strong>{item.name}</Text>
-                                    <Text type="secondary">{item.mode.toUpperCase()} В· {item.type} В· {item.market}</Text>
+                                    <Text type="secondary">{item.mode.toUpperCase()} • {item.type} • {item.market}</Text>
                                   </Space>
                                   <Space wrap>
                                     <Tag color="blue">id {item.strategyId || item.id}</Tag>
@@ -3638,9 +3638,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     : copy.engineStopped}
                               </Descriptions.Item>
                               <Descriptions.Item label="Engine fact">{algofundEngineRunning ? 'STARTED' : 'NOT STARTED'}</Descriptions.Item>
-                              <Descriptions.Item label={copy.sourceSystem}>{algofundState.engine?.systemName || algofundState.profile?.published_system_name || 'вЂ”'}</Descriptions.Item>
-                              <Descriptions.Item label={copy.engineSystemId}>{algofundState.engine?.systemId ?? 'вЂ”'}</Descriptions.Item>
-                              <Descriptions.Item label={copy.apiKey}>{algofundState.engine?.apiKeyName || algofundState.profile?.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || 'вЂ”'}</Descriptions.Item>
+                              <Descriptions.Item label={copy.sourceSystem}>{algofundState.engine?.systemName || algofundState.profile?.published_system_name || '—'}</Descriptions.Item>
+                              <Descriptions.Item label={copy.engineSystemId}>{algofundState.engine?.systemId ?? '—'}</Descriptions.Item>
+                              <Descriptions.Item label={copy.apiKey}>{algofundState.engine?.apiKeyName || algofundState.profile?.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || '—'}</Descriptions.Item>
                             </Descriptions>
                             <Button href={algofundTradingSystemsHref}>{copy.openTradingSystems}</Button>
                             {algofundEnginePending && !algofundEngineRunning ? (

@@ -1,117 +1,127 @@
-# Strategy / Trading System / Offer Catalog
+# Каталог Стратегий / Торговых Систем / Офферов
 
-## Purpose
-This document is the admin reference for:
-- what strategy families exist,
-- how trading systems are composed,
-- how offer metrics are interpreted,
-- how to run Research tasks in `light` or `heavy` mode,
-- how to generate high-frequency systems for rhythm-driven products.
+## Назначение
+Этот документ нужен админу как краткая опорная карта:
+- какие семейства стратегий сейчас используются;
+- как собираются торговые системы;
+- как читать метрики офферов;
+- как запускать задачи Research в режимах `light` и `heavy`;
+- как собирать high-frequency системы под продукты с более частыми сделками.
 
-## Execution Modes
-All new sweep entry points support `mode`:
-- `light`: conservative server load, smaller task batches.
-- `heavy`: maximum throughput, broader task processing.
+## Режимы Выполнения
+Все новые точки входа sweep поддерживают параметр `mode`:
+- `light`: более мягкая нагрузка на сервер, меньше обработка за шаг.
+- `heavy`: максимальная пропускная способность и более широкий перебор.
 
-Applied in:
+Используется в:
 - `POST /api/research/tasks/run-sweep`
 - `POST /api/research/tasks/run-sweep/manual`
 - `POST /api/research/scheduler/daily_incremental_sweep/backfill-now`
 - `POST /api/research/tasks/high-frequency-system`
 
-Operational note:
-- `daily_incremental_sweep` is still a snapshot-sync layer (fast import path).
-- for full historical recompute, use heavy sweep workflow and then re-import/refresh catalog.
+Операционная заметка:
+- `daily_incremental_sweep` пока остаётся слоем snapshot-sync, то есть быстрым импортом текущего среза.
+- для полноценного исторического пересчёта нужен heavy sweep workflow с последующим реимпортом/обновлением каталога.
 
-## Strategy Families (Current)
+## Семейства Стратегий
 ### DD_BattleToads
-- Type: breakout/trend-following.
-- Typical params: `price_channel_length`, `take_profit_percent`, `detection_source`.
-- Use case: directional momentum across mono and synthetic pairs.
+- Тип: breakout / trend-following.
+- Типичные параметры: `price_channel_length`, `take_profit_percent`, `detection_source`.
+- Когда полезна: направленный импульс на mono и synthetic парах.
 
 ### stat_arb_zscore
-- Type: mean-reversion spread model.
-- Typical params: `zscore_entry`, `zscore_exit`, `zscore_stop`.
-- Use case: synthetic pair dislocations and convergence trades.
+- Тип: mean-reversion модель по спреду.
+- Типичные параметры: `zscore_entry`, `zscore_exit`, `zscore_stop`.
+- Когда полезна: синтетические пары, расхождение и схлопывание спреда.
 
 ### zz_breakout
-- Type: structural breakout variant.
-- Use case: directional bursts and regime transitions.
+- Тип: структурный breakout-вариант.
+- Когда полезна: резкие направленные фазы и смена режима рынка.
 
-## Trading System Assembly Rules
-Current admin trading system controls:
-- member list with per-member `weight`, `role`, enable/disable,
-- live activation and safe apply,
-- backtest run from Trading Systems UI,
-- liquidity suggestions and monitoring overlays.
+## Что Такое Профили Стратегий
+Блок `Профили стратегий` в Research показывает не готовые live-TS, а кандидатов, которые были извлечены из sweep-прогонов.
 
-Recommended naming pattern:
+Смысл блока:
+- это рабочая база лучших конфигураций по конкретным рынкам и параметрам;
+- из этих профилей потом строятся пресеты офферов, публикации в runtime и будущие сборки TS;
+- ручные торговые системы живут отдельно в разделе Trading Systems.
+
+Проще говоря: `Профиль стратегии` = проверенный sweep-кандидат, а не уже собранная клиентская торговая система.
+
+## Правила Сборки Торговых Систем
+Сейчас админ может управлять:
+- составом участников с полями `weight`, `role`, enable/disable;
+- live-активацией и безопасным apply;
+- запуском backtest из UI Trading Systems;
+- подсказками по ликвидности и мониторинговыми оверлеями.
+
+Рекомендуемый шаблон названия:
 - `HF LIGHT 10tpd YYYY-MM-DD`
 - `HF HEAVY 10tpd YYYY-MM-DD`
 - `BALANCED PF-DD YYYY-MM-DD`
 
-## New Frequency Diagnostics
+## Диагностика Частоты Сделок
 Endpoint:
 - `GET /api/trading-systems/:apiKeyName/:systemId/frequency-diagnostics`
 
-Returns:
-- current estimated trades over sweep window,
-- estimated trades/day,
-- min/max range among enabled members,
-- `adjustable` flag,
-- `nearTarget` flag,
-- candidate suggestions from sweep.
+Что возвращает:
+- текущую оценку числа сделок на sweep-окне;
+- оценку `trades/day`;
+- диапазон min/max по активным участникам;
+- флаг `adjustable`;
+- флаг `nearTarget`;
+- подсказки-кандидаты из sweep.
 
-UI usage:
-- Trading Systems page shows if frequency is adjustable near the selected target.
+Как используется в UI:
+- страница Trading Systems показывает, можно ли реально подвинуть частоту сделок ближе к выбранной цели.
 
-## New High-Frequency Generation Task
+## Задача Генерации High-Frequency Системы
 Endpoint:
 - `POST /api/research/tasks/high-frequency-system`
 
-Input:
+Вход:
 - `apiKeyName`
 - `mode: light | heavy`
 - `targetTradesPerDay`
 - `maxMembers`
 - `minPf`, `maxDd`
 
-Output:
-- created trading system,
-- selected member diagnostics,
-- preview backtest summary,
-- candidate sample for manual follow-up.
+Выход:
+- созданная торговая система;
+- диагностика выбранных участников;
+- summary preview-backtest;
+- выборка кандидатов для ручного follow-up.
 
-## Offer Layer Improvement Direction
-Current offer stack is metric-driven (ret/pf/dd/wr/trades/score). To improve attractiveness and clarity (inspired by managed-strategy platforms):
-- add concise strategy card narrative (style + market regime fit),
-- expose risk posture and expected rhythm (`trades/day` and variance band),
-- add consistency block (rolling windows, drawdown behavior),
-- add transparent constraints (max DD guardrail and PF floor),
-- show simple onboarding path: conservative/balanced/aggressive presets.
+## Куда Улучшать Офферы
+Сейчас офферы в основном метрико-ориентированы: `ret/pf/dd/wr/trades/score`. Чтобы сделать слой офферов понятнее и привлекательнее, стоит развивать:
+- короткий narrative по стратегии: стиль и в каких режимах рынка она уместна;
+- явную подачу риска и ожидаемого ритма (`trades/day` и разброс);
+- блок стабильности: окна, поведение просадки, устойчивость;
+- прозрачные ограничения: потолок DD и нижний порог PF;
+- простой путь входа: conservative / balanced / aggressive пресеты.
 
-## Client Product Behavior (Current vs Target)
+## Поведение Клиентских Продуктов
 ### Strategy Client
-Current:
-- chooses offers,
-- sets risk + trade-frequency preference,
-- gets preview/materialization.
+Сейчас:
+- выбирает офферы;
+- задаёт риск и желаемую частоту сделок;
+- получает preview / materialization.
 
-Target extension:
-- user-composed mini trading systems by plan limits,
-- sweep-backed portfolio preview without heavy runtime compute.
+Целевое расширение:
+- самостоятельная мини-сборка ТС в рамках тарифных лимитов;
+- portfolio-preview на базе sweep без тяжёлого runtime compute.
 
 ### Algofund Client
-Current:
-- managed mode with request flow and risk controls.
+Сейчас:
+- управляемый режим с потоком заявок и риск-контролями.
 
-Target extension:
-- select between admin-published managed trading systems,
-- inspect short profile + backtest summary before selection.
+Целевое расширение:
+- выбор между опубликованными admin-managed TS;
+- просмотр короткого профиля и backtest-summary до выбора.
 
-## Admin Checklist (Daily)
-1. Check scheduler status and gap.
-2. Run `backfill-now` in `light` during active trading hours.
-3. Run `heavy` windows off-peak.
-4. Generate at least one high-frequency candidate TS and compare diagnostics.
-5. Promote only systems that keep acceptable PF/DD while increasing trade rhythm.
+## Ежедневный Чеклист Админа
+1. Проверить статус scheduler и наличие пробелов.
+2. Днём запускать `backfill-now` в режиме `light`.
+3. В внепиковые окна запускать `heavy`.
+4. Генерировать хотя бы одного high-frequency кандидата TS и сравнивать диагностику.
+5. Продвигать только те системы, которые держат приемлемые PF/DD и при этом улучшают ритм сделок.

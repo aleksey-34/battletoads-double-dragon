@@ -55,6 +55,12 @@ type BackfillJobRow = {
 };
 
 let runningBackfillJobId: number | null = null;
+const delay = async (ms: number): Promise<void> => {
+  if (ms <= 0) {
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, ms));
+};
 
 const DEFAULT_JOBS: Array<{ job_key: SchedulerJobKey; title: string; hour_utc: number; minute_utc: number }> = [
   {
@@ -527,6 +533,19 @@ const getLatestBackfillJob = async (): Promise<BackfillJobRow | null> => {
   return row || null;
 };
 
+const getBackfillJobById = async (jobId: number): Promise<BackfillJobRow | null> => {
+  const researchDb = getResearchDb();
+  const row = await researchDb.get(
+    `SELECT *
+     FROM research_backfill_jobs
+     WHERE id = ?
+     LIMIT 1`,
+    [jobId]
+  ) as BackfillJobRow | undefined;
+
+  return row || null;
+};
+
 export const getDailySweepBackfillStatus = async (): Promise<Record<string, unknown>> => {
   const latest = await getLatestBackfillJob();
   if (!latest) {
@@ -546,6 +565,48 @@ export const getDailySweepBackfillStatus = async (): Promise<Record<string, unkn
     details,
     isRunning: latest.status === 'running',
   };
+};
+
+export const updateDailySweepBackfillMode = async (modeInput: unknown, jobIdInput?: unknown): Promise<Record<string, unknown>> => {
+  const researchDb = getResearchDb();
+  const mode = normalizeSweepRunMode(modeInput);
+  const jobId = Number(jobIdInput || 0);
+  const targetJob = jobId > 0 ? await getBackfillJobById(jobId) : await getLatestBackfillJob();
+
+  if (!targetJob) {
+    throw new Error('Backfill job not found');
+  }
+
+  if (targetJob.status !== 'running' && targetJob.status !== 'queued') {
+    throw new Error(`Cannot change mode for backfill job in status=${targetJob.status}`);
+  }
+
+  let details: Record<string, unknown> = {};
+  try {
+    details = JSON.parse(String(targetJob.details_json || '{}')) as Record<string, unknown>;
+  } catch {
+    details = {};
+  }
+
+  await researchDb.run(
+    `UPDATE research_backfill_jobs
+     SET mode = ?,
+         details_json = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [
+      mode,
+      JSON.stringify({
+        ...details,
+        modeSwitchAt: toIsoNow(),
+        modeSwitchTo: mode,
+      }),
+      targetJob.id,
+    ]
+  );
+
+  logger.info(`[researchBackfill] job=${targetJob.id} mode switched to ${mode}`);
+  return getDailySweepBackfillStatus();
 };
 
 export const startDailySweepGapBackfillJob = async (maxDays: number = 30, modeInput: unknown = 'light'): Promise<Record<string, unknown>> => {
@@ -613,12 +674,56 @@ export const startDailySweepGapBackfillJob = async (maxDays: number = 30, modeIn
     const startedAt = Date.now();
     let createdRuns = 0;
     let skippedDays = 0;
+    let processedDays = 0;
 
     try {
       const { sweep, catalog } = await loadCatalogAndSweepWithFallback();
 
-      for (let index = 0; index < missingDaysToProcess.length; index += 1) {
-        const dayKey = missingDaysToProcess[index];
+      while (true) {
+        const currentJob = await getBackfillJobById(jobId);
+        if (!currentJob) {
+          throw new Error(`Backfill job disappeared: ${jobId}`);
+        }
+        if (currentJob.status !== 'running') {
+          break;
+        }
+
+        const currentMode = normalizeSweepRunMode(currentJob.mode);
+        const currentRequestedMaxDays = Math.max(1, Math.min(365, Math.floor(Number(currentJob.requested_max_days) || requestedMaxDays)));
+        const currentSafeMaxDays = currentMode === 'heavy'
+          ? currentRequestedMaxDays
+          : Math.min(currentRequestedMaxDays, 7);
+        const currentGap = await analyzeDailySweepGap(currentSafeMaxDays);
+        const pendingDays = currentGap.missingDays;
+
+        if (pendingDays.length === 0) {
+          await researchDb.run(
+            `UPDATE research_backfill_jobs
+             SET analyzed_days = ?,
+                 missing_days = ?,
+                 current_day_key = '',
+                 eta_seconds = 0,
+                 progress_percent = 100,
+                 details_json = ?,
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id = ?`,
+            [
+              currentGap.totalDays,
+              processedDays,
+              JSON.stringify({
+                lastDay: '',
+                mode: currentMode,
+                processedDays,
+                remainingDays: 0,
+                pendingDays: [],
+              }),
+              jobId,
+            ]
+          );
+          break;
+        }
+
+        const dayKey = pendingDays[0];
         const result = await runDailyIncrementalSweepForDay(dayKey, sweep, catalog);
 
         if (result.status === 'done') {
@@ -627,16 +732,21 @@ export const startDailySweepGapBackfillJob = async (maxDays: number = 30, modeIn
           skippedDays += 1;
         }
 
-        const processedDays = index + 1;
+        processedDays += 1;
         const elapsedSec = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
         const avgSecPerDay = elapsedSec / Math.max(1, processedDays);
-        const remainDays = Math.max(0, missingDaysToProcess.length - processedDays);
+        const refreshedGap = await analyzeDailySweepGap(currentSafeMaxDays);
+        const remainDays = Math.max(0, refreshedGap.missingDays.length);
+        const totalPlannedDays = Math.max(1, processedDays + remainDays);
         const etaSeconds = Math.max(0, Math.round(remainDays * avgSecPerDay));
-        const progressPercent = Number(((processedDays / Math.max(1, missingDaysToProcess.length)) * 100).toFixed(2));
+        const progressPercent = Number(((processedDays / totalPlannedDays) * 100).toFixed(2));
 
         await researchDb.run(
           `UPDATE research_backfill_jobs
-           SET processed_days = ?,
+           SET mode = ?,
+               analyzed_days = ?,
+               missing_days = ?,
+               processed_days = ?,
                created_runs = ?,
                skipped_days = ?,
                current_day_key = ?,
@@ -646,6 +756,9 @@ export const startDailySweepGapBackfillJob = async (maxDays: number = 30, modeIn
                updated_at = CURRENT_TIMESTAMP
            WHERE id = ?`,
           [
+            currentMode,
+            refreshedGap.totalDays,
+            processedDays + remainDays,
             processedDays,
             createdRuns,
             skippedDays,
@@ -655,16 +768,19 @@ export const startDailySweepGapBackfillJob = async (maxDays: number = 30, modeIn
             JSON.stringify({
               lastDay: dayKey,
               lastResult: result,
+              mode: currentMode,
               elapsedSec,
               processedDays,
               remainingDays: remainDays,
-              pendingDays: missingDaysToProcess.slice(processedDays),
+              pendingDays: refreshedGap.missingDays,
             }),
             jobId,
           ]
         );
 
-        logger.info(`[researchBackfill] job=${jobId} mode=${mode} processed=${processedDays}/${missingDaysToProcess.length} day=${dayKey} etaSec=${etaSeconds}`);
+        logger.info(`[researchBackfill] job=${jobId} mode=${currentMode} processed=${processedDays}/${totalPlannedDays} day=${dayKey} etaSec=${etaSeconds}`);
+
+        await delay(currentMode === 'heavy' ? 100 : 1200);
       }
 
       await researchDb.run(
@@ -679,7 +795,7 @@ export const startDailySweepGapBackfillJob = async (maxDays: number = 30, modeIn
              updated_at = CURRENT_TIMESTAMP,
              finished_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
-        [missingDaysToProcess.length, createdRuns, skippedDays, jobId]
+        [processedDays, createdRuns, skippedDays, jobId]
       );
       logger.info(`[researchBackfill] job=${jobId} done mode=${mode} created=${createdRuns} skipped=${skippedDays}`);
     } catch (error) {

@@ -1025,8 +1025,8 @@ const buildOfferFromSweepRecord = (record: SweepRecord): CatalogOffer => {
 
   return {
     offerId: `offer_${mode}_${asString(record.strategyType, 'strategy').toLowerCase()}_${record.strategyId}`,
-    titleRu: `${mode.toUpperCase()} В· ${asString(record.strategyType, 'Strategy')} В· ${asString(record.market, '')}`,
-    descriptionRu: 'Auto-generated from historical sweep record',
+    titleRu: `${mode.toUpperCase()} • ${asString(record.strategyType, 'Стратегия')} • ${asString(record.market, '')}`,
+    descriptionRu: 'Автоматически собрано из записи исторического sweep.',
     strategy: {
       id: Number(record.strategyId),
       name: asString(record.strategyName, `Strategy ${record.strategyId}`),
@@ -1131,7 +1131,7 @@ const buildPresetBackedOffers = async (catalog: CatalogData | null): Promise<Cat
       return {
         offerId,
         titleRu: legacy?.titleRu || String(config.name || offerId),
-        descriptionRu: legacy?.descriptionRu || 'Preset-backed offer',
+        descriptionRu: legacy?.descriptionRu || 'Оффер собран на базе пресетов.',
         strategy: {
           id: Number(config.strategyId || legacy?.strategy?.id || 0),
           name: String(config.name || legacy?.strategy?.name || offerId),

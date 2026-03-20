@@ -1,52 +1,52 @@
-# Sweep Run Results Log
+# Лог Результатов Sweep-Прогонов
 
-## Goal
-Track each major sweep/backfill run with reproducible metrics for:
-- strategy ranking,
-- offer generation,
-- product-level rollout decisions.
+## Цель
+Фиксировать каждый крупный sweep/backfill-прогон в воспроизводимом виде, чтобы потом было на что опираться при:
+- ранжировании стратегий;
+- генерации офферов;
+- продуктовых и runtime-решениях.
 
-## Run Template
+## Шаблон Прогона
 - Run ID:
-- Started at (UTC):
-- Finished at (UTC):
-- Mode: light | heavy
-- Scope: missing days / full recompute / manual pair batch
-- Requested days:
-- Analyzed days:
-- Missing days before:
-- Processed days:
-- Created runs:
-- Skipped days:
-- Failure count:
-- ETA behavior (stable/unstable):
+- Время старта (UTC):
+- Время завершения (UTC):
+- Режим: light | heavy
+- Объём: missing days / full recompute / manual pair batch
+- Запрошено дней:
+- Проанализировано дней:
+- Пропущенных дней до старта:
+- Обработано дней:
+- Создано run:
+- Пропущено дней:
+- Кол-во сбоев:
+- Поведение ETA: стабильное / нестабильное
 
-### Data Quality Checks
-- Sweep artifacts persisted: yes/no
-- Progress checkpoints persisted: yes/no
-- Last processed day key:
-- Any gaps left:
+### Проверки Качества Данных
+- Артефакты sweep сохранены: да/нет
+- Чекпоинты прогресса сохранены: да/нет
+- Последний обработанный day key:
+- Остались ли пробелы:
 
-### Ranking Output (Top candidates)
-- Top by PF:
-- Top by Sharpe proxy / stability:
-- Top by DD control:
-- Top by trades/day rhythm:
-- Top balanced (PF + DD + WR + trades):
+### Результаты Ранжирования
+- Топ по PF:
+- Топ по proxy Sharpe / стабильности:
+- Топ по контролю DD:
+- Топ по ритму trades/day:
+- Топ сбалансированный (PF + DD + WR + trades):
 
-### Offer Candidates
-- Mono offers shortlist:
-- Synth offers shortlist:
-- Recommended product mapping:
-  - Strategy Client:
-  - Algofund:
+### Кандидаты В Офферы
+- Шортлист mono-офферов:
+- Шортлист synth-офферов:
+- Рекомендуемое продуктовое сопоставление:
+- Strategy Client:
+- Algofund:
 
-### Trading System Candidates
+### Кандидаты В Торговые Системы
 - TS-1 (balanced):
 - TS-2 (high-frequency):
 - TS-3 (conservative):
 
-### Admin Decision
-- Promote to runtime: yes/no
-- Reason:
-- Follow-up tasks:
+### Решение Админа
+- Продвигаем в runtime: да/нет
+- Причина:
+- Follow-up задачи:

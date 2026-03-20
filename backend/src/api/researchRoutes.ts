@@ -35,6 +35,7 @@ import {
   listSchedulerJobs,
   runDailySweepGapBackfill,
   startDailySweepGapBackfillJob,
+  updateDailySweepBackfillMode,
   runSchedulerJobNow,
   updateSchedulerJob,
 } from '../research/schedulerService';
@@ -887,6 +888,22 @@ router.get('/scheduler/:jobKey/backfill-status', async (req, res) => {
 
     const status = await getDailySweepBackfillStatus();
     res.json({ success: true, ...status });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.patch('/scheduler/:jobKey/backfill-mode', async (req, res) => {
+  try {
+    const jobKey = String(req.params.jobKey || '');
+    if (jobKey !== 'daily_incremental_sweep') {
+      return res.status(400).json({ error: `Unsupported scheduler job key: ${jobKey}` });
+    }
+
+    const mode = parseSweepRunMode(req.body?.mode);
+    const result = await updateDailySweepBackfillMode(mode, req.body?.jobId);
+    res.json({ success: true, ...result });
   } catch (err) {
     const error = err as Error;
     res.status(500).json({ error: error.message });
