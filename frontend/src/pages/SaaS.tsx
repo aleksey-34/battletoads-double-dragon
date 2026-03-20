@@ -3823,13 +3823,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               checked={applyLowLotDeposit}
               onChange={(e) => setApplyLowLotDeposit(e.target.checked)}
             >
-              Increase deposit: {applyLowLotTarget.maxDeposit} -> {applyLowLotTarget.suggestedDepositMin} USD
+              Increase deposit: {applyLowLotTarget.maxDeposit} {'→'} {applyLowLotTarget.suggestedDepositMin} USD
             </Checkbox>
             <Checkbox
               checked={applyLowLotLot}
               onChange={(e) => setApplyLowLotLot(e.target.checked)}
             >
-              Increase lot%: {applyLowLotTarget.lotPercent}% -> {applyLowLotTarget.suggestedLotPercent}%
+              Increase lot%: {applyLowLotTarget.lotPercent}% {'→'} {applyLowLotTarget.suggestedLotPercent}%
             </Checkbox>
             {applyLowLotTarget.replacementCandidates?.length > 0 && (
               <div>
