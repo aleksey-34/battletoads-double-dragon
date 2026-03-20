@@ -1,4 +1,4 @@
-import fs from 'fs';
+﻿import fs from 'fs';
 import path from 'path';
 import { runBacktest } from '../backtest/engine';
 import { createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
@@ -1025,7 +1025,7 @@ const buildOfferFromSweepRecord = (record: SweepRecord): CatalogOffer => {
 
   return {
     offerId: `offer_${mode}_${asString(record.strategyType, 'strategy').toLowerCase()}_${record.strategyId}`,
-    titleRu: `${mode.toUpperCase()} · ${asString(record.strategyType, 'Strategy')} · ${asString(record.market, '')}`,
+    titleRu: `${mode.toUpperCase()} В· ${asString(record.strategyType, 'Strategy')} В· ${asString(record.market, '')}`,
     descriptionRu: 'Auto-generated from historical sweep record',
     strategy: {
       id: Number(record.strategyId),
@@ -1792,6 +1792,8 @@ export type LowLotRecommendation = {
   suggestedDepositMin: number;
   suggestedLotPercent: number;
   replacementCandidates: Array<{ symbol: string; score: number; note: string }>;
+  systemId: number | null;
+  eventSource: 'last_error' | 'runtime_event' | 'liquidity_trigger';
 };
 
 const getRuntimeFlag = async (key: string, fallback: string): Promise<string> => {
@@ -1846,72 +1848,38 @@ export const getAdminLowLotRecommendations = async (options?: {
   const limit = Math.max(1, Math.min(200, Math.floor(Number(options?.limit || 50) || 50)));
   const replLimit = Math.max(1, Math.min(5, Math.floor(Number(options?.perStrategyReplacementLimit || 3) || 3)));
 
-  const rows = await db.all(
-    `SELECT
-       a.id AS api_key_id,
-       a.name AS api_key_name,
-       s.id AS strategy_id,
-       s.name AS strategy_name,
-       COALESCE(s.market_mode, 'synthetic') AS market_mode,
-       COALESCE(s.base_symbol, '') AS base_symbol,
-       COALESCE(s.quote_symbol, '') AS quote_symbol,
-       COALESCE(s.max_deposit, 0) AS max_deposit,
-       COALESCE(s.leverage, 1) AS leverage,
-       COALESCE(s.lot_long_percent, 0) AS lot_long_percent,
-       COALESCE(s.lot_short_percent, 0) AS lot_short_percent,
-       COALESCE(s.last_error, '') AS last_error,
-       COALESCE(s.updated_at, '') AS updated_at
-     FROM strategies s
-     JOIN api_keys a ON a.id = s.api_key_id
-     WHERE COALESCE(s.last_error, '') <> ''
-       AND datetime(s.updated_at) >= datetime('now', ?)
-       AND lower(s.last_error) LIKE '%order size too small%'
-     ORDER BY datetime(s.updated_at) DESC
-     LIMIT ?`,
-    [`-${periodHours} hours`, limit]
-  );
-
-  const items: LowLotRecommendation[] = [];
-  for (const row of Array.isArray(rows) ? rows : []) {
-    const apiKeyId = Number(row?.api_key_id || 0);
-    const apiKeyName = String(row?.api_key_name || '');
-    const strategyId = Number(row?.strategy_id || 0);
-    const strategyName = String(row?.strategy_name || '');
-    const mode = String(row?.market_mode || 'synthetic');
-    const base = String(row?.base_symbol || '').toUpperCase();
-    const quote = String(row?.quote_symbol || '').toUpperCase();
+  // ── Helper: build one recommendation item from a strategy row ─────────────
+  const buildItem = async (
+    row: Record<string, unknown>,
+    source: LowLotRecommendation['eventSource']
+  ): Promise<LowLotRecommendation> => {
+    const apiKeyId = Number(row.api_key_id || 0);
+    const apiKeyName = String(row.api_key_name || '');
+    const strategyId = Number(row.strategy_id || 0);
+    const strategyName = String(row.strategy_name || '');
+    const mode = String(row.market_mode || 'synthetic');
+    const base = String(row.base_symbol || '').toUpperCase();
+    const quote = String(row.quote_symbol || '').toUpperCase();
     const pair = quote ? `${base}/${quote}` : base;
-    const maxDeposit = Math.max(0, Number(row?.max_deposit || 0));
-    const leverage = Math.max(0, Number(row?.leverage || 0));
-    const lotPercent = Math.max(0, Number(row?.lot_long_percent || 0), Number(row?.lot_short_percent || 0));
-    const lastError = String(row?.last_error || '').trim();
-    const updatedAt = String(row?.updated_at || '');
+    const maxDeposit = Math.max(0, Number(row.max_deposit || 0));
+    const leverage = Math.max(0, Number(row.leverage || 0));
+    const lotPercent = Math.max(0, Number(row.lot_long_percent || 0), Number(row.lot_short_percent || 0));
+    const lastError = String(row.last_error || '').trim();
+    const updatedAt = String(row.updated_at || '');
+    const systemId = row.system_id != null ? Number(row.system_id) : null;
 
     const tenantRows = await db.all(
-      `SELECT id, slug, display_name, product_mode
-       FROM tenants
-       WHERE assigned_api_key_name = ?
-       ORDER BY id ASC`,
+      'SELECT id, slug, display_name, product_mode FROM tenants WHERE assigned_api_key_name = ? ORDER BY id ASC',
       [apiKeyName]
     );
-
-    const replacementRows = apiKeyId > 0
+    const replacementRows: any[] = apiKeyId > 0
       ? await db.all(
-        `SELECT symbol, score, details_json
-         FROM liquidity_scan_suggestions
-         WHERE api_key_id = ?
-           AND status IN ('new', 'approved')
-           AND (symbol = ? OR symbol = ?)
-         ORDER BY score DESC, created_at DESC
-         LIMIT ?`,
-        [apiKeyId, base, quote, replLimit]
-      )
+          'SELECT symbol, score, details_json FROM liquidity_scan_suggestions WHERE api_key_id = ? AND status IN ('+("'"+'new'+"'"+', '+"'"+'approved'+"'")+') AND (symbol = ? OR symbol = ?) ORDER BY score DESC, created_at DESC LIMIT ?',
+          [apiKeyId, base, quote, replLimit]
+        )
       : [];
 
-    const suggestedDepositMin = Math.max(150, Number((maxDeposit * 1.5).toFixed(2)));
-    const suggestedLotPercent = lotPercent < 40 ? 50 : Math.min(100, lotPercent + 20);
-
-    items.push({
+    return {
       apiKeyName,
       strategyId,
       strategyName,
@@ -1922,45 +1890,159 @@ export const getAdminLowLotRecommendations = async (options?: {
       lotPercent,
       lastError,
       updatedAt,
-      tenants: (Array.isArray(tenantRows) ? tenantRows : []).map((tenant) => ({
-        id: Number(tenant.id),
-        slug: String(tenant.slug || ''),
-        displayName: String(tenant.display_name || ''),
-        mode: String(tenant.product_mode || 'strategy_client') as ProductMode,
+      systemId,
+      eventSource: source,
+      tenants: (Array.isArray(tenantRows) ? tenantRows : []).map((t: any) => ({
+        id: Number(t.id),
+        slug: String(t.slug || ''),
+        displayName: String(t.display_name || ''),
+        mode: String(t.product_mode || 'strategy_client') as ProductMode,
       })),
-      suggestedDepositMin,
-      suggestedLotPercent,
-      replacementCandidates: (Array.isArray(replacementRows) ? replacementRows : []).map((candidate) => {
-        const detailsRaw = String(candidate?.details_json || '{}');
+      suggestedDepositMin: Math.max(150, Number((maxDeposit * 1.5).toFixed(2))),
+      suggestedLotPercent: lotPercent < 40 ? 50 : Math.min(100, lotPercent + 20),
+      replacementCandidates: (Array.isArray(replacementRows) ? replacementRows : []).map((c: any) => {
         let note = '';
         try {
-          const details = JSON.parse(detailsRaw) as Record<string, unknown>;
-          note = String(details?.reason || details?.note || details?.message || '').trim();
-        } catch {
-          note = '';
-        }
-        return {
-          symbol: String(candidate?.symbol || ''),
-          score: Number(candidate?.score || 0),
-          note,
-        };
+          const d = JSON.parse(String(c.details_json || '{}')) as Record<string, unknown>;
+          note = String(d.reason || d.note || d.message || '').trim();
+        } catch { note = ''; }
+        return { symbol: String(c.symbol || ''), score: Number(c.score || 0), note };
+      }),
+    };
+  };
+
+  // ── Source 1: strategies with current last_error ───────────────────────────
+  const seenStrategyIds = new Set<number>();
+  const items: LowLotRecommendation[] = [];
+
+  const lastErrorRows = await db.all(
+    `SELECT
+       a.id AS api_key_id, a.name AS api_key_name,
+       s.id AS strategy_id, s.name AS strategy_name,
+       COALESCE(s.market_mode, 'synthetic') AS market_mode,
+       COALESCE(s.base_symbol, '') AS base_symbol,
+       COALESCE(s.quote_symbol, '') AS quote_symbol,
+       COALESCE(s.max_deposit, 0) AS max_deposit,
+       COALESCE(s.leverage, 1) AS leverage,
+       COALESCE(s.lot_long_percent, 0) AS lot_long_percent,
+       COALESCE(s.lot_short_percent, 0) AS lot_short_percent,
+       COALESCE(s.last_error, '') AS last_error,
+       COALESCE(s.updated_at, '') AS updated_at,
+       (SELECT tsm.system_id FROM trading_system_members tsm WHERE tsm.strategy_id = s.id ORDER BY tsm.id ASC LIMIT 1) AS system_id
+     FROM strategies s
+     JOIN api_keys a ON a.id = s.api_key_id
+     WHERE COALESCE(s.last_error, '') <> ''
+       AND datetime(s.updated_at) >= datetime('now', ?)
+       AND lower(s.last_error) LIKE '%order size too small%'
+     ORDER BY datetime(s.updated_at) DESC
+     LIMIT ?`,
+    [`-${periodHours} hours`, limit]
+  );
+  for (const row of Array.isArray(lastErrorRows) ? lastErrorRows : []) {
+    const sid = Number((row as any).strategy_id || 0);
+    if (!sid || seenStrategyIds.has(sid)) continue;
+    seenStrategyIds.add(sid);
+    items.push(await buildItem(row as Record<string, unknown>, 'last_error'));
+  }
+
+  // ── Source 2: recent runtime events (low_lot_error, unresolved) ───────────
+  const eventRows = await db.all(
+    `SELECT
+       e.strategy_id, e.api_key_name, e.message AS last_error,
+       datetime(e.created_at / 1000, 'unixepoch') AS updated_at,
+       a.id AS api_key_id,
+       COALESCE(s.market_mode, 'synthetic') AS market_mode,
+       COALESCE(s.base_symbol, '') AS base_symbol,
+       COALESCE(s.quote_symbol, '') AS quote_symbol,
+       COALESCE(s.max_deposit, 0) AS max_deposit,
+       COALESCE(s.leverage, 1) AS leverage,
+       COALESCE(s.lot_long_percent, 0) AS lot_long_percent,
+       COALESCE(s.lot_short_percent, 0) AS lot_short_percent,
+       COALESCE(s.name, e.strategy_name) AS strategy_name,
+       (SELECT tsm.system_id FROM trading_system_members tsm WHERE tsm.strategy_id = e.strategy_id ORDER BY tsm.id ASC LIMIT 1) AS system_id
+     FROM strategy_runtime_events e
+     LEFT JOIN strategies s ON s.id = e.strategy_id
+     LEFT JOIN api_keys a ON a.name = e.api_key_name
+     WHERE e.event_type = 'low_lot_error'
+       AND e.resolved_at = 0
+       AND e.created_at >= ?
+     ORDER BY e.created_at DESC
+     LIMIT ?`,
+    [Date.now() - periodHours * 3600_000, limit]
+  );
+  for (const row of Array.isArray(eventRows) ? eventRows : []) {
+    const sid = Number((row as any).strategy_id || 0);
+    if (!sid || seenStrategyIds.has(sid)) continue;
+    seenStrategyIds.add(sid);
+    items.push(await buildItem(row as Record<string, unknown>, 'runtime_event'));
+  }
+
+  // ── Source 3: liquidity triggers (system-level) ────────────────────────────
+  const liquidityRows = await db.all(
+    `SELECT e.api_key_name, e.message AS last_error, e.details_json,
+            datetime(e.created_at / 1000, 'unixepoch') AS updated_at,
+            a.id AS api_key_id
+     FROM strategy_runtime_events e
+     LEFT JOIN api_keys a ON a.name = e.api_key_name
+     WHERE e.event_type = 'liquidity_trigger'
+       AND e.resolved_at = 0
+       AND e.created_at >= ?
+     ORDER BY e.created_at DESC
+     LIMIT 20`,
+    [Date.now() - periodHours * 3600_000]
+  );
+  const seenLiquidityKeys = new Set<string>();
+  for (const row of Array.isArray(liquidityRows) ? liquidityRows : []) {
+    const apiKeyName = String((row as any).api_key_name || '');
+    const lastError = String((row as any).last_error || '');
+    let detailsJson: Record<string, unknown> = {};
+    try { detailsJson = JSON.parse(String((row as any).details_json || '{}')) as Record<string, unknown>; } catch { /* */ }
+    const symbol = String(detailsJson.symbol || '');
+    const dedupeKey = `${apiKeyName}:${symbol}`;
+    if (seenLiquidityKeys.has(dedupeKey)) continue;
+    seenLiquidityKeys.add(dedupeKey);
+    const tenantRows = await db.all(
+      'SELECT id, slug, display_name, product_mode FROM tenants WHERE assigned_api_key_name = ? ORDER BY id ASC',
+      [apiKeyName]
+    );
+    const apiKeyId = Number((row as any).api_key_id || 0);
+    const replRows: any[] = symbol && apiKeyId > 0
+      ? await db.all(
+          'SELECT symbol, score, details_json FROM liquidity_scan_suggestions WHERE api_key_id = ? AND status IN ('+("'"+'new'+"'"+', '+"'"+'approved'+"'")+') AND symbol = ? ORDER BY score DESC, created_at DESC LIMIT ?',
+          [apiKeyId, symbol, replLimit]
+        )
+      : [];
+    const systemIdFromDetails = detailsJson.systemId != null ? Number(detailsJson.systemId) : null;
+    items.push({
+      apiKeyName,
+      strategyId: 0,
+      strategyName: symbol ? `Liquidity: ${symbol}` : 'Liquidity trigger',
+      pair: symbol || '\u2014',
+      mode: 'mono',
+      maxDeposit: 0, leverage: 0, lotPercent: 0,
+      lastError, updatedAt: String((row as any).updated_at || ''),
+      systemId: systemIdFromDetails, eventSource: 'liquidity_trigger',
+      tenants: (Array.isArray(tenantRows) ? tenantRows : []).map((t: any) => ({
+        id: Number(t.id), slug: String(t.slug || ''),
+        displayName: String(t.display_name || ''), mode: String(t.product_mode || 'strategy_client') as ProductMode,
+      })),
+      suggestedDepositMin: 0, suggestedLotPercent: 0,
+      replacementCandidates: (Array.isArray(replRows) ? replRows : []).map((c: any) => {
+        let note = '';
+        try { const d = JSON.parse(String(c.details_json || '{}')) as Record<string, unknown>; note = String(d.reason || d.note || '').trim(); } catch { note = ''; }
+        return { symbol: String(c.symbol || ''), score: Number(c.score || 0), note };
       }),
     });
   }
 
-  return {
-    generatedAt: new Date().toISOString(),
-    periodHours,
-    items,
-  };
+  return { generatedAt: new Date().toISOString(), periodHours, items };
 };
-
 export const applyLowLotRecommendation = async (options: {
   strategyId: number;
   applyDepositFix: boolean;
   applyLotFix: boolean;
   replacementSymbol?: string;
-}): Promise<{ success: boolean; changes: Record<string, unknown> }> => {
+}): Promise<{ success: boolean; changes: Record<string, unknown>; changeSummary: string[] }> => {
   const strategy = await db.get('SELECT * FROM strategies WHERE id = ?', [options.strategyId]);
   if (!strategy) {
     throw new Error(`Strategy ${options.strategyId} not found`);
@@ -2008,7 +2090,7 @@ export const applyLowLotRecommendation = async (options: {
   }
 
   if (setClauses.length === 0) {
-    return { success: true, changes: {} };
+    return { success: true, changes: {}, changeSummary: [] };
   }
 
   setClauses.push('last_error = ?');
@@ -2050,7 +2132,31 @@ export const applyLowLotRecommendation = async (options: {
     );
   }
 
-  return { success: true, changes };
+  // Mark unresolved low-lot runtime events for this strategy as resolved.
+  await db.run(
+    `UPDATE strategy_runtime_events
+     SET resolved_at = ?
+     WHERE strategy_id = ? AND event_type = 'low_lot_error' AND resolved_at = 0`,
+    [Date.now(), options.strategyId]
+  );
+
+  // Build human-readable change summary for the UI.
+  const changeSummary: string[] = [];
+  if (changes['max_deposit']) {
+    const d = changes['max_deposit'] as { from: number; to: number };
+     changeSummary.push(`Deposit: $${d.from} -> $${d.to}`);
+  }
+  if (changes['lot_percent']) {
+    const l = changes['lot_percent'] as { from: number; to: number };
+     changeSummary.push(`Lot%: ${l.from}% -> ${l.to}%`);
+  }
+  if (changes['base_symbol'] || changes['quote_symbol']) {
+    const oldPair = `${String((changes['base_symbol'] as any)?.from || strategy.base_symbol || '')}/${String((changes['quote_symbol'] as any)?.from || strategy.quote_symbol || '')}`;
+    const newPair = `${String((changes['base_symbol'] as any)?.to || strategy.base_symbol || '')}/${String((changes['quote_symbol'] as any)?.to || strategy.quote_symbol || '')}`;
+     changeSummary.push(`Pair: ${oldPair} -> ${newPair}`);
+  }
+
+  return { success: true, changes, changeSummary };
 };
 
 export const getSaasAdminSummary = async () => {

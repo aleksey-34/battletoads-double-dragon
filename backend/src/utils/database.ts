@@ -455,6 +455,24 @@ export const initDB = async () => {
     CREATE INDEX IF NOT EXISTS idx_plans_product_mode
       ON plans (product_mode, is_active);
 
+    CREATE TABLE IF NOT EXISTS strategy_runtime_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      api_key_name TEXT NOT NULL,
+      strategy_id INTEGER,
+      strategy_name TEXT DEFAULT '',
+      event_type TEXT NOT NULL,
+      message TEXT NOT NULL,
+      details_json TEXT DEFAULT '{}',
+      resolved_at INTEGER DEFAULT 0,
+      created_at INTEGER DEFAULT (CAST(strftime('%s','now') * 1000 AS INTEGER))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sre_lookup
+      ON strategy_runtime_events (api_key_name, event_type, resolved_at, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_sre_strategy
+      ON strategy_runtime_events (strategy_id, event_type, created_at DESC);
+
     CREATE INDEX IF NOT EXISTS idx_tenants_product_mode
       ON tenants (product_mode, status, created_at DESC);
 

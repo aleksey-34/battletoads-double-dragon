@@ -1,4 +1,4 @@
-import { getTickersSnapshot } from '../bot/exchange';
+﻿import { getTickersSnapshot } from '../bot/exchange';
 import { getTradingSystem, listTradingSystems } from '../bot/tradingSystems';
 import { db } from '../utils/database';
 import logger from '../utils/logger';
@@ -269,6 +269,29 @@ export const runLiquidityScanForApiKey = async (
         allSuggestions.push(suggestion);
         createdSuggestions += 1;
       }
+    }
+  }
+
+  // Emit analytics events for high-score replacement suggestions so they surface
+  // in the admin low-lot recommendations panel immediately.
+  for (const s of allSuggestions) {
+    if (s.suggestedAction !== 'replace' || s.score < 2) {
+      continue;
+    }
+    try {
+      await db.run(
+        `INSERT INTO strategy_runtime_events
+           (api_key_name, strategy_id, strategy_name, event_type, message, details_json, resolved_at, created_at)
+         VALUES (?, NULL, '', 'liquidity_trigger', ?, ?, 0, ?)`,
+        [
+          apiKeyName,
+          `Liquidity replacement candidate: `+s.symbol+` (score `+s.score.toFixed(2)+`) for system `+s.systemId+`. `+String(s.details?.reason || ''),
+          JSON.stringify({ ...s.details, systemId: s.systemId, symbol: s.symbol }),
+          Date.now(),
+        ]
+      );
+    } catch {
+      // Non-critical; analytics loss is acceptable.
     }
   }
 
