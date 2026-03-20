@@ -1431,6 +1431,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [telegramControlsLoading, setTelegramControlsLoading] = useState(false);
   const [lowLotRecommendations, setLowLotRecommendations] = useState<LowLotRecommendationResponse | null>(null);
   const [lowLotLoading, setLowLotLoading] = useState(false);
+  const [applyLowLotTarget, setApplyLowLotTarget] = useState<LowLotRecommendation | null>(null);
+  const [applyLowLotDeposit, setApplyLowLotDeposit] = useState(true);
+  const [applyLowLotLot, setApplyLowLotLot] = useState(true);
+  const [applyLowLotReplacement, setApplyLowLotReplacement] = useState('');
+  const [applyLowLotWorking, setApplyLowLotWorking] = useState(false);
   const [monitoringChartOpen, setMonitoringChartOpen] = useState(false);
   const [monitoringChartLoading, setMonitoringChartLoading] = useState(false);
   const [monitoringChartApiKey, setMonitoringChartApiKey] = useState('');
@@ -1587,6 +1592,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setLowLotLoading(false);
     }
   }, [messageApi]);
+
+  const submitApplyLowLotRecommendation = useCallback(async () => {
+    if (!applyLowLotTarget) return;
+    if (!applyLowLotDeposit && !applyLowLotLot && !applyLowLotReplacement) {
+      messageApi.warning('Выберите хотя бы одно действие');
+      return;
+    }
+    setApplyLowLotWorking(true);
+    try {
+      await axios.post('/api/saas/admin/apply-low-lot-recommendation', {
+        strategyId: applyLowLotTarget.strategyId,
+        applyDepositFix: applyLowLotDeposit,
+        applyLotFix: applyLowLotLot,
+        replacementSymbol: applyLowLotReplacement || undefined,
+      });
+      messageApi.success(`Применено к стратегии ${applyLowLotTarget.strategyName}`);
+      setApplyLowLotTarget(null);
+      void loadLowLotRecommendations();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Ошибка применения'));
+    } finally {
+      setApplyLowLotWorking(false);
+    }
+  }, [applyLowLotTarget, applyLowLotDeposit, applyLowLotLot, applyLowLotReplacement, messageApi, loadLowLotRecommendations]);
 
   const loadMonitoringTabData = useCallback(async () => {
     if (!summary) {
@@ -3018,6 +3047,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         key: 'clients',
                                         render: (_, row) => row.tenants?.length || 0,
                                       },
+                                      {
+                                        title: '',
+                                        key: 'action',
+                                        width: 90,
+                                        render: (_, row) => (
+                                          <Button
+                                            size="small"
+                                            onClick={() => {
+                                              setApplyLowLotTarget(row);
+                                              setApplyLowLotDeposit(true);
+                                              setApplyLowLotLot(true);
+                                              setApplyLowLotReplacement(row.replacementCandidates?.[0]?.symbol ? `${row.replacementCandidates[0].symbol}/USDT` : '');
+                                            }}
+                                          >
+                                            Применить
+                                          </Button>
+                                        ),
+                                      },
                                     ]}
                                   />
                                 </Card>
@@ -3701,6 +3748,65 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             )}
           </Space>
         </Spin>
+      </Modal>
+
+      <Modal
+        title={`Применить рекомендацию: ${applyLowLotTarget?.strategyName || ''}`}
+        open={Boolean(applyLowLotTarget)}
+        onCancel={() => setApplyLowLotTarget(null)}
+        onOk={() => void submitApplyLowLotRecommendation()}
+        okText="Применить"
+        cancelText="Отмена"
+        confirmLoading={applyLowLotWorking}
+        width={520}
+      >
+        {applyLowLotTarget && (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Space wrap>
+              <Tag>{applyLowLotTarget.apiKeyName}</Tag>
+              <Tag>{applyLowLotTarget.pair}</Tag>
+              <Tag>клиентов: {applyLowLotTarget.tenants?.length || 0}</Tag>
+            </Space>
+            <Checkbox
+              checked={applyLowLotDeposit}
+              onChange={(e) => setApplyLowLotDeposit(e.target.checked)}
+            >
+              Увеличить депозит: {applyLowLotTarget.maxDeposit} → {applyLowLotTarget.suggestedDepositMin} USD
+            </Checkbox>
+            <Checkbox
+              checked={applyLowLotLot}
+              onChange={(e) => setApplyLowLotLot(e.target.checked)}
+            >
+              Увеличить lot%: {applyLowLotTarget.lotPercent}% → {applyLowLotTarget.suggestedLotPercent}%
+            </Checkbox>
+            {applyLowLotTarget.replacementCandidates?.length > 0 && (
+              <div>
+                <Text strong>Заменить пару (опционально):</Text>
+                <Select
+                  allowClear
+                  style={{ width: '100%', marginTop: 4 }}
+                  placeholder="Не менять пару"
+                  value={applyLowLotReplacement || undefined}
+                  onChange={(v) => setApplyLowLotReplacement(v || '')}
+                  options={applyLowLotTarget.replacementCandidates.map((c) => ({
+                    value: c.symbol.includes('/') ? c.symbol : `${c.symbol}/USDT`,
+                    label: `${c.symbol.includes('/') ? c.symbol : `${c.symbol}/USDT`} (score ${c.score})${c.note ? ' — ' + c.note : ''}`,
+                  }))}
+                />
+              </div>
+            )}
+            {applyLowLotTarget.tenants?.length > 0 && (
+              <div>
+                <Text type="secondary">Затронутые клиенты: </Text>
+                <Space wrap>
+                  {applyLowLotTarget.tenants.map((t) => (
+                    <Tag key={t.id}>{t.displayName || t.slug}</Tag>
+                  ))}
+                </Space>
+              </div>
+            )}
+          </Space>
+        )}
       </Modal>
     </div>
   );

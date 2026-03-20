@@ -1955,6 +1955,104 @@ export const getAdminLowLotRecommendations = async (options?: {
   };
 };
 
+export const applyLowLotRecommendation = async (options: {
+  strategyId: number;
+  applyDepositFix: boolean;
+  applyLotFix: boolean;
+  replacementSymbol?: string;
+}): Promise<{ success: boolean; changes: Record<string, unknown> }> => {
+  const strategy = await db.get('SELECT * FROM strategies WHERE id = ?', [options.strategyId]);
+  if (!strategy) {
+    throw new Error(`Strategy ${options.strategyId} not found`);
+  }
+
+  const changes: Record<string, unknown> = {};
+  const setClauses: string[] = [];
+  const values: unknown[] = [];
+
+  if (options.applyDepositFix) {
+    const currentDeposit = Math.max(0, Number(strategy.max_deposit || 0));
+    const newDeposit = Math.max(150, Number((currentDeposit * 1.5).toFixed(2)));
+    setClauses.push('max_deposit = ?');
+    values.push(newDeposit);
+    changes['max_deposit'] = { from: currentDeposit, to: newDeposit };
+  }
+
+  if (options.applyLotFix) {
+    const currentLot = Math.max(
+      0,
+      Number(strategy.lot_long_percent || 0),
+      Number(strategy.lot_short_percent || 0)
+    );
+    const newLot = currentLot < 40 ? 50 : Math.min(100, currentLot + 20);
+    setClauses.push('lot_long_percent = ?');
+    values.push(newLot);
+    setClauses.push('lot_short_percent = ?');
+    values.push(newLot);
+    changes['lot_percent'] = { from: currentLot, to: newLot };
+  }
+
+  if (options.replacementSymbol) {
+    const parts = String(options.replacementSymbol).split('/').map((s) => s.trim().toUpperCase());
+    const [base, quote] = parts;
+    if (base) {
+      setClauses.push('base_symbol = ?');
+      values.push(base);
+      changes['base_symbol'] = { from: String(strategy.base_symbol || ''), to: base };
+    }
+    if (quote) {
+      setClauses.push('quote_symbol = ?');
+      values.push(quote);
+      changes['quote_symbol'] = { from: String(strategy.quote_symbol || ''), to: quote };
+    }
+  }
+
+  if (setClauses.length === 0) {
+    return { success: true, changes: {} };
+  }
+
+  setClauses.push('last_error = ?');
+  values.push('');
+  setClauses.push('updated_at = CURRENT_TIMESTAMP');
+  values.push(options.strategyId);
+
+  await db.run(
+    `UPDATE strategies SET ${setClauses.join(', ')} WHERE id = ?`,
+    values
+  );
+
+  const apiKeyRow = await db.get('SELECT name FROM api_keys WHERE id = ?', [strategy.api_key_id]);
+  const apiKeyName = String(apiKeyRow?.name || '');
+  const payloadJson = JSON.stringify({ strategy_id: options.strategyId, strategy_name: String(strategy.name || ''), changes });
+
+  if (apiKeyName) {
+    const tenantRows = await db.all(
+      'SELECT id FROM tenants WHERE assigned_api_key_name = ?',
+      [apiKeyName]
+    );
+    if (Array.isArray(tenantRows) && tenantRows.length > 0) {
+      for (const tenant of tenantRows) {
+        await db.run(
+          `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json) VALUES (?, 'admin', 'apply_low_lot_recommendation', ?)`,
+          [Number(tenant.id), payloadJson]
+        );
+      }
+    } else {
+      await db.run(
+        `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json) VALUES (NULL, 'admin', 'apply_low_lot_recommendation', ?)`,
+        [payloadJson]
+      );
+    }
+  } else {
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json) VALUES (NULL, 'admin', 'apply_low_lot_recommendation', ?)`,
+      [payloadJson]
+    );
+  }
+
+  return { success: true, changes };
+};
+
 export const getSaasAdminSummary = async () => {
   await ensureSaasSeedData();
   const sourceCatalog = loadLatestClientCatalog();

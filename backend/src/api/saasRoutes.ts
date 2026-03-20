@@ -19,6 +19,7 @@ import {
   updateStrategyClientState,
   createTenantByAdmin,
   getAdminLowLotRecommendations,
+  applyLowLotRecommendation,
   getAdminTelegramControls,
   updateAdminTelegramControls,
 } from '../saas/service';
@@ -109,6 +110,26 @@ router.patch('/admin/telegram-controls', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS telegram controls update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/apply-low-lot-recommendation', async (req, res) => {
+  try {
+    const strategyId = toOptionalNumber(req.body?.strategyId);
+    if (!strategyId) {
+      return res.status(400).json({ error: 'strategyId is required' });
+    }
+    const data = await applyLowLotRecommendation({
+      strategyId,
+      applyDepositFix: toBool(req.body?.applyDepositFix, false),
+      applyLotFix: toBool(req.body?.applyLotFix, false),
+      replacementSymbol: req.body?.replacementSymbol ? String(req.body.replacementSymbol).trim() : undefined,
+    });
+    res.json(data);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS apply-low-lot-recommendation error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
