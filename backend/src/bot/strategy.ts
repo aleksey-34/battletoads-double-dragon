@@ -2967,7 +2967,21 @@ export const runAutoStrategiesCycle = async () => {
       processed += 1;
     } catch (error) {
       failed += 1;
-      logger.warn(`Auto-cycle strategy ${strategyId} (${apiKeyName}) failed: ${formatActionError(error)}`);
+      const errorText = formatActionError(error);
+      logger.warn(`Auto-cycle strategy ${strategyId} (${apiKeyName}) failed: ${errorText}`);
+
+      // Persist latest auto-cycle failure so SaaS monitoring and low-lot recommendations
+      // can pick up errors even when execution aborted before strategy state update.
+      try {
+        await updateStrategy(apiKeyName, strategyId, {
+          last_action: 'auto_cycle_failed',
+          last_error: errorText,
+        });
+      } catch (persistError) {
+        logger.warn(
+          `Auto-cycle strategy ${strategyId} (${apiKeyName}) failed to persist error: ${formatActionError(persistError)}`
+        );
+      }
     }
   }
 

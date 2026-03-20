@@ -962,12 +962,23 @@ const toFiniteNumberOrNull = (value: unknown): number | null => {
 
 const normalizeSeriesTime = (value: unknown): number | null => {
   const numeric = toFiniteNumberOrNull(value);
-  if (numeric === null) {
+  if (numeric !== null) {
+    const normalizedNumeric = numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
+    return normalizedNumeric > 0 ? normalizedNumeric : null;
+  }
+
+  const text = String(value || '').trim();
+  if (!text) {
     return null;
   }
 
-  const normalized = numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
-  return normalized > 0 ? normalized : null;
+  const parsedMs = Date.parse(text);
+  if (Number.isFinite(parsedMs)) {
+    const normalizedDate = Math.floor(parsedMs / 1000);
+    return normalizedDate > 0 ? normalizedDate : null;
+  }
+
+  return null;
 };
 
 const dedupeLinePoints = (points: LinePoint[]): LinePoint[] => {
@@ -2632,6 +2643,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: 'Client',
       key: 'tenant',
+      width: 240,
       render: (_, row) => (
         <Space direction="vertical" size={0}>
           <Text strong>{row.tenant.display_name}</Text>
