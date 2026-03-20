@@ -143,6 +143,41 @@ type AnalysisResponse = {
   reports: AnalysisReport[];
 };
 
+type FrequencyDiagnostics = {
+  success: boolean;
+  targetTrades: number;
+  targetTradesPerDay: number;
+  inferredSweepDays: number;
+  currentTradesEstimate: number;
+  currentTradesPerDayEstimate: number;
+  range: {
+    minTrades: number;
+    maxTrades: number;
+  };
+  adjustable: boolean;
+  nearTarget: boolean;
+  recommendation: string;
+  memberDiagnostics: Array<{
+    strategyId: number;
+    strategyName: string;
+    market: string;
+    interval: string;
+    weight: number;
+    trades: number;
+    tradesPerDay: number;
+    profitFactor: number;
+    maxDrawdownPercent: number;
+  }>;
+  candidateSuggestions: Array<{
+    strategyId: number;
+    strategyName: string;
+    tradesPerDay: number;
+    profitFactor: number;
+    maxDrawdownPercent: number;
+    score: number;
+  }>;
+};
+
 type LiquiditySuggestion = {
   id: number;
   system_id: number;
@@ -319,6 +354,8 @@ const TradingSystems: React.FC = () => {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null);
   const [suggestions, setSuggestions] = useState<LiquiditySuggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [frequencyDiagnostics, setFrequencyDiagnostics] = useState<FrequencyDiagnostics | null>(null);
+  const [frequencyDiagnosticsLoading, setFrequencyDiagnosticsLoading] = useState(false);
   const [safeMembersApply, setSafeMembersApply] = useState(true);
   const [monitoringPoints, setMonitoringPoints] = useState<MonitoringPoint[]>([]);
   const [memberDraftsByStrategyId, setMemberDraftsByStrategyId] = useState<Record<number, { weight: number; is_enabled: boolean }>>({});
@@ -358,12 +395,24 @@ const TradingSystems: React.FC = () => {
     if (!apiKeyName || !selectedSystemId) {
       setSelectedSystem(null);
       setMemberDraftsByStrategyId({});
+      setFrequencyDiagnostics(null);
       return;
     }
 
     void loadSystem(apiKeyName, selectedSystemId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKeyName, selectedSystemId]);
+
+  useEffect(() => {
+    if (!apiKeyName || !selectedSystemId) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void loadFrequencyDiagnostics(apiKeyName, selectedSystemId, Math.max(20, Math.floor(backtestTuning.targetTrades)));
+    }, 250);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKeyName, selectedSystemId, backtestTuning.targetTrades]);
 
   const loadApiKeys = useCallback(async () => {
     try {
@@ -427,6 +476,23 @@ const TradingSystems: React.FC = () => {
       setSelectedSystem(null);
     } finally {
       setSystemLoading(false);
+    }
+  }, []);
+
+  const loadFrequencyDiagnostics = useCallback(async (nextApiKeyName: string, systemId: number, targetTrades: number) => {
+    setFrequencyDiagnosticsLoading(true);
+    try {
+      const response = await axios.get<FrequencyDiagnostics>(`/api/trading-systems/${encodeURIComponent(nextApiKeyName)}/${systemId}/frequency-diagnostics`, {
+        params: {
+          targetTrades,
+          targetTradesPerDay: Math.max(1, Number((targetTrades / 50).toFixed(2))),
+        },
+      });
+      setFrequencyDiagnostics(response.data || null);
+    } catch {
+      setFrequencyDiagnostics(null);
+    } finally {
+      setFrequencyDiagnosticsLoading(false);
     }
   }, []);
 
@@ -951,6 +1017,26 @@ const TradingSystems: React.FC = () => {
                     <Paragraph type="secondary" style={{ marginTop: 6, marginBottom: 0 }}>
                       Цель по сделкам влияет на подбор и оценку в бэктесте/свипе, но не является прямой крутилкой live-лотности в algofund.
                     </Paragraph>
+                    <Spin spinning={frequencyDiagnosticsLoading}>
+                      {frequencyDiagnostics ? (
+                        <div style={{ marginTop: 10 }}>
+                          <Space wrap>
+                            <Tag color={frequencyDiagnostics.adjustable ? 'success' : 'warning'}>
+                              {frequencyDiagnostics.adjustable ? 'Frequency adjustable' : 'Low frequency flexibility'}
+                            </Tag>
+                            <Tag color={frequencyDiagnostics.nearTarget ? 'success' : 'processing'}>
+                              {frequencyDiagnostics.nearTarget ? 'Near target trades' : 'Far from target trades'}
+                            </Tag>
+                            <Text type="secondary">
+                              Est: {formatNumber(frequencyDiagnostics.currentTradesEstimate, 0)} trades / {frequencyDiagnostics.inferredSweepDays}d ({formatNumber(frequencyDiagnostics.currentTradesPerDayEstimate, 2)}/day)
+                            </Text>
+                          </Space>
+                          <Paragraph type="secondary" style={{ marginTop: 6, marginBottom: 0 }}>
+                            {frequencyDiagnostics.recommendation}
+                          </Paragraph>
+                        </div>
+                      ) : null}
+                    </Spin>
                   </Card>
 
                   <Descriptions column={1} bordered size="small">

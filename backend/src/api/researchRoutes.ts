@@ -48,8 +48,18 @@ import {
 } from '../research/taskService';
 import { db } from '../utils/database';
 import logger from '../utils/logger';
+import { getStrategies } from '../bot/strategy';
+import { createTradingSystem, runTradingSystemBacktest } from '../bot/tradingSystems';
+import { loadCatalogAndSweepWithFallback } from '../saas/service';
 
 const router = Router();
+
+type SweepRunMode = 'light' | 'heavy';
+
+const parseSweepRunMode = (value: unknown): SweepRunMode => {
+  const text = String(value || '').trim().toLowerCase();
+  return text === 'heavy' ? 'heavy' : 'light';
+};
 
 // ── Ensure research DB is ready on every request ──────────────────────────────
 router.use(async (_req, _res, next) => {
@@ -494,6 +504,7 @@ router.post('/tasks/run-sweep', async (req, res) => {
       dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
       interval: req.body?.interval ? String(req.body.interval) : undefined,
       markDone: req.body?.markDone !== false,
+      mode: parseSweepRunMode(req.body?.mode),
     });
 
     await db.run(
@@ -521,6 +532,7 @@ router.post('/tasks/run-sweep/manual', async (req, res) => {
       sweepName: req.body?.sweepName ? String(req.body.sweepName) : undefined,
       description: req.body?.description ? String(req.body.description) : undefined,
       note: req.body?.note ? String(req.body.note) : undefined,
+      mode: parseSweepRunMode(req.body?.mode),
     });
 
     await db.run(
@@ -530,6 +542,172 @@ router.post('/tasks/run-sweep/manual', async (req, res) => {
     );
 
     res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/tasks/high-frequency-system', async (req, res) => {
+  try {
+    const apiKeyName = String(req.body?.apiKeyName || '').trim();
+    if (!apiKeyName) {
+      return res.status(400).json({ error: 'apiKeyName is required' });
+    }
+
+    const mode = parseSweepRunMode(req.body?.mode);
+    const targetTradesPerDay = Math.max(1, Math.min(50, Number(req.body?.targetTradesPerDay || 10)));
+    const maxMembers = Math.max(2, Math.min(12, Math.floor(Number(req.body?.maxMembers || 6))));
+    const minPf = Math.max(0.5, Math.min(4, Number(req.body?.minPf || 1.05)));
+    const maxDd = Math.max(5, Math.min(80, Number(req.body?.maxDd || 28)));
+
+    const { sweep } = await loadCatalogAndSweepWithFallback();
+    if (!sweep || !Array.isArray(sweep.evaluated) || sweep.evaluated.length === 0) {
+      return res.status(400).json({ error: 'Sweep data is unavailable. Run historical sweep first.' });
+    }
+
+    const strategies = await getStrategies(apiKeyName, { includeLotPreview: false });
+    const existingById = new Map<number, any>();
+    for (const row of strategies) {
+      const strategyId = Number(row.id || 0);
+      if (strategyId > 0) {
+        existingById.set(strategyId, row);
+      }
+    }
+
+    const dateFromMs = Date.parse(String(sweep.config?.dateFrom || ''));
+    const dateToMs = Date.parse(String(sweep.config?.dateTo || ''));
+    const inferredDays = Number.isFinite(dateFromMs) && Number.isFinite(dateToMs) && dateToMs > dateFromMs
+      ? Math.max(1, Math.floor((dateToMs - dateFromMs) / 86_400_000))
+      : 365;
+
+    const candidates = sweep.evaluated
+      .map((item) => {
+        const strategyId = Number(item.strategyId || 0);
+        const strategy = existingById.get(strategyId) || null;
+        const tradesCount = Math.max(0, Number(item.tradesCount || 0));
+        const tradesPerDay = Number((tradesCount / inferredDays).toFixed(3));
+        return {
+          strategyId,
+          strategy,
+          strategyName: String(item.strategyName || strategy?.name || `#${strategyId}`),
+          market: String(item.market || ''),
+          marketMode: String(item.marketMode || ''),
+          strategyType: String(item.strategyType || strategy?.strategy_type || ''),
+          profitFactor: Number(item.profitFactor || 0),
+          maxDrawdownPercent: Number(item.maxDrawdownPercent || 0),
+          totalReturnPercent: Number(item.totalReturnPercent || 0),
+          score: Number(item.score || 0),
+          tradesCount,
+          tradesPerDay,
+          distance: Math.abs(tradesPerDay - targetTradesPerDay),
+        };
+      })
+      .filter((item) => item.strategyId > 0 && item.strategy && item.profitFactor >= minPf && item.maxDrawdownPercent <= maxDd)
+      .sort((left, right) => {
+        if (left.distance !== right.distance) {
+          return left.distance - right.distance;
+        }
+        if (left.tradesPerDay !== right.tradesPerDay) {
+          return right.tradesPerDay - left.tradesPerDay;
+        }
+        return right.score - left.score;
+      });
+
+    if (candidates.length === 0) {
+      return res.status(400).json({ error: 'No candidates match PF/DD filters in current sweep for this API key.' });
+    }
+
+    const selected: typeof candidates = [];
+    const selectedIds = new Set<number>();
+
+    const preferredMono = candidates.find((item) => item.marketMode === 'mono');
+    const preferredSynth = candidates.find((item) => item.marketMode !== 'mono');
+
+    if (preferredMono) {
+      selected.push(preferredMono);
+      selectedIds.add(preferredMono.strategyId);
+    }
+    if (preferredSynth && !selectedIds.has(preferredSynth.strategyId)) {
+      selected.push(preferredSynth);
+      selectedIds.add(preferredSynth.strategyId);
+    }
+
+    for (const item of candidates) {
+      if (selected.length >= maxMembers) {
+        break;
+      }
+      if (selectedIds.has(item.strategyId)) {
+        continue;
+      }
+      selected.push(item);
+      selectedIds.add(item.strategyId);
+    }
+
+    const weight = Number((1 / Math.max(1, selected.length)).toFixed(4));
+    const name = `HF ${mode.toUpperCase()} ${targetTradesPerDay}tpd ${new Date().toISOString().slice(0, 10)}`;
+    const createdSystem = await createTradingSystem(apiKeyName, {
+      name,
+      description: `Auto-generated high-frequency system (${mode}) target ${targetTradesPerDay} trades/day`,
+      is_active: false,
+      auto_sync_members: true,
+      discovery_enabled: false,
+      max_members: Math.max(maxMembers, selected.length),
+      members: selected.map((item, index) => ({
+        strategy_id: item.strategyId,
+        weight,
+        member_role: index < 2 ? 'core' : 'satellite',
+        is_enabled: true,
+        notes: `hf_${mode}; tpd=${item.tradesPerDay}; pf=${item.profitFactor.toFixed(2)}; dd=${item.maxDrawdownPercent.toFixed(2)}`,
+      })),
+    });
+
+    const bars = mode === 'heavy' ? 6000 : 1600;
+    const preview = await runTradingSystemBacktest(apiKeyName, Number(createdSystem.id), {
+      bars,
+      warmupBars: mode === 'heavy' ? 400 : 120,
+      initialBalance: 10000,
+    });
+
+    const payload = {
+      apiKeyName,
+      mode,
+      targetTradesPerDay,
+      inferredSweepDays: inferredDays,
+      selectedMembers: selected.map((item) => ({
+        strategyId: item.strategyId,
+        strategyName: item.strategyName,
+        market: item.market,
+        marketMode: item.marketMode,
+        strategyType: item.strategyType,
+        tradesPerDay: item.tradesPerDay,
+        tradesCount: item.tradesCount,
+        profitFactor: item.profitFactor,
+        maxDrawdownPercent: item.maxDrawdownPercent,
+        score: item.score,
+      })),
+      createdSystem,
+      preview: {
+        bars,
+        summary: preview.summary,
+      },
+      candidateSample: candidates.slice(0, 15).map((item) => ({
+        strategyId: item.strategyId,
+        strategyName: item.strategyName,
+        tradesPerDay: item.tradesPerDay,
+        profitFactor: item.profitFactor,
+        maxDrawdownPercent: item.maxDrawdownPercent,
+        score: item.score,
+      })),
+    };
+
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (NULL, 'platform_admin', 'research_generate_high_frequency_system', ?, CURRENT_TIMESTAMP)`,
+      [JSON.stringify(payload)]
+    );
+
+    res.json({ success: true, ...payload });
   } catch (err) {
     const error = err as Error;
     res.status(500).json({ error: error.message });
@@ -672,7 +850,8 @@ router.post('/scheduler/:jobKey/backfill-now', async (req, res) => {
     }
 
     const maxDays = req.body?.maxDays ? Number(req.body.maxDays) : 30;
-    const result = await runDailySweepGapBackfill(maxDays);
+    const mode = parseSweepRunMode(req.body?.mode);
+    const result = await runDailySweepGapBackfill(maxDays, mode);
     res.json({ success: true, ...result });
   } catch (err) {
     const error = err as Error;

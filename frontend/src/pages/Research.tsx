@@ -491,6 +491,11 @@ export default function Research() {
   const [taskDateFrom, setTaskDateFrom] = useState('');
   const [taskDateTo, setTaskDateTo] = useState('');
   const [taskMarkDone, setTaskMarkDone] = useState(true);
+  const [sweepMode, setSweepMode] = useState<'light' | 'heavy'>('light');
+  const [schedulerBackfillMode, setSchedulerBackfillMode] = useState<'light' | 'heavy'>('light');
+  const [hfGenerateLoading, setHfGenerateLoading] = useState(false);
+  const [hfTargetTradesPerDay, setHfTargetTradesPerDay] = useState(10);
+  const [hfApiKeyName, setHfApiKeyName] = useState('');
 
   const fetchScheduler = useCallback(async () => {
     setSchedulerLoading(true);
@@ -585,10 +590,11 @@ export default function Research() {
   const backfillSchedulerGap = async () => {
     setSchedulerBackfillLoading(true);
     try {
-      const res = await axios.post<{ createdRuns?: number; missingDays?: number }>('/api/research/scheduler/daily_incremental_sweep/backfill-now', {
+      const res = await axios.post<{ createdRuns?: number; missingDays?: number; mode?: string; processedDays?: number }>('/api/research/scheduler/daily_incremental_sweep/backfill-now', {
         maxDays: 30,
+        mode: schedulerBackfillMode,
       });
-      message.success(`Backfill finished: created ${res.data?.createdRuns || 0} runs (missing ${res.data?.missingDays || 0})`);
+      message.success(`Backfill ${res.data?.mode || schedulerBackfillMode}: created ${res.data?.createdRuns || 0} runs (processed ${res.data?.processedDays || 0}, missing ${res.data?.missingDays || 0})`);
       await Promise.all([fetchScheduler(), checkSchedulerGap(), fetchProfiles()]);
     } catch (e: any) {
       message.error(e?.response?.data?.error || 'Backfill failed');
@@ -648,8 +654,9 @@ export default function Research() {
         dateTo: taskDateTo || undefined,
         interval: taskInterval || undefined,
         markDone: taskMarkDone,
+        mode: sweepMode,
       });
-      message.success(`Task sweep finished: #${res.data?.sweepRunId || 'n/a'}, imported ${res.data?.imported || 0}`);
+      message.success(`Task sweep (${res.data?.mode || sweepMode}) finished: #${res.data?.sweepRunId || 'n/a'}, imported ${res.data?.imported || 0}`);
       await Promise.all([fetchTasks(), fetchScheduler(), fetchProfiles()]);
     } catch (e: any) {
       message.error(e?.response?.data?.error || 'Task sweep failed');
@@ -681,9 +688,10 @@ export default function Research() {
         sweepName: manualSweepName || undefined,
         description: manualSweepDescription || undefined,
         note: manualSweepNote || undefined,
+        mode: sweepMode,
       });
 
-      message.success(`Manual sweep created: #${res.data?.sweepRunId || 'n/a'}, imported ${res.data?.imported || 0}`);
+      message.success(`Manual sweep (${res.data?.mode || sweepMode}) created: #${res.data?.sweepRunId || 'n/a'}, imported ${res.data?.imported || 0}`);
       setManualSweepModalOpen(false);
       setManualMarketsText('');
       setManualSweepName('');
@@ -712,6 +720,30 @@ export default function Research() {
       await fetchTasks();
     } catch (e: any) {
       message.error(e?.response?.data?.error || 'Failed to mark tasks');
+    }
+  };
+
+  const generateHighFrequencySystem = async () => {
+    if (!hfApiKeyName) {
+      message.warning('Select API key first');
+      return;
+    }
+    setHfGenerateLoading(true);
+    try {
+      const res = await axios.post('/api/research/tasks/high-frequency-system', {
+        apiKeyName: hfApiKeyName,
+        targetTradesPerDay: hfTargetTradesPerDay,
+        mode: sweepMode,
+        maxMembers: sweepMode === 'heavy' ? 8 : 6,
+        minPf: sweepMode === 'heavy' ? 1.0 : 1.05,
+        maxDd: sweepMode === 'heavy' ? 35 : 28,
+      });
+      message.success(`High-frequency TS created: ${res.data?.createdSystem?.name || 'n/a'} (#${res.data?.createdSystem?.id || 'n/a'})`);
+      await Promise.all([fetchProfiles(), fetchScheduler()]);
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || 'Failed to generate high-frequency system');
+    } finally {
+      setHfGenerateLoading(false);
     }
   };
 
@@ -756,6 +788,12 @@ export default function Research() {
   useEffect(() => {
     axios.get<ApiKeyRecord[]>('/api/api-keys').then(r => setApiKeys(r.data || [])).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (!hfApiKeyName && apiKeys.length > 0) {
+      setHfApiKeyName(String(apiKeys[0].name || ''));
+    }
+  }, [apiKeys, hfApiKeyName]);
 
   // ── Preview ────────────────────────────────────────────────────────────────
   const handlePreview = async (profile: StrategyProfile) => {
@@ -990,6 +1028,15 @@ export default function Research() {
               <Button onClick={() => void checkSchedulerGap()} loading={schedulerGapLoading}>
                 Check gap (30d)
               </Button>
+              <Select
+                value={schedulerBackfillMode}
+                style={{ width: 130 }}
+                options={[
+                  { value: 'light', label: 'Backfill mode: light' },
+                  { value: 'heavy', label: 'Backfill mode: heavy' },
+                ]}
+                onChange={(value) => setSchedulerBackfillMode(value)}
+              />
               <Button onClick={() => void backfillSchedulerGap()} loading={schedulerBackfillLoading}>
                 Backfill missing days
               </Button>
@@ -1080,6 +1127,15 @@ export default function Research() {
             onChange={(e) => setTaskInterval(e.target.value)}
             placeholder="1h"
           />
+          <Select
+            value={sweepMode}
+            style={{ width: 140 }}
+            options={[
+              { value: 'light', label: 'Sweep mode: light' },
+              { value: 'heavy', label: 'Sweep mode: heavy' },
+            ]}
+            onChange={(value) => setSweepMode(value)}
+          />
           <Checkbox checked={taskMarkDone} onChange={(e) => setTaskMarkDone(e.target.checked)}>
             Mark done after run
           </Checkbox>
@@ -1150,6 +1206,43 @@ export default function Research() {
             },
           ]}
         />
+      </Card>
+
+      <Card
+        title="High-Frequency System Task (offers + TS for rhythm)"
+        style={{ marginTop: 16 }}
+      >
+        <Space wrap>
+          <Select
+            value={hfApiKeyName || undefined}
+            style={{ width: 220 }}
+            placeholder="API key"
+            options={apiKeys.map((row) => ({ value: row.name, label: row.name }))}
+            onChange={(value) => setHfApiKeyName(value)}
+          />
+          <span>Target trades/day:</span>
+          <InputNumber
+            min={1}
+            max={50}
+            value={hfTargetTradesPerDay}
+            onChange={(value) => setHfTargetTradesPerDay(Math.max(1, Math.min(50, Number(value || 10))))}
+          />
+          <Select
+            value={sweepMode}
+            style={{ width: 150 }}
+            options={[
+              { value: 'light', label: 'Mode: light' },
+              { value: 'heavy', label: 'Mode: heavy' },
+            ]}
+            onChange={(value) => setSweepMode(value)}
+          />
+          <Button type="primary" loading={hfGenerateLoading} onClick={() => void generateHighFrequencySystem()}>
+            Generate TS + preview
+          </Button>
+        </Space>
+        <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+          Creates a new trading system from sweep candidates focused on trade rhythm, with PF/DD guardrails. `light` keeps limits stricter, `heavy` allows wider exploration.
+        </Paragraph>
       </Card>
 
       <Divider />

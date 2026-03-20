@@ -80,6 +80,7 @@ import {
   requestAlgofundAction,
   updateAlgofundState,
   updateStrategyClientState,
+  loadCatalogAndSweepWithFallback,
 } from '../saas/service';
 import analyticsRoutes from './analyticsRoutes';
 import saasRoutes from './saasRoutes';
@@ -1451,6 +1452,117 @@ router.post('/trading-systems/:apiKeyName/:systemId/activation', async (req, res
   } catch (error) {
     const err = error as Error;
     logger.error(`Error applying trading system activation: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/trading-systems/:apiKeyName/:systemId/frequency-diagnostics', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  try {
+    const system = await getTradingSystem(apiKeyName, parsedSystemId);
+    const targetTrades = Math.max(20, Math.min(5000, Number(req.query.targetTrades || 500)));
+    const targetTradesPerDay = Math.max(1, Math.min(50, Number(req.query.targetTradesPerDay || 10)));
+
+    const { sweep } = await loadCatalogAndSweepWithFallback();
+    if (!sweep || !Array.isArray(sweep.evaluated) || sweep.evaluated.length === 0) {
+      return res.status(400).json({ error: 'Sweep data unavailable for diagnostics' });
+    }
+
+    const dateFromMs = Date.parse(String(sweep.config?.dateFrom || ''));
+    const dateToMs = Date.parse(String(sweep.config?.dateTo || ''));
+    const inferredDays = Number.isFinite(dateFromMs) && Number.isFinite(dateToMs) && dateToMs > dateFromMs
+      ? Math.max(1, Math.floor((dateToMs - dateFromMs) / 86_400_000))
+      : 365;
+
+    const byStrategyId = new Map<number, any>();
+    for (const row of sweep.evaluated) {
+      byStrategyId.set(Number(row.strategyId), row);
+    }
+
+    const enabledMembers = (system.members || []).filter((row) => Boolean(row.is_enabled));
+    const memberDiagnostics = enabledMembers.map((member) => {
+      const sweepRow = byStrategyId.get(Number(member.strategy_id)) || null;
+      const trades = Math.max(0, Number(sweepRow?.tradesCount || 0));
+      const tradesPerDay = Number((trades / inferredDays).toFixed(3));
+      return {
+        strategyId: Number(member.strategy_id),
+        strategyName: String(member.strategy?.name || sweepRow?.strategyName || `#${member.strategy_id}`),
+        market: String(sweepRow?.market || [member.strategy?.base_symbol, member.strategy?.quote_symbol].filter(Boolean).join('/')),
+        interval: String(sweepRow?.interval || member.strategy?.interval || ''),
+        weight: Number(member.weight || 0),
+        trades,
+        tradesPerDay,
+        profitFactor: Number(sweepRow?.profitFactor || 0),
+        maxDrawdownPercent: Number(sweepRow?.maxDrawdownPercent || 0),
+      };
+    });
+
+    const weightedTrades = memberDiagnostics.reduce((acc, item) => acc + (item.trades * Math.max(0, item.weight || 0)), 0);
+    const weightSum = memberDiagnostics.reduce((acc, item) => acc + Math.max(0, item.weight || 0), 0);
+    const normalizedTrades = weightSum > 0 ? weightedTrades / weightSum : memberDiagnostics.reduce((acc, item) => acc + item.trades, 0) / Math.max(1, memberDiagnostics.length);
+    const currentTradesEstimate = Number(normalizedTrades.toFixed(2));
+    const currentTradesPerDayEstimate = Number((currentTradesEstimate / inferredDays).toFixed(3));
+
+    const candidatePool = sweep.evaluated
+      .map((row) => {
+        const trades = Math.max(0, Number(row.tradesCount || 0));
+        return {
+          strategyId: Number(row.strategyId || 0),
+          strategyName: String(row.strategyName || ''),
+          market: String(row.market || ''),
+          strategyType: String(row.strategyType || ''),
+          marketMode: String(row.marketMode || ''),
+          trades,
+          tradesPerDay: Number((trades / inferredDays).toFixed(3)),
+          profitFactor: Number(row.profitFactor || 0),
+          maxDrawdownPercent: Number(row.maxDrawdownPercent || 0),
+          score: Number(row.score || 0),
+        };
+      })
+      .filter((row) => row.strategyId > 0)
+      .sort((left, right) => {
+        const leftDistance = Math.abs(left.tradesPerDay - targetTradesPerDay);
+        const rightDistance = Math.abs(right.tradesPerDay - targetTradesPerDay);
+        if (leftDistance !== rightDistance) {
+          return leftDistance - rightDistance;
+        }
+        return right.score - left.score;
+      });
+
+    const minTrades = memberDiagnostics.length > 0 ? Math.min(...memberDiagnostics.map((item) => item.trades)) : 0;
+    const maxTrades = memberDiagnostics.length > 0 ? Math.max(...memberDiagnostics.map((item) => item.trades)) : 0;
+
+    const adjustable = memberDiagnostics.length >= 3 && maxTrades > minTrades * 1.25;
+    const nearTarget = Math.abs(currentTradesEstimate - targetTrades) <= Math.max(40, targetTrades * 0.15);
+
+    res.json({
+      success: true,
+      targetTrades,
+      targetTradesPerDay,
+      inferredSweepDays: inferredDays,
+      currentTradesEstimate,
+      currentTradesPerDayEstimate,
+      range: {
+        minTrades,
+        maxTrades,
+      },
+      adjustable,
+      nearTarget,
+      recommendation: adjustable
+        ? (nearTarget ? 'Current system is close to target and has frequency flexibility.' : 'System is flexible, tune members/weights to approach target trades.')
+        : 'Low flexibility: add more diverse high/low frequency members from sweep.',
+      memberDiagnostics,
+      candidateSuggestions: candidatePool.slice(0, 12),
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error generating frequency diagnostics: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

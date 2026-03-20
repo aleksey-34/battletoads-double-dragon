@@ -7,6 +7,12 @@ import { importSweepCandidates, registerSweepRun } from './profileService';
 
 type SchedulerJobKey = 'daily_incremental_sweep';
 type SchedulerStatus = 'idle' | 'running' | 'done' | 'failed' | 'skipped';
+type SweepRunMode = 'light' | 'heavy';
+
+const normalizeSweepRunMode = (value: unknown): SweepRunMode => {
+  const text = String(value || '').trim().toLowerCase();
+  return text === 'heavy' ? 'heavy' : 'light';
+};
 
 type SchedulerJob = {
   id: number;
@@ -437,23 +443,30 @@ export const analyzeDailySweepGap = async (daysBack: number = 30): Promise<{
   };
 };
 
-export const runDailySweepGapBackfill = async (maxDays: number = 30): Promise<{
+export const runDailySweepGapBackfill = async (maxDays: number = 30, modeInput: unknown = 'light'): Promise<{
   analyzed: number;
   existingDays: number;
   missingDays: number;
+  mode: SweepRunMode;
+  requestedMaxDays: number;
+  processedDays: number;
   createdRuns: number;
   createdDayKeys: string[];
   skippedDayKeys: string[];
 }> => {
-  const safeMaxDays = Math.max(1, Math.min(365, Math.floor(Number(maxDays) || 30)));
+  const mode = normalizeSweepRunMode(modeInput);
+  const requestedMaxDays = Math.max(1, Math.min(365, Math.floor(Number(maxDays) || 30)));
+  const safeMaxDays = mode === 'heavy' ? requestedMaxDays : Math.min(requestedMaxDays, 7);
+  const dayBatchLimit = mode === 'heavy' ? 365 : 3;
   const gap = await analyzeDailySweepGap(safeMaxDays);
+  const missingDaysToProcess = gap.missingDays.slice(0, dayBatchLimit);
   const { sweep, catalog } = await loadCatalogAndSweepWithFallback();
 
   let createdRuns = 0;
   const createdDayKeys: string[] = [];
   const skippedDayKeys: string[] = [];
 
-  for (const dayKey of gap.missingDays) {
+  for (const dayKey of missingDaysToProcess) {
     const result = await runDailyIncrementalSweepForDay(dayKey, sweep, catalog);
     if (result.status === 'done') {
       createdRuns += 1;
@@ -467,6 +480,9 @@ export const runDailySweepGapBackfill = async (maxDays: number = 30): Promise<{
     analyzed: gap.totalDays,
     existingDays: gap.existingDays,
     missingDays: gap.missingDays.length,
+    mode,
+    requestedMaxDays,
+    processedDays: missingDaysToProcess.length,
     createdRuns,
     createdDayKeys,
     skippedDayKeys,

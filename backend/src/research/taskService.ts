@@ -3,6 +3,16 @@ import { getResearchDb } from './db';
 import { importSweepCandidates, registerSweepRun } from './profileService';
 
 export type SweepTaskStatus = 'new' | 'selected' | 'in_sweep' | 'done' | 'ignored';
+export type SweepRunMode = 'light' | 'heavy';
+
+const normalizeSweepRunMode = (value: unknown): SweepRunMode => {
+  const text = String(value || '').trim().toLowerCase();
+  return text === 'heavy' ? 'heavy' : 'light';
+};
+
+const getModeTaskLimit = (mode: SweepRunMode): number => {
+  return mode === 'heavy' ? 1000 : 120;
+};
 
 export type ResearchSweepTask = {
   id: number;
@@ -230,6 +240,7 @@ export const runSweepFromSelectedTasks = async (input?: {
   dateTo?: string;
   interval?: string;
   markDone?: boolean;
+  mode?: SweepRunMode;
 }): Promise<Record<string, unknown>> => {
   const rdb = getResearchDb();
 
@@ -241,9 +252,13 @@ export const runSweepFromSelectedTasks = async (input?: {
       lagDays: null,
     };
 
+  const mode = normalizeSweepRunMode(input?.mode);
+  const modeTaskLimit = getModeTaskLimit(mode);
+
   const ids = (input?.taskIds || [])
     .map((id) => Number(id))
-    .filter((id) => Number.isFinite(id) && id > 0);
+    .filter((id) => Number.isFinite(id) && id > 0)
+    .slice(0, modeTaskLimit);
 
   let rows: ResearchSweepTask[] = [];
   if (ids.length > 0) {
@@ -256,8 +271,12 @@ export const runSweepFromSelectedTasks = async (input?: {
     rows = await listResearchSweepTasks({ onlySelected: true, limit: 1000 });
   }
 
+  if (rows.length > modeTaskLimit) {
+    rows = rows.slice(0, modeTaskLimit);
+  }
+
   const intervalFallback = String(input?.interval || '').trim() || '1h';
-  const sweepName = `task_sweep_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+  const sweepName = `task_sweep_${mode}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
 
   const sweepRunId = await registerSweepRun({
     name: sweepName,
@@ -270,6 +289,8 @@ export const runSweepFromSelectedTasks = async (input?: {
       source: 'research_tasks',
       period,
       interval: intervalFallback,
+      mode,
+      modeTaskLimit,
       taskIds: rows.map((item) => item.id),
     },
   });
@@ -337,6 +358,8 @@ export const runSweepFromSelectedTasks = async (input?: {
     sweepRunId,
     period,
     lagDays: period.lagDays,
+    mode,
+    modeTaskLimit,
     tasks: rows.length,
     imported: importResult.imported,
     skipped: importResult.skipped,
@@ -352,14 +375,17 @@ export const runSweepFromManualMarkets = async (input: {
   sweepName?: string;
   description?: string;
   note?: string;
+  mode?: SweepRunMode;
 }): Promise<Record<string, unknown>> => {
   const rdb = getResearchDb();
+  const mode = normalizeSweepRunMode(input.mode);
+  const modeTaskLimit = getModeTaskLimit(mode);
   const rawMarkets = Array.isArray(input.markets) ? input.markets : [];
   const normalizedMarkets = Array.from(new Set(
     rawMarkets
       .map((item) => String(item || '').trim().toUpperCase())
       .filter(Boolean)
-  ));
+  )).slice(0, modeTaskLimit);
 
   if (normalizedMarkets.length === 0) {
     throw new Error('markets is required (example: BTC/USDT, ETH/USDT)');
@@ -375,7 +401,7 @@ export const runSweepFromManualMarkets = async (input: {
 
   const intervalFallback = String(input.interval || '').trim() || '1h';
   const sweepName = String(input.sweepName || '').trim()
-    || `manual_pair_sweep_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
+    || `manual_pair_sweep_${mode}_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}`;
   const description = String(input.description || '').trim() || 'Sweep generated from manual pair request';
   const note = String(input.note || '').trim();
 
@@ -391,6 +417,8 @@ export const runSweepFromManualMarkets = async (input: {
       source: 'research_manual_pairs',
       period,
       interval: intervalFallback,
+      mode,
+      modeTaskLimit,
       markets: normalizedMarkets,
       note: note || undefined,
     },
@@ -456,6 +484,8 @@ export const runSweepFromManualMarkets = async (input: {
     sweepRunId,
     period,
     lagDays: period.lagDays,
+    mode,
+    modeTaskLimit,
     markets: normalizedMarkets.length,
     imported: importResult.imported,
     skipped: importResult.skipped,
