@@ -31,6 +31,31 @@ type SchedulerJob = {
   updated_at: string;
 };
 
+type BackfillJobStatus = 'queued' | 'running' | 'done' | 'failed';
+
+type BackfillJobRow = {
+  id: number;
+  job_key: string;
+  mode: SweepRunMode;
+  status: BackfillJobStatus;
+  requested_max_days: number;
+  analyzed_days: number;
+  missing_days: number;
+  processed_days: number;
+  created_runs: number;
+  skipped_days: number;
+  current_day_key: string;
+  eta_seconds: number;
+  progress_percent: number;
+  details_json: string;
+  error: string;
+  started_at: string;
+  updated_at: string;
+  finished_at: string | null;
+};
+
+let runningBackfillJobId: number | null = null;
+
 const DEFAULT_JOBS: Array<{ job_key: SchedulerJobKey; title: string; hour_utc: number; minute_utc: number }> = [
   {
     job_key: 'daily_incremental_sweep',
@@ -489,6 +514,207 @@ export const runDailySweepGapBackfill = async (maxDays: number = 30, modeInput: 
   };
 };
 
+const getLatestBackfillJob = async (): Promise<BackfillJobRow | null> => {
+  const researchDb = getResearchDb();
+  const row = await researchDb.get(
+    `SELECT *
+     FROM research_backfill_jobs
+     WHERE job_key = 'daily_incremental_sweep_backfill'
+     ORDER BY id DESC
+     LIMIT 1`
+  ) as BackfillJobRow | undefined;
+
+  return row || null;
+};
+
+export const getDailySweepBackfillStatus = async (): Promise<Record<string, unknown>> => {
+  const latest = await getLatestBackfillJob();
+  if (!latest) {
+    return { exists: false };
+  }
+
+  let details: Record<string, unknown> = {};
+  try {
+    details = JSON.parse(String(latest.details_json || '{}')) as Record<string, unknown>;
+  } catch {
+    details = {};
+  }
+
+  return {
+    exists: true,
+    ...latest,
+    details,
+    isRunning: latest.status === 'running',
+  };
+};
+
+export const startDailySweepGapBackfillJob = async (maxDays: number = 30, modeInput: unknown = 'light'): Promise<Record<string, unknown>> => {
+  const researchDb = getResearchDb();
+  const mode = normalizeSweepRunMode(modeInput);
+  const requestedMaxDays = Math.max(1, Math.min(365, Math.floor(Number(maxDays) || 30)));
+
+  const existingRunning = await researchDb.get(
+    `SELECT id FROM research_backfill_jobs
+     WHERE job_key = 'daily_incremental_sweep_backfill' AND status = 'running'
+     ORDER BY id DESC LIMIT 1`
+  ) as { id?: number } | undefined;
+
+  if (existingRunning?.id) {
+    return {
+      started: false,
+      reason: 'Backfill already running',
+      jobId: Number(existingRunning.id),
+    };
+  }
+
+  const safeMaxDays = mode === 'heavy' ? requestedMaxDays : Math.min(requestedMaxDays, 7);
+  const dayBatchLimit = mode === 'heavy' ? 365 : 3;
+  const gap = await analyzeDailySweepGap(safeMaxDays);
+  const missingDaysToProcess = gap.missingDays.slice(0, dayBatchLimit);
+
+  const insertResult = await researchDb.run(
+    `INSERT INTO research_backfill_jobs (
+      job_key, mode, status,
+      requested_max_days, analyzed_days, missing_days,
+      processed_days, created_runs, skipped_days,
+      current_day_key, eta_seconds, progress_percent,
+      details_json, error, started_at, updated_at
+    ) VALUES (
+      'daily_incremental_sweep_backfill', ?, 'running',
+      ?, ?, ?,
+      0, 0, 0,
+      '', 0, 0,
+      ?, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+    )`,
+    [
+      mode,
+      requestedMaxDays,
+      gap.totalDays,
+      gap.missingDays.length,
+      JSON.stringify({
+        mode,
+        requestedMaxDays,
+        safeMaxDays,
+        dayBatchLimit,
+        toProcess: missingDaysToProcess.length,
+        pendingDays: missingDaysToProcess,
+      }),
+    ]
+  );
+
+  const jobId = Number(insertResult?.lastID || 0);
+  if (!Number.isFinite(jobId) || jobId <= 0) {
+    throw new Error('Failed to create backfill job record');
+  }
+
+  runningBackfillJobId = jobId;
+
+  void (async () => {
+    const startedAt = Date.now();
+    let createdRuns = 0;
+    let skippedDays = 0;
+
+    try {
+      const { sweep, catalog } = await loadCatalogAndSweepWithFallback();
+
+      for (let index = 0; index < missingDaysToProcess.length; index += 1) {
+        const dayKey = missingDaysToProcess[index];
+        const result = await runDailyIncrementalSweepForDay(dayKey, sweep, catalog);
+
+        if (result.status === 'done') {
+          createdRuns += 1;
+        } else {
+          skippedDays += 1;
+        }
+
+        const processedDays = index + 1;
+        const elapsedSec = Math.max(1, Math.floor((Date.now() - startedAt) / 1000));
+        const avgSecPerDay = elapsedSec / Math.max(1, processedDays);
+        const remainDays = Math.max(0, missingDaysToProcess.length - processedDays);
+        const etaSeconds = Math.max(0, Math.round(remainDays * avgSecPerDay));
+        const progressPercent = Number(((processedDays / Math.max(1, missingDaysToProcess.length)) * 100).toFixed(2));
+
+        await researchDb.run(
+          `UPDATE research_backfill_jobs
+           SET processed_days = ?,
+               created_runs = ?,
+               skipped_days = ?,
+               current_day_key = ?,
+               eta_seconds = ?,
+               progress_percent = ?,
+               details_json = ?,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`,
+          [
+            processedDays,
+            createdRuns,
+            skippedDays,
+            dayKey,
+            etaSeconds,
+            progressPercent,
+            JSON.stringify({
+              lastDay: dayKey,
+              lastResult: result,
+              elapsedSec,
+              processedDays,
+              remainingDays: remainDays,
+              pendingDays: missingDaysToProcess.slice(processedDays),
+            }),
+            jobId,
+          ]
+        );
+
+        logger.info(`[researchBackfill] job=${jobId} mode=${mode} processed=${processedDays}/${missingDaysToProcess.length} day=${dayKey} etaSec=${etaSeconds}`);
+      }
+
+      await researchDb.run(
+        `UPDATE research_backfill_jobs
+         SET status = 'done',
+             processed_days = ?,
+             created_runs = ?,
+             skipped_days = ?,
+             current_day_key = '',
+             eta_seconds = 0,
+             progress_percent = 100,
+             updated_at = CURRENT_TIMESTAMP,
+             finished_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [missingDaysToProcess.length, createdRuns, skippedDays, jobId]
+      );
+      logger.info(`[researchBackfill] job=${jobId} done mode=${mode} created=${createdRuns} skipped=${skippedDays}`);
+    } catch (error) {
+      const message = (error as Error).message;
+      await researchDb.run(
+        `UPDATE research_backfill_jobs
+         SET status = 'failed',
+             error = ?,
+             eta_seconds = 0,
+             updated_at = CURRENT_TIMESTAMP,
+             finished_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [message, jobId]
+      ).catch(() => {
+        // Keep process resilient if DB update fails during fatal path.
+      });
+      logger.error(`[researchBackfill] job=${jobId} failed: ${message}`);
+    } finally {
+      if (runningBackfillJobId === jobId) {
+        runningBackfillJobId = null;
+      }
+    }
+  })();
+
+  return {
+    started: true,
+    jobId,
+    mode,
+    requestedMaxDays,
+    analyzed: gap.totalDays,
+    missingDays: gap.missingDays.length,
+    toProcess: missingDaysToProcess.length,
+  };
+};
+
 const runSchedulerJobByKey = async (jobKey: SchedulerJobKey): Promise<{ status: SchedulerStatus; details: Record<string, unknown> }> => {
   if (jobKey === 'daily_incremental_sweep') {
     return runDailyIncrementalSweep();
@@ -621,6 +847,7 @@ export const getResearchDbObservability = async (): Promise<Record<string, unkno
     'publish_log',
     'backtest_runs',
     'research_scheduler_jobs',
+    'research_backfill_jobs',
   ];
 
   const mainTables = [

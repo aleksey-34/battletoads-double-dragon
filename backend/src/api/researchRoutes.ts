@@ -30,9 +30,11 @@ import {
 } from '../research/presetBuilder';
 import {
   analyzeDailySweepGap,
+  getDailySweepBackfillStatus,
   getResearchDbObservability,
   listSchedulerJobs,
   runDailySweepGapBackfill,
+  startDailySweepGapBackfillJob,
   runSchedulerJobNow,
   updateSchedulerJob,
 } from '../research/schedulerService';
@@ -853,6 +855,38 @@ router.post('/scheduler/:jobKey/backfill-now', async (req, res) => {
     const mode = parseSweepRunMode(req.body?.mode);
     const result = await runDailySweepGapBackfill(maxDays, mode);
     res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/scheduler/:jobKey/backfill-start', async (req, res) => {
+  try {
+    const jobKey = String(req.params.jobKey || '');
+    if (jobKey !== 'daily_incremental_sweep') {
+      return res.status(400).json({ error: `Unsupported scheduler job key: ${jobKey}` });
+    }
+
+    const maxDays = req.body?.maxDays ? Number(req.body.maxDays) : 30;
+    const mode = parseSweepRunMode(req.body?.mode);
+    const result = await startDailySweepGapBackfillJob(maxDays, mode);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/scheduler/:jobKey/backfill-status', async (req, res) => {
+  try {
+    const jobKey = String(req.params.jobKey || '');
+    if (jobKey !== 'daily_incremental_sweep') {
+      return res.status(400).json({ error: `Unsupported scheduler job key: ${jobKey}` });
+    }
+
+    const status = await getDailySweepBackfillStatus();
+    res.json({ success: true, ...status });
   } catch (err) {
     const error = err as Error;
     res.status(500).json({ error: error.message });

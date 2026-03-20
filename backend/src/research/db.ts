@@ -238,6 +238,30 @@ const applySchema = async (db: Database<sqlite3.Database, sqlite3.Statement>): P
 
     CREATE INDEX IF NOT EXISTS idx_research_sweep_tasks_status
       ON research_sweep_tasks (status, is_selected, created_at DESC);
+
+    CREATE TABLE IF NOT EXISTS research_backfill_jobs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job_key TEXT NOT NULL DEFAULT 'daily_incremental_sweep_backfill',
+      mode TEXT NOT NULL DEFAULT 'light',
+      status TEXT NOT NULL DEFAULT 'queued',
+      requested_max_days INTEGER DEFAULT 30,
+      analyzed_days INTEGER DEFAULT 0,
+      missing_days INTEGER DEFAULT 0,
+      processed_days INTEGER DEFAULT 0,
+      created_runs INTEGER DEFAULT 0,
+      skipped_days INTEGER DEFAULT 0,
+      current_day_key TEXT DEFAULT '',
+      eta_seconds INTEGER DEFAULT 0,
+      progress_percent REAL DEFAULT 0,
+      details_json TEXT DEFAULT '{}',
+      error TEXT DEFAULT '',
+      started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      finished_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_research_backfill_jobs_status
+      ON research_backfill_jobs (status, updated_at DESC);
   `);
 
   // Ensure demo offer data exists for preview demo

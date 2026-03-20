@@ -121,6 +121,27 @@ type SchedulerGapStatus = {
   missingDays: string[];
 };
 
+type BackfillJobStatus = {
+  success?: boolean;
+  exists?: boolean;
+  id?: number;
+  mode?: 'light' | 'heavy';
+  status?: 'queued' | 'running' | 'done' | 'failed';
+  requested_max_days?: number;
+  analyzed_days?: number;
+  missing_days?: number;
+  processed_days?: number;
+  created_runs?: number;
+  skipped_days?: number;
+  current_day_key?: string;
+  eta_seconds?: number;
+  progress_percent?: number;
+  error?: string;
+  started_at?: string;
+  updated_at?: string;
+  finished_at?: string | null;
+};
+
 type DbObservability = {
   atUtc: string;
   files: {
@@ -468,6 +489,7 @@ export default function Research() {
   const [schedulerGapLoading, setSchedulerGapLoading] = useState(false);
   const [schedulerBackfillLoading, setSchedulerBackfillLoading] = useState(false);
   const [schedulerGapStatus, setSchedulerGapStatus] = useState<SchedulerGapStatus | null>(null);
+  const [backfillJobStatus, setBackfillJobStatus] = useState<BackfillJobStatus | null>(null);
   const [schedulerRunStartedAt, setSchedulerRunStartedAt] = useState<number | null>(null);
   const [schedulerRunElapsedSec, setSchedulerRunElapsedSec] = useState(0);
   const [schedulerJob, setSchedulerJob] = useState<SchedulerJob | null>(null);
@@ -587,15 +609,28 @@ export default function Research() {
     }
   };
 
+  const fetchBackfillStatus = useCallback(async () => {
+    try {
+      const res = await axios.get<BackfillJobStatus>('/api/research/scheduler/daily_incremental_sweep/backfill-status');
+      setBackfillJobStatus(res.data || null);
+    } catch {
+      // keep UI resilient when endpoint is temporarily unavailable
+    }
+  }, []);
+
   const backfillSchedulerGap = async () => {
     setSchedulerBackfillLoading(true);
     try {
-      const res = await axios.post<{ createdRuns?: number; missingDays?: number; mode?: string; processedDays?: number }>('/api/research/scheduler/daily_incremental_sweep/backfill-now', {
+      const res = await axios.post<{ started?: boolean; reason?: string; mode?: string; jobId?: number; toProcess?: number; missingDays?: number }>('/api/research/scheduler/daily_incremental_sweep/backfill-start', {
         maxDays: 30,
         mode: schedulerBackfillMode,
       });
-      message.success(`Backfill ${res.data?.mode || schedulerBackfillMode}: created ${res.data?.createdRuns || 0} runs (processed ${res.data?.processedDays || 0}, missing ${res.data?.missingDays || 0})`);
-      await Promise.all([fetchScheduler(), checkSchedulerGap(), fetchProfiles()]);
+      if (res.data?.started === false) {
+        message.info(String(res.data?.reason || 'Backfill already running'));
+      } else {
+        message.success(`Backfill started (${res.data?.mode || schedulerBackfillMode}), job #${res.data?.jobId || 'n/a'}: ${res.data?.toProcess || 0}/${res.data?.missingDays || 0} days queued`);
+      }
+      await Promise.all([fetchScheduler(), checkSchedulerGap(), fetchBackfillStatus()]);
     } catch (e: any) {
       message.error(e?.response?.data?.error || 'Backfill failed');
     } finally {
@@ -783,6 +818,21 @@ export default function Research() {
   useEffect(() => { void fetchProfiles(page); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { void fetchScheduler(); }, [fetchScheduler]);
   useEffect(() => { void fetchTasks(); }, [fetchTasks]);
+  useEffect(() => { void fetchBackfillStatus(); }, [fetchBackfillStatus]);
+
+  useEffect(() => {
+    if (!backfillJobStatus || backfillJobStatus.status !== 'running') {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void fetchBackfillStatus();
+    }, 3000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [backfillJobStatus, fetchBackfillStatus]);
 
   // ── Fetch API keys for publish modal ───────────────────────────────────────
   useEffect(() => {
@@ -1051,7 +1101,22 @@ export default function Research() {
                   Gap 30d: {schedulerGapStatus.existingDays}/{schedulerGapStatus.totalDays} days present, missing {schedulerGapStatus.missingDays.length}
                 </Text>
               ) : null}
+              {backfillJobStatus?.exists ? (
+                <Text type={backfillJobStatus.status === 'failed' ? 'danger' : 'secondary'}>
+                  Backfill job #{backfillJobStatus.id || 'n/a'} [{backfillJobStatus.mode || 'light'}]: {backfillJobStatus.status || 'unknown'}; processed {backfillJobStatus.processed_days || 0}/{Math.max(1, Number(backfillJobStatus.missing_days || 0))}; created {backfillJobStatus.created_runs || 0}; skipped {backfillJobStatus.skipped_days || 0}; ETA {backfillJobStatus.eta_seconds || 0}s
+                </Text>
+              ) : null}
+              {backfillJobStatus?.error ? <Text type="danger">Backfill error: {backfillJobStatus.error}</Text> : null}
             </Space>
+            {backfillJobStatus?.exists ? (
+              <div style={{ marginTop: 10, maxWidth: 520 }}>
+                <Progress
+                  percent={Math.max(0, Math.min(100, Number(backfillJobStatus.progress_percent || 0)))}
+                  status={backfillJobStatus.status === 'failed' ? 'exception' : backfillJobStatus.status === 'done' ? 'success' : 'active'}
+                  format={(percent) => `${Number(percent || 0).toFixed(1)}%`}
+                />
+              </div>
+            ) : null}
             {schedulerRunNowLoading ? (
               <div style={{ marginTop: 12, maxWidth: 420 }}>
                 <Text type="secondary">Sweep is running... elapsed {schedulerRunElapsedSec}s</Text>

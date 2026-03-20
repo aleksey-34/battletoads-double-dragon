@@ -61,6 +61,28 @@ function AppShell() {
     return '1';
   }, [location.pathname]);
 
+  const currentSectionLabel = useMemo(() => {
+    if (location.pathname.startsWith('/settings')) return t('nav.settings', 'Settings');
+    if (location.pathname.startsWith('/positions')) return t('nav.positions', 'Positions');
+    if (location.pathname.startsWith('/logs')) return t('nav.logs', 'Logs');
+    if (location.pathname.startsWith('/backtest')) return t('nav.backtest', 'Backtest');
+    if (location.pathname.startsWith('/trading-systems')) return t('nav.tradingSystems', 'Trading Systems');
+    if (location.pathname.startsWith('/saas/admin')) return 'SaaS Admin';
+    if (location.pathname.startsWith('/saas/strategy-client')) return 'SaaS Strategy';
+    if (location.pathname.startsWith('/saas/algofund')) return 'SaaS Algofund';
+    if (location.pathname.startsWith('/saas')) return t('nav.saas', 'SaaS');
+    if (location.pathname.startsWith('/research')) return t('nav.research', 'Research');
+    if (location.pathname.startsWith('/client/login')) return 'Client Login';
+    if (location.pathname.startsWith('/client/register')) return 'Client Register';
+    if (location.pathname.startsWith('/cabinet')) return 'Client Cabinet';
+    if (location.pathname.startsWith('/login')) return 'Login';
+    return t('nav.dashboard', 'Dashboard');
+  }, [location.pathname, t]);
+
+  useEffect(() => {
+    document.title = `BT_bot_${currentSectionLabel}`;
+  }, [currentSectionLabel]);
+
   const checkAdminAuth = async () => {
     const password = localStorage.getItem('password');
 
@@ -190,6 +212,7 @@ function AppShell() {
       <Header style={{ color: 'white', paddingInline: 16 }}>
         <div className="app-header-row">
           <Typography.Text className="app-brand-title">{t('app.title', 'BattleToads Control')}</Typography.Text>
+          <Tag color="blue">Section: {currentSectionLabel}</Tag>
           {menuItems.length > 0 ? (
             <Menu className="app-main-menu" theme="dark" mode="horizontal" selectedKeys={[selectedMenuKey]} items={menuItems} />
           ) : (

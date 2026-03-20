@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="BT bot icon">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#0f5ed6"/>
+      <stop offset="100%" stop-color="#2a88ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="url(#bg)"/>
+  <ellipse cx="21" cy="24" rx="8" ry="7" fill="#9cff54"/>
+  <ellipse cx="43" cy="24" rx="8" ry="7" fill="#9cff54"/>
+  <circle cx="21" cy="24" r="3" fill="#06204a"/>
+  <circle cx="43" cy="24" r="3" fill="#06204a"/>
+  <path d="M14 41c6 8 30 8 36 0" fill="none" stroke="#9cff54" stroke-width="6" stroke-linecap="round"/>
+</svg>

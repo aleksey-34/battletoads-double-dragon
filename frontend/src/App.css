@@ -11,6 +11,12 @@
   --bt-text-muted: #486a54;
 }
 
+.app-root-layout .ant-layout-header {
+  background: linear-gradient(92deg, #0f5ed6 0%, #1677ff 50%, #2a88ff 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 8px 22px rgba(11, 73, 165, 0.22);
+}
+
 .battletoads-theme body,
 body.battletoads-theme {
   background:
