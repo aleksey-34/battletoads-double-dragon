@@ -293,7 +293,9 @@ export const triggerGitUpdate = async (): Promise<{ started: boolean; unit: stri
   const branch = status.branch || 'main';
   const deployMode = process.env.DEPLOY_MODE || 'single';
   const restartRuntime = process.env.RESTART_RUNTIME || '1';
-  const allowDirtyTracked = process.env.ALLOW_DIRTY_TRACKED || '0';
+  // Default to '1': the script does git reset --hard anyway, so blocking on dirty
+  // tracked files when explicitly triggered from the web UI is counterproductive.
+  const allowDirtyTracked = process.env.ALLOW_DIRTY_TRACKED || '1';
   const remoteCmd = `APP_DIR=${shellQuote(status.appDir)} BRANCH=${shellQuote(branch)} DEPLOY_MODE=${deployMode} RESTART_RUNTIME=${restartRuntime} ALLOW_DIRTY_TRACKED=${allowDirtyTracked} bash ${shellQuote(scriptPath)}`;
 
   let runResult: { stdout: string; stderr: string };

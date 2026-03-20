@@ -62,12 +62,17 @@ run git fetch --prune origin
 
 # Игнорируем untracked runtime-файлы (например backend/.auth-password.json, data/*),
 # но блокируем деплой при изменениях tracked-файлов.
-dirty_count="$(git status --porcelain --untracked-files=no | wc -l | tr -d ' ')"
+dirty_list="$(git status --porcelain --untracked-files=no)"
+dirty_count="$(echo -n "$dirty_list" | wc -l | tr -d ' ')"
 if [[ "$dirty_count" != "0" ]]; then
 	if [[ "$ALLOW_DIRTY_TRACKED" == "1" ]]; then
 		log "WARN: Repository has local tracked changes ($dirty_count). Proceeding because ALLOW_DIRTY_TRACKED=1."
+		log "Dirty files:"
+		echo "$dirty_list" | while IFS= read -r line; do log "  $line"; done
 	else
-		fail "Repository has local changes ($dirty_count). Refusing to deploy."
+		log "Dirty files that blocked deploy:"
+		echo "$dirty_list" | while IFS= read -r line; do log "  $line"; done
+		fail "Repository has $dirty_count local tracked change(s). Set ALLOW_DIRTY_TRACKED=1 to force."
 	fi
 fi
 
