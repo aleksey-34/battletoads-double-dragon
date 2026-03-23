@@ -2075,7 +2075,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!isAdminSurface) {
       return;
     }
-    if (activeTab === 'admin' && adminTab === 'offer-ts' && !summary?.offerStore && !summaryLoading) {
+    if (
+      activeTab === 'admin'
+      && (adminTab === 'offer-ts' || adminTab === 'research-analysis')
+      && !summary?.offerStore
+      && !summaryLoading
+    ) {
       void loadSummary('full');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
