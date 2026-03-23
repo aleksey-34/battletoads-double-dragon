@@ -11,6 +11,7 @@ import {
   updateTradingSystem,
 } from '../bot/tradingSystems';
 import { getMonitoringLatest } from '../bot/monitoring';
+import { getPositions } from '../bot/exchange';
 import { Strategy } from '../config/settings';
 import { db, initDB } from '../utils/database';
 import logger from '../utils/logger';
@@ -183,12 +184,44 @@ type StrategyClientProfileRow = {
   id: number;
   tenant_id: number;
   selected_offer_ids_json: string;
+  active_system_profile_id?: number | null;
   risk_level: Level3;
   trade_frequency_level: Level3;
   requested_enabled: number;
   actual_enabled: number;
   assigned_api_key_name: string;
   latest_preview_json: string;
+};
+
+type StrategyClientSystemProfileRow = {
+  id: number;
+  tenant_id: number;
+  profile_name: string;
+  selected_offer_ids_json: string;
+  is_active: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type OfferUnpublishImpact = {
+  offerId: string;
+  affectedTenants: Array<{
+    tenantId: number;
+    slug: string;
+    displayName: string;
+    productMode: ProductMode;
+    assignedApiKeyName: string;
+  }>;
+  openPositions: Array<{
+    tenantId: number;
+    apiKeyName: string;
+    count: number;
+    symbols: string[];
+  }>;
+  summary: {
+    tenantCount: number;
+    openPositionsCount: number;
+  };
 };
 
 type AlgofundProfileRow = {
@@ -1240,6 +1273,64 @@ const getTenantById = async (tenantId: number): Promise<TenantRow> => {
 const getStrategyClientProfile = async (tenantId: number): Promise<StrategyClientProfileRow | null> => {
   const row = await db.get('SELECT * FROM strategy_client_profiles WHERE tenant_id = ?', [tenantId]);
   return (row || null) as StrategyClientProfileRow | null;
+};
+
+const listStrategyClientSystemProfiles = async (tenantId: number): Promise<StrategyClientSystemProfileRow[]> => {
+  const rows = await db.all(
+    `SELECT *
+     FROM strategy_client_system_profiles
+     WHERE tenant_id = ?
+     ORDER BY is_active DESC, updated_at DESC, id DESC`,
+    [tenantId]
+  );
+  return (Array.isArray(rows) ? rows : []) as StrategyClientSystemProfileRow[];
+};
+
+const getStrategyClientSystemProfileById = async (tenantId: number, profileId: number): Promise<StrategyClientSystemProfileRow | null> => {
+  const row = await db.get(
+    'SELECT * FROM strategy_client_system_profiles WHERE id = ? AND tenant_id = ? LIMIT 1',
+    [profileId, tenantId]
+  );
+  return (row || null) as StrategyClientSystemProfileRow | null;
+};
+
+const activateStrategyClientSystemProfile = async (tenantId: number, profileId: number): Promise<void> => {
+  await db.run('UPDATE strategy_client_system_profiles SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [tenantId]);
+  await db.run('UPDATE strategy_client_system_profiles SET is_active = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ? AND id = ?', [tenantId, profileId]);
+  await db.run('UPDATE strategy_client_profiles SET active_system_profile_id = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [profileId, tenantId]);
+};
+
+const ensureDefaultStrategyClientSystemProfile = async (tenantId: number, selectedOfferIds: string[]): Promise<StrategyClientSystemProfileRow[]> => {
+  const existing = await listStrategyClientSystemProfiles(tenantId);
+  if (existing.length > 0) {
+    return existing;
+  }
+
+  await db.run(
+    `INSERT INTO strategy_client_system_profiles (tenant_id, profile_name, selected_offer_ids_json, is_active, created_at, updated_at)
+     VALUES (?, 'Custom TS 1', ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    [tenantId, JSON.stringify(selectedOfferIds || [])]
+  );
+
+  const created = await listStrategyClientSystemProfiles(tenantId);
+  const active = created.find((item) => Number(item.is_active || 0) === 1) || created[0] || null;
+  if (active?.id) {
+    await db.run('UPDATE strategy_client_profiles SET active_system_profile_id = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [active.id, tenantId]);
+  }
+  return created;
+};
+
+const syncLegacySelectedOffersFromActiveProfile = async (tenantId: number): Promise<string[]> => {
+  const rows = await ensureDefaultStrategyClientSystemProfile(tenantId, []);
+  const active = rows.find((item) => Number(item.is_active || 0) === 1) || rows[0] || null;
+  const activeOfferIds = active ? safeJsonParse<string[]>(active.selected_offer_ids_json, []) : [];
+  await db.run(
+    `UPDATE strategy_client_profiles
+     SET selected_offer_ids_json = ?, active_system_profile_id = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE tenant_id = ?`,
+    [JSON.stringify(activeOfferIds), active?.id || null, tenantId]
+  );
+  return activeOfferIds;
 };
 
 const getAlgofundProfile = async (tenantId: number): Promise<AlgofundProfileRow | null> => {
@@ -3068,6 +3159,7 @@ export const getStrategyClientState = async (tenantId: number) => {
   const plan = await getPlanForTenant(tenantId);
   const capabilities = resolvePlanCapabilities(plan);
   const profile = await getStrategyClientProfile(tenantId);
+  let systemProfiles = await listStrategyClientSystemProfiles(tenantId);
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const offerStore = await getOfferStoreAdminState();
   const publishedSet = new Set(offerStore.publishedOfferIds);
@@ -3075,7 +3167,15 @@ export const getStrategyClientState = async (tenantId: number) => {
   const directOffers = catalog ? getAllOffers(catalog) : [];
   const presetOffers = directOffers.length > 0 ? directOffers : await buildPresetBackedOffers(catalog);
   const recommendedSets = buildRecommendedSets(catalog);
-  const savedOfferIds = profile ? safeJsonParse<string[]>(profile.selected_offer_ids_json, []) : [];
+  const savedOfferIdsLegacy = profile ? safeJsonParse<string[]>(profile.selected_offer_ids_json, []) : [];
+  systemProfiles = await ensureDefaultStrategyClientSystemProfile(tenantId, savedOfferIdsLegacy);
+  const activeSystemProfile = systemProfiles.find((item) => Number(item.is_active || 0) === 1)
+    || (profile?.active_system_profile_id ? systemProfiles.find((item) => Number(item.id) === Number(profile.active_system_profile_id)) : null)
+    || systemProfiles[0]
+    || null;
+  const savedOfferIds = activeSystemProfile
+    ? safeJsonParse<string[]>(activeSystemProfile.selected_offer_ids_json, [])
+    : savedOfferIdsLegacy;
   const constraintsCatalog = catalog || await buildFallbackCatalogFromPresets(catalog, [tenant.assigned_api_key_name].filter(Boolean));
   const selectedOffersForConstraints = constraintsCatalog
     ? savedOfferIds
@@ -3094,8 +3194,17 @@ export const getStrategyClientState = async (tenantId: number) => {
     profile: profile ? {
       ...profile,
       selectedOfferIds: savedOfferIds,
+      activeSystemProfileId: activeSystemProfile?.id || null,
       latestPreview: hydrateStoredStrategyPreview(catalog, profile.latest_preview_json),
     } : null,
+    systemProfiles: systemProfiles.map((item) => ({
+      id: item.id,
+      profileName: item.profile_name,
+      selectedOfferIds: safeJsonParse<string[]>(item.selected_offer_ids_json, []),
+      isActive: Number(item.is_active || 0) === 1,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+    })),
     constraints: buildStrategySelectionConstraints(plan, selectedOffersForConstraints),
     catalog,
     offers: presetOffers,
@@ -3121,9 +3230,20 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
 
   const nextRiskLevel = payload.riskLevel || existing.risk_level || 'medium';
   const nextTradeFrequencyLevel = payload.tradeFrequencyLevel || existing.trade_frequency_level || 'medium';
+  const systemProfiles = await ensureDefaultStrategyClientSystemProfile(
+    tenantId,
+    safeJsonParse<string[]>(existing.selected_offer_ids_json, [])
+  );
+  const activeSystemProfile = systemProfiles.find((item) => Number(item.is_active || 0) === 1)
+    || (existing.active_system_profile_id ? systemProfiles.find((item) => Number(item.id) === Number(existing.active_system_profile_id)) : null)
+    || systemProfiles[0]
+    || null;
+  const activeOfferIds = activeSystemProfile
+    ? safeJsonParse<string[]>(activeSystemProfile.selected_offer_ids_json, [])
+    : safeJsonParse<string[]>(existing.selected_offer_ids_json, []);
   const nextOfferIds = Array.isArray(payload.selectedOfferIds)
     ? Array.from(new Set(payload.selectedOfferIds.map((item) => String(item || '').trim()).filter(Boolean)))
-    : safeJsonParse<string[]>(existing.selected_offer_ids_json, []);
+    : activeOfferIds;
   const nextAssignedApiKeyName = asString(payload.assignedApiKeyName, existing.assigned_api_key_name || tenant.assigned_api_key_name);
   const nextRequestedEnabled = payload.requestedEnabled !== undefined ? payload.requestedEnabled : existing.requested_enabled === 1;
   const { catalog: sourceCatalog } = await loadCatalogAndSweepWithFallback();
@@ -3146,14 +3266,24 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
   await db.run(
     `UPDATE strategy_client_profiles
      SET selected_offer_ids_json = ?,
+         active_system_profile_id = ?,
          risk_level = ?,
          trade_frequency_level = ?,
          requested_enabled = ?,
          assigned_api_key_name = ?,
          updated_at = CURRENT_TIMESTAMP
      WHERE tenant_id = ?`,
-    [JSON.stringify(nextOfferIds), nextRiskLevel, nextTradeFrequencyLevel, nextRequestedEnabled ? 1 : 0, nextAssignedApiKeyName, tenantId]
+    [JSON.stringify(nextOfferIds), activeSystemProfile?.id || null, nextRiskLevel, nextTradeFrequencyLevel, nextRequestedEnabled ? 1 : 0, nextAssignedApiKeyName, tenantId]
   );
+
+  if (activeSystemProfile?.id) {
+    await db.run(
+      `UPDATE strategy_client_system_profiles
+       SET selected_offer_ids_json = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ? AND tenant_id = ?`,
+      [JSON.stringify(nextOfferIds), activeSystemProfile.id, tenantId]
+    );
+  }
 
   await db.run(
     `UPDATE tenants
@@ -3163,6 +3293,227 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
   );
 
   return getStrategyClientState(tenantId);
+};
+
+export const listStrategyClientSystemProfilesState = async (tenantId: number) => {
+  const tenant = await getTenantById(tenantId);
+  if (tenant.product_mode !== 'strategy_client') {
+    throw new Error('Tenant is not a strategy client');
+  }
+  const profile = await getStrategyClientProfile(tenantId);
+  const fallback = profile ? safeJsonParse<string[]>(profile.selected_offer_ids_json, []) : [];
+  const rows = await ensureDefaultStrategyClientSystemProfile(tenantId, fallback);
+  return {
+    tenantId,
+    items: rows.map((item) => ({
+      id: item.id,
+      profileName: item.profile_name,
+      selectedOfferIds: safeJsonParse<string[]>(item.selected_offer_ids_json, []),
+      isActive: Number(item.is_active || 0) === 1,
+      createdAt: item.created_at,
+      updatedAt: item.updated_at,
+    })),
+  };
+};
+
+export const createStrategyClientSystemProfile = async (
+  tenantId: number,
+  profileName: string,
+  selectedOfferIds?: string[],
+  activate: boolean = false
+) => {
+  const state = await getStrategyClientState(tenantId);
+  const existingRows = await listStrategyClientSystemProfiles(tenantId);
+  const maxCustomSystems = state.constraints?.limits?.maxCustomSystems || 1;
+  if (existingRows.length >= maxCustomSystems) {
+    throw new Error(`Custom TS cap reached (${existingRows.length}/${maxCustomSystems}).`);
+  }
+
+  const fallbackSelected = Array.isArray(state.profile?.selectedOfferIds) ? state.profile?.selectedOfferIds : [];
+  const normalizedOfferIds = Array.isArray(selectedOfferIds)
+    ? Array.from(new Set(selectedOfferIds.map((item) => String(item || '').trim()).filter(Boolean)))
+    : fallbackSelected;
+
+  const name = asString(profileName, `Custom TS ${existingRows.length + 1}`);
+  const insertResult = await db.run(
+    `INSERT INTO strategy_client_system_profiles (tenant_id, profile_name, selected_offer_ids_json, is_active, created_at, updated_at)
+     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    [tenantId, name, JSON.stringify(normalizedOfferIds), activate ? 1 : 0]
+  );
+
+  const createdId = Number((insertResult as any)?.lastID || 0);
+  if (activate && createdId > 0) {
+    await activateStrategyClientSystemProfile(tenantId, createdId);
+    await syncLegacySelectedOffersFromActiveProfile(tenantId);
+  }
+
+  return listStrategyClientSystemProfilesState(tenantId);
+};
+
+export const updateStrategyClientSystemProfile = async (
+  tenantId: number,
+  profileId: number,
+  payload: { profileName?: string; selectedOfferIds?: string[] }
+) => {
+  const current = await getStrategyClientSystemProfileById(tenantId, profileId);
+  if (!current) {
+    throw new Error(`Strategy system profile not found: ${profileId}`);
+  }
+
+  const nextName = payload.profileName !== undefined
+    ? asString(payload.profileName, current.profile_name)
+    : current.profile_name;
+  const nextOfferIds = Array.isArray(payload.selectedOfferIds)
+    ? Array.from(new Set(payload.selectedOfferIds.map((item) => String(item || '').trim()).filter(Boolean)))
+    : safeJsonParse<string[]>(current.selected_offer_ids_json, []);
+
+  await db.run(
+    `UPDATE strategy_client_system_profiles
+     SET profile_name = ?, selected_offer_ids_json = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND tenant_id = ?`,
+    [nextName, JSON.stringify(nextOfferIds), profileId, tenantId]
+  );
+
+  if (Number(current.is_active || 0) === 1) {
+    await syncLegacySelectedOffersFromActiveProfile(tenantId);
+  }
+
+  return listStrategyClientSystemProfilesState(tenantId);
+};
+
+export const deleteStrategyClientSystemProfile = async (tenantId: number, profileId: number) => {
+  const rows = await listStrategyClientSystemProfiles(tenantId);
+  const target = rows.find((item) => Number(item.id) === profileId);
+  if (!target) {
+    throw new Error(`Strategy system profile not found: ${profileId}`);
+  }
+  if (rows.length <= 1) {
+    throw new Error('At least one custom TS profile must remain.');
+  }
+
+  await db.run('DELETE FROM strategy_client_system_profiles WHERE id = ? AND tenant_id = ?', [profileId, tenantId]);
+
+  if (Number(target.is_active || 0) === 1) {
+    const afterDelete = await listStrategyClientSystemProfiles(tenantId);
+    const fallback = afterDelete[0];
+    if (fallback?.id) {
+      await activateStrategyClientSystemProfile(tenantId, Number(fallback.id));
+    }
+    await syncLegacySelectedOffersFromActiveProfile(tenantId);
+  }
+
+  return listStrategyClientSystemProfilesState(tenantId);
+};
+
+export const activateStrategyClientSystemProfileById = async (tenantId: number, profileId: number) => {
+  const target = await getStrategyClientSystemProfileById(tenantId, profileId);
+  if (!target) {
+    throw new Error(`Strategy system profile not found: ${profileId}`);
+  }
+  await activateStrategyClientSystemProfile(tenantId, profileId);
+  await syncLegacySelectedOffersFromActiveProfile(tenantId);
+  return getStrategyClientState(tenantId);
+};
+
+export const requestAlgofundBatchAction = async (
+  tenantIds: number[],
+  requestType: AlgofundRequestType,
+  note: string,
+  payload: AlgofundRequestPayload = {}
+) => {
+  const normalizedTenantIds = Array.from(new Set((tenantIds || []).map((item) => Math.floor(asNumber(item, 0))).filter((item) => item > 0)));
+  const created: Array<Record<string, unknown>> = [];
+  const failures: Array<{ tenantId: number; error: string }> = [];
+
+  for (const tenantId of normalizedTenantIds) {
+    try {
+      const tenant = await getTenantById(tenantId);
+      if (tenant.product_mode !== 'algofund_client') {
+        throw new Error('Tenant is not algofund client');
+      }
+      const result = await requestAlgofundAction(tenantId, requestType, note, payload);
+      created.push({ tenantId, request: result });
+    } catch (error) {
+      failures.push({ tenantId, error: String((error as Error)?.message || error || 'failed') });
+    }
+  }
+
+  return {
+    total: normalizedTenantIds.length,
+    createdCount: created.length,
+    failedCount: failures.length,
+    created,
+    failures,
+  };
+};
+
+export const analyzeOfferUnpublishImpact = async (offerIdRaw: string): Promise<OfferUnpublishImpact> => {
+  const offerId = asString(offerIdRaw, '');
+  if (!offerId) {
+    throw new Error('offerId is required');
+  }
+
+  const tenants = (await listTenantSummaries()) as Array<{ tenant: TenantRow; plan: PlanRow | null }>;
+  const strategyProfiles = (await db.all('SELECT tenant_id, selected_offer_ids_json FROM strategy_client_profiles')) as Array<{ tenant_id: number; selected_offer_ids_json: string }>;
+  const systemProfiles = (await db.all('SELECT tenant_id, selected_offer_ids_json FROM strategy_client_system_profiles WHERE is_active = 1')) as Array<{ tenant_id: number; selected_offer_ids_json: string }>;
+
+  const legacyByTenant = new Map<number, string[]>();
+  for (const row of strategyProfiles) {
+    legacyByTenant.set(Number(row.tenant_id), safeJsonParse<string[]>(row.selected_offer_ids_json, []));
+  }
+  const activeByTenant = new Map<number, string[]>();
+  for (const row of systemProfiles) {
+    activeByTenant.set(Number(row.tenant_id), safeJsonParse<string[]>(row.selected_offer_ids_json, []));
+  }
+
+  const affectedTenants = tenants
+    .filter((row) => row.tenant.product_mode === 'strategy_client')
+    .filter((row) => {
+      const tenantId = Number(row.tenant.id);
+      const active = activeByTenant.get(tenantId);
+      const fallback = legacyByTenant.get(tenantId) || [];
+      const selected = Array.isArray(active) && active.length > 0 ? active : fallback;
+      return selected.includes(offerId);
+    })
+    .map((row) => ({
+      tenantId: Number(row.tenant.id),
+      slug: asString(row.tenant.slug, ''),
+      displayName: asString(row.tenant.display_name, ''),
+      productMode: row.tenant.product_mode,
+      assignedApiKeyName: asString(row.tenant.assigned_api_key_name, ''),
+    }));
+
+  const openPositions: OfferUnpublishImpact['openPositions'] = [];
+  for (const tenant of affectedTenants) {
+    if (!tenant.assignedApiKeyName) {
+      continue;
+    }
+    try {
+      const positionsRaw = await getPositions(tenant.assignedApiKeyName);
+      const positions = Array.isArray(positionsRaw) ? positionsRaw : [];
+      const actionable = positions.filter((row: any) => Math.abs(Number(row?.size || 0)) > 0);
+      if (actionable.length > 0) {
+        openPositions.push({
+          tenantId: tenant.tenantId,
+          apiKeyName: tenant.assignedApiKeyName,
+          count: actionable.length,
+          symbols: actionable.slice(0, 8).map((row: any) => asString(row?.symbol || row?.pair || '', '')).filter(Boolean),
+        });
+      }
+    } catch {
+      // Keep impact analysis resilient even if exchange API call fails for one tenant.
+    }
+  }
+
+  return {
+    offerId,
+    affectedTenants,
+    openPositions,
+    summary: {
+      tenantCount: affectedTenants.length,
+      openPositionsCount: openPositions.reduce((acc, row) => acc + Number(row.count || 0), 0),
+    },
+  };
 };
 
 export const previewStrategyClientOffer = async (

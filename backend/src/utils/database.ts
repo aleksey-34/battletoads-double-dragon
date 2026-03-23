@@ -385,12 +385,24 @@ export const initDB = async () => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL UNIQUE,
       selected_offer_ids_json TEXT DEFAULT '[]',
+      active_system_profile_id INTEGER,
       risk_level TEXT DEFAULT 'medium',
       trade_frequency_level TEXT DEFAULT 'medium',
       requested_enabled BOOLEAN DEFAULT 0,
       actual_enabled BOOLEAN DEFAULT 0,
       assigned_api_key_name TEXT DEFAULT '',
       latest_preview_json TEXT DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS strategy_client_system_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL,
+      profile_name TEXT NOT NULL,
+      selected_offer_ids_json TEXT DEFAULT '[]',
+      is_active BOOLEAN DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (tenant_id) REFERENCES tenants(id)
@@ -498,6 +510,9 @@ export const initDB = async () => {
     CREATE INDEX IF NOT EXISTS idx_strategy_backtest_pair_requests_tenant
       ON strategy_backtest_pair_requests (tenant_id, status, created_at DESC);
 
+    CREATE INDEX IF NOT EXISTS idx_strategy_client_system_profiles_tenant
+      ON strategy_client_system_profiles (tenant_id, is_active, updated_at DESC);
+
     CREATE INDEX IF NOT EXISTS idx_saas_audit_tenant
       ON saas_audit_log (tenant_id, created_at DESC);
   `);
@@ -569,6 +584,7 @@ export const initDB = async () => {
   await ensureColumn('live_trade_events', 'source_order_id TEXT');
   await ensureColumn('live_trade_events', 'source_symbol TEXT');
   await ensureColumn('algofund_start_stop_requests', "request_payload_json TEXT DEFAULT '{}'");
+  await ensureColumn('strategy_client_profiles', 'active_system_profile_id INTEGER');
 
   await db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_live_trade_events_source_trade_id

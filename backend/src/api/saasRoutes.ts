@@ -24,10 +24,17 @@ import {
   getAdminTelegramControls,
   updateAdminTelegramControls,
   getOfferStoreAdminState,
+  analyzeOfferUnpublishImpact,
   updateOfferStoreAdminState,
   getAdminReportSettings,
   updateAdminReportSettings,
   getAdminPerformanceReport,
+  listStrategyClientSystemProfilesState,
+  createStrategyClientSystemProfile,
+  updateStrategyClientSystemProfile,
+  deleteStrategyClientSystemProfile,
+  activateStrategyClientSystemProfileById,
+  requestAlgofundBatchAction,
 } from '../saas/service';
 
 const router = Router();
@@ -127,6 +134,21 @@ router.get('/admin/offer-store', async (_req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS offer-store read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/offer-store/unpublish-impact/:offerId', async (req, res) => {
+  try {
+    const offerId = String(req.params.offerId || '').trim();
+    if (!offerId) {
+      return res.status(400).json({ error: 'offerId is required' });
+    }
+    const data = await analyzeOfferUnpublishImpact(offerId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS offer-store unpublish-impact error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -285,6 +307,33 @@ router.post('/admin/tenants/:tenantId/magic-link', async (req, res) => {
   }
 });
 
+router.post('/admin/algofund-batch-actions', async (req, res) => {
+  try {
+    const tenantIds = Array.isArray(req.body?.tenantIds) ? req.body.tenantIds.map((item: unknown) => Number(item)) : [];
+    const requestTypeRaw = String(req.body?.requestType || '').trim().toLowerCase();
+    const requestType = requestTypeRaw === 'stop'
+      ? 'stop'
+      : requestTypeRaw === 'switch_system'
+        ? 'switch_system'
+        : 'start';
+
+    const data = await requestAlgofundBatchAction(
+      tenantIds,
+      requestType,
+      String(req.body?.note || ''),
+      {
+        targetSystemId: toOptionalNumber(req.body?.targetSystemId),
+        targetSystemName: req.body?.targetSystemName ? String(req.body.targetSystemName) : undefined,
+      }
+    );
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund batch action error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.patch('/admin/plans/:planCode', async (req, res) => {
   const planCode = String(req.params.planCode || '').trim();
   if (!planCode) {
@@ -429,6 +478,97 @@ router.post('/strategy-clients/:tenantId/materialize', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS strategy client materialize error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/strategy-clients/:tenantId/system-profiles', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const data = await listStrategyClientSystemProfilesState(tenantId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy system profiles read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/strategy-clients/:tenantId/system-profiles', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const data = await createStrategyClientSystemProfile(
+      tenantId,
+      String(req.body?.profileName || ''),
+      Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
+      toBool(req.body?.activate, true)
+    );
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy system profile create error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/strategy-clients/:tenantId/system-profiles/:profileId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  const profileId = Number(req.params.profileId);
+  if (!Number.isFinite(tenantId) || !Number.isFinite(profileId)) {
+    return res.status(400).json({ error: 'Invalid tenantId/profileId' });
+  }
+
+  try {
+    const data = await updateStrategyClientSystemProfile(tenantId, profileId, {
+      profileName: req.body?.profileName !== undefined ? String(req.body.profileName || '') : undefined,
+      selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy system profile update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/strategy-clients/:tenantId/system-profiles/:profileId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  const profileId = Number(req.params.profileId);
+  if (!Number.isFinite(tenantId) || !Number.isFinite(profileId)) {
+    return res.status(400).json({ error: 'Invalid tenantId/profileId' });
+  }
+
+  try {
+    const data = await deleteStrategyClientSystemProfile(tenantId, profileId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy system profile delete error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/strategy-clients/:tenantId/system-profiles/:profileId/activate', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  const profileId = Number(req.params.profileId);
+  if (!Number.isFinite(tenantId) || !Number.isFinite(profileId)) {
+    return res.status(400).json({ error: 'Invalid tenantId/profileId' });
+  }
+
+  try {
+    const data = await activateStrategyClientSystemProfileById(tenantId, profileId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy system profile activate error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

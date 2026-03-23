@@ -1,4 +1,4 @@
-﻿import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import {
   Alert,
@@ -424,6 +424,7 @@ type StrategyClientState = {
   monitoring?: TenantSummary['monitoring'];
   profile: {
     selectedOfferIds: string[];
+    activeSystemProfileId?: number | null;
     latestPreview?: Record<string, unknown>;
     risk_level: Level3;
     trade_frequency_level: Level3;
@@ -431,6 +432,14 @@ type StrategyClientState = {
     actual_enabled: number;
     assigned_api_key_name: string;
   } | null;
+  systemProfiles?: Array<{
+    id: number;
+    profileName: string;
+    selectedOfferIds: string[];
+    isActive: boolean;
+    createdAt?: string;
+    updatedAt?: string;
+  }>;
   constraints?: StrategySelectionConstraints;
   catalog: SaasSummary['catalog'];
   offers: CatalogOffer[];
@@ -497,6 +506,27 @@ type MaterializedStrategy = {
 type MaterializeResponse = {
   assignedApiKeyName: string;
   strategies: MaterializedStrategy[];
+};
+
+type OfferUnpublishImpact = {
+  offerId: string;
+  affectedTenants: Array<{
+    tenantId: number;
+    slug: string;
+    displayName: string;
+    productMode: ProductMode;
+    assignedApiKeyName: string;
+  }>;
+  openPositions: Array<{
+    tenantId: number;
+    apiKeyName: string;
+    count: number;
+    symbols: string[];
+  }>;
+  summary: {
+    tenantCount: number;
+    openPositionsCount: number;
+  };
 };
 
 type ClientMagicLinkResponse = {
@@ -1663,6 +1693,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [algofundLoading, setAlgofundLoading] = useState(false);
   const [algofundError, setAlgofundError] = useState('');
   const [strategyOfferIds, setStrategyOfferIds] = useState<string[]>([]);
+  const [strategySystemProfileId, setStrategySystemProfileId] = useState<number | null>(null);
+  const [strategyNewProfileName, setStrategyNewProfileName] = useState('');
   const [strategyRiskInput, setStrategyRiskInput] = useState(5);
   const [strategyTradeInput, setStrategyTradeInput] = useState(5);
   const [strategyApiKeyName, setStrategyApiKeyName] = useState('');
@@ -1706,6 +1738,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [applyLowLotLot, setApplyLowLotLot] = useState(true);
   const [applyLowLotReplacement, setApplyLowLotReplacement] = useState('');
   const [applyLowLotWorking, setApplyLowLotWorking] = useState(false);
+  const [batchTenantIds, setBatchTenantIds] = useState<number[]>([]);
+  const [batchAlgofundAction, setBatchAlgofundAction] = useState<'start' | 'stop' | 'switch_system'>('start');
+  const [batchTargetSystemId, setBatchTargetSystemId] = useState<number | null>(null);
+  const [batchActionNote, setBatchActionNote] = useState('');
+  const [unpublishWizardVisible, setUnpublishWizardVisible] = useState(false);
+  const [unpublishTargetOfferId, setUnpublishTargetOfferId] = useState('');
+  const [unpublishImpact, setUnpublishImpact] = useState<OfferUnpublishImpact | null>(null);
+  const [unpublishImpactLoading, setUnpublishImpactLoading] = useState(false);
+  const [unpublishAcknowledge, setUnpublishAcknowledge] = useState(false);
   const [monitoringChartOpen, setMonitoringChartOpen] = useState(false);
   const [monitoringChartLoading, setMonitoringChartLoading] = useState(false);
   const [monitoringChartApiKey, setMonitoringChartApiKey] = useState('');
@@ -1717,6 +1758,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const strategyTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client');
   const algofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
+  const batchEligibleAlgofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
+  const strategySystemProfiles = strategyState?.systemProfiles || [];
+  const activeStrategySystemProfile = strategySystemProfiles.find((item) => item.isActive) || null;
   const selectedStrategyTenantSummary = strategyTenants.find((item) => item.tenant.id === strategyTenantId) || null;
   const selectedAlgofundTenantSummary = algofundTenants.find((item) => item.tenant.id === algofundTenantId) || null;
   const strategyCapabilities = strategyState?.capabilities || selectedStrategyTenantSummary?.capabilities;
@@ -1819,6 +1863,37 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     } finally {
       setActionLoading('');
     }
+  };
+
+  const openUnpublishWizard = async (offerId: string) => {
+    setUnpublishTargetOfferId(String(offerId || ''));
+    setUnpublishAcknowledge(false);
+    setUnpublishWizardVisible(true);
+    setUnpublishImpactLoading(true);
+    try {
+      const response = await axios.get<{ success: boolean } & OfferUnpublishImpact>(`/api/saas/admin/offer-store/unpublish-impact/${encodeURIComponent(String(offerId || ''))}`);
+      setUnpublishImpact(response.data);
+    } catch (error: any) {
+      setUnpublishImpact(null);
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to analyze unpublish impact'));
+    } finally {
+      setUnpublishImpactLoading(false);
+    }
+  };
+
+  const closeUnpublishWizard = () => {
+    setUnpublishWizardVisible(false);
+    setUnpublishImpact(null);
+    setUnpublishTargetOfferId('');
+    setUnpublishAcknowledge(false);
+  };
+
+  const confirmUnpublishOffer = async () => {
+    if (!unpublishTargetOfferId) {
+      return;
+    }
+    await toggleOfferPublished(unpublishTargetOfferId, false);
+    closeUnpublishWizard();
   };
 
   const updateOfferStoreDefaults = async (patch: Partial<{ periodDays: number; targetTradesPerDay: number; riskLevel: Level3 }>) => {
@@ -2158,7 +2233,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       }, []),
     ]);
     const selected = Array.isArray(strategyState.profile.selectedOfferIds) ? strategyState.profile.selectedOfferIds : [];
+    const activeProfileId = Number(strategyState.profile.activeSystemProfileId || 0);
     setStrategyOfferIds(selected);
+    setStrategySystemProfileId(Number.isFinite(activeProfileId) && activeProfileId > 0 ? activeProfileId : null);
     setStrategyRiskInput(levelToSliderValue(strategyState.profile.risk_level || 'medium'));
     setStrategyTradeInput(levelToSliderValue(strategyState.profile.trade_frequency_level || 'medium'));
     setStrategyApiKeyName(strategyState.profile.assigned_api_key_name || strategyState.tenant.assigned_api_key_name || '');
@@ -2180,6 +2257,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAlgofundTenantStatus(algofundState.tenant.status || 'active');
     setAlgofundTenantPlanCode(algofundState.plan?.code || '');
   }, [algofundState]);
+
+  useEffect(() => {
+    const allowedTenantIds = new Set(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)));
+    setBatchTenantIds((current) => current.filter((item) => allowedTenantIds.has(Number(item))));
+  }, [batchEligibleAlgofundTenants]);
 
   const runStrategyPreview = useCallback(async (silent = false) => {
     if (!strategyTenantId || !strategyPreviewOfferId) {
@@ -2233,6 +2315,96 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setStrategySelectionPreviewLoading(false);
     }
   }, [copy.previewReady, messageApi, strategyOfferIds, strategyRiskInput, strategyTenantId, strategyTradeInput]);
+
+  const activateStrategySystemProfile = async (profileId: number) => {
+    if (!strategyTenantId) {
+      return;
+    }
+    setActionLoading('strategy-profile-activate');
+    try {
+      const response = await axios.post<StrategyClientState>(`/api/saas/strategy-clients/${strategyTenantId}/system-profiles/${profileId}/activate`);
+      setStrategyState(response.data);
+      messageApi.success('Custom TS profile activated');
+      await loadSummary();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to activate custom TS profile'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const createStrategySystemProfile = async () => {
+    if (!strategyTenantId) {
+      return;
+    }
+    const profileName = String(strategyNewProfileName || '').trim() || `Custom TS ${((strategyState?.systemProfiles?.length || 0) + 1)}`;
+    setActionLoading('strategy-profile-create');
+    try {
+      await axios.post(`/api/saas/strategy-clients/${strategyTenantId}/system-profiles`, {
+        profileName,
+        selectedOfferIds: strategyOfferIds,
+        activate: true,
+      });
+      await loadStrategyTenant(strategyTenantId);
+      await loadSummary();
+      setStrategyNewProfileName('');
+      messageApi.success('Custom TS profile created');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to create custom TS profile'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const deleteStrategySystemProfile = async () => {
+    if (!strategyTenantId || !strategySystemProfileId) {
+      return;
+    }
+    setActionLoading('strategy-profile-delete');
+    try {
+      await axios.delete(`/api/saas/strategy-clients/${strategyTenantId}/system-profiles/${strategySystemProfileId}`);
+      await loadStrategyTenant(strategyTenantId);
+      await loadSummary();
+      messageApi.success('Custom TS profile deleted');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to delete custom TS profile'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const runAlgofundBatchAction = async () => {
+    const selectedTenantIds = Array.from(new Set((batchTenantIds || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+    if (selectedTenantIds.length === 0) {
+      messageApi.warning('Select at least one tenant for batch action');
+      return;
+    }
+    if (batchAlgofundAction === 'switch_system' && (!Number.isFinite(Number(batchTargetSystemId)) || Number(batchTargetSystemId) <= 0)) {
+      messageApi.warning('targetSystemId is required for switch_system');
+      return;
+    }
+
+    setActionLoading('algofund-batch');
+    try {
+      const response = await axios.post('/api/saas/admin/algofund-batch-actions', {
+        tenantIds: selectedTenantIds,
+        requestType: batchAlgofundAction,
+        note: batchActionNote,
+        targetSystemId: batchAlgofundAction === 'switch_system' ? Number(batchTargetSystemId) : undefined,
+      });
+      const created = Number(response.data?.createdCount || 0);
+      const failed = Number(response.data?.failedCount || 0);
+      messageApi.success(`Batch completed: created ${created}, failed ${failed}`);
+      await loadSummary();
+      if (activeTab === 'admin' && adminTab === 'monitoring') {
+        await loadMonitoringTabData();
+      }
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to run algofund batch action'));
+    } finally {
+      setActionLoading('');
+    }
+  };
 
   // Strategy previews are manual-only to avoid API storms on SaaS page load.
 
@@ -3368,7 +3540,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           checked={Boolean(row.published)}
                                           loading={actionLoading === `offer-store:${String(row.offerId)}`}
                                           onChange={(checked) => {
-                                            void toggleOfferPublished(String(row.offerId), checked);
+                                            if (checked) {
+                                              void toggleOfferPublished(String(row.offerId), true);
+                                            } else {
+                                              void openUnpublishWizard(String(row.offerId));
+                                            }
                                           }}
                                         />
                                       ),
@@ -3611,7 +3787,73 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                           <Card className="battletoads-card" title={copy.connectedTenants} extra={<Button type="primary" onClick={() => setAdminTab('create-user')}>{copy.createClient}</Button>}>
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.adminCreateHint}</Paragraph>
-                            <Table rowKey={(row) => row.tenant.id} columns={tenantColumns} dataSource={summary?.tenants || []} pagination={false} scroll={{ x: 980 }} />
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              <Card size="small" className="battletoads-card" title="Algofund batch actions">
+                                <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                                  <Space wrap>
+                                    <Tag color="processing">Selected: {batchTenantIds.length}</Tag>
+                                    <Tag>Algofund tenants: {batchEligibleAlgofundTenants.length}</Tag>
+                                    <Button
+                                      size="small"
+                                      onClick={() => setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)))}
+                                    >
+                                      Select all algofund
+                                    </Button>
+                                    <Button size="small" onClick={() => setBatchTenantIds([])}>Clear selection</Button>
+                                  </Space>
+                                  <Space wrap style={{ width: '100%' }}>
+                                    <Select
+                                      style={{ width: 180 }}
+                                      value={batchAlgofundAction}
+                                      onChange={(value) => setBatchAlgofundAction(value)}
+                                      options={[
+                                        { value: 'start', label: 'start' },
+                                        { value: 'stop', label: 'stop' },
+                                        { value: 'switch_system', label: 'switch_system' },
+                                      ]}
+                                    />
+                                    <InputNumber
+                                      min={1}
+                                      style={{ width: 180 }}
+                                      value={batchTargetSystemId || undefined}
+                                      onChange={(value) => setBatchTargetSystemId(Number(value || 0) || null)}
+                                      disabled={batchAlgofundAction !== 'switch_system'}
+                                      placeholder="target system id"
+                                    />
+                                    <Input
+                                      style={{ width: 360 }}
+                                      value={batchActionNote}
+                                      onChange={(event) => setBatchActionNote(event.target.value)}
+                                      placeholder="optional admin note"
+                                    />
+                                    <Button
+                                      type="primary"
+                                      loading={actionLoading === 'algofund-batch'}
+                                      onClick={() => void runAlgofundBatchAction()}
+                                    >
+                                      Run batch
+                                    </Button>
+                                  </Space>
+                                </Space>
+                              </Card>
+                              <Table
+                                rowKey={(row) => row.tenant.id}
+                                columns={tenantColumns}
+                                dataSource={summary?.tenants || []}
+                                pagination={false}
+                                scroll={{ x: 980 }}
+                                rowSelection={{
+                                  selectedRowKeys: batchTenantIds,
+                                  onChange: (keys) => {
+                                    const next = Array.from(new Set((keys || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+                                    setBatchTenantIds(next);
+                                  },
+                                  getCheckboxProps: (row) => ({
+                                    disabled: row.tenant.product_mode !== 'algofund_client',
+                                  }),
+                                }}
+                              />
+                            </Space>
                           </Card>
 
                           <Row gutter={[16, 16]}>
@@ -3992,6 +4234,113 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               ) : null}
                             </>
                           ) : null}
+                        </Card>
+
+                        <Card className="battletoads-card" title="Custom TS profiles">
+                          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                            <Space wrap>
+                              <Tag color="blue">Profiles: {strategySystemProfiles.length}</Tag>
+                              {strategyState?.constraints?.limits?.maxCustomSystems !== null && strategyState?.constraints?.limits?.maxCustomSystems !== undefined ? (
+                                <Tag color="purple">Plan cap: {strategyState?.constraints?.limits?.maxCustomSystems}</Tag>
+                              ) : null}
+                              {activeStrategySystemProfile ? <Tag color="success">Active: {activeStrategySystemProfile.profileName}</Tag> : null}
+                            </Space>
+                            <Row gutter={[12, 12]}>
+                              <Col xs={24} lg={12}>
+                                <Text strong>Active profile</Text>
+                                <Select
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  value={strategySystemProfileId || undefined}
+                                  onChange={(value) => {
+                                    const numericId = Number(value);
+                                    setStrategySystemProfileId(numericId);
+                                    void activateStrategySystemProfile(numericId);
+                                  }}
+                                  options={strategySystemProfiles.map((item) => ({
+                                    value: Number(item.id),
+                                    label: `${item.profileName}${item.isActive ? ' [active]' : ''}`,
+                                  }))}
+                                />
+                              </Col>
+                              <Col xs={24} lg={7}>
+                                <Text strong>New profile name</Text>
+                                <Input
+                                  style={{ marginTop: 8 }}
+                                  value={strategyNewProfileName}
+                                  onChange={(event) => setStrategyNewProfileName(event.target.value)}
+                                  placeholder={`Custom TS ${strategySystemProfiles.length + 1}`}
+                                />
+                              </Col>
+                              <Col xs={12} lg={3}>
+                                <Text strong style={{ opacity: 0 }}>.</Text>
+                                <Button
+                                  type="primary"
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  loading={actionLoading === 'strategy-profile-create'}
+                                  onClick={() => void createStrategySystemProfile()}
+                                  disabled={
+                                    Number(strategyState?.constraints?.limits?.maxCustomSystems || 0) > 0
+                                    && strategySystemProfiles.length >= Number(strategyState?.constraints?.limits?.maxCustomSystems || 0)
+                                  }
+                                >
+                                  Create
+                                </Button>
+                              </Col>
+                              <Col xs={12} lg={2}>
+                                <Text strong style={{ opacity: 0 }}>.</Text>
+                                <Button
+                                  danger
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  loading={actionLoading === 'strategy-profile-delete'}
+                                  disabled={!strategySystemProfileId || strategySystemProfiles.length <= 1}
+                                  onClick={() => {
+                                    Modal.confirm({
+                                      title: 'Delete custom TS profile?',
+                                      content: 'Selected profile will be removed. Active profile cannot be deleted.',
+                                      okText: 'Delete',
+                                      okType: 'danger',
+                                      cancelText: 'Cancel',
+                                      onOk: async () => {
+                                        await deleteStrategySystemProfile();
+                                      },
+                                    });
+                                  }}
+                                >
+                                  Delete
+                                </Button>
+                              </Col>
+                            </Row>
+                            <Table
+                              size="small"
+                              rowKey="id"
+                              dataSource={strategySystemProfiles}
+                              pagination={false}
+                              columns={[
+                                {
+                                  title: 'Profile',
+                                  key: 'profileName',
+                                  render: (_, row: any) => (
+                                    <Space>
+                                      <Text strong>{row.profileName}</Text>
+                                      {row.isActive ? <Tag color="success">active</Tag> : <Tag color="default">inactive</Tag>}
+                                    </Space>
+                                  ),
+                                },
+                                {
+                                  title: 'Offers',
+                                  key: 'offers',
+                                  render: (_, row: any) => Array.isArray(row.selectedOfferIds) ? row.selectedOfferIds.length : 0,
+                                  width: 100,
+                                },
+                                {
+                                  title: 'Updated',
+                                  dataIndex: 'updatedAt',
+                                  width: 200,
+                                  render: (value: any) => value || '—',
+                                },
+                              ]}
+                            />
+                          </Space>
                         </Card>
 
                         <Card className="battletoads-card">
@@ -4689,6 +5038,109 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             )}
           </Space>
         )}
+      </Modal>
+
+      <Modal
+        title={`Unpublish offer: ${unpublishTargetOfferId || '—'}`}
+        open={unpublishWizardVisible}
+        onCancel={closeUnpublishWizard}
+        onOk={() => void confirmUnpublishOffer()}
+        okText="Unpublish"
+        okButtonProps={{
+          danger: true,
+          disabled: unpublishImpactLoading || !unpublishAcknowledge || !unpublishTargetOfferId,
+        }}
+        cancelText="Cancel"
+        confirmLoading={actionLoading === `offer-store:${String(unpublishTargetOfferId || '')}`}
+        width={860}
+      >
+        <Spin spinning={unpublishImpactLoading}>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            {unpublishImpact ? (
+              <Alert
+                type={unpublishImpact.summary?.openPositionsCount > 0 ? 'warning' : 'info'}
+                showIcon
+                message={`Affected tenants: ${Number(unpublishImpact.summary?.tenantCount || 0)} | Open positions: ${Number(unpublishImpact.summary?.openPositionsCount || 0)}`}
+                description="Unpublishing blocks new activations for this offer. Existing runtime positions may stay open until managed by client/admin actions."
+              />
+            ) : (
+              <Alert type="warning" showIcon message="Impact data unavailable. Retry before unpublishing." />
+            )}
+
+            {unpublishImpact?.affectedTenants?.length ? (
+              <Table
+                size="small"
+                rowKey={(row) => `${row.tenantId}:${row.assignedApiKeyName}`}
+                dataSource={unpublishImpact.affectedTenants}
+                pagination={{ pageSize: 5, showSizeChanger: false }}
+                columns={[
+                  {
+                    title: 'Tenant',
+                    key: 'tenant',
+                    render: (_, row: any) => (
+                      <Space direction="vertical" size={0}>
+                        <Text strong>{row.displayName}</Text>
+                        <Text type="secondary">{row.slug}</Text>
+                      </Space>
+                    ),
+                  },
+                  {
+                    title: 'Mode',
+                    dataIndex: 'productMode',
+                    width: 140,
+                    render: (value: ProductMode) => productModeTag(value),
+                  },
+                  {
+                    title: 'API key',
+                    dataIndex: 'assignedApiKeyName',
+                    width: 180,
+                    render: (value: string) => value || '—',
+                  },
+                ]}
+              />
+            ) : null}
+
+            {unpublishImpact?.openPositions?.length ? (
+              <Table
+                size="small"
+                rowKey={(row) => `${row.tenantId}:${row.apiKeyName}`}
+                dataSource={unpublishImpact.openPositions}
+                pagination={false}
+                columns={[
+                  {
+                    title: 'Tenant ID',
+                    dataIndex: 'tenantId',
+                    width: 120,
+                  },
+                  {
+                    title: 'API key',
+                    dataIndex: 'apiKeyName',
+                    width: 200,
+                  },
+                  {
+                    title: 'Open positions',
+                    dataIndex: 'count',
+                    width: 140,
+                  },
+                  {
+                    title: 'Symbols',
+                    key: 'symbols',
+                    render: (_, row: any) => (row.symbols || []).join(', ') || '—',
+                  },
+                ]}
+              />
+            ) : (
+              <Alert type="success" showIcon message="No open positions for affected tenants." />
+            )}
+
+            <Checkbox
+              checked={unpublishAcknowledge}
+              onChange={(event) => setUnpublishAcknowledge(event.target.checked)}
+            >
+              I reviewed impact and confirm unpublish for this offer.
+            </Checkbox>
+          </Space>
+        </Spin>
       </Modal>
     </div>
   );
