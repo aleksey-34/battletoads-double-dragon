@@ -22,6 +22,8 @@ const state: TestWorldState = {
   dbFile: '',
 };
 
+export const sharedState = state;
+
 setDefaultTimeout(60 * 1000);
 
 BeforeAll(async () => {

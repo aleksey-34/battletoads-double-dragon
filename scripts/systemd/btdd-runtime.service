@@ -1,0 +1,40 @@
+[Unit]
+Description=BTDD Runtime — Торговый контур (auto strategies + monitoring)
+Documentation=https://github.com/aleksey-34/battletoads-double-dragon
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/battletoads-double-dragon/backend
+
+# Переменные окружения из общего .env файла
+EnvironmentFile=-/opt/battletoads-double-dragon/.env
+
+# Параметры торгового цикла (переопределяются из .env)
+# Environment=STRATEGY_AUTORUN_SEC=30
+# Environment=MONITORING_SNAPSHOT_SEC=300
+# Environment=RECONCILIATION_INTERVAL_MIN=360
+# Environment=LIQUIDITY_SCAN_INTERVAL_MIN=180
+# Environment=RECONCILIATION_AUTO_APPLY=0
+# Environment=RECONCILIATION_AUTO_PAUSE=0
+
+ExecStart=/usr/bin/node /opt/battletoads-double-dragon/backend/dist/runtime-main.js
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=btdd-runtime
+
+# Повышенная надёжность torговго процесса
+TimeoutStopSec=30
+
+# Безопасность
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

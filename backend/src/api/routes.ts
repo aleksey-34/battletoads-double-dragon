@@ -42,6 +42,7 @@ import {
   getTradingSystem,
   listTradingSystems,
   replaceTradingSystemMembers,
+  replaceTradingSystemMembersSafely,
   runTradingSystemBacktest,
   setTradingSystemActivation,
   updateTradingSystem,
@@ -55,11 +56,15 @@ import {
   authenticateClient,
   completeClientOnboarding,
   getClientAuthPayloadFromSession,
+  loginClientByMagicToken,
   loginClientUser,
+  requirePlatformAdmin,
   registerClientUser,
   revokeClientSession,
 } from '../utils/auth';
 import logger from '../utils/logger';
+import { initResearchDb } from '../research/db';
+import { getPreset, listOfferIds } from '../research/presetBuilder';
 import { getGitUpdateJobStatus, getGitUpdateStatus, triggerGitUpdate } from '../system/updateManager';
 import {
   getPasswordRecoveryStatus,
@@ -75,6 +80,7 @@ import {
   requestAlgofundAction,
   updateAlgofundState,
   updateStrategyClientState,
+  loadCatalogAndSweepWithFallback,
 } from '../saas/service';
 import analyticsRoutes from './analyticsRoutes';
 import saasRoutes from './saasRoutes';
@@ -126,6 +132,23 @@ const STRATEGY_PATCH_ALLOWED_FIELDS = new Set<string>([
 ]);
 
 const CLIENT_GUIDES_ROOT_DIR = path.resolve(__dirname, '../../..', 'docs', 'exchange-guides');
+const REPO_ROOT_DIR = path.resolve(__dirname, '../../..');
+const ADMIN_DOCS_EXCLUDED_DIR_NAMES = new Set([
+  '.git',
+  '.github',
+  'node_modules',
+  'build',
+  'dist',
+  'coverage',
+  'test-results',
+]);
+const ADMIN_DOCS_EXCLUDED_RELATIVE_PREFIXES = [
+  'logs',
+  'results',
+  'backend/logs',
+  'frontend/build',
+  'frontend/test-results',
+];
 
 const CLIENT_EXCHANGE_GUIDES: Record<string, { id: string; title: string; fileName: string }> = {
   bybit: {
@@ -143,6 +166,89 @@ const CLIENT_EXCHANGE_GUIDES: Record<string, { id: string; title: string; fileNa
     title: 'BingX API Key Quick Guide',
     fileName: 'bingx-api-key-quick-guide.md',
   },
+};
+
+type AdminMarkdownDocRecord = {
+  relativePath: string;
+  title: string;
+  group: string;
+  sizeBytes: number;
+  updatedAt: string | null;
+  content: string;
+};
+
+const normalizeDocRelativePath = (filePath: string): string => path.relative(REPO_ROOT_DIR, filePath).split(path.sep).join('/');
+
+const shouldSkipAdminDocsDirectory = (relativeDir: string, entryName: string): boolean => {
+  const normalizedName = String(entryName || '').trim().toLowerCase();
+  if (ADMIN_DOCS_EXCLUDED_DIR_NAMES.has(normalizedName)) {
+    return true;
+  }
+
+  const nextRelativeDir = [relativeDir, entryName].filter(Boolean).join('/');
+  return ADMIN_DOCS_EXCLUDED_RELATIVE_PREFIXES.some((prefix) => nextRelativeDir === prefix || nextRelativeDir.startsWith(`${prefix}/`));
+};
+
+const extractMarkdownTitle = (content: string, relativePath: string): string => {
+  const headingLine = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => /^#\s+/.test(line));
+
+  if (headingLine) {
+    return headingLine.replace(/^#\s+/, '').trim();
+  }
+
+  const fileName = path.basename(relativePath, path.extname(relativePath));
+  return fileName.replace(/[-_]+/g, ' ').trim() || relativePath;
+};
+
+const collectAdminMarkdownDocs = (): AdminMarkdownDocRecord[] => {
+  const docs: AdminMarkdownDocRecord[] = [];
+
+  const walk = (absoluteDir: string, relativeDir: string) => {
+    if (!fs.existsSync(absoluteDir)) {
+      return;
+    }
+
+    const entries = fs.readdirSync(absoluteDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+
+      const absolutePath = path.join(absoluteDir, entry.name);
+      const relativePath = [relativeDir, entry.name].filter(Boolean).join('/');
+
+      if (entry.isDirectory()) {
+        if (shouldSkipAdminDocsDirectory(relativeDir, entry.name)) {
+          continue;
+        }
+        walk(absolutePath, relativePath);
+        continue;
+      }
+
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) {
+        continue;
+      }
+
+      const content = fs.readFileSync(absolutePath, 'utf-8');
+      const stat = fs.statSync(absolutePath);
+      const normalizedRelativePath = normalizeDocRelativePath(absolutePath);
+      docs.push({
+        relativePath: normalizedRelativePath,
+        title: extractMarkdownTitle(content, normalizedRelativePath),
+        group: normalizedRelativePath.includes('/') ? normalizedRelativePath.split('/')[0] : 'root',
+        sizeBytes: stat.size,
+        updatedAt: stat.mtime ? stat.mtime.toISOString() : null,
+        content,
+      });
+    }
+  };
+
+  walk(REPO_ROOT_DIR, '');
+
+  return docs.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 };
 
 const toOptionalNumber = (value: unknown): number | undefined => {
@@ -173,6 +279,10 @@ const toOptionalBool = (value: unknown): boolean | undefined => {
   }
 
   return undefined;
+};
+
+const isLevel3 = (value: unknown): value is 'low' | 'medium' | 'high' => {
+  return value === 'low' || value === 'medium' || value === 'high';
 };
 
 const resolveClientAuthErrorStatus = (message: string): number => {
@@ -280,6 +390,20 @@ router.post('/auth/client/login', async (req, res) => {
     const statusCode = resolveClientAuthErrorStatus(err.message);
     logger.error(`Client login error: ${err.message}`);
     res.status(statusCode).json({ error: err.message });
+  }
+});
+
+router.post('/auth/client/magic-login', async (req, res) => {
+  try {
+    const result = await loginClientByMagicToken(String(req.body?.token || ''), {
+      ip: String(req.ip || ''),
+      userAgent: String(req.headers['user-agent'] || ''),
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client magic login error: ${err.message}`);
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -423,6 +547,13 @@ router.patch('/client/strategy/profile', authenticateClient, async (req, res) =>
       return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
     }
 
+    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+    }
+    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+    }
+
     const state = await updateStrategyClientState(Number(session.user.tenantId), {
       selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
       riskLevel: req.body?.riskLevel,
@@ -434,6 +565,103 @@ router.patch('/client/strategy/profile', authenticateClient, async (req, res) =>
   } catch (error) {
     const err = error as Error;
     logger.error(`Client strategy profile save error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/client/strategy/backtest-requests', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+    if (session.user.productMode !== 'strategy_client') {
+      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
+    }
+
+    const rows = await db.all(
+      `SELECT id, tenant_id, base_symbol, quote_symbol, interval, note, status, created_at, decided_at
+       FROM strategy_backtest_pair_requests
+       WHERE tenant_id = ?
+       ORDER BY id DESC
+       LIMIT 100`,
+      [Number(session.user.tenantId)]
+    );
+
+    res.json({ success: true, requests: rows || [] });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client strategy backtest request list error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/client/strategy/backtest-request', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+    if (session.user.productMode !== 'strategy_client') {
+      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
+    }
+
+    const market = String(req.body?.market || '').trim().toUpperCase();
+    const baseSymbolRaw = String(req.body?.baseSymbol || '').trim().toUpperCase();
+    const quoteSymbolRaw = String(req.body?.quoteSymbol || '').trim().toUpperCase();
+    const interval = String(req.body?.interval || '1h').trim();
+    const note = String(req.body?.note || '').trim().slice(0, 400);
+
+    let baseSymbol = baseSymbolRaw;
+    let quoteSymbol = quoteSymbolRaw;
+
+    if (!baseSymbol && market) {
+      if (market.includes('/')) {
+        const [base, quote] = market.split('/');
+        baseSymbol = String(base || '').trim().toUpperCase();
+        quoteSymbol = String(quote || '').trim().toUpperCase();
+      } else {
+        baseSymbol = market;
+      }
+    }
+
+    if (!baseSymbol) {
+      return res.status(400).json({ error: 'market or baseSymbol is required' });
+    }
+
+    const inserted = await db.run(
+      `INSERT INTO strategy_backtest_pair_requests (
+         tenant_id, base_symbol, quote_symbol, interval, note, status, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, ?, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [Number(session.user.tenantId), baseSymbol, quoteSymbol, interval || '1h', note]
+    );
+
+    const requestId = Number(inserted?.lastID || 0);
+
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (?, 'client', 'client_strategy_backtest_pair_request', ?, CURRENT_TIMESTAMP)`,
+      [
+        Number(session.user.tenantId),
+        JSON.stringify({ requestId, baseSymbol, quoteSymbol, interval, note }),
+      ]
+    );
+
+    res.json({
+      success: true,
+      request: {
+        id: requestId,
+        tenant_id: Number(session.user.tenantId),
+        base_symbol: baseSymbol,
+        quote_symbol: quoteSymbol,
+        interval: interval || '1h',
+        note,
+        status: 'pending',
+      },
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client strategy backtest request create error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -452,6 +680,12 @@ router.post('/client/strategy/preview', authenticateClient, async (req, res) => 
     const offerId = String(req.body?.offerId || '').trim();
     if (!offerId) {
       return res.status(400).json({ error: 'offerId is required' });
+    }
+    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+    }
+    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
     }
 
     const preview = await previewStrategyClientOffer(
@@ -482,6 +716,13 @@ router.post('/client/strategy/selection-preview', authenticateClient, async (req
       return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
     }
 
+    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+    }
+    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+    }
+
     const preview = await previewStrategyClientSelection(Number(session.user.tenantId), {
       selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
       riskLevel: req.body?.riskLevel,
@@ -494,6 +735,69 @@ router.post('/client/strategy/selection-preview', authenticateClient, async (req
   } catch (error) {
     const err = error as Error;
     logger.error(`Client strategy selection preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/client/catalog', authenticateClient, async (_req, res) => {
+  try {
+    await initResearchDb();
+    const offerIds = await listOfferIds();
+
+    const items = await Promise.all(
+      offerIds.map(async (offerId) => {
+        const preset = await getPreset(offerId, 'medium', 'medium');
+        return {
+          offerId,
+          defaultRisk: 'medium',
+          defaultFreq: 'medium',
+          metrics: preset?.metrics || {},
+          equity_curve: preset?.equity_curve || [],
+          hasPreset: !!preset,
+        };
+      })
+    );
+
+    res.json({ success: true, offers: items });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client catalog load error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/client/catalog/:offerId/preset', authenticateClient, async (req, res) => {
+  try {
+    const offerId = String(req.params.offerId || '').trim();
+    if (!offerId) {
+      return res.status(400).json({ error: 'offerId is required' });
+    }
+
+    const risk = String(req.query.risk || 'medium').trim().toLowerCase();
+    const freq = String(req.query.freq || 'medium').trim().toLowerCase();
+    if (!isLevel3(risk)) {
+      return res.status(400).json({ error: 'risk must be one of: low | medium | high' });
+    }
+    if (!isLevel3(freq)) {
+      return res.status(400).json({ error: 'freq must be one of: low | medium | high' });
+    }
+
+    await initResearchDb();
+    const preset = await getPreset(offerId, risk, freq);
+    if (!preset) {
+      return res.status(404).json({ error: `Preset not found for offerId=${offerId} risk=${risk} freq=${freq}` });
+    }
+
+    res.json({
+      success: true,
+      offerId,
+      risk,
+      freq,
+      ...preset,
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client preset load error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -557,14 +861,21 @@ router.post('/client/algofund/request', authenticateClient, async (req, res) => 
       return res.status(403).json({ error: 'Algofund workspace is not available for this account' });
     }
 
-    const requestType = String(req.body?.requestType || '').trim().toLowerCase() === 'stop'
+    const requestTypeRaw = String(req.body?.requestType || '').trim().toLowerCase();
+    const requestType = requestTypeRaw === 'stop'
       ? 'stop'
-      : 'start';
+      : requestTypeRaw === 'switch_system'
+        ? 'switch_system'
+        : 'start';
 
     const state = await requestAlgofundAction(
       Number(session.user.tenantId),
       requestType,
-      String(req.body?.note || '')
+      String(req.body?.note || ''),
+      {
+        targetSystemId: toOptionalNumber(req.body?.targetSystemId),
+        targetSystemName: req.body?.targetSystemName ? String(req.body.targetSystemName) : undefined,
+      }
     );
 
     res.json({ success: true, state });
@@ -575,17 +886,112 @@ router.post('/client/algofund/request', authenticateClient, async (req, res) => 
   }
 });
 
-// Применить аутентификацию ко всем маршрутам
-router.use(authenticate);
+router.post('/client/api-key', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const exchange = String(req.body?.exchange || '').trim().toLowerCase();
+    const apiKey = String(req.body?.apiKey || '').trim();
+    const secret = String(req.body?.secret || '').trim();
+    const passphrase = String(req.body?.passphrase || '').trim();
+    const testnet = Boolean(req.body?.testnet);
+    const demo = Boolean(req.body?.demo);
+
+    if (!exchange) {
+      return res.status(400).json({ error: 'exchange is required' });
+    }
+    if (!apiKey || !secret) {
+      return res.status(400).json({ error: 'apiKey and secret are required' });
+    }
+
+    const tenantId = Number(session.user.tenantId);
+    const suffix = Math.random().toString(36).slice(2, 8);
+    const keyName = `tenant-${tenantId}-${exchange}-${suffix}`;
+
+    await saveApiKey({
+      name: keyName,
+      exchange,
+      api_key: apiKey,
+      secret,
+      passphrase,
+      speed_limit: 10,
+      testnet,
+      demo,
+    });
+
+    if (session.user.productMode === 'strategy_client') {
+      const state = await updateStrategyClientState(tenantId, {
+        assignedApiKeyName: keyName,
+      });
+      return res.json({ success: true, keyName, state, productMode: session.user.productMode });
+    }
+
+    const state = await updateAlgofundState(tenantId, {
+      assignedApiKeyName: keyName,
+    });
+    return res.json({ success: true, keyName, state, productMode: session.user.productMode });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client api key save error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Применить platform-admin guard ко всем admin маршрутам
+router.use(requirePlatformAdmin);
+
+router.get('/admin/docs', async (_req, res) => {
+  try {
+    const docs = collectAdminMarkdownDocs().map(({ content, ...doc }) => doc);
+    res.json({ success: true, docs });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Admin docs list error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/docs/content', async (req, res) => {
+  const docPath = String(req.query.docPath || '').trim();
+  if (!docPath) {
+    return res.status(400).json({ error: 'docPath is required' });
+  }
+
+  try {
+    const doc = collectAdminMarkdownDocs().find((item) => item.relativePath === docPath);
+    if (!doc) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    res.json({ success: true, doc });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Admin docs read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Получить последние строки логов
 router.get('/logs', async (req, res) => {
-  const logPath = path.join(__dirname, '../../logs/combined.log');
+  const combinedLogPath = path.join(__dirname, '../../logs/combined.log');
+  const errorLogPath = path.join(__dirname, '../../logs/error.log');
+
+  const readTailLines = (targetPath: string, maxLines: number): string[] => {
+    if (!fs.existsSync(targetPath)) {
+      return [];
+    }
+    const lines = fs.readFileSync(targetPath, 'utf-8').split('\n').filter((line) => String(line || '').trim());
+    return lines.slice(-Math.max(1, maxLines));
+  };
+
   try {
-    if (!fs.existsSync(logPath)) return res.json([]);
-    const data = fs.readFileSync(logPath, 'utf-8').split('\n');
-    const lastLines = data.slice(-100);
-    res.json(lastLines);
+    const combinedTail = readTailLines(combinedLogPath, 140);
+    const errorTail = readTailLines(errorLogPath, 160);
+    const merged = [...combinedTail, ...errorTail].slice(-220);
+    res.json(merged);
   } catch (error) {
     res.status(500).json({ error: 'Log read error' });
   }
@@ -866,6 +1272,9 @@ router.get('/strategies/:apiKeyName/summary', async (req, res) => {
       if (!includeArchived) {
         countWhere += ` AND COALESCE(s.is_archived, 0) = 0`;
       }
+      if (runtimeOnly) {
+        countWhere += ` AND COALESCE(s.is_runtime, 0) = 1`;
+      }
       const totalRow = await db.get(
         `SELECT COUNT(*) AS total
          FROM strategies s
@@ -1135,8 +1544,24 @@ router.put('/trading-systems/:apiKeyName/:systemId/members', async (req, res) =>
   }
 
   const members = Array.isArray(req.body) ? req.body : req.body?.members;
+  const safeApply = req.body?.safeApply === true || req.body?.options?.safeApply === true;
+  const safeOptions = {
+    cancelRemovedOrders: req.body?.options?.cancelRemovedOrders,
+    closeRemovedPositions: req.body?.options?.closeRemovedPositions,
+    syncMemberActivation: req.body?.options?.syncMemberActivation,
+  };
 
   try {
+    if (safeApply) {
+      const result = await replaceTradingSystemMembersSafely(
+        apiKeyName,
+        parsedSystemId,
+        Array.isArray(members) ? members : [],
+        safeOptions
+      );
+      return res.json({ success: true, ...result });
+    }
+
     const system = await replaceTradingSystemMembers(apiKeyName, parsedSystemId, Array.isArray(members) ? members : []);
     res.json({ success: true, system });
   } catch (error) {
@@ -1165,6 +1590,117 @@ router.post('/trading-systems/:apiKeyName/:systemId/activation', async (req, res
   } catch (error) {
     const err = error as Error;
     logger.error(`Error applying trading system activation: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/trading-systems/:apiKeyName/:systemId/frequency-diagnostics', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+
+  try {
+    const system = await getTradingSystem(apiKeyName, parsedSystemId);
+    const targetTrades = Math.max(20, Math.min(5000, Number(req.query.targetTrades || 500)));
+    const targetTradesPerDay = Math.max(1, Math.min(50, Number(req.query.targetTradesPerDay || 10)));
+
+    const { sweep } = await loadCatalogAndSweepWithFallback();
+    if (!sweep || !Array.isArray(sweep.evaluated) || sweep.evaluated.length === 0) {
+      return res.status(400).json({ error: 'Sweep data unavailable for diagnostics' });
+    }
+
+    const dateFromMs = Date.parse(String(sweep.config?.dateFrom || ''));
+    const dateToMs = Date.parse(String(sweep.config?.dateTo || ''));
+    const inferredDays = Number.isFinite(dateFromMs) && Number.isFinite(dateToMs) && dateToMs > dateFromMs
+      ? Math.max(1, Math.floor((dateToMs - dateFromMs) / 86_400_000))
+      : 365;
+
+    const byStrategyId = new Map<number, any>();
+    for (const row of sweep.evaluated) {
+      byStrategyId.set(Number(row.strategyId), row);
+    }
+
+    const enabledMembers = (system.members || []).filter((row) => Boolean(row.is_enabled));
+    const memberDiagnostics = enabledMembers.map((member) => {
+      const sweepRow = byStrategyId.get(Number(member.strategy_id)) || null;
+      const trades = Math.max(0, Number(sweepRow?.tradesCount || 0));
+      const tradesPerDay = Number((trades / inferredDays).toFixed(3));
+      return {
+        strategyId: Number(member.strategy_id),
+        strategyName: String(member.strategy?.name || sweepRow?.strategyName || `#${member.strategy_id}`),
+        market: String(sweepRow?.market || [member.strategy?.base_symbol, member.strategy?.quote_symbol].filter(Boolean).join('/')),
+        interval: String(sweepRow?.interval || member.strategy?.interval || ''),
+        weight: Number(member.weight || 0),
+        trades,
+        tradesPerDay,
+        profitFactor: Number(sweepRow?.profitFactor || 0),
+        maxDrawdownPercent: Number(sweepRow?.maxDrawdownPercent || 0),
+      };
+    });
+
+    const weightedTrades = memberDiagnostics.reduce((acc, item) => acc + (item.trades * Math.max(0, item.weight || 0)), 0);
+    const weightSum = memberDiagnostics.reduce((acc, item) => acc + Math.max(0, item.weight || 0), 0);
+    const normalizedTrades = weightSum > 0 ? weightedTrades / weightSum : memberDiagnostics.reduce((acc, item) => acc + item.trades, 0) / Math.max(1, memberDiagnostics.length);
+    const currentTradesEstimate = Number(normalizedTrades.toFixed(2));
+    const currentTradesPerDayEstimate = Number((currentTradesEstimate / inferredDays).toFixed(3));
+
+    const candidatePool = sweep.evaluated
+      .map((row) => {
+        const trades = Math.max(0, Number(row.tradesCount || 0));
+        return {
+          strategyId: Number(row.strategyId || 0),
+          strategyName: String(row.strategyName || ''),
+          market: String(row.market || ''),
+          strategyType: String(row.strategyType || ''),
+          marketMode: String(row.marketMode || ''),
+          trades,
+          tradesPerDay: Number((trades / inferredDays).toFixed(3)),
+          profitFactor: Number(row.profitFactor || 0),
+          maxDrawdownPercent: Number(row.maxDrawdownPercent || 0),
+          score: Number(row.score || 0),
+        };
+      })
+      .filter((row) => row.strategyId > 0)
+      .sort((left, right) => {
+        const leftDistance = Math.abs(left.tradesPerDay - targetTradesPerDay);
+        const rightDistance = Math.abs(right.tradesPerDay - targetTradesPerDay);
+        if (leftDistance !== rightDistance) {
+          return leftDistance - rightDistance;
+        }
+        return right.score - left.score;
+      });
+
+    const minTrades = memberDiagnostics.length > 0 ? Math.min(...memberDiagnostics.map((item) => item.trades)) : 0;
+    const maxTrades = memberDiagnostics.length > 0 ? Math.max(...memberDiagnostics.map((item) => item.trades)) : 0;
+
+    const adjustable = memberDiagnostics.length >= 3 && maxTrades > minTrades * 1.25;
+    const nearTarget = Math.abs(currentTradesEstimate - targetTrades) <= Math.max(40, targetTrades * 0.15);
+
+    res.json({
+      success: true,
+      targetTrades,
+      targetTradesPerDay,
+      inferredSweepDays: inferredDays,
+      currentTradesEstimate,
+      currentTradesPerDayEstimate,
+      range: {
+        minTrades,
+        maxTrades,
+      },
+      adjustable,
+      nearTarget,
+      recommendation: adjustable
+        ? (nearTarget ? 'Current system is close to target and has frequency flexibility.' : 'System is flexible, tune members/weights to approach target trades.')
+        : 'Low flexibility: add more diverse high/low frequency members from sweep.',
+      memberDiagnostics,
+      candidateSuggestions: candidatePool.slice(0, 12),
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error generating frequency diagnostics: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

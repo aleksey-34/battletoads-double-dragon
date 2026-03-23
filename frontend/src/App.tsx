@@ -16,6 +16,7 @@ import Backtest from './pages/Backtest';
 import Research from './pages/Research';
 import SaaS from './pages/SaaS';
 import TradingSystems from './pages/TradingSystems';
+import AdminDocs from './pages/AdminDocs';
 import { I18nProvider, useI18n, UILanguage } from './i18n';
 import './App.css';
 
@@ -45,9 +46,10 @@ function AppShell() {
         { key: '3', label: <Link to="/positions">{t('nav.positions', 'Positions')}</Link> },
         { key: '4', label: <Link to="/logs">{t('nav.logs', 'Logs')}</Link> },
         { key: '5', label: <Link to="/backtest">{t('nav.backtest', 'Backtest')}</Link> },
-        { key: '6', label: <Link to="/trading-systems">Trading Systems</Link> },
+        { key: '6', label: <Link to="/trading-systems">{t('nav.tradingSystems', 'Trading Systems')}</Link> },
         { key: '7', label: <Link to="/saas">{t('nav.saas', 'SaaS')}</Link> },
-        { key: '8', label: <Link to="/research">Research</Link> },
+        { key: '8', label: <Link to="/research">{t('nav.research', 'Research')}</Link> },
+        { key: '9', label: <Link to="/admin-docs">{t('nav.docs', 'Docs')}</Link> },
       ];
 
   const selectedMenuKey = useMemo(() => {
@@ -58,8 +60,32 @@ function AppShell() {
     if (location.pathname.startsWith('/trading-systems')) return '6';
     if (location.pathname.startsWith('/saas')) return '7';
     if (location.pathname.startsWith('/research')) return '8';
+    if (location.pathname.startsWith('/admin-docs')) return '9';
     return '1';
   }, [location.pathname]);
+
+  const currentSectionLabel = useMemo(() => {
+    if (location.pathname.startsWith('/settings')) return t('nav.settings', 'Settings');
+    if (location.pathname.startsWith('/positions')) return t('nav.positions', 'Positions');
+    if (location.pathname.startsWith('/logs')) return t('nav.logs', 'Logs');
+    if (location.pathname.startsWith('/backtest')) return t('nav.backtest', 'Backtest');
+    if (location.pathname.startsWith('/trading-systems')) return t('nav.tradingSystems', 'Trading Systems');
+    if (location.pathname.startsWith('/saas/admin')) return 'SaaS Admin';
+    if (location.pathname.startsWith('/saas/strategy-client')) return 'SaaS Strategy';
+    if (location.pathname.startsWith('/saas/algofund')) return 'SaaS Algofund';
+    if (location.pathname.startsWith('/saas')) return t('nav.saas', 'SaaS');
+    if (location.pathname.startsWith('/research')) return t('nav.research', 'Research');
+    if (location.pathname.startsWith('/admin-docs')) return t('nav.docs', 'Docs');
+    if (location.pathname.startsWith('/client/login')) return 'Client Login';
+    if (location.pathname.startsWith('/client/register')) return 'Client Register';
+    if (location.pathname.startsWith('/cabinet')) return 'Client Cabinet';
+    if (location.pathname.startsWith('/login')) return 'Login';
+    return t('nav.dashboard', 'Dashboard');
+  }, [location.pathname, t]);
+
+  useEffect(() => {
+    document.title = `BT_bot_${currentSectionLabel}`;
+  }, [currentSectionLabel]);
 
   const checkAdminAuth = async () => {
     const password = localStorage.getItem('password');
@@ -186,10 +212,14 @@ function AppShell() {
   })();
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
+    <Layout style={{ minHeight: '100vh' }} className="app-root-layout">
       <Header style={{ color: 'white', paddingInline: 16 }}>
         <div className="app-header-row">
-          <Typography.Text className="app-brand-title">{t('app.title', 'BattleToads Control')}</Typography.Text>
+          <Space size={10} align="center">
+            <img src="/favicon.svg" alt="BattleToads icon" style={{ width: 22, height: 22, display: 'block' }} />
+            <Typography.Text className="app-brand-title">{t('app.title', 'BattleToads Control')}</Typography.Text>
+          </Space>
+          <Tag color="blue">Section: {currentSectionLabel}</Tag>
           {menuItems.length > 0 ? (
             <Menu className="app-main-menu" theme="dark" mode="horizontal" selectedKeys={[selectedMenuKey]} items={menuItems} />
           ) : (
@@ -252,6 +282,7 @@ function AppShell() {
           <Route path="/saas/strategy-client" element={<SaaS initialTab="strategy-client" surfaceMode="strategy-client" />} />
           <Route path="/saas/algofund" element={<SaaS initialTab="algofund" surfaceMode="algofund" />} />
           <Route path="/research" element={<Research />} />
+          <Route path="/admin-docs" element={<AdminDocs />} />
         </Routes>
       </Content>
       <FloatButton.BackTop visibilityHeight={280} />

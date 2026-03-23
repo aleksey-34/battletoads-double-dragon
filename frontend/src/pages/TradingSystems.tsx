@@ -3,6 +3,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   Col,
   Descriptions,
   Empty,
@@ -25,6 +26,13 @@ import ChartComponent from '../components/ChartComponent';
 import { useI18n } from '../i18n';
 
 const { Paragraph, Text, Title } = Typography;
+
+const initialTradingSystemsParams = new URLSearchParams(window.location.search);
+const initialApiKeyNameFromUrl = String(initialTradingSystemsParams.get('apiKeyName') || '').trim();
+const initialSystemIdFromUrlRaw = Number(initialTradingSystemsParams.get('systemId') || '');
+const initialSystemIdFromUrl = Number.isFinite(initialSystemIdFromUrlRaw) && initialSystemIdFromUrlRaw > 0
+  ? initialSystemIdFromUrlRaw
+  : null;
 
 type ApiKeyRecord = {
   id: number;
@@ -52,6 +60,15 @@ type TradingSystemMember = {
   strategy?: StrategySummary | null;
 };
 
+type TradingSystemMetrics = {
+  equity_usd: number;
+  unrealized_pnl: number;
+  margin_load_percent: number;
+  drawdown_percent: number;
+  effective_leverage: number;
+  recorded_at?: string;
+};
+
 type TradingSystem = {
   id?: number;
   name: string;
@@ -62,11 +79,38 @@ type TradingSystem = {
   discovery_interval_hours: number;
   max_members: number;
   members: TradingSystemMember[];
+  metrics?: TradingSystemMetrics;
+};
+
+type SaasTenantSummary = {
+  tenant?: {
+    id?: number;
+    display_name?: string;
+    slug?: string;
+    assigned_api_key_name?: string;
+    product_mode?: string;
+  };
+  strategyProfile?: {
+    assigned_api_key_name?: string;
+  } | null;
+  algofundProfile?: {
+    assigned_api_key_name?: string;
+  } | null;
+};
+
+type SaasSummaryLite = {
+  tenants?: SaasTenantSummary[];
 };
 
 type BacktestPoint = {
   time: number;
   equity: number;
+};
+
+type MonitoringPoint = {
+  recorded_at?: string;
+  margin_load_percent?: number;
+  drawdown_percent?: number;
 };
 
 type BacktestSummary = {
@@ -119,6 +163,41 @@ type AnalysisResponse = {
   reports: AnalysisReport[];
 };
 
+type FrequencyDiagnostics = {
+  success: boolean;
+  targetTrades: number;
+  targetTradesPerDay: number;
+  inferredSweepDays: number;
+  currentTradesEstimate: number;
+  currentTradesPerDayEstimate: number;
+  range: {
+    minTrades: number;
+    maxTrades: number;
+  };
+  adjustable: boolean;
+  nearTarget: boolean;
+  recommendation: string;
+  memberDiagnostics: Array<{
+    strategyId: number;
+    strategyName: string;
+    market: string;
+    interval: string;
+    weight: number;
+    trades: number;
+    tradesPerDay: number;
+    profitFactor: number;
+    maxDrawdownPercent: number;
+  }>;
+  candidateSuggestions: Array<{
+    strategyId: number;
+    strategyName: string;
+    tradesPerDay: number;
+    profitFactor: number;
+    maxDrawdownPercent: number;
+    score: number;
+  }>;
+};
+
 type LiquiditySuggestion = {
   id: number;
   system_id: number;
@@ -164,8 +243,8 @@ type Copy = {
 
 const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
   ru: {
-    title: 'Trading Systems',
-    subtitle: 'Состав торговых систем, быстрый backtest, анализ и liquidity suggestions.',
+    title: 'Офер и ТС',
+    subtitle: 'Сборка и сопровождение торговых систем для клиентов: состав, веса, backtest, анализ и liquidity suggestions. Если список пуст, сначала назначьте tenant API-ключ в SaaS Админке.',
     apiKey: 'API-ключ',
     refresh: 'Обновить',
     systems: 'Системы',
@@ -182,7 +261,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     active: 'Активна',
     discovery: 'Discovery',
     interval: 'Интервал',
-    noSystems: 'Для этого API-ключа торговые системы не найдены.',
+    noSystems: 'Для выбранного tenant/API-ключа торговые системы не найдены.',
     loading: 'Загрузка...',
     weights: 'Вес',
     role: 'Роль',
@@ -195,8 +274,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     action: 'Действие',
   },
   en: {
-    title: 'Trading Systems',
-    subtitle: 'Trading system composition, quick backtests, analysis, and liquidity suggestions.',
+    title: 'Offers & TS',
+    subtitle: 'Build and operate client trading systems: members, weights, backtests, analysis, and liquidity suggestions. If empty, assign an API key to tenant in SaaS Admin first.',
     apiKey: 'API Key',
     refresh: 'Refresh',
     systems: 'Systems',
@@ -213,7 +292,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     active: 'Active',
     discovery: 'Discovery',
     interval: 'Interval',
-    noSystems: 'No trading systems found for this API key.',
+    noSystems: 'No trading systems found for selected tenant/API key.',
     loading: 'Loading...',
     weights: 'Weight',
     role: 'Role',
@@ -226,8 +305,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     action: 'Action',
   },
   tr: {
-    title: 'Trading Systems',
-    subtitle: 'Trading system uyeleri, hizli backtest, analiz ve liquidity suggestions.',
+    title: 'Offer & TS',
+    subtitle: 'Musteri trading system yonetimi: uyeler, agirliklar, backtest, analiz ve liquidity suggestions. Bos ise once SaaS Admin tarafinda tenant icin API key atayin.',
     apiKey: 'API Key',
     refresh: 'Yenile',
     systems: 'Sistemler',
@@ -244,7 +323,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     active: 'Aktif',
     discovery: 'Discovery',
     interval: 'Interval',
-    noSystems: 'Bu API key icin trading system bulunamadi.',
+    noSystems: 'Secilen tenant/API key icin trading system bulunamadi.',
     loading: 'Yukleniyor...',
     weights: 'Agirlik',
     role: 'Rol',
@@ -283,9 +362,9 @@ const TradingSystems: React.FC = () => {
   const { language } = useI18n();
   const copy = COPY_BY_LANGUAGE[language];
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
-  const [apiKeyName, setApiKeyName] = useState('');
+  const [apiKeyName, setApiKeyName] = useState(initialApiKeyNameFromUrl);
   const [systems, setSystems] = useState<TradingSystem[]>([]);
-  const [selectedSystemId, setSelectedSystemId] = useState<number | null>(null);
+  const [selectedSystemId, setSelectedSystemId] = useState<number | null>(initialSystemIdFromUrl);
   const [selectedSystem, setSelectedSystem] = useState<TradingSystem | null>(null);
   const [systemsLoading, setSystemsLoading] = useState(false);
   const [systemLoading, setSystemLoading] = useState(false);
@@ -295,7 +374,14 @@ const TradingSystems: React.FC = () => {
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null);
   const [suggestions, setSuggestions] = useState<LiquiditySuggestion[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
+  const [frequencyDiagnostics, setFrequencyDiagnostics] = useState<FrequencyDiagnostics | null>(null);
+  const [frequencyDiagnosticsLoading, setFrequencyDiagnosticsLoading] = useState(false);
+  const [safeMembersApply, setSafeMembersApply] = useState(true);
+  const [monitoringPoints, setMonitoringPoints] = useState<MonitoringPoint[]>([]);
   const [memberDraftsByStrategyId, setMemberDraftsByStrategyId] = useState<Record<number, { weight: number; is_enabled: boolean }>>({});
+  const [tenantRows, setTenantRows] = useState<Array<{ id: number; name: string; slug: string; apiKeyName: string }>>([]);
+  const [selectedTenantId, setSelectedTenantId] = useState<number | null>(null);
+  const [tenantSystemsByApiKey, setTenantSystemsByApiKey] = useState<Record<string, TradingSystem[]>>({});
   const [backtestTuning, setBacktestTuning] = useState<BacktestTuning>({
     riskMultiplier: 1,
     targetTrades: 160,
@@ -311,6 +397,7 @@ const TradingSystems: React.FC = () => {
 
     axios.defaults.headers.common.Authorization = `Bearer ${password}`;
     void loadApiKeys();
+    void loadTenantWorkflow();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -324,6 +411,7 @@ const TradingSystems: React.FC = () => {
 
     void loadSystems(apiKeyName);
     void loadSuggestions(apiKeyName);
+    void loadMonitoring(apiKeyName);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKeyName]);
 
@@ -331,12 +419,24 @@ const TradingSystems: React.FC = () => {
     if (!apiKeyName || !selectedSystemId) {
       setSelectedSystem(null);
       setMemberDraftsByStrategyId({});
+      setFrequencyDiagnostics(null);
       return;
     }
 
     void loadSystem(apiKeyName, selectedSystemId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKeyName, selectedSystemId]);
+
+  useEffect(() => {
+    if (!apiKeyName || !selectedSystemId) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void loadFrequencyDiagnostics(apiKeyName, selectedSystemId, Math.max(20, Math.floor(backtestTuning.targetTrades)));
+    }, 250);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiKeyName, selectedSystemId, backtestTuning.targetTrades]);
 
   const loadApiKeys = useCallback(async () => {
     try {
@@ -350,6 +450,61 @@ const TradingSystems: React.FC = () => {
       message.error(String(error?.response?.data?.error || error?.message || 'Failed to load API keys'));
     }
   }, []);
+
+  const loadTenantWorkflow = useCallback(async () => {
+    try {
+      const summaryResponse = await axios.get<SaasSummaryLite>('/api/saas/admin/summary');
+      const tenantsRaw = Array.isArray(summaryResponse.data?.tenants) ? summaryResponse.data.tenants : [];
+      const rows = tenantsRaw
+        .map((item) => {
+          const tenantId = Number(item?.tenant?.id || 0);
+          const apiKey = String(
+            item?.tenant?.assigned_api_key_name
+            || item?.strategyProfile?.assigned_api_key_name
+            || item?.algofundProfile?.assigned_api_key_name
+            || ''
+          ).trim();
+          return {
+            id: tenantId,
+            name: String(item?.tenant?.display_name || item?.tenant?.slug || `tenant_${tenantId}`),
+            slug: String(item?.tenant?.slug || ''),
+            apiKeyName: apiKey,
+          };
+        })
+        .filter((item) => item.id > 0 && item.apiKeyName);
+
+      setTenantRows(rows);
+      if (!selectedTenantId && rows.length > 0) {
+        setSelectedTenantId(rows[0].id);
+      }
+
+      const apiKeyList = Array.from(new Set(rows.map((item) => item.apiKeyName).filter(Boolean)));
+      if (apiKeyList.length === 0) {
+        setTenantSystemsByApiKey({});
+        return;
+      }
+
+      const fetched = await Promise.all(
+        apiKeyList.map(async (key) => {
+          try {
+            const response = await axios.get<TradingSystem[]>(`/api/trading-systems/${encodeURIComponent(key)}`);
+            return [key, Array.isArray(response.data) ? [...response.data] : [] as TradingSystem[]] as const;
+          } catch {
+            return [key, [] as TradingSystem[]] as const;
+          }
+        })
+      );
+
+      const map: Record<string, TradingSystem[]> = {};
+      for (const [key, items] of fetched) {
+        map[key] = items;
+      }
+      setTenantSystemsByApiKey(map);
+    } catch {
+      setTenantRows([]);
+      setTenantSystemsByApiKey({});
+    }
+  }, [selectedTenantId]);
 
   const loadSystems = useCallback(async (nextApiKeyName: string) => {
     setSystemsLoading(true);
@@ -373,6 +528,23 @@ const TradingSystems: React.FC = () => {
     }
   }, []);
 
+  const loadMonitoring = useCallback(async (nextApiKeyName: string) => {
+    if (!nextApiKeyName) {
+      setMonitoringPoints([]);
+      return;
+    }
+
+    try {
+      const response = await axios.get(`/api/monitoring/${encodeURIComponent(nextApiKeyName)}`, {
+        params: { limit: 240 },
+      });
+      const points = Array.isArray(response.data?.points) ? response.data.points : [];
+      setMonitoringPoints(points);
+    } catch {
+      setMonitoringPoints([]);
+    }
+  }, []);
+
   const loadSystem = useCallback(async (nextApiKeyName: string, systemId: number) => {
     setSystemLoading(true);
     try {
@@ -383,6 +555,23 @@ const TradingSystems: React.FC = () => {
       setSelectedSystem(null);
     } finally {
       setSystemLoading(false);
+    }
+  }, []);
+
+  const loadFrequencyDiagnostics = useCallback(async (nextApiKeyName: string, systemId: number, targetTrades: number) => {
+    setFrequencyDiagnosticsLoading(true);
+    try {
+      const response = await axios.get<FrequencyDiagnostics>(`/api/trading-systems/${encodeURIComponent(nextApiKeyName)}/${systemId}/frequency-diagnostics`, {
+        params: {
+          targetTrades,
+          targetTradesPerDay: Math.max(1, Number((targetTrades / 50).toFixed(2))),
+        },
+      });
+      setFrequencyDiagnostics(response.data || null);
+    } catch {
+      setFrequencyDiagnostics(null);
+    } finally {
+      setFrequencyDiagnosticsLoading(false);
     }
   }, []);
 
@@ -408,12 +597,12 @@ const TradingSystems: React.FC = () => {
       );
 
       const tunedBars = Math.max(240, Math.floor(backtestTuning.bars));
-      const tunedInitialBalance = Math.max(100, Number((1000 * Math.max(0.25, backtestTuning.riskMultiplier)).toFixed(2)));
 
       const response = await axios.post(`/api/trading-systems/${encodeURIComponent(apiKeyName)}/${selectedSystemId}/backtest`, {
         saveResult: true,
         bars: tunedBars,
-        initialBalance: tunedInitialBalance,
+        initialBalance: 1000,
+        riskMultiplier: Math.max(0.25, Math.min(3, Number(backtestTuning.riskMultiplier) || 1)),
         memberWeights,
         enabledMembers,
       });
@@ -448,10 +637,24 @@ const TradingSystems: React.FC = () => {
 
     setSystemActionLoading('members-save');
     try {
-      await axios.put(`/api/trading-systems/${encodeURIComponent(apiKeyName)}/${selectedSystemId}/members`, {
+      const response = await axios.put(`/api/trading-systems/${encodeURIComponent(apiKeyName)}/${selectedSystemId}/members`, {
         members,
+        safeApply: safeMembersApply,
+        options: {
+          safeApply: safeMembersApply,
+          cancelRemovedOrders: true,
+          closeRemovedPositions: true,
+          syncMemberActivation: true,
+        },
       });
       message.success('Trading system members updated');
+      const orchestration = response.data?.orchestration;
+      if (orchestration) {
+        const removedSymbols = Array.isArray(orchestration.removedSymbols) ? orchestration.removedSymbols.length : 0;
+        const closedPositions = Number(orchestration.closedPositions || 0);
+        const warnings = Array.isArray(orchestration.warnings) ? orchestration.warnings.length : 0;
+        message.info(`Safe apply: removedSymbols=${removedSymbols}, closedPositions=${closedPositions}, warnings=${warnings}`);
+      }
       await loadSystem(apiKeyName, selectedSystemId);
       await loadSystems(apiKeyName);
     } catch (error: any) {
@@ -564,11 +767,62 @@ const TradingSystems: React.FC = () => {
     }
   };
 
+  const setSystemActivation = async (isActive: boolean) => {
+    if (!apiKeyName || !selectedSystemId) {
+      return;
+    }
+
+    setSystemActionLoading('activation');
+    try {
+      await axios.post(`/api/trading-systems/${encodeURIComponent(apiKeyName)}/${selectedSystemId}/activation`, {
+        isActive,
+        syncMembers: false,
+      });
+      message.success(isActive ? 'Trading system activated' : 'Trading system deactivated');
+      await loadSystem(apiKeyName, selectedSystemId);
+      await loadSystems(apiKeyName);
+    } catch (error: any) {
+      message.error(String(error?.response?.data?.error || error?.message || 'Failed to update trading system activation'));
+    } finally {
+      setSystemActionLoading('');
+    }
+  };
+
   const equityChartData = useMemo(
     () => (backtestResult?.equityCurve || [])
       .map((point) => ({ time: point.time, value: point.equity }))
       .sort((left, right) => left.time - right.time),
     [backtestResult]
+  );
+
+  const drawdownChartData = useMemo(() => {
+    if (equityChartData.length === 0) {
+      return [] as Array<{ time: number; value: number }>;
+    }
+
+    let peak = Number(equityChartData[0].value);
+    return equityChartData.map((point) => {
+      const value = Number(point.value);
+      if (value > peak) {
+        peak = value;
+      }
+      const drawdownPercent = peak > 0 ? ((peak - value) / peak) * 100 : 0;
+      return {
+        time: point.time,
+        value: Number(drawdownPercent.toFixed(6)),
+      };
+    });
+  }, [equityChartData]);
+
+  const marginLoadChartData = useMemo(
+    () => (monitoringPoints || [])
+      .map((point) => ({
+        time: point.recorded_at ? Math.floor(new Date(point.recorded_at).getTime() / 1000) : 0,
+        value: Number(point.margin_load_percent),
+      }))
+      .filter((point) => Number.isFinite(point.time) && point.time > 0 && Number.isFinite(point.value))
+      .sort((left, right) => left.time - right.time),
+    [monitoringPoints]
   );
 
   const visibleSuggestions = useMemo(
@@ -586,26 +840,6 @@ const TradingSystems: React.FC = () => {
     }
     setMemberDraftsByStrategyId(nextDrafts);
   }, [selectedSystem]);
-
-  const memberWeightChartData = useMemo(() => {
-    const members = selectedSystem?.members || [];
-    const start = Math.floor(Date.now() / 1000);
-
-    return members
-      .map((member, index) => {
-        const draft = memberDraftsByStrategyId[member.strategy_id];
-        const weight = Number(draft ? draft.weight : member.weight);
-        if (!Number.isFinite(weight)) {
-          return null;
-        }
-
-        return {
-          time: start + index * 60,
-          value: Math.max(0, weight),
-        };
-      })
-      .filter((item): item is { time: number; value: number } => !!item);
-  }, [memberDraftsByStrategyId, selectedSystem]);
 
   const systemSummary = useMemo(() => {
     const members = selectedSystem?.members || [];
@@ -637,6 +871,24 @@ const TradingSystems: React.FC = () => {
     return `Сэмплов: ${formatNumber(samples, 0)}. Drift PnL: ${formatPercent(pnlDrift, 2)}. Slippage: ${formatPercent(slip * 100, 3)}. WinRate live/backtest: ${formatPercent(winLive * 100, 1)} / ${formatPercent(winBacktest * 100, 1)}.`;
   };
 
+  const selectedTenantRow = useMemo(
+    () => tenantRows.find((item) => item.id === selectedTenantId) || null,
+    [tenantRows, selectedTenantId]
+  );
+
+  const selectedTenantSystems = useMemo(
+    () => (selectedTenantRow ? (tenantSystemsByApiKey[selectedTenantRow.apiKeyName] || []) : []),
+    [selectedTenantRow, tenantSystemsByApiKey]
+  );
+
+  const openTenantSystem = (systemId: number) => {
+    if (!selectedTenantRow) {
+      return;
+    }
+    setApiKeyName(selectedTenantRow.apiKeyName);
+    setSelectedSystemId(systemId);
+  };
+
   return (
     <div className="battletoads-form-shell">
       <Card className="battletoads-card" bordered={false}>
@@ -645,9 +897,50 @@ const TradingSystems: React.FC = () => {
       </Card>
 
       <Card className="battletoads-card" style={{ marginTop: 16 }}>
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="Рабочая логика: ТС классифицируются по оффер-карточкам (витрина), а здесь вы выбираете tenant и его runtime-экземпляр ТС для операций. API-key выбор оставлен как fallback."
+        />
+        {tenantRows.length === 0 ? (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="Tenant с назначенным API-ключом не найден. Откройте SaaS -> Admin, назначьте клиенту API-ключ и вернитесь в этот раздел."
+            action={<Button size="small" href="/saas/admin">Открыть SaaS Admin</Button>}
+          />
+        ) : null}
         <Row gutter={[16, 16]} align="middle">
           <Col xs={24} lg={8}>
-            <Text strong>{copy.apiKey}</Text>
+            <Text strong>Tenant</Text>
+            <Select
+              style={{ width: '100%', marginTop: 8 }}
+              value={selectedTenantId || undefined}
+              onChange={(value) => setSelectedTenantId(Number(value))}
+              options={tenantRows.map((item) => ({ value: item.id, label: `${item.name}${item.slug ? ` (${item.slug})` : ''}` }))}
+              placeholder="Select tenant"
+              allowClear
+            />
+          </Col>
+          <Col xs={24} lg={8}>
+            <Text strong>Tenant systems</Text>
+            <Select
+              style={{ width: '100%', marginTop: 8 }}
+              value={selectedTenantSystems.some((item) => Number(item.id) === Number(selectedSystemId)) ? selectedSystemId || undefined : undefined}
+              onChange={(value) => openTenantSystem(Number(value))}
+              options={selectedTenantSystems.map((item) => ({
+                value: Number(item.id),
+                label: `${item.name} (#${item.id})${item.is_active ? ' [active]' : ''}`,
+              }))}
+              placeholder="Select system"
+              disabled={!selectedTenantRow}
+              allowClear
+            />
+          </Col>
+          <Col xs={24} lg={8}>
+            <Text strong>{copy.apiKey} (fallback)</Text>
             <Select
               style={{ width: '100%', marginTop: 8 }}
               value={apiKeyName || undefined}
@@ -662,7 +955,7 @@ const TradingSystems: React.FC = () => {
           <Col xs={24} lg={12}>
             <Space wrap style={{ marginTop: 30 }}>
               <Tooltip title="Обновить список систем и выбранную карточку">
-                <Button onClick={() => void loadSystems(apiKeyName)} loading={systemsLoading}>{copy.refresh}</Button>
+                <Button onClick={() => { void loadSystems(apiKeyName); void loadMonitoring(apiKeyName); }} loading={systemsLoading}>{copy.refresh}</Button>
               </Tooltip>
               <Tooltip title="Подтянуть текущие liquidity suggestions">
                 <Button onClick={() => void loadSuggestions(apiKeyName)} loading={suggestionsLoading}>{copy.suggestions}</Button>
@@ -673,6 +966,14 @@ const TradingSystems: React.FC = () => {
             </Space>
           </Col>
         </Row>
+        {selectedTenantRow && selectedTenantSystems.length === 0 ? (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginTop: 12 }}
+            message="У выбранного tenant пока нет торговых систем. Можно создать/назначить систему через API-key fallback или через SaaS workflows."
+          />
+        ) : null}
       </Card>
 
       <Row gutter={[16, 16]} style={{ marginTop: 0 }}>
@@ -734,8 +1035,18 @@ const TradingSystems: React.FC = () => {
             title={selectedSystem?.name || copy.members}
             extra={selectedSystem ? (
               <Space wrap>
+                <Tooltip title="Включить/выключить торговую систему целиком (статус active/inactive)">
+                  <Button onClick={() => void setSystemActivation(!selectedSystem.is_active)} loading={systemActionLoading === 'activation'}>
+                    {selectedSystem.is_active ? 'Deactivate system' : 'Activate system'}
+                  </Button>
+                </Tooltip>
                 <Tooltip title="Записать новые веса/статусы блоков в торговую систему">
                   <Button onClick={() => void saveMemberDrafts()} loading={systemActionLoading === 'members-save'}>Сохранить блоки</Button>
+                </Tooltip>
+                <Tooltip title="Safe apply: отменить ордера и закрыть позиции по удаляемым парам перед применением нового состава">
+                  <Checkbox checked={safeMembersApply} onChange={(e) => setSafeMembersApply(e.target.checked)}>
+                    Safe apply
+                  </Checkbox>
                 </Tooltip>
                 <Tooltip title="Бэктест учитывает текущие веса блоков и параметры ниже">
                   <Button onClick={() => void runSystemBacktest()} loading={systemActionLoading === 'backtest'}>{copy.backtest}</Button>
@@ -754,6 +1065,75 @@ const TradingSystems: React.FC = () => {
                     <Col xs={12} md={8}><Card size="small"><Text type="secondary">Enabled</Text><div><Text strong>{systemSummary.enabledCount}</Text></div></Card></Col>
                     <Col xs={24} md={8}><Card size="small"><Text type="secondary">Total weight</Text><div><Text strong>{formatNumber(systemSummary.totalWeight, 3)}</Text></div></Card></Col>
                   </Row>
+
+                  <Card size="small" title="Live Metrics" style={{ backgroundColor: '#fafafa' }}>
+                    <Row gutter={[12, 12]}>
+                      <Col xs={12} sm={12} md={8}>
+                        <Card size="small" bordered>
+                          <Text type="secondary">Equity</Text>
+                          <div><Text strong style={{ fontSize: 16 }}>${formatNumber(selectedSystem.metrics?.equity_usd ?? 0, 2)}</Text></div>
+                        </Card>
+                      </Col>
+                      <Col xs={12} sm={12} md={8}>
+                        <Card size="small" bordered>
+                          <Text type="secondary">Unrealized PnL</Text>
+                          <div>
+                            <Text
+                              strong
+                              style={{
+                                fontSize: 16,
+                                color: Number(selectedSystem.metrics?.unrealized_pnl ?? 0) >= 0 ? '#52c41a' : '#ff4d4f'
+                              }}
+                            >
+                              ${formatNumber(selectedSystem.metrics?.unrealized_pnl ?? 0, 2)}
+                            </Text>
+                          </div>
+                        </Card>
+                      </Col>
+                      <Col xs={12} sm={12} md={8}>
+                        <Card size="small" bordered>
+                          <Text type="secondary">Drawdown</Text>
+                          <div>
+                            <Text
+                              strong
+                              style={{
+                                fontSize: 16,
+                                color: Number(selectedSystem.metrics?.drawdown_percent ?? 0) > 20
+                                  ? '#ff4d4f'
+                                  : (Number(selectedSystem.metrics?.drawdown_percent ?? 0) > 10 ? '#faad14' : '#52c41a')
+                              }}
+                            >
+                              {formatPercent(selectedSystem.metrics?.drawdown_percent ?? 0, 2)}
+                            </Text>
+                          </div>
+                        </Card>
+                      </Col>
+                      <Col xs={12} sm={12} md={8}>
+                        <Card size="small" bordered>
+                          <Text type="secondary">Margin Load</Text>
+                          <div><Text strong style={{ fontSize: 16 }}>{formatPercent(selectedSystem.metrics?.margin_load_percent ?? 0, 2)}</Text></div>
+                        </Card>
+                      </Col>
+                      <Col xs={12} sm={12} md={8}>
+                        <Card size="small" bordered>
+                          <Text type="secondary">Leverage</Text>
+                          <div><Text strong style={{ fontSize: 16 }}>{formatNumber(selectedSystem.metrics?.effective_leverage ?? 0, 2)}x</Text></div>
+                        </Card>
+                      </Col>
+                      <Col xs={24} sm={12} md={8}>
+                        <Card size="small" bordered>
+                          <Text type="secondary">Updated</Text>
+                          <div>
+                            <Text type="secondary" style={{ fontSize: 12 }}>
+                              {selectedSystem.metrics?.recorded_at
+                                ? new Date(selectedSystem.metrics.recorded_at).toLocaleString()
+                                : 'No snapshot yet'}
+                            </Text>
+                          </div>
+                        </Card>
+                      </Col>
+                    </Row>
+                  </Card>
 
                   <Card size="small" title="Параметры запуска backtest">
                     <Row gutter={[12, 12]}>
@@ -780,6 +1160,29 @@ const TradingSystems: React.FC = () => {
                     <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
                       Период бэктеста определяется глубиной candles (bars) и интервалом стратегий. Чем больше bars, тем длиннее исторический отрезок.
                     </Paragraph>
+                    <Paragraph type="secondary" style={{ marginTop: 6, marginBottom: 0 }}>
+                      Цель по сделкам влияет на подбор и оценку в бэктесте/свипе, но не является прямой крутилкой live-лотности в algofund.
+                    </Paragraph>
+                    <Spin spinning={frequencyDiagnosticsLoading}>
+                      {frequencyDiagnostics ? (
+                        <div style={{ marginTop: 10 }}>
+                          <Space wrap>
+                            <Tag color={frequencyDiagnostics.adjustable ? 'success' : 'warning'}>
+                              {frequencyDiagnostics.adjustable ? 'Frequency adjustable' : 'Low frequency flexibility'}
+                            </Tag>
+                            <Tag color={frequencyDiagnostics.nearTarget ? 'success' : 'processing'}>
+                              {frequencyDiagnostics.nearTarget ? 'Near target trades' : 'Far from target trades'}
+                            </Tag>
+                            <Text type="secondary">
+                              Est: {formatNumber(frequencyDiagnostics.currentTradesEstimate, 0)} trades / {frequencyDiagnostics.inferredSweepDays}d ({formatNumber(frequencyDiagnostics.currentTradesPerDayEstimate, 2)}/day)
+                            </Text>
+                          </Space>
+                          <Paragraph type="secondary" style={{ marginTop: 6, marginBottom: 0 }}>
+                            {frequencyDiagnostics.recommendation}
+                          </Paragraph>
+                        </div>
+                      ) : null}
+                    </Spin>
                   </Card>
 
                   <Descriptions column={1} bordered size="small">
@@ -790,6 +1193,12 @@ const TradingSystems: React.FC = () => {
                     <Descriptions.Item label="Max members">{selectedSystem.max_members}</Descriptions.Item>
                     <Descriptions.Item label="Description">{selectedSystem.description || '—'}</Descriptions.Item>
                   </Descriptions>
+
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="Status=active: система участвует в торговом контуре. Discovery: авто-поиск кандидатов/обновлений состава. Auto sync: при включении/выключении системы автоматически синхронизировать статусы стратегий-участников."
+                  />
 
                   <Table<TradingSystemMember>
                     size="small"
@@ -869,12 +1278,6 @@ const TradingSystems: React.FC = () => {
                       },
                     ]}
                   />
-
-                  {memberWeightChartData.length > 1 ? (
-                    <Card size="small" title="Профиль весов блоков">
-                      <ChartComponent data={memberWeightChartData} type="line" />
-                    </Card>
-                  ) : null}
                 </Space>
               ) : (
                 <Empty description={copy.noSystems} />
@@ -910,6 +1313,23 @@ const TradingSystems: React.FC = () => {
           <div style={{ marginTop: 16 }}>
             {equityChartData.length > 0 ? <ChartComponent data={equityChartData} type="line" /> : <Empty description={copy.backtest} />}
           </div>
+
+          <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+            <Col xs={24} xl={12}>
+              <Card size="small" title="График просадки (DD)">
+                {drawdownChartData.length > 0 ? <ChartComponent data={drawdownChartData} type="line" /> : <Empty description="Нет данных DD" />}
+              </Card>
+            </Col>
+            <Col xs={24} xl={12}>
+              <Card size="small" title="График загрузки маржи (live monitoring)">
+                {marginLoadChartData.length > 0 ? (
+                  <ChartComponent data={marginLoadChartData} type="line" />
+                ) : (
+                  <Empty description="Нет history по margin load: метрика еще не собиралась или система не торговала" />
+                )}
+              </Card>
+            </Col>
+          </Row>
         </Card>
       ) : null}
 

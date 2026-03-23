@@ -16,6 +16,12 @@ export const initDB = async () => {
     driver: sqlite3.Database,
   });
 
+  // Reduce SQLITE_BUSY spikes under concurrent read/write bursts from SaaS pages.
+  await db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA busy_timeout = 5000;
+  `);
+
   const ensureColumn = async (table: string, columnDefinition: string) => {
     try {
       await db.exec(`ALTER TABLE ${table} ADD COLUMN ${columnDefinition}`);
@@ -347,6 +353,20 @@ export const initDB = async () => {
       FOREIGN KEY (user_id) REFERENCES client_users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS client_magic_links (
+      id TEXT PRIMARY KEY,
+      tenant_id INTEGER NOT NULL,
+      user_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      consumed_at TEXT,
+      note TEXT DEFAULT '',
+      created_by TEXT DEFAULT 'platform_admin',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+      FOREIGN KEY (user_id) REFERENCES client_users(id)
+    );
+
     CREATE TABLE IF NOT EXISTS subscriptions (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL,
@@ -365,12 +385,24 @@ export const initDB = async () => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL UNIQUE,
       selected_offer_ids_json TEXT DEFAULT '[]',
+      active_system_profile_id INTEGER,
       risk_level TEXT DEFAULT 'medium',
       trade_frequency_level TEXT DEFAULT 'medium',
       requested_enabled BOOLEAN DEFAULT 0,
       actual_enabled BOOLEAN DEFAULT 0,
       assigned_api_key_name TEXT DEFAULT '',
       latest_preview_json TEXT DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS strategy_client_system_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL,
+      profile_name TEXT NOT NULL,
+      selected_offer_ids_json TEXT DEFAULT '[]',
+      is_active BOOLEAN DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (tenant_id) REFERENCES tenants(id)
@@ -397,8 +429,23 @@ export const initDB = async () => {
       status TEXT DEFAULT 'pending',
       note TEXT DEFAULT '',
       decision_note TEXT DEFAULT '',
+      request_payload_json TEXT DEFAULT '{}',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       decided_at TEXT,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS strategy_backtest_pair_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL,
+      base_symbol TEXT NOT NULL,
+      quote_symbol TEXT DEFAULT '',
+      interval TEXT DEFAULT '1h',
+      note TEXT DEFAULT '',
+      status TEXT DEFAULT 'pending',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      decided_at TEXT,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (tenant_id) REFERENCES tenants(id)
     );
 
@@ -412,8 +459,32 @@ export const initDB = async () => {
       FOREIGN KEY (tenant_id) REFERENCES tenants(id)
     );
 
+    CREATE TABLE IF NOT EXISTS app_runtime_flags (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
     CREATE INDEX IF NOT EXISTS idx_plans_product_mode
       ON plans (product_mode, is_active);
+
+    CREATE TABLE IF NOT EXISTS strategy_runtime_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      api_key_name TEXT NOT NULL,
+      strategy_id INTEGER,
+      strategy_name TEXT DEFAULT '',
+      event_type TEXT NOT NULL,
+      message TEXT NOT NULL,
+      details_json TEXT DEFAULT '{}',
+      resolved_at INTEGER DEFAULT 0,
+      created_at INTEGER DEFAULT (CAST(strftime('%s','now') * 1000 AS INTEGER))
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sre_lookup
+      ON strategy_runtime_events (api_key_name, event_type, resolved_at, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_sre_strategy
+      ON strategy_runtime_events (strategy_id, event_type, created_at DESC);
 
     CREATE INDEX IF NOT EXISTS idx_tenants_product_mode
       ON tenants (product_mode, status, created_at DESC);
@@ -427,11 +498,20 @@ export const initDB = async () => {
     CREATE INDEX IF NOT EXISTS idx_client_sessions_hash
       ON client_sessions (token_hash);
 
+    CREATE INDEX IF NOT EXISTS idx_client_magic_links_hash
+      ON client_magic_links (token_hash);
+
     CREATE INDEX IF NOT EXISTS idx_subscriptions_tenant
       ON subscriptions (tenant_id, created_at DESC);
 
     CREATE INDEX IF NOT EXISTS idx_algofund_requests_tenant
       ON algofund_start_stop_requests (tenant_id, status, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_strategy_backtest_pair_requests_tenant
+      ON strategy_backtest_pair_requests (tenant_id, status, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_strategy_client_system_profiles_tenant
+      ON strategy_client_system_profiles (tenant_id, is_active, updated_at DESC);
 
     CREATE INDEX IF NOT EXISTS idx_saas_audit_tenant
       ON saas_audit_log (tenant_id, created_at DESC);
@@ -503,6 +583,8 @@ export const initDB = async () => {
   await ensureColumn('live_trade_events', 'source_trade_id TEXT');
   await ensureColumn('live_trade_events', 'source_order_id TEXT');
   await ensureColumn('live_trade_events', 'source_symbol TEXT');
+  await ensureColumn('algofund_start_stop_requests', "request_payload_json TEXT DEFAULT '{}'");
+  await ensureColumn('strategy_client_profiles', 'active_system_profile_id INTEGER');
 
   await db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_live_trade_events_source_trade_id

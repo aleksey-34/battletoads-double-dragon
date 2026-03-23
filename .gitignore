@@ -19,6 +19,8 @@ backend/logs/
 *.db
 *.sqlite
 *.sqlite3
+data/
+backend/.auth-password.json
 
 # Secrets / env
 .env

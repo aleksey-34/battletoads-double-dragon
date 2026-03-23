@@ -7,20 +7,24 @@ import {
   Checkbox,
   Col,
   Descriptions,
+  Divider,
   Empty,
   Input,
   InputNumber,
   List,
   message,
+  Modal,
   Row,
   Select,
   Slider,
   Space,
   Spin,
   Statistic,
+  Switch,
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -33,6 +37,21 @@ type ProductMode = 'strategy_client' | 'algofund_client';
 type Level3 = 'low' | 'medium' | 'high';
 type RequestStatus = 'pending' | 'approved' | 'rejected';
 type SaasTabKey = 'admin' | 'strategy-client' | 'algofund';
+type AdminTabKey = 'overview' | 'monitoring' | 'create-user';
+
+type TradingSystemListItem = {
+  id?: number;
+  name: string;
+  is_active: boolean;
+  updated_at?: string;
+  metrics?: {
+    equity_usd?: number;
+    unrealized_pnl?: number;
+    margin_load_percent?: number;
+    drawdown_percent?: number;
+    effective_leverage?: number;
+  };
+};
 
 type EquityPoint = {
   time: number;
@@ -78,9 +97,63 @@ type CatalogOffer = {
     tradeFrequency?: Record<Level3, CatalogPreset | null>;
   };
   equity?: {
+    source?: string;
+    generatedAt?: string;
     points?: EquityPoint[];
     summary?: Record<string, unknown>;
   };
+};
+
+type StrategySelectionConstraints = {
+  limits?: {
+    maxStrategies?: number | null;
+    minOffersPerSystem?: number | null;
+    maxOffersPerSystem?: number | null;
+    maxCustomSystems?: number | null;
+    mono?: number | null;
+    synth?: number | null;
+    depositCap?: number | null;
+    riskCap?: number | null;
+  };
+  usage?: {
+    selected?: number;
+    mono?: number;
+    synth?: number;
+    uniqueMarkets?: number;
+    remainingSlots?: number | null;
+    currentCustomSystems?: number;
+    remainingCustomSystems?: number | null;
+    estimatedDepositPerStrategy?: number | null;
+  };
+  violations?: string[];
+  warnings?: string[];
+};
+
+type AlgofundPortfolioPassport = {
+  generatedAt?: string;
+  source?: string;
+  selectionPolicy?: 'conservative' | 'balanced' | 'aggressive';
+  period?: PeriodInfo | null;
+  candidates?: Array<{
+    strategyId: number;
+    strategyName: string;
+    strategyType: string;
+    marketMode: string;
+    market: string;
+    weight: number;
+    score: number;
+    metrics: MetricSet;
+  }>;
+  portfolioSummary?: {
+    initialBalance?: number;
+    finalEquity?: number;
+    totalReturnPercent?: number;
+    maxDrawdownPercent?: number;
+    winRatePercent?: number;
+    profitFactor?: number;
+    tradesCount?: number;
+  } | null;
+  blockedReasons?: string[];
 };
 
 type Tenant = {
@@ -119,44 +192,6 @@ type TenantCapabilities = {
   startStopRequests: boolean;
 };
 
-type UpdateCommit = {
-  hash: string;
-  shortHash: string;
-  date: string;
-  subject: string;
-};
-
-type UpdateStatus = {
-  configured: boolean;
-  updateEnabled: boolean;
-  repoDir: string;
-  appDir: string;
-  branch: string;
-  originUrl: string;
-  localHash: string;
-  remoteHash: string;
-  ahead: number;
-  behind: number;
-  dirtyCount: number;
-  updateAvailable: boolean;
-  latestCommit: UpdateCommit | null;
-  pendingCommits: UpdateCommit[];
-  message?: string;
-};
-
-type UpdateJob = {
-  unit: string;
-  exists: boolean;
-  loadState: string;
-  activeState: string;
-  subState: string;
-  result: string;
-  execMainStatus: string;
-  startedAt: string;
-  exitedAt: string;
-  logs: string;
-};
-
 type TenantSummary = {
   tenant: Tenant;
   plan: Plan | null;
@@ -182,7 +217,48 @@ type TenantSummary = {
     unrealized_pnl?: number;
     margin_load_percent?: number;
     drawdown_percent?: number;
+    effective_leverage?: number;
   } | null;
+};
+
+type MonitoringSnapshotPoint = {
+  recorded_at?: string;
+  equity_usd?: number;
+  margin_load_percent?: number;
+  effective_leverage?: number;
+  drawdown_percent?: number;
+};
+
+type TelegramControls = {
+  adminEnabled: boolean;
+  clientsEnabled: boolean;
+  tokenConfigured: boolean;
+  chatConfigured: boolean;
+};
+
+type LowLotRecommendation = {
+  apiKeyName: string;
+  strategyId: number;
+  strategyName: string;
+  pair: string;
+  mode: string;
+  maxDeposit: number;
+  leverage: number;
+  lotPercent: number;
+  lastError: string;
+  updatedAt: string;
+  suggestedDepositMin: number;
+  suggestedLotPercent: number;
+  tenants: Array<{ id: number; slug: string; displayName: string; mode: ProductMode }>;
+  replacementCandidates: Array<{ symbol: string; score: number; note: string }>;
+  systemId: number | null;
+  eventSource: 'last_error' | 'runtime_event' | 'liquidity_trigger';
+};
+
+type LowLotRecommendationResponse = {
+  generatedAt: string;
+  periodHours: number;
+  items: LowLotRecommendation[];
 };
 
 type SaasSummary = {
@@ -249,6 +325,96 @@ type SaasSummary = {
   tenants: TenantSummary[];
   plans: Plan[];
   apiKeys: string[];
+  backtestPairRequests?: {
+    pending: number;
+    total: number;
+  };
+  algofundRequestQueue?: {
+    total: number;
+    pending: number;
+    approved: number;
+    rejected: number;
+    items: AlgofundRequest[];
+  };
+  offerStore?: {
+    defaults: {
+      periodDays: number;
+      targetTradesPerDay: number;
+      riskLevel: Level3;
+    };
+    publishedOfferIds: string[];
+    offers: Array<{
+      offerId: string;
+      titleRu: string;
+      mode: 'mono' | 'synth';
+      market: string;
+      strategyId: number;
+      score: number;
+      ret: number;
+      pf: number;
+      dd: number;
+      trades: number;
+      tradesPerDay: number;
+      periodDays: number;
+      published: boolean;
+      equityPoints?: number[];
+    }>;
+  };
+  reportSettings?: {
+    enabled: boolean;
+    tsDaily: boolean;
+    tsWeekly: boolean;
+    tsMonthly: boolean;
+    offerDaily: boolean;
+    offerWeekly: boolean;
+    offerMonthly: boolean;
+  };
+};
+
+type AdminPerformanceReport = {
+  generatedAt: string;
+  period: 'daily' | 'weekly' | 'monthly';
+  periodHours: number;
+  settings: SaasSummary['reportSettings'];
+  tradingSystems: Array<{
+    apiKeyName: string;
+    id: number;
+    name: string;
+    isActive: boolean;
+    equityUsd: number;
+    unrealizedPnl: number;
+    drawdownPercent: number;
+    marginLoadPercent: number;
+    effectiveLeverage: number;
+    updatedAt: string;
+  }>;
+  offers: Array<{
+    offerId: string;
+    titleRu: string;
+    strategyId: number;
+    mode: 'mono' | 'synth';
+    market: string;
+    published: boolean;
+    expected: {
+      ret: number;
+      pf: number;
+      dd: number;
+      trades: number;
+      tradesPerDay: number;
+    };
+    live: {
+      samples: number;
+      entryPriceDeviationPercent: number;
+      entryLagSeconds: number;
+      realizedVsPredictedPnlPercent: number;
+      winRatePercent: number | null;
+    } | null;
+    comparison: {
+      expectedWinRatePercent: number | null;
+      liveWinRatePercent: number | null;
+      winRateDeltaPercent: number | null;
+    } | null;
+  }>;
 };
 
 type StrategyClientState = {
@@ -258,6 +424,7 @@ type StrategyClientState = {
   monitoring?: TenantSummary['monitoring'];
   profile: {
     selectedOfferIds: string[];
+    activeSystemProfileId?: number | null;
     latestPreview?: Record<string, unknown>;
     risk_level: Level3;
     trade_frequency_level: Level3;
@@ -265,6 +432,15 @@ type StrategyClientState = {
     actual_enabled: number;
     assigned_api_key_name: string;
   } | null;
+  systemProfiles?: Array<{
+    id: number;
+    profileName: string;
+    selectedOfferIds: string[];
+    isActive: boolean;
+    createdAt?: string;
+    updatedAt?: string;
+  }>;
+  constraints?: StrategySelectionConstraints;
   catalog: SaasSummary['catalog'];
   offers: CatalogOffer[];
   recommendedSets: Record<string, CatalogOffer[]>;
@@ -297,6 +473,7 @@ type StrategySelectionPreviewResponse = {
     riskLevel?: Level3;
     tradeFrequencyLevel?: Level3;
   };
+  constraints?: StrategySelectionConstraints;
   selectedOffers: Array<{
     offerId: string;
     titleRu: string;
@@ -331,13 +508,46 @@ type MaterializeResponse = {
   strategies: MaterializedStrategy[];
 };
 
+type OfferUnpublishImpact = {
+  offerId: string;
+  affectedTenants: Array<{
+    tenantId: number;
+    slug: string;
+    displayName: string;
+    productMode: ProductMode;
+    assignedApiKeyName: string;
+  }>;
+  openPositions: Array<{
+    tenantId: number;
+    apiKeyName: string;
+    count: number;
+    symbols: string[];
+  }>;
+  summary: {
+    tenantCount: number;
+    openPositionsCount: number;
+  };
+};
+
+type ClientMagicLinkResponse = {
+  success: boolean;
+  token: string;
+  expiresAt: string;
+  loginUrl: string;
+  tenantId: number;
+  userId: number;
+};
+
 type AlgofundRequest = {
   id: number;
   tenant_id: number;
-  request_type: 'start' | 'stop';
+  tenant_display_name?: string;
+  tenant_slug?: string;
+  request_type: 'start' | 'stop' | 'switch_system';
   status: RequestStatus;
   note: string;
   decision_note: string;
+  request_payload_json?: string;
   created_at: string;
   decided_at?: string | null;
 };
@@ -352,7 +562,27 @@ type AlgofundState = {
     requested_enabled: number;
     actual_enabled: number;
     assigned_api_key_name: string;
+    published_system_name?: string;
   };
+  engine?: {
+    apiKeyName: string;
+    systemId: number;
+    systemName: string;
+    isActive: boolean;
+  } | null;
+  availableSystems?: Array<{
+    id: number;
+    name: string;
+    isActive: boolean;
+    updatedAt?: string;
+    metrics?: {
+      equityUsd?: number;
+      unrealizedPnl?: number;
+      drawdownPercent?: number;
+      marginLoadPercent?: number;
+      effectiveLeverage?: number;
+    } | null;
+  }>;
   preview: {
     riskMultiplier: number;
     period?: PeriodInfo | null;
@@ -362,6 +592,7 @@ type AlgofundState = {
       systemName: string;
     } | null;
     summary?: {
+      initialBalance?: number;
       finalEquity?: number;
       totalReturnPercent?: number;
       maxDrawdownPercent?: number;
@@ -373,6 +604,7 @@ type AlgofundState = {
     blockedByPlan?: boolean;
     blockedReason?: string;
   };
+  portfolioPassport?: AlgofundPortfolioPassport | null;
   requests: AlgofundRequest[];
   catalog: SaasSummary['catalog'];
 };
@@ -428,6 +660,7 @@ type Copy = {
   selectedOffers: string;
   monitoring: string;
   requestQueue: string;
+  requestTenant: string;
   previewTitle: string;
   selectedOffersPreview: string;
   publishedTsPreview: string;
@@ -473,6 +706,8 @@ type Copy = {
   previewUsesNearestPreset: string;
   previewPlanCapHint: string;
   previewRefreshing: string;
+  riskApplied: string;
+  initialBalance: string;
   openTradingSystems: string;
   persistedBucket: string;
   pending: string;
@@ -492,12 +727,30 @@ type Copy = {
   publishReady: string;
   seedReady: string;
   emergencyStop: string;
+  createMagicLink: string;
+  magicLinkReady: string;
+  magicLinkExpires: string;
+  createClient: string;
+  createClientTitle: string;
+  createClientSuccess: string;
+  recommendedSetsHint: string;
+  adminTsDraftHint: string;
+  selectedOffersHint: string;
+  selectedOffersEmptyHint: string;
+  adminCreateHint: string;
+  engineStatus: string;
+  engineSystemId: string;
+  engineRunning: string;
+  enginePending: string;
+  engineBlocked: string;
+  engineStopped: string;
+  engineNotMaterialized: string;
 };
 
 const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
   ru: {
     title: 'SaaS Control Room',
-    subtitle: 'Один MVP-контур для admin, strategy-client и Алгофонд поверх готовых sweep/catalog результатов.',
+    subtitle: 'Единый MVP-контур для admin, strategy-client и Алгофонда поверх готовых результатов sweep/catalog.',
     refresh: 'Обновить',
     seed: 'Инициализировать demo tenants',
     publish: 'Опубликовать admin TS',
@@ -507,15 +760,15 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     latestCatalog: 'Последний client catalog',
     latestSweep: 'Последний historical sweep',
     noCatalog: 'Каталог стратегий временно недоступен. Проверьте сборку каталога в админ-контуре.',
-    noSweep: 'Исторический sweep временно недоступен. Материализация будет доступна после обновления данных.',
-    recommendedSets: 'Рекомендуемые наборы',
-    adminTsDraft: 'Черновик admin trading system',
+    noSweep: 'Исторический sweep временно недоступен. Материализация станет доступна после обновления данных.',
+    recommendedSets: 'Наборы офферов из sweep',
+    adminTsDraft: 'Черновик портфеля admin',
     tenants: 'Тестовые tenants',
     openStrategyClient: 'Открыть клиента стратегий',
     openAlgofund: 'Открыть Алгофонд',
     saveProfile: 'Сохранить профиль',
     preview: 'Показать preview',
-    materialize: 'Materialize на API key',
+    materialize: 'Материализовать на API key',
     requestStart: 'Запросить старт',
     requestStop: 'Запросить стоп',
     approve: 'Одобрить',
@@ -523,15 +776,16 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     risk: 'Риск',
     tradeFrequency: 'Частота сделок',
     apiKey: 'API key',
-    selectedOffers: 'Выбранные офферы',
+    selectedOffers: 'Офферы для подключения',
     monitoring: 'Monitoring',
     requestQueue: 'Очередь запросов',
+    requestTenant: 'Tenant',
     previewTitle: 'Preview ожиданий',
-    selectedOffersPreview: 'Preview выбранных офферов',
+    selectedOffersPreview: 'SWEEP compare выбранных офферов (4D)',
     publishedTsPreview: 'Preview опубликованного admin TS',
     noTenant: 'Тенант этого типа пока не найден.',
     sourceSystem: 'Source system',
-    tenantMode: 'Режим',
+    tenantMode: 'Тип клиента',
     plan: 'Тариф',
     status: 'Статус',
     score: 'Score',
@@ -551,13 +805,13 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     capabilitySettings: 'Настройки',
     capabilityApiKeyUpdate: 'Смена API key',
     capabilityMonitoring: 'Мониторинг',
-    capabilityBacktest: 'Бэктест/Preview',
-    capabilityStartStop: 'Старт/Стоп заявки',
+    capabilityBacktest: 'Бэктест',
+    capabilityStartStop: 'Старт/стоп заявки',
     openSettings: 'Открыть Settings',
     openMonitoring: 'Открыть Monitoring',
     openBacktest: 'Открыть Backtest',
-    backtestLockedHint: 'Расширенный backtest недоступен на текущем тарифе. Показывается упрощенный preview.',
-    settingsLockedHint: 'Изменение настроек недоступно на текущем тарифе',
+    backtestLockedHint: 'Backtest недоступен на текущем тарифе. Preview остаётся доступным.',
+    settingsLockedHint: 'Изменение настроек недоступно на текущем тарифе.',
     priceUsdt: 'Цена, USDT/мес',
     saveTenant: 'Сохранить tenant',
     savePlan: 'Сохранить тариф',
@@ -568,9 +822,11 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     displayName: 'Имя клиента',
     tenantStatus: 'Статус tenant',
     planGrid: 'Тарифная сетка',
-    previewUsesNearestPreset: 'Preview использует ближайший пресет и при сохранении маппится в low / medium / high.',
-    previewPlanCapHint: 'В админ-режиме preview можно смотреть выше лимита тарифа, но сохранение все равно ограничивается тарифным cap.',
+    previewUsesNearestPreset: 'Preview использует ближайший пресет и при сохранении всё равно маппится в low / medium / high.',
+    previewPlanCapHint: 'В админ-режиме preview можно смотреть выше лимита тарифа, но сохранение всё равно ограничивается тарифным cap.',
     previewRefreshing: 'Пересчитываем preview...',
+    riskApplied: 'Риск (множитель)',
+    initialBalance: 'Начальный баланс',
     openTradingSystems: 'Открыть Trading Systems',
     persistedBucket: 'Сохраняемый bucket',
     pending: 'Ожидает',
@@ -580,8 +836,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     stop: 'Стоп',
     note: 'Комментарий',
     decisionNote: 'Комментарий решения',
-    chooseTenant: 'Выберите тенанта',
-    chooseOffer: 'Выберите оффер',
+    chooseTenant: 'Выберите клиента (tenant)',
+    chooseOffer: 'Выберите оффер для одиночного preview',
     saveSuccess: 'Профиль обновлен',
     previewReady: 'Preview обновлен',
     materializeSuccess: 'Стратегии материализованы',
@@ -590,6 +846,24 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     publishReady: 'Admin TS опубликован',
     seedReady: 'Demo tenants обновлены',
     emergencyStop: 'Стоп + закрыть позиции',
+    createMagicLink: 'Сгенерировать ссылку входа',
+    magicLinkReady: 'Ссылка готова (одноразовая)',
+    magicLinkExpires: 'Действительна до',
+    createClient: 'Создать нового пользователя',
+    createClientTitle: 'Создание пользователя через Admin',
+    createClientSuccess: 'Клиент создан',
+    recommendedSetsHint: 'Это готовые подборки офферов из последнего SWEEP. Можно быстро выбрать набор и затем подключить его клиенту.',
+    adminTsDraftHint: 'Служебный черновик портфеля для admin. Нужен для публикации admin trading system и контроля состава.',
+    selectedOffersHint: 'Выбирайте офферы как товары. Если выбрано несколько, ниже строится SWEEP compare (4D), а не полный API backtest.',
+    selectedOffersEmptyHint: 'Офферы не найдены в preset-базе. Показываю fallback из последнего SWEEP/client catalog, если он доступен.',
+    adminCreateHint: 'Admin создаёт клиентов двух типов: Клиент стратегий и Алгофонд. После создания можно сразу открыть и настроить кабинет.',
+    engineStatus: 'Статус движка',
+    engineSystemId: 'System ID',
+    engineRunning: 'Торговый движок запущен',
+    enginePending: 'Запрос одобрен, запуск ожидается',
+    engineBlocked: 'Не удалось материализовать клиента в engine',
+    engineStopped: 'Торговый движок остановлен',
+    engineNotMaterialized: 'Клиент ещё не заведён в торговый движок. Нужна materialization торговой системы.',
   },
   en: {
     title: 'SaaS Control Room',
@@ -604,8 +878,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     latestSweep: 'Latest historical sweep',
     noCatalog: 'Strategy catalog is temporarily unavailable. Check catalog build in admin mode.',
     noSweep: 'Historical sweep is temporarily unavailable. Materialization will be enabled after data refresh.',
-    recommendedSets: 'Recommended sets',
-    adminTsDraft: 'Admin trading system draft',
+    recommendedSets: 'Sweep-based offer bundles',
+    adminTsDraft: 'Admin portfolio draft',
     tenants: 'Demo tenants',
     openStrategyClient: 'Open strategy client',
     openAlgofund: 'Open algofund',
@@ -619,15 +893,16 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     risk: 'Risk',
     tradeFrequency: 'Trade frequency',
     apiKey: 'API key',
-    selectedOffers: 'Selected offers',
+    selectedOffers: 'Offers to connect',
     monitoring: 'Monitoring',
     requestQueue: 'Request queue',
+    requestTenant: 'Tenant',
     previewTitle: 'Expectation preview',
-    selectedOffersPreview: 'Selected offers preview',
+    selectedOffersPreview: 'Selected offers SWEEP compare (4D)',
     publishedTsPreview: 'Published admin TS preview',
     noTenant: 'No tenant of this type is available yet.',
     sourceSystem: 'Source system',
-    tenantMode: 'Mode',
+    tenantMode: 'Client type',
     plan: 'Plan',
     status: 'Status',
     score: 'Score',
@@ -647,12 +922,12 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     capabilitySettings: 'Settings',
     capabilityApiKeyUpdate: 'API key update',
     capabilityMonitoring: 'Monitoring',
-    capabilityBacktest: 'Backtest/Preview',
+    capabilityBacktest: 'Backtest',
     capabilityStartStop: 'Start/Stop requests',
     openSettings: 'Open Settings',
     openMonitoring: 'Open Monitoring',
     openBacktest: 'Open Backtest',
-    backtestLockedHint: 'Extended backtest is not available for this plan. Simplified preview is shown.',
+    backtestLockedHint: 'Backtest is not available on the current plan. Preview remains available.',
     settingsLockedHint: 'Settings update is not available for the current plan',
     priceUsdt: 'Price, USDT/mo',
     saveTenant: 'Save tenant',
@@ -667,6 +942,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     previewUsesNearestPreset: 'Preview uses the nearest preset and save still maps to low / medium / high.',
     previewPlanCapHint: 'In admin mode you can preview above the plan cap, but saving still respects the subscribed cap.',
     previewRefreshing: 'Refreshing preview...',
+    riskApplied: 'Risk (multiplier)',
+    initialBalance: 'Initial balance',
     openTradingSystems: 'Open Trading Systems',
     persistedBucket: 'Saved bucket',
     pending: 'Pending',
@@ -676,8 +953,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     stop: 'Stop',
     note: 'Note',
     decisionNote: 'Decision note',
-    chooseTenant: 'Select tenant',
-    chooseOffer: 'Select offer',
+    chooseTenant: 'Select client tenant',
+    chooseOffer: 'Select offer for single preview',
     saveSuccess: 'Profile updated',
     previewReady: 'Preview updated',
     materializeSuccess: 'Strategies materialized',
@@ -686,6 +963,24 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     publishReady: 'Admin TS published',
     seedReady: 'Demo tenants refreshed',
     emergencyStop: 'Stop + close positions',
+    createMagicLink: 'Create login link',
+    magicLinkReady: 'Link ready (one-time use)',
+    magicLinkExpires: 'Expires at',
+    createClient: 'Create new user',
+    createClientTitle: 'Admin user creation',
+    createClientSuccess: 'Client created',
+    recommendedSetsHint: 'These are ready offer bundles generated from the latest SWEEP. Pick a bundle and connect it to a client.',
+    adminTsDraftHint: 'Internal admin portfolio draft used for publishing admin trading system and composition control.',
+    selectedOffersHint: 'Pick offers like products. When several are selected, the panel runs SWEEP compare (4D), not full API backtest.',
+    selectedOffersEmptyHint: 'No offers found in preset storage. Fallback from latest SWEEP/client catalog is used when available.',
+    adminCreateHint: 'Admin creates two client types: Strategy Client and Algofund. After creation you can open and configure immediately.',
+    engineStatus: 'Engine status',
+    engineSystemId: 'System ID',
+    engineRunning: 'Trading engine is running',
+    enginePending: 'Request approved, engine launch pending',
+    engineBlocked: 'Client could not be materialized into engine',
+    engineStopped: 'Trading engine is stopped',
+    engineNotMaterialized: 'This client is not materialized into the trading engine yet. Trading-system materialization is required.',
   },
   tr: {
     title: 'SaaS Control Room',
@@ -700,8 +995,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     latestSweep: 'Son historical sweep',
     noCatalog: 'Strateji katalogu gecici olarak kullanilamiyor. Admin modunda katalog build kontrol edin.',
     noSweep: 'Historical sweep gecici olarak kullanilamiyor. Veri yenilenince materialize acilacak.',
-    recommendedSets: 'Onerilen setler',
-    adminTsDraft: 'Admin trading system taslagi',
+    recommendedSets: 'SWEEP teklif paketleri',
+    adminTsDraft: 'Admin portfoy taslagi',
     tenants: 'Demo tenantlar',
     openStrategyClient: 'Strategy client ac',
     openAlgofund: 'Algofund ac',
@@ -715,15 +1010,16 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     risk: 'Risk',
     tradeFrequency: 'Islem sikligi',
     apiKey: 'API key',
-    selectedOffers: 'Secilen teklifler',
+    selectedOffers: 'Baglanacak teklifler',
     monitoring: 'Monitoring',
     requestQueue: 'Talep kuyrugu',
+    requestTenant: 'Tenant',
     previewTitle: 'Beklenti onizlemesi',
-    selectedOffersPreview: 'Secilen teklifler onizlemesi',
+    selectedOffersPreview: 'Secilen teklifler SWEEP compare (4D)',
     publishedTsPreview: 'Yayinlanan admin TS onizlemesi',
     noTenant: 'Bu tipte tenant yok.',
     sourceSystem: 'Source system',
-    tenantMode: 'Mod',
+    tenantMode: 'Musteri tipi',
     plan: 'Plan',
     status: 'Durum',
     score: 'Score',
@@ -743,12 +1039,12 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     capabilitySettings: 'Ayarlar',
     capabilityApiKeyUpdate: 'API key guncelleme',
     capabilityMonitoring: 'Monitoring',
-    capabilityBacktest: 'Backtest/Onizleme',
+    capabilityBacktest: 'Backtest',
     capabilityStartStop: 'Baslat/Durdur talepleri',
     openSettings: 'Settings ac',
     openMonitoring: 'Monitoring ac',
     openBacktest: 'Backtest ac',
-    backtestLockedHint: 'Bu planda gelismis backtest kapali. Basit onizleme gosteriliyor.',
+    backtestLockedHint: 'Bu planda backtest kapali. Onizleme kullanilmaya devam eder.',
     settingsLockedHint: 'Bu planda ayar guncelleme kapali',
     priceUsdt: 'Fiyat, USDT/ay',
     saveTenant: 'Tenant kaydet',
@@ -763,6 +1059,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     previewUsesNearestPreset: 'Onizleme en yakin preseti kullanir ve kayit sirasinda yine low / medium / high olarak saklanir.',
     previewPlanCapHint: 'Admin modunda plan limitinin ustunu onizleyebilirsiniz, ancak kayit yine mevcut plan limitine gore yapilir.',
     previewRefreshing: 'Onizleme guncelleniyor...',
+    riskApplied: 'Risk (carpan)',
+    initialBalance: 'Baslangic bakiyesi',
     openTradingSystems: 'Trading Systems ac',
     persistedBucket: 'Kaydedilecek bucket',
     pending: 'Bekliyor',
@@ -772,8 +1070,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     stop: 'Durdur',
     note: 'Not',
     decisionNote: 'Karar notu',
-    chooseTenant: 'Tenant secin',
-    chooseOffer: 'Teklif secin',
+    chooseTenant: 'Musteri tenant secin',
+    chooseOffer: 'Tekli onizleme icin teklif secin',
     saveSuccess: 'Profil guncellendi',
     previewReady: 'Onizleme guncellendi',
     materializeSuccess: 'Stratejiler olusturuldu',
@@ -782,6 +1080,24 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     publishReady: 'Admin TS yayinlandi',
     seedReady: 'Demo tenantlar guncellendi',
     emergencyStop: 'Durdur + pozisyonlari kapat',
+    createMagicLink: 'Giris linki olustur',
+    magicLinkReady: 'Link hazir (tek kullanim)',
+    magicLinkExpires: 'Son kullanim',
+    createClient: 'Yeni kullanici olustur',
+    createClientTitle: 'Admin kullanici olusturma',
+    createClientSuccess: 'Musteri olusturuldu',
+    recommendedSetsHint: 'Bunlar son SWEEP sonucundan gelen hazir teklif paketleridir. Paketi secip musteriye baglayabilirsiniz.',
+    adminTsDraftHint: 'Admin trading system yayinlamasi ve kompozisyon kontrolu icin dahili portfoy taslagi.',
+    selectedOffersHint: 'Teklifleri urun gibi secin. Birden fazla secimde panel tam API backtest degil SWEEP compare (4D) calistirir.',
+    selectedOffersEmptyHint: 'Preset depoda teklif yok. Mumkunse son SWEEP/client catalog fallback gosterilir.',
+    adminCreateHint: 'Admin iki musteri tipi olusturur: Strateji Musterisi ve Algofund. Olusturduktan sonra hemen acip ayarlayabilirsiniz.',
+    engineStatus: 'Engine durumu',
+    engineSystemId: 'System ID',
+    engineRunning: 'Trading engine calisiyor',
+    enginePending: 'Talep onaylandi, engine baslatma bekleniyor',
+    engineBlocked: 'Musteri engine icine materialize edilemedi',
+    engineStopped: 'Trading engine durdu',
+    engineNotMaterialized: 'Bu musteri henuz trading engine icine alinmadi. Trading system materialization gerekli.',
   },
 };
 
@@ -808,15 +1124,20 @@ const calcDepositLoadPercent = (row: TenantSummary): number | null => {
 const calcLiquidationRisk = (row: TenantSummary): { level: 'low' | 'medium' | 'high'; color: string; bufferPercent: number | null } => {
   const marginLoad = Number(row.monitoring?.margin_load_percent ?? 0);
   const drawdown = Number(row.monitoring?.drawdown_percent ?? 0);
-  const score = marginLoad * 0.75 + drawdown * 0.35;
   const bufferPercent = Number.isFinite(marginLoad) ? Math.max(0, 100 - marginLoad) : null;
 
-  if (marginLoad >= 85 || drawdown >= 35 || score >= 85) {
+  // PRIMARY: margin_load is the main factor for liquidation risk
+  // HIGH: If margin_load >= 80% OR (margin_load >= 65% AND drawdown >= 35%)
+  if (marginLoad >= 80 || (marginLoad >= 65 && drawdown >= 35)) {
     return { level: 'high', color: 'red', bufferPercent };
   }
-  if (marginLoad >= 65 || drawdown >= 20 || score >= 60) {
+  
+  // MEDIUM: If margin_load >= 60% OR (margin_load >= 45% AND drawdown >= 25%)
+  if (marginLoad >= 60 || (marginLoad >= 45 && drawdown >= 25)) {
     return { level: 'medium', color: 'gold', bufferPercent };
   }
+  
+  // LOW: All other cases
   return { level: 'low', color: 'green', bufferPercent };
 };
 
@@ -831,12 +1152,23 @@ const toFiniteNumberOrNull = (value: unknown): number | null => {
 
 const normalizeSeriesTime = (value: unknown): number | null => {
   const numeric = toFiniteNumberOrNull(value);
-  if (numeric === null) {
+  if (numeric !== null) {
+    const normalizedNumeric = numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
+    return normalizedNumeric > 0 ? normalizedNumeric : null;
+  }
+
+  const text = String(value || '').trim();
+  if (!text) {
     return null;
   }
 
-  const normalized = numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
-  return normalized > 0 ? normalized : null;
+  const parsedMs = Date.parse(text);
+  if (Number.isFinite(parsedMs)) {
+    const normalizedDate = Math.floor(parsedMs / 1000);
+    return normalizedDate > 0 ? normalizedDate : null;
+  }
+
+  return null;
 };
 
 const dedupeLinePoints = (points: LinePoint[]): LinePoint[] => {
@@ -854,6 +1186,20 @@ const dedupeLinePoints = (points: LinePoint[]): LinePoint[] => {
     out.push(point);
   }
 
+  return out;
+};
+
+const dedupeOffersById = (offers: CatalogOffer[]): CatalogOffer[] => {
+  const out: CatalogOffer[] = [];
+  const seen = new Set<string>();
+  for (const offer of offers) {
+    const offerId = String(offer?.offerId || '').trim();
+    if (!offerId || seen.has(offerId)) {
+      continue;
+    }
+    seen.add(offerId);
+    out.push(offer);
+  }
   return out;
 };
 
@@ -969,6 +1315,214 @@ const metricColor = (value: number, kind: 'return' | 'drawdown' | 'pf') => {
   return value >= 0 ? 'success' : 'error';
 };
 
+const summarizeOfferSet = (offers: CatalogOffer[]) => {
+  const rows = Array.isArray(offers) ? offers : [];
+  if (rows.length === 0) {
+    return {
+      avgRet: 0,
+      avgDd: 0,
+      avgPf: 0,
+      count: 0,
+    };
+  }
+
+  const totalRet = rows.reduce((acc, offer) => acc + Number(offer.metrics?.ret || 0), 0);
+  const totalPf = rows.reduce((acc, offer) => acc + Number(offer.metrics?.pf || 0), 0);
+  const maxDd = rows.reduce((acc, offer) => Math.max(acc, Number(offer.metrics?.dd || 0)), 0);
+
+  return {
+    avgRet: totalRet / rows.length,
+    avgDd: maxDd,
+    avgPf: totalPf / rows.length,
+    count: rows.length,
+  };
+};
+
+const describeOfferSet = (setName: string, offers: CatalogOffer[]): string => {
+  const summary = summarizeOfferSet(offers);
+  const markets = offers
+    .slice(0, 4)
+    .map((offer) => String(offer.strategy?.market || '').trim())
+    .filter(Boolean)
+    .join(', ');
+  const notes = offers
+    .slice(0, 2)
+    .map((offer) => String(offer.descriptionRu || '').trim())
+    .filter(Boolean)
+    .join(' | ');
+
+  return [
+    `${setName}: ${summary.count} offers`,
+    `Prof ${formatPercent(summary.avgRet)} / DD ${formatPercent(summary.avgDd)} / PF ${formatNumber(summary.avgPf)}`,
+    markets ? `Markets: ${markets}` : '',
+    notes,
+  ].filter(Boolean).join('\n');
+};
+
+const buildDraftStrategyConstraints = (
+  offerIds: string[],
+  offers: CatalogOffer[],
+  baseline?: StrategySelectionConstraints | null,
+): StrategySelectionConstraints => {
+  const selectedSet = new Set((offerIds || []).map((item) => String(item || '').trim()).filter(Boolean));
+  const selectedOffers = (offers || []).filter((offer) => selectedSet.has(offer.offerId));
+  const mono = selectedOffers.filter((offer) => String(offer.strategy?.mode || 'mono') === 'mono').length;
+  const synth = selectedOffers.filter((offer) => String(offer.strategy?.mode || 'mono') !== 'mono').length;
+  const uniqueMarkets = new Set(selectedOffers.map((offer) => String(offer.strategy?.market || '').trim()).filter(Boolean)).size;
+  const maxStrategies = baseline?.limits?.maxStrategies ?? null;
+  const minOffersPerSystem = baseline?.limits?.minOffersPerSystem ?? null;
+  const maxOffersPerSystem = baseline?.limits?.maxOffersPerSystem ?? null;
+  const maxCustomSystems = baseline?.limits?.maxCustomSystems ?? null;
+  const monoLimit = baseline?.limits?.mono ?? null;
+  const synthLimit = baseline?.limits?.synth ?? null;
+  const depositCap = baseline?.limits?.depositCap ?? null;
+  const estimatedDepositPerStrategy = depositCap && selectedOffers.length > 0
+    ? Number((depositCap / selectedOffers.length).toFixed(2))
+    : null;
+
+  const violations: string[] = [];
+  const warnings: string[] = [];
+
+  if (minOffersPerSystem !== null && selectedOffers.length > 0 && selectedOffers.length < minOffersPerSystem) {
+    violations.push(`At least ${minOffersPerSystem} offers are required to build a custom TS.`);
+  }
+  if (maxStrategies !== null && selectedOffers.length > maxStrategies) {
+    violations.push(`Too many offers selected (${selectedOffers.length}/${maxStrategies}).`);
+  }
+  if (maxOffersPerSystem !== null && selectedOffers.length > maxOffersPerSystem) {
+    violations.push(`Custom TS offer cap exceeded (${selectedOffers.length}/${maxOffersPerSystem}).`);
+  }
+  if (monoLimit !== null && mono > monoLimit) {
+    violations.push(`Mono offers exceed plan limit (${mono}/${monoLimit}).`);
+  }
+  if (synthLimit !== null && synth > synthLimit) {
+    violations.push(`Synthetic offers exceed plan limit (${synth}/${synthLimit}).`);
+  }
+  if (selectedOffers.length > 1 && uniqueMarkets < selectedOffers.length) {
+    warnings.push('Repeated markets reduce diversification.');
+  }
+  if (selectedOffers.length > 1 && (mono === 0 || synth === 0)) {
+    warnings.push('Only one mode is selected; portfolio balance is weaker.');
+  }
+  if (estimatedDepositPerStrategy !== null && estimatedDepositPerStrategy < 250) {
+    warnings.push(`Estimated deposit per strategy is thin (${estimatedDepositPerStrategy} USDT).`);
+  }
+
+  return {
+    limits: {
+      maxStrategies,
+      minOffersPerSystem,
+      maxOffersPerSystem,
+      maxCustomSystems,
+      mono: monoLimit,
+      synth: synthLimit,
+      depositCap,
+      riskCap: baseline?.limits?.riskCap ?? null,
+    },
+    usage: {
+      selected: selectedOffers.length,
+      mono,
+      synth,
+      uniqueMarkets,
+      remainingSlots: maxStrategies !== null ? Math.max(0, maxStrategies - selectedOffers.length) : null,
+      currentCustomSystems: selectedOffers.length > 0 ? 1 : 0,
+      remainingCustomSystems: maxCustomSystems !== null
+        ? Math.max(0, maxCustomSystems - (selectedOffers.length > 0 ? 1 : 0))
+        : null,
+      estimatedDepositPerStrategy,
+    },
+    violations,
+    warnings,
+  };
+};
+
+const parseAlgofundRequestPayload = (raw?: string) => {
+  if (!raw) {
+    return { targetSystemId: undefined as number | undefined, targetSystemName: undefined as string | undefined };
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as { targetSystemId?: unknown; targetSystemName?: unknown };
+    const targetSystemId = Number(parsed?.targetSystemId || 0);
+    const targetSystemName = String(parsed?.targetSystemName || '').trim();
+    return {
+      targetSystemId: Number.isFinite(targetSystemId) && targetSystemId > 0 ? targetSystemId : undefined,
+      targetSystemName: targetSystemName || undefined,
+    };
+  } catch {
+    return { targetSystemId: undefined as number | undefined, targetSystemName: undefined as string | undefined };
+  }
+};
+
+const buildApiKeyLogComments = (rawLines: unknown, apiKeys: string[]): Record<string, string[]> => {
+  const lines = Array.isArray(rawLines) ? rawLines.map((item) => String(item || '')) : [];
+  const out: Record<string, string[]> = {};
+  for (const key of apiKeys) {
+    out[key] = [];
+  }
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!line.trim()) {
+      continue;
+    }
+
+    let level = '';
+    let message = line;
+    try {
+      const parsed = JSON.parse(line);
+      level = String(parsed?.level || '').toLowerCase();
+      message = String(parsed?.message || line);
+    } catch {
+      // Keep raw line if not JSON-formatted.
+    }
+
+    const normalizedMessage = message.toLowerCase();
+    const looksImportant = level === 'error'
+      || level === 'warn'
+      || /error|failed|not initialized|exception|insufficient|liquidat|109400|positionside/.test(normalizedMessage);
+
+    if (!looksImportant) {
+      continue;
+    }
+
+    for (const key of apiKeys) {
+      if (!normalizedMessage.includes(key.toLowerCase())) {
+        continue;
+      }
+      if (out[key].length >= 2) {
+        continue;
+      }
+
+      const compact = message.replace(/\s+/g, ' ').trim();
+      out[key].push(compact.length > 160 ? `${compact.slice(0, 157)}...` : compact);
+    }
+  }
+
+  return out;
+};
+
+const buildLotSizingHint = (notes: string[]): string | null => {
+  const joined = notes.join(' | ');
+  const oversizeMatch = joined.match(/oversize\s*=\s*(\d+(?:\.\d+)?)%/i);
+  if (!oversizeMatch) {
+    return null;
+  }
+
+  const oversize = Number(oversizeMatch[1]);
+  if (!Number.isFinite(oversize)) {
+    return 'Low lot size detected; consider increasing risk multiplier or replacing low-liquidity pair.';
+  }
+
+  if (oversize >= 180) {
+    return 'Lot too small for pair balancing (oversize > 180%). Suggest risk x2.0+ or replace pair.';
+  }
+  if (oversize >= 130) {
+    return 'Lot likely too small (oversize > 130%). Suggest risk x1.5+ or increase deposit.';
+  }
+  return 'Lot sizing warning detected. Suggest risk x1.2+ and re-check execution.';
+};
+
 const productModeTag = (mode: ProductMode) => {
   if (mode === 'algofund_client') {
     return <Tag color="gold">algofund</Tag>;
@@ -1030,6 +1584,18 @@ const sliderValueToLevel = (value: number): Level3 => {
   if (value >= 6.67) return 'high';
   return 'medium';
 };
+const snapToLevelValue = (value: number): number => {
+  if (!Number.isFinite(value)) {
+    return 5;
+  }
+  if (value <= 2.5) {
+    return 0;
+  }
+  if (value >= 7.5) {
+    return 10;
+  }
+  return 5;
+};
 
 const formatDateShort = (value?: string | null): string => {
   if (!value) {
@@ -1058,11 +1624,11 @@ const formatPeriodCoverage = (period?: PeriodInfo | null): string => {
   const diffMs = toMs - fromMs;
   const days = diffMs / (24 * 60 * 60 * 1000);
   if (days >= 1) {
-    return ` · ${Math.round(days)}d`;
+    return ` • ${Math.round(days)}d`;
   }
 
   const hours = diffMs / (60 * 60 * 1000);
-  return ` · ${Math.max(1, Math.round(hours))}h`;
+  return ` • ${Math.max(1, Math.round(hours))}h`;
 };
 
 const formatPeriodLabel = (period?: PeriodInfo | null): string => {
@@ -1072,7 +1638,7 @@ const formatPeriodLabel = (period?: PeriodInfo | null): string => {
 
   const from = formatDateShort(period.dateFrom);
   const to = formatDateShort(period.dateTo);
-  const interval = period.interval ? ` · ${period.interval}` : '';
+  const interval = period.interval ? ` • ${period.interval}` : '';
   const coverage = formatPeriodCoverage(period);
   return `${from} -> ${to}${interval}${coverage}`;
 };
@@ -1107,13 +1673,17 @@ export const hydrateStrategyPreview = (
 };
 
 const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin' }) => {
-  const { language, t } = useI18n();
+  const { language } = useI18n();
   const copy = COPY_BY_LANGUAGE[language];
   const isAdminSurface = surfaceMode === 'admin';
   const [messageApi, contextHolder] = message.useMessage();
   const [summary, setSummary] = useState<SaasSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState('');
+  const [reportPeriod, setReportPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [performanceReport, setPerformanceReport] = useState<AdminPerformanceReport | null>(null);
+  const [performanceReportLoading, setPerformanceReportLoading] = useState(false);
+  const [sendTelegramLoading, setSendTelegramLoading] = useState(false);
   const [strategyTenantId, setStrategyTenantId] = useState<number | null>(null);
   const [algofundTenantId, setAlgofundTenantId] = useState<number | null>(null);
   const [strategyState, setStrategyState] = useState<StrategyClientState | null>(null);
@@ -1123,6 +1693,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [algofundLoading, setAlgofundLoading] = useState(false);
   const [algofundError, setAlgofundError] = useState('');
   const [strategyOfferIds, setStrategyOfferIds] = useState<string[]>([]);
+  const [strategySystemProfileId, setStrategySystemProfileId] = useState<number | null>(null);
+  const [strategyNewProfileName, setStrategyNewProfileName] = useState('');
   const [strategyRiskInput, setStrategyRiskInput] = useState(5);
   const [strategyTradeInput, setStrategyTradeInput] = useState(5);
   const [strategyApiKeyName, setStrategyApiKeyName] = useState('');
@@ -1135,25 +1707,60 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [strategySelectionPreview, setStrategySelectionPreview] = useState<StrategySelectionPreviewResponse | null>(null);
   const [strategySelectionPreviewLoading, setStrategySelectionPreviewLoading] = useState(false);
   const [materializeResponse, setMaterializeResponse] = useState<MaterializeResponse | null>(null);
+  const [strategyMagicLink, setStrategyMagicLink] = useState<ClientMagicLinkResponse | null>(null);
+  const [algofundMagicLink, setAlgofundMagicLink] = useState<ClientMagicLinkResponse | null>(null);
   const [algofundRiskMultiplier, setAlgofundRiskMultiplier] = useState(1);
   const [algofundApiKeyName, setAlgofundApiKeyName] = useState('');
   const [algofundTenantDisplayName, setAlgofundTenantDisplayName] = useState('');
   const [algofundTenantStatus, setAlgofundTenantStatus] = useState('active');
   const [algofundTenantPlanCode, setAlgofundTenantPlanCode] = useState('');
+  const [adminTab, setAdminTab] = useState<AdminTabKey>('overview');
+  const [createTenantDisplayName, setCreateTenantDisplayName] = useState('');
+  const [createTenantProductMode, setCreateTenantProductMode] = useState<ProductMode>('strategy_client');
+  const [createTenantPlanCode, setCreateTenantPlanCode] = useState('');
+  const [createTenantApiKey, setCreateTenantApiKey] = useState('');
+  const [createTenantEmail, setCreateTenantEmail] = useState('');
   const [algofundNote, setAlgofundNote] = useState('');
   const [algofundDecisionNote, setAlgofundDecisionNote] = useState('');
+  const [retryMaterializeModalVisible, setRetryMaterializeModalVisible] = useState(false);
   const [publishResponse, setPublishResponse] = useState<AdminPublishResponse | null>(null);
+  const [monitoringSystemsByApiKey, setMonitoringSystemsByApiKey] = useState<Record<string, TradingSystemListItem[]>>({});
+  const [monitoringSystemSelected, setMonitoringSystemSelected] = useState<Record<number, number | undefined>>({});
+  const [monitoringLogCommentsByApiKey, setMonitoringLogCommentsByApiKey] = useState<Record<string, string[]>>({});
+  const [monitoringTabLoading, setMonitoringTabLoading] = useState(false);
+  const [monitoringModeFilter, setMonitoringModeFilter] = useState<'all' | ProductMode>('all');
+  const [telegramControls, setTelegramControls] = useState<TelegramControls | null>(null);
+  const [telegramControlsLoading, setTelegramControlsLoading] = useState(false);
+  const [lowLotRecommendations, setLowLotRecommendations] = useState<LowLotRecommendationResponse | null>(null);
+  const [lowLotLoading, setLowLotLoading] = useState(false);
+  const [applyLowLotTarget, setApplyLowLotTarget] = useState<LowLotRecommendation | null>(null);
+  const [applyLowLotDeposit, setApplyLowLotDeposit] = useState(true);
+  const [applyLowLotLot, setApplyLowLotLot] = useState(true);
+  const [applyLowLotReplacement, setApplyLowLotReplacement] = useState('');
+  const [applyLowLotWorking, setApplyLowLotWorking] = useState(false);
+  const [batchTenantIds, setBatchTenantIds] = useState<number[]>([]);
+  const [batchAlgofundAction, setBatchAlgofundAction] = useState<'start' | 'stop' | 'switch_system'>('start');
+  const [batchTargetSystemId, setBatchTargetSystemId] = useState<number | null>(null);
+  const [batchActionNote, setBatchActionNote] = useState('');
+  const [unpublishWizardVisible, setUnpublishWizardVisible] = useState(false);
+  const [unpublishTargetOfferId, setUnpublishTargetOfferId] = useState('');
+  const [unpublishImpact, setUnpublishImpact] = useState<OfferUnpublishImpact | null>(null);
+  const [unpublishImpactLoading, setUnpublishImpactLoading] = useState(false);
+  const [unpublishAcknowledge, setUnpublishAcknowledge] = useState(false);
+  const [monitoringChartOpen, setMonitoringChartOpen] = useState(false);
+  const [monitoringChartLoading, setMonitoringChartLoading] = useState(false);
+  const [monitoringChartApiKey, setMonitoringChartApiKey] = useState('');
+  const [monitoringChartPoints, setMonitoringChartPoints] = useState<LinePoint[]>([]);
+  const [monitoringChartLatest, setMonitoringChartLatest] = useState<MonitoringSnapshotPoint | null>(null);
   const [planDrafts, setPlanDrafts] = useState<Record<string, Plan>>({});
   const [actionLoading, setActionLoading] = useState<string>('');
-  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
-  const [updateJob, setUpdateJob] = useState<UpdateJob | null>(null);
-  const [updateLoading, setUpdateLoading] = useState(false);
-  const [updateRunLoading, setUpdateRunLoading] = useState(false);
-  const [jobLoading, setJobLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<SaasTabKey>(initialTab);
 
   const strategyTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client');
   const algofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
+  const batchEligibleAlgofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
+  const strategySystemProfiles = strategyState?.systemProfiles || [];
+  const activeStrategySystemProfile = strategySystemProfiles.find((item) => item.isActive) || null;
   const selectedStrategyTenantSummary = strategyTenants.find((item) => item.tenant.id === strategyTenantId) || null;
   const selectedAlgofundTenantSummary = algofundTenants.find((item) => item.tenant.id === algofundTenantId) || null;
   const strategyCapabilities = strategyState?.capabilities || selectedStrategyTenantSummary?.capabilities;
@@ -1169,11 +1776,56 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const algofundApiKeyEditable = isAdminSurface && Boolean(algofundCapabilities?.apiKeyUpdate ?? true);
   const strategyPlanOptions = (summary?.plans || [])
     .filter((plan) => plan.product_mode === 'strategy_client')
-    .map((plan) => ({ value: plan.code, label: `${plan.title} · ${formatMoney(plan.price_usdt)}` }));
+    .map((plan) => ({ value: plan.code, label: `${plan.title} В· ${formatMoney(plan.price_usdt)}` }));
   const algofundPlanOptions = (summary?.plans || [])
     .filter((plan) => plan.product_mode === 'algofund_client')
-    .map((plan) => ({ value: plan.code, label: `${plan.title} · ${formatMoney(plan.price_usdt)}` }));
+    .map((plan) => ({ value: plan.code, label: `${plan.title} В· ${formatMoney(plan.price_usdt)}` }));
   const apiKeyOptions = (summary?.apiKeys || []).map((name) => ({ label: name, value: name }));
+  const summaryCatalogOffers = dedupeOffersById([
+    ...(summary?.catalog?.clientCatalog?.mono || []),
+    ...(summary?.catalog?.clientCatalog?.synth || []),
+  ]);
+  const strategyRecommendedOffers = dedupeOffersById(
+    Object.values(strategyState?.recommendedSets || {}).reduce<CatalogOffer[]>((acc, items) => {
+      if (Array.isArray(items)) {
+        acc.push(...items);
+      }
+      return acc;
+    }, [])
+  );
+  const summaryRecommendedOffers = dedupeOffersById(
+    Object.values(summary?.recommendedSets || {}).reduce<CatalogOffer[]>((acc, items) => {
+      if (Array.isArray(items)) {
+        acc.push(...items);
+      }
+      return acc;
+    }, [])
+  );
+  const publishedOfferIds = new Set((summary?.offerStore?.publishedOfferIds || []).map((item) => String(item)));
+  const strategyOfferCatalog = dedupeOffersById(
+    (strategyState?.offers || []).length > 0
+      ? (strategyState?.offers || [])
+      : [...summaryCatalogOffers, ...strategyRecommendedOffers, ...summaryRecommendedOffers]
+  ).filter((offer) => publishedOfferIds.size === 0 || publishedOfferIds.has(String(offer.offerId || '')));
+  const strategyDraftConstraints = buildDraftStrategyConstraints(strategyOfferIds, strategyOfferCatalog, strategyState?.constraints || null);
+  const pendingAlgofundRequests = (summary?.algofundRequestQueue?.items || []).filter((item) => item.status === 'pending');
+  const pendingSwitchSystemIds = new Set(
+    pendingAlgofundRequests
+      .filter((item) => item.request_type === 'switch_system')
+      .map((item) => parseAlgofundRequestPayload(item.request_payload_json).targetSystemId)
+      .filter((id): id is number => Number.isFinite(Number(id)) && Number(id) > 0)
+  );
+  const pendingAlgofundRequestsByTenant = pendingAlgofundRequests.reduce<Record<number, AlgofundRequest[]>>((acc, item) => {
+    const key = Number(item.tenant_id || 0);
+    if (!Number.isFinite(key) || key <= 0) {
+      return acc;
+    }
+    if (!acc[key]) {
+      acc[key] = [];
+    }
+    acc[key].push(item);
+    return acc;
+  }, {});
 
   const loadSummary = async () => {
     setSummaryLoading(true);
@@ -1185,6 +1837,120 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setSummaryError(String(error?.response?.data?.error || error?.message || 'Failed to load SaaS summary'));
     } finally {
       setSummaryLoading(false);
+    }
+  };
+
+  const toggleOfferPublished = async (offerId: string, published: boolean) => {
+    const current = summary?.offerStore;
+    if (!current) {
+      return;
+    }
+    const set = new Set((current.publishedOfferIds || []).map((item) => String(item)));
+    if (published) {
+      set.add(String(offerId));
+    } else {
+      set.delete(String(offerId));
+    }
+    setActionLoading(`offer-store:${offerId}`);
+    try {
+      await axios.patch('/api/saas/admin/offer-store', {
+        publishedOfferIds: Array.from(set),
+      });
+      await loadSummary();
+      messageApi.success(published ? 'Offer published to store' : 'Offer unpublished from store');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to update offer visibility'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const openUnpublishWizard = async (offerId: string) => {
+    setUnpublishTargetOfferId(String(offerId || ''));
+    setUnpublishAcknowledge(false);
+    setUnpublishWizardVisible(true);
+    setUnpublishImpactLoading(true);
+    try {
+      const response = await axios.get<{ success: boolean } & OfferUnpublishImpact>(`/api/saas/admin/offer-store/unpublish-impact/${encodeURIComponent(String(offerId || ''))}`);
+      setUnpublishImpact(response.data);
+    } catch (error: any) {
+      setUnpublishImpact(null);
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to analyze unpublish impact'));
+    } finally {
+      setUnpublishImpactLoading(false);
+    }
+  };
+
+  const closeUnpublishWizard = () => {
+    setUnpublishWizardVisible(false);
+    setUnpublishImpact(null);
+    setUnpublishTargetOfferId('');
+    setUnpublishAcknowledge(false);
+  };
+
+  const confirmUnpublishOffer = async () => {
+    if (!unpublishTargetOfferId) {
+      return;
+    }
+    await toggleOfferPublished(unpublishTargetOfferId, false);
+    closeUnpublishWizard();
+  };
+
+  const updateOfferStoreDefaults = async (patch: Partial<{ periodDays: number; targetTradesPerDay: number; riskLevel: Level3 }>) => {
+    setActionLoading('offer-store-defaults');
+    try {
+      await axios.patch('/api/saas/admin/offer-store', {
+        defaults: {
+          ...(summary?.offerStore?.defaults || {}),
+          ...patch,
+        },
+      });
+      await loadSummary();
+      messageApi.success('Store defaults updated');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to update store defaults'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const toggleReportSetting = async (key: keyof NonNullable<SaasSummary['reportSettings']>, value: boolean) => {
+    setActionLoading(`report-setting:${String(key)}`);
+    try {
+      await axios.patch('/api/saas/admin/reports/settings', {
+        [key]: value,
+      });
+      await loadSummary();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to update report settings'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const sendReportToTelegram = async () => {
+    setSendTelegramLoading(true);
+    try {
+      await axios.post('/api/saas/admin/reports/send-telegram');
+      messageApi.success('Отчёт отправлен в Telegram');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to send Telegram report'));
+    } finally {
+      setSendTelegramLoading(false);
+    }
+  };
+
+  const loadPerformanceReport = async (period: 'daily' | 'weekly' | 'monthly' = reportPeriod) => {
+    setPerformanceReportLoading(true);
+    try {
+      const response = await axios.get<AdminPerformanceReport>('/api/saas/admin/reports/performance', {
+        params: { period },
+      });
+      setPerformanceReport(response.data);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load performance report'));
+    } finally {
+      setPerformanceReportLoading(false);
     }
   };
 
@@ -1202,7 +1968,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
-  const loadAlgofundTenant = async (tenantId: number, nextRiskMultiplier?: number, allowPreviewAbovePlan = false) => {
+  const loadAlgofundTenant = async (tenantId: number, nextRiskMultiplier?: number, allowPreviewAbovePlan = false, forceRefreshPreview = false) => {
     setAlgofundLoading(true);
     setAlgofundError('');
     try {
@@ -1212,6 +1978,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       }
       if (allowPreviewAbovePlan) {
         params.set('allowPreviewAbovePlan', '1');
+      }
+      if (forceRefreshPreview) {
+        params.set('refreshPreview', '1');
       }
       const query = params.toString() ? `?${params.toString()}` : '';
       const response = await axios.get<AlgofundState>(`/api/saas/algofund/${tenantId}${query}`);
@@ -1224,58 +1993,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
-  const fetchUpdateStatus = async (refreshRemote: boolean = true) => {
-    setUpdateLoading(true);
-    try {
-      const response = await axios.get<UpdateStatus>('/api/system/update/status', {
-        params: {
-          refresh: refreshRemote ? 1 : 0,
-        },
-      });
-      setUpdateStatus(response.data);
-    } catch (error: any) {
-      messageApi.error(error?.response?.data?.error || t('settings.msg.statusLoadError', 'Failed to load git update status'));
-    } finally {
-      setUpdateLoading(false);
-    }
-  };
-
-  const fetchUpdateJob = async () => {
-    setJobLoading(true);
-    try {
-      const response = await axios.get<UpdateJob>('/api/system/update/job');
-      setUpdateJob(response.data);
-    } catch (error: any) {
-      messageApi.error(error?.response?.data?.error || t('settings.msg.jobLoadError', 'Failed to load git update job status'));
-    } finally {
-      setJobLoading(false);
-    }
-  };
-
-  const runGitUpdate = async () => {
-    setUpdateRunLoading(true);
-    try {
-      const response = await axios.post('/api/system/update/run');
-      const unit = String(response?.data?.unit || 'btdd-git-update');
-      messageApi.success(t('settings.msg.runStarted', 'Update started ({unit}). Backend may restart during deploy.', { unit }));
-
-      window.setTimeout(() => {
-        void fetchUpdateJob();
-        void fetchUpdateStatus(true);
-      }, 1200);
-    } catch (error: any) {
-      messageApi.error(error?.response?.data?.error || t('settings.msg.runError', 'Failed to start git update'));
-    } finally {
-      setUpdateRunLoading(false);
-    }
-  };
-
   useEffect(() => {
     void loadSummary();
-    if (isAdminSurface) {
-      void fetchUpdateStatus(true);
-      void fetchUpdateJob();
-    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdminSurface]);
 
@@ -1283,24 +2002,187 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setActiveTab(initialTab);
   }, [initialTab]);
 
+  const loadTelegramControls = useCallback(async () => {
+    setTelegramControlsLoading(true);
+    try {
+      const response = await axios.get<TelegramControls>('/api/saas/admin/telegram-controls');
+      setTelegramControls(response.data);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load telegram controls'));
+    } finally {
+      setTelegramControlsLoading(false);
+    }
+  }, [messageApi]);
+
+  const patchTelegramControls = useCallback(async (patch: Partial<TelegramControls>) => {
+    setTelegramControlsLoading(true);
+    try {
+      const response = await axios.patch<TelegramControls>('/api/saas/admin/telegram-controls', patch);
+      setTelegramControls(response.data);
+      messageApi.success('Telegram control updated');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to update telegram controls'));
+    } finally {
+      setTelegramControlsLoading(false);
+    }
+  }, [messageApi]);
+
+  const loadLowLotRecommendations = useCallback(async () => {
+    setLowLotLoading(true);
+    try {
+      const response = await axios.get<LowLotRecommendationResponse>('/api/saas/admin/low-lot-recommendations', {
+        params: { hours: 72, limit: 40, perStrategyReplacementLimit: 3 },
+      });
+      setLowLotRecommendations(response.data);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load low-lot recommendations'));
+    } finally {
+      setLowLotLoading(false);
+    }
+  }, [messageApi]);
+
+  const submitApplyLowLotRecommendation = useCallback(async () => {
+    if (!applyLowLotTarget) return;
+    if (!applyLowLotDeposit && !applyLowLotLot && !applyLowLotReplacement) {
+      messageApi.warning('Выберите хотя бы одно действие');
+      return;
+    }
+    const strategyName = applyLowLotTarget.strategyName;
+    setApplyLowLotWorking(true);
+    try {
+      const resp = await axios.post<{ success: boolean; changes: Record<string, unknown>; changeSummary: string[] }>(
+        '/api/saas/admin/apply-low-lot-recommendation',
+        {
+          strategyId: applyLowLotTarget.strategyId,
+          applyDepositFix: applyLowLotDeposit,
+          applyLotFix: applyLowLotLot,
+          replacementSymbol: applyLowLotReplacement || undefined,
+        }
+      );
+      const changeSummary = Array.isArray(resp.data?.changeSummary) ? resp.data.changeSummary : [];
+      const summaryText = changeSummary.length > 0 ? ` (${changeSummary.join(', ')})` : '';
+      messageApi.success(`Применено к стратегии ${strategyName}${summaryText}`, 8);
+      setApplyLowLotTarget(null);
+      void loadLowLotRecommendations();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Ошибка применения'));
+    } finally {
+      setApplyLowLotWorking(false);
+    }
+  }, [applyLowLotTarget, applyLowLotDeposit, applyLowLotLot, applyLowLotReplacement, messageApi, loadLowLotRecommendations]);
+
+  const loadMonitoringTabData = useCallback(async () => {
+    if (!summary) {
+      return;
+    }
+
+    const apiKeys = Array.from(new Set(
+      (summary.tenants || [])
+        .map((item) => String(item.tenant.assigned_api_key_name || item.strategyProfile?.assigned_api_key_name || item.algofundProfile?.assigned_api_key_name || '').trim())
+        .filter(Boolean)
+    ));
+
+    if (apiKeys.length === 0) {
+      setMonitoringSystemsByApiKey({});
+      return;
+    }
+
+    setMonitoringTabLoading(true);
+    try {
+      const entries: Array<[string, TradingSystemListItem[]]> = await Promise.all(
+        apiKeys.map(async (apiKeyName) => {
+          try {
+            const response = await axios.get<TradingSystemListItem[]>(`/api/trading-systems/${encodeURIComponent(apiKeyName)}`);
+            return [apiKeyName, Array.isArray(response.data) ? response.data : []];
+          } catch {
+            return [apiKeyName, []];
+          }
+        })
+      );
+
+      const nextMap: Record<string, TradingSystemListItem[]> = {};
+      for (const [apiKeyName, systems] of entries) {
+        nextMap[apiKeyName] = systems;
+      }
+      setMonitoringSystemsByApiKey(nextMap);
+
+      try {
+        const logsResponse = await axios.get<string[]>('/api/logs');
+        setMonitoringLogCommentsByApiKey(buildApiKeyLogComments(logsResponse.data, apiKeys));
+      } catch {
+        setMonitoringLogCommentsByApiKey({});
+      }
+
+      setMonitoringSystemSelected((current) => {
+        const next = { ...current };
+        for (const tenantSummary of summary.tenants || []) {
+          const tenantId = Number(tenantSummary.tenant.id);
+          if (Number.isFinite(tenantId) && next[tenantId] === undefined) {
+            const apiKeyName = String(tenantSummary.tenant.assigned_api_key_name || '').trim();
+            const systems = nextMap[apiKeyName] || [];
+            const defaultSystem = systems.find((item) => item.is_active) || systems[0];
+            next[tenantId] = defaultSystem?.id ? Number(defaultSystem.id) : undefined;
+          }
+        }
+        return next;
+      });
+    } finally {
+      setMonitoringTabLoading(false);
+    }
+  }, [summary]);
+
+  const openMonitoringChart = async (apiKeyName: string) => {
+    const key = String(apiKeyName || '').trim();
+    if (!key) {
+      return;
+    }
+
+    setMonitoringChartOpen(true);
+    setMonitoringChartApiKey(key);
+    setMonitoringChartLoading(true);
+    try {
+      const response = await axios.get<{ points?: MonitoringSnapshotPoint[]; latest?: MonitoringSnapshotPoint }>(
+        `/api/monitoring/${encodeURIComponent(key)}`,
+        { params: { limit: 240 } }
+      );
+
+      const rows = Array.isArray(response.data?.points) ? response.data.points : [];
+      const linePoints: LinePoint[] = rows
+        .map((row) => {
+          const time = normalizeSeriesTime(row?.recorded_at);
+          const value = toFiniteNumberOrNull(row?.equity_usd);
+          if (time === null || value === null) {
+            return null;
+          }
+          return { time, value };
+        })
+        .filter((item): item is LinePoint => item !== null);
+
+      setMonitoringChartPoints(linePoints);
+      setMonitoringChartLatest(response.data?.latest || null);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load monitoring chart'));
+      setMonitoringChartPoints([]);
+      setMonitoringChartLatest(null);
+    } finally {
+      setMonitoringChartLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (!isAdminSurface) {
-      return;
+    if (activeTab === 'admin' && adminTab === 'overview') {
+      if (!performanceReport) {
+        void loadPerformanceReport('daily');
+      }
+      void loadTelegramControls();
     }
-
-    const activeState = String(updateJob?.activeState || '').toLowerCase();
-    if (activeState !== 'active' && activeState !== 'activating') {
-      return;
+    if (activeTab === 'admin' && adminTab === 'monitoring') {
+      void loadMonitoringTabData();
+      void loadTelegramControls();
+      void loadLowLotRecommendations();
     }
-
-    const timer = window.setInterval(() => {
-      void fetchUpdateJob();
-      void fetchUpdateStatus(false);
-    }, 5000);
-
-    return () => window.clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdminSurface, updateJob?.activeState]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, adminTab, loadMonitoringTabData, loadTelegramControls, loadLowLotRecommendations]);
 
   useEffect(() => {
     if (!summary) {
@@ -1339,16 +2221,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!strategyState?.profile) {
       return;
     }
+    const effectiveOffers = dedupeOffersById([
+      ...(strategyState.offers || []),
+      ...(strategyState.catalog?.clientCatalog?.mono || []),
+      ...(strategyState.catalog?.clientCatalog?.synth || []),
+      ...Object.values(strategyState.recommendedSets || {}).reduce<CatalogOffer[]>((acc, items) => {
+        if (Array.isArray(items)) {
+          acc.push(...items);
+        }
+        return acc;
+      }, []),
+    ]);
     const selected = Array.isArray(strategyState.profile.selectedOfferIds) ? strategyState.profile.selectedOfferIds : [];
+    const activeProfileId = Number(strategyState.profile.activeSystemProfileId || 0);
     setStrategyOfferIds(selected);
+    setStrategySystemProfileId(Number.isFinite(activeProfileId) && activeProfileId > 0 ? activeProfileId : null);
     setStrategyRiskInput(levelToSliderValue(strategyState.profile.risk_level || 'medium'));
     setStrategyTradeInput(levelToSliderValue(strategyState.profile.trade_frequency_level || 'medium'));
     setStrategyApiKeyName(strategyState.profile.assigned_api_key_name || strategyState.tenant.assigned_api_key_name || '');
     setStrategyTenantDisplayName(strategyState.tenant.display_name || '');
     setStrategyTenantStatus(strategyState.tenant.status || 'active');
     setStrategyTenantPlanCode(strategyState.plan?.code || '');
-    setStrategyPreviewOfferId((current) => (current && selected.includes(current) ? current : selected[0] || strategyState.offers[0]?.offerId || ''));
-    const latestPreview = hydrateStrategyPreview(strategyState.profile.latestPreview as StrategyPreviewResponse | null | undefined, strategyState.offers || []);
+    setStrategyPreviewOfferId((current) => (current && selected.includes(current) ? current : selected[0] || effectiveOffers[0]?.offerId || ''));
+    const latestPreview = hydrateStrategyPreview(strategyState.profile.latestPreview as StrategyPreviewResponse | null | undefined, effectiveOffers);
     setStrategyPreview(latestPreview);
   }, [strategyState]);
 
@@ -1363,6 +2258,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAlgofundTenantPlanCode(algofundState.plan?.code || '');
   }, [algofundState]);
 
+  useEffect(() => {
+    const allowedTenantIds = new Set(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)));
+    setBatchTenantIds((current) => current.filter((item) => allowedTenantIds.has(Number(item))));
+  }, [batchEligibleAlgofundTenants]);
+
   const runStrategyPreview = useCallback(async (silent = false) => {
     if (!strategyTenantId || !strategyPreviewOfferId) {
       return;
@@ -1376,7 +2276,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         riskScore: strategyRiskInput,
         tradeFrequencyScore: strategyTradeInput,
       });
-      setStrategyPreview(hydrateStrategyPreview(response.data, strategyState?.offers || []));
+      setStrategyPreview(hydrateStrategyPreview(response.data, strategyOfferCatalog));
       if (!silent) {
         messageApi.success(copy.previewReady);
       }
@@ -1385,7 +2285,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     } finally {
       setStrategyPreviewLoading(false);
     }
-  }, [copy.previewReady, messageApi, strategyPreviewOfferId, strategyRiskInput, strategyState, strategyTenantId, strategyTradeInput]);
+  }, [copy.previewReady, messageApi, strategyOfferCatalog, strategyPreviewOfferId, strategyRiskInput, strategyTenantId, strategyTradeInput]);
 
   const runStrategySelectionPreview = useCallback(async (silent = false) => {
     if (!strategyTenantId || strategyOfferIds.length === 0) {
@@ -1416,34 +2316,97 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   }, [copy.previewReady, messageApi, strategyOfferIds, strategyRiskInput, strategyTenantId, strategyTradeInput]);
 
-  useEffect(() => {
-    if (!strategyTenantId || !strategyPreviewOfferId || !strategyState) {
+  const activateStrategySystemProfile = async (profileId: number) => {
+    if (!strategyTenantId) {
+      return;
+    }
+    setActionLoading('strategy-profile-activate');
+    try {
+      const response = await axios.post<StrategyClientState>(`/api/saas/strategy-clients/${strategyTenantId}/system-profiles/${profileId}/activate`);
+      setStrategyState(response.data);
+      messageApi.success('Custom TS profile activated');
+      await loadSummary();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to activate custom TS profile'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const createStrategySystemProfile = async () => {
+    if (!strategyTenantId) {
+      return;
+    }
+    const profileName = String(strategyNewProfileName || '').trim() || `Custom TS ${((strategyState?.systemProfiles?.length || 0) + 1)}`;
+    setActionLoading('strategy-profile-create');
+    try {
+      await axios.post(`/api/saas/strategy-clients/${strategyTenantId}/system-profiles`, {
+        profileName,
+        selectedOfferIds: strategyOfferIds,
+        activate: true,
+      });
+      await loadStrategyTenant(strategyTenantId);
+      await loadSummary();
+      setStrategyNewProfileName('');
+      messageApi.success('Custom TS profile created');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to create custom TS profile'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const deleteStrategySystemProfile = async () => {
+    if (!strategyTenantId || !strategySystemProfileId) {
+      return;
+    }
+    setActionLoading('strategy-profile-delete');
+    try {
+      await axios.delete(`/api/saas/strategy-clients/${strategyTenantId}/system-profiles/${strategySystemProfileId}`);
+      await loadStrategyTenant(strategyTenantId);
+      await loadSummary();
+      messageApi.success('Custom TS profile deleted');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to delete custom TS profile'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const runAlgofundBatchAction = async () => {
+    const selectedTenantIds = Array.from(new Set((batchTenantIds || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+    if (selectedTenantIds.length === 0) {
+      messageApi.warning('Select at least one tenant for batch action');
+      return;
+    }
+    if (batchAlgofundAction === 'switch_system' && (!Number.isFinite(Number(batchTargetSystemId)) || Number(batchTargetSystemId) <= 0)) {
+      messageApi.warning('targetSystemId is required for switch_system');
       return;
     }
 
-    const timer = window.setTimeout(() => {
-      void runStrategyPreview(true);
-    }, 350);
-
-    return () => window.clearTimeout(timer);
-  }, [runStrategyPreview, strategyPreviewOfferId, strategyState, strategyTenantId]);
-
-  useEffect(() => {
-    if (!strategyTenantId || !strategyState) {
-      return;
+    setActionLoading('algofund-batch');
+    try {
+      const response = await axios.post('/api/saas/admin/algofund-batch-actions', {
+        tenantIds: selectedTenantIds,
+        requestType: batchAlgofundAction,
+        note: batchActionNote,
+        targetSystemId: batchAlgofundAction === 'switch_system' ? Number(batchTargetSystemId) : undefined,
+      });
+      const created = Number(response.data?.createdCount || 0);
+      const failed = Number(response.data?.failedCount || 0);
+      messageApi.success(`Batch completed: created ${created}, failed ${failed}`);
+      await loadSummary();
+      if (activeTab === 'admin' && adminTab === 'monitoring') {
+        await loadMonitoringTabData();
+      }
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to run algofund batch action'));
+    } finally {
+      setActionLoading('');
     }
+  };
 
-    if (strategyOfferIds.length === 0) {
-      setStrategySelectionPreview(null);
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      void runStrategySelectionPreview(true);
-    }, 350);
-
-    return () => window.clearTimeout(timer);
-  }, [runStrategySelectionPreview, strategyOfferIds, strategyState, strategyTenantId]);
+  // Strategy previews are manual-only to avoid API storms on SaaS page load.
 
   useEffect(() => {
     if (!algofundTenantId || !algofundState || algofundLoading) {
@@ -1478,6 +2441,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const nextRiskLevel = sliderValueToLevel(strategyRiskInput);
     const nextTradeLevel = sliderValueToLevel(strategyTradeInput);
 
+    if ((strategyDraftConstraints.violations || []).length > 0) {
+      messageApi.error((strategyDraftConstraints.violations || []).join(' '));
+      return;
+    }
+
     setActionLoading('strategy-save');
     try {
       const response = await axios.patch(`/api/saas/strategy-clients/${strategyTenantId}`, {
@@ -1498,6 +2466,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const runMaterialize = async () => {
     if (!strategyTenantId) {
+      return;
+    }
+    if ((strategyDraftConstraints.violations || []).length > 0) {
+      messageApi.error((strategyDraftConstraints.violations || []).join(' '));
       return;
     }
     setActionLoading('strategy-materialize');
@@ -1542,7 +2514,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!algofundTenantId) {
       return;
     }
-    await loadAlgofundTenant(algofundTenantId, algofundRiskMultiplier, isAdminSurface);
+    await loadAlgofundTenant(algofundTenantId, algofundRiskMultiplier, isAdminSurface, true);
     messageApi.success(copy.previewReady);
   };
 
@@ -1585,6 +2557,34 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       }
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Emergency stop failed'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const createStrategyMagicLink = async () => {
+    if (!strategyTenantId) return;
+    setActionLoading('strategy-magic-link');
+    try {
+      const response = await axios.post<ClientMagicLinkResponse>(`/api/saas/admin/tenants/${strategyTenantId}/magic-link`);
+      setStrategyMagicLink(response.data);
+      messageApi.success(copy.magicLinkReady);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to create magic link'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const createAlgofundMagicLink = async () => {
+    if (!algofundTenantId) return;
+    setActionLoading('algofund-magic-link');
+    try {
+      const response = await axios.post<ClientMagicLinkResponse>(`/api/saas/admin/tenants/${algofundTenantId}/magic-link`);
+      setAlgofundMagicLink(response.data);
+      messageApi.success(copy.magicLinkReady);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to create magic link'));
     } finally {
       setActionLoading('');
     }
@@ -1682,7 +2682,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
-  const sendAlgofundRequest = async (requestType: 'start' | 'stop') => {
+  const sendAlgofundRequest = async (
+    requestType: 'start' | 'stop' | 'switch_system',
+    payload?: { targetSystemId?: number; targetSystemName?: string }
+  ) => {
     if (!algofundTenantId) {
       return;
     }
@@ -1691,6 +2694,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       const response = await axios.post(`/api/saas/algofund/${algofundTenantId}/request`, {
         requestType,
         note: algofundNote,
+        targetSystemId: payload?.targetSystemId,
+        targetSystemName: payload?.targetSystemName,
       });
       setAlgofundState(response.data);
       setAlgofundNote('');
@@ -1716,6 +2721,31 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       await loadSummary();
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to resolve request'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const retryMaterialize = async () => {
+    if (!algofundTenantId) {
+      messageApi.error('No tenant selected');
+      return;
+    }
+    setActionLoading('retry-materialize');
+    try {
+      const response = await axios.post(`/api/saas/algofund/${algofundTenantId}/retry-materialize`);
+      const nextState = response.data as AlgofundState;
+      setAlgofundState(nextState);
+      if (Number(nextState?.profile?.actual_enabled || 0) === 1) {
+        messageApi.success('Materialization completed. The client system is now running in the trading engine.');
+      } else {
+        const reason = String(nextState?.preview?.blockedReason || '').trim();
+        messageApi.warning(reason || 'Materialization finished without engine start. Check Engine Status and Trading Systems.');
+      }
+      setRetryMaterializeModalVisible(false);
+      await loadSummary();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to retry materialization'));
     } finally {
       setActionLoading('');
     }
@@ -1748,63 +2778,60 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
-  const offerColumns: ColumnsType<CatalogOffer> = [
-    {
-      title: copy.selectedOffers,
-      key: 'selected',
-      width: 76,
-      render: (_, offer) => (
-        <Checkbox
-          checked={strategyOfferIds.includes(offer.offerId)}
-          onChange={(event) => {
-            const checked = event.target.checked;
-            setStrategyOfferIds((current) => {
-              if (checked) {
-                return Array.from(new Set([...current, offer.offerId]));
-              }
-              return current.filter((item) => item !== offer.offerId);
-            });
-          }}
-        />
-      ),
-    },
-    {
-      title: 'Offer',
-      key: 'offer',
-      render: (_, offer) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{offer.titleRu}</Text>
-          <Text type="secondary">{offer.strategy.mode.toUpperCase()} · {offer.strategy.type} · {offer.strategy.market}</Text>
-        </Space>
-      ),
-    },
-    {
-      title: copy.score,
-      dataIndex: ['metrics', 'score'],
-      width: 100,
-      render: (value) => <Tag color="cyan">{formatNumber(value)}</Tag>,
-    },
-    {
-      title: copy.returnLabel,
-      width: 110,
-      render: (_, offer) => <Tag color={metricColor(Number(offer.metrics.ret || 0), 'return')}>{formatPercent(offer.metrics.ret)}</Tag>,
-    },
-    {
-      title: copy.drawdown,
-      width: 110,
-      render: (_, offer) => <Tag color={metricColor(Number(offer.metrics.dd || 0), 'drawdown')}>{formatPercent(offer.metrics.dd)}</Tag>,
-    },
-    {
-      title: copy.profitFactor,
-      width: 100,
-      render: (_, offer) => <Tag color={metricColor(Number(offer.metrics.pf || 0), 'pf')}>{formatNumber(offer.metrics.pf)}</Tag>,
-    },
-    {
-      title: copy.trades,
-      width: 96,
-      render: (_, offer) => formatNumber(offer.metrics.trades, 0),
-    },
-  ];
+  const createTenantAdmin = async () => {
+    if (!createTenantDisplayName.trim() || !createTenantPlanCode) {
+      messageApi.error('Display name and plan are required');
+      return;
+    }
+    setActionLoading('createTenant');
+    try {
+      await axios.post('/api/saas/admin/tenants', {
+        displayName: createTenantDisplayName,
+        productMode: createTenantProductMode,
+        planCode: createTenantPlanCode,
+        assignedApiKeyName: createTenantApiKey || undefined,
+        email: createTenantEmail || undefined,
+        language,
+      });
+      messageApi.success(copy.createClientSuccess);
+      setCreateTenantDisplayName('');
+      setCreateTenantProductMode('strategy_client');
+      setCreateTenantPlanCode('');
+      setCreateTenantApiKey('');
+      setCreateTenantEmail('');
+      setAdminTab('overview');
+      await loadSummary();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to create tenant'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const toggleTenantRequestedEnabled = async (row: TenantSummary, nextEnabled: boolean) => {
+    const tenantId = Number(row.tenant.id);
+    if (!Number.isFinite(tenantId) || tenantId <= 0) {
+      return;
+    }
+
+    setActionLoading(`monitor-toggle-${tenantId}`);
+    try {
+      if (row.tenant.product_mode === 'strategy_client') {
+        await axios.patch(`/api/saas/strategy-clients/${tenantId}`, { requestedEnabled: nextEnabled });
+      } else {
+        await axios.patch(`/api/saas/algofund/${tenantId}`, { requestedEnabled: nextEnabled });
+      }
+      messageApi.success(`Updated ${row.tenant.display_name}: requested ${nextEnabled ? 'ON' : 'OFF'}`);
+      await loadSummary();
+      if (activeTab === 'admin' && adminTab === 'monitoring') {
+        await loadMonitoringTabData();
+      }
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to update requested status'));
+    } finally {
+      setActionLoading('');
+    }
+  };
 
   const tenantColumns: ColumnsType<TenantSummary> = [
     {
@@ -1826,7 +2853,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: copy.plan,
       key: 'plan',
-      render: (_, row) => row.plan ? `${row.plan.title} · ${formatMoney(row.plan.price_usdt)}` : '—',
+      render: (_, row) => row.plan ? `${row.plan.title} • ${formatMoney(row.plan.price_usdt)}` : '—',
     },
     {
       title: copy.apiKey,
@@ -1853,6 +2880,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           <Tag color="geekblue">PnL {formatMoney(row.monitoring.unrealized_pnl)}</Tag>
           <Tag color="orange">DD {formatPercent(row.monitoring.drawdown_percent)}</Tag>
           <Tag color="purple">ML {formatPercent(row.monitoring.margin_load_percent)}</Tag>
+          {Number.isFinite(row.monitoring.effective_leverage) ? <Tag color="red">Lev {formatNumber(row.monitoring.effective_leverage, 2)}x</Tag> : null}
           {calcDepositLoadPercent(row) !== null ? <Tag color="cyan">{copy.depositLoad}: {formatPercent(calcDepositLoadPercent(row))}</Tag> : null}
           {(() => {
             const liq = calcLiquidationRisk(row);
@@ -1996,7 +3024,42 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     },
   ];
 
+  const confirmResolveRequest = (row: AlgofundRequest, status: 'approved' | 'rejected') => {
+    const actionText = status === 'approved' ? 'Approve' : 'Reject';
+    const typeText = row.request_type === 'start'
+      ? 'start'
+      : row.request_type === 'stop'
+        ? 'stop'
+        : 'switch';
+
+    Modal.confirm({
+      title: `${actionText} ${typeText} request?`,
+      content: row.note ? `Client note: ${row.note}` : undefined,
+      okText: actionText,
+      okType: status === 'approved' ? 'primary' : 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        await resolveRequest(row.id, status);
+      },
+    });
+  };
+
   const requestColumns: ColumnsType<AlgofundRequest> = [
+    {
+      title: copy.requestTenant,
+      key: 'tenant',
+      width: 260,
+      render: (_, row) => {
+        const tenantName = String(row.tenant_display_name || algofundState?.tenant?.display_name || '').trim();
+        const tenantSlug = String(row.tenant_slug || algofundState?.tenant?.slug || '').trim();
+
+        if (tenantName && tenantSlug) {
+          return `${tenantName} (${tenantSlug})`;
+        }
+
+        return tenantName || tenantSlug || '—';
+      },
+    },
     {
       title: 'ID',
       dataIndex: 'id',
@@ -2011,12 +3074,54 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: 'Type',
       key: 'type',
-      width: 100,
-      render: (_, row) => row.request_type === 'start' ? copy.start : copy.stop,
+      width: 160,
+      render: (_, row) => {
+        if (row.request_type === 'start') {
+          return copy.start;
+        }
+        if (row.request_type === 'stop') {
+          return copy.stop;
+        }
+        const payload = parseAlgofundRequestPayload(row.request_payload_json);
+        return payload.targetSystemName
+          ? `Switch to ${payload.targetSystemName}`
+          : payload.targetSystemId
+            ? `Switch to #${payload.targetSystemId}`
+            : 'Switch system';
+      },
     },
     {
       title: copy.note,
       dataIndex: 'note',
+    },
+    {
+      title: 'Result',
+      key: 'result',
+      width: 140,
+      render: (_, row) => {
+        if (row.status === 'pending') {
+          return <Tag color="default">Pending</Tag>;
+        }
+        if (row.status === 'rejected') {
+          return <Tag color="default">Rejected</Tag>;
+        }
+        if (row.status === 'approved') {
+          const isBlocked = row.decision_note && row.decision_note.includes('Auto-note: approved without materialization');
+          if (row.request_type === 'start') {
+            if (isBlocked) {
+              return <Tag color="red">Blocked</Tag>;
+            }
+            return <Tag color="success">Started</Tag>;
+          }
+          if (row.request_type === 'stop') {
+            return <Tag color="green">Stopped</Tag>;
+          }
+          if (row.request_type === 'switch_system') {
+            return <Tag color="cyan">Switched</Tag>;
+          }
+        }
+        return <Tag color="default">—</Tag>;
+      },
     },
     {
       title: 'Created',
@@ -2033,7 +3138,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             size="small"
             type="primary"
             loading={actionLoading === `resolve-${row.id}`}
-            onClick={() => void resolveRequest(row.id, 'approved')}
+            onClick={() => confirmResolveRequest(row, 'approved')}
           >
             {copy.approve}
           </Button>
@@ -2041,7 +3146,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             size="small"
             danger
             loading={actionLoading === `resolve-${row.id}`}
-            onClick={() => void resolveRequest(row.id, 'rejected')}
+            onClick={() => confirmResolveRequest(row, 'rejected')}
           >
             {copy.reject}
           </Button>
@@ -2076,106 +3181,166 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const publishPreviewPeriod = publishResponse?.preview?.period || summaryPeriod;
   const strategyPersistedRiskBucket = sliderValueToLevel(strategyRiskInput);
   const strategyPersistedTradeBucket = sliderValueToLevel(strategyTradeInput);
-  const jobActiveState = String(updateJob?.activeState || '').toLowerCase();
-  const updateJobRunning = jobActiveState === 'active' || jobActiveState === 'activating';
-  const hasLocalServerChanges = Number(updateStatus?.dirtyCount || 0) > 0 || Number(updateStatus?.ahead || 0) > 0;
-  const canRunGitUpdate = Boolean(
-    updateStatus?.configured &&
-    updateStatus?.updateEnabled &&
-    updateStatus?.updateAvailable &&
-    !hasLocalServerChanges
-  );
+  const algofundEngineRunning = Boolean(algofundState?.profile?.actual_enabled);
+  const algofundEnginePending = Boolean(algofundState?.profile?.requested_enabled) && !algofundEngineRunning;
+  const algofundEngineBlockedReason = String(algofundState?.preview?.blockedReason || '').trim();
+  const algofundTradingSystemsHref = algofundState
+    ? `/trading-systems?apiKeyName=${encodeURIComponent(String(algofundState.engine?.apiKeyName || algofundState.profile?.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || ''))}${algofundState.engine?.systemId ? `&systemId=${algofundState.engine.systemId}` : ''}`
+    : '/trading-systems';
 
-  const renderUpdateStatusTag = () => {
-    if (!updateStatus) {
-      return <Tag color="processing">{t('settings.update.loading', 'Loading update status...')}</Tag>;
-    }
+  const monitoringRows = (summary?.tenants || [])
+    .filter((row) => monitoringModeFilter === 'all' || row.tenant.product_mode === monitoringModeFilter)
+    .map((row) => {
+      const profile = row.tenant.product_mode === 'strategy_client' ? row.strategyProfile : row.algofundProfile;
+      const requestedEnabled = Number(profile?.requested_enabled || 0) === 1;
+      const actualEnabled = Number(profile?.actual_enabled || 0) === 1;
+      const apiKeyName = String(profile?.assigned_api_key_name || row.tenant.assigned_api_key_name || '').trim();
+      const systems = monitoringSystemsByApiKey[apiKeyName] || [];
+      const logNotes = monitoringLogCommentsByApiKey[apiKeyName] || [];
+      const selectedSystemId = monitoringSystemSelected[row.tenant.id];
+      const selectedSystem = systems.find((system) => Number(system.id) === Number(selectedSystemId)) || null;
+      const liq = calcLiquidationRisk(row);
+      const tenantPendingRequests = pendingAlgofundRequestsByTenant[row.tenant.id] || [];
+      const comments: string[] = [];
+      if (!apiKeyName) comments.push('API key is not assigned');
+      if (requestedEnabled && !actualEnabled) comments.push('Requested ON, but engine is not started yet');
+      if (tenantPendingRequests.length > 0) comments.push(`Pending requests: ${tenantPendingRequests.map((item) => `${item.request_type} #${item.id}`).join(', ')}`);
+      if (actualEnabled && liq.level === 'high') comments.push('High liquidation risk');
+      if (!row.monitoring) comments.push('Monitoring snapshot unavailable');
+      const lotHint = buildLotSizingHint(logNotes);
+      if (lotHint) comments.push(lotHint);
 
-    if (!updateStatus.updateEnabled) {
-      return <Tag color="warning">{t('settings.update.disabled', 'Update API disabled')}</Tag>;
-    }
+      return {
+        ...row,
+        requestedEnabled,
+        actualEnabled,
+        apiKeyName,
+        systems,
+        logNotes,
+        selectedSystem,
+        tenantPendingRequests,
+        comments: comments.join(' | ') || 'OK',
+      };
+    });
 
-    if (updateStatus.updateAvailable) {
-      const count = Number(updateStatus.behind || updateStatus.pendingCommits?.length || 0);
-      return <Tag color="gold">{t('settings.update.available', 'Update available ({count})', { count })}</Tag>;
-    }
-
-    return <Tag color="success">{t('settings.update.upToDate', 'Up to date')}</Tag>;
-  };
-
-  const renderGitUpdateCard = (scopeLabel: string, compact: boolean) => (
-    <Card
-      className="battletoads-card"
-      title={`${t('settings.update.title', 'Git Update (VPS)')} · ${scopeLabel}`}
-      extra={(
-        <Space wrap>
-          <Button size="small" onClick={() => void fetchUpdateStatus(true)} loading={updateLoading}>
-            {t('settings.update.check', 'Check updates')}
-          </Button>
-          <Button size="small" onClick={() => void fetchUpdateJob()} loading={jobLoading}>
-            {t('settings.update.refreshJob', 'Refresh job')}
-          </Button>
-          <Button
-            size="small"
-            type="primary"
-            onClick={() => void runGitUpdate()}
-            loading={updateRunLoading}
-            disabled={!canRunGitUpdate}
-          >
-            {t('settings.update.install', 'Install from Git')}
-          </Button>
+  const monitoringColumns: ColumnsType<(typeof monitoringRows)[number]> = [
+    {
+      title: 'Client',
+      key: 'tenant',
+      width: 240,
+      render: (_, row) => (
+        <Space direction="vertical" size={0}>
+          <Text strong>{row.tenant.display_name}</Text>
+          <Text type="secondary">{row.tenant.slug}</Text>
         </Space>
-      )}
-    >
-      <Space wrap>
-        {renderUpdateStatusTag()}
-        {updateStatus?.branch ? <Tag color="blue">{updateStatus.branch}</Tag> : null}
-        {Number(updateStatus?.behind || 0) > 0 ? <Tag color="gold">behind {updateStatus?.behind}</Tag> : null}
-        {Number(updateStatus?.ahead || 0) > 0 ? <Tag color="purple">ahead {updateStatus?.ahead}</Tag> : null}
-        {Number(updateStatus?.dirtyCount || 0) > 0 ? <Tag color="red">dirty {updateStatus?.dirtyCount}</Tag> : null}
-        {updateJob?.activeState ? <Tag color={updateJobRunning ? 'processing' : 'default'}>{t('settings.update.job', 'Update Job')}: {updateJob.activeState}</Tag> : null}
-        {updateJob?.result && updateJob.result !== 'success' ? <Tag color="warning">result: {updateJob.result}</Tag> : null}
-      </Space>
-
-      {updateStatus?.message ? (
-        <Alert style={{ marginTop: 12 }} type="info" showIcon message={updateStatus.message} />
-      ) : null}
-
-      {hasLocalServerChanges ? (
-        <Alert
-          style={{ marginTop: 12 }}
-          type="warning"
-          showIcon
-          message="Server repo has local changes (ahead/dirty). Clean or commit them before running git update."
+      ),
+    },
+    {
+      title: 'Mode',
+      key: 'mode',
+      width: 130,
+      render: (_, row) => productModeTag(row.tenant.product_mode),
+    },
+    {
+      title: copy.apiKey,
+      key: 'apiKey',
+      width: 170,
+      render: (_, row) => row.apiKeyName || '—',
+    },
+    {
+      title: 'Requested',
+      key: 'requested',
+      width: 120,
+      render: (_, row) => (
+        <Switch
+          size="small"
+          checked={row.requestedEnabled}
+          loading={actionLoading === `monitor-toggle-${row.tenant.id}`}
+          onChange={(checked) => {
+            void toggleTenantRequestedEnabled(row, checked);
+          }}
         />
-      ) : null}
+      ),
+    },
+    {
+      title: 'Engine',
+      key: 'engine',
+      width: 120,
+      render: (_, row) => row.actualEnabled ? <Tag color="success">running</Tag> : <Tag color="default">stopped</Tag>,
+    },
+    {
+      title: 'Monitoring',
+      key: 'monitoring',
+      width: 250,
+      render: (_, row) => row.monitoring ? (
+        <Space size={4} wrap>
+          <Tag color="blue">Eq {formatMoney(row.monitoring.equity_usd)}</Tag>
+          <Tag color="geekblue">PnL {formatMoney(row.monitoring.unrealized_pnl)}</Tag>
+          <Tag color="orange">DD {formatPercent(row.monitoring.drawdown_percent)}</Tag>
+        </Space>
+      ) : <Tag color="default">no data</Tag>,
+    },
+    {
+      title: 'Approved systems',
+      key: 'systems',
+      width: 360,
+      render: (_, row) => {
+        const options = row.systems.map((system) => ({
+          value: Number(system.id),
+          label: `${system.name}${system.is_active ? ' [active]' : ''} В· PnL ${formatMoney(system.metrics?.unrealized_pnl)} В· DD ${formatPercent(system.metrics?.drawdown_percent)}`,
+        }));
 
-      {!compact && Number(updateStatus?.pendingCommits?.length || 0) > 0 ? (
-        <>
-          <Text strong style={{ display: 'block', marginTop: 12 }}>{t('settings.update.whatsNew', "What's new in Git")}</Text>
-          <List
-            size="small"
-            dataSource={updateStatus?.pendingCommits || []}
-            renderItem={(commit) => (
-              <List.Item>
-                <Space direction="vertical" size={0}>
-                  <Text code>{commit.shortHash}</Text>
-                  <Text>{commit.subject}</Text>
-                  <Text type="secondary">{commit.date}</Text>
-                </Space>
-              </List.Item>
-            )}
-          />
-        </>
-      ) : null}
-
-      {!compact && updateJob?.logs ? (
-        <Paragraph style={{ marginTop: 12, marginBottom: 0, whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
-          {String(updateJob.logs || '').split('\n').slice(-10).join('\n')}
-        </Paragraph>
-      ) : null}
-    </Card>
-  );
+        return (
+          <Space>
+            <Select
+              style={{ width: 280 }}
+              value={row.selectedSystem?.id ? Number(row.selectedSystem.id) : undefined}
+              onChange={(value) => {
+                setMonitoringSystemSelected((current) => ({ ...current, [row.tenant.id]: Number(value) }));
+              }}
+              options={options}
+              placeholder="No systems"
+              allowClear
+            />
+            <Button
+              size="small"
+              href={`/trading-systems?apiKeyName=${encodeURIComponent(row.apiKeyName)}${row.selectedSystem?.id ? `&systemId=${row.selectedSystem.id}` : ''}`}
+              disabled={!row.apiKeyName}
+            >
+              Open
+            </Button>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Comment',
+      key: 'comment',
+      render: (_, row) => row.comments,
+    },
+    {
+      title: 'Charts',
+      key: 'charts',
+      width: 120,
+      render: (_, row) => (
+        <Button
+          size="small"
+          disabled={!row.apiKeyName}
+          onClick={() => {
+            void openMonitoringChart(row.apiKeyName);
+          }}
+        >
+          Open chart
+        </Button>
+      ),
+    },
+    {
+      title: 'Log notes',
+      key: 'logNotes',
+      width: 360,
+      render: (_, row) => row.logNotes.length > 0 ? row.logNotes.join(' | ') : '—',
+    },
+  ];
 
   return (
     <div className="saas-page">
@@ -2190,6 +3355,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             <Space wrap className="saas-page-actions">
               <Button onClick={() => void loadSummary()} loading={summaryLoading}>{copy.refresh}</Button>
               {isAdminSurface ? <Button onClick={() => void seedDemoTenants()} loading={actionLoading === 'seed'}>{copy.seed}</Button> : null}
+              {isAdminSurface ? <Button type="dashed" onClick={() => { setActiveTab('admin'); setAdminTab('create-user'); }}>{copy.createClient}</Button> : null}
               {isAdminSurface ? <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>{copy.publish}</Button> : null}
             </Space>
           </Col>
@@ -2209,137 +3375,742 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               key: 'admin',
               label: copy.admin,
               children: (
-                <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                  {renderGitUpdateCard(copy.admin, false)}
-                  {!summary?.catalog ? <Alert type="warning" showIcon message={copy.noCatalog} /> : null}
-                  {!summary?.sweepSummary ? <Alert type="warning" showIcon message={copy.noSweep} /> : null}
-                  {summaryPeriod ? <Alert type="info" showIcon message={`${copy.period}: ${formatPeriodLabel(summaryPeriod)}`} /> : null}
+                <Tabs
+                  activeKey={adminTab}
+                  onChange={(key) => setAdminTab(key as AdminTabKey)}
+                  items={[
+                    {
+                      key: 'overview',
+                      label: 'Обзор',
+                      children: (
+                        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                          {!summary?.catalog ? <Alert type="warning" showIcon message={copy.noCatalog} /> : null}
+                          {!summary?.sweepSummary ? <Alert type="warning" showIcon message={copy.noSweep} /> : null}
+                          {summaryPeriod ? <Alert type="info" showIcon message={`${copy.period}: ${formatPeriodLabel(summaryPeriod)}`} /> : null}
 
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} md={8}>
-                      <Card className="battletoads-card">
-                        <Statistic title={copy.latestCatalog} value={summary?.catalog?.counts?.monoCatalog || 0} suffix={`mono / ${summary?.catalog?.counts?.synthCatalog || 0} synth`} />
-                        <Text type="secondary">{summary?.sourceFiles?.latestCatalogPath || 'results/*.json not found'}</Text>
-                      </Card>
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Card className="battletoads-card">
-                        <Statistic title={copy.latestSweep} value={summary?.sweepSummary?.counts?.evaluated || 0} suffix={`/ ${summary?.sweepSummary?.counts?.scheduledRuns || 0}`} />
-                        <Text type="secondary">{summary?.sourceFiles?.latestSweepPath || 'results/*.json not found'}</Text>
-                      </Card>
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Card className="battletoads-card">
-                        <Statistic title={copy.adminTsDraft} value={summary?.catalog?.adminTradingSystemDraft?.members?.length || 0} suffix="members" />
-                        <Text type="secondary">{summary?.catalog?.adminTradingSystemDraft?.name || '—'}</Text>
-                      </Card>
-                    </Col>
-                  </Row>
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} md={8}>
+                              <Card className="battletoads-card">
+                                <Statistic title={copy.latestCatalog} value={summary?.catalog?.counts?.monoCatalog || 0} suffix={`mono / ${summary?.catalog?.counts?.synthCatalog || 0} synth`} />
+                                <Text type="secondary">{summary?.sourceFiles?.latestCatalogPath || 'results/*.json not found'}</Text>
+                              </Card>
+                            </Col>
+                            <Col xs={24} md={8}>
+                              <Card className="battletoads-card">
+                                <Statistic title={copy.latestSweep} value={summary?.sweepSummary?.counts?.evaluated || 0} suffix={`/ ${summary?.sweepSummary?.counts?.scheduledRuns || 0}`} />
+                                <Text type="secondary">{summary?.sourceFiles?.latestSweepPath || 'results/*.json not found'}</Text>
+                              </Card>
+                            </Col>
+                            <Col xs={24} md={8}>
+                              <Card className="battletoads-card">
+                                <Statistic title={copy.adminTsDraft} value={summary?.catalog?.adminTradingSystemDraft?.members?.length || 0} suffix="members" />
+                                <Text type="secondary">{summary?.catalog?.adminTradingSystemDraft?.name || '—'}</Text>
+                              </Card>
+                            </Col>
+                          </Row>
 
-                  {summary?.sweepSummary?.portfolioFull ? (
-                    <Row gutter={[16, 16]}>
-                      <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.returnLabel} value={Number(summary.sweepSummary.portfolioFull.totalReturnPercent || 0)} precision={2} suffix="%" /></Card></Col>
-                      <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.drawdown} value={Number(summary.sweepSummary.portfolioFull.maxDrawdownPercent || 0)} precision={2} suffix="%" /></Card></Col>
-                      <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.profitFactor} value={Number(summary.sweepSummary.portfolioFull.profitFactor || 0)} precision={2} /></Card></Col>
-                      <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.trades} value={Number(summary.sweepSummary.portfolioFull.tradesCount || 0)} precision={0} /></Card></Col>
-                    </Row>
-                  ) : null}
-
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} xl={14}>
-                      <Card className="battletoads-card" title={copy.recommendedSets}>
-                        <List
-                          dataSource={Object.entries(summary?.recommendedSets || {})}
-                          locale={{ emptyText: <Empty description={copy.noCatalog} /> }}
-                          renderItem={([setName, offers]) => (
-                            <List.Item>
-                              <div style={{ width: '100%' }}>
-                                <Text strong>{setName}</Text>
-                                <div className="saas-offer-badges">
-                                  {(offers || []).map((offer) => (
-                                    <Tag key={offer.offerId} color={offer.strategy.mode === 'mono' ? 'green' : 'blue'}>
-                                      {offer.strategy.market} · {formatNumber(offer.metrics.score)}
-                                    </Tag>
-                                  ))}
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} md={7}>
+                              <Card
+                                className="battletoads-card"
+                                title="Backtest requests"
+                                extra={<Button size="small" href="/research">Research</Button>}
+                              >
+                                <Space>
+                                  <Tag color="processing">pending: {Number(summary?.backtestPairRequests?.pending || 0)}</Tag>
+                                  <Tag>total: {Number(summary?.backtestPairRequests?.total || 0)}</Tag>
+                                </Space>
+                                <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+                                  Обрабатывать в Research → выбрать → запустить sweep.
+                                </Paragraph>
+                              </Card>
+                            </Col>
+                            <Col xs={24} md={17}>
+                              <Card className="battletoads-card" title={copy.requestQueue}>
+                                <Space wrap>
+                                  <Tag color="processing">pending: {Number(summary?.algofundRequestQueue?.pending || 0)}</Tag>
+                                  <Tag color="success">approved: {Number(summary?.algofundRequestQueue?.approved || 0)}</Tag>
+                                  <Tag color="default">rejected: {Number(summary?.algofundRequestQueue?.rejected || 0)}</Tag>
+                                  <Tag>total: {Number(summary?.algofundRequestQueue?.total || 0)}</Tag>
+                                </Space>
+                                <div style={{ marginTop: 12 }}>
+                                  <Table
+                                    rowKey="id"
+                                    columns={requestColumns}
+                                    dataSource={summary?.algofundRequestQueue?.items || []}
+                                    pagination={{ pageSize: 8, showSizeChanger: false }}
+                                    scroll={{ x: 960 }}
+                                  />
                                 </div>
-                              </div>
-                            </List.Item>
-                          )}
-                        />
-                      </Card>
-                    </Col>
-                    <Col xs={24} xl={10}>
-                      <Card className="battletoads-card" title={copy.adminTsDraft} extra={<Button size="small" href="/trading-systems">{copy.openTradingSystems}</Button>}>
-                        <List
-                          dataSource={summary?.catalog?.adminTradingSystemDraft?.members || []}
-                          locale={{ emptyText: <Empty description={copy.noCatalog} /> }}
-                          renderItem={(member) => (
-                            <List.Item>
-                              <Space direction="vertical" size={0}>
-                                <Text strong>{member.strategyName}</Text>
-                                <Text type="secondary">{member.marketMode.toUpperCase()} · {member.market}</Text>
+                              </Card>
+                            </Col>
+                          </Row>
+
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} xl={14}>
+                              <Card className="battletoads-card" title="Sweep offers: publish/unpublish">
+                                <Space wrap style={{ marginBottom: 12 }}>
+                                  <Tag color="processing">published: {Number(summary?.offerStore?.publishedOfferIds?.length || 0)}</Tag>
+                                  <Tag>total: {Number(summary?.offerStore?.offers?.length || 0)}</Tag>
+                                  <Tag color="blue">period: {Number(summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
+                                  <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
+                                </Space>
+                                <Space wrap style={{ marginBottom: 12 }}>
+                                  <InputNumber
+                                    min={7}
+                                    max={365}
+                                    value={Number(summary?.offerStore?.defaults?.periodDays || 90)}
+                                    onChange={(value) => {
+                                      const numeric = Number(value || 90);
+                                      void updateOfferStoreDefaults({ periodDays: Math.max(7, Math.min(365, Math.floor(numeric))) });
+                                    }}
+                                    addonBefore="Period d"
+                                  />
+                                  <InputNumber
+                                    min={1}
+                                    max={20}
+                                    step={0.5}
+                                    value={Number(summary?.offerStore?.defaults?.targetTradesPerDay || 6)}
+                                    onChange={(value) => {
+                                      const numeric = Number(value || 6);
+                                      void updateOfferStoreDefaults({ targetTradesPerDay: Math.max(1, Math.min(20, numeric)) });
+                                    }}
+                                    addonBefore="Target/day"
+                                  />
+                                </Space>
+                                <Table
+                                  size="small"
+                                  rowKey="offerId"
+                                  dataSource={summary?.offerStore?.offers || []}
+                                  expandable={{
+                                    expandedRowRender: (row: any) => {
+                                      const pts: number[] = Array.isArray(row.equityPoints) ? row.equityPoints : [];
+                                      if (pts.length === 0) {
+                                        return <Text type="secondary">Equity curve unavailable (no preset for this offer yet)</Text>;
+                                      }
+                                      const equityData = pts.map((v, i) => ({ time: i, equity: v }));
+                                      return (
+                                        <div style={{ padding: '8px 0' }}>
+                                          <ChartComponent data={equityData} type="line" />
+                                        </div>
+                                      );
+                                    },
+                                    rowExpandable: () => true,
+                                  }}
+                                  pagination={{ pageSize: 8, showSizeChanger: false }}
+                                  scroll={{ x: 980 }}
+                                  columns={[
+                                    {
+                                      title: 'Offer',
+                                      key: 'offer',
+                                      render: (_, row: any) => (
+                                        <Space direction="vertical" size={0}>
+                                          <Text strong>{row.titleRu}</Text>
+                                          <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                        </Space>
+                                      ),
+                                    },
+                                    {
+                                      title: 'Backtest',
+                                      key: 'bt',
+                                      render: (_, row: any) => {
+                                        const sweepPeriodLabel = summary?.sweepSummary?.period
+                                          ? formatPeriodLabel(summary.sweepSummary.period)
+                                          : null;
+                                        return (
+                                          <Space wrap>
+                                            <Tag color="default">
+                                              {Number(row.periodDays || summary?.offerStore?.defaults?.periodDays || 0)}d
+                                              {sweepPeriodLabel ? ` • ${sweepPeriodLabel}` : ''}
+                                            </Tag>
+                                            <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
+                                            <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
+                                            <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                            <Tag color="blue">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
+                                          </Space>
+                                        );
+                                      },
+                                    },
+                                    {
+                                      title: 'Store',
+                                      key: 'published',
+                                      width: 130,
+                                      render: (_, row: any) => (
+                                        <Switch
+                                          checked={Boolean(row.published)}
+                                          loading={actionLoading === `offer-store:${String(row.offerId)}`}
+                                          onChange={(checked) => {
+                                            if (checked) {
+                                              void toggleOfferPublished(String(row.offerId), true);
+                                            } else {
+                                              void openUnpublishWizard(String(row.offerId));
+                                            }
+                                          }}
+                                        />
+                                      ),
+                                    },
+                                  ]}
+                                />
+                              </Card>
+                            </Col>
+                            <Col xs={24} xl={10}>
+                              <Card className="battletoads-card" title="Admin обзор / отчёты">
+                                <Space direction="vertical" style={{ width: '100%' }}>
+                                  <Space wrap>
+                                    <Text>Telegram</Text>
+                                    <Switch
+                                      size="small"
+                                      checked={Boolean(telegramControls?.adminEnabled)}
+                                      loading={telegramControlsLoading}
+                                      onChange={(checked) => { void patchTelegramControls({ adminEnabled: checked }); }}
+                                    />
+                                    <Tag color={telegramControls?.tokenConfigured ? 'success' : 'default'}>
+                                      token {telegramControls?.tokenConfigured ? 'ok' : 'missing'}
+                                    </Tag>
+                                    <Button
+                                      size="small"
+                                      loading={sendTelegramLoading}
+                                      disabled={!telegramControls?.tokenConfigured || !telegramControls?.chatConfigured}
+                                      onClick={() => void sendReportToTelegram()}
+                                    >
+                                      Отправить сейчас
+                                    </Button>
+                                  </Space>
+                                  <Divider style={{ margin: '6px 0' }} />
+                                  <Space>
+                                    <Text type="secondary">Вкл.</Text>
+                                    <Switch
+                                      size="small"
+                                      checked={Boolean(summary?.reportSettings?.enabled)}
+                                      loading={actionLoading === 'report-setting:enabled'}
+                                      onChange={(checked) => { void toggleReportSetting('enabled', checked); }}
+                                    />
+                                  </Space>
+                                  <Space wrap>
+                                    <Tag>TS daily <Switch size="small" checked={Boolean(summary?.reportSettings?.tsDaily)} onChange={(checked) => { void toggleReportSetting('tsDaily', checked); }} /></Tag>
+                                    <Tag>TS weekly <Switch size="small" checked={Boolean(summary?.reportSettings?.tsWeekly)} onChange={(checked) => { void toggleReportSetting('tsWeekly', checked); }} /></Tag>
+                                    <Tag>TS monthly <Switch size="small" checked={Boolean(summary?.reportSettings?.tsMonthly)} onChange={(checked) => { void toggleReportSetting('tsMonthly', checked); }} /></Tag>
+                                  </Space>
+                                  <Space wrap>
+                                    <Tag>Offer daily <Switch size="small" checked={Boolean(summary?.reportSettings?.offerDaily)} onChange={(checked) => { void toggleReportSetting('offerDaily', checked); }} /></Tag>
+                                    <Tag>Offer weekly <Switch size="small" checked={Boolean(summary?.reportSettings?.offerWeekly)} onChange={(checked) => { void toggleReportSetting('offerWeekly', checked); }} /></Tag>
+                                    <Tag>Offer monthly <Switch size="small" checked={Boolean(summary?.reportSettings?.offerMonthly)} onChange={(checked) => { void toggleReportSetting('offerMonthly', checked); }} /></Tag>
+                                  </Space>
+                                  <Divider style={{ margin: '6px 0' }} />
+                                  <Space wrap>
+                                    <Select
+                                      value={reportPeriod}
+                                      style={{ width: 130 }}
+                                      options={[
+                                        { value: 'daily', label: 'daily' },
+                                        { value: 'weekly', label: 'weekly' },
+                                        { value: 'monthly', label: 'monthly' },
+                                      ]}
+                                      onChange={(value) => setReportPeriod(value)}
+                                    />
+                                    <Button loading={performanceReportLoading} onClick={() => void loadPerformanceReport(reportPeriod)}>Обновить обзор</Button>
+                                  </Space>
+                                  <Space wrap>
+                                    <Tag color="blue">TS: {Number(performanceReport?.tradingSystems?.length || 0)}</Tag>
+                                    <Tag color="geekblue">Offers: {Number(performanceReport?.offers?.length || 0)}</Tag>
+                                    {performanceReport ? <Tag color="default">{performanceReport.generatedAt.slice(0, 16).replace('T', ' ')}</Tag> : null}
+                                  </Space>
+                                </Space>
+                              </Card>
+                            </Col>
+                          </Row>
+
+                          {performanceReport ? (
+                            <Card className="battletoads-card" title={`Performance report (${performanceReport.period})`}>
+                              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                <Text type="secondary">Generated: {performanceReport.generatedAt}</Text>
+                                <Alert
+                                  type="info"
+                                  showIcon
+                                  message="Где аналитика: ниже два блока. 1) TS runtime-аналитика (equity/pnl/dd/левередж). 2) Offer-аналитика с сопоставлением live vs backtest (samples, lag, pnl delta, win-rate delta)."
+                                />
+                                <Table
+                                  size="small"
+                                  rowKey={(row) => `${row.apiKeyName}:${row.id}`}
+                                  dataSource={performanceReport.tradingSystems || []}
+                                  pagination={{ pageSize: 8, showSizeChanger: false }}
+                                  scroll={{ x: 1200 }}
+                                  columns={[
+                                    {
+                                      title: 'TS',
+                                      key: 'ts',
+                                      render: (_, row: any) => (
+                                        <Space direction="vertical" size={0}>
+                                          <Text strong>{row.name}</Text>
+                                          <Text type="secondary">{row.apiKeyName} • #{row.id}</Text>
+                                        </Space>
+                                      ),
+                                    },
+                                    {
+                                      title: 'Status',
+                                      key: 'status',
+                                      render: (_, row: any) => row.isActive ? <Tag color="success">active</Tag> : <Tag color="default">inactive</Tag>,
+                                    },
+                                    {
+                                      title: 'Runtime metrics',
+                                      key: 'runtime',
+                                      render: (_, row: any) => (
+                                        <Space wrap>
+                                          <Tag color="blue">Eq {formatMoney(row.equityUsd)}</Tag>
+                                          <Tag color={metricColor(Number(row.unrealizedPnl || 0), 'return')}>PnL {formatMoney(row.unrealizedPnl)}</Tag>
+                                          <Tag color={metricColor(Number(row.drawdownPercent || 0), 'drawdown')}>DD {formatPercent(row.drawdownPercent)}</Tag>
+                                          <Tag color="purple">Lev {formatNumber(row.effectiveLeverage, 2)}</Tag>
+                                          <Tag color="orange">Margin {formatPercent(row.marginLoadPercent)}</Tag>
+                                        </Space>
+                                      ),
+                                    },
+                                    {
+                                      title: 'Updated',
+                                      dataIndex: 'updatedAt',
+                                      width: 220,
+                                    },
+                                  ]}
+                                />
+                                <Table
+                                  size="small"
+                                  rowKey={(row) => `${row.offerId}:${row.strategyId}`}
+                                  dataSource={performanceReport.offers || []}
+                                  pagination={{ pageSize: 8, showSizeChanger: false }}
+                                  scroll={{ x: 1200 }}
+                                  columns={[
+                                    {
+                                      title: 'Offer',
+                                      key: 'offer',
+                                      render: (_, row: any) => (
+                                        <Space direction="vertical" size={0}>
+                                          <Text strong>{row.titleRu}</Text>
+                                          <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                        </Space>
+                                      ),
+                                    },
+                                    {
+                                      title: 'Expected',
+                                      key: 'expected',
+                                      render: (_, row: any) => (
+                                        <Space wrap>
+                                          <Tag color="default">period {Number(row.periodDays || summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
+                                          <Tag>Ret {formatPercent(row.expected?.ret)}</Tag>
+                                          <Tag>PF {formatNumber(row.expected?.pf)}</Tag>
+                                          <Tag>DD {formatPercent(row.expected?.dd)}</Tag>
+                                          <Tag>tpd {formatNumber(row.expected?.tradesPerDay, 2)}</Tag>
+                                        </Space>
+                                      ),
+                                    },
+                                    {
+                                      title: 'Live vs BT',
+                                      key: 'cmp',
+                                      render: (_, row: any) => row.live ? (
+                                        <Space wrap>
+                                          <Tag color="processing">samples {Number(row.live?.samples || 0)}</Tag>
+                                          <Tag color="blue">lag {formatNumber(row.live?.entryLagSeconds, 2)}s</Tag>
+                                          <Tag color={metricColor(Number(row.live?.realizedVsPredictedPnlPercent || 0), 'return')}>pnlΔ {formatPercent(row.live?.realizedVsPredictedPnlPercent)}</Tag>
+                                          <Tag color={metricColor(Number(row.comparison?.winRateDeltaPercent || 0), 'return')}>wrΔ {formatNumber(row.comparison?.winRateDeltaPercent, 2)}pp</Tag>
+                                        </Space>
+                                      ) : <Tag color="default">no live data</Tag>,
+                                    },
+                                  ]}
+                                />
                               </Space>
-                              <Space>
-                                <Tag color="cyan">{copy.score}: {formatNumber(member.score)}</Tag>
-                                <Tag color="purple">w {formatNumber(member.weight)}</Tag>
-                              </Space>
-                            </List.Item>
-                          )}
-                        />
-                      </Card>
-                    </Col>
-                  </Row>
+                            </Card>
+                          ) : null}
 
-                  <Card className="battletoads-card" title={copy.connectedTenants}>
-                    <Table rowKey={(row) => row.tenant.id} columns={tenantColumns} dataSource={summary?.tenants || []} pagination={false} scroll={{ x: 980 }} />
-                  </Card>
+                          {summary?.sweepSummary?.portfolioFull ? (
+                            <Row gutter={[16, 16]}>
+                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.returnLabel} value={Number(summary.sweepSummary.portfolioFull.totalReturnPercent || 0)} precision={2} suffix="%" /></Card></Col>
+                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.drawdown} value={Number(summary.sweepSummary.portfolioFull.maxDrawdownPercent || 0)} precision={2} suffix="%" /></Card></Col>
+                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.profitFactor} value={Number(summary.sweepSummary.portfolioFull.profitFactor || 0)} precision={2} /></Card></Col>
+                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.trades} value={Number(summary.sweepSummary.portfolioFull.tradesCount || 0)} precision={0} /></Card></Col>
+                            </Row>
+                          ) : null}
 
-                  <Row gutter={[16, 16]}>
-                    <Col xs={24} xl={12}>
-                      <Card className="battletoads-card" title={`${copy.strategyClient} · ${copy.planGrid}`}>
-                        <Table
-                          rowKey="code"
-                          columns={planColumns}
-                          dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'strategy_client')}
-                          pagination={false}
-                          scroll={{ x: 980 }}
-                        />
-                      </Card>
-                    </Col>
-                    <Col xs={24} xl={12}>
-                      <Card className="battletoads-card" title={`${copy.algofund} · ${copy.planGrid}`}>
-                        <Table
-                          rowKey="code"
-                          columns={planColumns}
-                          dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'algofund_client')}
-                          pagination={false}
-                          scroll={{ x: 980 }}
-                        />
-                      </Card>
-                    </Col>
-                  </Row>
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} xl={14}>
+                              <Card className="battletoads-card" title={copy.recommendedSets}>
+                                <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.recommendedSetsHint}</Paragraph>
+                                <List
+                                  dataSource={Object.entries(summary?.recommendedSets || {})}
+                                  locale={{ emptyText: <Empty description={copy.noCatalog} /> }}
+                                  renderItem={([setName, offers]) => {
+                                    const setSummary = summarizeOfferSet(offers || []);
+                                    return (
+                                      <List.Item>
+                                        <div style={{ width: '100%' }}>
+                                          <Space wrap>
+                                            <Tooltip title={describeOfferSet(setName, offers || [])}>
+                                              <Text strong style={{ cursor: 'help' }}>{setName}</Text>
+                                            </Tooltip>
+                                            <Tag color={metricColor(setSummary.avgRet, 'return')}>Prof {formatPercent(setSummary.avgRet)}</Tag>
+                                            <Tag color={metricColor(setSummary.avgDd, 'drawdown')}>DD {formatPercent(setSummary.avgDd)}</Tag>
+                                            <Tag color={metricColor(setSummary.avgPf, 'pf')}>PF {formatNumber(setSummary.avgPf)}</Tag>
+                                          </Space>
+                                          <div className="saas-offer-badges">
+                                            {(offers || []).map((offer) => (
+                                              <Tag key={offer.offerId} color={offer.strategy.mode === 'mono' ? 'green' : 'blue'}>
+                                                {offer.strategy.market} В· {formatNumber(offer.metrics.score)} В· prof {formatPercent(offer.metrics.ret)} / dd {formatPercent(offer.metrics.dd)}
+                                              </Tag>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      </List.Item>
+                                    );
+                                  }}
+                                />
+                              </Card>
+                            </Col>
+                            <Col xs={24} xl={10}>
+                              <Card className="battletoads-card" title={copy.adminTsDraft} extra={<Button size="small" href="/trading-systems">{copy.openTradingSystems}</Button>}>
+                                <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.adminTsDraftHint}</Paragraph>
+                                <List
+                                  dataSource={summary?.catalog?.adminTradingSystemDraft?.members || []}
+                                  locale={{ emptyText: <Empty description={copy.noCatalog} /> }}
+                                  renderItem={(member) => (
+                                    <List.Item>
+                                      <Space direction="vertical" size={0}>
+                                        <Text strong>{member.strategyName}</Text>
+                                        <Text type="secondary">{member.marketMode.toUpperCase()} В· {member.market}</Text>
+                                      </Space>
+                                      <Space>
+                                        <Tag color="cyan">{copy.score}: {formatNumber(member.score)}</Tag>
+                                        <Tag color="purple">w {formatNumber(member.weight)}</Tag>
+                                      </Space>
+                                    </List.Item>
+                                  )}
+                                />
+                              </Card>
+                            </Col>
+                          </Row>
 
-                  {publishResponse?.preview ? (
-                    <Card className="battletoads-card" title={copy.publishedTsPreview}>
-                      <Row gutter={[16, 16]}>
-                        <Col xs={24} lg={8}>
-                          <Descriptions column={1} size="small" bordered>
-                            <Descriptions.Item label={copy.sourceSystem}>{publishResponse.sourceSystem?.systemName || '—'}</Descriptions.Item>
-                            <Descriptions.Item label={copy.apiKey}>{publishResponse.sourceSystem?.apiKeyName || '—'}</Descriptions.Item>
-                            <Descriptions.Item label={copy.period}>{formatPeriodLabel(publishPreviewPeriod)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.finalEquity}>{formatMoney(publishPreviewDerivedSummary?.finalEquity ?? publishResponse.preview.summary?.finalEquity)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.returnLabel}>{formatPercent(publishPreviewDerivedSummary?.totalReturnPercent ?? publishResponse.preview.summary?.totalReturnPercent)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.drawdown}>{formatPercent(publishPreviewDerivedSummary?.maxDrawdownPercent ?? publishResponse.preview.summary?.maxDrawdownPercent)}</Descriptions.Item>
-                            <Descriptions.Item label={copy.profitFactor}>{formatNumber(publishResponse.preview.summary?.profitFactor)}</Descriptions.Item>
-                          </Descriptions>
-                        </Col>
-                        <Col xs={24} lg={16}>
-                          {publishPreviewPoints.length > 0 ? <ChartComponent data={publishPreviewPoints} type="line" /> : <Empty description={copy.noCatalog} />}
-                        </Col>
-                      </Row>
-                    </Card>
-                  ) : null}
-                </Space>
+                          <Card className="battletoads-card" title={copy.connectedTenants} extra={<Button type="primary" onClick={() => setAdminTab('create-user')}>{copy.createClient}</Button>}>
+                            <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.adminCreateHint}</Paragraph>
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              <Card size="small" className="battletoads-card" title="Algofund batch actions">
+                                <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                                  <Space wrap>
+                                    <Tag color="processing">Selected: {batchTenantIds.length}</Tag>
+                                    <Tag>Algofund tenants: {batchEligibleAlgofundTenants.length}</Tag>
+                                    <Button
+                                      size="small"
+                                      onClick={() => setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)))}
+                                    >
+                                      Select all algofund
+                                    </Button>
+                                    <Button size="small" onClick={() => setBatchTenantIds([])}>Clear selection</Button>
+                                  </Space>
+                                  <Space wrap style={{ width: '100%' }}>
+                                    <Select
+                                      style={{ width: 180 }}
+                                      value={batchAlgofundAction}
+                                      onChange={(value) => setBatchAlgofundAction(value)}
+                                      options={[
+                                        { value: 'start', label: 'start' },
+                                        { value: 'stop', label: 'stop' },
+                                        { value: 'switch_system', label: 'switch_system' },
+                                      ]}
+                                    />
+                                    <InputNumber
+                                      min={1}
+                                      style={{ width: 180 }}
+                                      value={batchTargetSystemId || undefined}
+                                      onChange={(value) => setBatchTargetSystemId(Number(value || 0) || null)}
+                                      disabled={batchAlgofundAction !== 'switch_system'}
+                                      placeholder="target system id"
+                                    />
+                                    <Input
+                                      style={{ width: 360 }}
+                                      value={batchActionNote}
+                                      onChange={(event) => setBatchActionNote(event.target.value)}
+                                      placeholder="optional admin note"
+                                    />
+                                    <Button
+                                      type="primary"
+                                      loading={actionLoading === 'algofund-batch'}
+                                      onClick={() => void runAlgofundBatchAction()}
+                                    >
+                                      Run batch
+                                    </Button>
+                                  </Space>
+                                </Space>
+                              </Card>
+                              <Table
+                                rowKey={(row) => row.tenant.id}
+                                columns={tenantColumns}
+                                dataSource={summary?.tenants || []}
+                                pagination={false}
+                                scroll={{ x: 980 }}
+                                rowSelection={{
+                                  selectedRowKeys: batchTenantIds,
+                                  onChange: (keys) => {
+                                    const next = Array.from(new Set((keys || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+                                    setBatchTenantIds(next);
+                                  },
+                                  getCheckboxProps: (row) => ({
+                                    disabled: row.tenant.product_mode !== 'algofund_client',
+                                  }),
+                                }}
+                              />
+                            </Space>
+                          </Card>
+
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} xl={12}>
+                              <Card className="battletoads-card" title={`${copy.strategyClient} В· ${copy.planGrid}`}>
+                                <Table
+                                  rowKey="code"
+                                  columns={planColumns}
+                                  dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'strategy_client')}
+                                  pagination={false}
+                                  scroll={{ x: 980 }}
+                                />
+                              </Card>
+                            </Col>
+                            <Col xs={24} xl={12}>
+                              <Card className="battletoads-card" title={`${copy.algofund} В· ${copy.planGrid}`}>
+                                <Table
+                                  rowKey="code"
+                                  columns={planColumns}
+                                  dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'algofund_client')}
+                                  pagination={false}
+                                  scroll={{ x: 980 }}
+                                />
+                              </Card>
+                            </Col>
+                          </Row>
+
+                          {publishResponse?.preview ? (
+                            <Card className="battletoads-card" title={copy.publishedTsPreview}>
+                              <Row gutter={[16, 16]}>
+                                <Col xs={24} lg={8}>
+                                  <Descriptions column={1} size="small" bordered>
+                                    <Descriptions.Item label={copy.sourceSystem}>{publishResponse.sourceSystem?.systemName || '—'}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.apiKey}>{publishResponse.sourceSystem?.apiKeyName || '—'}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.period}>{formatPeriodLabel(publishPreviewPeriod)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(publishResponse.preview.summary?.finalEquity ?? publishPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(publishResponse.preview.summary?.totalReturnPercent ?? publishPreviewDerivedSummary?.totalReturnPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(publishResponse.preview.summary?.maxDrawdownPercent ?? publishPreviewDerivedSummary?.maxDrawdownPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.profitFactor}>{formatNumber(publishResponse.preview.summary?.profitFactor)}</Descriptions.Item>
+                                  </Descriptions>
+                                </Col>
+                                <Col xs={24} lg={16}>
+                                  {publishPreviewPoints.length > 0 ? <ChartComponent data={publishPreviewPoints} type="line" /> : <Empty description={copy.noCatalog} />}
+                                </Col>
+                              </Row>
+                            </Card>
+                          ) : null}
+                        </Space>
+                      ),
+                    },
+                    {
+                      key: 'monitoring',
+                      label: 'Мониторинг',
+                      children: (
+                        <Card className="battletoads-card" title="Живые клиенты и торговые движки">
+                          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                            <Paragraph type="secondary" style={{ marginTop: 0 }}>
+                              Сводка по strategy-client и algofund: состояние движка, краткие метрики, комментарии и выбор систем.
+                            </Paragraph>
+                            <Space wrap>
+                              <Select
+                                style={{ width: 260 }}
+                                value={monitoringModeFilter}
+                                onChange={(value) => setMonitoringModeFilter(value)}
+                                options={[
+                                  { value: 'all', label: 'Все режимы' },
+                                  { value: 'strategy_client', label: 'Strategy Client' },
+                                  { value: 'algofund_client', label: 'Algofund' },
+                                ]}
+                              />
+                              <Button onClick={() => void loadMonitoringTabData()} loading={monitoringTabLoading}>Обновить список систем</Button>
+                              <Button onClick={() => void loadLowLotRecommendations()} loading={lowLotLoading}>Обновить low-lot</Button>
+                              <Button onClick={() => void loadTelegramControls()} loading={telegramControlsLoading}>Обновить Telegram controls</Button>
+                            </Space>
+
+                            <Row gutter={[16, 16]}>
+                              <Col xs={24} xl={10}>
+                                <Card size="small" className="battletoads-card" title="Pending algofund requests">
+                                  <Space wrap>
+                                    <Tag color="processing">pending: {pendingAlgofundRequests.length}</Tag>
+                                    <Tag>clients: {Object.keys(pendingAlgofundRequestsByTenant).length}</Tag>
+                                  </Space>
+                                  <div style={{ marginTop: 12 }}>
+                                    <Table
+                                      size="small"
+                                      rowKey="id"
+                                      columns={requestColumns}
+                                      dataSource={pendingAlgofundRequests}
+                                      pagination={{ pageSize: 4, showSizeChanger: false }}
+                                      scroll={{ x: 760 }}
+                                    />
+                                  </div>
+                                </Card>
+                              </Col>
+                              <Col xs={24} xl={10}>
+                                <Card size="small" className="battletoads-card" title="Telegram controls">
+                                  <Space direction="vertical" style={{ width: '100%' }}>
+                                    <Space>
+                                      <Text>Admin reporter</Text>
+                                      <Switch
+                                        checked={Boolean(telegramControls?.adminEnabled)}
+                                        loading={telegramControlsLoading}
+                                        onChange={(checked) => {
+                                          void patchTelegramControls({ adminEnabled: checked });
+                                        }}
+                                      />
+                                    </Space>
+                                    <Space>
+                                      <Text>Client reporter</Text>
+                                      <Switch
+                                        checked={Boolean(telegramControls?.clientsEnabled)}
+                                        loading={telegramControlsLoading}
+                                        onChange={(checked) => {
+                                          void patchTelegramControls({ clientsEnabled: checked });
+                                        }}
+                                      />
+                                    </Space>
+                                    <Space wrap>
+                                      <Tag color={telegramControls?.tokenConfigured ? 'success' : 'default'}>token {telegramControls?.tokenConfigured ? 'ok' : 'missing'}</Tag>
+                                      <Tag color={telegramControls?.chatConfigured ? 'success' : 'default'}>chat_id {telegramControls?.chatConfigured ? 'ok' : 'missing'}</Tag>
+                                    </Space>
+                                  </Space>
+                                </Card>
+                              </Col>
+
+                              <Col xs={24} xl={14}>
+                                <Card size="small" className="battletoads-card" title="Low-lot recommendations (72h)">
+                                  <Table
+                                    size="small"
+                                    rowKey={(row) => `${row.apiKeyName}:${row.strategyId}`}
+                                    dataSource={lowLotRecommendations?.items || []}
+                                    pagination={{ pageSize: 5 }}
+                                    scroll={{ x: 900 }}
+                                    columns={[
+                                      {
+                                        title: 'Strategy',
+                                        key: 'strategy',
+                                        render: (_, row) => (
+                                          <Space direction="vertical" size={0}>
+                                            <Text strong>{row.strategyName}</Text>
+                                            <Text type="secondary">{row.apiKeyName} • {row.pair}</Text>
+                                          </Space>
+                                        ),
+                                      },
+                                      {
+                                        title: 'Source',
+                                        key: 'source',
+                                        width: 110,
+                                        render: (_, row) => {
+                                          const colors: Record<string, string> = {
+                                            last_error: 'red',
+                                            runtime_event: 'orange',
+                                            liquidity_trigger: 'blue',
+                                          };
+                                          const labels: Record<string, string> = {
+                                            last_error: 'error',
+                                            runtime_event: 'realtime',
+                                            liquidity_trigger: 'liquidity',
+                                          };
+                                          const src = row.eventSource || 'last_error';
+                                          return <Tag color={colors[src] || 'default'}>{labels[src] || src}</Tag>;
+                                        },
+                                      },
+                                      {
+                                        title: 'Current',
+                                        key: 'current',
+                                        render: (_, row) => `dep=${formatMoney(row.maxDeposit)} lot=${formatNumber(row.lotPercent, 1)}% lev=${formatNumber(row.leverage, 1)}`,
+                                      },
+                                      {
+                                        title: 'Recommend',
+                                        key: 'recommend',
+                                        render: (_, row) => (
+                                          <Space direction="vertical" size={0}>
+                                            <Text>min dep: {formatMoney(row.suggestedDepositMin)}</Text>
+                                            <Text>target lot: {formatNumber(row.suggestedLotPercent, 0)}%</Text>
+                                            <Text type="secondary">{row.replacementCandidates?.map((c) => c.symbol).filter(Boolean).join(', ') || 'replace by sweep candidate'}</Text>
+                                          </Space>
+                                        ),
+                                      },
+                                      {
+                                        title: 'Clients',
+                                        key: 'clients',
+                                        render: (_, row) => row.tenants?.length || 0,
+                                      },
+                                      {
+                                        title: '',
+                                        key: 'action',
+                                        width: 90,
+                                        render: (_, row) => (
+                                          <Button
+                                            size="small"
+                                            onClick={() => {
+                                              setApplyLowLotTarget(row);
+                                              setApplyLowLotDeposit(true);
+                                              setApplyLowLotLot(true);
+                                              setApplyLowLotReplacement(row.replacementCandidates?.[0]?.symbol ? `${row.replacementCandidates[0].symbol}/USDT` : '');
+                                            }}
+                                          >
+                                            Apply
+                                          </Button>
+                                        ),
+                                      },
+                                    ]}
+                                  />
+                                </Card>
+                              </Col>
+                            </Row>
+
+                            <Table
+                              rowKey={(row) => row.tenant.id}
+                              columns={monitoringColumns}
+                              dataSource={monitoringRows}
+                              pagination={{ pageSize: 8 }}
+                              scroll={{ x: 1500 }}
+                              loading={monitoringTabLoading && monitoringRows.length === 0}
+                            />
+                          </Space>
+                        </Card>
+                      ),
+                    },
+                    {
+                      key: 'create-user',
+                      label: 'Создать пользователя',
+                      children: (
+                        <Card className="battletoads-card" title={copy.createClientTitle}>
+                          <Space direction="vertical" style={{ width: '100%' }} size={12}>
+                            <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.adminCreateHint}</Paragraph>
+                            <div>
+                              <Text strong>{copy.displayName} *</Text>
+                              <Input style={{ marginTop: 4 }} value={createTenantDisplayName} onChange={(e) => setCreateTenantDisplayName(e.target.value)} placeholder="AlphaFund Client" />
+                            </div>
+                            <div>
+                              <Text strong>{copy.tenantMode} *</Text>
+                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantProductMode} onChange={setCreateTenantProductMode} options={[{ value: 'strategy_client', label: copy.strategyClient }, { value: 'algofund_client', label: copy.algofund }]} />
+                            </div>
+                            <div>
+                              <Text strong>{copy.plan} *</Text>
+                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantPlanCode || undefined} onChange={(v) => setCreateTenantPlanCode(v || '')} options={(summary?.plans || []).filter((p) => p.product_mode === createTenantProductMode).map((p) => ({ value: p.code, label: p.title }))} />
+                            </div>
+                            <div>
+                              <Text strong>{copy.apiKey}</Text>
+                              <Select allowClear style={{ width: '100%', marginTop: 4 }} value={createTenantApiKey || undefined} onChange={(v) => setCreateTenantApiKey(v || '')} options={apiKeyOptions} />
+                            </div>
+                            <div>
+                              <Text strong>Email</Text>
+                              <Input type="email" style={{ marginTop: 4 }} value={createTenantEmail} onChange={(e) => setCreateTenantEmail(e.target.value)} placeholder="client@example.com" />
+                            </div>
+                            <Space>
+                              <Button type="primary" onClick={() => void createTenantAdmin()} loading={actionLoading === 'createTenant'}>{copy.createClient}</Button>
+                              <Button onClick={() => setAdminTab('overview')}>Назад к обзору</Button>
+                            </Space>
+                          </Space>
+                        </Card>
+                      ),
+                    },
+                  ]}
+                />
               ),
             },
             {
@@ -2393,7 +4164,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               {isAdminSurface ? (
                                 <Select style={{ width: '100%', marginTop: 8 }} value={strategyTenantPlanCode || undefined} onChange={setStrategyTenantPlanCode} options={strategyPlanOptions} />
                               ) : (
-                                <div style={{ marginTop: 8 }}><Text>{strategyState.plan ? `${strategyState.plan.title} · ${formatMoney(strategyState.plan.price_usdt)}` : '—'}</Text></div>
+                                <div style={{ marginTop: 8 }}><Text>{strategyState.plan ? `${strategyState.plan.title} • ${formatMoney(strategyState.plan.price_usdt)}` : '—'}</Text></div>
                               )}
                             </Col>
                           </Row>
@@ -2425,28 +4196,152 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Button size="small" href="/backtest" disabled={!strategyBacktestEnabled}>{copy.openBacktest}</Button>
                           </Space>
                           {isAdminSurface ? (
-                            <Space wrap style={{ marginTop: 12 }}>
-                              <Select
-                                value={strategyTenantStatus}
-                                onChange={setStrategyTenantStatus}
-                                style={{ width: 180 }}
-                                options={[
-                                  { value: 'active', label: 'active' },
-                                  { value: 'suspended', label: 'suspended' },
-                                  { value: 'paused', label: 'paused' },
-                                ]}
-                              />
-                              <Button type="primary" onClick={() => void saveStrategyTenantAdmin()} loading={actionLoading === 'strategy-tenant-save'}>
-                                {copy.saveTenant}
-                              </Button>
-                              <Button danger onClick={() => void emergencyStopStrategy()} loading={actionLoading === 'strategy-emergency'}>
-                                {copy.emergencyStop}
-                              </Button>
-                            </Space>
+                            <>
+                              <Space wrap style={{ marginTop: 12 }}>
+                                <Select
+                                  value={strategyTenantStatus}
+                                  onChange={setStrategyTenantStatus}
+                                  style={{ width: 180 }}
+                                  options={[
+                                    { value: 'active', label: 'active' },
+                                    { value: 'suspended', label: 'suspended' },
+                                    { value: 'paused', label: 'paused' },
+                                  ]}
+                                />
+                                <Button type="primary" onClick={() => void saveStrategyTenantAdmin()} loading={actionLoading === 'strategy-tenant-save'}>
+                                  {copy.saveTenant}
+                                </Button>
+                                <Button danger onClick={() => void emergencyStopStrategy()} loading={actionLoading === 'strategy-emergency'}>
+                                  {copy.emergencyStop}
+                                </Button>
+                                <Button onClick={() => void createStrategyMagicLink()} loading={actionLoading === 'strategy-magic-link'}>
+                                  {copy.createMagicLink}
+                                </Button>
+                              </Space>
+                              {strategyMagicLink ? (
+                                <Alert
+                                  style={{ marginTop: 8 }}
+                                  type="info"
+                                  showIcon
+                                  message={copy.magicLinkReady}
+                                  description={
+                                    <>
+                                      <div><a href={strategyMagicLink.loginUrl} target="_blank" rel="noreferrer">{strategyMagicLink.loginUrl}</a></div>
+                                      <div>{copy.magicLinkExpires}: {new Date(strategyMagicLink.expiresAt).toLocaleString()}</div>
+                                    </>
+                                  }
+                                />
+                              ) : null}
+                            </>
                           ) : null}
                         </Card>
 
-                        {!strategyBacktestEnabled ? <Alert type="warning" showIcon message={copy.backtestLockedHint} /> : null}
+                        <Card className="battletoads-card" title="Custom TS profiles">
+                          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                            <Space wrap>
+                              <Tag color="blue">Profiles: {strategySystemProfiles.length}</Tag>
+                              {strategyState?.constraints?.limits?.maxCustomSystems !== null && strategyState?.constraints?.limits?.maxCustomSystems !== undefined ? (
+                                <Tag color="purple">Plan cap: {strategyState?.constraints?.limits?.maxCustomSystems}</Tag>
+                              ) : null}
+                              {activeStrategySystemProfile ? <Tag color="success">Active: {activeStrategySystemProfile.profileName}</Tag> : null}
+                            </Space>
+                            <Row gutter={[12, 12]}>
+                              <Col xs={24} lg={12}>
+                                <Text strong>Active profile</Text>
+                                <Select
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  value={strategySystemProfileId || undefined}
+                                  onChange={(value) => {
+                                    const numericId = Number(value);
+                                    setStrategySystemProfileId(numericId);
+                                    void activateStrategySystemProfile(numericId);
+                                  }}
+                                  options={strategySystemProfiles.map((item) => ({
+                                    value: Number(item.id),
+                                    label: `${item.profileName}${item.isActive ? ' [active]' : ''}`,
+                                  }))}
+                                />
+                              </Col>
+                              <Col xs={24} lg={7}>
+                                <Text strong>New profile name</Text>
+                                <Input
+                                  style={{ marginTop: 8 }}
+                                  value={strategyNewProfileName}
+                                  onChange={(event) => setStrategyNewProfileName(event.target.value)}
+                                  placeholder={`Custom TS ${strategySystemProfiles.length + 1}`}
+                                />
+                              </Col>
+                              <Col xs={12} lg={3}>
+                                <Text strong style={{ opacity: 0 }}>.</Text>
+                                <Button
+                                  type="primary"
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  loading={actionLoading === 'strategy-profile-create'}
+                                  onClick={() => void createStrategySystemProfile()}
+                                  disabled={
+                                    Number(strategyState?.constraints?.limits?.maxCustomSystems || 0) > 0
+                                    && strategySystemProfiles.length >= Number(strategyState?.constraints?.limits?.maxCustomSystems || 0)
+                                  }
+                                >
+                                  Create
+                                </Button>
+                              </Col>
+                              <Col xs={12} lg={2}>
+                                <Text strong style={{ opacity: 0 }}>.</Text>
+                                <Button
+                                  danger
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  loading={actionLoading === 'strategy-profile-delete'}
+                                  disabled={!strategySystemProfileId || strategySystemProfiles.length <= 1}
+                                  onClick={() => {
+                                    Modal.confirm({
+                                      title: 'Delete custom TS profile?',
+                                      content: 'Selected profile will be removed. Active profile cannot be deleted.',
+                                      okText: 'Delete',
+                                      okType: 'danger',
+                                      cancelText: 'Cancel',
+                                      onOk: async () => {
+                                        await deleteStrategySystemProfile();
+                                      },
+                                    });
+                                  }}
+                                >
+                                  Delete
+                                </Button>
+                              </Col>
+                            </Row>
+                            <Table
+                              size="small"
+                              rowKey="id"
+                              dataSource={strategySystemProfiles}
+                              pagination={false}
+                              columns={[
+                                {
+                                  title: 'Profile',
+                                  key: 'profileName',
+                                  render: (_, row: any) => (
+                                    <Space>
+                                      <Text strong>{row.profileName}</Text>
+                                      {row.isActive ? <Tag color="success">active</Tag> : <Tag color="default">inactive</Tag>}
+                                    </Space>
+                                  ),
+                                },
+                                {
+                                  title: 'Offers',
+                                  key: 'offers',
+                                  render: (_, row: any) => Array.isArray(row.selectedOfferIds) ? row.selectedOfferIds.length : 0,
+                                  width: 100,
+                                },
+                                {
+                                  title: 'Updated',
+                                  dataIndex: 'updatedAt',
+                                  width: 200,
+                                  render: (value: any) => value || '—',
+                                },
+                              ]}
+                            />
+                          </Space>
+                        </Card>
 
                         <Card className="battletoads-card">
                           <Row gutter={[16, 16]}>
@@ -2457,8 +4352,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                             <Col xs={24} lg={12}>
                               <Text strong>{copy.tradeFrequency}: {formatNumber(strategyTradeInput, 1)}</Text>
-                              <Slider min={0} max={10} step={0.1} marks={strategyLevelMarks} value={strategyTradeInput} onChange={(value) => setStrategyTradeInput(clampPreviewValue(Number(value)))} />
-                              <InputNumber min={0} max={10} step={0.1} style={{ width: '100%' }} value={strategyTradeInput} onChange={(value) => setStrategyTradeInput(clampPreviewValue(Number(value ?? 0)))} />
+                              <Slider min={0} max={10} step={null} marks={strategyLevelMarks} value={strategyTradeInput} onChange={(value) => setStrategyTradeInput(snapToLevelValue(Number(value)))} />
+                              <InputNumber min={0} max={10} step={5} style={{ width: '100%' }} value={strategyTradeInput} onChange={(value) => setStrategyTradeInput(snapToLevelValue(Number(value ?? 5)))} />
                             </Col>
                           </Row>
                           <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 8 }}>{copy.previewUsesNearestPreset}</Paragraph>
@@ -2472,8 +4367,125 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Space>
                         </Card>
 
+                        <Card className="battletoads-card" title="Builder constraints">
+                          <Row gutter={[12, 12]}>
+                            <Col xs={24} md={6}>
+                              <Statistic
+                                title="Selected"
+                                value={`${strategyDraftConstraints.usage?.selected ?? 0}${strategyDraftConstraints.limits?.maxOffersPerSystem !== null && strategyDraftConstraints.limits?.maxOffersPerSystem !== undefined ? ` / ${strategyDraftConstraints.limits?.maxOffersPerSystem}` : strategyDraftConstraints.limits?.maxStrategies !== null && strategyDraftConstraints.limits?.maxStrategies !== undefined ? ` / ${strategyDraftConstraints.limits?.maxStrategies}` : ''}`}
+                              />
+                            </Col>
+                            <Col xs={24} md={6}>
+                              <Statistic title="Mono / Synth" value={`${strategyDraftConstraints.usage?.mono ?? 0} / ${strategyDraftConstraints.usage?.synth ?? 0}`} />
+                            </Col>
+                            <Col xs={24} md={6}>
+                              <Statistic title="Markets" value={strategyDraftConstraints.usage?.uniqueMarkets ?? 0} />
+                            </Col>
+                            <Col xs={24} md={6}>
+                              <Statistic title="Deposit per TS" value={strategyDraftConstraints.usage?.estimatedDepositPerStrategy ?? 0} precision={2} suffix="USDT" />
+                            </Col>
+                          </Row>
+                          <Space wrap style={{ marginTop: 12 }}>
+                            {strategyDraftConstraints.usage?.remainingSlots !== null && strategyDraftConstraints.usage?.remainingSlots !== undefined ? <Tag color="blue">Remaining slots: {strategyDraftConstraints.usage?.remainingSlots}</Tag> : null}
+                            {strategyDraftConstraints.limits?.minOffersPerSystem !== null && strategyDraftConstraints.limits?.minOffersPerSystem !== undefined ? <Tag color="purple">Min offers per TS: {strategyDraftConstraints.limits?.minOffersPerSystem}</Tag> : null}
+                            {strategyDraftConstraints.limits?.maxOffersPerSystem !== null && strategyDraftConstraints.limits?.maxOffersPerSystem !== undefined ? <Tag color="purple">Max offers per TS: {strategyDraftConstraints.limits?.maxOffersPerSystem}</Tag> : null}
+                            {strategyDraftConstraints.limits?.maxCustomSystems !== null && strategyDraftConstraints.limits?.maxCustomSystems !== undefined ? <Tag color="cyan">Custom TS cap: {strategyDraftConstraints.limits?.maxCustomSystems}</Tag> : null}
+                            {strategyDraftConstraints.limits?.mono !== null && strategyDraftConstraints.limits?.mono !== undefined ? <Tag color="green">Mono cap: {strategyDraftConstraints.limits?.mono}</Tag> : null}
+                            {strategyDraftConstraints.limits?.synth !== null && strategyDraftConstraints.limits?.synth !== undefined ? <Tag color="geekblue">Synth cap: {strategyDraftConstraints.limits?.synth}</Tag> : null}
+                            {strategyDraftConstraints.limits?.depositCap !== null && strategyDraftConstraints.limits?.depositCap !== undefined ? <Tag color="gold">Deposit cap: {formatMoney(strategyDraftConstraints.limits?.depositCap)}</Tag> : null}
+                          </Space>
+                          {(strategyDraftConstraints.violations || []).map((item) => (
+                            <Alert key={item} style={{ marginTop: 12 }} type="error" showIcon message={item} />
+                          ))}
+                          {(strategyDraftConstraints.warnings || []).map((item) => (
+                            <Alert key={item} style={{ marginTop: 12 }} type="warning" showIcon message={item} />
+                          ))}
+                        </Card>
+
                         <Card className="battletoads-card" title={copy.selectedOffers}>
-                          <Table rowKey="offerId" columns={offerColumns} dataSource={strategyState.offers || []} pagination={false} scroll={{ x: 920 }} />
+                          <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.selectedOffersHint}</Paragraph>
+                          {strategyOfferCatalog.length === 0 ? (
+                            <>
+                              <Alert type="warning" showIcon message={copy.selectedOffersEmptyHint} style={{ marginBottom: 12 }} />
+                              <Empty description={copy.noCatalog} />
+                            </>
+                          ) : (
+                            <List
+                              grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
+                              dataSource={strategyOfferCatalog}
+                              renderItem={(offer) => {
+                                const checked = strategyOfferIds.includes(offer.offerId);
+                                return (
+                                  <List.Item key={offer.offerId}>
+                                    <Card
+                                      size="small"
+                                      className="battletoads-card"
+                                      title={<Text strong>{offer.titleRu}</Text>}
+                                      extra={(
+                                        <Checkbox
+                                          checked={checked}
+                                          onChange={(event) => {
+                                            const nextChecked = event.target.checked;
+                                            setStrategyOfferIds((current) => {
+                                              const next = nextChecked
+                                                ? Array.from(new Set([...current, offer.offerId]))
+                                                : current.filter((item) => item !== offer.offerId);
+                                              const nextConstraints = buildDraftStrategyConstraints(next, strategyOfferCatalog, strategyState?.constraints || null);
+                                              if (nextChecked && (nextConstraints.violations || []).length > 0) {
+                                                messageApi.warning((nextConstraints.violations || [copy.settingsLockedHint])[0]);
+                                                return current;
+                                              }
+                                              return next;
+                                            });
+                                          }}
+                                        />
+                                      )}
+                                    >
+                                      <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                                        <Text type="secondary">{offer.strategy.mode.toUpperCase()} • {offer.strategy.type} • {offer.strategy.market}</Text>
+                                        <Row gutter={[8, 8]}>
+                                          <Col span={12}>
+                                            <Card size="small" bordered>
+                                              <Text type="secondary">{copy.returnLabel}</Text>
+                                              <div><Text strong style={{ color: Number(offer.metrics.ret || 0) >= 0 ? '#389e0d' : '#cf1322' }}>{formatPercent(offer.metrics.ret)}</Text></div>
+                                            </Card>
+                                          </Col>
+                                          <Col span={12}>
+                                            <Card size="small" bordered>
+                                              <Text type="secondary">{copy.drawdown}</Text>
+                                              <div><Text strong>{formatPercent(offer.metrics.dd)}</Text></div>
+                                            </Card>
+                                          </Col>
+                                          <Col span={12}>
+                                            <Card size="small" bordered>
+                                              <Text type="secondary">{copy.profitFactor}</Text>
+                                              <div><Text strong>{formatNumber(offer.metrics.pf)}</Text></div>
+                                            </Card>
+                                          </Col>
+                                          <Col span={12}>
+                                            <Card size="small" bordered>
+                                              <Text type="secondary">{copy.trades}</Text>
+                                              <div><Text strong>{formatNumber(offer.metrics.trades, 0)}</Text></div>
+                                            </Card>
+                                          </Col>
+                                        </Row>
+                                        <Space wrap>
+                                          <Tag color="cyan">{copy.score}: {formatNumber(offer.metrics.score)}</Tag>
+                                          {offer.metrics.robust ? <Tag color="success">robust</Tag> : <Tag color="default">candidate</Tag>}
+                                          {summary?.sweepSummary?.period ? <Tag color="blue">SWEEP {formatPeriodLabel(summary.sweepSummary.period)}</Tag> : null}
+                                          {summary?.offerStore?.defaults?.periodDays ? <Tag color="default">period {summary.offerStore.defaults.periodDays}d</Tag> : null}
+                                          {offer.equity?.source ? <Tag color="processing">{String(offer.equity.source)}</Tag> : null}
+                                        </Space>
+                                        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                                          {offer.descriptionRu || 'Sweep-backed offer with preset-based selection.'}
+                                        </Paragraph>
+                                      </Space>
+                                    </Card>
+                                  </List.Item>
+                                );
+                              }}
+                            />
+                          )}
                         </Card>
 
                         <Card
@@ -2488,9 +4500,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Descriptions column={1} size="small" bordered>
                                     <Descriptions.Item label="Offers">{strategySelectionPreviewOffers.length}</Descriptions.Item>
                                     <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategySelectionPreviewPeriod)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(strategySelectionPreviewDerivedSummary?.finalEquity ?? (strategySelectionPreviewSummary as any)?.finalEquity)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(strategySelectionPreviewDerivedSummary?.totalReturnPercent ?? (strategySelectionPreviewSummary as any)?.totalReturnPercent)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(strategySelectionPreviewDerivedSummary?.maxDrawdownPercent ?? (strategySelectionPreviewSummary as any)?.maxDrawdownPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney((strategySelectionPreviewSummary as any)?.finalEquity ?? strategySelectionPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent((strategySelectionPreviewSummary as any)?.totalReturnPercent ?? strategySelectionPreviewDerivedSummary?.totalReturnPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.drawdown}>{formatPercent((strategySelectionPreviewSummary as any)?.maxDrawdownPercent ?? strategySelectionPreviewDerivedSummary?.maxDrawdownPercent)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.profitFactor}>{formatNumber((strategySelectionPreviewSummary as any)?.profitFactor)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.trades}>{formatNumber((strategySelectionPreviewSummary as any)?.tradesCount, 0)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.persistedBucket}>{strategySelectionPreview.controls?.riskLevel || strategyPersistedRiskBucket} / {strategySelectionPreview.controls?.tradeFrequencyLevel || strategyPersistedTradeBucket}</Descriptions.Item>
@@ -2500,7 +4512,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Space wrap style={{ marginBottom: 12 }}>
                                     {strategySelectionPreviewOffers.map((item) => (
                                       <Tag key={item.offerId} color={item.mode === 'mono' ? 'green' : 'blue'}>
-                                        {item.market} · {formatNumber(item.score)}
+                                        {item.market} • {formatNumber(item.score)}
                                       </Tag>
                                     ))}
                                   </Space>
@@ -2521,7 +4533,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 style={{ width: '100%', marginTop: 8 }}
                                 value={strategyPreviewOfferId || undefined}
                                 onChange={setStrategyPreviewOfferId}
-                                options={(strategyState.offers || []).map((offer) => ({ value: offer.offerId, label: `${offer.titleRu} · ${offer.strategy.market}` }))}
+                                options={strategyOfferCatalog.map((offer) => ({ value: offer.offerId, label: `${offer.titleRu} • ${offer.strategy.market}` }))}
                               />
                             </Col>
                             <Col xs={24} md={14}>
@@ -2541,9 +4553,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     <Descriptions.Item label="Offer">{strategyPreviewOffer?.titleRu || '—'}</Descriptions.Item>
                                     <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategyPreviewPeriod)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.score}>{formatNumber(strategyPreview?.preset?.score ?? strategyPreviewMetrics?.score)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(strategyPreviewDerivedSummary?.finalEquity ?? (strategyPreviewSummary as any)?.finalEquity)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(strategyPreviewDerivedSummary?.totalReturnPercent ?? (strategyPreviewSummary as any)?.totalReturnPercent ?? strategyPreviewMetrics?.ret)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(strategyPreviewDerivedSummary?.maxDrawdownPercent ?? (strategyPreviewSummary as any)?.maxDrawdownPercent ?? strategyPreviewMetrics?.dd)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney((strategyPreviewSummary as any)?.finalEquity ?? strategyPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent((strategyPreviewSummary as any)?.totalReturnPercent ?? strategyPreviewDerivedSummary?.totalReturnPercent ?? strategyPreviewMetrics?.ret)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.drawdown}>{formatPercent((strategyPreviewSummary as any)?.maxDrawdownPercent ?? strategyPreviewDerivedSummary?.maxDrawdownPercent ?? strategyPreviewMetrics?.dd)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.profitFactor}>{formatNumber((strategyPreviewSummary as any)?.profitFactor ?? strategyPreviewMetrics?.pf)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.trades}>{formatNumber((strategyPreviewSummary as any)?.tradesCount ?? strategyPreviewMetrics?.trades, 0)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.persistedBucket}>{strategyPreview.controls?.riskLevel || strategyPersistedRiskBucket} / {strategyPreview.controls?.tradeFrequencyLevel || strategyPersistedTradeBucket}</Descriptions.Item>
@@ -2567,7 +4579,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 <List.Item>
                                   <Space direction="vertical" size={0}>
                                     <Text strong>{item.name}</Text>
-                                    <Text type="secondary">{item.mode.toUpperCase()} · {item.type} · {item.market}</Text>
+                                    <Text type="secondary">{item.mode.toUpperCase()} • {item.type} • {item.market}</Text>
                                   </Space>
                                   <Space wrap>
                                     <Tag color="blue">id {item.strategyId || item.id}</Tag>
@@ -2667,28 +4679,45 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Button size="small" href="/backtest" disabled={!algofundBacktestEnabled}>{copy.openBacktest}</Button>
                           </Space>
                           {isAdminSurface ? (
-                            <Space wrap style={{ marginTop: 12 }}>
-                              <Select
-                                value={algofundTenantStatus}
-                                onChange={setAlgofundTenantStatus}
-                                style={{ width: 180 }}
-                                options={[
-                                  { value: 'active', label: 'active' },
-                                  { value: 'suspended', label: 'suspended' },
-                                  { value: 'paused', label: 'paused' },
-                                ]}
-                              />
-                              <Button type="primary" onClick={() => void saveAlgofundTenantAdmin()} loading={actionLoading === 'algofund-tenant-save'}>
-                                {copy.saveTenant}
-                              </Button>
-                              <Button danger onClick={() => void emergencyStopAlgofund()} loading={actionLoading === 'algofund-emergency'}>
-                                {copy.emergencyStop}
-                              </Button>
-                            </Space>
+                            <>
+                              <Space wrap style={{ marginTop: 12 }}>
+                                <Select
+                                  value={algofundTenantStatus}
+                                  onChange={setAlgofundTenantStatus}
+                                  style={{ width: 180 }}
+                                  options={[
+                                    { value: 'active', label: 'active' },
+                                    { value: 'suspended', label: 'suspended' },
+                                    { value: 'paused', label: 'paused' },
+                                  ]}
+                                />
+                                <Button type="primary" onClick={() => void saveAlgofundTenantAdmin()} loading={actionLoading === 'algofund-tenant-save'}>
+                                  {copy.saveTenant}
+                                </Button>
+                                <Button danger onClick={() => void emergencyStopAlgofund()} loading={actionLoading === 'algofund-emergency'}>
+                                  {copy.emergencyStop}
+                                </Button>
+                                <Button onClick={() => void createAlgofundMagicLink()} loading={actionLoading === 'algofund-magic-link'}>
+                                  {copy.createMagicLink}
+                                </Button>
+                              </Space>
+                              {algofundMagicLink ? (
+                                <Alert
+                                  style={{ marginTop: 8 }}
+                                  type="info"
+                                  showIcon
+                                  message={copy.magicLinkReady}
+                                  description={
+                                    <>
+                                      <div><a href={algofundMagicLink.loginUrl} target="_blank" rel="noreferrer">{algofundMagicLink.loginUrl}</a></div>
+                                      <div>{copy.magicLinkExpires}: {new Date(algofundMagicLink.expiresAt).toLocaleString()}</div>
+                                    </>
+                                  }
+                                />
+                              ) : null}
+                            </>
                           ) : null}
                         </Card>
-
-                        {!algofundBacktestEnabled ? <Alert type="warning" showIcon message={copy.backtestLockedHint} /> : null}
 
                         <Card className="battletoads-card">
                           <Row gutter={[16, 16]} align="middle">
@@ -2720,6 +4749,107 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>{copy.previewPlanCapHint}</Paragraph>
                         </Card>
 
+                        <Card className="battletoads-card" title="Algofund TS offers">
+                          {Array.isArray(algofundState?.availableSystems) && algofundState.availableSystems.length > 0 ? (
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              <Space wrap>
+                                <Tag color="processing">Client can switch between published TS offers</Tag>
+                                <Tag color="blue">Current engine: {algofundState.engine?.systemName || 'not materialized'}</Tag>
+                                {pendingAlgofundRequestsByTenant[algofundState.tenant.id]?.length ? <Tag color="gold">Pending requests: {pendingAlgofundRequestsByTenant[algofundState.tenant.id].length}</Tag> : null}
+                              </Space>
+                              <List
+                                grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
+                                dataSource={algofundState.availableSystems || []}
+                                renderItem={(item) => (
+                                  <List.Item key={item.id}>
+                                    <Card size="small" bordered>
+                                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                        <Text strong>{item.name}</Text>
+                                        <Text type="secondary">Trading System offer #{item.id}</Text>
+                                        <Space wrap>
+                                          {item.isActive ? <Tag color="success">active</Tag> : <Tag color="default">inactive</Tag>}
+                                          <Tag color="blue">Backtest period {formatPeriodLabel(algofundState.portfolioPassport?.period || null)}</Tag>
+                                          <Tag color="geekblue">Ret {formatPercent(algofundState.portfolioPassport?.portfolioSummary?.totalReturnPercent)}</Tag>
+                                          <Tag color="orange">DD {formatPercent(algofundState.portfolioPassport?.portfolioSummary?.maxDrawdownPercent)}</Tag>
+                                          <Tag color="purple">PF {formatNumber(algofundState.portfolioPassport?.portfolioSummary?.profitFactor)}</Tag>
+                                          {pendingSwitchSystemIds.has(Number(item.id)) ? <Tag color="gold">switch pending</Tag> : null}
+                                        </Space>
+                                        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                                          Для витрины показываем backtest/sweep-метрики и сравнение профиля риска. Runtime-метрики движка доступны отдельно в мониторинге.
+                                        </Paragraph>
+                                        <Button
+                                          type="primary"
+                                          size="small"
+                                          disabled={Boolean(item.isActive) || pendingSwitchSystemIds.has(Number(item.id))}
+                                          loading={actionLoading === 'algofund-switch_system'}
+                                          onClick={() => void sendAlgofundRequest('switch_system', {
+                                            targetSystemId: Number(item.id),
+                                            targetSystemName: String(item.name || ''),
+                                          })}
+                                        >
+                                          {item.isActive ? 'Current TS' : pendingSwitchSystemIds.has(Number(item.id)) ? 'Switch pending' : 'Request switch'}
+                                        </Button>
+                                      </Space>
+                                    </Card>
+                                  </List.Item>
+                                )}
+                              />
+                            </Space>
+                          ) : (
+                            <Empty description="Опубликованные TS для этого API key пока не найдены." />
+                          )}
+                        </Card>
+
+                        <Card className="battletoads-card" title={copy.engineStatus}>
+                          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                            <Space wrap>
+                              {algofundEngineRunning ? <Tag color="success">{copy.engineRunning}</Tag> : null}
+                              {algofundEnginePending ? <Tag color="processing">{copy.enginePending}</Tag> : null}
+                              {!algofundEngineRunning && !algofundEnginePending ? <Tag color="default">{copy.engineStopped}</Tag> : null}
+                              {algofundEngineBlockedReason ? <Tag color="warning">{copy.engineBlocked}</Tag> : null}
+                            </Space>
+                            <Descriptions column={1} size="small" bordered>
+                              <Descriptions.Item label={copy.engineStatus}>
+                                {algofundEngineRunning
+                                  ? copy.engineRunning
+                                  : algofundEnginePending
+                                    ? copy.enginePending
+                                    : copy.engineStopped}
+                              </Descriptions.Item>
+                              <Descriptions.Item label="Engine fact">{algofundEngineRunning ? 'STARTED' : 'NOT STARTED'}</Descriptions.Item>
+                              <Descriptions.Item label={copy.sourceSystem}>{algofundState.engine?.systemName || algofundState.profile?.published_system_name || '—'}</Descriptions.Item>
+                              <Descriptions.Item label={copy.engineSystemId}>{algofundState.engine?.systemId ?? '—'}</Descriptions.Item>
+                              <Descriptions.Item label={copy.apiKey}>{algofundState.engine?.apiKeyName || algofundState.profile?.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || '—'}</Descriptions.Item>
+                            </Descriptions>
+                            <Button href={algofundTradingSystemsHref}>{copy.openTradingSystems}</Button>
+                            {algofundEnginePending && !algofundEngineRunning ? (
+                              <>
+                                <Alert
+                                  type="warning"
+                                  showIcon
+                                  message={copy.engineNotMaterialized}
+                                  description={algofundEngineBlockedReason || undefined}
+                                />
+                                <Button
+                                  type="primary"
+                                  onClick={() => setRetryMaterializeModalVisible(true)}
+                                  loading={actionLoading === 'retry-materialize'}
+                                >
+                                  Retry materialization
+                                </Button>
+                              </>
+                            ) : null}
+                            {algofundEngineRunning ? (
+                              <Alert
+                                type="success"
+                                showIcon
+                                message={copy.engineRunning}
+                                description={algofundState.preview?.sourceSystem?.systemName || undefined}
+                              />
+                            ) : null}
+                          </Space>
+                        </Card>
+
                         <Card className="battletoads-card" title={copy.previewTitle} extra={algofundLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}>
                           <Spin spinning={algofundLoading}>
                             {
@@ -2728,9 +4858,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Descriptions column={1} size="small" bordered>
                                     <Descriptions.Item label={copy.sourceSystem}>{algofundState.preview?.sourceSystem?.systemName || '—'}</Descriptions.Item>
                                     <Descriptions.Item label={copy.period}>{formatPeriodLabel(algofundPreviewPeriod)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(algofundPreviewDerivedSummary?.finalEquity ?? algofundState.preview?.summary?.finalEquity)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(algofundPreviewDerivedSummary?.totalReturnPercent ?? algofundState.preview?.summary?.totalReturnPercent)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(algofundPreviewDerivedSummary?.maxDrawdownPercent ?? algofundState.preview?.summary?.maxDrawdownPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.riskApplied}>
+                                      <Tag color={Number(algofundState.preview?.riskMultiplier ?? 1) === 1 ? 'green' : 'blue'}>
+                                        {formatNumber(algofundState.preview?.riskMultiplier ?? algofundRiskMultiplier)}x
+                                      </Tag>
+                                      {Number(algofundState.preview?.riskMultiplier ?? 1) === 1 ? <span style={{ fontSize: 11, color: '#888', marginLeft: 4 }}>= Trading Systems baseline</span> : null}
+                                    </Descriptions.Item>
+                                    <Descriptions.Item label={copy.initialBalance}>{formatMoney(algofundState.preview?.summary?.initialBalance)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(algofundState.preview?.summary?.finalEquity ?? algofundPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(algofundState.preview?.summary?.totalReturnPercent ?? algofundPreviewDerivedSummary?.totalReturnPercent)}</Descriptions.Item>
+                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(algofundState.preview?.summary?.maxDrawdownPercent ?? algofundPreviewDerivedSummary?.maxDrawdownPercent)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.profitFactor}>{formatNumber(algofundState.preview?.summary?.profitFactor)}</Descriptions.Item>
                                     <Descriptions.Item label={copy.trades}>{formatNumber(algofundState.preview?.summary?.tradesCount, 0)}</Descriptions.Item>
                                   </Descriptions>
@@ -2782,6 +4919,229 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           ].filter((item) => isAdminSurface || item.key === surfaceMode)}
         />
       </Spin>
+
+      <Modal
+        title="Retry Algofund Materialization"
+        open={retryMaterializeModalVisible}
+        onCancel={() => setRetryMaterializeModalVisible(false)}
+        footer={null}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <p>
+            The system has been approved but materialization is blocked (catalog/sweep unavailable).
+            Click the button below to retry materialization. If catalog/sweep are now available, the system will start.
+          </p>
+          <div>
+            <Button
+              type="primary"
+              loading={actionLoading === 'retry-materialize'}
+              onClick={() => void retryMaterialize()}
+              style={{ width: '100%' }}
+            >
+              Retry Materialization Now
+            </Button>
+          </div>
+        </Space>
+      </Modal>
+
+      <Modal
+        title={`Monitoring chart: ${monitoringChartApiKey || '—'}`}
+        open={monitoringChartOpen}
+        onCancel={() => setMonitoringChartOpen(false)}
+        footer={<Button onClick={() => setMonitoringChartOpen(false)}>Close</Button>}
+        width={960}
+      >
+        <Spin spinning={monitoringChartLoading}>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Space wrap>
+              {monitoringChartLatest ? <Tag color="blue">Eq {formatMoney(monitoringChartLatest.equity_usd)}</Tag> : null}
+              {monitoringChartLatest ? <Tag color="purple">ML {formatPercent(monitoringChartLatest.margin_load_percent)}</Tag> : null}
+              {monitoringChartLatest ? <Tag color="red">Lev {formatNumber(monitoringChartLatest.effective_leverage, 2)}x</Tag> : null}
+              {monitoringChartLatest ? <Tag color="orange">DD {formatPercent(monitoringChartLatest.drawdown_percent)}</Tag> : null}
+            </Space>
+            {monitoringChartPoints.length > 0 ? (
+              <ChartComponent data={monitoringChartPoints} type="line" />
+            ) : (
+              <Empty description="No monitoring points" />
+            )}
+          </Space>
+        </Spin>
+      </Modal>
+
+      <Modal
+        title={`Apply recommendation: ${applyLowLotTarget?.strategyName || ''}`}
+        open={Boolean(applyLowLotTarget)}
+        onCancel={() => setApplyLowLotTarget(null)}
+        onOk={() => void submitApplyLowLotRecommendation()}
+        okText="Apply"
+        cancelText="Cancel"
+        confirmLoading={applyLowLotWorking}
+        width={520}
+        footer={[
+          <Button key="cancel" onClick={() => setApplyLowLotTarget(null)}>Cancel</Button>,
+          applyLowLotTarget?.systemId ? (
+            <Button
+              key="open-ts"
+              href={`/trading-systems?apiKeyName=${encodeURIComponent(applyLowLotTarget.apiKeyName)}&systemId=${applyLowLotTarget.systemId}`}
+              target="_self"
+            >
+              Open TS
+            </Button>
+          ) : null,
+          <Button key="apply" type="primary" loading={applyLowLotWorking} onClick={() => void submitApplyLowLotRecommendation()}>Apply</Button>,
+        ]}
+      >
+        {applyLowLotTarget && (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Space wrap>
+              <Tag>{applyLowLotTarget.apiKeyName}</Tag>
+              <Tag>{applyLowLotTarget.pair}</Tag>
+              <Tag>Clients: {applyLowLotTarget.tenants?.length || 0}</Tag>
+            </Space>
+            <Checkbox
+              checked={applyLowLotDeposit}
+              onChange={(e) => setApplyLowLotDeposit(e.target.checked)}
+            >
+              Increase deposit: {applyLowLotTarget.maxDeposit} {'→'} {applyLowLotTarget.suggestedDepositMin} USD
+            </Checkbox>
+            <Checkbox
+              checked={applyLowLotLot}
+              onChange={(e) => setApplyLowLotLot(e.target.checked)}
+            >
+              Increase lot%: {applyLowLotTarget.lotPercent}% {'→'} {applyLowLotTarget.suggestedLotPercent}%
+            </Checkbox>
+            {applyLowLotTarget.replacementCandidates?.length > 0 && (
+              <div>
+                <Text strong>Replace pair optionally:</Text>
+                <Select
+                  allowClear
+                  style={{ width: '100%', marginTop: 4 }}
+                  placeholder="Keep current pair"
+                  value={applyLowLotReplacement || undefined}
+                  onChange={(v) => setApplyLowLotReplacement(v || '')}
+                  options={applyLowLotTarget.replacementCandidates.map((c) => ({
+                    value: c.symbol.includes('/') ? c.symbol : `${c.symbol}/USDT`,
+                    label: `${c.symbol.includes('/') ? c.symbol : `${c.symbol}/USDT`} (score ${c.score})${c.note ? ' - ' + c.note : ''}`,
+                  }))}
+                />
+              </div>
+            )}
+            {applyLowLotTarget.tenants?.length > 0 && (
+              <div>
+                <Text type="secondary">Affected clients: </Text>
+                <Space wrap>
+                  {applyLowLotTarget.tenants.map((t) => (
+                    <Tag key={t.id}>{t.displayName || t.slug}</Tag>
+                  ))}
+                </Space>
+              </div>
+            )}
+          </Space>
+        )}
+      </Modal>
+
+      <Modal
+        title={`Unpublish offer: ${unpublishTargetOfferId || '—'}`}
+        open={unpublishWizardVisible}
+        onCancel={closeUnpublishWizard}
+        onOk={() => void confirmUnpublishOffer()}
+        okText="Unpublish"
+        okButtonProps={{
+          danger: true,
+          disabled: unpublishImpactLoading || !unpublishAcknowledge || !unpublishTargetOfferId,
+        }}
+        cancelText="Cancel"
+        confirmLoading={actionLoading === `offer-store:${String(unpublishTargetOfferId || '')}`}
+        width={860}
+      >
+        <Spin spinning={unpublishImpactLoading}>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            {unpublishImpact ? (
+              <Alert
+                type={unpublishImpact.summary?.openPositionsCount > 0 ? 'warning' : 'info'}
+                showIcon
+                message={`Affected tenants: ${Number(unpublishImpact.summary?.tenantCount || 0)} | Open positions: ${Number(unpublishImpact.summary?.openPositionsCount || 0)}`}
+                description="Unpublishing blocks new activations for this offer. Existing runtime positions may stay open until managed by client/admin actions."
+              />
+            ) : (
+              <Alert type="warning" showIcon message="Impact data unavailable. Retry before unpublishing." />
+            )}
+
+            {unpublishImpact?.affectedTenants?.length ? (
+              <Table
+                size="small"
+                rowKey={(row) => `${row.tenantId}:${row.assignedApiKeyName}`}
+                dataSource={unpublishImpact.affectedTenants}
+                pagination={{ pageSize: 5, showSizeChanger: false }}
+                columns={[
+                  {
+                    title: 'Tenant',
+                    key: 'tenant',
+                    render: (_, row: any) => (
+                      <Space direction="vertical" size={0}>
+                        <Text strong>{row.displayName}</Text>
+                        <Text type="secondary">{row.slug}</Text>
+                      </Space>
+                    ),
+                  },
+                  {
+                    title: 'Mode',
+                    dataIndex: 'productMode',
+                    width: 140,
+                    render: (value: ProductMode) => productModeTag(value),
+                  },
+                  {
+                    title: 'API key',
+                    dataIndex: 'assignedApiKeyName',
+                    width: 180,
+                    render: (value: string) => value || '—',
+                  },
+                ]}
+              />
+            ) : null}
+
+            {unpublishImpact?.openPositions?.length ? (
+              <Table
+                size="small"
+                rowKey={(row) => `${row.tenantId}:${row.apiKeyName}`}
+                dataSource={unpublishImpact.openPositions}
+                pagination={false}
+                columns={[
+                  {
+                    title: 'Tenant ID',
+                    dataIndex: 'tenantId',
+                    width: 120,
+                  },
+                  {
+                    title: 'API key',
+                    dataIndex: 'apiKeyName',
+                    width: 200,
+                  },
+                  {
+                    title: 'Open positions',
+                    dataIndex: 'count',
+                    width: 140,
+                  },
+                  {
+                    title: 'Symbols',
+                    key: 'symbols',
+                    render: (_, row: any) => (row.symbols || []).join(', ') || '—',
+                  },
+                ]}
+              />
+            ) : (
+              <Alert type="success" showIcon message="No open positions for affected tenants." />
+            )}
+
+            <Checkbox
+              checked={unpublishAcknowledge}
+              onChange={(event) => setUnpublishAcknowledge(event.target.checked)}
+            >
+              I reviewed impact and confirm unpublish for this offer.
+            </Checkbox>
+          </Space>
+        </Spin>
+      </Modal>
     </div>
   );
 };

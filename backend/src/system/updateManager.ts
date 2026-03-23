@@ -213,7 +213,7 @@ export const getGitUpdateStatus = async (refreshRemote: boolean = true): Promise
     }
   }
 
-  const dirtyRaw = (await command('git', ['status', '--porcelain'], repoDir)).stdout;
+  const dirtyRaw = (await command('git', ['status', '--porcelain', '--untracked-files=no'], repoDir)).stdout;
   const dirtyCount = dirtyRaw ? dirtyRaw.split('\n').filter(Boolean).length : 0;
 
   const latestLine = (await command('git', ['log', '-1', '--pretty=format:%H|%h|%ad|%s', '--date=iso'], repoDir)).stdout;
@@ -291,7 +291,12 @@ export const triggerGitUpdate = async (): Promise<{ started: boolean; unit: stri
   await ignoreCommandError('systemctl', ['reset-failed', UPDATE_UNIT_NAME]);
 
   const branch = status.branch || 'main';
-  const remoteCmd = `APP_DIR=${shellQuote(status.appDir)} BRANCH=${shellQuote(branch)} bash ${shellQuote(scriptPath)}`;
+  const deployMode = process.env.DEPLOY_MODE || 'single';
+  const restartRuntime = process.env.RESTART_RUNTIME || '1';
+  // Default to '1': the script does git reset --hard anyway, so blocking on dirty
+  // tracked files when explicitly triggered from the web UI is counterproductive.
+  const allowDirtyTracked = process.env.ALLOW_DIRTY_TRACKED || '1';
+  const remoteCmd = `APP_DIR=${shellQuote(status.appDir)} BRANCH=${shellQuote(branch)} DEPLOY_MODE=${deployMode} RESTART_RUNTIME=${restartRuntime} ALLOW_DIRTY_TRACKED=${allowDirtyTracked} bash ${shellQuote(scriptPath)}`;
 
   let runResult: { stdout: string; stderr: string };
   try {

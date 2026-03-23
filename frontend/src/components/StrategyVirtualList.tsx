@@ -21,7 +21,7 @@ const StrategyVirtualList: React.FC<Props> = ({
   items,
   activeKeys,
   onToggleKey,
-  containerMaxHeight = '72vh',
+  containerMaxHeight = '72dvh',
 }) => {
   const parentRef = useRef<HTMLDivElement>(null);
 
@@ -45,6 +45,7 @@ const StrategyVirtualList: React.FC<Props> = ({
       style={{
         maxHeight: containerMaxHeight,
         overflowY: 'auto',
+        WebkitOverflowScrolling: 'touch',
         border: '1px solid #d9d9d9',
         borderRadius: 8,
         background: '#fff',

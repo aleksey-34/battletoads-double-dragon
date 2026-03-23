@@ -6,6 +6,7 @@ import { initDB, getDbFilePath } from './utils/database';
 import logger from './utils/logger';
 import { runAutoStrategiesCycle } from './bot/strategy';
 import { startPreviewWorker } from './workers/previewWorker';
+import { startResearchSchedulerWorker } from './workers/researchSchedulerWorker';
 import { runLiquidityScanCycle, runMonitoringCycle, runReconciliationCycle } from './automation/scheduler';
 
 const app = express();
@@ -37,11 +38,23 @@ const startServer = async () => {
     logger.error('Error initializing exchange clients: ' + (e as Error).message);
   }
 
+  // Когда BTDD_DISABLE_RESEARCH_WORKERS=1 — workers запускаются отдельным btdd-research.service
+  const researchWorkersEnabled = process.env.BTDD_DISABLE_RESEARCH_WORKERS !== '1';
+  // Когда BTDD_DISABLE_TRADING=1 — торговые циклы запускаются отдельным btdd-runtime.service
+  const tradingEnabled = process.env.BTDD_DISABLE_TRADING !== '1';
+
   app.listen(PORT, () => {
     logger.info(`Server running on http://localhost:${PORT}`);
 
-    // Research circuit — preview job worker
-    void startPreviewWorker();
+    if (researchWorkersEnabled) {
+      // Research circuit — preview job worker
+      void startPreviewWorker();
+      // Research circuit — scheduled daily sweep sync
+      void startResearchSchedulerWorker();
+      logger.info('Research workers started (встроенный режим; для изоляции: BTDD_DISABLE_RESEARCH_WORKERS=1)');
+    } else {
+      logger.info('Research workers disabled (запускаются отдельным btdd-research.service)');
+    }
   });
 
   const autoRunSecRaw = Number(process.env.STRATEGY_AUTORUN_SEC || 30);
@@ -66,6 +79,11 @@ const startServer = async () => {
   const scannerTopUniverse = Number.isFinite(scannerTopUniverseRaw) && scannerTopUniverseRaw >= 20
     ? Math.floor(scannerTopUniverseRaw)
     : 120;
+  if (!tradingEnabled) {
+    logger.info('Trading cycles disabled (запускаются отдельным btdd-runtime.service)');
+    return;
+  }
+
   let autoCycleRunning = false;
   let monitoringCycleRunning = false;
   let reconciliationCycleRunning = false;

@@ -1,0 +1,35 @@
+[Unit]
+Description=BTDD API Server — HTTP API + Frontend
+Documentation=https://github.com/aleksey-34/battletoads-double-dragon
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/battletoads-double-dragon/backend
+
+# Переменные окружения — скопировать и заполнить на VPS
+EnvironmentFile=-/opt/battletoads-double-dragon/.env
+
+# Режим: чистый API без встроенных workers
+# Торговый цикл → btdd-runtime.service
+# Research workers → btdd-research.service
+Environment=BTDD_DISABLE_TRADING=1
+Environment=BTDD_DISABLE_RESEARCH_WORKERS=1
+
+ExecStart=/usr/bin/node /opt/battletoads-double-dragon/backend/dist/server.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=btdd-api
+
+# Безопасность
+NoNewPrivileges=true
+ProtectSystem=full
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

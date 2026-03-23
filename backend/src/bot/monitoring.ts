@@ -94,12 +94,38 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
   ]);
 
   const metrics = calculateMetrics(balances, positions);
+  
+  // Detect anomalous peaks: filter peaks older than 30 days or unrealistically high (>1.5x current equity)
+  // This prevents drawdown from being inflated by initialization bugs or temporary spikes
   const peakRow = await db.get(
-    'SELECT MAX(equity_usd) AS max_equity FROM monitoring_snapshots WHERE api_key_id = ?',
+    `SELECT MAX(equity_usd) AS max_equity, MAX(recorded_at) AS peak_time 
+     FROM monitoring_snapshots 
+     WHERE api_key_id = ? AND datetime(recorded_at) >= datetime('now', '-30 days')`,
     [key.id]
   );
-
-  const peakEquity = Math.max(toFiniteNumber(peakRow?.max_equity, 0), metrics.equityUsd);
+  
+  // Use peak from last 30 days, but filter unrealistic highs (anomalies > 1.5x current equity)
+  let peakEquity = toFiniteNumber(peakRow?.max_equity, 0);
+  const anomalyThreshold = metrics.equityUsd * 1.5;
+  if (peakEquity > anomalyThreshold) {
+    // If peak looks anomalous, fall back to 90-day median peak or just use current equity
+    const medianPeakRow = await db.get(
+      `SELECT (
+        SELECT equity_usd FROM monitoring_snapshots 
+        WHERE api_key_id = ? AND datetime(recorded_at) >= datetime('now', '-90 days')
+        ORDER BY equity_usd DESC LIMIT 1 OFFSET (
+          SELECT COUNT(*)/2 FROM monitoring_snapshots 
+          WHERE api_key_id = ? AND datetime(recorded_at) >= datetime('now', '-90 days')
+        )
+      ) AS median_peak`,
+      [key.id, key.id]
+    );
+    const medianPeak = toFiniteNumber(medianPeakRow?.median_peak, 0);
+    // Use median if it exists and is reasonable, otherwise use current equity as peak
+    peakEquity = medianPeak > 0 && medianPeak <= metrics.equityUsd * 1.2 ? medianPeak : metrics.equityUsd;
+  }
+  
+  peakEquity = Math.max(peakEquity, metrics.equityUsd);
   const drawdownPercent = peakEquity > 0
     ? Math.max(0, ((peakEquity - metrics.equityUsd) / peakEquity) * 100)
     : 0;

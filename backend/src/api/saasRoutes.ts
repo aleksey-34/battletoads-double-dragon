@@ -1,5 +1,7 @@
-import { Router } from 'express';
+﻿import { Router } from 'express';
 import logger from '../utils/logger';
+import { createClientMagicLink } from '../utils/auth';
+import { runAdminTelegramReportNow } from '../notifications/adminTelegramReporter';
 import {
   getAlgofundState,
   getSaasAdminSummary,
@@ -10,11 +12,29 @@ import {
   publishAdminTradingSystem,
   requestAlgofundAction,
   resolveAlgofundRequest,
+  retryMaterializeAlgofundSystem,
   seedDemoSaasData,
   updatePlanAdminState,
   updateAlgofundState,
   updateTenantAdminState,
   updateStrategyClientState,
+  createTenantByAdmin,
+  getAdminLowLotRecommendations,
+  applyLowLotRecommendation,
+  getAdminTelegramControls,
+  updateAdminTelegramControls,
+  getOfferStoreAdminState,
+  analyzeOfferUnpublishImpact,
+  updateOfferStoreAdminState,
+  getAdminReportSettings,
+  updateAdminReportSettings,
+  getAdminPerformanceReport,
+  listStrategyClientSystemProfilesState,
+  createStrategyClientSystemProfile,
+  updateStrategyClientSystemProfile,
+  deleteStrategyClientSystemProfile,
+  activateStrategyClientSystemProfileById,
+  requestAlgofundBatchAction,
 } from '../saas/service';
 
 const router = Router();
@@ -36,6 +56,10 @@ const toOptionalNumber = (value: unknown): number | undefined => {
   }
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : undefined;
+};
+
+const isLevel3 = (value: unknown): value is 'low' | 'medium' | 'high' => {
+  return value === 'low' || value === 'medium' || value === 'high';
 };
 
 router.get('/admin/summary', async (_req, res) => {
@@ -60,6 +84,155 @@ router.post('/admin/seed', async (_req, res) => {
   }
 });
 
+router.get('/admin/low-lot-recommendations', async (req, res) => {
+  try {
+    const hours = toOptionalNumber(req.query.hours);
+    const limit = toOptionalNumber(req.query.limit);
+    const perStrategyReplacementLimit = toOptionalNumber(req.query.perStrategyReplacementLimit);
+    const data = await getAdminLowLotRecommendations({
+      hours,
+      limit,
+      perStrategyReplacementLimit,
+    });
+    res.json(data);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS low-lot recommendations error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/telegram-controls', async (_req, res) => {
+  try {
+    const data = await getAdminTelegramControls();
+    res.json(data);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS telegram controls read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/admin/telegram-controls', async (req, res) => {
+  try {
+    const data = await updateAdminTelegramControls({
+      adminEnabled: req.body?.adminEnabled !== undefined ? toBool(req.body.adminEnabled) : undefined,
+      clientsEnabled: req.body?.clientsEnabled !== undefined ? toBool(req.body.clientsEnabled) : undefined,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS telegram controls update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/offer-store', async (_req, res) => {
+  try {
+    const data = await getOfferStoreAdminState();
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS offer-store read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/offer-store/unpublish-impact/:offerId', async (req, res) => {
+  try {
+    const offerId = String(req.params.offerId || '').trim();
+    if (!offerId) {
+      return res.status(400).json({ error: 'offerId is required' });
+    }
+    const data = await analyzeOfferUnpublishImpact(offerId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS offer-store unpublish-impact error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/admin/offer-store', async (req, res) => {
+  try {
+    const data = await updateOfferStoreAdminState({
+      defaults: req.body?.defaults,
+      publishedOfferIds: Array.isArray(req.body?.publishedOfferIds) ? req.body.publishedOfferIds.map(String) : undefined,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS offer-store update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/reports/settings', async (_req, res) => {
+  try {
+    const data = await getAdminReportSettings();
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS report settings read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/admin/reports/settings', async (req, res) => {
+  try {
+    const data = await updateAdminReportSettings(req.body || {});
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS report settings update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/reports/performance', async (req, res) => {
+  try {
+    const periodRaw = String(req.query.period || '').trim().toLowerCase();
+    const period = periodRaw === 'weekly' || periodRaw === 'monthly' ? periodRaw : 'daily';
+    const data = await getAdminPerformanceReport(period);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS performance report error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/apply-low-lot-recommendation', async (req, res) => {
+  try {
+    const strategyId = toOptionalNumber(req.body?.strategyId);
+    if (!strategyId) {
+      return res.status(400).json({ error: 'strategyId is required' });
+    }
+    const data = await applyLowLotRecommendation({
+      strategyId,
+      applyDepositFix: toBool(req.body?.applyDepositFix, false),
+      applyLotFix: toBool(req.body?.applyLotFix, false),
+      replacementSymbol: req.body?.replacementSymbol ? String(req.body.replacementSymbol).trim() : undefined,
+    });
+    res.json(data);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS apply-low-lot-recommendation error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/reports/send-telegram', async (_req, res) => {
+  try {
+    await runAdminTelegramReportNow({ periodHours: 24 });
+    res.json({ success: true });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS send telegram report error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/admin/publish', async (_req, res) => {
   try {
     const data = await publishAdminTradingSystem();
@@ -67,6 +240,29 @@ router.post('/admin/publish', async (_req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS publish admin TS error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/tenants', async (req, res) => {
+  const { displayName, productMode, planCode, assignedApiKeyName, language, email, fullName } = req.body;
+  if (!displayName || !productMode || !planCode) {
+    return res.status(400).json({ error: 'displayName, productMode, and planCode are required' });
+  }
+  try {
+    const tenants = await createTenantByAdmin({
+      displayName: String(displayName),
+      productMode,
+      planCode: String(planCode),
+      assignedApiKeyName: assignedApiKeyName ? String(assignedApiKeyName) : undefined,
+      language: language ? String(language) : undefined,
+      email: email ? String(email) : undefined,
+      fullName: fullName ? String(fullName) : undefined,
+    });
+    res.json({ success: true, tenants });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS create tenant error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -88,6 +284,52 @@ router.patch('/admin/tenants/:tenantId', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS tenant admin update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/tenants/:tenantId/magic-link', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const result = await createClientMagicLink(tenantId, {
+      ip: String(req.ip || ''),
+      userAgent: String(req.headers['user-agent'] || ''),
+    }, String(req.body?.note || ''));
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS magic link error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/algofund-batch-actions', async (req, res) => {
+  try {
+    const tenantIds = Array.isArray(req.body?.tenantIds) ? req.body.tenantIds.map((item: unknown) => Number(item)) : [];
+    const requestTypeRaw = String(req.body?.requestType || '').trim().toLowerCase();
+    const requestType = requestTypeRaw === 'stop'
+      ? 'stop'
+      : requestTypeRaw === 'switch_system'
+        ? 'switch_system'
+        : 'start';
+
+    const data = await requestAlgofundBatchAction(
+      tenantIds,
+      requestType,
+      String(req.body?.note || ''),
+      {
+        targetSystemId: toOptionalNumber(req.body?.targetSystemId),
+        targetSystemName: req.body?.targetSystemName ? String(req.body.targetSystemName) : undefined,
+      }
+    );
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund batch action error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -140,6 +382,13 @@ router.patch('/strategy-clients/:tenantId', async (req, res) => {
   }
 
   try {
+    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+    }
+    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+    }
+
     const data = await updateStrategyClientState(tenantId, {
       selectedOfferIds: Array.isArray(req.body.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
       riskLevel: req.body.riskLevel,
@@ -164,6 +413,12 @@ router.post('/strategy-clients/:tenantId/preview', async (req, res) => {
   if (!req.body.offerId) {
     return res.status(400).json({ error: 'offerId is required' });
   }
+  if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+    return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+  }
+  if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+    return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+  }
 
   try {
     const data = await previewStrategyClientOffer(
@@ -186,6 +441,13 @@ router.post('/strategy-clients/:tenantId/selection-preview', async (req, res) =>
   const tenantId = Number(req.params.tenantId);
   if (!Number.isFinite(tenantId)) {
     return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+    return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+  }
+  if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+    return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
   }
 
   try {
@@ -220,6 +482,97 @@ router.post('/strategy-clients/:tenantId/materialize', async (req, res) => {
   }
 });
 
+router.get('/strategy-clients/:tenantId/system-profiles', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const data = await listStrategyClientSystemProfilesState(tenantId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy system profiles read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/strategy-clients/:tenantId/system-profiles', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const data = await createStrategyClientSystemProfile(
+      tenantId,
+      String(req.body?.profileName || ''),
+      Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
+      toBool(req.body?.activate, true)
+    );
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy system profile create error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/strategy-clients/:tenantId/system-profiles/:profileId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  const profileId = Number(req.params.profileId);
+  if (!Number.isFinite(tenantId) || !Number.isFinite(profileId)) {
+    return res.status(400).json({ error: 'Invalid tenantId/profileId' });
+  }
+
+  try {
+    const data = await updateStrategyClientSystemProfile(tenantId, profileId, {
+      profileName: req.body?.profileName !== undefined ? String(req.body.profileName || '') : undefined,
+      selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy system profile update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/strategy-clients/:tenantId/system-profiles/:profileId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  const profileId = Number(req.params.profileId);
+  if (!Number.isFinite(tenantId) || !Number.isFinite(profileId)) {
+    return res.status(400).json({ error: 'Invalid tenantId/profileId' });
+  }
+
+  try {
+    const data = await deleteStrategyClientSystemProfile(tenantId, profileId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy system profile delete error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/strategy-clients/:tenantId/system-profiles/:profileId/activate', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  const profileId = Number(req.params.profileId);
+  if (!Number.isFinite(tenantId) || !Number.isFinite(profileId)) {
+    return res.status(400).json({ error: 'Invalid tenantId/profileId' });
+  }
+
+  try {
+    const data = await activateStrategyClientSystemProfileById(tenantId, profileId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy system profile activate error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/algofund/:tenantId', async (req, res) => {
   const tenantId = Number(req.params.tenantId);
   if (!Number.isFinite(tenantId)) {
@@ -230,7 +583,8 @@ router.get('/algofund/:tenantId', async (req, res) => {
     const data = await getAlgofundState(
       tenantId,
       toOptionalNumber(req.query.riskMultiplier),
-      toBool(req.query.allowPreviewAbovePlan)
+      toBool(req.query.allowPreviewAbovePlan),
+      toBool(req.query.refreshPreview)
     );
     res.json(data);
   } catch (error) {
@@ -250,6 +604,7 @@ router.patch('/algofund/:tenantId', async (req, res) => {
     const data = await updateAlgofundState(tenantId, {
       riskMultiplier: toOptionalNumber(req.body.riskMultiplier),
       assignedApiKeyName: req.body.assignedApiKeyName,
+      requestedEnabled: req.body.requestedEnabled !== undefined ? toBool(req.body.requestedEnabled) : undefined,
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -265,10 +620,23 @@ router.post('/algofund/:tenantId/request', async (req, res) => {
     return res.status(400).json({ error: 'Invalid tenantId' });
   }
 
-  const requestType = req.body.requestType === 'stop' ? 'stop' : 'start';
+  const requestTypeRaw = String(req.body.requestType || '').trim().toLowerCase();
+  const requestType = requestTypeRaw === 'stop'
+    ? 'stop'
+    : requestTypeRaw === 'switch_system'
+      ? 'switch_system'
+      : 'start';
 
   try {
-    const data = await requestAlgofundAction(tenantId, requestType, String(req.body.note || ''));
+    const data = await requestAlgofundAction(
+      tenantId,
+      requestType,
+      String(req.body.note || ''),
+      {
+        targetSystemId: toOptionalNumber(req.body.targetSystemId),
+        targetSystemName: req.body.targetSystemName ? String(req.body.targetSystemName) : undefined,
+      }
+    );
     res.json({ success: true, ...data });
   } catch (error) {
     const err = error as Error;
@@ -291,6 +659,22 @@ router.post('/algofund/requests/:requestId/resolve', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS algofund resolve error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/algofund/:tenantId/retry-materialize', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const data = await retryMaterializeAlgofundSystem(tenantId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund retry materialize error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

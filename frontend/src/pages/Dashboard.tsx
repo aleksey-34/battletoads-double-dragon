@@ -47,11 +47,13 @@ type LastOHLC = {
 
 type DetectionSource = 'wick' | 'close';
 type MarginType = 'cross' | 'isolated';
+type StrategyKind = 'DD_BattleToads' | 'zz_breakout' | 'stat_arb_zscore';
 
 type DDStrategy = {
   id: number;
   name: string;
-  strategy_type: 'DD_BattleToads';
+  strategy_type: StrategyKind;
+  market_mode: 'mono' | 'synthetic';
   is_active: boolean;
   display_on_chart: boolean;
   take_profit_percent: number;
@@ -232,6 +234,27 @@ const formatCompactNumber = (value: number | string, digits: number = 2) => {
     return String(value);
   }
   return numeric.toFixed(digits).replace(/\.?0+$/, '');
+};
+
+const resolveLotUsdt = (
+  runtimeLotUsdt: number | null | undefined,
+  maxDeposit: number,
+  lotPercent: number
+): { value: number | null; estimated: boolean } => {
+  if (runtimeLotUsdt !== null && runtimeLotUsdt !== undefined && Number.isFinite(Number(runtimeLotUsdt))) {
+    return { value: Number(runtimeLotUsdt), estimated: false };
+  }
+
+  const deposit = Number(maxDeposit);
+  const percent = Number(lotPercent);
+  if (!Number.isFinite(deposit) || !Number.isFinite(percent) || deposit <= 0 || percent < 0) {
+    return { value: null, estimated: false };
+  }
+
+  return {
+    value: (deposit * percent) / 100,
+    estimated: true,
+  };
 };
 
 const normalizeTimestampMs = (value: any): number | null => {
@@ -689,7 +712,12 @@ const parseStrategy = (raw: any): DDStrategy => {
   return {
     id: Number(raw?.id || 0),
     name: String(raw?.name || 'DD_BattleToads'),
-    strategy_type: 'DD_BattleToads',
+    strategy_type: String(raw?.strategy_type || 'DD_BattleToads') === 'zz_breakout'
+      ? 'zz_breakout'
+      : String(raw?.strategy_type || 'DD_BattleToads') === 'stat_arb_zscore'
+        ? 'stat_arb_zscore'
+        : 'DD_BattleToads',
+    market_mode: String(raw?.market_mode || 'synthetic') === 'mono' ? 'mono' : 'synthetic',
     is_active: readBoolean(raw?.is_active, true),
     display_on_chart: readBoolean(raw?.display_on_chart, true),
     take_profit_percent: readNumber(raw?.take_profit_percent, 7.5),
@@ -756,8 +784,10 @@ const Dashboard: React.FC = () => {
   const [strategiesErrorByKey, setStrategiesErrorByKey] = useState<{ [key: string]: string }>({});
   const [strategyDetailsLoadedByKey, setStrategyDetailsLoadedByKey] = useState<{ [key: string]: { [strategyId: string]: boolean } }>({});
   const [strategyDetailsLoadingByKey, setStrategyDetailsLoadingByKey] = useState<{ [key: string]: { [strategyId: string]: boolean } }>({});
+  const [strategyDetailsErrorByKey, setStrategyDetailsErrorByKey] = useState<{ [key: string]: { [strategyId: string]: string } }>({});
   const [activeStrategyPanelsByKey, setActiveStrategyPanelsByKey] = useState<{ [key: string]: string[] }>({});
   const [newStrategyNameByKey, setNewStrategyNameByKey] = useState<{ [key: string]: string }>({});
+  const [newSetStrategyTypeByKey, setNewSetStrategyTypeByKey] = useState<{ [key: string]: StrategyKind }>({});
   const [strategyActionLoading, setStrategyActionLoading] = useState<{ [key: string]: boolean }>({});
   const [accountRefreshLoadingByKey, setAccountRefreshLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [refreshAllAccountsLoading, setRefreshAllAccountsLoading] = useState<boolean>(false);
@@ -769,6 +799,7 @@ const Dashboard: React.FC = () => {
   const [copySourceByTargetKey, setCopySourceByTargetKey] = useState<{ [key: string]: string }>({});
   const [copyActionLoadingByKey, setCopyActionLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [showArchivedByKey, setShowArchivedByKey] = useState<{ [key: string]: boolean }>({});
+  const [runtimeOnlyByKey, setRuntimeOnlyByKey] = useState<{ [key: string]: boolean }>({});
   const [archiveActionLoadingByKey, setArchiveActionLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [uiTheme, setUiTheme] = useState<'classic' | 'battletoads'>('classic');
   const requestLocksRef = useRef<Record<string, boolean>>({});
@@ -946,6 +977,16 @@ const Dashboard: React.FC = () => {
             if (source) {
               next[target.name] = source.name;
             }
+          }
+        });
+        return next;
+      });
+
+      setRuntimeOnlyByKey((prev) => {
+        const next = { ...prev };
+        keys.forEach((key) => {
+          if (next[key.name] === undefined) {
+            next[key.name] = true;
           }
         });
         return next;
@@ -1157,30 +1198,22 @@ const Dashboard: React.FC = () => {
   };
 
   const getDefaultStrategyBinding = (keyName: string) => {
-    const keyStrategies = strategiesByKey[keyName] || [];
-    const sourceStrategy = keyStrategies[0];
-
-    if (sourceStrategy) {
+    const keySettings = chartSettings[keyName] || defaultChartSetting();
+    if (keySettings.type === 'synthetic') {
       return {
-        base: String(sourceStrategy.base_symbol || 'BTCUSDT').toUpperCase(),
-        quote: String(sourceStrategy.quote_symbol || 'ETHUSDT').toUpperCase(),
-        interval: String(sourceStrategy.interval || '1h'),
-        baseCoef: Number(sourceStrategy.base_coef) || 1,
-        quoteCoef: Number(sourceStrategy.quote_coef) || 1,
+        base: String(keySettings.base || 'BTCUSDT').toUpperCase(),
+        quote: String(keySettings.quote || 'ETHUSDT').toUpperCase(),
+        interval: String(keySettings.interval || '1h'),
+        baseCoef: Number(keySettings.baseCoef) || 1,
+        quoteCoef: Number(keySettings.quoteCoef) || 1,
       };
     }
 
-    const availableSymbols = Array.from(
-      new Set((symbols[keyName] || []).map((symbol) => String(symbol || '').toUpperCase()).filter((symbol) => Boolean(symbol)))
-    );
-
-    const base = availableSymbols[0] || 'BTCUSDT';
-    const quote = availableSymbols.find((symbol) => symbol !== base) || (base === 'ETHUSDT' ? 'BTCUSDT' : 'ETHUSDT');
-
+    const monoSymbol = String(keySettings.symbol || 'BTCUSDT').toUpperCase();
     return {
-      base,
-      quote,
-      interval: '1h',
+      base: monoSymbol,
+      quote: 'USDT',
+      interval: String(keySettings.interval || '1h'),
       baseCoef: 1,
       quoteCoef: 1,
     };
@@ -1217,10 +1250,11 @@ const Dashboard: React.FC = () => {
     });
   };
 
-  const fetchStrategies = async (keyName: string, options?: { silent?: boolean; full?: boolean; includeArchived?: boolean }) => {
+  const fetchStrategies = async (keyName: string, options?: { silent?: boolean; full?: boolean; includeArchived?: boolean; runtimeOnly?: boolean }) => {
     const silent = options?.silent === true;
     const full = options?.full === true;
     const includeArchived = options?.includeArchived ?? showArchivedByKey[keyName] ?? false;
+    const runtimeOnly = options?.runtimeOnly ?? runtimeOnlyByKey[keyName] ?? true;
     const requestLockKey = `strategies:${keyName}`;
 
     if (!acquireRequestLock(requestLockKey)) {
@@ -1236,6 +1270,7 @@ const Dashboard: React.FC = () => {
       const res = await axios.get(`/api/strategies/${keyName}/summary`, {
         params: {
           ...(full ? {} : { limit: STRATEGY_FETCH_LIMIT, offset: 0 }),
+          runtimeOnly: runtimeOnly ? '1' : '0',
           ...(includeArchived ? { includeArchived: '1' } : {}),
         },
       });
@@ -1246,6 +1281,7 @@ const Dashboard: React.FC = () => {
       setStrategiesByKey((prev) => ({ ...prev, [keyName]: payload }));
       setStrategyDetailsLoadedByKey((prev) => ({ ...prev, [keyName]: {} }));
       setStrategyDetailsLoadingByKey((prev) => ({ ...prev, [keyName]: {} }));
+      setStrategyDetailsErrorByKey((prev) => ({ ...prev, [keyName]: {} }));
       setStrategiesTotalByKey((prev) => ({ ...prev, [keyName]: total }));
       setFullStrategiesLoadedByKey((prev) => ({ ...prev, [keyName]: full || payload.length >= total }));
       setStrategyRenderLimitByKey((prev) => {
@@ -1309,6 +1345,13 @@ const Dashboard: React.FC = () => {
         [strategyIdKey]: true,
       },
     }));
+    setStrategyDetailsErrorByKey((prev) => ({
+      ...prev,
+      [keyName]: {
+        ...(prev[keyName] || {}),
+        [strategyIdKey]: '',
+      },
+    }));
 
     try {
       const res = await axios.get(`/api/strategies/${keyName}/${strategyId}`, {
@@ -1334,6 +1377,15 @@ const Dashboard: React.FC = () => {
         },
       }));
     } catch (error) {
+      const fallback = 'Failed to load strategy details';
+      const errorMessage = (error as any)?.response?.data?.error || (error as any)?.message || fallback;
+      setStrategyDetailsErrorByKey((prev) => ({
+        ...prev,
+        [keyName]: {
+          ...(prev[keyName] || {}),
+          [strategyIdKey]: String(errorMessage),
+        },
+      }));
       if (options?.silent !== true) {
         console.error(error);
       }
@@ -1360,15 +1412,18 @@ const Dashboard: React.FC = () => {
 
   const addStrategy = async (keyName: string) => {
     const strategyBinding = getDefaultStrategyBinding(keyName);
+    const settings = chartSettings[keyName] || defaultChartSetting();
 
-    const name = (newStrategyNameByKey[keyName] || '').trim() || 'DD_BattleToads';
+    const strategyType = newSetStrategyTypeByKey[keyName] || 'DD_BattleToads';
+    const name = (newStrategyNameByKey[keyName] || '').trim() || strategyType;
 
     try {
       setStrategyActionLoading((prev) => ({ ...prev, [`${keyName}:new`]: true }));
 
       const createRes = await axios.post(`/api/strategies/${keyName}`, {
         name,
-        strategy_type: 'DD_BattleToads',
+        strategy_type: strategyType,
+        market_mode: settings.type === 'mono' ? 'mono' : 'synthetic',
         display_on_chart: true,
         show_settings: true,
         show_chart: true,
@@ -1407,11 +1462,11 @@ const Dashboard: React.FC = () => {
       });
 
       setNewStrategyNameByKey((prev) => ({ ...prev, [keyName]: '' }));
-      message.success(`Strategy ${name} added`);
+      message.success(`Set ${name} added`);
       await fetchStrategies(keyName);
     } catch (error: any) {
       console.error(error);
-      message.error(error?.response?.data?.error || 'Failed to add strategy');
+      message.error(error?.response?.data?.error || 'Failed to add set');
     } finally {
       setStrategyActionLoading((prev) => ({ ...prev, [`${keyName}:new`]: false }));
     }
@@ -2051,6 +2106,7 @@ const Dashboard: React.FC = () => {
     const marginStats = calculateMarginStats(keyBalances, keyPositions);
     const activeStrategyPanels = activeStrategyPanelsByKey[keyName] || [];
     const newStrategyName = newStrategyNameByKey[keyName] || '';
+    const newSetStrategyType = newSetStrategyTypeByKey[keyName] || 'DD_BattleToads';
     const shownOHLC = keyHoverOHLC || keyLastOHLC;
     const ohlcTitle = keyHoverOHLC ? 'Hovered OHLC' : 'Last OHLC';
     const monitoringPayload = monitoringByKey[keyName] || { points: [], latest: null };
@@ -2065,6 +2121,7 @@ const Dashboard: React.FC = () => {
     const copyLoading = copyActionLoadingByKey[keyName] || false;
     const detailsLoadedForKey = strategyDetailsLoadedByKey[keyName] || {};
     const detailsLoadingForKey = strategyDetailsLoadingByKey[keyName] || {};
+    const detailsErrorForKey = strategyDetailsErrorByKey[keyName] || {};
     const totalStrategies = keyStrategies.length;
     const strategyRenderLimit = Math.min(totalStrategies, Math.max(STRATEGY_RENDER_CHUNK, Number(strategyRenderLimitByKey[keyName] || STRATEGY_RENDER_CHUNK)));
     const visibleStrategies = keyStrategies.slice(0, strategyRenderLimit);
@@ -2072,6 +2129,17 @@ const Dashboard: React.FC = () => {
     const runningStrategies = keyStrategies.filter((strategy) => strategy.is_active).length;
     const pausedStrategies = Math.max(0, totalStrategies - runningStrategies);
     const errorStrategies = keyStrategies.filter((strategy) => Boolean(String(strategy.last_error || '').trim())).length;
+    const setTypeOptions: Array<{ value: StrategyKind; label: string }> = [
+      { value: 'DD_BattleToads', label: 'DD' },
+      { value: 'zz_breakout', label: 'ZZ' },
+      { value: 'stat_arb_zscore', label: 'HD' },
+    ];
+    const strategyTypeLabel = (value: StrategyKind): string => {
+      if (value === 'zz_breakout') return 'ZZ';
+      if (value === 'stat_arb_zscore') return 'HD';
+      return 'DD';
+    };
+    const currentModeLabel = settings.type === 'mono' ? 'mono' : 'synthetic';
 
     return {
       key: String(key.id),
@@ -2080,7 +2148,7 @@ const Dashboard: React.FC = () => {
           <span>{key.name} ({key.exchange})</span>
           <StatusIndicator status={keyStatus.status} message={keyStatus.message} />
           <span style={{ fontSize: 12, color: '#666666' }}>API: {keyStatusText}</span>
-          <Tag color="blue">strategies: {keyStrategiesTotal}</Tag>
+          <Tag color="blue">sets: {keyStrategiesTotal}</Tag>
           <Tag color="green">running: {runningStrategies}</Tag>
           <Tag color="orange">paused: {pausedStrategies}</Tag>
           {errorStrategies > 0 ? <Tag color="red">errors: {errorStrategies}</Tag> : null}
@@ -2415,14 +2483,21 @@ const Dashboard: React.FC = () => {
 
           <Row style={{ marginTop: 16 }}>
             <Col span={24}>
-              <Card title="Strategies: DD_BattleToads">
+              <Card title="Sets">
                 <Space style={{ marginBottom: 12 }} wrap>
                   <Input
-                    placeholder="Strategy name"
+                    placeholder="Set name"
                     value={newStrategyName}
                     onChange={(e) => setNewStrategyNameByKey((prev) => ({ ...prev, [keyName]: e.target.value }))}
                     style={{ width: 260 }}
                     disabled={!keyActive}
+                  />
+                  <Select
+                    value={newSetStrategyType}
+                    style={{ width: 180 }}
+                    onChange={(value) => setNewSetStrategyTypeByKey((prev) => ({ ...prev, [keyName]: value as StrategyKind }))}
+                    disabled={!keyActive}
+                    options={setTypeOptions}
                   />
                   <Button
                     type="primary"
@@ -2432,10 +2507,11 @@ const Dashboard: React.FC = () => {
                     loading={Boolean(strategyActionLoading[`${keyName}:new`] && keyActive)}
                     disabled={!keyActive}
                   >
-                    Add strategy
+                    Add set
                   </Button>
                   <Tag color="blue">Chart preview is configured once in API key Chart Settings</Tag>
-                  <Tag color="green">Trading pair is configured per strategy below</Tag>
+                  <Tag color="green">New set mode: {currentModeLabel} (from chart settings)</Tag>
+                  <Tag color="purple">Type: {strategyTypeLabel(newSetStrategyType)} | Name: set_name | Strategy: DD/ZZ/HD</Tag>
                   <Tag color="cyan">rendered: {visibleStrategies.length}/{totalStrategies}</Tag>
                   {!keyFullLoaded ? <Tag color="gold">light mode: {totalStrategies}/{keyStrategiesTotal}</Tag> : null}
                   {!keyFullLoaded ? (
@@ -2474,6 +2550,17 @@ const Dashboard: React.FC = () => {
                     }}
                   >
                     {showArchivedByKey[keyName] ? 'Hide archived' : 'Show archived'}
+                  </Button>
+                  <Button
+                    size="small"
+                    type={(runtimeOnlyByKey[keyName] ?? true) ? 'primary' : 'default'}
+                    onClick={() => {
+                      const next = !(runtimeOnlyByKey[keyName] ?? true);
+                      setRuntimeOnlyByKey((prev) => ({ ...prev, [keyName]: next }));
+                      void fetchStrategies(keyName, { runtimeOnly: next });
+                    }}
+                  >
+                    {(runtimeOnlyByKey[keyName] ?? true) ? 'Show templates' : 'Hide templates'}
                   </Button>
                   <Button
                     size="small"
@@ -2533,7 +2620,15 @@ const Dashboard: React.FC = () => {
                 {keyStrategiesLoading
                   ? <Spin />
                   : keyStrategies.length === 0
-                    ? <Alert type="info" showIcon message="No strategy selected: balance, chart and positions remain visible." />
+                    ? (
+                      <Alert
+                        type="info"
+                        showIcon
+                        message={(runtimeOnlyByKey[keyName] ?? true)
+                          ? 'No runtime sets yet. Click "Show templates" to choose and add sets.'
+                          : 'No set selected: balance, chart and positions remain visible.'}
+                      />
+                    )
                     : (
                       <Collapse
                         activeKey={activeStrategyPanels}
@@ -2601,6 +2696,7 @@ const Dashboard: React.FC = () => {
                           const strategyIdKey = String(strategy.id);
                           const detailsLoaded = detailsLoadedForKey[strategyIdKey] === true;
                           const detailsLoading = detailsLoadingForKey[strategyIdKey] === true;
+                          const detailsError = String(detailsErrorForKey[strategyIdKey] || '').trim();
 
                           return {
                             key: String(strategy.id),
@@ -2609,6 +2705,8 @@ const Dashboard: React.FC = () => {
                                 <span>{strategy.name}</span>
                                 <Badge status={strategyBadgeStatus} text={strategyBadgeText} />
                                 <Tag color={strategyStatus.color}>{strategyStatus.label}</Tag>
+                                <Tag color="geekblue">set type: {strategyTypeLabel(strategy.strategy_type)}</Tag>
+                                <Tag color={strategy.market_mode === 'mono' ? 'green' : 'blue'}>{strategy.market_mode}</Tag>
                                 {strategy.is_runtime ? <Tag color="purple">runtime</Tag> : null}
                                 {strategy.is_archived ? <Tag color="default">archived</Tag> : null}
                                 {strategy.origin && strategy.origin !== 'manual' ? <Tag color="geekblue">{strategy.origin}</Tag> : null}
@@ -2629,7 +2727,25 @@ const Dashboard: React.FC = () => {
                               if (!detailsLoaded) {
                                 return detailsLoading
                                   ? <Spin size="small" />
-                                  : <Alert type="info" showIcon message="Loading strategy details..." />;
+                                  : detailsError
+                                    ? (
+                                      <Alert
+                                        type="error"
+                                        showIcon
+                                        message={detailsError}
+                                        action={(
+                                          <Button
+                                            size="small"
+                                            onClick={() => {
+                                              void fetchStrategyDetails(keyName, strategy.id, { silent: false });
+                                            }}
+                                          >
+                                            Retry
+                                          </Button>
+                                        )}
+                                      />
+                                    )
+                                    : <Alert type="info" showIcon message="Loading strategy details..." />;
                               }
 
                               // ── body vars (only run for visible + expanded items) ──
@@ -2688,6 +2804,8 @@ const Dashboard: React.FC = () => {
                                     ? Number(strategy.entry_ratio) / (1 + strategy.take_profit_percent / 100)
                                     : null
                                 : null;
+                              const longLotUsdt = resolveLotUsdt(strategy.lot_long_usdt, strategy.max_deposit, strategy.lot_long_percent);
+                              const shortLotUsdt = resolveLotUsdt(strategy.lot_short_usdt, strategy.max_deposit, strategy.lot_short_percent);
                               const tradeMarkers = strategy.display_on_chart && strategy.show_trades_on_chart
                                 ? buildStrategyTradeMarkers(keyTrades, pairSymbols)
                                 : [];
@@ -3150,8 +3268,8 @@ const Dashboard: React.FC = () => {
                                                 ? (
                                                   <div style={{ marginBottom: 6 }}>
                                                     <strong>Lot (USDT):</strong>
-                                                    {' '}LONG: {strategy.lot_long_usdt !== null && strategy.lot_long_usdt !== undefined ? formatCompactNumber(strategy.lot_long_usdt, 2) : '-'}
-                                                    {' '}| SHORT: {strategy.lot_short_usdt !== null && strategy.lot_short_usdt !== undefined ? formatCompactNumber(strategy.lot_short_usdt, 2) : '-'}
+                                                    {' '}LONG: {longLotUsdt.value !== null ? `${formatCompactNumber(longLotUsdt.value, 2)}${longLotUsdt.estimated ? ' (est.)' : ''}` : '-'}
+                                                    {' '}| SHORT: {shortLotUsdt.value !== null ? `${formatCompactNumber(shortLotUsdt.value, 2)}${shortLotUsdt.estimated ? ' (est.)' : ''}` : '-'}
                                                     {strategy.lot_balance_usdt !== null && strategy.lot_balance_usdt !== undefined
                                                       ? ` | Balance: ${formatCompactNumber(strategy.lot_balance_usdt, 2)}`
                                                       : ''}

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Alert, Button, Card, Form, Input, Select, Space, Typography, message } from 'antd';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useI18n } from '../i18n';
 
 type AuthMode = 'login' | 'register';
@@ -34,6 +34,7 @@ const saveClientSessionToken = (token: string) => {
 const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
   const { t, language } = useI18n();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [messageApi, contextHolder] = message.useMessage();
   const [mode, setMode] = useState<AuthMode>(initialMode);
   const [loading, setLoading] = useState(false);
@@ -44,6 +45,47 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
   useEffect(() => {
     setMode(initialMode);
   }, [initialMode]);
+
+  useEffect(() => {
+    const token = String(searchParams.get('token') || '').trim();
+    if (!token) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const consumeMagicToken = async () => {
+      setLoading(true);
+      setErrorText('');
+      try {
+        const response = await axios.post('/api/auth/client/magic-login', { token });
+        const sessionToken = String(response?.data?.token || '');
+        if (!sessionToken) {
+          throw new Error('Session token is missing in magic login response');
+        }
+        if (cancelled) {
+          return;
+        }
+        saveClientSessionToken(sessionToken);
+        messageApi.success(t('client.auth.magicSuccess', 'One-time login successful'));
+        navigate('/cabinet', { replace: true });
+      } catch (error: any) {
+        if (!cancelled) {
+          setErrorText(String(error?.response?.data?.error || error?.message || t('client.auth.magicFailed', 'Magic login failed')));
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    };
+
+    void consumeMagicToken();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [messageApi, navigate, searchParams, t]);
 
   const handleLogin = async (values: LoginFormValues) => {
     setLoading(true);
@@ -137,14 +179,14 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                   { type: 'email', message: t('client.auth.emailInvalid', 'Enter valid email') },
                 ]}
               >
-                <Input placeholder="name@company.com" />
+                <Input type="email" inputMode="email" autoComplete="email" placeholder="name@company.com" />
               </Form.Item>
               <Form.Item
                 label={t('client.auth.password', 'Password')}
                 name="password"
                 rules={[{ required: true, message: t('client.auth.passwordRequired', 'Password is required') }]}
               >
-                <Input.Password placeholder={t('client.auth.password', 'Password')} />
+                <Input.Password autoComplete="current-password" placeholder={t('client.auth.password', 'Password')} />
               </Form.Item>
               <Form.Item style={{ marginBottom: 0 }}>
                 <Button type="primary" htmlType="submit" loading={loading} block>
@@ -181,7 +223,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                   { type: 'email', message: t('client.auth.emailInvalid', 'Enter valid email') },
                 ]}
               >
-                <Input placeholder="name@company.com" />
+                <Input type="email" inputMode="email" autoComplete="email" placeholder="name@company.com" />
               </Form.Item>
               <Form.Item
                 label={t('client.auth.productMode', 'Workspace type')}
@@ -203,7 +245,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                   { min: 10, message: t('client.auth.passwordMin', 'Password must be at least 10 characters') },
                 ]}
               >
-                <Input.Password placeholder={t('client.auth.passwordPlaceholder', 'Strong password (10+ chars)')} />
+                <Input.Password autoComplete="new-password" placeholder={t('client.auth.passwordPlaceholder', 'Strong password (10+ chars)')} />
               </Form.Item>
               <Form.Item
                 label={t('client.auth.confirmPassword', 'Confirm password')}
@@ -221,7 +263,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                   }),
                 ]}
               >
-                <Input.Password placeholder={t('client.auth.confirmPasswordPlaceholder', 'Repeat your password')} />
+                <Input.Password autoComplete="new-password" placeholder={t('client.auth.confirmPasswordPlaceholder', 'Repeat your password')} />
               </Form.Item>
               <Form.Item style={{ marginBottom: 0 }}>
                 <Button type="primary" htmlType="submit" loading={loading} block>

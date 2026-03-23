@@ -1,6 +1,8 @@
 import { BacktestRunRequest, BacktestRunResult, runBacktest } from '../backtest/engine';
 import { Strategy } from '../config/settings';
 import { db } from '../utils/database';
+import { cancelAllOrders, closePosition, getPositions } from './exchange';
+import { getMonitoringLatest, recordMonitoringSnapshot } from './monitoring';
 import { getStrategies, updateStrategy } from './strategy';
 
 export type TradingSystemMember = {
@@ -13,6 +15,15 @@ export type TradingSystemMember = {
   notes: string;
   created_at?: string;
   strategy?: Strategy | null;
+};
+
+export type TradingSystemMetrics = {
+  equity_usd: number;
+  unrealized_pnl: number;
+  margin_load_percent: number;
+  drawdown_percent: number;
+  effective_leverage: number;
+  recorded_at?: string;
 };
 
 export type TradingSystem = {
@@ -28,6 +39,7 @@ export type TradingSystem = {
   created_at?: string;
   updated_at?: string;
   members: TradingSystemMember[];
+  metrics?: TradingSystemMetrics;
 };
 
 export type TradingSystemMemberDraft = {
@@ -36,6 +48,12 @@ export type TradingSystemMemberDraft = {
   member_role?: string;
   is_enabled?: boolean;
   notes?: string;
+};
+
+export type TradingSystemMembersSafeApplyOptions = {
+  cancelRemovedOrders?: boolean;
+  closeRemovedPositions?: boolean;
+  syncMemberActivation?: boolean;
 };
 
 export type TradingSystemDraft = {
@@ -79,7 +97,46 @@ const normalizeRole = (value: any): string => {
   return normalized || 'core';
 };
 
-const normalizeSystemRow = (row: any, members: TradingSystemMember[]): TradingSystem => {
+const normalizeMetricsRow = (row: any): TradingSystemMetrics | undefined => {
+  if (!row) {
+    return undefined;
+  }
+
+  return {
+    equity_usd: safeNumber(row.equity_usd, 0),
+    unrealized_pnl: safeNumber(row.unrealized_pnl, 0),
+    margin_load_percent: safeNumber(row.margin_load_percent, 0),
+    drawdown_percent: safeNumber(row.drawdown_percent, 0),
+    effective_leverage: safeNumber(row.effective_leverage, 0),
+    recorded_at: row.recorded_at,
+  };
+};
+
+const getTradingSystemMetrics = async (apiKeyName: string, apiKeyId: number): Promise<TradingSystemMetrics | undefined> => {
+  const latest = await db.get(
+    `SELECT equity_usd, unrealized_pnl, margin_load_percent, drawdown_percent, effective_leverage, recorded_at
+     FROM monitoring_snapshots
+     WHERE api_key_id = ?
+     ORDER BY datetime(recorded_at) DESC
+     LIMIT 1`,
+    [apiKeyId]
+  );
+
+  if (latest) {
+    return normalizeMetricsRow(latest);
+  }
+
+  // If no historical snapshot exists yet, try to create one on demand.
+  try {
+    await recordMonitoringSnapshot(apiKeyName);
+    const created = await getMonitoringLatest(apiKeyName);
+    return normalizeMetricsRow(created);
+  } catch {
+    return undefined;
+  }
+};
+
+const normalizeSystemRow = (row: any, members: TradingSystemMember[], metrics?: TradingSystemMetrics): TradingSystem => {
   return {
     id: Number(row.id),
     api_key_id: Number(row.api_key_id),
@@ -93,6 +150,7 @@ const normalizeSystemRow = (row: any, members: TradingSystemMember[]): TradingSy
     created_at: row.created_at,
     updated_at: row.updated_at,
     members,
+    metrics,
   };
 };
 
@@ -166,7 +224,21 @@ const loadTradingSystemsWithMembers = async (apiKeyName: string, rows: any[]): P
     membersBySystemId.set(systemId, list);
   }
 
-  return systems.map((row) => normalizeSystemRow(row, membersBySystemId.get(Number(row.id)) || []));
+  // Load metrics for each system (by api_key_id)
+  const metricsMap = new Map<number, TradingSystemMetrics | undefined>();
+  for (const row of systems) {
+    const apiKeyId = Number(row.api_key_id);
+    if (!metricsMap.has(apiKeyId)) {
+      const metrics = await getTradingSystemMetrics(apiKeyName, apiKeyId);
+      metricsMap.set(apiKeyId, metrics);
+    }
+  }
+
+  return systems.map((row) => {
+    const apiKeyId = Number(row.api_key_id);
+    const metrics = metricsMap.get(apiKeyId);
+    return normalizeSystemRow(row, membersBySystemId.get(Number(row.id)) || [], metrics);
+  });
 };
 
 const validateMembers = async (
@@ -391,6 +463,155 @@ export const replaceTradingSystemMembers = async (
   return getTradingSystem(apiKeyName, systemId);
 };
 
+const collectMemberSymbols = (member: TradingSystemMember): string[] => {
+  const strategy = member.strategy;
+  if (!strategy) {
+    return [];
+  }
+
+  const base = String(strategy.base_symbol || '').trim().toUpperCase();
+  const quote = String(strategy.quote_symbol || '').trim().toUpperCase();
+  if (!base) {
+    return [];
+  }
+
+  if (String(strategy.market_mode || 'synthetic') === 'mono') {
+    return [base];
+  }
+
+  return [base, quote].filter(Boolean);
+};
+
+export const replaceTradingSystemMembersSafely = async (
+  apiKeyName: string,
+  systemId: number,
+  members: TradingSystemMemberDraft[],
+  options?: TradingSystemMembersSafeApplyOptions
+): Promise<{ system: TradingSystem; orchestration: Record<string, unknown> }> => {
+  const current = await getTradingSystem(apiKeyName, systemId);
+  const nextMembers = Array.isArray(members) ? members : [];
+  const settings = {
+    cancelRemovedOrders: options?.cancelRemovedOrders !== false,
+    closeRemovedPositions: options?.closeRemovedPositions !== false,
+    syncMemberActivation: options?.syncMemberActivation !== false,
+  };
+
+  const strategyMap = new Map<number, Strategy>();
+  const allStrategies = await getStrategies(apiKeyName, { includeLotPreview: false });
+  for (const strategy of allStrategies) {
+    if (strategy.id) {
+      strategyMap.set(Number(strategy.id), strategy);
+    }
+  }
+
+  const currentEnabledMembers = current.members.filter((member) => member.is_enabled);
+  const nextEnabledMembers = nextMembers
+    .filter((member) => safeBoolean(member.is_enabled, true))
+    .map((member) => ({
+      strategyId: Number(member.strategy_id),
+      strategy: strategyMap.get(Number(member.strategy_id)) || null,
+    }));
+
+  const currentStrategyIds = new Set(currentEnabledMembers.map((member) => Number(member.strategy_id)));
+  const nextStrategyIds = new Set(nextEnabledMembers.map((member) => Number(member.strategyId)).filter((id) => Number.isFinite(id) && id > 0));
+
+  const removedStrategyIds = Array.from(currentStrategyIds).filter((id) => !nextStrategyIds.has(id));
+  const addedStrategyIds = Array.from(nextStrategyIds).filter((id) => !currentStrategyIds.has(id));
+
+  const currentSymbols = new Set<string>();
+  for (const member of currentEnabledMembers) {
+    for (const symbol of collectMemberSymbols(member)) {
+      currentSymbols.add(symbol);
+    }
+  }
+
+  const nextSymbols = new Set<string>();
+  for (const item of nextEnabledMembers) {
+    if (!item.strategy) {
+      continue;
+    }
+    const base = String(item.strategy.base_symbol || '').trim().toUpperCase();
+    const quote = String(item.strategy.quote_symbol || '').trim().toUpperCase();
+    if (!base) {
+      continue;
+    }
+    if (String(item.strategy.market_mode || 'synthetic') === 'mono') {
+      nextSymbols.add(base);
+    } else {
+      nextSymbols.add(base);
+      if (quote) {
+        nextSymbols.add(quote);
+      }
+    }
+  }
+
+  const removedSymbols = Array.from(currentSymbols).filter((symbol) => !nextSymbols.has(symbol));
+  const warnings: string[] = [];
+
+  if (settings.cancelRemovedOrders) {
+    for (const symbol of removedSymbols) {
+      try {
+        await cancelAllOrders(apiKeyName, symbol);
+      } catch (error) {
+        warnings.push(`cancelAllOrders failed for ${symbol}: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  let closedPositions = 0;
+  if (settings.closeRemovedPositions) {
+    for (const symbol of removedSymbols) {
+      try {
+        const positions = await getPositions(apiKeyName, symbol);
+        const actionable = positions.filter((position: any) => Number.parseFloat(String(position?.size || '0')) > 0);
+        for (const position of actionable) {
+          const qty = String(position?.size || '0');
+          const side = String(position?.side || '') as 'Buy' | 'Sell';
+          if (!qty || qty === '0' || (side !== 'Buy' && side !== 'Sell')) {
+            continue;
+          }
+          await closePosition(apiKeyName, symbol, qty, side);
+          closedPositions += 1;
+        }
+      } catch (error) {
+        warnings.push(`close positions failed for ${symbol}: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  const system = await replaceTradingSystemMembers(apiKeyName, systemId, nextMembers);
+
+  if (settings.syncMemberActivation) {
+    for (const strategyId of removedStrategyIds) {
+      try {
+        await updateStrategy(apiKeyName, strategyId, { is_active: false }, { source: 'system_safe_replace_removed' });
+      } catch (error) {
+        warnings.push(`deactivate strategy ${strategyId} failed: ${(error as Error).message}`);
+      }
+    }
+
+    for (const strategyId of addedStrategyIds) {
+      try {
+        await updateStrategy(apiKeyName, strategyId, { is_active: Boolean(system.is_active) }, { source: 'system_safe_replace_added' });
+      } catch (error) {
+        warnings.push(`activate strategy ${strategyId} failed: ${(error as Error).message}`);
+      }
+    }
+  }
+
+  return {
+    system,
+    orchestration: {
+      removedSymbols,
+      removedStrategyIds,
+      addedStrategyIds,
+      closedPositions,
+      warnings,
+      options: settings,
+    },
+  };
+};
+
 export const setTradingSystemActivation = async (
   apiKeyName: string,
   systemId: number,
@@ -423,6 +644,7 @@ export const runTradingSystemBacktest = async (
   requestPatch?: Partial<BacktestRunRequest> & {
     memberWeights?: Record<string, number>;
     enabledMembers?: Record<string, boolean>;
+    riskMultiplier?: number;
   }
 ): Promise<BacktestRunResult> => {
   const system = await getTradingSystem(apiKeyName, systemId);
@@ -444,24 +666,17 @@ export const runTradingSystemBacktest = async (
     throw new Error(`Trading system ${systemId} has no enabled members to backtest`);
   }
 
-  const weightedMembers = enabledMembers.map((member) => {
-    const overrideWeight = Number(memberWeightsPatch[String(member.strategy_id)]);
-    const weight = Number.isFinite(overrideWeight) ? overrideWeight : Number(member.weight);
-    return Math.max(0, weight);
-  });
-
-  const avgWeight = weightedMembers.length > 0
-    ? weightedMembers.reduce((sum, value) => sum + value, 0) / weightedMembers.length
-    : 1;
-
-  const normalizedRiskMultiplier = Number.isFinite(avgWeight) && avgWeight > 0 ? avgWeight : 1;
-
   const incomingInitial = Number(requestPatch?.initialBalance);
   const initialBalance = Number.isFinite(incomingInitial) && incomingInitial > 0
     ? incomingInitial
-    : 1000 * normalizedRiskMultiplier;
+    : 1000;
 
-  return runBacktest({
+  const incomingRiskMultiplier = Number(requestPatch?.riskMultiplier);
+  const riskMultiplier = Number.isFinite(incomingRiskMultiplier)
+    ? Math.max(0.25, Math.min(3, incomingRiskMultiplier))
+    : 1;
+
+  const baseResult = await runBacktest({
     ...(requestPatch || {}),
     apiKeyName,
     mode: 'portfolio',
@@ -469,4 +684,72 @@ export const runTradingSystemBacktest = async (
     initialBalance,
     strategyId: undefined,
   });
+
+  if (Math.abs(riskMultiplier - 1) < 1e-9 || !Array.isArray(baseResult.equityCurve) || baseResult.equityCurve.length === 0) {
+    return baseResult;
+  }
+
+  const initial = Number(baseResult.summary.initialBalance);
+  const sortedBaseCurve = [...baseResult.equityCurve].sort((left, right) => Number(left.time) - Number(right.time));
+  const recomposedEquityCurve: typeof sortedBaseCurve = [];
+  let prevRiskEquity = Number.isFinite(initial) && initial > 0 ? initial : Number(sortedBaseCurve[0]?.equity || 1000);
+
+  for (let index = 0; index < sortedBaseCurve.length; index += 1) {
+    const point = sortedBaseCurve[index];
+    if (index === 0) {
+      const seeded = {
+        ...point,
+        equity: Number(prevRiskEquity.toFixed(6)),
+      };
+      recomposedEquityCurve.push(seeded);
+      continue;
+    }
+
+    const prevBase = Number(sortedBaseCurve[index - 1]?.equity ?? sortedBaseCurve[0]?.equity ?? prevRiskEquity);
+    const currBase = Number(point.equity);
+    const baseReturn = Number.isFinite(prevBase) && Math.abs(prevBase) > 1e-9
+      ? (currBase / prevBase) - 1
+      : 0;
+    const adjustedReturn = Math.max(-0.99, baseReturn * riskMultiplier);
+    prevRiskEquity = prevRiskEquity * (1 + adjustedReturn);
+
+    recomposedEquityCurve.push({
+      ...point,
+      equity: Number(prevRiskEquity.toFixed(6)),
+    });
+  }
+
+  let peak = initial;
+  let maxDrawdownAbsolute = 0;
+  let maxDrawdownPercent = 0;
+
+  for (const point of recomposedEquityCurve) {
+    const equity = Number(point.equity);
+    if (equity > peak) {
+      peak = equity;
+    }
+    const drawdownAbs = peak - equity;
+    const drawdownPct = peak > 0 ? (drawdownAbs / peak) * 100 : 0;
+    if (drawdownAbs > maxDrawdownAbsolute) {
+      maxDrawdownAbsolute = drawdownAbs;
+    }
+    if (drawdownPct > maxDrawdownPercent) {
+      maxDrawdownPercent = drawdownPct;
+    }
+  }
+
+  const finalEquity = Number(recomposedEquityCurve[recomposedEquityCurve.length - 1]?.equity ?? initial);
+  const totalReturnPercent = initial > 0 ? ((finalEquity / initial) - 1) * 100 : 0;
+
+  return {
+    ...baseResult,
+    equityCurve: recomposedEquityCurve,
+    summary: {
+      ...baseResult.summary,
+      finalEquity: Number(finalEquity.toFixed(6)),
+      totalReturnPercent: Number(totalReturnPercent.toFixed(6)),
+      maxDrawdownAbsolute: Number(maxDrawdownAbsolute.toFixed(6)),
+      maxDrawdownPercent: Number(maxDrawdownPercent.toFixed(6)),
+    },
+  };
 };

@@ -65,6 +65,15 @@ type GuideItem = {
   downloadUrl: string;
 };
 
+type ClientApiKeyDraft = {
+  exchange: string;
+  apiKey: string;
+  secret: string;
+  passphrase: string;
+  testnet: boolean;
+  demo: boolean;
+};
+
 type EquityPoint = {
   time: number;
   equity?: number;
@@ -126,6 +135,18 @@ type AlgofundRequest = {
   note: string;
   decision_note: string;
   created_at: string;
+};
+
+type StrategyBacktestPairRequest = {
+  id: number;
+  tenant_id: number;
+  base_symbol: string;
+  quote_symbol: string;
+  interval: string;
+  note: string;
+  status: 'pending' | 'approved' | 'in_sweep' | 'done' | 'rejected' | 'ignored';
+  created_at: string;
+  decided_at: string | null;
 };
 
 type AlgofundState = {
@@ -256,12 +277,24 @@ const ClientCabinet: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
   const [actionLoading, setActionLoading] = useState('');
+  const [apiKeyDraft, setApiKeyDraft] = useState<ClientApiKeyDraft>({
+    exchange: 'bybit',
+    apiKey: '',
+    secret: '',
+    passphrase: '',
+    testnet: false,
+    demo: false,
+  });
 
   const [strategyOfferIds, setStrategyOfferIds] = useState<string[]>([]);
   const [strategyRiskInput, setStrategyRiskInput] = useState(5);
   const [strategyTradeInput, setStrategyTradeInput] = useState(5);
   const [strategySelectionPreview, setStrategySelectionPreview] = useState<StrategySelectionPreviewResponse | null>(null);
   const [strategySelectionPreviewLoading, setStrategySelectionPreviewLoading] = useState(false);
+  const [backtestRequests, setBacktestRequests] = useState<StrategyBacktestPairRequest[]>([]);
+  const [requestMarket, setRequestMarket] = useState('');
+  const [requestInterval, setRequestInterval] = useState('1h');
+  const [requestNote, setRequestNote] = useState('');
 
   const [algofundRiskMultiplier, setAlgofundRiskMultiplier] = useState(1);
   const [algofundNote, setAlgofundNote] = useState('');
@@ -315,6 +348,12 @@ const ClientCabinet: React.FC = () => {
 
     setAlgofundRiskMultiplier(toFinite(algofundState.profile.risk_multiplier, 1));
   }, [algofundState]);
+
+  useEffect(() => {
+    if (workspace?.productMode === 'strategy_client') {
+      void loadBacktestRequests();
+    }
+  }, [workspace?.productMode]);
 
   const logoutClient = async () => {
     try {
@@ -383,6 +422,40 @@ const ClientCabinet: React.FC = () => {
       setStrategySelectionPreview(null);
     } finally {
       setStrategySelectionPreviewLoading(false);
+    }
+  };
+
+  const loadBacktestRequests = async () => {
+    try {
+      const response = await axios.get<{ requests: StrategyBacktestPairRequest[] }>('/api/client/strategy/backtest-requests');
+      setBacktestRequests(response.data?.requests || []);
+    } catch {
+      // Optional endpoint on older backend versions.
+    }
+  };
+
+  const sendBacktestPairRequest = async () => {
+    const market = requestMarket.trim().toUpperCase();
+    if (!market) {
+      messageApi.warning('Enter market, for example SOLUSDT or BTC/ETH');
+      return;
+    }
+
+    setActionLoading('strategy-backtest-request');
+    try {
+      await axios.post('/api/client/strategy/backtest-request', {
+        market,
+        interval: requestInterval || '1h',
+        note: requestNote,
+      });
+      messageApi.success('Backtest pair request sent');
+      setRequestMarket('');
+      setRequestNote('');
+      await loadBacktestRequests();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to send request'));
+    } finally {
+      setActionLoading('');
     }
   };
 
@@ -456,6 +529,73 @@ const ClientCabinet: React.FC = () => {
     }
   };
 
+  const downloadGuide = async (guide: GuideItem) => {
+    setActionLoading(`guide-${guide.id}`);
+    try {
+      const response = await axios.get(guide.downloadUrl, { responseType: 'blob' });
+      const blob = new Blob([response.data], { type: 'text/markdown;charset=utf-8' });
+      const objectUrl = window.URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = `${guide.id}-api-key-quick-guide.md`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.URL.revokeObjectURL(objectUrl);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.onboarding.guideDownloadFailed', 'Failed to download guide')));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const saveClientApiKey = async () => {
+    if (!apiKeyDraft.apiKey.trim() || !apiKeyDraft.secret.trim()) {
+      messageApi.error(t('client.apiKey.required', 'API key and secret are required'));
+      return;
+    }
+
+    setActionLoading('client-api-key');
+    try {
+      const response = await axios.post('/api/client/api-key', {
+        exchange: apiKeyDraft.exchange,
+        apiKey: apiKeyDraft.apiKey,
+        secret: apiKeyDraft.secret,
+        passphrase: apiKeyDraft.passphrase,
+        testnet: apiKeyDraft.testnet,
+        demo: apiKeyDraft.demo,
+      });
+
+      setApiKeyDraft((current) => ({
+        ...current,
+        apiKey: '',
+        secret: '',
+        passphrase: '',
+      }));
+
+      setWorkspace((current) => {
+        if (!current) return current;
+        if (response.data?.productMode === 'strategy_client') {
+          return {
+            ...current,
+            strategyState: response.data?.state || current.strategyState,
+          };
+        }
+        return {
+          ...current,
+          algofundState: response.data?.state || current.algofundState,
+        };
+      });
+
+      messageApi.success(t('client.apiKey.saved', 'API key saved and connected to your workspace'));
+      await loadWorkspace();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.apiKey.saveFailed', 'Failed to save API key')));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const renderCapabilities = (capabilities?: TenantCapabilities) => {
     if (!capabilities) {
       return null;
@@ -505,7 +645,11 @@ const ClientCabinet: React.FC = () => {
                 <Descriptions.Item label={t('client.cabinet.user', 'User')}>{clientUser?.fullName || '—'}</Descriptions.Item>
                 <Descriptions.Item label={t('client.cabinet.workspace', 'Workspace')}>{clientUser?.tenantDisplayName || '—'}</Descriptions.Item>
                 <Descriptions.Item label={t('client.cabinet.slug', 'Workspace slug')}>{clientUser?.tenantSlug || '—'}</Descriptions.Item>
-                <Descriptions.Item label={t('client.cabinet.mode', 'Mode')}>{workspace.productMode === 'algofund_client' ? 'algofund' : 'strategy'}</Descriptions.Item>
+                <Descriptions.Item label={t('client.cabinet.mode', 'Mode')}>
+                  {workspace.productMode === 'algofund_client'
+                    ? t('client.auth.productModeAlgofund', 'Algofund Client')
+                    : t('client.auth.productModeStrategy', 'Strategy Client')}
+                </Descriptions.Item>
                 <Descriptions.Item label={t('client.cabinet.status', 'Status')}>{clientUser?.tenantStatus || '—'}</Descriptions.Item>
               </Descriptions>
             </Card>
@@ -523,7 +667,7 @@ const ClientCabinet: React.FC = () => {
                 </ol>
                 <Space wrap style={{ marginBottom: 12 }}>
                   {guides.length > 0 ? guides.map((guide) => (
-                    <Button key={guide.id} href={guide.downloadUrl} target="_blank">
+                    <Button key={guide.id} loading={actionLoading === `guide-${guide.id}`} onClick={() => void downloadGuide(guide)}>
                       {guide.title}
                     </Button>
                   )) : <Tag color="default">{t('client.onboarding.noGuides', 'No guides available')}</Tag>}
@@ -538,13 +682,73 @@ const ClientCabinet: React.FC = () => {
               <Card className="battletoads-card" title={t('client.onboarding.guidesTitle', 'Exchange Quick Guides')}>
                 <Space wrap>
                   {guides.length > 0 ? guides.map((guide) => (
-                    <Button key={guide.id} href={guide.downloadUrl} target="_blank">
+                    <Button key={guide.id} loading={actionLoading === `guide-${guide.id}`} onClick={() => void downloadGuide(guide)}>
                       {guide.title}
                     </Button>
                   )) : <Tag color="default">{t('client.onboarding.noGuides', 'No guides available')}</Tag>}
                 </Space>
               </Card>
             )}
+
+            <Card className="battletoads-card" title={t('client.apiKey.title', 'Exchange API key')}>
+              <Row gutter={[12, 12]}>
+                <Col xs={24} md={8}>
+                  <Typography.Text strong>{t('client.apiKey.exchange', 'Exchange')}</Typography.Text>
+                  <Input
+                    style={{ marginTop: 6 }}
+                    value={apiKeyDraft.exchange}
+                    onChange={(event) => setApiKeyDraft((current) => ({ ...current, exchange: event.target.value.trim().toLowerCase() || 'bybit' }))}
+                    placeholder="bybit"
+                  />
+                </Col>
+                <Col xs={24} md={8}>
+                  <Typography.Text strong>{t('client.apiKey.apiKey', 'API key')}</Typography.Text>
+                  <Input
+                    style={{ marginTop: 6 }}
+                    value={apiKeyDraft.apiKey}
+                    onChange={(event) => setApiKeyDraft((current) => ({ ...current, apiKey: event.target.value }))}
+                    placeholder="xxxxxxxx"
+                  />
+                </Col>
+                <Col xs={24} md={8}>
+                  <Typography.Text strong>{t('client.apiKey.secret', 'Secret')}</Typography.Text>
+                  <Input.Password
+                    style={{ marginTop: 6 }}
+                    value={apiKeyDraft.secret}
+                    onChange={(event) => setApiKeyDraft((current) => ({ ...current, secret: event.target.value }))}
+                    placeholder="xxxxxxxx"
+                  />
+                </Col>
+                <Col xs={24} md={8}>
+                  <Typography.Text strong>{t('client.apiKey.passphrase', 'Passphrase')}</Typography.Text>
+                  <Input
+                    style={{ marginTop: 6 }}
+                    value={apiKeyDraft.passphrase}
+                    onChange={(event) => setApiKeyDraft((current) => ({ ...current, passphrase: event.target.value }))}
+                    placeholder={t('client.apiKey.passphraseOptional', 'Optional (required on some exchanges)')}
+                  />
+                </Col>
+                <Col xs={24} md={16}>
+                  <Space wrap style={{ marginTop: 26 }}>
+                    <Checkbox
+                      checked={apiKeyDraft.testnet}
+                      onChange={(event) => setApiKeyDraft((current) => ({ ...current, testnet: event.target.checked }))}
+                    >
+                      {t('client.apiKey.testnet', 'Testnet')}
+                    </Checkbox>
+                    <Checkbox
+                      checked={apiKeyDraft.demo}
+                      onChange={(event) => setApiKeyDraft((current) => ({ ...current, demo: event.target.checked }))}
+                    >
+                      {t('client.apiKey.demo', 'Demo trading')}
+                    </Checkbox>
+                    <Button type="primary" loading={actionLoading === 'client-api-key'} onClick={() => void saveClientApiKey()}>
+                      {t('client.apiKey.save', 'Save and connect')}
+                    </Button>
+                  </Space>
+                </Col>
+              </Row>
+            </Card>
 
             {strategyState ? (
               <>
@@ -643,6 +847,56 @@ const ClientCabinet: React.FC = () => {
                       <Empty description={t('client.strategy.previewEmpty', 'No preview chart yet')} />
                     )}
                   </Spin>
+                </Card>
+
+                <Card className="battletoads-card" title="Request New Pair Backtest">
+                  <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                    <Space wrap>
+                      <Input
+                        style={{ width: 240 }}
+                        placeholder="Market: SOLUSDT or BTC/ETH"
+                        value={requestMarket}
+                        onChange={(event) => setRequestMarket(event.target.value)}
+                      />
+                      <Input
+                        style={{ width: 90 }}
+                        placeholder="Interval"
+                        value={requestInterval}
+                        onChange={(event) => setRequestInterval(event.target.value)}
+                      />
+                    </Space>
+                    <Input.TextArea
+                      rows={2}
+                      value={requestNote}
+                      onChange={(event) => setRequestNote(event.target.value)}
+                      placeholder="Optional note for admin/research"
+                    />
+                    <Space wrap>
+                      <Button type="primary" loading={actionLoading === 'strategy-backtest-request'} onClick={() => void sendBacktestPairRequest()}>
+                        Send request
+                      </Button>
+                      <Button onClick={() => void loadBacktestRequests()}>Refresh list</Button>
+                    </Space>
+
+                    <List
+                      size="small"
+                      dataSource={backtestRequests}
+                      locale={{ emptyText: <Empty description="No pair requests yet" /> }}
+                      renderItem={(item) => (
+                        <List.Item>
+                          <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                            <Space wrap>
+                              <Typography.Text strong>{[item.base_symbol, item.quote_symbol].filter(Boolean).join('/') || item.base_symbol}</Typography.Text>
+                              <Tag>{item.interval}</Tag>
+                              <Tag color={item.status === 'done' ? 'success' : item.status === 'rejected' ? 'error' : 'processing'}>{item.status}</Tag>
+                              <Typography.Text type="secondary">#{item.id}</Typography.Text>
+                            </Space>
+                            {item.note ? <Typography.Text type="secondary">{item.note}</Typography.Text> : null}
+                          </Space>
+                        </List.Item>
+                      )}
+                    />
+                  </Space>
                 </Card>
               </>
             ) : null}

@@ -2936,8 +2936,9 @@ export const copyStrategyBlock = async (
 
 export const runAutoStrategiesCycle = async () => {
   const { db } = await import('../utils/database');
+  const { ensureExchangeClientInitialized } = await import('./exchange');
   const rows = await db.all(
-    `SELECT a.name AS api_key_name, s.id AS strategy_id
+    `SELECT a.name AS api_key_name, s.id AS strategy_id, COALESCE(s.name, '') AS strategy_name
      FROM strategies s
      JOIN api_keys a ON a.id = s.api_key_id
      WHERE s.is_active = 1 AND s.auto_update = 1
@@ -2951,12 +2952,14 @@ export const runAutoStrategiesCycle = async () => {
   for (const row of jobs) {
     const apiKeyName = String(row?.api_key_name || '');
     const strategyId = Number(row?.strategy_id || 0);
+    const strategyName = String(row?.strategy_name || '');
 
     if (!apiKeyName || !Number.isFinite(strategyId) || strategyId <= 0) {
       continue;
     }
 
     try {
+      await ensureExchangeClientInitialized(apiKeyName);
       await executeStrategy(apiKeyName, strategyId, {
         source: 'auto',
         closedBarOnly: true,
@@ -2965,7 +2968,36 @@ export const runAutoStrategiesCycle = async () => {
       processed += 1;
     } catch (error) {
       failed += 1;
-      logger.warn(`Auto-cycle strategy ${strategyId} (${apiKeyName}) failed: ${formatActionError(error)}`);
+      const errorText = formatActionError(error);
+      logger.warn(`Auto-cycle strategy ${strategyId} (${apiKeyName}) failed: ${errorText}`);
+      const isLowLot = errorText.toLowerCase().includes('order size too small');
+
+      // Persist latest auto-cycle failure so SaaS monitoring and low-lot recommendations
+      // can pick up errors even when execution aborted before strategy state update.
+      try {
+        await updateStrategy(apiKeyName, strategyId, {
+          last_action: 'auto_cycle_failed',
+          last_error: errorText,
+        });
+      } catch (persistError) {
+        logger.warn(
+          `Auto-cycle strategy ${strategyId} (${apiKeyName}) failed to persist error: ${formatActionError(persistError)}`
+        );
+      }
+
+      // Emit low-lot runtime event for instant visibility in analytics (no extra cycle wait).
+      if (isLowLot) {
+        try {
+          await db.run(
+            `INSERT INTO strategy_runtime_events
+               (api_key_name, strategy_id, strategy_name, event_type, message, resolved_at, created_at)
+             VALUES (?, ?, ?, 'low_lot_error', ?, 0, ?)`,
+            [apiKeyName, strategyId, strategyName, errorText, Date.now()]
+          );
+        } catch {
+          // Non-critical; analytics event loss is acceptable.
+        }
+      }
     }
   }
 

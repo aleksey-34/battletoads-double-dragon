@@ -4,6 +4,10 @@
   "main": "dist/server.js",
   "scripts": {
     "start": "ts-node src/server.ts",
+    "start:api": "node dist/server.js",
+    "start:runtime": "node dist/runtime-main.js",
+    "start:research": "node dist/research-main.js",
+    "telegram:test-admin": "node dist/scripts/sendAdminTelegramTest.js",
     "build": "tsc",
     "dev": "ts-node --watch src/server.ts",
     "compare:tv": "ts-node src/backtest/compareTvTrades.ts",

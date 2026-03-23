@@ -74,6 +74,14 @@ type ClientLoginInput = {
   password: string;
 };
 
+type ClientMagicLinkResult = {
+  token: string;
+  expiresAt: string;
+  loginUrl: string;
+  tenantId: number;
+  userId: number;
+};
+
 type StoredPasswordState = {
   passwordHash: string;
   updatedAt: string;
@@ -221,6 +229,32 @@ const fetchClientUserByEmail = async (email: string): Promise<(ClientUserWithTen
   );
 
   return (row || null) as (ClientUserWithTenantRow & { password_hash: string }) | null;
+};
+
+const fetchPrimaryClientUserByTenantId = async (tenantId: number): Promise<ClientUserWithTenantRow | null> => {
+  const row = await db.get(
+    `SELECT
+       cu.id AS user_id,
+       cu.tenant_id,
+       cu.email,
+       cu.full_name,
+       cu.preferred_language,
+       cu.onboarding_completed_at,
+       cu.status AS user_status,
+       t.slug AS tenant_slug,
+       t.display_name AS tenant_display_name,
+       t.status AS tenant_status,
+       t.product_mode
+     FROM client_users cu
+     JOIN tenants t ON t.id = cu.tenant_id
+     WHERE cu.tenant_id = ?
+       AND cu.status = 'active'
+     ORDER BY cu.id ASC
+     LIMIT 1`,
+    [tenantId]
+  );
+
+  return (row || null) as ClientUserWithTenantRow | null;
 };
 
 const ensureUniqueTenantSlug = async (baseSlug: string): Promise<string> => {
@@ -559,6 +593,169 @@ export const loginClientUser = async (payload: ClientLoginInput, requestMeta?: S
   return createClientSession(user, requestMeta);
 };
 
+export const createClientMagicLink = async (
+  tenantId: number,
+  requestMeta?: SessionRequestMeta,
+  note?: string
+): Promise<ClientMagicLinkResult> => {
+  let user = await fetchPrimaryClientUserByTenantId(tenantId);
+  if (!user) {
+    // Auto-create a placeholder client user from tenant data so the magic link can be issued
+    const tenant = await db.get(
+      'SELECT id, slug, display_name, status FROM tenants WHERE id = ? LIMIT 1',
+      [tenantId]
+    ) as { id: number; slug: string; display_name: string; status: string } | undefined;
+    if (!tenant) {
+      throw new Error(`Tenant ${tenantId} not found`);
+    }
+
+    // First try to reactivate an existing tenant user, if any.
+    const anyTenantUser = await db.get(
+      'SELECT id FROM client_users WHERE tenant_id = ? ORDER BY id ASC LIMIT 1',
+      [tenantId]
+    ) as { id?: number } | undefined;
+
+    if (anyTenantUser?.id) {
+      const fallbackPasswordHash = await bcrypt.hash(randomBytes(16).toString('hex'), 10);
+      await db.run(
+        `UPDATE client_users
+         SET status = 'active',
+             password_hash = CASE WHEN length(trim(coalesce(password_hash, ''))) = 0 THEN ? ELSE password_hash END,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [fallbackPasswordHash, Number(anyTenantUser.id)]
+      );
+    } else {
+      const placeholderEmail = `client+${tenant.id}-${tenant.slug}@algo.internal`;
+      const fallbackPasswordHash = await bcrypt.hash(randomBytes(16).toString('hex'), 10);
+      await db.run(
+        `INSERT OR IGNORE INTO client_users (tenant_id, email, full_name, password_hash, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [tenantId, placeholderEmail, String(tenant.display_name || tenant.slug), fallbackPasswordHash]
+      ).catch(() => {/* duplicate — ignore */});
+    }
+
+    user = await fetchPrimaryClientUserByTenantId(tenantId);
+    if (!user) {
+      throw new Error(`Active client user not found for tenant ${tenantId} and auto-create failed`);
+    }
+  }
+
+  if (String(user.tenant_status || 'active') !== 'active') {
+    throw new Error('Workspace is not active');
+  }
+
+  const linkId = randomBytes(16).toString('hex');
+  const token = randomBytes(32).toString('hex');
+  const tokenHash = hashSessionToken(token);
+  const ttlMin = Math.max(5, Number.parseInt(String(process.env.CLIENT_MAGIC_LINK_TTL_MIN || '60'), 10) || 60);
+  const expiresAt = new Date(Date.now() + ttlMin * 60 * 1000).toISOString();
+  const clientBaseUrl = String(process.env.CLIENT_BASE_URL || process.env.APP_BASE_URL || '').trim();
+  const loginUrl = `${clientBaseUrl || ''}/client/login?token=${encodeURIComponent(token)}`;
+
+  await db.run(
+    `INSERT INTO client_magic_links (
+       id,
+       tenant_id,
+       user_id,
+       token_hash,
+       expires_at,
+       consumed_at,
+       note,
+       created_by,
+       created_at
+     ) VALUES (?, ?, ?, ?, ?, NULL, ?, 'platform_admin', CURRENT_TIMESTAMP)`,
+    [
+      linkId,
+      Number(user.tenant_id),
+      Number(user.user_id),
+      tokenHash,
+      expiresAt,
+      String(note || '').slice(0, 500),
+    ]
+  );
+
+  await db.run(
+    `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+     VALUES (?, 'platform_admin', 'client_magic_link_created', ?, CURRENT_TIMESTAMP)`,
+    [Number(user.tenant_id), JSON.stringify({ userId: Number(user.user_id), expiresAt, ip: String(requestMeta?.ip || '') })]
+  );
+
+  return {
+    token,
+    expiresAt,
+    loginUrl,
+    tenantId: Number(user.tenant_id),
+    userId: Number(user.user_id),
+  };
+};
+
+export const loginClientByMagicToken = async (tokenRaw: string, requestMeta?: SessionRequestMeta): Promise<ClientAuthPayload> => {
+  const token = String(tokenRaw || '').trim();
+  if (!token) {
+    throw new Error('Magic token is required');
+  }
+
+  const tokenHash = hashSessionToken(token);
+  const row = await db.get(
+    `SELECT
+       cml.id,
+       cml.tenant_id,
+       cml.user_id,
+       cml.expires_at,
+       cml.consumed_at,
+       cu.status AS user_status,
+       t.status AS tenant_status
+     FROM client_magic_links cml
+     JOIN client_users cu ON cu.id = cml.user_id
+     JOIN tenants t ON t.id = cml.tenant_id
+     WHERE cml.token_hash = ?
+     LIMIT 1`,
+    [tokenHash]
+  );
+
+  if (!row) {
+    throw new Error('Magic link is invalid');
+  }
+
+  if (row.consumed_at) {
+    throw new Error('Magic link already used');
+  }
+
+  const expiresAtMs = Date.parse(String(row.expires_at || ''));
+  if (!Number.isFinite(expiresAtMs) || expiresAtMs <= Date.now()) {
+    throw new Error('Magic link expired');
+  }
+
+  if (String(row.user_status || 'active') !== 'active') {
+    throw new Error('User account is disabled');
+  }
+
+  if (String(row.tenant_status || 'active') !== 'active') {
+    throw new Error('Workspace is not active');
+  }
+
+  const user = await fetchClientUserById(Number(row.user_id));
+  if (!user) {
+    throw new Error('Client user not found');
+  }
+
+  await db.run(
+    `UPDATE client_magic_links
+     SET consumed_at = CURRENT_TIMESTAMP
+     WHERE id = ? AND consumed_at IS NULL`,
+    [String(row.id)]
+  );
+
+  await db.run(
+    `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+     VALUES (?, 'client_magic_link', 'client_magic_link_consumed', ?, CURRENT_TIMESTAMP)`,
+    [Number(row.tenant_id), JSON.stringify({ userId: Number(row.user_id), ip: String(requestMeta?.ip || '') })]
+  );
+
+  return createClientSession(user, requestMeta);
+};
+
 export const getClientSessionFromToken = async (token: string, touch = true): Promise<ClientSessionContext | null> => {
   const normalized = String(token || '').trim();
   if (!normalized) {
@@ -703,5 +900,36 @@ export const authenticate = (req: any, res: any, next: any) => {
   if (!verifyDashboardPassword(password)) {
     return res.status(401).json({ error: 'Invalid password' });
   }
+  next();
+};
+
+/**
+ * Phase 6 incremental RBAC guard.
+ *
+ * Backward-compatible behavior:
+ * - If ADMIN_PLATFORM_TOKEN is not configured, falls back to existing dashboard password auth.
+ * - If ADMIN_PLATFORM_TOKEN is configured, request must provide this token in Authorization Bearer.
+ */
+export const requirePlatformAdmin = (req: any, res: any, next: any) => {
+  const platformToken = String(process.env.ADMIN_PLATFORM_TOKEN || '').trim();
+  if (!platformToken) {
+    return authenticate(req, res, next);
+  }
+
+  const authHeader = String(req?.headers?.authorization || '').trim();
+  if (!authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const token = authHeader.slice(7).trim();
+  if (!token || token !== platformToken) {
+    return res.status(403).json({ error: 'Forbidden: platform_admin required' });
+  }
+
+  req.adminAuth = {
+    role: 'platform_admin',
+    authMode: 'platform_token',
+  };
+
   next();
 };

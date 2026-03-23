@@ -244,6 +244,8 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
 
         lastSizeRef.current = { width, height };
         chart.applyOptions({ width, height });
+        chart.timeScale().fitContent();
+        chart.timeScale().scrollToRealTime();
       });
     };
 
@@ -602,7 +604,7 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
     markerPluginRef.current.setMarkers(normalized);
   }, [markers, data.length, type]);
 
-  return <div ref={chartContainerRef} style={{ width: '100%', minHeight: 260 }} />;
+  return <div ref={chartContainerRef} style={{ width: '100%', minHeight: 260, touchAction: 'none' }} />;
 };
 
 export default ChartComponent;
