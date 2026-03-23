@@ -1928,6 +1928,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       pendingCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.requested_enabled || 0) === 1 && Number(tenant.algofundProfile?.actual_enabled || 0) !== 1).length,
     };
   });
+  const publishedAdminTsEditorTarget = (() => {
+    const sourceApiKeyName = String(publishResponse?.sourceSystem?.apiKeyName || '').trim();
+    const sourceSystemId = Number(publishResponse?.sourceSystem?.systemId || 0);
+    if (sourceApiKeyName) {
+      return {
+        apiKeyName: sourceApiKeyName,
+        systemId: sourceSystemId > 0 ? sourceSystemId : undefined,
+      };
+    }
+
+    const fallbackTenant = batchEligibleAlgofundTenants.find((item) => {
+      const apiKey = String(item.algofundProfile?.assigned_api_key_name || item.tenant.assigned_api_key_name || '').trim();
+      return apiKey.length > 0;
+    });
+    if (!fallbackTenant) {
+      return null;
+    }
+
+    return {
+      apiKeyName: String(fallbackTenant.algofundProfile?.assigned_api_key_name || fallbackTenant.tenant.assigned_api_key_name || '').trim(),
+      systemId: undefined,
+    };
+  })();
   const offerTitleById = offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
     return acc;
@@ -3103,6 +3126,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     messageApi.success('Открыт шаг применения клиентам: выбран switch_system и подставлен опубликованный admin TS');
   };
 
+  const openPublishedAdminTsEditor = () => {
+    if (!publishedAdminTsEditorTarget?.apiKeyName) {
+      messageApi.warning('Для открытия редактора ТС нужен назначенный API key и опубликованная runtime ТС');
+      return;
+    }
+
+    const params = new URLSearchParams();
+    params.set('apiKeyName', publishedAdminTsEditorTarget.apiKeyName);
+    if (publishedAdminTsEditorTarget.systemId && publishedAdminTsEditorTarget.systemId > 0) {
+      params.set('systemId', String(publishedAdminTsEditorTarget.systemId));
+    }
+    window.location.href = `/trading-systems?${params.toString()}`;
+  };
+
   const applyPublishedAdminTsToSelectedClients = async () => {
     const publishedSystemId = Number(publishResponse?.sourceSystem?.systemId || 0);
     const publishedSystemName = String(publishResponse?.sourceSystem?.systemName || '').trim();
@@ -3872,9 +3909,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 <Space wrap>
                                   <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>Отправить ТС на апрув</Button>
                                   <Button size="small" onClick={() => setAdminTab('research-analysis')}>Открыть sweep/backtest</Button>
+                                  <Button size="small" onClick={openPublishedAdminTsEditor}>Редактировать ТС</Button>
                                   <Button size="small" onClick={() => setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)).filter((item) => item > 0))}>Выбрать всех algofund-клиентов</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId} onClick={openPublishedAdminTsForClients}>Применить к клиентам Алгофонда</Button>
-                                  <Button size="small" href="/backtest">Открыть Backtest</Button>
+                                  <Button size="small" onClick={openPublishedAdminTsEditor}>Backtest ТС (в редакторе)</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId || batchTenantIds.length === 0} loading={actionLoading === 'apply-published-admin-ts'} onClick={() => void applyPublishedAdminTsToSelectedClients()}>
                                     Применить к выбранным ({batchTenantIds.length})
                                   </Button>
@@ -4439,8 +4477,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               >
                                 Применение к клиентам
                               </Button>
-                              <Button size="small" href="/backtest">
-                                Открыть Backtest
+                              <Button size="small" onClick={openPublishedAdminTsEditor}>
+                                Редактировать ТС
+                              </Button>
+                              <Button size="small" onClick={openPublishedAdminTsEditor}>
+                                Backtest ТС (в редакторе)
                               </Button>
                             </Space>
                           </Card>
