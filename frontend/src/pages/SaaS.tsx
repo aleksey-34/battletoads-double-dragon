@@ -107,6 +107,9 @@ type CatalogOffer = {
 type StrategySelectionConstraints = {
   limits?: {
     maxStrategies?: number | null;
+    minOffersPerSystem?: number | null;
+    maxOffersPerSystem?: number | null;
+    maxCustomSystems?: number | null;
     mono?: number | null;
     synth?: number | null;
     depositCap?: number | null;
@@ -118,6 +121,8 @@ type StrategySelectionConstraints = {
     synth?: number;
     uniqueMarkets?: number;
     remainingSlots?: number | null;
+    currentCustomSystems?: number;
+    remainingCustomSystems?: number | null;
     estimatedDepositPerStrategy?: number | null;
   };
   violations?: string[];
@@ -1335,6 +1340,9 @@ const buildDraftStrategyConstraints = (
   const synth = selectedOffers.filter((offer) => String(offer.strategy?.mode || 'mono') !== 'mono').length;
   const uniqueMarkets = new Set(selectedOffers.map((offer) => String(offer.strategy?.market || '').trim()).filter(Boolean)).size;
   const maxStrategies = baseline?.limits?.maxStrategies ?? null;
+  const minOffersPerSystem = baseline?.limits?.minOffersPerSystem ?? null;
+  const maxOffersPerSystem = baseline?.limits?.maxOffersPerSystem ?? null;
+  const maxCustomSystems = baseline?.limits?.maxCustomSystems ?? null;
   const monoLimit = baseline?.limits?.mono ?? null;
   const synthLimit = baseline?.limits?.synth ?? null;
   const depositCap = baseline?.limits?.depositCap ?? null;
@@ -1345,8 +1353,14 @@ const buildDraftStrategyConstraints = (
   const violations: string[] = [];
   const warnings: string[] = [];
 
+  if (minOffersPerSystem !== null && selectedOffers.length > 0 && selectedOffers.length < minOffersPerSystem) {
+    violations.push(`At least ${minOffersPerSystem} offers are required to build a custom TS.`);
+  }
   if (maxStrategies !== null && selectedOffers.length > maxStrategies) {
     violations.push(`Too many offers selected (${selectedOffers.length}/${maxStrategies}).`);
+  }
+  if (maxOffersPerSystem !== null && selectedOffers.length > maxOffersPerSystem) {
+    violations.push(`Custom TS offer cap exceeded (${selectedOffers.length}/${maxOffersPerSystem}).`);
   }
   if (monoLimit !== null && mono > monoLimit) {
     violations.push(`Mono offers exceed plan limit (${mono}/${monoLimit}).`);
@@ -1367,6 +1381,9 @@ const buildDraftStrategyConstraints = (
   return {
     limits: {
       maxStrategies,
+      minOffersPerSystem,
+      maxOffersPerSystem,
+      maxCustomSystems,
       mono: monoLimit,
       synth: synthLimit,
       depositCap,
@@ -1378,6 +1395,10 @@ const buildDraftStrategyConstraints = (
       synth,
       uniqueMarkets,
       remainingSlots: maxStrategies !== null ? Math.max(0, maxStrategies - selectedOffers.length) : null,
+      currentCustomSystems: selectedOffers.length > 0 ? 1 : 0,
+      remainingCustomSystems: maxCustomSystems !== null
+        ? Math.max(0, maxCustomSystems - (selectedOffers.length > 0 ? 1 : 0))
+        : null,
       estimatedDepositPerStrategy,
     },
     violations,
@@ -4002,7 +4023,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Col xs={24} md={6}>
                               <Statistic
                                 title="Selected"
-                                value={`${strategyDraftConstraints.usage?.selected ?? 0}${strategyDraftConstraints.limits?.maxStrategies !== null && strategyDraftConstraints.limits?.maxStrategies !== undefined ? ` / ${strategyDraftConstraints.limits?.maxStrategies}` : ''}`}
+                                value={`${strategyDraftConstraints.usage?.selected ?? 0}${strategyDraftConstraints.limits?.maxOffersPerSystem !== null && strategyDraftConstraints.limits?.maxOffersPerSystem !== undefined ? ` / ${strategyDraftConstraints.limits?.maxOffersPerSystem}` : strategyDraftConstraints.limits?.maxStrategies !== null && strategyDraftConstraints.limits?.maxStrategies !== undefined ? ` / ${strategyDraftConstraints.limits?.maxStrategies}` : ''}`}
                               />
                             </Col>
                             <Col xs={24} md={6}>
@@ -4017,6 +4038,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Row>
                           <Space wrap style={{ marginTop: 12 }}>
                             {strategyDraftConstraints.usage?.remainingSlots !== null && strategyDraftConstraints.usage?.remainingSlots !== undefined ? <Tag color="blue">Remaining slots: {strategyDraftConstraints.usage?.remainingSlots}</Tag> : null}
+                            {strategyDraftConstraints.limits?.minOffersPerSystem !== null && strategyDraftConstraints.limits?.minOffersPerSystem !== undefined ? <Tag color="purple">Min offers per TS: {strategyDraftConstraints.limits?.minOffersPerSystem}</Tag> : null}
+                            {strategyDraftConstraints.limits?.maxOffersPerSystem !== null && strategyDraftConstraints.limits?.maxOffersPerSystem !== undefined ? <Tag color="purple">Max offers per TS: {strategyDraftConstraints.limits?.maxOffersPerSystem}</Tag> : null}
+                            {strategyDraftConstraints.limits?.maxCustomSystems !== null && strategyDraftConstraints.limits?.maxCustomSystems !== undefined ? <Tag color="cyan">Custom TS cap: {strategyDraftConstraints.limits?.maxCustomSystems}</Tag> : null}
                             {strategyDraftConstraints.limits?.mono !== null && strategyDraftConstraints.limits?.mono !== undefined ? <Tag color="green">Mono cap: {strategyDraftConstraints.limits?.mono}</Tag> : null}
                             {strategyDraftConstraints.limits?.synth !== null && strategyDraftConstraints.limits?.synth !== undefined ? <Tag color="geekblue">Synth cap: {strategyDraftConstraints.limits?.synth}</Tag> : null}
                             {strategyDraftConstraints.limits?.depositCap !== null && strategyDraftConstraints.limits?.depositCap !== undefined ? <Tag color="gold">Deposit cap: {formatMoney(strategyDraftConstraints.limits?.depositCap)}</Tag> : null}

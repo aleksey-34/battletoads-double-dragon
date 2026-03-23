@@ -70,6 +70,9 @@ type TenantCapabilities = {
 export type StrategySelectionConstraints = {
   limits: {
     maxStrategies: number | null;
+    minOffersPerSystem: number | null;
+    maxOffersPerSystem: number | null;
+    maxCustomSystems: number | null;
     mono: number | null;
     synth: number | null;
     depositCap: number | null;
@@ -81,6 +84,8 @@ export type StrategySelectionConstraints = {
     synth: number;
     uniqueMarkets: number;
     remainingSlots: number | null;
+    currentCustomSystems: number;
+    remainingCustomSystems: number | null;
     estimatedDepositPerStrategy: number | null;
   };
   violations: string[];
@@ -404,12 +409,12 @@ type StrategyMaterializedRow = {
 const repoRoot = path.resolve(__dirname, '../../..');
 const resultsDir = path.join(repoRoot, 'results');
 const strategyClientPlans: PlanSeed[] = [
-  { code: 'strategy_15', title: 'Strategy Client 15', productMode: 'strategy_client', priceUsdt: 15, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 1, allowTsStartStopRequests: false, features: { monoOrSynth: 1 } },
-  { code: 'strategy_20', title: 'Strategy Client 20', productMode: 'strategy_client', priceUsdt: 20, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 3, allowTsStartStopRequests: false, features: { monoOrSynth: 3 } },
-  { code: 'strategy_25', title: 'Strategy Client 25', productMode: 'strategy_client', priceUsdt: 25, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 3, allowTsStartStopRequests: false, features: { exchanges: 2 } },
-  { code: 'strategy_30', title: 'Strategy Client 30', productMode: 'strategy_client', priceUsdt: 30, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 3, allowTsStartStopRequests: false, features: { exchanges: 3 } },
-  { code: 'strategy_50', title: 'Strategy Client 50', productMode: 'strategy_client', priceUsdt: 50, maxDepositTotal: 5000, riskCapMax: 0, maxStrategiesTotal: 6, allowTsStartStopRequests: true, features: { mono: 3, synth: 3, complexTs: true } },
-  { code: 'strategy_100', title: 'Strategy Client 100', productMode: 'strategy_client', priceUsdt: 100, maxDepositTotal: 10000, riskCapMax: 0, maxStrategiesTotal: 6, allowTsStartStopRequests: true, features: { mono: 3, synth: 3, complexTs: true, extraExchangeRequest: true } },
+  { code: 'strategy_15', title: 'Strategy Client 15', productMode: 'strategy_client', priceUsdt: 15, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 2, allowTsStartStopRequests: false, features: { monoOrSynth: 2, customTsBuilder: true, customTsMinOffers: 2, customTsMaxOffers: 2, customTsMaxCount: 1 } },
+  { code: 'strategy_20', title: 'Strategy Client 20', productMode: 'strategy_client', priceUsdt: 20, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 3, allowTsStartStopRequests: false, features: { monoOrSynth: 3, customTsBuilder: true, customTsMinOffers: 2, customTsMaxOffers: 3, customTsMaxCount: 1 } },
+  { code: 'strategy_25', title: 'Strategy Client 25', productMode: 'strategy_client', priceUsdt: 25, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 4, allowTsStartStopRequests: false, features: { exchanges: 2, customTsBuilder: true, customTsMinOffers: 2, customTsMaxOffers: 4, customTsMaxCount: 2 } },
+  { code: 'strategy_30', title: 'Strategy Client 30', productMode: 'strategy_client', priceUsdt: 30, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 4, allowTsStartStopRequests: false, features: { exchanges: 3, customTsBuilder: true, customTsMinOffers: 2, customTsMaxOffers: 4, customTsMaxCount: 2 } },
+  { code: 'strategy_50', title: 'Strategy Client 50', productMode: 'strategy_client', priceUsdt: 50, maxDepositTotal: 5000, riskCapMax: 0, maxStrategiesTotal: 5, allowTsStartStopRequests: true, features: { mono: 3, synth: 3, complexTs: true, customTsBuilder: true, customTsMinOffers: 2, customTsMaxOffers: 5, customTsMaxCount: 3 } },
+  { code: 'strategy_100', title: 'Strategy Client 100', productMode: 'strategy_client', priceUsdt: 100, maxDepositTotal: 10000, riskCapMax: 0, maxStrategiesTotal: 6, allowTsStartStopRequests: true, features: { mono: 3, synth: 3, complexTs: true, extraExchangeRequest: true, customTsBuilder: true, customTsMinOffers: 2, customTsMaxOffers: 6, customTsMaxCount: 3 } },
 ];
 
 const algofundPlans: PlanSeed[] = [
@@ -672,9 +677,22 @@ const resolveStrategyPlanLimits = (plan: PlanRow | null) => {
   const monoLimit = Math.max(0, asNumber(features.mono, 0));
   const synthLimit = Math.max(0, asNumber(features.synth, 0));
   const unifiedLimit = Math.max(0, asNumber(features.monoOrSynth, 0));
+  const minOffersPerSystemRaw = Math.max(0, Math.floor(asNumber(features.customTsMinOffers, 0)));
+  const maxOffersPerSystemRaw = Math.max(0, Math.floor(asNumber(features.customTsMaxOffers, 0)));
+  const maxCustomSystemsRaw = Math.max(0, Math.floor(asNumber(features.customTsMaxCount, 0)));
+  const fallbackMaxOffers = unifiedLimit > 0
+    ? unifiedLimit
+    : maxStrategies;
+  const maxOffersPerSystem = maxOffersPerSystemRaw > 0 ? maxOffersPerSystemRaw : fallbackMaxOffers;
+  const minOffersPerSystem = minOffersPerSystemRaw > 0
+    ? Math.min(minOffersPerSystemRaw, maxOffersPerSystem > 0 ? maxOffersPerSystem : minOffersPerSystemRaw)
+    : (maxOffersPerSystem >= 2 ? 2 : (maxOffersPerSystem > 0 ? 1 : 0));
 
   return {
     maxStrategies: maxStrategies > 0 ? maxStrategies : null,
+    minOffersPerSystem: minOffersPerSystem > 0 ? minOffersPerSystem : null,
+    maxOffersPerSystem: maxOffersPerSystem > 0 ? maxOffersPerSystem : null,
+    maxCustomSystems: maxCustomSystemsRaw > 0 ? maxCustomSystemsRaw : 1,
     mono: monoLimit > 0 ? monoLimit : null,
     synth: synthLimit > 0 ? synthLimit : null,
     unified: unifiedLimit > 0 ? unifiedLimit : null,
@@ -702,7 +720,14 @@ const buildStrategySelectionConstraints = (
   const violations: string[] = [];
   const warnings: string[] = [];
 
-  const hardLimit = limits.unified ?? limits.maxStrategies;
+  const hardLimitBase = limits.unified ?? limits.maxStrategies;
+  const hardLimit = hardLimitBase !== null && limits.maxOffersPerSystem !== null
+    ? Math.min(hardLimitBase, limits.maxOffersPerSystem)
+    : (hardLimitBase ?? limits.maxOffersPerSystem);
+
+  if (limits.minOffersPerSystem !== null && selected > 0 && selected < limits.minOffersPerSystem) {
+    violations.push(`At least ${limits.minOffersPerSystem} offers are required to build a custom TS.`);
+  }
   if (hardLimit !== null && selected > hardLimit) {
     violations.push(`Too many offers selected (${selected}/${hardLimit}).`);
   }
@@ -726,6 +751,9 @@ const buildStrategySelectionConstraints = (
   return {
     limits: {
       maxStrategies: hardLimit,
+      minOffersPerSystem: limits.minOffersPerSystem,
+      maxOffersPerSystem: limits.maxOffersPerSystem,
+      maxCustomSystems: limits.maxCustomSystems,
       mono: limits.mono,
       synth: limits.synth,
       depositCap: limits.depositCap,
@@ -737,6 +765,10 @@ const buildStrategySelectionConstraints = (
       synth,
       uniqueMarkets,
       remainingSlots: hardLimit !== null ? Math.max(0, hardLimit - selected) : null,
+      currentCustomSystems: selected > 0 ? 1 : 0,
+      remainingCustomSystems: limits.maxCustomSystems !== null
+        ? Math.max(0, limits.maxCustomSystems - (selected > 0 ? 1 : 0))
+        : null,
       estimatedDepositPerStrategy,
     },
     violations,

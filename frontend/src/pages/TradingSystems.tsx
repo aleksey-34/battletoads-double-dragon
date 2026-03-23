@@ -901,7 +901,7 @@ const TradingSystems: React.FC = () => {
           type="info"
           showIcon
           style={{ marginBottom: 12 }}
-          message="Новый поток: сначала выбираете tenant и его торговую систему, затем работаете с составом/бэктестом/апрувами. API-key выбор оставлен как fallback."
+          message="Рабочая логика: ТС классифицируются по оффер-карточкам (витрина), а здесь вы выбираете tenant и его runtime-экземпляр ТС для операций. API-key выбор оставлен как fallback."
         />
         {tenantRows.length === 0 ? (
           <Alert
