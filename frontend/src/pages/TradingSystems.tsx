@@ -243,8 +243,8 @@ type Copy = {
 
 const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
   ru: {
-    title: 'Trading Systems',
-    subtitle: 'Ручные торговые системы (настройка админом): состав, веса, backtest, анализ и liquidity suggestions. Это отдельный слой от sweep-профилей.',
+    title: 'Офер и ТС',
+    subtitle: 'Сборка и сопровождение торговых систем для клиентов: состав, веса, backtest, анализ и liquidity suggestions. Если список пуст, сначала назначьте tenant API-ключ в SaaS Админке.',
     apiKey: 'API-ключ',
     refresh: 'Обновить',
     systems: 'Системы',
@@ -261,7 +261,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     active: 'Активна',
     discovery: 'Discovery',
     interval: 'Интервал',
-    noSystems: 'Для этого API-ключа торговые системы не найдены.',
+    noSystems: 'Для выбранного tenant/API-ключа торговые системы не найдены.',
     loading: 'Загрузка...',
     weights: 'Вес',
     role: 'Роль',
@@ -274,8 +274,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     action: 'Действие',
   },
   en: {
-    title: 'Trading Systems',
-    subtitle: 'Manual trading systems (admin-configured): members, weights, backtests, analysis, and liquidity suggestions. This is separate from sweep profiles.',
+    title: 'Offers & TS',
+    subtitle: 'Build and operate client trading systems: members, weights, backtests, analysis, and liquidity suggestions. If empty, assign an API key to tenant in SaaS Admin first.',
     apiKey: 'API Key',
     refresh: 'Refresh',
     systems: 'Systems',
@@ -292,7 +292,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     active: 'Active',
     discovery: 'Discovery',
     interval: 'Interval',
-    noSystems: 'No trading systems found for this API key.',
+    noSystems: 'No trading systems found for selected tenant/API key.',
     loading: 'Loading...',
     weights: 'Weight',
     role: 'Role',
@@ -305,8 +305,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     action: 'Action',
   },
   tr: {
-    title: 'Trading Systems',
-    subtitle: 'Manuel trading system katmani (admin ayari): uyeler, agirliklar, backtest, analiz ve liquidity suggestions. Sweep profillerinden ayridir.',
+    title: 'Offer & TS',
+    subtitle: 'Musteri trading system yonetimi: uyeler, agirliklar, backtest, analiz ve liquidity suggestions. Bos ise once SaaS Admin tarafinda tenant icin API key atayin.',
     apiKey: 'API Key',
     refresh: 'Yenile',
     systems: 'Sistemler',
@@ -323,7 +323,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     active: 'Aktif',
     discovery: 'Discovery',
     interval: 'Interval',
-    noSystems: 'Bu API key icin trading system bulunamadi.',
+    noSystems: 'Secilen tenant/API key icin trading system bulunamadi.',
     loading: 'Yukleniyor...',
     weights: 'Agirlik',
     role: 'Rol',
@@ -903,6 +903,15 @@ const TradingSystems: React.FC = () => {
           style={{ marginBottom: 12 }}
           message="Новый поток: сначала выбираете tenant и его торговую систему, затем работаете с составом/бэктестом/апрувами. API-key выбор оставлен как fallback."
         />
+        {tenantRows.length === 0 ? (
+          <Alert
+            type="warning"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message="Tenant с назначенным API-ключом не найден. Откройте SaaS -> Admin, назначьте клиенту API-ключ и вернитесь в этот раздел."
+            action={<Button size="small" href="/saas/admin">Открыть SaaS Admin</Button>}
+          />
+        ) : null}
         <Row gutter={[16, 16]} align="middle">
           <Col xs={24} lg={8}>
             <Text strong>Tenant</Text>
@@ -957,6 +966,14 @@ const TradingSystems: React.FC = () => {
             </Space>
           </Col>
         </Row>
+        {selectedTenantRow && selectedTenantSystems.length === 0 ? (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginTop: 12 }}
+            message="У выбранного tenant пока нет торговых систем. Можно создать/назначить систему через API-key fallback или через SaaS workflows."
+          />
+        ) : null}
       </Card>
 
       <Row gutter={[16, 16]} style={{ marginTop: 0 }}>
