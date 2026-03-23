@@ -11,7 +11,7 @@ import {
   updateTradingSystem,
 } from '../bot/tradingSystems';
 import { getMonitoringLatest } from '../bot/monitoring';
-import { getPositions } from '../bot/exchange';
+import { getPositions, closeAllPositions, cancelAllOrders } from '../bot/exchange';
 import { Strategy } from '../config/settings';
 import { db, initDB } from '../utils/database';
 import logger from '../utils/logger';
@@ -4345,10 +4345,23 @@ export const resolveAlgofundRequest = async (requestId: number, status: RequestS
         decisionNote = note ? `${note} | ${suffix}` : suffix;
       }
     } else if (row.request_type === 'stop') {
-      const systems = await listTradingSystems(asString(profile.assigned_api_key_name || tenant.assigned_api_key_name));
+      const algofundApiKey = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
+      const systems = await listTradingSystems(algofundApiKey);
       const existing = systems.find((item) => asString(item.name) === getAlgofundClientSystemName(tenant));
       if (existing?.id) {
-        await setTradingSystemActivation(asString(profile.assigned_api_key_name || tenant.assigned_api_key_name), Number(existing.id), false, true);
+        await setTradingSystemActivation(algofundApiKey, Number(existing.id), false, true);
+      }
+      if (algofundApiKey) {
+        try {
+          await cancelAllOrders(algofundApiKey);
+        } catch (error) {
+          logger.warn(`cancelAllOrders on stop for ${algofundApiKey}: ${(error as Error).message}`);
+        }
+        try {
+          await closeAllPositions(algofundApiKey);
+        } catch (error) {
+          logger.warn(`closeAllPositions on stop for ${algofundApiKey}: ${(error as Error).message}`);
+        }
       }
       await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
     } else if (row.request_type === 'switch_system') {
