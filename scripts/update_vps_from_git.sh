@@ -8,6 +8,8 @@ DEPLOY_MODE="${DEPLOY_MODE:-single}"
 SERVICE_NAME="${SERVICE_NAME:-battletoads-backend}"
 BACKEND_DIR="${BACKEND_DIR:-$APP_DIR/backend}"
 FRONTEND_DIR="${FRONTEND_DIR:-$APP_DIR/frontend}"
+DB_BACKUP_DIR="${DB_BACKUP_DIR:-$APP_DIR/backups/db}"
+DB_BACKUP_KEEP="${DB_BACKUP_KEEP:-14}"
 BUILD_FRONTEND="${BUILD_FRONTEND:-1}"
 # 1 => после frontend build синхронизировать артефакты в nginx root и reload nginx.
 # Важно для VPS-контура, где nginx отдает статику напрямую и может оставаться старый UI.
@@ -46,6 +48,34 @@ require_cmd git
 require_cmd npm
 require_cmd systemctl
 
+backup_sqlite_db() {
+	local src="$1"
+	local label="$2"
+	if [[ ! -f "$src" ]]; then
+		log "WARN: SQLite source not found, skip backup: $src"
+		return 0
+	fi
+
+	mkdir -p "$DB_BACKUP_DIR"
+	local ts
+	ts="$(date -u +%Y%m%dT%H%M%SZ)"
+	local dst="$DB_BACKUP_DIR/${label}_${ts}.db"
+	cp -a "$src" "$dst"
+	log "SQLite backup created: $dst"
+
+	# Keep only latest N backups per db label.
+	if [[ "$DB_BACKUP_KEEP" =~ ^[0-9]+$ ]] && [[ "$DB_BACKUP_KEEP" -gt 0 ]]; then
+		local old
+		old="$(ls -1t "$DB_BACKUP_DIR"/${label}_*.db 2>/dev/null | tail -n +$((DB_BACKUP_KEEP + 1)) || true)"
+		if [[ -n "$old" ]]; then
+			echo "$old" | while IFS= read -r file; do
+				rm -f "$file"
+			done
+			log "SQLite backup rotation applied for $label (keep=$DB_BACKUP_KEEP)"
+		fi
+	fi
+}
+
 install_node_deps() {
 	local target_dir="$1"
 	cd "$target_dir"
@@ -70,6 +100,10 @@ log "Starting deploy in $APP_DIR"
 log "Local HEAD before update: $local_head"
 
 run git fetch --prune origin
+
+# SQLite backups before repository reset/restart.
+backup_sqlite_db "$BACKEND_DIR/database.db" "database"
+backup_sqlite_db "$BACKEND_DIR/research.db" "research"
 
 # Игнорируем untracked runtime-файлы (например backend/.auth-password.json, data/*),
 # но блокируем деплой при изменениях tracked-файлов.

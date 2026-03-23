@@ -2942,8 +2942,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: copy.status,
       key: 'status',
-      width: 120,
-      render: (_, row) => <Tag color={row.tenant.status === 'active' ? 'success' : 'default'}>{row.tenant.status}</Tag>,
+      width: 220,
+      render: (_, row) => {
+        const profile = row.tenant.product_mode === 'strategy_client' ? row.strategyProfile : row.algofundProfile;
+        const requestedEnabled = Number(profile?.requested_enabled || 0) === 1;
+        const actualEnabled = Number(profile?.actual_enabled || 0) === 1;
+        return (
+          <Space direction="vertical" size={2}>
+            <Tag color={row.tenant.status === 'active' ? 'success' : 'default'}>{row.tenant.status}</Tag>
+            <Space size={4} wrap>
+              <Tag color={actualEnabled ? 'success' : 'default'}>{actualEnabled ? 'runtime on' : 'runtime off'}</Tag>
+              <Tag color={requestedEnabled ? 'processing' : 'default'}>{requestedEnabled ? 'requested on' : 'requested off'}</Tag>
+            </Space>
+          </Space>
+        );
+      },
     },
     {
       title: 'Action',
