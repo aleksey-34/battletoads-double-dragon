@@ -125,6 +125,10 @@ if [[ "$BUILD_FRONTEND" == "1" ]]; then
 					run rm -rf "$NGINX_ROOT"/*
 					run cp -a "$FRONTEND_DIR/build/." "$NGINX_ROOT/"
 				fi
+
+				# Ensure nginx can read synced frontend assets regardless of source umask.
+				run find "$NGINX_ROOT" -type d -exec chmod 755 {} +
+				run find "$NGINX_ROOT" -type f -exec chmod 644 {} +
 				log "Frontend synced to nginx root: $NGINX_ROOT"
 				SYNCED=1
 			done
