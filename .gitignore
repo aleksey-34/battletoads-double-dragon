@@ -17,10 +17,14 @@ backend/logs/
 
 # Local databases and state
 *.db
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 data/
 backend/.auth-password.json
+deploy-manifest.json
+Recent/
 
 # Secrets / env
 .env
