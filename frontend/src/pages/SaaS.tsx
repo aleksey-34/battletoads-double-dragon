@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import {
   Alert,
@@ -1696,6 +1696,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [performanceReport, setPerformanceReport] = useState<AdminPerformanceReport | null>(null);
   const [performanceReportLoading, setPerformanceReportLoading] = useState(false);
   const [sendTelegramLoading, setSendTelegramLoading] = useState(false);
+  const reviewContextRef = useRef<HTMLDivElement | null>(null);
   const [strategyTenantId, setStrategyTenantId] = useState<number | null>(null);
   const [algofundTenantId, setAlgofundTenantId] = useState<number | null>(null);
   const [strategyState, setStrategyState] = useState<StrategyClientState | null>(null);
@@ -3140,6 +3141,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     window.location.href = `/trading-systems?${params.toString()}`;
   };
 
+  const openAdminReviewContext = (kind: 'offer' | 'algofund-ts', offerId?: string) => {
+    setAdminTab('offer-ts');
+    setSelectedAdminReviewKind(kind);
+    if (kind === 'offer' && offerId) {
+      setSelectedAdminReviewOfferId(String(offerId));
+    }
+    window.setTimeout(() => {
+      reviewContextRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 0);
+  };
+
   const applyPublishedAdminTsToSelectedClients = async () => {
     const publishedSystemId = Number(publishResponse?.sourceSystem?.systemId || 0);
     const publishedSystemName = String(publishResponse?.sourceSystem?.systemName || '').trim();
@@ -3864,6 +3876,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
 
+                          <div ref={reviewContextRef}>
                           <Card className="battletoads-card" title="Контекст review: оффер или ТС">
                             {selectedAdminReviewKind === 'algofund-ts' ? (
                               <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -3964,6 +3977,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Empty description="Выбери карточку из Анализа ресерча или approved-витрины для review" />
                             )}
                           </Card>
+                          </div>
 
                           <Card className="battletoads-card" title="Оферы и ТС: только approved на витринах">
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>
@@ -3975,7 +3989,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
                             </Space>
                             <Space wrap style={{ marginBottom: 16 }}>
-                              <Button size="small" onClick={() => { setSelectedAdminReviewKind('algofund-ts'); }}>Открыть review ТС</Button>
+                              <Button size="small" onClick={() => openAdminReviewContext('algofund-ts')}>Открыть review ТС</Button>
                             </Space>
 
                             <Row gutter={[16, 16]}>
@@ -4057,7 +4071,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       renderItem={(item) => (
                                         <List.Item
                                           actions={[
-                                            <Button key="review" size="small" onClick={() => setSelectedAdminReviewKind('algofund-ts')}>Review</Button>,
+                                            <Button key="review" size="small" onClick={() => openAdminReviewContext('algofund-ts')}>Review</Button>,
                                             <Button
                                               key="apply"
                                               size="small"
