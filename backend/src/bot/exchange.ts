@@ -201,6 +201,40 @@ const isBingxPositionSideError = (error: unknown): boolean => {
   return message.includes('positionside') || message.includes('position side') || message.includes('109400') || message.includes('both');
 };
 
+const isTimestampSyncError = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '').toLowerCase();
+  return message.includes('timestamp is invalid')
+    || message.includes('timestamp for this request')
+    || message.includes('recvwindow')
+    || message.includes('expired')
+    || message.includes('code":109400')
+    || message.includes('code 109400');
+};
+
+const syncCcxtClock = async (apiKeyName: string, entry: CcxtClientEntry): Promise<void> => {
+  try {
+    if (typeof entry.client.loadTimeDifference === 'function') {
+      await entry.limiter.schedule(() => entry.client.loadTimeDifference());
+      logger.warn(`CCXT time difference synced for ${apiKeyName} (${entry.exchange})`);
+      return;
+    }
+
+    if (typeof entry.client.fetchTime === 'function') {
+      const serverTime = await entry.limiter.schedule(() => entry.client.fetchTime());
+      if (Number.isFinite(Number(serverTime))) {
+        entry.client.options = {
+          ...(entry.client.options || {}),
+          timeDifference: Number(serverTime) - Date.now(),
+        };
+        logger.warn(`CCXT manual time difference synced for ${apiKeyName} (${entry.exchange})`);
+      }
+    }
+  } catch (error) {
+    const err = error as Error;
+    logger.warn(`CCXT time sync failed for ${apiKeyName} (${entry.exchange}): ${err.message}`);
+  }
+};
+
 const tryEnsureBingxOneWayMode = async (
   apiKeyName: string,
   entry: CcxtClientEntry,
@@ -328,8 +362,12 @@ export const initExchangeClient = (apiKey: ApiKey) => {
       secret: apiKey.secret,
       password: apiKey.passphrase || undefined,
       enableRateLimit: true,
+      adjustForTimeDifference: true,
+      recvWindow: 10000,
       options: {
         defaultType: 'swap',
+        adjustForTimeDifference: true,
+        recvWindow: 10000,
       },
     });
 
@@ -862,7 +900,16 @@ export const getBalances = async (apiKeyName: string) => {
     const entry = getCcxtClientEntry(apiKeyName);
 
     try {
-      const payload: any = await entry.limiter.schedule(() => entry.client.fetchBalance());
+      let payload: any;
+      try {
+        payload = await entry.limiter.schedule(() => entry.client.fetchBalance());
+      } catch (error) {
+        if (!isTimestampSyncError(error)) {
+          throw error;
+        }
+        await syncCcxtClock(apiKeyName, entry);
+        payload = await entry.limiter.schedule(() => entry.client.fetchBalance());
+      }
       const total = payload?.total || {};
       const free = payload?.free || {};
 

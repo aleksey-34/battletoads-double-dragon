@@ -2449,7 +2449,9 @@ export const updateAdminTelegramControls = async (payload: {
 };
 
 export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
-  const { catalog, sweep } = await loadCatalogAndSweepWithFallback();
+  const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
+  const apiKeys = await getAvailableApiKeyNames();
+  const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
   const allOffers = catalog ? getAllOffers(catalog) : [];
   const offerIds = allOffers.map((item) => String(item.offerId));
   const defaults = normalizeOfferStoreDefaults(safeJsonParse(
