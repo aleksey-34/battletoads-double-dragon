@@ -79,12 +79,12 @@ backup_sqlite_db() {
 install_node_deps() {
 	local target_dir="$1"
 	cd "$target_dir"
-	if npm ci --silent; then
+	if npm ci --include=dev --silent; then
 		log "Dependencies installed with npm ci in $target_dir"
 		return 0
 	fi
 	log "WARN: npm ci failed in $target_dir, falling back to npm install"
-	run npm install --no-audit --no-fund --silent
+	run npm install --include=dev --no-audit --no-fund --silent
 }
 
 [[ -d "$APP_DIR/.git" ]] || fail "Not a git repository: $APP_DIR"
