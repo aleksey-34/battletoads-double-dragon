@@ -134,13 +134,23 @@ backup_sqlite_db() {
 
 install_node_deps() {
 	local target_dir="$1"
+	local required_bin="${2:-}"
 	cd "$target_dir"
-	if npm ci --include=dev --silent; then
+	if NPM_CONFIG_PRODUCTION=false NPM_CONFIG_INCLUDE=dev npm ci --include=dev --silent; then
 		log "Dependencies installed with npm ci in $target_dir"
-		return 0
+	else
+		log "WARN: npm ci failed in $target_dir, falling back to npm install"
+		run NPM_CONFIG_PRODUCTION=false NPM_CONFIG_INCLUDE=dev npm install --include=dev --no-audit --no-fund --silent
 	fi
-	log "WARN: npm ci failed in $target_dir, falling back to npm install"
-	run npm install --include=dev --no-audit --no-fund --silent
+
+	if [[ -n "$required_bin" ]] && [[ ! -x "$target_dir/node_modules/.bin/$required_bin" ]]; then
+		log "WARN: required binary '$required_bin' missing after npm ci in $target_dir, forcing npm install"
+		run NPM_CONFIG_PRODUCTION=false NPM_CONFIG_INCLUDE=dev npm install --include=dev --no-audit --no-fund --silent
+	fi
+
+	if [[ -n "$required_bin" ]] && [[ ! -x "$target_dir/node_modules/.bin/$required_bin" ]]; then
+		fail "Required binary '$required_bin' is missing in $target_dir after dependency install"
+	fi
 }
 
 [[ -d "$APP_DIR/.git" ]] || fail "Not a git repository: $APP_DIR"
@@ -190,7 +200,7 @@ run npm run build
 
 if [[ "$BUILD_FRONTEND" == "1" ]]; then
 	cd "$FRONTEND_DIR"
-	install_node_deps "$FRONTEND_DIR"
+	install_node_deps "$FRONTEND_DIR" "react-scripts"
 	# CRA treats warnings as errors when CI=true; force production build without CI strict mode on VPS deploy.
 	run env CI=false npm run build
 
