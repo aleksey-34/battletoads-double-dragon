@@ -46,6 +46,17 @@ require_cmd git
 require_cmd npm
 require_cmd systemctl
 
+install_node_deps() {
+	local target_dir="$1"
+	cd "$target_dir"
+	if npm ci --silent; then
+		log "Dependencies installed with npm ci in $target_dir"
+		return 0
+	fi
+	log "WARN: npm ci failed in $target_dir, falling back to npm install"
+	run npm install --no-audit --no-fund --silent
+}
+
 [[ -d "$APP_DIR/.git" ]] || fail "Not a git repository: $APP_DIR"
 [[ -d "$BACKEND_DIR" ]] || fail "Backend directory not found: $BACKEND_DIR"
 if [[ "$BUILD_FRONTEND" == "1" ]]; then
@@ -84,12 +95,12 @@ log "Local HEAD after update: $local_head_after"
 
 cd "$BACKEND_DIR"
 
-run npm ci --silent
+install_node_deps "$BACKEND_DIR"
 run npm run build
 
 if [[ "$BUILD_FRONTEND" == "1" ]]; then
 	cd "$FRONTEND_DIR"
-	run npm ci --silent
+	install_node_deps "$FRONTEND_DIR"
 	# CRA treats warnings as errors when CI=true; force production build without CI strict mode on VPS deploy.
 	run env CI=false npm run build
 
