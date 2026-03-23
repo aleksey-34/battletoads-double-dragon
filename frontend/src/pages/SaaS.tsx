@@ -1730,6 +1730,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [monitoringLogCommentsByApiKey, setMonitoringLogCommentsByApiKey] = useState<Record<string, string[]>>({});
   const [monitoringTabLoading, setMonitoringTabLoading] = useState(false);
   const [monitoringModeFilter, setMonitoringModeFilter] = useState<'all' | ProductMode>('all');
+  const [clientsModeFilter, setClientsModeFilter] = useState<'all' | ProductMode>('all');
   const [telegramControls, setTelegramControls] = useState<TelegramControls | null>(null);
   const [telegramControlsLoading, setTelegramControlsLoading] = useState(false);
   const [lowLotRecommendations, setLowLotRecommendations] = useState<LowLotRecommendationResponse | null>(null);
@@ -2437,6 +2438,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const runSingleAlgofundAction = async (tenantId: number, action: 'start' | 'stop' | 'switch_system', targetSystemId?: number) => {
+    setActionLoading(`algofund-single:${tenantId}`);
+    try {
+      const response = await axios.post('/api/saas/admin/algofund-batch-actions', {
+        tenantIds: [tenantId],
+        requestType: action,
+        targetSystemId: action === 'switch_system' ? Number(targetSystemId) : undefined,
+      });
+      const created = Number(response.data?.createdCount || 0);
+      messageApi.success(`Запрос создан: ${created}`);
+      await loadSummary();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Ошибка'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   // Strategy previews are manual-only to avoid API storms on SaaS page load.
 
   useEffect(() => {
@@ -2929,7 +2948,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: 'Action',
       key: 'action',
-      width: 170,
+      width: 260,
       render: (_, row) => row.tenant.product_mode === 'strategy_client' ? (
         <Button
           size="small"
@@ -2941,15 +2960,33 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           {copy.openStrategyClient}
         </Button>
       ) : (
-        <Button
-          size="small"
-          onClick={() => {
-            setAlgofundTenantId(row.tenant.id);
-            setActiveTab('algofund');
-          }}
-        >
-          {copy.openAlgofund}
-        </Button>
+        <Space size={4} wrap>
+          <Button
+            size="small"
+            onClick={() => {
+              setAlgofundTenantId(row.tenant.id);
+              setActiveTab('algofund');
+            }}
+          >
+            {copy.openAlgofund}
+          </Button>
+          <Button
+            size="small"
+            type="primary"
+            loading={actionLoading === `algofund-single:${row.tenant.id}`}
+            onClick={() => void runSingleAlgofundAction(Number(row.tenant.id), 'start')}
+          >
+            Start
+          </Button>
+          <Button
+            size="small"
+            danger
+            loading={actionLoading === `algofund-single:${row.tenant.id}`}
+            onClick={() => void runSingleAlgofundAction(Number(row.tenant.id), 'stop')}
+          >
+            Stop
+          </Button>
+        </Space>
       ),
     },
   ];
@@ -3477,9 +3514,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
 
-                          <Row gutter={[16, 16]}>
-                            <Col xs={24} xl={14}>
-                              <Card className="battletoads-card" title="Sweep offers: publish/unpublish">
+                          <Card className="battletoads-card" title="Sweep offers: publish/unpublish">
                                 <Space wrap style={{ marginBottom: 12 }}>
                                   <Tag color="processing">published: {Number(summary?.offerStore?.publishedOfferIds?.length || 0)}</Tag>
                                   <Tag>total: {Number(summary?.offerStore?.offers?.length || 0)}</Tag>
@@ -3582,74 +3617,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     },
                                   ]}
                                 />
-                              </Card>
-                            </Col>
-                            <Col xs={24} xl={10}>
-                              <Card className="battletoads-card" title="Admin обзор / отчёты">
-                                <Space direction="vertical" style={{ width: '100%' }}>
-                                  <Space wrap>
-                                    <Text>Telegram</Text>
-                                    <Switch
-                                      size="small"
-                                      checked={Boolean(telegramControls?.adminEnabled)}
-                                      loading={telegramControlsLoading}
-                                      onChange={(checked) => { void patchTelegramControls({ adminEnabled: checked }); }}
-                                    />
-                                    <Tag color={telegramControls?.tokenConfigured ? 'success' : 'default'}>
-                                      token {telegramControls?.tokenConfigured ? 'ok' : 'missing'}
-                                    </Tag>
-                                    <Button
-                                      size="small"
-                                      loading={sendTelegramLoading}
-                                      disabled={!telegramControls?.tokenConfigured || !telegramControls?.chatConfigured}
-                                      onClick={() => void sendReportToTelegram()}
-                                    >
-                                      Отправить сейчас
-                                    </Button>
-                                  </Space>
-                                  <Divider style={{ margin: '6px 0' }} />
-                                  <Space>
-                                    <Text type="secondary">Вкл.</Text>
-                                    <Switch
-                                      size="small"
-                                      checked={Boolean(summary?.reportSettings?.enabled)}
-                                      loading={actionLoading === 'report-setting:enabled'}
-                                      onChange={(checked) => { void toggleReportSetting('enabled', checked); }}
-                                    />
-                                  </Space>
-                                  <Space wrap>
-                                    <Tag>TS daily <Switch size="small" checked={Boolean(summary?.reportSettings?.tsDaily)} onChange={(checked) => { void toggleReportSetting('tsDaily', checked); }} /></Tag>
-                                    <Tag>TS weekly <Switch size="small" checked={Boolean(summary?.reportSettings?.tsWeekly)} onChange={(checked) => { void toggleReportSetting('tsWeekly', checked); }} /></Tag>
-                                    <Tag>TS monthly <Switch size="small" checked={Boolean(summary?.reportSettings?.tsMonthly)} onChange={(checked) => { void toggleReportSetting('tsMonthly', checked); }} /></Tag>
-                                  </Space>
-                                  <Space wrap>
-                                    <Tag>Offer daily <Switch size="small" checked={Boolean(summary?.reportSettings?.offerDaily)} onChange={(checked) => { void toggleReportSetting('offerDaily', checked); }} /></Tag>
-                                    <Tag>Offer weekly <Switch size="small" checked={Boolean(summary?.reportSettings?.offerWeekly)} onChange={(checked) => { void toggleReportSetting('offerWeekly', checked); }} /></Tag>
-                                    <Tag>Offer monthly <Switch size="small" checked={Boolean(summary?.reportSettings?.offerMonthly)} onChange={(checked) => { void toggleReportSetting('offerMonthly', checked); }} /></Tag>
-                                  </Space>
-                                  <Divider style={{ margin: '6px 0' }} />
-                                  <Space wrap>
-                                    <Select
-                                      value={reportPeriod}
-                                      style={{ width: 130 }}
-                                      options={[
-                                        { value: 'daily', label: 'daily' },
-                                        { value: 'weekly', label: 'weekly' },
-                                        { value: 'monthly', label: 'monthly' },
-                                      ]}
-                                      onChange={(value) => setReportPeriod(value)}
-                                    />
-                                    <Button loading={performanceReportLoading} onClick={() => void loadPerformanceReport(reportPeriod)}>Обновить обзор</Button>
-                                  </Space>
-                                  <Space wrap>
-                                    <Tag color="blue">TS: {Number(performanceReport?.tradingSystems?.length || 0)}</Tag>
-                                    <Tag color="geekblue">Offers: {Number(performanceReport?.offers?.length || 0)}</Tag>
-                                    {performanceReport ? <Tag color="default">{performanceReport.generatedAt.slice(0, 16).replace('T', ' ')}</Tag> : null}
-                                  </Space>
-                                </Space>
-                              </Card>
-                            </Col>
-                          </Row>
+                          </Card>
 
                           {performanceReport ? (
                             <Card className="battletoads-card" title={`Performance report (${performanceReport.period})`}>
@@ -3816,102 +3784,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
 
-                          <Card className="battletoads-card" title={copy.connectedTenants} extra={<Button type="primary" onClick={() => setAdminTab('create-user')}>{copy.createClient}</Button>}>
-                            <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.adminCreateHint}</Paragraph>
-                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                              <Card size="small" className="battletoads-card" title="Algofund batch actions">
-                                <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                                  <Space wrap>
-                                    <Tag color="processing">Selected: {batchTenantIds.length}</Tag>
-                                    <Tag>Algofund tenants: {batchEligibleAlgofundTenants.length}</Tag>
-                                    <Button
-                                      size="small"
-                                      onClick={() => setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)))}
-                                    >
-                                      Select all algofund
-                                    </Button>
-                                    <Button size="small" onClick={() => setBatchTenantIds([])}>Clear selection</Button>
-                                  </Space>
-                                  <Space wrap style={{ width: '100%' }}>
-                                    <Select
-                                      style={{ width: 180 }}
-                                      value={batchAlgofundAction}
-                                      onChange={(value) => setBatchAlgofundAction(value)}
-                                      options={[
-                                        { value: 'start', label: 'start' },
-                                        { value: 'stop', label: 'stop' },
-                                        { value: 'switch_system', label: 'switch_system' },
-                                      ]}
-                                    />
-                                    <InputNumber
-                                      min={1}
-                                      style={{ width: 180 }}
-                                      value={batchTargetSystemId || undefined}
-                                      onChange={(value) => setBatchTargetSystemId(Number(value || 0) || null)}
-                                      disabled={batchAlgofundAction !== 'switch_system'}
-                                      placeholder="target system id"
-                                    />
-                                    <Input
-                                      style={{ width: 360 }}
-                                      value={batchActionNote}
-                                      onChange={(event) => setBatchActionNote(event.target.value)}
-                                      placeholder="optional admin note"
-                                    />
-                                    <Button
-                                      type="primary"
-                                      loading={actionLoading === 'algofund-batch'}
-                                      onClick={() => void runAlgofundBatchAction()}
-                                    >
-                                      Run batch
-                                    </Button>
-                                  </Space>
-                                </Space>
-                              </Card>
-                              <Table
-                                rowKey={(row) => row.tenant.id}
-                                columns={tenantColumns}
-                                dataSource={summary?.tenants || []}
-                                pagination={false}
-                                scroll={{ x: 980 }}
-                                rowSelection={{
-                                  selectedRowKeys: batchTenantIds,
-                                  onChange: (keys) => {
-                                    const next = Array.from(new Set((keys || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
-                                    setBatchTenantIds(next);
-                                  },
-                                  getCheckboxProps: (row) => ({
-                                    disabled: row.tenant.product_mode !== 'algofund_client',
-                                  }),
-                                }}
-                              />
-                            </Space>
-                          </Card>
-
-                          <Row gutter={[16, 16]}>
-                            <Col xs={24} xl={12}>
-                              <Card className="battletoads-card" title={`${copy.strategyClient} В· ${copy.planGrid}`}>
-                                <Table
-                                  rowKey="code"
-                                  columns={planColumns}
-                                  dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'strategy_client')}
-                                  pagination={false}
-                                  scroll={{ x: 980 }}
-                                />
-                              </Card>
-                            </Col>
-                            <Col xs={24} xl={12}>
-                              <Card className="battletoads-card" title={`${copy.algofund} В· ${copy.planGrid}`}>
-                                <Table
-                                  rowKey="code"
-                                  columns={planColumns}
-                                  dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'algofund_client')}
-                                  pagination={false}
-                                  scroll={{ x: 980 }}
-                                />
-                              </Card>
-                            </Col>
-                          </Row>
-
                           {publishResponse?.preview ? (
                             <Card className="battletoads-card" title={copy.publishedTsPreview}>
                               <Row gutter={[16, 16]}>
@@ -4017,6 +3889,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           <Card className="battletoads-card" title={copy.connectedTenants} extra={<Button type="primary" onClick={() => setAdminTab('create-user')}>{copy.createClient}</Button>}>
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.adminCreateHint}</Paragraph>
                             <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              <Space wrap>
+                                <Select
+                                  style={{ width: 220 }}
+                                  value={clientsModeFilter}
+                                  onChange={(value) => setClientsModeFilter(value)}
+                                  options={[
+                                    { value: 'all', label: 'Все клиенты' },
+                                    { value: 'strategy_client', label: 'Strategy Client' },
+                                    { value: 'algofund_client', label: 'Algofund' },
+                                  ]}
+                                />
+                                <Tag color="default">
+                                  {(summary?.tenants || []).filter((t) => clientsModeFilter === 'all' || t.tenant.product_mode === clientsModeFilter).length} клиентов
+                                </Tag>
+                              </Space>
                               <Card size="small" className="battletoads-card" title="Algofund batch actions">
                                 <Space direction="vertical" size={10} style={{ width: '100%' }}>
                                   <Space wrap>
@@ -4068,9 +3955,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Table
                                 rowKey={(row) => row.tenant.id}
                                 columns={tenantColumns}
-                                dataSource={summary?.tenants || []}
-                                pagination={false}
-                                scroll={{ x: 980 }}
+                                dataSource={(summary?.tenants || []).filter((t) => clientsModeFilter === 'all' || t.tenant.product_mode === clientsModeFilter)}
+                                pagination={{ pageSize: 10, showSizeChanger: false }}
+                                scroll={{ x: 1100 }}
                                 rowSelection={{
                                   selectedRowKeys: batchTenantIds,
                                   onChange: (keys) => {
@@ -4116,7 +4003,71 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       key: 'monitoring',
                       label: 'Мониторинг',
                       children: (
-                        <Card className="battletoads-card" title="Живые клиенты и торговые движки">
+                        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                          <Card className="battletoads-card" title="Admin обзор / отчёты">
+                            <Space direction="vertical" style={{ width: '100%' }}>
+                              <Space wrap>
+                                <Text>Telegram</Text>
+                                <Switch
+                                  size="small"
+                                  checked={Boolean(telegramControls?.adminEnabled)}
+                                  loading={telegramControlsLoading}
+                                  onChange={(checked) => { void patchTelegramControls({ adminEnabled: checked }); }}
+                                />
+                                <Tag color={telegramControls?.tokenConfigured ? 'success' : 'default'}>
+                                  token {telegramControls?.tokenConfigured ? 'ok' : 'missing'}
+                                </Tag>
+                                <Button
+                                  size="small"
+                                  loading={sendTelegramLoading}
+                                  disabled={!telegramControls?.tokenConfigured || !telegramControls?.chatConfigured}
+                                  onClick={() => void sendReportToTelegram()}
+                                >
+                                  Отправить сейчас
+                                </Button>
+                              </Space>
+                              <Divider style={{ margin: '6px 0' }} />
+                              <Space>
+                                <Text type="secondary">Вкл.</Text>
+                                <Switch
+                                  size="small"
+                                  checked={Boolean(summary?.reportSettings?.enabled)}
+                                  loading={actionLoading === 'report-setting:enabled'}
+                                  onChange={(checked) => { void toggleReportSetting('enabled', checked); }}
+                                />
+                              </Space>
+                              <Space wrap>
+                                <Tag>TS daily <Switch size="small" checked={Boolean(summary?.reportSettings?.tsDaily)} onChange={(checked) => { void toggleReportSetting('tsDaily', checked); }} /></Tag>
+                                <Tag>TS weekly <Switch size="small" checked={Boolean(summary?.reportSettings?.tsWeekly)} onChange={(checked) => { void toggleReportSetting('tsWeekly', checked); }} /></Tag>
+                                <Tag>TS monthly <Switch size="small" checked={Boolean(summary?.reportSettings?.tsMonthly)} onChange={(checked) => { void toggleReportSetting('tsMonthly', checked); }} /></Tag>
+                              </Space>
+                              <Space wrap>
+                                <Tag>Offer daily <Switch size="small" checked={Boolean(summary?.reportSettings?.offerDaily)} onChange={(checked) => { void toggleReportSetting('offerDaily', checked); }} /></Tag>
+                                <Tag>Offer weekly <Switch size="small" checked={Boolean(summary?.reportSettings?.offerWeekly)} onChange={(checked) => { void toggleReportSetting('offerWeekly', checked); }} /></Tag>
+                                <Tag>Offer monthly <Switch size="small" checked={Boolean(summary?.reportSettings?.offerMonthly)} onChange={(checked) => { void toggleReportSetting('offerMonthly', checked); }} /></Tag>
+                              </Space>
+                              <Divider style={{ margin: '6px 0' }} />
+                              <Space wrap>
+                                <Select
+                                  value={reportPeriod}
+                                  style={{ width: 130 }}
+                                  options={[
+                                    { value: 'daily', label: 'daily' },
+                                    { value: 'weekly', label: 'weekly' },
+                                    { value: 'monthly', label: 'monthly' },
+                                  ]}
+                                  onChange={(value) => setReportPeriod(value)}
+                                />
+                                <Button loading={performanceReportLoading} onClick={() => void loadPerformanceReport(reportPeriod)}>Обновить обзор</Button>
+                              </Space>
+                              <Space wrap>
+                                <Tag color="blue">TS: {Number(performanceReport?.tradingSystems?.length || 0)}</Tag>
+                                <Tag color="geekblue">Offers: {Number(performanceReport?.offers?.length || 0)}</Tag>
+                                {performanceReport ? <Tag color="default">{performanceReport.generatedAt.slice(0, 16).replace('T', ' ')}</Tag> : null}
+                              </Space>
+                            </Space>
+                          </Card>
+                          <Card className="battletoads-card" title="Живые клиенты и торговые движки">
                           <Space direction="vertical" size={12} style={{ width: '100%' }}>
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>
                               Сводка по strategy-client и algofund: состояние движка, краткие метрики, комментарии и выбор систем.
@@ -4280,6 +4231,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             />
                           </Space>
                         </Card>
+                        </Space>
                       ),
                     },
                     {
