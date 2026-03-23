@@ -352,6 +352,7 @@ type SaasSummary = {
       tradesPerDay: number;
       periodDays: number;
       published: boolean;
+      equityPoints?: number[];
     }>;
   };
   reportSettings?: {
@@ -3288,6 +3289,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   size="small"
                                   rowKey="offerId"
                                   dataSource={summary?.offerStore?.offers || []}
+                                  expandable={{
+                                    expandedRowRender: (row: any) => {
+                                      const pts: number[] = Array.isArray(row.equityPoints) ? row.equityPoints : [];
+                                      if (pts.length === 0) {
+                                        return <Text type="secondary">Equity curve unavailable (no preset for this offer yet)</Text>;
+                                      }
+                                      const equityData = pts.map((v, i) => ({ time: i, equity: v }));
+                                      return (
+                                        <div style={{ padding: '8px 0' }}>
+                                          <ChartComponent data={equityData} type="line" />
+                                        </div>
+                                      );
+                                    },
+                                    rowExpandable: () => true,
+                                  }}
                                   pagination={{ pageSize: 8, showSizeChanger: false }}
                                   scroll={{ x: 980 }}
                                   columns={[
@@ -3304,15 +3320,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     {
                                       title: 'Backtest',
                                       key: 'bt',
-                                      render: (_, row: any) => (
-                                        <Space wrap>
-                                          <Tag color="default">period {Number(row.periodDays || summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
-                                          <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
-                                          <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
-                                          <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
-                                          <Tag color="blue">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
-                                        </Space>
-                                      ),
+                                      render: (_, row: any) => {
+                                        const sweepPeriodLabel = summary?.sweepSummary?.period
+                                          ? formatPeriodLabel(summary.sweepSummary.period)
+                                          : null;
+                                        return (
+                                          <Space wrap>
+                                            <Tag color="default">
+                                              {Number(row.periodDays || summary?.offerStore?.defaults?.periodDays || 0)}d
+                                              {sweepPeriodLabel ? ` • ${sweepPeriodLabel}` : ''}
+                                            </Tag>
+                                            <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
+                                            <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
+                                            <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                            <Tag color="blue">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
+                                          </Space>
+                                        );
+                                      },
                                     },
                                     {
                                       title: 'Store',

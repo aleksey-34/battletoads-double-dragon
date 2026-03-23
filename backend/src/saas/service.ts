@@ -137,6 +137,7 @@ export type OfferStoreState = {
     tradesPerDay: number;
     periodDays: number;
     published: boolean;
+    equityPoints: number[];
   }>;
 };
 
@@ -2346,31 +2347,55 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     }
   });
 
+  const rawOffers = allOffers
+    .map((offer) => {
+      const strategyId = Number(offer.strategy?.id || 0);
+      const sweepRecord = sweepByStrategyId.get(strategyId) || null;
+      const trades = Math.max(0, Math.floor(asNumber(sweepRecord?.tradesCount, offer.metrics?.trades || 0)));
+      return {
+        offerId: String(offer.offerId || ''),
+        titleRu: asString(offer.titleRu, offer.offerId),
+        mode: (offer.strategy?.mode === 'synth' ? 'synth' : 'mono') as 'mono' | 'synth',
+        market: asString(offer.strategy?.market, ''),
+        strategyId,
+        score: Number(asNumber(sweepRecord?.score, offer.metrics?.score || 0).toFixed(3)),
+        ret: Number(asNumber(sweepRecord?.totalReturnPercent, offer.metrics?.ret || 0).toFixed(3)),
+        pf: Number(asNumber(sweepRecord?.profitFactor, offer.metrics?.pf || 0).toFixed(3)),
+        dd: Number(asNumber(sweepRecord?.maxDrawdownPercent, offer.metrics?.dd || 0).toFixed(3)),
+        trades,
+        tradesPerDay: Number((trades / Math.max(1, periodDays)).toFixed(3)),
+        periodDays,
+        published: publishedSet.has(String(offer.offerId || '')),
+      };
+    })
+    .sort((left, right) => right.score - left.score);
+
+  // Batch-fetch equity curves from presets (medium risk, medium freq = default client view)
+  const equityByOfferId = new Map<string, number[]>();
+  await Promise.all(
+    rawOffers.map(async (row) => {
+      try {
+        const preset = await getPreset(row.offerId, 'medium', 'medium');
+        if (preset && Array.isArray(preset.equity_curve) && preset.equity_curve.length > 0) {
+          // Downsample to at most 80 points to keep response compact
+          const full = preset.equity_curve as number[];
+          const step = full.length > 80 ? Math.ceil(full.length / 80) : 1;
+          const sampled = full.filter((_, idx) => idx % step === 0);
+          equityByOfferId.set(row.offerId, sampled);
+        }
+      } catch {
+        // No preset available — equity will be empty
+      }
+    })
+  );
+
   return {
     defaults,
     publishedOfferIds,
-    offers: allOffers
-      .map((offer) => {
-        const strategyId = Number(offer.strategy?.id || 0);
-        const sweepRecord = sweepByStrategyId.get(strategyId) || null;
-        const trades = Math.max(0, Math.floor(asNumber(sweepRecord?.tradesCount, offer.metrics?.trades || 0)));
-        return {
-          offerId: String(offer.offerId || ''),
-          titleRu: asString(offer.titleRu, offer.offerId),
-          mode: (offer.strategy?.mode === 'synth' ? 'synth' : 'mono') as 'mono' | 'synth',
-          market: asString(offer.strategy?.market, ''),
-          strategyId,
-          score: Number(asNumber(sweepRecord?.score, offer.metrics?.score || 0).toFixed(3)),
-          ret: Number(asNumber(sweepRecord?.totalReturnPercent, offer.metrics?.ret || 0).toFixed(3)),
-          pf: Number(asNumber(sweepRecord?.profitFactor, offer.metrics?.pf || 0).toFixed(3)),
-          dd: Number(asNumber(sweepRecord?.maxDrawdownPercent, offer.metrics?.dd || 0).toFixed(3)),
-          trades,
-          tradesPerDay: Number((trades / Math.max(1, periodDays)).toFixed(3)),
-          periodDays,
-          published: publishedSet.has(String(offer.offerId || '')),
-        };
-      })
-      .sort((left, right) => right.score - left.score),
+    offers: rawOffers.map((row) => ({
+      ...row,
+      equityPoints: equityByOfferId.get(row.offerId) || [],
+    })),
   };
 };
 
