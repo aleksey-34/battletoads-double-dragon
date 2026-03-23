@@ -1,6 +1,7 @@
 ﻿import { Router } from 'express';
 import logger from '../utils/logger';
 import { createClientMagicLink } from '../utils/auth';
+import { runAdminTelegramReportNow } from '../notifications/adminTelegramReporter';
 import {
   getAlgofundState,
   getSaasAdminSummary,
@@ -22,6 +23,11 @@ import {
   applyLowLotRecommendation,
   getAdminTelegramControls,
   updateAdminTelegramControls,
+  getOfferStoreAdminState,
+  updateOfferStoreAdminState,
+  getAdminReportSettings,
+  updateAdminReportSettings,
+  getAdminPerformanceReport,
 } from '../saas/service';
 
 const router = Router();
@@ -114,6 +120,66 @@ router.patch('/admin/telegram-controls', async (req, res) => {
   }
 });
 
+router.get('/admin/offer-store', async (_req, res) => {
+  try {
+    const data = await getOfferStoreAdminState();
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS offer-store read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/admin/offer-store', async (req, res) => {
+  try {
+    const data = await updateOfferStoreAdminState({
+      defaults: req.body?.defaults,
+      publishedOfferIds: Array.isArray(req.body?.publishedOfferIds) ? req.body.publishedOfferIds.map(String) : undefined,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS offer-store update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/reports/settings', async (_req, res) => {
+  try {
+    const data = await getAdminReportSettings();
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS report settings read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/admin/reports/settings', async (req, res) => {
+  try {
+    const data = await updateAdminReportSettings(req.body || {});
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS report settings update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/reports/performance', async (req, res) => {
+  try {
+    const periodRaw = String(req.query.period || '').trim().toLowerCase();
+    const period = periodRaw === 'weekly' || periodRaw === 'monthly' ? periodRaw : 'daily';
+    const data = await getAdminPerformanceReport(period);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS performance report error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/admin/apply-low-lot-recommendation', async (req, res) => {
   try {
     const strategyId = toOptionalNumber(req.body?.strategyId);
@@ -130,6 +196,17 @@ router.post('/admin/apply-low-lot-recommendation', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS apply-low-lot-recommendation error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/reports/send-telegram', async (_req, res) => {
+  try {
+    await runAdminTelegramReportNow({ periodHours: 24 });
+    res.json({ success: true });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS send telegram report error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -403,10 +480,23 @@ router.post('/algofund/:tenantId/request', async (req, res) => {
     return res.status(400).json({ error: 'Invalid tenantId' });
   }
 
-  const requestType = req.body.requestType === 'stop' ? 'stop' : 'start';
+  const requestTypeRaw = String(req.body.requestType || '').trim().toLowerCase();
+  const requestType = requestTypeRaw === 'stop'
+    ? 'stop'
+    : requestTypeRaw === 'switch_system'
+      ? 'switch_system'
+      : 'start';
 
   try {
-    const data = await requestAlgofundAction(tenantId, requestType, String(req.body.note || ''));
+    const data = await requestAlgofundAction(
+      tenantId,
+      requestType,
+      String(req.body.note || ''),
+      {
+        targetSystemId: toOptionalNumber(req.body.targetSystemId),
+        targetSystemName: req.body.targetSystemName ? String(req.body.targetSystemName) : undefined,
+      }
+    );
     res.json({ success: true, ...data });
   } catch (error) {
     const err = error as Error;

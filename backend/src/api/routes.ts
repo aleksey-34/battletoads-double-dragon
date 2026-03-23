@@ -132,6 +132,23 @@ const STRATEGY_PATCH_ALLOWED_FIELDS = new Set<string>([
 ]);
 
 const CLIENT_GUIDES_ROOT_DIR = path.resolve(__dirname, '../../..', 'docs', 'exchange-guides');
+const REPO_ROOT_DIR = path.resolve(__dirname, '../../..');
+const ADMIN_DOCS_EXCLUDED_DIR_NAMES = new Set([
+  '.git',
+  '.github',
+  'node_modules',
+  'build',
+  'dist',
+  'coverage',
+  'test-results',
+]);
+const ADMIN_DOCS_EXCLUDED_RELATIVE_PREFIXES = [
+  'logs',
+  'results',
+  'backend/logs',
+  'frontend/build',
+  'frontend/test-results',
+];
 
 const CLIENT_EXCHANGE_GUIDES: Record<string, { id: string; title: string; fileName: string }> = {
   bybit: {
@@ -149,6 +166,89 @@ const CLIENT_EXCHANGE_GUIDES: Record<string, { id: string; title: string; fileNa
     title: 'BingX API Key Quick Guide',
     fileName: 'bingx-api-key-quick-guide.md',
   },
+};
+
+type AdminMarkdownDocRecord = {
+  relativePath: string;
+  title: string;
+  group: string;
+  sizeBytes: number;
+  updatedAt: string | null;
+  content: string;
+};
+
+const normalizeDocRelativePath = (filePath: string): string => path.relative(REPO_ROOT_DIR, filePath).split(path.sep).join('/');
+
+const shouldSkipAdminDocsDirectory = (relativeDir: string, entryName: string): boolean => {
+  const normalizedName = String(entryName || '').trim().toLowerCase();
+  if (ADMIN_DOCS_EXCLUDED_DIR_NAMES.has(normalizedName)) {
+    return true;
+  }
+
+  const nextRelativeDir = [relativeDir, entryName].filter(Boolean).join('/');
+  return ADMIN_DOCS_EXCLUDED_RELATIVE_PREFIXES.some((prefix) => nextRelativeDir === prefix || nextRelativeDir.startsWith(`${prefix}/`));
+};
+
+const extractMarkdownTitle = (content: string, relativePath: string): string => {
+  const headingLine = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => /^#\s+/.test(line));
+
+  if (headingLine) {
+    return headingLine.replace(/^#\s+/, '').trim();
+  }
+
+  const fileName = path.basename(relativePath, path.extname(relativePath));
+  return fileName.replace(/[-_]+/g, ' ').trim() || relativePath;
+};
+
+const collectAdminMarkdownDocs = (): AdminMarkdownDocRecord[] => {
+  const docs: AdminMarkdownDocRecord[] = [];
+
+  const walk = (absoluteDir: string, relativeDir: string) => {
+    if (!fs.existsSync(absoluteDir)) {
+      return;
+    }
+
+    const entries = fs.readdirSync(absoluteDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+
+      const absolutePath = path.join(absoluteDir, entry.name);
+      const relativePath = [relativeDir, entry.name].filter(Boolean).join('/');
+
+      if (entry.isDirectory()) {
+        if (shouldSkipAdminDocsDirectory(relativeDir, entry.name)) {
+          continue;
+        }
+        walk(absolutePath, relativePath);
+        continue;
+      }
+
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) {
+        continue;
+      }
+
+      const content = fs.readFileSync(absolutePath, 'utf-8');
+      const stat = fs.statSync(absolutePath);
+      const normalizedRelativePath = normalizeDocRelativePath(absolutePath);
+      docs.push({
+        relativePath: normalizedRelativePath,
+        title: extractMarkdownTitle(content, normalizedRelativePath),
+        group: normalizedRelativePath.includes('/') ? normalizedRelativePath.split('/')[0] : 'root',
+        sizeBytes: stat.size,
+        updatedAt: stat.mtime ? stat.mtime.toISOString() : null,
+        content,
+      });
+    }
+  };
+
+  walk(REPO_ROOT_DIR, '');
+
+  return docs.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 };
 
 const toOptionalNumber = (value: unknown): number | undefined => {
@@ -761,14 +861,21 @@ router.post('/client/algofund/request', authenticateClient, async (req, res) => 
       return res.status(403).json({ error: 'Algofund workspace is not available for this account' });
     }
 
-    const requestType = String(req.body?.requestType || '').trim().toLowerCase() === 'stop'
+    const requestTypeRaw = String(req.body?.requestType || '').trim().toLowerCase();
+    const requestType = requestTypeRaw === 'stop'
       ? 'stop'
-      : 'start';
+      : requestTypeRaw === 'switch_system'
+        ? 'switch_system'
+        : 'start';
 
     const state = await requestAlgofundAction(
       Number(session.user.tenantId),
       requestType,
-      String(req.body?.note || '')
+      String(req.body?.note || ''),
+      {
+        targetSystemId: toOptionalNumber(req.body?.targetSystemId),
+        targetSystemName: req.body?.targetSystemName ? String(req.body.targetSystemName) : undefined,
+      }
     );
 
     res.json({ success: true, state });
@@ -835,6 +942,37 @@ router.post('/client/api-key', authenticateClient, async (req, res) => {
 
 // Применить platform-admin guard ко всем admin маршрутам
 router.use(requirePlatformAdmin);
+
+router.get('/admin/docs', async (_req, res) => {
+  try {
+    const docs = collectAdminMarkdownDocs().map(({ content, ...doc }) => doc);
+    res.json({ success: true, docs });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Admin docs list error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/docs/content', async (req, res) => {
+  const docPath = String(req.query.docPath || '').trim();
+  if (!docPath) {
+    return res.status(400).json({ error: 'docPath is required' });
+  }
+
+  try {
+    const doc = collectAdminMarkdownDocs().find((item) => item.relativePath === docPath);
+    if (!doc) {
+      return res.status(404).json({ error: 'Document not found' });
+    }
+
+    res.json({ success: true, doc });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Admin docs read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Получить последние строки логов
 router.get('/logs', async (req, res) => {

@@ -16,10 +16,17 @@ import { db, initDB } from '../utils/database';
 import logger from '../utils/logger';
 import { initResearchDb } from '../research/db';
 import { getPreset, listOfferIds } from '../research/presetBuilder';
+import { computeReconciliationMetrics } from '../analytics/liveReconciliation';
 
 export type ProductMode = 'strategy_client' | 'algofund_client';
 export type Level3 = 'low' | 'medium' | 'high';
 export type RequestStatus = 'pending' | 'approved' | 'rejected';
+export type AlgofundRequestType = 'start' | 'stop' | 'switch_system';
+
+type AlgofundRequestPayload = {
+  targetSystemId?: number;
+  targetSystemName?: string;
+};
 
 type PeriodInfo = {
   dateFrom: string | null;
@@ -58,6 +65,89 @@ type TenantCapabilities = {
   monitoring: boolean;
   backtest: boolean;
   startStopRequests: boolean;
+};
+
+export type StrategySelectionConstraints = {
+  limits: {
+    maxStrategies: number | null;
+    mono: number | null;
+    synth: number | null;
+    depositCap: number | null;
+    riskCap: number | null;
+  };
+  usage: {
+    selected: number;
+    mono: number;
+    synth: number;
+    uniqueMarkets: number;
+    remainingSlots: number | null;
+    estimatedDepositPerStrategy: number | null;
+  };
+  violations: string[];
+  warnings: string[];
+};
+
+export type AlgofundPortfolioPassport = {
+  generatedAt: string;
+  source: string;
+  selectionPolicy: 'conservative' | 'balanced' | 'aggressive';
+  period: PeriodInfo | null;
+  candidates: Array<{
+    strategyId: number;
+    strategyName: string;
+    strategyType: string;
+    marketMode: string;
+    market: string;
+    weight: number;
+    score: number;
+    metrics: CatalogMetricSet;
+  }>;
+  portfolioSummary: {
+    initialBalance?: number;
+    finalEquity?: number;
+    totalReturnPercent?: number;
+    maxDrawdownPercent?: number;
+    winRatePercent?: number;
+    profitFactor?: number;
+    tradesCount?: number;
+  } | null;
+  blockedReasons: string[];
+};
+
+export type OfferStoreDefaults = {
+  periodDays: number;
+  targetTradesPerDay: number;
+  riskLevel: Level3;
+};
+
+export type OfferStoreState = {
+  defaults: OfferStoreDefaults;
+  publishedOfferIds: string[];
+  offers: Array<{
+    offerId: string;
+    titleRu: string;
+    mode: 'mono' | 'synth';
+    market: string;
+    strategyId: number;
+    score: number;
+    ret: number;
+    pf: number;
+    dd: number;
+    trades: number;
+    tradesPerDay: number;
+    periodDays: number;
+    published: boolean;
+  }>;
+};
+
+export type AdminReportSettings = {
+  enabled: boolean;
+  tsDaily: boolean;
+  tsWeekly: boolean;
+  tsMonthly: boolean;
+  offerDaily: boolean;
+  offerWeekly: boolean;
+  offerMonthly: boolean;
 };
 
 type TenantRow = {
@@ -109,17 +199,18 @@ type AlgofundProfileRow = {
 type AlgofundRequestRow = {
   id: number;
   tenant_id: number;
-  request_type: 'start' | 'stop';
+  request_type: AlgofundRequestType;
   status: RequestStatus;
   note: string;
   decision_note: string;
+  request_payload_json: string;
   created_at: string;
   decided_at: string | null;
   tenant_display_name?: string;
   tenant_slug?: string;
 };
 
-type CatalogMetricSet = {
+export type CatalogMetricSet = {
   ret: number;
   pf: number;
   dd: number;
@@ -127,7 +218,7 @@ type CatalogMetricSet = {
   trades: number;
 };
 
-type CatalogPreset = {
+export type CatalogPreset = {
   strategyId: number;
   strategyName: string;
   score: number;
@@ -143,7 +234,7 @@ type CatalogPreset = {
   };
 };
 
-type CatalogOffer = {
+export type CatalogOffer = {
   offerId: string;
   titleRu: string;
   descriptionRu: string;
@@ -188,13 +279,14 @@ type CatalogOffer = {
   };
 };
 
-type CatalogData = {
+export type CatalogData = {
   timestamp: string;
   apiKeyName: string;
   source: {
     sweepFile: string;
     sweepTimestamp: string | null;
   };
+  config?: Record<string, unknown>;
   counts: {
     evaluated: number;
     robust: number;
@@ -222,7 +314,7 @@ type CatalogData = {
   };
 };
 
-type SweepRecord = {
+export type SweepRecord = {
   strategyId: number;
   strategyName: string;
   strategyType: string;
@@ -244,7 +336,7 @@ type SweepRecord = {
   robust: boolean;
 };
 
-type SweepData = {
+export type SweepData = {
   timestamp: string;
   apiKeyName: string;
   counts: {
@@ -292,6 +384,8 @@ type SweepData = {
     warmupBars?: number;
     skipMissingSymbols?: boolean;
     strategyPrefix?: string;
+    systemName?: string;
+    maxMembers?: number;
   };
 };
 
@@ -489,6 +583,224 @@ const getAllOffers = (catalog: CatalogData): CatalogOffer[] => [
   ...(catalog?.clientCatalog?.mono || []),
   ...(catalog?.clientCatalog?.synth || []),
 ];
+
+const DEFAULT_OFFER_STORE_DEFAULTS: OfferStoreDefaults = {
+  periodDays: 90,
+  targetTradesPerDay: 6,
+  riskLevel: 'medium',
+};
+
+const DEFAULT_ADMIN_REPORT_SETTINGS: AdminReportSettings = {
+  enabled: true,
+  tsDaily: true,
+  tsWeekly: true,
+  tsMonthly: true,
+  offerDaily: true,
+  offerWeekly: true,
+  offerMonthly: true,
+};
+
+const getSweepPeriodDays = (sweep: SweepData | null, fallbackDays: number): number => {
+  const dateFromMs = Date.parse(String(sweep?.config?.dateFrom || ''));
+  const dateToRaw = String(sweep?.config?.dateTo || '').trim();
+  const dateToMs = dateToRaw ? Date.parse(dateToRaw) : Date.now();
+  if (Number.isFinite(dateFromMs) && Number.isFinite(dateToMs) && dateToMs > dateFromMs) {
+    return Math.max(1, Math.floor((dateToMs - dateFromMs) / 86_400_000));
+  }
+  return Math.max(1, Math.floor(fallbackDays));
+};
+
+const normalizeOfferStoreDefaults = (raw: unknown): OfferStoreDefaults => {
+  const parsed = (raw && typeof raw === 'object') ? (raw as Record<string, unknown>) : {};
+  const riskRaw = asString(parsed.riskLevel, DEFAULT_OFFER_STORE_DEFAULTS.riskLevel) as Level3;
+  return {
+    periodDays: Math.max(7, Math.min(365, Math.floor(asNumber(parsed.periodDays, DEFAULT_OFFER_STORE_DEFAULTS.periodDays)))),
+    targetTradesPerDay: Math.max(1, Math.min(20, Number(asNumber(parsed.targetTradesPerDay, DEFAULT_OFFER_STORE_DEFAULTS.targetTradesPerDay).toFixed(2)))),
+    riskLevel: riskRaw === 'low' || riskRaw === 'high' ? riskRaw : 'medium',
+  };
+};
+
+const normalizeAdminReportSettings = (raw: unknown): AdminReportSettings => {
+  const parsed = (raw && typeof raw === 'object') ? (raw as Record<string, unknown>) : {};
+  const pick = (key: keyof AdminReportSettings): boolean => {
+    const value = parsed[key];
+    if (value === undefined || value === null || value === '') {
+      return DEFAULT_ADMIN_REPORT_SETTINGS[key];
+    }
+    if (typeof value === 'boolean') {
+      return value;
+    }
+    const text = String(value).trim().toLowerCase();
+    return text === '1' || text === 'true' || text === 'yes' || text === 'on';
+  };
+
+  return {
+    enabled: pick('enabled'),
+    tsDaily: pick('tsDaily'),
+    tsWeekly: pick('tsWeekly'),
+    tsMonthly: pick('tsMonthly'),
+    offerDaily: pick('offerDaily'),
+    offerWeekly: pick('offerWeekly'),
+    offerMonthly: pick('offerMonthly'),
+  };
+};
+
+const filterCatalogByPublishedOfferIds = (catalog: CatalogData | null, publishedIds: Set<string>): CatalogData | null => {
+  if (!catalog) {
+    return null;
+  }
+  const mono = (catalog.clientCatalog?.mono || []).filter((item) => publishedIds.has(String(item.offerId)));
+  const synth = (catalog.clientCatalog?.synth || []).filter((item) => publishedIds.has(String(item.offerId)));
+  return {
+    ...catalog,
+    counts: {
+      ...catalog.counts,
+      monoCatalog: mono.length,
+      synthCatalog: synth.length,
+    },
+    clientCatalog: {
+      mono,
+      synth,
+    },
+  };
+};
+
+const resolveStrategyPlanLimits = (plan: PlanRow | null) => {
+  const features = getPlanFeatures(plan);
+  const maxStrategies = Math.max(0, asNumber(plan?.max_strategies_total, 0));
+  const monoLimit = Math.max(0, asNumber(features.mono, 0));
+  const synthLimit = Math.max(0, asNumber(features.synth, 0));
+  const unifiedLimit = Math.max(0, asNumber(features.monoOrSynth, 0));
+
+  return {
+    maxStrategies: maxStrategies > 0 ? maxStrategies : null,
+    mono: monoLimit > 0 ? monoLimit : null,
+    synth: synthLimit > 0 ? synthLimit : null,
+    unified: unifiedLimit > 0 ? unifiedLimit : null,
+    depositCap: asNumber(plan?.max_deposit_total, 0) > 0 ? asNumber(plan?.max_deposit_total, 0) : null,
+    riskCap: asNumber(plan?.risk_cap_max, 0) > 0 ? asNumber(plan?.risk_cap_max, 0) : null,
+  };
+};
+
+const buildStrategySelectionConstraints = (
+  plan: PlanRow | null,
+  offers: CatalogOffer[],
+): StrategySelectionConstraints => {
+  const limits = resolveStrategyPlanLimits(plan);
+  const safeOffers = Array.isArray(offers) ? offers : [];
+  const selected = safeOffers.length;
+  const mono = safeOffers.filter((item) => asString(item.strategy?.mode, 'mono') === 'mono').length;
+  const synth = safeOffers.filter((item) => asString(item.strategy?.mode, 'mono') !== 'mono').length;
+  const uniqueMarkets = new Set(
+    safeOffers.map((item) => asString(item.strategy?.market, '')).filter(Boolean)
+  ).size;
+  const estimatedDepositPerStrategy = limits.depositCap && selected > 0
+    ? Number((limits.depositCap / selected).toFixed(2))
+    : null;
+
+  const violations: string[] = [];
+  const warnings: string[] = [];
+
+  const hardLimit = limits.unified ?? limits.maxStrategies;
+  if (hardLimit !== null && selected > hardLimit) {
+    violations.push(`Too many offers selected (${selected}/${hardLimit}).`);
+  }
+  if (limits.mono !== null && mono > limits.mono) {
+    violations.push(`Mono offers exceed plan limit (${mono}/${limits.mono}).`);
+  }
+  if (limits.synth !== null && synth > limits.synth) {
+    violations.push(`Synthetic offers exceed plan limit (${synth}/${limits.synth}).`);
+  }
+
+  if (selected > 1 && uniqueMarkets < selected) {
+    warnings.push('Selection contains repeated markets; diversification is lower than it looks.');
+  }
+  if (selected > 1 && (mono === 0 || synth === 0)) {
+    warnings.push('Selection is concentrated in one mode only (mono or synth).');
+  }
+  if (estimatedDepositPerStrategy !== null && estimatedDepositPerStrategy < 250) {
+    warnings.push(`Estimated deposit per strategy is thin (${estimatedDepositPerStrategy} USDT).`);
+  }
+
+  return {
+    limits: {
+      maxStrategies: hardLimit,
+      mono: limits.mono,
+      synth: limits.synth,
+      depositCap: limits.depositCap,
+      riskCap: limits.riskCap,
+    },
+    usage: {
+      selected,
+      mono,
+      synth,
+      uniqueMarkets,
+      remainingSlots: hardLimit !== null ? Math.max(0, hardLimit - selected) : null,
+      estimatedDepositPerStrategy,
+    },
+    violations,
+    warnings,
+  };
+};
+
+const buildAlgofundPortfolioPassport = (
+  catalog: CatalogData | null,
+  sweep: SweepData | null,
+  period: PeriodInfo | null,
+  preview: {
+    summary?: Record<string, unknown> | null;
+    blockedReason?: string;
+  } | null,
+  riskMultiplier: number,
+): AlgofundPortfolioPassport | null => {
+  const members = Array.isArray(catalog?.adminTradingSystemDraft?.members)
+    ? catalog?.adminTradingSystemDraft?.members || []
+    : [];
+
+  if (members.length === 0) {
+    return null;
+  }
+
+  const candidates = members.map((member) => {
+    const record = sweep ? findSweepRecordByStrategyId(sweep, Number(member.strategyId)) : null;
+    return {
+      strategyId: Number(member.strategyId),
+      strategyName: asString(member.strategyName, `Strategy ${member.strategyId}`),
+      strategyType: asString(member.strategyType, record?.strategyType || 'DD_BattleToads'),
+      marketMode: asString(member.marketMode, record?.marketMode || 'mono'),
+      market: asString(member.market, record?.market || ''),
+      weight: Number(asNumber(member.weight, 1).toFixed(4)),
+      score: Number(asNumber(member.score, record?.score || 0).toFixed(3)),
+      metrics: {
+        ret: Number(asNumber(record?.totalReturnPercent, 0).toFixed(3)),
+        pf: Number(asNumber(record?.profitFactor, 0).toFixed(3)),
+        dd: Number(asNumber(record?.maxDrawdownPercent, 0).toFixed(3)),
+        wr: Number(asNumber(record?.winRatePercent, 0).toFixed(3)),
+        trades: Math.max(0, Math.floor(asNumber(record?.tradesCount, 0))),
+      },
+    };
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    source: 'admin_trading_system_draft',
+    selectionPolicy: riskMultiplier <= 0.9 ? 'conservative' : riskMultiplier >= 1.5 ? 'aggressive' : 'balanced',
+    period,
+    candidates,
+    portfolioSummary: preview?.summary
+      ? {
+          initialBalance: asNumber(preview.summary.initialBalance, undefined as unknown as number),
+          finalEquity: asNumber(preview.summary.finalEquity, undefined as unknown as number),
+          totalReturnPercent: asNumber(preview.summary.totalReturnPercent, undefined as unknown as number),
+          maxDrawdownPercent: asNumber(preview.summary.maxDrawdownPercent, undefined as unknown as number),
+          winRatePercent: asNumber(preview.summary.winRatePercent, undefined as unknown as number),
+          profitFactor: asNumber(preview.summary.profitFactor, undefined as unknown as number),
+          tradesCount: asNumber(preview.summary.tradesCount, undefined as unknown as number),
+        }
+      : null,
+    blockedReasons: preview?.blockedReason ? [String(preview.blockedReason)] : [],
+  };
+};
 
 const buildFallbackCatalogFromPresets = async (
   sourceCatalog: CatalogData | null,
@@ -918,6 +1230,39 @@ const getAlgofundRequestsByTenant = async (tenantId: number): Promise<AlgofundRe
   return (Array.isArray(rows) ? rows : []) as AlgofundRequestRow[];
 };
 
+const parseAlgofundRequestPayload = (raw: unknown): AlgofundRequestPayload => {
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const targetSystemId = Math.floor(asNumber((parsed as any)?.targetSystemId, 0));
+    const targetSystemName = asString((parsed as any)?.targetSystemName, '');
+    return {
+      targetSystemId: targetSystemId > 0 ? targetSystemId : undefined,
+      targetSystemName: targetSystemName || undefined,
+    };
+  } catch {
+    return {};
+  }
+};
+
+const getAlgofundRequestsAll = async (limit: number = 200): Promise<AlgofundRequestRow[]> => {
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.floor(limit))) : 200;
+  const rows = await db.all(
+    `SELECT
+      r.*,
+      t.display_name AS tenant_display_name,
+      t.slug AS tenant_slug
+     FROM algofund_start_stop_requests r
+     JOIN tenants t ON t.id = r.tenant_id
+     ORDER BY r.id DESC
+     LIMIT ?`,
+    [safeLimit]
+  );
+  return (Array.isArray(rows) ? rows : []) as AlgofundRequestRow[];
+};
+
 const findOfferById = (catalog: CatalogData, offerId: string): CatalogOffer => {
   const offer = getAllOffers(catalog).find((item) => item.offerId === offerId);
   if (!offer) {
@@ -1011,7 +1356,8 @@ const buildSweepPreset = (record: SweepRecord, riskLevel: Level3, freqLevel: Lev
 };
 
 const buildOfferFromSweepRecord = (record: SweepRecord): CatalogOffer => {
-  const mode = asString(record.marketMode, 'mono') === 'synthetic' ? 'synth' : 'mono';
+  const rawMode = asString(record.marketMode, 'mono');
+  const mode = rawMode === 'synthetic' || rawMode === 'synth' ? 'synth' : 'mono';
   const mediumMedium = buildSweepPreset(record, 'medium', 'medium');
   const metrics = {
     ret: asNumber(record.totalReturnPercent, 0),
@@ -1060,6 +1406,142 @@ const buildOfferFromSweepRecord = (record: SweepRecord): CatalogOffer => {
         profitFactor: metrics.pf,
         tradesCount: metrics.trades,
       },
+    },
+  };
+};
+
+const pickTopOffersFromSweepRecords = (rows: SweepRecord[], limit: number): CatalogOffer[] => {
+  const sorted = [...rows].sort((left, right) => asNumber(right.score, 0) - asNumber(left.score, 0));
+  const preferred = sorted.filter((item) => Boolean(item.robust));
+  const pool = preferred.length > 0 ? preferred : sorted;
+  const selected: CatalogOffer[] = [];
+  const seenMarkets = new Set<string>();
+
+  for (const row of pool) {
+    const market = asString(row.market, '');
+    if (market && seenMarkets.has(market)) {
+      continue;
+    }
+    selected.push(buildOfferFromSweepRecord(row));
+    if (market) {
+      seenMarkets.add(market);
+    }
+    if (selected.length >= limit) {
+      break;
+    }
+  }
+
+  if (selected.length < limit) {
+    const seenOfferIds = new Set(selected.map((item) => item.offerId));
+    for (const row of sorted) {
+      const offer = buildOfferFromSweepRecord(row);
+      if (seenOfferIds.has(offer.offerId)) {
+        continue;
+      }
+      selected.push(offer);
+      seenOfferIds.add(offer.offerId);
+      if (selected.length >= limit) {
+        break;
+      }
+    }
+  }
+
+  return selected.sort((left, right) => asNumber(right.metrics?.score, 0) - asNumber(left.metrics?.score, 0));
+};
+
+const pickAdminDraftMembersFromSweep = (rows: SweepRecord[], limit: number): SweepRecord[] => {
+  const sorted = [...rows].sort((left, right) => asNumber(right.score, 0) - asNumber(left.score, 0));
+  const preferred = sorted.filter((item) => Boolean(item.robust));
+  const pool = preferred.length > 0 ? preferred : sorted;
+  const selected: SweepRecord[] = [];
+  const seenMarkets = new Set<string>();
+
+  for (const row of pool) {
+    const market = asString(row.market, '');
+    if (market && seenMarkets.has(market)) {
+      continue;
+    }
+    selected.push(row);
+    if (market) {
+      seenMarkets.add(market);
+    }
+    if (selected.length >= limit) {
+      break;
+    }
+  }
+
+  if (selected.length < limit) {
+    const seenIds = new Set(selected.map((item) => Number(item.strategyId)));
+    for (const row of sorted) {
+      const strategyId = Number(row.strategyId);
+      if (seenIds.has(strategyId)) {
+        continue;
+      }
+      selected.push(row);
+      seenIds.add(strategyId);
+      if (selected.length >= limit) {
+        break;
+      }
+    }
+  }
+
+  return selected;
+};
+
+export const buildClientCatalogFromSweepData = (
+  sweep: SweepData,
+  options?: {
+    sweepFilePath?: string;
+    durationSec?: number;
+    monoLimit?: number;
+    synthLimit?: number;
+    maxMembers?: number;
+  }
+): CatalogData => {
+  const monoLimit = Math.max(1, Math.min(24, Number(options?.monoLimit || 6)));
+  const synthLimit = Math.max(1, Math.min(24, Number(options?.synthLimit || 6)));
+  const maxMembers = Math.max(1, Math.min(12, Number(options?.maxMembers || 6)));
+  const rows = Array.isArray(sweep?.evaluated) ? sweep.evaluated : [];
+  const monoRows = rows.filter((item) => asString(item.marketMode, 'mono') === 'mono');
+  const synthRows = rows.filter((item) => asString(item.marketMode, 'mono') !== 'mono');
+  const monoOffers = pickTopOffersFromSweepRecords(monoRows, monoLimit);
+  const synthOffers = pickTopOffersFromSweepRecords(synthRows, synthLimit);
+  const selectedMembers = pickAdminDraftMembersFromSweep(rows, maxMembers);
+
+  return {
+    timestamp: new Date().toISOString(),
+    apiKeyName: asString(sweep?.apiKeyName, ''),
+    source: {
+      sweepFile: asString(options?.sweepFilePath, 'generated:full_historical_sweep'),
+      sweepTimestamp: asString(sweep?.timestamp, '') || null,
+    },
+    config: {
+      ...(sweep?.config || {}),
+    } as any,
+    counts: {
+      evaluated: Math.max(0, rows.length),
+      robust: rows.filter((item) => Boolean(item.robust)).length,
+      monoCatalog: monoOffers.length,
+      synthCatalog: synthOffers.length,
+      adminTsMembers: selectedMembers.length,
+      durationSec: Math.max(0, Number(options?.durationSec || sweep?.counts?.durationSec || 0)),
+    },
+    clientCatalog: {
+      mono: monoOffers,
+      synth: synthOffers,
+    },
+    adminTradingSystemDraft: {
+      name: asString(sweep?.config?.systemName, `HISTSWEEP ${asString(sweep?.apiKeyName, 'API')} Candidate`),
+      members: selectedMembers.map((item, index) => ({
+        strategyId: Number(item.strategyId),
+        strategyName: asString(item.strategyName, `Strategy ${item.strategyId}`),
+        strategyType: asString(item.strategyType, 'DD_BattleToads'),
+        marketMode: asString(item.marketMode, 'mono'),
+        market: asString(item.market, ''),
+        score: asNumber(item.score, 0),
+        weight: Number((index === 0 ? 1.25 : index === 1 ? 1.1 : 1).toFixed(4)),
+      })),
+      sourcePortfolioSummary: Array.isArray(sweep?.portfolioResults) ? sweep.portfolioResults : [],
     },
   };
 };
@@ -1136,7 +1618,10 @@ const buildPresetBackedOffers = async (catalog: CatalogData | null): Promise<Cat
           id: Number(config.strategyId || legacy?.strategy?.id || 0),
           name: String(config.name || legacy?.strategy?.name || offerId),
           type: String(config.strategy_type || legacy?.strategy?.type || 'DD_BattleToads'),
-          mode: (String(config.market_mode || legacy?.strategy?.mode || 'mono') === 'synthetic' ? 'synth' : 'mono') as 'mono' | 'synth',
+          mode: ((() => {
+            const rawMode = String(config.market_mode || legacy?.strategy?.mode || 'mono');
+            return rawMode === 'synthetic' || rawMode === 'synth' ? 'synth' : 'mono';
+          })()) as 'mono' | 'synth',
           market: legacy?.strategy?.market || [config.base_symbol, config.quote_symbol].filter(Boolean).join('/'),
           params: {
             interval: String(config.interval || legacy?.strategy?.params?.interval || '1h'),
@@ -1839,6 +2324,173 @@ export const updateAdminTelegramControls = async (payload: {
   return getAdminTelegramControls();
 };
 
+export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
+  const { catalog, sweep } = await loadCatalogAndSweepWithFallback();
+  const allOffers = catalog ? getAllOffers(catalog) : [];
+  const offerIds = allOffers.map((item) => String(item.offerId));
+  const defaults = normalizeOfferStoreDefaults(safeJsonParse(
+    await getRuntimeFlag('offer.store.defaults', JSON.stringify(DEFAULT_OFFER_STORE_DEFAULTS)),
+    DEFAULT_OFFER_STORE_DEFAULTS,
+  ));
+  const publishedFromFlag = safeJsonParse<string[]>(await getRuntimeFlag('offer.store.published_ids', ''), []);
+  const publishedOfferIds = (publishedFromFlag.length > 0 ? publishedFromFlag : offerIds)
+    .map((item) => String(item || '').trim())
+    .filter((item) => offerIds.includes(item));
+  const publishedSet = new Set(publishedOfferIds);
+  const periodDays = getSweepPeriodDays(sweep, defaults.periodDays);
+  const sweepByStrategyId = new Map<number, SweepRecord>();
+  (sweep?.evaluated || []).forEach((item) => {
+    const strategyId = Number(item.strategyId || 0);
+    if (strategyId > 0 && !sweepByStrategyId.has(strategyId)) {
+      sweepByStrategyId.set(strategyId, item);
+    }
+  });
+
+  return {
+    defaults,
+    publishedOfferIds,
+    offers: allOffers
+      .map((offer) => {
+        const strategyId = Number(offer.strategy?.id || 0);
+        const sweepRecord = sweepByStrategyId.get(strategyId) || null;
+        const trades = Math.max(0, Math.floor(asNumber(sweepRecord?.tradesCount, offer.metrics?.trades || 0)));
+        return {
+          offerId: String(offer.offerId || ''),
+          titleRu: asString(offer.titleRu, offer.offerId),
+          mode: (offer.strategy?.mode === 'synth' ? 'synth' : 'mono') as 'mono' | 'synth',
+          market: asString(offer.strategy?.market, ''),
+          strategyId,
+          score: Number(asNumber(sweepRecord?.score, offer.metrics?.score || 0).toFixed(3)),
+          ret: Number(asNumber(sweepRecord?.totalReturnPercent, offer.metrics?.ret || 0).toFixed(3)),
+          pf: Number(asNumber(sweepRecord?.profitFactor, offer.metrics?.pf || 0).toFixed(3)),
+          dd: Number(asNumber(sweepRecord?.maxDrawdownPercent, offer.metrics?.dd || 0).toFixed(3)),
+          trades,
+          tradesPerDay: Number((trades / Math.max(1, periodDays)).toFixed(3)),
+          periodDays,
+          published: publishedSet.has(String(offer.offerId || '')),
+        };
+      })
+      .sort((left, right) => right.score - left.score),
+  };
+};
+
+export const updateOfferStoreAdminState = async (payload: {
+  defaults?: Partial<OfferStoreDefaults>;
+  publishedOfferIds?: string[];
+}) => {
+  const current = await getOfferStoreAdminState();
+  const nextDefaults = normalizeOfferStoreDefaults({
+    ...current.defaults,
+    ...(payload.defaults || {}),
+  });
+
+  const offerIds = new Set(current.offers.map((item) => item.offerId));
+  const nextPublished = Array.isArray(payload.publishedOfferIds)
+    ? Array.from(new Set(payload.publishedOfferIds.map((item) => String(item || '').trim()).filter((item) => offerIds.has(item))))
+    : current.publishedOfferIds;
+
+  await Promise.all([
+    setRuntimeFlag('offer.store.defaults', JSON.stringify(nextDefaults)),
+    setRuntimeFlag('offer.store.published_ids', JSON.stringify(nextPublished)),
+  ]);
+
+  return getOfferStoreAdminState();
+};
+
+export const getAdminReportSettings = async (): Promise<AdminReportSettings> => {
+  const raw = await getRuntimeFlag('admin.reports.settings', JSON.stringify(DEFAULT_ADMIN_REPORT_SETTINGS));
+  return normalizeAdminReportSettings(safeJsonParse<Record<string, unknown>>(raw, DEFAULT_ADMIN_REPORT_SETTINGS));
+};
+
+export const updateAdminReportSettings = async (payload: Partial<AdminReportSettings>): Promise<AdminReportSettings> => {
+  const current = await getAdminReportSettings();
+  const next = normalizeAdminReportSettings({
+    ...current,
+    ...(payload || {}),
+  });
+  await setRuntimeFlag('admin.reports.settings', JSON.stringify(next));
+  return getAdminReportSettings();
+};
+
+export const getAdminPerformanceReport = async (period: 'daily' | 'weekly' | 'monthly' = 'daily') => {
+  const periodHours = period === 'monthly' ? 24 * 30 : period === 'weekly' ? 24 * 7 : 24;
+  const now = Date.now();
+  const fromMs = now - periodHours * 3600_000;
+  const [offerStore, reportSettings, apiKeys] = await Promise.all([
+    getOfferStoreAdminState(),
+    getAdminReportSettings(),
+    getAvailableApiKeyNames(),
+  ]);
+
+  const tsRows: Array<Record<string, unknown>> = [];
+  for (const apiKeyName of apiKeys) {
+    const systems = await listTradingSystems(apiKeyName).catch(() => []);
+    for (const item of (Array.isArray(systems) ? systems : [])) {
+      tsRows.push({
+        apiKeyName,
+        id: Number(item?.id || 0),
+        name: asString(item?.name, ''),
+        isActive: Boolean(item?.is_active),
+        equityUsd: asNumber(item?.metrics?.equity_usd, 0),
+        unrealizedPnl: asNumber(item?.metrics?.unrealized_pnl, 0),
+        drawdownPercent: asNumber(item?.metrics?.drawdown_percent, 0),
+        marginLoadPercent: asNumber(item?.metrics?.margin_load_percent, 0),
+        effectiveLeverage: asNumber(item?.metrics?.effective_leverage, 0),
+        updatedAt: asString(item?.updated_at, ''),
+      });
+    }
+  }
+
+  const offerRows: Array<Record<string, unknown>> = [];
+  for (const offer of offerStore.offers) {
+    const strategyId = Number(offer.strategyId || 0);
+    const metrics = strategyId > 0
+      ? await computeReconciliationMetrics(strategyId, fromMs, now).catch(() => null)
+      : null;
+    const liveWinRatePercent = metrics ? Number((Number(metrics.win_rate_live || 0) * 100).toFixed(3)) : null;
+    const expectedWinRatePercent = metrics ? Number((Number(metrics.win_rate_backtest || 0) * 100).toFixed(3)) : null;
+    offerRows.push({
+      offerId: offer.offerId,
+      titleRu: offer.titleRu,
+      strategyId,
+      mode: offer.mode,
+      market: offer.market,
+      published: offer.published,
+      periodDays: offer.periodDays,
+      expected: {
+        ret: offer.ret,
+        pf: offer.pf,
+        dd: offer.dd,
+        trades: offer.trades,
+        tradesPerDay: offer.tradesPerDay,
+      },
+      live: metrics ? {
+        samples: Number(metrics.samples_count || 0),
+        entryPriceDeviationPercent: Number((Number(metrics.entry_price_deviation_percent || 0) * 100).toFixed(3)),
+        entryLagSeconds: Number(Number(metrics.entry_time_lag_seconds || 0).toFixed(3)),
+        realizedVsPredictedPnlPercent: Number((Number(metrics.realized_vs_predicted_pnl_percent || 0) * 100).toFixed(3)),
+        winRatePercent: liveWinRatePercent,
+      } : null,
+      comparison: metrics ? {
+        expectedWinRatePercent,
+        liveWinRatePercent,
+        winRateDeltaPercent: liveWinRatePercent !== null && expectedWinRatePercent !== null
+          ? Number((liveWinRatePercent - expectedWinRatePercent).toFixed(3))
+          : null,
+      } : null,
+    });
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    period,
+    periodHours,
+    settings: reportSettings,
+    tradingSystems: tsRows,
+    offers: offerRows,
+  };
+};
+
 export const getAdminLowLotRecommendations = async (options?: {
   hours?: number;
   limit?: number;
@@ -2172,13 +2824,18 @@ export const getSaasAdminSummary = async () => {
       counts: sourceSweep.counts,
       selectedMembers: sourceSweep.selectedMembers,
       topByMode: sourceSweep.topByMode,
-      topAll: sourceSweep.topAll.slice(0, 12),
+      topAll: (Array.isArray(sourceSweep.topAll) ? sourceSweep.topAll : []).slice(0, 12),
       portfolioFull: sourceSweep.portfolioResults?.[0] || null,
     }
     : buildFallbackSweepSummary(catalog);
   const recommendedSets = buildRecommendedSets(catalog);
   const tenants = await listTenantSummaries();
   const plans = await listPlans();
+  const algofundRequests = await getAlgofundRequestsAll(200);
+  const [offerStore, reportSettings] = await Promise.all([
+    getOfferStoreAdminState(),
+    getAdminReportSettings(),
+  ]);
   const backtestRequestCount = await db.get(
     `SELECT
        SUM(CASE WHEN status IN ('pending', 'approved', 'in_sweep') THEN 1 ELSE 0 END) AS pending,
@@ -2201,6 +2858,15 @@ export const getSaasAdminSummary = async () => {
       pending: Number(backtestRequestCount?.pending || 0),
       total: Number(backtestRequestCount?.total || 0),
     },
+    algofundRequestQueue: {
+      total: algofundRequests.length,
+      pending: algofundRequests.filter((row) => row.status === 'pending').length,
+      approved: algofundRequests.filter((row) => row.status === 'approved').length,
+      rejected: algofundRequests.filter((row) => row.status === 'rejected').length,
+      items: algofundRequests,
+    },
+    offerStore,
+    reportSettings,
   };
 };
 
@@ -2345,9 +3011,20 @@ export const getStrategyClientState = async (tenantId: number) => {
   const plan = await getPlanForTenant(tenantId);
   const capabilities = resolvePlanCapabilities(plan);
   const profile = await getStrategyClientProfile(tenantId);
-  const catalog = loadLatestClientCatalog();
-  const presetOffers = await buildPresetBackedOffers(catalog);
+  const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
+  const offerStore = await getOfferStoreAdminState();
+  const publishedSet = new Set(offerStore.publishedOfferIds);
+  const catalog = filterCatalogByPublishedOfferIds(sourceCatalog, publishedSet);
+  const directOffers = catalog ? getAllOffers(catalog) : [];
+  const presetOffers = directOffers.length > 0 ? directOffers : await buildPresetBackedOffers(catalog);
   const recommendedSets = buildRecommendedSets(catalog);
+  const savedOfferIds = profile ? safeJsonParse<string[]>(profile.selected_offer_ids_json, []) : [];
+  const constraintsCatalog = catalog || await buildFallbackCatalogFromPresets(catalog, [tenant.assigned_api_key_name].filter(Boolean));
+  const selectedOffersForConstraints = constraintsCatalog
+    ? savedOfferIds
+      .map((offerId) => findOfferByIdOrNull(constraintsCatalog, offerId))
+      .filter((item): item is CatalogOffer => !!item)
+    : [];
   const monitoring = capabilities.monitoring && tenant.assigned_api_key_name
     ? await getMonitoringLatest(tenant.assigned_api_key_name).catch(() => null)
     : null;
@@ -2359,12 +3036,15 @@ export const getStrategyClientState = async (tenantId: number) => {
     monitoring,
     profile: profile ? {
       ...profile,
-      selectedOfferIds: safeJsonParse<string[]>(profile.selected_offer_ids_json, []),
+      selectedOfferIds: savedOfferIds,
       latestPreview: hydrateStoredStrategyPreview(catalog, profile.latest_preview_json),
     } : null,
+    constraints: buildStrategySelectionConstraints(plan, selectedOffersForConstraints),
     catalog,
     offers: presetOffers,
     recommendedSets,
+    offerStoreDefaults: offerStore.defaults,
+    sweepPeriod: buildPeriodInfo(sweep),
   };
 };
 
@@ -2377,6 +3057,7 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
 }) => {
   const tenant = await getTenantById(tenantId);
   const existing = await getStrategyClientProfile(tenantId);
+  const plan = await getPlanForTenant(tenantId);
   if (!existing) {
     throw new Error(`Strategy client profile not found for tenant ${tenant.slug}`);
   }
@@ -2384,10 +3065,26 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
   const nextRiskLevel = payload.riskLevel || existing.risk_level || 'medium';
   const nextTradeFrequencyLevel = payload.tradeFrequencyLevel || existing.trade_frequency_level || 'medium';
   const nextOfferIds = Array.isArray(payload.selectedOfferIds)
-    ? payload.selectedOfferIds
+    ? Array.from(new Set(payload.selectedOfferIds.map((item) => String(item || '').trim()).filter(Boolean)))
     : safeJsonParse<string[]>(existing.selected_offer_ids_json, []);
   const nextAssignedApiKeyName = asString(payload.assignedApiKeyName, existing.assigned_api_key_name || tenant.assigned_api_key_name);
   const nextRequestedEnabled = payload.requestedEnabled !== undefined ? payload.requestedEnabled : existing.requested_enabled === 1;
+  const { catalog: sourceCatalog } = await loadCatalogAndSweepWithFallback();
+  const offerStore = await getOfferStoreAdminState();
+  const publishedSet = new Set(offerStore.publishedOfferIds);
+  const catalog = filterCatalogByPublishedOfferIds(sourceCatalog, publishedSet);
+  const selectedOffers = catalog
+    ? nextOfferIds.map((offerId) => findOfferByIdOrNull(catalog, offerId)).filter((item): item is CatalogOffer => !!item)
+    : [];
+  const constraints = buildStrategySelectionConstraints(plan, selectedOffers);
+
+  if (catalog && selectedOffers.length !== nextOfferIds.length) {
+    const missing = nextOfferIds.filter((offerId) => !selectedOffers.find((item) => item.offerId === offerId));
+    throw new Error(`Unknown offers in selection: ${missing.join(', ')}`);
+  }
+  if (constraints.violations.length > 0) {
+    throw new Error(constraints.violations.join(' '));
+  }
 
   await db.run(
     `UPDATE strategy_client_profiles
@@ -2634,6 +3331,7 @@ export const previewStrategyClientSelection = async (
       preset,
     };
   });
+  const constraints = buildStrategySelectionConstraints(state.plan, selectedOffers.map((item) => item.offer));
 
   const uniqueStrategyIds = Array.from(new Set(selectedOffers.map((item) => Number(item.preset.strategyId)).filter((item) => Number.isFinite(item) && item > 0)));
 
@@ -2646,6 +3344,7 @@ export const previewStrategyClientSelection = async (
     return {
       period,
       controls,
+      constraints,
       selectedOffers: selectedOffers.map((item) => ({
         offerId: item.offerId,
         titleRu: item.offer.titleRu,
@@ -2685,6 +3384,7 @@ export const previewStrategyClientSelection = async (
   return {
     period,
     controls,
+    constraints,
     selectedOffers: selectedOffers.map((item) => ({
       offerId: item.offerId,
       titleRu: item.offer.titleRu,
@@ -2721,10 +3421,6 @@ export const materializeStrategyClient = async (tenantId: number, activate: bool
     throw new Error('No selected offers configured for this client');
   }
 
-  if (plan.max_strategies_total > 0 && selectedOfferIds.length > plan.max_strategies_total) {
-    throw new Error(`Selected offers exceed plan limit (${selectedOfferIds.length}/${plan.max_strategies_total})`);
-  }
-
   const assignedApiKeyName = asString(profile.assigned_api_key_name || state.tenant.assigned_api_key_name);
   if (!assignedApiKeyName) {
     throw new Error('Assign an API key to this strategy client first');
@@ -2751,6 +3447,10 @@ export const materializeStrategyClient = async (tenantId: number, activate: bool
       },
     };
   });
+  const materializeConstraints = buildStrategySelectionConstraints(plan, selectedOfferIds.map((offerId) => findOfferById(state.catalog as CatalogData, offerId)));
+  if (materializeConstraints.violations.length > 0) {
+    throw new Error(materializeConstraints.violations.join(' '));
+  }
 
   const strategies = await upsertTenantStrategies(
     state.tenant as TenantRow,
@@ -2962,6 +3662,22 @@ export const getAlgofundState = async (
   }
 
   const capabilities = resolvePlanCapabilities(plan);
+  const availableSystemsRaw = effectiveProfile.assigned_api_key_name || tenant.assigned_api_key_name
+    ? await listTradingSystems(asString(effectiveProfile.assigned_api_key_name || tenant.assigned_api_key_name)).catch(() => [])
+    : [];
+  const availableSystems = (Array.isArray(availableSystemsRaw) ? availableSystemsRaw : []).map((item: any) => ({
+    id: Number(item?.id || 0),
+    name: asString(item?.name, ''),
+    isActive: Boolean(item?.is_active),
+    updatedAt: asString(item?.updated_at, ''),
+    metrics: item?.metrics ? {
+      equityUsd: asNumber(item.metrics.equity_usd, 0),
+      unrealizedPnl: asNumber(item.metrics.unrealized_pnl, 0),
+      drawdownPercent: asNumber(item.metrics.drawdown_percent, 0),
+      marginLoadPercent: asNumber(item.metrics.margin_load_percent, 0),
+      effectiveLeverage: asNumber(item.metrics.effective_leverage, 0),
+    } : null,
+  })).filter((item) => item.id > 0);
   const maxPreviewRiskMultiplier = allowPreviewAbovePlan
     ? Math.max(10, asNumber(plan.risk_cap_max, 1))
     : asNumber(plan.risk_cap_max, 1);
@@ -2970,7 +3686,9 @@ export const getAlgofundState = async (
     maxPreviewRiskMultiplier
   ));
 
-  const sweep = loadLatestSweep();
+  const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
+  const offerStore = await getOfferStoreAdminState();
+  const catalog = filterCatalogByPublishedOfferIds(sourceCatalog, new Set(offerStore.publishedOfferIds));
   const period = buildPeriodInfo(sweep);
 
   let preview: {
@@ -3069,9 +3787,11 @@ export const getAlgofundState = async (
       latestPreview: safeJsonParse<Record<string, unknown>>(profile.latest_preview_json, {}),
     },
     engine,
+    availableSystems,
     preview,
+    portfolioPassport: buildAlgofundPortfolioPassport(catalog, sweep, period, preview, riskMultiplier),
     requests: await getAlgofundRequestsByTenant(tenantId),
-    catalog: loadLatestClientCatalog(),
+    catalog,
   };
 };
 
@@ -3112,7 +3832,12 @@ export const updateAlgofundState = async (
   return getAlgofundState(tenantId, nextRiskMultiplier);
 };
 
-export const requestAlgofundAction = async (tenantId: number, requestType: 'start' | 'stop', note: string) => {
+export const requestAlgofundAction = async (
+  tenantId: number,
+  requestType: AlgofundRequestType,
+  note: string,
+  payload: AlgofundRequestPayload = {}
+) => {
   const tenant = await getTenantById(tenantId);
   const plan = await getPlanForTenant(tenantId);
   const profile = await getAlgofundProfile(tenantId);
@@ -3125,23 +3850,50 @@ export const requestAlgofundAction = async (tenantId: number, requestType: 'star
     throw new Error('Start/stop requests are not available for the current plan');
   }
 
-  await db.run(
-    `INSERT INTO algofund_start_stop_requests (tenant_id, request_type, status, note, decision_note, created_at)
-     VALUES (?, ?, 'pending', ?, '', CURRENT_TIMESTAMP)`,
-    [tenantId, requestType, note]
-  );
+  const apiKeyName = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
+  const requestPayload: AlgofundRequestPayload = {
+    targetSystemId: undefined,
+    targetSystemName: undefined,
+  };
+
+  if (requestType === 'switch_system') {
+    const targetSystemId = Math.floor(asNumber(payload.targetSystemId, 0));
+    if (!targetSystemId || targetSystemId <= 0) {
+      throw new Error('targetSystemId is required for switch_system request');
+    }
+    if (!apiKeyName) {
+      throw new Error('Assign API key before requesting system switch');
+    }
+
+    const systems = await listTradingSystems(apiKeyName);
+    const target = systems.find((item) => Number(item.id) === targetSystemId);
+    if (!target?.id) {
+      throw new Error(`Target trading system not found: ${targetSystemId}`);
+    }
+
+    requestPayload.targetSystemId = Number(target.id);
+    requestPayload.targetSystemName = asString(target.name, '');
+  }
 
   await db.run(
-    `UPDATE algofund_profiles
-     SET requested_enabled = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE tenant_id = ?`,
-    [requestType === 'start' ? 1 : 0, tenantId]
+    `INSERT INTO algofund_start_stop_requests (tenant_id, request_type, status, note, decision_note, request_payload_json, created_at)
+     VALUES (?, ?, 'pending', ?, '', ?, CURRENT_TIMESTAMP)`,
+    [tenantId, requestType, note, JSON.stringify(requestPayload)]
   );
+
+  if (requestType === 'start' || requestType === 'stop') {
+    await db.run(
+      `UPDATE algofund_profiles
+       SET requested_enabled = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [requestType === 'start' ? 1 : 0, tenantId]
+    );
+  }
 
   await db.run(
     `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
      VALUES (?, 'algofund_client', ?, ?, CURRENT_TIMESTAMP)`,
-    [tenantId, `algofund_${requestType}_request`, JSON.stringify({ note })]
+    [tenantId, `algofund_${requestType}_request`, JSON.stringify({ note, requestPayload })]
   );
 
   return getAlgofundState(tenantId);
@@ -3154,6 +3906,7 @@ export const resolveAlgofundRequest = async (requestId: number, status: RequestS
   }
 
   const row = request as AlgofundRequestRow;
+  const requestPayload = parseAlgofundRequestPayload(row.request_payload_json);
   const tenant = await getTenantById(row.tenant_id);
   const plan = await getPlanForTenant(row.tenant_id);
   const profile = await getAlgofundProfile(row.tenant_id);
@@ -3180,13 +3933,48 @@ export const resolveAlgofundRequest = async (requestId: number, status: RequestS
         const suffix = `Auto-note: approved without materialization (${reason})`;
         decisionNote = note ? `${note} | ${suffix}` : suffix;
       }
-    } else {
+    } else if (row.request_type === 'stop') {
       const systems = await listTradingSystems(asString(profile.assigned_api_key_name || tenant.assigned_api_key_name));
       const existing = systems.find((item) => asString(item.name) === getAlgofundClientSystemName(tenant));
       if (existing?.id) {
         await setTradingSystemActivation(asString(profile.assigned_api_key_name || tenant.assigned_api_key_name), Number(existing.id), false, true);
       }
       await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
+    } else if (row.request_type === 'switch_system') {
+      const apiKeyName = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
+      if (!apiKeyName) {
+        throw new Error('Assign API key before approving switch request');
+      }
+
+      const targetSystemId = Math.floor(asNumber(requestPayload.targetSystemId, 0));
+      if (targetSystemId <= 0) {
+        throw new Error('Switch request payload is missing targetSystemId');
+      }
+
+      const systems = await listTradingSystems(apiKeyName);
+      const target = systems.find((item) => Number(item.id) === targetSystemId);
+      if (!target?.id) {
+        throw new Error(`Target trading system not found: ${targetSystemId}`);
+      }
+
+      for (const item of systems) {
+        const id = Number(item.id || 0);
+        if (!id || id === Number(target.id) || !Boolean(item.is_active)) {
+          continue;
+        }
+        await setTradingSystemActivation(apiKeyName, id, false, true);
+      }
+
+      await setTradingSystemActivation(apiKeyName, Number(target.id), true, true);
+      await db.run(
+        `UPDATE algofund_profiles
+         SET actual_enabled = 1,
+             requested_enabled = 1,
+             published_system_name = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ?`,
+        [asString(target.name), row.tenant_id]
+      );
     }
   }
 

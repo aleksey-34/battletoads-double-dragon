@@ -417,6 +417,7 @@ export const initDB = async () => {
       status TEXT DEFAULT 'pending',
       note TEXT DEFAULT '',
       decision_note TEXT DEFAULT '',
+      request_payload_json TEXT DEFAULT '{}',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       decided_at TEXT,
       FOREIGN KEY (tenant_id) REFERENCES tenants(id)
@@ -567,6 +568,7 @@ export const initDB = async () => {
   await ensureColumn('live_trade_events', 'source_trade_id TEXT');
   await ensureColumn('live_trade_events', 'source_order_id TEXT');
   await ensureColumn('live_trade_events', 'source_symbol TEXT');
+  await ensureColumn('algofund_start_stop_requests', "request_payload_json TEXT DEFAULT '{}'");
 
   await db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_live_trade_events_source_trade_id

@@ -82,6 +82,26 @@ type TradingSystem = {
   metrics?: TradingSystemMetrics;
 };
 
+type SaasTenantSummary = {
+  tenant?: {
+    id?: number;
+    display_name?: string;
+    slug?: string;
+    assigned_api_key_name?: string;
+    product_mode?: string;
+  };
+  strategyProfile?: {
+    assigned_api_key_name?: string;
+  } | null;
+  algofundProfile?: {
+    assigned_api_key_name?: string;
+  } | null;
+};
+
+type SaasSummaryLite = {
+  tenants?: SaasTenantSummary[];
+};
+
 type BacktestPoint = {
   time: number;
   equity: number;
@@ -359,6 +379,9 @@ const TradingSystems: React.FC = () => {
   const [safeMembersApply, setSafeMembersApply] = useState(true);
   const [monitoringPoints, setMonitoringPoints] = useState<MonitoringPoint[]>([]);
   const [memberDraftsByStrategyId, setMemberDraftsByStrategyId] = useState<Record<number, { weight: number; is_enabled: boolean }>>({});
+  const [tenantRows, setTenantRows] = useState<Array<{ id: number; name: string; slug: string; apiKeyName: string }>>([]);
+  const [selectedTenantId, setSelectedTenantId] = useState<number | null>(null);
+  const [tenantSystemsByApiKey, setTenantSystemsByApiKey] = useState<Record<string, TradingSystem[]>>({});
   const [backtestTuning, setBacktestTuning] = useState<BacktestTuning>({
     riskMultiplier: 1,
     targetTrades: 160,
@@ -374,6 +397,7 @@ const TradingSystems: React.FC = () => {
 
     axios.defaults.headers.common.Authorization = `Bearer ${password}`;
     void loadApiKeys();
+    void loadTenantWorkflow();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -426,6 +450,61 @@ const TradingSystems: React.FC = () => {
       message.error(String(error?.response?.data?.error || error?.message || 'Failed to load API keys'));
     }
   }, []);
+
+  const loadTenantWorkflow = useCallback(async () => {
+    try {
+      const summaryResponse = await axios.get<SaasSummaryLite>('/api/saas/admin/summary');
+      const tenantsRaw = Array.isArray(summaryResponse.data?.tenants) ? summaryResponse.data.tenants : [];
+      const rows = tenantsRaw
+        .map((item) => {
+          const tenantId = Number(item?.tenant?.id || 0);
+          const apiKey = String(
+            item?.tenant?.assigned_api_key_name
+            || item?.strategyProfile?.assigned_api_key_name
+            || item?.algofundProfile?.assigned_api_key_name
+            || ''
+          ).trim();
+          return {
+            id: tenantId,
+            name: String(item?.tenant?.display_name || item?.tenant?.slug || `tenant_${tenantId}`),
+            slug: String(item?.tenant?.slug || ''),
+            apiKeyName: apiKey,
+          };
+        })
+        .filter((item) => item.id > 0 && item.apiKeyName);
+
+      setTenantRows(rows);
+      if (!selectedTenantId && rows.length > 0) {
+        setSelectedTenantId(rows[0].id);
+      }
+
+      const apiKeyList = Array.from(new Set(rows.map((item) => item.apiKeyName).filter(Boolean)));
+      if (apiKeyList.length === 0) {
+        setTenantSystemsByApiKey({});
+        return;
+      }
+
+      const fetched = await Promise.all(
+        apiKeyList.map(async (key) => {
+          try {
+            const response = await axios.get<TradingSystem[]>(`/api/trading-systems/${encodeURIComponent(key)}`);
+            return [key, Array.isArray(response.data) ? response.data : []] as const;
+          } catch {
+            return [key, []] as const;
+          }
+        })
+      );
+
+      const map: Record<string, TradingSystem[]> = {};
+      for (const [key, items] of fetched) {
+        map[key] = items;
+      }
+      setTenantSystemsByApiKey(map);
+    } catch {
+      setTenantRows([]);
+      setTenantSystemsByApiKey({});
+    }
+  }, [selectedTenantId]);
 
   const loadSystems = useCallback(async (nextApiKeyName: string) => {
     setSystemsLoading(true);
@@ -792,6 +871,24 @@ const TradingSystems: React.FC = () => {
     return `Сэмплов: ${formatNumber(samples, 0)}. Drift PnL: ${formatPercent(pnlDrift, 2)}. Slippage: ${formatPercent(slip * 100, 3)}. WinRate live/backtest: ${formatPercent(winLive * 100, 1)} / ${formatPercent(winBacktest * 100, 1)}.`;
   };
 
+  const selectedTenantRow = useMemo(
+    () => tenantRows.find((item) => item.id === selectedTenantId) || null,
+    [tenantRows, selectedTenantId]
+  );
+
+  const selectedTenantSystems = useMemo(
+    () => (selectedTenantRow ? (tenantSystemsByApiKey[selectedTenantRow.apiKeyName] || []) : []),
+    [selectedTenantRow, tenantSystemsByApiKey]
+  );
+
+  const openTenantSystem = (systemId: number) => {
+    if (!selectedTenantRow) {
+      return;
+    }
+    setApiKeyName(selectedTenantRow.apiKeyName);
+    setSelectedSystemId(systemId);
+  };
+
   return (
     <div className="battletoads-form-shell">
       <Card className="battletoads-card" bordered={false}>
@@ -800,9 +897,41 @@ const TradingSystems: React.FC = () => {
       </Card>
 
       <Card className="battletoads-card" style={{ marginTop: 16 }}>
+        <Alert
+          type="info"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="Новый поток: сначала выбираете tenant и его торговую систему, затем работаете с составом/бэктестом/апрувами. API-key выбор оставлен как fallback."
+        />
         <Row gutter={[16, 16]} align="middle">
           <Col xs={24} lg={8}>
-            <Text strong>{copy.apiKey}</Text>
+            <Text strong>Tenant</Text>
+            <Select
+              style={{ width: '100%', marginTop: 8 }}
+              value={selectedTenantId || undefined}
+              onChange={(value) => setSelectedTenantId(Number(value))}
+              options={tenantRows.map((item) => ({ value: item.id, label: `${item.name}${item.slug ? ` (${item.slug})` : ''}` }))}
+              placeholder="Select tenant"
+              allowClear
+            />
+          </Col>
+          <Col xs={24} lg={8}>
+            <Text strong>Tenant systems</Text>
+            <Select
+              style={{ width: '100%', marginTop: 8 }}
+              value={selectedTenantSystems.some((item) => Number(item.id) === Number(selectedSystemId)) ? selectedSystemId || undefined : undefined}
+              onChange={(value) => openTenantSystem(Number(value))}
+              options={selectedTenantSystems.map((item) => ({
+                value: Number(item.id),
+                label: `${item.name} (#${item.id})${item.is_active ? ' [active]' : ''}`,
+              }))}
+              placeholder="Select system"
+              disabled={!selectedTenantRow}
+              allowClear
+            />
+          </Col>
+          <Col xs={24} lg={8}>
+            <Text strong>{copy.apiKey} (fallback)</Text>
             <Select
               style={{ width: '100%', marginTop: 8 }}
               value={apiKeyName || undefined}

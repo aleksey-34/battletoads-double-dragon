@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
+  Alert,
   Badge,
   Button,
   Card,
@@ -142,6 +143,46 @@ type BackfillJobStatus = {
   finished_at?: string | null;
 };
 
+type FullHistoricalSweepStatus = {
+  success?: boolean;
+  exists?: boolean;
+  id?: number;
+  mode?: 'light' | 'heavy';
+  status?: 'queued' | 'running' | 'done' | 'failed';
+  processed_days?: number;
+  created_runs?: number;
+  skipped_days?: number;
+  current_day_key?: string;
+  progress_percent?: number;
+  error?: string;
+  started_at?: string;
+  updated_at?: string;
+  finished_at?: string | null;
+  details?: {
+    totalRuns?: number;
+    processedRuns?: number;
+    successRuns?: number;
+    failedRuns?: number;
+    logFilePath?: string;
+    sweepFilePath?: string;
+    catalogFilePath?: string;
+    resumedFromCheckpoint?: boolean;
+    skippedFromCheckpoint?: number;
+    config?: {
+      apiKeyName?: string;
+      dateFrom?: string;
+      dateTo?: string | null;
+      interval?: string;
+    };
+    researchImport?: {
+      sweepRunId?: number;
+      imported?: number;
+      skipped?: number;
+      candidates?: number;
+    };
+  };
+};
+
 type DbObservability = {
   atUtc: string;
   files: {
@@ -189,6 +230,16 @@ function statusColor(status: string): string {
 
 function parseMetrics(raw: string): Record<string, unknown> {
   try { return JSON.parse(raw) || {}; } catch { return {}; }
+}
+
+function formatDurationCompact(totalSeconds?: number | null): string {
+  const safe = Math.max(0, Math.floor(Number(totalSeconds || 0)));
+  const hours = Math.floor(safe / 3600);
+  const minutes = Math.floor((safe % 3600) / 60);
+  const seconds = safe % 60;
+  if (hours > 0) return `${hours}ч ${minutes}м`;
+  if (minutes > 0) return `${minutes}м ${seconds}с`;
+  return `${seconds}с`;
 }
 
 // ─── Sweep Panel ─────────────────────────────────────────────────────────────
@@ -515,6 +566,12 @@ export default function Research() {
   const [taskMarkDone, setTaskMarkDone] = useState(true);
   const [sweepMode, setSweepMode] = useState<'light' | 'heavy'>('light');
   const [schedulerBackfillMode, setSchedulerBackfillMode] = useState<'light' | 'heavy'>('light');
+  const [fullHistoricalSweepMode, setFullHistoricalSweepMode] = useState<'light' | 'heavy'>('heavy');
+  const [fullHistoricalSweepLoading, setFullHistoricalSweepLoading] = useState(false);
+  const [fullHistoricalSweepStatus, setFullHistoricalSweepStatus] = useState<FullHistoricalSweepStatus | null>(null);
+  const [fullHistoricalDateFrom, setFullHistoricalDateFrom] = useState('2025-01-01');
+  const [fullHistoricalDateTo, setFullHistoricalDateTo] = useState('');
+  const [fullHistoricalInterval, setFullHistoricalInterval] = useState('4h,1h');
   const [hfGenerateLoading, setHfGenerateLoading] = useState(false);
   const [hfTargetTradesPerDay, setHfTargetTradesPerDay] = useState(10);
   const [hfApiKeyName, setHfApiKeyName] = useState('');
@@ -618,6 +675,15 @@ export default function Research() {
     }
   }, []);
 
+  const fetchFullHistoricalSweepStatus = useCallback(async () => {
+    try {
+      const res = await axios.get<FullHistoricalSweepStatus>('/api/research/sweeps/full-historical/status');
+      setFullHistoricalSweepStatus(res.data || null);
+    } catch {
+      // keep UI resilient when endpoint is temporarily unavailable
+    }
+  }, []);
+
   const changeBackfillMode = async (value: 'light' | 'heavy') => {
     setSchedulerBackfillMode(value);
 
@@ -654,6 +720,56 @@ export default function Research() {
       message.error(e?.response?.data?.error || 'Backfill failed');
     } finally {
       setSchedulerBackfillLoading(false);
+    }
+  };
+
+  const startFullHistoricalSweep = async () => {
+    setFullHistoricalSweepLoading(true);
+    try {
+      const res = await axios.post<{
+        started?: boolean;
+        reason?: string;
+        jobId?: number;
+        totalRuns?: number;
+      }>('/api/research/sweeps/full-historical/start', {
+        mode: fullHistoricalSweepMode,
+        dateFrom: fullHistoricalDateFrom || undefined,
+        dateTo: fullHistoricalDateTo || undefined,
+        interval: fullHistoricalInterval || undefined,
+      });
+
+      if (res.data?.started === false) {
+        message.info(String(res.data?.reason || 'Historical sweep already running'));
+      } else {
+        message.success(`Полный historical sweep запущен: job #${res.data?.jobId || 'n/a'}, runs=${res.data?.totalRuns || 0}`);
+      }
+
+      await Promise.all([fetchFullHistoricalSweepStatus(), fetchScheduler()]);
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || 'Не удалось запустить полный historical sweep');
+    } finally {
+      setFullHistoricalSweepLoading(false);
+    }
+  };
+
+  const abortFullHistoricalSweep = async () => {
+    setFullHistoricalSweepLoading(true);
+    try {
+      const res = await axios.post<{ aborted?: boolean; reason?: string; jobId?: number }>('/api/research/sweeps/full-historical/abort', {
+        reason: 'manual abort from research ui',
+      });
+
+      if (res.data?.aborted) {
+        message.success(`Full sweep aborted: job #${res.data?.jobId || 'n/a'}`);
+      } else {
+        message.info(String(res.data?.reason || 'No running full sweep job to abort'));
+      }
+
+      await Promise.all([fetchFullHistoricalSweepStatus(), fetchScheduler()]);
+    } catch (e: any) {
+      message.error(e?.response?.data?.error || 'Не удалось остановить full historical sweep');
+    } finally {
+      setFullHistoricalSweepLoading(false);
     }
   };
 
@@ -795,7 +911,7 @@ export default function Research() {
       message.success(`High-frequency TS created: ${res.data?.createdSystem?.name || 'n/a'} (#${res.data?.createdSystem?.id || 'n/a'})`);
       await Promise.all([fetchProfiles(), fetchScheduler()]);
     } catch (e: any) {
-      message.error(e?.response?.data?.error || 'Failed to generate high-frequency system');
+      message.error(e?.response?.data?.error || 'Failed to generate high-frequency system', 10);
     } finally {
       setHfGenerateLoading(false);
     }
@@ -838,6 +954,7 @@ export default function Research() {
   useEffect(() => { void fetchScheduler(); }, [fetchScheduler]);
   useEffect(() => { void fetchTasks(); }, [fetchTasks]);
   useEffect(() => { void fetchBackfillStatus(); }, [fetchBackfillStatus]);
+  useEffect(() => { void fetchFullHistoricalSweepStatus(); }, [fetchFullHistoricalSweepStatus]);
 
   useEffect(() => {
     if (!backfillJobStatus || backfillJobStatus.status !== 'running') {
@@ -852,6 +969,20 @@ export default function Research() {
       window.clearInterval(timer);
     };
   }, [backfillJobStatus, fetchBackfillStatus]);
+
+  useEffect(() => {
+    if (!fullHistoricalSweepStatus || fullHistoricalSweepStatus.status !== 'running') {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void fetchFullHistoricalSweepStatus();
+    }, 3000);
+
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [fullHistoricalSweepStatus, fetchFullHistoricalSweepStatus]);
 
   useEffect(() => {
     if (backfillJobStatus?.mode) {
@@ -869,6 +1000,19 @@ export default function Research() {
       setHfApiKeyName(String(apiKeys[0].name || ''));
     }
   }, [apiKeys, hfApiKeyName]);
+
+  const fullHistoricalProcessedRuns = Number(fullHistoricalSweepStatus?.details?.processedRuns || fullHistoricalSweepStatus?.processed_days || 0);
+  const fullHistoricalTotalRuns = Number(fullHistoricalSweepStatus?.details?.totalRuns || 0);
+  const fullHistoricalStartedAtMs = fullHistoricalSweepStatus?.started_at ? Date.parse(fullHistoricalSweepStatus.started_at) : NaN;
+  const fullHistoricalElapsedSec = Number.isFinite(fullHistoricalStartedAtMs)
+    ? Math.max(0, Math.floor((Date.now() - fullHistoricalStartedAtMs) / 1000))
+    : 0;
+  const fullHistoricalRunsPerSec = fullHistoricalElapsedSec > 0 && fullHistoricalProcessedRuns > 0
+    ? fullHistoricalProcessedRuns / fullHistoricalElapsedSec
+    : 0;
+  const fullHistoricalEtaSec = fullHistoricalRunsPerSec > 0 && fullHistoricalTotalRuns > fullHistoricalProcessedRuns
+    ? Math.max(0, Math.round((fullHistoricalTotalRuns - fullHistoricalProcessedRuns) / fullHistoricalRunsPerSec))
+    : 0;
 
   // ── Preview ────────────────────────────────────────────────────────────────
   const handlePreview = async (profile: StrategyProfile) => {
@@ -1182,7 +1326,125 @@ export default function Research() {
         </Row>
       </Card>
 
+      <Card
+        title="Полный Historical Sweep (heavy pipeline)"
+        style={{ marginTop: 16 }}
+        extra={
+          <Space>
+            <Tag color={statusColor(String(fullHistoricalSweepStatus?.status || 'idle'))}>
+              {fullHistoricalSweepStatus?.status || 'idle'}
+            </Tag>
+            <Tag color={fullHistoricalSweepMode === 'heavy' ? 'red' : 'default'}>
+              {fullHistoricalSweepMode === 'heavy' ? 'heavy' : 'light'}
+            </Tag>
+          </Space>
+        }
+      >
+        <Space wrap>
+          <span>From:</span>
+          <Input type="date" style={{ width: 150 }} value={fullHistoricalDateFrom} onChange={(e) => setFullHistoricalDateFrom(e.target.value)} />
+          <span>To:</span>
+          <Input type="date" style={{ width: 150 }} value={fullHistoricalDateTo} onChange={(e) => setFullHistoricalDateTo(e.target.value)} />
+          <Input
+            style={{ width: 90 }}
+            value={fullHistoricalInterval}
+            onChange={(e) => setFullHistoricalInterval(e.target.value)}
+            placeholder="4h,1h"
+          />
+          <Select
+            value={fullHistoricalSweepMode}
+            style={{ width: 150 }}
+            options={[
+              { value: 'light', label: 'Режим: light' },
+              { value: 'heavy', label: 'Режим: heavy' },
+            ]}
+            onChange={(value) => setFullHistoricalSweepMode(value)}
+          />
+          <Button type="primary" loading={fullHistoricalSweepLoading} onClick={() => void startFullHistoricalSweep()}>
+            Запустить full sweep
+          </Button>
+          <Button danger loading={fullHistoricalSweepLoading} onClick={() => void abortFullHistoricalSweep()}>
+            Остановить full sweep
+          </Button>
+          <Button onClick={() => void fetchFullHistoricalSweepStatus()}>
+            Обновить статус
+          </Button>
+        </Space>
+
+        <Space direction="vertical" size={2} style={{ marginTop: 12 }}>
+          <Text type="secondary">
+            Конфиг: {fullHistoricalSweepStatus?.details?.config?.apiKeyName || 'BTDD_D1'}; {fullHistoricalSweepStatus?.details?.config?.dateFrom || fullHistoricalDateFrom || '—'} → {fullHistoricalSweepStatus?.details?.config?.dateTo || fullHistoricalDateTo || 'latest'}; {fullHistoricalSweepStatus?.details?.config?.interval || fullHistoricalInterval || '4h'}
+          </Text>
+          {fullHistoricalSweepStatus?.exists ? (
+            <Text type={fullHistoricalSweepStatus.status === 'failed' ? 'danger' : 'secondary'}>
+              Job #{fullHistoricalSweepStatus.id || 'n/a'}: обработано {fullHistoricalSweepStatus.details?.processedRuns || fullHistoricalSweepStatus.processed_days || 0}/{fullHistoricalSweepStatus.details?.totalRuns || 0}; успех {fullHistoricalSweepStatus.details?.successRuns || fullHistoricalSweepStatus.created_runs || 0}; ошибок {fullHistoricalSweepStatus.details?.failedRuns || fullHistoricalSweepStatus.skipped_days || 0}
+            </Text>
+          ) : (
+            <Text type="secondary">Полный historical sweep ещё не запускался.</Text>
+          )}
+          {fullHistoricalSweepStatus?.status === 'running' ? (
+            <Text type="secondary">
+              В работе: {formatDurationCompact(fullHistoricalElapsedSec)}; темп {fullHistoricalRunsPerSec > 0 ? `${fullHistoricalRunsPerSec.toFixed(2)} runs/sec` : 'собираем оценку'}; ETA {fullHistoricalEtaSec > 0 ? formatDurationCompact(fullHistoricalEtaSec) : '—'}
+            </Text>
+          ) : null}
+          {fullHistoricalSweepStatus?.details?.resumedFromCheckpoint ? (
+            <Text type="warning">
+              Resume from checkpoint: да; пропущено уже готовых runs {fullHistoricalSweepStatus.details?.skippedFromCheckpoint || 0}
+            </Text>
+          ) : null}
+          {fullHistoricalSweepStatus?.details?.logFilePath ? (
+            <Text type="secondary">Лог: {fullHistoricalSweepStatus.details.logFilePath}</Text>
+          ) : null}
+          {fullHistoricalSweepStatus?.details?.sweepFilePath ? (
+            <Text type="secondary">Sweep JSON: {fullHistoricalSweepStatus.details.sweepFilePath}</Text>
+          ) : null}
+          {fullHistoricalSweepStatus?.details?.catalogFilePath ? (
+            <Text type="secondary">Catalog JSON: {fullHistoricalSweepStatus.details.catalogFilePath}</Text>
+          ) : null}
+          {fullHistoricalSweepStatus?.details?.researchImport?.sweepRunId ? (
+            <Text type="secondary">
+              Импорт в Research: sweep #{fullHistoricalSweepStatus.details.researchImport.sweepRunId}, imported {fullHistoricalSweepStatus.details.researchImport.imported || 0}, skipped {fullHistoricalSweepStatus.details.researchImport.skipped || 0}
+            </Text>
+          ) : null}
+          {fullHistoricalSweepStatus?.error ? <Text type="danger">Ошибка: {fullHistoricalSweepStatus.error}</Text> : null}
+        </Space>
+
+        {fullHistoricalSweepStatus?.exists ? (
+          <div style={{ marginTop: 10, maxWidth: 640 }}>
+            <Progress
+              percent={Math.max(0, Math.min(100, Number(fullHistoricalSweepStatus.progress_percent || 0)))}
+              status={fullHistoricalSweepStatus.status === 'failed' ? 'exception' : fullHistoricalSweepStatus.status === 'done' ? 'success' : 'active'}
+              format={(percent) => `${Number(percent || 0).toFixed(1)}%`}
+            />
+          </div>
+        ) : null}
+      </Card>
+
       <Divider />
+
+      <Card title="Что это в Research: Sweep Runs и Профили стратегий" style={{ marginBottom: 16 }}>
+        <Space direction="vertical" size={8}>
+          <Alert
+            type="info"
+            showIcon
+            message="Коротко: Sweep Runs = массовый поиск кандидатов. Профили стратегий = выбранные кандидаты с метриками, из которых собираются офферы и TS."
+          />
+          <Text>
+            <strong>Sweep Runs</strong> — это массовые backtest-прогоны по сетке параметров. Мы перебираем много комбинаций,
+            считаем PF/DD/WR/trades и формируем shortlist в офферы и TS.
+          </Text>
+          <Text>
+            <strong>Профили стратегий</strong> — это готовые режимы риска/частоты (например conservative, balanced, HF),
+            которые помогают быстро собирать продуктовые конфигурации без ручного подбора каждого параметра.
+          </Text>
+          <Text>
+            Практический поток: запустили Sweep → получили кандидатов → опубликовали офферы в витрину → собрали TS для Strategy Client/Algofund.
+          </Text>
+          <Text type="secondary">
+            Упрощённо: Sweep = "откуда берутся кандидаты", Профили = "как из кандидатов собрать понятные продукты".
+          </Text>
+        </Space>
+      </Card>
 
       <Card
         title="Запросы пар на backtest -> задачи sweep"
@@ -1332,6 +1594,9 @@ export default function Research() {
         </Space>
         <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
           Создаёт новую торговую систему из sweep-кандидатов с фокусом на ритм сделок и ограничениями по PF/DD. Мягкий режим бережнее по нагрузке, жесткий расширяет перебор.
+        </Paragraph>
+        <Paragraph type="secondary" style={{ marginTop: 6, marginBottom: 0 }}>
+          Важно: эта задача использует последний завершённый historical sweep artifact. Если heavy sweep ещё идёт, его частичные результаты сюда ещё не попадают.
         </Paragraph>
       </Card>
 

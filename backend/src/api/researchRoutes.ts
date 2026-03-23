@@ -39,6 +39,11 @@ import {
   runSchedulerJobNow,
   updateSchedulerJob,
 } from '../research/schedulerService';
+import {
+  startFullHistoricalSweepJob as startHistoricalSweepJob,
+  getFullHistoricalSweepStatus as getHistoricalSweepStatus,
+  abortRunningFullHistoricalSweepJob as abortHistoricalSweepJob,
+} from '../research/fullHistoricalSweepService';
 import { importHistoricalArtifactsToResearch, importCandidatesFromSweepCatalog } from '../research/importService';
 import {
   listResearchSweepTasks,
@@ -344,6 +349,49 @@ router.get('/sweeps/:id/pairs', async (req, res) => {
   }
 });
 
+router.post('/sweeps/full-historical/start', async (req, res) => {
+  try {
+    const result = await startHistoricalSweepJob({
+      mode: parseSweepRunMode(req.body?.mode),
+      apiKeyName: req.body?.apiKeyName ? String(req.body.apiKeyName) : undefined,
+      dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
+      dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
+      interval: req.body?.interval ? String(req.body.interval) : undefined,
+      systemName: req.body?.systemName ? String(req.body.systemName) : undefined,
+      strategyPrefix: req.body?.strategyPrefix ? String(req.body.strategyPrefix) : undefined,
+      checkpointEvery: req.body?.checkpointEvery ? Number(req.body.checkpointEvery) : undefined,
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    logger.error(`POST /research/sweeps/full-historical/start error: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.get('/sweeps/full-historical/status', async (_req, res) => {
+  try {
+    const result = await getHistoricalSweepStatus();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    logger.error(`GET /research/sweeps/full-historical/status error: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/sweeps/full-historical/abort', async (req, res) => {
+  try {
+    const reason = req.body?.reason ? String(req.body.reason) : 'aborted by operator';
+    const result = await abortHistoricalSweepJob(reason);
+    res.json({ success: true, ...result });
+  } catch (err) {
+    const error = err as Error;
+    logger.error(`POST /research/sweeps/full-historical/abort error: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 /**
  * Register a sweep run from an existing JSON file on the VPS filesystem.
  * Does NOT start a new sweep — that is done via the existing scripts.
@@ -583,13 +631,14 @@ router.post('/tasks/high-frequency-system', async (req, res) => {
     const inferredDays = Number.isFinite(dateFromMs) && Number.isFinite(dateToMs) && dateToMs > dateFromMs
       ? Math.max(1, Math.floor((dateToMs - dateFromMs) / 86_400_000))
       : 365;
+    const frequencyWindowDays = Math.max(7, Math.min(365, Math.floor(Number(req.body?.windowDays || inferredDays || 90))));
 
-    const candidates = sweep.evaluated
+    const allCandidates = sweep.evaluated
       .map((item) => {
         const strategyId = Number(item.strategyId || 0);
         const strategy = existingById.get(strategyId) || null;
         const tradesCount = Math.max(0, Number(item.tradesCount || 0));
-        const tradesPerDay = Number((tradesCount / inferredDays).toFixed(3));
+        const tradesPerDay = Number((tradesCount / frequencyWindowDays).toFixed(3));
         return {
           strategyId,
           strategy,
@@ -597,16 +646,44 @@ router.post('/tasks/high-frequency-system', async (req, res) => {
           market: String(item.market || ''),
           marketMode: String(item.marketMode || ''),
           strategyType: String(item.strategyType || strategy?.strategy_type || ''),
+          interval: String(item.interval || strategy?.interval || ''),
           profitFactor: Number(item.profitFactor || 0),
           maxDrawdownPercent: Number(item.maxDrawdownPercent || 0),
           totalReturnPercent: Number(item.totalReturnPercent || 0),
           score: Number(item.score || 0),
           tradesCount,
           tradesPerDay,
-          distance: Math.abs(tradesPerDay - targetTradesPerDay),
         };
       })
-      .filter((item) => item.strategyId > 0 && item.strategy && item.profitFactor >= minPf && item.maxDrawdownPercent <= maxDd)
+      .filter((item) => item.strategyId > 0 && item.strategy);
+
+    const fallbackProfiles = [
+      {
+        label: 'A',
+        targetTradesPerDay,
+        minPf,
+        maxDd,
+      },
+      {
+        label: 'B',
+        targetTradesPerDay: Math.min(targetTradesPerDay, 6),
+        minPf: Math.max(0.9, Number((minPf - 0.03).toFixed(3))),
+        maxDd: Math.min(80, Number((maxDd + 2).toFixed(3))),
+      },
+      {
+        label: 'C',
+        targetTradesPerDay: Math.min(targetTradesPerDay, 4),
+        minPf: Math.max(0.85, Number((minPf - 0.05).toFixed(3))),
+        maxDd: Math.min(80, Number((maxDd + 5).toFixed(3))),
+      },
+    ];
+
+    const buildCandidates = (profile: { targetTradesPerDay: number; minPf: number; maxDd: number }) => allCandidates
+      .filter((item) => item.profitFactor >= profile.minPf && item.maxDrawdownPercent <= profile.maxDd)
+      .map((item) => ({
+        ...item,
+        distance: Math.abs(item.tradesPerDay - profile.targetTradesPerDay),
+      }))
       .sort((left, right) => {
         if (left.distance !== right.distance) {
           return left.distance - right.distance;
@@ -617,8 +694,36 @@ router.post('/tasks/high-frequency-system', async (req, res) => {
         return right.score - left.score;
       });
 
+    let activeProfile = fallbackProfiles[0];
+    let candidates = buildCandidates(activeProfile);
     if (candidates.length === 0) {
-      return res.status(400).json({ error: 'No candidates match PF/DD filters in current sweep for this API key.' });
+      for (const profile of fallbackProfiles.slice(1)) {
+        const next = buildCandidates(profile);
+        if (next.length > 0) {
+          activeProfile = profile;
+          candidates = next;
+          break;
+        }
+      }
+    }
+
+    if (candidates.length === 0) {
+      const historicalStatus = await getHistoricalSweepStatus().catch(() => null) as Record<string, any> | null;
+      const processedRunsRaw = Number(historicalStatus?.details?.processedRuns || historicalStatus?.processed_days || 0);
+      const totalRuns = Math.max(0, Number(historicalStatus?.details?.totalRuns || 0));
+      const processedRuns = totalRuns > 0
+        ? Math.min(totalRuns, Math.max(0, processedRunsRaw))
+        : Math.max(0, processedRunsRaw);
+      const progressPercent = totalRuns > 0
+        ? Number(((processedRuns / totalRuns) * 100).toFixed(2))
+        : Math.max(0, Math.min(100, Number(historicalStatus?.progress_percent || 0)));
+      const shouldShowRunningHint = historicalStatus?.status === 'running' && (totalRuns <= 0 || processedRuns < totalRuns);
+      const runningHint = shouldShowRunningHint
+        ? ` Full historical sweep is still running: job #${historicalStatus?.id || 'n/a'} ${processedRuns}/${totalRuns} (${progressPercent}%). High-frequency TS generation uses completed sweep artifacts, not the in-progress job.`
+        : '';
+      const profileHint = ` Tried fallback ladder A/B/C with targets ${fallbackProfiles.map((item) => `${item.targetTradesPerDay}/day`).join(' -> ')} and PF/DD relaxation.`;
+      const configHint = ' To reach ~10/day reliably, run dedicated HF sweep profile with shorter horizon (60-120 days) and faster intervals (15m/30m).';
+      return res.status(400).json({ error: `No candidates match PF/DD filters in current sweep for this API key.${runningHint}${profileHint}${configHint}` });
     }
 
     const selected: typeof candidates = [];
@@ -677,6 +782,13 @@ router.post('/tasks/high-frequency-system', async (req, res) => {
       mode,
       targetTradesPerDay,
       inferredSweepDays: inferredDays,
+      frequencyWindowDays,
+      selectionProfile: {
+        label: activeProfile.label,
+        targetTradesPerDay: activeProfile.targetTradesPerDay,
+        minPf: activeProfile.minPf,
+        maxDd: activeProfile.maxDd,
+      },
       selectedMembers: selected.map((item) => ({
         strategyId: item.strategyId,
         strategyName: item.strategyName,
