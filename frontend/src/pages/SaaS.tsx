@@ -1813,7 +1813,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     (strategyState?.offers || []).length > 0
       ? (strategyState?.offers || [])
       : [...summaryCatalogOffers, ...strategyRecommendedOffers, ...summaryRecommendedOffers]
-  ).filter((offer) => publishedOfferIds.size === 0 || publishedOfferIds.has(String(offer.offerId || '')));
+  ).filter((offer) => publishedOfferIds.has(String(offer.offerId || '')));
   const strategyDraftConstraints = buildDraftStrategyConstraints(strategyOfferIds, strategyOfferCatalog, strategyState?.constraints || null);
   const pendingAlgofundRequests = (summary?.algofundRequestQueue?.items || []).filter((item) => item.status === 'pending');
   const pendingSwitchSystemIds = new Set(
@@ -1834,6 +1834,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return acc;
   }, {});
   const offerStoreOffers = summary?.offerStore?.offers || [];
+  const publishedStorefrontOffers = offerStoreOffers.filter((offer) => Boolean(offer.published));
+  const researchCandidateOffers = offerStoreOffers.filter((offer) => !Boolean(offer.published));
   const offerTitleById = offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
     return acc;
@@ -3759,40 +3761,145 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
 
-                          <Card className="battletoads-card" title="Sweep offers: publish/unpublish">
-                                <Space wrap style={{ marginBottom: 12 }}>
-                                  <Tag color="processing">published: {Number(summary?.offerStore?.publishedOfferIds?.length || 0)}</Tag>
-                                  <Tag>total: {Number(summary?.offerStore?.offers?.length || 0)}</Tag>
-                                  <Tag color="blue">period: {Number(summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
-                                  <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
-                                </Space>
-                                <Space wrap style={{ marginBottom: 12 }}>
-                                  <InputNumber
-                                    min={7}
-                                    max={365}
-                                    value={Number(summary?.offerStore?.defaults?.periodDays || 90)}
-                                    onChange={(value) => {
-                                      const numeric = Number(value || 90);
-                                      void updateOfferStoreDefaults({ periodDays: Math.max(7, Math.min(365, Math.floor(numeric))) });
-                                    }}
-                                    addonBefore="Period d"
+                          <Card className="battletoads-card" title="Approval center: оферы клиентов стратегий и ТС Алгофонда">
+                            <Paragraph type="secondary" style={{ marginTop: 0 }}>
+                              Логика теперь явная: после sweep карточки попадают в кандидаты из ресерча. Здесь ты смотришь equity и метрики, при необходимости идешь в бэктест или Trading Systems, а затем апрувишь на витрину.
+                            </Paragraph>
+                            <Space wrap style={{ marginBottom: 12 }}>
+                              <Tag color="processing">approved storefront: {publishedStorefrontOffers.length}</Tag>
+                              <Tag color="default">research candidates: {researchCandidateOffers.length}</Tag>
+                              <Tag color="blue">period: {Number(summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
+                              <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
+                            </Space>
+                            <Space wrap style={{ marginBottom: 16 }}>
+                              <InputNumber
+                                min={7}
+                                max={365}
+                                value={Number(summary?.offerStore?.defaults?.periodDays || 90)}
+                                onChange={(value) => {
+                                  const numeric = Number(value || 90);
+                                  void updateOfferStoreDefaults({ periodDays: Math.max(7, Math.min(365, Math.floor(numeric))) });
+                                }}
+                                addonBefore="Period d"
+                              />
+                              <InputNumber
+                                min={1}
+                                max={20}
+                                step={0.5}
+                                value={Number(summary?.offerStore?.defaults?.targetTradesPerDay || 6)}
+                                onChange={(value) => {
+                                  const numeric = Number(value || 6);
+                                  void updateOfferStoreDefaults({ targetTradesPerDay: Math.max(1, Math.min(20, numeric)) });
+                                }}
+                                addonBefore="Target/day"
+                              />
+                              <Button size="small" href="/backtest">Открыть Бэктест</Button>
+                              <Button size="small" href="/trading-systems">Открыть Trading Systems</Button>
+                            </Space>
+
+                            <Row gutter={[16, 16]}>
+                              <Col xs={24} xl={14}>
+                                <Card className="battletoads-card" size="small" title="Витрина оферов клиентов стратегий (approved)">
+                                  {publishedStorefrontOffers.length === 0 ? (
+                                    <Empty description="Пока ничего не апрувлено на витрину" />
+                                  ) : (
+                                    <Table
+                                      size="small"
+                                      rowKey="offerId"
+                                      dataSource={publishedStorefrontOffers}
+                                      expandable={{
+                                        expandedRowRender: (row: any) => {
+                                          const pts: number[] = Array.isArray(row.equityPoints) ? row.equityPoints : [];
+                                          if (pts.length === 0) {
+                                            return <Text type="secondary">Equity curve unavailable</Text>;
+                                          }
+                                          return <ChartComponent data={pts.map((v, i) => ({ time: i, equity: v }))} type="line" />;
+                                        },
+                                        rowExpandable: () => true,
+                                      }}
+                                      pagination={{ pageSize: 6, showSizeChanger: false }}
+                                      scroll={{ x: 760 }}
+                                      columns={[
+                                        {
+                                          title: 'Офер',
+                                          key: 'offer',
+                                          render: (_, row: any) => (
+                                            <Space direction="vertical" size={0}>
+                                              <Text strong>{row.titleRu}</Text>
+                                              <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                            </Space>
+                                          ),
+                                        },
+                                        {
+                                          title: 'Метрики',
+                                          key: 'metrics',
+                                          render: (_, row: any) => (
+                                            <Space wrap>
+                                              <Tag>{Number(row.periodDays || 0)}d</Tag>
+                                              <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
+                                              <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
+                                              <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                            </Space>
+                                          ),
+                                        },
+                                        {
+                                          title: 'Действия',
+                                          key: 'actions',
+                                          width: 180,
+                                          render: (_, row: any) => (
+                                            <Space wrap>
+                                              <Button size="small" href="/backtest">Бэктест</Button>
+                                              <Button size="small" danger onClick={() => void openUnpublishWizard(String(row.offerId))}>Снять</Button>
+                                            </Space>
+                                          ),
+                                        },
+                                      ]}
+                                    />
+                                  )}
+                                </Card>
+                              </Col>
+                              <Col xs={24} xl={10}>
+                                <Card className="battletoads-card" size="small" title="ТС Алгофонда: кандидат на апрув">
+                                  <Paragraph type="secondary" style={{ marginTop: 0 }}>
+                                    Для Алгофонда витрина строится не из оферов, а из собранного admin TS. Сначала смотри состав и метрики, при необходимости корректируй в Trading Systems, потом публикуй.
+                                  </Paragraph>
+                                  <Space wrap style={{ marginBottom: 12 }}>
+                                    <Tag color="processing">members: {Number(summary?.catalog?.adminTradingSystemDraft?.members?.length || 0)}</Tag>
+                                    <Tag>{summary?.catalog?.adminTradingSystemDraft?.name || 'Admin TS draft'}</Tag>
+                                  </Space>
+                                  <List
+                                    dataSource={summary?.catalog?.adminTradingSystemDraft?.members || []}
+                                    locale={{ emptyText: <Empty description="После sweep пока нет TS-кандидата для публикации" /> }}
+                                    renderItem={(member) => (
+                                      <List.Item>
+                                        <Space direction="vertical" size={0}>
+                                          <Text strong>{member.strategyName}</Text>
+                                          <Text type="secondary">{member.marketMode.toUpperCase()} • {member.market}</Text>
+                                        </Space>
+                                        <Space wrap>
+                                          <Tag color="cyan">score {formatNumber(member.score)}</Tag>
+                                          <Tag color="purple">w {formatNumber(member.weight)}</Tag>
+                                        </Space>
+                                      </List.Item>
+                                    )}
                                   />
-                                  <InputNumber
-                                    min={1}
-                                    max={20}
-                                    step={0.5}
-                                    value={Number(summary?.offerStore?.defaults?.targetTradesPerDay || 6)}
-                                    onChange={(value) => {
-                                      const numeric = Number(value || 6);
-                                      void updateOfferStoreDefaults({ targetTradesPerDay: Math.max(1, Math.min(20, numeric)) });
-                                    }}
-                                    addonBefore="Target/day"
-                                  />
-                                </Space>
+                                  <Space wrap style={{ marginTop: 12 }}>
+                                    <Button size="small" href="/trading-systems">Настроить ТС</Button>
+                                    <Button size="small" href="/backtest">Смотреть бэктест</Button>
+                                    <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>Апрув и публикация ТС</Button>
+                                  </Space>
+                                </Card>
+                              </Col>
+                            </Row>
+
+                            <Card className="battletoads-card" size="small" title="Кандидаты из sweep/research на апрув">
+                              {researchCandidateOffers.length === 0 ? (
+                                <Empty description="Новых карточек из sweep/research без апрува сейчас нет" />
+                              ) : (
                                 <Table
                                   size="small"
                                   rowKey="offerId"
-                                  dataSource={summary?.offerStore?.offers || []}
+                                  dataSource={researchCandidateOffers}
                                   expandable={{
                                     expandedRowRender: (row: any) => {
                                       const pts: number[] = Array.isArray(row.equityPoints) ? row.equityPoints : [];
@@ -3800,11 +3907,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         return <Text type="secondary">Equity curve unavailable (no preset for this offer yet)</Text>;
                                       }
                                       const equityData = pts.map((v, i) => ({ time: i, equity: v }));
-                                      return (
-                                        <div style={{ padding: '8px 0' }}>
-                                          <ChartComponent data={equityData} type="line" />
-                                        </div>
-                                      );
+                                      return <ChartComponent data={equityData} type="line" />;
                                     },
                                     rowExpandable: () => true,
                                   }}
@@ -3812,7 +3915,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   scroll={{ x: 980 }}
                                   columns={[
                                     {
-                                      title: 'Offer',
+                                      title: 'Кандидат',
                                       key: 'offer',
                                       render: (_, row: any) => (
                                         <Space direction="vertical" size={0}>
@@ -3822,46 +3925,43 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       ),
                                     },
                                     {
-                                      title: 'Backtest',
+                                      title: 'Sweep/backtest',
                                       key: 'bt',
-                                      render: (_, row: any) => {
-                                        const sweepPeriodLabel = summary?.sweepSummary?.period
-                                          ? formatPeriodLabel(summary.sweepSummary.period)
-                                          : null;
-                                        return (
-                                          <Space wrap>
-                                            <Tag color="default">
-                                              {Number(row.periodDays || summary?.offerStore?.defaults?.periodDays || 0)}d
-                                              {sweepPeriodLabel ? ` • ${sweepPeriodLabel}` : ''}
-                                            </Tag>
-                                            <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
-                                            <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
-                                            <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
-                                            <Tag color="blue">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
-                                          </Space>
-                                        );
-                                      },
+                                      render: (_, row: any) => (
+                                        <Space wrap>
+                                          <Tag color="default">{Number(row.periodDays || summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
+                                          <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
+                                          <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
+                                          <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                          <Tag color="blue">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
+                                        </Space>
+                                      ),
                                     },
                                     {
-                                      title: 'Store',
+                                      title: 'Апрув',
                                       key: 'published',
-                                      width: 130,
+                                      width: 240,
                                       render: (_, row: any) => (
-                                        <Switch
-                                          checked={Boolean(row.published)}
-                                          loading={actionLoading === `offer-store:${String(row.offerId)}`}
-                                          onChange={(checked) => {
-                                            if (checked) {
-                                              void toggleOfferPublished(String(row.offerId), true);
-                                            } else {
-                                              void openUnpublishWizard(String(row.offerId));
-                                            }
-                                          }}
-                                        />
+                                        <Space wrap>
+                                          <Button size="small" href="/backtest">Бэктест</Button>
+                                          <Switch
+                                            checked={Boolean(row.published)}
+                                            loading={actionLoading === `offer-store:${String(row.offerId)}`}
+                                            onChange={(checked) => {
+                                              if (checked) {
+                                                void toggleOfferPublished(String(row.offerId), true);
+                                              } else {
+                                                void openUnpublishWizard(String(row.offerId));
+                                              }
+                                            }}
+                                          />
+                                        </Space>
                                       ),
                                     },
                                   ]}
                                 />
+                              )}
+                            </Card>
                           </Card>
 
                           {performanceReport ? (
@@ -4631,49 +4731,53 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 showIcon
                                 message="Здесь для admin показывается витрина карточек. Кабинет клиента перенесен в Админ → Оферы и ТС."
                               />
-                              <Table
-                                size="small"
-                                rowKey="offerId"
-                                dataSource={offerStoreOffers.filter((offer) => offer.mode === 'mono' || offer.mode === 'synth')}
-                                pagination={{ pageSize: 8, showSizeChanger: false }}
-                                scroll={{ x: 900 }}
-                                columns={[
-                                  {
-                                    title: 'Карточка',
-                                    key: 'offer',
-                                    render: (_, row: any) => (
-                                      <Space direction="vertical" size={0}>
-                                        <Text strong>{row.titleRu}</Text>
-                                        <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
-                                      </Space>
-                                    ),
-                                  },
-                                  {
-                                    title: 'Период/метрики',
-                                    key: 'metrics',
-                                    render: (_, row: any) => (
-                                      <Space size={4} wrap>
-                                        <Tag color="default">{Number(row.periodDays || 0)}d</Tag>
-                                        <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
-                                        <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
-                                        <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
-                                      </Space>
-                                    ),
-                                  },
-                                  {
-                                    title: 'Действия',
-                                    key: 'actions',
-                                    width: 280,
-                                    render: (_, row: any) => (
-                                      <Space size={4} wrap>
-                                        <Button size="small" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Редактировать</Button>
-                                        <Button size="small" href="/backtest">Бэктест</Button>
-                                        <Tag color={row.published ? 'success' : 'default'}>{row.published ? 'на витрине' : 'из ресерча'}</Tag>
-                                      </Space>
-                                    ),
-                                  },
-                                ]}
-                              />
+                              {publishedStorefrontOffers.length === 0 ? (
+                                <Empty description="Витрина оферов пока пустая: сначала апрувни карточки в Админ → Оферы и ТС" />
+                              ) : (
+                                <Table
+                                  size="small"
+                                  rowKey="offerId"
+                                  dataSource={publishedStorefrontOffers}
+                                  pagination={{ pageSize: 8, showSizeChanger: false }}
+                                  scroll={{ x: 900 }}
+                                  columns={[
+                                    {
+                                      title: 'Карточка',
+                                      key: 'offer',
+                                      render: (_, row: any) => (
+                                        <Space direction="vertical" size={0}>
+                                          <Text strong>{row.titleRu}</Text>
+                                          <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                        </Space>
+                                      ),
+                                    },
+                                    {
+                                      title: 'Период/метрики',
+                                      key: 'metrics',
+                                      render: (_, row: any) => (
+                                        <Space size={4} wrap>
+                                          <Tag color="default">{Number(row.periodDays || 0)}d</Tag>
+                                          <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
+                                          <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
+                                          <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                        </Space>
+                                      ),
+                                    },
+                                    {
+                                      title: 'Действия',
+                                      key: 'actions',
+                                      width: 280,
+                                      render: (_, row: any) => (
+                                        <Space size={4} wrap>
+                                          <Button size="small" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Редактировать</Button>
+                                          <Button size="small" href="/backtest">Бэктест</Button>
+                                          <Tag color="success">на витрине</Tag>
+                                        </Space>
+                                      ),
+                                    },
+                                  ]}
+                                />
+                              )}
                             </Space>
                           ) : (
                             <>
@@ -4790,6 +4894,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           )}
                         </Card>
 
+                        {!isAdminSurface ? (
+                        <>
                         <Card className="battletoads-card" title="Custom TS profiles">
                           <Space direction="vertical" size={12} style={{ width: '100%' }}>
                             <Space wrap>
@@ -5144,6 +5250,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             />
                           </Card>
                         ) : null}
+                        </>
+                        ) : (
+                          <Alert type="info" showIcon message="Редактирование, настройка риска и подбор оферов выполняются через Админ → Оферы и ТС. Здесь оставлена только витрина." />
+                        )}
                       </>
                     ) : null}
                   </Spin>
@@ -5167,52 +5277,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Alert
                                 type="info"
                                 showIcon
-                                message="Здесь для admin показывается витрина/кандидаты Алгофонда. Кабинет клиента перенесен в Админ → Оферы и ТС."
+                                message="Здесь для admin показывается только одобренная витрина Алгофонда. Кандидаты и настройка TS находятся в Админ → Оферы и ТС."
                               />
-                              <Table
-                                size="small"
-                                rowKey="offerId"
-                                dataSource={offerStoreOffers}
-                                pagination={{ pageSize: 8, showSizeChanger: false }}
-                                scroll={{ x: 900 }}
-                                columns={[
-                                  {
-                                    title: 'Карточка',
-                                    key: 'offer',
-                                    render: (_, row: any) => (
-                                      <Space direction="vertical" size={0}>
-                                        <Text strong>{row.titleRu}</Text>
-                                        <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
-                                      </Space>
-                                    ),
-                                  },
-                                  {
-                                    title: 'Период/метрики',
-                                    key: 'metrics',
-                                    render: (_, row: any) => (
-                                      <Space size={4} wrap>
-                                        <Tag color="default">{Number(row.periodDays || 0)}d</Tag>
-                                        <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
-                                        <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
-                                        <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
-                                      </Space>
-                                    ),
-                                  },
-                                  {
-                                    title: 'Действия',
-                                    key: 'actions',
-                                    width: 320,
-                                    render: (_, row: any) => (
-                                      <Space size={4} wrap>
-                                        <Button size="small" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Редактировать</Button>
-                                        <Button size="small" href="/backtest">Бэктест</Button>
-                                        <Button size="small" href="/trading-systems">ТС</Button>
-                                        <Tag color={row.published ? 'success' : 'default'}>{row.published ? 'на витрине' : 'из ресерча'}</Tag>
-                                      </Space>
-                                    ),
-                                  },
-                                ]}
-                              />
+                              <Empty description="Витрина Алгофонда сейчас пуста, пока не опубликован admin TS через Админ → Оферы и ТС" />
+                              <Space wrap>
+                                <Button type="primary" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Перейти в approval center</Button>
+                                <Button href="/trading-systems">Trading Systems</Button>
+                                <Button href="/backtest">Бэктест</Button>
+                              </Space>
                             </Space>
                           ) : (
                             <>
@@ -5520,6 +5592,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Space>
                           </Card>
                         ) : null}
+                        </>
+                        ) : (
+                          <Alert type="info" showIcon message="Клиентские настройки Алгофонда скрыты в admin-режиме. Используй Админ → Оферы и ТС для выбора TS после sweep, настройки и публикации." />
+                        )}
                       </>
                     ) : null}
                   </Spin>
