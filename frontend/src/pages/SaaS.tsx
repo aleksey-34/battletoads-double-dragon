@@ -5592,10 +5592,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Space>
                           </Card>
                         ) : null}
-                        </>
-                        ) : (
-                          <Alert type="info" showIcon message="Клиентские настройки Алгофонда скрыты в admin-режиме. Используй Админ → Оферы и ТС для выбора TS после sweep, настройки и публикации." />
-                        )}
                       </>
                     ) : null}
                   </Spin>
