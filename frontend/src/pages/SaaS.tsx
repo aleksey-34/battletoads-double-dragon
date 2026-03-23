@@ -1858,7 +1858,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return true;
   });
   const resolveSummaryScope = (): SummaryScope => {
-    if (activeTab === 'admin' && adminTab === 'offer-ts') {
+    if (activeTab === 'admin' && (adminTab === 'offer-ts' || adminTab === 'research-analysis')) {
       return 'full';
     }
     return 'light';
