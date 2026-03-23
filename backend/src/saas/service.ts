@@ -946,6 +946,24 @@ const buildFallbackSweepSummary = (catalog: CatalogData | null) => {
   };
 };
 
+const resolveSweepSelectedMembers = (sweep: SweepData | null, catalog: CatalogData | null): SweepRecord[] => {
+  const explicitMembers = Array.isArray(sweep?.selectedMembers)
+    ? sweep.selectedMembers.filter((item): item is SweepRecord => Boolean(item && Number(item.strategyId || 0) > 0))
+    : [];
+  if (explicitMembers.length > 0) {
+    return explicitMembers;
+  }
+
+  const strategyIds = Array.from(new Set([
+    ...((catalog?.adminTradingSystemDraft?.members || []).map((member) => Number(member.strategyId || 0))),
+    ...((sweep?.tradingSystem?.members || []).map((member) => Number(member.strategy_id || 0))),
+  ].filter((item) => Number.isFinite(item) && item > 0)));
+
+  return strategyIds
+    .map((strategyId) => findSweepRecordByStrategyId(sweep, strategyId))
+    .filter((item): item is SweepRecord => Boolean(item));
+};
+
 const buildFallbackSweepRecordFromOffer = (offer: CatalogOffer): SweepRecord | null => {
   const strategyId = Number(offer?.strategy?.id || 0);
   if (!Number.isFinite(strategyId) || strategyId <= 0) {
@@ -2970,12 +2988,13 @@ export const getSaasAdminSummary = async (options?: {
   const sourceSweep = loadLatestSweep();
   const apiKeys = await getAvailableApiKeyNames();
   const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
+  const sweepSelectedMembers = resolveSweepSelectedMembers(sourceSweep, catalog);
   const sweepSummary = sourceSweep
     ? {
       timestamp: sourceSweep.timestamp,
       period: buildPeriodInfo(sourceSweep),
       counts: sourceSweep.counts,
-      selectedMembers: sourceSweep.selectedMembers,
+      selectedMembers: sweepSelectedMembers,
       topByMode: sourceSweep.topByMode,
       topAll: (Array.isArray(sourceSweep.topAll) ? sourceSweep.topAll : []).slice(0, 12),
       portfolioFull: sourceSweep.portfolioResults?.[0] || null,
