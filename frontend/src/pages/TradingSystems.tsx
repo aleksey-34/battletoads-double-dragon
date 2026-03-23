@@ -488,9 +488,9 @@ const TradingSystems: React.FC = () => {
         apiKeyList.map(async (key) => {
           try {
             const response = await axios.get<TradingSystem[]>(`/api/trading-systems/${encodeURIComponent(key)}`);
-            return [key, Array.isArray(response.data) ? response.data : []] as const;
+            return [key, Array.isArray(response.data) ? [...response.data] : [] as TradingSystem[]] as const;
           } catch {
-            return [key, []] as const;
+            return [key, [] as TradingSystem[]] as const;
           }
         })
       );
