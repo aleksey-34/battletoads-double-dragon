@@ -212,6 +212,7 @@ type TenantSummary = {
     requested_enabled?: number;
     actual_enabled?: number;
     assigned_api_key_name?: string;
+    published_system_name?: string;
   } | null;
   monitoring?: {
     equity_usd?: number;
@@ -1731,6 +1732,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [monitoringTabLoading, setMonitoringTabLoading] = useState(false);
   const [monitoringModeFilter, setMonitoringModeFilter] = useState<'all' | ProductMode>('all');
   const [clientsModeFilter, setClientsModeFilter] = useState<'all' | ProductMode>('all');
+  const [clientsClassKind, setClientsClassKind] = useState<'all' | 'offer' | 'ts'>('all');
+  const [clientsClassValue, setClientsClassValue] = useState('');
+  const [adminWorkspaceMode, setAdminWorkspaceMode] = useState<ProductMode>('strategy_client');
+  const [adminWorkspaceTenantId, setAdminWorkspaceTenantId] = useState<number | null>(null);
   const [telegramControls, setTelegramControls] = useState<TelegramControls | null>(null);
   const [telegramControlsLoading, setTelegramControlsLoading] = useState(false);
   const [lowLotRecommendations, setLowLotRecommendations] = useState<LowLotRecommendationResponse | null>(null);
@@ -1828,6 +1833,50 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     acc[key].push(item);
     return acc;
   }, {});
+  const offerStoreOffers = summary?.offerStore?.offers || [];
+  const offerTitleById = offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
+    acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
+    return acc;
+  }, {});
+  const clientsOfferFilterOptions = offerStoreOffers.map((offer) => ({
+    value: String(offer.offerId),
+    label: `${offer.titleRu} (${String(offer.mode || '').toUpperCase()} ${offer.market})`,
+  }));
+  const clientsTsFilterOptions = Array.from(
+    new Set(
+      (summary?.tenants || [])
+        .filter((item) => item.tenant.product_mode === 'algofund_client')
+        .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
+        .filter((item) => item.length > 0)
+    )
+  ).map((name) => ({ value: name, label: name }));
+
+  const filteredClients = (summary?.tenants || []).filter((tenantSummary) => {
+    if (clientsModeFilter !== 'all' && tenantSummary.tenant.product_mode !== clientsModeFilter) {
+      return false;
+    }
+    if (clientsClassKind === 'all' || !clientsClassValue) {
+      return true;
+    }
+    if (clientsClassKind === 'offer') {
+      if (tenantSummary.tenant.product_mode !== 'strategy_client') {
+        return false;
+      }
+      const selected = Array.isArray(tenantSummary.strategyProfile?.selectedOfferIds)
+        ? tenantSummary.strategyProfile?.selectedOfferIds || []
+        : [];
+      return selected.includes(clientsClassValue);
+    }
+    if (clientsClassKind === 'ts') {
+      if (tenantSummary.tenant.product_mode !== 'algofund_client') {
+        return false;
+      }
+      return String(tenantSummary.algofundProfile?.published_system_name || '') === clientsClassValue;
+    }
+    return true;
+  });
+  const adminWorkspaceTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === adminWorkspaceMode);
+  const adminWorkspaceCurrent = adminWorkspaceTenants.find((item) => Number(item.tenant.id) === Number(adminWorkspaceTenantId || 0)) || null;
 
   const resolveSummaryScope = (): SummaryScope => {
     if (activeTab === 'admin' && adminTab === 'offer-ts') {
@@ -2033,6 +2082,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdminSurface, activeTab, adminTab, summary?.offerStore]);
+
+  useEffect(() => {
+    setClientsClassValue('');
+  }, [clientsClassKind]);
+
+  useEffect(() => {
+    if (adminWorkspaceTenants.length === 0) {
+      setAdminWorkspaceTenantId(null);
+      return;
+    }
+    const exists = adminWorkspaceTenants.some((item) => Number(item.tenant.id) === Number(adminWorkspaceTenantId || 0));
+    if (!exists) {
+      setAdminWorkspaceTenantId(Number(adminWorkspaceTenants[0].tenant.id));
+    }
+  }, [adminWorkspaceTenants, adminWorkspaceTenantId]);
 
   const loadTelegramControls = useCallback(async () => {
     setTelegramControlsLoading(true);
@@ -2998,6 +3062,32 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       ) : <Tag color="default">off</Tag>) : <Tag color="default">off</Tag>,
     },
     {
+      title: 'Классификация',
+      key: 'classification',
+      width: 260,
+      render: (_, row) => {
+        if (row.tenant.product_mode === 'strategy_client') {
+          const selected = Array.isArray(row.strategyProfile?.selectedOfferIds)
+            ? row.strategyProfile?.selectedOfferIds || []
+            : [];
+          if (selected.length === 0) {
+            return <Tag color="default">Офер не выбран</Tag>;
+          }
+          return (
+            <Space size={4} wrap>
+              {selected.slice(0, 3).map((offerId) => (
+                <Tag key={`${row.tenant.id}:${offerId}`} color="blue">{offerTitleById[String(offerId)] || String(offerId)}</Tag>
+              ))}
+              {selected.length > 3 ? <Tag color="default">+{selected.length - 3}</Tag> : null}
+            </Space>
+          );
+        }
+
+        const systemName = String(row.algofundProfile?.published_system_name || '').trim();
+        return systemName ? <Tag color="purple">{systemName}</Tag> : <Tag color="default">ТС не выбрана</Tag>;
+      },
+    },
+    {
       title: copy.status,
       key: 'status',
       width: 220,
@@ -3548,6 +3638,90 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
 
+                          <Card className="battletoads-card" title={copy.tenantWorkspace}>
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              <Row gutter={[12, 12]}>
+                                <Col xs={24} md={8}>
+                                  <Text strong>Режим</Text>
+                                  <Select
+                                    style={{ width: '100%', marginTop: 8 }}
+                                    value={adminWorkspaceMode}
+                                    onChange={(value) => setAdminWorkspaceMode(value)}
+                                    options={[
+                                      { value: 'strategy_client', label: copy.strategyClient },
+                                      { value: 'algofund_client', label: copy.algofund },
+                                    ]}
+                                  />
+                                </Col>
+                                <Col xs={24} md={16}>
+                                  <Text strong>{copy.chooseTenant}</Text>
+                                  <Select
+                                    style={{ width: '100%', marginTop: 8 }}
+                                    value={adminWorkspaceTenantId ?? undefined}
+                                    onChange={(value) => setAdminWorkspaceTenantId(Number(value))}
+                                    options={adminWorkspaceTenants.map((item) => ({
+                                      value: Number(item.tenant.id),
+                                      label: `${item.tenant.display_name} (${item.tenant.slug})`,
+                                    }))}
+                                  />
+                                </Col>
+                              </Row>
+                              {adminWorkspaceCurrent ? (
+                                <>
+                                  <Space size={4} wrap>
+                                    <Tag color="blue">{adminWorkspaceCurrent.plan ? `${adminWorkspaceCurrent.plan.title}` : 'Без тарифа'}</Tag>
+                                    <Tag color="geekblue">API: {adminWorkspaceCurrent.tenant.assigned_api_key_name || '—'}</Tag>
+                                    <Tag color={adminWorkspaceCurrent.tenant.status === 'active' ? 'success' : 'default'}>{adminWorkspaceCurrent.tenant.status}</Tag>
+                                    <Tag color={Number((adminWorkspaceCurrent.tenant.product_mode === 'strategy_client' ? adminWorkspaceCurrent.strategyProfile?.actual_enabled : adminWorkspaceCurrent.algofundProfile?.actual_enabled) || 0) === 1 ? 'success' : 'default'}>
+                                      runtime {Number((adminWorkspaceCurrent.tenant.product_mode === 'strategy_client' ? adminWorkspaceCurrent.strategyProfile?.actual_enabled : adminWorkspaceCurrent.algofundProfile?.actual_enabled) || 0) === 1 ? 'on' : 'off'}
+                                    </Tag>
+                                  </Space>
+                                  <Space wrap>
+                                    <Button size="small" href="/settings">{copy.openSettings}</Button>
+                                    <Button size="small" href="/positions">{copy.openMonitoring}</Button>
+                                    <Button size="small" href="/backtest">{copy.openBacktest}</Button>
+                                    <Button
+                                      size="small"
+                                      onClick={() => {
+                                        if (adminWorkspaceCurrent.tenant.product_mode === 'strategy_client') {
+                                          setStrategyTenantId(Number(adminWorkspaceCurrent.tenant.id));
+                                          setActiveTab('strategy-client');
+                                        } else {
+                                          setAlgofundTenantId(Number(adminWorkspaceCurrent.tenant.id));
+                                          setActiveTab('algofund');
+                                        }
+                                      }}
+                                    >
+                                      Открыть вкладку клиента
+                                    </Button>
+                                    {adminWorkspaceCurrent.tenant.product_mode === 'algofund_client' ? (
+                                      <>
+                                        <Button
+                                          size="small"
+                                          type="primary"
+                                          loading={actionLoading === `algofund-single:${adminWorkspaceCurrent.tenant.id}`}
+                                          onClick={() => void runSingleAlgofundAction(Number(adminWorkspaceCurrent.tenant.id), 'start')}
+                                        >
+                                          Start
+                                        </Button>
+                                        <Button
+                                          size="small"
+                                          danger
+                                          loading={actionLoading === `algofund-single:${adminWorkspaceCurrent.tenant.id}`}
+                                          onClick={() => void runSingleAlgofundAction(Number(adminWorkspaceCurrent.tenant.id), 'stop')}
+                                        >
+                                          Stop
+                                        </Button>
+                                      </>
+                                    ) : null}
+                                  </Space>
+                                </>
+                              ) : (
+                                <Alert type="warning" showIcon message="Выбери клиента для быстрого кабинета" />
+                              )}
+                            </Space>
+                          </Card>
+
                           <Row gutter={[16, 16]}>
                             <Col xs={24} md={7}>
                               <Card
@@ -3920,6 +4094,75 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
 
+                          <Card className="battletoads-card" title="Карточки из ресерча и витрины">
+                            <Paragraph type="secondary" style={{ marginTop: 0 }}>
+                              В карточках указаны период и ключевые метрики бэктеста. Разверни строку, чтобы увидеть equity-график.
+                            </Paragraph>
+                            <Table
+                              size="small"
+                              rowKey="offerId"
+                              dataSource={offerStoreOffers}
+                              pagination={{ pageSize: 8, showSizeChanger: false }}
+                              scroll={{ x: 980 }}
+                              expandable={{
+                                expandedRowRender: (row: any) => {
+                                  const pts: number[] = Array.isArray(row.equityPoints) ? row.equityPoints : [];
+                                  if (pts.length === 0) {
+                                    return <Text type="secondary">Equity curve unavailable</Text>;
+                                  }
+                                  return <ChartComponent data={pts.map((v, i) => ({ time: i, equity: v }))} type="line" />;
+                                },
+                                rowExpandable: () => true,
+                              }}
+                              columns={[
+                                {
+                                  title: 'Карточка',
+                                  key: 'offer',
+                                  render: (_, row: any) => (
+                                    <Space direction="vertical" size={0}>
+                                      <Text strong>{row.titleRu}</Text>
+                                      <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                    </Space>
+                                  ),
+                                },
+                                {
+                                  title: 'Период и метрики',
+                                  key: 'metrics',
+                                  render: (_, row: any) => (
+                                    <Space size={4} wrap>
+                                      <Tag color="default">period {Number(row.periodDays || 0)}d</Tag>
+                                      <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
+                                      <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
+                                      <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                      <Tag color="blue">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
+                                    </Space>
+                                  ),
+                                },
+                                {
+                                  title: 'Витрина',
+                                  key: 'store',
+                                  width: 200,
+                                  render: (_, row: any) => (
+                                    <Space size={4} wrap>
+                                      <Switch
+                                        checked={Boolean(row.published)}
+                                        loading={actionLoading === `offer-store:${String(row.offerId)}`}
+                                        onChange={(checked) => {
+                                          if (checked) {
+                                            void toggleOfferPublished(String(row.offerId), true);
+                                          } else {
+                                            void openUnpublishWizard(String(row.offerId));
+                                          }
+                                        }}
+                                      />
+                                      <Button size="small" href="/backtest">Бэктест</Button>
+                                    </Space>
+                                  ),
+                                },
+                              ]}
+                            />
+                          </Card>
+
                           <Card className="battletoads-card" title="Отчёты и аналитика">
                             <Space direction="vertical" style={{ width: '100%' }}>
                               <Space wrap>
@@ -3971,8 +4214,33 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     { value: 'algofund_client', label: 'Algofund' },
                                   ]}
                                 />
+                                <Select
+                                  style={{ width: 180 }}
+                                  value={clientsClassKind}
+                                  onChange={(value) => setClientsClassKind(value)}
+                                  options={[
+                                    { value: 'all', label: 'Все категории' },
+                                    { value: 'offer', label: 'Офер' },
+                                    { value: 'ts', label: 'ТС' },
+                                  ]}
+                                />
+                                <Select
+                                  allowClear
+                                  style={{ width: 320 }}
+                                  value={clientsClassValue || undefined}
+                                  onChange={(value) => setClientsClassValue(String(value || ''))}
+                                  disabled={clientsClassKind === 'all'}
+                                  placeholder={
+                                    clientsClassKind === 'offer'
+                                      ? 'Выберите офер'
+                                      : clientsClassKind === 'ts'
+                                        ? 'Выберите ТС'
+                                        : 'Категория не выбрана'
+                                  }
+                                  options={clientsClassKind === 'offer' ? clientsOfferFilterOptions : clientsTsFilterOptions}
+                                />
                                 <Tag color="default">
-                                  {(summary?.tenants || []).filter((t) => clientsModeFilter === 'all' || t.tenant.product_mode === clientsModeFilter).length} клиентов
+                                  {filteredClients.length} клиентов
                                 </Tag>
                               </Space>
                               <Card size="small" className="battletoads-card" title="Algofund batch actions">
@@ -4026,7 +4294,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Table
                                 rowKey={(row) => row.tenant.id}
                                 columns={tenantColumns}
-                                dataSource={(summary?.tenants || []).filter((t) => clientsModeFilter === 'all' || t.tenant.product_mode === clientsModeFilter)}
+                                dataSource={filteredClients}
                                 pagination={{ pageSize: 10, showSizeChanger: false }}
                                 scroll={{ x: 1100 }}
                                 rowSelection={{
@@ -4355,7 +4623,60 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Spin spinning={strategyLoading && !strategyState}>
                     {strategyState ? (
                       <>
-                        <Card className="battletoads-card" title={copy.tenantWorkspace}>
+                        <Card className="battletoads-card" title={isAdminSurface ? 'Витрина Клиент стратегий' : copy.tenantWorkspace}>
+                          {isAdminSurface ? (
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              <Alert
+                                type="info"
+                                showIcon
+                                message="Здесь для admin показывается витрина карточек. Кабинет клиента перенесен в Админ → Оферы и ТС."
+                              />
+                              <Table
+                                size="small"
+                                rowKey="offerId"
+                                dataSource={offerStoreOffers.filter((offer) => offer.mode === 'mono' || offer.mode === 'synth')}
+                                pagination={{ pageSize: 8, showSizeChanger: false }}
+                                scroll={{ x: 900 }}
+                                columns={[
+                                  {
+                                    title: 'Карточка',
+                                    key: 'offer',
+                                    render: (_, row: any) => (
+                                      <Space direction="vertical" size={0}>
+                                        <Text strong>{row.titleRu}</Text>
+                                        <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                      </Space>
+                                    ),
+                                  },
+                                  {
+                                    title: 'Период/метрики',
+                                    key: 'metrics',
+                                    render: (_, row: any) => (
+                                      <Space size={4} wrap>
+                                        <Tag color="default">{Number(row.periodDays || 0)}d</Tag>
+                                        <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
+                                        <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
+                                        <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                      </Space>
+                                    ),
+                                  },
+                                  {
+                                    title: 'Действия',
+                                    key: 'actions',
+                                    width: 280,
+                                    render: (_, row: any) => (
+                                      <Space size={4} wrap>
+                                        <Button size="small" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Редактировать</Button>
+                                        <Button size="small" href="/backtest">Бэктест</Button>
+                                        <Tag color={row.published ? 'success' : 'default'}>{row.published ? 'на витрине' : 'из ресерча'}</Tag>
+                                      </Space>
+                                    ),
+                                  },
+                                ]}
+                              />
+                            </Space>
+                          ) : (
+                            <>
                           <Row gutter={[16, 16]} align="middle">
                             {isAdminSurface ? (
                               <Col xs={24} md={6}>
@@ -4465,6 +4786,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               ) : null}
                             </>
                           ) : null}
+                            </>
+                          )}
                         </Card>
 
                         <Card className="battletoads-card" title="Custom TS profiles">
@@ -4838,7 +5161,61 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Spin spinning={algofundLoading && !algofundState}>
                     {algofundState ? (
                       <>
-                        <Card className="battletoads-card" title={copy.tenantWorkspace}>
+                        <Card className="battletoads-card" title={isAdminSurface ? 'Витрина Алгофонд' : copy.tenantWorkspace}>
+                          {isAdminSurface ? (
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              <Alert
+                                type="info"
+                                showIcon
+                                message="Здесь для admin показывается витрина/кандидаты Алгофонда. Кабинет клиента перенесен в Админ → Оферы и ТС."
+                              />
+                              <Table
+                                size="small"
+                                rowKey="offerId"
+                                dataSource={offerStoreOffers}
+                                pagination={{ pageSize: 8, showSizeChanger: false }}
+                                scroll={{ x: 900 }}
+                                columns={[
+                                  {
+                                    title: 'Карточка',
+                                    key: 'offer',
+                                    render: (_, row: any) => (
+                                      <Space direction="vertical" size={0}>
+                                        <Text strong>{row.titleRu}</Text>
+                                        <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                      </Space>
+                                    ),
+                                  },
+                                  {
+                                    title: 'Период/метрики',
+                                    key: 'metrics',
+                                    render: (_, row: any) => (
+                                      <Space size={4} wrap>
+                                        <Tag color="default">{Number(row.periodDays || 0)}d</Tag>
+                                        <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
+                                        <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
+                                        <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                      </Space>
+                                    ),
+                                  },
+                                  {
+                                    title: 'Действия',
+                                    key: 'actions',
+                                    width: 320,
+                                    render: (_, row: any) => (
+                                      <Space size={4} wrap>
+                                        <Button size="small" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Редактировать</Button>
+                                        <Button size="small" href="/backtest">Бэктест</Button>
+                                        <Button size="small" href="/trading-systems">ТС</Button>
+                                        <Tag color={row.published ? 'success' : 'default'}>{row.published ? 'на витрине' : 'из ресерча'}</Tag>
+                                      </Space>
+                                    ),
+                                  },
+                                ]}
+                              />
+                            </Space>
+                          ) : (
+                            <>
                           <Row gutter={[16, 16]} align="middle">
                             {isAdminSurface ? (
                               <Col xs={24} md={6}>
@@ -4948,6 +5325,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               ) : null}
                             </>
                           ) : null}
+                            </>
+                          )}
                         </Card>
 
                         <Card className="battletoads-card">
