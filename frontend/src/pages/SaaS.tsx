@@ -1808,10 +1808,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         : true
   ));
   const researchCandidateOffers = reviewableSweepOffers.filter((offer) => !Boolean(offer.published));
-  const adminReviewOfferPool = dedupeOffersById([
-    ...reviewableSweepOffers,
-    ...publishedStorefrontOffers,
-  ]);
+  const adminReviewOfferPool = Array.from(
+    new Map(
+      [...reviewableSweepOffers, ...publishedStorefrontOffers]
+        .map((offer) => [String(offer.offerId), offer])
+    ).values()
+  );
   const selectedAdminReviewOffer = adminReviewOfferPool.find((offer) => String(offer.offerId) === selectedAdminReviewOfferId) || null;
   const adminTradingSystemDraft = summary?.catalog?.adminTradingSystemDraft || null;
   const offerTitleById = offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
