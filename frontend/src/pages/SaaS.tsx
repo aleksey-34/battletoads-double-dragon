@@ -4356,8 +4356,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                           <Card className="battletoads-card" title="ТС Алгофонда из последнего sweep">
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                              Это текущий draft торговой системы, собранный из последнего sweep. Открой его в Оферы и ТС, чтобы проверить состав, донастроить и отправить на апрув.
+                              Это текущий draft торговой системы, собранный из последнего sweep. Здесь должен быть полный путь: проверить состав и метрики, перейти в review, отправить ТС на апрув, затем открыть шаг применения и перевести клиентов Алгофонда на опубликованную runtime ТС.
                             </Paragraph>
+                            <Alert
+                              type="info"
+                              showIcon
+                              style={{ marginBottom: 12 }}
+                              message="Шаги: 1) review состава и метрик, 2) апрув draft ТС, 3) публикация на витрину Алгофонда, 4) switch_system на выбранных клиентов."
+                            />
                             <Space wrap style={{ marginBottom: 12 }}>
                               <Tag color="processing">members: {Number(adminTradingSystemDraft?.members?.length || 0)}</Tag>
                               <Tag color="blue">{adminTradingSystemDraft?.name || 'Admin TS draft'}</Tag>
@@ -4409,7 +4415,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Button size="small" loading={actionLoading === 'load-sweep-review'} onClick={() => void loadSweepReviewCandidates()}>
                                 Обновить из sweep
                               </Button>
+                              <Button size="small" onClick={() => setAdminTab('research-analysis')}>
+                                Открыть sweep/backtest
+                              </Button>
                               <Button
+                                type="primary"
                                 size="small"
                                 onClick={() => {
                                   setSelectedAdminReviewKind('algofund-ts');
@@ -4418,6 +4428,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               >
                                 Открыть review ТС
                               </Button>
+                              <Button size="small" loading={actionLoading === 'publish'} onClick={() => void publishAdminTs()}>
+                                Отправить ТС на апрув
+                              </Button>
                               <Button
                                 size="small"
                                 onClick={() => {
@@ -4425,6 +4438,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 }}
                               >
                                 Применение к клиентам
+                              </Button>
+                              <Button size="small" href="/backtest">
+                                Открыть Backtest
                               </Button>
                             </Space>
                           </Card>
