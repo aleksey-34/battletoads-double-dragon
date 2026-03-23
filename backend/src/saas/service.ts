@@ -3001,7 +3001,7 @@ export const getSaasAdminSummary = async (options?: {
     }
     : buildFallbackSweepSummary(catalog);
   const recommendedSets = buildRecommendedSets(catalog);
-  const tenants = await listTenantSummaries();
+  const tenants = await listTenantSummaries({ includeLatestPreview: false });
   const plans = await listPlans();
   const algofundRequests = await getAlgofundRequestsAll(200);
   const [offerStore, reportSettings] = await Promise.all([
@@ -3142,7 +3142,10 @@ export const updatePlanAdminState = async (planCode: string, payload: {
   return listPlans();
 };
 
-const listTenantSummaries = async () => {
+const listTenantSummaries = async (options?: {
+  includeLatestPreview?: boolean;
+}) => {
+  const includeLatestPreview = options?.includeLatestPreview !== false;
   const rows = await db.all('SELECT * FROM tenants ORDER BY id ASC');
   const out = [] as Array<Record<string, unknown>>;
 
@@ -3160,12 +3163,26 @@ const listTenantSummaries = async () => {
       capabilities,
       strategyProfile: strategyProfile ? {
         ...strategyProfile,
+        ...(includeLatestPreview
+          ? {
+            latest_preview_json: strategyProfile.latest_preview_json,
+            latestPreview: safeJsonParse<Record<string, unknown>>(strategyProfile.latest_preview_json, {}),
+          }
+          : {
+            latest_preview_json: '',
+          }),
         selectedOfferIds: safeJsonParse<string[]>(strategyProfile.selected_offer_ids_json, []),
-        latestPreview: safeJsonParse<Record<string, unknown>>(strategyProfile.latest_preview_json, {}),
       } : null,
       algofundProfile: algofundProfile ? {
         ...algofundProfile,
-        latestPreview: safeJsonParse<Record<string, unknown>>(algofundProfile.latest_preview_json, {}),
+        ...(includeLatestPreview
+          ? {
+            latest_preview_json: algofundProfile.latest_preview_json,
+            latestPreview: safeJsonParse<Record<string, unknown>>(algofundProfile.latest_preview_json, {}),
+          }
+          : {
+            latest_preview_json: '',
+          }),
       } : null,
       monitoring,
     });
@@ -3449,7 +3466,8 @@ export const requestAlgofundBatchAction = async (
   const normalizedTenantIds = Array.from(new Set((tenantIds || []).map((item) => Math.floor(asNumber(item, 0))).filter((item) => item > 0)));
   const created: Array<Record<string, unknown>> = [];
   const failures: Array<{ tenantId: number; error: string }> = [];
-  const directExecute = Boolean(options?.directExecute) && (requestType === 'start' || requestType === 'stop');
+  const directExecute = Boolean(options?.directExecute)
+    && (requestType === 'start' || requestType === 'stop' || requestType === 'switch_system');
 
   for (const tenantId of normalizedTenantIds) {
     try {

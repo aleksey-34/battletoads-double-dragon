@@ -314,12 +314,52 @@ type SaasSummary = {
       maxDrawdownPercent: number;
       profitFactor: number;
     }>;
+    topAll?: Array<{
+      strategyId: number;
+      strategyName: string;
+      strategyType: string;
+      marketMode: string;
+      market: string;
+      score: number;
+      totalReturnPercent: number;
+      maxDrawdownPercent: number;
+      profitFactor: number;
+    }>;
+    topByMode?: {
+      mono?: Array<{
+        strategyId: number;
+        strategyName: string;
+        strategyType: string;
+        marketMode: string;
+        market: string;
+        score: number;
+        totalReturnPercent: number;
+        maxDrawdownPercent: number;
+        profitFactor: number;
+      }>;
+      synth?: Array<{
+        strategyId: number;
+        strategyName: string;
+        strategyType: string;
+        marketMode: string;
+        market: string;
+        score: number;
+        totalReturnPercent: number;
+        maxDrawdownPercent: number;
+        profitFactor: number;
+      }>;
+    };
     portfolioFull?: {
-      totalReturnPercent?: number;
-      maxDrawdownPercent?: number;
-      profitFactor?: number;
-      winRatePercent?: number;
-      tradesCount?: number;
+      type?: string;
+      summary?: {
+        finalEquity?: number;
+        totalReturnPercent?: number;
+        maxDrawdownPercent?: number;
+        profitFactor?: number;
+        winRatePercent?: number;
+        tradesCount?: number;
+      } | null;
+      error?: string;
     } | null;
   } | null;
   recommendedSets: Record<string, CatalogOffer[]>;
@@ -1588,6 +1628,21 @@ const formatPeriodCoverage = (period?: PeriodInfo | null): string => {
   return ` • ${Math.max(1, Math.round(hours))}h`;
 };
 
+const getPeriodDurationDays = (period?: PeriodInfo | null): number | null => {
+  if (!period?.dateFrom || !period?.dateTo) {
+    return null;
+  }
+
+  const fromMs = Date.parse(period.dateFrom);
+  const toMs = Date.parse(period.dateTo);
+  if (!Number.isFinite(fromMs) || !Number.isFinite(toMs) || toMs <= fromMs) {
+    return null;
+  }
+
+  const days = (toMs - fromMs) / (24 * 60 * 60 * 1000);
+  return days > 0 ? days : null;
+};
+
 const formatPeriodLabel = (period?: PeriodInfo | null): string => {
   if (!period) {
     return '—';
@@ -1691,6 +1746,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [clientsClassValue, setClientsClassValue] = useState('');
   const [selectedAdminReviewKind, setSelectedAdminReviewKind] = useState<'offer' | 'algofund-ts'>('offer');
   const [selectedAdminReviewOfferId, setSelectedAdminReviewOfferId] = useState('');
+  const [approvalMinProfitFactor, setApprovalMinProfitFactor] = useState(1);
   const [telegramControls, setTelegramControls] = useState<TelegramControls | null>(null);
   const [telegramControlsLoading, setTelegramControlsLoading] = useState(false);
   const [lowLotRecommendations, setLowLotRecommendations] = useState<LowLotRecommendationResponse | null>(null);
@@ -1789,8 +1845,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return acc;
   }, {});
   const offerStoreOffers = summary?.offerStore?.offers || [];
-  const sweepTopStrategyIds = new Set(
-    (summary?.sweepSummary?.selectedMembers || [])
+  const sweepReviewRecords = Array.from(
+    new Map(
+      [
+        ...(summary?.sweepSummary?.selectedMembers || []),
+        ...(summary?.sweepSummary?.topAll || []),
+        ...(summary?.sweepSummary?.topByMode?.mono || []),
+        ...(summary?.sweepSummary?.topByMode?.synth || []),
+      ].map((item) => [Number(item.strategyId || 0), item])
+    ).values()
+  ).filter((item) => Number(item?.strategyId || 0) > 0);
+  const sweepRecordByStrategyId = sweepReviewRecords.reduce<Record<number, typeof sweepReviewRecords[number]>>((acc, item) => {
+    const key = Number(item.strategyId || 0);
+    if (key > 0) {
+      acc[key] = item;
+    }
+    return acc;
+  }, {});
+  const sweepCandidateStrategyIds = new Set(
+    [
+      ...(summary?.sweepSummary?.selectedMembers || []),
+      ...(summary?.sweepSummary?.topAll || []),
+      ...(summary?.sweepSummary?.topByMode?.mono || []),
+      ...(summary?.sweepSummary?.topByMode?.synth || []),
+    ]
       .map((item) => Number(item.strategyId || 0))
       .filter((item) => Number.isFinite(item) && item > 0)
   );
@@ -1801,12 +1879,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   );
   const publishedStorefrontOffers = offerStoreOffers.filter((offer) => Boolean(offer.published));
   const reviewableSweepOffers = offerStoreOffers.filter((offer) => (
-    sweepTopStrategyIds.size > 0
-      ? sweepTopStrategyIds.has(Number(offer.strategyId || 0))
+    sweepCandidateStrategyIds.size > 0
+      ? sweepCandidateStrategyIds.has(Number(offer.strategyId || 0))
       : recommendedOfferIds.size > 0
         ? recommendedOfferIds.has(String(offer.offerId || ''))
         : true
-  ));
+  ) && Number(offer.pf || 0) >= approvalMinProfitFactor);
   const researchCandidateOffers = reviewableSweepOffers.filter((offer) => !Boolean(offer.published));
   const adminReviewOfferPool = Array.from(
     new Map(
@@ -1816,6 +1894,40 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   );
   const selectedAdminReviewOffer = adminReviewOfferPool.find((offer) => String(offer.offerId) === selectedAdminReviewOfferId) || null;
   const adminTradingSystemDraft = summary?.catalog?.adminTradingSystemDraft || null;
+  const adminDraftMembersDetailed = (adminTradingSystemDraft?.members || []).map((member) => ({
+    ...member,
+    reviewRecord: sweepRecordByStrategyId[Number(member.strategyId || 0)] || null,
+  }));
+  const adminDraftPortfolioSummary = summary?.sweepSummary?.portfolioFull?.summary || null;
+  const adminDraftPeriodDays = getPeriodDurationDays(summary?.sweepSummary?.period || null);
+  const adminDraftTradesPerDay = adminDraftPortfolioSummary && adminDraftPeriodDays && adminDraftPeriodDays > 0
+    ? Number((Number(adminDraftPortfolioSummary.tradesCount || 0) / adminDraftPeriodDays).toFixed(2))
+    : null;
+  const algofundStorefrontSystems = Array.from(
+    new Set([
+      ...batchEligibleAlgofundTenants
+        .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
+        .filter(Boolean),
+      String(publishResponse?.sourceSystem?.systemName || '').trim(),
+    ].filter(Boolean))
+  ).map((systemName) => {
+    const tenants = batchEligibleAlgofundTenants.filter((tenant) => String(tenant.algofundProfile?.published_system_name || '').trim() === systemName);
+    const runtimeSystemId = publishResponse?.sourceSystem?.systemName === systemName
+      ? Number(publishResponse.sourceSystem.systemId || 0)
+      : null;
+
+    return {
+      systemName,
+      runtimeSystemId,
+      apiKeyName: publishResponse?.sourceSystem?.systemName === systemName
+        ? String(publishResponse.sourceSystem.apiKeyName || '')
+        : '',
+      tenants,
+      tenantCount: tenants.length,
+      activeCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.actual_enabled || 0) === 1).length,
+      pendingCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.requested_enabled || 0) === 1 && Number(tenant.algofundProfile?.actual_enabled || 0) !== 1).length,
+    };
+  });
   const offerTitleById = offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
     return acc;
@@ -2063,7 +2175,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!isAdminSurface) {
       return;
     }
-    void loadSummary('light');
+    void loadSummary('full');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdminSurface]);
 
@@ -2956,6 +3068,76 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const openTenantWorkspace = (row: TenantSummary) => {
+    const tenantId = Number(row.tenant.id || 0);
+    if (!tenantId) {
+      return;
+    }
+
+    if (row.tenant.product_mode === 'strategy_client') {
+      setStrategyTenantId(tenantId);
+      setActiveTab('strategy-client');
+      return;
+    }
+
+    setAlgofundTenantId(tenantId);
+    setActiveTab('algofund');
+  };
+
+  const openPublishedAdminTsForClients = () => {
+    const publishedSystemId = Number(publishResponse?.sourceSystem?.systemId || 0);
+    const publishedSystemName = String(publishResponse?.sourceSystem?.systemName || '').trim();
+    if (!publishedSystemId || !publishedSystemName) {
+      messageApi.warning('Сначала отправьте draft ТС на апрув, чтобы получить runtime system id');
+      return;
+    }
+
+    setActiveTab('admin');
+    setAdminTab('clients');
+    setClientsModeFilter('algofund_client');
+    setClientsClassKind('ts');
+    setClientsClassValue(publishedSystemName);
+    setBatchAlgofundAction('switch_system');
+    setBatchTargetSystemId(publishedSystemId);
+    setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)).filter((item) => item > 0));
+    messageApi.success('Открыт шаг применения клиентам: выбран switch_system и подставлен опубликованный admin TS');
+  };
+
+  const applyPublishedAdminTsToSelectedClients = async () => {
+    const publishedSystemId = Number(publishResponse?.sourceSystem?.systemId || 0);
+    const publishedSystemName = String(publishResponse?.sourceSystem?.systemName || '').trim();
+    const selectedTenantIds = Array.from(new Set((batchTenantIds || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+
+    if (!publishedSystemId || !publishedSystemName) {
+      messageApi.warning('Сначала отправьте draft ТС на апрув, чтобы получить runtime system id');
+      return;
+    }
+    if (selectedTenantIds.length === 0) {
+      messageApi.warning('Сначала выберите algofund-клиентов в разделе Клиенты');
+      return;
+    }
+
+    setActionLoading('apply-published-admin-ts');
+    try {
+      const response = await axios.post('/api/saas/admin/algofund-batch-actions', {
+        tenantIds: selectedTenantIds,
+        requestType: 'switch_system',
+        note: `Apply published admin TS ${publishedSystemName}`,
+        targetSystemId: publishedSystemId,
+        targetSystemName: publishedSystemName,
+        directExecute: true,
+      });
+      const created = Number(response.data?.createdCount || 0);
+      const failed = Number(response.data?.failedCount || 0);
+      messageApi.success(`Применение завершено: switched ${created}, failed ${failed}`);
+      await loadSummary();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to apply published admin TS to selected clients'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const createTenantAdmin = async () => {
     if (!createTenantDisplayName.trim() || !createTenantPlanCode) {
       messageApi.error('Display name and plan are required');
@@ -3419,10 +3601,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const algofundEngineRunning = Boolean(algofundState?.profile?.actual_enabled);
   const algofundEnginePending = Boolean(algofundState?.profile?.requested_enabled) && !algofundEngineRunning;
   const algofundEngineBlockedReason = String(algofundState?.preview?.blockedReason || '').trim();
-  const algofundTradingSystemsHref = algofundState
-    ? `/trading-systems?apiKeyName=${encodeURIComponent(String(algofundState.engine?.apiKeyName || algofundState.profile?.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || ''))}${algofundState.engine?.systemId ? `&systemId=${algofundState.engine.systemId}` : ''}`
-    : '/trading-systems';
-
   const monitoringRows = (summary?.tenants || [])
     .filter((row) => monitoringModeFilter === 'all' || row.tenant.product_mode === monitoringModeFilter)
     .map((row) => {
@@ -3539,10 +3717,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             />
             <Button
               size="small"
-              href={`/trading-systems?apiKeyName=${encodeURIComponent(row.apiKeyName)}${row.selectedSystem?.id ? `&systemId=${row.selectedSystem.id}` : ''}`}
-              disabled={!row.apiKeyName}
+              onClick={() => openTenantWorkspace(row)}
             >
-              Open
+              Открыть в SaaS
             </Button>
           </Space>
         );
@@ -3612,7 +3789,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               children: (
                 <Tabs
                   activeKey={adminTab}
-                  onChange={(key) => setAdminTab(key as AdminTabKey)}
+                  onChange={(key) => {
+                    const nextKey = key as AdminTabKey;
+                    setAdminTab(nextKey);
+                    if (nextKey === 'offer-ts' || nextKey === 'research-analysis') {
+                      void loadSummary('full');
+                    }
+                  }}
                   items={[
                     {
                       key: 'offer-ts',
@@ -3648,31 +3831,53 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             {selectedAdminReviewKind === 'algofund-ts' ? (
                               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                                 <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                                  Здесь просматривается текущий draft торговой системы Алгофонда из последнего sweep. После проверки состава и метрик можно открыть Trading Systems и затем отправить ТС на апрув/публикацию.
+                                  Здесь полный workflow по ТС Алгофонда после sweep: просмотр состава и метрик, отправка draft ТС на апрув, затем переход к применению опубликованной ТС на клиентов Алгофонда.
                                 </Paragraph>
                                 <Space wrap>
+                                  <Tag color={publishResponse?.sourceSystem ? 'success' : 'processing'}>{publishResponse?.sourceSystem ? 'published runtime TS ready' : 'pending review'}</Tag>
                                   <Tag color="processing">members: {Number(adminTradingSystemDraft?.members?.length || 0)}</Tag>
                                   <Tag color="blue">{adminTradingSystemDraft?.name || 'Admin TS draft'}</Tag>
+                                  {publishResponse?.sourceSystem?.systemId ? <Tag color="geekblue">system #{publishResponse.sourceSystem.systemId}</Tag> : null}
+                                  {publishResponse?.preview?.summary ? <Tag color={metricColor(Number(publishResponse.preview.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(publishResponse.preview.summary.totalReturnPercent)}</Tag> : null}
+                                  {publishResponse?.preview?.summary ? <Tag color={metricColor(Number(publishResponse.preview.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(publishResponse.preview.summary.maxDrawdownPercent)}</Tag> : null}
+                                  {publishResponse?.preview?.summary ? <Tag color={metricColor(Number(publishResponse.preview.summary.profitFactor || 0), 'pf')}>PF {formatNumber(publishResponse.preview.summary.profitFactor)}</Tag> : null}
                                 </Space>
+                                {publishResponse?.sourceSystem ? (
+                                  <Descriptions column={1} size="small" bordered>
+                                    <Descriptions.Item label="Runtime TS">{publishResponse.sourceSystem.systemName}</Descriptions.Item>
+                                    <Descriptions.Item label="API key">{publishResponse.sourceSystem.apiKeyName}</Descriptions.Item>
+                                    <Descriptions.Item label="Следующий шаг">Открой шаг применения клиентам Алгофонда и выполни switch_system на этот runtime TS</Descriptions.Item>
+                                  </Descriptions>
+                                ) : null}
                                 <List
-                                  dataSource={adminTradingSystemDraft?.members || []}
+                                  dataSource={adminDraftMembersDetailed}
                                   locale={{ emptyText: <Empty description="Sweep еще не подготовил draft ТС для review" /> }}
-                                  renderItem={(member) => (
+                                  renderItem={(member, index) => (
                                     <List.Item>
                                       <Space direction="vertical" size={0}>
                                         <Text strong>{member.strategyName}</Text>
                                         <Text type="secondary">{member.marketMode.toUpperCase()} • {member.market}</Text>
                                       </Space>
                                       <Space wrap>
+                                        <Tag color={index < 3 ? 'geekblue' : 'default'}>{index < 3 ? 'core' : 'satellite'}</Tag>
                                         <Tag color="cyan">score {formatNumber(member.score)}</Tag>
                                         <Tag color="purple">w {formatNumber(member.weight)}</Tag>
+                                        {member.reviewRecord ? <Tag color={metricColor(Number(member.reviewRecord.totalReturnPercent || 0), 'return')}>Ret {formatPercent(member.reviewRecord.totalReturnPercent)}</Tag> : null}
+                                        {member.reviewRecord ? <Tag color={metricColor(Number(member.reviewRecord.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(member.reviewRecord.maxDrawdownPercent)}</Tag> : null}
+                                        {member.reviewRecord ? <Tag color={metricColor(Number(member.reviewRecord.profitFactor || 0), 'pf')}>PF {formatNumber(member.reviewRecord.profitFactor)}</Tag> : null}
                                       </Space>
                                     </List.Item>
                                   )}
                                 />
                                 <Space wrap>
-                                  <Button size="small" href="/trading-systems">Открыть Trading Systems</Button>
                                   <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>Отправить ТС на апрув</Button>
+                                  <Button size="small" onClick={() => setAdminTab('research-analysis')}>Открыть sweep/backtest</Button>
+                                  <Button size="small" onClick={() => setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)).filter((item) => item > 0))}>Выбрать всех algofund-клиентов</Button>
+                                  <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId} onClick={openPublishedAdminTsForClients}>Применить к клиентам Алгофонда</Button>
+                                  <Button size="small" href="/backtest">Открыть Backtest</Button>
+                                  <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId || batchTenantIds.length === 0} loading={actionLoading === 'apply-published-admin-ts'} onClick={() => void applyPublishedAdminTsToSelectedClients()}>
+                                    Применить к выбранным ({batchTenantIds.length})
+                                  </Button>
                                 </Space>
                               </Space>
                             ) : selectedAdminReviewOffer ? (
@@ -3701,7 +3906,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Empty description="Для этой карточки пока нет equity-кривой" />
                                 )}
                                 <Space wrap>
-                                  <Button size="small" href="/trading-systems">Открыть Trading Systems</Button>
                                   <Button
                                     type="primary"
                                     size="small"
@@ -3710,6 +3914,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   >
                                     {selectedAdminReviewOffer.published ? 'Обновить витрину' : 'Отправить на апрув'}
                                   </Button>
+                                  <Button size="small" onClick={() => setActiveTab('strategy-client')}>Проверить витрину клиентов стратегий</Button>
+                                  <Button size="small" href="/backtest" disabled={!strategyBacktestEnabled}>Открыть Backtest</Button>
                                   {selectedAdminReviewOffer.published ? <Button size="small" danger onClick={() => void openUnpublishWizard(String(selectedAdminReviewOffer.offerId))}>Снять с витрины</Button> : null}
                                 </Space>
                                     </>
@@ -3723,7 +3929,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                           <Card className="battletoads-card" title="Оферы и ТС: только approved на витринах">
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                              Здесь только то, что уже апрувлено и показано на витринах. Для редактирования используй Trading Systems, для снятия с витрины используй флаг в таблице ниже.
+                              Здесь только то, что уже апрувлено и показано на витринах. Для редактирования вернись в блок review выше, для снятия с витрины используй флаг в таблице ниже.
                             </Paragraph>
                             <Space wrap style={{ marginBottom: 12 }}>
                               <Tag color="processing">approved storefront: {publishedStorefrontOffers.length}</Tag>
@@ -3731,11 +3937,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
                             </Space>
                             <Space wrap style={{ marginBottom: 16 }}>
-                              <Button size="small" href="/trading-systems">Открыть Trading Systems</Button>
+                              <Button size="small" onClick={() => { setSelectedAdminReviewKind('algofund-ts'); }}>Открыть review ТС</Button>
                             </Space>
 
                             <Row gutter={[16, 16]}>
-                              <Col xs={24}>
+                              <Col xs={24} lg={12}>
                                 <Card className="battletoads-card" size="small" title="Витрина оферов клиентов стратегий (approved)">
                                   {publishedStorefrontOffers.length === 0 ? (
                                     <Empty description="Пока ничего не апрувлено на витрину" />
@@ -3799,6 +4005,46 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           ),
                                         },
                                       ]}
+                                    />
+                                  )}
+                                </Card>
+                              </Col>
+                              <Col xs={24} lg={12}>
+                                <Card className="battletoads-card" size="small" title="Витрина ТС Алгофонда (approved)">
+                                  {algofundStorefrontSystems.length === 0 ? (
+                                    <Empty description="Пока нет опубликованной ТС Алгофонда на витрине" />
+                                  ) : (
+                                    <List
+                                      dataSource={algofundStorefrontSystems}
+                                      renderItem={(item) => (
+                                        <List.Item
+                                          actions={[
+                                            <Button key="review" size="small" onClick={() => setSelectedAdminReviewKind('algofund-ts')}>Review</Button>,
+                                            <Button
+                                              key="apply"
+                                              size="small"
+                                              disabled={!item.runtimeSystemId || batchTenantIds.length === 0}
+                                              loading={actionLoading === 'apply-published-admin-ts'}
+                                              onClick={() => void applyPublishedAdminTsToSelectedClients()}
+                                            >
+                                              Apply ({batchTenantIds.length})
+                                            </Button>,
+                                          ]}
+                                        >
+                                          <List.Item.Meta
+                                            title={
+                                              <Space wrap>
+                                                <Text strong>{item.systemName}</Text>
+                                                {item.runtimeSystemId ? <Tag color="geekblue">system #{item.runtimeSystemId}</Tag> : null}
+                                                <Tag color="processing">clients {item.tenantCount}</Tag>
+                                                <Tag color="success">active {item.activeCount}</Tag>
+                                                {item.pendingCount > 0 ? <Tag color="warning">pending {item.pendingCount}</Tag> : null}
+                                              </Space>
+                                            }
+                                            description={item.tenants.length > 0 ? item.tenants.map((tenant) => tenant.tenant.display_name).join(', ') : 'TS опубликована, но ещё не привязана к клиентам'}
+                                          />
+                                        </List.Item>
+                                      )}
                                     />
                                   )}
                                 </Card>
@@ -3907,10 +4153,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                           {summary?.sweepSummary?.portfolioFull ? (
                             <Row gutter={[16, 16]}>
-                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.returnLabel} value={Number(summary.sweepSummary.portfolioFull.totalReturnPercent || 0)} precision={2} suffix="%" /></Card></Col>
-                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.drawdown} value={Number(summary.sweepSummary.portfolioFull.maxDrawdownPercent || 0)} precision={2} suffix="%" /></Card></Col>
-                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.profitFactor} value={Number(summary.sweepSummary.portfolioFull.profitFactor || 0)} precision={2} /></Card></Col>
-                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.trades} value={Number(summary.sweepSummary.portfolioFull.tradesCount || 0)} precision={0} /></Card></Col>
+                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.returnLabel} value={Number(summary.sweepSummary.portfolioFull.summary?.totalReturnPercent || 0)} precision={2} suffix="%" /></Card></Col>
+                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.drawdown} value={Number(summary.sweepSummary.portfolioFull.summary?.maxDrawdownPercent || 0)} precision={2} suffix="%" /></Card></Col>
+                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.profitFactor} value={Number(summary.sweepSummary.portfolioFull.summary?.profitFactor || 0)} precision={2} /></Card></Col>
+                              <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.trades} value={Number(summary.sweepSummary.portfolioFull.summary?.tradesCount || 0)} precision={0} /></Card></Col>
                             </Row>
                           ) : null}
 
@@ -3955,7 +4201,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Button size="small" loading={actionLoading === 'load-sweep-review'} onClick={() => void loadSweepReviewCandidates()}>
                                     Загрузить оферы и ТС из sweep
                                   </Button>
-                                  <Button size="small" href="/trading-systems">Открыть Trading Systems (sweep backtest)</Button>
+                                  <Button
+                                    size="small"
+                                    onClick={() => {
+                                      setSelectedAdminReviewKind('algofund-ts');
+                                      setAdminTab('offer-ts');
+                                    }}
+                                  >
+                                    Открыть в Оферы и ТС (sweep backtest)
+                                  </Button>
                                 </Space>
                                 <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
                                   Очередь запросов на бэктест и переход в Research для запуска sweep.
@@ -3996,7 +4250,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 }}
                                 addonBefore="Target/day"
                               />
-                              <Button size="small" href="/trading-systems">Открыть Trading Systems</Button>
+                              <InputNumber
+                                min={0.5}
+                                max={5}
+                                step={0.05}
+                                value={approvalMinProfitFactor}
+                                onChange={(value) => {
+                                  const numeric = Number(value || 1);
+                                  setApprovalMinProfitFactor(Math.max(0.5, Math.min(5, Number(numeric.toFixed(2)))));
+                                }}
+                                addonBefore="Min PF"
+                              />
                               <Button
                                 size="small"
                                 onClick={() => {
@@ -4004,7 +4268,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   setAdminTab('offer-ts');
                                 }}
                               >
-                                Открыть draft ТС в Оферы и ТС
+                                Перейти в review ТС
+                              </Button>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  void openPublishedAdminTsForClients();
+                                }}
+                              >
+                                Применение ТС к клиентам
                               </Button>
                             </Space>
                             <Table
@@ -4089,17 +4361,44 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Space wrap style={{ marginBottom: 12 }}>
                               <Tag color="processing">members: {Number(adminTradingSystemDraft?.members?.length || 0)}</Tag>
                               <Tag color="blue">{adminTradingSystemDraft?.name || 'Admin TS draft'}</Tag>
+                              <Tag color="gold">pending review</Tag>
+                              {summary?.sweepSummary?.period ? <Tag color="default">{formatPeriodLabel(summary.sweepSummary.period)}</Tag> : null}
+                              {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(adminDraftPortfolioSummary.totalReturnPercent)}</Tag> : null}
+                              {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(adminDraftPortfolioSummary.maxDrawdownPercent)}</Tag> : null}
+                              {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.profitFactor || 0), 'pf')}>PF {formatNumber(adminDraftPortfolioSummary.profitFactor)}</Tag> : null}
+                              {adminDraftTradesPerDay !== null ? <Tag color="blue">tpd {formatNumber(adminDraftTradesPerDay, 2)}</Tag> : null}
                             </Space>
+                            {summary?.sweepSummary?.portfolioFull?.error ? (
+                              <Alert
+                                type="warning"
+                                showIcon
+                                style={{ marginBottom: 12 }}
+                                message={`Portfolio backtest error: ${summary.sweepSummary.portfolioFull.error}`}
+                              />
+                            ) : null}
+                            {adminDraftPortfolioSummary ? (
+                              <Descriptions size="small" bordered column={2} style={{ marginBottom: 12 }}>
+                                <Descriptions.Item label="Статус">Черновик из sweep</Descriptions.Item>
+                                <Descriptions.Item label="Источник">full_range portfolio backtest</Descriptions.Item>
+                                <Descriptions.Item label="Final equity">{formatMoney(adminDraftPortfolioSummary.finalEquity)}</Descriptions.Item>
+                                <Descriptions.Item label="Сделок">{formatNumber(adminDraftPortfolioSummary.tradesCount, 0)}</Descriptions.Item>
+                              </Descriptions>
+                            ) : (
+                              <Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 12 }}>
+                                Метрики портфеля еще не доступны. Ниже все равно показан состав draft ТС из последнего sweep.
+                              </Paragraph>
+                            )}
                             <List
                               dataSource={adminTradingSystemDraft?.members || []}
                               locale={{ emptyText: <Empty description="Недавний sweep еще не сформировал draft ТС" /> }}
-                              renderItem={(member) => (
+                              renderItem={(member, index) => (
                                 <List.Item>
                                   <Space direction="vertical" size={0}>
                                     <Text strong>{member.strategyName}</Text>
                                     <Text type="secondary">{member.marketMode.toUpperCase()} • {member.market}</Text>
                                   </Space>
                                   <Space wrap>
+                                    <Tag color={index < 3 ? 'geekblue' : 'default'}>{index < 3 ? 'core' : 'satellite'}</Tag>
                                     <Tag color="cyan">score {formatNumber(member.score)}</Tag>
                                     <Tag color="purple">w {formatNumber(member.weight)}</Tag>
                                   </Space>
@@ -4107,6 +4406,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               )}
                             />
                             <Space wrap style={{ marginTop: 12 }}>
+                              <Button size="small" loading={actionLoading === 'load-sweep-review'} onClick={() => void loadSweepReviewCandidates()}>
+                                Обновить из sweep
+                              </Button>
                               <Button
                                 size="small"
                                 onClick={() => {
@@ -4114,9 +4416,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   setAdminTab('offer-ts');
                                 }}
                               >
-                                Открыть в Оферы и ТС
+                                Открыть review ТС
                               </Button>
-                              <Button size="small" href="/trading-systems">Trading Systems</Button>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  void openPublishedAdminTsForClients();
+                                }}
+                              >
+                                Применение к клиентам
+                              </Button>
                             </Space>
                           </Card>
 
@@ -5157,7 +5466,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Empty description="Витрина Алгофонда сейчас пуста, пока не опубликован admin TS через Админ → Оферы и ТС" />
                               <Space wrap>
                                 <Button type="primary" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Перейти в approval center</Button>
-                                <Button href="/trading-systems">Trading Systems</Button>
+                                <Button onClick={() => { setActiveTab('admin'); setAdminTab('clients'); setClientsModeFilter('algofund_client'); }}>К клиентам Алгофонда</Button>
                                 <Button href="/backtest">Бэктест</Button>
                               </Space>
                             </Space>
@@ -5384,7 +5693,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Descriptions.Item label={copy.engineSystemId}>{algofundState.engine?.systemId ?? '—'}</Descriptions.Item>
                               <Descriptions.Item label={copy.apiKey}>{algofundState.engine?.apiKeyName || algofundState.profile?.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || '—'}</Descriptions.Item>
                             </Descriptions>
-                            <Button href={algofundTradingSystemsHref}>{copy.openTradingSystems}</Button>
+                            <Button onClick={() => { setActiveTab('admin'); setAdminTab('clients'); setClientsModeFilter('algofund_client'); }}>{copy.openTradingSystems}</Button>
                             {algofundEnginePending && !algofundEngineRunning ? (
                               <>
                                 <Alert
@@ -5545,10 +5854,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           applyLowLotTarget?.systemId ? (
             <Button
               key="open-ts"
-              href={`/trading-systems?apiKeyName=${encodeURIComponent(applyLowLotTarget.apiKeyName)}&systemId=${applyLowLotTarget.systemId}`}
-              target="_self"
+              onClick={() => {
+                setApplyLowLotTarget(null);
+                setActiveTab('admin');
+                setAdminTab('monitoring');
+              }}
             >
-              Open TS
+              Открыть в SaaS
             </Button>
           ) : null,
           <Button key="apply" type="primary" loading={applyLowLotWorking} onClick={() => void submitApplyLowLotRecommendation()}>Apply</Button>,
