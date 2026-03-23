@@ -62,9 +62,11 @@ const isLevel3 = (value: unknown): value is 'low' | 'medium' | 'high' => {
   return value === 'low' || value === 'medium' || value === 'high';
 };
 
-router.get('/admin/summary', async (_req, res) => {
+router.get('/admin/summary', async (req, res) => {
   try {
-    const data = await getSaasAdminSummary();
+    const scope = String(req.query.scope || 'full').trim().toLowerCase();
+    const includeOfferStore = scope !== 'light';
+    const data = await getSaasAdminSummary({ includeOfferStore });
     res.json(data);
   } catch (error) {
     const err = error as Error;

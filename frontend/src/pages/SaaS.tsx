@@ -37,7 +37,8 @@ type ProductMode = 'strategy_client' | 'algofund_client';
 type Level3 = 'low' | 'medium' | 'high';
 type RequestStatus = 'pending' | 'approved' | 'rejected';
 type SaasTabKey = 'admin' | 'strategy-client' | 'algofund';
-type AdminTabKey = 'overview' | 'monitoring' | 'create-user';
+type AdminTabKey = 'offer-ts' | 'research-analysis' | 'clients' | 'monitoring' | 'create-user';
+type SummaryScope = 'light' | 'full';
 
 type TradingSystemListItem = {
   id?: number;
@@ -1714,7 +1715,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [algofundTenantDisplayName, setAlgofundTenantDisplayName] = useState('');
   const [algofundTenantStatus, setAlgofundTenantStatus] = useState('active');
   const [algofundTenantPlanCode, setAlgofundTenantPlanCode] = useState('');
-  const [adminTab, setAdminTab] = useState<AdminTabKey>('overview');
+  const [adminTab, setAdminTab] = useState<AdminTabKey>('clients');
   const [createTenantDisplayName, setCreateTenantDisplayName] = useState('');
   const [createTenantProductMode, setCreateTenantProductMode] = useState<ProductMode>('strategy_client');
   const [createTenantPlanCode, setCreateTenantPlanCode] = useState('');
@@ -1827,12 +1828,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return acc;
   }, {});
 
-  const loadSummary = async () => {
+  const resolveSummaryScope = (): SummaryScope => {
+    if (activeTab === 'admin' && adminTab === 'offer-ts') {
+      return 'full';
+    }
+    return 'light';
+  };
+
+  const loadSummary = async (scope: SummaryScope = resolveSummaryScope()) => {
     setSummaryLoading(true);
     setSummaryError('');
     try {
-      const response = await axios.get<SaasSummary>('/api/saas/admin/summary');
-      setSummary(response.data);
+      const response = await axios.get<SaasSummary>('/api/saas/admin/summary', {
+        params: { scope },
+      });
+      setSummary((prev) => {
+        if (scope === 'light' && prev?.offerStore && !response.data.offerStore) {
+          return {
+            ...response.data,
+            offerStore: prev.offerStore,
+          };
+        }
+        return response.data;
+      });
     } catch (error: any) {
       setSummaryError(String(error?.response?.data?.error || error?.message || 'Failed to load SaaS summary'));
     } finally {
@@ -1994,13 +2012,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   useEffect(() => {
-    void loadSummary();
+    if (!isAdminSurface) {
+      return;
+    }
+    void loadSummary('light');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdminSurface]);
 
   useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab]);
+
+  useEffect(() => {
+    if (!isAdminSurface) {
+      return;
+    }
+    if (activeTab === 'admin' && adminTab === 'offer-ts' && !summary?.offerStore && !summaryLoading) {
+      void loadSummary('full');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdminSurface, activeTab, adminTab, summary?.offerStore]);
 
   const loadTelegramControls = useCallback(async () => {
     setTelegramControlsLoading(true);
@@ -2170,7 +2201,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   useEffect(() => {
-    if (activeTab === 'admin' && adminTab === 'overview') {
+    if (activeTab === 'admin' && adminTab === 'research-analysis') {
       if (!performanceReport) {
         void loadPerformanceReport('daily');
       }
@@ -2799,7 +2830,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setCreateTenantPlanCode('');
       setCreateTenantApiKey('');
       setCreateTenantEmail('');
-      setAdminTab('overview');
+      setAdminTab('offer-ts');
       await loadSummary();
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to create tenant'));
@@ -3380,8 +3411,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   onChange={(key) => setAdminTab(key as AdminTabKey)}
                   items={[
                     {
-                      key: 'overview',
-                      label: 'Обзор',
+                      key: 'offer-ts',
+                      label: 'Оферы и ТС',
                       children: (
                         <Space direction="vertical" size={16} style={{ width: '100%' }}>
                           {!summary?.catalog ? <Alert type="warning" showIcon message={copy.noCatalog} /> : null}
@@ -3905,6 +3936,183 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       ),
                     },
                     {
+                      key: 'research-analysis',
+                      label: 'Анализ ресерча',
+                      children: (
+                        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} md={8}>
+                              <Card
+                                className="battletoads-card"
+                                title="Backtest requests"
+                                extra={<Button size="small" href="/research">Research</Button>}
+                              >
+                                <Space>
+                                  <Tag color="processing">pending: {Number(summary?.backtestPairRequests?.pending || 0)}</Tag>
+                                  <Tag>total: {Number(summary?.backtestPairRequests?.total || 0)}</Tag>
+                                </Space>
+                                <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
+                                  Очередь запросов на бэктест и переход в Research для запуска sweep.
+                                </Paragraph>
+                              </Card>
+                            </Col>
+                            <Col xs={24} md={16}>
+                              <Card className="battletoads-card" title={copy.requestQueue}>
+                                <Space wrap>
+                                  <Tag color="processing">pending: {Number(summary?.algofundRequestQueue?.pending || 0)}</Tag>
+                                  <Tag color="success">approved: {Number(summary?.algofundRequestQueue?.approved || 0)}</Tag>
+                                  <Tag color="default">rejected: {Number(summary?.algofundRequestQueue?.rejected || 0)}</Tag>
+                                  <Tag>total: {Number(summary?.algofundRequestQueue?.total || 0)}</Tag>
+                                </Space>
+                                <div style={{ marginTop: 12 }}>
+                                  <Table
+                                    rowKey="id"
+                                    columns={requestColumns}
+                                    dataSource={summary?.algofundRequestQueue?.items || []}
+                                    pagination={{ pageSize: 8, showSizeChanger: false }}
+                                    scroll={{ x: 960 }}
+                                  />
+                                </div>
+                              </Card>
+                            </Col>
+                          </Row>
+
+                          <Card className="battletoads-card" title="Отчёты и аналитика">
+                            <Space direction="vertical" style={{ width: '100%' }}>
+                              <Space wrap>
+                                <Select
+                                  value={reportPeriod}
+                                  style={{ width: 140 }}
+                                  options={[
+                                    { value: 'daily', label: 'daily' },
+                                    { value: 'weekly', label: 'weekly' },
+                                    { value: 'monthly', label: 'monthly' },
+                                  ]}
+                                  onChange={(value) => setReportPeriod(value)}
+                                />
+                                <Button loading={performanceReportLoading} onClick={() => void loadPerformanceReport(reportPeriod)}>Обновить отчёт</Button>
+                                <Button
+                                  loading={sendTelegramLoading}
+                                  disabled={!telegramControls?.tokenConfigured || !telegramControls?.chatConfigured}
+                                  onClick={() => void sendReportToTelegram()}
+                                >
+                                  Отправить в Telegram
+                                </Button>
+                              </Space>
+                              <Space wrap>
+                                <Tag color="blue">TS: {Number(performanceReport?.tradingSystems?.length || 0)}</Tag>
+                                <Tag color="geekblue">Offers: {Number(performanceReport?.offers?.length || 0)}</Tag>
+                                {performanceReport ? <Tag color="default">{performanceReport.generatedAt.slice(0, 16).replace('T', ' ')}</Tag> : null}
+                              </Space>
+                            </Space>
+                          </Card>
+                        </Space>
+                      ),
+                    },
+                    {
+                      key: 'clients',
+                      label: 'Клиенты',
+                      children: (
+                        <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                          <Card className="battletoads-card" title={copy.connectedTenants} extra={<Button type="primary" onClick={() => setAdminTab('create-user')}>{copy.createClient}</Button>}>
+                            <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.adminCreateHint}</Paragraph>
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              <Card size="small" className="battletoads-card" title="Algofund batch actions">
+                                <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                                  <Space wrap>
+                                    <Tag color="processing">Selected: {batchTenantIds.length}</Tag>
+                                    <Tag>Algofund tenants: {batchEligibleAlgofundTenants.length}</Tag>
+                                    <Button
+                                      size="small"
+                                      onClick={() => setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)))}
+                                    >
+                                      Select all algofund
+                                    </Button>
+                                    <Button size="small" onClick={() => setBatchTenantIds([])}>Clear selection</Button>
+                                  </Space>
+                                  <Space wrap style={{ width: '100%' }}>
+                                    <Select
+                                      style={{ width: 180 }}
+                                      value={batchAlgofundAction}
+                                      onChange={(value) => setBatchAlgofundAction(value)}
+                                      options={[
+                                        { value: 'start', label: 'start' },
+                                        { value: 'stop', label: 'stop' },
+                                        { value: 'switch_system', label: 'switch_system' },
+                                      ]}
+                                    />
+                                    <InputNumber
+                                      min={1}
+                                      style={{ width: 180 }}
+                                      value={batchTargetSystemId || undefined}
+                                      onChange={(value) => setBatchTargetSystemId(Number(value || 0) || null)}
+                                      disabled={batchAlgofundAction !== 'switch_system'}
+                                      placeholder="target system id"
+                                    />
+                                    <Input
+                                      style={{ width: 360 }}
+                                      value={batchActionNote}
+                                      onChange={(event) => setBatchActionNote(event.target.value)}
+                                      placeholder="optional admin note"
+                                    />
+                                    <Button
+                                      type="primary"
+                                      loading={actionLoading === 'algofund-batch'}
+                                      onClick={() => void runAlgofundBatchAction()}
+                                    >
+                                      Run batch
+                                    </Button>
+                                  </Space>
+                                </Space>
+                              </Card>
+                              <Table
+                                rowKey={(row) => row.tenant.id}
+                                columns={tenantColumns}
+                                dataSource={summary?.tenants || []}
+                                pagination={false}
+                                scroll={{ x: 980 }}
+                                rowSelection={{
+                                  selectedRowKeys: batchTenantIds,
+                                  onChange: (keys) => {
+                                    const next = Array.from(new Set((keys || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+                                    setBatchTenantIds(next);
+                                  },
+                                  getCheckboxProps: (row) => ({
+                                    disabled: row.tenant.product_mode !== 'algofund_client',
+                                  }),
+                                }}
+                              />
+                            </Space>
+                          </Card>
+
+                          <Row gutter={[16, 16]}>
+                            <Col xs={24} xl={12}>
+                              <Card className="battletoads-card" title={`${copy.strategyClient} В· ${copy.planGrid}`}>
+                                <Table
+                                  rowKey="code"
+                                  columns={planColumns}
+                                  dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'strategy_client')}
+                                  pagination={false}
+                                  scroll={{ x: 980 }}
+                                />
+                              </Card>
+                            </Col>
+                            <Col xs={24} xl={12}>
+                              <Card className="battletoads-card" title={`${copy.algofund} В· ${copy.planGrid}`}>
+                                <Table
+                                  rowKey="code"
+                                  columns={planColumns}
+                                  dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'algofund_client')}
+                                  pagination={false}
+                                  scroll={{ x: 980 }}
+                                />
+                              </Card>
+                            </Col>
+                          </Row>
+                        </Space>
+                      ),
+                    },
+                    {
                       key: 'monitoring',
                       label: 'Мониторинг',
                       children: (
@@ -4103,7 +4311,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </div>
                             <Space>
                               <Button type="primary" onClick={() => void createTenantAdmin()} loading={actionLoading === 'createTenant'}>{copy.createClient}</Button>
-                              <Button onClick={() => setAdminTab('overview')}>Назад к обзору</Button>
+                              <Button onClick={() => setAdminTab('offer-ts')}>Назад к оферам и ТС</Button>
                             </Space>
                           </Space>
                         </Card>

@@ -2959,8 +2959,11 @@ export const applyLowLotRecommendation = async (options: {
   return { success: true, changes, changeSummary };
 };
 
-export const getSaasAdminSummary = async () => {
+export const getSaasAdminSummary = async (options?: {
+  includeOfferStore?: boolean;
+}) => {
   await ensureSaasSeedData();
+  const includeOfferStore = options?.includeOfferStore !== false;
   const sourceCatalog = loadLatestClientCatalog();
   const sourceSweep = loadLatestSweep();
   const apiKeys = await getAvailableApiKeyNames();
@@ -2981,7 +2984,7 @@ export const getSaasAdminSummary = async () => {
   const plans = await listPlans();
   const algofundRequests = await getAlgofundRequestsAll(200);
   const [offerStore, reportSettings] = await Promise.all([
-    getOfferStoreAdminState(),
+    includeOfferStore ? getOfferStoreAdminState() : Promise.resolve(null),
     getAdminReportSettings(),
   ]);
   const backtestRequestCount = await db.get(
@@ -3013,7 +3016,7 @@ export const getSaasAdminSummary = async () => {
       rejected: algofundRequests.filter((row) => row.status === 'rejected').length,
       items: algofundRequests,
     },
-    offerStore,
+    ...(offerStore ? { offerStore } : {}),
     reportSettings,
   };
 };
