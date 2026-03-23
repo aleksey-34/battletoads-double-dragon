@@ -2405,6 +2405,40 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const confirmAlgofundAdminDirectAction = async (
+    action: 'start' | 'stop',
+    tenantCount: number
+  ): Promise<boolean> => {
+    const actionLabel = action === 'start' ? 'START' : 'STOP + CLOSE POSITIONS';
+    const first = await new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        title: `Confirm ${actionLabel}`,
+        content: `Apply ${actionLabel} for ${tenantCount} tenant(s) immediately, without creating request queue items?`,
+        okText: 'Confirm',
+        cancelText: 'Cancel',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+    if (!first) {
+      return false;
+    }
+
+    const second = await new Promise<boolean>((resolve) => {
+      Modal.confirm({
+        title: `Final confirmation: ${actionLabel}`,
+        content: 'This action executes immediately.',
+        okText: 'Execute now',
+        okType: action === 'stop' ? 'danger' : 'primary',
+        cancelText: 'Back',
+        onOk: () => resolve(true),
+        onCancel: () => resolve(false),
+      });
+    });
+
+    return second;
+  };
+
   const runAlgofundBatchAction = async () => {
     const selectedTenantIds = Array.from(new Set((batchTenantIds || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
     if (selectedTenantIds.length === 0) {
@@ -2416,6 +2450,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
+    if ((batchAlgofundAction === 'start' || batchAlgofundAction === 'stop') && isAdminSurface) {
+      const confirmed = await confirmAlgofundAdminDirectAction(batchAlgofundAction, selectedTenantIds.length);
+      if (!confirmed) {
+        return;
+      }
+    }
+
     setActionLoading('algofund-batch');
     try {
       const response = await axios.post('/api/saas/admin/algofund-batch-actions', {
@@ -2423,10 +2464,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         requestType: batchAlgofundAction,
         note: batchActionNote,
         targetSystemId: batchAlgofundAction === 'switch_system' ? Number(batchTargetSystemId) : undefined,
+        directExecute: isAdminSurface && (batchAlgofundAction === 'start' || batchAlgofundAction === 'stop'),
       });
       const created = Number(response.data?.createdCount || 0);
       const failed = Number(response.data?.failedCount || 0);
-      messageApi.success(`Batch completed: created ${created}, failed ${failed}`);
+      messageApi.success(
+        isAdminSurface && (batchAlgofundAction === 'start' || batchAlgofundAction === 'stop')
+          ? `Batch completed: executed ${created}, failed ${failed}`
+          : `Batch completed: created ${created}, failed ${failed}`
+      );
       await loadSummary();
       if (activeTab === 'admin' && adminTab === 'monitoring') {
         await loadMonitoringTabData();
@@ -2439,15 +2485,27 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   const runSingleAlgofundAction = async (tenantId: number, action: 'start' | 'stop' | 'switch_system', targetSystemId?: number) => {
+    if ((action === 'start' || action === 'stop') && isAdminSurface) {
+      const confirmed = await confirmAlgofundAdminDirectAction(action, 1);
+      if (!confirmed) {
+        return;
+      }
+    }
+
     setActionLoading(`algofund-single:${tenantId}`);
     try {
       const response = await axios.post('/api/saas/admin/algofund-batch-actions', {
         tenantIds: [tenantId],
         requestType: action,
         targetSystemId: action === 'switch_system' ? Number(targetSystemId) : undefined,
+        directExecute: isAdminSurface && (action === 'start' || action === 'stop'),
       });
       const created = Number(response.data?.createdCount || 0);
-      messageApi.success(`Запрос создан: ${created}`);
+      messageApi.success(
+        isAdminSurface && (action === 'start' || action === 'stop')
+          ? `Действие выполнено: ${created}`
+          : `Запрос создан: ${created}`
+      );
       await loadSummary();
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Ошибка'));
@@ -4365,7 +4423,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Space>
                           <Space wrap style={{ marginTop: 12 }}>
                             <Button size="small" href="/settings" disabled={!strategySettingsEnabled}>{copy.openSettings}</Button>
-                            <Button size="small" href="/positions" disabled={!strategyMonitoringEnabled}>{copy.openMonitoring}</Button>
+                            <Button size="small" href="/positions" disabled={!strategyMonitoringEnabled && !isAdminSurface}>{copy.openMonitoring}</Button>
                             <Button size="small" href="/backtest" disabled={!strategyBacktestEnabled}>{copy.openBacktest}</Button>
                           </Space>
                           {isAdminSurface ? (
@@ -4848,7 +4906,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Space>
                           <Space wrap style={{ marginTop: 12 }}>
                             <Button size="small" href="/settings" disabled={!algofundSettingsEnabled}>{copy.openSettings}</Button>
-                            <Button size="small" href="/positions" disabled={!algofundMonitoringEnabled}>{copy.openMonitoring}</Button>
+                            <Button size="small" href="/positions" disabled={!algofundMonitoringEnabled && !isAdminSurface}>{copy.openMonitoring}</Button>
                             <Button size="small" href="/backtest" disabled={!algofundBacktestEnabled}>{copy.openBacktest}</Button>
                           </Space>
                           {isAdminSurface ? (

@@ -3422,11 +3422,13 @@ export const requestAlgofundBatchAction = async (
   tenantIds: number[],
   requestType: AlgofundRequestType,
   note: string,
-  payload: AlgofundRequestPayload = {}
+  payload: AlgofundRequestPayload = {},
+  options?: { directExecute?: boolean }
 ) => {
   const normalizedTenantIds = Array.from(new Set((tenantIds || []).map((item) => Math.floor(asNumber(item, 0))).filter((item) => item > 0)));
   const created: Array<Record<string, unknown>> = [];
   const failures: Array<{ tenantId: number; error: string }> = [];
+  const directExecute = Boolean(options?.directExecute) && (requestType === 'start' || requestType === 'stop');
 
   for (const tenantId of normalizedTenantIds) {
     try {
@@ -3434,8 +3436,42 @@ export const requestAlgofundBatchAction = async (
       if (tenant.product_mode !== 'algofund_client') {
         throw new Error('Tenant is not algofund client');
       }
-      const result = await requestAlgofundAction(tenantId, requestType, note, payload);
-      created.push({ tenantId, request: result });
+
+      if (directExecute) {
+        const plan = await getPlanForTenant(tenantId);
+        const profile = await getAlgofundProfile(tenantId);
+        if (!plan || !profile) {
+          throw new Error('Algofund plan/profile not found');
+        }
+
+        const capabilities = resolvePlanCapabilities(plan);
+        if (!capabilities.startStopRequests) {
+          throw new Error('Start/stop requests are not available for the current plan');
+        }
+
+        await applyApprovedAlgofundAction({
+          row: {
+            tenant_id: tenantId,
+            request_type: requestType,
+          } as AlgofundRequestRow,
+          requestPayload: payload,
+          tenant,
+          profile,
+          plan,
+          decisionNote: note,
+        });
+
+        await db.run(
+          `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+           VALUES (?, 'admin', 'direct_algofund_action', ?, CURRENT_TIMESTAMP)`,
+          [tenantId, JSON.stringify({ requestType, note, payload })]
+        );
+
+        created.push({ tenantId, directAction: requestType, status: 'executed' });
+      } else {
+        const result = await requestAlgofundAction(tenantId, requestType, note, payload);
+        created.push({ tenantId, request: result });
+      }
     } catch (error) {
       failures.push({ tenantId, error: String((error as Error)?.message || error || 'failed') });
     }
@@ -4331,75 +4367,14 @@ export const resolveAlgofundRequest = async (requestId: number, status: RequestS
   }
 
   if (status === 'approved') {
-    if (row.request_type === 'start') {
-      try {
-        await materializeAlgofundSystem(tenant, plan, { ...profile, requested_enabled: 1 }, true);
-        await db.run('UPDATE algofund_profiles SET actual_enabled = 1, requested_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
-      } catch (error) {
-        const reason = (error as Error).message || 'Materialization failed';
-        logger.warn(`Algofund request approve fallback for tenant ${row.tenant_id}: ${reason}`);
-        await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
-
-        const note = decisionNote.trim();
-        const suffix = `Auto-note: approved without materialization (${reason})`;
-        decisionNote = note ? `${note} | ${suffix}` : suffix;
-      }
-    } else if (row.request_type === 'stop') {
-      const algofundApiKey = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
-      const systems = await listTradingSystems(algofundApiKey);
-      const existing = systems.find((item) => asString(item.name) === getAlgofundClientSystemName(tenant));
-      if (existing?.id) {
-        await setTradingSystemActivation(algofundApiKey, Number(existing.id), false, true);
-      }
-      if (algofundApiKey) {
-        try {
-          await cancelAllOrders(algofundApiKey);
-        } catch (error) {
-          logger.warn(`cancelAllOrders on stop for ${algofundApiKey}: ${(error as Error).message}`);
-        }
-        try {
-          await closeAllPositions(algofundApiKey);
-        } catch (error) {
-          logger.warn(`closeAllPositions on stop for ${algofundApiKey}: ${(error as Error).message}`);
-        }
-      }
-      await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
-    } else if (row.request_type === 'switch_system') {
-      const apiKeyName = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
-      if (!apiKeyName) {
-        throw new Error('Assign API key before approving switch request');
-      }
-
-      const targetSystemId = Math.floor(asNumber(requestPayload.targetSystemId, 0));
-      if (targetSystemId <= 0) {
-        throw new Error('Switch request payload is missing targetSystemId');
-      }
-
-      const systems = await listTradingSystems(apiKeyName);
-      const target = systems.find((item) => Number(item.id) === targetSystemId);
-      if (!target?.id) {
-        throw new Error(`Target trading system not found: ${targetSystemId}`);
-      }
-
-      for (const item of systems) {
-        const id = Number(item.id || 0);
-        if (!id || id === Number(target.id) || !Boolean(item.is_active)) {
-          continue;
-        }
-        await setTradingSystemActivation(apiKeyName, id, false, true);
-      }
-
-      await setTradingSystemActivation(apiKeyName, Number(target.id), true, true);
-      await db.run(
-        `UPDATE algofund_profiles
-         SET actual_enabled = 1,
-             requested_enabled = 1,
-             published_system_name = ?,
-             updated_at = CURRENT_TIMESTAMP
-         WHERE tenant_id = ?`,
-        [asString(target.name), row.tenant_id]
-      );
-    }
+    decisionNote = await applyApprovedAlgofundAction({
+      row,
+      requestPayload,
+      tenant,
+      profile,
+      plan,
+      decisionNote,
+    });
   }
 
   await db.run(
@@ -4416,6 +4391,96 @@ export const resolveAlgofundRequest = async (requestId: number, status: RequestS
   );
 
   return getAlgofundState(row.tenant_id);
+};
+
+const applyApprovedAlgofundAction = async (params: {
+  row: AlgofundRequestRow;
+  requestPayload: AlgofundRequestPayload;
+  tenant: TenantRow;
+  profile: AlgofundProfileRow;
+  plan: PlanRow;
+  decisionNote: string;
+}): Promise<string> => {
+  const {
+    row,
+    requestPayload,
+    tenant,
+    profile,
+    plan,
+  } = params;
+  let decisionNote = params.decisionNote;
+
+  if (row.request_type === 'start') {
+    try {
+      await materializeAlgofundSystem(tenant, plan, { ...profile, requested_enabled: 1 }, true);
+      await db.run('UPDATE algofund_profiles SET actual_enabled = 1, requested_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
+    } catch (error) {
+      const reason = (error as Error).message || 'Materialization failed';
+      logger.warn(`Algofund request approve fallback for tenant ${row.tenant_id}: ${reason}`);
+      await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
+
+      const note = decisionNote.trim();
+      const suffix = `Auto-note: approved without materialization (${reason})`;
+      decisionNote = note ? `${note} | ${suffix}` : suffix;
+    }
+  } else if (row.request_type === 'stop') {
+    const algofundApiKey = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
+    const systems = await listTradingSystems(algofundApiKey);
+    const existing = systems.find((item) => asString(item.name) === getAlgofundClientSystemName(tenant));
+    if (existing?.id) {
+      await setTradingSystemActivation(algofundApiKey, Number(existing.id), false, true);
+    }
+    if (algofundApiKey) {
+      try {
+        await cancelAllOrders(algofundApiKey);
+      } catch (error) {
+        logger.warn(`cancelAllOrders on stop for ${algofundApiKey}: ${(error as Error).message}`);
+      }
+      try {
+        await closeAllPositions(algofundApiKey);
+      } catch (error) {
+        logger.warn(`closeAllPositions on stop for ${algofundApiKey}: ${(error as Error).message}`);
+      }
+    }
+    await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
+  } else if (row.request_type === 'switch_system') {
+    const apiKeyName = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
+    if (!apiKeyName) {
+      throw new Error('Assign API key before approving switch request');
+    }
+
+    const targetSystemId = Math.floor(asNumber(requestPayload.targetSystemId, 0));
+    if (targetSystemId <= 0) {
+      throw new Error('Switch request payload is missing targetSystemId');
+    }
+
+    const systems = await listTradingSystems(apiKeyName);
+    const target = systems.find((item) => Number(item.id) === targetSystemId);
+    if (!target?.id) {
+      throw new Error(`Target trading system not found: ${targetSystemId}`);
+    }
+
+    for (const item of systems) {
+      const id = Number(item.id || 0);
+      if (!id || id === Number(target.id) || !Boolean(item.is_active)) {
+        continue;
+      }
+      await setTradingSystemActivation(apiKeyName, id, false, true);
+    }
+
+    await setTradingSystemActivation(apiKeyName, Number(target.id), true, true);
+    await db.run(
+      `UPDATE algofund_profiles
+       SET actual_enabled = 1,
+           requested_enabled = 1,
+           published_system_name = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [asString(target.name), row.tenant_id]
+    );
+  }
+
+  return decisionNote;
 };
 
 export const retryMaterializeAlgofundSystem = async (tenantId: number) => {

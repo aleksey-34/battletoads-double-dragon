@@ -326,6 +326,9 @@ router.post('/admin/algofund-batch-actions', async (req, res) => {
       {
         targetSystemId: toOptionalNumber(req.body?.targetSystemId),
         targetSystemName: req.body?.targetSystemName ? String(req.body.targetSystemName) : undefined,
+      },
+      {
+        directExecute: Boolean(req.body?.directExecute),
       }
     );
     res.json({ success: true, ...data });
