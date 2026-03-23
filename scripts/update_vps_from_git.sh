@@ -11,6 +11,7 @@ FRONTEND_DIR="${FRONTEND_DIR:-$APP_DIR/frontend}"
 DB_BACKUP_DIR="${DB_BACKUP_DIR:-$APP_DIR/backups/db}"
 DB_BACKUP_KEEP="${DB_BACKUP_KEEP:-14}"
 BUILD_FRONTEND="${BUILD_FRONTEND:-1}"
+MANIFEST_PATH="${MANIFEST_PATH:-$APP_DIR/deploy-manifest.json}"
 # 1 => после frontend build синхронизировать артефакты в nginx root и reload nginx.
 # Важно для VPS-контура, где nginx отдает статику напрямую и может оставаться старый UI.
 SYNC_FRONTEND_NGINX="${SYNC_FRONTEND_NGINX:-1}"
@@ -47,6 +48,61 @@ require_cmd() {
 require_cmd git
 require_cmd npm
 require_cmd systemctl
+
+hash_file_or_empty() {
+	local file="$1"
+	if [[ -f "$file" ]]; then
+		sha256sum "$file" | awk '{print $1}'
+		return 0
+	fi
+	echo ""
+}
+
+write_deploy_manifest() {
+	local deployed_at commit_full commit_short frontend_bundle_name
+	deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	commit_full="$(git rev-parse HEAD)"
+	commit_short="$(git rev-parse --short HEAD)"
+	frontend_bundle_name="$(ls -1 "$FRONTEND_DIR"/build/static/js/main.*.js 2>/dev/null | xargs -r basename | head -n 1 || true)"
+
+	local api_state runtime_state research_state
+	api_state="$(systemctl is-active btdd-api 2>/dev/null || echo unknown)"
+	runtime_state="$(systemctl is-active btdd-runtime 2>/dev/null || echo unknown)"
+	research_state="$(systemctl is-active btdd-research 2>/dev/null || echo unknown)"
+
+	cat > "$MANIFEST_PATH" <<EOF
+{
+	"deployedAtUtc": "$deployed_at",
+	"branch": "$BRANCH",
+	"commit": {
+		"short": "$commit_short",
+		"full": "$commit_full"
+	},
+	"deployMode": "$DEPLOY_MODE",
+	"restartRuntime": "$RESTART_RUNTIME",
+	"artifacts": {
+		"backend": {
+			"serverJsSha256": "$(hash_file_or_empty "$BACKEND_DIR/dist/server.js")",
+			"runtimeMainJsSha256": "$(hash_file_or_empty "$BACKEND_DIR/dist/runtime-main.js")",
+			"researchMainJsSha256": "$(hash_file_or_empty "$BACKEND_DIR/dist/research-main.js")"
+		},
+		"frontend": {
+			"mainBundle": "$frontend_bundle_name",
+			"mainBundleSha256": "$(hash_file_or_empty "$FRONTEND_DIR/build/static/js/$frontend_bundle_name")",
+			"indexHtmlSha256": "$(hash_file_or_empty "$FRONTEND_DIR/build/index.html")"
+		}
+	},
+	"services": {
+		"btdd-api": "$api_state",
+		"btdd-runtime": "$runtime_state",
+		"btdd-research": "$research_state"
+	}
+}
+EOF
+
+	chmod 644 "$MANIFEST_PATH"
+	log "Deploy manifest written: $MANIFEST_PATH"
+}
 
 backup_sqlite_db() {
 	local src="$1"
@@ -138,6 +194,12 @@ if [[ "$BUILD_FRONTEND" == "1" ]]; then
 	# CRA treats warnings as errors when CI=true; force production build without CI strict mode on VPS deploy.
 	run env CI=false npm run build
 
+	[[ -f "$FRONTEND_DIR/build/index.html" ]] || fail "Frontend build missing index.html"
+	FRONTEND_MAIN_BUNDLE_PATH="$(ls -1 "$FRONTEND_DIR"/build/static/js/main.*.js 2>/dev/null | head -n 1 || true)"
+	[[ -n "$FRONTEND_MAIN_BUNDLE_PATH" ]] || fail "Frontend build missing main.*.js bundle"
+	FRONTEND_MAIN_BUNDLE_NAME="$(basename "$FRONTEND_MAIN_BUNDLE_PATH")"
+	log "Frontend artifacts verified: $FRONTEND_MAIN_BUNDLE_NAME"
+
 	if [[ "$SYNC_FRONTEND_NGINX" == "1" ]]; then
 		if command -v nginx >/dev/null 2>&1; then
 			# Sync into all configured nginx roots to avoid stale UI when active vhost
@@ -163,6 +225,8 @@ if [[ "$BUILD_FRONTEND" == "1" ]]; then
 				# Ensure nginx can read synced frontend assets regardless of source umask.
 				run find "$NGINX_ROOT" -type d -exec chmod 755 {} +
 				run find "$NGINX_ROOT" -type f -exec chmod 644 {} +
+				[[ -f "$NGINX_ROOT/index.html" ]] || fail "Nginx root missing index.html after sync: $NGINX_ROOT"
+				[[ -f "$NGINX_ROOT/static/js/$FRONTEND_MAIN_BUNDLE_NAME" ]] || fail "Nginx root missing main bundle after sync: $NGINX_ROOT/static/js/$FRONTEND_MAIN_BUNDLE_NAME"
 				log "Frontend synced to nginx root: $NGINX_ROOT"
 				SYNCED=1
 			done
@@ -202,6 +266,8 @@ else
 	[[ "$service_state" == "active" ]] || fail "Service $SERVICE_NAME is not active after restart"
 	log "Service $SERVICE_NAME state: $service_state"
 fi
+
+write_deploy_manifest
 
 log "Deploy finished successfully"
 
