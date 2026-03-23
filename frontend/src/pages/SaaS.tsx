@@ -1790,7 +1790,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   }, {});
   const offerStoreOffers = summary?.offerStore?.offers || [];
   const sweepTopStrategyIds = new Set(
-    (summary?.sweepSummary?.topAll || [])
+    (summary?.sweepSummary?.selectedMembers || [])
       .map((item) => Number(item.strategyId || 0))
       .filter((item) => Number.isFinite(item) && item > 0)
   );
@@ -1862,7 +1862,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return 'light';
   };
 
-  const loadSummary = async (scope: SummaryScope = resolveSummaryScope()) => {
+  const loadSummary = async (scope: SummaryScope = resolveSummaryScope()): Promise<SaasSummary | null> => {
     setSummaryLoading(true);
     setSummaryError('');
     try {
@@ -1878,10 +1878,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         }
         return response.data;
       });
+      return response.data;
     } catch (error: any) {
       setSummaryError(String(error?.response?.data?.error || error?.message || 'Failed to load SaaS summary'));
+      return null;
     } finally {
       setSummaryLoading(false);
+    }
+  };
+
+  const loadSweepReviewCandidates = async () => {
+    setActionLoading('load-sweep-review');
+    try {
+      const nextSummary = await loadSummary('full');
+      setSelectedAdminReviewKind('offer');
+      const shortlistCount = Array.isArray(nextSummary?.sweepSummary?.selectedMembers) ? nextSummary?.sweepSummary?.selectedMembers.length : 0;
+      const draftMembersCount = Array.isArray(nextSummary?.catalog?.adminTradingSystemDraft?.members)
+        ? nextSummary?.catalog?.adminTradingSystemDraft?.members.length
+        : 0;
+      messageApi.success(`Загружено из sweep: shortlist ${shortlistCount}, draft TS members ${draftMembersCount}`);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load shortlisted sweep candidates'));
+    } finally {
+      setActionLoading('');
     }
   };
 
@@ -3926,6 +3945,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 <Space>
                                   <Tag color="processing">pending: {Number(summary?.backtestPairRequests?.pending || 0)}</Tag>
                                   <Tag>total: {Number(summary?.backtestPairRequests?.total || 0)}</Tag>
+                                  <Button size="small" loading={actionLoading === 'load-sweep-review'} onClick={() => void loadSweepReviewCandidates()}>
+                                    Загрузить оферы и ТС из sweep
+                                  </Button>
                                   <Button size="small" href="/trading-systems">Открыть Trading Systems (sweep backtest)</Button>
                                 </Space>
                                 <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
