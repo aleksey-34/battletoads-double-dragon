@@ -2457,7 +2457,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     DEFAULT_OFFER_STORE_DEFAULTS,
   ));
   const publishedFromFlag = safeJsonParse<string[]>(await getRuntimeFlag('offer.store.published_ids', ''), []);
-  const publishedOfferIds = (publishedFromFlag.length > 0 ? publishedFromFlag : offerIds)
+  const publishedOfferIds = publishedFromFlag
     .map((item) => String(item || '').trim())
     .filter((item) => offerIds.includes(item));
   const publishedSet = new Set(publishedOfferIds);

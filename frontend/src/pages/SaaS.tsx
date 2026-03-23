@@ -1689,8 +1689,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [clientsModeFilter, setClientsModeFilter] = useState<'all' | ProductMode>('all');
   const [clientsClassKind, setClientsClassKind] = useState<'all' | 'offer' | 'ts'>('all');
   const [clientsClassValue, setClientsClassValue] = useState('');
-  const [adminWorkspaceMode, setAdminWorkspaceMode] = useState<ProductMode>('strategy_client');
-  const [adminWorkspaceTenantId, setAdminWorkspaceTenantId] = useState<number | null>(null);
+  const [selectedAdminReviewKind, setSelectedAdminReviewKind] = useState<'offer' | 'algofund-ts'>('offer');
+  const [selectedAdminReviewOfferId, setSelectedAdminReviewOfferId] = useState('');
   const [telegramControls, setTelegramControls] = useState<TelegramControls | null>(null);
   const [telegramControlsLoading, setTelegramControlsLoading] = useState(false);
   const [lowLotRecommendations, setLowLotRecommendations] = useState<LowLotRecommendationResponse | null>(null);
@@ -1789,8 +1789,31 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return acc;
   }, {});
   const offerStoreOffers = summary?.offerStore?.offers || [];
+  const sweepTopStrategyIds = new Set(
+    (summary?.sweepSummary?.topAll || [])
+      .map((item) => Number(item.strategyId || 0))
+      .filter((item) => Number.isFinite(item) && item > 0)
+  );
+  const recommendedOfferIds = new Set(
+    summaryRecommendedOffers
+      .map((offer) => String(offer.offerId || '').trim())
+      .filter(Boolean)
+  );
   const publishedStorefrontOffers = offerStoreOffers.filter((offer) => Boolean(offer.published));
-  const researchCandidateOffers = offerStoreOffers.filter((offer) => !Boolean(offer.published));
+  const reviewableSweepOffers = offerStoreOffers.filter((offer) => (
+    sweepTopStrategyIds.size > 0
+      ? sweepTopStrategyIds.has(Number(offer.strategyId || 0))
+      : recommendedOfferIds.size > 0
+        ? recommendedOfferIds.has(String(offer.offerId || ''))
+        : true
+  ));
+  const researchCandidateOffers = reviewableSweepOffers.filter((offer) => !Boolean(offer.published));
+  const adminReviewOfferPool = dedupeOffersById([
+    ...reviewableSweepOffers,
+    ...publishedStorefrontOffers,
+  ]);
+  const selectedAdminReviewOffer = adminReviewOfferPool.find((offer) => String(offer.offerId) === selectedAdminReviewOfferId) || null;
+  const adminTradingSystemDraft = summary?.catalog?.adminTradingSystemDraft || null;
   const offerTitleById = offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
     return acc;
@@ -1832,9 +1855,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     return true;
   });
-  const adminWorkspaceTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === adminWorkspaceMode);
-  const adminWorkspaceCurrent = adminWorkspaceTenants.find((item) => Number(item.tenant.id) === Number(adminWorkspaceTenantId || 0)) || null;
-
   const resolveSummaryScope = (): SummaryScope => {
     if (activeTab === 'admin' && adminTab === 'offer-ts') {
       return 'full';
@@ -2045,15 +2065,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   }, [clientsClassKind]);
 
   useEffect(() => {
-    if (adminWorkspaceTenants.length === 0) {
-      setAdminWorkspaceTenantId(null);
+    if (selectedAdminReviewKind !== 'offer') {
       return;
     }
-    const exists = adminWorkspaceTenants.some((item) => Number(item.tenant.id) === Number(adminWorkspaceTenantId || 0));
-    if (!exists) {
-      setAdminWorkspaceTenantId(Number(adminWorkspaceTenants[0].tenant.id));
+    if (reviewableSweepOffers.length === 0) {
+      setSelectedAdminReviewOfferId('');
+      return;
     }
-  }, [adminWorkspaceTenants, adminWorkspaceTenantId]);
+    const exists = reviewableSweepOffers.some((item) => String(item.offerId) === String(selectedAdminReviewOfferId || ''));
+    if (!exists) {
+      setSelectedAdminReviewOfferId(String(reviewableSweepOffers[0].offerId));
+    }
+  }, [selectedAdminReviewKind, reviewableSweepOffers, selectedAdminReviewOfferId]);
 
   const loadTelegramControls = useCallback(async () => {
     setTelegramControlsLoading(true);
@@ -3595,88 +3618,81 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
 
-                          <Card className="battletoads-card" title={copy.tenantWorkspace}>
-                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                              <Row gutter={[12, 12]}>
-                                <Col xs={24} md={8}>
-                                  <Text strong>Режим</Text>
-                                  <Select
-                                    style={{ width: '100%', marginTop: 8 }}
-                                    value={adminWorkspaceMode}
-                                    onChange={(value) => setAdminWorkspaceMode(value)}
-                                    options={[
-                                      { value: 'strategy_client', label: copy.strategyClient },
-                                      { value: 'algofund_client', label: copy.algofund },
-                                    ]}
-                                  />
-                                </Col>
-                                <Col xs={24} md={16}>
-                                  <Text strong>{copy.chooseTenant}</Text>
-                                  <Select
-                                    style={{ width: '100%', marginTop: 8 }}
-                                    value={adminWorkspaceTenantId ?? undefined}
-                                    onChange={(value) => setAdminWorkspaceTenantId(Number(value))}
-                                    options={adminWorkspaceTenants.map((item) => ({
-                                      value: Number(item.tenant.id),
-                                      label: `${item.tenant.display_name} (${item.tenant.slug})`,
-                                    }))}
-                                  />
-                                </Col>
-                              </Row>
-                              {adminWorkspaceCurrent ? (
-                                <>
-                                  <Space size={4} wrap>
-                                    <Tag color="blue">{adminWorkspaceCurrent.plan ? `${adminWorkspaceCurrent.plan.title}` : 'Без тарифа'}</Tag>
-                                    <Tag color="geekblue">API: {adminWorkspaceCurrent.tenant.assigned_api_key_name || '—'}</Tag>
-                                    <Tag color={adminWorkspaceCurrent.tenant.status === 'active' ? 'success' : 'default'}>{adminWorkspaceCurrent.tenant.status}</Tag>
-                                    <Tag color={Number((adminWorkspaceCurrent.tenant.product_mode === 'strategy_client' ? adminWorkspaceCurrent.strategyProfile?.actual_enabled : adminWorkspaceCurrent.algofundProfile?.actual_enabled) || 0) === 1 ? 'success' : 'default'}>
-                                      runtime {Number((adminWorkspaceCurrent.tenant.product_mode === 'strategy_client' ? adminWorkspaceCurrent.strategyProfile?.actual_enabled : adminWorkspaceCurrent.algofundProfile?.actual_enabled) || 0) === 1 ? 'on' : 'off'}
-                                    </Tag>
-                                  </Space>
-                                  <Space wrap>
-                                    <Button size="small" href="/settings">{copy.openSettings}</Button>
-                                    <Button size="small" href="/positions">{copy.openMonitoring}</Button>
-                                    <Button size="small" href="/backtest">{copy.openBacktest}</Button>
-                                    <Button
-                                      size="small"
-                                      onClick={() => {
-                                        if (adminWorkspaceCurrent.tenant.product_mode === 'strategy_client') {
-                                          setStrategyTenantId(Number(adminWorkspaceCurrent.tenant.id));
-                                          setActiveTab('strategy-client');
-                                        } else {
-                                          setAlgofundTenantId(Number(adminWorkspaceCurrent.tenant.id));
-                                          setActiveTab('algofund');
-                                        }
-                                      }}
-                                    >
-                                      Открыть вкладку клиента
-                                    </Button>
-                                    {adminWorkspaceCurrent.tenant.product_mode === 'algofund_client' ? (
-                                      <>
-                                        <Button
-                                          size="small"
-                                          type="primary"
-                                          loading={actionLoading === `algofund-single:${adminWorkspaceCurrent.tenant.id}`}
-                                          onClick={() => void runSingleAlgofundAction(Number(adminWorkspaceCurrent.tenant.id), 'start')}
-                                        >
-                                          Start
-                                        </Button>
-                                        <Button
-                                          size="small"
-                                          danger
-                                          loading={actionLoading === `algofund-single:${adminWorkspaceCurrent.tenant.id}`}
-                                          onClick={() => void runSingleAlgofundAction(Number(adminWorkspaceCurrent.tenant.id), 'stop')}
-                                        >
-                                          Stop
-                                        </Button>
-                                      </>
-                                    ) : null}
-                                  </Space>
-                                </>
-                              ) : (
-                                <Alert type="warning" showIcon message="Выбери клиента для быстрого кабинета" />
-                              )}
-                            </Space>
+                          <Card className="battletoads-card" title="Контекст review: оффер или ТС">
+                            {selectedAdminReviewKind === 'algofund-ts' ? (
+                              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                <Paragraph type="secondary" style={{ marginTop: 0 }}>
+                                  Здесь просматривается текущий draft торговой системы Алгофонда из последнего sweep. После проверки состава и метрик можно открыть Trading Systems и затем отправить ТС на апрув/публикацию.
+                                </Paragraph>
+                                <Space wrap>
+                                  <Tag color="processing">members: {Number(adminTradingSystemDraft?.members?.length || 0)}</Tag>
+                                  <Tag color="blue">{adminTradingSystemDraft?.name || 'Admin TS draft'}</Tag>
+                                </Space>
+                                <List
+                                  dataSource={adminTradingSystemDraft?.members || []}
+                                  locale={{ emptyText: <Empty description="Sweep еще не подготовил draft ТС для review" /> }}
+                                  renderItem={(member) => (
+                                    <List.Item>
+                                      <Space direction="vertical" size={0}>
+                                        <Text strong>{member.strategyName}</Text>
+                                        <Text type="secondary">{member.marketMode.toUpperCase()} • {member.market}</Text>
+                                      </Space>
+                                      <Space wrap>
+                                        <Tag color="cyan">score {formatNumber(member.score)}</Tag>
+                                        <Tag color="purple">w {formatNumber(member.weight)}</Tag>
+                                      </Space>
+                                    </List.Item>
+                                  )}
+                                />
+                                <Space wrap>
+                                  <Button size="small" href="/trading-systems">Открыть Trading Systems</Button>
+                                  <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>Отправить ТС на апрув</Button>
+                                </Space>
+                              </Space>
+                            ) : selectedAdminReviewOffer ? (
+                              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                {(() => {
+                                  const equityPoints = Array.isArray(selectedAdminReviewOffer.equityPoints) ? selectedAdminReviewOffer.equityPoints : [];
+                                  return (
+                                    <>
+                                <Space wrap>
+                                  <Tag color={selectedAdminReviewOffer.published ? 'success' : 'processing'}>{selectedAdminReviewOffer.published ? 'already on storefront' : 'awaiting review'}</Tag>
+                                  <Tag color="blue">offer #{selectedAdminReviewOffer.offerId}</Tag>
+                                  <Tag>{selectedAdminReviewOffer.mode.toUpperCase()}</Tag>
+                                  <Tag>{selectedAdminReviewOffer.market}</Tag>
+                                </Space>
+                                <Descriptions column={1} size="small" bordered>
+                                  <Descriptions.Item label="Карточка">{selectedAdminReviewOffer.titleRu}</Descriptions.Item>
+                                  <Descriptions.Item label="Период">{Number(selectedAdminReviewOffer.periodDays || 0)}d</Descriptions.Item>
+                                  <Descriptions.Item label="Return">{formatPercent(selectedAdminReviewOffer.ret)}</Descriptions.Item>
+                                  <Descriptions.Item label="Drawdown">{formatPercent(selectedAdminReviewOffer.dd)}</Descriptions.Item>
+                                  <Descriptions.Item label="Profit factor">{formatNumber(selectedAdminReviewOffer.pf)}</Descriptions.Item>
+                                  <Descriptions.Item label="Trades/day">{formatNumber(selectedAdminReviewOffer.tradesPerDay, 2)}</Descriptions.Item>
+                                </Descriptions>
+                                {equityPoints.length > 0 ? (
+                                  <ChartComponent data={equityPoints.map((value, index) => ({ time: index, equity: value }))} type="line" />
+                                ) : (
+                                  <Empty description="Для этой карточки пока нет equity-кривой" />
+                                )}
+                                <Space wrap>
+                                  <Button size="small" href="/trading-systems">Открыть Trading Systems</Button>
+                                  <Button
+                                    type="primary"
+                                    size="small"
+                                    loading={actionLoading === `offer-store:${String(selectedAdminReviewOffer.offerId)}`}
+                                    onClick={() => void toggleOfferPublished(String(selectedAdminReviewOffer.offerId), true)}
+                                  >
+                                    {selectedAdminReviewOffer.published ? 'Обновить витрину' : 'Отправить на апрув'}
+                                  </Button>
+                                  {selectedAdminReviewOffer.published ? <Button size="small" danger onClick={() => void openUnpublishWizard(String(selectedAdminReviewOffer.offerId))}>Снять с витрины</Button> : null}
+                                </Space>
+                                    </>
+                                  );
+                                })()}
+                              </Space>
+                            ) : (
+                              <Empty description="Выбери карточку из Анализа ресерча или approved-витрины для review" />
+                            )}
                           </Card>
 
                           <Card className="battletoads-card" title="Оферы и ТС: только approved на витринах">
@@ -3743,7 +3759,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           width: 180,
                                           render: (_, row: any) => (
                                             <Space wrap>
-                                              <Button size="small" href="/trading-systems">Редактировать</Button>
+                                              <Button
+                                                size="small"
+                                                onClick={() => {
+                                                  setSelectedAdminReviewKind('offer');
+                                                  setSelectedAdminReviewOfferId(String(row.offerId));
+                                                }}
+                                              >
+                                                Редактировать
+                                              </Button>
                                               <Button size="small" danger onClick={() => void openUnpublishWizard(String(row.offerId))}>Снять</Button>
                                             </Space>
                                           ),
@@ -3916,7 +3940,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               После sweep настраивай параметры, проверяй метрики/equity и апрувь кандидатов. Далее в Оферы и ТС остаются только approved-витрины и управление флагами.
                             </Paragraph>
                             <Space wrap style={{ marginBottom: 12 }}>
-                              <Tag color="default">research candidates: {researchCandidateOffers.length}</Tag>
+                              <Tag color="default">sweep offers: {reviewableSweepOffers.length}</Tag>
+                              <Tag color="processing">awaiting review: {researchCandidateOffers.length}</Tag>
                               <Tag color="blue">period: {Number(summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
                               <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
                             </Space>
@@ -3943,12 +3968,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 addonBefore="Target/day"
                               />
                               <Button size="small" href="/trading-systems">Открыть Trading Systems</Button>
-                              <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>Сохранить и передать в Оферы и ТС</Button>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  setSelectedAdminReviewKind('algofund-ts');
+                                  setAdminTab('offer-ts');
+                                }}
+                              >
+                                Открыть draft ТС в Оферы и ТС
+                              </Button>
                             </Space>
                             <Table
                               size="small"
                               rowKey="offerId"
-                              dataSource={researchCandidateOffers}
+                              dataSource={reviewableSweepOffers}
                               pagination={{ pageSize: 8, showSizeChanger: false }}
                               scroll={{ x: 980 }}
                               expandable={{
@@ -3988,9 +4021,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 {
                                   title: 'Витрина',
                                   key: 'store',
-                                  width: 200,
+                                  width: 280,
                                   render: (_, row: any) => (
                                     <Space size={4} wrap>
+                                      <Tag color={row.published ? 'success' : 'processing'}>{row.published ? 'approved' : 'pending review'}</Tag>
+                                      <Button
+                                        size="small"
+                                        onClick={() => {
+                                          setSelectedAdminReviewKind('offer');
+                                          setSelectedAdminReviewOfferId(String(row.offerId));
+                                          setAdminTab('offer-ts');
+                                        }}
+                                      >
+                                        Открыть в Оферы и ТС
+                                      </Button>
                                       <Switch
                                         checked={Boolean(row.published)}
                                         loading={actionLoading === `offer-store:${String(row.offerId)}`}
@@ -4002,12 +4046,49 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           }
                                         }}
                                       />
-                                      <Button size="small" href="/trading-systems">ТС/Backtest</Button>
                                     </Space>
                                   ),
                                 },
                               ]}
                             />
+                          </Card>
+
+                          <Card className="battletoads-card" title="ТС Алгофонда из последнего sweep">
+                            <Paragraph type="secondary" style={{ marginTop: 0 }}>
+                              Это текущий draft торговой системы, собранный из последнего sweep. Открой его в Оферы и ТС, чтобы проверить состав, донастроить и отправить на апрув.
+                            </Paragraph>
+                            <Space wrap style={{ marginBottom: 12 }}>
+                              <Tag color="processing">members: {Number(adminTradingSystemDraft?.members?.length || 0)}</Tag>
+                              <Tag color="blue">{adminTradingSystemDraft?.name || 'Admin TS draft'}</Tag>
+                            </Space>
+                            <List
+                              dataSource={adminTradingSystemDraft?.members || []}
+                              locale={{ emptyText: <Empty description="Недавний sweep еще не сформировал draft ТС" /> }}
+                              renderItem={(member) => (
+                                <List.Item>
+                                  <Space direction="vertical" size={0}>
+                                    <Text strong>{member.strategyName}</Text>
+                                    <Text type="secondary">{member.marketMode.toUpperCase()} • {member.market}</Text>
+                                  </Space>
+                                  <Space wrap>
+                                    <Tag color="cyan">score {formatNumber(member.score)}</Tag>
+                                    <Tag color="purple">w {formatNumber(member.weight)}</Tag>
+                                  </Space>
+                                </List.Item>
+                              )}
+                            />
+                            <Space wrap style={{ marginTop: 12 }}>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  setSelectedAdminReviewKind('algofund-ts');
+                                  setAdminTab('offer-ts');
+                                }}
+                              >
+                                Открыть в Оферы и ТС
+                              </Button>
+                              <Button size="small" href="/trading-systems">Trading Systems</Button>
+                            </Space>
                           </Card>
 
                           <Card className="battletoads-card" title="Отчёты и аналитика">
