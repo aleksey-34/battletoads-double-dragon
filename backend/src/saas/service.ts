@@ -932,6 +932,7 @@ const buildFallbackCatalogFromPresets = async (
   sourceCatalog: CatalogData | null,
   apiKeys: string[]
 ): Promise<CatalogData> => {
+  void apiKeys;
   const offers = await buildPresetBackedOffers(sourceCatalog);
   const mono = offers.filter((item) => item.strategy.mode === 'mono');
   const synth = offers.filter((item) => item.strategy.mode !== 'mono');
@@ -950,9 +951,9 @@ const buildFallbackCatalogFromPresets = async (
 
   return {
     timestamp: new Date().toISOString(),
-    apiKeyName: sourceCatalog?.apiKeyName || apiKeys[0] || '',
+    apiKeyName: '',
     source: {
-      sweepFile: sourceCatalog?.source?.sweepFile || 'fallback:preset-db',
+      sweepFile: sourceCatalog?.source?.sweepFile || 'fallback:sweep+preset-db',
       sweepTimestamp: sourceCatalog?.source?.sweepTimestamp || null,
     },
     counts: {
@@ -1141,8 +1142,10 @@ export const loadCatalogAndSweepWithFallback = async (): Promise<{ catalog: Cata
 
   const sourceCatalog = loadLatestClientCatalog();
   const sourceSweep = loadLatestSweep();
-  const apiKeys = await getAvailableApiKeyNames();
-  const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
+  const fallbackCatalog = await buildFallbackCatalogFromPresets(null, []);
+  const catalog = getAllOffers(fallbackCatalog).length > 0
+    ? fallbackCatalog
+    : sourceCatalog || fallbackCatalog;
   const sweep = sourceSweep || buildFallbackSweepData(catalog);
   return { catalog, sweep };
 };
@@ -1481,6 +1484,41 @@ const findOfferByIdOrNull = (catalog: CatalogData | null, offerId?: string | nul
   return getAllOffers(catalog).find((item) => item.offerId === offerId) || null;
 };
 
+const readMetric = (
+  metrics: Record<string, unknown>,
+  keys: string[],
+  fallback: number
+): number => {
+  for (const key of keys) {
+    const value = Number(metrics?.[key]);
+    if (Number.isFinite(value)) {
+      return value;
+    }
+  }
+  return fallback;
+};
+
+const normalizePresetMetrics = (
+  metrics: Record<string, unknown>,
+  fallback: CatalogMetricSet & { score?: number }
+): CatalogMetricSet & { score: number } => {
+  const ret = readMetric(metrics, ['ret', 'total_return_percent', 'totalReturnPercent'], fallback.ret);
+  const pf = readMetric(metrics, ['pf', 'profit_factor', 'profitFactor'], fallback.pf);
+  const dd = readMetric(metrics, ['dd', 'max_drawdown_percent', 'maxDrawdownPercent'], fallback.dd);
+  const wr = readMetric(metrics, ['wr', 'win_rate', 'winRatePercent', 'win_rate_percent'], fallback.wr);
+  const trades = readMetric(metrics, ['trades', 'trades_count', 'tradesCount'], fallback.trades);
+  const score = readMetric(metrics, ['score'], asNumber(fallback.score, ret));
+
+  return {
+    ret,
+    pf,
+    dd,
+    wr,
+    trades,
+    score,
+  };
+};
+
 const toCatalogPreset = (
   preset: { config: Record<string, unknown>; metrics: Record<string, unknown> } | null,
   fallback: { strategyId: number; strategyName: string; params: CatalogPreset['params']; metrics: CatalogMetricSet & { score?: number } }
@@ -1491,20 +1529,21 @@ const toCatalogPreset = (
 
   const config = (preset.config || {}) as Record<string, unknown>;
   const metrics = (preset.metrics || {}) as Record<string, unknown>;
+  const normalizedMetrics = normalizePresetMetrics(metrics, fallback.metrics);
 
   return {
     strategyId: asNumber(config.strategyId, fallback.strategyId),
     strategyName: asString(config.name, fallback.strategyName),
-    score: asNumber(metrics.score, asNumber(fallback.metrics.score, fallback.metrics.ret)),
+    score: normalizedMetrics.score,
     equity_curve: Array.isArray((preset as any).equity_curve)
       ? (preset as any).equity_curve.map((value: unknown) => asNumber(value, 0))
       : undefined,
     metrics: {
-      ret: asNumber(metrics.ret, fallback.metrics.ret),
-      pf: asNumber(metrics.pf, fallback.metrics.pf),
-      dd: asNumber(metrics.dd, fallback.metrics.dd),
-      wr: asNumber(metrics.wr, fallback.metrics.wr),
-      trades: asNumber(metrics.trades, fallback.metrics.trades),
+      ret: normalizedMetrics.ret,
+      pf: normalizedMetrics.pf,
+      dd: normalizedMetrics.dd,
+      wr: normalizedMetrics.wr,
+      trades: normalizedMetrics.trades,
     },
     params: {
       interval: asString(config.interval, fallback.params.interval),
