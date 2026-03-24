@@ -29,20 +29,10 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import Backtest from './Backtest';
 import ChartComponent from '../components/ChartComponent';
 import { useI18n } from '../i18n';
 
 const { Paragraph, Text, Title } = Typography;
-
-const toTimestampOrNull = (value?: string | null): number | null => {
-  if (!value) {
-    return null;
-  }
-
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : null;
-};
 
 type ProductMode = 'strategy_client' | 'algofund_client';
 type Level3 = 'low' | 'medium' | 'high';
@@ -55,14 +45,51 @@ type SaasBacktestContext = {
   kind: 'offer' | 'algofund-ts';
   title: string;
   description: string;
-  apiKeyName: string;
-  mode: 'single' | 'portfolio';
   offerId?: string;
   offerPublished?: boolean;
-  strategyId?: number | null;
-  strategyIds?: number[];
-  dateFromMs?: number | null;
-  dateToMs?: number | null;
+  offerIds?: string[];
+};
+
+type AdminSweepBacktestPreviewResponse = {
+  kind: 'offer' | 'algofund-ts';
+  controls: {
+    riskScore: number;
+    tradeFrequencyScore: number;
+    riskLevel: Level3;
+    tradeFrequencyLevel: Level3;
+  };
+  period?: PeriodInfo | null;
+  selectedOffers: Array<{
+    offerId: string;
+    titleRu: string;
+    mode: 'mono' | 'synth';
+    market: string;
+    strategyId: number;
+    strategyName: string;
+    score: number;
+    metrics: {
+      ret: number;
+      pf: number;
+      dd: number;
+      wr: number;
+      trades: number;
+    };
+    tradesPerDay: number;
+    periodDays: number;
+    equityPoints: number[];
+  }>;
+  preview: {
+    source?: string;
+    summary?: {
+      finalEquity?: number;
+      totalReturnPercent?: number;
+      maxDrawdownPercent?: number;
+      profitFactor?: number;
+      winRatePercent?: number;
+      tradesCount?: number;
+    } | null;
+    equity?: EquityPoint[];
+  };
 };
 
 type TradingSystemListItem = {
@@ -1843,6 +1870,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminWizardTarget, setAdminWizardTarget] = useState<'offer' | 'algofund-ts'>('offer');
   const [backtestDrawerVisible, setBacktestDrawerVisible] = useState(false);
   const [backtestDrawerContext, setBacktestDrawerContext] = useState<SaasBacktestContext | null>(null);
+  const [adminSweepBacktestRiskScore, setAdminSweepBacktestRiskScore] = useState(5);
+  const [adminSweepBacktestTradeScore, setAdminSweepBacktestTradeScore] = useState(5);
+  const [adminSweepBacktestInitialBalance, setAdminSweepBacktestInitialBalance] = useState(10000);
+  const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
+  const [adminSweepBacktestResult, setAdminSweepBacktestResult] = useState<AdminSweepBacktestPreviewResponse | null>(null);
 
   const strategyTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client');
   const algofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
@@ -1984,6 +2016,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const adminDraftTradesPerDay = adminDraftPortfolioSummary && adminDraftPeriodDays && adminDraftPeriodDays > 0
     ? Number((Number(adminDraftPortfolioSummary.tradesCount || 0) / adminDraftPeriodDays).toFixed(2))
     : null;
+  const parseAlgofundPreviewSummary = (raw: any) => {
+    const preview = raw?.preview && typeof raw.preview === 'object' ? raw.preview : raw;
+    const summary = preview?.summary && typeof preview.summary === 'object' ? preview.summary : null;
+    return summary;
+  };
   const algofundStorefrontSystems = Array.from(
     new Set([
       ...batchEligibleAlgofundTenants
@@ -1996,42 +2033,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const runtimeSystemId = publishResponse?.sourceSystem?.systemName === systemName
       ? Number(publishResponse.sourceSystem.systemId || 0)
       : null;
+    const publishSummary = publishResponse?.sourceSystem?.systemName === systemName
+      ? publishResponse?.preview?.summary || null
+      : null;
+    const tenantSummaries = tenants
+      .map((tenant) => parseAlgofundPreviewSummary(tenant.algofundProfile?.latestPreview || null))
+      .filter((summary) => summary && typeof summary === 'object');
+    const fallbackSummary = tenantSummaries[0] || (systemName === String(adminTradingSystemDraft?.name || '').trim() ? adminDraftPortfolioSummary : null);
 
     return {
       systemName,
       runtimeSystemId,
-      apiKeyName: publishResponse?.sourceSystem?.systemName === systemName
-        ? String(publishResponse.sourceSystem.apiKeyName || '')
-        : '',
+      summary: publishSummary || fallbackSummary || null,
       tenants,
       tenantCount: tenants.length,
       activeCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.actual_enabled || 0) === 1).length,
       pendingCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.requested_enabled || 0) === 1 && Number(tenant.algofundProfile?.actual_enabled || 0) !== 1).length,
     };
   });
-  const publishedAdminTsEditorTarget = (() => {
-    const sourceApiKeyName = String(publishResponse?.sourceSystem?.apiKeyName || '').trim();
-    const sourceSystemId = Number(publishResponse?.sourceSystem?.systemId || 0);
-    if (sourceApiKeyName) {
-      return {
-        apiKeyName: sourceApiKeyName,
-        systemId: sourceSystemId > 0 ? sourceSystemId : undefined,
-      };
-    }
-
-    const fallbackTenant = batchEligibleAlgofundTenants.find((item) => {
-      const apiKey = String(item.algofundProfile?.assigned_api_key_name || item.tenant.assigned_api_key_name || '').trim();
-      return apiKey.length > 0;
-    });
-    if (!fallbackTenant) {
-      return null;
-    }
-
-    return {
-      apiKeyName: String(fallbackTenant.algofundProfile?.assigned_api_key_name || fallbackTenant.tenant.assigned_api_key_name || '').trim(),
-      systemId: undefined,
-    };
-  })();
   const offerTitleById = offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
     return acc;
@@ -3308,16 +3327,82 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setMonitoringModeFilter(mode);
   };
 
-  const resolveSweepBacktestApiKeyName = () => String(
-    summary?.catalog?.apiKeyName
-    || publishedAdminTsEditorTarget?.apiKeyName
-    || summary?.apiKeys?.[0]
-    || ''
-  ).trim();
+  const runAdminSweepBacktestPreview = async (context?: SaasBacktestContext | null) => {
+    const targetContext = context || backtestDrawerContext;
+    if (!targetContext) {
+      return;
+    }
+
+    setAdminSweepBacktestLoading(true);
+    try {
+      const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
+        kind: targetContext.kind,
+        offerId: targetContext.offerId,
+        offerIds: targetContext.offerIds,
+        riskScore: adminSweepBacktestRiskScore,
+        tradeFrequencyScore: adminSweepBacktestTradeScore,
+        initialBalance: adminSweepBacktestInitialBalance,
+      });
+      setAdminSweepBacktestResult(response.data);
+    } catch (error: any) {
+      setAdminSweepBacktestResult(null);
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось построить sweep backtest preview'));
+    } finally {
+      setAdminSweepBacktestLoading(false);
+    }
+  };
+
+  const saveOfferReviewSnapshotFromBacktest = async () => {
+    if (!backtestDrawerContext?.offerId || !adminSweepBacktestResult || adminSweepBacktestResult.kind !== 'offer') {
+      messageApi.warning('Сначала открой backtest оффера и дождись метрик');
+      return;
+    }
+
+    const selected = adminSweepBacktestResult.selectedOffers[0];
+    const summary = adminSweepBacktestResult.preview?.summary || {};
+    if (!selected) {
+      messageApi.warning('Нет данных для сохранения метрик оффера');
+      return;
+    }
+
+    const equityPoints = Array.isArray(adminSweepBacktestResult.preview?.equity)
+      ? (adminSweepBacktestResult.preview?.equity || [])
+        .map((point) => Number(point?.equity ?? point?.value ?? NaN))
+        .filter((value) => Number.isFinite(value))
+      : [];
+
+    setActionLoading(`offer-review-snapshot:${backtestDrawerContext.offerId}`);
+    try {
+      await axios.patch('/api/saas/admin/offer-store', {
+        reviewSnapshotPatch: {
+          [String(backtestDrawerContext.offerId)]: {
+            offerId: String(backtestDrawerContext.offerId),
+            ret: Number(summary.totalReturnPercent ?? selected.metrics.ret ?? 0),
+            pf: Number(summary.profitFactor ?? selected.metrics.pf ?? 0),
+            dd: Number(summary.maxDrawdownPercent ?? selected.metrics.dd ?? 0),
+            trades: Number(summary.tradesCount ?? selected.metrics.trades ?? 0),
+            tradesPerDay: Number(selected.tradesPerDay ?? 0),
+            periodDays: Number(selected.periodDays ?? 90),
+            equityPoints,
+          },
+        },
+      });
+      await loadSummary('full');
+      messageApi.success('Метрики оффера сохранены в карточке витрины');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось сохранить метрики оффера'));
+    } finally {
+      setActionLoading('');
+    }
+  };
 
   const openEmbeddedBacktest = (context: SaasBacktestContext) => {
     setBacktestDrawerContext(context);
     setBacktestDrawerVisible(true);
+    setAdminSweepBacktestResult(null);
+    window.setTimeout(() => {
+      void runAdminSweepBacktestPreview(context);
+    }, 0);
   };
 
   const openOfferBacktest = (offer?: typeof adminReviewOfferPool[number] | null) => {
@@ -3326,47 +3411,34 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
-    const apiKeyName = resolveSweepBacktestApiKeyName();
-    const strategyId = Number(offer.strategyId || 0);
-    if (!apiKeyName || !strategyId) {
-      messageApi.warning('Для бэктеста оффера нужен source API key и strategy id из последнего sweep');
-      return;
-    }
-
     openEmbeddedBacktest({
       kind: 'offer',
       title: `Бэктест оффера: ${offer.titleRu}`,
-      description: `Карточка из последнего sweep. Бэктест запускается по strategy #${strategyId} на API key ${apiKeyName}. После проверки можно сразу отправлять оффер на витрину.`,
-      apiKeyName,
-      mode: 'single',
+      description: 'Sweep-бэктест карточки из последнего свепа. Регулируй риск и частоту, проверяй метрики/equity и решай: публиковать или оставить в review.',
       offerId: String(offer.offerId || ''),
       offerPublished: Boolean(offer.published),
-      strategyId,
-      dateFromMs: summaryPeriodFromMs,
-      dateToMs: summaryPeriodToMs,
     });
   };
 
   const openDraftTsBacktest = () => {
-    const apiKeyName = resolveSweepBacktestApiKeyName();
-    const strategyIds = (adminTradingSystemDraft?.members || [])
+    const strategyIds = new Set((adminTradingSystemDraft?.members || [])
       .map((member) => Number(member.strategyId || 0))
-      .filter((value) => Number.isFinite(value) && value > 0);
+      .filter((value) => Number.isFinite(value) && value > 0));
 
-    if (!apiKeyName || strategyIds.length === 0) {
-      messageApi.warning('Для бэктеста ТС нужен draft из последнего sweep и source API key');
+    const offerIds = reviewableSweepOffers
+      .filter((offer) => strategyIds.has(Number(offer.strategyId || 0)))
+      .map((offer) => String(offer.offerId || ''));
+
+    if (Number(adminTradingSystemDraft?.members?.length || 0) === 0) {
+      messageApi.warning('Для бэктеста ТС нужен draft из последнего sweep');
       return;
     }
 
     openEmbeddedBacktest({
       kind: 'algofund-ts',
       title: `Бэктест ТС: ${adminTradingSystemDraft?.name || 'Draft TS'}`,
-      description: 'Портфельный бэктест draft ТС из последнего sweep. После проверки метрик можно отправлять ТС на апрув.',
-      apiKeyName,
-      mode: 'portfolio',
-      strategyIds,
-      dateFromMs: summaryPeriodFromMs,
-      dateToMs: summaryPeriodToMs,
+      description: 'Sweep-портфельный бэктест draft ТС из последнего свепа. После проверки метрик можно отправлять ТС на апрув.',
+      offerIds,
     });
   };
 
@@ -3991,8 +4063,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const algofundPreviewDerivedSummary = summarizeLineSeries(algofundPreviewPoints);
   const publishPreviewDerivedSummary = summarizeLineSeries(publishPreviewPoints);
   const summaryPeriod = summary?.sweepSummary?.period || null;
-  const summaryPeriodFromMs = toTimestampOrNull(summaryPeriod?.dateFrom || null);
-  const summaryPeriodToMs = toTimestampOrNull(summaryPeriod?.dateTo || null);
   const strategyPreviewPeriod = strategyPreview?.period || summaryPeriod;
   const strategySelectionPreviewPeriod = strategySelectionPreview?.period || summaryPeriod;
   const algofundPreviewPeriod = algofundState?.preview?.period || summaryPeriod;
@@ -4330,7 +4400,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 {publishResponse?.sourceSystem ? (
                                   <Descriptions column={1} size="small" bordered>
                                     <Descriptions.Item label="Runtime TS">{publishResponse.sourceSystem.systemName}</Descriptions.Item>
-                                    <Descriptions.Item label="API key">{publishResponse.sourceSystem.apiKeyName}</Descriptions.Item>
                                     <Descriptions.Item label="Следующий шаг">Открой шаг применения клиентам Алгофонда и выполни switch_system на этот runtime TS</Descriptions.Item>
                                   </Descriptions>
                                 ) : null}
@@ -4525,6 +4594,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                 <Tag color="processing">clients {item.tenantCount}</Tag>
                                                 <Tag color="success">active {item.activeCount}</Tag>
                                                 {item.pendingCount > 0 ? <Tag color="warning">pending {item.pendingCount}</Tag> : null}
+                                                {item.summary ? <Tag color={metricColor(Number(item.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(item.summary.totalReturnPercent)}</Tag> : null}
+                                                {item.summary ? <Tag color={metricColor(Number(item.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(item.summary.maxDrawdownPercent)}</Tag> : null}
+                                                {item.summary ? <Tag color={metricColor(Number(item.summary.profitFactor || 0), 'pf')}>PF {formatNumber(item.summary.profitFactor)}</Tag> : null}
+                                                {item.summary?.tradesCount !== undefined ? <Tag color="blue">trades {formatNumber(item.summary.tradesCount, 0)}</Tag> : null}
                                               </Space>
                                             }
                                             description={item.tenants.length > 0 ? item.tenants.map((tenant) => tenant.tenant.display_name).join(', ') : 'TS опубликована, но ещё не привязана к клиентам'}
@@ -4712,7 +4785,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 type="info"
                                 showIcon
                                 style={{ marginBottom: 12 }}
-                                message={`Источник оферов: API key «${summary.catalog.apiKeyName}» · sweep ${String(summary.catalog.timestamp || '').slice(0, 10)} · все стратегии выполняются через этот ключ`}
+                                message={`Источник оферов: недавний historical sweep (${String(summary.catalog.timestamp || '').slice(0, 10)}), без перехода в API backtest`}
                               />
                             ) : null}
                             <Space wrap style={{ marginBottom: 12 }}>
@@ -6733,12 +6806,32 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             <Alert
               type="info"
               showIcon
-              message="Контекст SaaS сохранен: после анализа бэктеста закрой окно и продолжай review/publish без перехода в старые экраны."
+              message="Sweep backtest: настрой риск и частоту сделок, проверь метрики/equity, сохрани метрики карточки и реши — публиковать или оставить в review."
             />
             <Space wrap>
               <Button size="small" onClick={returnToReviewFromBacktest}>
                 Вернуться в review
               </Button>
+              <Button
+                size="small"
+                loading={adminSweepBacktestLoading}
+                onClick={() => {
+                  void runAdminSweepBacktestPreview();
+                }}
+              >
+                Пересчитать sweep backtest
+              </Button>
+              {backtestDrawerContext.kind === 'offer' ? (
+                <Button
+                  size="small"
+                  loading={actionLoading === `offer-review-snapshot:${String(backtestDrawerContext.offerId || '')}`}
+                  onClick={() => {
+                    void saveOfferReviewSnapshotFromBacktest();
+                  }}
+                >
+                  Сохранить метрики в карточку
+                </Button>
+              ) : null}
               <Button
                 type="primary"
                 size="small"
@@ -6754,14 +6847,107 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   : (backtestDrawerContext.offerPublished ? 'Обновить витрину оффера' : 'Отправить оффер на витрину')}
               </Button>
             </Space>
-            <Backtest
-              embedded
-              lockApiKey
-              lockMode
-              lockSelection
-              showHistory={false}
-              preset={backtestDrawerContext}
-            />
+
+            <Row gutter={[12, 12]}>
+              <Col xs={24} md={8}>
+                <Card size="small" title="Риск (0-10)">
+                  <Slider
+                    min={0}
+                    max={10}
+                    step={0.1}
+                    value={adminSweepBacktestRiskScore}
+                    onChange={(value) => setAdminSweepBacktestRiskScore(Number(value || 0))}
+                  />
+                  <Text type="secondary">Текущий уровень: {sliderValueToLevel(adminSweepBacktestRiskScore)}</Text>
+                </Card>
+              </Col>
+              <Col xs={24} md={8}>
+                <Card size="small" title="Частота сделок (0-10)">
+                  <Slider
+                    min={0}
+                    max={10}
+                    step={0.1}
+                    value={adminSweepBacktestTradeScore}
+                    onChange={(value) => setAdminSweepBacktestTradeScore(Number(value || 0))}
+                  />
+                  <Text type="secondary">Текущий уровень: {sliderValueToLevel(adminSweepBacktestTradeScore)}</Text>
+                </Card>
+              </Col>
+              <Col xs={24} md={8}>
+                <Card size="small" title="Начальный баланс">
+                  <InputNumber
+                    min={100}
+                    step={100}
+                    style={{ width: '100%' }}
+                    value={adminSweepBacktestInitialBalance}
+                    onChange={(value) => setAdminSweepBacktestInitialBalance(Math.max(100, Number(value || 10000)))}
+                  />
+                </Card>
+              </Col>
+            </Row>
+
+            {adminSweepBacktestResult ? (
+              <Card size="small" title="Результат sweep backtest">
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Space wrap>
+                    <Tag color="blue">offers: {adminSweepBacktestResult.selectedOffers.length}</Tag>
+                    <Tag color="geekblue">risk: {adminSweepBacktestResult.controls.riskLevel}</Tag>
+                    <Tag color="purple">frequency: {adminSweepBacktestResult.controls.tradeFrequencyLevel}</Tag>
+                    {adminSweepBacktestResult.period ? <Tag color="default">{formatPeriodLabel(adminSweepBacktestResult.period)}</Tag> : null}
+                    {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(adminSweepBacktestResult.preview.summary.totalReturnPercent)}</Tag> : null}
+                    {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(adminSweepBacktestResult.preview.summary.maxDrawdownPercent)}</Tag> : null}
+                    {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.profitFactor || 0), 'pf')}>PF {formatNumber(adminSweepBacktestResult.preview.summary.profitFactor)}</Tag> : null}
+                    {adminSweepBacktestResult.preview?.summary?.tradesCount !== undefined ? <Tag color="cyan">trades {formatNumber(adminSweepBacktestResult.preview.summary.tradesCount, 0)}</Tag> : null}
+                  </Space>
+
+                  {Array.isArray(adminSweepBacktestResult.preview?.equity) && (adminSweepBacktestResult.preview?.equity || []).length > 0 ? (
+                    <ChartComponent
+                      data={(adminSweepBacktestResult.preview?.equity || []).map((point) => ({
+                        time: Number(point.time),
+                        equity: Number(point.equity ?? point.value ?? 0),
+                      }))}
+                      type="line"
+                    />
+                  ) : (
+                    <Empty description="Пока нет equity-кривой" />
+                  )}
+
+                  <Table
+                    size="small"
+                    rowKey="offerId"
+                    pagination={false}
+                    dataSource={adminSweepBacktestResult.selectedOffers}
+                    columns={[
+                      {
+                        title: 'Карточка',
+                        key: 'offer',
+                        render: (_, row: any) => (
+                          <Space direction="vertical" size={0}>
+                            <Text strong>{row.titleRu}</Text>
+                            <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                          </Space>
+                        ),
+                      },
+                      {
+                        title: 'Метрики',
+                        key: 'metrics',
+                        render: (_, row: any) => (
+                          <Space wrap>
+                            <Tag color={metricColor(Number(row.metrics?.ret || 0), 'return')}>Ret {formatPercent(row.metrics?.ret)}</Tag>
+                            <Tag color={metricColor(Number(row.metrics?.dd || 0), 'drawdown')}>DD {formatPercent(row.metrics?.dd)}</Tag>
+                            <Tag color={metricColor(Number(row.metrics?.pf || 0), 'pf')}>PF {formatNumber(row.metrics?.pf)}</Tag>
+                            <Tag color="blue">trades {formatNumber(row.metrics?.trades, 0)}</Tag>
+                            <Tag color="cyan">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
+                          </Space>
+                        ),
+                      },
+                    ]}
+                  />
+                </Space>
+              </Card>
+            ) : (
+              <Empty description={adminSweepBacktestLoading ? 'Считаю sweep backtest...' : 'Запусти sweep backtest для просмотра метрик'} />
+            )}
           </Space>
         ) : (
           <Empty description="Нет данных для открытия backtest" />

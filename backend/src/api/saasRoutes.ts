@@ -29,6 +29,7 @@ import {
   getAdminReportSettings,
   updateAdminReportSettings,
   getAdminPerformanceReport,
+  previewAdminSweepBacktest,
   listStrategyClientSystemProfilesState,
   createStrategyClientSystemProfile,
   updateStrategyClientSystemProfile,
@@ -160,11 +161,32 @@ router.patch('/admin/offer-store', async (req, res) => {
     const data = await updateOfferStoreAdminState({
       defaults: req.body?.defaults,
       publishedOfferIds: Array.isArray(req.body?.publishedOfferIds) ? req.body.publishedOfferIds.map(String) : undefined,
+      reviewSnapshotPatch: req.body?.reviewSnapshotPatch && typeof req.body.reviewSnapshotPatch === 'object'
+        ? req.body.reviewSnapshotPatch
+        : undefined,
     });
     res.json({ success: true, ...data });
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS offer-store update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/sweep-backtest-preview', async (req, res) => {
+  try {
+    const data = await previewAdminSweepBacktest({
+      kind: req.body?.kind === 'algofund-ts' ? 'algofund-ts' : 'offer',
+      offerId: req.body?.offerId ? String(req.body.offerId) : undefined,
+      offerIds: Array.isArray(req.body?.offerIds) ? req.body.offerIds.map((item: unknown) => String(item)) : undefined,
+      riskScore: toOptionalNumber(req.body?.riskScore),
+      tradeFrequencyScore: toOptionalNumber(req.body?.tradeFrequencyScore),
+      initialBalance: toOptionalNumber(req.body?.initialBalance),
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS admin sweep backtest preview error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

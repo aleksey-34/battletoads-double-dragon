@@ -147,6 +147,18 @@ export type OfferStoreState = {
   }>;
 };
 
+type OfferReviewSnapshot = {
+  offerId: string;
+  ret: number;
+  pf: number;
+  dd: number;
+  trades: number;
+  tradesPerDay: number;
+  periodDays: number;
+  equityPoints: number[];
+  updatedAt: string;
+};
+
 export type AdminReportSettings = {
   enabled: boolean;
   tsDaily: boolean;
@@ -657,6 +669,53 @@ const normalizeOfferStoreDefaults = (raw: unknown): OfferStoreDefaults => {
     targetTradesPerDay: Math.max(1, Math.min(20, Number(asNumber(parsed.targetTradesPerDay, DEFAULT_OFFER_STORE_DEFAULTS.targetTradesPerDay).toFixed(2)))),
     riskLevel: riskRaw === 'low' || riskRaw === 'high' ? riskRaw : 'medium',
   };
+};
+
+const normalizeOfferReviewSnapshot = (offerId: string, raw: unknown): OfferReviewSnapshot | null => {
+  const parsed = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+  if (!parsed) {
+    return null;
+  }
+
+  const safeOfferId = String(offerId || '').trim();
+  if (!safeOfferId) {
+    return null;
+  }
+
+  const fullEquity = Array.isArray(parsed.equityPoints)
+    ? parsed.equityPoints
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value))
+    : [];
+  const step = fullEquity.length > 120 ? Math.ceil(fullEquity.length / 120) : 1;
+  const sampledEquity = fullEquity.filter((_value, index) => index % step === 0);
+
+  return {
+    offerId: safeOfferId,
+    ret: Number(asNumber(parsed.ret, 0).toFixed(3)),
+    pf: Number(asNumber(parsed.pf, 0).toFixed(3)),
+    dd: Number(asNumber(parsed.dd, 0).toFixed(3)),
+    trades: Math.max(0, Math.floor(asNumber(parsed.trades, 0))),
+    tradesPerDay: Number(asNumber(parsed.tradesPerDay, 0).toFixed(3)),
+    periodDays: Math.max(1, Math.floor(asNumber(parsed.periodDays, 90))),
+    equityPoints: sampledEquity,
+    updatedAt: asString(parsed.updatedAt, new Date().toISOString()),
+  };
+};
+
+const getOfferReviewSnapshots = async (): Promise<Record<string, OfferReviewSnapshot>> => {
+  const raw = safeJsonParse<Record<string, unknown>>(
+    await getRuntimeFlag('offer.store.review_snapshots', '{}'),
+    {}
+  );
+  const result: Record<string, OfferReviewSnapshot> = {};
+  for (const [offerId, value] of Object.entries(raw || {})) {
+    const normalized = normalizeOfferReviewSnapshot(offerId, value);
+    if (normalized) {
+      result[offerId] = normalized;
+    }
+  }
+  return result;
 };
 
 const normalizeAdminReportSettings = (raw: unknown): AdminReportSettings => {
@@ -2472,11 +2531,16 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
   const allOffers = catalog ? getAllOffers(catalog) : [];
   const offerIds = allOffers.map((item) => String(item.offerId));
+  const [defaultsRaw, publishedRaw, reviewSnapshots] = await Promise.all([
+    getRuntimeFlag('offer.store.defaults', JSON.stringify(DEFAULT_OFFER_STORE_DEFAULTS)),
+    getRuntimeFlag('offer.store.published_ids', ''),
+    getOfferReviewSnapshots(),
+  ]);
   const defaults = normalizeOfferStoreDefaults(safeJsonParse(
-    await getRuntimeFlag('offer.store.defaults', JSON.stringify(DEFAULT_OFFER_STORE_DEFAULTS)),
+    defaultsRaw,
     DEFAULT_OFFER_STORE_DEFAULTS,
   ));
-  const publishedFromFlag = safeJsonParse<string[]>(await getRuntimeFlag('offer.store.published_ids', ''), []);
+  const publishedFromFlag = safeJsonParse<string[]>(publishedRaw, []);
   const publishedOfferIds = publishedFromFlag
     .map((item) => String(item || '').trim())
     .filter((item) => offerIds.includes(item));
@@ -2494,7 +2558,9 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     .map((offer) => {
       const strategyId = Number(offer.strategy?.id || 0);
       const sweepRecord = sweepByStrategyId.get(strategyId) || null;
-      const trades = Math.max(0, Math.floor(asNumber(sweepRecord?.tradesCount, offer.metrics?.trades || 0)));
+      const snapshot = reviewSnapshots[String(offer.offerId || '')] || null;
+      const trades = Math.max(0, Math.floor(asNumber(snapshot?.trades, sweepRecord?.tradesCount ?? offer.metrics?.trades ?? 0)));
+      const periodDaysRow = Math.max(1, Math.floor(asNumber(snapshot?.periodDays, periodDays)));
       return {
         offerId: String(offer.offerId || ''),
         titleRu: asString(offer.titleRu, offer.offerId),
@@ -2502,12 +2568,12 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
         market: asString(offer.strategy?.market, ''),
         strategyId,
         score: Number(asNumber(sweepRecord?.score, offer.metrics?.score || 0).toFixed(3)),
-        ret: Number(asNumber(sweepRecord?.totalReturnPercent, offer.metrics?.ret || 0).toFixed(3)),
-        pf: Number(asNumber(sweepRecord?.profitFactor, offer.metrics?.pf || 0).toFixed(3)),
-        dd: Number(asNumber(sweepRecord?.maxDrawdownPercent, offer.metrics?.dd || 0).toFixed(3)),
+        ret: Number(asNumber(snapshot?.ret, sweepRecord?.totalReturnPercent ?? offer.metrics?.ret ?? 0).toFixed(3)),
+        pf: Number(asNumber(snapshot?.pf, sweepRecord?.profitFactor ?? offer.metrics?.pf ?? 0).toFixed(3)),
+        dd: Number(asNumber(snapshot?.dd, sweepRecord?.maxDrawdownPercent ?? offer.metrics?.dd ?? 0).toFixed(3)),
         trades,
-        tradesPerDay: Number((trades / Math.max(1, periodDays)).toFixed(3)),
-        periodDays,
+        tradesPerDay: Number(asNumber(snapshot?.tradesPerDay, trades / Math.max(1, periodDaysRow)).toFixed(3)),
+        periodDays: periodDaysRow,
         published: publishedSet.has(String(offer.offerId || '')),
       };
     })
@@ -2537,7 +2603,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     publishedOfferIds,
     offers: rawOffers.map((row) => ({
       ...row,
-      equityPoints: equityByOfferId.get(row.offerId) || [],
+      equityPoints: reviewSnapshots[row.offerId]?.equityPoints || equityByOfferId.get(row.offerId) || [],
     })),
   };
 };
@@ -2545,6 +2611,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
 export const updateOfferStoreAdminState = async (payload: {
   defaults?: Partial<OfferStoreDefaults>;
   publishedOfferIds?: string[];
+  reviewSnapshotPatch?: Record<string, Partial<OfferReviewSnapshot> | null>;
 }) => {
   const current = await getOfferStoreAdminState();
   const nextDefaults = normalizeOfferStoreDefaults({
@@ -2557,12 +2624,188 @@ export const updateOfferStoreAdminState = async (payload: {
     ? Array.from(new Set(payload.publishedOfferIds.map((item) => String(item || '').trim()).filter((item) => offerIds.has(item))))
     : current.publishedOfferIds;
 
+  const nextReviewSnapshots = await getOfferReviewSnapshots();
+  const snapshotPatch = payload.reviewSnapshotPatch || {};
+  for (const [offerIdRaw, patch] of Object.entries(snapshotPatch)) {
+    const offerId = String(offerIdRaw || '').trim();
+    if (!offerId || !offerIds.has(offerId)) {
+      continue;
+    }
+
+    if (patch === null) {
+      delete nextReviewSnapshots[offerId];
+      continue;
+    }
+
+    const merged: Record<string, unknown> = {
+      ...(nextReviewSnapshots[offerId] || {}),
+      ...(patch || {}),
+      offerId,
+      updatedAt: new Date().toISOString(),
+    };
+    const normalized = normalizeOfferReviewSnapshot(offerId, merged);
+    if (normalized) {
+      nextReviewSnapshots[offerId] = normalized;
+    }
+  }
+
   await Promise.all([
     setRuntimeFlag('offer.store.defaults', JSON.stringify(nextDefaults)),
     setRuntimeFlag('offer.store.published_ids', JSON.stringify(nextPublished)),
+    setRuntimeFlag('offer.store.review_snapshots', JSON.stringify(nextReviewSnapshots)),
   ]);
 
   return getOfferStoreAdminState();
+};
+
+export const previewAdminSweepBacktest = async (payload?: {
+  kind?: 'offer' | 'algofund-ts';
+  offerId?: string;
+  offerIds?: string[];
+  riskScore?: number;
+  tradeFrequencyScore?: number;
+  initialBalance?: number;
+}) => {
+  const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
+  const apiKeys = await getAvailableApiKeyNames();
+  const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
+  if (!catalog) {
+    throw new Error('Catalog is unavailable for sweep backtest preview');
+  }
+
+  const kind: 'offer' | 'algofund-ts' = payload?.kind === 'algofund-ts' ? 'algofund-ts' : 'offer';
+  const period = buildPeriodInfo(sweep);
+  const periodDays = getSweepPeriodDays(sweep, 90);
+  const initialBalance = Math.max(100, asNumber(payload?.initialBalance, asNumber(sweep?.config?.initialBalance, 10000)));
+  const riskScore = normalizePreferenceScore(payload?.riskScore, 'medium');
+  const tradeFrequencyScore = normalizePreferenceScore(payload?.tradeFrequencyScore, 'medium');
+  const riskLevel = preferenceScoreToLevel(riskScore);
+  const tradeFrequencyLevel = preferenceScoreToLevel(tradeFrequencyScore);
+
+  let offerIds: string[] = [];
+  if (kind === 'offer') {
+    const offerId = asString(payload?.offerId, '');
+    if (!offerId) {
+      throw new Error('offerId is required for offer sweep backtest preview');
+    }
+    offerIds = [offerId];
+  } else {
+    const payloadOfferIds = Array.isArray(payload?.offerIds)
+      ? payload?.offerIds?.map((item) => asString(item, '')).filter(Boolean)
+      : [];
+    if (payloadOfferIds.length > 0) {
+      offerIds = Array.from(new Set(payloadOfferIds));
+    } else {
+      const draftStrategyIds = new Set(
+        (catalog.adminTradingSystemDraft?.members || [])
+          .map((member) => Number(member.strategyId || 0))
+          .filter((value) => Number.isFinite(value) && value > 0)
+      );
+      offerIds = getAllOffers(catalog)
+        .filter((offer) => draftStrategyIds.has(Number(offer.strategy?.id || 0)))
+        .map((offer) => String(offer.offerId || ''))
+        .filter(Boolean);
+    }
+    if (offerIds.length === 0) {
+      throw new Error('No offerIds resolved for TS sweep backtest preview');
+    }
+  }
+
+  const selectedOffers = offerIds
+    .map((offerId) => findOfferByIdOrNull(catalog, offerId))
+    .filter((offer): offer is CatalogOffer => Boolean(offer))
+    .map((offer) => {
+      const preset = resolveOfferPresetByPreference(
+        offer,
+        riskLevel,
+        tradeFrequencyLevel,
+        riskScore,
+        tradeFrequencyScore
+      );
+      const trades = Math.max(0, Math.floor(asNumber(preset.metrics?.trades, offer.metrics?.trades || 0)));
+      const ret = asNumber(preset.metrics?.ret, offer.metrics?.ret || 0);
+      const pf = asNumber(preset.metrics?.pf, offer.metrics?.pf || 0);
+      const dd = asNumber(preset.metrics?.dd, offer.metrics?.dd || 0);
+      const tradesPerDay = Number((trades / Math.max(1, periodDays)).toFixed(3));
+      return {
+        offerId: String(offer.offerId || ''),
+        titleRu: asString(offer.titleRu, offer.offerId),
+        mode: offer.strategy?.mode === 'synth' ? 'synth' : 'mono',
+        market: asString(offer.strategy?.market, ''),
+        strategyId: Number(preset.strategyId || offer.strategy?.id || 0),
+        strategyName: asString(preset.strategyName, offer.strategy?.name || ''),
+        score: Number(asNumber(preset.score, offer.metrics?.score || 0).toFixed(3)),
+        metrics: {
+          ret: Number(ret.toFixed(3)),
+          pf: Number(pf.toFixed(3)),
+          dd: Number(dd.toFixed(3)),
+          wr: Number(asNumber(preset.metrics?.wr, offer.metrics?.wr || 0).toFixed(3)),
+          trades,
+        },
+        tradesPerDay,
+        periodDays,
+        equityPoints: toPresetOnlyEquity(initialBalance, ret).map((point) => Number(asNumber(point.equity, 0).toFixed(4))),
+        preset,
+      };
+    });
+
+  if (selectedOffers.length === 0) {
+    throw new Error('No offers resolved for sweep backtest preview');
+  }
+
+  if (kind === 'offer') {
+    const first = selectedOffers[0];
+    return {
+      kind,
+      controls: {
+        riskScore,
+        tradeFrequencyScore,
+        riskLevel,
+        tradeFrequencyLevel,
+      },
+      period,
+      selectedOffers,
+      preview: {
+        source: 'admin_sweep_preset',
+        summary: buildPresetOnlySingleSummary(initialBalance, first.preset, first.market, first.strategyName),
+        equity: toPresetOnlyEquity(initialBalance, first.metrics.ret),
+        trades: [],
+        strictPresetMode: true,
+      },
+    };
+  }
+
+  const pseudoSelectedOffers = selectedOffers.map((item) => ({
+    offer: {
+      offerId: item.offerId,
+      titleRu: item.titleRu,
+      strategy: {
+        market: item.market,
+      },
+    },
+    preset: item.preset,
+  }));
+
+  const avgRet = selectedOffers.reduce((acc, item) => acc + asNumber(item.metrics.ret, 0), 0) / Math.max(1, selectedOffers.length);
+
+  return {
+    kind,
+    controls: {
+      riskScore,
+      tradeFrequencyScore,
+      riskLevel,
+      tradeFrequencyLevel,
+    },
+    period,
+    selectedOffers,
+    preview: {
+      source: 'admin_sweep_preset',
+      summary: buildPresetOnlyPortfolioSummary(initialBalance, pseudoSelectedOffers as any),
+      equity: toPresetOnlyEquity(initialBalance, avgRet),
+      trades: [],
+      strictPresetMode: true,
+    },
+  };
 };
 
 export const getAdminReportSettings = async (): Promise<AdminReportSettings> => {
