@@ -4468,6 +4468,120 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Space>
                           </Card>
 
+                          <Card className="battletoads-card" title="Кандидаты из sweep: Оферы и ТС">
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              <Space wrap>
+                                <Text strong>Что показывать:</Text>
+                                <Segmented
+                                  value={adminSweepListMode}
+                                  options={[
+                                    { value: 'offers', label: 'Оферы' },
+                                    { value: 'ts', label: 'ТС-наборы' },
+                                  ]}
+                                  onChange={(value) => setAdminSweepListMode(String(value) === 'ts' ? 'ts' : 'offers')}
+                                />
+                                <Tag color="default">offers: {reviewableSweepOffers.length}</Tag>
+                                <Tag color="processing">ts sets: {adminSweepTsSets.length}</Tag>
+                              </Space>
+
+                              {adminSweepListMode === 'offers' ? (
+                                <Table
+                                  size="small"
+                                  rowKey="offerId"
+                                  dataSource={reviewableSweepOffers}
+                                  pagination={{ pageSize: 8, showSizeChanger: false }}
+                                  columns={[
+                                    {
+                                      title: 'Карточка',
+                                      key: 'offer',
+                                      render: (_, row: any) => (
+                                        <Space direction="vertical" size={0}>
+                                          <Text strong>{row.titleRu}</Text>
+                                          <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                        </Space>
+                                      ),
+                                    },
+                                    {
+                                      title: 'Метрики',
+                                      key: 'metrics',
+                                      render: (_, row: any) => (
+                                        <Space wrap>
+                                          <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
+                                          <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
+                                          <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                          <Tag color="blue">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
+                                        </Space>
+                                      ),
+                                    },
+                                    {
+                                      title: 'Действия',
+                                      key: 'actions',
+                                      width: 280,
+                                      render: (_, row: any) => (
+                                        <Space wrap>
+                                          <Button
+                                            size="small"
+                                            onClick={() => {
+                                              setSelectedAdminReviewKind('offer');
+                                              setSelectedAdminReviewOfferId(String(row.offerId));
+                                            }}
+                                          >
+                                            Выбрать офер
+                                          </Button>
+                                          <Button size="small" type="primary" onClick={() => openOfferBacktest(row)}>
+                                            Бэктест
+                                          </Button>
+                                        </Space>
+                                      ),
+                                    },
+                                  ]}
+                                />
+                              ) : (
+                                <List
+                                  size="small"
+                                  dataSource={adminSweepTsSets}
+                                  locale={{ emptyText: <Empty description="Sweep TS-наборы пока не найдены" /> }}
+                                  renderItem={(set) => (
+                                    <List.Item
+                                      actions={[
+                                        <Button
+                                          key="pick"
+                                          size="small"
+                                          onClick={() => {
+                                            setSelectedAdminDraftTsOfferIds(set.offerIds);
+                                            setSelectedAdminReviewKind('algofund-ts');
+                                            messageApi.success(`Выбран TS-набор ${set.setKey}: ${set.offerCount} карточек`);
+                                          }}
+                                        >
+                                          Выбрать ТС-набор
+                                        </Button>,
+                                        <Button
+                                          key="bt"
+                                          type="primary"
+                                          size="small"
+                                          onClick={() => {
+                                            setSelectedAdminDraftTsOfferIds(set.offerIds);
+                                            openDraftTsBacktest();
+                                          }}
+                                        >
+                                          Бэктест ТС
+                                        </Button>,
+                                      ]}
+                                    >
+                                      <Space wrap>
+                                        <Text strong>{set.setKey}</Text>
+                                        <Tag color="processing">offers {set.offerCount}</Tag>
+                                        <Tag color={metricColor(Number(set.avgRet || 0), 'return')}>avg Ret {formatPercent(set.avgRet)}</Tag>
+                                        <Tag color={metricColor(Number(set.avgDd || 0), 'drawdown')}>avg DD {formatPercent(set.avgDd)}</Tag>
+                                        <Tag color={metricColor(Number(set.avgPf || 0), 'pf')}>avg PF {formatNumber(set.avgPf)}</Tag>
+                                      </Space>
+                                    </List.Item>
+                                  )}
+                                />
+                              )}
+                            </Space>
+                          </Card>
+
                           <div ref={reviewContextRef}>
                           <Card className="battletoads-card" title="Контекст бэктеста: оффер или ТС">
                             {selectedAdminReviewKind === 'algofund-ts' ? (
