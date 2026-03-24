@@ -269,6 +269,8 @@ type SaasSummary = {
     latestSweepPath: string;
   };
   catalog: {
+    apiKeyName?: string;
+    timestamp?: string;
     counts?: {
       evaluated?: number;
       robust?: number;
