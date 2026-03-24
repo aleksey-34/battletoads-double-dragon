@@ -3303,17 +3303,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
-    setActiveTab('admin');
-    setAdminTab('research-analysis');
-    setSelectedAdminReviewKind('algofund-ts');
-    messageApi.info('Backtest открыт в SaaS: Админ -> Анализ ресерча.');
+    setBacktestDrawerApiKeyName(publishedAdminTsEditorTarget.apiKeyName);
+    setBacktestDrawerSystemId(Number(publishedAdminTsEditorTarget.systemId || 0));
+    setBacktestDrawerVisible(true);
+    messageApi.info('Backtest открыт во встроенном окне SaaS.');
   };
 
   const openSaasBacktestFlow = () => {
+    if (publishedAdminTsEditorTarget?.apiKeyName) {
+      setBacktestDrawerApiKeyName(publishedAdminTsEditorTarget.apiKeyName);
+      setBacktestDrawerSystemId(Number(publishedAdminTsEditorTarget.systemId || 0));
+      setBacktestDrawerVisible(true);
+      return;
+    }
+
     setActiveTab('admin');
-    setAdminTab('research-analysis');
+    setAdminTab('offer-ts');
     setSelectedAdminReviewKind('offer');
-    messageApi.info('Backtest по sweep открыт в SaaS: Админ -> Анализ ресерча.');
+    messageApi.info('Сначала открой review офера/ТС и назначь runtime target для backtest.');
   };
 
   const preferredClientSwitchTarget = (() => {
@@ -4466,8 +4473,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Button
                                     size="small"
                                     onClick={() => {
-                                      setSelectedAdminReviewKind('algofund-ts');
-                                      setAdminTab('research-analysis');
+                                      openAdminReviewContext('algofund-ts');
                                     }}
                                   >
                                     Открыть review sweep/backtest
@@ -4526,8 +4532,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Button
                                 size="small"
                                 onClick={() => {
-                                  setSelectedAdminReviewKind('algofund-ts');
-                                  setAdminTab('research-analysis');
+                                  openAdminReviewContext('algofund-ts');
                                 }}
                               >
                                 Перейти в review ТС
@@ -4575,9 +4580,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           size="small"
                                           type="primary"
                                           onClick={() => {
-                                            setSelectedAdminReviewKind('offer');
-                                            setSelectedAdminReviewOfferId(String(row.offerId));
-                                            setAdminTab('research-analysis');
+                                            openAdminReviewContext('offer', String(row.offerId));
                                           }}
                                         >
                                           Открыть review офера
@@ -4637,9 +4640,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       <Button
                                         size="small"
                                         onClick={() => {
-                                          setSelectedAdminReviewKind('offer');
-                                          setSelectedAdminReviewOfferId(String(row.offerId));
-                                          setAdminTab('research-analysis');
+                                          openAdminReviewContext('offer', String(row.offerId));
                                         }}
                                       >
                                         Открыть review/backtest
@@ -4730,8 +4731,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 type="primary"
                                 size="small"
                                 onClick={() => {
-                                  setSelectedAdminReviewKind('algofund-ts');
-                                  setAdminTab('research-analysis');
+                                  openAdminReviewContext('algofund-ts');
                                 }}
                               >
                                 Открыть review ТС
