@@ -17,7 +17,7 @@ import {
   Typography,
   message,
 } from 'antd';
-import type { Dayjs } from 'dayjs';
+import dayjs, { Dayjs } from 'dayjs';
 import axios from 'axios';
 import ChartComponent from '../components/ChartComponent';
 import { useI18n } from '../i18n';
@@ -132,6 +132,29 @@ type BacktestRunRow = {
   profit_factor: number;
 };
 
+type BacktestPreset = {
+  title?: string;
+  description?: string;
+  apiKeyName?: string;
+  mode?: BacktestMode;
+  strategyId?: number | null;
+  strategyIds?: number[];
+  dateFromMs?: number | null;
+  dateToMs?: number | null;
+  bars?: number;
+  initialBalance?: number;
+  warmupBars?: number;
+};
+
+type BacktestProps = {
+  preset?: BacktestPreset | null;
+  embedded?: boolean;
+  lockApiKey?: boolean;
+  lockMode?: boolean;
+  lockSelection?: boolean;
+  showHistory?: boolean;
+};
+
 const formatNumber = (value: number, digits: number = 2): string => {
   if (!Number.isFinite(value)) {
     return '-';
@@ -146,7 +169,14 @@ const formatPercent = (value: number, digits: number = 2): string => {
   return `${value.toFixed(digits)}%`;
 };
 
-const Backtest: React.FC = () => {
+const Backtest: React.FC<BacktestProps> = ({
+  preset = null,
+  embedded = false,
+  lockApiKey = false,
+  lockMode = false,
+  lockSelection = false,
+  showHistory,
+}) => {
   const { t } = useI18n();
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
   const [apiKeyName, setApiKeyName] = useState<string>('');
@@ -175,6 +205,7 @@ const Backtest: React.FC = () => {
 
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [historyRows, setHistoryRows] = useState<BacktestRunRow[]>([]);
+  const effectiveShowHistory = showHistory ?? !embedded;
 
   useEffect(() => {
     const password = localStorage.getItem('password');
@@ -185,9 +216,35 @@ const Backtest: React.FC = () => {
 
     axios.defaults.headers.common.Authorization = `Bearer ${password}`;
     void loadApiKeys();
-    void loadHistory();
+    if (effectiveShowHistory) {
+      void loadHistory();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [effectiveShowHistory]);
+
+  useEffect(() => {
+    if (!preset) {
+      return;
+    }
+
+    if (preset.apiKeyName) {
+      setApiKeyName(preset.apiKeyName);
+    }
+    if (preset.mode) {
+      setMode(preset.mode);
+    }
+    if (Number.isFinite(Number(preset.bars)) && Number(preset.bars) > 0) {
+      setBars(Number(preset.bars));
+    }
+    if (Number.isFinite(Number(preset.initialBalance)) && Number(preset.initialBalance) > 0) {
+      setInitialBalance(Number(preset.initialBalance));
+    }
+    if (Number.isFinite(Number(preset.warmupBars)) && Number(preset.warmupBars) >= 0) {
+      setWarmupBars(Number(preset.warmupBars));
+    }
+    setDateFrom(preset.dateFromMs ? dayjs(preset.dateFromMs) : null);
+    setDateTo(preset.dateToMs ? dayjs(preset.dateToMs) : null);
+  }, [preset]);
 
   useEffect(() => {
     if (!apiKeyName) {
@@ -201,6 +258,24 @@ const Backtest: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiKeyName]);
 
+  useEffect(() => {
+    if (!preset || strategies.length === 0) {
+      return;
+    }
+
+    if (preset.mode === 'single' && preset.strategyId && strategies.some((item) => item.id === preset.strategyId)) {
+      setStrategyId(preset.strategyId);
+      return;
+    }
+
+    if (preset.mode === 'portfolio' && Array.isArray(preset.strategyIds) && preset.strategyIds.length > 0) {
+      const filtered = preset.strategyIds.filter((value) => strategies.some((item) => item.id === value));
+      if (filtered.length > 0) {
+        setStrategyIds(filtered);
+      }
+    }
+  }, [preset, strategies]);
+
   const loadApiKeys = useCallback(async () => {
     setLoadingApiKeys(true);
     try {
@@ -209,7 +284,7 @@ const Backtest: React.FC = () => {
       setApiKeys(rows);
 
       if (rows.length > 0) {
-        setApiKeyName((prev) => prev || rows[0].name);
+        setApiKeyName((prev) => prev || preset?.apiKeyName || rows[0].name);
       }
     } catch (error: any) {
       console.error(error);
@@ -217,7 +292,7 @@ const Backtest: React.FC = () => {
     } finally {
       setLoadingApiKeys(false);
     }
-  }, [t]);
+  }, [preset?.apiKeyName, t]);
 
   const loadStrategies = useCallback(async (selectedApiKeyName: string) => {
     setLoadingStrategies(true);
@@ -393,9 +468,22 @@ const Backtest: React.FC = () => {
 
   return (
     <div className="battletoads-form-shell">
-      <Card className="battletoads-card" title={t('backtest.runnerTitle', 'Backtest Runner')} extra={<Button onClick={() => { void loadHistory(); }} loading={historyLoading}>{t('backtest.refreshHistory', 'Refresh history')}</Button>}>
+      <Card
+        className="battletoads-card"
+        title={preset?.title || t('backtest.runnerTitle', 'Backtest Runner')}
+        extra={effectiveShowHistory ? <Button onClick={() => { void loadHistory(); }} loading={historyLoading}>{t('backtest.refreshHistory', 'Refresh history')}</Button> : null}
+      >
         <Space direction="vertical" style={{ width: '100%' }} size={14}>
           {errorText ? <Alert type="error" showIcon message={errorText} /> : null}
+          {preset?.description ? <Alert type="info" showIcon message={preset.description} /> : null}
+          {preset?.apiKeyName ? (
+            <Space wrap>
+              <Tag color="blue">{preset.apiKeyName}</Tag>
+              {preset.mode ? <Tag color={preset.mode === 'portfolio' ? 'gold' : 'geekblue'}>{preset.mode === 'portfolio' ? 'portfolio' : 'single'}</Tag> : null}
+              {Array.isArray(preset.strategyIds) && preset.strategyIds.length > 0 ? <Tag color="processing">strategies: {preset.strategyIds.length}</Tag> : null}
+              {preset.strategyId ? <Tag color="processing">strategy #{preset.strategyId}</Tag> : null}
+            </Space>
+          ) : null}
 
           <Row gutter={[12, 12]}>
             <Col xs={24} md={12}>
@@ -406,6 +494,7 @@ const Backtest: React.FC = () => {
                 value={apiKeyName || undefined}
                 placeholder={t('backtest.selectApiKey', 'Select API key')}
                 onChange={(value) => setApiKeyName(value)}
+                disabled={lockApiKey}
                 options={apiKeys.map((item) => ({
                   label: `${item.name} (${item.exchange})`,
                   value: item.name,
@@ -419,6 +508,7 @@ const Backtest: React.FC = () => {
                 style={{ width: '100%', marginTop: 6 }}
                 value={mode}
                 onChange={(value: BacktestMode) => setMode(value)}
+                disabled={lockMode}
                 options={[
                   { label: t('backtest.mode.single', 'Single Strategy'), value: 'single' },
                   { label: t('backtest.mode.portfolio', 'Portfolio (shared balance)'), value: 'portfolio' },
@@ -513,6 +603,7 @@ const Backtest: React.FC = () => {
                 placeholder={t('backtest.selectStrategy', 'Select strategy')}
                 options={strategyOptions}
                 onChange={(value) => setStrategyId(Number(value))}
+                disabled={lockSelection}
               />
             </div>
           ) : (
@@ -526,6 +617,7 @@ const Backtest: React.FC = () => {
                 placeholder={t('backtest.selectMultipleStrategies', 'Select one or more strategies')}
                 options={strategyOptions}
                 onChange={(values) => setStrategyIds(values.map((value) => Number(value)))}
+                disabled={lockSelection}
               />
             </div>
           )}
@@ -706,6 +798,7 @@ const Backtest: React.FC = () => {
         />
       </Card>
 
+      {effectiveShowHistory ? (
       <Card className="battletoads-card" title={t('backtest.history', 'Backtest History')} style={{ marginTop: 16 }}>
         <Table<BacktestRunRow>
           dataSource={historyRows}
@@ -774,6 +867,7 @@ const Backtest: React.FC = () => {
           ]}
         />
       </Card>
+      ) : null}
     </div>
   );
 };

@@ -39,7 +39,7 @@ test.describe('SaaS admin flow', () => {
     await expect(page.locator('body')).toContainText(/Performance|Low-lot|monitoring|Отч[её]ты и аналитика/i, { timeout: 20000 });
   });
 
-  test('offer-ts actions stay inside SaaS flow', async ({ page }) => {
+  test('offer-ts actions stay inside SaaS flow and open embedded backtest', async ({ page }) => {
     await page.goto('/saas', { waitUntil: 'domcontentloaded' });
     await page.waitForTimeout(1500);
     await page.locator('.ant-spin-spinning').first().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
@@ -56,19 +56,13 @@ test.describe('SaaS admin flow', () => {
       await expect(page).toHaveURL(/\/saas$/);
     }
 
-    const sweepButton = page.getByRole('button', { name: /Открыть sweep\/backtest/i }).first();
-    if (await sweepButton.isVisible().catch(() => false)) {
-      await sweepButton.click();
-      await page.waitForTimeout(800);
-      await expect(page).toHaveURL(/\/saas$/);
-    }
-
-    const editorBacktestButton = page.getByRole('button', { name: /Backtest ТС \(в окне\)/i }).first();
+    const editorBacktestButton = page.getByRole('button', { name: /Открыть бэктест ТС/i }).first();
     if (await editorBacktestButton.isVisible().catch(() => false)) {
       await editorBacktestButton.click();
       await page.waitForTimeout(1000);
       await expect(page).toHaveURL(/\/saas$/);
-      await expect(page.locator('iframe[title="Trading Systems Backtest"]')).toBeVisible({ timeout: 15000 });
+      await expect(page.getByText(/Запуск бектеста|Backtest Runner/i).first()).toBeVisible({ timeout: 15000 });
+      await expect(page.locator('.ant-drawer')).toContainText(/Контекст SaaS сохранен|draft ТС|Бэктест/i, { timeout: 15000 });
     }
   });
 });

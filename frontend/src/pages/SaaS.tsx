@@ -28,10 +28,20 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import Backtest from './Backtest';
 import ChartComponent from '../components/ChartComponent';
 import { useI18n } from '../i18n';
 
 const { Paragraph, Text, Title } = Typography;
+
+const toTimestampOrNull = (value?: string | null): number | null => {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
 
 type ProductMode = 'strategy_client' | 'algofund_client';
 type Level3 = 'low' | 'medium' | 'high';
@@ -39,6 +49,17 @@ type RequestStatus = 'pending' | 'approved' | 'rejected';
 type SaasTabKey = 'admin' | 'strategy-client' | 'algofund';
 type AdminTabKey = 'offer-ts' | 'research-analysis' | 'clients' | 'monitoring' | 'create-user';
 type SummaryScope = 'light' | 'full';
+
+type SaasBacktestContext = {
+  title: string;
+  description: string;
+  apiKeyName: string;
+  mode: 'single' | 'portfolio';
+  strategyId?: number | null;
+  strategyIds?: number[];
+  dateFromMs?: number | null;
+  dateToMs?: number | null;
+};
 
 type TradingSystemListItem = {
   id?: number;
@@ -1816,8 +1837,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [approveRequestSelectedPlan, setApproveRequestSelectedPlan] = useState('');
   const [approveRequestSelectedApiKey, setApproveRequestSelectedApiKey] = useState('');
   const [backtestDrawerVisible, setBacktestDrawerVisible] = useState(false);
-  const [backtestDrawerApiKeyName, setBacktestDrawerApiKeyName] = useState('');
-  const [backtestDrawerSystemId, setBacktestDrawerSystemId] = useState<number | null>(null);
+  const [backtestDrawerContext, setBacktestDrawerContext] = useState<SaasBacktestContext | null>(null);
 
   const strategyTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client');
   const algofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
@@ -1931,9 +1951,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         : true
   ) && Number(offer.pf || 0) >= approvalMinProfitFactor);
   const reviewTargetTradesPerDay = Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0);
-  const reviewCandidateLimit = Number.isFinite(reviewTargetTradesPerDay) && reviewTargetTradesPerDay > 0
-    ? Math.max(3, Math.min(reviewableSweepOffersRaw.length, Math.round(reviewTargetTradesPerDay * 2)))
-    : reviewableSweepOffersRaw.length;
   const reviewableSweepOffers = [...reviewableSweepOffersRaw]
     .sort((a, b) => {
       const target = Number.isFinite(reviewTargetTradesPerDay) ? reviewTargetTradesPerDay : 0;
@@ -1943,8 +1960,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         return aDistance - bDistance;
       }
       return Number(b.score || 0) - Number(a.score || 0);
-    })
-    .slice(0, reviewCandidateLimit);
+    });
   const researchCandidateOffers = reviewableSweepOffers.filter((offer) => !Boolean(offer.published));
   const adminReviewOfferPool = Array.from(
     new Map(
@@ -3314,39 +3330,75 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     messageApi.info('Редактирование ТС выполняется в SaaS: Админ -> Оферы и ТС (review).');
   };
 
-  const openBacktestDrawerForAdminTs = () => {
-    if (!publishedAdminTsEditorTarget?.apiKeyName) {
-      messageApi.warning('Для открытия backtest нужен назначенный API key и опубликованная runtime ТС');
+  const resolveSweepBacktestApiKeyName = () => String(
+    summary?.catalog?.apiKeyName
+    || publishedAdminTsEditorTarget?.apiKeyName
+    || summary?.apiKeys?.[0]
+    || ''
+  ).trim();
+
+  const openEmbeddedBacktest = (context: SaasBacktestContext) => {
+    setBacktestDrawerContext(context);
+    setBacktestDrawerVisible(true);
+  };
+
+  const openOfferBacktest = (offer?: typeof adminReviewOfferPool[number] | null) => {
+    if (!offer) {
+      messageApi.warning('Сначала выбери оффер из sweep-кандидатов');
       return;
     }
 
-    const params = new URLSearchParams();
-    params.set('apiKeyName', publishedAdminTsEditorTarget.apiKeyName);
-    if (publishedAdminTsEditorTarget.systemId && Number(publishedAdminTsEditorTarget.systemId) > 0) {
-      params.set('systemId', String(publishedAdminTsEditorTarget.systemId));
+    const apiKeyName = resolveSweepBacktestApiKeyName();
+    const strategyId = Number(offer.strategyId || 0);
+    if (!apiKeyName || !strategyId) {
+      messageApi.warning('Для бэктеста оффера нужен source API key и strategy id из последнего sweep');
+      return;
     }
-    window.location.href = `/trading-systems-workbench?${params.toString()}`;
+
+    openEmbeddedBacktest({
+      title: `Бэктест оффера: ${offer.titleRu}`,
+      description: `Карточка из последнего sweep. Бэктест запускается по strategy #${strategyId} на API key ${apiKeyName}. После проверки можно сразу отправлять оффер на витрину.`,
+      apiKeyName,
+      mode: 'single',
+      strategyId,
+      dateFromMs: summaryPeriodFromMs,
+      dateToMs: summaryPeriodToMs,
+    });
+  };
+
+  const openDraftTsBacktest = () => {
+    const apiKeyName = resolveSweepBacktestApiKeyName();
+    const strategyIds = (adminTradingSystemDraft?.members || [])
+      .map((member) => Number(member.strategyId || 0))
+      .filter((value) => Number.isFinite(value) && value > 0);
+
+    if (!apiKeyName || strategyIds.length === 0) {
+      messageApi.warning('Для бэктеста ТС нужен draft из последнего sweep и source API key');
+      return;
+    }
+
+    openEmbeddedBacktest({
+      title: `Бэктест ТС: ${adminTradingSystemDraft?.name || 'Draft TS'}`,
+      description: 'Портфельный бэктест draft ТС из последнего sweep. После проверки метрик можно отправлять ТС на апрув.',
+      apiKeyName,
+      mode: 'portfolio',
+      strategyIds,
+      dateFromMs: summaryPeriodFromMs,
+      dateToMs: summaryPeriodToMs,
+    });
+  };
+
+  const openBacktestDrawerForAdminTs = () => {
+    openDraftTsBacktest();
   };
 
   const openSaasBacktestFlow = () => {
-    const fallbackApiKeyName = String(
-      publishedAdminTsEditorTarget?.apiKeyName
-      || summary?.catalog?.apiKeyName
-      || summary?.apiKeys?.[0]
-      || ''
-    ).trim();
-
-    if (!fallbackApiKeyName) {
-      messageApi.warning('Для backtest нужен хотя бы один доступный API key');
+    if (selectedAdminReviewKind === 'algofund-ts') {
+      openDraftTsBacktest();
       return;
     }
 
-    const params = new URLSearchParams();
-    params.set('apiKeyName', fallbackApiKeyName);
-    if (publishedAdminTsEditorTarget?.systemId && Number(publishedAdminTsEditorTarget.systemId) > 0) {
-      params.set('systemId', String(publishedAdminTsEditorTarget.systemId));
-    }
-    window.location.href = `/trading-systems-workbench?${params.toString()}`;
+    openOfferBacktest(selectedAdminReviewOffer || reviewableSweepOffers[0] || null);
   };
 
   const preferredClientSwitchTarget = (() => {
@@ -3884,6 +3936,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const algofundPreviewDerivedSummary = summarizeLineSeries(algofundPreviewPoints);
   const publishPreviewDerivedSummary = summarizeLineSeries(publishPreviewPoints);
   const summaryPeriod = summary?.sweepSummary?.period || null;
+  const summaryPeriodFromMs = toTimestampOrNull(summaryPeriod?.dateFrom || null);
+  const summaryPeriodToMs = toTimestampOrNull(summaryPeriod?.dateTo || null);
   const strategyPreviewPeriod = strategyPreview?.period || summaryPeriod;
   const strategySelectionPreviewPeriod = strategySelectionPreview?.period || summaryPeriod;
   const algofundPreviewPeriod = algofundState?.preview?.period || summaryPeriod;
@@ -4174,11 +4228,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 />
                                 <Space wrap>
                                   <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>Отправить ТС на апрув</Button>
-                                  <Button size="small" onClick={() => setAdminTab('research-analysis')}>Открыть sweep/backtest</Button>
+                                  <Button size="small" onClick={openBacktestDrawerForAdminTs}>Открыть бэктест ТС</Button>
                                   <Button size="small" onClick={openPublishedAdminTsEditor}>Редактировать ТС</Button>
                                   <Button size="small" onClick={() => setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)).filter((item) => item > 0))}>Выбрать всех algofund-клиентов</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId} onClick={openPublishedAdminTsForClients}>Применить к клиентам Алгофонда</Button>
-                                  <Button size="small" onClick={openBacktestDrawerForAdminTs}>Backtest ТС (форма TradingSystems)</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId || batchTenantIds.length === 0} loading={actionLoading === 'apply-published-admin-ts'} onClick={() => void applyPublishedAdminTsToSelectedClients()}>
                                     Применить к выбранным ({batchTenantIds.length})
                                   </Button>
@@ -4218,8 +4271,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   >
                                     {selectedAdminReviewOffer.published ? 'Обновить витрину' : 'Отправить на апрув'}
                                   </Button>
+                                  <Button size="small" onClick={() => openOfferBacktest(selectedAdminReviewOffer)}>
+                                    Открыть бэктест оффера
+                                  </Button>
                                   <Button size="small" onClick={() => setActiveTab('strategy-client')}>Проверить витрину клиентов стратегий</Button>
-                                  <Button size="small" onClick={() => setAdminTab('research-analysis')} disabled={!strategyBacktestEnabled}>Открыть sweep/backtest</Button>
                                   {selectedAdminReviewOffer.published ? <Button size="small" danger onClick={() => void openUnpublishWizard(String(selectedAdminReviewOffer.offerId))}>Снять с витрины</Button> : null}
                                 </Space>
                                     </>
@@ -4542,6 +4597,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Tag color="blue">period: {Number(summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
                               <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
                             </Space>
+                            <Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 12, fontSize: 12 }}>
+                              Ниже показаны все кандидаты из последнего sweep. Параметр Target/day больше не скрывает офферы, а только поднимает наверх наиболее близкие по частоте сделок.
+                            </Paragraph>
                             <Space wrap style={{ marginBottom: 16 }}>
                               <InputNumber
                                 min={7}
@@ -4596,7 +4654,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               size="small"
                               rowKey="offerId"
                               dataSource={reviewableSweepOffers}
-                              pagination={{ pageSize: 8, showSizeChanger: false }}
+                              pagination={{ pageSize: 12, showSizeChanger: false }}
                               scroll={{ x: 980 }}
                               expandable={{
                                 expandedRowRender: (row: any) => {
@@ -4630,6 +4688,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           }}
                                         >
                                           Открыть review офера
+                                        </Button>
+                                        <Button
+                                          size="small"
+                                          onClick={() => {
+                                            openOfferBacktest(row);
+                                          }}
+                                        >
+                                          Бэктест
                                         </Button>
                                         <Button
                                           size="small"
@@ -4770,8 +4836,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Button size="small" loading={actionLoading === 'load-sweep-review'} onClick={() => void loadSweepReviewCandidates()}>
                                 Обновить из sweep
                               </Button>
-                              <Button size="small" onClick={() => setAdminTab('research-analysis')}>
-                                Открыть sweep/backtest
+                              <Button size="small" onClick={openBacktestDrawerForAdminTs}>
+                                Открыть бэктест ТС
                               </Button>
                               <Button
                                 type="primary"
@@ -4795,9 +4861,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               </Button>
                               <Button size="small" onClick={openPublishedAdminTsEditor}>
                                 Редактировать ТС
-                              </Button>
-                              <Button size="small" onClick={openBacktestDrawerForAdminTs}>
-                                Backtest ТС (форма TradingSystems)
                               </Button>
                             </Space>
                           </Card>
@@ -6533,23 +6596,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       </Modal>
 
       <Drawer
-        title="Backtest ТС из SaaS"
+        title={backtestDrawerContext?.title || 'Backtest из SaaS'}
         placement="right"
         width="92vw"
         open={backtestDrawerVisible}
-        onClose={() => setBacktestDrawerVisible(false)}
+        onClose={() => {
+          setBacktestDrawerVisible(false);
+          setBacktestDrawerContext(null);
+        }}
       >
-        {backtestDrawerApiKeyName ? (
+        {backtestDrawerContext ? (
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <Alert
               type="info"
               showIcon
-              message="Контекст SaaS сохранен: после анализа backtest закрой окно и продолжай review/publish."
+              message="Контекст SaaS сохранен: после анализа бэктеста закрой окно и продолжай review/publish без перехода в старые экраны."
             />
-            <iframe
-              title="Trading Systems Backtest"
-              src={`/trading-systems?apiKeyName=${encodeURIComponent(backtestDrawerApiKeyName)}${backtestDrawerSystemId && backtestDrawerSystemId > 0 ? `&systemId=${backtestDrawerSystemId}` : ''}`}
-              style={{ width: '100%', height: 'calc(100vh - 180px)', border: '1px solid #f0f0f0', borderRadius: 8 }}
+            <Backtest
+              embedded
+              lockApiKey
+              lockMode
+              lockSelection
+              showHistory={false}
+              preset={backtestDrawerContext}
             />
           </Space>
         ) : (
