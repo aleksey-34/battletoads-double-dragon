@@ -17,6 +17,7 @@ import {
   Modal,
   Row,
   Select,
+  Segmented,
   Slider,
   Space,
   Spin,
@@ -3501,7 +3502,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     openEmbeddedBacktest({
       kind: 'offer',
       title: `Бэктест оффера: ${offer.titleRu}`,
-      description: 'Sweep-бэктест карточки из последнего свепа. Регулируй риск и частоту, проверяй метрики/equity и решай: публиковать или оставить в review.',
+      description: 'Sweep-бэктест карточки из последнего свепа. Регулируй риск и частоту, проверяй метрики/equity и решай: отправить на витрину или закрыть.',
       offerId: String(offer.offerId || ''),
       offerPublished: Boolean(offer.published),
     });
@@ -3524,7 +3525,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     openEmbeddedBacktest({
       kind: 'algofund-ts',
       title: `Бэктест ТС: ${adminTradingSystemDraft?.name || 'Draft TS'}`,
-      description: 'Sweep-портфельный бэктест draft ТС из последнего свепа. После проверки метрик можно отправлять ТС на апрув.',
+      description: 'Sweep-портфельный бэктест draft ТС из последнего свепа. После проверки метрик можно отправлять ТС на витрину.',
       offerIds,
     });
   };
@@ -4883,6 +4884,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Tag color="blue">period: {Number(summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
                               <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
                             </Space>
+                            <Space wrap style={{ marginBottom: 12 }}>
+                              <Text strong>Что показывать:</Text>
+                              <Segmented
+                                value={adminSweepListMode}
+                                options={[
+                                  { value: 'offers', label: 'Оферы' },
+                                  { value: 'ts', label: 'ТС-наборы' },
+                                ]}
+                                onChange={(value) => setAdminSweepListMode(String(value) === 'ts' ? 'ts' : 'offers')}
+                              />
+                            </Space>
                             <Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 12, fontSize: 12 }}>
                               Ниже показаны все кандидаты из последнего sweep. Параметр Target/day больше не скрывает офферы, а только поднимает наверх наиболее близкие по частоте сделок.
                             </Paragraph>
@@ -4918,16 +4930,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   setApprovalMinProfitFactor(Math.max(0.5, Math.min(5, Number(numeric.toFixed(2)))));
                                 }}
                                 addonBefore="Min PF"
-                              />
-                              <Select
-                                size="small"
-                                value={adminSweepListMode}
-                                style={{ width: 180 }}
-                                options={[
-                                  { value: 'offers', label: 'Показывать: оферы' },
-                                  { value: 'ts', label: 'Показывать: ТС-наборы' },
-                                ]}
-                                onChange={(value: 'offers' | 'ts') => setAdminSweepListMode(value)}
                               />
                               <Button
                                 size="small"
