@@ -1875,6 +1875,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestInitialBalance, setAdminSweepBacktestInitialBalance] = useState(10000);
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
   const [adminSweepBacktestResult, setAdminSweepBacktestResult] = useState<AdminSweepBacktestPreviewResponse | null>(null);
+  const [selectedAdminDraftTsOfferIds, setSelectedAdminDraftTsOfferIds] = useState<string[]>([]);
 
   const strategyTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client');
   const algofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
@@ -1964,29 +1965,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     return acc;
   }, {});
-  const sweepCandidateStrategyIds = new Set(
-    [
-      ...(summary?.sweepSummary?.selectedMembers || []),
-      ...(summary?.sweepSummary?.topAll || []),
-      ...(summary?.sweepSummary?.topByMode?.mono || []),
-      ...(summary?.sweepSummary?.topByMode?.synth || []),
-    ]
-      .map((item) => Number(item.strategyId || 0))
-      .filter((item) => Number.isFinite(item) && item > 0)
-  );
-  const recommendedOfferIds = new Set(
-    summaryRecommendedOffers
-      .map((offer) => String(offer.offerId || '').trim())
-      .filter(Boolean)
-  );
   const publishedStorefrontOffers = offerStoreOffers.filter((offer) => Boolean(offer.published));
-  const reviewableSweepOffersRaw = offerStoreOffers.filter((offer) => (
-    sweepCandidateStrategyIds.size > 0
-      ? sweepCandidateStrategyIds.has(Number(offer.strategyId || 0))
-      : recommendedOfferIds.size > 0
-        ? recommendedOfferIds.has(String(offer.offerId || ''))
-        : true
-  ) && Number(offer.pf || 0) >= approvalMinProfitFactor);
+  const reviewableSweepOffersRaw = offerStoreOffers.filter((offer) => Number(offer.pf || 0) >= approvalMinProfitFactor);
   const reviewTargetTradesPerDay = Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0);
   const reviewableSweepOffers = [...reviewableSweepOffersRaw]
     .sort((a, b) => {
@@ -2007,6 +1987,39 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   );
   const selectedAdminReviewOffer = adminReviewOfferPool.find((offer) => String(offer.offerId) === selectedAdminReviewOfferId) || null;
   const adminTradingSystemDraft = summary?.catalog?.adminTradingSystemDraft || null;
+  const adminSweepTsSets = Object.entries(summary?.recommendedSets || {})
+    .map(([setKey, offers]) => {
+      const safeOffers = Array.isArray(offers) ? offers : [];
+      const offerIds = Array.from(new Set(safeOffers.map((offer) => String(offer.offerId || '')).filter(Boolean)));
+      const avgRet = safeOffers.length > 0
+        ? safeOffers.reduce((acc, offer) => acc + Number(offer.metrics?.ret || 0), 0) / safeOffers.length
+        : 0;
+      const avgPf = safeOffers.length > 0
+        ? safeOffers.reduce((acc, offer) => acc + Number(offer.metrics?.pf || 0), 0) / safeOffers.length
+        : 0;
+      const avgDd = safeOffers.length > 0
+        ? safeOffers.reduce((acc, offer) => acc + Number(offer.metrics?.dd || 0), 0) / safeOffers.length
+        : 0;
+
+      return {
+        setKey,
+        offers: safeOffers,
+        offerIds,
+        offerCount: offerIds.length,
+        avgRet,
+        avgPf,
+        avgDd,
+      };
+    })
+    .filter((item) => item.offerCount > 0);
+  const adminDraftMemberStrategyIds = new Set(
+    (adminTradingSystemDraft?.members || [])
+      .map((member) => Number(member.strategyId || 0))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  );
+  const adminDraftTsOfferCandidates = reviewableSweepOffers.filter((offer) => adminDraftMemberStrategyIds.has(Number(offer.strategyId || 0)));
+  const adminDraftTsOfferIdsAll = adminDraftTsOfferCandidates.map((offer) => String(offer.offerId || '')).filter(Boolean);
+  const adminDraftTsOfferIdsAllKey = adminDraftTsOfferIdsAll.join('|');
   const adminDraftMembersDetailed = (adminTradingSystemDraft?.members || []).map((member) => ({
     ...member,
     reviewRecord: sweepRecordByStrategyId[Number(member.strategyId || 0)] || null,
@@ -2376,6 +2389,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setSelectedAdminReviewOfferId(String(reviewableSweepOffers[0].offerId));
     }
   }, [selectedAdminReviewKind, reviewableSweepOffers, selectedAdminReviewOfferId]);
+
+  useEffect(() => {
+    if (adminDraftTsOfferIdsAll.length === 0) {
+      setSelectedAdminDraftTsOfferIds([]);
+      return;
+    }
+
+    setSelectedAdminDraftTsOfferIds((prev) => {
+      const normalizedPrev = (prev || []).map((item) => String(item || '')).filter(Boolean);
+      const stillAvailable = normalizedPrev.filter((item) => adminDraftTsOfferIdsAll.includes(item));
+      if (stillAvailable.length > 0) {
+        return stillAvailable;
+      }
+      return adminDraftTsOfferIdsAll;
+    });
+  }, [adminDraftTsOfferIdsAllKey]);
 
   const loadTelegramControls = useCallback(async () => {
     setTelegramControlsLoading(true);
@@ -3421,16 +3450,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   const openDraftTsBacktest = () => {
-    const strategyIds = new Set((adminTradingSystemDraft?.members || [])
-      .map((member) => Number(member.strategyId || 0))
-      .filter((value) => Number.isFinite(value) && value > 0));
-
-    const offerIds = reviewableSweepOffers
-      .filter((offer) => strategyIds.has(Number(offer.strategyId || 0)))
-      .map((offer) => String(offer.offerId || ''));
+    const selectedOfferIds = (selectedAdminDraftTsOfferIds || []).map((item) => String(item || '')).filter(Boolean);
+    const offerIds = selectedOfferIds.length > 0 ? selectedOfferIds : adminDraftTsOfferIdsAll;
 
     if (Number(adminTradingSystemDraft?.members?.length || 0) === 0) {
       messageApi.warning('Для бэктеста ТС нужен draft из последнего sweep');
+      return;
+    }
+
+    if (offerIds.length === 0) {
+      messageApi.warning('Для sweep бэктеста ТС выбери хотя бы одну карточку из draft ТС');
       return;
     }
 
@@ -4986,6 +5015,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             />
                             <Space wrap style={{ marginBottom: 12 }}>
                               <Tag color="processing">members: {Number(adminTradingSystemDraft?.members?.length || 0)}</Tag>
+                              <Tag color="blue">selected cards: {selectedAdminDraftTsOfferIds.length}</Tag>
                               <Tag color="blue">{adminTradingSystemDraft?.name || 'Admin TS draft'}</Tag>
                               <Tag color="gold">pending review</Tag>
                               {summary?.sweepSummary?.period ? <Tag color="default">{formatPeriodLabel(summary.sweepSummary.period)}</Tag> : null}
@@ -5014,6 +5044,59 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 Метрики портфеля еще не доступны. Ниже все равно показан состав draft ТС из последнего sweep.
                               </Paragraph>
                             )}
+                            <Card size="small" title="Список ТС-наборов из sweep" style={{ marginBottom: 12 }}>
+                              {adminSweepTsSets.length === 0 ? (
+                                <Empty description="Sweep sets пока не найдены" />
+                              ) : (
+                                <List
+                                  size="small"
+                                  dataSource={adminSweepTsSets}
+                                  pagination={{ pageSize: 6, showSizeChanger: false }}
+                                  renderItem={(set) => (
+                                    <List.Item
+                                      actions={[
+                                        <Button
+                                          key="pick"
+                                          size="small"
+                                          onClick={() => {
+                                            setSelectedAdminDraftTsOfferIds(set.offerIds);
+                                            messageApi.success(`Выбран TS-набор ${set.setKey}: ${set.offerCount} оферов для sweep backtest`);
+                                          }}
+                                        >
+                                          Выбрать для sweep backtest
+                                        </Button>,
+                                      ]}
+                                    >
+                                      <Space wrap>
+                                        <Text strong>{set.setKey}</Text>
+                                        <Tag color="processing">offers {set.offerCount}</Tag>
+                                        <Tag color={metricColor(Number(set.avgRet || 0), 'return')}>avg Ret {formatPercent(set.avgRet)}</Tag>
+                                        <Tag color={metricColor(Number(set.avgDd || 0), 'drawdown')}>avg DD {formatPercent(set.avgDd)}</Tag>
+                                        <Tag color={metricColor(Number(set.avgPf || 0), 'pf')}>avg PF {formatNumber(set.avgPf)}</Tag>
+                                      </Space>
+                                    </List.Item>
+                                  )}
+                                />
+                              )}
+                            </Card>
+                            <Space wrap style={{ marginBottom: 12 }}>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  setSelectedAdminDraftTsOfferIds(adminDraftTsOfferIdsAll);
+                                }}
+                              >
+                                Выбрать все карточки ТС
+                              </Button>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  setSelectedAdminDraftTsOfferIds([]);
+                                }}
+                              >
+                                Очистить выбор
+                              </Button>
+                            </Space>
                             <List
                               dataSource={adminTradingSystemDraft?.members || []}
                               locale={{ emptyText: <Empty description="Недавний sweep еще не сформировал draft ТС" /> }}
@@ -5027,6 +5110,32 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     <Tag color={index < 3 ? 'geekblue' : 'default'}>{index < 3 ? 'core' : 'satellite'}</Tag>
                                     <Tag color="cyan">score {formatNumber(member.score)}</Tag>
                                     <Tag color="purple">w {formatNumber(member.weight)}</Tag>
+                                    {(() => {
+                                      const linkedOffer = adminDraftTsOfferCandidates.find((offer) => Number(offer.strategyId || 0) === Number(member.strategyId || 0));
+                                      if (!linkedOffer?.offerId) {
+                                        return <Tag color="default">no offer card</Tag>;
+                                      }
+                                      const offerId = String(linkedOffer.offerId);
+                                      const checked = selectedAdminDraftTsOfferIds.includes(offerId);
+                                      return (
+                                        <Checkbox
+                                          checked={checked}
+                                          onChange={(event) => {
+                                            setSelectedAdminDraftTsOfferIds((prev) => {
+                                              const set = new Set((prev || []).map((item) => String(item || '')).filter(Boolean));
+                                              if (event.target.checked) {
+                                                set.add(offerId);
+                                              } else {
+                                                set.delete(offerId);
+                                              }
+                                              return Array.from(set);
+                                            });
+                                          }}
+                                        >
+                                          для sweep backtest
+                                        </Checkbox>
+                                      );
+                                    })()}
                                   </Space>
                                 </List.Item>
                               )}

@@ -2483,18 +2483,48 @@ export type LowLotRecommendation = {
 };
 
 const getRuntimeFlag = async (key: string, fallback: string): Promise<string> => {
-  const row = await db.get('SELECT value FROM app_runtime_flags WHERE key = ?', [key]);
+  const row = await runWithSqliteBusyRetry(() => db.get('SELECT value FROM app_runtime_flags WHERE key = ?', [key]));
   const value = String(row?.value || '').trim();
   return value || fallback;
 };
 
 const setRuntimeFlag = async (key: string, value: string): Promise<void> => {
-  await db.run(
-    `INSERT INTO app_runtime_flags (key, value, updated_at)
-     VALUES (?, ?, CURRENT_TIMESTAMP)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
-    [key, value]
-  );
+  await runWithSqliteBusyRetry(async () => {
+    await db.run(
+      `INSERT INTO app_runtime_flags (key, value, updated_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+      [key, value]
+    );
+  });
+};
+
+const SQLITE_BUSY_RETRY_DELAY_MS = 120;
+const SQLITE_BUSY_RETRY_ATTEMPTS = 6;
+
+const isSqliteBusyError = (error: unknown): boolean => {
+  const text = String((error as any)?.message || error || '').toLowerCase();
+  return text.includes('sqlite_busy') || text.includes('database is locked') || text.includes('database table is locked');
+};
+
+const waitMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const runWithSqliteBusyRetry = async <T>(fn: () => Promise<T>): Promise<T> => {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < SQLITE_BUSY_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!isSqliteBusyError(error) || attempt >= SQLITE_BUSY_RETRY_ATTEMPTS - 1) {
+        throw error;
+      }
+      lastError = error;
+      const delay = SQLITE_BUSY_RETRY_DELAY_MS * (attempt + 1);
+      await waitMs(delay);
+    }
+  }
+
+  throw lastError as Error;
 };
 
 export const getAdminTelegramControls = async (): Promise<AdminTelegramControls> => {
@@ -2649,11 +2679,9 @@ export const updateOfferStoreAdminState = async (payload: {
     }
   }
 
-  await Promise.all([
-    setRuntimeFlag('offer.store.defaults', JSON.stringify(nextDefaults)),
-    setRuntimeFlag('offer.store.published_ids', JSON.stringify(nextPublished)),
-    setRuntimeFlag('offer.store.review_snapshots', JSON.stringify(nextReviewSnapshots)),
-  ]);
+  await setRuntimeFlag('offer.store.defaults', JSON.stringify(nextDefaults));
+  await setRuntimeFlag('offer.store.published_ids', JSON.stringify(nextPublished));
+  await setRuntimeFlag('offer.store.review_snapshots', JSON.stringify(nextReviewSnapshots));
 
   return getOfferStoreAdminState();
 };
