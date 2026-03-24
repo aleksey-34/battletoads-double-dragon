@@ -68,11 +68,21 @@ export const buildPresetsForOffer = async (
   const riskMultipliers: Record<RiskLevel, number> = { low: 0.5, medium: 1.0, high: 1.5 };
   const freqChannels: Record<FreqLevel, number> = { low: 70, medium: 50, high: 30 };
 
+  const metricNumber = (keys: string[], fallback: number): number => {
+    for (const key of keys) {
+      const value = Number(baseMetrics[key]);
+      if (Number.isFinite(value)) {
+        return value;
+      }
+    }
+    return fallback;
+  };
+
   const baseLot = Number(baseConfig.lot_long_percent ?? 100);
-  const baseRet = Number(baseMetrics.ret ?? 0);
-  const basePf = Number(baseMetrics.pf ?? 1);
-  const baseWr = Number(baseMetrics.wr ?? 0);
-  const baseDd = Number(baseMetrics.dd ?? 0);
+  const baseRet = metricNumber(['ret', 'total_return_percent', 'totalReturnPercent'], 0);
+  const basePf = metricNumber(['pf', 'profit_factor', 'profitFactor'], 1);
+  const baseWr = metricNumber(['wr', 'win_rate', 'winRatePercent', 'win_rate_percent'], 0);
+  const baseDd = metricNumber(['dd', 'max_drawdown_percent', 'maxDrawdownPercent'], 0);
 
   const risks: RiskLevel[] = ['low', 'medium', 'high'];
   const freqs: FreqLevel[] = ['low', 'medium', 'high'];
@@ -103,10 +113,19 @@ export const buildPresetsForOffer = async (
         },
         metrics: {
           ret: retScaled,
+          total_return_percent: retScaled,
+          totalReturnPercent: retScaled,
           pf: basePf,
+          profit_factor: basePf,
+          profitFactor: basePf,
           dd: ddScaled,
+          max_drawdown_percent: ddScaled,
+          maxDrawdownPercent: ddScaled,
           wr: baseWr,
-          trades: baseMetrics.trades,
+          win_rate: baseWr,
+          winRatePercent: baseWr,
+          trades: metricNumber(['trades', 'trades_count', 'tradesCount'], 0),
+          tradesCount: metricNumber(['trades', 'trades_count', 'tradesCount'], 0),
         },
         equity_curve: curveScaled,
       });
