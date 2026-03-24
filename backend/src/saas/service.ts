@@ -3454,7 +3454,10 @@ export const getSaasAdminSummary = async (options?: {
   const sourceCatalog = loadLatestClientCatalog();
   const sourceSweep = loadLatestSweep();
   const apiKeys = await getAvailableApiKeyNames();
-  const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
+  const fallbackCatalog = await buildFallbackCatalogFromPresets(null, []);
+  const catalog = getAllOffers(fallbackCatalog).length > 0
+    ? fallbackCatalog
+    : sourceCatalog || fallbackCatalog;
   const sweepSelectedMembers = resolveSweepSelectedMembers(sourceSweep, catalog);
   const sweepSummary = sourceSweep
     ? {
