@@ -14,7 +14,6 @@ import ClientCabinet from './pages/ClientCabinet';
 import Logs from './pages/Logs';
 import Research from './pages/Research';
 import SaaS from './pages/SaaS';
-import TradingSystems from './pages/TradingSystems';
 import AdminDocs from './pages/AdminDocs';
 import { I18nProvider, useI18n, UILanguage } from './i18n';
 import './App.css';
@@ -44,7 +43,6 @@ function AppShell() {
         { key: '2', label: <Link to="/settings">{t('nav.settings', 'Settings')}</Link> },
         { key: '3', label: <Link to="/positions">{t('nav.positions', 'Positions')}</Link> },
         { key: '4', label: <Link to="/logs">{t('nav.logs', 'Logs')}</Link> },
-        { key: '6', label: <Link to="/trading-systems">{t('nav.tradingSystems', 'Trading Systems')}</Link> },
         { key: '7', label: <Link to="/saas">{t('nav.saas', 'SaaS')}</Link> },
         { key: '8', label: <Link to="/research">{t('nav.research', 'Research')}</Link> },
         { key: '9', label: <Link to="/admin-docs">{t('nav.docs', 'Docs')}</Link> },
@@ -54,7 +52,6 @@ function AppShell() {
     if (location.pathname.startsWith('/settings')) return '2';
     if (location.pathname.startsWith('/positions')) return '3';
     if (location.pathname.startsWith('/logs')) return '4';
-    if (location.pathname.startsWith('/trading-systems')) return '6';
     if (location.pathname.startsWith('/saas')) return '7';
     if (location.pathname.startsWith('/research')) return '8';
     if (location.pathname.startsWith('/admin-docs')) return '9';
@@ -272,7 +269,7 @@ function AppShell() {
           <Route path="/positions" element={<Positions />} />
           <Route path="/logs" element={<Logs />} />
           <Route path="/backtest" element={<Navigate to="/saas" replace />} />
-          <Route path="/trading-systems" element={<TradingSystems />} />
+          <Route path="/trading-systems" element={<Navigate to="/saas/admin?adminTab=offer-ts" replace />} />
           <Route path="/saas" element={<SaaS surfaceMode="admin" />} />
           <Route path="/saas/admin" element={<SaaS initialTab="admin" surfaceMode="admin" />} />
           <Route path="/saas/strategy-client" element={<SaaS initialTab="strategy-client" surfaceMode="strategy-client" />} />

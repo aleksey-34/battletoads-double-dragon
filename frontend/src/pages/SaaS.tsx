@@ -671,6 +671,35 @@ type AdminPublishResponse = {
   };
 };
 
+const ADMIN_PUBLISH_RESPONSE_STORAGE_KEY = 'saasAdminPublishResponse';
+
+const parseAdminPublishResponse = (raw?: string | null): AdminPublishResponse | null => {
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(raw) as AdminPublishResponse;
+    const apiKeyName = String(parsed?.sourceSystem?.apiKeyName || '').trim();
+    const systemName = String(parsed?.sourceSystem?.systemName || '').trim();
+    const systemId = Number(parsed?.sourceSystem?.systemId || 0);
+    if (!apiKeyName || !systemName || !Number.isFinite(systemId) || systemId <= 0) {
+      return null;
+    }
+
+    return {
+      sourceSystem: {
+        apiKeyName,
+        systemId,
+        systemName,
+      },
+      preview: parsed?.preview || undefined,
+    };
+  } catch {
+    return null;
+  }
+};
+
 type Copy = {
   title: string;
   subtitle: string;
@@ -1737,7 +1766,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [algofundNote, setAlgofundNote] = useState('');
   const [algofundDecisionNote, setAlgofundDecisionNote] = useState('');
   const [retryMaterializeModalVisible, setRetryMaterializeModalVisible] = useState(false);
-  const [publishResponse, setPublishResponse] = useState<AdminPublishResponse | null>(null);
+  const [publishResponse, setPublishResponse] = useState<AdminPublishResponse | null>(() => {
+    if (typeof window === 'undefined') {
+      return null;
+    }
+    return parseAdminPublishResponse(window.localStorage.getItem(ADMIN_PUBLISH_RESPONSE_STORAGE_KEY));
+  });
   const [monitoringSystemsByApiKey, setMonitoringSystemsByApiKey] = useState<Record<string, TradingSystemListItem[]>>({});
   const [monitoringSystemSelected, setMonitoringSystemSelected] = useState<Record<number, number | undefined>>({});
   const [monitoringLogCommentsByApiKey, setMonitoringLogCommentsByApiKey] = useState<Record<string, string[]>>({});
@@ -2214,6 +2248,44 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   useEffect(() => {
     setActiveTab(initialTab);
   }, [initialTab]);
+
+  useEffect(() => {
+    if (!isAdminSurface || typeof window === 'undefined') {
+      return;
+    }
+
+    const params = new URLSearchParams(window.location.search);
+    const requestedAdminTab = String(params.get('adminTab') || '').trim() as AdminTabKey;
+    if (requestedAdminTab === 'offer-ts' || requestedAdminTab === 'research-analysis' || requestedAdminTab === 'clients' || requestedAdminTab === 'monitoring' || requestedAdminTab === 'create-user') {
+      setActiveTab('admin');
+      setAdminTab(requestedAdminTab);
+    }
+  }, [isAdminSurface]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+
+    const persisted = parseAdminPublishResponse(window.localStorage.getItem(ADMIN_PUBLISH_RESPONSE_STORAGE_KEY));
+    const currentApiKeyName = String(publishResponse?.sourceSystem?.apiKeyName || '').trim();
+    const currentSystemName = String(publishResponse?.sourceSystem?.systemName || '').trim();
+    const currentSystemId = Number(publishResponse?.sourceSystem?.systemId || 0);
+
+    if (currentApiKeyName && currentSystemName && Number.isFinite(currentSystemId) && currentSystemId > 0) {
+      window.localStorage.setItem(ADMIN_PUBLISH_RESPONSE_STORAGE_KEY, JSON.stringify(publishResponse));
+      return;
+    }
+
+    if (!publishResponse && persisted) {
+      setPublishResponse(persisted);
+      return;
+    }
+
+    if (!persisted) {
+      window.localStorage.removeItem(ADMIN_PUBLISH_RESPONSE_STORAGE_KEY);
+    }
+  }, [publishResponse]);
 
   useEffect(() => {
     if (!isAdminSurface) {
@@ -3219,12 +3291,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
-    const params = new URLSearchParams();
-    params.set('apiKeyName', publishedAdminTsEditorTarget.apiKeyName);
-    if (publishedAdminTsEditorTarget.systemId && publishedAdminTsEditorTarget.systemId > 0) {
-      params.set('systemId', String(publishedAdminTsEditorTarget.systemId));
-    }
-    window.location.href = `/trading-systems?${params.toString()}`;
+    setActiveTab('admin');
+    setAdminTab('offer-ts');
+    setSelectedAdminReviewKind('algofund-ts');
+    messageApi.info('Редактирование ТС выполняется в SaaS: Админ -> Оферы и ТС (review).');
   };
 
   const openBacktestDrawerForAdminTs = () => {
@@ -3233,15 +3303,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
-    setBacktestDrawerApiKeyName(publishedAdminTsEditorTarget.apiKeyName);
-    setBacktestDrawerSystemId(Number(publishedAdminTsEditorTarget.systemId || 0));
-    setBacktestDrawerVisible(true);
+    setActiveTab('admin');
+    setAdminTab('research-analysis');
+    setSelectedAdminReviewKind('algofund-ts');
+    messageApi.info('Backtest открыт в SaaS: Админ -> Анализ ресерча.');
   };
 
   const openSaasBacktestFlow = () => {
     setActiveTab('admin');
     setAdminTab('offer-ts');
-    messageApi.info('Backtest по sweep доступен в Админ -> Оферы и ТС (review) и через кнопку "Backtest ТС (в редакторе)".');
+    messageApi.info('Backtest по sweep доступен в SaaS: Админ -> Оферы и ТС (review) и Админ -> Анализ ресерча.');
   };
 
   const preferredClientSwitchTarget = (() => {
@@ -4063,7 +4134,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Button size="small" onClick={openPublishedAdminTsEditor}>Редактировать ТС</Button>
                                   <Button size="small" onClick={() => setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)).filter((item) => item > 0))}>Выбрать всех algofund-клиентов</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId} onClick={openPublishedAdminTsForClients}>Применить к клиентам Алгофонда</Button>
-                                  <Button size="small" onClick={openBacktestDrawerForAdminTs}>Backtest ТС (в окне)</Button>
+                                  <Button size="small" onClick={openBacktestDrawerForAdminTs}>Backtest ТС (в SaaS)</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId || batchTenantIds.length === 0} loading={actionLoading === 'apply-published-admin-ts'} onClick={() => void applyPublishedAdminTsToSelectedClients()}>
                                     Применить к выбранным ({batchTenantIds.length})
                                   </Button>
@@ -4669,7 +4740,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 Редактировать ТС
                               </Button>
                               <Button size="small" onClick={openBacktestDrawerForAdminTs}>
-                                Backtest ТС (в окне)
+                                Backtest ТС (в SaaS)
                               </Button>
                             </Space>
                           </Card>

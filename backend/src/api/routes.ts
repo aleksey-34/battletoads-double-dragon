@@ -940,6 +940,120 @@ router.post('/client/api-key', authenticateClient, async (req, res) => {
   }
 });
 
+// SaaS admin routes need to be BEFORE requirePlatformAdmin so they're accessible from the internal frontend dashboard
+router.use('/saas', saasRoutes);
+
+// Analytics routes for live reconciliation and drift analysis
+router.use('/analytics', analyticsRoutes);
+
+// Public routes for Backtest page (require Bearer token from frontend, but NOT the requirePlatformAdmin guard)
+// These endpoints are used by the dashboard's internal Backtest page
+router.get('/api-keys', async (req, res) => {
+  try {
+    const { apiKeys } = await loadSettings();
+    res.json(apiKeys);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading API keys: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/backtest/strategies/:apiKeyName', async (req, res) => {
+  const { apiKeyName } = req.params;
+  try {
+    const strategies = await getStrategies(apiKeyName);
+    res.json(strategies);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading backtest strategies: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/backtest/run', async (req, res) => {
+  if (backtestRunInProgress) {
+    return res.status(429).json({
+      error: 'Backtest already running. Wait for current run to finish before starting a new one.',
+    });
+  }
+
+  try {
+    backtestRunInProgress = true;
+    const saveResult = req.body?.saveResult !== false;
+    const result = await runBacktest(req.body || {});
+    let runId: number | null = null;
+
+    if (saveResult) {
+      runId = await saveBacktestRun(result);
+      result.runId = runId;
+    }
+
+    res.json({ success: true, runId, result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error running backtest: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  } finally {
+    backtestRunInProgress = false;
+  }
+});
+
+router.get('/backtest/runs', async (req, res) => {
+  const apiKeyName = req.query.apiKeyName ? String(req.query.apiKeyName) : undefined;
+  const limitRaw = Number.parseInt(String(req.query.limit || '20'), 10);
+  const limit = Number.isFinite(limitRaw) ? limitRaw : 20;
+
+  try {
+    const rows = await listBacktestRuns(limit, apiKeyName);
+    res.json(rows);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading backtest runs: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/backtest/runs/:id', async (req, res) => {
+  const id = Number.parseInt(String(req.params.id || '0'), 10);
+
+  if (!Number.isFinite(id) || id <= 0) {
+    return res.status(400).json({ error: 'Invalid run id' });
+  }
+
+  try {
+    const run = await getBacktestRun(id);
+    if (!run) {
+      return res.status(404).json({ error: 'Backtest run not found' });
+    }
+    res.json(run);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading backtest run ${id}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/backtest/runs/:id', async (req, res) => {
+  const id = Number.parseInt(String(req.params.id || '0'), 10);
+
+  if (!Number.isFinite(id) || id <= 0) {
+    return res.status(400).json({ error: 'Invalid run id' });
+  }
+
+  try {
+    const deleted = await deleteBacktestRun(id);
+    if (!deleted) {
+      return res.status(404).json({ error: 'Backtest run not found' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error deleting backtest run ${id}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Применить platform-admin guard ко всем admin маршрутам
 router.use(requirePlatformAdmin);
 
@@ -1034,17 +1148,6 @@ router.get('/system/update/job', async (req, res) => {
 });
 
 // API ключи
-router.get('/api-keys', async (req, res) => {
-  try {
-    const { apiKeys } = await loadSettings();
-    res.json(apiKeys);
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`Error loading API keys: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
 router.post('/api-keys', async (req, res) => {
   const key: ApiKey = req.body;
   try {
@@ -2214,9 +2317,5 @@ router.get('/symbols/:apiKeyName', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
-// Analytics routes for live reconciliation and drift analysis
-router.use('/analytics', analyticsRoutes);
-router.use('/saas', saasRoutes);
 
 export default router;
