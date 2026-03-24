@@ -4979,7 +4979,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                           <Card className="battletoads-card" title="Sweep pipeline: оферы и ТС">
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                              Путь: список после sweep -> бэктест -> сохранить риск/частоту -> на витрину или закрыть. Затем из витрины применить на одного, нескольких или всех клиентов.
+                              Путь: список после sweep, бэктест, сохранение риска и частоты, публикация на витрину или закрытие. Затем из витрины применить на одного, нескольких или всех клиентов.
                             </Paragraph>
                             {summary?.catalog?.apiKeyName ? (
                               <Alert
