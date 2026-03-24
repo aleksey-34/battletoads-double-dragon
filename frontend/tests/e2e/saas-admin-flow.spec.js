@@ -24,11 +24,7 @@ test.describe('SaaS admin flow', () => {
     const strayBacktestLinks = await page.locator('a[href="/backtest"]').count();
     expect(strayBacktestLinks).toBe(0);
 
-    const adminTab = page.getByText(/^Admin$|^Админ$/i).first();
-    if (await adminTab.isVisible().catch(() => false)) {
-      await adminTab.click();
-      await page.waitForTimeout(500);
-    }
+    await page.waitForTimeout(500);
 
     await page.getByText(/Оферы и ТС/i).first().click();
     await expect(page.getByText(/approved|витрина|review/i).first()).toBeVisible({ timeout: 20000 });
@@ -48,11 +44,7 @@ test.describe('SaaS admin flow', () => {
     await page.waitForTimeout(1500);
     await page.locator('.ant-spin-spinning').first().waitFor({ state: 'hidden', timeout: 10000 }).catch(() => {});
 
-    const adminTab = page.getByText(/^Admin$|^Админ$/i).first();
-    if (await adminTab.isVisible().catch(() => false)) {
-      await adminTab.click();
-      await page.waitForTimeout(500);
-    }
+    await page.waitForTimeout(500);
 
     await page.getByText(/Оферы и ТС/i).first().click();
     await page.waitForTimeout(800);
