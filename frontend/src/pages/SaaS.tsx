@@ -1835,6 +1835,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [clientsClassKind, setClientsClassKind] = useState<'all' | 'offer' | 'ts'>('all');
   const [clientsClassValue, setClientsClassValue] = useState('');
   const [selectedAdminReviewKind, setSelectedAdminReviewKind] = useState<'offer' | 'algofund-ts'>('offer');
+  const [adminSweepListMode, setAdminSweepListMode] = useState<'offers' | 'ts'>('offers');
   const [selectedAdminReviewOfferId, setSelectedAdminReviewOfferId] = useState('');
   const [approvalMinProfitFactor, setApprovalMinProfitFactor] = useState(1);
   const [telegramControls, setTelegramControls] = useState<TelegramControls | null>(null);
@@ -4795,7 +4796,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       openAdminReviewContext('algofund-ts');
                                     }}
                                   >
-                                    Открыть review sweep/backtest
+                                    Открыть sweep backtest ТС
                                   </Button>
                                 </Space>
                                 <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
@@ -4805,9 +4806,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
 
-                          <Card className="battletoads-card" title="Approval center: оферы клиентов стратегий и ТС Алгофонда">
+                          <Card className="battletoads-card" title="Sweep pipeline: оферы и ТС">
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                              После sweep настраивай параметры, проверяй метрики/equity и апрувь кандидатов. Далее в Оферы и ТС остаются только approved-витрины и управление флагами.
+                              Путь: список после sweep -> бэктест -> сохранить риск/частоту -> на витрину или закрыть. Затем из витрины применить на одного, нескольких или всех клиентов.
                             </Paragraph>
                             {summary?.catalog?.apiKeyName ? (
                               <Alert
@@ -4819,9 +4820,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             ) : null}
                             <Space wrap style={{ marginBottom: 12 }}>
                               <Tag color="default">sweep offers: {reviewableSweepOffers.length}</Tag>
-                              <Tag color="processing">awaiting review: {researchCandidateOffers.length}</Tag>
+                              <Tag color="processing">not on storefront: {researchCandidateOffers.length}</Tag>
                               <Tag color="purple">sweep strategies: {sweepReviewRecords.length}</Tag>
                               <Tag color="geekblue">draft TS: {adminTradingSystemDraft ? 1 : 0}</Tag>
+                              <Tag color="magenta">view: {adminSweepListMode === 'offers' ? 'offers' : 'ts sets'}</Tag>
                               <Tag color="blue">period: {Number(summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
                               <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
                             </Space>
@@ -4861,13 +4863,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 }}
                                 addonBefore="Min PF"
                               />
+                              <Select
+                                size="small"
+                                value={adminSweepListMode}
+                                style={{ width: 180 }}
+                                options={[
+                                  { value: 'offers', label: 'Показывать: оферы' },
+                                  { value: 'ts', label: 'Показывать: ТС-наборы' },
+                                ]}
+                                onChange={(value: 'offers' | 'ts') => setAdminSweepListMode(value)}
+                              />
                               <Button
                                 size="small"
                                 onClick={() => {
                                   openAdminReviewContext('algofund-ts');
                                 }}
                               >
-                                Перейти в review ТС
+                                Перейти к бэктесту ТС
                               </Button>
                               <Button
                                 size="small"
@@ -4878,6 +4890,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 Применение ТС к клиентам
                               </Button>
                             </Space>
+                            {adminSweepListMode === 'offers' ? (
                             <Table
                               size="small"
                               rowKey="offerId"
@@ -4915,7 +4928,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             openAdminReviewContext('offer', String(row.offerId));
                                           }}
                                         >
-                                          Открыть review офера
+                                          Открыть бэктест офера
                                         </Button>
                                         <Button
                                           size="small"
@@ -4935,7 +4948,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             void toggleOfferPublished(String(row.offerId), true);
                                           }}
                                         >
-                                          {row.published ? 'Снять с витрины' : 'Отправить на апрув'}
+                                          {row.published ? 'Снять с витрины' : 'На витрину'}
                                         </Button>
                                       </Space>
                                       {pts.length > 0
@@ -4976,14 +4989,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   width: 280,
                                   render: (_, row: any) => (
                                     <Space size={4} wrap>
-                                      <Tag color={row.published ? 'success' : 'processing'}>{row.published ? 'approved' : 'pending review'}</Tag>
+                                      <Tag color={row.published ? 'success' : 'processing'}>{row.published ? 'on storefront' : 'not on storefront'}</Tag>
                                       <Button
                                         size="small"
                                         onClick={() => {
                                           openAdminReviewContext('offer', String(row.offerId));
                                         }}
                                       >
-                                        Открыть review/backtest
+                                        Открыть бэктест
                                       </Button>
                                       <Switch
                                         checked={Boolean(row.published)}
@@ -5001,23 +5014,61 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 },
                               ]}
                             />
+                            ) : (
+                              <Card size="small" title="Список ТС-наборов из sweep">
+                                {adminSweepTsSets.length === 0 ? (
+                                  <Empty description="Sweep sets пока не найдены" />
+                                ) : (
+                                  <List
+                                    size="small"
+                                    dataSource={adminSweepTsSets}
+                                    pagination={{ pageSize: 8, showSizeChanger: false }}
+                                    renderItem={(set) => (
+                                      <List.Item
+                                        actions={[
+                                          <Button
+                                            key="pick"
+                                            size="small"
+                                            onClick={() => {
+                                              setSelectedAdminDraftTsOfferIds(set.offerIds);
+                                              setAdminSweepListMode('ts');
+                                              messageApi.success(`Выбран TS-набор ${set.setKey}: ${set.offerCount} оферов для бэктеста`);
+                                            }}
+                                          >
+                                            Выбрать для бэктеста
+                                          </Button>,
+                                        ]}
+                                      >
+                                        <Space wrap>
+                                          <Text strong>{set.setKey}</Text>
+                                          <Tag color="processing">offers {set.offerCount}</Tag>
+                                          <Tag color={metricColor(Number(set.avgRet || 0), 'return')}>avg Ret {formatPercent(set.avgRet)}</Tag>
+                                          <Tag color={metricColor(Number(set.avgDd || 0), 'drawdown')}>avg DD {formatPercent(set.avgDd)}</Tag>
+                                          <Tag color={metricColor(Number(set.avgPf || 0), 'pf')}>avg PF {formatNumber(set.avgPf)}</Tag>
+                                        </Space>
+                                      </List.Item>
+                                    )}
+                                  />
+                                )}
+                              </Card>
+                            )}
                           </Card>
 
                           <Card className="battletoads-card" title="ТС Алгофонда из последнего sweep">
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                              Это текущий draft торговой системы, собранный из последнего sweep. Здесь должен быть полный путь: проверить состав и метрики, перейти в review, отправить ТС на апрув, затем открыть шаг применения и перевести клиентов Алгофонда на опубликованную runtime ТС.
+                              Это текущий draft торговой системы из последнего sweep. Здесь путь: проверить состав и метрики, запустить бэктест ТС, сохранить параметры и отправить ТС на витрину.
                             </Paragraph>
                             <Alert
                               type="info"
                               showIcon
                               style={{ marginBottom: 12 }}
-                              message="Шаги: 1) review состава и метрик, 2) апрув draft ТС, 3) публикация на витрину Алгофонда, 4) switch_system на выбранных клиентов."
+                              message="Шаги: 1) бэктест состава и метрик, 2) сохранить риск/частоту, 3) публикация на витрину Алгофонда, 4) switch_system на выбранных клиентов."
                             />
                             <Space wrap style={{ marginBottom: 12 }}>
                               <Tag color="processing">members: {Number(adminTradingSystemDraft?.members?.length || 0)}</Tag>
                               <Tag color="blue">selected cards: {selectedAdminDraftTsOfferIds.length}</Tag>
                               <Tag color="blue">{adminTradingSystemDraft?.name || 'Admin TS draft'}</Tag>
-                              <Tag color="gold">pending review</Tag>
+                              <Tag color="gold">draft from sweep</Tag>
                               {summary?.sweepSummary?.period ? <Tag color="default">{formatPeriodLabel(summary.sweepSummary.period)}</Tag> : null}
                               {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(adminDraftPortfolioSummary.totalReturnPercent)}</Tag> : null}
                               {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(adminDraftPortfolioSummary.maxDrawdownPercent)}</Tag> : null}
@@ -5063,7 +5114,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             messageApi.success(`Выбран TS-набор ${set.setKey}: ${set.offerCount} оферов для sweep backtest`);
                                           }}
                                         >
-                                          Выбрать для sweep backtest
+                                          Выбрать для бэктеста
                                         </Button>,
                                       ]}
                                     >
@@ -5154,10 +5205,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   openAdminReviewContext('algofund-ts');
                                 }}
                               >
-                                Открыть review ТС
+                                Открыть бэктест ТС
                               </Button>
                               <Button size="small" loading={actionLoading === 'publish'} onClick={() => void publishAdminTs()}>
-                                Отправить ТС на апрув
+                                На витрину ТС
                               </Button>
                               <Button
                                 size="small"
