@@ -4899,14 +4899,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       : null);
                                   return (
                                     <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                                      <Descriptions size="small" bordered column={3}>
-                                        <Descriptions.Item label="Score">{formatNumber(scoreValue)}</Descriptions.Item>
-                                        <Descriptions.Item label="PF">{formatNumber(pfValue)}</Descriptions.Item>
-                                        <Descriptions.Item label="Trades/day">{tradesPerDayValue === null || tradesPerDayValue === undefined ? '—' : formatNumber(tradesPerDayValue, 2)}</Descriptions.Item>
-                                        <Descriptions.Item label="Ret">{formatPercent(retValue)}</Descriptions.Item>
-                                        <Descriptions.Item label="DD">{formatPercent(ddValue)}</Descriptions.Item>
-                                        <Descriptions.Item label="Win rate">{winRateValue === null || winRateValue === undefined ? '—' : formatPercent(winRateValue)}</Descriptions.Item>
-                                      </Descriptions>
+                                      <Space wrap size={6}>
+                                        <Tag color="cyan">Score {formatNumber(scoreValue)}</Tag>
+                                        <Tag color={metricColor(Number(retValue || 0), 'return')}>Ret {formatPercent(retValue)}</Tag>
+                                        <Tag color={metricColor(Number(ddValue || 0), 'drawdown')}>DD {formatPercent(ddValue)}</Tag>
+                                        <Tag color={metricColor(Number(pfValue || 0), 'pf')}>PF {formatNumber(pfValue)}</Tag>
+                                        <Tag color="blue">Trades/day {tradesPerDayValue === null || tradesPerDayValue === undefined ? '—' : formatNumber(tradesPerDayValue, 2)}</Tag>
+                                        <Tag color="default">Win rate {winRateValue === null || winRateValue === undefined ? '—' : formatPercent(winRateValue)}</Tag>
+                                      </Space>
                                       <Space wrap>
                                         <Button
                                           size="small"
