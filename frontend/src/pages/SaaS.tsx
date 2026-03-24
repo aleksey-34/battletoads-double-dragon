@@ -1921,13 +1921,28 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       .filter(Boolean)
   );
   const publishedStorefrontOffers = offerStoreOffers.filter((offer) => Boolean(offer.published));
-  const reviewableSweepOffers = offerStoreOffers.filter((offer) => (
+  const reviewableSweepOffersRaw = offerStoreOffers.filter((offer) => (
     sweepCandidateStrategyIds.size > 0
       ? sweepCandidateStrategyIds.has(Number(offer.strategyId || 0))
       : recommendedOfferIds.size > 0
         ? recommendedOfferIds.has(String(offer.offerId || ''))
         : true
   ) && Number(offer.pf || 0) >= approvalMinProfitFactor);
+  const reviewTargetTradesPerDay = Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0);
+  const reviewCandidateLimit = Number.isFinite(reviewTargetTradesPerDay) && reviewTargetTradesPerDay > 0
+    ? Math.max(3, Math.min(reviewableSweepOffersRaw.length, Math.round(reviewTargetTradesPerDay * 2)))
+    : reviewableSweepOffersRaw.length;
+  const reviewableSweepOffers = [...reviewableSweepOffersRaw]
+    .sort((a, b) => {
+      const target = Number.isFinite(reviewTargetTradesPerDay) ? reviewTargetTradesPerDay : 0;
+      const aDistance = Math.abs(Number(a.tradesPerDay || 0) - target);
+      const bDistance = Math.abs(Number(b.tradesPerDay || 0) - target);
+      if (aDistance !== bDistance) {
+        return aDistance - bDistance;
+      }
+      return Number(b.score || 0) - Number(a.score || 0);
+    })
+    .slice(0, reviewCandidateLimit);
   const researchCandidateOffers = reviewableSweepOffers.filter((offer) => !Boolean(offer.published));
   const adminReviewOfferPool = Array.from(
     new Map(
@@ -3303,24 +3318,33 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
-    setBacktestDrawerApiKeyName(publishedAdminTsEditorTarget.apiKeyName);
-    setBacktestDrawerSystemId(Number(publishedAdminTsEditorTarget.systemId || 0));
-    setBacktestDrawerVisible(true);
-    messageApi.info('Backtest открыт во встроенном окне SaaS.');
+    const params = new URLSearchParams();
+    params.set('apiKeyName', publishedAdminTsEditorTarget.apiKeyName);
+    if (publishedAdminTsEditorTarget.systemId && Number(publishedAdminTsEditorTarget.systemId) > 0) {
+      params.set('systemId', String(publishedAdminTsEditorTarget.systemId));
+    }
+    window.location.href = `/trading-systems-workbench?${params.toString()}`;
   };
 
   const openSaasBacktestFlow = () => {
-    if (publishedAdminTsEditorTarget?.apiKeyName) {
-      setBacktestDrawerApiKeyName(publishedAdminTsEditorTarget.apiKeyName);
-      setBacktestDrawerSystemId(Number(publishedAdminTsEditorTarget.systemId || 0));
-      setBacktestDrawerVisible(true);
+    const fallbackApiKeyName = String(
+      publishedAdminTsEditorTarget?.apiKeyName
+      || summary?.catalog?.apiKeyName
+      || summary?.apiKeys?.[0]
+      || ''
+    ).trim();
+
+    if (!fallbackApiKeyName) {
+      messageApi.warning('Для backtest нужен хотя бы один доступный API key');
       return;
     }
 
-    setActiveTab('admin');
-    setAdminTab('offer-ts');
-    setSelectedAdminReviewKind('offer');
-    messageApi.info('Сначала открой review офера/ТС и назначь runtime target для backtest.');
+    const params = new URLSearchParams();
+    params.set('apiKeyName', fallbackApiKeyName);
+    if (publishedAdminTsEditorTarget?.systemId && Number(publishedAdminTsEditorTarget.systemId) > 0) {
+      params.set('systemId', String(publishedAdminTsEditorTarget.systemId));
+    }
+    window.location.href = `/trading-systems-workbench?${params.toString()}`;
   };
 
   const preferredClientSwitchTarget = (() => {
@@ -4071,12 +4095,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           {!summary?.catalog ? <Alert type="warning" showIcon message={copy.noCatalog} /> : null}
                           {!summary?.sweepSummary ? <Alert type="warning" showIcon message={copy.noSweep} /> : null}
                           {summaryPeriod ? <Alert type="info" showIcon message={`${copy.period}: ${formatPeriodLabel(summaryPeriod)}`} /> : null}
+                          {summary?.catalog?.apiKeyName ? (
+                            <Alert
+                              type="success"
+                              showIcon
+                              message={`Каталог из sweep — API key: ${summary.catalog.apiKeyName} · ${String(summary.catalog.timestamp || '').slice(0, 16).replace('T', ' ')} UTC · ${summary.catalog.counts?.monoCatalog || 0} mono + ${summary.catalog.counts?.synthCatalog || 0} synth оферов · draft TS: ${summary.catalog.adminTradingSystemDraft?.members?.length || 0} стратегий`}
+                            />
+                          ) : null}
 
                           <Row gutter={[16, 16]}>
                             <Col xs={24} md={8}>
                               <Card className="battletoads-card">
                                 <Statistic title={copy.latestCatalog} value={summary?.catalog?.counts?.monoCatalog || 0} suffix={`mono / ${summary?.catalog?.counts?.synthCatalog || 0} synth`} />
-                                <Text type="secondary">{summary?.sourceFiles?.latestCatalogPath || 'results/*.json not found'}</Text>
+                                <Space direction="vertical" size={2}>
+                                  {summary?.catalog?.apiKeyName ? <Tag color="blue">{summary.catalog.apiKeyName}</Tag> : null}
+                                  <Text type="secondary">{String(summary?.catalog?.timestamp || '').slice(0, 16).replace('T', ' ') || summary?.sourceFiles?.latestCatalogPath || 'results/*.json not found'}</Text>
+                                </Space>
                               </Card>
                             </Col>
                             <Col xs={24} md={8}>
@@ -4142,7 +4176,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Button size="small" onClick={openPublishedAdminTsEditor}>Редактировать ТС</Button>
                                   <Button size="small" onClick={() => setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)).filter((item) => item > 0))}>Выбрать всех algofund-клиентов</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId} onClick={openPublishedAdminTsForClients}>Применить к клиентам Алгофонда</Button>
-                                  <Button size="small" onClick={openBacktestDrawerForAdminTs}>Backtest ТС (в SaaS)</Button>
+                                  <Button size="small" onClick={openBacktestDrawerForAdminTs}>Backtest ТС (форма TradingSystems)</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId || batchTenantIds.length === 0} loading={actionLoading === 'apply-published-admin-ts'} onClick={() => void applyPublishedAdminTsToSelectedClients()}>
                                     Применить к выбранным ({batchTenantIds.length})
                                   </Button>
@@ -4490,9 +4524,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>
                               После sweep настраивай параметры, проверяй метрики/equity и апрувь кандидатов. Далее в Оферы и ТС остаются только approved-витрины и управление флагами.
                             </Paragraph>
+                            {summary?.catalog?.apiKeyName ? (
+                              <Alert
+                                type="info"
+                                showIcon
+                                style={{ marginBottom: 12 }}
+                                message={`Источник оферов: API key «${summary.catalog.apiKeyName}» · sweep ${String(summary.catalog.timestamp || '').slice(0, 10)} · все стратегии выполняются через этот ключ`}
+                              />
+                            ) : null}
                             <Space wrap style={{ marginBottom: 12 }}>
                               <Tag color="default">sweep offers: {reviewableSweepOffers.length}</Tag>
                               <Tag color="processing">awaiting review: {researchCandidateOffers.length}</Tag>
+                              <Tag color="purple">sweep strategies: {sweepReviewRecords.length}</Tag>
+                              <Tag color="geekblue">draft TS: {adminTradingSystemDraft ? 1 : 0}</Tag>
                               <Tag color="blue">period: {Number(summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
                               <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
                             </Space>
@@ -4751,7 +4795,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 Редактировать ТС
                               </Button>
                               <Button size="small" onClick={openBacktestDrawerForAdminTs}>
-                                Backtest ТС (в SaaS)
+                                Backtest ТС (форма TradingSystems)
                               </Button>
                             </Space>
                           </Card>

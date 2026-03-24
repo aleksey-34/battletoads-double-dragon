@@ -7,6 +7,7 @@ import ruRU from 'antd/locale/ru_RU';
 import trTR from 'antd/locale/tr_TR';
 import Dashboard from './pages/Dashboard';
 import Settings from './pages/Settings';
+import TradingSystems from './pages/TradingSystems';
 import Positions from './pages/Positions';
 import Login from './pages/Login';
 import ClientAuth from './pages/ClientAuth';
@@ -270,6 +271,7 @@ function AppShell() {
           <Route path="/logs" element={<Logs />} />
           <Route path="/backtest" element={<Navigate to="/saas" replace />} />
           <Route path="/trading-systems" element={<Navigate to="/saas/admin?adminTab=offer-ts" replace />} />
+          <Route path="/trading-systems-workbench" element={<TradingSystems />} />
           <Route path="/saas" element={<SaaS surfaceMode="admin" />} />
           <Route path="/saas/admin" element={<SaaS initialTab="admin" surfaceMode="admin" />} />
           <Route path="/saas/strategy-client" element={<SaaS initialTab="strategy-client" surfaceMode="strategy-client" />} />
