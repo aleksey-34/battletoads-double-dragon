@@ -20,6 +20,7 @@ import {
   Slider,
   Space,
   Spin,
+  Steps,
   Statistic,
   Switch,
   Table,
@@ -51,10 +52,13 @@ type AdminTabKey = 'offer-ts' | 'research-analysis' | 'clients' | 'monitoring' |
 type SummaryScope = 'light' | 'full';
 
 type SaasBacktestContext = {
+  kind: 'offer' | 'algofund-ts';
   title: string;
   description: string;
   apiKeyName: string;
   mode: 'single' | 'portfolio';
+  offerId?: string;
+  offerPublished?: boolean;
   strategyId?: number | null;
   strategyIds?: number[];
   dateFromMs?: number | null;
@@ -1836,6 +1840,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [approveRequestPendingId, setApproveRequestPendingId] = useState<number | null>(null);
   const [approveRequestSelectedPlan, setApproveRequestSelectedPlan] = useState('');
   const [approveRequestSelectedApiKey, setApproveRequestSelectedApiKey] = useState('');
+  const [adminWizardTarget, setAdminWizardTarget] = useState<'offer' | 'algofund-ts'>('offer');
   const [backtestDrawerVisible, setBacktestDrawerVisible] = useState(false);
   const [backtestDrawerContext, setBacktestDrawerContext] = useState<SaasBacktestContext | null>(null);
 
@@ -3297,37 +3302,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     messageApi.info('Открыт список клиентов, подключённых к выбранному офферу.');
   };
 
-  const focusClientsByTradingSystem = (systemName: string) => {
-    const normalizedSystemName = String(systemName || '').trim();
-    if (!normalizedSystemName) {
-      messageApi.warning('Для фильтрации клиентов нужна опубликованная runtime ТС.');
-      return;
-    }
-
-    setActiveTab('admin');
-    setAdminTab('clients');
-    setClientsModeFilter('algofund_client');
-    setClientsClassKind('ts');
-    setClientsClassValue(normalizedSystemName);
-    messageApi.info('Открыт список algofund-клиентов с выбранной ТС.');
-  };
-
   const openAdminMonitoring = (mode: 'all' | ProductMode = 'all') => {
     setActiveTab('admin');
     setAdminTab('monitoring');
     setMonitoringModeFilter(mode);
-  };
-
-  const openPublishedAdminTsEditor = () => {
-    if (!publishedAdminTsEditorTarget?.apiKeyName) {
-      messageApi.warning('Для открытия редактора ТС нужен назначенный API key и опубликованная runtime ТС');
-      return;
-    }
-
-    setActiveTab('admin');
-    setAdminTab('offer-ts');
-    setSelectedAdminReviewKind('algofund-ts');
-    messageApi.info('Редактирование ТС выполняется в SaaS: Админ -> Оферы и ТС (review).');
   };
 
   const resolveSweepBacktestApiKeyName = () => String(
@@ -3356,10 +3334,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
 
     openEmbeddedBacktest({
+      kind: 'offer',
       title: `Бэктест оффера: ${offer.titleRu}`,
       description: `Карточка из последнего sweep. Бэктест запускается по strategy #${strategyId} на API key ${apiKeyName}. После проверки можно сразу отправлять оффер на витрину.`,
       apiKeyName,
       mode: 'single',
+      offerId: String(offer.offerId || ''),
+      offerPublished: Boolean(offer.published),
       strategyId,
       dateFromMs: summaryPeriodFromMs,
       dateToMs: summaryPeriodToMs,
@@ -3378,6 +3359,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
 
     openEmbeddedBacktest({
+      kind: 'algofund-ts',
       title: `Бэктест ТС: ${adminTradingSystemDraft?.name || 'Draft TS'}`,
       description: 'Портфельный бэктест draft ТС из последнего sweep. После проверки метрик можно отправлять ТС на апрув.',
       apiKeyName,
@@ -3386,6 +3368,79 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       dateFromMs: summaryPeriodFromMs,
       dateToMs: summaryPeriodToMs,
     });
+  };
+
+  const wizardOfferCandidate = selectedAdminReviewOffer || reviewableSweepOffers[0] || null;
+  const openWizardReviewStep = () => {
+    if (adminWizardTarget === 'algofund-ts') {
+      openAdminReviewContext('algofund-ts');
+      return;
+    }
+
+    if (!wizardOfferCandidate) {
+      messageApi.warning('Сначала загрузи sweep-кандидаты');
+      return;
+    }
+
+    openAdminReviewContext('offer', String(wizardOfferCandidate.offerId));
+  };
+
+  const openWizardBacktestStep = () => {
+    if (adminWizardTarget === 'algofund-ts') {
+      openDraftTsBacktest();
+      return;
+    }
+
+    openOfferBacktest(wizardOfferCandidate);
+  };
+
+  const publishFromWizard = async () => {
+    if (adminWizardTarget === 'algofund-ts') {
+      await publishAdminTs();
+      return;
+    }
+
+    if (!wizardOfferCandidate) {
+      messageApi.warning('Нет выбранного оффера для витрины');
+      return;
+    }
+
+    await toggleOfferPublished(String(wizardOfferCandidate.offerId), true);
+  };
+
+  const publishFromBacktestContext = async () => {
+    if (!backtestDrawerContext) {
+      return;
+    }
+
+    if (backtestDrawerContext.kind === 'algofund-ts') {
+      await publishAdminTs();
+      return;
+    }
+
+    if (!backtestDrawerContext.offerId) {
+      messageApi.warning('В этом backtest-контексте не найден offer id');
+      return;
+    }
+
+    await toggleOfferPublished(String(backtestDrawerContext.offerId), true);
+    setBacktestDrawerContext((prev) => prev ? { ...prev, offerPublished: true } : prev);
+  };
+
+  const returnToReviewFromBacktest = () => {
+    if (!backtestDrawerContext) {
+      return;
+    }
+
+    setBacktestDrawerVisible(false);
+    if (backtestDrawerContext.kind === 'algofund-ts') {
+      openAdminReviewContext('algofund-ts');
+      return;
+    }
+
+    if (backtestDrawerContext.offerId) {
+      openAdminReviewContext('offer', backtestDrawerContext.offerId);
+    }
   };
 
   const openBacktestDrawerForAdminTs = () => {
@@ -3944,6 +3999,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const publishPreviewPeriod = publishResponse?.preview?.period || summaryPeriod;
   const strategyPersistedRiskBucket = sliderValueToLevel(strategyRiskInput);
   const strategyPersistedTradeBucket = sliderValueToLevel(strategyTradeInput);
+  const adminWizardCurrentStep = (() => {
+    if (reviewableSweepOffers.length === 0 && Number(adminTradingSystemDraft?.members?.length || 0) === 0) {
+      return 0;
+    }
+
+    if (adminWizardTarget === 'offer') {
+      if (!wizardOfferCandidate) {
+        return 1;
+      }
+      if (selectedAdminReviewKind !== 'offer') {
+        return 1;
+      }
+      return 2;
+    }
+
+    if (selectedAdminReviewKind !== 'algofund-ts') {
+      return 1;
+    }
+    return 2;
+  })();
   const algofundEngineRunning = Boolean(algofundState?.profile?.actual_enabled);
   const algofundEnginePending = Boolean(algofundState?.profile?.requested_enabled) && !algofundEngineRunning;
   const algofundEngineBlockedReason = String(algofundState?.preview?.blockedReason || '').trim();
@@ -4183,6 +4258,59 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
 
+                          <Card className="battletoads-card" title="Wizard: Sweep → Review → Backtest → Publish">
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              <Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 0 }}>
+                                Жесткий путь без параллельных веток: сначала обнови sweep-кандидаты, затем review, затем backtest, затем публикация на витрину/approve.
+                              </Paragraph>
+                              <Space wrap>
+                                <Select
+                                  value={adminWizardTarget}
+                                  style={{ width: 260 }}
+                                  options={[
+                                    { value: 'offer', label: 'Поток оффера на витрину' },
+                                    { value: 'algofund-ts', label: 'Поток ТС Алгофонда' },
+                                  ]}
+                                  onChange={(value) => setAdminWizardTarget(value)}
+                                />
+                                <Tag color="blue">шаг 1: sweep</Tag>
+                                <Tag color="geekblue">шаг 2: review</Tag>
+                                <Tag color="purple">шаг 3: backtest</Tag>
+                                <Tag color="success">шаг 4: publish</Tag>
+                              </Space>
+                              <Steps
+                                size="small"
+                                current={adminWizardCurrentStep}
+                                items={[
+                                  { title: 'Sweep', description: reviewableSweepOffers.length > 0 ? `${reviewableSweepOffers.length} кандидатов` : 'кандидаты не загружены' },
+                                  { title: 'Review', description: adminWizardTarget === 'offer' ? (wizardOfferCandidate ? `offer #${wizardOfferCandidate.offerId}` : 'оффер не выбран') : `draft TS members: ${Number(adminTradingSystemDraft?.members?.length || 0)}` },
+                                  { title: 'Backtest', description: adminWizardTarget === 'offer' ? 'single strategy' : 'portfolio draft TS' },
+                                  { title: 'Publish', description: adminWizardTarget === 'offer' ? 'на витрину офферов' : 'approve ТС Алгофонда' },
+                                ]}
+                              />
+                              <Space wrap>
+                                <Button size="small" loading={actionLoading === 'load-sweep-review'} onClick={() => void loadSweepReviewCandidates()}>
+                                  1) Обновить из sweep
+                                </Button>
+                                <Button size="small" onClick={openWizardReviewStep}>
+                                  2) Открыть review
+                                </Button>
+                                <Button size="small" onClick={openWizardBacktestStep}>
+                                  3) Открыть backtest
+                                </Button>
+                                <Button
+                                  type="primary"
+                                  size="small"
+                                  disabled={adminWizardTarget === 'offer' ? !wizardOfferCandidate : Number(adminTradingSystemDraft?.members?.length || 0) === 0}
+                                  loading={actionLoading === 'publish' || actionLoading === `offer-store:${String(wizardOfferCandidate?.offerId || '')}`}
+                                  onClick={() => void publishFromWizard()}
+                                >
+                                  4) Отправить на витрину/апрув
+                                </Button>
+                              </Space>
+                            </Space>
+                          </Card>
+
                           <div ref={reviewContextRef}>
                           <Card className="battletoads-card" title="Контекст review: оффер или ТС">
                             {selectedAdminReviewKind === 'algofund-ts' ? (
@@ -4229,7 +4357,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 <Space wrap>
                                   <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>Отправить ТС на апрув</Button>
                                   <Button size="small" onClick={openBacktestDrawerForAdminTs}>Открыть бэктест ТС</Button>
-                                  <Button size="small" onClick={openPublishedAdminTsEditor}>Редактировать ТС</Button>
                                   <Button size="small" onClick={() => setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)).filter((item) => item > 0))}>Выбрать всех algofund-клиентов</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId} onClick={openPublishedAdminTsForClients}>Применить к клиентам Алгофонда</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId || batchTenantIds.length === 0} loading={actionLoading === 'apply-published-admin-ts'} onClick={() => void applyPublishedAdminTsToSelectedClients()}>
@@ -4274,7 +4401,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Button size="small" onClick={() => openOfferBacktest(selectedAdminReviewOffer)}>
                                     Открыть бэктест оффера
                                   </Button>
-                                  <Button size="small" onClick={() => setActiveTab('strategy-client')}>Проверить витрину клиентов стратегий</Button>
                                   {selectedAdminReviewOffer.published ? <Button size="small" danger onClick={() => void openUnpublishWizard(String(selectedAdminReviewOffer.offerId))}>Снять с витрины</Button> : null}
                                 </Space>
                                     </>
@@ -4858,9 +4984,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 }}
                               >
                                 Применение к клиентам
-                              </Button>
-                              <Button size="small" onClick={openPublishedAdminTsEditor}>
-                                Редактировать ТС
                               </Button>
                             </Space>
                           </Card>
@@ -6612,6 +6735,25 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               showIcon
               message="Контекст SaaS сохранен: после анализа бэктеста закрой окно и продолжай review/publish без перехода в старые экраны."
             />
+            <Space wrap>
+              <Button size="small" onClick={returnToReviewFromBacktest}>
+                Вернуться в review
+              </Button>
+              <Button
+                type="primary"
+                size="small"
+                loading={
+                  backtestDrawerContext.kind === 'algofund-ts'
+                    ? actionLoading === 'publish'
+                    : actionLoading === `offer-store:${String(backtestDrawerContext.offerId || '')}`
+                }
+                onClick={() => void publishFromBacktestContext()}
+              >
+                {backtestDrawerContext.kind === 'algofund-ts'
+                  ? 'Отправить ТС на апрув'
+                  : (backtestDrawerContext.offerPublished ? 'Обновить витрину оффера' : 'Отправить оффер на витрину')}
+              </Button>
+            </Space>
             <Backtest
               embedded
               lockApiKey
