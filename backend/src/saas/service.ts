@@ -274,6 +274,7 @@ export type CatalogPreset = {
   strategyName: string;
   score: number;
   metrics: CatalogMetricSet;
+  equity_curve?: number[];
   params: {
     interval: string;
     length: number;
@@ -1495,6 +1496,9 @@ const toCatalogPreset = (
     strategyId: asNumber(config.strategyId, fallback.strategyId),
     strategyName: asString(config.name, fallback.strategyName),
     score: asNumber(metrics.score, asNumber(fallback.metrics.score, fallback.metrics.ret)),
+    equity_curve: Array.isArray((preset as any).equity_curve)
+      ? (preset as any).equity_curve.map((value: unknown) => asNumber(value, 0))
+      : undefined,
     metrics: {
       ret: asNumber(metrics.ret, fallback.metrics.ret),
       pf: asNumber(metrics.pf, fallback.metrics.pf),
@@ -2134,6 +2138,9 @@ const resolveOfferPreset = (offer: CatalogOffer, riskLevel: Level3, tradeFrequen
       strategyId: offer.strategy.id,
       strategyName: offer.strategy.name,
       score: offer.metrics.score,
+      equity_curve: Array.isArray(offer.equity?.points)
+        ? offer.equity.points.map((point) => asNumber(point?.equity, 0))
+        : undefined,
       metrics: {
         ret: offer.metrics.ret,
         pf: offer.metrics.pf,
@@ -2164,6 +2171,72 @@ const resolveOfferPreset = (offer: CatalogOffer, riskLevel: Level3, tradeFrequen
     }
     return asNumber(right.score, 0) - asNumber(left.score, 0);
   })[0];
+};
+
+const buildPreviewEquityFromPreset = (
+  preset: CatalogPreset,
+  initialBalance: number,
+  fallbackRet: number
+): Array<{ time: number; equity: number }> => {
+  const curve = Array.isArray(preset.equity_curve)
+    ? preset.equity_curve
+      .map((value) => asNumber(value, Number.NaN))
+      .filter((value) => Number.isFinite(value) && value > 0)
+    : [];
+
+  if (curve.length >= 2) {
+    return curve.map((equity, index) => ({
+      time: index + 1,
+      equity: Number(equity.toFixed(4)),
+    }));
+  }
+
+  return toPresetOnlyEquity(initialBalance, fallbackRet);
+};
+
+const buildPortfolioPreviewEquityFromPresets = (
+  selectedOffers: Array<{ metrics: CatalogMetricSet; preset: CatalogPreset }>,
+  initialBalance: number
+): Array<{ time: number; equity: number }> => {
+  const normalizedCurves = selectedOffers
+    .map((item) => {
+      const points = buildPreviewEquityFromPreset(item.preset, initialBalance, asNumber(item.metrics.ret, 0));
+      if (!Array.isArray(points) || points.length < 2) {
+        return null;
+      }
+      const first = asNumber(points[0]?.equity, 0);
+      if (first <= 0) {
+        return null;
+      }
+      return points.map((point) => asNumber(point.equity, first) / first - 1);
+    })
+    .filter((curve): curve is number[] => Array.isArray(curve) && curve.length >= 2);
+
+  if (normalizedCurves.length === 0) {
+    const avgRet = selectedOffers.reduce((acc, item) => acc + asNumber(item.metrics.ret, 0), 0) / Math.max(1, selectedOffers.length);
+    return toPresetOnlyEquity(initialBalance, avgRet);
+  }
+
+  const maxLength = normalizedCurves.reduce((acc, curve) => Math.max(acc, curve.length), 0);
+  const out: Array<{ time: number; equity: number }> = [];
+  for (let index = 0; index < maxLength; index += 1) {
+    let sum = 0;
+    let count = 0;
+    for (const curve of normalizedCurves) {
+      const value = curve[Math.min(index, curve.length - 1)];
+      if (Number.isFinite(value)) {
+        sum += value;
+        count += 1;
+      }
+    }
+    const avgReturn = count > 0 ? sum / count : 0;
+    out.push({
+      time: index + 1,
+      equity: Number((initialBalance * (1 + avgReturn)).toFixed(4)),
+    });
+  }
+
+  return out;
 };
 
 const resolveOfferPresetByPreference = (
@@ -2844,7 +2917,7 @@ export const previewAdminSweepBacktest = async (payload?: {
 
   if (kind === 'offer') {
     const first = selectedOffers[0];
-    const equityCurve = toPresetOnlyEquity(initialBalance, first.metrics.ret);
+    const equityCurve = buildPreviewEquityFromPreset(first.preset, initialBalance, first.metrics.ret);
     const derivedCurves = buildDerivedPreviewCurves(equityCurve, initialBalance, riskScore);
     const singleSummary = buildPresetOnlySingleSummary(initialBalance, first.preset, first.market, first.strategyName);
     return {
@@ -2887,8 +2960,7 @@ export const previewAdminSweepBacktest = async (payload?: {
     preset: item.preset,
   }));
 
-  const avgRet = selectedOffers.reduce((acc, item) => acc + asNumber(item.metrics.ret, 0), 0) / Math.max(1, selectedOffers.length);
-  const portfolioEquity = toPresetOnlyEquity(initialBalance, avgRet);
+  const portfolioEquity = buildPortfolioPreviewEquityFromPresets(selectedOffers, initialBalance);
   const portfolioCurves = buildDerivedPreviewCurves(portfolioEquity, initialBalance, riskScore);
   const portfolioSummary = buildPresetOnlyPortfolioSummary(initialBalance, pseudoSelectedOffers as any);
 
