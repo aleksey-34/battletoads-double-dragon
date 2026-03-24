@@ -3311,8 +3311,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const openSaasBacktestFlow = () => {
     setActiveTab('admin');
-    setAdminTab('offer-ts');
-    messageApi.info('Backtest по sweep доступен в SaaS: Админ -> Оферы и ТС (review) и Админ -> Анализ ресерча.');
+    setAdminTab('research-analysis');
+    setSelectedAdminReviewKind('offer');
+    messageApi.info('Backtest по sweep открыт в SaaS: Админ -> Анализ ресерча.');
   };
 
   const preferredClientSwitchTarget = (() => {
@@ -4466,10 +4467,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     size="small"
                                     onClick={() => {
                                       setSelectedAdminReviewKind('algofund-ts');
-                                      setAdminTab('offer-ts');
+                                      setAdminTab('research-analysis');
                                     }}
                                   >
-                                    Открыть в Оферы и ТС (sweep backtest)
+                                    Открыть review sweep/backtest
                                   </Button>
                                 </Space>
                                 <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
@@ -4526,7 +4527,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 size="small"
                                 onClick={() => {
                                   setSelectedAdminReviewKind('algofund-ts');
-                                  setAdminTab('offer-ts');
+                                  setAdminTab('research-analysis');
                                 }}
                               >
                                 Перейти в review ТС
@@ -4566,7 +4567,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           onClick={() => {
                                             setSelectedAdminReviewKind('offer');
                                             setSelectedAdminReviewOfferId(String(row.offerId));
-                                            setAdminTab('offer-ts');
+                                            setAdminTab('research-analysis');
                                           }}
                                         >
                                           Открыть review офера
@@ -4628,10 +4629,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         onClick={() => {
                                           setSelectedAdminReviewKind('offer');
                                           setSelectedAdminReviewOfferId(String(row.offerId));
-                                          setAdminTab('offer-ts');
+                                          setAdminTab('research-analysis');
                                         }}
                                       >
-                                        Открыть в Оферы и ТС
+                                        Открыть review/backtest
                                       </Button>
                                       <Switch
                                         checked={Boolean(row.published)}
@@ -4720,7 +4721,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 size="small"
                                 onClick={() => {
                                   setSelectedAdminReviewKind('algofund-ts');
-                                  setAdminTab('offer-ts');
+                                  setAdminTab('research-analysis');
                                 }}
                               >
                                 Открыть review ТС
@@ -5803,7 +5804,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Space wrap>
                                 <Button type="primary" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Перейти в approval center</Button>
                                 <Button onClick={() => { setActiveTab('admin'); setAdminTab('clients'); setClientsModeFilter('algofund_client'); }}>К клиентам Алгофонда</Button>
-                                <Button onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Бэктест</Button>
+                                <Button onClick={() => { setActiveTab('admin'); setAdminTab('research-analysis'); setSelectedAdminReviewKind('algofund-ts'); }}>Бэктест</Button>
                               </Space>
                             </Space>
                           ) : (
