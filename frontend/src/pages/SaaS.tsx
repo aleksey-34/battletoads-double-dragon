@@ -8,6 +8,7 @@ import {
   Col,
   Descriptions,
   Divider,
+  Drawer,
   Empty,
   Input,
   InputNumber,
@@ -1774,6 +1775,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [planDrafts, setPlanDrafts] = useState<Record<string, Plan>>({});
   const [actionLoading, setActionLoading] = useState<string>('');
   const [activeTab, setActiveTab] = useState<SaasTabKey>(initialTab);
+  const [approveRequestModalVisible, setApproveRequestModalVisible] = useState(false);
+  const [approveRequestPendingId, setApproveRequestPendingId] = useState<number | null>(null);
+  const [approveRequestSelectedPlan, setApproveRequestSelectedPlan] = useState('');
+  const [approveRequestSelectedApiKey, setApproveRequestSelectedApiKey] = useState('');
+  const [backtestDrawerVisible, setBacktestDrawerVisible] = useState(false);
+  const [backtestDrawerApiKeyName, setBacktestDrawerApiKeyName] = useState('');
+  const [backtestDrawerSystemId, setBacktestDrawerSystemId] = useState<number | null>(null);
 
   const strategyTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client');
   const algofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
@@ -3040,6 +3048,55 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const handleApproveAlgofundRequest = async () => {
+    const request = (summary?.algofundRequestQueue?.items || []).find((r) => r.id === approveRequestPendingId);
+    if (!request) {
+      messageApi.error('Request not found');
+      return;
+    }
+
+    if (!approveRequestSelectedPlan) {
+      messageApi.error('Please select a plan');
+      return;
+    }
+
+    if (!approveRequestSelectedApiKey) {
+      messageApi.error('Please select an API key');
+      return;
+    }
+
+    setActionLoading(`approve-request-${approveRequestPendingId}`);
+    try {
+      const tenantId = Number(request.tenant_id || 0);
+      if (!Number.isFinite(tenantId) || tenantId <= 0) {
+        throw new Error('Invalid tenant ID');
+      }
+
+      // Step 1: Update tenant with new plan and API key
+      await axios.patch(`/api/saas/admin/tenants/${tenantId}`, {
+        planCode:approveRequestSelectedPlan,
+        assignedApiKeyName: approveRequestSelectedApiKey,
+      });
+
+      // Step 2: Approve the request
+      await axios.post(`/api/saas/algofund/requests/${approveRequestPendingId}/resolve`, {
+        status: 'approved',
+        decisionNote: `Plan: ${approveRequestSelectedPlan}, API Key: ${approveRequestSelectedApiKey}`,
+      });
+
+      messageApi.success('Algofund client request approved');
+      setApproveRequestModalVisible(false);
+      setApproveRequestPendingId(null);
+      setApproveRequestSelectedPlan('');
+      setApproveRequestSelectedApiKey('');
+      await loadSummary();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to approve request'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const retryMaterialize = async () => {
     if (!algofundTenantId) {
       messageApi.error('No tenant selected');
@@ -3127,6 +3184,35 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     messageApi.success('Открыт шаг применения клиентам: выбран switch_system и подставлен опубликованный admin TS');
   };
 
+  const focusClientsByOffer = (offerId: string) => {
+    setActiveTab('admin');
+    setAdminTab('clients');
+    setClientsClassKind('offer');
+    setClientsClassValue(String(offerId || ''));
+    messageApi.info('Открыт список клиентов, подключённых к выбранному офферу.');
+  };
+
+  const focusClientsByTradingSystem = (systemName: string) => {
+    const normalizedSystemName = String(systemName || '').trim();
+    if (!normalizedSystemName) {
+      messageApi.warning('Для фильтрации клиентов нужна опубликованная runtime ТС.');
+      return;
+    }
+
+    setActiveTab('admin');
+    setAdminTab('clients');
+    setClientsModeFilter('algofund_client');
+    setClientsClassKind('ts');
+    setClientsClassValue(normalizedSystemName);
+    messageApi.info('Открыт список algofund-клиентов с выбранной ТС.');
+  };
+
+  const openAdminMonitoring = (mode: 'all' | ProductMode = 'all') => {
+    setActiveTab('admin');
+    setAdminTab('monitoring');
+    setMonitoringModeFilter(mode);
+  };
+
   const openPublishedAdminTsEditor = () => {
     if (!publishedAdminTsEditorTarget?.apiKeyName) {
       messageApi.warning('Для открытия редактора ТС нужен назначенный API key и опубликованная runtime ТС');
@@ -3140,6 +3226,45 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     window.location.href = `/trading-systems?${params.toString()}`;
   };
+
+  const openBacktestDrawerForAdminTs = () => {
+    if (!publishedAdminTsEditorTarget?.apiKeyName) {
+      messageApi.warning('Для открытия backtest нужен назначенный API key и опубликованная runtime ТС');
+      return;
+    }
+
+    setBacktestDrawerApiKeyName(publishedAdminTsEditorTarget.apiKeyName);
+    setBacktestDrawerSystemId(Number(publishedAdminTsEditorTarget.systemId || 0));
+    setBacktestDrawerVisible(true);
+  };
+
+  const openSaasBacktestFlow = () => {
+    setActiveTab('admin');
+    setAdminTab('offer-ts');
+    messageApi.info('Backtest по sweep доступен в Админ -> Оферы и ТС (review) и через кнопку "Backtest ТС (в редакторе)".');
+  };
+
+  const preferredClientSwitchTarget = (() => {
+    const explicitSystemId = Number(batchTargetSystemId || 0);
+    if (Number.isFinite(explicitSystemId) && explicitSystemId > 0) {
+      return {
+        systemId: explicitSystemId,
+        systemName: String(publishResponse?.sourceSystem?.systemName || '').trim(),
+        source: 'batch-target',
+      };
+    }
+
+    const publishedSystemId = Number(publishResponse?.sourceSystem?.systemId || 0);
+    if (Number.isFinite(publishedSystemId) && publishedSystemId > 0) {
+      return {
+        systemId: publishedSystemId,
+        systemName: String(publishResponse?.sourceSystem?.systemName || '').trim(),
+        source: 'published-admin-ts',
+      };
+    }
+
+    return null;
+  })();
 
   const openAdminReviewContext = (kind: 'offer' | 'algofund-ts', offerId?: string) => {
     setAdminTab('offer-ts');
@@ -3384,6 +3509,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           >
             Stop
           </Button>
+          <Button
+            size="small"
+            disabled={!preferredClientSwitchTarget?.systemId}
+            loading={actionLoading === `algofund-single:${row.tenant.id}`}
+            onClick={() => void runSingleAlgofundAction(Number(row.tenant.id), 'switch_system', Number(preferredClientSwitchTarget?.systemId || 0))}
+          >
+            Switch TS
+          </Button>
         </Space>
       ),
     },
@@ -3603,8 +3736,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           <Button
             size="small"
             type="primary"
-            loading={actionLoading === `resolve-${row.id}`}
-            onClick={() => confirmResolveRequest(row, 'approved')}
+            loading={actionLoading === `approve-request-${row.id}`}
+            onClick={() => {
+              setApproveRequestPendingId(row.id);
+              setApproveRequestModalVisible(true);
+              setApproveRequestSelectedPlan('');
+              setApproveRequestSelectedApiKey('');
+            }}
           >
             {copy.approve}
           </Button>
@@ -3925,7 +4063,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Button size="small" onClick={openPublishedAdminTsEditor}>Редактировать ТС</Button>
                                   <Button size="small" onClick={() => setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)).filter((item) => item > 0))}>Выбрать всех algofund-клиентов</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId} onClick={openPublishedAdminTsForClients}>Применить к клиентам Алгофонда</Button>
-                                  <Button size="small" onClick={openPublishedAdminTsEditor}>Backtest ТС (в редакторе)</Button>
+                                  <Button size="small" onClick={openBacktestDrawerForAdminTs}>Backtest ТС (в окне)</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId || batchTenantIds.length === 0} loading={actionLoading === 'apply-published-admin-ts'} onClick={() => void applyPublishedAdminTsToSelectedClients()}>
                                     Применить к выбранным ({batchTenantIds.length})
                                   </Button>
@@ -3966,7 +4104,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     {selectedAdminReviewOffer.published ? 'Обновить витрину' : 'Отправить на апрув'}
                                   </Button>
                                   <Button size="small" onClick={() => setActiveTab('strategy-client')}>Проверить витрину клиентов стратегий</Button>
-                                  <Button size="small" href="/backtest" disabled={!strategyBacktestEnabled}>Открыть Backtest</Button>
+                                  <Button size="small" onClick={() => setAdminTab('research-analysis')} disabled={!strategyBacktestEnabled}>Открыть sweep/backtest</Button>
                                   {selectedAdminReviewOffer.published ? <Button size="small" danger onClick={() => void openUnpublishWizard(String(selectedAdminReviewOffer.offerId))}>Снять с витрины</Button> : null}
                                 </Space>
                                     </>
@@ -4340,10 +4478,46 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               expandable={{
                                 expandedRowRender: (row: any) => {
                                   const pts: number[] = Array.isArray(row.equityPoints) ? row.equityPoints : [];
-                                  if (pts.length === 0) {
-                                    return <Text type="secondary">Equity curve unavailable</Text>;
-                                  }
-                                  return <ChartComponent data={pts.map((v, i) => ({ time: i, equity: v }))} type="line" />;
+                                  return (
+                                    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                      <Descriptions size="small" bordered column={3}>
+                                        <Descriptions.Item label="Score">{formatNumber(row.score)}</Descriptions.Item>
+                                        <Descriptions.Item label="PF">{formatNumber(row.pf)}</Descriptions.Item>
+                                        <Descriptions.Item label="Trades/day">{formatNumber(row.tradesPerDay, 2)}</Descriptions.Item>
+                                        <Descriptions.Item label="Ret">{formatPercent(row.ret)}</Descriptions.Item>
+                                        <Descriptions.Item label="DD">{formatPercent(row.dd)}</Descriptions.Item>
+                                        <Descriptions.Item label="Win rate">{formatPercent(row.wr)}</Descriptions.Item>
+                                      </Descriptions>
+                                      <Space wrap>
+                                        <Button
+                                          size="small"
+                                          type="primary"
+                                          onClick={() => {
+                                            setSelectedAdminReviewKind('offer');
+                                            setSelectedAdminReviewOfferId(String(row.offerId));
+                                            setAdminTab('offer-ts');
+                                          }}
+                                        >
+                                          Открыть review офера
+                                        </Button>
+                                        <Button
+                                          size="small"
+                                          onClick={() => {
+                                            if (row.published) {
+                                              void openUnpublishWizard(String(row.offerId));
+                                              return;
+                                            }
+                                            void toggleOfferPublished(String(row.offerId), true);
+                                          }}
+                                        >
+                                          {row.published ? 'Снять с витрины' : 'Отправить на апрув'}
+                                        </Button>
+                                      </Space>
+                                      {pts.length > 0
+                                        ? <ChartComponent data={pts.map((v, i) => ({ time: i, equity: v }))} type="line" />
+                                        : <Text type="secondary">Equity curve unavailable</Text>}
+                                    </Space>
+                                  );
                                 },
                                 rowExpandable: () => true,
                               }}
@@ -4494,8 +4668,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Button size="small" onClick={openPublishedAdminTsEditor}>
                                 Редактировать ТС
                               </Button>
-                              <Button size="small" onClick={openPublishedAdminTsEditor}>
-                                Backtest ТС (в редакторе)
+                              <Button size="small" onClick={openBacktestDrawerForAdminTs}>
+                                Backtest ТС (в окне)
                               </Button>
                             </Space>
                           </Card>
@@ -4597,6 +4771,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 <Tag color="default">
                                   {filteredClients.length} клиентов
                                 </Tag>
+                                {clientsClassKind !== 'all' && clientsClassValue ? (
+                                  <Tag color="processing">
+                                    Фильтр: {clientsClassKind === 'offer' ? 'Офер' : 'ТС'}: {clientsClassValue}
+                                  </Tag>
+                                ) : null}
+                                {preferredClientSwitchTarget?.systemId ? (
+                                  <Tag color="purple">
+                                    Switch target: #{preferredClientSwitchTarget.systemId}{preferredClientSwitchTarget.systemName ? ` • ${preferredClientSwitchTarget.systemName}` : ''}
+                                  </Tag>
+                                ) : null}
+                                <Button
+                                  size="small"
+                                  onClick={() => {
+                                    setClientsClassKind('all');
+                                    setClientsClassValue('');
+                                    setClientsModeFilter('all');
+                                  }}
+                                >
+                                  Сбросить фильтры
+                                </Button>
                               </Space>
                               <Card size="small" className="battletoads-card" title="Algofund batch actions">
                                 <Space direction="vertical" size={10} style={{ width: '100%' }}>
@@ -5025,7 +5219,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       render: (_, row: any) => (
                                         <Space size={4} wrap>
                                           <Button size="small" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Редактировать</Button>
-                                          <Button size="small" href="/backtest">Бэктест</Button>
+                                          <Button size="small" onClick={() => openAdminReviewContext('offer', String(row.offerId))}>Бэктест</Button>
                                           <Tag color="success">на витрине</Tag>
                                         </Space>
                                       ),
@@ -5104,7 +5298,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           <Space wrap style={{ marginTop: 12 }}>
                             <Button size="small" href="/settings" disabled={!strategySettingsEnabled}>{copy.openSettings}</Button>
                             <Button size="small" href="/positions" disabled={!strategyMonitoringEnabled && !isAdminSurface}>{copy.openMonitoring}</Button>
-                            <Button size="small" href="/backtest" disabled={!strategyBacktestEnabled}>{copy.openBacktest}</Button>
+                            <Button size="small" onClick={openSaasBacktestFlow} disabled={!strategyBacktestEnabled}>{copy.openBacktest}</Button>
                           </Space>
                           {isAdminSurface ? (
                             <>
@@ -5538,7 +5732,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Space wrap>
                                 <Button type="primary" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Перейти в approval center</Button>
                                 <Button onClick={() => { setActiveTab('admin'); setAdminTab('clients'); setClientsModeFilter('algofund_client'); }}>К клиентам Алгофонда</Button>
-                                <Button href="/backtest">Бэктест</Button>
+                                <Button onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Бэктест</Button>
                               </Space>
                             </Space>
                           ) : (
@@ -5611,7 +5805,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           <Space wrap style={{ marginTop: 12 }}>
                             <Button size="small" href="/settings" disabled={!algofundSettingsEnabled}>{copy.openSettings}</Button>
                             <Button size="small" href="/positions" disabled={!algofundMonitoringEnabled && !isAdminSurface}>{copy.openMonitoring}</Button>
-                            <Button size="small" href="/backtest" disabled={!algofundBacktestEnabled}>{copy.openBacktest}</Button>
+                            <Button size="small" onClick={openSaasBacktestFlow} disabled={!algofundBacktestEnabled}>{copy.openBacktest}</Button>
                           </Space>
                           {isAdminSurface ? (
                             <>
@@ -6013,6 +6207,33 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               <Alert type="warning" showIcon message="Impact data unavailable. Retry before unpublishing." />
             )}
 
+            {unpublishImpact ? (
+              <Alert
+                type={Number(unpublishImpact.summary?.openPositionsCount || 0) > 0 ? 'error' : 'info'}
+                showIcon
+                message="Recommended next steps"
+                description={Number(unpublishImpact.summary?.openPositionsCount || 0) > 0
+                  ? 'Сначала открой Мониторинг и Клиенты по этому офферу: проверь открытые позиции, затем останови/переведи затронутых клиентов и только после этого подтверждай снятие с витрины.'
+                  : 'Открой Клиенты по этому офферу и проверь, нужны ли stop/switch действия для затронутых пользователей после снятия с витрины.'}
+              />
+            ) : null}
+
+            <Space wrap>
+              <Button
+                size="small"
+                disabled={!unpublishTargetOfferId}
+                onClick={() => focusClientsByOffer(unpublishTargetOfferId)}
+              >
+                Открыть клиентов по офферу
+              </Button>
+              <Button
+                size="small"
+                onClick={() => openAdminMonitoring('all')}
+              >
+                Открыть мониторинг
+              </Button>
+            </Space>
+
             {unpublishImpact?.affectedTenants?.length ? (
               <Table
                 size="small"
@@ -6088,6 +6309,125 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           </Space>
         </Spin>
       </Modal>
+
+      <Modal
+        title="Approve Algofund Connection Request"
+        open={approveRequestModalVisible}
+        onCancel={() => {
+          setApproveRequestModalVisible(false);
+          setApproveRequestPendingId(null);
+        }}
+        onOk={() => void handleApproveAlgofundRequest()}
+        confirmLoading={actionLoading.startsWith('approve-request-')}
+        width={600}
+      >
+        {approveRequestPendingId !== null && (
+          <Space direction="vertical" size={16} style={{ width: '100%' }}>
+            <Descriptions size="small" bordered>
+              <Descriptions.Item label="Request ID" span={3}>
+                {approveRequestPendingId}
+              </Descriptions.Item>
+              <Descriptions.Item label="Tenant" span={3}>
+                {(() => {
+                  const req = (summary?.algofundRequestQueue?.items || []).find((r) => r.id === approveRequestPendingId);
+                  if (!req) return '—';
+                  const name = String(req.tenant_display_name || '').trim();
+                  const slug = String(req.tenant_slug || '').trim();
+                  return name && slug ? `${name} (${slug})` : name || slug || '—';
+                })()}
+              </Descriptions.Item>
+              <Descriptions.Item label="Request Type" span={3}>
+                {(() => {
+                  const req = (summary?.algofundRequestQueue?.items || []).find((r) => r.id === approveRequestPendingId);
+                  if (!req) return '—';
+                  if (req.request_type === 'start') return 'Start';
+                  if (req.request_type === 'stop') return 'Stop';
+                  const payload = parseAlgofundRequestPayload(req.request_payload_json);
+                  return `Switch to ${payload.targetSystemName || `#${payload.targetSystemId}`}`;
+                })()}
+              </Descriptions.Item>
+            </Descriptions>
+
+            <Card size="small" title="Assign Plan & API Key">
+              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                <div>
+                  <label htmlFor="approve-plan-select">Plan <span style={{ color: 'red' }}>*</span></label>
+                  <Select
+                    id="approve-plan-select"
+                    style={{ width: '100%', marginTop: 4 }}
+                    placeholder="Select plan for this client"
+                    value={approveRequestSelectedPlan || undefined}
+                    onChange={(value) => setApproveRequestSelectedPlan(value)}
+                    options={algofundPlanOptions}
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="approve-apikey-select">API Key <span style={{ color: 'red' }}>*</span></label>
+                  <Select
+                    id="approve-apikey-select"
+                    style={{ width: '100%', marginTop: 4 }}
+                    placeholder="Select API key for trading engine"
+                    value={approveRequestSelectedApiKey || undefined}
+                    onChange={(value) => setApproveRequestSelectedApiKey(value)}
+                    options={apiKeyOptions}
+                  />
+                </div>
+
+                {approveRequestSelectedPlan && (
+                  (() => {
+                    const plan = (summary?.plans || []).find((p) => p.code === approveRequestSelectedPlan);
+                    if (!plan) return null;
+                    return (
+                      <Card size="small" style={{ backgroundColor: '#fafafa' }}>
+                        <Descriptions size="small">
+                          <Descriptions.Item label="Price" span={3}>
+                            {formatMoney(plan.price_usdt)}/mo
+                          </Descriptions.Item>
+                          <Descriptions.Item label="Max Deposit" span={3}>
+                            ${Number(plan.max_deposit_total || 0).toFixed(2)}
+                          </Descriptions.Item>
+                          <Descriptions.Item label="Risk Cap" span={3}>
+                            {Number(plan.risk_cap_max || 0).toFixed(4)}
+                          </Descriptions.Item>
+                          <Descriptions.Item label="Start/Stop Requests" span={3}>
+                            {plan.allow_ts_start_stop_requests ? '✓ Allowed' : '✗ Not allowed'}
+                          </Descriptions.Item>
+                        </Descriptions>
+                      </Card>
+                    );
+                  })()
+                )}
+              </Space>
+            </Card>
+          </Space>
+        )}
+      </Modal>
+
+      <Drawer
+        title="Backtest ТС из SaaS"
+        placement="right"
+        width="92vw"
+        open={backtestDrawerVisible}
+        onClose={() => setBacktestDrawerVisible(false)}
+      >
+        {backtestDrawerApiKeyName ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              message="Контекст SaaS сохранен: после анализа backtest закрой окно и продолжай review/publish."
+            />
+            <iframe
+              title="Trading Systems Backtest"
+              src={`/trading-systems?apiKeyName=${encodeURIComponent(backtestDrawerApiKeyName)}${backtestDrawerSystemId && backtestDrawerSystemId > 0 ? `&systemId=${backtestDrawerSystemId}` : ''}`}
+              style={{ width: '100%', height: 'calc(100vh - 180px)', border: '1px solid #f0f0f0', borderRadius: 8 }}
+            />
+          </Space>
+        ) : (
+          <Empty description="Нет данных для открытия backtest" />
+        )}
+      </Drawer>
     </div>
   );
 };

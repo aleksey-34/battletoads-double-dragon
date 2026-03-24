@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { BrowserRouter as Router, Routes, Route, Link, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Layout, Menu, FloatButton, Tag, Button, Space, Select, Typography, ConfigProvider } from 'antd';
 import enUS from 'antd/locale/en_US';
 import ruRU from 'antd/locale/ru_RU';
@@ -12,7 +12,6 @@ import Login from './pages/Login';
 import ClientAuth from './pages/ClientAuth';
 import ClientCabinet from './pages/ClientCabinet';
 import Logs from './pages/Logs';
-import Backtest from './pages/Backtest';
 import Research from './pages/Research';
 import SaaS from './pages/SaaS';
 import TradingSystems from './pages/TradingSystems';
@@ -45,7 +44,6 @@ function AppShell() {
         { key: '2', label: <Link to="/settings">{t('nav.settings', 'Settings')}</Link> },
         { key: '3', label: <Link to="/positions">{t('nav.positions', 'Positions')}</Link> },
         { key: '4', label: <Link to="/logs">{t('nav.logs', 'Logs')}</Link> },
-        { key: '5', label: <Link to="/backtest">{t('nav.backtest', 'Backtest')}</Link> },
         { key: '6', label: <Link to="/trading-systems">{t('nav.tradingSystems', 'Trading Systems')}</Link> },
         { key: '7', label: <Link to="/saas">{t('nav.saas', 'SaaS')}</Link> },
         { key: '8', label: <Link to="/research">{t('nav.research', 'Research')}</Link> },
@@ -56,7 +54,6 @@ function AppShell() {
     if (location.pathname.startsWith('/settings')) return '2';
     if (location.pathname.startsWith('/positions')) return '3';
     if (location.pathname.startsWith('/logs')) return '4';
-    if (location.pathname.startsWith('/backtest')) return '5';
     if (location.pathname.startsWith('/trading-systems')) return '6';
     if (location.pathname.startsWith('/saas')) return '7';
     if (location.pathname.startsWith('/research')) return '8';
@@ -68,7 +65,6 @@ function AppShell() {
     if (location.pathname.startsWith('/settings')) return t('nav.settings', 'Settings');
     if (location.pathname.startsWith('/positions')) return t('nav.positions', 'Positions');
     if (location.pathname.startsWith('/logs')) return t('nav.logs', 'Logs');
-    if (location.pathname.startsWith('/backtest')) return t('nav.backtest', 'Backtest');
     if (location.pathname.startsWith('/trading-systems')) return t('nav.tradingSystems', 'Trading Systems');
     if (location.pathname.startsWith('/saas/admin')) return 'SaaS Admin';
     if (location.pathname.startsWith('/saas/strategy-client')) return 'SaaS Strategy';
@@ -275,7 +271,7 @@ function AppShell() {
           <Route path="/settings" element={<Settings />} />
           <Route path="/positions" element={<Positions />} />
           <Route path="/logs" element={<Logs />} />
-          <Route path="/backtest" element={<Backtest />} />
+          <Route path="/backtest" element={<Navigate to="/saas" replace />} />
           <Route path="/trading-systems" element={<TradingSystems />} />
           <Route path="/saas" element={<SaaS surfaceMode="admin" />} />
           <Route path="/saas/admin" element={<SaaS initialTab="admin" surfaceMode="admin" />} />
