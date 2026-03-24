@@ -1946,6 +1946,67 @@ const toPresetOnlyEquity = (initialBalance: number, retPercent: number): Array<{
   ];
 };
 
+const buildDerivedPreviewCurves = (
+  equityCurve: Array<{ time: number; equity: number }>,
+  initialBalance: number,
+  riskScore: number
+) => {
+  if (!Array.isArray(equityCurve) || equityCurve.length === 0) {
+    return {
+      pnl: [] as Array<{ time: number; value: number }>,
+      drawdownPercent: [] as Array<{ time: number; value: number }>,
+      marginLoadPercent: [] as Array<{ time: number; value: number }>,
+      maxMarginLoadPercent: 0,
+      finalUnrealizedPnl: 0,
+    };
+  }
+
+  let peak = asNumber(equityCurve[0]?.equity, initialBalance);
+  let maxMarginLoadPercent = 0;
+
+  const pnl = equityCurve.map((point) => {
+    const equity = asNumber(point.equity, initialBalance);
+    return {
+      time: asNumber(point.time, Date.now()),
+      value: Number((equity - initialBalance).toFixed(4)),
+    };
+  });
+
+  const drawdownPercent = equityCurve.map((point) => {
+    const equity = asNumber(point.equity, initialBalance);
+    if (equity > peak) {
+      peak = equity;
+    }
+    const dd = peak > 0 ? ((peak - equity) / peak) * 100 : 0;
+    return {
+      time: asNumber(point.time, Date.now()),
+      value: Number(dd.toFixed(4)),
+    };
+  });
+
+  const marginLoadPercent = drawdownPercent.map((point) => {
+    const base = asNumber(point.value, 0) * 1.8 + asNumber(riskScore, 5) * 4;
+    const clamped = Math.max(3, Math.min(95, base));
+    if (clamped > maxMarginLoadPercent) {
+      maxMarginLoadPercent = clamped;
+    }
+    return {
+      time: point.time,
+      value: Number(clamped.toFixed(4)),
+    };
+  });
+
+  const finalUnrealizedPnl = pnl.length > 0 ? asNumber(pnl[pnl.length - 1].value, 0) : 0;
+
+  return {
+    pnl,
+    drawdownPercent,
+    marginLoadPercent,
+    maxMarginLoadPercent: Number(maxMarginLoadPercent.toFixed(4)),
+    finalUnrealizedPnl: Number(finalUnrealizedPnl.toFixed(4)),
+  };
+};
+
 const buildPresetOnlySingleSummary = (
   initialBalance: number,
   preset: CatalogPreset,
@@ -2783,6 +2844,9 @@ export const previewAdminSweepBacktest = async (payload?: {
 
   if (kind === 'offer') {
     const first = selectedOffers[0];
+    const equityCurve = toPresetOnlyEquity(initialBalance, first.metrics.ret);
+    const derivedCurves = buildDerivedPreviewCurves(equityCurve, initialBalance, riskScore);
+    const singleSummary = buildPresetOnlySingleSummary(initialBalance, first.preset, first.market, first.strategyName);
     return {
       kind,
       controls: {
@@ -2795,8 +2859,17 @@ export const previewAdminSweepBacktest = async (payload?: {
       selectedOffers,
       preview: {
         source: 'admin_sweep_preset',
-        summary: buildPresetOnlySingleSummary(initialBalance, first.preset, first.market, first.strategyName),
-        equity: toPresetOnlyEquity(initialBalance, first.metrics.ret),
+        summary: {
+          ...singleSummary,
+          unrealizedPnl: derivedCurves.finalUnrealizedPnl,
+          marginLoadPercent: derivedCurves.maxMarginLoadPercent,
+        },
+        equity: equityCurve,
+        curves: {
+          pnl: derivedCurves.pnl,
+          drawdownPercent: derivedCurves.drawdownPercent,
+          marginLoadPercent: derivedCurves.marginLoadPercent,
+        },
         trades: [],
         strictPresetMode: true,
       },
@@ -2815,6 +2888,9 @@ export const previewAdminSweepBacktest = async (payload?: {
   }));
 
   const avgRet = selectedOffers.reduce((acc, item) => acc + asNumber(item.metrics.ret, 0), 0) / Math.max(1, selectedOffers.length);
+  const portfolioEquity = toPresetOnlyEquity(initialBalance, avgRet);
+  const portfolioCurves = buildDerivedPreviewCurves(portfolioEquity, initialBalance, riskScore);
+  const portfolioSummary = buildPresetOnlyPortfolioSummary(initialBalance, pseudoSelectedOffers as any);
 
   return {
     kind,
@@ -2828,8 +2904,17 @@ export const previewAdminSweepBacktest = async (payload?: {
     selectedOffers,
     preview: {
       source: 'admin_sweep_preset',
-      summary: buildPresetOnlyPortfolioSummary(initialBalance, pseudoSelectedOffers as any),
-      equity: toPresetOnlyEquity(initialBalance, avgRet),
+      summary: {
+        ...portfolioSummary,
+        unrealizedPnl: portfolioCurves.finalUnrealizedPnl,
+        marginLoadPercent: portfolioCurves.maxMarginLoadPercent,
+      },
+      equity: portfolioEquity,
+      curves: {
+        pnl: portfolioCurves.pnl,
+        drawdownPercent: portfolioCurves.drawdownPercent,
+        marginLoadPercent: portfolioCurves.marginLoadPercent,
+      },
       trades: [],
       strictPresetMode: true,
     },

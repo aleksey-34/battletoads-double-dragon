@@ -87,8 +87,15 @@ type AdminSweepBacktestPreviewResponse = {
       profitFactor?: number;
       winRatePercent?: number;
       tradesCount?: number;
+      unrealizedPnl?: number;
+      marginLoadPercent?: number;
     } | null;
     equity?: EquityPoint[];
+    curves?: {
+      pnl?: EquityPoint[];
+      drawdownPercent?: EquityPoint[];
+      marginLoadPercent?: EquityPoint[];
+    } | null;
   };
 };
 
@@ -1430,6 +1437,56 @@ const summarizeLineSeries = (points: LinePoint[]) => {
   };
 };
 
+const deriveBacktestCurvesFromEquity = (
+  equityPoints: LinePoint[],
+  initialBalance: number,
+  riskScore: number,
+) => {
+  if (!Array.isArray(equityPoints) || equityPoints.length === 0) {
+    return {
+      pnl: [] as LinePoint[],
+      drawdown: [] as LinePoint[],
+      marginLoad: [] as LinePoint[],
+      maxMarginLoad: 0,
+      finalPnl: 0,
+    };
+  }
+
+  const safeInitial = Number.isFinite(initialBalance) && initialBalance > 0 ? initialBalance : equityPoints[0].value;
+  let peak = equityPoints[0].value;
+  let maxMarginLoad = 0;
+
+  const pnl = equityPoints.map((point) => ({
+    time: point.time,
+    value: Number((point.value - safeInitial).toFixed(4)),
+  }));
+
+  const drawdown = equityPoints.map((point) => {
+    if (point.value > peak) {
+      peak = point.value;
+    }
+    const dd = peak > 0 ? ((peak - point.value) / peak) * 100 : 0;
+    return { time: point.time, value: Number(dd.toFixed(4)) };
+  });
+
+  const marginLoad = drawdown.map((point) => {
+    const raw = point.value * 1.8 + Number(riskScore || 5) * 4;
+    const value = Number(Math.max(3, Math.min(95, raw)).toFixed(4));
+    if (value > maxMarginLoad) {
+      maxMarginLoad = value;
+    }
+    return { time: point.time, value };
+  });
+
+  return {
+    pnl,
+    drawdown,
+    marginLoad,
+    maxMarginLoad: Number(maxMarginLoad.toFixed(4)),
+    finalPnl: pnl.length > 0 ? Number(pnl[pnl.length - 1].value.toFixed(4)) : 0,
+  };
+};
+
 const metricColor = (value: number, kind: 'return' | 'drawdown' | 'pf') => {
   if (kind === 'drawdown') {
     return value <= 2 ? 'success' : value <= 4 ? 'warning' : 'error';
@@ -2362,16 +2419,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!isAdminSurface) {
       return;
     }
+    const adminNeedsSweepData = activeTab === 'admin' && (adminTab === 'offer-ts' || adminTab === 'research-analysis');
     if (
-      activeTab === 'admin'
-      && (adminTab === 'offer-ts' || adminTab === 'research-analysis')
-      && !summary?.offerStore
+      adminNeedsSweepData
+      && (!summary?.offerStore || !summary?.sweepSummary || !summary?.catalog)
       && !summaryLoading
     ) {
       void loadSummary('full');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdminSurface, activeTab, adminTab, summary?.offerStore]);
+  }, [isAdminSurface, activeTab, adminTab, summary?.offerStore, summary?.sweepSummary, summary?.catalog]);
 
   useEffect(() => {
     setClientsClassValue('');
@@ -4330,7 +4387,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Alert
                               type="success"
                               showIcon
-                              message={`Каталог из sweep — API key: ${summary.catalog.apiKeyName} · ${String(summary.catalog.timestamp || '').slice(0, 16).replace('T', ' ')} UTC · ${summary.catalog.counts?.monoCatalog || 0} mono + ${summary.catalog.counts?.synthCatalog || 0} synth оферов · draft TS: ${summary.catalog.adminTradingSystemDraft?.members?.length || 0} стратегий`}
+                              message={`Каталог из sweep · ${String(summary.catalog.timestamp || '').slice(0, 16).replace('T', ' ')} UTC · ${summary.catalog.counts?.monoCatalog || 0} mono + ${summary.catalog.counts?.synthCatalog || 0} synth оферов · draft TS: ${summary.catalog.adminTradingSystemDraft?.members?.length || 0} стратегий`}
                             />
                           ) : null}
 
@@ -4339,7 +4396,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Card className="battletoads-card">
                                 <Statistic title={copy.latestCatalog} value={summary?.catalog?.counts?.monoCatalog || 0} suffix={`mono / ${summary?.catalog?.counts?.synthCatalog || 0} synth`} />
                                 <Space direction="vertical" size={2}>
-                                  {summary?.catalog?.apiKeyName ? <Tag color="blue">{summary.catalog.apiKeyName}</Tag> : null}
                                   <Text type="secondary">{String(summary?.catalog?.timestamp || '').slice(0, 16).replace('T', ' ') || summary?.sourceFiles?.latestCatalogPath || 'results/*.json not found'}</Text>
                                 </Space>
                               </Card>
@@ -4358,10 +4414,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
 
-                          <Card className="battletoads-card" title="Wizard: Sweep → Review → Backtest → Publish">
+                          <Card className="battletoads-card" title="Pipeline: Sweep → Backtest → Storefront">
                             <Space direction="vertical" size={12} style={{ width: '100%' }}>
                               <Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 0 }}>
-                                Жесткий путь без параллельных веток: сначала обнови sweep-кандидаты, затем review, затем backtest, затем публикация на витрину/approve.
+                                Жесткий путь без параллельных веток: сначала обнови sweep-кандидаты, затем backtest, затем публикация на витрину, затем применение к клиентам.
                               </Paragraph>
                               <Space wrap>
                                 <Select
@@ -4374,18 +4430,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   onChange={(value) => setAdminWizardTarget(value)}
                                 />
                                 <Tag color="blue">шаг 1: sweep</Tag>
-                                <Tag color="geekblue">шаг 2: review</Tag>
-                                <Tag color="purple">шаг 3: backtest</Tag>
-                                <Tag color="success">шаг 4: publish</Tag>
+                                <Tag color="purple">шаг 2: backtest</Tag>
+                                <Tag color="success">шаг 3: storefront</Tag>
+                                <Tag color="geekblue">шаг 4: apply clients</Tag>
                               </Space>
                               <Steps
                                 size="small"
                                 current={adminWizardCurrentStep}
                                 items={[
                                   { title: 'Sweep', description: reviewableSweepOffers.length > 0 ? `${reviewableSweepOffers.length} кандидатов` : 'кандидаты не загружены' },
-                                  { title: 'Review', description: adminWizardTarget === 'offer' ? (wizardOfferCandidate ? `offer #${wizardOfferCandidate.offerId}` : 'оффер не выбран') : `draft TS members: ${Number(adminTradingSystemDraft?.members?.length || 0)}` },
-                                  { title: 'Backtest', description: adminWizardTarget === 'offer' ? 'single strategy' : 'portfolio draft TS' },
-                                  { title: 'Publish', description: adminWizardTarget === 'offer' ? 'на витрину офферов' : 'approve ТС Алгофонда' },
+                                  { title: 'Backtest', description: adminWizardTarget === 'offer' ? (wizardOfferCandidate ? `offer #${wizardOfferCandidate.offerId}` : 'оффер не выбран') : `draft TS members: ${Number(adminTradingSystemDraft?.members?.length || 0)}` },
+                                  { title: 'Storefront', description: adminWizardTarget === 'offer' ? 'на витрину офферов' : 'на витрину ТС Алгофонда' },
+                                  { title: 'Apply', description: 'применить опубликованное к клиентам' },
                                 ]}
                               />
                               <Space wrap>
@@ -4393,7 +4449,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   1) Обновить из sweep
                                 </Button>
                                 <Button size="small" onClick={openWizardReviewStep}>
-                                  2) Открыть review
+                                  2) Открыть контекст
                                 </Button>
                                 <Button size="small" onClick={openWizardBacktestStep}>
                                   3) Открыть backtest
@@ -4405,21 +4461,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   loading={actionLoading === 'publish' || actionLoading === `offer-store:${String(wizardOfferCandidate?.offerId || '')}`}
                                   onClick={() => void publishFromWizard()}
                                 >
-                                  4) Отправить на витрину/апрув
+                                  4) На витрину
                                 </Button>
                               </Space>
                             </Space>
                           </Card>
 
                           <div ref={reviewContextRef}>
-                          <Card className="battletoads-card" title="Контекст review: оффер или ТС">
+                          <Card className="battletoads-card" title="Контекст бэктеста: оффер или ТС">
                             {selectedAdminReviewKind === 'algofund-ts' ? (
                               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                                 <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                                  Здесь полный workflow по ТС Алгофонда после sweep: просмотр состава и метрик, отправка draft ТС на апрув, затем переход к применению опубликованной ТС на клиентов Алгофонда.
+                                  Здесь полный workflow по ТС Алгофонда после sweep: просмотр состава и метрик, запуск бэктеста, публикация ТС на витрину, затем применение к клиентам Алгофонда.
                                 </Paragraph>
                                 <Space wrap>
-                                  <Tag color={publishResponse?.sourceSystem ? 'success' : 'processing'}>{publishResponse?.sourceSystem ? 'published runtime TS ready' : 'pending review'}</Tag>
+                                  <Tag color={publishResponse?.sourceSystem ? 'success' : 'processing'}>{publishResponse?.sourceSystem ? 'runtime TS ready' : 'draft from sweep'}</Tag>
                                   <Tag color="processing">members: {Number(adminTradingSystemDraft?.members?.length || 0)}</Tag>
                                   <Tag color="blue">{adminTradingSystemDraft?.name || 'Admin TS draft'}</Tag>
                                   {publishResponse?.sourceSystem?.systemId ? <Tag color="geekblue">system #{publishResponse.sourceSystem.systemId}</Tag> : null}
@@ -4454,7 +4510,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   )}
                                 />
                                 <Space wrap>
-                                  <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>Отправить ТС на апрув</Button>
+                                  <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>На витрину ТС</Button>
                                   <Button size="small" onClick={openBacktestDrawerForAdminTs}>Открыть бэктест ТС</Button>
                                   <Button size="small" onClick={() => setBatchTenantIds(batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)).filter((item) => item > 0))}>Выбрать всех algofund-клиентов</Button>
                                   <Button size="small" disabled={!publishResponse?.sourceSystem?.systemId} onClick={openPublishedAdminTsForClients}>Применить к клиентам Алгофонда</Button>
@@ -4470,7 +4526,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   return (
                                     <>
                                 <Space wrap>
-                                  <Tag color={selectedAdminReviewOffer.published ? 'success' : 'processing'}>{selectedAdminReviewOffer.published ? 'already on storefront' : 'awaiting review'}</Tag>
+                                  <Tag color={selectedAdminReviewOffer.published ? 'success' : 'processing'}>{selectedAdminReviewOffer.published ? 'on storefront' : 'not on storefront'}</Tag>
                                   <Tag color="blue">offer #{selectedAdminReviewOffer.offerId}</Tag>
                                   <Tag>{selectedAdminReviewOffer.mode.toUpperCase()}</Tag>
                                   <Tag>{selectedAdminReviewOffer.market}</Tag>
@@ -4495,7 +4551,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     loading={actionLoading === `offer-store:${String(selectedAdminReviewOffer.offerId)}`}
                                     onClick={() => void toggleOfferPublished(String(selectedAdminReviewOffer.offerId), true)}
                                   >
-                                    {selectedAdminReviewOffer.published ? 'Обновить витрину' : 'Отправить на апрув'}
+                                    {selectedAdminReviewOffer.published ? 'Обновить витрину' : 'На витрину'}
                                   </Button>
                                   <Button size="small" onClick={() => openOfferBacktest(selectedAdminReviewOffer)}>
                                     Открыть бэктест оффера
@@ -4507,29 +4563,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 })()}
                               </Space>
                             ) : (
-                              <Empty description="Выбери карточку из Анализа ресерча или approved-витрины для review" />
+                              <Empty description="Выбери карточку из списка sweep или витрины для бэктеста" />
                             )}
                           </Card>
                           </div>
 
-                          <Card className="battletoads-card" title="Оферы и ТС: только approved на витринах">
+                          <Card className="battletoads-card" title="Оферы и ТС на витринах">
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                              Здесь только то, что уже апрувлено и показано на витринах. Для редактирования вернись в блок review выше, для снятия с витрины используй флаг в таблице ниже.
+                              Здесь только то, что уже опубликовано на витринах. Для обновления карточек вернись в контекст бэктеста выше.
                             </Paragraph>
                             <Space wrap style={{ marginBottom: 12 }}>
-                              <Tag color="processing">approved storefront: {publishedStorefrontOffers.length}</Tag>
+                              <Tag color="processing">storefront offers: {publishedStorefrontOffers.length}</Tag>
                               <Tag color="blue">period: {Number(summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
                               <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
                             </Space>
                             <Space wrap style={{ marginBottom: 16 }}>
-                              <Button size="small" onClick={() => openAdminReviewContext('algofund-ts')}>Открыть review ТС</Button>
+                              <Button size="small" onClick={() => openAdminReviewContext('algofund-ts')}>Открыть бэктест ТС</Button>
                             </Space>
 
                             <Row gutter={[16, 16]}>
                               <Col xs={24} lg={12}>
-                                <Card className="battletoads-card" size="small" title="Витрина оферов клиентов стратегий (approved)">
+                                <Card className="battletoads-card" size="small" title="Витрина оферов клиентов стратегий">
                                   {publishedStorefrontOffers.length === 0 ? (
-                                    <Empty description="Пока ничего не апрувлено на витрину" />
+                                    <Empty description="Пока на витрине нет оферов" />
                                   ) : (
                                     <Table
                                       size="small"
@@ -4595,7 +4651,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 </Card>
                               </Col>
                               <Col xs={24} lg={12}>
-                                <Card className="battletoads-card" size="small" title="Витрина ТС Алгофонда (approved)">
+                                <Card className="battletoads-card" size="small" title="Витрина ТС Алгофонда">
                                   {algofundStorefrontSystems.length === 0 ? (
                                     <Empty description="Пока нет опубликованной ТС Алгофонда на витрине" />
                                   ) : (
@@ -4604,7 +4660,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       renderItem={(item) => (
                                         <List.Item
                                           actions={[
-                                            <Button key="review" size="small" onClick={() => openAdminReviewContext('algofund-ts')}>Review</Button>,
+                                            <Button key="review" size="small" onClick={() => openAdminReviewContext('algofund-ts')}>Бэктест</Button>,
                                             <Button
                                               key="apply"
                                               size="small"
@@ -6966,11 +7022,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             <Alert
               type="info"
               showIcon
-              message="Sweep backtest: настрой риск и частоту сделок, проверь метрики/equity, сохрани метрики карточки и реши — публиковать или оставить в review."
+              message="Sweep backtest: настрой риск и частоту сделок, проверь сделки/PnL/DD/margin и графики, сохрани метрики карточки и реши — отправить на витрину или закрыть."
             />
             <Space wrap>
               <Button size="small" onClick={returnToReviewFromBacktest}>
-                Вернуться в review
+                Вернуться к карточке
               </Button>
               <Button
                 size="small"
@@ -7003,7 +7059,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 onClick={() => void publishFromBacktestContext()}
               >
                 {backtestDrawerContext.kind === 'algofund-ts'
-                  ? 'Отправить ТС на апрув'
+                  ? 'Отправить ТС на витрину'
                   : (backtestDrawerContext.offerPublished ? 'Обновить витрину оффера' : 'Отправить оффер на витрину')}
               </Button>
             </Space>
@@ -7049,6 +7105,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             {adminSweepBacktestResult ? (
               <Card size="small" title="Результат sweep backtest">
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  {(() => {
+                    const equitySeries = toLineSeriesData(adminSweepBacktestResult.preview?.equity || []);
+                    const summary = adminSweepBacktestResult.preview?.summary || {};
+                    const fallbackCurves = deriveBacktestCurvesFromEquity(
+                      equitySeries,
+                      Number(adminSweepBacktestInitialBalance || 10000),
+                      Number(adminSweepBacktestResult.controls?.riskScore || adminSweepBacktestRiskScore || 5),
+                    );
+
+                    const pnlCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.pnl || []);
+                    const drawdownCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.drawdownPercent || []);
+                    const marginCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.marginLoadPercent || []);
+
+                    const effectivePnlCurve = pnlCurve.length > 0 ? pnlCurve : fallbackCurves.pnl;
+                    const effectiveDrawdownCurve = drawdownCurve.length > 0 ? drawdownCurve : fallbackCurves.drawdown;
+                    const effectiveMarginCurve = marginCurve.length > 0 ? marginCurve : fallbackCurves.marginLoad;
+
+                    const finalPnl = Number(summary.unrealizedPnl ?? (effectivePnlCurve.length > 0 ? effectivePnlCurve[effectivePnlCurve.length - 1].value : fallbackCurves.finalPnl) ?? 0);
+                    const tradesCount = Number(summary.tradesCount ?? 0);
+                    const maxDd = Number(summary.maxDrawdownPercent ?? (effectiveDrawdownCurve.length > 0 ? Math.max(...effectiveDrawdownCurve.map((point) => point.value)) : 0));
+                    const marginLoad = Number(summary.marginLoadPercent ?? (effectiveMarginCurve.length > 0 ? Math.max(...effectiveMarginCurve.map((point) => point.value)) : fallbackCurves.maxMarginLoad));
+
+                    return (
+                      <>
                   <Space wrap>
                     <Tag color="blue">offers: {adminSweepBacktestResult.selectedOffers.length}</Tag>
                     <Tag color="geekblue">risk: {adminSweepBacktestResult.controls.riskLevel}</Tag>
@@ -7060,17 +7140,55 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     {adminSweepBacktestResult.preview?.summary?.tradesCount !== undefined ? <Tag color="cyan">trades {formatNumber(adminSweepBacktestResult.preview.summary.tradesCount, 0)}</Tag> : null}
                   </Space>
 
-                  {Array.isArray(adminSweepBacktestResult.preview?.equity) && (adminSweepBacktestResult.preview?.equity || []).length > 0 ? (
+                  <Row gutter={[12, 12]}>
+                    <Col xs={12} md={6}><Card size="small"><Statistic title="Сделки" value={Number.isFinite(tradesCount) ? tradesCount : 0} precision={0} /></Card></Col>
+                    <Col xs={12} md={6}><Card size="small"><Statistic title="P/L" value={finalPnl} precision={2} suffix="USDT" /></Card></Col>
+                    <Col xs={12} md={6}><Card size="small"><Statistic title="Max DD" value={maxDd} precision={2} suffix="%" /></Card></Col>
+                    <Col xs={12} md={6}><Card size="small"><Statistic title="Margin load" value={marginLoad} precision={2} suffix="%" /></Card></Col>
+                  </Row>
+
+                  {equitySeries.length > 0 ? (
                     <ChartComponent
-                      data={(adminSweepBacktestResult.preview?.equity || []).map((point) => ({
-                        time: Number(point.time),
-                        equity: Number(point.equity ?? point.value ?? 0),
-                      }))}
+                      data={equitySeries.map((point) => ({ time: point.time, equity: point.value }))}
                       type="line"
                     />
                   ) : (
                     <Empty description="Пока нет equity-кривой" />
                   )}
+
+                  <Row gutter={[12, 12]}>
+                    <Col xs={24} md={8}>
+                      <Card size="small" title="График P/L">
+                        {effectivePnlCurve.length > 0 ? (
+                          <ChartComponent data={effectivePnlCurve.map((point) => ({ time: point.time, equity: point.value }))} type="line" />
+                        ) : (
+                          <Empty description="Нет данных P/L" />
+                        )}
+                      </Card>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Card size="small" title="График просадки (DD)">
+                        {effectiveDrawdownCurve.length > 0 ? (
+                          <ChartComponent data={effectiveDrawdownCurve.map((point) => ({ time: point.time, equity: point.value }))} type="line" />
+                        ) : (
+                          <Empty description="Нет данных просадки" />
+                        )}
+                      </Card>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Card size="small" title="График загрузки маржи">
+                        {effectiveMarginCurve.length > 0 ? (
+                          <ChartComponent data={effectiveMarginCurve.map((point) => ({ time: point.time, equity: point.value }))} type="line" />
+                        ) : (
+                          <Empty description="Нет данных загрузки маржи" />
+                        )}
+                      </Card>
+                    </Col>
+                  </Row>
+
+                      </>
+                    );
+                  })()}
 
                   <Table
                     size="small"
