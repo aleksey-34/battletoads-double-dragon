@@ -4550,15 +4550,25 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               expandable={{
                                 expandedRowRender: (row: any) => {
                                   const pts: number[] = Array.isArray(row.equityPoints) ? row.equityPoints : [];
+                                  const reviewRecord = sweepRecordByStrategyId[Number(row.strategyId || 0)] as any;
+                                  const scoreValue = row.score ?? reviewRecord?.score;
+                                  const pfValue = row.pf ?? reviewRecord?.profitFactor;
+                                  const retValue = row.ret ?? reviewRecord?.totalReturnPercent;
+                                  const ddValue = row.dd ?? reviewRecord?.maxDrawdownPercent;
+                                  const winRateValue = row.wr ?? reviewRecord?.winRatePercent;
+                                  const tradesPerDayValue = row.tradesPerDay
+                                    ?? (Number(row.trades || 0) > 0 && Number(row.periodDays || 0) > 0
+                                      ? Number(row.trades || 0) / Number(row.periodDays || 0)
+                                      : null);
                                   return (
                                     <Space direction="vertical" size={12} style={{ width: '100%' }}>
                                       <Descriptions size="small" bordered column={3}>
-                                        <Descriptions.Item label="Score">{formatNumber(row.score)}</Descriptions.Item>
-                                        <Descriptions.Item label="PF">{formatNumber(row.pf)}</Descriptions.Item>
-                                        <Descriptions.Item label="Trades/day">{formatNumber(row.tradesPerDay, 2)}</Descriptions.Item>
-                                        <Descriptions.Item label="Ret">{formatPercent(row.ret)}</Descriptions.Item>
-                                        <Descriptions.Item label="DD">{formatPercent(row.dd)}</Descriptions.Item>
-                                        <Descriptions.Item label="Win rate">{formatPercent(row.wr)}</Descriptions.Item>
+                                        <Descriptions.Item label="Score">{formatNumber(scoreValue)}</Descriptions.Item>
+                                        <Descriptions.Item label="PF">{formatNumber(pfValue)}</Descriptions.Item>
+                                        <Descriptions.Item label="Trades/day">{tradesPerDayValue === null || tradesPerDayValue === undefined ? '—' : formatNumber(tradesPerDayValue, 2)}</Descriptions.Item>
+                                        <Descriptions.Item label="Ret">{formatPercent(retValue)}</Descriptions.Item>
+                                        <Descriptions.Item label="DD">{formatPercent(ddValue)}</Descriptions.Item>
+                                        <Descriptions.Item label="Win rate">{winRateValue === null || winRateValue === undefined ? '—' : formatPercent(winRateValue)}</Descriptions.Item>
                                       </Descriptions>
                                       <Space wrap>
                                         <Button
