@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Table,
   Button,
@@ -125,6 +125,7 @@ const Positions: React.FC = () => {
   const [refreshAllLoading, setRefreshAllLoading] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<ViewMode>('all');
   const [manualOrderDraftByKey, setManualOrderDraftByKey] = useState<{ [key: string]: ManualOrderDraft }>({});
+  const apiKeysRef = useRef<ApiKey[]>([]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -137,6 +138,14 @@ const Positions: React.FC = () => {
     axios.defaults.headers.common.Authorization = `Bearer ${password}`;
     void fetchApiKeys();
   }, []);
+
+  const refreshForKeys = async (keys: ApiKey[]) => {
+    for (const key of keys) {
+      await fetchPositions(key.name);
+      await fetchOrders(key.name);
+      await fetchTrades(key.name);
+    }
+  };
 
   const fetchApiKeys = async () => {
     try {
@@ -160,15 +169,42 @@ const Positions: React.FC = () => {
         return next;
       });
 
-      for (const key of keys) {
-        void fetchPositions(key.name);
-        void fetchOrders(key.name);
-        void fetchTrades(key.name);
-      }
+      await refreshForKeys(keys);
     } catch (error) {
       console.error(error);
     }
   };
+
+  useEffect(() => {
+    apiKeysRef.current = apiKeys;
+  }, [apiKeys]);
+
+  useEffect(() => {
+    const softRefresh = () => {
+      const keys = apiKeysRef.current;
+      if (keys.length > 0) {
+        void refreshForKeys(keys);
+      } else {
+        void fetchApiKeys();
+      }
+    };
+
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        softRefresh();
+      }
+    };
+
+    window.addEventListener('focus', softRefresh);
+    document.addEventListener('visibilitychange', handleVisibility);
+    const timerId = window.setInterval(softRefresh, 15000);
+
+    return () => {
+      window.removeEventListener('focus', softRefresh);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.clearInterval(timerId);
+    };
+  }, []);
 
   const fetchPositions = async (apiKeyName: string) => {
     setLoadingByKey((prev) => ({ ...prev, [apiKeyName]: true }));
@@ -408,11 +444,7 @@ const Positions: React.FC = () => {
   const refreshAllPositions = async () => {
     setRefreshAllLoading(true);
     try {
-      for (const key of apiKeys) {
-        await fetchPositions(key.name);
-        await fetchOrders(key.name);
-        await fetchTrades(key.name);
-      }
+      await refreshForKeys(apiKeysRef.current);
       message.success(t('positions.msg.refreshedAll', 'Positions, orders and trades refreshed for all API keys'));
     } catch (error) {
       console.error(error);

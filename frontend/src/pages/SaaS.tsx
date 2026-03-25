@@ -27,6 +27,7 @@ import {
   Table,
   Tabs,
   Tag,
+  Tooltip,
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
@@ -58,6 +59,7 @@ type AdminSweepBacktestPreviewResponse = {
     tradeFrequencyScore: number;
     riskLevel: Level3;
     tradeFrequencyLevel: Level3;
+    riskScaleMaxPercent?: number;
   };
   period?: PeriodInfo | null;
   selectedOffers: Array<{
@@ -447,6 +449,24 @@ type SaasSummary = {
       riskLevel: Level3;
     };
     publishedOfferIds: string[];
+    tsBacktestSnapshot?: {
+      ret: number;
+      pf: number;
+      dd: number;
+      trades: number;
+      tradesPerDay: number;
+      periodDays: number;
+      finalEquity: number;
+      equityPoints?: number[];
+      offerIds?: string[];
+      backtestSettings?: {
+        riskScore?: number;
+        tradeFrequencyScore?: number;
+        initialBalance?: number;
+        riskScaleMaxPercent?: number;
+      };
+      updatedAt?: string;
+    } | null;
     offers: Array<{
       offerId: string;
       titleRu: string;
@@ -461,7 +481,15 @@ type SaasSummary = {
       tradesPerDay: number;
       periodDays: number;
       published: boolean;
+      snapshotUpdatedAt?: string;
+      appearedAt?: string;
       equityPoints?: number[];
+      backtestSettings?: {
+        riskScore?: number;
+        tradeFrequencyScore?: number;
+        initialBalance?: number;
+        riskScaleMaxPercent?: number;
+      };
     }>;
   };
   reportSettings?: {
@@ -733,7 +761,66 @@ type AdminPublishResponse = {
   };
 };
 
+type BacktestCardSettings = {
+  riskScore: number;
+  tradeFrequencyScore: number;
+  initialBalance: number;
+  riskScaleMaxPercent: number;
+};
+
 const ADMIN_PUBLISH_RESPONSE_STORAGE_KEY = 'saasAdminPublishResponse';
+const ADMIN_BACKTEST_SETTINGS_STORAGE_KEY = 'saasAdminBacktestSettingsByCard';
+const DEFAULT_BACKTEST_SETTINGS: BacktestCardSettings = {
+  riskScore: 5,
+  tradeFrequencyScore: 5,
+  initialBalance: 10000,
+  riskScaleMaxPercent: 40,
+};
+
+const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
+  const parsed = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const riskScore = Number(parsed.riskScore);
+  const tradeFrequencyScore = Number(parsed.tradeFrequencyScore);
+  const initialBalance = Number(parsed.initialBalance);
+  const riskScaleMaxPercent = Number(parsed.riskScaleMaxPercent);
+  return {
+    riskScore: Number.isFinite(riskScore) ? Math.min(10, Math.max(0, riskScore)) : DEFAULT_BACKTEST_SETTINGS.riskScore,
+    tradeFrequencyScore: Number.isFinite(tradeFrequencyScore) ? Math.min(10, Math.max(0, tradeFrequencyScore)) : DEFAULT_BACKTEST_SETTINGS.tradeFrequencyScore,
+    initialBalance: Number.isFinite(initialBalance) ? Math.max(100, Math.floor(initialBalance)) : DEFAULT_BACKTEST_SETTINGS.initialBalance,
+    riskScaleMaxPercent: Number.isFinite(riskScaleMaxPercent) ? Math.min(400, Math.max(0, riskScaleMaxPercent)) : DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent,
+  };
+};
+
+const parseAdminBacktestSettingsByCard = (raw?: string | null): Record<string, BacktestCardSettings> => {
+  if (!raw) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const out: Record<string, BacktestCardSettings> = {};
+    for (const [key, value] of Object.entries(parsed || {})) {
+      const safeKey = String(key || '').trim();
+      if (!safeKey) {
+        continue;
+      }
+      out[safeKey] = normalizeBacktestCardSettings(value);
+    }
+    return out;
+  } catch {
+    return {};
+  }
+};
+
+const getBacktestContextKey = (context?: SaasBacktestContext | null): string => {
+  if (!context) {
+    return '';
+  }
+  if (context.kind === 'offer') {
+    return `offer:${String(context.offerId || '').trim()}`;
+  }
+  const ids = (context.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean).sort();
+  return `ts:${ids.join('|')}`;
+};
 
 const parseAdminPublishResponse = (raw?: string | null): AdminPublishResponse | null => {
   if (!raw) {
@@ -1384,6 +1471,38 @@ const extractEquityPoints = (payload: unknown): EquityPoint[] => {
   return extractEquityPoints(objectPayload.points || objectPayload.equityCurve || []);
 };
 
+const downsampleLinePoints = (points: LinePoint[], maxPoints = 600): LinePoint[] => {
+  if (!Array.isArray(points) || points.length <= maxPoints) {
+    return points;
+  }
+
+  const out: LinePoint[] = [];
+  const step = (points.length - 1) / (maxPoints - 1);
+  for (let index = 0; index < maxPoints; index += 1) {
+    const sourceIndex = Math.round(index * step);
+    out.push(points[Math.min(points.length - 1, sourceIndex)]);
+  }
+  return out;
+};
+
+const downsampleNumericSeries = (values: number[], maxPoints = 160): number[] => {
+  if (!Array.isArray(values) || values.length <= maxPoints) {
+    return values;
+  }
+
+  const out: number[] = [];
+  const step = (values.length - 1) / (maxPoints - 1);
+  for (let index = 0; index < maxPoints; index += 1) {
+    const sourceIndex = Math.round(index * step);
+    const value = Number(values[Math.min(values.length - 1, sourceIndex)]);
+    if (Number.isFinite(value)) {
+      out.push(value);
+    }
+  }
+
+  return out;
+};
+
 const toLineSeriesData = (payload: unknown): LinePoint[] => {
   const points = extractEquityPoints(payload)
     .map((point) => {
@@ -1400,7 +1519,7 @@ const toLineSeriesData = (payload: unknown): LinePoint[] => {
     .filter((point): point is LinePoint => !!point)
     .sort((left, right) => left.time - right.time);
 
-  return dedupeLinePoints(points);
+  return downsampleLinePoints(dedupeLinePoints(points));
 };
 
 const summarizeLineSeries = (points: LinePoint[]) => {
@@ -1749,6 +1868,43 @@ const formatDateShort = (value?: string | null): string => {
   return date.toISOString().slice(0, 10);
 };
 
+const formatDateTimeShort = (value?: string | null): string => {
+  if (!value) {
+    return '—';
+  }
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return `${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 16)} UTC`;
+};
+
+const renderOfferLifecycleTag = (offer: {
+  published?: boolean;
+  appearedAt?: string;
+  snapshotUpdatedAt?: string;
+}) => {
+  const published = Boolean(offer?.published);
+  const hasSavedSnapshot = Boolean(String(offer?.snapshotUpdatedAt || '').trim());
+
+  const statusColor = published ? 'success' : (hasSavedSnapshot ? 'warning' : 'error');
+  const statusLabel = published
+    ? 'Диод: сохранено + на витрине'
+    : (hasSavedSnapshot ? 'Диод: сохранено после бэка' : 'Диод: свежий sweep');
+
+  const appeared = formatDateTimeShort(offer?.appearedAt || null);
+  const saved = hasSavedSnapshot ? formatDateTimeShort(offer?.snapshotUpdatedAt || null) : '—';
+  const tooltip = `Появление: ${appeared} | Сохранение: ${saved} | Витрина: ${published ? 'да' : 'нет'}`;
+
+  return (
+    <Tooltip title={tooltip}>
+      <Tag color={statusColor}>{statusLabel}</Tag>
+    </Tooltip>
+  );
+};
+
 const formatPeriodCoverage = (period?: PeriodInfo | null): string => {
   if (!period?.dateFrom || !period?.dateTo) {
     return '';
@@ -1831,6 +1987,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const copy = COPY_BY_LANGUAGE[language];
   const isAdminSurface = surfaceMode === 'admin';
   const [messageApi, contextHolder] = message.useMessage();
+  const summaryRequestSeqRef = useRef(0);
+  const algofundRequestSeqRef = useRef(0);
   const [summary, setSummary] = useState<SaasSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState('');
@@ -1929,20 +2087,40 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminWizardTarget, setAdminWizardTarget] = useState<'offer' | 'algofund-ts'>('offer');
   const [backtestDrawerVisible, setBacktestDrawerVisible] = useState(false);
   const [backtestDrawerContext, setBacktestDrawerContext] = useState<SaasBacktestContext | null>(null);
-  const [adminSweepBacktestRiskScore, setAdminSweepBacktestRiskScore] = useState(5);
-  const [adminSweepBacktestTradeScore, setAdminSweepBacktestTradeScore] = useState(5);
-  const [adminSweepBacktestInitialBalance, setAdminSweepBacktestInitialBalance] = useState(10000);
+  const [adminBacktestSettingsByCard, setAdminBacktestSettingsByCard] = useState<Record<string, BacktestCardSettings>>(() => {
+    if (typeof window === 'undefined') {
+      return {};
+    }
+    return parseAdminBacktestSettingsByCard(window.localStorage.getItem(ADMIN_BACKTEST_SETTINGS_STORAGE_KEY));
+  });
+  const [adminSweepBacktestRiskScore, setAdminSweepBacktestRiskScore] = useState(DEFAULT_BACKTEST_SETTINGS.riskScore);
+  const [adminSweepBacktestTradeScore, setAdminSweepBacktestTradeScore] = useState(DEFAULT_BACKTEST_SETTINGS.tradeFrequencyScore);
+  const [adminSweepBacktestInitialBalance, setAdminSweepBacktestInitialBalance] = useState(DEFAULT_BACKTEST_SETTINGS.initialBalance);
+  const [adminSweepBacktestRiskScaleMaxPercent, setAdminSweepBacktestRiskScaleMaxPercent] = useState(DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent);
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
   const [adminSweepBacktestResult, setAdminSweepBacktestResult] = useState<AdminSweepBacktestPreviewResponse | null>(null);
   const [selectedAdminDraftTsOfferIds, setSelectedAdminDraftTsOfferIds] = useState<string[]>([]);
+  const [selectedAdminDraftTsSetKey, setSelectedAdminDraftTsSetKey] = useState('');
 
   const strategyTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client');
   const algofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
   const batchEligibleAlgofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
+  const algofundTenantsWithPublishedTs = batchEligibleAlgofundTenants
+    .filter((item) => String(item.algofundProfile?.published_system_name || '').trim().length > 0);
+  const publishedAlgofundSystems = Array.from(new Set(
+    algofundTenantsWithPublishedTs
+      .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
+      .filter(Boolean)
+  ));
   const strategySystemProfiles = strategyState?.systemProfiles || [];
   const activeStrategySystemProfile = strategySystemProfiles.find((item) => item.isActive) || null;
   const selectedStrategyTenantSummary = strategyTenants.find((item) => item.tenant.id === strategyTenantId) || null;
   const selectedAlgofundTenantSummary = algofundTenants.find((item) => item.tenant.id === algofundTenantId) || null;
+  const selectedAlgofundPublishedSystemName = String(
+    selectedAlgofundTenantSummary?.algofundProfile?.published_system_name
+    || algofundState?.profile?.published_system_name
+    || ''
+  ).trim();
   const strategyCapabilities = strategyState?.capabilities || selectedStrategyTenantSummary?.capabilities;
   const algofundCapabilities = algofundState?.capabilities || selectedAlgofundTenantSummary?.capabilities;
   const strategySettingsEnabled = strategyCapabilities ? Boolean(strategyCapabilities.settings) : true;
@@ -2078,16 +2256,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   );
   const adminDraftTsOfferCandidates = reviewableSweepOffers.filter((offer) => adminDraftMemberStrategyIds.has(Number(offer.strategyId || 0)));
   const adminDraftTsOfferIdsAll = adminDraftTsOfferCandidates.map((offer) => String(offer.offerId || '')).filter(Boolean);
-  const adminDraftTsOfferIdsAllKey = adminDraftTsOfferIdsAll.join('|');
   const adminDraftMembersDetailed = (adminTradingSystemDraft?.members || []).map((member) => ({
     ...member,
     reviewRecord: sweepRecordByStrategyId[Number(member.strategyId || 0)] || null,
   }));
-  const adminDraftPortfolioSummary = summary?.sweepSummary?.portfolioFull?.summary || null;
+  const adminSavedTsSnapshot = summary?.offerStore?.tsBacktestSnapshot || null;
+  const adminDraftPortfolioSummary = adminSavedTsSnapshot
+    ? {
+      finalEquity: Number(adminSavedTsSnapshot.finalEquity || 0),
+      totalReturnPercent: Number(adminSavedTsSnapshot.ret || 0),
+      maxDrawdownPercent: Number(adminSavedTsSnapshot.dd || 0),
+      profitFactor: Number(adminSavedTsSnapshot.pf || 0),
+      tradesCount: Number(adminSavedTsSnapshot.trades || 0),
+    }
+    : (summary?.sweepSummary?.portfolioFull?.summary || null);
   const adminDraftPeriodDays = getPeriodDurationDays(summary?.sweepSummary?.period || null);
-  const adminDraftTradesPerDay = adminDraftPortfolioSummary && adminDraftPeriodDays && adminDraftPeriodDays > 0
-    ? Number((Number(adminDraftPortfolioSummary.tradesCount || 0) / adminDraftPeriodDays).toFixed(2))
-    : null;
+  const adminDraftTradesPerDay = adminSavedTsSnapshot
+    ? Number(adminSavedTsSnapshot.tradesPerDay || 0)
+    : (adminDraftPortfolioSummary && adminDraftPeriodDays && adminDraftPeriodDays > 0
+      ? Number((Number(adminDraftPortfolioSummary.tradesCount || 0) / adminDraftPeriodDays).toFixed(2))
+      : null);
   const parseAlgofundPreviewSummary = (raw: any) => {
     const preview = raw?.preview && typeof raw.preview === 'object' ? raw.preview : raw;
     const summary = preview?.summary && typeof preview.summary === 'object' ? preview.summary : null;
@@ -2172,27 +2360,35 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   const loadSummary = async (scope: SummaryScope = resolveSummaryScope()): Promise<SaasSummary | null> => {
+    const requestSeq = summaryRequestSeqRef.current + 1;
+    summaryRequestSeqRef.current = requestSeq;
     setSummaryLoading(true);
     setSummaryError('');
     try {
       const response = await axios.get<SaasSummary>('/api/saas/admin/summary', {
         params: { scope },
       });
-      setSummary((prev) => {
-        if (scope === 'light' && prev?.offerStore && !response.data.offerStore) {
-          return {
-            ...response.data,
-            offerStore: prev.offerStore,
-          };
-        }
-        return response.data;
-      });
+      if (requestSeq === summaryRequestSeqRef.current) {
+        setSummary((prev) => {
+          if (scope === 'light' && prev?.offerStore && !response.data.offerStore) {
+            return {
+              ...response.data,
+              offerStore: prev.offerStore,
+            };
+          }
+          return response.data;
+        });
+      }
       return response.data;
     } catch (error: any) {
-      setSummaryError(String(error?.response?.data?.error || error?.message || 'Failed to load SaaS summary'));
+      if (requestSeq === summaryRequestSeqRef.current) {
+        setSummaryError(String(error?.response?.data?.error || error?.message || 'Failed to load SaaS summary'));
+      }
       return null;
     } finally {
-      setSummaryLoading(false);
+      if (requestSeq === summaryRequestSeqRef.current) {
+        setSummaryLoading(false);
+      }
     }
   };
 
@@ -2342,6 +2538,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   const loadAlgofundTenant = async (tenantId: number, nextRiskMultiplier?: number, allowPreviewAbovePlan = false, forceRefreshPreview = false) => {
+    const requestSeq = algofundRequestSeqRef.current + 1;
+    algofundRequestSeqRef.current = requestSeq;
     setAlgofundLoading(true);
     setAlgofundError('');
     try {
@@ -2357,12 +2555,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       }
       const query = params.toString() ? `?${params.toString()}` : '';
       const response = await axios.get<AlgofundState>(`/api/saas/algofund/${tenantId}${query}`);
-      setAlgofundState(response.data);
+      if (requestSeq === algofundRequestSeqRef.current) {
+        setAlgofundState(response.data);
+      }
     } catch (error: any) {
-      setAlgofundError(String(error?.response?.data?.error || error?.message || 'Failed to load algofund client'));
-      setAlgofundState(null);
+      if (requestSeq === algofundRequestSeqRef.current) {
+        setAlgofundError(String(error?.response?.data?.error || error?.message || 'Failed to load algofund client'));
+        setAlgofundState(null);
+      }
     } finally {
-      setAlgofundLoading(false);
+      if (requestSeq === algofundRequestSeqRef.current) {
+        setAlgofundLoading(false);
+      }
     }
   };
 
@@ -2452,6 +2656,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   useEffect(() => {
     if (adminDraftTsOfferIdsAll.length === 0) {
       setSelectedAdminDraftTsOfferIds([]);
+      setSelectedAdminDraftTsSetKey('');
       return;
     }
 
@@ -2461,9 +2666,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       if (stillAvailable.length > 0) {
         return stillAvailable;
       }
+      setSelectedAdminDraftTsSetKey('');
       return adminDraftTsOfferIdsAll;
     });
-  }, [adminDraftTsOfferIdsAllKey]);
+  }, [adminDraftTsOfferIdsAll]);
 
   const loadTelegramControls = useCallback(async () => {
     setTelegramControlsLoading(true);
@@ -2653,7 +2859,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
 
     const nextStrategyTenant = (summary.tenants || []).find((item) => item.tenant.product_mode === 'strategy_client')?.tenant.id || null;
-    const nextAlgofundTenant = (summary.tenants || []).find((item) => item.tenant.product_mode === 'algofund_client')?.tenant.id || null;
+    const nextAlgofundTenant =
+      (summary.tenants || []).find((item) => (
+        item.tenant.product_mode === 'algofund_client'
+        && String(item.algofundProfile?.published_system_name || '').trim().length > 0
+      ))?.tenant.id
+      || (summary.tenants || []).find((item) => item.tenant.product_mode === 'algofund_client')?.tenant.id
+      || null;
 
     if (strategyTenantId === null && nextStrategyTenant !== null) {
       setStrategyTenantId(nextStrategyTenant);
@@ -3415,6 +3627,57 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setMonitoringModeFilter(mode);
   };
 
+  const persistBacktestSettingsByCard = useCallback((next: Record<string, BacktestCardSettings>) => {
+    if (typeof window === 'undefined') {
+      return;
+    }
+    window.localStorage.setItem(ADMIN_BACKTEST_SETTINGS_STORAGE_KEY, JSON.stringify(next));
+  }, []);
+
+  const applyBacktestSettings = useCallback((settings: BacktestCardSettings) => {
+    setAdminSweepBacktestRiskScore(settings.riskScore);
+    setAdminSweepBacktestTradeScore(settings.tradeFrequencyScore);
+    setAdminSweepBacktestInitialBalance(settings.initialBalance);
+    setAdminSweepBacktestRiskScaleMaxPercent(settings.riskScaleMaxPercent);
+  }, []);
+
+  const resolveBacktestSettingsForContext = useCallback((context: SaasBacktestContext): BacktestCardSettings => {
+    const contextKey = getBacktestContextKey(context);
+    const saved = contextKey ? adminBacktestSettingsByCard[contextKey] : null;
+    if (saved) {
+      return normalizeBacktestCardSettings(saved);
+    }
+
+    if (context.kind === 'offer' && context.offerId) {
+      const offer = (summary?.offerStore?.offers || []).find((item) => String(item.offerId) === String(context.offerId));
+      if (offer?.backtestSettings) {
+        return normalizeBacktestCardSettings(offer.backtestSettings);
+      }
+    }
+
+    return { ...DEFAULT_BACKTEST_SETTINGS };
+  }, [adminBacktestSettingsByCard, summary?.offerStore?.offers]);
+
+  const storeCurrentBacktestSettingsForContext = useCallback((context: SaasBacktestContext | null | undefined, patch: Partial<BacktestCardSettings>) => {
+    const contextKey = getBacktestContextKey(context);
+    if (!contextKey) {
+      return;
+    }
+
+    setAdminBacktestSettingsByCard((current) => {
+      const nextSettings = normalizeBacktestCardSettings({
+        ...(current[contextKey] || DEFAULT_BACKTEST_SETTINGS),
+        ...patch,
+      });
+      const next = {
+        ...current,
+        [contextKey]: nextSettings,
+      };
+      persistBacktestSettingsByCard(next);
+      return next;
+    });
+  }, [persistBacktestSettingsByCard]);
+
   const runAdminSweepBacktestPreview = async (context?: SaasBacktestContext | null) => {
     const targetContext = context || backtestDrawerContext;
     if (!targetContext) {
@@ -3430,6 +3693,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         riskScore: adminSweepBacktestRiskScore,
         tradeFrequencyScore: adminSweepBacktestTradeScore,
         initialBalance: adminSweepBacktestInitialBalance,
+        riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
       });
       setAdminSweepBacktestResult(response.data);
     } catch (error: any) {
@@ -3453,11 +3717,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
-    const equityPoints = Array.isArray(adminSweepBacktestResult.preview?.equity)
+    const equityPointsRaw = Array.isArray(adminSweepBacktestResult.preview?.equity)
       ? (adminSweepBacktestResult.preview?.equity || [])
         .map((point) => Number(point?.equity ?? point?.value ?? NaN))
         .filter((value) => Number.isFinite(value))
       : [];
+    const equityPoints = downsampleNumericSeries(equityPointsRaw, 160);
 
     setActionLoading(`offer-review-snapshot:${backtestDrawerContext.offerId}`);
     try {
@@ -3472,6 +3737,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             tradesPerDay: Number(selected.tradesPerDay ?? 0),
             periodDays: Number(selected.periodDays ?? 90),
             equityPoints,
+            riskScore: Number(adminSweepBacktestRiskScore ?? 5),
+            tradeFrequencyScore: Number(adminSweepBacktestTradeScore ?? 5),
+            initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
+            riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 40),
           },
         },
       });
@@ -3484,7 +3753,99 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const saveTsReviewSnapshotFromBacktest = async () => {
+    if (!backtestDrawerContext || backtestDrawerContext.kind !== 'algofund-ts' || !adminSweepBacktestResult || adminSweepBacktestResult.kind !== 'algofund-ts') {
+      messageApi.warning('Сначала открой backtest ТС и дождись метрик');
+      return;
+    }
+
+    const summary = adminSweepBacktestResult.preview?.summary || {};
+    const equityPointsRaw = Array.isArray(adminSweepBacktestResult.preview?.equity)
+      ? (adminSweepBacktestResult.preview?.equity || [])
+        .map((point) => Number(point?.equity ?? point?.value ?? NaN))
+        .filter((value) => Number.isFinite(value))
+      : [];
+    const equityPoints = downsampleNumericSeries(equityPointsRaw, 160);
+    const offerIds = (backtestDrawerContext.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean);
+    const periodDays = Number(getPeriodDurationDays(adminSweepBacktestResult.period || null) || 90);
+    const finalEquity = Number(summary.finalEquity ?? (equityPoints.length > 0 ? equityPoints[equityPoints.length - 1] : adminSweepBacktestInitialBalance));
+    const trades = Number(summary.tradesCount ?? 0);
+
+    setActionLoading('ts-review-snapshot');
+    try {
+      await axios.patch('/api/saas/admin/offer-store', {
+        tsBacktestSnapshotPatch: {
+          ret: Number(summary.totalReturnPercent ?? 0),
+          pf: Number(summary.profitFactor ?? 0),
+          dd: Number(summary.maxDrawdownPercent ?? 0),
+          trades,
+          tradesPerDay: Number((trades / Math.max(1, periodDays)).toFixed(3)),
+          periodDays,
+          finalEquity,
+          equityPoints,
+          offerIds,
+          backtestSettings: {
+            riskScore: Number(adminSweepBacktestRiskScore ?? 5),
+            tradeFrequencyScore: Number(adminSweepBacktestTradeScore ?? 5),
+            initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
+            riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 40),
+          },
+        },
+      });
+      await loadSummary('full');
+      messageApi.success('Метрики ТС сохранены как черновик');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось сохранить метрики ТС'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const saveOfferReviewSnapshotFromRow = async (offer: any) => {
+    const offerId = String(offer?.offerId || '').trim();
+    if (!offerId) {
+      return;
+    }
+
+    const equityPointsRaw = Array.isArray(offer?.equityPoints)
+      ? offer.equityPoints
+        .map((point: unknown) => Number(point))
+        .filter((value: number) => Number.isFinite(value))
+      : [];
+    const equityPoints = downsampleNumericSeries(equityPointsRaw, 160);
+
+    setActionLoading(`offer-review-snapshot:${offerId}`);
+    try {
+      await axios.patch('/api/saas/admin/offer-store', {
+        reviewSnapshotPatch: {
+          [offerId]: {
+            offerId,
+            ret: Number(offer?.ret ?? 0),
+            pf: Number(offer?.pf ?? 0),
+            dd: Number(offer?.dd ?? 0),
+            trades: Number(offer?.trades ?? 0),
+            tradesPerDay: Number(offer?.tradesPerDay ?? 0),
+            periodDays: Number(offer?.periodDays ?? 90),
+            equityPoints,
+            riskScore: Number(offer?.backtestSettings?.riskScore ?? 5),
+            tradeFrequencyScore: Number(offer?.backtestSettings?.tradeFrequencyScore ?? 5),
+            initialBalance: Number(offer?.backtestSettings?.initialBalance ?? 10000),
+            riskScaleMaxPercent: Number(offer?.backtestSettings?.riskScaleMaxPercent ?? 40),
+          },
+        },
+      });
+      await loadSummary('full');
+      messageApi.success('Черновик карточки сохранен');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось сохранить черновик карточки'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const openEmbeddedBacktest = (context: SaasBacktestContext) => {
+    const settings = resolveBacktestSettingsForContext(context);
+    applyBacktestSettings(settings);
     setBacktestDrawerContext(context);
     setBacktestDrawerVisible(true);
     setAdminSweepBacktestResult(null);
@@ -3508,9 +3869,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
   };
 
-  const openDraftTsBacktest = () => {
-    const selectedOfferIds = (selectedAdminDraftTsOfferIds || []).map((item) => String(item || '')).filter(Boolean);
+  const openDraftTsBacktest = (params?: { setKey?: string; offerIds?: string[] }) => {
+    const directOfferIds = (params?.offerIds || []).map((item) => String(item || '')).filter(Boolean);
+    const selectedOfferIds = directOfferIds.length > 0
+      ? directOfferIds
+      : (selectedAdminDraftTsOfferIds || []).map((item) => String(item || '')).filter(Boolean);
     const offerIds = selectedOfferIds.length > 0 ? selectedOfferIds : adminDraftTsOfferIdsAll;
+    const selectedOfferIdSet = new Set(offerIds);
+    const selectedOffers = adminDraftTsOfferCandidates.filter((offer) => selectedOfferIdSet.has(String(offer.offerId || '').trim()));
+    const selectedStrategyNames = Array.from(new Set(
+      selectedOffers
+        .map((offer) => String(offer?.titleRu || '').trim())
+        .filter(Boolean)
+    ));
+    const inferredSelectedTsName = String(params?.setKey || '').trim()
+      || selectedAdminDraftTsSetKey
+      || (selectedStrategyNames.length === 1 ? selectedStrategyNames[0] : '');
 
     if (Number(adminTradingSystemDraft?.members?.length || 0) === 0) {
       messageApi.warning('Для бэктеста ТС нужен draft из последнего sweep');
@@ -3522,9 +3896,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
+    const tsName = String(
+      inferredSelectedTsName
+      || adminTradingSystemDraft?.name
+      || publishResponse?.sourceSystem?.systemName
+      || algofundState?.engine?.systemName
+      || 'Algofund TS'
+    ).trim();
+
     openEmbeddedBacktest({
       kind: 'algofund-ts',
-      title: `Бэктест ТС: ${adminTradingSystemDraft?.name || 'Draft TS'}`,
+      title: `Бэктест ТС: ${tsName}`,
       description: 'Sweep-портфельный бэктест draft ТС из последнего свепа. После проверки метрик можно отправлять ТС на витрину.',
       offerIds,
     });
@@ -3574,7 +3956,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
 
     if (backtestDrawerContext.kind === 'algofund-ts') {
+      await saveTsReviewSnapshotFromBacktest();
       await publishAdminTs();
+      setBacktestDrawerVisible(false);
+      setBacktestDrawerContext(null);
       return;
     }
 
@@ -3583,8 +3968,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
+    await saveOfferReviewSnapshotFromBacktest();
     await toggleOfferPublished(String(backtestDrawerContext.offerId), true);
     setBacktestDrawerContext((prev) => prev ? { ...prev, offerPublished: true } : prev);
+    setBacktestDrawerVisible(false);
+    setBacktestDrawerContext(null);
   };
 
   const returnToReviewFromBacktest = () => {
@@ -4549,6 +4937,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           size="small"
                                           onClick={() => {
                                             setSelectedAdminDraftTsOfferIds(set.offerIds);
+                                            setSelectedAdminDraftTsSetKey(String(set.setKey || '').trim());
                                             setSelectedAdminReviewKind('algofund-ts');
                                             messageApi.success(`Выбран TS-набор ${set.setKey}: ${set.offerCount} карточек`);
                                           }}
@@ -4561,7 +4950,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           size="small"
                                           onClick={() => {
                                             setSelectedAdminDraftTsOfferIds(set.offerIds);
-                                            openDraftTsBacktest();
+                                            setSelectedAdminDraftTsSetKey(String(set.setKey || '').trim());
+                                            openDraftTsBacktest({
+                                              setKey: String(set.setKey || '').trim(),
+                                              offerIds: set.offerIds,
+                                            });
                                           }}
                                         >
                                           Бэктест ТС
@@ -4689,6 +5082,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Paragraph>
                             <Space wrap style={{ marginBottom: 12 }}>
                               <Tag color="processing">storefront offers: {publishedStorefrontOffers.length}</Tag>
+                              <Tag color="gold">waitlist offers: {researchCandidateOffers.length}</Tag>
                               <Tag color="blue">period: {Number(summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
                               <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
                             </Space>
@@ -4744,7 +5138,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         {
                                           title: 'Действия',
                                           key: 'actions',
-                                          width: 180,
+                                          width: 320,
                                           render: (_, row: any) => (
                                             <Space wrap>
                                               <Button
@@ -4755,6 +5149,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                 }}
                                               >
                                                 Редактировать
+                                              </Button>
+                                              <Button
+                                                size="small"
+                                                loading={actionLoading === `offer-review-snapshot:${String(row.offerId || '')}`}
+                                                onClick={() => {
+                                                  void saveOfferReviewSnapshotFromRow(row);
+                                                }}
+                                              >
+                                                Сохранить
+                                              </Button>
+                                              <Button
+                                                size="small"
+                                                onClick={() => {
+                                                  openOfferBacktest(row);
+                                                }}
+                                              >
+                                                Бэктест
                                               </Button>
                                               <Button size="small" danger onClick={() => void openUnpublishWizard(String(row.offerId))}>Снять</Button>
                                             </Space>
@@ -4810,6 +5221,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 </Card>
                               </Col>
                             </Row>
+
                           </Card>
 
                           {performanceReport ? (
@@ -5112,6 +5524,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         </Button>
                                         <Button
                                           size="small"
+                                          loading={actionLoading === `offer-review-snapshot:${String(row.offerId || '')}`}
+                                          onClick={() => {
+                                            void saveOfferReviewSnapshotFromRow(row);
+                                          }}
+                                        >
+                                          Сохранить
+                                        </Button>
+                                        <Button
+                                          size="small"
                                           onClick={() => {
                                             if (row.published) {
                                               void openUnpublishWizard(String(row.offerId));
@@ -5146,41 +5567,58 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   title: 'Период и метрики',
                                   key: 'metrics',
                                   render: (_, row: any) => (
-                                    <Space size={4} wrap>
-                                      <Tag color="default">period {Number(row.periodDays || 0)}d</Tag>
-                                      <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
-                                      <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
-                                      <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
-                                      <Tag color="blue">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
+                                    <Space direction="vertical" size={4}>
+                                      <Space size={4} wrap>
+                                        <Tag color="default">period {Number(row.periodDays || 0)}d</Tag>
+                                        <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
+                                        <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
+                                        <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                        <Tag color="blue">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
+                                      </Space>
+                                      <Space size={4} wrap>
+                                        {renderOfferLifecycleTag(row)}
+                                        <Tag color="default">Появилась: {formatDateShort(row.appearedAt || summary?.sweepSummary?.timestamp)}</Tag>
+                                        {row.snapshotUpdatedAt ? <Tag color="warning">Сохранена: {formatDateShort(row.snapshotUpdatedAt)}</Tag> : null}
+                                      </Space>
                                     </Space>
                                   ),
                                 },
                                 {
-                                  title: 'Витрина',
+                                  title: 'Действия',
                                   key: 'store',
-                                  width: 280,
+                                  width: 360,
                                   render: (_, row: any) => (
                                     <Space size={4} wrap>
-                                      <Tag color={row.published ? 'success' : 'processing'}>{row.published ? 'on storefront' : 'not on storefront'}</Tag>
                                       <Button
                                         size="small"
                                         onClick={() => {
                                           openAdminReviewContext('offer', String(row.offerId));
                                         }}
                                       >
-                                        Открыть бэктест
+                                        Редактировать
                                       </Button>
-                                      <Switch
-                                        checked={Boolean(row.published)}
-                                        loading={actionLoading === `offer-store:${String(row.offerId)}`}
-                                        onChange={(checked) => {
-                                          if (checked) {
-                                            void toggleOfferPublished(String(row.offerId), true);
-                                          } else {
-                                            void openUnpublishWizard(String(row.offerId));
-                                          }
+                                      <Button
+                                        size="small"
+                                        loading={actionLoading === `offer-review-snapshot:${String(row.offerId || '')}`}
+                                        onClick={() => {
+                                          void saveOfferReviewSnapshotFromRow(row);
                                         }}
-                                      />
+                                      >
+                                        Сохранить
+                                      </Button>
+                                      <Button
+                                        size="small"
+                                        loading={actionLoading === `offer-store:${String(row.offerId)}`}
+                                        onClick={() => {
+                                          if (row.published) {
+                                            void openUnpublishWizard(String(row.offerId));
+                                            return;
+                                          }
+                                          void toggleOfferPublished(String(row.offerId), true);
+                                        }}
+                                      >
+                                        {row.published ? 'Снять с витрины' : 'На витрину'}
+                                      </Button>
                                     </Space>
                                   ),
                                 },
@@ -5203,6 +5641,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             size="small"
                                             onClick={() => {
                                               setSelectedAdminDraftTsOfferIds(set.offerIds);
+                                              setSelectedAdminDraftTsSetKey(String(set.setKey || '').trim());
                                               setAdminSweepListMode('ts');
                                               messageApi.success(`Выбран TS-набор ${set.setKey}: ${set.offerCount} оферов для бэктеста`);
                                             }}
@@ -5240,7 +5679,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Tag color="processing">members: {Number(adminTradingSystemDraft?.members?.length || 0)}</Tag>
                               <Tag color="blue">selected cards: {selectedAdminDraftTsOfferIds.length}</Tag>
                               <Tag color="blue">{adminTradingSystemDraft?.name || 'Admin TS draft'}</Tag>
-                              <Tag color="gold">draft from sweep</Tag>
+                              <Tag color={adminSavedTsSnapshot ? 'green' : 'gold'}>{adminSavedTsSnapshot ? 'saved draft snapshot' : 'draft from sweep'}</Tag>
                               {summary?.sweepSummary?.period ? <Tag color="default">{formatPeriodLabel(summary.sweepSummary.period)}</Tag> : null}
                               {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(adminDraftPortfolioSummary.totalReturnPercent)}</Tag> : null}
                               {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(adminDraftPortfolioSummary.maxDrawdownPercent)}</Tag> : null}
@@ -5257,8 +5696,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             ) : null}
                             {adminDraftPortfolioSummary ? (
                               <Descriptions size="small" bordered column={2} style={{ marginBottom: 12 }}>
-                                <Descriptions.Item label="Статус">Черновик из sweep</Descriptions.Item>
-                                <Descriptions.Item label="Источник">full_range portfolio backtest</Descriptions.Item>
+                                <Descriptions.Item label="Статус">{adminSavedTsSnapshot ? 'Сохраненный черновик ТС' : 'Черновик из sweep'}</Descriptions.Item>
+                                <Descriptions.Item label="Источник">{adminSavedTsSnapshot ? 'saved TS backtest snapshot' : 'full_range portfolio backtest'}</Descriptions.Item>
                                 <Descriptions.Item label="Final equity">{formatMoney(adminDraftPortfolioSummary.finalEquity)}</Descriptions.Item>
                                 <Descriptions.Item label="Сделок">{formatNumber(adminDraftPortfolioSummary.tradesCount, 0)}</Descriptions.Item>
                               </Descriptions>
@@ -5283,6 +5722,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           size="small"
                                           onClick={() => {
                                             setSelectedAdminDraftTsOfferIds(set.offerIds);
+                                            setSelectedAdminDraftTsSetKey(String(set.setKey || '').trim());
                                             messageApi.success(`Выбран TS-набор ${set.setKey}: ${set.offerCount} оферов для sweep backtest`);
                                           }}
                                         >
@@ -5307,6 +5747,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 size="small"
                                 onClick={() => {
                                   setSelectedAdminDraftTsOfferIds(adminDraftTsOfferIdsAll);
+                                  setSelectedAdminDraftTsSetKey('');
                                 }}
                               >
                                 Выбрать все карточки ТС
@@ -5315,6 +5756,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 size="small"
                                 onClick={() => {
                                   setSelectedAdminDraftTsOfferIds([]);
+                                  setSelectedAdminDraftTsSetKey('');
                                 }}
                               >
                                 Очистить выбор
@@ -5344,6 +5786,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         <Checkbox
                                           checked={checked}
                                           onChange={(event) => {
+                                            setSelectedAdminDraftTsSetKey('');
                                             setSelectedAdminDraftTsOfferIds((prev) => {
                                               const set = new Set((prev || []).map((item) => String(item || '')).filter(Boolean));
                                               if (event.target.checked) {
@@ -6447,10 +6890,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 showIcon
                                 message="Здесь для admin показывается только одобренная витрина Алгофонда. Кандидаты и настройка TS находятся в Админ → Оферы и ТС."
                               />
-                              <Empty description="Витрина Алгофонда сейчас пуста, пока не опубликован admin TS через Админ → Оферы и ТС" />
+                              {publishedAlgofundSystems.length === 0 ? (
+                                <Empty description="Витрина Алгофонда сейчас пуста: опубликованная TS еще не привязана к algofund-клиентам" />
+                              ) : (
+                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                  <Tag color="success">Опубликованные TS: {publishedAlgofundSystems.length}</Tag>
+                                  <Text>Клиентские runtime TS: {publishedAlgofundSystems.join(', ')}</Text>
+                                  <Text type="secondary">Клиентов с привязанной TS: {algofundTenantsWithPublishedTs.length}</Text>
+                                </Space>
+                              )}
                               <Space wrap>
                                 <Button type="primary" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Перейти в approval center</Button>
-                                <Button onClick={() => { setActiveTab('admin'); setAdminTab('clients'); setClientsModeFilter('algofund_client'); }}>К клиентам Алгофонда</Button>
+                                <Button onClick={() => { setActiveTab('admin'); setAdminTab('clients'); setClientsModeFilter('algofund_client'); setClientsClassKind('ts'); }}>К клиентам Алгофонда</Button>
                                 <Button onClick={() => { setActiveTab('admin'); setAdminTab('research-analysis'); setSelectedAdminReviewKind('algofund-ts'); }}>Бэктест</Button>
                               </Space>
                             </Space>
@@ -6592,6 +7043,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Col xs={24} lg={8}>
                               <Space wrap style={{ marginTop: 24 }}>
                                 <Button type="primary" onClick={() => void saveAlgofundProfile()} loading={actionLoading === 'algofund-save'} disabled={!algofundSettingsEnabled}>{copy.saveProfile}</Button>
+                                <Button onClick={() => void runStrategySelectionPreview()} loading={strategySelectionPreviewLoading}>Preview selected offers</Button>
                                 <Button onClick={() => void refreshAlgofundPreview()}>{copy.preview}</Button>
                               </Space>
                             </Col>
@@ -6708,7 +7160,25 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                         <Card className="battletoads-card" title={copy.previewTitle} extra={algofundLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}>
                           <Spin spinning={algofundLoading}>
-                            {
+                            {isAdminSurface ? (
+                              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                                <Alert
+                                  type="warning"
+                                  showIcon
+                                  message="В admin-режиме здесь скрыт клиентский preview, привязанный к tenant/API key."
+                                  description="Для корректного preview витрины и admin TS используй Админ → Оферы и ТС (блок Published admin TS preview)."
+                                />
+                                <Space wrap>
+                                  <Button type="primary" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>
+                                    Открыть Approval Center
+                                  </Button>
+                                  <Button onClick={() => { setActiveTab('admin'); setAdminTab('clients'); setClientsModeFilter('algofund_client'); }}>
+                                    К клиентским привязкам TS
+                                  </Button>
+                                </Space>
+                                {!selectedAlgofundPublishedSystemName ? <Empty description="Для выбранного клиента TS пока не привязана" /> : null}
+                              </Space>
+                            ) : (
                               <Row gutter={[16, 16]}>
                                 <Col xs={24} lg={8}>
                                   <Descriptions column={1} size="small" bordered>
@@ -6732,7 +7202,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   {algofundPreviewPoints.length > 0 ? <ChartComponent data={algofundPreviewPoints} type="line" /> : <Empty description={copy.previewTitle} />}
                                 </Col>
                               </Row>
-                            }
+                            )}
                           </Spin>
                         </Card>
 
@@ -7140,6 +7610,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               showIcon
               message="Sweep backtest: настрой риск и частоту сделок, проверь сделки/PnL/DD/margin и графики, сохрани метрики карточки и реши — отправить на витрину или закрыть."
             />
+            {backtestDrawerContext.kind === 'algofund-ts' ? (
+              <Space wrap>
+                <Tag color="geekblue">Тестируемая ТС: {String(backtestDrawerContext.title || '').replace(/^Бэктест ТС:\s*/u, '') || '—'}</Tag>
+                <Tag color="blue">Карточек в тесте: {Array.isArray(backtestDrawerContext.offerIds) ? backtestDrawerContext.offerIds.length : 0}</Tag>
+              </Space>
+            ) : null}
             <Space wrap>
               <Button size="small" onClick={returnToReviewFromBacktest}>
                 Вернуться к карточке
@@ -7161,7 +7637,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     void saveOfferReviewSnapshotFromBacktest();
                   }}
                 >
-                  Сохранить метрики в карточку
+                  Сохранить
+                </Button>
+              ) : null}
+              {backtestDrawerContext.kind === 'algofund-ts' ? (
+                <Button
+                  size="small"
+                  loading={actionLoading === 'ts-review-snapshot'}
+                  onClick={() => {
+                    void saveTsReviewSnapshotFromBacktest();
+                  }}
+                >
+                  Сохранить
                 </Button>
               ) : null}
               <Button
@@ -7169,51 +7656,81 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 size="small"
                 loading={
                   backtestDrawerContext.kind === 'algofund-ts'
-                    ? actionLoading === 'publish'
+                    ? actionLoading === 'publish' || actionLoading === 'ts-review-snapshot'
                     : actionLoading === `offer-store:${String(backtestDrawerContext.offerId || '')}`
+                      || actionLoading === `offer-review-snapshot:${String(backtestDrawerContext.offerId || '')}`
                 }
                 onClick={() => void publishFromBacktestContext()}
               >
                 {backtestDrawerContext.kind === 'algofund-ts'
-                  ? 'Отправить ТС на витрину'
-                  : (backtestDrawerContext.offerPublished ? 'Обновить витрину оффера' : 'Отправить оффер на витрину')}
+                  ? 'Сохранить и отправить ТС на витрину'
+                  : (backtestDrawerContext.offerPublished ? 'Сохранить и обновить витрину оффера' : 'Сохранить и отправить оффер на витрину')}
               </Button>
             </Space>
 
             <Row gutter={[12, 12]}>
-              <Col xs={24} md={8}>
+              <Col xs={24} md={6}>
                 <Card size="small" title="Риск (0-10)">
                   <Slider
                     min={0}
                     max={10}
                     step={0.1}
                     value={adminSweepBacktestRiskScore}
-                    onChange={(value) => setAdminSweepBacktestRiskScore(Number(value || 0))}
+                    onChange={(value) => {
+                      const next = Number(value || 0);
+                      setAdminSweepBacktestRiskScore(next);
+                      storeCurrentBacktestSettingsForContext(backtestDrawerContext, { riskScore: next });
+                    }}
                   />
                   <Text type="secondary">Текущий уровень: {sliderValueToLevel(adminSweepBacktestRiskScore)}</Text>
                 </Card>
               </Col>
-              <Col xs={24} md={8}>
+              <Col xs={24} md={6}>
                 <Card size="small" title="Частота сделок (0-10)">
                   <Slider
                     min={0}
                     max={10}
                     step={0.1}
                     value={adminSweepBacktestTradeScore}
-                    onChange={(value) => setAdminSweepBacktestTradeScore(Number(value || 0))}
+                    onChange={(value) => {
+                      const next = Number(value || 0);
+                      setAdminSweepBacktestTradeScore(next);
+                      storeCurrentBacktestSettingsForContext(backtestDrawerContext, { tradeFrequencyScore: next });
+                    }}
                   />
                   <Text type="secondary">Текущий уровень: {sliderValueToLevel(adminSweepBacktestTradeScore)}</Text>
                 </Card>
               </Col>
-              <Col xs={24} md={8}>
+              <Col xs={24} md={6}>
                 <Card size="small" title="Начальный баланс">
                   <InputNumber
                     min={100}
                     step={100}
                     style={{ width: '100%' }}
                     value={adminSweepBacktestInitialBalance}
-                    onChange={(value) => setAdminSweepBacktestInitialBalance(Math.max(100, Number(value || 10000)))}
+                    onChange={(value) => {
+                      const next = Math.max(100, Number(value || 10000));
+                      setAdminSweepBacktestInitialBalance(next);
+                      storeCurrentBacktestSettingsForContext(backtestDrawerContext, { initialBalance: next });
+                    }}
                   />
+                </Card>
+              </Col>
+              <Col xs={24} md={6}>
+                <Card size="small" title="Max risk scale, %">
+                  <InputNumber
+                    min={0}
+                    max={400}
+                    step={5}
+                    style={{ width: '100%' }}
+                    value={adminSweepBacktestRiskScaleMaxPercent}
+                    onChange={(value) => {
+                      const next = Math.max(0, Math.min(400, Number(value || 40)));
+                      setAdminSweepBacktestRiskScaleMaxPercent(next);
+                      storeCurrentBacktestSettingsForContext(backtestDrawerContext, { riskScaleMaxPercent: next });
+                    }}
+                  />
+                  <Text type="secondary">10 по риску = {formatNumber(1 + adminSweepBacktestRiskScaleMaxPercent / 100, 2)}x к базовой позиции</Text>
                 </Card>
               </Col>
             </Row>

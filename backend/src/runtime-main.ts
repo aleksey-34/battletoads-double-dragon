@@ -20,13 +20,42 @@
  *   LIQUIDITY_SCANNER_TOP_UNIVERSE (default 120)
  */
 
-import { initDB, getDbFilePath } from './utils/database';
+import { initDB, getDbFilePath, db } from './utils/database';
 import logger from './utils/logger';
 import { loadSettings } from './config/settings';
 import { initExchangeClient } from './bot/exchange';
 import { runAutoStrategiesCycle } from './bot/strategy';
 import { runLiquidityScanCycle, runMonitoringCycle, runReconciliationCycle } from './automation/scheduler';
 import { startAdminTelegramReporter } from './notifications/adminTelegramReporter';
+
+const parseBool = (value: unknown, fallback = false): boolean => {
+  if (value === undefined || value === null || value === '') {
+    return fallback;
+  }
+  const text = String(value).trim().toLowerCase();
+  return text === '1' || text === 'true' || text === 'yes' || text === 'on';
+};
+
+const getRuntimeFlag = async (key: string, fallback: string): Promise<string> => {
+  try {
+    const row = await db.get('SELECT value FROM app_runtime_flags WHERE key = ?', [key]);
+    const value = String(row?.value || '').trim();
+    return value || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const readCycleEnabled = async (
+  dbKey: string,
+  envKey: string,
+  fallback = false,
+): Promise<boolean> => {
+  const envValue = process.env[envKey];
+  const fallbackValue = envValue !== undefined ? String(envValue) : (fallback ? '1' : '0');
+  const flagValue = await getRuntimeFlag(dbKey, fallbackValue);
+  return parseBool(flagValue, fallback);
+};
 
 const startRuntime = async () => {
   await initDB();
@@ -62,10 +91,16 @@ const startRuntime = async () => {
   const autoApplyAdjustments = process.env.RECONCILIATION_AUTO_APPLY === '1';
   const autoPauseOnCritical = process.env.RECONCILIATION_AUTO_PAUSE === '1';
   const scannerTopUniverse = Math.max(20, Math.floor(Number(process.env.LIQUIDITY_SCANNER_TOP_UNIVERSE || 120) || 120));
+  const autoCycleEnabled = await readCycleEnabled('runtime.cycle.autorun.enabled', 'BTDD_RUNTIME_AUTORUN_ENABLED', false);
+  const monitoringCycleEnabled = await readCycleEnabled('runtime.cycle.monitoring.enabled', 'BTDD_RUNTIME_MONITORING_ENABLED', false);
+  const reconciliationCycleEnabled = await readCycleEnabled('runtime.cycle.reconciliation.enabled', 'BTDD_RUNTIME_RECONCILIATION_ENABLED', false);
+  const liquidityScanCycleEnabled = await readCycleEnabled('runtime.cycle.liquidity_scan.enabled', 'BTDD_RUNTIME_LIQUIDITY_SCAN_ENABLED', false);
 
   logger.info(
-    `[runtime] Starting with: autoRun=${autoRunSec}s, monitoring=${monitoringSec}s, ` +
-    `reconciliation=${reconciliationMin}min, liquidityScan=${liquidityScanMin}min`
+    `[runtime] Cycle config: autoRun=${autoRunSec}s(${autoCycleEnabled ? 'on' : 'off'}), ` +
+    `monitoring=${monitoringSec}s(${monitoringCycleEnabled ? 'on' : 'off'}), ` +
+    `reconciliation=${reconciliationMin}min(${reconciliationCycleEnabled ? 'on' : 'off'}), ` +
+    `liquidityScan=${liquidityScanMin}min(${liquidityScanCycleEnabled ? 'on' : 'off'})`
   );
 
   let autoCycleRunning = false;
@@ -74,73 +109,96 @@ const startRuntime = async () => {
   let liquidityScanCycleRunning = false;
 
   // ── Auto trading cycle ───────────────────────────────────────────────────────
-  setInterval(async () => {
-    if (autoCycleRunning) return;
-    autoCycleRunning = true;
-    try {
-      const result = await runAutoStrategiesCycle();
-      if (result.total > 0) {
-        logger.info(`[runtime] Auto strategy cycle: total=${result.total}, processed=${result.processed}, failed=${result.failed}`);
+  if (autoCycleEnabled) {
+    setInterval(async () => {
+      if (autoCycleRunning) return;
+      autoCycleRunning = true;
+      try {
+        const result = await runAutoStrategiesCycle();
+        if (result.total > 0) {
+          logger.info(`[runtime] Auto strategy cycle: total=${result.total}, processed=${result.processed}, failed=${result.failed}`);
+        }
+      } catch (error) {
+        logger.error(`[runtime] Auto strategy cycle error: ${(error as Error).message}`);
+      } finally {
+        autoCycleRunning = false;
       }
-    } catch (error) {
-      logger.error(`[runtime] Auto strategy cycle error: ${(error as Error).message}`);
-    } finally {
-      autoCycleRunning = false;
-    }
-  }, autoRunSec * 1000);
+    }, autoRunSec * 1000);
+  } else {
+    logger.warn('[runtime] Auto strategy cycle is disabled by runtime flag');
+  }
 
   // ── Monitoring cycle ─────────────────────────────────────────────────────────
-  setInterval(async () => {
-    if (monitoringCycleRunning) return;
-    monitoringCycleRunning = true;
-    try {
-      const result = await runMonitoringCycle();
-      if (result.processed > 0 || result.failed > 0) {
-        logger.info(`[runtime] Monitoring cycle: processed=${result.processed}, failed=${result.failed}`);
+  if (monitoringCycleEnabled) {
+    setInterval(async () => {
+      if (monitoringCycleRunning) return;
+      monitoringCycleRunning = true;
+      try {
+        const result = await runMonitoringCycle();
+        if (result.processed > 0 || result.failed > 0) {
+          logger.info(`[runtime] Monitoring cycle: processed=${result.processed}, failed=${result.failed}`);
+        }
+      } catch (error) {
+        logger.error(`[runtime] Monitoring cycle error: ${(error as Error).message}`);
+      } finally {
+        monitoringCycleRunning = false;
       }
-    } catch (error) {
-      logger.error(`[runtime] Monitoring cycle error: ${(error as Error).message}`);
-    } finally {
-      monitoringCycleRunning = false;
-    }
-  }, monitoringSec * 1000);
+    }, monitoringSec * 1000);
+  } else {
+    logger.warn('[runtime] Monitoring cycle is disabled by runtime flag');
+  }
 
   // ── Reconciliation cycle ─────────────────────────────────────────────────────
-  setInterval(async () => {
-    if (reconciliationCycleRunning) return;
-    reconciliationCycleRunning = true;
-    try {
-      const result = await runReconciliationCycle({
-        periodHours: reconciliationPeriodHours,
-        backtestBars: reconciliationBars,
-        autoApplyAdjustments,
-        autoPauseOnCritical,
-      });
-      if (result.processed > 0 || result.failed > 0) {
-        logger.info(`[runtime] Reconciliation cycle: processed=${result.processed}, failed=${result.failed}`);
+  if (reconciliationCycleEnabled) {
+    setInterval(async () => {
+      if (reconciliationCycleRunning) return;
+      reconciliationCycleRunning = true;
+      try {
+        const result = await runReconciliationCycle({
+          periodHours: reconciliationPeriodHours,
+          backtestBars: reconciliationBars,
+          autoApplyAdjustments,
+          autoPauseOnCritical,
+        });
+        if (result.processed > 0 || result.failed > 0) {
+          logger.info(`[runtime] Reconciliation cycle: processed=${result.processed}, failed=${result.failed}`);
+        }
+      } catch (error) {
+        logger.error(`[runtime] Reconciliation cycle error: ${(error as Error).message}`);
+      } finally {
+        reconciliationCycleRunning = false;
       }
-    } catch (error) {
-      logger.error(`[runtime] Reconciliation cycle error: ${(error as Error).message}`);
-    } finally {
-      reconciliationCycleRunning = false;
-    }
-  }, reconciliationMin * 60 * 1000);
+    }, reconciliationMin * 60 * 1000);
+  } else {
+    logger.warn('[runtime] Reconciliation cycle is disabled by runtime flag');
+  }
 
   // ── Liquidity scan cycle ─────────────────────────────────────────────────────
-  setInterval(async () => {
-    if (liquidityScanCycleRunning) return;
-    liquidityScanCycleRunning = true;
-    try {
-      const result = await runLiquidityScanCycle({ topUniverseLimit: scannerTopUniverse });
-      if (result.processed > 0 || result.failed > 0 || result.suggestions > 0) {
-        logger.info(`[runtime] Liquidity scan: processed=${result.processed}, failed=${result.failed}, suggestions=${result.suggestions}`);
+  if (liquidityScanCycleEnabled) {
+    setInterval(async () => {
+      if (liquidityScanCycleRunning) return;
+      liquidityScanCycleRunning = true;
+      try {
+        const result = await runLiquidityScanCycle({ topUniverseLimit: scannerTopUniverse });
+        if (result.processed > 0 || result.failed > 0 || result.suggestions > 0) {
+          logger.info(`[runtime] Liquidity scan: processed=${result.processed}, failed=${result.failed}, suggestions=${result.suggestions}`);
+        }
+      } catch (error) {
+        logger.error(`[runtime] Liquidity scan cycle error: ${(error as Error).message}`);
+      } finally {
+        liquidityScanCycleRunning = false;
       }
-    } catch (error) {
-      logger.error(`[runtime] Liquidity scan cycle error: ${(error as Error).message}`);
-    } finally {
-      liquidityScanCycleRunning = false;
-    }
-  }, liquidityScanMin * 60 * 1000);
+    }, liquidityScanMin * 60 * 1000);
+  } else {
+    logger.warn('[runtime] Liquidity scan cycle is disabled by runtime flag');
+  }
+
+  if (!autoCycleEnabled && !monitoringCycleEnabled && !reconciliationCycleEnabled && !liquidityScanCycleEnabled) {
+    logger.warn('[runtime] All runtime cycles are disabled by flags; waiting for explicit enable');
+    setInterval(() => {
+      // keep process alive while all cycles are disabled
+    }, 24 * 60 * 60 * 1000);
+  }
 
   logger.info('[runtime] Runtime process started — торговый контур активен');
 };

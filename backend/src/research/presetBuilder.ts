@@ -65,7 +65,7 @@ export const buildPresetsForOffer = async (
   baseEquityCurve: number[],
   sweepRunId: number
 ): Promise<void> => {
-  const riskMultipliers: Record<RiskLevel, number> = { low: 0.5, medium: 1.0, high: 1.5 };
+  const riskMultipliers: Record<RiskLevel, number> = { low: 0.6, medium: 1.0, high: 1.4 };
   const freqChannels: Record<FreqLevel, number> = { low: 70, medium: 50, high: 30 };
 
   const metricNumber = (keys: string[], fallback: number): number => {
@@ -83,6 +83,7 @@ export const buildPresetsForOffer = async (
   const basePf = metricNumber(['pf', 'profit_factor', 'profitFactor'], 1);
   const baseWr = metricNumber(['wr', 'win_rate', 'winRatePercent', 'win_rate_percent'], 0);
   const baseDd = metricNumber(['dd', 'max_drawdown_percent', 'maxDrawdownPercent'], 0);
+  const curveStart = Number(baseEquityCurve[0] ?? 0);
 
   const risks: RiskLevel[] = ['low', 'medium', 'high'];
   const freqs: FreqLevel[] = ['low', 'medium', 'high'];
@@ -95,10 +96,16 @@ export const buildPresetsForOffer = async (
       // Approximate metric scaling (real values come from preview worker for precise runs)
       const retScaled = baseRet * riskMultipliers[risk];
       const ddScaled = baseDd * riskMultipliers[risk];
-      // equity curve: scale returns by risk multiplier
-      const curveScaled = baseEquityCurve.map((v, i) =>
-        i === 0 ? v : v * riskMultipliers[risk]
-      );
+      const curveScaled = curveStart > 0
+        ? baseEquityCurve.map((value) => {
+          const equity = Number(value);
+          if (!Number.isFinite(equity)) {
+            return curveStart;
+          }
+          const relativeReturn = equity / curveStart - 1;
+          return Number((curveStart * (1 + relativeReturn * riskMultipliers[risk])).toFixed(4));
+        })
+        : [];
 
       await upsertPreset({
         offer_id: offerId,
@@ -115,6 +122,7 @@ export const buildPresetsForOffer = async (
           ret: retScaled,
           total_return_percent: retScaled,
           totalReturnPercent: retScaled,
+          score: metricNumber(['score'], retScaled),
           pf: basePf,
           profit_factor: basePf,
           profitFactor: basePf,

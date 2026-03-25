@@ -129,6 +129,24 @@ export type OfferStoreDefaults = {
 export type OfferStoreState = {
   defaults: OfferStoreDefaults;
   publishedOfferIds: string[];
+  tsBacktestSnapshot?: {
+    ret: number;
+    pf: number;
+    dd: number;
+    trades: number;
+    tradesPerDay: number;
+    periodDays: number;
+    finalEquity: number;
+    equityPoints: number[];
+    offerIds: string[];
+    backtestSettings: {
+      riskScore: number;
+      tradeFrequencyScore: number;
+      initialBalance: number;
+      riskScaleMaxPercent: number;
+    };
+    updatedAt: string;
+  } | null;
   offers: Array<{
     offerId: string;
     titleRu: string;
@@ -143,7 +161,15 @@ export type OfferStoreState = {
     tradesPerDay: number;
     periodDays: number;
     published: boolean;
+    snapshotUpdatedAt?: string;
+    appearedAt?: string;
     equityPoints: number[];
+    backtestSettings?: {
+      riskScore: number;
+      tradeFrequencyScore: number;
+      initialBalance: number;
+      riskScaleMaxPercent: number;
+    };
   }>;
 };
 
@@ -156,6 +182,29 @@ type OfferReviewSnapshot = {
   tradesPerDay: number;
   periodDays: number;
   equityPoints: number[];
+  riskScore?: number;
+  tradeFrequencyScore?: number;
+  initialBalance?: number;
+  riskScaleMaxPercent?: number;
+  updatedAt: string;
+};
+
+type TsBacktestSnapshot = {
+  ret: number;
+  pf: number;
+  dd: number;
+  trades: number;
+  tradesPerDay: number;
+  periodDays: number;
+  finalEquity: number;
+  equityPoints: number[];
+  offerIds: string[];
+  backtestSettings: {
+    riskScore: number;
+    tradeFrequencyScore: number;
+    initialBalance: number;
+    riskScaleMaxPercent: number;
+  };
   updatedAt: string;
 };
 
@@ -314,6 +363,7 @@ export type CatalogOffer = {
     risk: Record<Level3, CatalogPreset | null>;
     tradeFrequency: Record<Level3, CatalogPreset | null>;
   };
+  presetMatrix?: Record<Level3, Record<Level3, CatalogPreset | null>>;
   equity?: {
     source: string;
     generatedAt: string;
@@ -598,22 +648,52 @@ const findLatestFile = (matcher: RegExp): string => {
     return '';
   }
 
+  const extractIsoFromName = (fileName: string): number => {
+    const match = fileName.match(/(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)/i);
+    if (!match?.[1]) {
+      return Number.NaN;
+    }
+    const normalized = match[1].replace(/-/g, (token, index) => {
+      // keep date part unchanged (YYYY-MM-DD), convert time separators only
+      return index < 10 ? '-' : ':';
+    }).replace('T', 'T').replace(/:(\d{3})Z$/i, '.$1Z');
+    const parsed = Date.parse(normalized);
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  };
+
+  const isBackupLike = (name: string): boolean => {
+    const lower = name.toLowerCase();
+    return lower.includes('checkpoint')
+      || lower.includes('.bak')
+      || lower.includes('backup')
+      || lower.includes('pre-risk-freq-work');
+  };
+
   const rows = fs.readdirSync(resultsDir)
-    .filter((name) => matcher.test(name))
+    .filter((name) => matcher.test(name) && !isBackupLike(name))
     .map((name) => {
       const filePath = path.join(resultsDir, name);
       return {
         filePath,
+        fileName: name,
+        isoStampMs: extractIsoFromName(name),
         mtimeMs: fs.statSync(filePath).mtimeMs,
       };
     })
-    .sort((left, right) => right.mtimeMs - left.mtimeMs);
+    .sort((left, right) => {
+      const leftStamp = Number.isFinite(left.isoStampMs) ? left.isoStampMs : -1;
+      const rightStamp = Number.isFinite(right.isoStampMs) ? right.isoStampMs : -1;
+      if (leftStamp !== rightStamp) {
+        return rightStamp - leftStamp;
+      }
+      return right.mtimeMs - left.mtimeMs;
+    });
 
   return rows[0]?.filePath || '';
 };
 
-const getLatestClientCatalogPath = (): string => findLatestFile(/_client_catalog_.*\.json$/i);
-const getLatestSweepPath = (): string => findLatestFile(/_historical_sweep_.*\.json$/i);
+const getLatestClientCatalogPath = (): string => findLatestFile(/_client_catalog_\d{4}-\d{2}-\d{2}T.*Z\.json$/i);
+const getLatestSweepPath = (): string => findLatestFile(/_historical_sweep_\d{4}-\d{2}-\d{2}T.*Z\.json$/i);
 
 export const loadLatestClientCatalog = (): CatalogData | null => {
   const filePath = getLatestClientCatalogPath();
@@ -700,6 +780,10 @@ const normalizeOfferReviewSnapshot = (offerId: string, raw: unknown): OfferRevie
     tradesPerDay: Number(asNumber(parsed.tradesPerDay, 0).toFixed(3)),
     periodDays: Math.max(1, Math.floor(asNumber(parsed.periodDays, 90))),
     equityPoints: sampledEquity,
+    riskScore: Number(clampNumber(asNumber(parsed.riskScore, 5), 0, 10).toFixed(2)),
+    tradeFrequencyScore: Number(clampNumber(asNumber(parsed.tradeFrequencyScore, 5), 0, 10).toFixed(2)),
+    initialBalance: Math.max(100, Math.floor(asNumber(parsed.initialBalance, 10000))),
+    riskScaleMaxPercent: Number(clampNumber(asNumber(parsed.riskScaleMaxPercent, 40), 0, 400).toFixed(2)),
     updatedAt: asString(parsed.updatedAt, new Date().toISOString()),
   };
 };
@@ -717,6 +801,55 @@ const getOfferReviewSnapshots = async (): Promise<Record<string, OfferReviewSnap
     }
   }
   return result;
+};
+
+const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null => {
+  const parsed = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+  if (!parsed) {
+    return null;
+  }
+
+  const fullEquity = Array.isArray(parsed.equityPoints)
+    ? parsed.equityPoints
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value))
+    : [];
+  const step = fullEquity.length > 160 ? Math.ceil(fullEquity.length / 160) : 1;
+  const sampledEquity = fullEquity.filter((_value, index) => index % step === 0);
+
+  const rawOfferIds = Array.isArray(parsed.offerIds) ? parsed.offerIds : [];
+  const offerIds = Array.from(new Set(rawOfferIds.map((item) => String(item || '').trim()).filter(Boolean)));
+
+  const settingsRaw = parsed.backtestSettings && typeof parsed.backtestSettings === 'object'
+    ? (parsed.backtestSettings as Record<string, unknown>)
+    : {};
+
+  return {
+    ret: Number(asNumber(parsed.ret, 0).toFixed(3)),
+    pf: Number(asNumber(parsed.pf, 0).toFixed(3)),
+    dd: Number(asNumber(parsed.dd, 0).toFixed(3)),
+    trades: Math.max(0, Math.floor(asNumber(parsed.trades, 0))),
+    tradesPerDay: Number(asNumber(parsed.tradesPerDay, 0).toFixed(3)),
+    periodDays: Math.max(1, Math.floor(asNumber(parsed.periodDays, 90))),
+    finalEquity: Number(asNumber(parsed.finalEquity, 0).toFixed(4)),
+    equityPoints: sampledEquity,
+    offerIds,
+    backtestSettings: {
+      riskScore: Number(clampNumber(asNumber(settingsRaw.riskScore, 5), 0, 10).toFixed(2)),
+      tradeFrequencyScore: Number(clampNumber(asNumber(settingsRaw.tradeFrequencyScore, 5), 0, 10).toFixed(2)),
+      initialBalance: Math.max(100, Math.floor(asNumber(settingsRaw.initialBalance, 10000))),
+      riskScaleMaxPercent: Number(clampNumber(asNumber(settingsRaw.riskScaleMaxPercent, 40), 0, 400).toFixed(2)),
+    },
+    updatedAt: asString(parsed.updatedAt, new Date().toISOString()),
+  };
+};
+
+const getTsBacktestSnapshot = async (): Promise<TsBacktestSnapshot | null> => {
+  const raw = safeJsonParse<Record<string, unknown> | null>(
+    await getRuntimeFlag('offer.store.ts_backtest_snapshot', 'null'),
+    null,
+  );
+  return normalizeTsBacktestSnapshot(raw);
 };
 
 const normalizeAdminReportSettings = (raw: unknown): AdminReportSettings => {
@@ -1142,7 +1275,7 @@ export const loadCatalogAndSweepWithFallback = async (): Promise<{ catalog: Cata
 
   const sourceCatalog = loadLatestClientCatalog();
   const sourceSweep = loadLatestSweep();
-  const fallbackCatalog = await buildFallbackCatalogFromPresets(null, []);
+  const fallbackCatalog = await buildFallbackCatalogFromPresets(sourceCatalog, []);
   const catalog = getAllOffers(fallbackCatalog).length > 0
     ? fallbackCatalog
     : sourceCatalog || fallbackCatalog;
@@ -1284,6 +1417,24 @@ const buildRecommendedSets = (catalog: CatalogData | null) => {
   const all = [...mono, ...synth].sort((left, right) => scoreOffer(right) - scoreOffer(left));
   const conservative = [...all].sort((left, right) => asNumber(left.metrics.dd, 0) - asNumber(right.metrics.dd, 0));
   const momentum = [...all].sort((left, right) => asNumber(right.metrics.ret, 0) - asNumber(left.metrics.ret, 0));
+  const takeUniqueMarkets = (source: CatalogOffer[], limit: number): CatalogOffer[] => {
+    const out: CatalogOffer[] = [];
+    const seenMarkets = new Set<string>();
+    for (const offer of source) {
+      const market = asString(offer?.strategy?.market, '');
+      if (market && seenMarkets.has(market)) {
+        continue;
+      }
+      out.push(offer);
+      if (market) {
+        seenMarkets.add(market);
+      }
+      if (out.length >= limit) {
+        break;
+      }
+    }
+    return out;
+  };
 
   const balancedBot: CatalogOffer[] = [];
   if (mono[0]) balancedBot.push(mono[0]);
@@ -1295,14 +1446,14 @@ const buildRecommendedSets = (catalog: CatalogData | null) => {
     }
   }
 
-  const premiumMix = all.slice(0, 6);
+  const premiumMix = takeUniqueMarkets(all, 6);
 
   return {
-    balancedBot,
-    conservativeBot: conservative.slice(0, 3),
-    monoStarter: mono.slice(0, 3),
-    synthStarter: synth.slice(0, 3),
-    momentumBot: momentum.slice(0, 3),
+    balancedBot: takeUniqueMarkets(balancedBot, 3),
+    conservativeBot: takeUniqueMarkets(conservative, 3),
+    monoStarter: takeUniqueMarkets(mono, 3),
+    synthStarter: takeUniqueMarkets(synth, 3),
+    momentumBot: takeUniqueMarkets(momentum, 3),
     premiumMix,
   };
 };
@@ -1567,14 +1718,64 @@ const buildSweepEquityPoints = (retPercent: number): Array<{ time: number; equit
   ];
 };
 
-const buildSweepPreset = (record: SweepRecord, riskLevel: Level3, freqLevel: Level3): CatalogPreset => {
-  const riskMul = riskLevel === 'low' ? 0.75 : riskLevel === 'high' ? 1.35 : 1;
-  const freqMul = freqLevel === 'low' ? 0.75 : freqLevel === 'high' ? 1.3 : 1;
+const getSweepRiskMultiplier = (riskLevel: Level3): number => {
+  if (riskLevel === 'low') {
+    return 0.6;
+  }
+  if (riskLevel === 'high') {
+    return 1.4;
+  }
+  return 1;
+};
+
+const buildSweepFamilyKey = (record: SweepRecord): string => {
+  return [
+    asString(record.strategyType, ''),
+    asString(record.marketMode, ''),
+    asString(record.market, ''),
+    asString(record.interval, ''),
+  ].join('|');
+};
+
+const pickFamilyTradePresetRows = (
+  anchor: SweepRecord,
+  familyRows: SweepRecord[]
+): Record<Level3, SweepRecord> => {
+  const pool = [...familyRows]
+    .filter((row) => Number(row.strategyId || 0) > 0)
+    .sort((left, right) => {
+      const tradeDiff = asNumber(left.tradesCount, 0) - asNumber(right.tradesCount, 0);
+      if (tradeDiff !== 0) {
+        return tradeDiff;
+      }
+      return asNumber(right.score, 0) - asNumber(left.score, 0);
+    });
+
+  if (pool.length === 0) {
+    return {
+      low: anchor,
+      medium: anchor,
+      high: anchor,
+    };
+  }
+
+  const anchorStrategyId = Number(anchor.strategyId || 0);
+  const medium = pool.find((row) => Number(row.strategyId || 0) === anchorStrategyId) || anchor || pool[Math.floor(pool.length / 2)] || pool[0];
+
+  return {
+    low: pool[0],
+    medium,
+    high: pool[pool.length - 1],
+  };
+};
+
+const buildSweepPresetFromRecord = (record: SweepRecord, riskLevel: Level3): CatalogPreset => {
+  const riskMul = getSweepRiskMultiplier(riskLevel);
 
   const scoreBase = asNumber(record.score, 0);
   const ret = asNumber(record.totalReturnPercent, 0) * riskMul;
   const dd = asNumber(record.maxDrawdownPercent, 0) * riskMul;
-  const trades = Math.max(1, Math.round(asNumber(record.tradesCount, 0) * freqMul));
+  const trades = Math.max(1, Math.round(asNumber(record.tradesCount, 0)));
 
   return {
     strategyId: Number(record.strategyId),
@@ -1589,7 +1790,7 @@ const buildSweepPreset = (record: SweepRecord, riskLevel: Level3, freqLevel: Lev
     },
     params: {
       interval: asString(record.interval, '4h'),
-      length: Math.max(2, Math.round(asNumber(record.length, 50) * (freqLevel === 'low' ? 1.25 : freqLevel === 'high' ? 0.8 : 1))),
+      length: Math.max(2, Math.round(asNumber(record.length, 50))),
       takeProfitPercent: asNumber(record.takeProfitPercent, 0),
       detectionSource: asString(record.detectionSource, 'close'),
       zscoreEntry: asNumber(record.zscoreEntry, 2),
@@ -1599,10 +1800,28 @@ const buildSweepPreset = (record: SweepRecord, riskLevel: Level3, freqLevel: Lev
   };
 };
 
-const buildOfferFromSweepRecord = (record: SweepRecord): CatalogOffer => {
+const buildOfferFromSweepRecord = (record: SweepRecord, familyRows: SweepRecord[] = [record]): CatalogOffer => {
   const rawMode = asString(record.marketMode, 'mono');
   const mode = rawMode === 'synthetic' || rawMode === 'synth' ? 'synth' : 'mono';
-  const mediumMedium = buildSweepPreset(record, 'medium', 'medium');
+  const tradeRows = pickFamilyTradePresetRows(record, familyRows);
+  const presetMatrix: Record<Level3, Record<Level3, CatalogPreset | null>> = {
+    low: {
+      low: buildSweepPresetFromRecord(tradeRows.low, 'low'),
+      medium: buildSweepPresetFromRecord(tradeRows.medium, 'low'),
+      high: buildSweepPresetFromRecord(tradeRows.high, 'low'),
+    },
+    medium: {
+      low: buildSweepPresetFromRecord(tradeRows.low, 'medium'),
+      medium: buildSweepPresetFromRecord(tradeRows.medium, 'medium'),
+      high: buildSweepPresetFromRecord(tradeRows.high, 'medium'),
+    },
+    high: {
+      low: buildSweepPresetFromRecord(tradeRows.low, 'high'),
+      medium: buildSweepPresetFromRecord(tradeRows.medium, 'high'),
+      high: buildSweepPresetFromRecord(tradeRows.high, 'high'),
+    },
+  };
+  const mediumMedium = presetMatrix.medium.medium || buildSweepPresetFromRecord(record, 'medium');
   const metrics = {
     ret: asNumber(record.totalReturnPercent, 0),
     pf: asNumber(record.profitFactor, 1),
@@ -1628,16 +1847,17 @@ const buildOfferFromSweepRecord = (record: SweepRecord): CatalogOffer => {
     metrics,
     sliderPresets: {
       risk: {
-        low: buildSweepPreset(record, 'low', 'medium'),
+        low: presetMatrix.low.medium,
         medium: mediumMedium,
-        high: buildSweepPreset(record, 'high', 'medium'),
+        high: presetMatrix.high.medium,
       },
       tradeFrequency: {
-        low: buildSweepPreset(record, 'medium', 'low'),
+        low: presetMatrix.medium.low,
         medium: mediumMedium,
-        high: buildSweepPreset(record, 'medium', 'high'),
+        high: presetMatrix.medium.high,
       },
     },
+    presetMatrix,
     equity: {
       source: 'sweep_fallback',
       generatedAt: new Date().toISOString(),
@@ -1655,6 +1875,13 @@ const buildOfferFromSweepRecord = (record: SweepRecord): CatalogOffer => {
 };
 
 const pickTopOffersFromSweepRecords = (rows: SweepRecord[], limit: number): CatalogOffer[] => {
+  const familyRowsByKey = new Map<string, SweepRecord[]>();
+  rows.forEach((row) => {
+    const key = buildSweepFamilyKey(row);
+    const next = familyRowsByKey.get(key) || [];
+    next.push(row);
+    familyRowsByKey.set(key, next);
+  });
   const sorted = [...rows].sort((left, right) => asNumber(right.score, 0) - asNumber(left.score, 0));
   const preferred = sorted.filter((item) => Boolean(item.robust));
   const pool = preferred.length > 0 ? preferred : sorted;
@@ -1666,7 +1893,7 @@ const pickTopOffersFromSweepRecords = (rows: SweepRecord[], limit: number): Cata
     if (market && seenMarkets.has(market)) {
       continue;
     }
-    selected.push(buildOfferFromSweepRecord(row));
+    selected.push(buildOfferFromSweepRecord(row, familyRowsByKey.get(buildSweepFamilyKey(row)) || [row]));
     if (market) {
       seenMarkets.add(market);
     }
@@ -1678,7 +1905,7 @@ const pickTopOffersFromSweepRecords = (rows: SweepRecord[], limit: number): Cata
   if (selected.length < limit) {
     const seenOfferIds = new Set(selected.map((item) => item.offerId));
     for (const row of sorted) {
-      const offer = buildOfferFromSweepRecord(row);
+      const offer = buildOfferFromSweepRecord(row, familyRowsByKey.get(buildSweepFamilyKey(row)) || [row]);
       if (seenOfferIds.has(offer.offerId)) {
         continue;
       }
@@ -1716,13 +1943,21 @@ const pickAdminDraftMembersFromSweep = (rows: SweepRecord[], limit: number): Swe
 
   if (selected.length < limit) {
     const seenIds = new Set(selected.map((item) => Number(item.strategyId)));
+    const seenMarkets = new Set(selected.map((item) => asString(item.market, '')).filter(Boolean));
     for (const row of sorted) {
       const strategyId = Number(row.strategyId);
+      const market = asString(row.market, '');
       if (seenIds.has(strategyId)) {
+        continue;
+      }
+      if (market && seenMarkets.has(market)) {
         continue;
       }
       selected.push(row);
       seenIds.add(strategyId);
+      if (market) {
+        seenMarkets.add(market);
+      }
       if (selected.length >= limit) {
         break;
       }
@@ -1796,22 +2031,28 @@ const buildPresetBackedOffers = async (catalog: CatalogData | null): Promise<Cat
     const offerIds = await listOfferIds();
     const offers = await Promise.all(offerIds.map(async (offerId) => {
       const [
-        riskLow,
-        riskMedium,
-        riskHigh,
-        freqLow,
-        freqMedium,
-        freqHigh,
+        lowLow,
+        lowMedium,
+        lowHigh,
+        mediumLow,
+        mediumMedium,
+        mediumHigh,
+        highLow,
+        highMedium,
+        highHigh,
       ] = await Promise.all([
+        getPreset(offerId, 'low', 'low'),
         getPreset(offerId, 'low', 'medium'),
-        getPreset(offerId, 'medium', 'medium'),
-        getPreset(offerId, 'high', 'medium'),
+        getPreset(offerId, 'low', 'high'),
         getPreset(offerId, 'medium', 'low'),
         getPreset(offerId, 'medium', 'medium'),
         getPreset(offerId, 'medium', 'high'),
+        getPreset(offerId, 'high', 'low'),
+        getPreset(offerId, 'high', 'medium'),
+        getPreset(offerId, 'high', 'high'),
       ]);
 
-      const preset = riskMedium || freqMedium || riskLow || riskHigh || freqLow || freqHigh;
+      const preset = mediumMedium || lowMedium || mediumLow || highMedium || mediumHigh || lowLow || lowHigh || highLow || highHigh;
       if (!preset) {
         return null;
       }
@@ -1842,16 +2083,34 @@ const buildPresetBackedOffers = async (catalog: CatalogData | null): Promise<Cat
         },
       };
 
+      const presetMatrix = {
+        low: {
+          low: toCatalogPreset(lowLow, fallbackPresetMeta),
+          medium: toCatalogPreset(lowMedium, fallbackPresetMeta),
+          high: toCatalogPreset(lowHigh, fallbackPresetMeta),
+        },
+        medium: {
+          low: toCatalogPreset(mediumLow, fallbackPresetMeta),
+          medium: toCatalogPreset(mediumMedium, fallbackPresetMeta),
+          high: toCatalogPreset(mediumHigh, fallbackPresetMeta),
+        },
+        high: {
+          low: toCatalogPreset(highLow, fallbackPresetMeta),
+          medium: toCatalogPreset(highMedium, fallbackPresetMeta),
+          high: toCatalogPreset(highHigh, fallbackPresetMeta),
+        },
+      } as Record<Level3, Record<Level3, CatalogPreset | null>>;
+
       const riskPresets = {
-        low: toCatalogPreset(riskLow, fallbackPresetMeta) || legacy?.sliderPresets?.risk?.low || null,
-        medium: toCatalogPreset(riskMedium || freqMedium, fallbackPresetMeta) || legacy?.sliderPresets?.risk?.medium || null,
-        high: toCatalogPreset(riskHigh, fallbackPresetMeta) || legacy?.sliderPresets?.risk?.high || null,
+        low: presetMatrix.low.medium || legacy?.sliderPresets?.risk?.low || null,
+        medium: presetMatrix.medium.medium || legacy?.sliderPresets?.risk?.medium || null,
+        high: presetMatrix.high.medium || legacy?.sliderPresets?.risk?.high || null,
       } as Record<Level3, CatalogPreset | null>;
 
       const tradeFrequencyPresets = {
-        low: toCatalogPreset(freqLow, fallbackPresetMeta) || legacy?.sliderPresets?.tradeFrequency?.low || null,
-        medium: toCatalogPreset(freqMedium || riskMedium, fallbackPresetMeta) || legacy?.sliderPresets?.tradeFrequency?.medium || null,
-        high: toCatalogPreset(freqHigh, fallbackPresetMeta) || legacy?.sliderPresets?.tradeFrequency?.high || null,
+        low: presetMatrix.medium.low || legacy?.sliderPresets?.tradeFrequency?.low || null,
+        medium: presetMatrix.medium.medium || legacy?.sliderPresets?.tradeFrequency?.medium || null,
+        high: presetMatrix.medium.high || legacy?.sliderPresets?.tradeFrequency?.high || null,
       } as Record<Level3, CatalogPreset | null>;
 
       return {
@@ -1890,7 +2149,10 @@ const buildPresetBackedOffers = async (catalog: CatalogData | null): Promise<Cat
           risk: riskPresets,
           tradeFrequency: tradeFrequencyPresets,
         },
+        presetMatrix,
         equity: {
+          source: 'preset_db',
+          generatedAt: new Date().toISOString(),
           points: Array.isArray(preset.equity_curve)
             ? preset.equity_curve.map((value, index) => ({ time: index + 1, equity: asNumber(value, 0) }))
             : [],
@@ -2150,6 +2412,11 @@ const markMaterializedRuntimeOrigin = async (
 
 const collectPresetCandidates = (offer: CatalogOffer): CatalogPreset[] => {
   const values = [
+    ...(offer.presetMatrix
+      ? (['low', 'medium', 'high'] as Level3[]).flatMap((riskLevel) =>
+        (['low', 'medium', 'high'] as Level3[]).map((freqLevel) => offer.presetMatrix?.[riskLevel]?.[freqLevel] || null)
+      )
+      : []),
     offer.sliderPresets?.risk?.low,
     offer.sliderPresets?.risk?.medium,
     offer.sliderPresets?.risk?.high,
@@ -2159,12 +2426,24 @@ const collectPresetCandidates = (offer: CatalogOffer): CatalogPreset[] => {
   ].filter((item): item is CatalogPreset => !!item);
 
   const out: CatalogPreset[] = [];
-  const seen = new Set<number>();
+  const seen = new Set<string>();
   for (const item of values) {
-    if (seen.has(item.strategyId)) {
+    const signature = [
+      item.strategyId,
+      asNumber(item.metrics.ret, 0).toFixed(6),
+      asNumber(item.metrics.dd, 0).toFixed(6),
+      asNumber(item.metrics.trades, 0).toFixed(6),
+      asNumber(item.params.length, 0),
+      asNumber(item.params.takeProfitPercent, 0).toFixed(6),
+      asString(item.params.detectionSource, ''),
+      asNumber(item.params.zscoreEntry, 0).toFixed(6),
+      asNumber(item.params.zscoreExit, 0).toFixed(6),
+      asNumber(item.params.zscoreStop, 0).toFixed(6),
+    ].join('|');
+    if (seen.has(signature)) {
       continue;
     }
-    seen.add(item.strategyId);
+    seen.add(signature);
     out.push(item);
   }
   return out;
@@ -2193,18 +2472,30 @@ const resolveOfferPreset = (offer: CatalogOffer, riskLevel: Level3, tradeFrequen
 
   const sortedByDd = [...candidates].sort((left, right) => asNumber(left.metrics.dd, 0) - asNumber(right.metrics.dd, 0));
   const sortedByTrades = [...candidates].sort((left, right) => asNumber(left.metrics.trades, 0) - asNumber(right.metrics.trades, 0));
-  const ddRank = new Map<number, number>();
-  const tradeRank = new Map<number, number>();
+  const getCandidateKey = (item: CatalogPreset): string => [
+    item.strategyId,
+    asNumber(item.metrics.ret, 0).toFixed(6),
+    asNumber(item.metrics.dd, 0).toFixed(6),
+    asNumber(item.metrics.trades, 0).toFixed(6),
+    asNumber(item.params.length, 0),
+    asNumber(item.params.takeProfitPercent, 0).toFixed(6),
+    asString(item.params.detectionSource, ''),
+    asNumber(item.params.zscoreEntry, 0).toFixed(6),
+    asNumber(item.params.zscoreExit, 0).toFixed(6),
+    asNumber(item.params.zscoreStop, 0).toFixed(6),
+  ].join('|');
+  const ddRank = new Map<string, number>();
+  const tradeRank = new Map<string, number>();
 
-  sortedByDd.forEach((item, index) => ddRank.set(item.strategyId, index));
-  sortedByTrades.forEach((item, index) => tradeRank.set(item.strategyId, index));
+  sortedByDd.forEach((item, index) => ddRank.set(getCandidateKey(item), index));
+  sortedByTrades.forEach((item, index) => tradeRank.set(getCandidateKey(item), index));
 
   const targetDd = (levelToPreferenceScore(riskLevel) / 10) * Math.max(sortedByDd.length - 1, 0);
   const targetTrades = (levelToPreferenceScore(tradeFrequencyLevel) / 10) * Math.max(sortedByTrades.length - 1, 0);
 
   return [...candidates].sort((left, right) => {
-    const leftScore = Math.abs((ddRank.get(left.strategyId) || 0) - targetDd) + Math.abs((tradeRank.get(left.strategyId) || 0) - targetTrades);
-    const rightScore = Math.abs((ddRank.get(right.strategyId) || 0) - targetDd) + Math.abs((tradeRank.get(right.strategyId) || 0) - targetTrades);
+    const leftScore = Math.abs((ddRank.get(getCandidateKey(left)) || 0) - targetDd) + Math.abs((tradeRank.get(getCandidateKey(left)) || 0) - targetTrades);
+    const rightScore = Math.abs((ddRank.get(getCandidateKey(right)) || 0) - targetDd) + Math.abs((tradeRank.get(getCandidateKey(right)) || 0) - targetTrades);
     if (leftScore !== rightScore) {
       return leftScore - rightScore;
     }
@@ -2292,18 +2583,30 @@ const resolveOfferPresetByPreference = (
 
   const sortedByDd = [...candidates].sort((left, right) => asNumber(left.metrics.dd, 0) - asNumber(right.metrics.dd, 0));
   const sortedByTrades = [...candidates].sort((left, right) => asNumber(left.metrics.trades, 0) - asNumber(right.metrics.trades, 0));
-  const ddRank = new Map<number, number>();
-  const tradeRank = new Map<number, number>();
+  const getCandidateKey = (item: CatalogPreset): string => [
+    item.strategyId,
+    asNumber(item.metrics.ret, 0).toFixed(6),
+    asNumber(item.metrics.dd, 0).toFixed(6),
+    asNumber(item.metrics.trades, 0).toFixed(6),
+    asNumber(item.params.length, 0),
+    asNumber(item.params.takeProfitPercent, 0).toFixed(6),
+    asString(item.params.detectionSource, ''),
+    asNumber(item.params.zscoreEntry, 0).toFixed(6),
+    asNumber(item.params.zscoreExit, 0).toFixed(6),
+    asNumber(item.params.zscoreStop, 0).toFixed(6),
+  ].join('|');
+  const ddRank = new Map<string, number>();
+  const tradeRank = new Map<string, number>();
 
-  sortedByDd.forEach((item, index) => ddRank.set(item.strategyId, index));
-  sortedByTrades.forEach((item, index) => tradeRank.set(item.strategyId, index));
+  sortedByDd.forEach((item, index) => ddRank.set(getCandidateKey(item), index));
+  sortedByTrades.forEach((item, index) => tradeRank.set(getCandidateKey(item), index));
 
   const targetDd = (normalizePreferenceScore(riskScore, riskLevel) / 10) * Math.max(sortedByDd.length - 1, 0);
   const targetTrades = (normalizePreferenceScore(tradeFrequencyScore, tradeFrequencyLevel) / 10) * Math.max(sortedByTrades.length - 1, 0);
 
   return [...candidates].sort((left, right) => {
-    const leftScore = Math.abs((ddRank.get(left.strategyId) || 0) - targetDd) + Math.abs((tradeRank.get(left.strategyId) || 0) - targetTrades);
-    const rightScore = Math.abs((ddRank.get(right.strategyId) || 0) - targetDd) + Math.abs((tradeRank.get(right.strategyId) || 0) - targetTrades);
+    const leftScore = Math.abs((ddRank.get(getCandidateKey(left)) || 0) - targetDd) + Math.abs((tradeRank.get(getCandidateKey(left)) || 0) - targetTrades);
+    const rightScore = Math.abs((ddRank.get(getCandidateKey(right)) || 0) - targetDd) + Math.abs((tradeRank.get(getCandidateKey(right)) || 0) - targetTrades);
     if (leftScore !== rightScore) {
       return leftScore - rightScore;
     }
@@ -2734,10 +3037,11 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
   const allOffers = catalog ? getAllOffers(catalog) : [];
   const offerIds = allOffers.map((item) => String(item.offerId));
-  const [defaultsRaw, publishedRaw, reviewSnapshots] = await Promise.all([
+  const [defaultsRaw, publishedRaw, reviewSnapshots, tsBacktestSnapshot] = await Promise.all([
     getRuntimeFlag('offer.store.defaults', JSON.stringify(DEFAULT_OFFER_STORE_DEFAULTS)),
     getRuntimeFlag('offer.store.published_ids', ''),
     getOfferReviewSnapshots(),
+    getTsBacktestSnapshot(),
   ]);
   const defaults = normalizeOfferStoreDefaults(safeJsonParse(
     defaultsRaw,
@@ -2778,6 +3082,8 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
         tradesPerDay: Number(asNumber(snapshot?.tradesPerDay, trades / Math.max(1, periodDaysRow)).toFixed(3)),
         periodDays: periodDaysRow,
         published: publishedSet.has(String(offer.offerId || '')),
+        snapshotUpdatedAt: asString(snapshot?.updatedAt, ''),
+        appearedAt: asString(sweep?.timestamp, ''),
       };
     })
     .sort((left, right) => right.score - left.score);
@@ -2804,9 +3110,16 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   return {
     defaults,
     publishedOfferIds,
+    tsBacktestSnapshot,
     offers: rawOffers.map((row) => ({
       ...row,
       equityPoints: reviewSnapshots[row.offerId]?.equityPoints || equityByOfferId.get(row.offerId) || [],
+      backtestSettings: {
+        riskScore: Number(asNumber(reviewSnapshots[row.offerId]?.riskScore, 5).toFixed(2)),
+        tradeFrequencyScore: Number(asNumber(reviewSnapshots[row.offerId]?.tradeFrequencyScore, 5).toFixed(2)),
+        initialBalance: Math.max(100, Math.floor(asNumber(reviewSnapshots[row.offerId]?.initialBalance, 10000))),
+        riskScaleMaxPercent: Number(asNumber(reviewSnapshots[row.offerId]?.riskScaleMaxPercent, 40).toFixed(2)),
+      },
     })),
   };
 };
@@ -2815,6 +3128,7 @@ export const updateOfferStoreAdminState = async (payload: {
   defaults?: Partial<OfferStoreDefaults>;
   publishedOfferIds?: string[];
   reviewSnapshotPatch?: Record<string, Partial<OfferReviewSnapshot> | null>;
+  tsBacktestSnapshotPatch?: Partial<TsBacktestSnapshot> | null;
 }) => {
   const current = await getOfferStoreAdminState();
   const nextDefaults = normalizeOfferStoreDefaults({
@@ -2852,9 +3166,23 @@ export const updateOfferStoreAdminState = async (payload: {
     }
   }
 
+  const currentTsBacktestSnapshot = await getTsBacktestSnapshot();
+  let nextTsBacktestSnapshot: TsBacktestSnapshot | null = currentTsBacktestSnapshot;
+  if (payload.tsBacktestSnapshotPatch === null) {
+    nextTsBacktestSnapshot = null;
+  } else if (payload.tsBacktestSnapshotPatch && typeof payload.tsBacktestSnapshotPatch === 'object') {
+    const mergedTsSnapshot: Record<string, unknown> = {
+      ...(currentTsBacktestSnapshot || {}),
+      ...(payload.tsBacktestSnapshotPatch || {}),
+      updatedAt: new Date().toISOString(),
+    };
+    nextTsBacktestSnapshot = normalizeTsBacktestSnapshot(mergedTsSnapshot);
+  }
+
   await setRuntimeFlag('offer.store.defaults', JSON.stringify(nextDefaults));
   await setRuntimeFlag('offer.store.published_ids', JSON.stringify(nextPublished));
   await setRuntimeFlag('offer.store.review_snapshots', JSON.stringify(nextReviewSnapshots));
+  await setRuntimeFlag('offer.store.ts_backtest_snapshot', JSON.stringify(nextTsBacktestSnapshot));
 
   return getOfferStoreAdminState();
 };
@@ -2866,6 +3194,8 @@ export const previewAdminSweepBacktest = async (payload?: {
   riskScore?: number;
   tradeFrequencyScore?: number;
   initialBalance?: number;
+  riskScaleMaxPercent?: number;
+  preferRealBacktest?: boolean;
 }) => {
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();
@@ -2882,6 +3212,9 @@ export const previewAdminSweepBacktest = async (payload?: {
   const tradeFrequencyScore = normalizePreferenceScore(payload?.tradeFrequencyScore, 'medium');
   const riskLevel = preferenceScoreToLevel(riskScore);
   const tradeFrequencyLevel = preferenceScoreToLevel(tradeFrequencyScore);
+  const sweepEvaluatedRows: SweepRecord[] = Array.isArray(sweep?.evaluated)
+    ? sweep.evaluated.filter((item): item is SweepRecord => Boolean(item && Number(item.strategyId || 0) > 0))
+    : [];
 
   let offerIds: string[] = [];
   if (kind === 'offer') {
@@ -2912,35 +3245,69 @@ export const previewAdminSweepBacktest = async (payload?: {
     }
   }
 
-  const selectedOffers = offerIds
+  let selectedOffers = offerIds
     .map((offerId) => findOfferByIdOrNull(catalog, offerId))
     .filter((offer): offer is CatalogOffer => Boolean(offer))
     .map((offer) => {
-      const preset = resolveOfferPresetByPreference(
+      const matrixPreset = kind === 'algofund-ts'
+        ? (offer.presetMatrix?.[riskLevel]?.[tradeFrequencyLevel] || null)
+        : null;
+      const preset = matrixPreset || resolveOfferPresetByPreference(
         offer,
         riskLevel,
         tradeFrequencyLevel,
         riskScore,
         tradeFrequencyScore
       );
-      const trades = Math.max(0, Math.floor(asNumber(preset.metrics?.trades, offer.metrics?.trades || 0)));
-      const ret = asNumber(preset.metrics?.ret, offer.metrics?.ret || 0);
-      const pf = asNumber(preset.metrics?.pf, offer.metrics?.pf || 0);
-      const dd = asNumber(preset.metrics?.dd, offer.metrics?.dd || 0);
+
+      // TS fallback for older catalogs: derive low/medium/high frequency variant
+      // directly from sweep family rows so freq changes strategy variant (not TS size).
+      let familyVariant: SweepRecord | null = null;
+      if (kind === 'algofund-ts' && sweepEvaluatedRows.length > 0) {
+        const modeToken = offer.strategy?.mode === 'synth' ? 'synthetic' : 'mono';
+        const intervalToken = asString(preset.params?.interval || offer.strategy?.params?.interval, '');
+        const familyRows = sweepEvaluatedRows.filter((row) => {
+          const rowMode = asString(row.marketMode, '');
+          const modeMatched = modeToken === 'synthetic'
+            ? (rowMode === 'synthetic' || rowMode === 'synth')
+            : rowMode === 'mono';
+          if (!modeMatched) {
+            return false;
+          }
+          return asString(row.strategyType, '') === asString(offer.strategy?.type, '')
+            && asString(row.market, '') === asString(offer.strategy?.market, '')
+            && (!intervalToken || asString(row.interval, '') === intervalToken);
+        });
+
+        if (familyRows.length > 0) {
+          const anchor = familyRows.find((row) => Number(row.strategyId || 0) === Number(preset.strategyId || 0)) || familyRows[Math.floor(familyRows.length / 2)];
+          const familyPresetRows = pickFamilyTradePresetRows(anchor, familyRows);
+          familyVariant = familyPresetRows[tradeFrequencyLevel] || null;
+        }
+      }
+
+      const resolvedStrategyId = Number(familyVariant?.strategyId || preset.strategyId || offer.strategy?.id || 0);
+      const trades = Math.max(0, Math.floor(asNumber(familyVariant?.tradesCount, asNumber(preset.metrics?.trades, offer.metrics?.trades || 0))));
+      const ret = asNumber(familyVariant?.totalReturnPercent, asNumber(preset.metrics?.ret, offer.metrics?.ret || 0));
+      const pf = asNumber(familyVariant?.profitFactor, asNumber(preset.metrics?.pf, offer.metrics?.pf || 0));
+      const dd = asNumber(familyVariant?.maxDrawdownPercent, asNumber(preset.metrics?.dd, offer.metrics?.dd || 0));
       const tradesPerDay = Number((trades / Math.max(1, periodDays)).toFixed(3));
       return {
         offerId: String(offer.offerId || ''),
         titleRu: asString(offer.titleRu, offer.offerId),
         mode: offer.strategy?.mode === 'synth' ? 'synth' : 'mono',
         market: asString(offer.strategy?.market, ''),
-        strategyId: Number(preset.strategyId || offer.strategy?.id || 0),
-        strategyName: asString(preset.strategyName, offer.strategy?.name || ''),
+        familyType: asString(offer.strategy?.type, ''),
+        familyMode: offer.strategy?.mode === 'synth' ? 'synthetic' : 'mono',
+        familyInterval: asString(preset.params?.interval || offer.strategy?.params?.interval, ''),
+        strategyId: resolvedStrategyId,
+        strategyName: asString(familyVariant?.strategyName, asString(preset.strategyName, offer.strategy?.name || '')),
         score: Number(asNumber(preset.score, offer.metrics?.score || 0).toFixed(3)),
         metrics: {
           ret: Number(ret.toFixed(3)),
           pf: Number(pf.toFixed(3)),
           dd: Number(dd.toFixed(3)),
-          wr: Number(asNumber(preset.metrics?.wr, offer.metrics?.wr || 0).toFixed(3)),
+          wr: Number(asNumber(familyVariant?.winRatePercent, asNumber(preset.metrics?.wr, offer.metrics?.wr || 0)).toFixed(3)),
           trades,
         },
         tradesPerDay,
@@ -2949,6 +3316,184 @@ export const previewAdminSweepBacktest = async (payload?: {
         preset,
       };
     });
+
+  if (kind === 'algofund-ts' && selectedOffers.length > 0 && sweepEvaluatedRows.length > 0) {
+    const grouped = new Map<string, number[]>();
+    selectedOffers.forEach((item, index) => {
+      const key = [
+        asString((item as Record<string, unknown>).familyType, ''),
+        asString((item as Record<string, unknown>).familyMode, ''),
+        asString(item.market, ''),
+        asString((item as Record<string, unknown>).familyInterval, ''),
+      ].join('|');
+      const next = grouped.get(key) || [];
+      next.push(index);
+      grouped.set(key, next);
+    });
+
+    grouped.forEach((indexes, key) => {
+      const [familyType, familyMode, familyMarket, familyInterval] = key.split('|');
+      const familyRows = sweepEvaluatedRows
+        .filter((row) => {
+          const rowMode = asString(row.marketMode, '');
+          const modeMatched = familyMode === 'synthetic'
+            ? (rowMode === 'synthetic' || rowMode === 'synth')
+            : rowMode === 'mono';
+          if (!modeMatched) {
+            return false;
+          }
+          if (asString(row.strategyType, '') !== familyType) {
+            return false;
+          }
+          if (asString(row.market, '') !== familyMarket) {
+            return false;
+          }
+          if (familyInterval && asString(row.interval, '') !== familyInterval) {
+            return false;
+          }
+          return Number(row.strategyId || 0) > 0;
+        })
+        .sort((left, right) => {
+          const tradeDiff = asNumber(left.tradesCount, 0) - asNumber(right.tradesCount, 0);
+          if (tradeDiff !== 0) {
+            return tradeDiff;
+          }
+          return asNumber(right.score, 0) - asNumber(left.score, 0);
+        });
+
+      if (familyRows.length === 0) {
+        return;
+      }
+
+      const memberCount = indexes.length;
+      const total = familyRows.length;
+      let start = 0;
+      if (tradeFrequencyLevel === 'high') {
+        start = Math.max(0, total - memberCount);
+      } else if (tradeFrequencyLevel === 'medium') {
+        start = Math.max(0, Math.floor((total - memberCount) / 2));
+      }
+
+      indexes.forEach((offerIndex, localIndex) => {
+        const row = familyRows[Math.min(start + localIndex, total - 1)] || null;
+        if (!row) {
+          return;
+        }
+        const current = selectedOffers[offerIndex];
+        if (!current) {
+          return;
+        }
+        current.strategyId = Number(row.strategyId || current.strategyId);
+        current.strategyName = asString(row.strategyName, current.strategyName);
+        current.metrics = {
+          ...current.metrics,
+          ret: Number(asNumber(row.totalReturnPercent, current.metrics.ret).toFixed(3)),
+          pf: Number(asNumber(row.profitFactor, current.metrics.pf).toFixed(3)),
+          dd: Number(asNumber(row.maxDrawdownPercent, current.metrics.dd).toFixed(3)),
+          wr: Number(asNumber(row.winRatePercent, current.metrics.wr).toFixed(3)),
+          trades: Math.max(0, Math.floor(asNumber(row.tradesCount, current.metrics.trades))),
+        };
+      });
+    });
+  }
+
+  const canTryRealBacktest = payload?.preferRealBacktest !== false;
+  const strategyIds = Array.from(new Set(
+    selectedOffers
+      .map((item) => Number(item.strategyId || 0))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  ));
+
+  // Risk multiplier applied post-hoc to real backtest result.
+  // 0..10 slider maps linearly between [1-maxPct/100, 1+maxPct/100].
+  const riskScaleMaxPercent = clampNumber(asNumber(payload?.riskScaleMaxPercent, 40), 0, 400);
+  const maxMul = 1 + riskScaleMaxPercent / 100;
+  const minMul = Math.max(0.1, 1 - riskScaleMaxPercent / 100);
+  const rerunRiskMul = minMul + (maxMul - minMul) * (riskScore / 10);
+
+  if (canTryRealBacktest && strategyIds.length > 0) {
+    const sweepConfigAny = (sweep?.config || {}) as Record<string, unknown>;
+    const preferredApiKey = asString(sweep?.apiKeyName, '')
+      || asString(sweepConfigAny.apiKeyName, '')
+      || asString(catalog?.apiKeyName, '')
+      || asString((await getAvailableApiKeyNames())[0], '');
+
+    if (preferredApiKey) {
+      try {
+        // Keep TS composition fixed. Frequency is applied via preset variant selection
+        // for each member (resolveOfferPresetByPreference), not by dropping members.
+        const rerunStrategyIds = [...strategyIds];
+
+        const result = await runBacktest({
+          apiKeyName: preferredApiKey,
+          mode: kind === 'offer' ? 'single' : 'portfolio',
+          strategyId: kind === 'offer' ? rerunStrategyIds[0] : undefined,
+          strategyIds: kind === 'algofund-ts' ? rerunStrategyIds : undefined,
+          bars: asNumber(sweep?.config?.backtestBars, 6000),
+          warmupBars: asNumber(sweep?.config?.warmupBars, 400),
+          skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
+          initialBalance,
+          commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
+          slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
+          fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
+          dateFrom: asString(sweep?.config?.dateFrom, ''),
+          dateTo: asString(sweep?.config?.dateTo, ''),
+        });
+
+        // Apply risk multiplier to returns/DD/equity (position sizing approximation)
+        const summaryAny = result.summary as Record<string, unknown>;
+        const scaledSummary = {
+          ...result.summary,
+          totalReturnPercent: result.summary.totalReturnPercent * rerunRiskMul,
+          maxDrawdownPercent: result.summary.maxDrawdownPercent * rerunRiskMul,
+          ...(summaryAny.netProfit != null ? { netProfit: Number(summaryAny.netProfit) * rerunRiskMul } : {}),
+          marginLoadPercent: 0,
+        };
+        const scaledEquity = result.equityCurve.map((point) => ({
+          ...point,
+          equity: Number((initialBalance + (point.equity - initialBalance) * rerunRiskMul).toFixed(4)),
+        }));
+
+        return {
+          kind,
+          controls: {
+            riskScore,
+            tradeFrequencyScore,
+            riskLevel,
+            tradeFrequencyLevel,
+            riskScaleMaxPercent,
+          },
+          period,
+          selectedOffers,
+          preview: {
+            source: 'admin_sweep_rerun',
+            summary: scaledSummary,
+            equity: scaledEquity,
+            curves: {
+              pnl: scaledEquity.map((point) => ({ time: point.time, value: point.equity - initialBalance })),
+              drawdownPercent: [],
+              marginLoadPercent: [],
+            },
+            trades: result.trades,
+            strictPresetMode: false,
+            riskApproximated: rerunRiskMul !== 1,
+          },
+          rerun: {
+            requested: true,
+            executed: true,
+            apiKeyName: preferredApiKey,
+            strategyIds: rerunStrategyIds,
+            tsMembersCount: kind === 'algofund-ts' ? selectedOffers.length : 1,
+            riskMul: rerunRiskMul,
+            riskScaleMaxPercent,
+            freqLevel: tradeFrequencyLevel,
+          },
+        };
+      } catch (error) {
+        logger.warn(`Admin sweep rerun fallback to preset mode: ${(error as Error).message}`);
+      }
+    }
+  }
 
   if (selectedOffers.length === 0) {
     throw new Error('No offers resolved for sweep backtest preview');
@@ -2966,6 +3511,7 @@ export const previewAdminSweepBacktest = async (payload?: {
         tradeFrequencyScore,
         riskLevel,
         tradeFrequencyLevel,
+        riskScaleMaxPercent,
       },
       period,
       selectedOffers,
@@ -2984,6 +3530,10 @@ export const previewAdminSweepBacktest = async (payload?: {
         },
         trades: [],
         strictPresetMode: true,
+      },
+      rerun: {
+        requested: canTryRealBacktest,
+        executed: false,
       },
     };
   }
@@ -3010,6 +3560,7 @@ export const previewAdminSweepBacktest = async (payload?: {
       tradeFrequencyScore,
       riskLevel,
       tradeFrequencyLevel,
+      riskScaleMaxPercent,
     },
     period,
     selectedOffers,
@@ -3028,6 +3579,10 @@ export const previewAdminSweepBacktest = async (payload?: {
       },
       trades: [],
       strictPresetMode: true,
+    },
+    rerun: {
+      requested: canTryRealBacktest,
+      executed: false,
     },
   };
 };
@@ -3454,7 +4009,7 @@ export const getSaasAdminSummary = async (options?: {
   const sourceCatalog = loadLatestClientCatalog();
   const sourceSweep = loadLatestSweep();
   const apiKeys = await getAvailableApiKeyNames();
-  const fallbackCatalog = await buildFallbackCatalogFromPresets(null, []);
+  const fallbackCatalog = await buildFallbackCatalogFromPresets(sourceCatalog, []);
   const catalog = getAllOffers(fallbackCatalog).length > 0
     ? fallbackCatalog
     : sourceCatalog || fallbackCatalog;

@@ -164,6 +164,11 @@ router.patch('/admin/offer-store', async (req, res) => {
       reviewSnapshotPatch: req.body?.reviewSnapshotPatch && typeof req.body.reviewSnapshotPatch === 'object'
         ? req.body.reviewSnapshotPatch
         : undefined,
+      tsBacktestSnapshotPatch: req.body?.tsBacktestSnapshotPatch === null
+        ? null
+        : (req.body?.tsBacktestSnapshotPatch && typeof req.body.tsBacktestSnapshotPatch === 'object'
+          ? req.body.tsBacktestSnapshotPatch
+          : undefined),
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -182,6 +187,7 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
       riskScore: toOptionalNumber(req.body?.riskScore),
       tradeFrequencyScore: toOptionalNumber(req.body?.tradeFrequencyScore),
       initialBalance: toOptionalNumber(req.body?.initialBalance),
+      riskScaleMaxPercent: toOptionalNumber(req.body?.riskScaleMaxPercent),
     });
     res.json({ success: true, ...data });
   } catch (error) {

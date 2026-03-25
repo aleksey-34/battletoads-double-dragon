@@ -250,7 +250,7 @@ export default function AdminDocs() {
                     <ReactMarkdown
                       remarkPlugins={[remarkGfm]}
                       components={{
-                        a: ({ node, ...props }) => <a {...props} target="_blank" rel="noreferrer" />,
+                        a: ({ node, children, ...props }) => <a {...props} target="_blank" rel="noreferrer">{children}</a>,
                         code: ({ className, children, ...props }) => <code className={`docs-code-block ${className || ''}`.trim()} {...props}>{children}</code>,
                         table: ({ node, ...props }) => <div className="docs-table-wrap"><table {...props} /></div>,
                         blockquote: ({ node, ...props }) => <blockquote className="docs-blockquote" {...props} />,

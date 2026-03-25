@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { BrowserRouter as Router, Routes, Route, Link, Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { Layout, Menu, FloatButton, Tag, Button, Space, Select, Typography, ConfigProvider } from 'antd';
 import enUS from 'antd/locale/en_US';
 import ruRU from 'antd/locale/ru_RU';
@@ -37,19 +37,38 @@ function AppShell() {
   const isClientCabinetRoute = location.pathname.startsWith('/cabinet');
   const isClientSaasSurface = location.pathname.startsWith('/saas/strategy-client') || location.pathname.startsWith('/saas/algofund');
 
+  const menuRouteByKey: Record<string, string> = {
+    '1': '/dashboard',
+    '2': '/settings',
+    '3': '/positions',
+    '4': '/logs',
+    '7': '/saas',
+    '8': '/research',
+    '9': '/admin-docs',
+  };
+
   const menuItems = isClientSaasSurface || isClientRoute
     ? []
     : [
-        { key: '1', label: <Link to="/">{t('nav.dashboard', 'Dashboard')}</Link> },
-        { key: '2', label: <Link to="/settings">{t('nav.settings', 'Settings')}</Link> },
-        { key: '3', label: <Link to="/positions">{t('nav.positions', 'Positions')}</Link> },
-        { key: '4', label: <Link to="/logs">{t('nav.logs', 'Logs')}</Link> },
-        { key: '7', label: <Link to="/saas">{t('nav.saas', 'SaaS')}</Link> },
-        { key: '8', label: <Link to="/research">{t('nav.research', 'Research')}</Link> },
-        { key: '9', label: <Link to="/admin-docs">{t('nav.docs', 'Docs')}</Link> },
+        { key: '1', label: t('nav.dashboard', 'Dashboard') },
+        { key: '2', label: t('nav.settings', 'Settings') },
+        { key: '3', label: t('nav.positions', 'Positions') },
+        { key: '4', label: t('nav.logs', 'Logs') },
+        { key: '7', label: t('nav.saas', 'SaaS') },
+        { key: '8', label: t('nav.research', 'Research') },
+        { key: '9', label: t('nav.docs', 'Docs') },
       ];
 
+  const handleMenuClick = ({ key }: { key: string }) => {
+    const route = menuRouteByKey[key];
+    if (!route || route === location.pathname) {
+      return;
+    }
+    navigate(route);
+  };
+
   const selectedMenuKey = useMemo(() => {
+    if (location.pathname.startsWith('/dashboard')) return '1';
     if (location.pathname.startsWith('/settings')) return '2';
     if (location.pathname.startsWith('/positions')) return '3';
     if (location.pathname.startsWith('/logs')) return '4';
@@ -215,7 +234,14 @@ function AppShell() {
           </Space>
           <Tag color="blue">Section: {currentSectionLabel}</Tag>
           {menuItems.length > 0 ? (
-            <Menu className="app-main-menu" theme="dark" mode="horizontal" selectedKeys={[selectedMenuKey]} items={menuItems} />
+            <Menu
+              className="app-main-menu"
+              theme="dark"
+              mode="horizontal"
+              selectedKeys={[selectedMenuKey]}
+              items={menuItems}
+              onClick={handleMenuClick}
+            />
           ) : (
             <div style={{ flex: 1 }} />
           )}
@@ -265,7 +291,8 @@ function AppShell() {
           <Route path="/client/login" element={<ClientAuth initialMode="login" />} />
           <Route path="/client/register" element={<ClientAuth initialMode="register" />} />
           <Route path="/cabinet" element={<ClientCabinet />} />
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<Navigate to="/saas" replace />} />
+          <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/settings" element={<Settings />} />
           <Route path="/positions" element={<Positions />} />
           <Route path="/logs" element={<Logs />} />
