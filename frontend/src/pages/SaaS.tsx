@@ -2032,6 +2032,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [createTenantProductMode, setCreateTenantProductMode] = useState<ProductMode>('strategy_client');
   const [createTenantPlanCode, setCreateTenantPlanCode] = useState('');
   const [createTenantApiKey, setCreateTenantApiKey] = useState('');
+  const [createTenantInlineApiKeyName, setCreateTenantInlineApiKeyName] = useState('');
+  const [createTenantInlineApiKey, setCreateTenantInlineApiKey] = useState('');
+  const [createTenantInlineApiSecret, setCreateTenantInlineApiSecret] = useState('');
   const [createTenantEmail, setCreateTenantEmail] = useState('');
   const [algofundNote, setAlgofundNote] = useState('');
   const [algofundDecisionNote, setAlgofundDecisionNote] = useState('');
@@ -4077,6 +4080,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       messageApi.error('Display name and plan are required');
       return;
     }
+    const inlineApiKey = createTenantInlineApiKey.trim();
+    const inlineApiSecret = createTenantInlineApiSecret.trim();
+    if ((inlineApiKey && !inlineApiSecret) || (!inlineApiKey && inlineApiSecret)) {
+      messageApi.error('Для нового API ключа заполните и API Key, и API Secret');
+      return;
+    }
     setActionLoading('createTenant');
     try {
       await axios.post('/api/saas/admin/tenants', {
@@ -4084,6 +4093,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         productMode: createTenantProductMode,
         planCode: createTenantPlanCode,
         assignedApiKeyName: createTenantApiKey || undefined,
+        inlineApiKeyName: createTenantInlineApiKeyName.trim() || undefined,
+        inlineApiKey: inlineApiKey || undefined,
+        inlineApiSecret: inlineApiSecret || undefined,
         email: createTenantEmail || undefined,
         language,
       });
@@ -4092,6 +4104,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setCreateTenantProductMode('strategy_client');
       setCreateTenantPlanCode('');
       setCreateTenantApiKey('');
+      setCreateTenantInlineApiKeyName('');
+      setCreateTenantInlineApiKey('');
+      setCreateTenantInlineApiSecret('');
       setCreateTenantEmail('');
       setAdminTab('offer-ts');
       await loadSummary();
@@ -6306,6 +6321,34 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <div>
                               <Text strong>{copy.apiKey}</Text>
                               <Select allowClear style={{ width: '100%', marginTop: 4 }} value={createTenantApiKey || undefined} onChange={(v) => setCreateTenantApiKey(v || '')} options={apiKeyOptions} />
+                            </div>
+                            <div>
+                              <Text strong>Новый API Key Name (опционально)</Text>
+                              <Input
+                                style={{ marginTop: 4 }}
+                                value={createTenantInlineApiKeyName}
+                                onChange={(e) => setCreateTenantInlineApiKeyName(e.target.value)}
+                                placeholder="alpha-client-key"
+                              />
+                            </div>
+                            <div>
+                              <Text strong>Новый API Key</Text>
+                              <Input
+                                style={{ marginTop: 4 }}
+                                value={createTenantInlineApiKey}
+                                onChange={(e) => setCreateTenantInlineApiKey(e.target.value)}
+                                placeholder="Введите API Key (public)"
+                              />
+                            </div>
+                            <div>
+                              <Text strong>API Secret</Text>
+                              <Input
+                                type="password"
+                                style={{ marginTop: 4 }}
+                                value={createTenantInlineApiSecret}
+                                onChange={(e) => setCreateTenantInlineApiSecret(e.target.value)}
+                                placeholder="Введите API Secret"
+                              />
                             </div>
                             <div>
                               <Text strong>Email</Text>

@@ -275,7 +275,19 @@ router.post('/admin/publish', async (_req, res) => {
 });
 
 router.post('/admin/tenants', async (req, res) => {
-  const { displayName, productMode, planCode, assignedApiKeyName, language, email, fullName } = req.body;
+  const {
+    displayName,
+    productMode,
+    planCode,
+    assignedApiKeyName,
+    inlineApiKeyName,
+    inlineApiKey,
+    inlineApiSecret,
+    inlineApiExchange,
+    language,
+    email,
+    fullName,
+  } = req.body;
   if (!displayName || !productMode || !planCode) {
     return res.status(400).json({ error: 'displayName, productMode, and planCode are required' });
   }
@@ -285,6 +297,10 @@ router.post('/admin/tenants', async (req, res) => {
       productMode,
       planCode: String(planCode),
       assignedApiKeyName: assignedApiKeyName ? String(assignedApiKeyName) : undefined,
+      inlineApiKeyName: inlineApiKeyName ? String(inlineApiKeyName) : undefined,
+      inlineApiKey: inlineApiKey ? String(inlineApiKey) : undefined,
+      inlineApiSecret: inlineApiSecret ? String(inlineApiSecret) : undefined,
+      inlineApiExchange: inlineApiExchange ? String(inlineApiExchange) : undefined,
       language: language ? String(language) : undefined,
       email: email ? String(email) : undefined,
       fullName: fullName ? String(fullName) : undefined,

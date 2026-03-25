@@ -12,7 +12,7 @@ import {
 } from '../bot/tradingSystems';
 import { getMonitoringLatest } from '../bot/monitoring';
 import { getPositions, closeAllPositions, cancelAllOrders } from '../bot/exchange';
-import { Strategy } from '../config/settings';
+import { Strategy, saveApiKey } from '../config/settings';
 import { db, initDB } from '../utils/database';
 import logger from '../utils/logger';
 import { initResearchDb } from '../research/db';
@@ -2856,6 +2856,10 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
     productMode: ProductMode;
     planCode: string;
     assignedApiKeyName?: string;
+    inlineApiKeyName?: string;
+    inlineApiKey?: string;
+    inlineApiSecret?: string;
+    inlineApiExchange?: string;
     language?: string;
     email?: string;
     fullName?: string;
@@ -2893,7 +2897,48 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
     // Ensure deposit_cap_override column exists (idempotent migration)
     await db.run(`ALTER TABLE tenants ADD COLUMN deposit_cap_override INTEGER DEFAULT NULL`).catch(() => { /* already exists */ });
 
-    const apiKeyName = asString(payload.assignedApiKeyName, '');
+    let apiKeyName = asString(payload.assignedApiKeyName, '');
+    const inlineApiKeyNameRaw = asString(payload.inlineApiKeyName, '').trim();
+    const inlineApiKey = asString(payload.inlineApiKey, '').trim();
+    const inlineApiSecret = asString(payload.inlineApiSecret, '').trim();
+    const inlineApiExchange = asString(payload.inlineApiExchange, 'bybit').trim() || 'bybit';
+
+    if (inlineApiKey || inlineApiSecret || inlineApiKeyNameRaw) {
+      if (!inlineApiKey || !inlineApiSecret) {
+        throw new Error('inlineApiKey and inlineApiSecret are required when creating an inline API key');
+      }
+
+      const keyBase = (inlineApiKeyNameRaw || `${baseSlug}-api`)
+        .toLowerCase()
+        .replace(/[^a-z0-9_.-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 64) || `${baseSlug}-api`;
+
+      let inlineName = keyBase;
+      let keyAttempt = 0;
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const existingKey = await db.get('SELECT id FROM api_keys WHERE name = ?', [inlineName]);
+        if (!existingKey) break;
+        keyAttempt += 1;
+        inlineName = `${keyBase}-${keyAttempt}`;
+      }
+
+      await saveApiKey({
+        name: inlineName,
+        exchange: inlineApiExchange,
+        api_key: inlineApiKey,
+        secret: inlineApiSecret,
+        passphrase: '',
+        speed_limit: 10,
+        testnet: false,
+        demo: false,
+      });
+
+      apiKeyName = inlineName;
+      logger.info(`[SaaS] Created inline API key for tenant creation: ${inlineName}`);
+    }
+
     const language = asString(payload.language, 'ru');
 
     await db.run(
