@@ -2002,6 +2002,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [messageApi, contextHolder] = message.useMessage();
   const summaryRequestSeqRef = useRef(0);
   const algofundRequestSeqRef = useRef(0);
+  const backtestDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [summary, setSummary] = useState<SaasSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState('');
@@ -2085,6 +2086,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [applyLowLotReplacement, setApplyLowLotReplacement] = useState('');
   const [applyLowLotWorking, setApplyLowLotWorking] = useState(false);
   const [batchTenantIds, setBatchTenantIds] = useState<number[]>([]);
+  const [storefrontConnectTarget, setStorefrontConnectTarget] = useState<null | { systemId: number; systemName: string; tenantIds: number[] }>(null);
   const [batchAlgofundAction, setBatchAlgofundAction] = useState<'start' | 'stop' | 'switch_system'>('start');
   const [batchTargetSystemId, setBatchTargetSystemId] = useState<number | null>(null);
   const [batchActionNote, setBatchActionNote] = useState('');
@@ -2121,6 +2123,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
   const [adminSweepBacktestResult, setAdminSweepBacktestResult] = useState<AdminSweepBacktestPreviewResponse | null>(null);
   const [adminSweepBacktestRerunApiKey, setAdminSweepBacktestRerunApiKey] = useState('');
+  // True when user moved a slider but hasn't yet recalculated — show stale indicator
+  const [adminSweepBacktestStale, setAdminSweepBacktestStale] = useState(false);
+  // Client-side scaling factor applied instantly to last equity curve while backend recalculates
+  const [adminSweepPreviewRiskScale, setAdminSweepPreviewRiskScale] = useState(1);
   const [removeStorefrontTarget, setRemoveStorefrontTarget] = useState<string | null>(null);
   const [removeStorefrontClosePositions, setRemoveStorefrontClosePositions] = useState(true);
   const [removeStorefrontConfirm, setRemoveStorefrontConfirm] = useState<{
@@ -2336,12 +2342,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       .map((tenant) => parseAlgofundPreviewSummary(tenant.algofundProfile?.latestPreview || null))
       .filter((summary) => summary && typeof summary === 'object');
     const fallbackSummary = tenantSummaries[0] || adminDraftPortfolioSummary;
+    // Also use latest backtest result summary for the matching TS when available
+    const latestBacktestSummary = (adminSweepBacktestResult?.kind === 'algofund-ts' && adminSweepBacktestResult?.preview?.summary
+      && backtestDrawerContext?.kind === 'algofund-ts')
+      ? adminSweepBacktestResult.preview.summary
+      : null;
 
     return {
       systemName,
       storefrontLabel,
       runtimeSystemId,
-      summary: publishSummary || fallbackSummary || null,
+      summary: publishSummary || latestBacktestSummary || fallbackSummary || null,
       tenants,
       tenantCount: tenants.length,
       activeCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.actual_enabled || 0) === 1).length,
@@ -3773,6 +3784,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
   }, [persistBacktestSettingsByCard]);
 
+  // Debounce helper: triggers auto-recalculate after slider changes with 700ms delay
+  const scheduleBacktestDebounce = useCallback(() => {
+    if (backtestDebounceRef.current !== null) {
+      clearTimeout(backtestDebounceRef.current);
+    }
+    backtestDebounceRef.current = setTimeout(() => {
+      backtestDebounceRef.current = null;
+      void runAdminSweepBacktestPreview();
+    }, 700);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const runAdminSweepBacktestPreview = async (
     context?: SaasBacktestContext | null,
     options?: { preferRealBacktest?: boolean }
@@ -3783,6 +3805,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
 
     setAdminSweepBacktestLoading(true);
+    setAdminSweepBacktestStale(false);
+    setAdminSweepPreviewRiskScale(1);
     try {
       const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
         kind: targetContext.kind,
@@ -3802,6 +3826,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       if (response.data.sweepApiKeyName && !adminSweepBacktestRerunApiKey) {
         setAdminSweepBacktestRerunApiKey(response.data.sweepApiKeyName);
       }
+      // Auto-store current settings for this context card
+      storeCurrentBacktestSettingsForContext(targetContext, {
+        riskScore: adminSweepBacktestRiskScore,
+        tradeFrequencyScore: adminSweepBacktestTradeScore,
+        initialBalance: adminSweepBacktestInitialBalance,
+        riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
+      });
     } catch (error: any) {
       setAdminSweepBacktestResult(null);
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось построить sweep backtest preview'));
@@ -4193,6 +4224,42 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       await loadSummary();
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to apply published admin TS to selected clients'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const applyStorefrontTsToClients = async () => {
+    const systemId = Number(storefrontConnectTarget?.systemId || 0);
+    const systemName = String(storefrontConnectTarget?.systemName || '').trim();
+    const selectedTenantIds = Array.from(new Set((storefrontConnectTarget?.tenantIds || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+
+    if (!systemId || !systemName) {
+      messageApi.warning('Не найдена TS для применения');
+      return;
+    }
+    if (selectedTenantIds.length === 0) {
+      messageApi.warning('Выберите хотя бы одного клиента Алгофонда');
+      return;
+    }
+
+    setActionLoading('apply-storefront-ts');
+    try {
+      const response = await axios.post('/api/saas/admin/algofund-batch-actions', {
+        tenantIds: selectedTenantIds,
+        requestType: 'switch_system',
+        note: `Apply storefront TS ${systemName}`,
+        targetSystemId: systemId,
+        targetSystemName: systemName,
+        directExecute: true,
+      });
+      const created = Number(response.data?.createdCount || 0);
+      const failed = Number(response.data?.failedCount || 0);
+      messageApi.success(`TS применена: switched ${created}, failed ${failed}`);
+      setStorefrontConnectTarget(null);
+      await loadSummary('full');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось применить TS к клиентам'));
     } finally {
       setActionLoading('');
     }
@@ -7342,9 +7409,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           <Button
                                             size="small"
                                             onClick={() => {
-                                              navigateToAdminTab('clients');
-                                              setClientsModeFilter('algofund_client');
+                                              setStorefrontConnectTarget({
+                                                systemId: Number(item.runtimeSystemId || 0),
+                                                systemName: String(item.systemName || ''),
+                                                tenantIds: item.tenants.map((tenant) => Number(tenant.tenant.id)).filter((id) => id > 0),
+                                              });
                                             }}
+                                            disabled={!item.runtimeSystemId}
                                           >
                                             Подключить клиентов
                                           </Button>
@@ -7572,6 +7643,64 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               Retry Materialization Now
             </Button>
           </div>
+        </Space>
+      </Modal>
+
+      <Modal
+        title={`Подключить клиентов к TS: ${storefrontConnectTarget?.systemName || '—'}`}
+        open={Boolean(storefrontConnectTarget)}
+        onCancel={() => setStorefrontConnectTarget(null)}
+        onOk={() => void applyStorefrontTsToClients()}
+        okText="Применить TS"
+        cancelText="Отмена"
+        confirmLoading={actionLoading === 'apply-storefront-ts'}
+        width={720}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="Прямое подключение клиентов к выбранной TS"
+            description="Будет выполнен direct switch_system для выбранных Algofund-клиентов без дополнительного перехода в batch-раздел."
+          />
+          <Select
+            mode="multiple"
+            style={{ width: '100%' }}
+            placeholder="Выберите клиентов Algofund"
+            value={storefrontConnectTarget?.tenantIds || []}
+            onChange={(values) => setStorefrontConnectTarget((current) => (current ? {
+              ...current,
+              tenantIds: values.map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0),
+            } : current))}
+            options={batchEligibleAlgofundTenants.map((item) => ({
+              value: Number(item.tenant.id),
+              label: `${item.tenant.display_name || item.tenant.slug || `tenant-${item.tenant.id}`} (${item.tenant.slug || item.tenant.id})${item.algofundProfile?.published_system_name ? ` - текущая TS: ${item.algofundProfile.published_system_name}` : ''}`,
+            }))}
+            optionFilterProp="label"
+          />
+          <Space wrap>
+            <Button
+              size="small"
+              onClick={() => setStorefrontConnectTarget((current) => (current ? {
+                ...current,
+                tenantIds: batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)).filter((item) => item > 0),
+              } : current))}
+            >
+              Выбрать всех algofund-клиентов
+            </Button>
+            <Button
+              size="small"
+              onClick={() => setStorefrontConnectTarget((current) => (current ? {
+                ...current,
+                tenantIds: [],
+              } : current))}
+            >
+              Очистить выбор
+            </Button>
+          </Space>
+          <Text type="secondary">
+            Выбрано клиентов: {(storefrontConnectTarget?.tenantIds || []).length}
+          </Text>
         </Space>
       </Modal>
 
@@ -8042,7 +8171,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
             <Row gutter={[12, 12]}>
               <Col xs={24} md={6}>
-                <Card size="small" title="Риск (0-10)">
+                <Card size="small" title={<Space>{adminSweepBacktestStale ? <Tag color="orange">⟳ Обновить</Tag> : null}<span>Риск (0-10)</span></Space>}>
                   <Slider
                     min={0}
                     max={10}
@@ -8052,13 +8181,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       const next = Number(value || 0);
                       setAdminSweepBacktestRiskScore(next);
                       storeCurrentBacktestSettingsForContext(backtestDrawerContext, { riskScore: next });
+                      const prevScore = adminSweepBacktestResult?.controls?.riskScore ?? 5;
+                      const expMap = (s: number) => Math.exp(Math.log(0.18) + (s / 10) * (Math.log(5.5) - Math.log(0.18)));
+                      const scale = expMap(next) / Math.max(0.01, expMap(prevScore));
+                      setAdminSweepPreviewRiskScale(Number(scale.toFixed(4)));
+                      setAdminSweepBacktestStale(true);
+                      scheduleBacktestDebounce();
                     }}
                   />
                   <Text type="secondary">Текущий уровень: {sliderValueToLevel(adminSweepBacktestRiskScore)}</Text>
                 </Card>
               </Col>
               <Col xs={24} md={6}>
-                <Card size="small" title="Частота сделок (0-10)">
+                <Card size="small" title={<Space>{adminSweepBacktestStale ? <Tag color="orange">⟳ Обновить</Tag> : null}<span>Частота сделок (0-10)</span></Space>}>
                   <Slider
                     min={0}
                     max={10}
@@ -8068,6 +8203,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       const next = Number(value || 0);
                       setAdminSweepBacktestTradeScore(next);
                       storeCurrentBacktestSettingsForContext(backtestDrawerContext, { tradeFrequencyScore: next });
+                      setAdminSweepBacktestStale(true);
+                      scheduleBacktestDebounce();
                     }}
                   />
                   <Text type="secondary">Текущий уровень: {sliderValueToLevel(adminSweepBacktestTradeScore)}</Text>
@@ -8108,14 +8245,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             </Row>
 
             {adminSweepBacktestResult ? (
-              <Card size="small" title="Результат sweep backtest">
+              <Card size="small" title={adminSweepBacktestStale ? <Space><Tag color="orange">⟳ Пересчёт запущен...</Tag><span>Результат sweep backtest</span></Space> : 'Результат sweep backtest'}>
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   {(() => {
-                    const equitySeries = toLineSeriesData(adminSweepBacktestResult.preview?.equity || []);
+                    const rawEquitySeries = toLineSeriesData(adminSweepBacktestResult.preview?.equity || []);
+                    // Apply instant client-side scale while backend recalculates (stale mode)
+                    const balance = Number(adminSweepBacktestInitialBalance || 10000);
+                    const scale = adminSweepBacktestStale ? adminSweepPreviewRiskScale : 1;
+                    const equitySeries = scale !== 1
+                      ? rawEquitySeries.map((point) => ({ ...point, value: balance + (point.value - balance) * scale }))
+                      : rawEquitySeries;
                     const summary = adminSweepBacktestResult.preview?.summary || {};
                     const fallbackCurves = deriveBacktestCurvesFromEquity(
                       equitySeries,
-                      Number(adminSweepBacktestInitialBalance || 10000),
+                      balance,
                       Number(adminSweepBacktestResult.controls?.riskScore || adminSweepBacktestRiskScore || 5),
                     );
 

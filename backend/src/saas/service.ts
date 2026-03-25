@@ -2250,7 +2250,8 @@ const buildSyntheticEquityPoints = (
   initialBalance: number,
   retPercent: number,
   maxDrawdownPercent: number,
-  periodDays: number
+  periodDays: number,
+  oscillationFactor = 1
 ): Array<{ time: number; equity: number }> => {
   const start = Number.isFinite(initialBalance) && initialBalance > 0 ? initialBalance : 10000;
   const ret = Number.isFinite(retPercent) ? retPercent : 0;
@@ -2270,7 +2271,7 @@ const buildSyntheticEquityPoints = (
     const trend = start + (finalEquity - start) * t;
     // Wave simulates drawdown: dips in mid-period then recovers
     // sin(t * 2π) gives a full oscillation; attenuate toward end so we finish on trend
-    const wave = -ddAbs * Math.sin(t * Math.PI * 2.2) * Math.pow(1 - t * 0.7, 1.2) * 0.65;
+    const wave = -ddAbs * Math.sin(t * Math.PI * (1.8 + oscillationFactor * 0.9)) * Math.pow(1 - t * 0.7, 1.2) * (0.45 + oscillationFactor * 0.18);
     const equity = Math.max(start * 0.05, trend + wave);
     points.push({
       time: Math.round(now - periodMs + t * periodMs),
@@ -2283,6 +2284,96 @@ const buildSyntheticEquityPoints = (
 const toPresetOnlyEquity = (initialBalance: number, retPercent: number, periodDays = 90): Array<{ time: number; equity: number }> => {
   const ddApprox = Math.abs(retPercent) * 0.3;
   return buildSyntheticEquityPoints(initialBalance, retPercent, ddApprox, periodDays);
+};
+
+const getPreviewRiskMultiplier = (riskScore: number, riskScaleMaxPercent: number): number => {
+  // Exponential scaling: risk=0 → ~0.18x, risk=5 → 1.0x, risk=10 → ~5.5x.
+  // This gives a visually dramatic spread between low and high risk settings.
+  const normalized = clampNumber(asNumber(riskScore, 5), 0, 10) / 10; // 0..1
+  // Cap drives the max; use riskScaleMaxPercent to shift the ceiling.
+  // Default 40 → maxMul ≈ 4.5; 100 → maxMul ≈ 6.0.
+  const logMax = Math.log(Math.max(2.0, 1 + riskScaleMaxPercent / 15));
+  const logMin = -logMax * 0.9; // floor near 0.18x at risk=0
+  return Math.exp(logMin + normalized * (logMax - logMin));
+};
+
+const getPreviewTradeMultiplier = (tradeFrequencyScore: number): number => {
+  // freq=0 → 0.25x, freq=5 → 1.0x, freq=10 → 2.4x  — wider range than before
+  const normalized = clampNumber(asNumber(tradeFrequencyScore, 5), 0, 10) / 10;
+  return Math.exp(Math.log(0.25) + normalized * (Math.log(2.4) - Math.log(0.25)));
+};
+
+const adjustPreviewMetrics = (
+  metrics: { ret: number; pf: number; dd: number; wr: number; trades: number },
+  riskMul: number,
+  tradeMul: number
+) => {
+  // ret scales with both risk and trade frequency; high risk → high potential return AND high DD
+  const retMul = riskMul * Math.sqrt(tradeMul); // sqrt makes trade effect softer on ret
+  // dd scales even more aggressively with risk (risk is a lot about how much you can lose)
+  const ddMul = Math.max(0.05, riskMul * (0.7 + tradeMul * 0.3));
+  // pf degrades with very high risk and very high frequency
+  const pfBase = asNumber(metrics.pf, 1);
+  const pfMul = Math.max(0.3, 1 / Math.max(0.5, Math.sqrt(riskMul) * Math.sqrt(tradeMul)));
+  // win rate: high risk = lower wr, high freq = higher wr (more trades → regression to mean)
+  const wrShift = (tradeMul - 1) * 5 - Math.max(0, riskMul - 1) * 6;
+  // trades scale primarily with frequency, lightly with risk
+  const tradesMul = Math.max(0.1, tradeMul * Math.max(0.5, riskMul * 0.6 + 0.4));
+
+  return {
+    ret: Number((asNumber(metrics.ret, 0) * retMul).toFixed(3)),
+    pf: Number(Math.max(0.15, pfBase * pfMul).toFixed(3)),
+    dd: Number(Math.max(0.02, asNumber(metrics.dd, 0) * ddMul).toFixed(3)),
+    wr: Number(clampNumber(asNumber(metrics.wr, 0) + wrShift, 1, 99).toFixed(3)),
+    trades: Math.max(1, Math.round(asNumber(metrics.trades, 0) * tradesMul)),
+  };
+};
+
+const buildAdjustedPreviewEquity = (
+  preset: CatalogPreset,
+  initialBalance: number,
+  targetRet: number,
+  targetDd: number,
+  periodDays: number,
+  oscillationFactor: number // 0.1 (very smooth) to 2.5 (very volatile)
+): Array<{ time: number; equity: number }> => {
+  const curve = Array.isArray(preset.equity_curve)
+    ? preset.equity_curve.map((value) => asNumber(value, Number.NaN)).filter((value) => Number.isFinite(value) && value > 0)
+    : [];
+
+  if (curve.length < 2) {
+    return buildSyntheticEquityPoints(initialBalance, targetRet, targetDd, periodDays, oscillationFactor);
+  }
+
+  const first = asNumber(curve[0], 0);
+  if (first <= 0) {
+    return buildSyntheticEquityPoints(initialBalance, targetRet, targetDd, periodDays, oscillationFactor);
+  }
+
+  const normalized = curve.map((equity) => asNumber(equity, first) / first - 1);
+  const baseFinal = normalized[normalized.length - 1];
+  if (!Number.isFinite(baseFinal) || Math.abs(baseFinal) < 0.000001) {
+    return buildSyntheticEquityPoints(initialBalance, targetRet, targetDd, periodDays, oscillationFactor);
+  }
+
+  const scale = (targetRet / 100) / baseFinal;
+  const now = Date.now();
+  const periodMs = Math.round(Math.max(10, periodDays) * 24 * 3600 * 1000);
+  // Oscillation amplitude driven by both risk (via dd) and oscillationFactor
+  const waveFreq = 1.2 + oscillationFactor * 1.2; // more risk = higher frequency oscillations
+  const waveAmp = (targetDd / 100) * 0.12 * oscillationFactor; // more risk = bigger swings
+
+  return normalized.map((value, index) => {
+    const t = normalized.length <= 1 ? 1 : index / (normalized.length - 1);
+    // Multi-frequency noise makes it look more realistic
+    const primaryWave = Math.sin(t * Math.PI * waveFreq) * waveAmp * (1 - t * 0.08);
+    const secondaryWave = Math.sin(t * Math.PI * waveFreq * 2.3 + 0.7) * waveAmp * 0.3;
+    const adjustedReturn = value * scale + primaryWave + secondaryWave;
+    return {
+      time: Math.round(now - periodMs + t * periodMs),
+      equity: Number((initialBalance * (1 + adjustedReturn)).toFixed(4)),
+    };
+  });
 };
 
 const buildDerivedPreviewCurves = (
@@ -2350,9 +2441,10 @@ const buildPresetOnlySingleSummary = (
   initialBalance: number,
   preset: CatalogPreset,
   market: string,
-  strategyName: string
+  strategyName: string,
+  overrides?: Partial<{ ret: number; pf: number; dd: number; wr: number; trades: number }>
 ): Record<string, unknown> => {
-  const ret = asNumber(preset.metrics.ret, 0);
+  const ret = asNumber(overrides?.ret, asNumber(preset.metrics.ret, 0));
   const end = Number((initialBalance * (1 + ret / 100)).toFixed(4));
   return {
     mode: 'single',
@@ -2370,11 +2462,11 @@ const buildPresetOnlySingleSummary = (
     initialBalance,
     finalEquity: end,
     totalReturnPercent: ret,
-    maxDrawdownPercent: asNumber(preset.metrics.dd, 0),
-    maxDrawdownAbsolute: Number((initialBalance * asNumber(preset.metrics.dd, 0) / 100).toFixed(4)),
-    tradesCount: Math.max(0, Math.floor(asNumber(preset.metrics.trades, 0))),
-    winRatePercent: asNumber(preset.metrics.wr, 0),
-    profitFactor: asNumber(preset.metrics.pf, 1),
+    maxDrawdownPercent: asNumber(overrides?.dd, asNumber(preset.metrics.dd, 0)),
+    maxDrawdownAbsolute: Number((initialBalance * asNumber(overrides?.dd, asNumber(preset.metrics.dd, 0)) / 100).toFixed(4)),
+    tradesCount: Math.max(0, Math.floor(asNumber(overrides?.trades, asNumber(preset.metrics.trades, 0)))),
+    winRatePercent: asNumber(overrides?.wr, asNumber(preset.metrics.wr, 0)),
+    profitFactor: asNumber(overrides?.pf, asNumber(preset.metrics.pf, 1)),
     grossProfit: 0,
     grossLoss: 0,
     commissionPercent: 0,
@@ -2387,14 +2479,15 @@ const buildPresetOnlySingleSummary = (
 
 const buildPresetOnlyPortfolioSummary = (
   initialBalance: number,
-  selectedOffers: Array<{ offerId: string; offer: CatalogOffer; preset: CatalogPreset }>
+  selectedOffers: Array<{ offerId: string; offer: CatalogOffer; preset: CatalogPreset }>,
+  overrides?: Partial<{ avgRet: number; avgPf: number; maxDd: number; avgWr: number; totalTrades: number }>
 ): Record<string, unknown> => {
   const count = selectedOffers.length || 1;
-  const avgRet = selectedOffers.reduce((acc, item) => acc + asNumber(item.preset.metrics.ret, 0), 0) / count;
-  const avgPf = selectedOffers.reduce((acc, item) => acc + asNumber(item.preset.metrics.pf, 1), 0) / count;
-  const avgWr = selectedOffers.reduce((acc, item) => acc + asNumber(item.preset.metrics.wr, 0), 0) / count;
-  const maxDd = selectedOffers.reduce((acc, item) => Math.max(acc, asNumber(item.preset.metrics.dd, 0)), 0);
-  const totalTrades = selectedOffers.reduce((acc, item) => acc + Math.max(0, Math.floor(asNumber(item.preset.metrics.trades, 0))), 0);
+  const avgRet = asNumber(overrides?.avgRet, selectedOffers.reduce((acc, item) => acc + asNumber(item.preset.metrics.ret, 0), 0) / count);
+  const avgPf = asNumber(overrides?.avgPf, selectedOffers.reduce((acc, item) => acc + asNumber(item.preset.metrics.pf, 1), 0) / count);
+  const avgWr = asNumber(overrides?.avgWr, selectedOffers.reduce((acc, item) => acc + asNumber(item.preset.metrics.wr, 0), 0) / count);
+  const maxDd = asNumber(overrides?.maxDd, selectedOffers.reduce((acc, item) => Math.max(acc, asNumber(item.preset.metrics.dd, 0)), 0));
+  const totalTrades = Math.max(0, Math.floor(asNumber(overrides?.totalTrades, selectedOffers.reduce((acc, item) => acc + Math.max(0, Math.floor(asNumber(item.preset.metrics.trades, 0))), 0))));
   const end = Number((initialBalance * (1 + avgRet / 100)).toFixed(4));
 
   return {
@@ -3504,11 +3597,16 @@ export const previewAdminSweepBacktest = async (payload?: {
   ));
 
   // Risk multiplier applied post-hoc to real backtest result.
-  // 0..10 slider maps linearly between [1-maxPct/100, 1+maxPct/100].
+  // Exponential: risk=0 → ~0.18x, risk=5 → 1.0x, risk=10 → ~5.5x.
   const riskScaleMaxPercent = clampNumber(asNumber(payload?.riskScaleMaxPercent, 40), 0, 400);
-  const maxMul = 1 + riskScaleMaxPercent / 100;
-  const minMul = Math.max(0.1, 1 - riskScaleMaxPercent / 100);
-  const rerunRiskMul = minMul + (maxMul - minMul) * (riskScore / 10);
+  const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
+  const tradeMul = getPreviewTradeMultiplier(tradeFrequencyScore);
+  // oscillationFactor: low risk + low freq → near 0 (straight smooth line);
+  //                   high risk + high freq → ~2.5 (very jagged volatile curve)
+  const oscillationFactor = clampNumber(
+    Math.log(Math.max(0.1, rerunRiskMul)) * 0.8 + Math.log(Math.max(0.1, tradeMul)) * 0.6 + 1.0,
+    0.05, 2.5
+  );
   let rerunFailureReason = '';
 
   if (canTryRealBacktest && strategyIds.length > 0) {
@@ -3602,13 +3700,30 @@ export const previewAdminSweepBacktest = async (payload?: {
     throw new Error('No offers resolved for sweep backtest preview');
   }
 
+  const adjustedSelectedOffers = selectedOffers.map((item) => {
+    const adjustedMetrics = adjustPreviewMetrics(item.metrics, rerunRiskMul, tradeMul);
+    return {
+      ...item,
+      metrics: adjustedMetrics,
+      tradesPerDay: Number((adjustedMetrics.trades / Math.max(1, item.periodDays)).toFixed(3)),
+      equityPoints: buildAdjustedPreviewEquity(
+        item.preset,
+        initialBalance,
+        adjustedMetrics.ret,
+        adjustedMetrics.dd,
+        item.periodDays,
+        oscillationFactor
+      ).map((point) => Number(asNumber(point.equity, 0).toFixed(4))),
+    };
+  });
+
   const sweepApiKeyName = asString((sweep as Record<string, unknown>)?.apiKeyName || ((sweep as Record<string, unknown>)?.config as Record<string, unknown>)?.apiKeyName, '');
 
   if (kind === 'offer') {
-    const first = selectedOffers[0];
-    const equityCurve = buildPreviewEquityFromPreset(first.preset, initialBalance, first.metrics.ret, periodDays);
+    const first = adjustedSelectedOffers[0];
+    const equityCurve = buildAdjustedPreviewEquity(first.preset, initialBalance, first.metrics.ret, first.metrics.dd, periodDays, oscillationFactor);
     const derivedCurves = buildDerivedPreviewCurves(equityCurve, initialBalance, riskScore);
-    const singleSummary = buildPresetOnlySingleSummary(initialBalance, first.preset, first.market, first.strategyName);
+    const singleSummary = buildPresetOnlySingleSummary(initialBalance, first.preset, first.market, first.strategyName, first.metrics);
     return {
       kind,
       controls: {
@@ -3620,7 +3735,7 @@ export const previewAdminSweepBacktest = async (payload?: {
       },
       period,
       sweepApiKeyName,
-      selectedOffers,
+      selectedOffers: adjustedSelectedOffers,
       preview: {
         source: 'admin_sweep_preset',
         summary: {
@@ -3656,9 +3771,42 @@ export const previewAdminSweepBacktest = async (payload?: {
     preset: item.preset,
   }));
 
-  const portfolioEquity = buildPortfolioPreviewEquityFromPresets(selectedOffers, initialBalance, periodDays);
+  // Build portfolio equity directly from already-oscillated per-offer equityPoints
+  // (averaging across all offers preserves the per-risk oscillation pattern)
+  const allOfferEquityArrays = adjustedSelectedOffers
+    .map((item) => (Array.isArray(item.equityPoints) ? item.equityPoints as number[] : []))
+    .filter((pts) => pts.length >= 2);
+
+  let portfolioEquity: Array<{ time: number; equity: number }>;
+  if (allOfferEquityArrays.length > 0) {
+    const maxLen = allOfferEquityArrays.reduce((acc, pts) => Math.max(acc, pts.length), 0);
+    const now = Date.now();
+    const resolvedPeriodDays = Math.max(10, periodDays || 90);
+    const periodMs = Math.round(resolvedPeriodDays * 24 * 3600 * 1000);
+    portfolioEquity = Array.from({ length: maxLen }, (_, index) => {
+      let sum = 0;
+      let count = 0;
+      for (const pts of allOfferEquityArrays) {
+        const val = pts[Math.min(index, pts.length - 1)];
+        if (Number.isFinite(val)) { sum += val; count += 1; }
+      }
+      const avgEq = count > 0 ? sum / count : initialBalance;
+      return {
+        time: Math.round(now - periodMs + (index / Math.max(1, maxLen - 1)) * periodMs),
+        equity: Number(avgEq.toFixed(4)),
+      };
+    });
+  } else {
+    portfolioEquity = buildPortfolioPreviewEquityFromPresets(adjustedSelectedOffers, initialBalance, periodDays);
+  }
   const portfolioCurves = buildDerivedPreviewCurves(portfolioEquity, initialBalance, riskScore);
-  const portfolioSummary = buildPresetOnlyPortfolioSummary(initialBalance, pseudoSelectedOffers as any);
+  const portfolioSummary = buildPresetOnlyPortfolioSummary(initialBalance, pseudoSelectedOffers as any, {
+    avgRet: adjustedSelectedOffers.reduce((acc, item) => acc + asNumber(item.metrics.ret, 0), 0) / Math.max(1, adjustedSelectedOffers.length),
+    avgPf: adjustedSelectedOffers.reduce((acc, item) => acc + asNumber(item.metrics.pf, 0), 0) / Math.max(1, adjustedSelectedOffers.length),
+    maxDd: adjustedSelectedOffers.reduce((acc, item) => Math.max(acc, asNumber(item.metrics.dd, 0)), 0),
+    avgWr: adjustedSelectedOffers.reduce((acc, item) => acc + asNumber(item.metrics.wr, 0), 0) / Math.max(1, adjustedSelectedOffers.length),
+    totalTrades: adjustedSelectedOffers.reduce((acc, item) => acc + Math.max(0, Math.floor(asNumber(item.metrics.trades, 0))), 0),
+  });
 
   return {
     kind,
@@ -3671,7 +3819,7 @@ export const previewAdminSweepBacktest = async (payload?: {
     },
     period,
     sweepApiKeyName,
-    selectedOffers,
+    selectedOffers: adjustedSelectedOffers,
     preview: {
       source: 'admin_sweep_preset',
       summary: {
