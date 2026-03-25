@@ -204,10 +204,12 @@ router.post('/admin/storefront-system/remove', async (req, res) => {
   try {
     const systemName = req.body?.systemName ? String(req.body.systemName).trim() : '';
     const force = toBool(req.body?.force, false);
+    const dryRun = toBool(req.body?.dryRun, false);
+    const closePositions = toBool(req.body?.closePositions, false);
     if (!systemName) {
       return res.status(400).json({ error: 'systemName is required' });
     }
-    const data = await removeAlgofundStorefrontSystem({ systemName, force });
+    const data = await removeAlgofundStorefrontSystem({ systemName, force, dryRun, closePositions });
     res.json({ success: true, ...data });
   } catch (error) {
     const err = error as Error;
@@ -303,6 +305,10 @@ router.post('/admin/tenants', async (req, res) => {
     inlineApiKey,
     inlineApiSecret,
     inlineApiExchange,
+    inlineApiPassphrase,
+    inlineApiSpeedLimit,
+    inlineApiTestnet,
+    inlineApiDemo,
     language,
     email,
     fullName,
@@ -320,6 +326,10 @@ router.post('/admin/tenants', async (req, res) => {
       inlineApiKey: inlineApiKey ? String(inlineApiKey) : undefined,
       inlineApiSecret: inlineApiSecret ? String(inlineApiSecret) : undefined,
       inlineApiExchange: inlineApiExchange ? String(inlineApiExchange) : undefined,
+      inlineApiPassphrase: inlineApiPassphrase ? String(inlineApiPassphrase) : undefined,
+      inlineApiSpeedLimit: toOptionalNumber(inlineApiSpeedLimit),
+      inlineApiTestnet: inlineApiTestnet !== undefined ? toBool(inlineApiTestnet) : undefined,
+      inlineApiDemo: inlineApiDemo !== undefined ? toBool(inlineApiDemo) : undefined,
       language: language ? String(language) : undefined,
       email: email ? String(email) : undefined,
       fullName: fullName ? String(fullName) : undefined,

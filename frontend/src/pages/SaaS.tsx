@@ -2048,6 +2048,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [createTenantInlineApiKeyName, setCreateTenantInlineApiKeyName] = useState('');
   const [createTenantInlineApiKey, setCreateTenantInlineApiKey] = useState('');
   const [createTenantInlineApiSecret, setCreateTenantInlineApiSecret] = useState('');
+  const [createTenantInlineApiPassphrase, setCreateTenantInlineApiPassphrase] = useState('');
+  const [createTenantInlineApiExchange, setCreateTenantInlineApiExchange] = useState('bybit');
+  const [createTenantInlineApiSpeedLimit, setCreateTenantInlineApiSpeedLimit] = useState(10);
+  const [createTenantInlineApiTestnet, setCreateTenantInlineApiTestnet] = useState(false);
+  const [createTenantInlineApiDemo, setCreateTenantInlineApiDemo] = useState(false);
   const [createTenantEmail, setCreateTenantEmail] = useState('');
   const [algofundNote, setAlgofundNote] = useState('');
   const [algofundDecisionNote, setAlgofundDecisionNote] = useState('');
@@ -2117,7 +2122,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestResult, setAdminSweepBacktestResult] = useState<AdminSweepBacktestPreviewResponse | null>(null);
   const [adminSweepBacktestRerunApiKey, setAdminSweepBacktestRerunApiKey] = useState('');
   const [removeStorefrontTarget, setRemoveStorefrontTarget] = useState<string | null>(null);
-  const [removeStorefrontConfirm, setRemoveStorefrontConfirm] = useState<{ systemName: string; clientCount: number; tenants: Array<{ id: number; display_name: string }> } | null>(null);
+  const [removeStorefrontClosePositions, setRemoveStorefrontClosePositions] = useState(true);
+  const [removeStorefrontConfirm, setRemoveStorefrontConfirm] = useState<{
+    systemName: string;
+    clientCount: number;
+    tenants: Array<{ id: number; display_name: string }>;
+    positionsByApiKey: Array<{ apiKeyName: string; openPositions: number; symbols: string[] }>;
+  } | null>(null);
   const [selectedAdminDraftTsOfferIds, setSelectedAdminDraftTsOfferIds] = useState<string[]>([]);
   const [selectedAdminDraftTsSetKey, setSelectedAdminDraftTsSetKey] = useState('');
 
@@ -2613,12 +2624,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
-    const params = new URLSearchParams(window.location.search);
-    const requestedAdminTab = String(params.get('adminTab') || '').trim() as AdminTabKey;
-    if (requestedAdminTab === 'offer-ts' || requestedAdminTab === 'research-analysis' || requestedAdminTab === 'clients' || requestedAdminTab === 'monitoring' || requestedAdminTab === 'create-user') {
-      setActiveTab('admin');
-      setAdminTab(requestedAdminTab);
-    }
+    const applyFromUrl = () => {
+      const path = window.location.pathname || '';
+      const params = new URLSearchParams(window.location.search);
+      const requestedAdminTab = String(params.get('adminTab') || '').trim() as AdminTabKey;
+      const isAdminPath = path.includes('/saas/admin');
+      if (isAdminPath) {
+        setActiveTab('admin');
+      }
+      if (requestedAdminTab === 'offer-ts' || requestedAdminTab === 'research-analysis' || requestedAdminTab === 'clients' || requestedAdminTab === 'monitoring' || requestedAdminTab === 'create-user') {
+        setAdminTab(requestedAdminTab);
+      }
+    };
+
+    applyFromUrl();
+    window.addEventListener('popstate', applyFromUrl);
+    return () => {
+      window.removeEventListener('popstate', applyFromUrl);
+    };
   }, [isAdminSurface]);
 
   useEffect(() => {
@@ -3611,17 +3634,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         removed: boolean;
         clientsAffected: number;
         affectedTenants: Array<{ id: number; display_name: string }>;
+        positionsByApiKey: Array<{ apiKeyName: string; openPositions: number; symbols: string[] }>;
         warning?: string;
-      }>('/api/saas/admin/storefront-system/remove', { systemName, force: false });
+      }>('/api/saas/admin/storefront-system/remove', { systemName, force: false, dryRun: true });
       if (response.data.removed) {
         messageApi.success(`TS "${systemName}" снята с витрины`);
         await loadSummary('full');
       } else {
-        // Needs confirmation
         setRemoveStorefrontConfirm({
           systemName,
           clientCount: response.data.clientsAffected,
           tenants: response.data.affectedTenants || [],
+          positionsByApiKey: response.data.positionsByApiKey || [],
         });
       }
     } catch (error: any) {
@@ -3636,8 +3660,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!systemName) return;
     setActionLoading(`remove-storefront:${systemName}`);
     try {
-      await axios.post('/api/saas/admin/storefront-system/remove', { systemName, force: true });
-      messageApi.success(`TS "${systemName}" снята с витрины. ${removeStorefrontConfirm?.clientCount || 0} клиентов отключено.`);
+      const response = await axios.post('/api/saas/admin/storefront-system/remove', {
+        systemName,
+        force: true,
+        closePositions: removeStorefrontClosePositions,
+      });
+      const closeFailed = Number(response.data?.closeResult?.failed || 0);
+      messageApi.success(`TS "${systemName}" снята с витрины. ${removeStorefrontConfirm?.clientCount || 0} клиентов отключено.${removeStorefrontClosePositions ? ` Ошибок закрытия: ${closeFailed}` : ''}`);
       setRemoveStorefrontConfirm(null);
       await loadSummary('full');
     } catch (error: any) {
@@ -3655,12 +3684,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     if (row.tenant.product_mode === 'strategy_client') {
       setStrategyTenantId(tenantId);
-      setActiveTab('strategy-client');
+      navigateSaasTab('strategy-client');
       return;
     }
 
     setAlgofundTenantId(tenantId);
-    setActiveTab('algofund');
+    navigateSaasTab('algofund');
   };
 
   const openPublishedAdminTsForClients = () => {
@@ -3671,8 +3700,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
-    setActiveTab('admin');
-    setAdminTab('clients');
+    navigateToAdminTab('clients');
     setClientsModeFilter('algofund_client');
     setClientsClassKind('ts');
     setClientsClassValue(publishedSystemName);
@@ -3683,16 +3711,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   const focusClientsByOffer = (offerId: string) => {
-    setActiveTab('admin');
-    setAdminTab('clients');
+    navigateToAdminTab('clients');
     setClientsClassKind('offer');
     setClientsClassValue(String(offerId || ''));
     messageApi.info('Открыт список клиентов, подключённых к выбранному офферу.');
   };
 
   const openAdminMonitoring = (mode: 'all' | ProductMode = 'all') => {
-    setActiveTab('admin');
-    setAdminTab('monitoring');
+    navigateToAdminTab('monitoring');
     setMonitoringModeFilter(mode);
   };
 
@@ -4076,13 +4102,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     openDraftTsBacktest();
   };
 
-  const navigateToAdminTab = (tab: AdminTabKey) => {
+  const navigateSaasTab = (tab: SaasTabKey, nextAdminTab?: AdminTabKey) => {
     if (typeof window !== 'undefined') {
-      window.location.assign(`/saas/admin?adminTab=${tab}`);
-      return;
+      if (tab === 'admin') {
+        const target = nextAdminTab || adminTab;
+        window.history.pushState({}, '', `/saas/admin?adminTab=${target}`);
+      } else {
+        window.history.pushState({}, '', '/saas');
+      }
     }
-    setActiveTab('admin');
-    setAdminTab(tab);
+    setActiveTab(tab);
+    if (tab === 'admin' && nextAdminTab) {
+      setAdminTab(nextAdminTab);
+    }
+  };
+
+  const navigateToAdminTab = (tab: AdminTabKey) => {
+    navigateSaasTab('admin', tab);
   };
 
   const openSaasBacktestFlow = () => {
@@ -4117,7 +4153,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   })();
 
   const openAdminReviewContext = (kind: 'offer' | 'algofund-ts', offerId?: string) => {
-    setAdminTab('offer-ts');
+    navigateToAdminTab('offer-ts');
     setSelectedAdminReviewKind(kind);
     if (kind === 'offer' && offerId) {
       setSelectedAdminReviewOfferId(String(offerId));
@@ -4183,6 +4219,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         inlineApiKeyName: createTenantInlineApiKeyName.trim() || undefined,
         inlineApiKey: inlineApiKey || undefined,
         inlineApiSecret: inlineApiSecret || undefined,
+        inlineApiPassphrase: createTenantInlineApiPassphrase.trim() || undefined,
+        inlineApiExchange: createTenantInlineApiExchange || undefined,
+        inlineApiSpeedLimit: createTenantInlineApiSpeedLimit || undefined,
+        inlineApiTestnet: createTenantInlineApiTestnet,
+        inlineApiDemo: createTenantInlineApiDemo,
         email: createTenantEmail || undefined,
         language,
       });
@@ -4194,8 +4235,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setCreateTenantInlineApiKeyName('');
       setCreateTenantInlineApiKey('');
       setCreateTenantInlineApiSecret('');
+      setCreateTenantInlineApiPassphrase('');
+      setCreateTenantInlineApiExchange('bybit');
+      setCreateTenantInlineApiSpeedLimit(10);
+      setCreateTenantInlineApiTestnet(false);
+      setCreateTenantInlineApiDemo(false);
       setCreateTenantEmail('');
-      setAdminTab('offer-ts');
+      navigateToAdminTab('offer-ts');
       await loadSummary();
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to create tenant'));
@@ -4339,7 +4385,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           size="small"
           onClick={() => {
             setStrategyTenantId(row.tenant.id);
-            setActiveTab('strategy-client');
+            navigateSaasTab('strategy-client');
           }}
         >
           {copy.openStrategyClient}
@@ -4350,7 +4396,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             size="small"
             onClick={() => {
               setAlgofundTenantId(row.tenant.id);
-              setActiveTab('algofund');
+              navigateSaasTab('algofund');
             }}
           >
             {copy.openAlgofund}
@@ -4836,7 +4882,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             <Space wrap className="saas-page-actions">
               <Button onClick={() => void loadSummary()} loading={summaryLoading}>{copy.refresh}</Button>
               {isAdminSurface ? <Button onClick={() => void seedDemoTenants()} loading={actionLoading === 'seed'}>{copy.seed}</Button> : null}
-              {isAdminSurface ? <Button type="dashed" onClick={() => { setActiveTab('admin'); setAdminTab('create-user'); }}>{copy.createClient}</Button> : null}
+              {isAdminSurface ? <Button type="dashed" onClick={() => navigateToAdminTab('create-user')}>{copy.createClient}</Button> : null}
               {isAdminSurface ? <Button type="primary" onClick={() => void publishAdminTs()} loading={actionLoading === 'publish'}>{copy.publish}</Button> : null}
             </Space>
           </Col>
@@ -4850,7 +4896,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           className="saas-tabs"
           destroyOnHidden
           activeKey={activeTab}
-          onChange={(key) => setActiveTab(key as SaasTabKey)}
+          onChange={(key) => {
+            const next = key as SaasTabKey;
+            if (next === 'admin') {
+              navigateToAdminTab(adminTab);
+            } else {
+              navigateSaasTab(next);
+            }
+          }}
           items={[
             {
               key: 'admin',
@@ -4860,7 +4913,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   activeKey={adminTab}
                   onChange={(key) => {
                     const nextKey = key as AdminTabKey;
-                    setAdminTab(nextKey);
+                    navigateToAdminTab(nextKey);
                     if (nextKey === 'offer-ts' || nextKey === 'research-analysis') {
                       void loadSummary('full');
                     }
@@ -6004,7 +6057,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </div>
                           </Card>
 
-                          <Card className="battletoads-card" title={copy.connectedTenants} extra={<Button type="primary" onClick={() => setAdminTab('create-user')}>{copy.createClient}</Button>}>
+                          <Card className="battletoads-card" title={copy.connectedTenants} extra={<Button type="primary" onClick={() => navigateToAdminTab('create-user')}>{copy.createClient}</Button>}>
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.adminCreateHint}</Paragraph>
                             <Space direction="vertical" size={12} style={{ width: '100%' }}>
                               <Space wrap>
@@ -6430,6 +6483,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               />
                             </div>
                             <div>
+                              <Text strong>Биржа</Text>
+                              <Select
+                                style={{ width: '100%', marginTop: 4 }}
+                                value={createTenantInlineApiExchange}
+                                onChange={(value) => setCreateTenantInlineApiExchange(String(value || 'bybit'))}
+                                options={[
+                                  { value: 'bybit', label: 'Bybit' },
+                                  { value: 'bingx', label: 'BingX' },
+                                  { value: 'bitget', label: 'Bitget' },
+                                ]}
+                              />
+                            </div>
+                            <div>
                               <Text strong>Новый API Key</Text>
                               <Input
                                 style={{ marginTop: 4 }}
@@ -6449,12 +6515,41 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               />
                             </div>
                             <div>
+                              <Text strong>Passphrase</Text>
+                              <Input
+                                style={{ marginTop: 4 }}
+                                value={createTenantInlineApiPassphrase}
+                                onChange={(e) => setCreateTenantInlineApiPassphrase(e.target.value)}
+                                placeholder="Для Bitget обязательно, иначе опционально"
+                              />
+                            </div>
+                            <div>
+                              <Text strong>RPS</Text>
+                              <InputNumber
+                                min={1}
+                                max={200}
+                                style={{ width: '100%', marginTop: 4 }}
+                                value={createTenantInlineApiSpeedLimit}
+                                onChange={(value) => setCreateTenantInlineApiSpeedLimit(Math.max(1, Number(value || 10)))}
+                              />
+                            </div>
+                            <Space wrap>
+                              <Space>
+                                <Text>Testnet:</Text>
+                                <Switch checked={createTenantInlineApiTestnet} onChange={setCreateTenantInlineApiTestnet} />
+                              </Space>
+                              <Space>
+                                <Text>Demo-trading:</Text>
+                                <Switch checked={createTenantInlineApiDemo} onChange={setCreateTenantInlineApiDemo} />
+                              </Space>
+                            </Space>
+                            <div>
                               <Text strong>Email</Text>
                               <Input type="email" style={{ marginTop: 4 }} value={createTenantEmail} onChange={(e) => setCreateTenantEmail(e.target.value)} placeholder="client@example.com" />
                             </div>
                             <Space>
                               <Button type="primary" onClick={() => void createTenantAdmin()} loading={actionLoading === 'createTenant'}>{copy.createClient}</Button>
-                              <Button onClick={() => setAdminTab('offer-ts')}>Назад к оферам и ТС</Button>
+                              <Button onClick={() => navigateToAdminTab('offer-ts')}>Назад к оферам и ТС</Button>
                             </Space>
                           </Space>
                         </Card>
@@ -6521,7 +6616,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       width: 280,
                                       render: (_, row: any) => (
                                         <Space size={4} wrap>
-                                          <Button size="small" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Редактировать</Button>
+                                          <Button size="small" onClick={() => navigateToAdminTab('offer-ts')}>Редактировать</Button>
                                           <Button size="small" onClick={() => openAdminReviewContext('offer', String(row.offerId))}>Бэктест</Button>
                                           <Tag color="success">на витрине</Tag>
                                         </Space>
@@ -7339,7 +7434,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Descriptions.Item label={copy.engineSystemId}>{algofundState.engine?.systemId ?? '—'}</Descriptions.Item>
                               <Descriptions.Item label={copy.apiKey}>{algofundState.engine?.apiKeyName || algofundState.profile?.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || '—'}</Descriptions.Item>
                             </Descriptions>
-                            <Button onClick={() => { setActiveTab('admin'); setAdminTab('clients'); setClientsModeFilter('algofund_client'); }}>{copy.openTradingSystems}</Button>
+                            <Button onClick={() => { navigateToAdminTab('clients'); setClientsModeFilter('algofund_client'); }}>{copy.openTradingSystems}</Button>
                             {algofundEnginePending && !algofundEngineRunning ? (
                               <>
                                 <Alert
@@ -7379,10 +7474,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   description="Для корректного preview витрины и admin TS используй Админ → Оферы и ТС (блок Published admin TS preview)."
                                 />
                                 <Space wrap>
-                                  <Button type="primary" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>
+                                  <Button type="primary" onClick={() => navigateToAdminTab('offer-ts')}>
                                     Открыть Approval Center
                                   </Button>
-                                  <Button onClick={() => { setActiveTab('admin'); setAdminTab('clients'); setClientsModeFilter('algofund_client'); }}>
+                                  <Button onClick={() => { navigateToAdminTab('clients'); setClientsModeFilter('algofund_client'); }}>
                                     К клиентским привязкам TS
                                   </Button>
                                 </Space>
@@ -7494,8 +7589,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             type="warning"
             showIcon
             message={`TS "${removeStorefrontConfirm?.systemName}" подключена к ${removeStorefrontConfirm?.clientCount || 0} клиентам`}
-            description="После подтверждения клиенты будут отключены от этой ТС и их trading engine остановится. Открытые позиции НЕ закрываются автоматически — проверьте их вручную."
+            description="После подтверждения клиенты будут отключены от этой ТС. Ниже можно выбрать, нужно ли пытаться закрыть открытые позиции через stop-flow."
           />
+          <Space>
+            <Switch checked={removeStorefrontClosePositions} onChange={setRemoveStorefrontClosePositions} />
+            <Text>Пытаться закрыть открытые позиции и остановить engine</Text>
+          </Space>
+          {(removeStorefrontConfirm?.positionsByApiKey || []).length > 0 ? (
+            <Card size="small" title="Dry-run по API key">
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                {(removeStorefrontConfirm?.positionsByApiKey || []).map((item) => (
+                  <div key={item.apiKeyName}>
+                    <Space wrap>
+                      <Tag color="blue">{item.apiKeyName}</Tag>
+                      <Tag color={item.openPositions > 0 ? 'warning' : 'success'}>
+                        open positions: {item.openPositions < 0 ? 'unknown' : item.openPositions}
+                      </Tag>
+                      {item.symbols.slice(0, 6).map((symbol) => <Tag key={symbol}>{symbol}</Tag>)}
+                    </Space>
+                  </div>
+                ))}
+              </Space>
+            </Card>
+          ) : null}
           {(removeStorefrontConfirm?.tenants || []).length > 0 ? (
             <div>
               <Text strong>Затронутые клиенты:</Text>
@@ -7549,8 +7665,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               key="open-ts"
               onClick={() => {
                 setApplyLowLotTarget(null);
-                setActiveTab('admin');
-                setAdminTab('monitoring');
+                navigateToAdminTab('monitoring');
               }}
             >
               Открыть в SaaS

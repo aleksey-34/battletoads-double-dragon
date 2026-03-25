@@ -2905,6 +2905,10 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
     inlineApiKey?: string;
     inlineApiSecret?: string;
     inlineApiExchange?: string;
+    inlineApiPassphrase?: string;
+    inlineApiSpeedLimit?: number;
+    inlineApiTestnet?: boolean;
+    inlineApiDemo?: boolean;
     language?: string;
     email?: string;
     fullName?: string;
@@ -2947,6 +2951,10 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
     const inlineApiKey = asString(payload.inlineApiKey, '').trim();
     const inlineApiSecret = asString(payload.inlineApiSecret, '').trim();
     const inlineApiExchange = asString(payload.inlineApiExchange, 'bybit').trim() || 'bybit';
+    const inlineApiPassphrase = asString(payload.inlineApiPassphrase, '').trim();
+    const inlineApiSpeedLimit = Math.max(1, Math.min(200, Math.floor(asNumber(payload.inlineApiSpeedLimit, 10))));
+    const inlineApiTestnet = Boolean(payload.inlineApiTestnet);
+    const inlineApiDemo = Boolean(payload.inlineApiDemo);
 
     if (inlineApiKey || inlineApiSecret || inlineApiKeyNameRaw) {
       if (!inlineApiKey || !inlineApiSecret) {
@@ -2974,10 +2982,10 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
         exchange: inlineApiExchange,
         api_key: inlineApiKey,
         secret: inlineApiSecret,
-        passphrase: '',
-        speed_limit: 10,
-        testnet: false,
-        demo: false,
+        passphrase: inlineApiPassphrase,
+        speed_limit: inlineApiSpeedLimit,
+        testnet: inlineApiTestnet,
+        demo: inlineApiDemo,
       });
 
       apiKeyName = inlineName;
@@ -5732,10 +5740,14 @@ export const publishAdminTradingSystem = async () => {
 export const removeAlgofundStorefrontSystem = async (payload: {
   systemName: string;
   force?: boolean;
+  dryRun?: boolean;
+  closePositions?: boolean;
 }): Promise<{
   removed: boolean;
   clientsAffected: number;
   affectedTenants: Array<{ id: number; display_name: string }>;
+  positionsByApiKey: Array<{ apiKeyName: string; openPositions: number; symbols: string[] }>;
+  closeResult?: { requested: number; failed: number };
   warning?: string;
 }> => {
   const systemName = asString(payload.systemName, '').trim();
@@ -5745,22 +5757,74 @@ export const removeAlgofundStorefrontSystem = async (payload: {
 
   // Find tenants connected to this TS
   const connectedRows = await db.all(
-    `SELECT t.id, t.display_name
+    `SELECT t.id, t.display_name, COALESCE(ap.assigned_api_key_name, t.assigned_api_key_name, '') AS api_key_name
      FROM tenants t
      JOIN algofund_profiles ap ON ap.tenant_id = t.id
      WHERE ap.published_system_name = ?`,
     [systemName]
-  ) as Array<{ id: number; display_name: string }>;
+  ) as Array<{ id: number; display_name: string; api_key_name?: string }>;
 
   const clientCount = connectedRows.length;
   const affectedTenants = connectedRows.map((row) => ({ id: Number(row.id), display_name: asString(row.display_name, `tenant#${row.id}`) }));
+  const apiKeys = Array.from(new Set(connectedRows.map((row) => asString(row.api_key_name, '')).filter(Boolean)));
+  const positionsByApiKey: Array<{ apiKeyName: string; openPositions: number; symbols: string[] }> = [];
+
+  for (const apiKeyName of apiKeys) {
+    try {
+      const positions = await getPositions(apiKeyName);
+      const open = (Array.isArray(positions) ? positions : []).filter((item: any) => {
+        const size = Math.abs(asNumber(item?.size, 0));
+        return Number.isFinite(size) && size > 0;
+      });
+      positionsByApiKey.push({
+        apiKeyName,
+        openPositions: open.length,
+        symbols: open.map((item: any) => asString(item?.symbol, '')).filter(Boolean).slice(0, 20),
+      });
+    } catch (error) {
+      logger.warn(`positions dry-run failed for ${apiKeyName}: ${(error as Error).message}`);
+      positionsByApiKey.push({
+        apiKeyName,
+        openPositions: -1,
+        symbols: [],
+      });
+    }
+  }
+
+  if (payload.dryRun) {
+    return {
+      removed: false,
+      clientsAffected: clientCount,
+      affectedTenants,
+      positionsByApiKey,
+      warning: `Dry-run: TS "${systemName}" связана с ${clientCount} клиентами`,
+    };
+  }
 
   if (clientCount > 0 && !payload.force) {
     return {
       removed: false,
       clientsAffected: clientCount,
       affectedTenants,
+      positionsByApiKey,
       warning: `TS "${systemName}" подключена к ${clientCount} клиентам. Подтвердите удаление и отключение клиентов.`,
+    };
+  }
+
+  let closeResult: { requested: number; failed: number } | undefined;
+
+  if (clientCount > 0 && payload.closePositions) {
+    const tenantIds = affectedTenants.map((item) => Number(item.id)).filter((item) => item > 0);
+    const batch = await requestAlgofundBatchAction(
+      tenantIds,
+      'stop',
+      `Storefront remove ${systemName}`,
+      {},
+      { directExecute: true }
+    );
+    closeResult = {
+      requested: Number((batch as any)?.createdCount || 0),
+      failed: Number((batch as any)?.failedCount || 0),
     };
   }
 
@@ -5801,6 +5865,8 @@ export const removeAlgofundStorefrontSystem = async (payload: {
     removed: true,
     clientsAffected: clientCount,
     affectedTenants,
+    positionsByApiKey,
+    ...(closeResult ? { closeResult } : {}),
   };
 };
 
