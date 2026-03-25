@@ -2340,24 +2340,27 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const summary = preview?.summary && typeof preview.summary === 'object' ? preview.summary : null;
     return summary;
   };
-  const algofundStorefrontSystems = Array.from(
-    new Set([
+  const algofundStorefrontSystems = (() => {
+    // Build storefront from ALL available published TS systems (not just those with connected clients)
+    const availableSystemNames = Array.from(new Set([
+      // All systems from algofundState (now includes ALL published ALGOFUND_MASTER from all API keys)
+      ...(algofundState?.availableSystems || [])
+        .map((item) => String(item.name || '').trim())
+        .filter(Boolean),
+      // Also include systems connected to current tenants
       ...batchEligibleAlgofundTenants
         .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
         .filter(Boolean),
+      // And the most recently published system
       String(publishResponse?.sourceSystem?.systemName || '').trim(),
-    ].filter(Boolean))
-  ).map((systemName) => {
-    const storefrontLabel = `TS offer #${Array.from(new Set([
-      ...batchEligibleAlgofundTenants
-        .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
-        .filter(Boolean),
-      String(publishResponse?.sourceSystem?.systemName || '').trim(),
-    ].filter(Boolean))).indexOf(systemName) + 1}`;
+    ].filter(Boolean)));
+
+    return availableSystemNames.map((systemName) => {
+    const storefrontLabel = `TS offer #${availableSystemNames.indexOf(systemName) + 1}`;
     const tenants = batchEligibleAlgofundTenants.filter((tenant) => String(tenant.algofundProfile?.published_system_name || '').trim() === systemName);
     const runtimeSystemId = publishResponse?.sourceSystem?.systemName === systemName
       ? Number(publishResponse.sourceSystem.systemId || 0)
-      : null;
+      : (algofundState?.availableSystems || []).find((s) => s.name === systemName)?.id || null;
     const publishSummary = publishResponse?.sourceSystem?.systemName === systemName
       ? publishResponse?.preview?.summary || null
       : null;
@@ -2382,6 +2385,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       pendingCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.requested_enabled || 0) === 1 && Number(tenant.algofundProfile?.actual_enabled || 0) !== 1).length,
     };
   });
+  })();
   const offerTitleById = offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
     return acc;
@@ -7838,7 +7842,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   }
                                 }}
                               >
-                                {copy.save}
+                                Сохранить
                               </Button>
                             </Space>
                           ) : null}
