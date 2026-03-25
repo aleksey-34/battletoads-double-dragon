@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import axios from 'axios';
 import {
   Alert,
+  Badge,
   Button,
   Card,
   Checkbox,
@@ -62,6 +63,7 @@ type AdminSweepBacktestPreviewResponse = {
     riskScaleMaxPercent?: number;
   };
   period?: PeriodInfo | null;
+  sweepApiKeyName?: string;
   selectedOffers: Array<{
     offerId: string;
     titleRu: string;
@@ -2114,6 +2116,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
   const [adminSweepBacktestResult, setAdminSweepBacktestResult] = useState<AdminSweepBacktestPreviewResponse | null>(null);
   const [adminSweepBacktestRerunApiKey, setAdminSweepBacktestRerunApiKey] = useState('');
+  const [removeStorefrontTarget, setRemoveStorefrontTarget] = useState<string | null>(null);
+  const [removeStorefrontConfirm, setRemoveStorefrontConfirm] = useState<{ systemName: string; clientCount: number; tenants: Array<{ id: number; display_name: string }> } | null>(null);
   const [selectedAdminDraftTsOfferIds, setSelectedAdminDraftTsOfferIds] = useState<string[]>([]);
   const [selectedAdminDraftTsSetKey, setSelectedAdminDraftTsSetKey] = useState('');
 
@@ -2320,7 +2324,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const tenantSummaries = tenants
       .map((tenant) => parseAlgofundPreviewSummary(tenant.algofundProfile?.latestPreview || null))
       .filter((summary) => summary && typeof summary === 'object');
-    const fallbackSummary = tenantSummaries[0] || (systemName === String(adminTradingSystemDraft?.name || '').trim() ? adminDraftPortfolioSummary : null);
+    const fallbackSummary = tenantSummaries[0] || adminDraftPortfolioSummary;
 
     return {
       systemName,
@@ -3600,6 +3604,49 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const initiateRemoveStorefront = async (systemName: string) => {
+    setRemoveStorefrontTarget(systemName);
+    try {
+      const response = await axios.post<{
+        removed: boolean;
+        clientsAffected: number;
+        affectedTenants: Array<{ id: number; display_name: string }>;
+        warning?: string;
+      }>('/api/saas/admin/storefront-system/remove', { systemName, force: false });
+      if (response.data.removed) {
+        messageApi.success(`TS "${systemName}" снята с витрины`);
+        await loadSummary('full');
+      } else {
+        // Needs confirmation
+        setRemoveStorefrontConfirm({
+          systemName,
+          clientCount: response.data.clientsAffected,
+          tenants: response.data.affectedTenants || [],
+        });
+      }
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Ошибка при снятии ТС с витрины'));
+    } finally {
+      setRemoveStorefrontTarget(null);
+    }
+  };
+
+  const confirmRemoveStorefront = async () => {
+    const systemName = removeStorefrontConfirm?.systemName;
+    if (!systemName) return;
+    setActionLoading(`remove-storefront:${systemName}`);
+    try {
+      await axios.post('/api/saas/admin/storefront-system/remove', { systemName, force: true });
+      messageApi.success(`TS "${systemName}" снята с витрины. ${removeStorefrontConfirm?.clientCount || 0} клиентов отключено.`);
+      setRemoveStorefrontConfirm(null);
+      await loadSummary('full');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Ошибка при принудительном снятии ТС с витрины'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const openTenantWorkspace = (row: TenantSummary) => {
     const tenantId = Number(row.tenant.id || 0);
     if (!tenantId) {
@@ -3725,6 +3772,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           : undefined,
       });
       setAdminSweepBacktestResult(response.data);
+      // Auto-set rerun key to sweep's key when none has been chosen yet
+      if (response.data.sweepApiKeyName && !adminSweepBacktestRerunApiKey) {
+        setAdminSweepBacktestRerunApiKey(response.data.sweepApiKeyName);
+      }
     } catch (error: any) {
       setAdminSweepBacktestResult(null);
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось построить sweep backtest preview'));
@@ -4935,8 +4986,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       key: 'offer',
                                       render: (_, row: any) => (
                                         <Space direction="vertical" size={0}>
-                                          <Text strong>{row.titleRu}</Text>
-                                          <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                          <Space>
+                                            <Badge
+                                              status={row.published ? 'success' : Number(row.ret || 0) >= 1 ? 'processing' : 'default'}
+                                              title={row.published ? 'На витрине' : Number(row.ret || 0) >= 1 ? 'Хороший кандидат' : 'Кандидат'}
+                                            />
+                                            <Text strong>{row.titleRu}</Text>
+                                            {row.published ? <Tag color="success" style={{ marginLeft: 2 }}>витрина</Tag> : null}
+                                          </Space>
+                                          <Text type="secondary" style={{ paddingLeft: 16 }}>{String(row.mode || '').toUpperCase()} • {row.market}</Text>
                                         </Space>
                                       ),
                                     },
@@ -5013,6 +5071,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       ]}
                                     >
                                       <Space wrap>
+                                        <Badge
+                                          status={Number(set.avgRet || 0) >= 1 ? 'processing' : 'default'}
+                                          title={Number(set.avgRet || 0) >= 1 ? 'Хороший набор' : 'Набор кандидатов'}
+                                        />
                                         <Text strong>{set.setKey}</Text>
                                         <Tag color="processing">offers {set.offerCount}</Tag>
                                         <Tag color={metricColor(Number(set.avgRet || 0), 'return')}>avg Ret {formatPercent(set.avgRet)}</Tag>
@@ -7144,24 +7206,61 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 dataSource={algofundStorefrontSystems}
                                 renderItem={(item) => (
                                   <List.Item key={item.systemName}>
-                                    <Card size="small" bordered>
+                                    <Card
+                                      size="small"
+                                      bordered
+                                      title={
+                                        <Space>
+                                          <Text strong>{item.storefrontLabel}</Text>
+                                          {item.activeCount > 0
+                                            ? <Badge status="success" text="active" />
+                                            : item.pendingCount > 0
+                                              ? <Badge status="processing" text="pending" />
+                                              : <Badge status="default" text="no clients" />}
+                                        </Space>
+                                      }
+                                    >
                                       <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                        <Text strong>{item.storefrontLabel}</Text>
-                                        <Text type="secondary">Approved TS offer</Text>
                                         <Space wrap>
                                           <Tag color="blue">clients {Number(item.tenantCount || 0)}</Tag>
                                           <Tag color="green">active {Number(item.activeCount || 0)}</Tag>
-                                          <Tag color="gold">pending {Number(item.pendingCount || 0)}</Tag>
-                                          <Tag color="geekblue">Ret {formatPercent(item.summary?.totalReturnPercent)}</Tag>
-                                          <Tag color="orange">DD {formatPercent(item.summary?.maxDrawdownPercent)}</Tag>
-                                          <Tag color="purple">PF {formatNumber(item.summary?.profitFactor)}</Tag>
+                                          {item.pendingCount > 0 ? <Tag color="gold">pending {item.pendingCount}</Tag> : null}
+                                          {item.summary?.totalReturnPercent !== undefined && item.summary.totalReturnPercent !== 0
+                                            ? <Tag color={metricColor(Number(item.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(item.summary.totalReturnPercent)}</Tag>
+                                            : null}
+                                          {item.summary?.maxDrawdownPercent !== undefined && item.summary.maxDrawdownPercent !== 0
+                                            ? <Tag color={metricColor(Number(item.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(item.summary.maxDrawdownPercent)}</Tag>
+                                            : null}
+                                          {item.summary?.profitFactor !== undefined && item.summary.profitFactor !== 0
+                                            ? <Tag color={metricColor(Number(item.summary.profitFactor || 0), 'pf')}>PF {formatNumber(item.summary.profitFactor)}</Tag>
+                                            : null}
+                                          {item.summary?.tradesCount !== undefined && item.summary.tradesCount !== 0
+                                            ? <Tag color="blue">сделок {formatNumber(item.summary.tradesCount, 0)}</Tag>
+                                            : null}
                                         </Space>
-                                        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                                          Это витринная TS-карточка. Sweep/preview строятся из snapshot и данных ресерча, без обязательной привязки к runtime API key.
-                                        </Paragraph>
+                                        {item.tenants.length > 0
+                                          ? <Text type="secondary" style={{ fontSize: 12 }}>{item.tenants.map((t) => t.tenant.display_name).join(', ')}</Text>
+                                          : <Text type="secondary" style={{ fontSize: 12 }}>Нет подключённых клиентов</Text>}
                                         <Space wrap>
-                                          <Button size="small" onClick={openBacktestDrawerForAdminTs}>Открыть бэктест ТС</Button>
+                                          <Button size="small" onClick={openBacktestDrawerForAdminTs}>Бэктест ТС</Button>
                                           <Button size="small" onClick={() => navigateToAdminTab('offer-ts')}>В approval center</Button>
+                                          <Button
+                                            size="small"
+                                            onClick={() => {
+                                              navigateToAdminTab('clients');
+                                              setClientsModeFilter('algofund_client');
+                                            }}
+                                          >
+                                            Подключить клиентов
+                                          </Button>
+                                          <Button
+                                            size="small"
+                                            danger
+                                            loading={removeStorefrontTarget === item.systemName}
+                                            onClick={() => void initiateRemoveStorefront(item.systemName)}
+                                          >
+                                            Снять с витрины
+                                          </Button>
                                         </Space>
                                       </Space>
                                     </Card>
@@ -7378,6 +7477,35 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               Retry Materialization Now
             </Button>
           </div>
+        </Space>
+      </Modal>
+
+      <Modal
+        title="Снять ТС с витрины"
+        open={removeStorefrontConfirm !== null}
+        onCancel={() => setRemoveStorefrontConfirm(null)}
+        onOk={() => void confirmRemoveStorefront()}
+        okButtonProps={{ danger: true, loading: actionLoading.startsWith('remove-storefront:') }}
+        okText="Подтвердить снятие"
+        cancelText="Отмена"
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="warning"
+            showIcon
+            message={`TS "${removeStorefrontConfirm?.systemName}" подключена к ${removeStorefrontConfirm?.clientCount || 0} клиентам`}
+            description="После подтверждения клиенты будут отключены от этой ТС и их trading engine остановится. Открытые позиции НЕ закрываются автоматически — проверьте их вручную."
+          />
+          {(removeStorefrontConfirm?.tenants || []).length > 0 ? (
+            <div>
+              <Text strong>Затронутые клиенты:</Text>
+              <ul style={{ marginTop: 4 }}>
+                {(removeStorefrontConfirm?.tenants || []).map((t) => (
+                  <li key={t.id}>{t.display_name}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </Space>
       </Modal>
 

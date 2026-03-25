@@ -36,6 +36,7 @@ import {
   deleteStrategyClientSystemProfile,
   activateStrategyClientSystemProfileById,
   requestAlgofundBatchAction,
+  removeAlgofundStorefrontSystem,
 } from '../saas/service';
 
 const router = Router();
@@ -195,6 +196,22 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS admin sweep backtest preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/storefront-system/remove', async (req, res) => {
+  try {
+    const systemName = req.body?.systemName ? String(req.body.systemName).trim() : '';
+    const force = toBool(req.body?.force, false);
+    if (!systemName) {
+      return res.status(400).json({ error: 'systemName is required' });
+    }
+    const data = await removeAlgofundStorefrontSystem({ systemName, force });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS storefront-system remove error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

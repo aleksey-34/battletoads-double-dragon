@@ -2241,14 +2241,48 @@ const getRiskLotPercent = (riskLevel: Level3): number => {
   return 10;
 };
 
-const toPresetOnlyEquity = (initialBalance: number, retPercent: number): Array<{ time: number; equity: number }> => {
+/**
+ * Builds a realistic synthetic equity curve from summary metrics.
+ * Uses a trend + drawdown-oscillation model so the chart is visually meaningful
+ * and changes when risk/frequency sliders are adjusted.
+ */
+const buildSyntheticEquityPoints = (
+  initialBalance: number,
+  retPercent: number,
+  maxDrawdownPercent: number,
+  periodDays: number
+): Array<{ time: number; equity: number }> => {
   const start = Number.isFinite(initialBalance) && initialBalance > 0 ? initialBalance : 10000;
-  const end = Number((start * (1 + (Number(retPercent) || 0) / 100)).toFixed(4));
+  const ret = Number.isFinite(retPercent) ? retPercent : 0;
+  const dd = Math.max(0, Number.isFinite(maxDrawdownPercent) ? maxDrawdownPercent : Math.abs(ret) * 0.3);
+  const days = Math.max(10, Number.isFinite(periodDays) && periodDays > 0 ? periodDays : 90);
+  const finalEquity = start * (1 + ret / 100);
+  const ddAbs = start * dd / 100;
+  // Number of points: ~1 per day, clamped to 40..200
+  const n = Math.max(40, Math.min(200, Math.round(days)));
   const now = Date.now();
-  return [
-    { time: now - 1000, equity: start },
-    { time: now, equity: end },
-  ];
+  const periodMs = Math.round(days * 24 * 3600 * 1000);
+
+  const points: Array<{ time: number; equity: number }> = [];
+  for (let i = 0; i <= n; i++) {
+    const t = i / n; // 0..1
+    // Exponential trend from start to finalEquity
+    const trend = start + (finalEquity - start) * t;
+    // Wave simulates drawdown: dips in mid-period then recovers
+    // sin(t * 2π) gives a full oscillation; attenuate toward end so we finish on trend
+    const wave = -ddAbs * Math.sin(t * Math.PI * 2.2) * Math.pow(1 - t * 0.7, 1.2) * 0.65;
+    const equity = Math.max(start * 0.05, trend + wave);
+    points.push({
+      time: Math.round(now - periodMs + t * periodMs),
+      equity: Number(equity.toFixed(4)),
+    });
+  }
+  return points;
+};
+
+const toPresetOnlyEquity = (initialBalance: number, retPercent: number, periodDays = 90): Array<{ time: number; equity: number }> => {
+  const ddApprox = Math.abs(retPercent) * 0.3;
+  return buildSyntheticEquityPoints(initialBalance, retPercent, ddApprox, periodDays);
 };
 
 const buildDerivedPreviewCurves = (
@@ -2506,7 +2540,8 @@ const resolveOfferPreset = (offer: CatalogOffer, riskLevel: Level3, tradeFrequen
 const buildPreviewEquityFromPreset = (
   preset: CatalogPreset,
   initialBalance: number,
-  fallbackRet: number
+  fallbackRet: number,
+  periodDays?: number
 ): Array<{ time: number; equity: number }> => {
   const curve = Array.isArray(preset.equity_curve)
     ? preset.equity_curve
@@ -2521,16 +2556,20 @@ const buildPreviewEquityFromPreset = (
     }));
   }
 
-  return toPresetOnlyEquity(initialBalance, fallbackRet);
+  const ret = Number.isFinite(fallbackRet) ? fallbackRet : asNumber(preset?.metrics?.ret, 0);
+  const dd = asNumber(preset?.metrics?.dd, Math.abs(ret) * 0.3);
+  return buildSyntheticEquityPoints(initialBalance, ret, dd, periodDays || 90);
 };
 
 const buildPortfolioPreviewEquityFromPresets = (
   selectedOffers: Array<{ metrics: CatalogMetricSet; preset: CatalogPreset }>,
-  initialBalance: number
+  initialBalance: number,
+  periodDays?: number
 ): Array<{ time: number; equity: number }> => {
+  const resolvedPeriodDays = Math.max(10, Number.isFinite(periodDays ?? 0) ? (periodDays || 90) : 90);
   const normalizedCurves = selectedOffers
     .map((item) => {
-      const points = buildPreviewEquityFromPreset(item.preset, initialBalance, asNumber(item.metrics.ret, 0));
+      const points = buildPreviewEquityFromPreset(item.preset, initialBalance, asNumber(item.metrics.ret, 0), resolvedPeriodDays);
       if (!Array.isArray(points) || points.length < 2) {
         return null;
       }
@@ -2544,7 +2583,8 @@ const buildPortfolioPreviewEquityFromPresets = (
 
   if (normalizedCurves.length === 0) {
     const avgRet = selectedOffers.reduce((acc, item) => acc + asNumber(item.metrics.ret, 0), 0) / Math.max(1, selectedOffers.length);
-    return toPresetOnlyEquity(initialBalance, avgRet);
+    const avgDd = selectedOffers.reduce((acc, item) => acc + asNumber(item.metrics.dd, 0), 0) / Math.max(1, selectedOffers.length);
+    return buildSyntheticEquityPoints(initialBalance, avgRet, avgDd, resolvedPeriodDays);
   }
 
   const maxLength = normalizedCurves.reduce((acc, curve) => Math.max(acc, curve.length), 0);
@@ -2815,7 +2855,12 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
     throw new Error('Client catalog JSON not found in results/, and no trading systems available in DB.');
   }
 
-  const apiKeyName = asString(catalog.apiKeyName);
+  // Use sweep's apiKeyName to create the master system, because strategy IDs
+  // in the catalog draft belong to whichever key ran the sweep. Using a different
+  // key causes "Strategy X does not belong to api key Y" errors.
+  const sweep = loadLatestSweep();
+  const sweepApiKey = asString((sweep as Record<string, unknown>)?.apiKeyName || ((sweep as Record<string, unknown>)?.config as Record<string, unknown>)?.apiKeyName, '');
+  const apiKeyName = sweepApiKey || asString(catalog.apiKeyName);
   const systemName = `ALGOFUND_MASTER::${apiKeyName}`;
   const systems = await listTradingSystems(apiKeyName);
   const existing = systems.find((item) => asString(item.name) === systemName);
@@ -3512,6 +3557,7 @@ export const previewAdminSweepBacktest = async (payload?: {
             riskScaleMaxPercent,
           },
           period,
+          sweepApiKeyName: asString((sweep as Record<string, unknown>)?.apiKeyName || ((sweep as Record<string, unknown>)?.config as Record<string, unknown>)?.apiKeyName, ''),
           selectedOffers,
           preview: {
             source: 'admin_sweep_rerun',
@@ -3548,9 +3594,11 @@ export const previewAdminSweepBacktest = async (payload?: {
     throw new Error('No offers resolved for sweep backtest preview');
   }
 
+  const sweepApiKeyName = asString((sweep as Record<string, unknown>)?.apiKeyName || ((sweep as Record<string, unknown>)?.config as Record<string, unknown>)?.apiKeyName, '');
+
   if (kind === 'offer') {
     const first = selectedOffers[0];
-    const equityCurve = buildPreviewEquityFromPreset(first.preset, initialBalance, first.metrics.ret);
+    const equityCurve = buildPreviewEquityFromPreset(first.preset, initialBalance, first.metrics.ret, periodDays);
     const derivedCurves = buildDerivedPreviewCurves(equityCurve, initialBalance, riskScore);
     const singleSummary = buildPresetOnlySingleSummary(initialBalance, first.preset, first.market, first.strategyName);
     return {
@@ -3563,6 +3611,7 @@ export const previewAdminSweepBacktest = async (payload?: {
         riskScaleMaxPercent,
       },
       period,
+      sweepApiKeyName,
       selectedOffers,
       preview: {
         source: 'admin_sweep_preset',
@@ -3599,7 +3648,7 @@ export const previewAdminSweepBacktest = async (payload?: {
     preset: item.preset,
   }));
 
-  const portfolioEquity = buildPortfolioPreviewEquityFromPresets(selectedOffers, initialBalance);
+  const portfolioEquity = buildPortfolioPreviewEquityFromPresets(selectedOffers, initialBalance, periodDays);
   const portfolioCurves = buildDerivedPreviewCurves(portfolioEquity, initialBalance, riskScore);
   const portfolioSummary = buildPresetOnlyPortfolioSummary(initialBalance, pseudoSelectedOffers as any);
 
@@ -3613,6 +3662,7 @@ export const previewAdminSweepBacktest = async (payload?: {
       riskScaleMaxPercent,
     },
     period,
+    sweepApiKeyName,
     selectedOffers,
     preview: {
       source: 'admin_sweep_preset',
@@ -5671,6 +5721,86 @@ export const publishAdminTradingSystem = async () => {
       period,
     },
     catalog: loadLatestClientCatalog(),
+  };
+};
+
+/**
+ * Remove an Algofund TS offer from the storefront.
+ * Checks connected clients and optionally disconnects them.
+ * Returns the list of affected clients for confirmation UI.
+ */
+export const removeAlgofundStorefrontSystem = async (payload: {
+  systemName: string;
+  force?: boolean;
+}): Promise<{
+  removed: boolean;
+  clientsAffected: number;
+  affectedTenants: Array<{ id: number; display_name: string }>;
+  warning?: string;
+}> => {
+  const systemName = asString(payload.systemName, '').trim();
+  if (!systemName) {
+    throw new Error('systemName is required');
+  }
+
+  // Find tenants connected to this TS
+  const connectedRows = await db.all(
+    `SELECT t.id, t.display_name
+     FROM tenants t
+     JOIN algofund_profiles ap ON ap.tenant_id = t.id
+     WHERE ap.published_system_name = ?`,
+    [systemName]
+  ) as Array<{ id: number; display_name: string }>;
+
+  const clientCount = connectedRows.length;
+  const affectedTenants = connectedRows.map((row) => ({ id: Number(row.id), display_name: asString(row.display_name, `tenant#${row.id}`) }));
+
+  if (clientCount > 0 && !payload.force) {
+    return {
+      removed: false,
+      clientsAffected: clientCount,
+      affectedTenants,
+      warning: `TS "${systemName}" подключена к ${clientCount} клиентам. Подтвердите удаление и отключение клиентов.`,
+    };
+  }
+
+  // Disconnect clients if any
+  if (clientCount > 0) {
+    await db.run(
+      `UPDATE algofund_profiles
+       SET published_system_name = NULL,
+           requested_enabled = 0,
+           actual_enabled = 0,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE published_system_name = ?`,
+      [systemName]
+    );
+
+    // Log the action
+    for (const tenant of affectedTenants) {
+      await db.run(
+        `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+         VALUES (?, 'admin', 'algofund_ts_removed', ?, CURRENT_TIMESTAMP)`,
+        [tenant.id, JSON.stringify({ systemName, reason: 'admin_remove_storefront' })]
+      );
+    }
+  }
+
+  // If this is the only (or last) published system, clear the tsBacktestSnapshot
+  const remainingRows = await db.all(
+    `SELECT COUNT(*) as cnt FROM algofund_profiles WHERE published_system_name IS NOT NULL AND published_system_name != ''`
+  ) as Array<{ cnt: number }>;
+  const remainingCount = Number(remainingRows[0]?.cnt || 0);
+
+  if (remainingCount === 0) {
+    // Clear snapshot so storefront shows empty state
+    await setRuntimeFlag('offer.store.ts_backtest_snapshot', 'null');
+  }
+
+  return {
+    removed: true,
+    clientsAffected: clientCount,
+    affectedTenants,
   };
 };
 
