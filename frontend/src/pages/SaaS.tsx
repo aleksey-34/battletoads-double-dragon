@@ -2990,6 +2990,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       ))?.tenant.id
       || (summary.tenants || []).find((item) => item.tenant.product_mode === 'algofund_client')?.tenant.id
       || null;
+    const nextCopytradingTenant =
+      (summary.tenants || []).find((item) => item.tenant.product_mode === 'copytrading_client')?.tenant.id
+      || null;
 
     if (strategyTenantId === null && nextStrategyTenant !== null) {
       setStrategyTenantId(nextStrategyTenant);
@@ -2997,7 +3000,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (algofundTenantId === null && nextAlgofundTenant !== null) {
       setAlgofundTenantId(nextAlgofundTenant);
     }
-  }, [summary, strategyTenantId, algofundTenantId]);
+    if (copytradingTenantId === null && nextCopytradingTenant !== null) {
+      setCopytradingTenantId(nextCopytradingTenant);
+    }
+  }, [summary, strategyTenantId, algofundTenantId, copytradingTenantId]);
 
   useEffect(() => {
     if (strategyTenantId !== null) {
