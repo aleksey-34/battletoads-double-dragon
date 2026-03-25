@@ -37,12 +37,13 @@ import { useI18n } from '../i18n';
 
 const { Paragraph, Text, Title } = Typography;
 
-type ProductMode = 'strategy_client' | 'algofund_client';
+type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client';
 type Level3 = 'low' | 'medium' | 'high';
 type RequestStatus = 'pending' | 'approved' | 'rejected';
-type SaasTabKey = 'admin' | 'strategy-client' | 'algofund';
+type SaasTabKey = 'admin' | 'strategy-client' | 'algofund' | 'copytrading';
 type AdminTabKey = 'offer-ts' | 'research-analysis' | 'clients' | 'monitoring' | 'create-user';
 type SummaryScope = 'light' | 'full';
+type CopytradingUiStatus = 'idle' | 'copying' | 'stopped' | 'saving' | 'error';
 
 type SaasBacktestContext = {
   kind: 'offer' | 'algofund-ts';
@@ -1839,7 +1840,7 @@ const strategyLevelMarks = {
 
 type SaaSProps = {
   initialTab?: SaasTabKey;
-  surfaceMode?: 'admin' | 'strategy-client' | 'algofund';
+  surfaceMode?: 'admin' | 'strategy-client' | 'algofund' | 'copytrading';
 };
 
 const clampPreviewValue = (value: number, max = 10): number => Math.min(max, Math.max(0, value));
@@ -2002,6 +2003,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [messageApi, contextHolder] = message.useMessage();
   const summaryRequestSeqRef = useRef(0);
   const algofundRequestSeqRef = useRef(0);
+  const copytradingRequestSeqRef = useRef(0);
+  const backtestRequestSeqRef = useRef(0);
   const backtestDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [summary, setSummary] = useState<SaasSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -2013,12 +2016,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const reviewContextRef = useRef<HTMLDivElement | null>(null);
   const [strategyTenantId, setStrategyTenantId] = useState<number | null>(null);
   const [algofundTenantId, setAlgofundTenantId] = useState<number | null>(null);
+  const [copytradingTenantId, setCopytradingTenantId] = useState<number | null>(null);
   const [strategyState, setStrategyState] = useState<StrategyClientState | null>(null);
   const [strategyLoading, setStrategyLoading] = useState(false);
   const [strategyError, setStrategyError] = useState('');
   const [algofundState, setAlgofundState] = useState<AlgofundState | null>(null);
   const [algofundLoading, setAlgofundLoading] = useState(false);
   const [algofundError, setAlgofundError] = useState('');
+  const [copytradingState, setCopytradingState] = useState<Record<string, any> | null>(null);
+  const [copytradingLoading, setCopytradingLoading] = useState(false);
+  const [copytradingError, setCopytradingError] = useState('');
+  const [copytradingMasterApiKeyName, setCopytradingMasterApiKeyName] = useState('');
+  const [copytradingTenantDisplayName, setCopytradingTenantDisplayName] = useState('');
+  const [copytradingTenantStatus, setCopytradingTenantStatus] = useState('active');
+  const [copytradingTenantPlanCode, setCopytradingTenantPlanCode] = useState('');
+  const [copytradingUiStatus, setCopytradingUiStatus] = useState<CopytradingUiStatus>('idle');
+  const [copytradingUiMessage, setCopytradingUiMessage] = useState('Ожидание данных copytrading');
+  const [copytradingLogs, setCopytradingLogs] = useState<string[]>([]);
   const [strategyOfferIds, setStrategyOfferIds] = useState<string[]>([]);
   const [strategySystemProfileId, setStrategySystemProfileId] = useState<number | null>(null);
   const [strategyNewProfileName, setStrategyNewProfileName] = useState('');
@@ -2140,6 +2154,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const strategyTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client');
   const algofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
+  const copytradingTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'copytrading_client');
   const batchEligibleAlgofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
   const algofundTenantsWithPublishedTs = batchEligibleAlgofundTenants
     .filter((item) => String(item.algofundProfile?.published_system_name || '').trim().length > 0);
@@ -2174,6 +2189,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const algofundPlanOptions = (summary?.plans || [])
     .filter((plan) => plan.product_mode === 'algofund_client')
     .map((plan) => ({ value: plan.code, label: `${plan.title} В· ${formatMoney(plan.price_usdt)}` }));
+  const copytradingPlanOptions = (summary?.plans || [])
+    .filter((plan) => plan.product_mode === 'copytrading_client')
+    .map((plan) => ({ value: plan.code, label: `${plan.title} В· ${formatMoney(plan.price_usdt)}` }));
   const apiKeyOptions = (summary?.apiKeys || []).map((name) => ({ label: name, value: name }));
   const summaryCatalogOffers = dedupeOffersById([
     ...(summary?.catalog?.clientCatalog?.mono || []),
@@ -2196,6 +2214,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }, [])
   );
   const publishedOfferIds = new Set((summary?.offerStore?.publishedOfferIds || []).map((item) => String(item)));
+
+  const appendCopytradingLog = (line: string) => {
+    const ts = new Date().toLocaleTimeString();
+    setCopytradingLogs((prev) => [`${ts} - ${line}`, ...prev].slice(0, 24));
+  };
   const strategyOfferCatalog = dedupeOffersById(
     (strategyState?.offers || []).length > 0
       ? (strategyState?.offers || [])
@@ -2618,6 +2641,43 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const loadCopytradingTenant = async (tenantId: number) => {
+    const requestSeq = copytradingRequestSeqRef.current + 1;
+    copytradingRequestSeqRef.current = requestSeq;
+    setCopytradingLoading(true);
+    setCopytradingError('');
+    setCopytradingUiStatus('idle');
+    setCopytradingUiMessage('Загрузка состояния copytrading...');
+    try {
+      const response = await axios.get<Record<string, any>>(`/api/saas/copytrading/${tenantId}`);
+      if (requestSeq === copytradingRequestSeqRef.current) {
+        const data = response.data as any;
+        const enabled = Boolean(data?.profile?.copy_enabled);
+        setCopytradingState(data);
+        setCopytradingMasterApiKeyName(String(data?.profile?.master_api_key_name || data?.tenant?.assigned_api_key_name || ''));
+        setCopytradingTenantDisplayName(String(data?.tenant?.display_name || ''));
+        setCopytradingTenantStatus(String(data?.tenant?.status || 'active'));
+        setCopytradingTenantPlanCode(String(data?.plan?.code || ''));
+        setCopytradingUiStatus(enabled ? 'copying' : 'stopped');
+        setCopytradingUiMessage(enabled ? 'Копирование активно' : 'Копирование остановлено');
+        appendCopytradingLog(`Tenant #${tenantId}: состояние загружено, copy_enabled=${enabled ? 1 : 0}`);
+      }
+    } catch (error: any) {
+      if (requestSeq === copytradingRequestSeqRef.current) {
+        const message = String(error?.response?.data?.error || error?.message || 'Failed to load copytrading client');
+        setCopytradingError(message);
+        setCopytradingState(null);
+        setCopytradingUiStatus('error');
+        setCopytradingUiMessage(`Ошибка загрузки: ${message}`);
+        appendCopytradingLog(`Tenant #${tenantId}: ошибка загрузки (${message})`);
+      }
+    } finally {
+      if (requestSeq === copytradingRequestSeqRef.current) {
+        setCopytradingLoading(false);
+      }
+    }
+  };
+
   useEffect(() => {
     if (!isAdminSurface) {
       return;
@@ -2946,6 +3006,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       void loadAlgofundTenant(algofundTenantId, undefined, isAdminSurface);
     }
   }, [algofundTenantId, isAdminSurface]);
+
+  useEffect(() => {
+    if (copytradingTenantId !== null) {
+      void loadCopytradingTenant(copytradingTenantId);
+    }
+  }, [copytradingTenantId]);
 
   useEffect(() => {
     const nextDrafts = Object.fromEntries((summary?.plans || []).map((plan) => [plan.code, { ...plan }])) as Record<string, Plan>;
@@ -3699,6 +3765,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
+    if (row.tenant.product_mode === 'copytrading_client') {
+      setCopytradingTenantId(tenantId);
+      navigateSaasTab('copytrading');
+      return;
+    }
+
     setAlgofundTenantId(tenantId);
     navigateSaasTab('algofund');
   };
@@ -3804,6 +3876,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
+    const requestSeq = ++backtestRequestSeqRef.current;
     setAdminSweepBacktestLoading(true);
     setAdminSweepBacktestStale(false);
     setAdminSweepPreviewRiskScale(1);
@@ -3821,6 +3894,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           ? (adminSweepBacktestRerunApiKey || undefined)
           : undefined,
       });
+      if (requestSeq !== backtestRequestSeqRef.current) {
+        return;
+      }
       setAdminSweepBacktestResult(response.data);
       // Auto-set rerun key to sweep's key when none has been chosen yet
       if (response.data.sweepApiKeyName && !adminSweepBacktestRerunApiKey) {
@@ -3834,10 +3910,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
       });
     } catch (error: any) {
+      if (requestSeq !== backtestRequestSeqRef.current) {
+        return;
+      }
       setAdminSweepBacktestResult(null);
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось построить sweep backtest preview'));
     } finally {
-      setAdminSweepBacktestLoading(false);
+      if (requestSeq === backtestRequestSeqRef.current) {
+        setAdminSweepBacktestLoading(false);
+      }
     }
   };
 
@@ -3993,6 +4074,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   const openEmbeddedBacktest = (context: SaasBacktestContext) => {
+    backtestRequestSeqRef.current += 1;
     const settings = resolveBacktestSettingsForContext(context);
     applyBacktestSettings(settings);
     setBacktestDrawerContext(context);
@@ -4150,6 +4232,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       if (tab === 'admin') {
         const target = nextAdminTab || adminTab;
         window.history.pushState({}, '', `/saas/admin?adminTab=${target}`);
+      } else if (tab === 'copytrading') {
+        window.history.pushState({}, '', '/saas/copytrading');
       } else {
         window.history.pushState({}, '', '/saas');
       }
@@ -4468,6 +4552,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           }}
         >
           {copy.openStrategyClient}
+        </Button>
+      ) : row.tenant.product_mode === 'copytrading_client' ? (
+        <Button
+          size="small"
+          onClick={() => {
+            setCopytradingTenantId(row.tenant.id);
+            navigateSaasTab('copytrading');
+          }}
+        >
+          Copytrading
         </Button>
       ) : (
         <Space size={4} wrap>
@@ -6571,6 +6665,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   { value: 'bybit', label: 'Bybit' },
                                   { value: 'bingx', label: 'BingX' },
                                   { value: 'bitget', label: 'Bitget' },
+                                  { value: 'binance', label: 'Binance Futures' },
                                 ]}
                               />
                             </div>
@@ -7624,6 +7719,148 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Space>
                           </Card>
                         ) : null}
+                      </>
+                    ) : null}
+                  </Spin>
+                </Space>
+              ),
+            },
+            {
+              key: 'copytrading',
+              label: 'Copytrading',
+              children: (
+                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  {copytradingTenants.length === 0 ? <Alert type="info" showIcon message={copy.noTenant} /> : null}
+                  {copytradingError ? <Alert type="error" showIcon message={copytradingError} /> : null}
+
+                  <Spin spinning={copytradingLoading && !copytradingState}>
+                    {copytradingState ? (
+                      <>
+                        <Card className="battletoads-card" title="Copytrading">
+                          <Row gutter={[16, 16]} align="middle">
+                            {isAdminSurface ? (
+                              <Col xs={24} md={6}>
+                                <Text strong>{copy.chooseTenant}</Text>
+                                <Select
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  value={copytradingTenantId ?? undefined}
+                                  onChange={(value) => setCopytradingTenantId(Number(value))}
+                                  options={copytradingTenants.map((item) => ({ value: item.tenant.id, label: `${item.tenant.display_name} (${item.tenant.slug})` }))}
+                                />
+                              </Col>
+                            ) : null}
+                            <Col xs={24} md={isAdminSurface ? 6 : 8}>
+                              <Text strong>{copy.displayName}</Text>
+                              {isAdminSurface ? (
+                                <Input style={{ marginTop: 8 }} value={copytradingTenantDisplayName} onChange={(event) => setCopytradingTenantDisplayName(event.target.value)} />
+                              ) : (
+                                <div style={{ marginTop: 8 }}><Text>{copytradingState.tenant?.display_name}</Text></div>
+                              )}
+                            </Col>
+                            <Col xs={24} md={isAdminSurface ? 6 : 8}>
+                              <Text strong>Master API Key</Text>
+                              {isAdminSurface ? (
+                                <Select
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  value={copytradingMasterApiKeyName || undefined}
+                                  onChange={setCopytradingMasterApiKeyName}
+                                  options={apiKeyOptions}
+                                />
+                              ) : (
+                                <div style={{ marginTop: 8 }}><Text>{copytradingMasterApiKeyName || '—'}</Text></div>
+                              )}
+                            </Col>
+                            <Col xs={24} md={isAdminSurface ? 6 : 8}>
+                              <Text strong>{copy.plan}</Text>
+                              {isAdminSurface ? (
+                                <Select style={{ width: '100%', marginTop: 8 }} value={copytradingTenantPlanCode || undefined} onChange={setCopytradingTenantPlanCode} options={copytradingPlanOptions} />
+                              ) : (
+                                <div style={{ marginTop: 8 }}><Text>{copytradingState.plan ? `${copytradingState.plan.title} · ${formatMoney(copytradingState.plan.price_usdt)}` : '—'}</Text></div>
+                              )}
+                            </Col>
+                          </Row>
+
+                          <Space wrap style={{ marginTop: 12 }}>
+                            <Tag color="blue">Algorithm: {copytradingState.profile?.engine?.algorithm || '—'}</Tag>
+                            <Tag color="gold">Precision: {copytradingState.profile?.engine?.precision || '—'}</Tag>
+                            <Tag color="cyan">{copy.tenantStatus}: {copytradingState.tenant?.status}</Tag>
+                            <Tag color={copytradingState.profile?.copy_enabled ? 'success' : 'default'}>
+                              Copy: {copytradingState.profile?.copy_enabled ? 'enabled' : 'disabled'}
+                            </Tag>
+                          </Space>
+
+                          <Card size="small" title="Copy status" style={{ marginTop: 16 }}>
+                            <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                              <Alert
+                                showIcon
+                                type={copytradingUiStatus === 'error' ? 'error' : copytradingUiStatus === 'copying' ? 'success' : copytradingUiStatus === 'saving' ? 'warning' : 'info'}
+                                message={copytradingUiMessage}
+                              />
+                              <Badge
+                                status={copytradingUiStatus === 'error' ? 'error' : copytradingUiStatus === 'copying' ? 'processing' : copytradingUiStatus === 'saving' ? 'warning' : 'default'}
+                                text={`State: ${copytradingUiStatus}`}
+                              />
+                              <List
+                                size="small"
+                                bordered
+                                dataSource={copytradingLogs}
+                                locale={{ emptyText: 'Лог пуст' }}
+                                renderItem={(item) => <List.Item>{item}</List.Item>}
+                                style={{ maxHeight: 180, overflowY: 'auto' }}
+                              />
+                            </Space>
+                          </Card>
+
+                          {isAdminSurface ? (
+                            <Space wrap style={{ marginTop: 16 }}>
+                              <Button
+                                type="primary"
+                                loading={copytradingLoading}
+                                onClick={async () => {
+                                  try {
+                                    if (!copytradingTenantId) {
+                                      return;
+                                    }
+                                    setCopytradingUiStatus('saving');
+                                    setCopytradingUiMessage('Сохраняем настройки copytrading...');
+                                    appendCopytradingLog(`Tenant #${copytradingTenantId}: отправка обновления master api key`);
+                                    await axios.patch(`/api/saas/copytrading/${copytradingTenantId}`, {
+                                      masterApiKeyName: copytradingMasterApiKeyName,
+                                    });
+                                    appendCopytradingLog(`Tenant #${copytradingTenantId}: обновление применено`);
+                                    await loadCopytradingTenant(copytradingTenantId);
+                                  } catch (err: any) {
+                                    const msg = String(err?.response?.data?.error || err?.message || 'Update failed');
+                                    setCopytradingError(msg);
+                                    setCopytradingUiStatus('error');
+                                    setCopytradingUiMessage(`Ошибка сохранения: ${msg}`);
+                                    appendCopytradingLog(`Tenant #${copytradingTenantId || 0}: ошибка сохранения (${msg})`);
+                                  }
+                                }}
+                              >
+                                {copy.save}
+                              </Button>
+                            </Space>
+                          ) : null}
+
+                          <Card size="small" title="Follower tenants" style={{ marginTop: 16 }}>
+                            {(copytradingState.profile?.tenants || []).length === 0 ? (
+                              <Empty description="No follower tenants configured" />
+                            ) : (
+                              <Table
+                                size="small"
+                                rowKey={(_, idx) => String(idx)}
+                                dataSource={copytradingState.profile?.tenants || []}
+                                pagination={false}
+                                columns={[
+                                  { title: 'Tenant ID', dataIndex: 'tenantId', width: 120 },
+                                  { title: 'Slug', dataIndex: 'slug', width: 180 },
+                                  { title: 'API Key', dataIndex: 'apiKeyName', width: 200 },
+                                ]}
+                              />
+                            )}
+                          </Card>
+                        </Card>
                       </>
                     ) : null}
                   </Spin>

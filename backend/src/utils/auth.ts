@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { db } from './database';
 
-type ProductMode = 'strategy_client' | 'algofund_client';
+type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client';
 
 type SessionRequestMeta = {
   ip?: string;
@@ -104,6 +104,7 @@ const PASSWORD_STATE_FILE = resolvePasswordStateFile();
 const DEFAULT_CLIENT_SESSION_DAYS = 30;
 const DEFAULT_STRATEGY_PLAN_CODE = 'strategy_20';
 const DEFAULT_ALGOFUND_PLAN_CODE = 'algofund_20';
+const DEFAULT_COPYTRADING_PLAN_CODE = 'copytrading_100';
 
 const getClientSessionTtlMs = (): number => {
   const envValue = Number(process.env.CLIENT_SESSION_TTL_DAYS || DEFAULT_CLIENT_SESSION_DAYS);
@@ -120,6 +121,9 @@ const normalizeProductMode = (value: unknown): ProductMode => {
   const raw = String(value || '').trim().toLowerCase();
   if (raw === 'algofund' || raw === 'algofund_client') {
     return 'algofund_client';
+  }
+  if (raw === 'copytrading' || raw === 'copytrading_client') {
+    return 'copytrading_client';
   }
   return 'strategy_client';
 };
@@ -275,7 +279,9 @@ const ensureUniqueTenantSlug = async (baseSlug: string): Promise<string> => {
 const ensureRegistrationPlanId = async (productMode: ProductMode): Promise<number> => {
   const preferredCode = productMode === 'strategy_client'
     ? DEFAULT_STRATEGY_PLAN_CODE
-    : DEFAULT_ALGOFUND_PLAN_CODE;
+    : productMode === 'copytrading_client'
+      ? DEFAULT_COPYTRADING_PLAN_CODE
+      : DEFAULT_ALGOFUND_PLAN_CODE;
 
   let row = await db.get(
     'SELECT id FROM plans WHERE code = ? AND product_mode = ? AND is_active = 1 LIMIT 1',

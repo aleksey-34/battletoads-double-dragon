@@ -37,6 +37,8 @@ import {
   activateStrategyClientSystemProfileById,
   requestAlgofundBatchAction,
   removeAlgofundStorefrontSystem,
+  getCopytradingState,
+  updateCopytradingState,
 } from '../saas/service';
 
 const router = Router();
@@ -753,6 +755,46 @@ router.post('/algofund/:tenantId/retry-materialize', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS algofund retry materialize error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/copytrading/:tenantId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const data = await getCopytradingState(tenantId);
+    res.json(data);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS copytrading state error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/copytrading/:tenantId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const data = await updateCopytradingState(tenantId, {
+      masterApiKeyName: req.body.masterApiKeyName,
+      masterName: req.body.masterName,
+      masterTags: req.body.masterTags,
+      tenants: Array.isArray(req.body.tenants) ? req.body.tenants : undefined,
+      copyAlgorithm: req.body.copyAlgorithm,
+      copyPrecision: req.body.copyPrecision,
+      copyEnabled: req.body.copyEnabled !== undefined ? toBool(req.body.copyEnabled) : undefined,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS copytrading update error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

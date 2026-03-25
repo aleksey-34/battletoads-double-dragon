@@ -12,7 +12,7 @@ type ExchangeClientEntry = {
 };
 
 type CcxtClientEntry = {
-  exchange: 'bitget' | 'bingx';
+  exchange: 'bitget' | 'bingx' | 'binance';
   client: any;
   limiter: Bottleneck;
   symbolMap: Map<string, string>;
@@ -67,7 +67,7 @@ const toUiSymbol = (value: any): string => {
   return withoutSlash.replace(/[^A-Z0-9]/g, '');
 };
 
-const detectExchange = (exchange: string): 'bybit' | 'bitget' | 'bingx' => {
+const detectExchange = (exchange: string): 'bybit' | 'bitget' | 'bingx' | 'binance' => {
   const normalized = String(exchange || '').trim().toLowerCase();
 
   if (normalized.includes('bitget')) {
@@ -76,6 +76,10 @@ const detectExchange = (exchange: string): 'bybit' | 'bitget' | 'bingx' => {
 
   if (normalized.includes('bingx') || normalized.includes('bing x')) {
     return 'bingx';
+  }
+
+  if (normalized.includes('binance')) {
+    return 'binance';
   }
 
   return 'bybit';
@@ -351,7 +355,11 @@ export const initExchangeClient = (apiKey: ApiKey) => {
 
   if (exchange !== 'bybit') {
     const ccxt = loadCcxtModule();
-    const ExchangeClass = exchange === 'bitget' ? ccxt.bitget : ccxt.bingx;
+    const ExchangeClass = exchange === 'bitget'
+      ? ccxt.bitget
+      : exchange === 'binance'
+        ? ccxt.binanceusdm
+        : ccxt.bingx;
 
     if (!ExchangeClass) {
       throw new Error(`Exchange ${exchange} is not available in ccxt`);

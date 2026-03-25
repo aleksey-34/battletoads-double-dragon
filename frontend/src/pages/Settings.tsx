@@ -357,6 +357,7 @@ const Settings: React.FC = () => {
               <Option value="Bybit">Bybit</Option>
               <Option value="Bitget">Bitget Futures</Option>
               <Option value="BingX">BingX Futures</Option>
+              <Option value="Binance">Binance Futures</Option>
             </Select>
           </Form.Item>
           <Form.Item label={t('settings.form.apiKey', 'API Key')} name="api_key" rules={[{ required: true }]}>

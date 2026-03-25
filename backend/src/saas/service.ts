@@ -27,6 +27,7 @@ export type AlgofundRequestType = 'start' | 'stop' | 'switch_system';
 type AlgofundRequestPayload = {
   targetSystemId?: number;
   targetSystemName?: string;
+  targetApiKeyName?: string;
 };
 
 type PeriodInfo = {
@@ -2394,10 +2395,9 @@ const adjustPreviewMetrics = (
   const pfMul = Math.max(0.3, 1 / Math.max(0.5, Math.sqrt(riskMul) * Math.sqrt(tradeMul)));
   // win rate: high risk = lower wr, high freq = higher wr (more trades → regression to mean)
   const wrShift = (tradeMul - 1) * 5 - Math.max(0, riskMul - 1) * 6;
-  // trades scale with frequency; higher risk usually increases holding time,
-  // so trade count should stay flat or slightly decrease when risk grows.
-  const riskTradeDensityMul = clampNumber(1.08 - Math.max(0, riskMul - 1) * 0.22, 0.6, 1.05);
-  const tradesMul = Math.max(0.1, tradeMul * riskTradeDensityMul);
+  // Trades should be controlled by frequency only.
+  // Risk affects P/L and DD profile, but not trade count density.
+  const tradesMul = Math.max(0.1, tradeMul);
 
   return {
     ret: Number((asNumber(metrics.ret, 0) * retMul).toFixed(3)),
@@ -2953,12 +2953,15 @@ const getBestExistingSourceSystem = async (): Promise<{ apiKeyName: string; syst
        ak.name AS api_key_name,
        COALESCE(ts.is_active, 0) AS is_active,
        COALESCE(ts.discovery_enabled, 0) AS discovery_enabled,
-       SUM(CASE WHEN COALESCE(tsm.is_enabled, 1) = 1 THEN 1 ELSE 0 END) AS enabled_members
+       SUM(CASE WHEN COALESCE(tsm.is_enabled, 1) = 1 THEN 1 ELSE 0 END) AS enabled_members,
+       SUM(CASE WHEN COALESCE(tsm.is_enabled, 1) = 1 AND s.id IS NOT NULL THEN 1 ELSE 0 END) AS valid_enabled_members
      FROM trading_systems ts
      JOIN api_keys ak ON ak.id = ts.api_key_id
      LEFT JOIN trading_system_members tsm ON tsm.system_id = ts.id
+     LEFT JOIN strategies s ON s.id = tsm.strategy_id AND s.api_key_id = ts.api_key_id
      GROUP BY ts.id, ts.name, ak.name, ts.is_active, ts.discovery_enabled, ts.updated_at
      ORDER BY
+       valid_enabled_members DESC,
        COALESCE(ts.is_active, 0) DESC,
        enabled_members DESC,
        CASE
@@ -2976,6 +2979,10 @@ const getBestExistingSourceSystem = async (): Promise<{ apiKeyName: string; syst
   );
 
   if (!row) {
+    return null;
+  }
+
+  if (asNumber((row as Record<string, unknown>).valid_enabled_members, 0) <= 0) {
     return null;
   }
 
@@ -3097,6 +3104,10 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
   }
 
   if (!apiKeyName) {
+    apiKeyName = asString(catalog.apiKeyName || sweepApiKey, '');
+  }
+
+  if (!apiKeyName) {
     const fallback = await getBestExistingSourceSystem();
     if (fallback && fallback.apiKeyName && fallback.systemId > 0) {
       return fallback;
@@ -3108,6 +3119,7 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
   const existing = systems.find((item) => asString(item.name) === systemName);
   const membersRaw = (catalog.adminTradingSystemDraft?.members || []).map((item, index) => ({
     strategy_id: Number(item.strategyId),
+    strategy_name: asString(item.strategyName, '').trim(),
     weight: asNumber(item.weight, index === 0 ? 1.25 : index === 1 ? 1.1 : 1),
     member_role: index < 3 ? 'core' : 'satellite',
     is_enabled: true,
@@ -3119,9 +3131,192 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
       .map((row) => Number((row as { id?: number })?.id || 0))
       .filter((value) => Number.isFinite(value) && value > 0)
   );
-  const members = membersRaw.filter((item) => existingStrategyIds.has(Number(item.strategy_id || 0)));
+  const existingStrategyIdByName = new Map<string, number>();
+  for (const row of Array.isArray(existingStrategies) ? existingStrategies : []) {
+    const id = Number((row as { id?: number })?.id || 0);
+    const name = asString((row as { name?: string })?.name, '').trim().toLowerCase();
+    if (id > 0 && name) {
+      existingStrategyIdByName.set(name, id);
+    }
+  }
+
+  const dedupeStrategyIds = new Set<number>();
+  const members = membersRaw
+    .map((item) => {
+      const currentId = Number(item.strategy_id || 0);
+      const resolvedId = existingStrategyIds.has(currentId)
+        ? currentId
+        : Number(existingStrategyIdByName.get(asString(item.strategy_name, '').toLowerCase()) || 0);
+
+      if (!resolvedId || dedupeStrategyIds.has(resolvedId)) {
+        return null;
+      }
+      dedupeStrategyIds.add(resolvedId);
+
+      return {
+        strategy_id: resolvedId,
+        weight: item.weight,
+        member_role: item.member_role,
+        is_enabled: item.is_enabled,
+        notes: item.notes,
+      };
+    })
+    .filter((item): item is { strategy_id: number; weight: number; member_role: string; is_enabled: boolean; notes: string } => Boolean(item));
 
   if (members.length === 0) {
+    const runtimeApiKeys = Array.from(new Set([
+      apiKeyName,
+      ...(await getAvailableApiKeyNames()),
+    ].map((value) => asString(value, '').trim()).filter(Boolean)));
+
+    for (const runtimeApiKeyName of runtimeApiKeys) {
+      const runtimeStrategies = await getStrategies(runtimeApiKeyName, { includeLotPreview: false }).catch(() => []);
+      const runtimeMembers = (Array.isArray(runtimeStrategies) ? runtimeStrategies : [])
+        .map((row, index) => {
+          const strategyId = Number((row as { id?: number })?.id || 0);
+          if (!strategyId || !Number.isFinite(strategyId)) {
+            return null;
+          }
+          return {
+            strategy_id: strategyId,
+            weight: index === 0 ? 1.25 : index === 1 ? 1.1 : 1,
+            member_role: index < 3 ? 'core' : 'satellite',
+            is_enabled: true,
+            notes: 'algofund_master runtime_fallback',
+          };
+        })
+        .filter((item): item is { strategy_id: number; weight: number; member_role: string; is_enabled: boolean; notes: string } => Boolean(item))
+        .slice(0, 6);
+
+      if (runtimeMembers.length === 0) {
+        continue;
+      }
+
+      const runtimeSystemName = `ALGOFUND_MASTER::${runtimeApiKeyName}`;
+      const runtimeSystems = runtimeApiKeyName === apiKeyName
+        ? systems
+        : await listTradingSystems(runtimeApiKeyName).catch(() => []);
+      const runtimeExisting = (Array.isArray(runtimeSystems) ? runtimeSystems : [])
+        .find((item) => asString(item.name) === runtimeSystemName);
+
+      if (runtimeExisting?.id) {
+        await updateTradingSystem(runtimeApiKeyName, Number(runtimeExisting.id), {
+          name: runtimeSystemName,
+          description: 'Published admin TS (runtime fallback from available strategies)',
+          auto_sync_members: false,
+          discovery_enabled: false,
+          max_members: Math.max(6, runtimeMembers.length),
+        });
+        await replaceTradingSystemMembers(runtimeApiKeyName, Number(runtimeExisting.id), runtimeMembers);
+        logger.warn(`Draft TS members unavailable for ${apiKeyName}; used runtime fallback API key ${runtimeApiKeyName} with ${runtimeMembers.length} members.`);
+        return { apiKeyName: runtimeApiKeyName, systemId: Number(runtimeExisting.id), systemName: runtimeSystemName };
+      }
+
+      const runtimeCreated = await createTradingSystem(runtimeApiKeyName, {
+        name: runtimeSystemName,
+        description: 'Published admin TS (runtime fallback from available strategies)',
+        auto_sync_members: false,
+        discovery_enabled: false,
+        max_members: Math.max(6, runtimeMembers.length),
+        members: runtimeMembers,
+      });
+      logger.warn(`Draft TS members unavailable for ${apiKeyName}; created runtime fallback system on ${runtimeApiKeyName} with ${runtimeMembers.length} members.`);
+      return { apiKeyName: runtimeApiKeyName, systemId: Number(runtimeCreated.id), systemName: runtimeSystemName };
+    }
+
+    const materializeApiKeyName = asString(apiKeyName || catalog.apiKeyName || sweepApiKey, '').trim();
+    const evaluatedRows = Array.isArray(sweep?.evaluated) ? sweep?.evaluated || [] : [];
+    const evaluatedById = new Map<number, SweepRecord>();
+    for (const row of evaluatedRows) {
+      const strategyId = Number((row as SweepRecord)?.strategyId || 0);
+      if (strategyId > 0 && !evaluatedById.has(strategyId)) {
+        evaluatedById.set(strategyId, row as SweepRecord);
+      }
+    }
+
+    if (materializeApiKeyName && evaluatedById.size > 0) {
+      const draftRecords = (catalog.adminTradingSystemDraft?.members || [])
+        .map((member) => evaluatedById.get(Number(member.strategyId || 0)) || null)
+        .filter((row): row is SweepRecord => Boolean(row));
+
+      if (draftRecords.length > 0) {
+        const currentRows = await getStrategies(materializeApiKeyName, { includeLotPreview: false }).catch(() => []);
+        const currentByName = new Map<string, number>();
+        for (const row of Array.isArray(currentRows) ? currentRows : []) {
+          const id = Number((row as { id?: number })?.id || 0);
+          const name = asString((row as { name?: string })?.name, '').trim();
+          if (id > 0 && name) {
+            currentByName.set(name, id);
+          }
+        }
+
+        const materializedMembers: Array<{ strategy_id: number; weight: number; member_role: string; is_enabled: boolean; notes: string }> = [];
+        for (let index = 0; index < draftRecords.length && materializedMembers.length < 6; index += 1) {
+          const record = draftRecords[index];
+          const name = `SAAS::ADMIN::${record.marketMode.toUpperCase()}::${record.strategyType}::${record.market}`;
+          const existingId = Number(currentByName.get(name) || 0);
+
+          let strategyId = existingId;
+          if (strategyId <= 0) {
+            const created = await createStrategy(
+              materializeApiKeyName,
+              buildStrategyDraftFromRecord(record, name, Math.max(250, SAAS_PREVIEW_INITIAL_BALANCE), 'medium', false)
+            );
+            strategyId = Number((created as { id?: number })?.id || 0);
+          }
+
+          if (strategyId > 0) {
+            materializedMembers.push({
+              strategy_id: strategyId,
+              weight: index === 0 ? 1.25 : index === 1 ? 1.1 : 1,
+              member_role: index < 3 ? 'core' : 'satellite',
+              is_enabled: true,
+              notes: 'algofund_master materialized_from_sweep',
+            });
+          }
+        }
+
+        if (materializedMembers.length > 0) {
+          const materializedSystemName = `ALGOFUND_MASTER::${materializeApiKeyName}`;
+          const materializedSystems = await listTradingSystems(materializeApiKeyName).catch(() => []);
+          const materializedExisting = (Array.isArray(materializedSystems) ? materializedSystems : [])
+            .find((item) => asString(item.name) === materializedSystemName);
+
+          if (materializedExisting?.id) {
+            await updateTradingSystem(materializeApiKeyName, Number(materializedExisting.id), {
+              name: materializedSystemName,
+              description: 'Published admin TS (auto materialized from sweep draft)',
+              auto_sync_members: false,
+              discovery_enabled: false,
+              max_members: Math.max(6, materializedMembers.length),
+            });
+            await replaceTradingSystemMembers(materializeApiKeyName, Number(materializedExisting.id), materializedMembers);
+            logger.warn(`Auto-materialized ${materializedMembers.length} draft members for ${materializeApiKeyName} to recover publish flow.`);
+            return {
+              apiKeyName: materializeApiKeyName,
+              systemId: Number(materializedExisting.id),
+              systemName: materializedSystemName,
+            };
+          }
+
+          const materializedCreated = await createTradingSystem(materializeApiKeyName, {
+            name: materializedSystemName,
+            description: 'Published admin TS (auto materialized from sweep draft)',
+            auto_sync_members: false,
+            discovery_enabled: false,
+            max_members: Math.max(6, materializedMembers.length),
+            members: materializedMembers,
+          });
+          logger.warn(`Auto-created materialized source TS with ${materializedMembers.length} members for ${materializeApiKeyName}.`);
+          return {
+            apiKeyName: materializeApiKeyName,
+            systemId: Number(materializedCreated.id),
+            systemName: materializedSystemName,
+          };
+        }
+      }
+    }
+
     const fallback = await getBestExistingSourceSystem();
     if (fallback && fallback.apiKeyName && fallback.systemId > 0) {
       return fallback;
@@ -4532,6 +4727,13 @@ export const updateTenantAdminState = async (tenantId: number, payload: {
        WHERE tenant_id = ?`,
       [nextAssignedApiKeyName, tenantId]
     );
+  } else if (tenant.product_mode === 'copytrading_client') {
+    await db.run(
+      `UPDATE copytrading_profiles
+       SET master_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [nextAssignedApiKeyName, tenantId]
+    );
   } else {
     await db.run(
       `UPDATE algofund_profiles
@@ -5834,18 +6036,37 @@ export const requestAlgofundAction = async (
     if (!targetSystemId || targetSystemId <= 0) {
       throw new Error('targetSystemId is required for switch_system request');
     }
-    if (!apiKeyName) {
-      throw new Error('Assign API key before requesting system switch');
+    let switchApiKeyName = apiKeyName;
+    let systems = switchApiKeyName ? await listTradingSystems(switchApiKeyName).catch(() => []) : [];
+    let target = (Array.isArray(systems) ? systems : []).find((item) => Number(item.id) === targetSystemId);
+
+    if (!target?.id) {
+      const globalTarget = await db.get(
+        `SELECT ts.id AS system_id, ts.name AS system_name, ak.name AS api_key_name
+         FROM trading_systems ts
+         JOIN api_keys ak ON ak.id = ts.api_key_id
+         WHERE ts.id = ?`,
+        [targetSystemId]
+      ) as { system_id?: number; system_name?: string; api_key_name?: string } | undefined;
+
+      const globalApiKeyName = asString(globalTarget?.api_key_name, '');
+      if (globalTarget?.system_id && globalApiKeyName) {
+        switchApiKeyName = globalApiKeyName;
+        systems = await listTradingSystems(switchApiKeyName).catch(() => []);
+        target = (Array.isArray(systems) ? systems : []).find((item) => Number(item.id) === targetSystemId) || {
+          id: Number(globalTarget.system_id),
+          name: asString(globalTarget.system_name, ''),
+        } as any;
+      }
     }
 
-    const systems = await listTradingSystems(apiKeyName);
-    const target = systems.find((item) => Number(item.id) === targetSystemId);
     if (!target?.id) {
       throw new Error(`Target trading system not found: ${targetSystemId}`);
     }
 
     requestPayload.targetSystemId = Number(target.id);
     requestPayload.targetSystemName = asString(target.name, '');
+    requestPayload.targetApiKeyName = asString(switchApiKeyName, '');
   }
 
   await db.run(
@@ -5970,20 +6191,69 @@ const applyApprovedAlgofundAction = async (params: {
     }
     await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
   } else if (row.request_type === 'switch_system') {
-    const apiKeyName = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
+    const targetSystemId = Math.floor(asNumber(requestPayload.targetSystemId, 0));
+    let apiKeyName = asString(requestPayload.targetApiKeyName || profile.assigned_api_key_name || tenant.assigned_api_key_name);
+
+    if (!apiKeyName && targetSystemId > 0) {
+      const globalTarget = await db.get(
+        `SELECT ak.name AS api_key_name
+         FROM trading_systems ts
+         JOIN api_keys ak ON ak.id = ts.api_key_id
+         WHERE ts.id = ?`,
+        [targetSystemId]
+      ) as { api_key_name?: string } | undefined;
+      apiKeyName = asString(globalTarget?.api_key_name, '');
+    }
+
     if (!apiKeyName) {
       throw new Error('Assign API key before approving switch request');
     }
 
-    const targetSystemId = Math.floor(asNumber(requestPayload.targetSystemId, 0));
     if (targetSystemId <= 0) {
       throw new Error('Switch request payload is missing targetSystemId');
     }
 
-    const systems = await listTradingSystems(apiKeyName);
-    const target = systems.find((item) => Number(item.id) === targetSystemId);
+    let systems = await listTradingSystems(apiKeyName).catch(() => []);
+    let target = (Array.isArray(systems) ? systems : []).find((item) => Number(item.id) === targetSystemId);
+
+    if (!target?.id) {
+      const globalTarget = await db.get(
+        `SELECT ts.id AS system_id, ts.name AS system_name, ak.name AS api_key_name
+         FROM trading_systems ts
+         JOIN api_keys ak ON ak.id = ts.api_key_id
+         WHERE ts.id = ?`,
+        [targetSystemId]
+      ) as { system_id?: number; system_name?: string; api_key_name?: string } | undefined;
+
+      const globalApiKeyName = asString(globalTarget?.api_key_name, '');
+      if (globalTarget?.system_id && globalApiKeyName) {
+        apiKeyName = globalApiKeyName;
+        systems = await listTradingSystems(apiKeyName).catch(() => []);
+        target = (Array.isArray(systems) ? systems : []).find((item) => Number(item.id) === targetSystemId) || {
+          id: Number(globalTarget.system_id),
+          name: asString(globalTarget.system_name, ''),
+        } as any;
+      }
+    }
+
     if (!target?.id) {
       throw new Error(`Target trading system not found: ${targetSystemId}`);
+    }
+
+    const currentAssignedApiKey = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name, '');
+    if (apiKeyName && apiKeyName !== currentAssignedApiKey) {
+      await db.run(
+        `UPDATE tenants
+         SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [apiKeyName, row.tenant_id]
+      );
+      await db.run(
+        `UPDATE algofund_profiles
+         SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ?`,
+        [apiKeyName, row.tenant_id]
+      );
     }
 
     for (const item of systems) {
@@ -5999,10 +6269,11 @@ const applyApprovedAlgofundAction = async (params: {
       `UPDATE algofund_profiles
        SET actual_enabled = 1,
            requested_enabled = 1,
+           assigned_api_key_name = ?,
            published_system_name = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE tenant_id = ?`,
-      [asString(target.name), row.tenant_id]
+      [apiKeyName, asString(target.name), row.tenant_id]
     );
   }
 
@@ -6193,6 +6464,83 @@ export const removeAlgofundStorefrontSystem = async (payload: {
     positionsByApiKey,
     ...(closeResult ? { closeResult } : {}),
   };
+};
+
+export const getCopytradingState = async (tenantId: number) => {
+  await ensureSaasSeedData();
+  const tenant = await getTenantById(tenantId);
+  if (tenant.product_mode !== 'copytrading_client') {
+    throw new Error('Tenant is not a copytrading client');
+  }
+  const plan = await getPlanForTenant(tenantId);
+  const profile = await getCopytradingProfile(tenantId);
+  if (!profile) {
+    throw new Error('Copytrading profile not found');
+  }
+  const tenants = safeJsonParse<Array<Record<string, unknown>>>(profile.tenants_json, []).slice(0, 5);
+  return {
+    tenant,
+    plan,
+    profile: {
+      ...profile,
+      tenants,
+      engine: {
+        type: 'simple_copy_engine',
+        algorithm: profile.copy_algorithm,
+        precision: profile.copy_precision,
+      },
+    },
+  };
+};
+
+export const updateCopytradingState = async (
+  tenantId: number,
+  payload: {
+    masterApiKeyName?: string;
+    masterName?: string;
+    masterTags?: string;
+    tenants?: Array<Record<string, unknown>>;
+    copyAlgorithm?: string;
+    copyPrecision?: string;
+    copyEnabled?: boolean;
+  }
+) => {
+  const profile = await getCopytradingProfile(tenantId);
+  if (!profile) {
+    throw new Error('Copytrading profile not found');
+  }
+
+  const nextMasterApiKeyName = asString(payload.masterApiKeyName, profile.master_api_key_name);
+  const nextMasterName = asString(payload.masterName, profile.master_name);
+  const nextMasterTags = asString(payload.masterTags, profile.master_tags);
+  const nextTenantsJson = payload.tenants !== undefined
+    ? JSON.stringify(payload.tenants.slice(0, 5))
+    : profile.tenants_json;
+  const nextCopyAlgorithm = asString(payload.copyAlgorithm, profile.copy_algorithm);
+  const nextCopyPrecision = asString(payload.copyPrecision, profile.copy_precision);
+  const nextCopyEnabled = payload.copyEnabled !== undefined
+    ? (payload.copyEnabled ? 1 : 0)
+    : Number(profile.copy_enabled || 0);
+
+  await db.run(
+    `UPDATE copytrading_profiles
+     SET master_api_key_name = ?, master_name = ?, master_tags = ?,
+         tenants_json = ?, copy_algorithm = ?, copy_precision = ?,
+         copy_enabled = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE tenant_id = ?`,
+    [nextMasterApiKeyName, nextMasterName, nextMasterTags,
+     nextTenantsJson, nextCopyAlgorithm, nextCopyPrecision,
+     nextCopyEnabled, tenantId]
+  );
+
+  if (payload.masterApiKeyName !== undefined) {
+    await db.run(
+      `UPDATE tenants SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [nextMasterApiKeyName, tenantId]
+    );
+  }
+
+  return getCopytradingState(tenantId);
 };
 
 export const seedDemoSaasData = async () => {

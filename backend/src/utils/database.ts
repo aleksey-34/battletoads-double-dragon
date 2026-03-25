@@ -422,6 +422,21 @@ export const initDB = async () => {
       FOREIGN KEY (tenant_id) REFERENCES tenants(id)
     );
 
+    CREATE TABLE IF NOT EXISTS copytrading_profiles (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL UNIQUE,
+      master_api_key_name TEXT DEFAULT '',
+      master_name TEXT DEFAULT '',
+      master_tags TEXT DEFAULT 'copytrading-master',
+      tenants_json TEXT DEFAULT '[]',
+      copy_algorithm TEXT DEFAULT 'vwap_basic',
+      copy_precision TEXT DEFAULT 'standard',
+      copy_enabled BOOLEAN DEFAULT 0,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
     CREATE TABLE IF NOT EXISTS algofund_start_stop_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL,
@@ -506,6 +521,9 @@ export const initDB = async () => {
 
     CREATE INDEX IF NOT EXISTS idx_algofund_requests_tenant
       ON algofund_start_stop_requests (tenant_id, status, created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_copytrading_profiles_tenant
+      ON copytrading_profiles (tenant_id, updated_at DESC);
 
     CREATE INDEX IF NOT EXISTS idx_strategy_backtest_pair_requests_tenant
       ON strategy_backtest_pair_requests (tenant_id, status, created_at DESC);
