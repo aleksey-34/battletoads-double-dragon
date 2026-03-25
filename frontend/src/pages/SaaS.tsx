@@ -3860,6 +3860,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         .filter((value) => Number.isFinite(value))
       : [];
     const equityPoints = downsampleNumericSeries(equityPointsRaw, 160);
+    const snapshotApiKeyName = String(
+      adminSweepBacktestResult?.rerun?.apiKeyName
+      || adminSweepBacktestResult?.sweepApiKeyName
+      || ''
+    ).trim();
 
     setActionLoading(`offer-review-snapshot:${backtestDrawerContext.offerId}`);
     try {
@@ -3867,6 +3872,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         reviewSnapshotPatch: {
           [String(backtestDrawerContext.offerId)]: {
             offerId: String(backtestDrawerContext.offerId),
+            apiKeyName: snapshotApiKeyName,
             ret: Number(summary.totalReturnPercent ?? selected.metrics.ret ?? 0),
             pf: Number(summary.profitFactor ?? selected.metrics.pf ?? 0),
             dd: Number(summary.maxDrawdownPercent ?? selected.metrics.dd ?? 0),
@@ -3907,11 +3913,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const periodDays = Number(getPeriodDurationDays(adminSweepBacktestResult.period || null) || 90);
     const finalEquity = Number(summary.finalEquity ?? (equityPoints.length > 0 ? equityPoints[equityPoints.length - 1] : adminSweepBacktestInitialBalance));
     const trades = Number(summary.tradesCount ?? 0);
+    const snapshotApiKeyName = String(
+      adminSweepBacktestResult?.rerun?.apiKeyName
+      || adminSweepBacktestResult?.sweepApiKeyName
+      || ''
+    ).trim();
 
     setActionLoading('ts-review-snapshot');
     try {
       await axios.patch('/api/saas/admin/offer-store', {
         tsBacktestSnapshotPatch: {
+          apiKeyName: snapshotApiKeyName,
           ret: Number(summary.totalReturnPercent ?? 0),
           pf: Number(summary.profitFactor ?? 0),
           dd: Number(summary.maxDrawdownPercent ?? 0),

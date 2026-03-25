@@ -175,6 +175,7 @@ export type OfferStoreState = {
 
 type OfferReviewSnapshot = {
   offerId: string;
+  apiKeyName?: string;
   ret: number;
   pf: number;
   dd: number;
@@ -190,6 +191,7 @@ type OfferReviewSnapshot = {
 };
 
 type TsBacktestSnapshot = {
+  apiKeyName?: string;
   ret: number;
   pf: number;
   dd: number;
@@ -773,6 +775,7 @@ const normalizeOfferReviewSnapshot = (offerId: string, raw: unknown): OfferRevie
 
   return {
     offerId: safeOfferId,
+    apiKeyName: asString(parsed.apiKeyName, ''),
     ret: Number(asNumber(parsed.ret, 0).toFixed(3)),
     pf: Number(asNumber(parsed.pf, 0).toFixed(3)),
     dd: Number(asNumber(parsed.dd, 0).toFixed(3)),
@@ -825,6 +828,7 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
     : {};
 
   return {
+    apiKeyName: asString(parsed.apiKeyName, ''),
     ret: Number(asNumber(parsed.ret, 0).toFixed(3)),
     pf: Number(asNumber(parsed.pf, 0).toFixed(3)),
     dd: Number(asNumber(parsed.dd, 0).toFixed(3)),
@@ -2317,8 +2321,10 @@ const adjustPreviewMetrics = (
   const pfMul = Math.max(0.3, 1 / Math.max(0.5, Math.sqrt(riskMul) * Math.sqrt(tradeMul)));
   // win rate: high risk = lower wr, high freq = higher wr (more trades → regression to mean)
   const wrShift = (tradeMul - 1) * 5 - Math.max(0, riskMul - 1) * 6;
-  // trades scale primarily with frequency, lightly with risk
-  const tradesMul = Math.max(0.1, tradeMul * Math.max(0.5, riskMul * 0.6 + 0.4));
+  // trades scale with frequency; higher risk usually increases holding time,
+  // so trade count should stay flat or slightly decrease when risk grows.
+  const riskTradeDensityMul = clampNumber(1.08 - Math.max(0, riskMul - 1) * 0.22, 0.6, 1.05);
+  const tradesMul = Math.max(0.1, tradeMul * riskTradeDensityMul);
 
   return {
     ret: Number((asNumber(metrics.ret, 0) * retMul).toFixed(3)),
@@ -2907,6 +2913,54 @@ const getBestExistingSourceSystem = async (): Promise<{ apiKeyName: string; syst
   };
 };
 
+const resolveApiKeyNameForStrategyIds = async (
+  strategyIdsRaw: number[],
+  fallbackApiKeyName = ''
+): Promise<string> => {
+  const strategyIds = Array.from(new Set(
+    (Array.isArray(strategyIdsRaw) ? strategyIdsRaw : [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  ));
+
+  if (strategyIds.length === 0) {
+    return asString(fallbackApiKeyName, '');
+  }
+
+  const placeholders = strategyIds.map(() => '?').join(', ');
+  const rows = await db.all(
+    `SELECT s.id AS strategy_id, ak.name AS api_key_name
+     FROM strategies s
+     JOIN api_keys ak ON ak.id = s.api_key_id
+     WHERE s.id IN (${placeholders})`,
+    strategyIds
+  );
+
+  const rowByStrategyId = new Map<number, string>();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const strategyId = asNumber((row as Record<string, unknown>).strategy_id, 0);
+    const apiKeyName = asString((row as Record<string, unknown>).api_key_name, '');
+    if (strategyId > 0 && apiKeyName) {
+      rowByStrategyId.set(strategyId, apiKeyName);
+    }
+  }
+
+  const missingIds = strategyIds.filter((id) => !rowByStrategyId.has(id));
+  if (missingIds.length > 0) {
+    throw new Error(`Cannot resolve api key for strategy ids: ${missingIds.join(', ')}`);
+  }
+
+  const uniqueApiKeys = Array.from(new Set(strategyIds
+    .map((id) => asString(rowByStrategyId.get(id), ''))
+    .filter(Boolean)));
+
+  if (uniqueApiKeys.length === 1) {
+    return uniqueApiKeys[0];
+  }
+
+  throw new Error(`Draft TS mixes multiple api keys: ${uniqueApiKeys.join(', ')}. Keep one api key per TS.`);
+};
+
 const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyName: string; systemId: number; systemName: string }> => {
   const catalog = loadLatestClientCatalog();
 
@@ -2948,12 +3002,14 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
     throw new Error('Client catalog JSON not found in results/, and no trading systems available in DB.');
   }
 
-  // Use sweep's apiKeyName to create the master system, because strategy IDs
-  // in the catalog draft belong to whichever key ran the sweep. Using a different
-  // key causes "Strategy X does not belong to api key Y" errors.
+  // Resolve api key by strategy ownership in DB (source of truth), not by latest sweep.
+  // This avoids mismatches when the latest sweep/catalog and draft TS come from different keys.
   const sweep = loadLatestSweep();
   const sweepApiKey = asString((sweep as Record<string, unknown>)?.apiKeyName || ((sweep as Record<string, unknown>)?.config as Record<string, unknown>)?.apiKeyName, '');
-  const apiKeyName = sweepApiKey || asString(catalog.apiKeyName);
+  const memberStrategyIds = (catalog.adminTradingSystemDraft?.members || [])
+    .map((item) => Number(item.strategyId || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const apiKeyName = await resolveApiKeyNameForStrategyIds(memberStrategyIds, sweepApiKey || asString(catalog.apiKeyName));
   const systemName = `ALGOFUND_MASTER::${apiKeyName}`;
   const systems = await listTradingSystems(apiKeyName);
   const existing = systems.find((item) => asString(item.name) === systemName);
@@ -3611,7 +3667,9 @@ export const previewAdminSweepBacktest = async (payload?: {
 
   if (canTryRealBacktest && strategyIds.length > 0) {
     const sweepConfigAny = (sweep?.config || {}) as Record<string, unknown>;
+    const resolvedByStrategiesApiKey = await resolveApiKeyNameForStrategyIds(strategyIds, '');
     const preferredApiKey = asString(payload?.rerunApiKeyName, '')
+      || resolvedByStrategiesApiKey
       || asString(sweep?.apiKeyName, '')
       || asString(sweepConfigAny.apiKeyName, '')
       || asString(catalog?.apiKeyName, '')
