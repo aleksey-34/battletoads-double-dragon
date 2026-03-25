@@ -789,6 +789,7 @@ router.patch('/copytrading/:tenantId', async (req, res) => {
       tenants: Array.isArray(req.body.tenants) ? req.body.tenants : undefined,
       copyAlgorithm: req.body.copyAlgorithm,
       copyPrecision: req.body.copyPrecision,
+      copyRatio: toOptionalNumber(req.body.copyRatio),
       copyEnabled: req.body.copyEnabled !== undefined ? toBool(req.body.copyEnabled) : undefined,
     });
     res.json({ success: true, ...data });

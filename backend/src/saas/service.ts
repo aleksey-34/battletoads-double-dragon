@@ -308,6 +308,7 @@ type CopytradingProfileRow = {
   tenants_json: string;
   copy_algorithm: string;
   copy_precision: string;
+  copy_ratio: number;
   copy_enabled: number;
 };
 
@@ -1439,8 +1440,8 @@ const ensureCopytradingProfile = async (tenantId: number, assignedApiKeyName: st
   await db.run(
     `INSERT INTO copytrading_profiles (
       tenant_id, master_api_key_name, master_name, master_tags,
-      tenants_json, copy_algorithm, copy_precision, copy_enabled, created_at, updated_at
-    ) VALUES (?, ?, '', 'copytrading-master', '[]', 'vwap_basic', 'standard', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      tenants_json, copy_algorithm, copy_precision, copy_ratio, copy_enabled, created_at, updated_at
+    ) VALUES (?, ?, '', 'copytrading-master', '[]', 'vwap_basic', 'standard', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     ON CONFLICT(tenant_id) DO UPDATE SET
       master_api_key_name = CASE WHEN COALESCE(copytrading_profiles.master_api_key_name, '') = '' THEN excluded.master_api_key_name ELSE copytrading_profiles.master_api_key_name END,
       updated_at = CURRENT_TIMESTAMP`,
@@ -1520,14 +1521,18 @@ export const ensureSaasSeedData = async (): Promise<void> => {
   const clientKeys = apiKeyNames.filter((name) => name !== sourceApiKeyName);
   const strategyClientApiKey = clientKeys[0] || sourceApiKeyName;
   const algofundApiKey = clientKeys[1] || clientKeys[0] || sourceApiKeyName;
+  const copytradingApiKey = clientKeys[2] || clientKeys[1] || clientKeys[0] || sourceApiKeyName;
 
   const strategyTenant = await ensureTenant('client-bot-01', 'Client Bot 01', 'strategy_client', 'ru', strategyClientApiKey);
   const algofundTenant = await ensureTenant('algofund-01', 'Algofund Client 01', 'algofund_client', 'ru', algofundApiKey);
+  const copytradingTenant = await ensureTenant('copytrading-01', 'Copytrading Client 01', 'copytrading_client', 'ru', copytradingApiKey);
 
   await ensureSubscription(strategyTenant.id, (await getPlanByCode('strategy_20')).id);
   await ensureSubscription(algofundTenant.id, (await getPlanByCode('algofund_20')).id);
+  await ensureSubscription(copytradingTenant.id, (await getPlanByCode('copytrading_100')).id);
   await ensureStrategyClientProfile(strategyTenant.id, offerIds, strategyClientApiKey);
   await ensureAlgofundProfile(algofundTenant.id, algofundApiKey);
+  await ensureCopytradingProfile(copytradingTenant.id, copytradingApiKey);
 };
 
 const getPlanForTenant = async (tenantId: number): Promise<PlanRow | null> => {
@@ -5809,10 +5814,24 @@ export const getAlgofundState = async (
   }
 
   const capabilities = resolvePlanCapabilities(plan);
-  const availableSystemsRaw = effectiveProfile.assigned_api_key_name || tenant.assigned_api_key_name
-    ? await listTradingSystems(asString(effectiveProfile.assigned_api_key_name || tenant.assigned_api_key_name)).catch(() => [])
-    : [];
-  const availableSystems = (Array.isArray(availableSystemsRaw) ? availableSystemsRaw : []).map((item: any) => ({
+  // Fetch ALL published Algofund TS from all API keys, not filtered by tenant's assigned key
+  // This allows clients to see TS published under other API keys without API key binding
+  const allApiKeyNames = await getAvailableApiKeyNames().catch(() => []);
+  const allAlgofundSystemsMap = new Map<string, any>();
+  for (const apiKeyName of allApiKeyNames) {
+    const systems = await listTradingSystems(apiKeyName).catch(() => []);
+    for (const item of (Array.isArray(systems) ? systems : [])) {
+      const systemName = asString(item?.name, '');
+      // Collect all ALGOFUND_MASTER systems published to the storefront
+      if (systemName && systemName.toUpperCase().includes('ALGOFUND_MASTER')) {
+        const key = `${systemName}`;
+        if (!allAlgofundSystemsMap.has(key)) {
+          allAlgofundSystemsMap.set(key, item);
+        }
+      }
+    }
+  }
+  const availableSystems = Array.from(allAlgofundSystemsMap.values()).map((item: any) => ({
     id: Number(item?.id || 0),
     name: asString(item?.name, ''),
     isActive: Boolean(item?.is_active),
@@ -6489,6 +6508,7 @@ export const getCopytradingState = async (tenantId: number) => {
         algorithm: profile.copy_algorithm,
         precision: profile.copy_precision,
       },
+      copy_ratio: asNumber(profile.copy_ratio, 1),
     },
   };
 };
@@ -6502,6 +6522,7 @@ export const updateCopytradingState = async (
     tenants?: Array<Record<string, unknown>>;
     copyAlgorithm?: string;
     copyPrecision?: string;
+    copyRatio?: number;
     copyEnabled?: boolean;
   }
 ) => {
@@ -6518,6 +6539,7 @@ export const updateCopytradingState = async (
     : profile.tenants_json;
   const nextCopyAlgorithm = asString(payload.copyAlgorithm, profile.copy_algorithm);
   const nextCopyPrecision = asString(payload.copyPrecision, profile.copy_precision);
+  const nextCopyRatio = clampNumber(asNumber(payload.copyRatio, asNumber(profile.copy_ratio, 1)), 0.01, 100);
   const nextCopyEnabled = payload.copyEnabled !== undefined
     ? (payload.copyEnabled ? 1 : 0)
     : Number(profile.copy_enabled || 0);
@@ -6525,11 +6547,11 @@ export const updateCopytradingState = async (
   await db.run(
     `UPDATE copytrading_profiles
      SET master_api_key_name = ?, master_name = ?, master_tags = ?,
-         tenants_json = ?, copy_algorithm = ?, copy_precision = ?,
+         tenants_json = ?, copy_algorithm = ?, copy_precision = ?, copy_ratio = ?,
          copy_enabled = ?, updated_at = CURRENT_TIMESTAMP
      WHERE tenant_id = ?`,
     [nextMasterApiKeyName, nextMasterName, nextMasterTags,
-     nextTenantsJson, nextCopyAlgorithm, nextCopyPrecision,
+     nextTenantsJson, nextCopyAlgorithm, nextCopyPrecision, nextCopyRatio,
      nextCopyEnabled, tenantId]
   );
 

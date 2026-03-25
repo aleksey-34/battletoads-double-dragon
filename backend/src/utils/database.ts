@@ -431,6 +431,7 @@ export const initDB = async () => {
       tenants_json TEXT DEFAULT '[]',
       copy_algorithm TEXT DEFAULT 'vwap_basic',
       copy_precision TEXT DEFAULT 'standard',
+      copy_ratio REAL DEFAULT 1,
       copy_enabled BOOLEAN DEFAULT 0,
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -603,6 +604,7 @@ export const initDB = async () => {
   await ensureColumn('live_trade_events', 'source_symbol TEXT');
   await ensureColumn('algofund_start_stop_requests', "request_payload_json TEXT DEFAULT '{}'");
   await ensureColumn('strategy_client_profiles', 'active_system_profile_id INTEGER');
+  await ensureColumn('copytrading_profiles', 'copy_ratio REAL DEFAULT 1');
 
   await db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_live_trade_events_source_trade_id
