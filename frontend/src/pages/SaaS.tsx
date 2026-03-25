@@ -464,6 +464,27 @@ type SaasSummary = {
       riskLevel: Level3;
     };
     publishedOfferIds: string[];
+    tsBacktestSnapshots?: Record<string, {
+      apiKeyName?: string;
+      systemName?: string;
+      setKey?: string;
+      ret: number;
+      pf: number;
+      dd: number;
+      trades: number;
+      tradesPerDay: number;
+      periodDays: number;
+      finalEquity: number;
+      equityPoints?: number[];
+      offerIds?: string[];
+      backtestSettings?: {
+        riskScore?: number;
+        tradeFrequencyScore?: number;
+        initialBalance?: number;
+        riskScaleMaxPercent?: number;
+      };
+      updatedAt?: string;
+    }>;
     tsBacktestSnapshot?: {
       ret: number;
       pf: number;
