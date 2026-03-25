@@ -6931,7 +6931,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Alert
                                 type="info"
                                 showIcon
-                                message="Здесь для admin показывается только одобренная витрина Алгофонда. Кандидаты и настройка TS находятся в Админ → Оферы и ТС."
+                                message="Здесь показывается одобренная витрина Алгофонда и текущие TS-офферы. Подготовка кандидатов и настройка draft TS остаются в Админ → Оферы и ТС."
                               />
                               {publishedAlgofundSystems.length === 0 ? (
                                 <Empty description="Витрина Алгофонда сейчас пуста: опубликованная TS еще не привязана к algofund-клиентам" />
@@ -7096,11 +7096,43 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                         <Card className="battletoads-card" title="Algofund TS offers">
                           {isAdminSurface ? (
-                            <Alert
-                              type="info"
-                              showIcon
-                              message="Карточки TS скрыты в admin-режиме. Sweep/backtest и подготовка кандидатов выполняются в Админ → Анализ ресерча; approved-витрины управляются в Админ → Оферы и ТС."
-                            />
+                            algofundStorefrontSystems.length === 0 ? (
+                              <Alert
+                                type="warning"
+                                showIcon
+                                message="Пока нет одобренных TS в витрине. Сначала сохрани snapshot и отправь TS на витрину в Админ → Оферы и ТС."
+                              />
+                            ) : (
+                              <List
+                                grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
+                                dataSource={algofundStorefrontSystems}
+                                renderItem={(item) => (
+                                  <List.Item key={item.systemName}>
+                                    <Card size="small" bordered>
+                                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                        <Text strong>{item.systemName}</Text>
+                                        <Text type="secondary">Approved TS offer</Text>
+                                        <Space wrap>
+                                          <Tag color="blue">clients {Number(item.tenantCount || 0)}</Tag>
+                                          <Tag color="green">active {Number(item.activeCount || 0)}</Tag>
+                                          <Tag color="gold">pending {Number(item.pendingCount || 0)}</Tag>
+                                          <Tag color="geekblue">Ret {formatPercent(item.summary?.totalReturnPercent)}</Tag>
+                                          <Tag color="orange">DD {formatPercent(item.summary?.maxDrawdownPercent)}</Tag>
+                                          <Tag color="purple">PF {formatNumber(item.summary?.profitFactor)}</Tag>
+                                        </Space>
+                                        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                                          Это витринная TS-карточка. Sweep/preview строятся из snapshot и данных ресерча, без обязательной привязки к runtime API key.
+                                        </Paragraph>
+                                        <Space wrap>
+                                          <Button size="small" onClick={openBacktestDrawerForAdminTs}>Открыть бэктест ТС</Button>
+                                          <Button size="small" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>В approval center</Button>
+                                        </Space>
+                                      </Space>
+                                    </Card>
+                                  </List.Item>
+                                )}
+                              />
+                            )
                           ) : Array.isArray(algofundState?.availableSystems) && algofundState.availableSystems.length > 0 ? (
                             <Space direction="vertical" size={12} style={{ width: '100%' }}>
                               <Space wrap>

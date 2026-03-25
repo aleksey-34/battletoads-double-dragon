@@ -3442,7 +3442,7 @@ export const previewAdminSweepBacktest = async (payload?: {
     });
   }
 
-  const canTryRealBacktest = payload?.preferRealBacktest !== false;
+  const canTryRealBacktest = payload?.preferRealBacktest === true;
   const strategyIds = Array.from(new Set(
     selectedOffers
       .map((item) => Number(item.strategyId || 0))
@@ -5292,15 +5292,43 @@ export const getAlgofundState = async (
     } catch (error) {
       const message = (error as Error).message || 'Algofund preview unavailable';
       logger.warn(`Algofund preview unavailable for tenant ${tenantId}: ${message}`);
-      preview = {
-        riskMultiplier,
-        sourceSystem: null,
-        summary: null,
-        period,
-        equityCurve: [],
-        blockedByPlan: true,
-        blockedReason: message,
-      };
+      const tsSnapshot = await getTsBacktestSnapshot().catch(() => null);
+      if (tsSnapshot) {
+        const baseline = SAAS_ALGOFUND_BASELINE_INITIAL_BALANCE;
+        const finalEquity = Number(tsSnapshot.finalEquity || baseline);
+        const rawSeries = Array.isArray(tsSnapshot.equityPoints)
+          ? tsSnapshot.equityPoints.map((point) => Number(point)).filter((point) => Number.isFinite(point))
+          : [];
+        const fallbackSeries = rawSeries.length > 1 ? rawSeries : [baseline, finalEquity];
+        const equityCurve = fallbackSeries.map((equity, index) => ({ time: index, equity: Number(equity.toFixed(4)) }));
+
+        preview = {
+          riskMultiplier,
+          sourceSystem: null,
+          summary: {
+            initialBalance: baseline,
+            finalEquity,
+            totalReturnPercent: Number(tsSnapshot.ret || 0),
+            maxDrawdownPercent: Number(tsSnapshot.dd || 0),
+            profitFactor: Number(tsSnapshot.pf || 0),
+            tradesCount: Number(tsSnapshot.trades || 0),
+          },
+          period,
+          equityCurve,
+          blockedByPlan: false,
+          blockedReason: undefined,
+        };
+      } else {
+        preview = {
+          riskMultiplier,
+          sourceSystem: null,
+          summary: null,
+          period,
+          equityCurve: [],
+          blockedByPlan: true,
+          blockedReason: message,
+        };
+      }
     }
 
     await db.run(
