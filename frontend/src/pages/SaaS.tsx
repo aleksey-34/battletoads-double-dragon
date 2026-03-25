@@ -57,6 +57,12 @@ type SaasBacktestContext = {
 
 type AdminSweepBacktestPreviewResponse = {
   kind: 'offer' | 'algofund-ts';
+  publishMeta?: {
+    offerIds?: string[];
+    setKey?: string;
+    membersCount?: number;
+    systemName?: string;
+  };
   controls: {
     riskScore: number;
     tradeFrequencyScore: number;
@@ -799,6 +805,7 @@ type AdminPublishResponse = {
     offerIds?: string[];
     setKey?: string;
     membersCount?: number;
+    systemName?: string;
   };
 };
 

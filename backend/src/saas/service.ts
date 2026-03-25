@@ -6512,6 +6512,7 @@ export const publishAdminTradingSystem = async (payload?: { offerIds?: string[];
       offerIds,
       setKey,
       membersCount: members.length,
+      systemName: sourceSystem.systemName,
     },
     preview: {
       ...preview,
