@@ -104,6 +104,7 @@ type AdminSweepBacktestPreviewResponse = {
     requested?: boolean;
     executed?: boolean;
     apiKeyName?: string;
+    error?: string;
     strategyIds?: number[];
     tsMembersCount?: number;
     riskMul?: number;
@@ -2303,6 +2304,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       String(publishResponse?.sourceSystem?.systemName || '').trim(),
     ].filter(Boolean))
   ).map((systemName) => {
+    const storefrontLabel = `TS offer #${Array.from(new Set([
+      ...batchEligibleAlgofundTenants
+        .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
+        .filter(Boolean),
+      String(publishResponse?.sourceSystem?.systemName || '').trim(),
+    ].filter(Boolean))).indexOf(systemName) + 1}`;
     const tenants = batchEligibleAlgofundTenants.filter((tenant) => String(tenant.algofundProfile?.published_system_name || '').trim() === systemName);
     const runtimeSystemId = publishResponse?.sourceSystem?.systemName === systemName
       ? Number(publishResponse.sourceSystem.systemId || 0)
@@ -2317,6 +2324,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     return {
       systemName,
+      storefrontLabel,
       runtimeSystemId,
       summary: publishSummary || fallbackSummary || null,
       tenants,
@@ -4015,6 +4023,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const openBacktestDrawerForAdminTs = () => {
     openDraftTsBacktest();
+  };
+
+  const navigateToAdminTab = (tab: AdminTabKey) => {
+    if (typeof window !== 'undefined') {
+      window.location.assign(`/saas/admin?adminTab=${tab}`);
+      return;
+    }
+    setActiveTab('admin');
+    setAdminTab(tab);
   };
 
   const openSaasBacktestFlow = () => {
@@ -6957,14 +6974,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               ) : (
                                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                                   <Tag color="success">Опубликованные TS: {publishedAlgofundSystems.length}</Tag>
-                                  <Text>Клиентские runtime TS: {publishedAlgofundSystems.join(', ')}</Text>
+                                  <Text>Витринные TS офферы синхронизированы и доступны в карточках ниже</Text>
                                   <Text type="secondary">Клиентов с привязанной TS: {algofundTenantsWithPublishedTs.length}</Text>
                                 </Space>
                               )}
                               <Space wrap>
-                                <Button type="primary" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>Перейти в approval center</Button>
-                                <Button onClick={() => { setActiveTab('admin'); setAdminTab('clients'); setClientsModeFilter('algofund_client'); setClientsClassKind('ts'); }}>К клиентам Алгофонда</Button>
-                                <Button onClick={() => { setActiveTab('admin'); setAdminTab('research-analysis'); setSelectedAdminReviewKind('algofund-ts'); }}>Бэктест</Button>
+                                <Button type="primary" onClick={() => navigateToAdminTab('offer-ts')}>Перейти в approval center</Button>
+                                <Button onClick={() => navigateToAdminTab('clients')}>К клиентам Алгофонда</Button>
+                                <Button onClick={() => navigateToAdminTab('research-analysis')}>Бэктест</Button>
                               </Space>
                             </Space>
                           ) : (
@@ -7129,7 +7146,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <List.Item key={item.systemName}>
                                     <Card size="small" bordered>
                                       <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                        <Text strong>{item.systemName}</Text>
+                                        <Text strong>{item.storefrontLabel}</Text>
                                         <Text type="secondary">Approved TS offer</Text>
                                         <Space wrap>
                                           <Tag color="blue">clients {Number(item.tenantCount || 0)}</Tag>
@@ -7144,7 +7161,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         </Paragraph>
                                         <Space wrap>
                                           <Button size="small" onClick={openBacktestDrawerForAdminTs}>Открыть бэктест ТС</Button>
-                                          <Button size="small" onClick={() => { setActiveTab('admin'); setAdminTab('offer-ts'); }}>В approval center</Button>
+                                          <Button size="small" onClick={() => navigateToAdminTab('offer-ts')}>В approval center</Button>
                                         </Space>
                                       </Space>
                                     </Card>
@@ -7880,6 +7897,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     <Tag color="purple">frequency: {adminSweepBacktestResult.controls.tradeFrequencyLevel}</Tag>
                     {adminSweepBacktestResult.rerun?.executed ? (
                       <Tag color="green">real rerun: {adminSweepBacktestResult.rerun.apiKeyName || 'api_key'}</Tag>
+                    ) : adminSweepBacktestResult.rerun?.requested && adminSweepBacktestResult.rerun?.error ? (
+                      <Tag color="red">real rerun failed: {adminSweepBacktestResult.rerun.error}</Tag>
                     ) : (
                       <Tag color="default">mode: sweep-only</Tag>
                     )}

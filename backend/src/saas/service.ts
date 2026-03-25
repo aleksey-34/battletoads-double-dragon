@@ -3456,6 +3456,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   const maxMul = 1 + riskScaleMaxPercent / 100;
   const minMul = Math.max(0.1, 1 - riskScaleMaxPercent / 100);
   const rerunRiskMul = minMul + (maxMul - minMul) * (riskScore / 10);
+  let rerunFailureReason = '';
 
   if (canTryRealBacktest && strategyIds.length > 0) {
     const sweepConfigAny = (sweep?.config || {}) as Record<string, unknown>;
@@ -3537,7 +3538,8 @@ export const previewAdminSweepBacktest = async (payload?: {
           },
         };
       } catch (error) {
-        logger.warn(`Admin sweep rerun fallback to preset mode: ${(error as Error).message}`);
+        rerunFailureReason = asString((error as Error).message, 'Unknown rerun error');
+        logger.warn(`Admin sweep rerun fallback to preset mode: ${rerunFailureReason}`);
       }
     }
   }
@@ -3581,6 +3583,7 @@ export const previewAdminSweepBacktest = async (payload?: {
       rerun: {
         requested: canTryRealBacktest,
         executed: false,
+        ...(rerunFailureReason ? { error: rerunFailureReason } : {}),
       },
     };
   }
@@ -3630,6 +3633,7 @@ export const previewAdminSweepBacktest = async (payload?: {
     rerun: {
       requested: canTryRealBacktest,
       executed: false,
+      ...(rerunFailureReason ? { error: rerunFailureReason } : {}),
     },
   };
 };
