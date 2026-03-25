@@ -773,6 +773,16 @@ type AdminPublishResponse = {
     };
     equityCurve?: EquityPoint[];
   };
+  publishMeta?: {
+    offerIds?: string[];
+    setKey?: string;
+    membersCount?: number;
+  };
+};
+
+type AdminPublishPayload = {
+  offerIds?: string[];
+  setKey?: string;
 };
 
 type BacktestCardSettings = {
@@ -2831,10 +2841,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   useEffect(() => {
-    if (!isAdminSurface) {
-      return;
-    }
-    void loadSummary('full');
+    void loadSummary(isAdminSurface ? 'full' : 'light');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdminSurface]);
 
@@ -3848,10 +3855,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
-  const publishAdminTs = async () => {
+  const publishAdminTs = async (payload?: AdminPublishPayload) => {
+    const fallbackOfferIds = selectedAdminDraftTsOfferIds.length > 0
+      ? selectedAdminDraftTsOfferIds
+      : adminDraftTsOfferIdsAll;
+    const offerIds = Array.from(new Set(
+      (Array.isArray(payload?.offerIds) && payload?.offerIds?.length ? payload.offerIds : fallbackOfferIds)
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    ));
+    const setKey = String(payload?.setKey || selectedAdminDraftTsSetKey || '').trim();
+
     setActionLoading('publish');
     try {
-      const response = await axios.post<AdminPublishResponse>('/api/saas/admin/publish');
+      const response = await axios.post<AdminPublishResponse>('/api/saas/admin/publish', {
+        offerIds,
+        setKey: setKey || undefined,
+      });
       setPublishResponse(response.data);
       messageApi.success(copy.publishReady);
       await loadSummary();
@@ -4328,7 +4348,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const publishFromWizard = async () => {
     if (adminWizardTarget === 'algofund-ts') {
-      await publishAdminTs();
+      await publishAdminTs({
+        offerIds: selectedAdminDraftTsOfferIds,
+        setKey: selectedAdminDraftTsSetKey,
+      });
       return;
     }
 
@@ -4347,7 +4370,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     if (backtestDrawerContext.kind === 'algofund-ts') {
       await saveTsReviewSnapshotFromBacktest();
-      await publishAdminTs();
+      await publishAdminTs({
+        offerIds: backtestDrawerContext.offerIds,
+        setKey: selectedAdminDraftTsSetKey,
+      });
       setBacktestDrawerVisible(false);
       setBacktestDrawerContext(null);
       return;
