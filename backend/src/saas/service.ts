@@ -19,7 +19,7 @@ import { initResearchDb } from '../research/db';
 import { getPreset, listOfferIds } from '../research/presetBuilder';
 import { computeReconciliationMetrics } from '../analytics/liveReconciliation';
 
-export type ProductMode = 'strategy_client' | 'algofund_client';
+export type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client';
 export type Level3 = 'low' | 'medium' | 'high';
 export type RequestStatus = 'pending' | 'approved' | 'rejected';
 export type AlgofundRequestType = 'start' | 'stop' | 'switch_system';
@@ -298,6 +298,18 @@ type AlgofundProfileRow = {
   latest_preview_json: string;
 };
 
+type CopytradingProfileRow = {
+  id: number;
+  tenant_id: number;
+  master_api_key_name: string;
+  master_name: string;
+  master_tags: string;
+  tenants_json: string;
+  copy_algorithm: string;
+  copy_precision: string;
+  copy_enabled: number;
+};
+
 type AlgofundRequestRow = {
   id: number;
   tenant_id: number;
@@ -522,6 +534,25 @@ const algofundPlans: PlanSeed[] = [
   { code: 'algofund_100', title: 'Algofund 100', productMode: 'algofund_client', priceUsdt: 100, maxDepositTotal: 5000, riskCapMax: 2, maxStrategiesTotal: 0, allowTsStartStopRequests: true, features: { managedTs: true } },
   { code: 'algofund_150', title: 'Algofund 150', productMode: 'algofund_client', priceUsdt: 150, maxDepositTotal: 10000, riskCapMax: 2, maxStrategiesTotal: 0, allowTsStartStopRequests: true, features: { managedTs: true } },
   { code: 'algofund_200', title: 'Algofund 200', productMode: 'algofund_client', priceUsdt: 200, maxDepositTotal: 10000, riskCapMax: 2.5, maxStrategiesTotal: 0, allowTsStartStopRequests: true, features: { managedTs: true } },
+];
+
+const copytradingPlans: PlanSeed[] = [
+  {
+    code: 'copytrading_100',
+    title: 'Copytrading 100',
+    productMode: 'copytrading_client',
+    priceUsdt: 100,
+    maxDepositTotal: 0,
+    riskCapMax: 0,
+    maxStrategiesTotal: 0,
+    allowTsStartStopRequests: false,
+    features: {
+      copyMasterLimit: 1,
+      copyTenantLimit: 5,
+      copyAlgorithm: 'vwap_basic',
+      copyPrecision: 'standard',
+    },
+  },
 ];
 
 const asNumber = (value: unknown, fallback = 0): number => {
@@ -1403,6 +1434,19 @@ const ensureAlgofundProfile = async (tenantId: number, assignedApiKeyName: strin
   );
 };
 
+const ensureCopytradingProfile = async (tenantId: number, assignedApiKeyName: string): Promise<void> => {
+  await db.run(
+    `INSERT INTO copytrading_profiles (
+      tenant_id, master_api_key_name, master_name, master_tags,
+      tenants_json, copy_algorithm, copy_precision, copy_enabled, created_at, updated_at
+    ) VALUES (?, ?, '', 'copytrading-master', '[]', 'vwap_basic', 'standard', 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(tenant_id) DO UPDATE SET
+      master_api_key_name = CASE WHEN COALESCE(copytrading_profiles.master_api_key_name, '') = '' THEN excluded.master_api_key_name ELSE copytrading_profiles.master_api_key_name END,
+      updated_at = CURRENT_TIMESTAMP`,
+    [tenantId, assignedApiKeyName]
+  );
+};
+
 const scoreOffer = (offer: CatalogOffer): number => asNumber(offer?.metrics?.score, 0);
 
 const buildRecommendedSets = (catalog: CatalogData | null) => {
@@ -1463,7 +1507,7 @@ const buildRecommendedSets = (catalog: CatalogData | null) => {
 };
 
 export const ensureSaasSeedData = async (): Promise<void> => {
-  for (const plan of [...strategyClientPlans, ...algofundPlans]) {
+  for (const plan of [...strategyClientPlans, ...algofundPlans, ...copytradingPlans]) {
     await upsertPlan(plan);
   }
 
@@ -1572,6 +1616,11 @@ const syncLegacySelectedOffersFromActiveProfile = async (tenantId: number): Prom
 const getAlgofundProfile = async (tenantId: number): Promise<AlgofundProfileRow | null> => {
   const row = await db.get('SELECT * FROM algofund_profiles WHERE tenant_id = ?', [tenantId]);
   return (row || null) as AlgofundProfileRow | null;
+};
+
+const getCopytradingProfile = async (tenantId: number): Promise<CopytradingProfileRow | null> => {
+  const row = await db.get('SELECT * FROM copytrading_profiles WHERE tenant_id = ?', [tenantId]);
+  return (row || null) as CopytradingProfileRow | null;
 };
 
 const getAlgofundRequestsByTenant = async (tenantId: number): Promise<AlgofundRequestRow[]> => {
@@ -2262,27 +2311,51 @@ const buildSyntheticEquityPoints = (
   const dd = Math.max(0, Number.isFinite(maxDrawdownPercent) ? maxDrawdownPercent : Math.abs(ret) * 0.3);
   const days = Math.max(10, Number.isFinite(periodDays) && periodDays > 0 ? periodDays : 90);
   const finalEquity = start * (1 + ret / 100);
-  const ddAbs = start * dd / 100;
   // Number of points: ~1 per day, clamped to 40..200
   const n = Math.max(40, Math.min(200, Math.round(days)));
   const now = Date.now();
   const periodMs = Math.round(days * 24 * 3600 * 1000);
 
-  const points: Array<{ time: number; equity: number }> = [];
-  for (let i = 0; i <= n; i++) {
-    const t = i / n; // 0..1
-    // Exponential trend from start to finalEquity
-    const trend = start + (finalEquity - start) * t;
-    // Wave simulates drawdown: dips in mid-period then recovers
-    // sin(t * 2π) gives a full oscillation; attenuate toward end so we finish on trend
-    const wave = -ddAbs * Math.sin(t * Math.PI * (1.8 + oscillationFactor * 0.9)) * Math.pow(1 - t * 0.7, 1.2) * (0.45 + oscillationFactor * 0.18);
-    const equity = Math.max(start * 0.05, trend + wave);
-    points.push({
-      time: Math.round(now - periodMs + t * periodMs),
-      equity: Number(equity.toFixed(4)),
-    });
+  // Deterministic PRNG: stable curve for same inputs, no random "jumps" between rerenders.
+  let seed = Math.floor((ret + 1000) * 17 + dd * 113 + days * 7 + oscillationFactor * 97);
+  if (!Number.isFinite(seed) || seed <= 0) {
+    seed = 1234567;
   }
-  return points;
+  const nextRand = (): number => {
+    seed = (seed * 1664525 + 1013904223) % 4294967296;
+    return seed / 4294967296;
+  };
+  const nextGaussian = (): number => {
+    const u1 = Math.max(1e-9, nextRand());
+    const u2 = Math.max(1e-9, nextRand());
+    return Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+  };
+
+  const targetGrowth = Math.max(0.05, finalEquity) / start;
+  const drift = Math.log(targetGrowth) / n;
+  const vol = Math.max(0.0015, (dd / 100) / Math.sqrt(n) * (0.95 + oscillationFactor * 0.45));
+
+  const rawPath: number[] = [start];
+  let eq = start;
+  for (let i = 1; i <= n; i++) {
+    const shock = nextGaussian();
+    const step = drift + shock * vol;
+    eq = Math.max(start * 0.03, eq * Math.exp(step));
+    rawPath.push(eq);
+  }
+
+  // Force final point to match requested return while preserving curve shape.
+  const endRaw = Math.max(start * 0.03, rawPath[rawPath.length - 1]);
+  const scale = Math.max(0.05, finalEquity) / endRaw;
+  const scaledPath = rawPath.map((value) => value * scale);
+
+  return scaledPath.map((equity, index) => {
+    const t = index / n;
+    return {
+      time: Math.round(now - periodMs + t * periodMs),
+      equity: Number(Math.max(start * 0.03, equity).toFixed(4)),
+    };
+  });
 };
 
 const toPresetOnlyEquity = (initialBalance: number, retPercent: number, periodDays = 90): Array<{ time: number; equity: number }> => {
@@ -2915,8 +2988,10 @@ const getBestExistingSourceSystem = async (): Promise<{ apiKeyName: string; syst
 
 const resolveApiKeyNameForStrategyIds = async (
   strategyIdsRaw: number[],
-  fallbackApiKeyName = ''
+  fallbackApiKeyName = '',
+  options?: { strict?: boolean }
 ): Promise<string> => {
+  const strict = options?.strict !== false;
   const strategyIds = Array.from(new Set(
     (Array.isArray(strategyIdsRaw) ? strategyIdsRaw : [])
       .map((value) => Number(value))
@@ -2947,7 +3022,10 @@ const resolveApiKeyNameForStrategyIds = async (
 
   const missingIds = strategyIds.filter((id) => !rowByStrategyId.has(id));
   if (missingIds.length > 0) {
-    throw new Error(`Cannot resolve api key for strategy ids: ${missingIds.join(', ')}`);
+    if (strict) {
+      throw new Error(`Cannot resolve api key for strategy ids: ${missingIds.join(', ')}`);
+    }
+    return asString(fallbackApiKeyName, '');
   }
 
   const uniqueApiKeys = Array.from(new Set(strategyIds
@@ -2957,8 +3035,10 @@ const resolveApiKeyNameForStrategyIds = async (
   if (uniqueApiKeys.length === 1) {
     return uniqueApiKeys[0];
   }
-
-  throw new Error(`Draft TS mixes multiple api keys: ${uniqueApiKeys.join(', ')}. Keep one api key per TS.`);
+  if (strict) {
+    throw new Error(`Draft TS mixes multiple api keys: ${uniqueApiKeys.join(', ')}. Keep one api key per TS.`);
+  }
+  return asString(fallbackApiKeyName, uniqueApiKeys[0] || '');
 };
 
 const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyName: string; systemId: number; systemName: string }> => {
@@ -3009,17 +3089,49 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
   const memberStrategyIds = (catalog.adminTradingSystemDraft?.members || [])
     .map((item) => Number(item.strategyId || 0))
     .filter((value) => Number.isFinite(value) && value > 0);
-  const apiKeyName = await resolveApiKeyNameForStrategyIds(memberStrategyIds, sweepApiKey || asString(catalog.apiKeyName));
+  let apiKeyName = '';
+  try {
+    apiKeyName = await resolveApiKeyNameForStrategyIds(memberStrategyIds, sweepApiKey || asString(catalog.apiKeyName), { strict: true });
+  } catch (error) {
+    logger.warn(`Failed to resolve draft TS api key by strategy ownership: ${(error as Error).message}`);
+  }
+
+  if (!apiKeyName) {
+    const fallback = await getBestExistingSourceSystem();
+    if (fallback && fallback.apiKeyName && fallback.systemId > 0) {
+      return fallback;
+    }
+    throw new Error('Cannot resolve api key for draft TS members and no fallback trading system found.');
+  }
   const systemName = `ALGOFUND_MASTER::${apiKeyName}`;
   const systems = await listTradingSystems(apiKeyName);
   const existing = systems.find((item) => asString(item.name) === systemName);
-  const members = (catalog.adminTradingSystemDraft?.members || []).map((item, index) => ({
+  const membersRaw = (catalog.adminTradingSystemDraft?.members || []).map((item, index) => ({
     strategy_id: Number(item.strategyId),
     weight: asNumber(item.weight, index === 0 ? 1.25 : index === 1 ? 1.1 : 1),
     member_role: index < 3 ? 'core' : 'satellite',
     is_enabled: true,
     notes: `algofund_master ${item.strategyType} ${item.market}`,
   }));
+  const existingStrategies = await getStrategies(apiKeyName, { includeLotPreview: false }).catch(() => []);
+  const existingStrategyIds = new Set(
+    (Array.isArray(existingStrategies) ? existingStrategies : [])
+      .map((row) => Number((row as { id?: number })?.id || 0))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  );
+  const members = membersRaw.filter((item) => existingStrategyIds.has(Number(item.strategy_id || 0)));
+
+  if (members.length === 0) {
+    const fallback = await getBestExistingSourceSystem();
+    if (fallback && fallback.apiKeyName && fallback.systemId > 0) {
+      return fallback;
+    }
+    throw new Error('Draft TS has no strategies available in runtime API key; cannot publish.');
+  }
+
+  if (members.length < membersRaw.length) {
+    logger.warn(`Draft TS members filtered by runtime availability: kept=${members.length}, total=${membersRaw.length}, apiKey=${apiKeyName}`);
+  }
 
   if (existing?.id) {
     await updateTradingSystem(apiKeyName, Number(existing.id), {
@@ -3064,8 +3176,8 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
   }) => {
     const displayName = asString(payload.displayName, '').trim();
     if (!displayName) throw new Error('displayName is required');
-    if (payload.productMode !== 'strategy_client' && payload.productMode !== 'algofund_client') {
-      throw new Error('productMode must be strategy_client or algofund_client');
+    if (payload.productMode !== 'strategy_client' && payload.productMode !== 'algofund_client' && payload.productMode !== 'copytrading_client') {
+      throw new Error('productMode must be strategy_client, algofund_client or copytrading_client');
     }
 
     await ensureSaasSeedData();
@@ -3156,8 +3268,10 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
 
     if (payload.productMode === 'strategy_client') {
       await ensureStrategyClientProfile(tenant.id, [], apiKeyName);
-    } else {
+    } else if (payload.productMode === 'algofund_client') {
       await ensureAlgofundProfile(tenant.id, apiKeyName);
+    } else {
+      await ensureCopytradingProfile(tenant.id, apiKeyName);
     }
 
     // Optionally create a client user account if email is provided
@@ -3667,7 +3781,7 @@ export const previewAdminSweepBacktest = async (payload?: {
 
   if (canTryRealBacktest && strategyIds.length > 0) {
     const sweepConfigAny = (sweep?.config || {}) as Record<string, unknown>;
-    const resolvedByStrategiesApiKey = await resolveApiKeyNameForStrategyIds(strategyIds, '');
+    const resolvedByStrategiesApiKey = await resolveApiKeyNameForStrategyIds(strategyIds, '', { strict: false });
     const preferredApiKey = asString(payload?.rerunApiKeyName, '')
       || resolvedByStrategiesApiKey
       || asString(sweep?.apiKeyName, '')
@@ -4494,6 +4608,7 @@ const listTenantSummaries = async (options?: {
     const capabilities = resolvePlanCapabilities(plan);
     const strategyProfile = await getStrategyClientProfile(tenant.id);
     const algofundProfile = await getAlgofundProfile(tenant.id);
+    const copytradingProfile = await getCopytradingProfile(tenant.id);
     const monitoring = capabilities.monitoring && tenant.assigned_api_key_name
       ? await getMonitoringLatest(tenant.assigned_api_key_name).catch(() => null)
       : null;
@@ -4523,6 +4638,10 @@ const listTenantSummaries = async (options?: {
           : {
             latest_preview_json: '',
           }),
+      } : null,
+      copytradingProfile: copytradingProfile ? {
+        ...copytradingProfile,
+        tenants: safeJsonParse<Array<Record<string, unknown>>>(copytradingProfile.tenants_json, []),
       } : null,
       monitoring,
     });
