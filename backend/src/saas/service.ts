@@ -3241,6 +3241,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   initialBalance?: number;
   riskScaleMaxPercent?: number;
   preferRealBacktest?: boolean;
+  rerunApiKeyName?: string;
 }) => {
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();
@@ -3458,7 +3459,8 @@ export const previewAdminSweepBacktest = async (payload?: {
 
   if (canTryRealBacktest && strategyIds.length > 0) {
     const sweepConfigAny = (sweep?.config || {}) as Record<string, unknown>;
-    const preferredApiKey = asString(sweep?.apiKeyName, '')
+    const preferredApiKey = asString(payload?.rerunApiKeyName, '')
+      || asString(sweep?.apiKeyName, '')
       || asString(sweepConfigAny.apiKeyName, '')
       || asString(catalog?.apiKeyName, '')
       || asString((await getAvailableApiKeyNames())[0], '');

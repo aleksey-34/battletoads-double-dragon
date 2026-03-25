@@ -100,6 +100,16 @@ type AdminSweepBacktestPreviewResponse = {
       marginLoadPercent?: EquityPoint[];
     } | null;
   };
+  rerun?: {
+    requested?: boolean;
+    executed?: boolean;
+    apiKeyName?: string;
+    strategyIds?: number[];
+    tsMembersCount?: number;
+    riskMul?: number;
+    riskScaleMaxPercent?: number;
+    freqLevel?: Level3;
+  };
 };
 
 type TradingSystemListItem = {
@@ -2102,6 +2112,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestRiskScaleMaxPercent, setAdminSweepBacktestRiskScaleMaxPercent] = useState(DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent);
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
   const [adminSweepBacktestResult, setAdminSweepBacktestResult] = useState<AdminSweepBacktestPreviewResponse | null>(null);
+  const [adminSweepBacktestRerunApiKey, setAdminSweepBacktestRerunApiKey] = useState('');
   const [selectedAdminDraftTsOfferIds, setSelectedAdminDraftTsOfferIds] = useState<string[]>([]);
   const [selectedAdminDraftTsSetKey, setSelectedAdminDraftTsSetKey] = useState('');
 
@@ -3681,7 +3692,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
   }, [persistBacktestSettingsByCard]);
 
-  const runAdminSweepBacktestPreview = async (context?: SaasBacktestContext | null) => {
+  const runAdminSweepBacktestPreview = async (
+    context?: SaasBacktestContext | null,
+    options?: { preferRealBacktest?: boolean }
+  ) => {
     const targetContext = context || backtestDrawerContext;
     if (!targetContext) {
       return;
@@ -3697,6 +3711,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         tradeFrequencyScore: adminSweepBacktestTradeScore,
         initialBalance: adminSweepBacktestInitialBalance,
         riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
+        preferRealBacktest: options?.preferRealBacktest === true,
+        rerunApiKeyName: options?.preferRealBacktest
+          ? (adminSweepBacktestRerunApiKey || undefined)
+          : undefined,
       });
       setAdminSweepBacktestResult(response.data);
     } catch (error: any) {
@@ -3852,6 +3870,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setBacktestDrawerContext(context);
     setBacktestDrawerVisible(true);
     setAdminSweepBacktestResult(null);
+    setAdminSweepBacktestRerunApiKey('');
     window.setTimeout(() => {
       void runAdminSweepBacktestPreview(context);
     }, 0);
@@ -7704,6 +7723,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               >
                 Пересчитать sweep backtest
               </Button>
+              <Select
+                allowClear
+                size="small"
+                style={{ minWidth: 220 }}
+                placeholder="API key для real rerun (опц.)"
+                value={adminSweepBacktestRerunApiKey || undefined}
+                onChange={(value) => setAdminSweepBacktestRerunApiKey(String(value || ''))}
+                options={apiKeyOptions}
+              />
+              <Button
+                size="small"
+                loading={adminSweepBacktestLoading}
+                onClick={() => {
+                  void runAdminSweepBacktestPreview(undefined, { preferRealBacktest: true });
+                }}
+              >
+                API rerun (реальный)
+              </Button>
               {backtestDrawerContext.kind === 'offer' ? (
                 <Button
                   size="small"
@@ -7841,6 +7878,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     <Tag color="blue">offers: {adminSweepBacktestResult.selectedOffers.length}</Tag>
                     <Tag color="geekblue">risk: {adminSweepBacktestResult.controls.riskLevel}</Tag>
                     <Tag color="purple">frequency: {adminSweepBacktestResult.controls.tradeFrequencyLevel}</Tag>
+                    {adminSweepBacktestResult.rerun?.executed ? (
+                      <Tag color="green">real rerun: {adminSweepBacktestResult.rerun.apiKeyName || 'api_key'}</Tag>
+                    ) : (
+                      <Tag color="default">mode: sweep-only</Tag>
+                    )}
                     {adminSweepBacktestResult.period ? <Tag color="default">{formatPeriodLabel(adminSweepBacktestResult.period)}</Tag> : null}
                     {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(adminSweepBacktestResult.preview.summary.totalReturnPercent)}</Tag> : null}
                     {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(adminSweepBacktestResult.preview.summary.maxDrawdownPercent)}</Tag> : null}
