@@ -2043,6 +2043,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [messageApi, contextHolder] = message.useMessage();
   const summaryRequestSeqRef = useRef(0);
   const algofundRequestSeqRef = useRef(0);
+  const algofundAutoPreviewTimerRef = useRef<number | null>(null);
   const copytradingRequestSeqRef = useRef(0);
   const backtestRequestSeqRef = useRef(0);
   const backtestDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2414,6 +2415,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       .filter((point: any) => Number.isFinite(point.time) && Number.isFinite(point.equity));
   };
 
+  const mapSnapshotEquityPoints = (equityPoints?: number[]) => Array.isArray(equityPoints)
+    ? equityPoints
+      .map((equity: number, index: number) => ({
+        time: index,
+        equity: Number(equity),
+      }))
+      .filter((point: { time: number; equity: number }) => Number.isFinite(point.time) && Number.isFinite(point.equity))
+    : [];
+
   const extractTsSuffixToken = (systemName: string): string => {
     const parts = String(systemName || '').trim().split('::').filter(Boolean);
     return String(parts[parts.length - 1] || '').trim().toLowerCase();
@@ -2506,14 +2516,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         tradesCount: Number(snapshotForSystem.trades || 0),
       }
       : null;
-    const snapshotCurve = snapshotForSystem && Array.isArray(snapshotForSystem.equityPoints)
-      ? (snapshotForSystem.equityPoints || [])
-        .map((equity: number, index: number) => ({
-          time: index,
-          equity: Number(equity),
-        }))
-        .filter((point: { time: number; equity: number }) => Number.isFinite(point.time) && Number.isFinite(point.equity))
-      : [];
+    const snapshotCurve = mapSnapshotEquityPoints(snapshotForSystem?.equityPoints);
 
     const activeSetKey = String(selectedAdminDraftTsSetKey || '').trim();
     const latestBacktestMatchesSystem = activeSetKey
@@ -2529,15 +2532,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       && adminSweepBacktestResult?.kind === 'algofund-ts' && backtestDrawerContext?.kind === 'algofund-ts')
       ? parseAlgofundPreviewEquity(adminSweepBacktestResult?.preview || null)
       : [];
+    const safeLatestBacktestSummary = snapshotForSystem ? latestBacktestSummary : null;
+    const safeLatestBacktestCurve = snapshotForSystem ? latestBacktestCurve : [];
 
     return {
       systemName,
       storefrontLabel,
       runtimeSystemId,
-      summary: publishSummary || latestBacktestSummary || snapshotSummary || fallbackSummary || null,
+      summary: publishSummary || snapshotSummary || fallbackSummary || safeLatestBacktestSummary || null,
       equityCurve: publishEquityCurve.length > 1
         ? publishEquityCurve
-        : (latestBacktestCurve.length > 1 ? latestBacktestCurve : (snapshotCurve.length > 1 ? snapshotCurve : (tenantCurves[0] || []))),
+        : (snapshotCurve.length > 1 ? snapshotCurve : (tenantCurves[0] || safeLatestBacktestCurve)),
       tenants,
       tenantCount: tenants.length,
       activeCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.actual_enabled || 0) === 1).length,
@@ -3560,26 +3565,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   // Strategy previews are manual-only to avoid API storms on SaaS page load.
 
   useEffect(() => {
-    if (!algofundTenantId || !algofundState || algofundLoading) {
-      return;
-    }
-
-    const currentPreviewRisk = Number(algofundState.preview?.riskMultiplier ?? algofundState.profile?.risk_multiplier ?? 1);
-    const targetRisk = Number(algofundRiskMultiplier);
-    if (!Number.isFinite(targetRisk)) {
-      return;
-    }
-
-    if (Math.abs(currentPreviewRisk - targetRisk) < 0.01) {
-      return;
-    }
-
-    const timer = window.setTimeout(() => {
-      void loadAlgofundTenant(algofundTenantId, Number(targetRisk.toFixed(2)), isAdminSurface);
-    }, 500);
-
-    return () => window.clearTimeout(timer);
-  }, [algofundLoading, algofundRiskMultiplier, algofundTenantId, algofundState, isAdminSurface]);
+    return () => {
+      if (algofundAutoPreviewTimerRef.current !== null) {
+        window.clearTimeout(algofundAutoPreviewTimerRef.current);
+        algofundAutoPreviewTimerRef.current = null;
+      }
+    };
+  }, []);
 
   const saveStrategyProfile = async () => {
     if (!strategyTenantId) {
@@ -4527,7 +4519,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   const navigateSaasTab = (tab: SaasTabKey, nextAdminTab?: AdminTabKey) => {
-    if (tab === 'admin') {
+    if (isAdminSurface) {
+      const target = nextAdminTab || adminTab;
+      navigate(`/saas/admin?adminTab=${target}`);
+    } else if (tab === 'admin') {
       const target = nextAdminTab || adminTab;
       navigate(`/saas/admin?adminTab=${target}`);
     } else if (tab === 'strategy-client') {
