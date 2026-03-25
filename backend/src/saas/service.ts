@@ -4978,8 +4978,16 @@ const listTenantSummaries = async (options?: {
     const strategyProfile = await getStrategyClientProfile(tenant.id);
     const algofundProfile = await getAlgofundProfile(tenant.id);
     const copytradingProfile = await getCopytradingProfile(tenant.id);
-    const monitoring = capabilities.monitoring && tenant.assigned_api_key_name
-      ? await getMonitoringLatest(tenant.assigned_api_key_name).catch(() => null)
+    const effectiveMonitoringApiKeyName = asString(
+      tenant.product_mode === 'strategy_client'
+        ? strategyProfile?.assigned_api_key_name
+        : tenant.product_mode === 'algofund_client'
+          ? algofundProfile?.assigned_api_key_name
+          : copytradingProfile?.master_api_key_name,
+      tenant.assigned_api_key_name
+    ).trim();
+    const monitoring = capabilities.monitoring && effectiveMonitoringApiKeyName
+      ? await getMonitoringLatest(effectiveMonitoringApiKeyName).catch(() => null)
       : null;
     out.push({
       tenant,
@@ -5051,8 +5059,9 @@ export const getStrategyClientState = async (tenantId: number) => {
       .map((offerId) => findOfferByIdOrNull(constraintsCatalog, offerId))
       .filter((item): item is CatalogOffer => !!item)
     : [];
-  const monitoring = capabilities.monitoring && tenant.assigned_api_key_name
-    ? await getMonitoringLatest(tenant.assigned_api_key_name).catch(() => null)
+  const effectiveMonitoringApiKeyName = asString(profile?.assigned_api_key_name, tenant.assigned_api_key_name).trim();
+  const monitoring = capabilities.monitoring && effectiveMonitoringApiKeyName
+    ? await getMonitoringLatest(effectiveMonitoringApiKeyName).catch(() => null)
     : null;
 
   return {

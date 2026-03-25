@@ -2538,6 +2538,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return {
       systemName,
       storefrontLabel,
+      isArchived: systemName.toUpperCase().startsWith('ARCHIVED::'),
       runtimeSystemId,
       summary: publishSummary || snapshotSummary || fallbackSummary || safeLatestBacktestSummary || null,
       equityCurve: publishEquityCurve.length > 1
@@ -2549,6 +2550,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       pendingCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.requested_enabled || 0) === 1 && Number(tenant.algofundProfile?.actual_enabled || 0) !== 1).length,
     };
   });
+  }).filter((item) => !item.isArchived || item.tenantCount > 0);
   })();
   const offerTitleById = offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
@@ -4759,7 +4761,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       key: 'apiKey',
       render: (_, row) => (
         <Space wrap>
-          <Text>{row.tenant.assigned_api_key_name || '—'}</Text>
+          <Text>{row.tenant.product_mode === 'strategy_client'
+            ? row.strategyProfile?.assigned_api_key_name || row.tenant.assigned_api_key_name || '—'
+            : row.tenant.product_mode === 'algofund_client'
+              ? row.algofundProfile?.assigned_api_key_name || row.tenant.assigned_api_key_name || '—'
+              : row.copytradingProfile?.master_api_key_name || row.tenant.assigned_api_key_name || '—'}</Text>
           {row.capabilities && !row.capabilities.apiKeyUpdate ? <Tag color="default">readonly</Tag> : null}
         </Space>
       ),
@@ -4822,14 +4828,28 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         const profile = row.tenant.product_mode === 'strategy_client' ? row.strategyProfile : row.algofundProfile;
         const requestedEnabled = Number(profile?.requested_enabled || 0) === 1;
         const actualEnabled = Number(profile?.actual_enabled || 0) === 1;
+        const hasError = requestedEnabled && !actualEnabled;
+        const runtimeColor = hasError ? 'error' : actualEnabled ? 'success' : 'warning';
+        const runtimeLabel = hasError ? 'runtime error' : actualEnabled ? 'runtime on' : 'runtime off';
+        const statusDetails = [
+          `Tenant: ${row.tenant.status}`,
+          `Requested: ${requestedEnabled ? 'on' : 'off'}`,
+          `Runtime: ${actualEnabled ? 'on' : 'off'}`,
+          row.tenant.product_mode === 'algofund_client' && String(row.algofundProfile?.published_system_name || '').trim()
+            ? `TS: ${String(row.algofundProfile?.published_system_name || '').trim()}`
+            : '',
+          hasError ? 'Requested ON, but runtime is not started or failed to materialize.' : '',
+        ].filter(Boolean).join(' | ');
         return (
-          <Space direction="vertical" size={2}>
-            <Tag color={row.tenant.status === 'active' ? 'success' : 'default'}>{row.tenant.status}</Tag>
-            <Space size={4} wrap>
-              <Tag color={actualEnabled ? 'success' : 'default'}>{actualEnabled ? 'runtime on' : 'runtime off'}</Tag>
-              <Tag color={requestedEnabled ? 'processing' : 'default'}>{requestedEnabled ? 'requested on' : 'requested off'}</Tag>
+          <Tooltip title={statusDetails}>
+            <Space direction="vertical" size={2}>
+              <Tag color={row.tenant.status === 'active' ? 'success' : 'default'}>{row.tenant.status}</Tag>
+              <Space size={4} wrap>
+                <Tag color={runtimeColor}>{runtimeLabel}</Tag>
+                <Tag color={requestedEnabled ? 'processing' : 'default'}>{requestedEnabled ? 'requested on' : 'requested off'}</Tag>
+              </Space>
             </Space>
-          </Space>
+          </Tooltip>
         );
       },
     },
@@ -7791,6 +7811,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           <Tag color="blue">clients {Number(item.tenantCount || 0)}</Tag>
                                           <Tag color="green">active {Number(item.activeCount || 0)}</Tag>
                                           {item.pendingCount > 0 ? <Tag color="gold">pending {item.pendingCount}</Tag> : null}
+                                          {!item.tenants.length && !item.runtimeSystemId ? <Tag color="default">legacy snapshot</Tag> : null}
                                           {item.summary?.totalReturnPercent !== undefined && item.summary.totalReturnPercent !== 0
                                             ? <Tag color={metricColor(Number(item.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(item.summary.totalReturnPercent)}</Tag>
                                             : null}
@@ -7841,7 +7862,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 )}
                               />
                             )
-                          ) : Array.isArray(algofundState?.availableSystems) && algofundState.availableSystems.length > 0 ? (
+                          ) : Array.isArray(algofundState?.availableSystems) && algofundState.availableSystems.filter((item) => !String(item.name || '').toUpperCase().startsWith('ARCHIVED::')).length > 0 ? (
                             <Space direction="vertical" size={12} style={{ width: '100%' }}>
                               <Space wrap>
                                 <Tag color="processing">Client can switch between published TS offers</Tag>
@@ -7850,7 +7871,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               </Space>
                               <List
                                 grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
-                                dataSource={algofundState.availableSystems || []}
+                                dataSource={(algofundState.availableSystems || []).filter((item) => !String(item.name || '').toUpperCase().startsWith('ARCHIVED::'))}
                                 renderItem={(item) => (
                                   <List.Item key={item.id}>
                                     <Card size="small" bordered>
