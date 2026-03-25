@@ -2413,6 +2413,55 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       }))
       .filter((point: any) => Number.isFinite(point.time) && Number.isFinite(point.equity));
   };
+
+  const extractTsSuffixToken = (systemName: string): string => {
+    const parts = String(systemName || '').trim().split('::').filter(Boolean);
+    return String(parts[parts.length - 1] || '').trim().toLowerCase();
+  };
+
+  const matchesTsSnapshotToken = (systemName: string, token: string): boolean => {
+    const normalizedToken = String(token || '').trim().toLowerCase();
+    if (!normalizedToken) {
+      return false;
+    }
+    const normalizedName = String(systemName || '').trim().toLowerCase();
+    return normalizedName.endsWith(`::${normalizedToken}`) || normalizedName.includes(`::${normalizedToken}-`);
+  };
+
+  const resolveTsSnapshotForSystem = (systemName: string) => {
+    const snapshotMap = summary?.offerStore?.tsBacktestSnapshots || {};
+    const entries = Object.entries(snapshotMap)
+      .map(([key, snapshot]) => ({
+        key: String(key || '').trim(),
+        snapshot,
+      }))
+      .filter((item) => item.key.length > 0 && item.snapshot);
+
+    if (entries.length === 0) {
+      return null;
+    }
+
+    const exactMatch = entries.find((item) => String(item.snapshot?.systemName || '').trim() === systemName);
+    if (exactMatch?.snapshot) {
+      return exactMatch.snapshot;
+    }
+
+    const suffixToken = extractTsSuffixToken(systemName);
+    if (!suffixToken || !suffixToken.includes('-')) {
+      return null;
+    }
+
+    const tokenMatch = entries.find((item) => {
+      const setKey = String(item.snapshot?.setKey || '').trim();
+      if (setKey && matchesTsSnapshotToken(systemName, setKey)) {
+        return true;
+      }
+      return matchesTsSnapshotToken(systemName, item.key);
+    });
+
+    return tokenMatch?.snapshot || null;
+  };
+
   const algofundStorefrontSystems = (() => {
     // Build storefront from ALL available published TS systems (not just those with connected clients)
     const availableSystemNames = Array.from(new Set([
@@ -2432,6 +2481,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return availableSystemNames.map((systemName) => {
     const storefrontLabel = `TS offer #${availableSystemNames.indexOf(systemName) + 1}`;
     const tenants = batchEligibleAlgofundTenants.filter((tenant) => String(tenant.algofundProfile?.published_system_name || '').trim() === systemName);
+    const snapshotForSystem = resolveTsSnapshotForSystem(systemName);
     const runtimeSystemId = publishResponse?.sourceSystem?.systemName === systemName
       ? Number(publishResponse.sourceSystem.systemId || 0)
       : (algofundState?.availableSystems || []).find((s) => s.name === systemName)?.id || null;
@@ -2448,12 +2498,35 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       .map((tenant) => parseAlgofundPreviewEquity(tenant.algofundProfile?.latestPreview || null))
       .filter((curve) => Array.isArray(curve) && curve.length > 1);
     const fallbackSummary = tenantSummaries[0] || null;
+    const snapshotSummary = snapshotForSystem
+      ? {
+        totalReturnPercent: Number(snapshotForSystem.ret || 0),
+        maxDrawdownPercent: Number(snapshotForSystem.dd || 0),
+        profitFactor: Number(snapshotForSystem.pf || 0),
+        tradesCount: Number(snapshotForSystem.trades || 0),
+      }
+      : null;
+    const snapshotCurve = snapshotForSystem && Array.isArray(snapshotForSystem.equityPoints)
+      ? (snapshotForSystem.equityPoints || [])
+        .map((equity: number, index: number) => ({
+          time: index,
+          equity: Number(equity),
+        }))
+        .filter((point: { time: number; equity: number }) => Number.isFinite(point.time) && Number.isFinite(point.equity))
+      : [];
+
+    const activeSetKey = String(selectedAdminDraftTsSetKey || '').trim();
+    const latestBacktestMatchesSystem = activeSetKey
+      ? matchesTsSnapshotToken(systemName, activeSetKey)
+      : true;
     // Also use latest backtest result summary for the matching TS when available
-    const latestBacktestSummary = (adminSweepBacktestResult?.kind === 'algofund-ts' && adminSweepBacktestResult?.preview?.summary
+    const latestBacktestSummary = (latestBacktestMatchesSystem
+      && adminSweepBacktestResult?.kind === 'algofund-ts' && adminSweepBacktestResult?.preview?.summary
       && backtestDrawerContext?.kind === 'algofund-ts')
       ? adminSweepBacktestResult.preview.summary
       : null;
-    const latestBacktestCurve = (adminSweepBacktestResult?.kind === 'algofund-ts' && backtestDrawerContext?.kind === 'algofund-ts')
+    const latestBacktestCurve = (latestBacktestMatchesSystem
+      && adminSweepBacktestResult?.kind === 'algofund-ts' && backtestDrawerContext?.kind === 'algofund-ts')
       ? parseAlgofundPreviewEquity(adminSweepBacktestResult?.preview || null)
       : [];
 
@@ -2461,10 +2534,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       systemName,
       storefrontLabel,
       runtimeSystemId,
-      summary: publishSummary || latestBacktestSummary || fallbackSummary || null,
+      summary: publishSummary || latestBacktestSummary || snapshotSummary || fallbackSummary || null,
       equityCurve: publishEquityCurve.length > 1
         ? publishEquityCurve
-        : (latestBacktestCurve.length > 1 ? latestBacktestCurve : (tenantCurves[0] || [])),
+        : (latestBacktestCurve.length > 1 ? latestBacktestCurve : (snapshotCurve.length > 1 ? snapshotCurve : (tenantCurves[0] || []))),
       tenants,
       tenantCount: tenants.length,
       activeCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.actual_enabled || 0) === 1).length,

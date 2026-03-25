@@ -172,6 +172,9 @@ router.patch('/admin/offer-store', async (req, res) => {
         : (req.body?.tsBacktestSnapshotPatch && typeof req.body.tsBacktestSnapshotPatch === 'object'
           ? req.body.tsBacktestSnapshotPatch
           : undefined),
+      tsBacktestSnapshotsPatch: req.body?.tsBacktestSnapshotsPatch && typeof req.body.tsBacktestSnapshotsPatch === 'object'
+        ? req.body.tsBacktestSnapshotsPatch
+        : undefined,
     });
     res.json({ success: true, ...data });
   } catch (error) {
