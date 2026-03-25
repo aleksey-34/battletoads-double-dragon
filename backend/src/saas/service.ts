@@ -130,7 +130,29 @@ export type OfferStoreDefaults = {
 export type OfferStoreState = {
   defaults: OfferStoreDefaults;
   publishedOfferIds: string[];
+  tsBacktestSnapshots?: Record<string, {
+    systemName?: string;
+    setKey?: string;
+    ret: number;
+    pf: number;
+    dd: number;
+    trades: number;
+    tradesPerDay: number;
+    periodDays: number;
+    finalEquity: number;
+    equityPoints: number[];
+    offerIds: string[];
+    backtestSettings: {
+      riskScore: number;
+      tradeFrequencyScore: number;
+      initialBalance: number;
+      riskScaleMaxPercent: number;
+    };
+    updatedAt: string;
+  }>;
   tsBacktestSnapshot?: {
+    systemName?: string;
+    setKey?: string;
     ret: number;
     pf: number;
     dd: number;
@@ -193,6 +215,8 @@ type OfferReviewSnapshot = {
 
 type TsBacktestSnapshot = {
   apiKeyName?: string;
+  systemName?: string;
+  setKey?: string;
   ret: number;
   pf: number;
   dd: number;
@@ -210,6 +234,8 @@ type TsBacktestSnapshot = {
   };
   updatedAt: string;
 };
+
+const normalizeTsSnapshotMapKey = (raw: string): string => String(raw || '').trim();
 
 export type AdminReportSettings = {
   enabled: boolean;
@@ -862,6 +888,8 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
 
   return {
     apiKeyName: asString(parsed.apiKeyName, ''),
+    systemName: asString(parsed.systemName, ''),
+    setKey: asString(parsed.setKey, ''),
     ret: Number(asNumber(parsed.ret, 0).toFixed(3)),
     pf: Number(asNumber(parsed.pf, 0).toFixed(3)),
     dd: Number(asNumber(parsed.dd, 0).toFixed(3)),
@@ -879,6 +907,25 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
     },
     updatedAt: asString(parsed.updatedAt, new Date().toISOString()),
   };
+};
+
+const getTsBacktestSnapshots = async (): Promise<Record<string, TsBacktestSnapshot>> => {
+  const raw = safeJsonParse<Record<string, unknown>>(
+    await getRuntimeFlag('offer.store.ts_backtest_snapshots', '{}'),
+    {}
+  );
+  const out: Record<string, TsBacktestSnapshot> = {};
+  for (const [key, value] of Object.entries(raw || {})) {
+    const normalizedKey = normalizeTsSnapshotMapKey(key);
+    if (!normalizedKey) {
+      continue;
+    }
+    const snapshot = normalizeTsBacktestSnapshot(value);
+    if (snapshot) {
+      out[normalizedKey] = snapshot;
+    }
+  }
+  return out;
 };
 
 const getTsBacktestSnapshot = async (): Promise<TsBacktestSnapshot | null> => {
@@ -3053,8 +3100,91 @@ const resolveApiKeyNameForStrategyIds = async (
   return asString(fallbackApiKeyName, uniqueApiKeys[0] || '');
 };
 
-const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyName: string; systemId: number; systemName: string }> => {
+const normalizePublishOfferIds = (offerIds?: string[]): string[] => Array.from(new Set(
+  (Array.isArray(offerIds) ? offerIds : [])
+    .map((value) => String(value || '').trim())
+    .filter(Boolean)
+));
+
+const buildSetSlug = (raw: string): string => asString(raw, '')
+  .trim()
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, '-')
+  .replace(/^-+|-+$/g, '')
+  .slice(0, 40);
+
+const simpleHash36 = (value: string): string => {
+  let hash = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash) + value.charCodeAt(index);
+    hash |= 0;
+  }
+  return Math.abs(hash).toString(36);
+};
+
+const buildPublishSystemSuffix = (setKey: string, offerIds: string[]): string => {
+  const slug = buildSetSlug(setKey);
+  const seed = offerIds.join('|') || setKey || 'default';
+  const hash = simpleHash36(seed).slice(0, 8);
+  if (slug) {
+    return `${slug}-${hash}`;
+  }
+  return `set-${hash}`;
+};
+
+const resolvePublishDraftMembers = (
+  catalog: CatalogData | null,
+  offerIds: string[]
+): CatalogData['adminTradingSystemDraft']['members'] => {
+  const fallbackMembers = Array.isArray(catalog?.adminTradingSystemDraft?.members)
+    ? (catalog?.adminTradingSystemDraft?.members || [])
+    : [];
+
+  if (!catalog || offerIds.length === 0) {
+    return fallbackMembers;
+  }
+
+  const offersById = new Map<string, CatalogOffer>();
+  for (const offer of getAllOffers(catalog)) {
+    const offerId = String(offer?.offerId || '').trim();
+    if (offerId) {
+      offersById.set(offerId, offer);
+    }
+  }
+
+  const mapped = offerIds
+    .map((offerId) => offersById.get(offerId) || null)
+    .filter((offer): offer is CatalogOffer => Boolean(offer))
+    .map((offer, index, arr) => ({
+      strategyId: Number(offer.strategy?.id || 0),
+      strategyName: asString(offer.strategy?.name, `Strategy ${index + 1}`),
+      strategyType: asString(offer.strategy?.type, 'DD_BattleToads'),
+      marketMode: offer.strategy?.mode === 'synth' ? 'synthetic' : 'mono',
+      market: asString(offer.strategy?.market, ''),
+      score: Number(asNumber(offer.metrics?.score, 0).toFixed(3)),
+      weight: Number((1 / Math.max(1, arr.length)).toFixed(4)),
+    }))
+    .filter((member) => Number.isFinite(member.strategyId) && member.strategyId > 0);
+
+  if (mapped.length === 0) {
+    return fallbackMembers;
+  }
+
+  return mapped;
+};
+
+const ensurePublishedSourceSystem = async (
+  tenantId?: number,
+  options?: {
+    draftMembersOverride?: CatalogData['adminTradingSystemDraft']['members'];
+    systemNameSuffix?: string;
+  }
+): Promise<{ apiKeyName: string; systemId: number; systemName: string }> => {
   const catalog = loadLatestClientCatalog();
+  const draftMembers = Array.isArray(options?.draftMembersOverride) && (options?.draftMembersOverride?.length || 0) > 0
+    ? (options?.draftMembersOverride || [])
+    : (catalog?.adminTradingSystemDraft?.members || []);
+  const systemNameSuffix = asString(options?.systemNameSuffix, '').trim();
 
   if (tenantId) {
     const [tenant, profile] = await Promise.all([
@@ -3101,9 +3231,13 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
   const memberStrategyIds = (catalog.adminTradingSystemDraft?.members || [])
     .map((item) => Number(item.strategyId || 0))
     .filter((value) => Number.isFinite(value) && value > 0);
+  const memberStrategyIdsOverride = draftMembers
+    .map((item) => Number(item.strategyId || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const strategyIdsForPublish = memberStrategyIdsOverride.length > 0 ? memberStrategyIdsOverride : memberStrategyIds;
   let apiKeyName = '';
   try {
-    apiKeyName = await resolveApiKeyNameForStrategyIds(memberStrategyIds, sweepApiKey || asString(catalog.apiKeyName), { strict: true });
+    apiKeyName = await resolveApiKeyNameForStrategyIds(strategyIdsForPublish, sweepApiKey || asString(catalog.apiKeyName), { strict: true });
   } catch (error) {
     logger.warn(`Failed to resolve draft TS api key by strategy ownership: ${(error as Error).message}`);
   }
@@ -3119,10 +3253,10 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
     }
     throw new Error('Cannot resolve api key for draft TS members and no fallback trading system found.');
   }
-  const systemName = `ALGOFUND_MASTER::${apiKeyName}`;
+  const systemName = `ALGOFUND_MASTER::${apiKeyName}${systemNameSuffix ? `::${systemNameSuffix}` : ''}`;
   const systems = await listTradingSystems(apiKeyName);
   const existing = systems.find((item) => asString(item.name) === systemName);
-  const membersRaw = (catalog.adminTradingSystemDraft?.members || []).map((item, index) => ({
+  const membersRaw = (draftMembers || []).map((item, index) => ({
     strategy_id: Number(item.strategyId),
     strategy_name: asString(item.strategyName, '').trim(),
     weight: asNumber(item.weight, index === 0 ? 1.25 : index === 1 ? 1.1 : 1),
@@ -3197,7 +3331,7 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
         continue;
       }
 
-      const runtimeSystemName = `ALGOFUND_MASTER::${runtimeApiKeyName}`;
+      const runtimeSystemName = `ALGOFUND_MASTER::${runtimeApiKeyName}${systemNameSuffix ? `::${systemNameSuffix}` : ''}`;
       const runtimeSystems = runtimeApiKeyName === apiKeyName
         ? systems
         : await listTradingSystems(runtimeApiKeyName).catch(() => []);
@@ -3240,7 +3374,7 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
     }
 
     if (materializeApiKeyName && evaluatedById.size > 0) {
-      const draftRecords = (catalog.adminTradingSystemDraft?.members || [])
+      const draftRecords = (draftMembers || [])
         .map((member) => evaluatedById.get(Number(member.strategyId || 0)) || null)
         .filter((row): row is SweepRecord => Boolean(row));
 
@@ -3282,7 +3416,7 @@ const ensurePublishedSourceSystem = async (tenantId?: number): Promise<{ apiKeyN
         }
 
         if (materializedMembers.length > 0) {
-          const materializedSystemName = `ALGOFUND_MASTER::${materializeApiKeyName}`;
+          const materializedSystemName = `ALGOFUND_MASTER::${materializeApiKeyName}${systemNameSuffix ? `::${systemNameSuffix}` : ''}`;
           const materializedSystems = await listTradingSystems(materializeApiKeyName).catch(() => []);
           const materializedExisting = (Array.isArray(materializedSystems) ? materializedSystems : [])
             .find((item) => asString(item.name) === materializedSystemName);
@@ -3598,11 +3732,12 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
   const allOffers = catalog ? getAllOffers(catalog) : [];
   const offerIds = allOffers.map((item) => String(item.offerId));
-  const [defaultsRaw, publishedRaw, reviewSnapshots, tsBacktestSnapshot] = await Promise.all([
+  const [defaultsRaw, publishedRaw, reviewSnapshots, tsBacktestSnapshot, tsBacktestSnapshots] = await Promise.all([
     getRuntimeFlag('offer.store.defaults', JSON.stringify(DEFAULT_OFFER_STORE_DEFAULTS)),
     getRuntimeFlag('offer.store.published_ids', ''),
     getOfferReviewSnapshots(),
     getTsBacktestSnapshot(),
+    getTsBacktestSnapshots(),
   ]);
   const defaults = normalizeOfferStoreDefaults(safeJsonParse(
     defaultsRaw,
@@ -3671,6 +3806,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   return {
     defaults,
     publishedOfferIds,
+    tsBacktestSnapshots,
     tsBacktestSnapshot,
     offers: rawOffers.map((row) => ({
       ...row,
@@ -3690,6 +3826,7 @@ export const updateOfferStoreAdminState = async (payload: {
   publishedOfferIds?: string[];
   reviewSnapshotPatch?: Record<string, Partial<OfferReviewSnapshot> | null>;
   tsBacktestSnapshotPatch?: Partial<TsBacktestSnapshot> | null;
+  tsBacktestSnapshotsPatch?: Record<string, Partial<TsBacktestSnapshot> | null>;
 }) => {
   const current = await getOfferStoreAdminState();
   const nextDefaults = normalizeOfferStoreDefaults({
@@ -3728,6 +3865,7 @@ export const updateOfferStoreAdminState = async (payload: {
   }
 
   const currentTsBacktestSnapshot = await getTsBacktestSnapshot();
+  const currentTsBacktestSnapshots = await getTsBacktestSnapshots();
   let nextTsBacktestSnapshot: TsBacktestSnapshot | null = currentTsBacktestSnapshot;
   if (payload.tsBacktestSnapshotPatch === null) {
     nextTsBacktestSnapshot = null;
@@ -3740,10 +3878,34 @@ export const updateOfferStoreAdminState = async (payload: {
     nextTsBacktestSnapshot = normalizeTsBacktestSnapshot(mergedTsSnapshot);
   }
 
+  const nextTsBacktestSnapshots: Record<string, TsBacktestSnapshot> = {
+    ...currentTsBacktestSnapshots,
+  };
+  for (const [rawKey, patch] of Object.entries(payload.tsBacktestSnapshotsPatch || {})) {
+    const key = normalizeTsSnapshotMapKey(rawKey);
+    if (!key) {
+      continue;
+    }
+    if (patch === null) {
+      delete nextTsBacktestSnapshots[key];
+      continue;
+    }
+    const mergedSnapshot: Record<string, unknown> = {
+      ...(nextTsBacktestSnapshots[key] || {}),
+      ...(patch || {}),
+      updatedAt: new Date().toISOString(),
+    };
+    const normalizedSnapshot = normalizeTsBacktestSnapshot(mergedSnapshot);
+    if (normalizedSnapshot) {
+      nextTsBacktestSnapshots[key] = normalizedSnapshot;
+    }
+  }
+
   await setRuntimeFlag('offer.store.defaults', JSON.stringify(nextDefaults));
   await setRuntimeFlag('offer.store.published_ids', JSON.stringify(nextPublished));
   await setRuntimeFlag('offer.store.review_snapshots', JSON.stringify(nextReviewSnapshots));
   await setRuntimeFlag('offer.store.ts_backtest_snapshot', JSON.stringify(nextTsBacktestSnapshot));
+  await setRuntimeFlag('offer.store.ts_backtest_snapshots', JSON.stringify(nextTsBacktestSnapshots));
 
   return getOfferStoreAdminState();
 };
@@ -6324,8 +6486,15 @@ export const retryMaterializeAlgofundSystem = async (tenantId: number) => {
   return getAlgofundState(tenantId);
 };
 
-export const publishAdminTradingSystem = async () => {
-  const sourceSystem = await ensurePublishedSourceSystem(undefined);
+export const publishAdminTradingSystem = async (payload?: { offerIds?: string[]; setKey?: string }) => {
+  const catalog = loadLatestClientCatalog();
+  const offerIds = normalizePublishOfferIds(payload?.offerIds);
+  const setKey = asString(payload?.setKey, '').trim();
+  const members = resolvePublishDraftMembers(catalog, offerIds);
+  const sourceSystem = await ensurePublishedSourceSystem(undefined, {
+    draftMembersOverride: members,
+    systemNameSuffix: buildPublishSystemSuffix(setKey, offerIds),
+  });
   const period = buildPeriodInfo(loadLatestSweep());
   const preview = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
     bars: SAAS_PREVIEW_BARS,
@@ -6339,11 +6508,16 @@ export const publishAdminTradingSystem = async () => {
 
   return {
     sourceSystem,
+    publishMeta: {
+      offerIds,
+      setKey,
+      membersCount: members.length,
+    },
     preview: {
       ...preview,
       period,
     },
-    catalog: loadLatestClientCatalog(),
+    catalog,
   };
 };
 
@@ -6382,6 +6556,13 @@ export const removeAlgofundStorefrontSystem = async (payload: {
   const clientCount = connectedRows.length;
   const affectedTenants = connectedRows.map((row) => ({ id: Number(row.id), display_name: asString(row.display_name, `tenant#${row.id}`) }));
   const apiKeys = Array.from(new Set(connectedRows.map((row) => asString(row.api_key_name, '')).filter(Boolean)));
+  const systemRows = await db.all(
+    `SELECT ts.id, ak.name AS api_key_name
+     FROM trading_systems ts
+     JOIN api_keys ak ON ak.id = ts.api_key_id
+     WHERE ts.name = ?`,
+    [systemName]
+  ) as Array<{ id?: number; api_key_name?: string }>;
   const positionsByApiKey: Array<{ apiKeyName: string; openPositions: number; symbols: string[] }> = [];
 
   for (const apiKeyName of apiKeys) {
@@ -6474,6 +6655,30 @@ export const removeAlgofundStorefrontSystem = async (payload: {
   if (remainingCount === 0) {
     // Clear snapshot so storefront shows empty state
     await setRuntimeFlag('offer.store.ts_backtest_snapshot', 'null');
+  }
+
+  const currentTsSnapshotMap = await getTsBacktestSnapshots();
+  const nextTsSnapshotMap = Object.fromEntries(
+    Object.entries(currentTsSnapshotMap).filter(([_key, snapshot]) => asString(snapshot?.systemName, '') !== systemName)
+  );
+  await setRuntimeFlag('offer.store.ts_backtest_snapshots', JSON.stringify(nextTsSnapshotMap));
+
+  // Remove system from storefront listing by archiving its name away from ALGOFUND_MASTER::* prefix.
+  // Keeping the row (instead of hard-delete) preserves auditability and avoids FK side effects.
+  const archiveSuffix = `archived_${Date.now()}`;
+  for (const row of (Array.isArray(systemRows) ? systemRows : [])) {
+    const systemId = Number(row.id || 0);
+    const apiKeyName = asString(row.api_key_name, '').trim();
+    if (!systemId || !apiKeyName) {
+      continue;
+    }
+    await updateTradingSystem(apiKeyName, systemId, {
+      name: `ARCHIVED::${systemName}::${archiveSuffix}`,
+      description: `Storefront removed at ${new Date().toISOString()}`,
+      auto_sync_members: false,
+      discovery_enabled: false,
+    });
+    await setTradingSystemActivation(apiKeyName, systemId, false, true).catch(() => undefined);
   }
 
   return {

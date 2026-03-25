@@ -286,9 +286,12 @@ router.post('/admin/reports/send-telegram', async (_req, res) => {
   }
 });
 
-router.post('/admin/publish', async (_req, res) => {
+router.post('/admin/publish', async (req, res) => {
   try {
-    const data = await publishAdminTradingSystem();
+    const data = await publishAdminTradingSystem({
+      offerIds: Array.isArray(req.body?.offerIds) ? req.body.offerIds.map((item: unknown) => String(item || '')) : undefined,
+      setKey: req.body?.setKey ? String(req.body.setKey || '') : undefined,
+    });
     res.json({ success: true, ...data });
   } catch (error) {
     const err = error as Error;

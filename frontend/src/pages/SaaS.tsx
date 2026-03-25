@@ -32,6 +32,7 @@ import {
   Typography,
 } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
+import { useNavigate } from 'react-router-dom';
 import ChartComponent from '../components/ChartComponent';
 import { useI18n } from '../i18n';
 
@@ -2008,6 +2009,7 @@ export const hydrateStrategyPreview = (
 
 const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin' }) => {
   const { language } = useI18n();
+  const navigate = useNavigate();
   const copy = COPY_BY_LANGUAGE[language];
   const isAdminSurface = surfaceMode === 'admin';
   const [messageApi, contextHolder] = message.useMessage();
@@ -2346,7 +2348,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     ...member,
     reviewRecord: sweepRecordByStrategyId[Number(member.strategyId || 0)] || null,
   }));
-  const adminSavedTsSnapshot = summary?.offerStore?.tsBacktestSnapshot || null;
+  
+  // Use per-set snapshot key if available; fall back to legacy single snapshot for backward compat
+  const snapshotKeyForCurrentSet = String(selectedAdminDraftTsSetKey || '').trim();
+  const adminSavedTsSnapshot = snapshotKeyForCurrentSet
+    ? (summary?.offerStore?.tsBacktestSnapshots?.[snapshotKeyForCurrentSet] || null)
+    : (summary?.offerStore?.tsBacktestSnapshot || null);
+  
   const adminDraftPortfolioSummary = adminSavedTsSnapshot
     ? {
       finalEquity: Number(adminSavedTsSnapshot.finalEquity || 0),
@@ -4172,31 +4180,37 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const periodDays = Number(getPeriodDurationDays(adminSweepBacktestResult.period || null) || 90);
     const finalEquity = Number(summary.finalEquity ?? (equityPoints.length > 0 ? equityPoints[equityPoints.length - 1] : adminSweepBacktestInitialBalance));
     const trades = Number(summary.tradesCount ?? 0);
+    const snapshotSetKey = String(adminSweepBacktestResult?.publishMeta?.setKey || selectedAdminDraftTsSetKey || '').trim();
     const snapshotApiKeyName = String(
       adminSweepBacktestResult?.rerun?.apiKeyName
       || adminSweepBacktestResult?.sweepApiKeyName
       || ''
     ).trim();
+    const snapshotKey = snapshotSetKey || `ts_snapshot_${Date.now()}`;
 
     setActionLoading('ts-review-snapshot');
     try {
       await axios.patch('/api/saas/admin/offer-store', {
-        tsBacktestSnapshotPatch: {
-          apiKeyName: snapshotApiKeyName,
-          ret: Number(summary.totalReturnPercent ?? 0),
-          pf: Number(summary.profitFactor ?? 0),
-          dd: Number(summary.maxDrawdownPercent ?? 0),
-          trades,
-          tradesPerDay: Number((trades / Math.max(1, periodDays)).toFixed(3)),
-          periodDays,
-          finalEquity,
-          equityPoints,
-          offerIds,
-          backtestSettings: {
-            riskScore: Number(adminSweepBacktestRiskScore ?? 5),
-            tradeFrequencyScore: Number(adminSweepBacktestTradeScore ?? 5),
-            initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
-            riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 40),
+        tsBacktestSnapshotsPatch: {
+          [snapshotKey]: {
+            apiKeyName: snapshotApiKeyName,
+            setKey: snapshotSetKey,
+            systemName: adminSweepBacktestResult?.publishMeta?.systemName,
+            ret: Number(summary.totalReturnPercent ?? 0),
+            pf: Number(summary.profitFactor ?? 0),
+            dd: Number(summary.maxDrawdownPercent ?? 0),
+            trades,
+            tradesPerDay: Number((trades / Math.max(1, periodDays)).toFixed(3)),
+            periodDays,
+            finalEquity,
+            equityPoints,
+            offerIds,
+            backtestSettings: {
+              riskScore: Number(adminSweepBacktestRiskScore ?? 5),
+              tradeFrequencyScore: Number(adminSweepBacktestTradeScore ?? 5),
+              initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
+              riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 40),
+            },
           },
         },
       });
@@ -4412,15 +4426,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   const navigateSaasTab = (tab: SaasTabKey, nextAdminTab?: AdminTabKey) => {
-    if (typeof window !== 'undefined') {
-      if (tab === 'admin') {
-        const target = nextAdminTab || adminTab;
-        window.history.pushState({}, '', `/saas/admin?adminTab=${target}`);
-      } else if (tab === 'copytrading') {
-        window.history.pushState({}, '', '/saas/copytrading');
-      } else {
-        window.history.pushState({}, '', '/saas');
-      }
+    if (tab === 'admin') {
+      const target = nextAdminTab || adminTab;
+      navigate(`/saas/admin?adminTab=${target}`);
+    } else if (tab === 'strategy-client') {
+      navigate('/saas/strategy-client');
+    } else if (tab === 'algofund') {
+      navigate('/saas/algofund');
+    } else if (tab === 'copytrading') {
+      navigate('/saas/copytrading');
     }
     setActiveTab(tab);
     if (tab === 'admin' && nextAdminTab) {
