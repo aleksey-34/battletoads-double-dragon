@@ -2375,7 +2375,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     })
     .filter((item) => item.offerCount > 0);
   const adminCuratedDraftTsSet = (() => {
-    const draftMembers = Array.isArray(adminTradingSystemDraft?.members) ? adminTradingSystemDraft.members : [];
+    const draftMembers = adminTradingSystemDraft?.members ?? [];
     if (draftMembers.length === 0) {
       return null;
     }
