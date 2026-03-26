@@ -297,6 +297,11 @@ type TenantSummary = {
     assigned_api_key_name?: string;
     published_system_name?: string;
   } | null;
+  copytradingProfile?: {
+    master_api_key_name?: string;
+    requested_enabled?: number;
+    actual_enabled?: number;
+  } | null;
   monitoring?: {
     equity_usd?: number;
     unrealized_pnl?: number;
