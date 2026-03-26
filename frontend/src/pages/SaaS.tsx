@@ -2374,6 +2374,44 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       };
     })
     .filter((item) => item.offerCount > 0);
+  const adminCuratedDraftTsSet = (() => {
+    const draftMembers = Array.isArray(adminTradingSystemDraft?.members) ? adminTradingSystemDraft.members : [];
+    if (draftMembers.length === 0) {
+      return null;
+    }
+
+    const draftOffers = reviewableSweepOffers.filter((offer) =>
+      draftMembers.some((member) => Number(member.strategyId || 0) === Number(offer.strategyId || 0))
+    );
+
+    const offerIds = Array.from(new Set(draftOffers.map((offer) => String(offer.offerId || '')).filter(Boolean)));
+    if (offerIds.length === 0) {
+      return null;
+    }
+
+    const avgRet = draftOffers.length > 0
+      ? draftOffers.reduce((acc, offer) => acc + Number(offer.metrics?.ret || 0), 0) / draftOffers.length
+      : 0;
+    const avgPf = draftOffers.length > 0
+      ? draftOffers.reduce((acc, offer) => acc + Number(offer.metrics?.pf || 0), 0) / draftOffers.length
+      : 0;
+    const avgDd = draftOffers.length > 0
+      ? draftOffers.reduce((acc, offer) => acc + Number(offer.metrics?.dd || 0), 0) / draftOffers.length
+      : 0;
+
+    return {
+      setKey: 'HIGH-TRADE CURATED',
+      offers: draftOffers,
+      offerIds,
+      offerCount: offerIds.length,
+      avgRet,
+      avgPf,
+      avgDd,
+    };
+  })();
+  const adminSweepTsSetsWithCurated = adminCuratedDraftTsSet
+    ? [adminCuratedDraftTsSet, ...adminSweepTsSets.filter((item) => item.setKey !== adminCuratedDraftTsSet.setKey)]
+    : adminSweepTsSets;
   const adminDraftMemberStrategyIds = new Set(
     (adminTradingSystemDraft?.members || [])
       .map((member) => Number(member.strategyId || 0))
@@ -5533,7 +5571,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   onChange={(value) => setAdminSweepListMode(String(value) === 'ts' ? 'ts' : 'offers')}
                                 />
                                 <Tag color="default">offers: {reviewableSweepOffers.length}</Tag>
-                                <Tag color="processing">ts sets: {adminSweepTsSets.length}</Tag>
+                                <Tag color="processing">ts sets: {adminSweepTsSetsWithCurated.length}</Tag>
                               </Space>
 
                               {adminSweepListMode === 'offers' ? (
@@ -5598,7 +5636,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               ) : (
                                 <List
                                   size="small"
-                                  dataSource={adminSweepTsSets}
+                                  dataSource={adminSweepTsSetsWithCurated}
                                   locale={{ emptyText: <Empty description="Sweep TS-наборы пока не найдены" /> }}
                                   renderItem={(set) => (
                                     <List.Item
@@ -6301,12 +6339,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             />
                             ) : (
                               <Card size="small" title="Список ТС-наборов из sweep">
-                                {adminSweepTsSets.length === 0 ? (
+                                {adminSweepTsSetsWithCurated.length === 0 ? (
                                   <Empty description="Sweep sets пока не найдены" />
                                 ) : (
                                   <List
                                     size="small"
-                                    dataSource={adminSweepTsSets}
+                                    dataSource={adminSweepTsSetsWithCurated}
                                     pagination={{ pageSize: 8, showSizeChanger: false }}
                                     renderItem={(set) => (
                                       <List.Item
@@ -6382,12 +6420,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               </Paragraph>
                             )}
                             <Card size="small" title="Список ТС-наборов из sweep" style={{ marginBottom: 12 }}>
-                              {adminSweepTsSets.length === 0 ? (
+                              {adminSweepTsSetsWithCurated.length === 0 ? (
                                 <Empty description="Sweep sets пока не найдены" />
                               ) : (
                                 <List
                                   size="small"
-                                  dataSource={adminSweepTsSets}
+                                  dataSource={adminSweepTsSetsWithCurated}
                                   pagination={{ pageSize: 6, showSizeChanger: false }}
                                   renderItem={(set) => (
                                     <List.Item
