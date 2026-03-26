@@ -9,8 +9,6 @@ import {
   runTradingSystemBacktest,
   setTradingSystemActivation,
   updateTradingSystem,
-  TradingSystem,
-  TradingSystemMemberDraft,
 } from '../bot/tradingSystems';
 import { getMonitoringLatest } from '../bot/monitoring';
 import { getPositions, closeAllPositions, cancelAllOrders } from '../bot/exchange';
@@ -1405,6 +1403,22 @@ export const loadCatalogAndSweepWithFallback = async (): Promise<{ catalog: Cata
     ? fallbackCatalog
     : sourceCatalog || fallbackCatalog;
   const sweep = sourceSweep || buildFallbackSweepData(catalog);
+
+  if (catalog) {
+    const extraRaw = await getRuntimeFlag('admin.catalog.extra_draft_members', '[]');
+    const extraMembers = safeJsonParse<CatalogData['adminTradingSystemDraft']['members']>(extraRaw, []);
+    if (Array.isArray(extraMembers) && extraMembers.length > 0) {
+      const existingIds = new Set((catalog.adminTradingSystemDraft?.members || []).map((m) => m.strategyId));
+      const toInject = extraMembers.filter((m) => !existingIds.has(m.strategyId));
+      if (toInject.length > 0) {
+        catalog.adminTradingSystemDraft = {
+          ...catalog.adminTradingSystemDraft,
+          members: [...(catalog.adminTradingSystemDraft?.members || []), ...toInject],
+        };
+      }
+    }
+  }
+
   return { catalog, sweep };
 };
 
@@ -4522,62 +4536,25 @@ export const getHighTradeRecommendations = async (options?: {
   };
 };
 
-/**
- * Register HIGH-TRADE CURATED TS v1 as a trading system for an API key.
- * This creates a multi-member TS in the admin draft system for client assignment.
- *
- * @param apiKeyName - Admin API key name to register TS under
- * @param activate - Whether to immediately activate the trading system
- * @returns Created trading system with members
- */
-export const registerCuratedHighTradeTS = async (apiKeyName: string, activate: boolean = false): Promise<TradingSystem | null> => {
-  try {
-    const curatedPath = '/opt/battletoads-double-dragon/results/btdd_d1_curated_high_trade_v1.json';
-    const fileContent = fs.readFileSync(curatedPath, 'utf-8');
-    const curatedSpec = JSON.parse(fileContent);
-    const strategyIds = curatedSpec.members
-      .map((m: any) => Number(m.strategyId || 0))
-      .filter((id: number) => id > 0);
+export const getCuratedDraftMembers = async (): Promise<CatalogData['adminTradingSystemDraft']['members']> => {
+  const raw = await getRuntimeFlag('admin.catalog.extra_draft_members', '[]');
+  return safeJsonParse<CatalogData['adminTradingSystemDraft']['members']>(raw, []);
+};
 
-    if (strategyIds.length === 0) {
-      logger.warn('registerCuratedHighTradeTS: No valid strategy IDs in curated spec');
-      return null;
-    }
-
-    const members: TradingSystemMemberDraft[] = curatedSpec.members.map((m: any) => ({
-      strategy_id: Number(m.strategyId),
-      weight: Number(m.weight || 0.9),
-      member_role: String(m.memberRole || 'satellite'),
-      is_enabled: Boolean(m.isEnabled !== false),
-      notes: `${m.market} ${m.interval} | ${m.strategyType}`,
-    }));
-
-    const tsName = `HIGH-TRADE CURATED TS v1 [${new Date().toISOString().split('T')[0]}]`;
-    const created = await createTradingSystem(apiKeyName, {
-      name: tsName,
-      description: 'Curated high-frequency trading system optimized for maximum trade count with acceptable PF/DD',
-      is_active: activate,
-      auto_sync_members: false,
-      discovery_enabled: false,
-      max_members: Math.max(5, members.length + 2),
-      members,
-    });
-
-    logger.info(`registerCuratedHighTradeTS: Created TS "${created.name}" with ${members.length} members`, {
-      systemId: created.id,
-      apiKeyName,
-      memberCount: members.length,
-      aggregate: curatedSpec.aggregateMetrics,
-    });
-
-    return created;
-  } catch (error) {
-    logger.error('registerCuratedHighTradeTS failed', {
-      error: String(error),
-      apiKeyName,
-    });
-    return null;
-  }
+export const setCuratedDraftMembers = async (
+  members: CatalogData['adminTradingSystemDraft']['members'],
+): Promise<CatalogData['adminTradingSystemDraft']['members']> => {
+  const normalized = (Array.isArray(members) ? members : []).map((m, index) => ({
+    strategyId: Math.max(0, Math.floor(Number(m.strategyId || 0))),
+    strategyName: asString(m.strategyName, `Strategy ${m.strategyId}`),
+    strategyType: asString(m.strategyType, 'DD_BattleToads'),
+    marketMode: asString(m.marketMode, 'mono'),
+    market: asString(m.market, ''),
+    score: asNumber(m.score, 0),
+    weight: asNumber(m.weight, index === 0 ? 1.15 : index === 1 ? 1.05 : 0.9),
+  })).filter((m) => m.strategyId > 0);
+  await setRuntimeFlag('admin.catalog.extra_draft_members', JSON.stringify(normalized));
+  return normalized;
 };
 
 export const updateAdminReportSettings = async (payload: Partial<AdminReportSettings>): Promise<AdminReportSettings> => {

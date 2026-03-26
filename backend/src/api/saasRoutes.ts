@@ -22,7 +22,8 @@ import {
   getAdminLowLotRecommendations,
   getHighTradeRecommendations,
   applyLowLotRecommendation,
-  registerCuratedHighTradeTS,
+  getCuratedDraftMembers,
+  setCuratedDraftMembers,
   getAdminTelegramControls,
   updateAdminTelegramControls,
   getOfferStoreAdminState,
@@ -134,18 +135,25 @@ router.get('/admin/high-trade-recommendations', async (req, res) => {
   }
 });
 
-router.post('/admin/register-curated-high-trade-ts', async (req, res) => {
+router.get('/admin/curated-draft-members', async (_req, res) => {
   try {
-    const apiKeyName = String(req.body?.apiKeyName || 'BTDD_D1').trim();
-    const activate = Boolean(req.body?.activate);
-    const result = await registerCuratedHighTradeTS(apiKeyName, activate);
-    if (!result) {
-      return res.status(400).json({ error: 'Failed to register curated trading system' });
-    }
-    res.json({ success: true, tradingSystem: result });
+    const members = await getCuratedDraftMembers();
+    res.json({ members });
   } catch (error) {
     const err = error as Error;
-    logger.error(`SaaS register curated TS error: ${err.message}`);
+    logger.error(`SaaS curated draft members read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/curated-draft-members', async (req, res) => {
+  try {
+    const members = Array.isArray(req.body?.members) ? req.body.members : [];
+    const saved = await setCuratedDraftMembers(members);
+    res.json({ success: true, members: saved });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS curated draft members save error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
