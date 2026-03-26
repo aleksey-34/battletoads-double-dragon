@@ -2390,13 +2390,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
 
     const avgRet = draftOffers.length > 0
-      ? draftOffers.reduce((acc, offer) => acc + Number(offer.metrics?.ret || 0), 0) / draftOffers.length
+      ? draftOffers.reduce((acc, offer) => acc + Number(offer.ret || 0), 0) / draftOffers.length
       : 0;
     const avgPf = draftOffers.length > 0
-      ? draftOffers.reduce((acc, offer) => acc + Number(offer.metrics?.pf || 0), 0) / draftOffers.length
+      ? draftOffers.reduce((acc, offer) => acc + Number(offer.pf || 0), 0) / draftOffers.length
       : 0;
     const avgDd = draftOffers.length > 0
-      ? draftOffers.reduce((acc, offer) => acc + Number(offer.metrics?.dd || 0), 0) / draftOffers.length
+      ? draftOffers.reduce((acc, offer) => acc + Number(offer.dd || 0), 0) / draftOffers.length
       : 0;
 
     return {
