@@ -35,9 +35,7 @@ function AppShell() {
   const isClientRoute = location.pathname.startsWith('/client') || location.pathname.startsWith('/cabinet');
   const isClientAuthRoute = location.pathname.startsWith('/client/login') || location.pathname.startsWith('/client/register');
   const isClientCabinetRoute = location.pathname.startsWith('/cabinet');
-  const isClientSaasSurface = location.pathname.startsWith('/saas/strategy-client')
-    || location.pathname.startsWith('/saas/algofund')
-    || location.pathname.startsWith('/saas/copytrading');
+  const isClientSaasSurface = false;
 
   const menuRouteByKey: Record<string, string> = {
     '1': '/dashboard',
@@ -85,11 +83,7 @@ function AppShell() {
     if (location.pathname.startsWith('/positions')) return t('nav.positions', 'Positions');
     if (location.pathname.startsWith('/logs')) return t('nav.logs', 'Logs');
     if (location.pathname.startsWith('/trading-systems')) return t('nav.tradingSystems', 'Trading Systems');
-    if (location.pathname.startsWith('/saas/admin')) return 'SaaS Admin';
-    if (location.pathname.startsWith('/saas/strategy-client')) return 'SaaS Strategy';
-    if (location.pathname.startsWith('/saas/algofund')) return 'SaaS Algofund';
-    if (location.pathname.startsWith('/saas/copytrading')) return 'SaaS Copytrading';
-    if (location.pathname.startsWith('/saas')) return t('nav.saas', 'SaaS');
+    if (location.pathname.startsWith('/saas')) return 'SaaS Admin';
     if (location.pathname.startsWith('/research')) return t('nav.research', 'Research');
     if (location.pathname.startsWith('/admin-docs')) return t('nav.docs', 'Docs');
     if (location.pathname.startsWith('/client/login')) return 'Client Login';
@@ -304,9 +298,9 @@ function AppShell() {
           <Route path="/trading-systems-workbench" element={<TradingSystems />} />
           <Route path="/saas" element={<SaaS surfaceMode="admin" />} />
           <Route path="/saas/admin" element={<SaaS initialTab="admin" surfaceMode="admin" />} />
-          <Route path="/saas/strategy-client" element={<SaaS initialTab="strategy-client" surfaceMode="strategy-client" />} />
-          <Route path="/saas/algofund" element={<SaaS initialTab="algofund" surfaceMode="algofund" />} />
-          <Route path="/saas/copytrading" element={<SaaS initialTab="copytrading" surfaceMode="copytrading" />} />
+          <Route path="/saas/strategy-client" element={<Navigate to="/saas/admin?adminTab=strategy-client" replace />} />
+          <Route path="/saas/algofund" element={<Navigate to="/saas/admin?adminTab=algofund" replace />} />
+          <Route path="/saas/copytrading" element={<Navigate to="/saas/admin?adminTab=copytrading" replace />} />
           <Route path="/research" element={<Research />} />
           <Route path="/admin-docs" element={<AdminDocs />} />
         </Routes>

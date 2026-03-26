@@ -451,6 +451,21 @@ export const initDB = async () => {
       FOREIGN KEY (tenant_id) REFERENCES tenants(id)
     );
 
+    CREATE TABLE IF NOT EXISTS algofund_active_systems (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      profile_id INTEGER NOT NULL,
+      system_name TEXT NOT NULL,
+      weight REAL DEFAULT 1.0,
+      is_enabled BOOLEAN DEFAULT 1,
+      assigned_by TEXT DEFAULT 'admin',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (profile_id) REFERENCES algofund_profiles(id)
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_algofund_active_systems_profile_name
+      ON algofund_active_systems (profile_id, system_name);
+
     CREATE TABLE IF NOT EXISTS strategy_backtest_pair_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL,

@@ -39,6 +39,10 @@ import {
   removeAlgofundStorefrontSystem,
   getCopytradingState,
   updateCopytradingState,
+  getAlgofundActiveSystems,
+  assignAlgofundSystems,
+  toggleAlgofundSystem,
+  removeAlgofundSystemFromProfile,
 } from '../saas/service';
 
 const router = Router();
@@ -124,6 +128,7 @@ router.patch('/admin/telegram-controls', async (req, res) => {
     const data = await updateAdminTelegramControls({
       adminEnabled: req.body?.adminEnabled !== undefined ? toBool(req.body.adminEnabled) : undefined,
       clientsEnabled: req.body?.clientsEnabled !== undefined ? toBool(req.body.clientsEnabled) : undefined,
+      runtimeOnly: req.body?.runtimeOnly !== undefined ? toBool(req.body.runtimeOnly) : undefined,
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -280,7 +285,8 @@ router.post('/admin/apply-low-lot-recommendation', async (req, res) => {
 
 router.post('/admin/reports/send-telegram', async (_req, res) => {
   try {
-    await runAdminTelegramReportNow({ periodHours: 24 });
+    const controls = await getAdminTelegramControls();
+    await runAdminTelegramReportNow({ periodHours: 24, runtimeOnly: controls.runtimeOnly });
     res.json({ success: true });
   } catch (error) {
     const err = error as Error;
@@ -802,6 +808,97 @@ router.patch('/copytrading/:tenantId', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS copytrading update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Multi-TS Algofund endpoints ──────────────────────────────────────────────
+
+router.get('/algofund/:tenantId/active-systems', async (req, res) => {
+  const profileId = Number(req.params.tenantId);
+  if (!Number.isFinite(profileId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const data = await getAlgofundActiveSystems(profileId);
+    res.json({ success: true, systems: data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund active-systems read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/algofund/:tenantId/active-systems', async (req, res) => {
+  const profileId = Number(req.params.tenantId);
+  if (!Number.isFinite(profileId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  if (!Array.isArray(req.body?.systems)) {
+    return res.status(400).json({ error: 'systems array is required' });
+  }
+  try {
+    const systems = req.body.systems.map((s: Record<string, unknown>) => ({
+      systemName: String(s.systemName || ''),
+      weight: s.weight !== undefined ? Number(s.weight) : 1,
+      isEnabled: s.isEnabled !== false,
+      assignedBy: s.assignedBy === 'client' ? 'client' : ('admin' as const),
+    }));
+    const data = await assignAlgofundSystems({
+      profileId,
+      systems,
+      replace: Boolean(req.body?.replace),
+    });
+    res.json({ success: true, systems: data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund assign-systems error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/algofund/:tenantId/active-systems/:systemName/toggle', async (req, res) => {
+  const profileId = Number(req.params.tenantId);
+  const systemName = decodeURIComponent(String(req.params.systemName || '').trim());
+  if (!Number.isFinite(profileId) || !systemName) {
+    return res.status(400).json({ error: 'Invalid tenantId or systemName' });
+  }
+  const isEnabled = toBool(req.body?.isEnabled, true);
+  const apiKeyName = String(req.body?.apiKeyName || '').trim();
+  if (!apiKeyName) {
+    return res.status(400).json({ error: 'apiKeyName is required for pair conflict check' });
+  }
+  const actorMode = req.body?.actorMode === 'client' ? 'client' : ('admin' as const);
+  try {
+    const data = await toggleAlgofundSystem({ profileId, systemName, isEnabled, apiKeyName, actorMode });
+    if (data.conflicts.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: 'Pair conflict detected',
+        conflicts: data.conflicts,
+        activeSystems: data.activeSystems,
+      });
+    }
+    res.json({ success: true, systems: data.activeSystems });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund toggle-system error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/algofund/:tenantId/active-systems/:systemName', async (req, res) => {
+  const profileId = Number(req.params.tenantId);
+  const systemName = decodeURIComponent(String(req.params.systemName || '').trim());
+  if (!Number.isFinite(profileId) || !systemName) {
+    return res.status(400).json({ error: 'Invalid tenantId or systemName' });
+  }
+  try {
+    const data = await removeAlgofundSystemFromProfile({ profileId, systemName });
+    res.json({ success: true, systems: data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund remove-system error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

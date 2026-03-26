@@ -3630,6 +3630,7 @@ const ensurePublishedSourceSystem = async (
 type AdminTelegramControls = {
   adminEnabled: boolean;
   clientsEnabled: boolean;
+  runtimeOnly: boolean;
   tokenConfigured: boolean;
   chatConfigured: boolean;
 };
@@ -3699,14 +3700,16 @@ const runWithSqliteBusyRetry = async <T>(fn: () => Promise<T>): Promise<T> => {
 };
 
 export const getAdminTelegramControls = async (): Promise<AdminTelegramControls> => {
-  const [adminEnabledRaw, clientsEnabledRaw] = await Promise.all([
+  const [adminEnabledRaw, clientsEnabledRaw, runtimeOnlyRaw] = await Promise.all([
     getRuntimeFlag('telegram.admin.enabled', '1'),
     getRuntimeFlag('telegram.clients.enabled', '0'),
+    getRuntimeFlag('telegram.admin.runtimeonly', '0'),
   ]);
 
   return {
     adminEnabled: adminEnabledRaw !== '0',
     clientsEnabled: clientsEnabledRaw !== '0',
+    runtimeOnly: runtimeOnlyRaw === '1',
     tokenConfigured: Boolean(String(process.env.TELEGRAM_ADMIN_BOT_TOKEN || '').trim()),
     chatConfigured: Boolean(String(process.env.TELEGRAM_ADMIN_CHAT_ID || '').trim()),
   };
@@ -3715,12 +3718,16 @@ export const getAdminTelegramControls = async (): Promise<AdminTelegramControls>
 export const updateAdminTelegramControls = async (payload: {
   adminEnabled?: boolean;
   clientsEnabled?: boolean;
+  runtimeOnly?: boolean;
 }): Promise<AdminTelegramControls> => {
   if (payload.adminEnabled !== undefined) {
     await setRuntimeFlag('telegram.admin.enabled', payload.adminEnabled ? '1' : '0');
   }
   if (payload.clientsEnabled !== undefined) {
     await setRuntimeFlag('telegram.clients.enabled', payload.clientsEnabled ? '1' : '0');
+  }
+  if (payload.runtimeOnly !== undefined) {
+    await setRuntimeFlag('telegram.admin.runtimeonly', payload.runtimeOnly ? '1' : '0');
   }
 
   return getAdminTelegramControls();
@@ -6784,3 +6791,165 @@ export const seedDemoSaasData = async () => {
   await ensureSaasSeedData();
   return getSaasAdminSummary();
 };
+
+// ─── Multi-TS per Algofund client ────────────────────────────────────────────
+
+type AlgofundActiveSystem = {
+  id: number;
+  profileId: number;
+  systemName: string;
+  weight: number;
+  isEnabled: boolean;
+  assignedBy: 'admin' | 'client';
+  createdAt: string;
+};
+
+export const getAlgofundActiveSystems = async (profileId: number): Promise<AlgofundActiveSystem[]> => {
+  const rows = await db.all(
+    `SELECT id, profile_id, system_name, weight, is_enabled, assigned_by, created_at
+     FROM algofund_active_systems
+     WHERE profile_id = ?
+     ORDER BY id ASC`,
+    [profileId]
+  ) as Array<Record<string, unknown>>;
+
+  return (Array.isArray(rows) ? rows : []).map((row) => ({
+    id: Number(row.id || 0),
+    profileId: Number(row.profile_id || 0),
+    systemName: String(row.system_name || ''),
+    weight: Number(row.weight ?? 1),
+    isEnabled: Boolean(row.is_enabled),
+    assignedBy: String(row.assigned_by || 'admin') as 'admin' | 'client',
+    createdAt: String(row.created_at || ''),
+  }));
+};
+
+type PairConflict = {
+  pair: string;
+  conflictingSystemName: string;
+};
+
+export const checkAlgofundSystemPairConflicts = async (
+  profileId: number,
+  proposedSystemName: string,
+  apiKeyName: string
+): Promise<PairConflict[]> => {
+  // Get pairs used by the proposed system
+  const proposedRows = await db.all(
+    `SELECT DISTINCT s.base_symbol, s.quote_symbol
+     FROM trading_systems ts
+     JOIN api_keys ak ON ak.id = ts.api_key_id
+     JOIN trading_system_members tsm ON tsm.system_id = ts.id
+     JOIN strategies s ON s.id = tsm.strategy_id
+     WHERE ak.name = ? AND ts.name = ? AND tsm.is_enabled = 1`,
+    [apiKeyName, proposedSystemName]
+  ) as Array<{ base_symbol: string; quote_symbol: string }>;
+
+  if (!proposedRows.length) {
+    return [];
+  }
+
+  const proposedPairs = new Set(proposedRows.map((r) => `${r.base_symbol}/${r.quote_symbol}`));
+
+  // Get pairs from all currently-enabled active systems for this profile
+  const currentRows = await db.all(
+    `SELECT DISTINCT s.base_symbol, s.quote_symbol, aas.system_name
+     FROM algofund_active_systems aas
+     JOIN trading_systems ts ON ts.name = aas.system_name
+     JOIN api_keys ak ON ak.id = ts.api_key_id
+     JOIN trading_system_members tsm ON tsm.system_id = ts.id
+     JOIN strategies s ON s.id = tsm.strategy_id
+     WHERE aas.profile_id = ? AND aas.is_enabled = 1 AND aas.system_name != ?
+       AND ak.name = ? AND tsm.is_enabled = 1`,
+    [profileId, proposedSystemName, apiKeyName]
+  ) as Array<{ base_symbol: string; quote_symbol: string; system_name: string }>;
+
+  const conflicts: PairConflict[] = [];
+  for (const row of currentRows) {
+    const pair = `${row.base_symbol}/${row.quote_symbol}`;
+    if (proposedPairs.has(pair)) {
+      conflicts.push({ pair, conflictingSystemName: row.system_name });
+    }
+  }
+
+  return conflicts;
+};
+
+export const assignAlgofundSystems = async (payload: {
+  profileId: number;
+  systems: Array<{ systemName: string; weight?: number; isEnabled?: boolean; assignedBy?: 'admin' | 'client' }>;
+  replace?: boolean;
+}): Promise<AlgofundActiveSystem[]> => {
+  const { profileId, systems, replace = false } = payload;
+
+  if (replace) {
+    await db.run(`DELETE FROM algofund_active_systems WHERE profile_id = ?`, [profileId]);
+  }
+
+  for (const sys of systems) {
+    const systemName = String(sys.systemName || '').trim();
+    if (!systemName) continue;
+    const weight = Math.max(0.01, Number(sys.weight ?? 1));
+    const isEnabled = sys.isEnabled !== false ? 1 : 0;
+    const assignedBy = sys.assignedBy === 'client' ? 'client' : 'admin';
+
+    await db.run(
+      `INSERT INTO algofund_active_systems (profile_id, system_name, weight, is_enabled, assigned_by, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT (profile_id, system_name) DO UPDATE SET
+         weight = excluded.weight,
+         is_enabled = excluded.is_enabled,
+         assigned_by = excluded.assigned_by,
+         updated_at = CURRENT_TIMESTAMP`,
+      [profileId, systemName, weight, isEnabled, assignedBy]
+    );
+  }
+
+  return getAlgofundActiveSystems(profileId);
+};
+
+export const toggleAlgofundSystem = async (payload: {
+  profileId: number;
+  systemName: string;
+  isEnabled: boolean;
+  apiKeyName: string;
+  actorMode?: 'admin' | 'client';
+}): Promise<{ activeSystems: AlgofundActiveSystem[]; conflicts: PairConflict[] }> => {
+  const { profileId, systemName, isEnabled, apiKeyName } = payload;
+  const actorMode = payload.actorMode === 'client' ? 'client' : 'admin';
+
+  let conflicts: PairConflict[] = [];
+  if (isEnabled) {
+    conflicts = await checkAlgofundSystemPairConflicts(profileId, systemName, apiKeyName);
+    if (conflicts.length > 0) {
+      return { activeSystems: await getAlgofundActiveSystems(profileId), conflicts };
+    }
+  }
+
+  await db.run(
+    `INSERT INTO algofund_active_systems (profile_id, system_name, weight, is_enabled, assigned_by, created_at, updated_at)
+     VALUES (?, ?, 1.0, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+     ON CONFLICT (profile_id, system_name) DO UPDATE SET
+       is_enabled = excluded.is_enabled,
+       assigned_by = excluded.assigned_by,
+       updated_at = CURRENT_TIMESTAMP`,
+    [profileId, systemName, isEnabled ? 1 : 0, actorMode]
+  );
+
+  return {
+    activeSystems: await getAlgofundActiveSystems(profileId),
+    conflicts: [],
+  };
+};
+
+export const removeAlgofundSystemFromProfile = async (payload: {
+  profileId: number;
+  systemName: string;
+}): Promise<AlgofundActiveSystem[]> => {
+  await db.run(
+    `DELETE FROM algofund_active_systems WHERE profile_id = ? AND system_name = ?`,
+    [payload.profileId, payload.systemName]
+  );
+  return getAlgofundActiveSystems(payload.profileId);
+};
+

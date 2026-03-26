@@ -322,6 +322,7 @@ type MonitoringSnapshotPoint = {
 type TelegramControls = {
   adminEnabled: boolean;
   clientsEnabled: boolean;
+  runtimeOnly: boolean;
   tokenConfigured: boolean;
   chatConfigured: boolean;
 };
@@ -2172,6 +2173,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [unpublishImpact, setUnpublishImpact] = useState<OfferUnpublishImpact | null>(null);
   const [unpublishImpactLoading, setUnpublishImpactLoading] = useState(false);
   const [unpublishAcknowledge, setUnpublishAcknowledge] = useState(false);
+  const [algofundActiveSystems, setAlgofundActiveSystems] = useState<Array<{id:number;systemName:string;weight:number;isEnabled:boolean;assignedBy:string}>>([]);
+  const [algofundActiveSystemsLoading, setAlgofundActiveSystemsLoading] = useState(false);
   const [monitoringChartOpen, setMonitoringChartOpen] = useState(false);
   const [monitoringChartLoading, setMonitoringChartLoading] = useState(false);
   const [monitoringChartApiKey, setMonitoringChartApiKey] = useState('');
@@ -2782,6 +2785,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const loadAlgofundActiveSystems = async (tenantId: number) => {
+    setAlgofundActiveSystemsLoading(true);
+    try {
+      const response = await axios.get<{ success: boolean; systems: typeof algofundActiveSystems }>(`/api/saas/algofund/${tenantId}/active-systems`);
+      setAlgofundActiveSystems(response.data.systems || []);
+    } catch {
+      // non-critical, ignore
+    } finally {
+      setAlgofundActiveSystemsLoading(false);
+    }
+  };
+
   const loadAlgofundTenant = async (tenantId: number, nextRiskMultiplier?: number, allowPreviewAbovePlan = false, forceRefreshPreview = false) => {
     const requestSeq = algofundRequestSeqRef.current + 1;
     algofundRequestSeqRef.current = requestSeq;
@@ -3289,6 +3304,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   useEffect(() => {
     if (algofundTenantId !== null) {
       void loadAlgofundTenant(algofundTenantId, undefined, isAdminSurface);
+      if (isAdminSurface) {
+        void loadAlgofundActiveSystems(algofundTenantId);
+      }
     }
   }, [algofundTenantId, isAdminSurface]);
 
@@ -6837,10 +6855,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         }}
                                       />
                                     </Space>
+                                    <Space>
+                                      <Text>Только runtime-клиенты</Text>
+                                      <Switch
+                                        checked={Boolean(telegramControls?.runtimeOnly)}
+                                        loading={telegramControlsLoading}
+                                        onChange={(checked) => {
+                                          void patchTelegramControls({ runtimeOnly: checked });
+                                        }}
+                                      />
+                                    </Space>
                                     <Space wrap>
                                       <Tag color={telegramControls?.tokenConfigured ? 'success' : 'default'}>token {telegramControls?.tokenConfigured ? 'ok' : 'missing'}</Tag>
                                       <Tag color={telegramControls?.chatConfigured ? 'success' : 'default'}>chat_id {telegramControls?.chatConfigured ? 'ok' : 'missing'}</Tag>
                                     </Space>
+                                    <Button
+                                      size="small"
+                                      type="primary"
+                                      loading={sendTelegramLoading}
+                                      disabled={!telegramControls?.tokenConfigured || !telegramControls?.chatConfigured}
+                                      onClick={() => { void sendReportToTelegram(); }}
+                                    >
+                                      Запросить отчёт сейчас
+                                    </Button>
                                   </Space>
                                 </Card>
                               </Col>
@@ -7915,6 +7952,97 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Empty description="Опубликованные TS для этого API key пока не найдены." />
                           )}
                         </Card>
+
+                        {isAdminSurface && algofundTenantId !== null ? (
+                          <Card
+                            className="battletoads-card"
+                            title="Multi-TS назначение клиенту"
+                            extra={<Button size="small" loading={algofundActiveSystemsLoading} onClick={() => void loadAlgofundActiveSystems(algofundTenantId)}>Обновить</Button>}
+                          >
+                            <Space direction="vertical" style={{ width: '100%' }}>
+                              {algofundActiveSystems.length === 0 ? (
+                                <Text type="secondary">Нет назначенных TS (используется legacy single-system режим)</Text>
+                              ) : (
+                                algofundActiveSystems.map((sys) => (
+                                  <Space key={sys.id} style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+                                    <Space>
+                                      <Switch
+                                        size="small"
+                                        checked={sys.isEnabled}
+                                        loading={algofundActiveSystemsLoading}
+                                        onChange={async (checked) => {
+                                          const apiKeyName = algofundState?.profile?.assigned_api_key_name || algofundState?.tenant?.assigned_api_key_name || '';
+                                          setAlgofundActiveSystemsLoading(true);
+                                          try {
+                                            await axios.patch(`/api/saas/algofund/${algofundTenantId}/active-systems/${encodeURIComponent(sys.systemName)}/toggle`, {
+                                              isEnabled: checked,
+                                              apiKeyName,
+                                              actorMode: 'admin',
+                                            });
+                                            await loadAlgofundActiveSystems(algofundTenantId);
+                                          } catch (err: any) {
+                                            const conflicts = err?.response?.data?.conflicts;
+                                            if (conflicts?.length) {
+                                              messageApi.error(`Конфликт пар: ${conflicts.map((c: any) => `${c.pair} (${c.conflictingSystemName})`).join(', ')}`);
+                                            } else {
+                                              messageApi.error(String(err?.response?.data?.error || err.message || 'Error'));
+                                            }
+                                          } finally {
+                                            setAlgofundActiveSystemsLoading(false);
+                                          }
+                                        }}
+                                      />
+                                      <Text>{sys.systemName}</Text>
+                                      <Tag color="blue">w={sys.weight}</Tag>
+                                      <Tag color={sys.assignedBy === 'client' ? 'purple' : 'default'}>{sys.assignedBy}</Tag>
+                                    </Space>
+                                    <Button
+                                      size="small"
+                                      danger
+                                      onClick={async () => {
+                                        setAlgofundActiveSystemsLoading(true);
+                                        try {
+                                          await axios.delete(`/api/saas/algofund/${algofundTenantId}/active-systems/${encodeURIComponent(sys.systemName)}`);
+                                          await loadAlgofundActiveSystems(algofundTenantId);
+                                        } catch (err: any) {
+                                          messageApi.error(String(err?.response?.data?.error || err.message || 'Error'));
+                                        } finally {
+                                          setAlgofundActiveSystemsLoading(false);
+                                        }
+                                      }}
+                                    >Убрать</Button>
+                                  </Space>
+                                ))
+                              )}
+                              <Space wrap style={{ marginTop: 8 }}>
+                                {algofundStorefrontSystems.map((item) => (
+                                  algofundActiveSystems.some((s) => s.systemName === item.systemName) ? null : (
+                                    <Button
+                                      key={item.systemName}
+                                      size="small"
+                                      onClick={async () => {
+                                        const apiKeyName = algofundState?.profile?.assigned_api_key_name || algofundState?.tenant?.assigned_api_key_name || '';
+                                        setAlgofundActiveSystemsLoading(true);
+                                        try {
+                                          await axios.put(`/api/saas/algofund/${algofundTenantId}/active-systems`, {
+                                            systems: [{ systemName: item.systemName, weight: 1, isEnabled: true, assignedBy: 'admin' }],
+                                            replace: false,
+                                          });
+                                          await loadAlgofundActiveSystems(algofundTenantId);
+                                          messageApi.success(`TS ${item.systemName} добавлена`);
+                                        } catch (err: any) {
+                                          messageApi.error(String(err?.response?.data?.error || err.message || 'Error'));
+                                        } finally {
+                                          setAlgofundActiveSystemsLoading(false);
+                                        }
+                                      }}
+                                    >+ {item.storefrontLabel || item.systemName}</Button>
+                                  )
+                                ))}
+                              </Space>
+                            </Space>
+                          </Card>
+                        ) : null}
 
                         <Card className="battletoads-card" title={copy.engineStatus}>
                           <Space direction="vertical" size={12} style={{ width: '100%' }}>

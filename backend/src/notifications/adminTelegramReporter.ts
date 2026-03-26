@@ -9,6 +9,7 @@ type ReporterState = {
 type ReportNowOptions = {
   periodHours?: number;
   includeLoginAlerts?: boolean;
+  runtimeOnly?: boolean;
 };
 
 const toFinite = (value: unknown, fallback = 0): number => {
@@ -85,7 +86,14 @@ const buildLowLotActionHint = (maxDeposit: number, lotPercent: number): string =
   return `action: dep>=${recommendedDeposit.toFixed(0)} or lot>=${targetLot.toFixed(0)}% or replace pair via sweep`;
 };
 
-const buildAccountLines = async (periodHours: number): Promise<string[]> => {
+const buildAccountLines = async (periodHours: number, runtimeOnly = false): Promise<string[]> => {
+  const runtimeFilter = runtimeOnly
+    ? `AND a.id IN (
+         SELECT DISTINCT ak.id FROM api_keys ak
+         JOIN tenants t ON t.assigned_api_key_id = ak.id
+         WHERE t.actual_enabled = 1
+       )`
+    : '';
   const rows = await db.all(
     `SELECT
        a.name AS api_key_name,
@@ -121,6 +129,7 @@ const buildAccountLines = async (periodHours: number): Promise<string[]> => {
        WHERE lte.actual_time >= (strftime('%s','now', ?) * 1000)
        GROUP BY s.api_key_id
      ) tr ON tr.api_key_id = a.id
+     WHERE 1=1 ${runtimeFilter}
      ORDER BY a.name ASC`,
     [`-${periodHours} hours`, `-${periodHours} hours`]
   );
@@ -243,9 +252,9 @@ const trimTelegramText = (value: string, maxLen = 3900): string => {
   return `${text.slice(0, Math.max(0, maxLen - 21))}\n...message truncated`;
 };
 
-const sendPeriodicReport = async (periodHours: number): Promise<void> => {
+const sendPeriodicReport = async (periodHours: number, runtimeOnly = false): Promise<void> => {
   const [lines, driftLines, lowLotLines] = await Promise.all([
-    buildAccountLines(periodHours),
+    buildAccountLines(periodHours, runtimeOnly),
     buildDriftAlertLines(periodHours),
     buildLowLotLines(periodHours),
   ]);
@@ -312,6 +321,7 @@ export const runAdminTelegramReportNow = async (options?: ReportNowOptions): Pro
 
   const periodHours = Math.max(1, Math.floor(Number(options?.periodHours || process.env.TELEGRAM_ADMIN_REPORT_HOURS || 12) || 12));
   const includeLoginAlerts = options?.includeLoginAlerts !== false;
+  const runtimeOnly = Boolean(options?.runtimeOnly);
   const state: ReporterState = {
     lastReportAtMs: 0,
     lastLoginAtIso: await getLatestLoginAtIso(),
@@ -321,7 +331,7 @@ export const runAdminTelegramReportNow = async (options?: ReportNowOptions): Pro
     await sendNewLoginAlerts(state);
   }
 
-  await sendPeriodicReport(periodHours);
+  await sendPeriodicReport(periodHours, runtimeOnly);
 };
 
 export const startAdminTelegramReporter = async (): Promise<void> => {
