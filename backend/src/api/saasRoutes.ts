@@ -22,6 +22,7 @@ import {
   getAdminLowLotRecommendations,
   getHighTradeRecommendations,
   applyLowLotRecommendation,
+  registerCuratedHighTradeTS,
   getAdminTelegramControls,
   updateAdminTelegramControls,
   getOfferStoreAdminState,
@@ -129,6 +130,22 @@ router.get('/admin/high-trade-recommendations', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS high-trade recommendations error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/register-curated-high-trade-ts', async (req, res) => {
+  try {
+    const apiKeyName = String(req.body?.apiKeyName || 'BTDD_D1').trim();
+    const activate = Boolean(req.body?.activate);
+    const result = await registerCuratedHighTradeTS(apiKeyName, activate);
+    if (!result) {
+      return res.status(400).json({ error: 'Failed to register curated trading system' });
+    }
+    res.json({ success: true, tradingSystem: result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS register curated TS error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
