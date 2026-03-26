@@ -20,6 +20,7 @@ import {
   updateStrategyClientState,
   createTenantByAdmin,
   getAdminLowLotRecommendations,
+  getHighTradeRecommendations,
   applyLowLotRecommendation,
   getAdminTelegramControls,
   updateAdminTelegramControls,
@@ -108,6 +109,26 @@ router.get('/admin/low-lot-recommendations', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS low-lot recommendations error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/high-trade-recommendations', async (req, res) => {
+  try {
+    const minProfitFactor = toOptionalNumber(req.query.minProfitFactor);
+    const maxDrawdownPercent = toOptionalNumber(req.query.maxDrawdownPercent);
+    const minReturnPercent = toOptionalNumber(req.query.minReturnPercent);
+    const limit = toOptionalNumber(req.query.limit);
+    const data = await getHighTradeRecommendations({
+      minProfitFactor,
+      maxDrawdownPercent,
+      minReturnPercent,
+      limit,
+    });
+    res.json(data);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS high-trade recommendations error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

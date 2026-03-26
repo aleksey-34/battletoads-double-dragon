@@ -196,6 +196,45 @@ export type OfferStoreState = {
   }>;
 };
 
+export type HighTradeRecommendation = {
+  strategyId: number;
+  strategyName: string;
+  strategyType: string;
+  marketMode: string;
+  market: string;
+  interval: string;
+  totalReturnPercent: number;
+  maxDrawdownPercent: number;
+  winRatePercent: number;
+  profitFactor: number;
+  tradesCount: number;
+  score: number;
+  robust: boolean;
+};
+
+export type HighTradeRecommendationResponse = {
+  generatedAt: string;
+  sourceSweepTimestamp: string | null;
+  filters: {
+    minProfitFactor: number;
+    maxDrawdownPercent: number;
+    minReturnPercent: number;
+    limit: number;
+  };
+  offers: HighTradeRecommendation[];
+  recommendedTradingSystem: {
+    name: string;
+    selectionPolicy: string;
+    members: Array<HighTradeRecommendation & { weight: number; memberRole: string }>;
+    aggregate: {
+      tradesCount: number;
+      avgProfitFactor: number;
+      avgReturnPercent: number;
+      avgDrawdownPercent: number;
+    };
+  } | null;
+};
+
 type OfferReviewSnapshot = {
   offerId: string;
   apiKeyName?: string;
@@ -4388,6 +4427,97 @@ export const previewAdminSweepBacktest = async (payload?: {
 export const getAdminReportSettings = async (): Promise<AdminReportSettings> => {
   const raw = await getRuntimeFlag('admin.reports.settings', JSON.stringify(DEFAULT_ADMIN_REPORT_SETTINGS));
   return normalizeAdminReportSettings(safeJsonParse<Record<string, unknown>>(raw, DEFAULT_ADMIN_REPORT_SETTINGS));
+};
+
+export const getHighTradeRecommendations = async (options?: {
+  minProfitFactor?: number;
+  maxDrawdownPercent?: number;
+  minReturnPercent?: number;
+  limit?: number;
+}): Promise<HighTradeRecommendationResponse> => {
+  const minProfitFactor = Math.max(0, asNumber(options?.minProfitFactor, 1.02));
+  const maxDrawdownPercent = Math.max(0, asNumber(options?.maxDrawdownPercent, 28));
+  const minReturnPercent = asNumber(options?.minReturnPercent, 3);
+  const limit = Math.max(1, Math.min(20, Math.floor(asNumber(options?.limit, 8))));
+
+  const sweep = loadLatestSweep();
+  const rows = Array.isArray(sweep?.evaluated) ? sweep?.evaluated || [] : [];
+  const filtered = rows
+    .filter((row) => asNumber(row.profitFactor, 0) >= minProfitFactor)
+    .filter((row) => asNumber(row.maxDrawdownPercent, 999) <= maxDrawdownPercent)
+    .filter((row) => asNumber(row.totalReturnPercent, -999) >= minReturnPercent)
+    .sort((left, right) => {
+      const tradeDiff = asNumber(right.tradesCount, 0) - asNumber(left.tradesCount, 0);
+      if (tradeDiff !== 0) {
+        return tradeDiff;
+      }
+      const pfDiff = asNumber(right.profitFactor, 0) - asNumber(left.profitFactor, 0);
+      if (pfDiff !== 0) {
+        return pfDiff;
+      }
+      return asNumber(right.score, 0) - asNumber(left.score, 0);
+    });
+
+  const deduped: SweepRecord[] = [];
+  const seenMarkets = new Set<string>();
+  for (const row of filtered) {
+    const marketKey = `${asString(row.marketMode, '')}|${asString(row.market, '')}|${asString(row.strategyType, '')}`;
+    if (seenMarkets.has(marketKey)) {
+      continue;
+    }
+    seenMarkets.add(marketKey);
+    deduped.push(row);
+    if (deduped.length >= limit) {
+      break;
+    }
+  }
+
+  const offers: HighTradeRecommendation[] = deduped.map((row) => ({
+    strategyId: Number(row.strategyId || 0),
+    strategyName: asString(row.strategyName, `Strategy ${row.strategyId}`),
+    strategyType: asString(row.strategyType, ''),
+    marketMode: asString(row.marketMode, ''),
+    market: asString(row.market, ''),
+    interval: asString(row.interval, ''),
+    totalReturnPercent: asNumber(row.totalReturnPercent, 0),
+    maxDrawdownPercent: asNumber(row.maxDrawdownPercent, 0),
+    winRatePercent: asNumber(row.winRatePercent, 0),
+    profitFactor: asNumber(row.profitFactor, 0),
+    tradesCount: Math.max(0, Math.floor(asNumber(row.tradesCount, 0))),
+    score: asNumber(row.score, 0),
+    robust: Boolean(row.robust),
+  }));
+
+  const tsMembers = offers.slice(0, Math.min(5, offers.length)).map((item, index) => ({
+    ...item,
+    weight: Number((index === 0 ? 1.15 : index === 1 ? 1.05 : 0.9).toFixed(2)),
+    memberRole: index < 2 ? 'core' : 'satellite',
+  }));
+
+  const recommendedTradingSystem = tsMembers.length > 0 ? {
+    name: 'HIGH-TRADE CURATED TS',
+    selectionPolicy: 'max trades with acceptable pf/dd',
+    members: tsMembers,
+    aggregate: {
+      tradesCount: tsMembers.reduce((sum, item) => sum + item.tradesCount, 0),
+      avgProfitFactor: Number((tsMembers.reduce((sum, item) => sum + item.profitFactor, 0) / tsMembers.length).toFixed(3)),
+      avgReturnPercent: Number((tsMembers.reduce((sum, item) => sum + item.totalReturnPercent, 0) / tsMembers.length).toFixed(3)),
+      avgDrawdownPercent: Number((tsMembers.reduce((sum, item) => sum + item.maxDrawdownPercent, 0) / tsMembers.length).toFixed(3)),
+    },
+  } : null;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    sourceSweepTimestamp: sweep?.timestamp || null,
+    filters: {
+      minProfitFactor,
+      maxDrawdownPercent,
+      minReturnPercent,
+      limit,
+    },
+    offers,
+    recommendedTradingSystem,
+  };
 };
 
 export const updateAdminReportSettings = async (payload: Partial<AdminReportSettings>): Promise<AdminReportSettings> => {
