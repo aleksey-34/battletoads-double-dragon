@@ -215,9 +215,7 @@ const buildRuntimeClientLines = async (periodHours: number): Promise<string[]> =
     const scopePart = systemName
       ? ` | ts=${escapeHtml(shorten(systemName, 54))}`
       : '';
-    const keyPart = mode === 'algofund'
-      ? `key=${escapeHtml(executionApiKeyName || '-')} | ts_key=${escapeHtml(systemApiKeyName || executionApiKeyName || '-')}`
-      : `key=${escapeHtml(executionApiKeyName || '-')}`;
+    const keyPart = `key=${escapeHtml(executionApiKeyName || '-')}`;
 
     out.push(
       `${escapeHtml(displayName || tenantSlug || executionApiKeyName || 'client')} (${escapeHtml(mode)}#${profileId}) | ${keyPart}${scopePart} | trades=${trades} | delta=${delta.toFixed(2)} | eq=${eqLatest.toFixed(2)} | ml=${margin.toFixed(1)}% | dd=${dd.toFixed(1)}%${warnings.length ? ` | ${warnings.join(',')}` : ''}`
