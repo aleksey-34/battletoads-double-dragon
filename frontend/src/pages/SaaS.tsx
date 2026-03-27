@@ -2370,6 +2370,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
       return {
         setKey,
+        displayName: setKey,
+        snapshotKey: setKey,
+        isDraft: false,
         offers: safeOffers,
         offerIds,
         offerCount: offerIds.length,
@@ -2405,7 +2408,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       : 0;
 
     return {
-      setKey: 'HIGH-TRADE CURATED',
+      setKey: `draft:${String(adminTradingSystemDraft?.name || 'admin-ts-draft').trim() || 'admin-ts-draft'}`,
+      displayName: `CURRENT DRAFT: ${String(adminTradingSystemDraft?.name || 'Admin TS draft').trim() || 'Admin TS draft'}`,
+      snapshotKey: '',
+      isDraft: true,
       offers: draftOffers,
       offerIds,
       offerCount: offerIds.length,
@@ -2450,6 +2456,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     : (adminDraftPortfolioSummary && adminDraftPeriodDays && adminDraftPeriodDays > 0
       ? Number((Number(adminDraftPortfolioSummary.tradesCount || 0) / adminDraftPeriodDays).toFixed(2))
       : null);
+  const adminDraftPeriodLabel = adminSavedTsSnapshot
+    ? `snapshot ${formatNumber(Number(adminSavedTsSnapshot.periodDays || 0), 0)}d${adminSavedTsSnapshot.updatedAt ? ` • saved ${formatDateTimeShort(adminSavedTsSnapshot.updatedAt)}` : ''}`
+    : (summary?.sweepSummary?.period ? formatPeriodLabel(summary.sweepSummary.period) : '—');
   const parseAlgofundPreviewSummary = (raw: any) => {
     const preview = raw?.preview && typeof raw.preview === 'object' ? raw.preview : raw;
     const summary = preview?.summary && typeof preview.summary === 'object' ? preview.summary : null;
@@ -5754,9 +5763,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           size="small"
                                           onClick={() => {
                                             setSelectedAdminDraftTsOfferIds(set.offerIds);
-                                            setSelectedAdminDraftTsSetKey(String(set.setKey || '').trim());
+                                            setSelectedAdminDraftTsSetKey(String(set.snapshotKey || '').trim());
                                             setSelectedAdminReviewKind('algofund-ts');
-                                            messageApi.success(`Выбран TS-набор ${set.setKey}: ${set.offerCount} карточек`);
+                                            messageApi.success(`Выбран TS-набор ${set.displayName}: ${set.offerCount} карточек`);
                                           }}
                                         >
                                           Выбрать ТС-набор
@@ -5767,9 +5776,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           size="small"
                                           onClick={() => {
                                             setSelectedAdminDraftTsOfferIds(set.offerIds);
-                                            setSelectedAdminDraftTsSetKey(String(set.setKey || '').trim());
+                                            setSelectedAdminDraftTsSetKey(String(set.snapshotKey || '').trim());
                                             openDraftTsBacktest({
-                                              setKey: String(set.setKey || '').trim(),
+                                              setKey: String(set.snapshotKey || '').trim() || undefined,
                                               offerIds: set.offerIds,
                                             });
                                           }}
@@ -5783,7 +5792,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           status={Number(set.avgRet || 0) >= 1 ? 'processing' : 'default'}
                                           title={Number(set.avgRet || 0) >= 1 ? 'Хороший набор' : 'Набор кандидатов'}
                                         />
-                                        <Text strong>{set.setKey}</Text>
+                                        <Text strong>{set.displayName}</Text>
+                                        {set.isDraft ? <Tag color="gold">draft</Tag> : null}
                                         <Tag color="processing">offers {set.offerCount}</Tag>
                                         <Tag color={metricColor(Number(set.avgRet || 0), 'return')}>avg Ret {formatPercent(set.avgRet)}</Tag>
                                         <Tag color={metricColor(Number(set.avgDd || 0), 'drawdown')}>avg DD {formatPercent(set.avgDd)}</Tag>
@@ -6462,9 +6472,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             size="small"
                                             onClick={() => {
                                               setSelectedAdminDraftTsOfferIds(set.offerIds);
-                                              setSelectedAdminDraftTsSetKey(String(set.setKey || '').trim());
+                                              setSelectedAdminDraftTsSetKey(String(set.snapshotKey || '').trim());
                                               setAdminSweepListMode('ts');
-                                              messageApi.success(`Выбран TS-набор ${set.setKey}: ${set.offerCount} оферов для бэктеста`);
+                                              messageApi.success(`Выбран TS-набор ${set.displayName}: ${set.offerCount} оферов для бэктеста`);
                                             }}
                                           >
                                             Выбрать для бэктеста
@@ -6472,7 +6482,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         ]}
                                       >
                                         <Space wrap>
-                                          <Text strong>{set.setKey}</Text>
+                                          <Text strong>{set.displayName}</Text>
+                                          {set.isDraft ? <Tag color="gold">draft</Tag> : null}
                                           <Tag color="processing">offers {set.offerCount}</Tag>
                                           <Tag color={metricColor(Number(set.avgRet || 0), 'return')}>avg Ret {formatPercent(set.avgRet)}</Tag>
                                           <Tag color={metricColor(Number(set.avgDd || 0), 'drawdown')}>avg DD {formatPercent(set.avgDd)}</Tag>
@@ -6501,7 +6512,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Tag color="blue">selected cards: {selectedAdminDraftTsOfferIds.length}</Tag>
                               <Tag color="blue">{adminTradingSystemDraft?.name || 'Admin TS draft'}</Tag>
                               <Tag color={adminSavedTsSnapshot ? 'green' : 'gold'}>{adminSavedTsSnapshot ? 'saved draft snapshot' : 'draft from sweep'}</Tag>
-                              {summary?.sweepSummary?.period ? <Tag color="default">{formatPeriodLabel(summary.sweepSummary.period)}</Tag> : null}
+                              {adminDraftPeriodLabel ? <Tag color="default">{adminDraftPeriodLabel}</Tag> : null}
                               {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(adminDraftPortfolioSummary.totalReturnPercent)}</Tag> : null}
                               {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(adminDraftPortfolioSummary.maxDrawdownPercent)}</Tag> : null}
                               {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.profitFactor || 0), 'pf')}>PF {formatNumber(adminDraftPortfolioSummary.profitFactor)}</Tag> : null}
@@ -6543,8 +6554,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           size="small"
                                           onClick={() => {
                                             setSelectedAdminDraftTsOfferIds(set.offerIds);
-                                            setSelectedAdminDraftTsSetKey(String(set.setKey || '').trim());
-                                            messageApi.success(`Выбран TS-набор ${set.setKey}: ${set.offerCount} оферов для sweep backtest`);
+                                            setSelectedAdminDraftTsSetKey(String(set.snapshotKey || '').trim());
+                                            messageApi.success(`Выбран TS-набор ${set.displayName}: ${set.offerCount} оферов для sweep backtest`);
                                           }}
                                         >
                                           Выбрать для бэктеста
@@ -6552,7 +6563,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       ]}
                                     >
                                       <Space wrap>
-                                        <Text strong>{set.setKey}</Text>
+                                        <Text strong>{set.displayName}</Text>
+                                        {set.isDraft ? <Tag color="gold">draft</Tag> : null}
                                         <Tag color="processing">offers {set.offerCount}</Tag>
                                         <Tag color={metricColor(Number(set.avgRet || 0), 'return')}>avg Ret {formatPercent(set.avgRet)}</Tag>
                                         <Tag color={metricColor(Number(set.avgDd || 0), 'drawdown')}>avg DD {formatPercent(set.avgDd)}</Tag>
