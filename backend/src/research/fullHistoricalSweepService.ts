@@ -43,6 +43,15 @@ type HistoricalSweepConfig = {
     minTrades: number;
   };
   strategyTypes: Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout'>;
+  monoMarkets: string[];
+  synthMarkets: string[];
+  ddLengths: number[];
+  ddTakeProfits: number[];
+  ddSources: Array<'close' | 'wick'>;
+  statLengths: number[];
+  statEntry: number[];
+  statExit: number[];
+  statStop: number[];
   systemName: string;
   strategyPrefix: string;
 };
@@ -92,16 +101,16 @@ type SweepCheckpoint = {
 
 const repoRoot = path.resolve(__dirname, '../../..');
 const resultsDir = path.join(repoRoot, 'results');
-const monoMarkets = ['BERAUSDT', 'IPUSDT', 'ORDIUSDT', 'GRTUSDT', 'INJUSDT', 'TRUUSDT', 'STXUSDT', 'VETUSDT', 'AUCTIONUSDT', 'MERLUSDT', 'ZECUSDT', 'SOMIUSDT'];
-const synthMarkets = ['IPUSDT/ZECUSDT', 'ORDIUSDT/ZECUSDT', 'MERLUSDT/SOMIUSDT', 'AUCTIONUSDT/MERLUSDT', 'BERAUSDT/ZECUSDT', 'IPUSDT/SOMIUSDT', 'GRTUSDT/INJUSDT', 'TRUUSDT/GRTUSDT', 'STXUSDT/INJUSDT', 'VETUSDT/GRTUSDT'];
+const defaultMonoMarkets = ['BERAUSDT', 'IPUSDT', 'ORDIUSDT', 'GRTUSDT', 'INJUSDT', 'TRUUSDT', 'STXUSDT', 'VETUSDT', 'AUCTIONUSDT', 'MERLUSDT', 'ZECUSDT', 'SOMIUSDT'];
+const defaultSynthMarkets = ['IPUSDT/ZECUSDT', 'ORDIUSDT/ZECUSDT', 'MERLUSDT/SOMIUSDT', 'AUCTIONUSDT/MERLUSDT', 'BERAUSDT/ZECUSDT', 'IPUSDT/SOMIUSDT', 'GRTUSDT/INJUSDT', 'TRUUSDT/GRTUSDT', 'STXUSDT/INJUSDT', 'VETUSDT/GRTUSDT'];
 
-const ddLengths = [5, 8, 12, 16, 24, 36];
-const ddTakeProfits = [2, 3, 4, 5, 7.5, 10];
-const ddSources: Array<'close' | 'wick'> = ['close', 'wick'];
-const statLengths = [24, 36, 48, 72, 96, 120];
-const statEntry = [1.25, 1.5, 1.75, 2, 2.25];
-const statExit = [0.5, 0.75, 1];
-const statStop = [2.5, 3, 3.5];
+const defaultDdLengths = [5, 8, 12, 16, 24, 36];
+const defaultDdTakeProfits = [2, 3, 4, 5, 7.5, 10];
+const defaultDdSources: Array<'close' | 'wick'> = ['close', 'wick'];
+const defaultStatLengths = [24, 36, 48, 72, 96, 120];
+const defaultStatEntry = [1.25, 1.5, 1.75, 2, 2.25];
+const defaultStatExit = [0.5, 0.75, 1];
+const defaultStatStop = [2.5, 3, 3.5];
 
 const activeJobs = new Set<number>();
 
@@ -146,6 +155,52 @@ const parseIntervals = (raw: unknown): string[] => {
   return valid.length > 0 ? valid : ['4h'];
 };
 
+const parseStringList = (raw: unknown): string[] => {
+  if (Array.isArray(raw)) {
+    return Array.from(new Set(raw.map((item) => String(item || '').trim().toUpperCase()).filter(Boolean)));
+  }
+  const text = String(raw || '').trim();
+  if (!text) {
+    return [];
+  }
+  return Array.from(new Set(text.split(/[\s,;|]+/).map((item) => item.trim().toUpperCase()).filter(Boolean)));
+};
+
+const parseNumberList = (raw: unknown): number[] => {
+  const values = Array.isArray(raw)
+    ? raw
+    : String(raw || '').split(/[\s,;|]+/).filter(Boolean);
+  const normalized = values
+    .map((item) => Number(item))
+    .filter((value) => Number.isFinite(value));
+  return Array.from(new Set(normalized));
+};
+
+const parseStrategyTypes = (raw: unknown): Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout'> => {
+  const values = parseStringList(raw);
+  const allowed = new Set(['DD_BATTLETOADS', 'STAT_ARB_ZSCORE', 'ZZ_BREAKOUT']);
+  const parsed = values
+    .filter((value) => allowed.has(value))
+    .map((value) => {
+      if (value === 'DD_BATTLETOADS') {
+        return 'DD_BattleToads';
+      }
+      if (value === 'ZZ_BREAKOUT') {
+        return 'zz_breakout';
+      }
+      return 'stat_arb_zscore';
+    });
+  return parsed;
+};
+
+const parseDdSources = (raw: unknown): Array<'close' | 'wick'> => {
+  const values = Array.isArray(raw)
+    ? raw.map((item) => String(item || '').trim().toLowerCase())
+    : String(raw || '').split(/[\s,;|]+/).map((item) => item.trim().toLowerCase());
+  const parsed = Array.from(new Set(values.filter((item) => item === 'close' || item === 'wick'))) as Array<'close' | 'wick'>;
+  return parsed;
+};
+
 const buildDefaultConfig = (input?: Partial<HistoricalSweepConfig> & { mode?: unknown }): HistoricalSweepConfig => {
   const apiKeyName = String(input?.apiKeyName || 'BTDD_D1').trim() || 'BTDD_D1';
   const dateFrom = String(input?.dateFrom || '2025-01-01T00:00:00Z').trim() || '2025-01-01T00:00:00Z';
@@ -157,6 +212,10 @@ const buildDefaultConfig = (input?: Partial<HistoricalSweepConfig> & { mode?: un
   const checkpointFile = input?.checkpointFile
     ? String(input.checkpointFile)
     : path.join(resultsDir, `${apiKeyName.toLowerCase()}_historical_sweep_checkpoint.json`);
+  const hasMonoMarkets = Boolean(input && Object.prototype.hasOwnProperty.call(input, 'monoMarkets'));
+  const hasSynthMarkets = Boolean(input && Object.prototype.hasOwnProperty.call(input, 'synthMarkets'));
+  const parsedMonoMarkets = parseStringList((input as any)?.monoMarkets);
+  const parsedSynthMarkets = parseStringList((input as any)?.synthMarkets);
 
   return {
     apiKeyName,
@@ -187,9 +246,36 @@ const buildDefaultConfig = (input?: Partial<HistoricalSweepConfig> & { mode?: un
       maxDrawdownPercent: Number(input?.robust?.maxDrawdownPercent ?? 22),
       minTrades: Math.max(1, Number(input?.robust?.minTrades || 40)),
     },
-    strategyTypes: Array.isArray(input?.strategyTypes) && input.strategyTypes.length > 0
-      ? input.strategyTypes
+    strategyTypes: parseStrategyTypes(input?.strategyTypes).length > 0
+      ? parseStrategyTypes(input?.strategyTypes)
       : ['DD_BattleToads', 'stat_arb_zscore', 'zz_breakout'],
+    monoMarkets: hasMonoMarkets
+      ? parsedMonoMarkets
+      : defaultMonoMarkets,
+    synthMarkets: hasSynthMarkets
+      ? parsedSynthMarkets
+      : defaultSynthMarkets,
+    ddLengths: parseNumberList((input as any)?.ddLengths).length > 0
+      ? parseNumberList((input as any)?.ddLengths)
+      : defaultDdLengths,
+    ddTakeProfits: parseNumberList((input as any)?.ddTakeProfits).length > 0
+      ? parseNumberList((input as any)?.ddTakeProfits)
+      : defaultDdTakeProfits,
+    ddSources: parseDdSources((input as any)?.ddSources).length > 0
+      ? parseDdSources((input as any)?.ddSources)
+      : defaultDdSources,
+    statLengths: parseNumberList((input as any)?.statLengths).length > 0
+      ? parseNumberList((input as any)?.statLengths)
+      : defaultStatLengths,
+    statEntry: parseNumberList((input as any)?.statEntry).length > 0
+      ? parseNumberList((input as any)?.statEntry)
+      : defaultStatEntry,
+    statExit: parseNumberList((input as any)?.statExit).length > 0
+      ? parseNumberList((input as any)?.statExit)
+      : defaultStatExit,
+    statStop: parseNumberList((input as any)?.statStop).length > 0
+      ? parseNumberList((input as any)?.statStop)
+      : defaultStatStop,
     systemName: safeSystemName,
     strategyPrefix: safePrefix,
   };
@@ -233,10 +319,10 @@ const buildRunPlans = (config: HistoricalSweepConfig): SweepRunPlan[] => {
     for (const interval of intervals) {
       for (const strategyType of config.strategyTypes) {
       if (strategyType === 'stat_arb_zscore') {
-        for (const length of statLengths) {
-          for (const zscoreEntry of statEntry) {
-            for (const zscoreExit of statExit) {
-              for (const zscoreStop of statStop) {
+        for (const length of config.statLengths) {
+          for (const zscoreEntry of config.statEntry) {
+            for (const zscoreExit of config.statExit) {
+              for (const zscoreStop of config.statStop) {
                 addPlan({
                   strategyType,
                   marketMode,
@@ -258,9 +344,9 @@ const buildRunPlans = (config: HistoricalSweepConfig): SweepRunPlan[] => {
         continue;
       }
 
-      for (const length of ddLengths) {
-        for (const takeProfitPercent of ddTakeProfits) {
-          for (const detectionSource of ddSources) {
+      for (const length of config.ddLengths) {
+        for (const takeProfitPercent of config.ddTakeProfits) {
+          for (const detectionSource of config.ddSources) {
             addPlan({
               strategyType,
               marketMode,
@@ -282,8 +368,8 @@ const buildRunPlans = (config: HistoricalSweepConfig): SweepRunPlan[] => {
     }
   };
 
-  monoMarkets.forEach((market) => addMarketRuns('mono', market));
-  synthMarkets.forEach((market) => addMarketRuns('synth', market));
+  config.monoMarkets.forEach((market) => addMarketRuns('mono', market));
+  config.synthMarkets.forEach((market) => addMarketRuns('synth', market));
   return plans;
 };
 
@@ -598,8 +684,8 @@ const buildSweepArtifact = async (
     config,
     universe: {
       sweepFile: path.join(repoRoot, 'backend', 'logs', 'backtests', 'third_strategy_sweep_seed_btdd_d1.json'),
-      synthMarkets,
-      monoMarkets,
+      synthMarkets: config.synthMarkets,
+      monoMarkets: config.monoMarkets,
     },
     counts: {
       potentialRuns: config.maxRuns,

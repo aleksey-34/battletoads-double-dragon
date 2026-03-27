@@ -53,6 +53,7 @@ type SaasBacktestContext = {
   offerId?: string;
   offerPublished?: boolean;
   offerIds?: string[];
+  setKey?: string;
 };
 
 type AdminSweepBacktestPreviewResponse = {
@@ -876,6 +877,10 @@ const getBacktestContextKey = (context?: SaasBacktestContext | null): string => 
   }
   if (context.kind === 'offer') {
     return `offer:${String(context.offerId || '').trim()}`;
+  }
+  const setKey = String(context.setKey || '').trim();
+  if (setKey) {
+    return `ts-set:${setKey}`;
   }
   const ids = (context.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean).sort();
   return `ts:${ids.join('|')}`;
@@ -2519,18 +2524,27 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   const algofundStorefrontSystems = (() => {
-    // Build storefront from ALL available published TS systems (not just those with connected clients)
+    // Build storefront from active/relevant TS systems only to avoid mixing stale historical entries.
+    const availableSystems = Array.isArray(algofundState?.availableSystems) ? (algofundState?.availableSystems || []) : [];
+    const availableSystemByName = new Map(
+      availableSystems
+        .map((item) => [String(item?.name || '').trim(), item] as const)
+        .filter(([name]) => name.length > 0)
+    );
+
+    const snapshotSystemNames = Object.values(summary?.offerStore?.tsBacktestSnapshots || {})
+      .map((snapshot) => String(snapshot?.systemName || '').trim())
+      .filter(Boolean);
+
     const availableSystemNames = Array.from(new Set([
-      // All systems from algofundState (now includes ALL published ALGOFUND_MASTER from all API keys)
-      ...(algofundState?.availableSystems || [])
-        .map((item) => String(item.name || '').trim())
-        .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::'))
-        .filter(Boolean),
-      // Also include systems connected to current tenants
+      ...availableSystems
+        .filter((item) => Boolean(item?.isActive))
+        .map((item) => String(item?.name || '').trim())
+        .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::')),
       ...batchEligibleAlgofundTenants
         .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
         .filter(Boolean),
-      // And the most recently published system
+      ...snapshotSystemNames,
       String(publishResponse?.sourceSystem?.systemName || '').trim(),
     ].filter(Boolean)));
 
@@ -2538,9 +2552,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const storefrontLabel = `TS offer #${availableSystemNames.indexOf(systemName) + 1}`;
     const tenants = batchEligibleAlgofundTenants.filter((tenant) => String(tenant.algofundProfile?.published_system_name || '').trim() === systemName);
     const snapshotForSystem = resolveTsSnapshotForSystem(systemName);
+    const runtimeSystem = availableSystemByName.get(systemName);
     const runtimeSystemId = publishResponse?.sourceSystem?.systemName === systemName
       ? Number(publishResponse.sourceSystem.systemId || 0)
-      : (algofundState?.availableSystems || []).find((s) => s.name === systemName)?.id || null;
+      : runtimeSystem?.id || null;
     const publishSummary = publishResponse?.sourceSystem?.systemName === systemName
       ? publishResponse?.preview?.summary || null
       : null;
@@ -2581,10 +2596,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const safeLatestBacktestSummary = snapshotForSystem ? latestBacktestSummary : null;
     const safeLatestBacktestCurve = snapshotForSystem ? latestBacktestCurve : [];
 
+    const hasMeaningfulState = Boolean(
+      publishSummary
+      || snapshotForSystem
+      || tenants.length > 0
+      || Number(runtimeSystem?.isActive ? 1 : 0) === 1
+    );
+
     return {
       systemName,
       storefrontLabel,
       isArchived: systemName.toUpperCase().startsWith('ARCHIVED::'),
+      hasMeaningfulState,
       runtimeSystemId,
       summary: publishSummary || snapshotSummary || fallbackSummary || safeLatestBacktestSummary || null,
       equityCurve: publishEquityCurve.length > 1
@@ -2595,7 +2618,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       activeCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.actual_enabled || 0) === 1).length,
       pendingCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.requested_enabled || 0) === 1 && Number(tenant.algofundProfile?.actual_enabled || 0) !== 1).length,
     };
-    }).filter((item) => !item.isArchived || item.tenantCount > 0);
+    }).filter((item) => item.hasMeaningfulState && (!item.isArchived || item.tenantCount > 0));
   })();
   const offerTitleById = offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
@@ -4167,6 +4190,39 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return normalizeBacktestCardSettings(saved);
     }
 
+    if (context.kind === 'algofund-ts') {
+      const snapshots = Object.values(summary?.offerStore?.tsBacktestSnapshots || {});
+      const contextSetKey = String(context.setKey || selectedAdminDraftTsSetKey || '').trim();
+      const contextOfferIds = Array.from(new Set((context.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean))).sort();
+
+      let matchingSnapshot = null as (typeof snapshots[number] | null);
+
+      if (contextSetKey) {
+        matchingSnapshot = snapshots.find((snapshot) => String(snapshot?.setKey || '').trim() === contextSetKey) || null;
+      }
+
+      if (!matchingSnapshot && contextOfferIds.length > 0) {
+        matchingSnapshot = snapshots.find((snapshot) => {
+          const snapshotOfferIds = Array.from(new Set((snapshot?.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean))).sort();
+          if (snapshotOfferIds.length !== contextOfferIds.length) {
+            return false;
+          }
+          return snapshotOfferIds.every((id, index) => id === contextOfferIds[index]);
+        }) || null;
+      }
+
+      if (!matchingSnapshot) {
+        const systemName = String(publishResponse?.sourceSystem?.systemName || selectedAlgofundPublishedSystemName || '').trim();
+        if (systemName) {
+          matchingSnapshot = resolveTsSnapshotForSystem(systemName);
+        }
+      }
+
+      if (matchingSnapshot?.backtestSettings) {
+        return normalizeBacktestCardSettings(matchingSnapshot.backtestSettings);
+      }
+    }
+
     if (context.kind === 'offer' && context.offerId) {
       const offer = (summary?.offerStore?.offers || []).find((item) => String(item.offerId) === String(context.offerId));
       if (offer?.backtestSettings) {
@@ -4175,7 +4231,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
 
     return { ...DEFAULT_BACKTEST_SETTINGS };
-  }, [adminBacktestSettingsByCard, summary?.offerStore?.offers]);
+  }, [
+    adminBacktestSettingsByCard,
+    summary?.offerStore?.offers,
+    summary?.offerStore?.tsBacktestSnapshots,
+    selectedAdminDraftTsSetKey,
+    publishResponse?.sourceSystem?.systemName,
+    selectedAlgofundPublishedSystemName,
+    resolveTsSnapshotForSystem,
+  ]);
 
   const storeCurrentBacktestSettingsForContext = useCallback((context: SaasBacktestContext | null | undefined, patch: Partial<BacktestCardSettings>) => {
     const contextKey = getBacktestContextKey(context);
@@ -4335,7 +4399,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const periodDays = Number(getPeriodDurationDays(adminSweepBacktestResult.period || null) || 90);
     const finalEquity = Number(summary.finalEquity ?? (equityPoints.length > 0 ? equityPoints[equityPoints.length - 1] : adminSweepBacktestInitialBalance));
     const trades = Number(summary.tradesCount ?? 0);
-    const snapshotSetKey = String(adminSweepBacktestResult?.publishMeta?.setKey || selectedAdminDraftTsSetKey || '').trim();
+    const snapshotSetKey = String(
+      adminSweepBacktestResult?.publishMeta?.setKey
+      || backtestDrawerContext?.setKey
+      || selectedAdminDraftTsSetKey
+      || ''
+    ).trim();
     const snapshotApiKeyName = String(
       adminSweepBacktestResult?.rerun?.apiKeyName
       || adminSweepBacktestResult?.sweepApiKeyName
@@ -4488,6 +4557,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       title: `Бэктест ТС: ${tsName}`,
       description: 'Sweep-портфельный бэктест draft ТС из последнего свепа. После проверки метрик можно отправлять ТС на витрину.',
       offerIds,
+      setKey: String(params?.setKey || selectedAdminDraftTsSetKey || '').trim() || undefined,
     });
   };
 
@@ -4541,7 +4611,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       await saveTsReviewSnapshotFromBacktest();
       await publishAdminTs({
         offerIds: backtestDrawerContext.offerIds,
-        setKey: selectedAdminDraftTsSetKey,
+        setKey: String(backtestDrawerContext.setKey || selectedAdminDraftTsSetKey || '').trim() || undefined,
       });
       setBacktestDrawerVisible(false);
       setBacktestDrawerContext(null);
@@ -4578,6 +4648,28 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const openBacktestDrawerForAdminTs = () => {
     openDraftTsBacktest();
+  };
+
+  const openBacktestDrawerForStorefrontTs = (systemName: string) => {
+    const normalizedSystemName = String(systemName || '').trim();
+    if (!normalizedSystemName) {
+      openDraftTsBacktest();
+      return;
+    }
+
+    const snapshot = resolveTsSnapshotForSystem(normalizedSystemName);
+    const setKey = String(snapshot?.setKey || '').trim();
+    const rawSnapshotOfferIds = snapshot?.offerIds;
+    const snapshotOfferIds = Array.isArray(rawSnapshotOfferIds) ? rawSnapshotOfferIds : [];
+    const offerIds = snapshotOfferIds.length > 0
+      ? snapshotOfferIds.map((item) => String(item || '').trim()).filter(Boolean)
+      : [];
+
+    if (setKey) {
+      setSelectedAdminDraftTsSetKey(setKey);
+    }
+
+    openDraftTsBacktest({ setKey, offerIds });
   };
 
   const navigateSaasTab = (tab: SaasTabKey, nextAdminTab?: AdminTabKey) => {
@@ -4673,6 +4765,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       const created = Number(response.data?.createdCount || 0);
       const failed = Number(response.data?.failedCount || 0);
       messageApi.success(`Применение завершено: switched ${created}, failed ${failed}`);
+      const failures = Array.isArray(response.data?.failures) ? response.data.failures : [];
+      if (failures.length > 0) {
+        const details = failures
+          .slice(0, 3)
+          .map((item: any) => `tenant ${Number(item?.tenantId || 0)}: ${String(item?.error || 'failed')}`)
+          .join('; ');
+        messageApi.warning(`Ошибки применения: ${details}`);
+      }
       await loadSummary();
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to apply published admin TS to selected clients'));
@@ -4708,6 +4808,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       const created = Number(response.data?.createdCount || 0);
       const failed = Number(response.data?.failedCount || 0);
       messageApi.success(`TS применена: switched ${created}, failed ${failed}`);
+      const failures = Array.isArray(response.data?.failures) ? response.data.failures : [];
+      if (failures.length > 0) {
+        const details = failures
+          .slice(0, 3)
+          .map((item: any) => `tenant ${Number(item?.tenantId || 0)}: ${String(item?.error || 'failed')}`)
+          .join('; ');
+        messageApi.warning(`Причина ошибок: ${details}`);
+      }
       setStorefrontConnectTarget(null);
       await loadSummary('full');
     } catch (error: any) {
@@ -7911,8 +8019,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           ? <Text type="secondary" style={{ fontSize: 12 }}>{item.tenants.map((t) => t.tenant.display_name).join(', ')}</Text>
                                           : <Text type="secondary" style={{ fontSize: 12 }}>Нет подключённых клиентов</Text>}
                                         <Space wrap>
-                                          <Button size="small" onClick={openBacktestDrawerForAdminTs}>Бэктест ТС</Button>
-                                          <Button size="small" onClick={() => navigateToAdminTab('offer-ts')}>В approval center</Button>
+                                          <Button size="small" onClick={() => openBacktestDrawerForStorefrontTs(item.systemName)}>Бэктест ТС</Button>
+                                          <Button
+                                            size="small"
+                                            onClick={() => {
+                                              const snapshot = resolveTsSnapshotForSystem(item.systemName);
+                                              const setKey = String(snapshot?.setKey || '').trim();
+                                              if (setKey) {
+                                                setSelectedAdminDraftTsSetKey(setKey);
+                                              }
+                                              setSelectedAdminReviewKind('algofund-ts');
+                                              navigateToAdminTab('offer-ts');
+                                            }}
+                                          >
+                                            В approval center
+                                          </Button>
                                           <Button
                                             size="small"
                                             onClick={() => {

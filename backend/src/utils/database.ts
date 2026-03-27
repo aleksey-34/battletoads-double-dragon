@@ -415,6 +415,7 @@ export const initDB = async () => {
       requested_enabled BOOLEAN DEFAULT 0,
       actual_enabled BOOLEAN DEFAULT 0,
       assigned_api_key_name TEXT DEFAULT '',
+      execution_api_key_name TEXT DEFAULT '',
       published_system_name TEXT DEFAULT '',
       latest_preview_json TEXT DEFAULT '{}',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -619,6 +620,7 @@ export const initDB = async () => {
   await ensureColumn('live_trade_events', 'source_symbol TEXT');
   await ensureColumn('algofund_start_stop_requests', "request_payload_json TEXT DEFAULT '{}'");
   await ensureColumn('strategy_client_profiles', 'active_system_profile_id INTEGER');
+  await ensureColumn('algofund_profiles', "execution_api_key_name TEXT DEFAULT ''");
   await ensureColumn('copytrading_profiles', 'copy_ratio REAL DEFAULT 1');
 
   await db.exec(`

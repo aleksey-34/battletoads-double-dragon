@@ -360,6 +360,7 @@ type AlgofundProfileRow = {
   requested_enabled: number;
   actual_enabled: number;
   assigned_api_key_name: string;
+  execution_api_key_name: string;
   published_system_name: string;
   latest_preview_json: string;
 };
@@ -1205,6 +1206,14 @@ const buildFallbackCatalogFromPresets = async (
       weight: Number((1 / Math.max(1, Math.min(6, offers.length))).toFixed(4)),
     }));
 
+  // Preserve original draft from sourceCatalog if available
+  const originalDraft = sourceCatalog?.adminTradingSystemDraft;
+  const shouldUseOriginalDraft = originalDraft && 
+    Array.isArray(originalDraft.members) && 
+    originalDraft.members.length > 0 &&
+    originalDraft.name && 
+    !originalDraft.name.includes('fallback');
+
   return {
     timestamp: new Date().toISOString(),
     apiKeyName: '',
@@ -1224,11 +1233,13 @@ const buildFallbackCatalogFromPresets = async (
       mono,
       synth,
     },
-    adminTradingSystemDraft: {
-      name: 'SAAS Admin TS (fallback)',
-      members: topMembers,
-      sourcePortfolioSummary: [],
-    },
+    adminTradingSystemDraft: shouldUseOriginalDraft
+      ? originalDraft
+      : {
+          name: 'SAAS Admin TS (fallback)',
+          members: topMembers,
+          sourcePortfolioSummary: [],
+        },
   };
 };
 
@@ -1528,13 +1539,14 @@ const ensureStrategyClientProfile = async (tenantId: number, offerIds: string[],
 const ensureAlgofundProfile = async (tenantId: number, assignedApiKeyName: string): Promise<void> => {
   await db.run(
     `INSERT INTO algofund_profiles (
-      tenant_id, risk_multiplier, requested_enabled, actual_enabled, assigned_api_key_name,
+      tenant_id, risk_multiplier, requested_enabled, actual_enabled, assigned_api_key_name, execution_api_key_name,
       published_system_name, latest_preview_json, created_at, updated_at
-    ) VALUES (?, 1, 0, 0, ?, '', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ) VALUES (?, 1, 0, 0, ?, ?, '', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     ON CONFLICT(tenant_id) DO UPDATE SET
       assigned_api_key_name = CASE WHEN COALESCE(algofund_profiles.assigned_api_key_name, '') = '' THEN excluded.assigned_api_key_name ELSE algofund_profiles.assigned_api_key_name END,
+      execution_api_key_name = CASE WHEN COALESCE(algofund_profiles.execution_api_key_name, '') = '' THEN excluded.execution_api_key_name ELSE algofund_profiles.execution_api_key_name END,
       updated_at = CURRENT_TIMESTAMP`,
-    [tenantId, assignedApiKeyName]
+    [tenantId, assignedApiKeyName, assignedApiKeyName]
   );
 };
 
@@ -4978,6 +4990,14 @@ export const getSaasAdminSummary = async (options?: {
   const catalog = getAllOffers(fallbackCatalog).length > 0
     ? fallbackCatalog
     : sourceCatalog || fallbackCatalog;
+  
+  // Always use source draft if available, don't let fallback overwrite it
+  if (sourceCatalog?.adminTradingSystemDraft && 
+      sourceCatalog.adminTradingSystemDraft.name && 
+      !sourceCatalog.adminTradingSystemDraft.name.includes('fallback')) {
+    catalog.adminTradingSystemDraft = sourceCatalog.adminTradingSystemDraft;
+  }
+  
   const sweepSelectedMembers = resolveSweepSelectedMembers(sourceSweep, catalog);
   const sweepSummary = sourceSweep
     ? {
@@ -5078,7 +5098,7 @@ export const updateTenantAdminState = async (tenantId: number, payload: {
   } else {
     await db.run(
       `UPDATE algofund_profiles
-       SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+       SET execution_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
        WHERE tenant_id = ?`,
       [nextAssignedApiKeyName, tenantId]
     );
@@ -5156,7 +5176,7 @@ const listTenantSummaries = async (options?: {
       tenant.product_mode === 'strategy_client'
         ? strategyProfile?.assigned_api_key_name
         : tenant.product_mode === 'algofund_client'
-          ? algofundProfile?.assigned_api_key_name
+          ? (algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name)
           : copytradingProfile?.master_api_key_name,
       tenant.assigned_api_key_name
     ).trim();
@@ -5981,11 +6001,19 @@ export const materializeStrategyClient = async (tenantId: number, activate: bool
 
 const getAlgofundClientSystemName = (tenant: TenantRow): string => `ALGOFUND::${tenant.slug}`;
 
+const getAlgofundSystemApiKeyName = (tenant: TenantRow, profile: AlgofundProfileRow): string => {
+  return asString(profile.assigned_api_key_name || tenant.assigned_api_key_name || profile.execution_api_key_name);
+};
+
+const getAlgofundExecutionApiKeyName = (tenant: TenantRow, profile: AlgofundProfileRow): string => {
+  return asString(profile.execution_api_key_name || tenant.assigned_api_key_name || profile.assigned_api_key_name);
+};
+
 const getAlgofundEngineState = async (
   tenant: TenantRow,
   profile: AlgofundProfileRow
 ): Promise<{ apiKeyName: string; systemId: number; systemName: string; isActive: boolean } | null> => {
-  const apiKeyName = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
+  const apiKeyName = getAlgofundSystemApiKeyName(tenant, profile);
   if (!apiKeyName) {
     return null;
   }
@@ -6018,8 +6046,8 @@ const materializeAlgofundSystem = async (
     throw new Error('Catalog or sweep data unavailable (results and fallback sources are missing).');
   }
 
-  const assignedApiKeyName = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
-  if (!assignedApiKeyName) {
+  const executionApiKeyName = getAlgofundExecutionApiKeyName(tenant, profile);
+  if (!executionApiKeyName) {
     throw new Error('Assign an API key to this algofund client first');
   }
 
@@ -6031,7 +6059,7 @@ const materializeAlgofundSystem = async (
   const riskMultiplier = Math.max(0, Math.min(asNumber(profile.risk_multiplier, 1), asNumber(plan.risk_cap_max, 1)));
   const materializedStrategies = await upsertTenantStrategies(
     tenant,
-    assignedApiKeyName,
+    executionApiKeyName,
     draftMembers.map((member, index) => {
       const record = findSweepRecordByStrategyId(sweep, Number(member.strategyId));
       if (!record) {
@@ -6055,7 +6083,7 @@ const materializeAlgofundSystem = async (
     activate || profile.requested_enabled === 1
   );
 
-  const systems = await listTradingSystems(assignedApiKeyName);
+  const systems = await listTradingSystems(executionApiKeyName);
   const systemName = getAlgofundClientSystemName(tenant);
   const existing = systems.find((item) => asString(item.name) === systemName);
   const members = materializedStrategies.map((row, index) => ({
@@ -6068,17 +6096,17 @@ const materializeAlgofundSystem = async (
 
   let systemId = 0;
   if (existing?.id) {
-    await updateTradingSystem(assignedApiKeyName, Number(existing.id), {
+    await updateTradingSystem(executionApiKeyName, Number(existing.id), {
       name: systemName,
       description: `Algofund managed TS for ${tenant.display_name}`,
       auto_sync_members: false,
       discovery_enabled: false,
       max_members: Math.max(6, members.length),
     });
-    await replaceTradingSystemMembers(assignedApiKeyName, Number(existing.id), members);
+    await replaceTradingSystemMembers(executionApiKeyName, Number(existing.id), members);
     systemId = Number(existing.id);
   } else {
-    const created = await createTradingSystem(assignedApiKeyName, {
+    const created = await createTradingSystem(executionApiKeyName, {
       name: systemName,
       description: `Algofund managed TS for ${tenant.display_name}`,
       auto_sync_members: false,
@@ -6090,22 +6118,23 @@ const materializeAlgofundSystem = async (
   }
 
   if (activate || profile.requested_enabled === 1) {
-    await setTradingSystemActivation(assignedApiKeyName, systemId, true, true);
+    await setTradingSystemActivation(executionApiKeyName, systemId, true, true);
   }
 
   await db.run(
     `UPDATE algofund_profiles
      SET assigned_api_key_name = ?,
+         execution_api_key_name = ?,
          published_system_name = ?,
          updated_at = CURRENT_TIMESTAMP
      WHERE tenant_id = ?`,
-    [assignedApiKeyName, systemName, tenant.id]
+    [executionApiKeyName, executionApiKeyName, systemName, tenant.id]
   );
 
   return {
     systemId,
     systemName,
-    assignedApiKeyName,
+    assignedApiKeyName: executionApiKeyName,
     riskMultiplier,
     strategies: materializedStrategies,
   };
@@ -6135,24 +6164,28 @@ export const getAlgofundState = async (
     actual_enabled: engine ? (engine.isActive ? 1 : 0) : profile.actual_enabled,
     published_system_name: engine?.systemName || profile.published_system_name,
     assigned_api_key_name: engine?.apiKeyName || profile.assigned_api_key_name,
+    execution_api_key_name: profile.execution_api_key_name,
   };
 
   if (
     effectiveProfile.actual_enabled !== profile.actual_enabled
     || effectiveProfile.published_system_name !== profile.published_system_name
     || effectiveProfile.assigned_api_key_name !== profile.assigned_api_key_name
+    || effectiveProfile.execution_api_key_name !== profile.execution_api_key_name
   ) {
     await db.run(
       `UPDATE algofund_profiles
        SET actual_enabled = ?,
            published_system_name = ?,
            assigned_api_key_name = ?,
+           execution_api_key_name = ?,
            updated_at = CURRENT_TIMESTAMP
        WHERE tenant_id = ?`,
       [
         effectiveProfile.actual_enabled,
         effectiveProfile.published_system_name,
         effectiveProfile.assigned_api_key_name,
+        effectiveProfile.execution_api_key_name,
         tenantId,
       ]
     );
@@ -6309,7 +6342,7 @@ export const getAlgofundState = async (
       preview.blockedReason = undefined;
       if (!preview.sourceSystem && asString(profile.published_system_name, '')) {
         preview.sourceSystem = {
-          apiKeyName: asString(effectiveProfile.assigned_api_key_name || tenant.assigned_api_key_name, ''),
+          apiKeyName: asString(getAlgofundSystemApiKeyName(tenant, effectiveProfile), ''),
           systemId: Number(engine?.systemId || 0),
           systemName: asString(effectiveProfile.published_system_name, ''),
         };
@@ -6349,14 +6382,15 @@ export const updateAlgofundState = async (
     payload.riskMultiplier !== undefined ? payload.riskMultiplier : asNumber(profile.risk_multiplier, 1),
     asNumber(plan.risk_cap_max, 1)
   ));
-  const nextApiKeyName = asString(payload.assignedApiKeyName, profile.assigned_api_key_name || tenant.assigned_api_key_name);
+  const currentExecutionApiKeyName = getAlgofundExecutionApiKeyName(tenant, profile);
+  const nextApiKeyName = asString(payload.assignedApiKeyName, currentExecutionApiKeyName);
   const nextRequestedEnabled = payload.requestedEnabled !== undefined
     ? payload.requestedEnabled
     : Number(profile.requested_enabled || 0) === 1;
 
   await db.run(
     `UPDATE algofund_profiles
-     SET risk_multiplier = ?, assigned_api_key_name = ?, requested_enabled = ?, updated_at = CURRENT_TIMESTAMP
+     SET risk_multiplier = ?, execution_api_key_name = ?, requested_enabled = ?, updated_at = CURRENT_TIMESTAMP
      WHERE tenant_id = ?`,
     [nextRiskMultiplier, nextApiKeyName, nextRequestedEnabled ? 1 : 0, tenantId]
   );
@@ -6389,7 +6423,7 @@ export const requestAlgofundAction = async (
     throw new Error('Start/stop requests are not available for the current plan');
   }
 
-  const apiKeyName = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
+  const apiKeyName = getAlgofundSystemApiKeyName(tenant, profile);
   const requestPayload: AlgofundRequestPayload = {
     targetSystemId: undefined,
     targetSystemName: undefined,
@@ -6535,8 +6569,8 @@ const applyApprovedAlgofundAction = async (params: {
       decisionNote = note ? `${note} | ${suffix}` : suffix;
     }
   } else if (row.request_type === 'stop') {
-    const algofundApiKey = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name);
-    const systems = await listTradingSystems(algofundApiKey);
+    const algofundApiKey = getAlgofundExecutionApiKeyName(tenant, profile);
+    const systems = algofundApiKey ? await listTradingSystems(algofundApiKey) : [];
     const existing = systems.find((item) => asString(item.name) === getAlgofundClientSystemName(tenant));
     if (existing?.id) {
       await setTradingSystemActivation(algofundApiKey, Number(existing.id), false, true);
@@ -6556,7 +6590,7 @@ const applyApprovedAlgofundAction = async (params: {
     await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
   } else if (row.request_type === 'switch_system') {
     const targetSystemId = Math.floor(asNumber(requestPayload.targetSystemId, 0));
-    let apiKeyName = asString(requestPayload.targetApiKeyName || profile.assigned_api_key_name || tenant.assigned_api_key_name);
+    let apiKeyName = asString(requestPayload.targetApiKeyName || getAlgofundSystemApiKeyName(tenant, profile));
 
     if (!apiKeyName && targetSystemId > 0) {
       const globalTarget = await db.get(
@@ -6604,21 +6638,7 @@ const applyApprovedAlgofundAction = async (params: {
       throw new Error(`Target trading system not found: ${targetSystemId}`);
     }
 
-    const currentAssignedApiKey = asString(profile.assigned_api_key_name || tenant.assigned_api_key_name, '');
-    if (apiKeyName && apiKeyName !== currentAssignedApiKey) {
-      await db.run(
-        `UPDATE tenants
-         SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE id = ?`,
-        [apiKeyName, row.tenant_id]
-      );
-      await db.run(
-        `UPDATE algofund_profiles
-         SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE tenant_id = ?`,
-        [apiKeyName, row.tenant_id]
-      );
-    }
+    // Do not implicitly rebind client execution key to the system owner key.
 
     for (const item of systems) {
       const id = Number(item.id || 0);
@@ -6730,7 +6750,7 @@ export const removeAlgofundStorefrontSystem = async (payload: {
 
   // Find tenants connected to this TS
   const connectedRows = await db.all(
-    `SELECT t.id, t.display_name, COALESCE(ap.assigned_api_key_name, t.assigned_api_key_name, '') AS api_key_name
+    `SELECT t.id, t.display_name, COALESCE(ap.execution_api_key_name, ap.assigned_api_key_name, t.assigned_api_key_name, '') AS api_key_name
      FROM tenants t
      JOIN algofund_profiles ap ON ap.tenant_id = t.id
      WHERE ap.published_system_name = ?`,

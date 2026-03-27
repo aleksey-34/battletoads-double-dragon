@@ -30,6 +30,12 @@ const isAdminReporterEnabledInDb = async (): Promise<boolean> => {
   return value !== '0';
 };
 
+const isRuntimeOnlyEnabledInDb = async (): Promise<boolean> => {
+  const row = await db.get('SELECT value FROM app_runtime_flags WHERE key = ?', ['telegram.admin.runtimeonly']);
+  const value = String(row?.value || '').trim().toLowerCase();
+  return value === '1' || value === 'true' || value === 'yes' || value === 'on';
+};
+
 const escapeHtml = (value: string): string => {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -86,12 +92,165 @@ const buildLowLotActionHint = (maxDeposit: number, lotPercent: number): string =
   return `action: dep>=${recommendedDeposit.toFixed(0)} or lot>=${targetLot.toFixed(0)}% or replace pair via sweep`;
 };
 
+const buildRuntimeClientLines = async (periodHours: number): Promise<string[]> => {
+  const rows = await db.all(
+    `WITH active_clients AS (
+       SELECT
+         'algofund' AS mode,
+         ap.id AS profile_id,
+         t.display_name AS display_name,
+         t.slug AS tenant_slug,
+         COALESCE(NULLIF(ap.execution_api_key_name, ''), NULLIF(t.assigned_api_key_name, ''), NULLIF(ap.assigned_api_key_name, '')) AS execution_api_key_name,
+         COALESCE(NULLIF(ap.assigned_api_key_name, ''), NULLIF(t.assigned_api_key_name, '')) AS system_api_key_name,
+         COALESCE(ap.published_system_name, '') AS system_name,
+         COALESCE(ap.risk_multiplier, 1) AS risk_value
+       FROM algofund_profiles ap
+       JOIN tenants t ON t.id = ap.tenant_id
+       WHERE COALESCE(ap.requested_enabled, 0) = 1
+         AND COALESCE(ap.actual_enabled, 0) = 1
+
+       UNION ALL
+
+       SELECT
+         'strategy' AS mode,
+         sp.id AS profile_id,
+         t.display_name AS display_name,
+         t.slug AS tenant_slug,
+         COALESCE(NULLIF(sp.assigned_api_key_name, ''), NULLIF(t.assigned_api_key_name, '')) AS execution_api_key_name,
+         '' AS system_api_key_name,
+         '' AS system_name,
+         0 AS risk_value
+       FROM strategy_client_profiles sp
+       JOIN tenants t ON t.id = sp.tenant_id
+       WHERE COALESCE(sp.requested_enabled, 0) = 1
+         AND COALESCE(sp.actual_enabled, 0) = 1
+     )
+     SELECT
+       ac.mode,
+       ac.profile_id,
+       ac.display_name,
+       ac.tenant_slug,
+       ac.execution_api_key_name,
+       ac.system_api_key_name,
+       ac.system_name,
+       ac.risk_value,
+       COALESCE(ms_latest.equity_usd, 0) AS equity_latest,
+       COALESCE(ms_old.equity_usd, COALESCE(ms_latest.equity_usd, 0)) AS equity_old,
+       COALESCE(ms_latest.margin_load_percent, 0) AS margin_load,
+       COALESCE(ms_latest.drawdown_percent, 0) AS drawdown,
+       CASE
+         WHEN ac.mode = 'algofund' THEN COALESCE(tr_algofund.cnt, 0)
+         ELSE COALESCE(tr_key.cnt, 0)
+       END AS trades_count
+     FROM active_clients ac
+     LEFT JOIN api_keys a ON a.name = ac.execution_api_key_name
+     LEFT JOIN (
+       SELECT m1.api_key_id, m1.equity_usd, m1.margin_load_percent, m1.drawdown_percent
+       FROM monitoring_snapshots m1
+       JOIN (
+         SELECT api_key_id, MAX(datetime(recorded_at)) AS max_at
+         FROM monitoring_snapshots
+         GROUP BY api_key_id
+       ) mx ON mx.api_key_id = m1.api_key_id AND datetime(m1.recorded_at) = mx.max_at
+     ) ms_latest ON ms_latest.api_key_id = a.id
+     LEFT JOIN (
+       SELECT m2.api_key_id, m2.equity_usd
+       FROM monitoring_snapshots m2
+       JOIN (
+         SELECT api_key_id, MIN(datetime(recorded_at)) AS min_at
+         FROM monitoring_snapshots
+         WHERE datetime(recorded_at) >= datetime('now', ?)
+         GROUP BY api_key_id
+       ) mn ON mn.api_key_id = m2.api_key_id AND datetime(m2.recorded_at) = mn.min_at
+     ) ms_old ON ms_old.api_key_id = a.id
+     LEFT JOIN (
+       SELECT s.api_key_id, COUNT(*) AS cnt
+       FROM live_trade_events lte
+       JOIN strategies s ON s.id = lte.strategy_id
+       WHERE lte.actual_time >= (strftime('%s','now', ?) * 1000)
+       GROUP BY s.api_key_id
+     ) tr_key ON tr_key.api_key_id = a.id
+     LEFT JOIN (
+       SELECT aas.profile_id, COUNT(*) AS cnt
+       FROM algofund_active_systems aas
+       JOIN trading_systems ts ON ts.name = aas.system_name
+       JOIN trading_system_members tsm ON tsm.system_id = ts.id AND COALESCE(tsm.is_enabled, 1) = 1
+       JOIN live_trade_events lte ON lte.strategy_id = tsm.strategy_id
+       WHERE COALESCE(aas.is_enabled, 1) = 1
+         AND lte.actual_time >= (strftime('%s','now', ?) * 1000)
+       GROUP BY aas.profile_id
+     ) tr_algofund ON tr_algofund.profile_id = ac.profile_id
+     ORDER BY ac.mode ASC, ac.display_name ASC`,
+    [`-${periodHours} hours`, `-${periodHours} hours`, `-${periodHours} hours`]
+  );
+
+  const out: string[] = [];
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const displayName = String(row?.display_name || '').trim();
+    const tenantSlug = String(row?.tenant_slug || '').trim();
+    const executionApiKeyName = String(row?.execution_api_key_name || '').trim();
+    const systemApiKeyName = String(row?.system_api_key_name || '').trim();
+    const mode = String(row?.mode || '').trim() || 'client';
+    const profileId = Math.max(0, Math.floor(toFinite(row?.profile_id, 0)));
+    const systemName = String(row?.system_name || '').trim();
+
+    const eqLatest = toFinite(row?.equity_latest, 0);
+    const eqOld = toFinite(row?.equity_old, eqLatest);
+    const delta = eqLatest - eqOld;
+    const margin = toFinite(row?.margin_load, 0);
+    const dd = toFinite(row?.drawdown, 0);
+    const trades = Math.max(0, Math.floor(toFinite(row?.trades_count, 0)));
+
+    const warnings: string[] = [];
+    if (margin >= 80) {
+      warnings.push('HIGH_ML');
+    }
+    if (dd >= 35) {
+      warnings.push('HIGH_DD');
+    }
+    if (trades === 0) {
+      warnings.push('NO_TRADES');
+    }
+
+    const scopePart = systemName
+      ? ` | ts=${escapeHtml(shorten(systemName, 54))}`
+      : '';
+    const keyPart = mode === 'algofund'
+      ? `key=${escapeHtml(executionApiKeyName || '-')} | ts_key=${escapeHtml(systemApiKeyName || executionApiKeyName || '-')}`
+      : `key=${escapeHtml(executionApiKeyName || '-')}`;
+
+    out.push(
+      `${escapeHtml(displayName || tenantSlug || executionApiKeyName || 'client')} (${escapeHtml(mode)}#${profileId}) | ${keyPart}${scopePart} | trades=${trades} | delta=${delta.toFixed(2)} | eq=${eqLatest.toFixed(2)} | ml=${margin.toFixed(1)}% | dd=${dd.toFixed(1)}%${warnings.length ? ` | ${warnings.join(',')}` : ''}`
+    );
+  }
+
+  return out;
+};
+
 const buildAccountLines = async (periodHours: number, runtimeOnly = false): Promise<string[]> => {
+  if (runtimeOnly) {
+    return buildRuntimeClientLines(periodHours);
+  }
+
   const runtimeFilter = runtimeOnly
-    ? `AND a.id IN (
-         SELECT DISTINCT ak.id FROM api_keys ak
-         JOIN tenants t ON t.assigned_api_key_id = ak.id
-         WHERE t.actual_enabled = 1
+    ? `AND a.name IN (
+         SELECT DISTINCT api_key_name
+         FROM (
+           SELECT COALESCE(NULLIF(ap.execution_api_key_name, ''), NULLIF(t.assigned_api_key_name, ''), NULLIF(ap.assigned_api_key_name, '')) AS api_key_name
+           FROM algofund_profiles ap
+           JOIN tenants t ON t.id = ap.tenant_id
+           WHERE COALESCE(ap.requested_enabled, 0) = 1
+             AND COALESCE(ap.actual_enabled, 0) = 1
+
+           UNION
+
+           SELECT COALESCE(NULLIF(sp.assigned_api_key_name, ''), NULLIF(t.assigned_api_key_name, '')) AS api_key_name
+           FROM strategy_client_profiles sp
+           JOIN tenants t ON t.id = sp.tenant_id
+           WHERE COALESCE(sp.requested_enabled, 0) = 1
+             AND COALESCE(sp.actual_enabled, 0) = 1
+         ) active_clients
+         WHERE COALESCE(api_key_name, '') <> ''
        )`
     : '';
   const rows = await db.all(
@@ -359,7 +518,8 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
 
       const nowMs = Date.now();
       if (state.lastReportAtMs === 0 || nowMs - state.lastReportAtMs >= reportHours * 3600_000) {
-        await sendPeriodicReport(reportHours);
+        const runtimeOnly = await isRuntimeOnlyEnabledInDb();
+        await sendPeriodicReport(reportHours, runtimeOnly);
         state.lastReportAtMs = nowMs;
       }
     } catch (error) {

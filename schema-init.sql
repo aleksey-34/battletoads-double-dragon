@@ -384,6 +384,7 @@ CREATE TABLE IF NOT EXISTS algofund_profiles (
   requested_enabled BOOLEAN DEFAULT 0,
   actual_enabled BOOLEAN DEFAULT 0,
   assigned_api_key_name TEXT DEFAULT '',
+  execution_api_key_name TEXT DEFAULT '',
   published_system_name TEXT DEFAULT '',
   latest_preview_json TEXT DEFAULT '{}',
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
