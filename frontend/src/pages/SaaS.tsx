@@ -2423,6 +2423,27 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const adminSweepTsSetsWithCurated = adminCuratedDraftTsSet
     ? [adminCuratedDraftTsSet, ...adminSweepTsSets.filter((item) => item.setKey !== adminCuratedDraftTsSet.setKey)]
     : adminSweepTsSets;
+  // Add saved snapshots that are NOT already covered by recommendedSets as explicit list entries
+  const adminSweepSetKeys = new Set(adminSweepTsSets.map((item) => item.setKey));
+  const adminSnapshotOnlyTsSets = Object.entries(summary?.offerStore?.tsBacktestSnapshots || {})
+    .filter(([key]) => !adminSweepSetKeys.has(key))
+    .map(([key, snap]) => ({
+      setKey: key,
+      displayName: key,
+      snapshotKey: key,
+      isDraft: false,
+      isSnapshot: true,
+      offers: [],
+      offerIds: Array.isArray(snap.offerIds) ? snap.offerIds.map(String) : [],
+      offerCount: Array.isArray(snap.offerIds) ? snap.offerIds.length : 0,
+      avgRet: Number(snap.ret || 0),
+      avgPf: Number(snap.pf || 0),
+      avgDd: Number(snap.dd || 0),
+    }));
+  const adminSweepTsSetsAll = [
+    ...adminSweepTsSetsWithCurated,
+    ...adminSnapshotOnlyTsSets,
+  ];
   const adminDraftMemberStrategyIds = new Set(
     (adminTradingSystemDraft?.members || [])
       .map((member) => Number(member.strategyId || 0))
@@ -5688,7 +5709,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   onChange={(value) => setAdminSweepListMode(String(value) === 'ts' ? 'ts' : 'offers')}
                                 />
                                 <Tag color="default">offers: {reviewableSweepOffers.length}</Tag>
-                                <Tag color="processing">ts sets: {adminSweepTsSetsWithCurated.length}</Tag>
+                                <Tag color="processing">ts sets: {adminSweepTsSetsAll.length}</Tag>
                               </Space>
 
                               {adminSweepListMode === 'offers' ? (
@@ -5753,7 +5774,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               ) : (
                                 <List
                                   size="small"
-                                  dataSource={adminSweepTsSetsWithCurated}
+                                  dataSource={adminSweepTsSetsAll}
                                   locale={{ emptyText: <Empty description="Sweep TS-наборы пока не найдены" /> }}
                                   renderItem={(set) => (
                                     <List.Item
@@ -5793,7 +5814,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           title={Number(set.avgRet || 0) >= 1 ? 'Хороший набор' : 'Набор кандидатов'}
                                         />
                                         <Text strong>{set.displayName}</Text>
-                                        {set.isDraft ? <Tag color="gold">draft</Tag> : null}
+                                        {set.isDraft ? <Tag color="gold">draft</Tag> : (set as any).isSnapshot ? <Tag color="cyan">snapshot</Tag> : null}
                                         <Tag color="processing">offers {set.offerCount}</Tag>
                                         <Tag color={metricColor(Number(set.avgRet || 0), 'return')}>avg Ret {formatPercent(set.avgRet)}</Tag>
                                         <Tag color={metricColor(Number(set.avgDd || 0), 'drawdown')}>avg DD {formatPercent(set.avgDd)}</Tag>
@@ -6457,12 +6478,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             />
                             ) : (
                               <Card size="small" title="Список ТС-наборов из sweep">
-                                {adminSweepTsSetsWithCurated.length === 0 ? (
+                                {adminSweepTsSetsAll.length === 0 ? (
                                   <Empty description="Sweep sets пока не найдены" />
                                 ) : (
                                   <List
                                     size="small"
-                                    dataSource={adminSweepTsSetsWithCurated}
+                                   dataSource={adminSweepTsSetsAll}
                                     pagination={{ pageSize: 8, showSizeChanger: false }}
                                     renderItem={(set) => (
                                       <List.Item
@@ -6483,7 +6504,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       >
                                         <Space wrap>
                                           <Text strong>{set.displayName}</Text>
-                                          {set.isDraft ? <Tag color="gold">draft</Tag> : null}
+                                          {set.isDraft ? <Tag color="gold">draft</Tag> : (set as any).isSnapshot ? <Tag color="cyan">snapshot</Tag> : null}
                                           <Tag color="processing">offers {set.offerCount}</Tag>
                                           <Tag color={metricColor(Number(set.avgRet || 0), 'return')}>avg Ret {formatPercent(set.avgRet)}</Tag>
                                           <Tag color={metricColor(Number(set.avgDd || 0), 'drawdown')}>avg DD {formatPercent(set.avgDd)}</Tag>
@@ -6539,12 +6560,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               </Paragraph>
                             )}
                             <Card size="small" title="Список ТС-наборов из sweep" style={{ marginBottom: 12 }}>
-                              {adminSweepTsSetsWithCurated.length === 0 ? (
+                              {adminSweepTsSetsAll.length === 0 ? (
                                 <Empty description="Sweep sets пока не найдены" />
                               ) : (
                                 <List
                                   size="small"
-                                  dataSource={adminSweepTsSetsWithCurated}
+                                  dataSource={adminSweepTsSetsAll}
                                   pagination={{ pageSize: 6, showSizeChanger: false }}
                                   renderItem={(set) => (
                                     <List.Item
@@ -6564,7 +6585,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     >
                                       <Space wrap>
                                         <Text strong>{set.displayName}</Text>
-                                        {set.isDraft ? <Tag color="gold">draft</Tag> : null}
+                                        {set.isDraft ? <Tag color="gold">draft</Tag> : (set as any).isSnapshot ? <Tag color="cyan">snapshot</Tag> : null}
                                         <Tag color="processing">offers {set.offerCount}</Tag>
                                         <Tag color={metricColor(Number(set.avgRet || 0), 'return')}>avg Ret {formatPercent(set.avgRet)}</Tag>
                                         <Tag color={metricColor(Number(set.avgDd || 0), 'drawdown')}>avg DD {formatPercent(set.avgDd)}</Tag>
