@@ -2901,6 +2901,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return String(parts[parts.length - 1] || '').trim().toLowerCase();
   };
 
+  const tsDisplayName = (systemName: string): string => extractTsSuffixToken(systemName) || systemName;
+
   const matchesTsSnapshotToken = (systemName: string, token: string): boolean => {
     const rawToken = String(token || '').trim().toLowerCase();
     if (!rawToken) {
@@ -7276,7 +7278,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           <List.Item.Meta
                                             title={
                                               <Space wrap>
-                                                <Text strong>{item.systemName}</Text>
+                                                <Text strong>{tsDisplayName(item.systemName)}</Text>
                                                 {item.runtimeSystemId ? <Tag color="geekblue">system #{item.runtimeSystemId}</Tag> : null}
                                                 <Tag color="processing">clients {item.tenantCount}</Tag>
                                                 <Tag color="success">active {item.activeCount}</Tag>
@@ -7287,7 +7289,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                 {item.summary?.tradesCount !== undefined ? <Tag color="blue">trades {formatNumber(item.summary.tradesCount, 0)}</Tag> : null}
                                               </Space>
                                             }
-                                            description={item.tenants.length > 0 ? item.tenants.map((tenant) => tenant.tenant.display_name).join(', ') : 'TS опубликована, но ещё не привязана к клиентам'}
+                                            description={
+                                              <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                                {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
+                                                  <div style={{ width: 220 }}>
+                                                    <ChartComponent data={item.equityCurve} type="line" fixedHeight={64} />
+                                                  </div>
+                                                ) : null}
+                                                <Text type="secondary" style={{ fontSize: 11 }}>
+                                                  {item.tenants.length > 0 ? item.tenants.map((tenant) => tenant.tenant.display_name).join(', ') : 'нет подключённых клиентов'}
+                                                </Text>
+                                              </Space>
+                                            }
                                           />
                                         </List.Item>
                                       )}
@@ -9090,7 +9103,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       bordered
                                       title={
                                         <Space>
-                                          <Text strong>{item.systemName}</Text>
+                                          <Text strong>{tsDisplayName(item.systemName)}</Text>
                                           {item.activeCount > 0
                                             ? <Badge status="success" text="active" />
                                             : item.pendingCount > 0
@@ -9100,9 +9113,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       }
                                     >
                                       <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                        <Text type="secondary" style={{ fontSize: 12 }}>
-                                          {item.systemName}
-                                        </Text>
                                         <Space wrap>
                                           <Tag color="blue">clients {Number(item.tenantCount || 0)}</Tag>
                                           <Tag color="green">active {Number(item.activeCount || 0)}</Tag>
