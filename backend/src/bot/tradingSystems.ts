@@ -351,13 +351,12 @@ export const updateTradingSystem = async (
   patch: TradingSystemDraft
 ): Promise<TradingSystem> => {
   const existing = await getTradingSystem(apiKeyName, systemId);
-  const nextMaxMembers = patch.max_members !== undefined
+  const requestedMaxMembers = patch.max_members !== undefined
     ? Math.max(1, Math.floor(safeNumber(patch.max_members, existing.max_members)))
     : existing.max_members;
-
-  if (existing.members.length > nextMaxMembers) {
-    throw new Error(`Current member count ${existing.members.length} exceeds requested max_members=${nextMaxMembers}`);
-  }
+  // Never shrink max_members below current composition in a metadata update.
+  // Member downsize should happen via replaceTradingSystemMembers first.
+  const nextMaxMembers = Math.max(requestedMaxMembers, existing.members.length);
 
   const updates: string[] = [];
   const params: any[] = [];

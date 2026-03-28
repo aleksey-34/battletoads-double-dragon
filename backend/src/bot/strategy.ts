@@ -505,7 +505,10 @@ type LiveLegBalanceSnapshot = {
 };
 
 const SIZING_EPSILON = 1e-9;
-const MAX_SHARE_ERROR = 0.03;
+// Exchange lot-step quantization can make perfect synthetic leg ratio impossible
+// on lower-notional entries. A 6% tolerance keeps balance checks meaningful
+// while avoiding false low-lot blocks for executable orders.
+const MAX_SHARE_ERROR = 0.06;
 const MAX_LEG_DEVIATION = 0.3;
 const MAX_OVERSIZE_DEVIATION = 0.2;
 const MAX_TOTAL_DEVIATION = 0.3;

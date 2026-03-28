@@ -42,7 +42,7 @@ type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client';
 type Level3 = 'low' | 'medium' | 'high';
 type RequestStatus = 'pending' | 'approved' | 'rejected';
 type SaasTabKey = 'admin' | 'strategy-client' | 'algofund' | 'copytrading';
-type AdminTabKey = 'offer-ts' | 'research-analysis' | 'clients' | 'monitoring' | 'create-user';
+type AdminTabKey = 'offer-ts' | 'clients' | 'monitoring' | 'create-user';
 type SummaryScope = 'light' | 'full';
 type CopytradingUiStatus = 'idle' | 'copying' | 'stopped' | 'saving' | 'error';
 
@@ -81,6 +81,7 @@ type AdminSweepBacktestPreviewResponse = {
     strategyId: number;
     strategyName: string;
     score: number;
+    metricsSource?: 'offer_store' | 'snapshot_only';
     metrics: {
       ret: number;
       pf: number;
@@ -324,8 +325,32 @@ type TelegramControls = {
   adminEnabled: boolean;
   clientsEnabled: boolean;
   runtimeOnly: boolean;
+  reconciliationCycleEnabled: boolean;
   tokenConfigured: boolean;
   chatConfigured: boolean;
+  reportIntervalMinutes: number;
+};
+
+type MonitoringPositionsDigest = {
+  openCount: number;
+  symbols: string[];
+};
+
+type MonitoringStrategyDigest = {
+  total: number;
+  active: number;
+  activeAuto: number;
+  withLastError: number;
+};
+
+type MonitoringReconciliationDigest = {
+  reportCount: number;
+  strategyCount: number;
+  problematicCount: number;
+  avgSamples: number;
+  avgPnlDeltaPercent: number | null;
+  avgWinRateDeltaPercent: number | null;
+  latestAt: string;
 };
 
 type LowLotRecommendation = {
@@ -1066,7 +1091,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     requestTenant: 'Tenant',
     previewTitle: 'Preview ожиданий',
     selectedOffersPreview: 'SWEEP compare выбранных офферов (4D)',
-    publishedTsPreview: 'Preview опубликованного admin TS',
+    publishedTsPreview: 'Опубликованная ТС: результат бэктеста',
     noTenant: 'Тенант этого типа пока не найден.',
     sourceSystem: 'Source system',
     tenantMode: 'Тип клиента',
@@ -1183,7 +1208,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     requestTenant: 'Tenant',
     previewTitle: 'Expectation preview',
     selectedOffersPreview: 'Selected offers SWEEP compare (4D)',
-    publishedTsPreview: 'Published admin TS preview',
+    publishedTsPreview: 'Published TS: backtest result',
     noTenant: 'No tenant of this type is available yet.',
     sourceSystem: 'Source system',
     tenantMode: 'Client type',
@@ -1300,7 +1325,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     requestTenant: 'Tenant',
     previewTitle: 'Beklenti onizlemesi',
     selectedOffersPreview: 'Secilen teklifler SWEEP compare (4D)',
-    publishedTsPreview: 'Yayinlanan admin TS onizlemesi',
+    publishedTsPreview: 'Yayinlanan TS: backtest sonucu',
     noTenant: 'Bu tipte tenant yok.',
     sourceSystem: 'Source system',
     tenantMode: 'Musteri tipi',
@@ -1779,6 +1804,8 @@ const parseAlgofundRequestPayload = (raw?: string) => {
 const buildApiKeyLogComments = (rawLines: unknown, apiKeys: string[]): Record<string, string[]> => {
   const lines = Array.isArray(rawLines) ? rawLines.map((item) => String(item || '')) : [];
   const out: Record<string, string[]> = {};
+  const nowMs = Date.now();
+  const maxAgeMs = 24 * 60 * 60 * 1000;
   for (const key of apiKeys) {
     out[key] = [];
   }
@@ -1791,12 +1818,21 @@ const buildApiKeyLogComments = (rawLines: unknown, apiKeys: string[]): Record<st
 
     let level = '';
     let message = line;
+    let tsMs = Number.NaN;
     try {
       const parsed = JSON.parse(line);
       level = String(parsed?.level || '').toLowerCase();
       message = String(parsed?.message || line);
+      const parsedTs = Date.parse(String(parsed?.timestamp || ''));
+      if (Number.isFinite(parsedTs)) {
+        tsMs = parsedTs;
+      }
     } catch {
       // Keep raw line if not JSON-formatted.
+    }
+
+    if (Number.isFinite(tsMs) && nowMs - tsMs > maxAgeMs) {
+      continue;
     }
 
     const normalizedMessage = message.toLowerCase();
@@ -1843,6 +1879,24 @@ const buildLotSizingHint = (notes: string[]): string | null => {
     return 'Lot likely too small (oversize > 130%). Suggest risk x1.5+ or increase deposit.';
   }
   return 'Lot sizing warning detected. Suggest risk x1.2+ and re-check execution.';
+};
+
+const parseUnknownJson = (raw: unknown): Record<string, unknown> => {
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    // Ignore malformed JSON payloads in old records.
+  }
+  return {};
 };
 
 const productModeTag = (mode: ProductMode) => {
@@ -1894,6 +1948,13 @@ type SaaSProps = {
 };
 
 const clampPreviewValue = (value: number, max = 10): number => Math.min(max, Math.max(0, value));
+
+const getBacktestRiskMultiplier = (riskScore: number, riskScaleMaxPercent: number): number => {
+  const normalized = clampPreviewValue(Number(riskScore || 5), 10) / 10;
+  const logMax = Math.log(Math.max(2.0, 1 + Number(riskScaleMaxPercent || 40) / 15));
+  const logMin = -logMax * 0.9;
+  return Math.exp(logMin + normalized * (logMax - logMin));
+};
 
 const levelToSliderValue = (level: Level3): number => {
   if (level === 'low') return 0;
@@ -2150,6 +2211,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [monitoringSystemsByApiKey, setMonitoringSystemsByApiKey] = useState<Record<string, TradingSystemListItem[]>>({});
   const [monitoringSystemSelected, setMonitoringSystemSelected] = useState<Record<number, number | undefined>>({});
   const [monitoringLogCommentsByApiKey, setMonitoringLogCommentsByApiKey] = useState<Record<string, string[]>>({});
+  const [monitoringPositionsByApiKey, setMonitoringPositionsByApiKey] = useState<Record<string, MonitoringPositionsDigest>>({});
+  const [monitoringStrategiesByApiKey, setMonitoringStrategiesByApiKey] = useState<Record<string, MonitoringStrategyDigest>>({});
+  const [monitoringReconciliationByApiKey, setMonitoringReconciliationByApiKey] = useState<Record<string, MonitoringReconciliationDigest>>({});
   const [monitoringTabLoading, setMonitoringTabLoading] = useState(false);
   const [monitoringModeFilter, setMonitoringModeFilter] = useState<'all' | ProductMode>('all');
   const [clientsModeFilter, setClientsModeFilter] = useState<'all' | ProductMode>('all');
@@ -2333,7 +2397,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return acc;
   }, {});
   const publishedStorefrontOffers = offerStoreOffers.filter((offer) => Boolean(offer.published));
-  const reviewableSweepOffersRaw = offerStoreOffers.filter((offer) => Number(offer.pf || 0) >= approvalMinProfitFactor);
+  const reviewableSweepOffersRaw = offerStoreOffers.filter(
+    (offer) =>
+      Number(offer.pf || 0) >= approvalMinProfitFactor &&
+      (sweepReviewRecords.length === 0 || sweepRecordByStrategyId[Number(offer.strategyId || 0)] != null)
+  );
   const reviewTargetTradesPerDay = Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0);
   const reviewableSweepOffers = [...reviewableSweepOffersRaw]
     .sort((a, b) => {
@@ -2566,6 +2634,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       .map((snapshot) => String(snapshot?.systemName || '').trim())
       .filter(Boolean);
 
+    const masterSystemNames = Array.from(new Set([
+      ...availableSystems
+        .map((item) => String(item?.name || '').trim())
+        .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::')),
+      ...snapshotSystemNames.filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::')),
+      String(publishResponse?.sourceSystem?.systemName || '').trim(),
+    ].filter((name) => Boolean(name) && String(name).toUpperCase().startsWith('ALGOFUND_MASTER::'))));
+    const singleMasterSystemName = masterSystemNames.length === 1 ? masterSystemNames[0] : '';
+
     const availableSystemNames = Array.from(new Set([
       ...availableSystems
         .filter((item) => Boolean(item?.isActive))
@@ -2573,14 +2650,32 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::')),
       ...batchEligibleAlgofundTenants
         .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
-        .filter(Boolean),
+        .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::')),
       ...snapshotSystemNames,
       String(publishResponse?.sourceSystem?.systemName || '').trim(),
-    ].filter(Boolean)));
+    ].filter((name) => Boolean(name) && String(name).toUpperCase().startsWith('ALGOFUND_MASTER::'))));
 
     return availableSystemNames.map((systemName) => {
     const storefrontLabel = `TS offer #${availableSystemNames.indexOf(systemName) + 1}`;
-    const tenants = batchEligibleAlgofundTenants.filter((tenant) => String(tenant.algofundProfile?.published_system_name || '').trim() === systemName);
+    const tenants = batchEligibleAlgofundTenants.filter((tenant) => {
+      const tenantSystemName = String(tenant.algofundProfile?.published_system_name || '').trim();
+      if (!tenantSystemName) {
+        return false;
+      }
+      if (tenantSystemName === systemName) {
+        return true;
+      }
+      // Runtime per-tenant systems (ALGOFUND::<tenant>) should still be attached to
+      // the single active master storefront card when one master exists.
+      if (
+        singleMasterSystemName
+        && systemName === singleMasterSystemName
+        && tenantSystemName.toUpperCase().startsWith('ALGOFUND::')
+      ) {
+        return true;
+      }
+      return false;
+    });
     const snapshotForSystem = resolveTsSnapshotForSystem(systemName);
     const runtimeSystem = availableSystemByName.get(systemName);
     const runtimeSystemId = publishResponse?.sourceSystem?.systemName === systemName
@@ -2692,7 +2787,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return true;
   });
   const resolveSummaryScope = (): SummaryScope => {
-    if (activeTab === 'admin' && (adminTab === 'offer-ts' || adminTab === 'research-analysis')) {
+    if (activeTab === 'admin' && adminTab === 'offer-ts') {
       return 'full';
     }
     return 'light';
@@ -3088,7 +3183,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       if (isAdminPath) {
         setActiveTab('admin');
       }
-      if (requestedAdminTab === 'offer-ts' || requestedAdminTab === 'research-analysis' || requestedAdminTab === 'clients' || requestedAdminTab === 'monitoring' || requestedAdminTab === 'create-user') {
+      if (requestedAdminTab === 'offer-ts' || requestedAdminTab === 'clients' || requestedAdminTab === 'monitoring' || requestedAdminTab === 'create-user') {
         setAdminTab(requestedAdminTab);
       }
     };
@@ -3129,7 +3224,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!isAdminSurface) {
       return;
     }
-    const adminNeedsSweepData = activeTab === 'admin' && (adminTab === 'offer-ts' || adminTab === 'research-analysis');
+    const adminNeedsSweepData = activeTab === 'admin' && adminTab === 'offer-ts';
     if (
       adminNeedsSweepData
       && (!summary?.offerStore || !summary?.sweepSummary || !summary?.catalog)
@@ -3258,27 +3353,180 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     if (apiKeys.length === 0) {
       setMonitoringSystemsByApiKey({});
+      setMonitoringPositionsByApiKey({});
+      setMonitoringStrategiesByApiKey({});
+      setMonitoringReconciliationByApiKey({});
       return;
     }
 
     setMonitoringTabLoading(true);
     try {
-      const entries: Array<[string, TradingSystemListItem[]]> = await Promise.all(
+      const entries = await Promise.all(
         apiKeys.map(async (apiKeyName) => {
+          const [systems, positionsDigest, strategiesDigest, reconciliationDigest] = await Promise.all([
+            (async (): Promise<TradingSystemListItem[]> => {
+              try {
+                const response = await axios.get<TradingSystemListItem[]>(`/api/trading-systems/${encodeURIComponent(apiKeyName)}`);
+                return Array.isArray(response.data) ? response.data : [];
+              } catch {
+                return [];
+              }
+            })(),
+            (async (): Promise<MonitoringPositionsDigest> => {
+              try {
+                const response = await axios.get<unknown[]>(`/api/positions/${encodeURIComponent(apiKeyName)}`);
+                const rows = Array.isArray(response.data) ? response.data : [];
+                const symbols = Array.from(new Set(rows
+                  .map((item) => {
+                    const row = item as Record<string, unknown>;
+                    return String(row.symbol || row.base_symbol || row.baseSymbol || '').trim().toUpperCase();
+                  })
+                  .filter(Boolean)));
+                return {
+                  openCount: rows.length,
+                  symbols,
+                };
+              } catch {
+                return { openCount: 0, symbols: [] };
+              }
+            })(),
+            (async (): Promise<MonitoringStrategyDigest> => {
+              try {
+                const response = await axios.get<unknown[]>(`/api/strategies/${encodeURIComponent(apiKeyName)}`);
+                const rows = Array.isArray(response.data) ? response.data : [];
+                const activeRows = rows.filter((item) => Number((item as Record<string, unknown>).is_active ? 1 : 0) === 1);
+                const activeAutoRows = activeRows.filter((item) => Number((item as Record<string, unknown>).auto_update ? 1 : 0) === 1);
+                const withLastError = activeRows.filter((item) => String((item as Record<string, unknown>).last_error || '').trim().length > 0).length;
+                return {
+                  total: rows.length,
+                  active: activeRows.length,
+                  activeAuto: activeAutoRows.length,
+                  withLastError,
+                };
+              } catch {
+                return { total: 0, active: 0, activeAuto: 0, withLastError: 0 };
+              }
+            })(),
+            (async (): Promise<MonitoringReconciliationDigest> => {
+              try {
+                const response = await axios.get<{ reports?: unknown[] }>(
+                  `/api/analytics/${encodeURIComponent(apiKeyName)}/reconciliation/reports`,
+                  { params: { limit: 200 } }
+                );
+                const rows = Array.isArray(response.data?.reports) ? response.data?.reports : [];
+                const strategyIds = new Set<number>();
+                let problematicCount = 0;
+                let samplesTotal = 0;
+                let pnlDeltaTotal = 0;
+                let pnlDeltaCount = 0;
+                let winRateDeltaTotal = 0;
+                let winRateDeltaCount = 0;
+                let latestAt = '';
+
+                for (const rowUnknown of rows) {
+                  const row = rowUnknown as Record<string, unknown>;
+                  const strategyId = Number(row.strategy_id || 0);
+                  if (strategyId > 0) {
+                    strategyIds.add(strategyId);
+                  }
+
+                  const metrics = parseUnknownJson(row.metrics_json);
+                  const recommendation = parseUnknownJson(row.recommendation_json);
+                  const severity = String(recommendation.severity || '').toLowerCase();
+                  const action = String(recommendation.action || '').toLowerCase();
+                  if (severity === 'critical' || action === 'pause' || action === 'disable') {
+                    problematicCount += 1;
+                  }
+
+                  const samples = Number(metrics.samples_count || 0);
+                  if (Number.isFinite(samples)) {
+                    samplesTotal += samples;
+                  }
+
+                  const pnlDelta = Number(metrics.realized_vs_predicted_pnl_percent);
+                  if (Number.isFinite(pnlDelta)) {
+                    pnlDeltaTotal += pnlDelta * 100;
+                    pnlDeltaCount += 1;
+                  }
+
+                  const winRateLive = Number(metrics.win_rate_live);
+                  const winRateBacktest = Number(metrics.win_rate_backtest);
+                  if (Number.isFinite(winRateLive) && Number.isFinite(winRateBacktest)) {
+                    winRateDeltaTotal += (winRateLive - winRateBacktest) * 100;
+                    winRateDeltaCount += 1;
+                  }
+
+                  const createdAtRaw = String(row.created_at || '');
+                  if (createdAtRaw && createdAtRaw > latestAt) {
+                    latestAt = createdAtRaw;
+                  }
+                }
+
+                return {
+                  reportCount: rows.length,
+                  strategyCount: strategyIds.size,
+                  problematicCount,
+                  avgSamples: rows.length > 0 ? Number((samplesTotal / rows.length).toFixed(2)) : 0,
+                  avgPnlDeltaPercent: pnlDeltaCount > 0 ? Number((pnlDeltaTotal / pnlDeltaCount).toFixed(3)) : null,
+                  avgWinRateDeltaPercent: winRateDeltaCount > 0 ? Number((winRateDeltaTotal / winRateDeltaCount).toFixed(3)) : null,
+                  latestAt,
+                };
+              } catch {
+                return {
+                  reportCount: 0,
+                  strategyCount: 0,
+                  problematicCount: 0,
+                  avgSamples: 0,
+                  avgPnlDeltaPercent: null,
+                  avgWinRateDeltaPercent: null,
+                  latestAt: '',
+                };
+              }
+            })(),
+          ]);
+
           try {
-            const response = await axios.get<TradingSystemListItem[]>(`/api/trading-systems/${encodeURIComponent(apiKeyName)}`);
-            return [apiKeyName, Array.isArray(response.data) ? response.data : []];
+            return {
+              apiKeyName,
+              systems,
+              positionsDigest,
+              strategiesDigest,
+              reconciliationDigest,
+            };
           } catch {
-            return [apiKeyName, []];
+            return {
+              apiKeyName,
+              systems: [],
+              positionsDigest: { openCount: 0, symbols: [] },
+              strategiesDigest: { total: 0, active: 0, activeAuto: 0, withLastError: 0 },
+              reconciliationDigest: {
+                reportCount: 0,
+                strategyCount: 0,
+                problematicCount: 0,
+                avgSamples: 0,
+                avgPnlDeltaPercent: null,
+                avgWinRateDeltaPercent: null,
+                latestAt: '',
+              },
+            };
           }
         })
       );
 
       const nextMap: Record<string, TradingSystemListItem[]> = {};
-      for (const [apiKeyName, systems] of entries) {
-        nextMap[apiKeyName] = systems;
+      const nextPositionsMap: Record<string, MonitoringPositionsDigest> = {};
+      const nextStrategiesMap: Record<string, MonitoringStrategyDigest> = {};
+      const nextReconciliationMap: Record<string, MonitoringReconciliationDigest> = {};
+      for (const entry of entries) {
+        nextMap[entry.apiKeyName] = entry.systems;
+        nextPositionsMap[entry.apiKeyName] = entry.positionsDigest;
+        nextStrategiesMap[entry.apiKeyName] = entry.strategiesDigest;
+        nextReconciliationMap[entry.apiKeyName] = entry.reconciliationDigest;
       }
       setMonitoringSystemsByApiKey(nextMap);
+      setMonitoringPositionsByApiKey(nextPositionsMap);
+      setMonitoringStrategiesByApiKey(nextStrategiesMap);
+      setMonitoringReconciliationByApiKey(nextReconciliationMap);
 
       try {
         const logsResponse = await axios.get<string[]>('/api/logs');
@@ -3344,19 +3592,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   useEffect(() => {
-    if (activeTab === 'admin' && adminTab === 'research-analysis') {
-      if (!performanceReport) {
-        void loadPerformanceReport('daily');
-      }
-      void loadTelegramControls();
-    }
     if (activeTab === 'admin' && adminTab === 'monitoring') {
       void loadMonitoringTabData();
       void loadTelegramControls();
       void loadLowLotRecommendations();
+      if (!performanceReport) {
+        void loadPerformanceReport('daily');
+      }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, adminTab, loadMonitoringTabData, loadTelegramControls, loadLowLotRecommendations]);
+  }, [activeTab, adminTab, loadMonitoringTabData, loadTelegramControls, loadLowLotRecommendations, performanceReport]);
 
   useEffect(() => {
     if (!summary) {
@@ -4318,6 +4563,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     try {
       const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
         kind: targetContext.kind,
+        setKey: targetContext.setKey,
         offerId: targetContext.offerId,
         offerIds: targetContext.offerIds,
         riskScore: adminSweepBacktestRiskScore,
@@ -4348,12 +4594,55 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       if (requestSeq !== backtestRequestSeqRef.current) {
         return;
       }
+      const errorMessage = String(error?.response?.data?.error || error?.message || '');
       setAdminSweepBacktestResult(null);
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось построить sweep backtest preview'));
+      messageApi.error(errorMessage || 'Не удалось построить sweep backtest preview');
     } finally {
       if (requestSeq === backtestRequestSeqRef.current) {
         setAdminSweepBacktestLoading(false);
       }
+    }
+  };
+
+  const startHistoricalSweepForBacktest = async () => {
+    const apiKeyName = String(
+      adminSweepBacktestResult?.rerun?.apiKeyName
+      || adminSweepBacktestResult?.sweepApiKeyName
+      || adminSweepBacktestRerunApiKey
+      || ''
+    ).trim();
+    if (!apiKeyName) {
+      messageApi.warning('Не найден API key для запуска historical sweep');
+      return;
+    }
+
+    const sweepConfig = ((summary?.sweepSummary as any)?.config || {}) as Record<string, unknown>;
+    setActionLoading('admin-rerun-historical-sweep');
+    try {
+      const response = await axios.post<{
+        started?: boolean;
+        reason?: string;
+        jobId?: number;
+      }>('/api/research/sweeps/full-historical/start', {
+        mode: 'light',
+        apiKeyName,
+        dateFrom: sweepConfig.dateFrom ? String(sweepConfig.dateFrom) : undefined,
+        dateTo: sweepConfig.dateTo ? String(sweepConfig.dateTo) : undefined,
+        backtestBars: Number(sweepConfig.backtestBars || 6000),
+        warmupBars: Number(sweepConfig.warmupBars || 400),
+        initialBalance: Number(sweepConfig.initialBalance || adminSweepBacktestInitialBalance || 10000),
+        commissionPercent: Number(sweepConfig.commissionPercent || 0.1),
+        slippagePercent: Number(sweepConfig.slippagePercent || 0.05),
+      });
+      if (response.data?.started === false) {
+        messageApi.warning(response.data?.reason || 'Historical sweep уже запущен');
+        return;
+      }
+      messageApi.success(`Historical sweep запущен${response.data?.jobId ? `, job #${response.data.jobId}` : ''}. После завершения повтори API rerun.`);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось запустить historical sweep'));
+    } finally {
+      setActionLoading('');
     }
   };
 
@@ -5028,15 +5317,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         const actualEnabled = Number(profile?.actual_enabled || 0) === 1;
         const hasError = requestedEnabled && !actualEnabled;
         const runtimeColor = hasError ? 'error' : actualEnabled ? 'success' : 'warning';
-        const runtimeLabel = hasError ? 'runtime error' : actualEnabled ? 'runtime on' : 'runtime off';
+        const runtimeLabel = hasError ? 'ошибка запуска' : actualEnabled ? 'движок активен' : 'движок остановлен';
         const statusDetails = [
-          `Tenant: ${row.tenant.status}`,
-          `Requested: ${requestedEnabled ? 'on' : 'off'}`,
-          `Runtime: ${actualEnabled ? 'on' : 'off'}`,
+          `Тенант: ${row.tenant.status}`,
+          `Торговля: ${requestedEnabled ? 'включена' : 'выключена'}`,
+          `Движок: ${actualEnabled ? 'запущен' : 'остановлен'}`,
           row.tenant.product_mode === 'algofund_client' && String(row.algofundProfile?.published_system_name || '').trim()
             ? `TS: ${String(row.algofundProfile?.published_system_name || '').trim()}`
             : '',
-          hasError ? 'Requested ON, but runtime is not started or failed to materialize.' : '',
+          hasError ? 'Торговля включена, но движок не запустился или не материализовался.' : '',
         ].filter(Boolean).join(' | ');
         return (
           <Tooltip title={statusDetails}>
@@ -5044,7 +5333,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               <Tag color={row.tenant.status === 'active' ? 'success' : 'default'}>{row.tenant.status}</Tag>
               <Space size={4} wrap>
                 <Tag color={runtimeColor}>{runtimeLabel}</Tag>
-                <Tag color={requestedEnabled ? 'processing' : 'default'}>{requestedEnabled ? 'requested on' : 'requested off'}</Tag>
+                <Tag color={requestedEnabled ? 'processing' : 'default'}>{requestedEnabled ? 'торговля включена' : 'торговля выключена'}</Tag>
               </Space>
             </Space>
           </Tooltip>
@@ -5409,17 +5698,31 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       const actualEnabled = Number(profile?.actual_enabled || 0) === 1;
       const apiKeyName = String(profile?.assigned_api_key_name || row.tenant.assigned_api_key_name || '').trim();
       const systems = monitoringSystemsByApiKey[apiKeyName] || [];
+      const positionsDigest = monitoringPositionsByApiKey[apiKeyName] || { openCount: 0, symbols: [] };
+      const strategiesDigest = monitoringStrategiesByApiKey[apiKeyName] || { total: 0, active: 0, activeAuto: 0, withLastError: 0 };
+      const reconciliationDigest = monitoringReconciliationByApiKey[apiKeyName] || {
+        reportCount: 0,
+        strategyCount: 0,
+        problematicCount: 0,
+        avgSamples: 0,
+        avgPnlDeltaPercent: null,
+        avgWinRateDeltaPercent: null,
+        latestAt: '',
+      };
       const logNotes = monitoringLogCommentsByApiKey[apiKeyName] || [];
       const selectedSystemId = monitoringSystemSelected[row.tenant.id];
       const selectedSystem = systems.find((system) => Number(system.id) === Number(selectedSystemId)) || null;
       const liq = calcLiquidationRisk(row);
       const tenantPendingRequests = pendingAlgofundRequestsByTenant[row.tenant.id] || [];
       const comments: string[] = [];
-      if (!apiKeyName) comments.push('API key is not assigned');
-      if (requestedEnabled && !actualEnabled) comments.push('Requested ON, but engine is not started yet');
+      if (!apiKeyName) comments.push('Инфо: API key не назначен');
+      if (requestedEnabled && !actualEnabled) comments.push('Торговля включена, но движок ещё не стартовал');
       if (tenantPendingRequests.length > 0) comments.push(`Pending requests: ${tenantPendingRequests.map((item) => `${item.request_type} #${item.id}`).join(', ')}`);
-      if (actualEnabled && liq.level === 'high') comments.push('High liquidation risk');
-      if (!row.monitoring) comments.push('Monitoring snapshot unavailable');
+      if (actualEnabled && liq.level === 'high') comments.push('Высокий риск ликвидации');
+      if (!row.monitoring) comments.push('Снимок мониторинга пока недоступен');
+      if (strategiesDigest.active > 0 && strategiesDigest.activeAuto < strategiesDigest.active) {
+        comments.push(`Reconciliation coverage неполная: auto_update ${strategiesDigest.activeAuto}/${strategiesDigest.active}`);
+      }
       const lotHint = buildLotSizingHint(logNotes);
       if (lotHint) comments.push(lotHint);
 
@@ -5429,12 +5732,81 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         actualEnabled,
         apiKeyName,
         systems,
+        positionsDigest,
+        strategiesDigest,
+        reconciliationDigest,
         logNotes,
         selectedSystem,
         tenantPendingRequests,
         comments: comments.join(' | ') || 'OK',
       };
     });
+
+  const monitoringCrossReportRows = monitoringRows.map((row) => {
+    const analyticsParts: string[] = [];
+    if (row.monitoring) {
+      analyticsParts.push(`Eq ${formatMoney(row.monitoring.equity_usd)}`);
+      analyticsParts.push(`PnL ${formatMoney(row.monitoring.unrealized_pnl)}`);
+      analyticsParts.push(`DD ${formatPercent(row.monitoring.drawdown_percent)}`);
+    } else {
+      analyticsParts.push('Monitoring snapshot: no data');
+    }
+    analyticsParts.push(`Open positions: ${row.positionsDigest.openCount}`);
+    analyticsParts.push(`Recon reports: ${row.reconciliationDigest.reportCount}`);
+
+    const clientsParts = [
+      `${row.tenant.display_name} (${row.tenant.slug})`,
+      row.tenant.product_mode,
+    ];
+
+    const correspondenceParts: string[] = [];
+    correspondenceParts.push(`Active systems: ${row.systems.length}`);
+    correspondenceParts.push(`Selected: ${row.selectedSystem?.name || '—'}`);
+    correspondenceParts.push(`Strategies active/auto: ${row.strategiesDigest.active}/${row.strategiesDigest.activeAuto}`);
+    correspondenceParts.push(`Recon strategy coverage: ${row.reconciliationDigest.strategyCount}`);
+    correspondenceParts.push(`Symbols in positions: ${row.positionsDigest.symbols.join(', ') || '—'}`);
+
+    const problems: string[] = [];
+    if (!row.apiKeyName) {
+      problems.push('API key не назначен (инфо)');
+    }
+    if (row.requestedEnabled && !row.actualEnabled) {
+      problems.push('Торговля запрошена, но движок остановлен');
+    }
+    if (row.strategiesDigest.active > 0 && row.strategiesDigest.activeAuto < row.strategiesDigest.active) {
+      problems.push('Не все активные стратегии участвуют в reconciliation');
+    }
+    if (row.reconciliationDigest.problematicCount > 0) {
+      problems.push(`Есть стратегии с critical/pause рекомендациями: ${row.reconciliationDigest.problematicCount}`);
+    }
+    if (row.strategiesDigest.withLastError > 0) {
+      problems.push(`Активные стратегии с last_error: ${row.strategiesDigest.withLastError}`);
+    }
+
+    const suggestions: string[] = [];
+    if (row.strategiesDigest.active > 0 && row.strategiesDigest.activeAuto < row.strategiesDigest.active) {
+      suggestions.push('Включить auto_update для активных стратегий ключа');
+    }
+    if (!telegramControls?.reconciliationCycleEnabled) {
+      suggestions.push('Включить runtime.cycle.reconciliation.enabled');
+    }
+    if (row.requestedEnabled && !row.actualEnabled && row.apiKeyName) {
+      suggestions.push('Проверить ключ и выполнить retry materialize/start');
+    }
+    if (row.reconciliationDigest.reportCount === 0 && row.strategiesDigest.activeAuto > 0) {
+      suggestions.push('Запустить reconciliation/run вручную для первичного слепка');
+    }
+
+    return {
+      key: row.tenant.id,
+      card: `${row.apiKeyName || 'NO_KEY'} • ${row.tenant.display_name}`,
+      analytics: analyticsParts.join(' | '),
+      clients: clientsParts.join(' | '),
+      correspondence: correspondenceParts.join(' | '),
+      problems: problems.length > 0 ? problems.join(' | ') : '—',
+      suggestions: suggestions.length > 0 ? suggestions.join(' | ') : '—',
+    };
+  });
 
   const monitoringColumns: ColumnsType<(typeof monitoringRows)[number]> = [
     {
@@ -5461,18 +5833,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       render: (_, row) => row.apiKeyName || '—',
     },
     {
-      title: 'Requested',
+      title: 'Включить торговлю',
       key: 'requested',
-      width: 120,
+      width: 140,
       render: (_, row) => (
-        <Switch
-          size="small"
-          checked={row.requestedEnabled}
-          loading={actionLoading === `monitor-toggle-${row.tenant.id}`}
-          onChange={(checked) => {
-            void toggleTenantRequestedEnabled(row, checked);
-          }}
-        />
+        <Tooltip title="Режим торговли включен: энгин запрошен о старте и должен быть активен. Выключено: клиент не торгует.">
+          <Switch
+            size="small"
+            checked={row.requestedEnabled}
+            loading={actionLoading === `monitor-toggle-${row.tenant.id}`}
+            onChange={(checked) => {
+              void toggleTenantRequestedEnabled(row, checked);
+            }}
+          />
+        </Tooltip>
       ),
     },
     {
@@ -5599,7 +5973,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   onChange={(key) => {
                     const nextKey = key as AdminTabKey;
                     navigateToAdminTab(nextKey);
-                    if (nextKey === 'offer-ts' || nextKey === 'research-analysis') {
+                    if (nextKey === 'offer-ts') {
                       void loadSummary('full');
                     }
                   }}
@@ -5678,7 +6052,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   1) Обновить из sweep
                                 </Button>
                                 <Button size="small" onClick={openWizardReviewStep}>
-                                  2) Открыть контекст
+                                  2) Открыть детали
                                 </Button>
                                 <Button size="small" onClick={openWizardBacktestStep}>
                                   3) Открыть backtest
@@ -5828,7 +6202,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Card>
 
                           <div ref={reviewContextRef}>
-                          <Card className="battletoads-card" title="Контекст бэктеста: оффер или ТС">
+                          <Card className="battletoads-card" title="Детали и публикация выбранного">
                             {selectedAdminReviewKind === 'algofund-ts' ? (
                               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                                 <Paragraph type="secondary" style={{ marginTop: 0 }}>
@@ -5930,7 +6304,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                           <Card className="battletoads-card" title="Оферы и ТС на витринах">
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                              Здесь только то, что уже опубликовано на витринах. Для обновления карточек вернись в контекст бэктеста выше.
+                              Здесь только опубликованные оферы и ТС. Чтобы пересчитать или перепубликовать, выбери офер или ТС-набор выше.
                             </Paragraph>
                             <Space wrap style={{ marginBottom: 12 }}>
                               <Tag color="processing">storefront offers: {publishedStorefrontOffers.length}</Tag>
@@ -6075,106 +6449,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Row>
 
                           </Card>
-
-                          {performanceReport ? (
-                            <Card className="battletoads-card" title={`Performance report (${performanceReport.period})`}>
-                              <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                                <Text type="secondary">Generated: {performanceReport.generatedAt}</Text>
-                                <Alert
-                                  type="info"
-                                  showIcon
-                                  message="Где аналитика: ниже два блока. 1) TS runtime-аналитика (equity/pnl/dd/левередж). 2) Offer-аналитика с сопоставлением live vs backtest (samples, lag, pnl delta, win-rate delta)."
-                                />
-                                <Table
-                                  size="small"
-                                  rowKey={(row) => `${row.apiKeyName}:${row.id}`}
-                                  dataSource={performanceReport.tradingSystems || []}
-                                  pagination={{ pageSize: 8, showSizeChanger: false }}
-                                  scroll={{ x: 1200 }}
-                                  columns={[
-                                    {
-                                      title: 'TS',
-                                      key: 'ts',
-                                      render: (_, row: any) => (
-                                        <Space direction="vertical" size={0}>
-                                          <Text strong>{row.name}</Text>
-                                          <Text type="secondary">{row.apiKeyName} • #{row.id}</Text>
-                                        </Space>
-                                      ),
-                                    },
-                                    {
-                                      title: 'Status',
-                                      key: 'status',
-                                      render: (_, row: any) => row.isActive ? <Tag color="success">active</Tag> : <Tag color="default">inactive</Tag>,
-                                    },
-                                    {
-                                      title: 'Runtime metrics',
-                                      key: 'runtime',
-                                      render: (_, row: any) => (
-                                        <Space wrap>
-                                          <Tag color="blue">Eq {formatMoney(row.equityUsd)}</Tag>
-                                          <Tag color={metricColor(Number(row.unrealizedPnl || 0), 'return')}>PnL {formatMoney(row.unrealizedPnl)}</Tag>
-                                          <Tag color={metricColor(Number(row.drawdownPercent || 0), 'drawdown')}>DD {formatPercent(row.drawdownPercent)}</Tag>
-                                          <Tag color="purple">Lev {formatNumber(row.effectiveLeverage, 2)}</Tag>
-                                          <Tag color="orange">Margin {formatPercent(row.marginLoadPercent)}</Tag>
-                                        </Space>
-                                      ),
-                                    },
-                                    {
-                                      title: 'Updated',
-                                      dataIndex: 'updatedAt',
-                                      width: 220,
-                                    },
-                                  ]}
-                                />
-                                <Table
-                                  size="small"
-                                  rowKey={(row) => `${row.offerId}:${row.strategyId}`}
-                                  dataSource={performanceReport.offers || []}
-                                  pagination={{ pageSize: 8, showSizeChanger: false }}
-                                  scroll={{ x: 1200 }}
-                                  columns={[
-                                    {
-                                      title: 'Offer',
-                                      key: 'offer',
-                                      render: (_, row: any) => (
-                                        <Space direction="vertical" size={0}>
-                                          <Text strong>{row.titleRu}</Text>
-                                          <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
-                                        </Space>
-                                      ),
-                                    },
-                                    {
-                                      title: 'Expected',
-                                      key: 'expected',
-                                      render: (_, row: any) => (
-                                        <Space wrap>
-                                          <Tag color="default">period {Number(row.periodDays || summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
-                                          <Tag>Ret {formatPercent(row.expected?.ret)}</Tag>
-                                          <Tag>PF {formatNumber(row.expected?.pf)}</Tag>
-                                          <Tag>DD {formatPercent(row.expected?.dd)}</Tag>
-                                          <Tag>tpd {formatNumber(row.expected?.tradesPerDay, 2)}</Tag>
-                                        </Space>
-                                      ),
-                                    },
-                                    {
-                                      title: 'Live vs BT',
-                                      key: 'cmp',
-                                      render: (_, row: any) => row.live ? (
-                                        <Space wrap>
-                                          <Tag color="processing">samples {Number(row.live?.samples || 0)}</Tag>
-                                          <Tag color="blue">lag {formatNumber(row.live?.entryLagSeconds, 2)}s</Tag>
-                                          <Tag color={metricColor(Number(row.live?.realizedVsPredictedPnlPercent || 0), 'return')}>pnlΔ {formatPercent(row.live?.realizedVsPredictedPnlPercent)}</Tag>
-                                          <Tag color={metricColor(Number(row.comparison?.winRateDeltaPercent || 0), 'return')}>wrΔ {formatNumber(row.comparison?.winRateDeltaPercent, 2)}pp</Tag>
-                                        </Space>
-                                      ) : <Tag color="default">no live data</Tag>,
-                                    },
-                                  ]}
-                                />
-                              </Space>
-                            </Card>
-                          ) : null}
-
                           {summary?.sweepSummary?.portfolioFull ? (
                             <Row gutter={[16, 16]}>
                               <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.returnLabel} value={Number(summary.sweepSummary.portfolioFull.summary?.totalReturnPercent || 0)} precision={2} suffix="%" /></Card></Col>
@@ -6183,542 +6457,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Col xs={12} md={6}><Card className="battletoads-card"><Statistic title={copy.trades} value={Number(summary.sweepSummary.portfolioFull.summary?.tradesCount || 0)} precision={0} /></Card></Col>
                             </Row>
                           ) : null}
-
-                          {publishResponse?.preview ? (
-                            <Card className="battletoads-card" title={copy.publishedTsPreview}>
-                              <Row gutter={[16, 16]}>
-                                <Col xs={24} lg={8}>
-                                  <Descriptions column={1} size="small" bordered>
-                                    <Descriptions.Item label={copy.sourceSystem}>{publishResponse.sourceSystem?.systemName || '—'}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.apiKey}>{publishResponse.sourceSystem?.apiKeyName || '—'}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.period}>{formatPeriodLabel(publishPreviewPeriod)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(publishResponse.preview.summary?.finalEquity ?? publishPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(publishResponse.preview.summary?.totalReturnPercent ?? publishPreviewDerivedSummary?.totalReturnPercent)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(publishResponse.preview.summary?.maxDrawdownPercent ?? publishPreviewDerivedSummary?.maxDrawdownPercent)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.profitFactor}>{formatNumber(publishResponse.preview.summary?.profitFactor)}</Descriptions.Item>
-                                  </Descriptions>
-                                </Col>
-                                <Col xs={24} lg={16}>
-                                  {publishPreviewPoints.length > 0 ? <ChartComponent data={publishPreviewPoints} type="line" /> : <Empty description={copy.noCatalog} />}
-                                </Col>
-                              </Row>
-                            </Card>
-                          ) : null}
-                        </Space>
-                      ),
-                    },
-                    {
-                      key: 'research-analysis',
-                      label: 'Анализ ресерча',
-                      children: (
-                        <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                          <Row gutter={[16, 16]}>
-                            <Col xs={24}>
-                              <Card
-                                className="battletoads-card"
-                                title="Backtest requests"
-                                extra={<Button size="small" href="/research">Research</Button>}
-                              >
-                                <Space>
-                                  <Tag color="processing">pending: {Number(summary?.backtestPairRequests?.pending || 0)}</Tag>
-                                  <Tag>total: {Number(summary?.backtestPairRequests?.total || 0)}</Tag>
-                                  <Button size="small" loading={actionLoading === 'load-sweep-review'} onClick={() => void loadSweepReviewCandidates()}>
-                                    Загрузить оферы и ТС из sweep
-                                  </Button>
-                                  <Button
-                                    size="small"
-                                    onClick={() => {
-                                      openAdminReviewContext('algofund-ts');
-                                    }}
-                                  >
-                                    Открыть sweep backtest ТС
-                                  </Button>
-                                </Space>
-                                <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0, fontSize: 12 }}>
-                                  Очередь запросов на бэктест и переход в Research для запуска sweep.
-                                </Paragraph>
-                              </Card>
-                            </Col>
-                          </Row>
-
-                          <Card className="battletoads-card" title="Sweep pipeline: оферы и ТС">
-                            <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                              Путь: список после sweep, бэктест, сохранение риска и частоты, публикация на витрину или закрытие. Затем из витрины применить на одного, нескольких или всех клиентов.
-                            </Paragraph>
-                            {summary?.catalog?.apiKeyName ? (
-                              <Alert
-                                type="info"
-                                showIcon
-                                style={{ marginBottom: 12 }}
-                                message={`Источник оферов: недавний historical sweep (${String(summary.catalog.timestamp || '').slice(0, 10)}), без перехода в API backtest`}
-                              />
-                            ) : null}
-                            <Space wrap style={{ marginBottom: 12 }}>
-                              <Tag color="default">sweep offers: {reviewableSweepOffers.length}</Tag>
-                              <Tag color="processing">not on storefront: {researchCandidateOffers.length}</Tag>
-                              <Tag color="purple">sweep strategies: {sweepReviewRecords.length}</Tag>
-                              <Tag color="geekblue">draft TS: {adminTradingSystemDraft ? 1 : 0}</Tag>
-                              <Tag color="magenta">view: {adminSweepListMode === 'offers' ? 'offers' : 'ts sets'}</Tag>
-                              <Tag color="blue">period: {Number(summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
-                              <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
-                            </Space>
-                            <Space wrap style={{ marginBottom: 12 }}>
-                              <Text strong>Что показывать:</Text>
-                              <Segmented
-                                value={adminSweepListMode}
-                                options={[
-                                  { value: 'offers', label: 'Оферы' },
-                                  { value: 'ts', label: 'ТС-наборы' },
-                                ]}
-                                onChange={(value) => setAdminSweepListMode(String(value) === 'ts' ? 'ts' : 'offers')}
-                              />
-                            </Space>
-                            <Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 12, fontSize: 12 }}>
-                              Ниже показаны все кандидаты из последнего sweep. Параметр Target/day больше не скрывает офферы, а только поднимает наверх наиболее близкие по частоте сделок.
-                            </Paragraph>
-                            <Space wrap style={{ marginBottom: 16 }}>
-                              <InputNumber
-                                min={7}
-                                max={365}
-                                value={Number(summary?.offerStore?.defaults?.periodDays || 90)}
-                                onChange={(value) => {
-                                  const numeric = Number(value || 90);
-                                  void updateOfferStoreDefaults({ periodDays: Math.max(7, Math.min(365, Math.floor(numeric))) });
-                                }}
-                                addonBefore="Period d"
-                              />
-                              <InputNumber
-                                min={1}
-                                max={20}
-                                step={0.5}
-                                value={Number(summary?.offerStore?.defaults?.targetTradesPerDay || 6)}
-                                onChange={(value) => {
-                                  const numeric = Number(value || 6);
-                                  void updateOfferStoreDefaults({ targetTradesPerDay: Math.max(1, Math.min(20, numeric)) });
-                                }}
-                                addonBefore="Target/day"
-                              />
-                              <InputNumber
-                                min={0.5}
-                                max={5}
-                                step={0.05}
-                                value={approvalMinProfitFactor}
-                                onChange={(value) => {
-                                  const numeric = Number(value || 1);
-                                  setApprovalMinProfitFactor(Math.max(0.5, Math.min(5, Number(numeric.toFixed(2)))));
-                                }}
-                                addonBefore="Min PF"
-                              />
-                              <Button
-                                size="small"
-                                onClick={() => {
-                                  openAdminReviewContext('algofund-ts');
-                                }}
-                              >
-                                Перейти к бэктесту ТС
-                              </Button>
-                              <Button
-                                size="small"
-                                onClick={() => {
-                                  void openPublishedAdminTsForClients();
-                                }}
-                              >
-                                Применение ТС к клиентам
-                              </Button>
-                            </Space>
-                            {adminSweepListMode === 'offers' ? (
-                            <Table
-                              size="small"
-                              rowKey="offerId"
-                              dataSource={reviewableSweepOffers}
-                              pagination={{ pageSize: 12, showSizeChanger: false }}
-                              scroll={{ x: 980 }}
-                              expandable={{
-                                expandedRowRender: (row: any) => {
-                                  const pts: number[] = Array.isArray(row.equityPoints) ? row.equityPoints : [];
-                                  const reviewRecord = sweepRecordByStrategyId[Number(row.strategyId || 0)] as any;
-                                  const scoreValue = row.score ?? reviewRecord?.score;
-                                  const pfValue = row.pf ?? reviewRecord?.profitFactor;
-                                  const retValue = row.ret ?? reviewRecord?.totalReturnPercent;
-                                  const ddValue = row.dd ?? reviewRecord?.maxDrawdownPercent;
-                                  const winRateValue = row.wr ?? reviewRecord?.winRatePercent;
-                                  const tradesPerDayValue = row.tradesPerDay
-                                    ?? (Number(row.trades || 0) > 0 && Number(row.periodDays || 0) > 0
-                                      ? Number(row.trades || 0) / Number(row.periodDays || 0)
-                                      : null);
-                                  return (
-                                    <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                                      <Space wrap size={6}>
-                                        <Tag color="cyan">Score {formatNumber(scoreValue)}</Tag>
-                                        <Tag color={metricColor(Number(retValue || 0), 'return')}>Ret {formatPercent(retValue)}</Tag>
-                                        <Tag color={metricColor(Number(ddValue || 0), 'drawdown')}>DD {formatPercent(ddValue)}</Tag>
-                                        <Tag color={metricColor(Number(pfValue || 0), 'pf')}>PF {formatNumber(pfValue)}</Tag>
-                                        <Tag color="blue">Trades/day {tradesPerDayValue === null || tradesPerDayValue === undefined ? '—' : formatNumber(tradesPerDayValue, 2)}</Tag>
-                                        <Tag color="default">Win rate {winRateValue === null || winRateValue === undefined ? '—' : formatPercent(winRateValue)}</Tag>
-                                      </Space>
-                                      <Space wrap>
-                                        <Button
-                                          size="small"
-                                          type="primary"
-                                          onClick={() => {
-                                            openAdminReviewContext('offer', String(row.offerId));
-                                          }}
-                                        >
-                                          Открыть бэктест офера
-                                        </Button>
-                                        <Button
-                                          size="small"
-                                          onClick={() => {
-                                            openOfferBacktest(row);
-                                          }}
-                                        >
-                                          Бэктест
-                                        </Button>
-                                        <Button
-                                          size="small"
-                                          loading={actionLoading === `offer-review-snapshot:${String(row.offerId || '')}`}
-                                          onClick={() => {
-                                            void saveOfferReviewSnapshotFromRow(row);
-                                          }}
-                                        >
-                                          Сохранить
-                                        </Button>
-                                        <Button
-                                          size="small"
-                                          onClick={() => {
-                                            if (row.published) {
-                                              void openUnpublishWizard(String(row.offerId));
-                                              return;
-                                            }
-                                            void toggleOfferPublished(String(row.offerId), true);
-                                          }}
-                                        >
-                                          {row.published ? 'Снять с витрины' : 'На витрину'}
-                                        </Button>
-                                      </Space>
-                                      {pts.length > 0
-                                        ? <ChartComponent data={pts.map((v, i) => ({ time: i, equity: v }))} type="line" />
-                                        : <Text type="secondary">Equity curve unavailable</Text>}
-                                    </Space>
-                                  );
-                                },
-                                rowExpandable: () => true,
-                              }}
-                              columns={[
-                                {
-                                  title: 'Карточка',
-                                  key: 'offer',
-                                  render: (_, row: any) => (
-                                    <Space direction="vertical" size={0}>
-                                      <Text strong>{row.titleRu}</Text>
-                                      <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
-                                    </Space>
-                                  ),
-                                },
-                                {
-                                  title: 'Период и метрики',
-                                  key: 'metrics',
-                                  render: (_, row: any) => (
-                                    <Space direction="vertical" size={4}>
-                                      <Space size={4} wrap>
-                                        <Tag color="default">period {Number(row.periodDays || 0)}d</Tag>
-                                        <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
-                                        <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
-                                        <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
-                                        <Tag color="blue">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
-                                      </Space>
-                                      <Space size={4} wrap>
-                                        {renderOfferLifecycleTag(row)}
-                                        <Tag color="default">Появилась: {formatDateShort(row.appearedAt || summary?.sweepSummary?.timestamp)}</Tag>
-                                        {row.snapshotUpdatedAt ? <Tag color="warning">Сохранена: {formatDateShort(row.snapshotUpdatedAt)}</Tag> : null}
-                                      </Space>
-                                    </Space>
-                                  ),
-                                },
-                                {
-                                  title: 'Действия',
-                                  key: 'store',
-                                  width: 360,
-                                  render: (_, row: any) => (
-                                    <Space size={4} wrap>
-                                      <Button
-                                        size="small"
-                                        onClick={() => {
-                                          openAdminReviewContext('offer', String(row.offerId));
-                                        }}
-                                      >
-                                        Редактировать
-                                      </Button>
-                                      <Button
-                                        size="small"
-                                        loading={actionLoading === `offer-review-snapshot:${String(row.offerId || '')}`}
-                                        onClick={() => {
-                                          void saveOfferReviewSnapshotFromRow(row);
-                                        }}
-                                      >
-                                        Сохранить
-                                      </Button>
-                                      <Button
-                                        size="small"
-                                        loading={actionLoading === `offer-store:${String(row.offerId)}`}
-                                        onClick={() => {
-                                          if (row.published) {
-                                            void openUnpublishWizard(String(row.offerId));
-                                            return;
-                                          }
-                                          void toggleOfferPublished(String(row.offerId), true);
-                                        }}
-                                      >
-                                        {row.published ? 'Снять с витрины' : 'На витрину'}
-                                      </Button>
-                                    </Space>
-                                  ),
-                                },
-                              ]}
-                            />
-                            ) : (
-                              <Card size="small" title="Список ТС-наборов из sweep">
-                                {adminSweepTsSetsAll.length === 0 ? (
-                                  <Empty description="Sweep sets пока не найдены" />
-                                ) : (
-                                  <List
-                                    size="small"
-                                   dataSource={adminSweepTsSetsAll}
-                                    pagination={{ pageSize: 8, showSizeChanger: false }}
-                                    renderItem={(set) => (
-                                      <List.Item
-                                        actions={[
-                                          <Button
-                                            key="pick"
-                                            size="small"
-                                            onClick={() => {
-                                              setSelectedAdminDraftTsOfferIds(set.offerIds);
-                                              setSelectedAdminDraftTsSetKey(String(set.snapshotKey || '').trim());
-                                              setAdminSweepListMode('ts');
-                                              messageApi.success(`Выбран TS-набор ${set.displayName}: ${set.offerCount} оферов для бэктеста`);
-                                            }}
-                                          >
-                                            Выбрать для бэктеста
-                                          </Button>,
-                                        ]}
-                                      >
-                                        <Space wrap>
-                                          <Text strong>{set.displayName}</Text>
-                                          {set.isDraft ? <Tag color="gold">draft</Tag> : (set as any).isSnapshot ? <Tag color="cyan">snapshot</Tag> : null}
-                                          <Tag color="processing">offers {set.offerCount}</Tag>
-                                          <Tag color={metricColor(Number(set.avgRet || 0), 'return')}>avg Ret {formatPercent(set.avgRet)}</Tag>
-                                          <Tag color={metricColor(Number(set.avgDd || 0), 'drawdown')}>avg DD {formatPercent(set.avgDd)}</Tag>
-                                          <Tag color={metricColor(Number(set.avgPf || 0), 'pf')}>avg PF {formatNumber(set.avgPf)}</Tag>
-                                        </Space>
-                                      </List.Item>
-                                    )}
-                                  />
-                                )}
-                              </Card>
-                            )}
-                          </Card>
-
-                          <Card className="battletoads-card" title="ТС Алгофонда из последнего sweep">
-                            <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                              Это текущий draft торговой системы из последнего sweep. Здесь путь: проверить состав и метрики, запустить бэктест ТС, сохранить параметры и отправить ТС на витрину.
-                            </Paragraph>
-                            <Alert
-                              type="info"
-                              showIcon
-                              style={{ marginBottom: 12 }}
-                              message="Шаги: 1) бэктест состава и метрик, 2) сохранить риск/частоту, 3) публикация на витрину Алгофонда, 4) switch_system на выбранных клиентов."
-                            />
-                            <Space wrap style={{ marginBottom: 12 }}>
-                              <Tag color="processing">members: {Number(adminTradingSystemDraft?.members?.length || 0)}</Tag>
-                              <Tag color="blue">selected cards: {selectedAdminDraftTsOfferIds.length}</Tag>
-                              <Tag color="blue">{adminTradingSystemDraft?.name || 'Admin TS draft'}</Tag>
-                              <Tag color={adminSavedTsSnapshot ? 'green' : 'gold'}>{adminSavedTsSnapshot ? 'saved draft snapshot' : 'draft from sweep'}</Tag>
-                              {adminDraftPeriodLabel ? <Tag color="default">{adminDraftPeriodLabel}</Tag> : null}
-                              {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(adminDraftPortfolioSummary.totalReturnPercent)}</Tag> : null}
-                              {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(adminDraftPortfolioSummary.maxDrawdownPercent)}</Tag> : null}
-                              {adminDraftPortfolioSummary ? <Tag color={metricColor(Number(adminDraftPortfolioSummary.profitFactor || 0), 'pf')}>PF {formatNumber(adminDraftPortfolioSummary.profitFactor)}</Tag> : null}
-                              {adminDraftTradesPerDay !== null ? <Tag color="blue">tpd {formatNumber(adminDraftTradesPerDay, 2)}</Tag> : null}
-                            </Space>
-                            {summary?.sweepSummary?.portfolioFull?.error ? (
-                              <Alert
-                                type="warning"
-                                showIcon
-                                style={{ marginBottom: 12 }}
-                                message={`Portfolio backtest error: ${summary.sweepSummary.portfolioFull.error}`}
-                              />
-                            ) : null}
-                            {adminDraftPortfolioSummary ? (
-                              <Descriptions size="small" bordered column={2} style={{ marginBottom: 12 }}>
-                                <Descriptions.Item label="Статус">{adminSavedTsSnapshot ? 'Сохраненный черновик ТС' : 'Черновик из sweep'}</Descriptions.Item>
-                                <Descriptions.Item label="Источник">{adminSavedTsSnapshot ? 'saved TS backtest snapshot' : 'full_range portfolio backtest'}</Descriptions.Item>
-                                <Descriptions.Item label="Final equity">{formatMoney(adminDraftPortfolioSummary.finalEquity)}</Descriptions.Item>
-                                <Descriptions.Item label="Сделок">{formatNumber(adminDraftPortfolioSummary.tradesCount, 0)}</Descriptions.Item>
-                              </Descriptions>
-                            ) : (
-                              <Paragraph type="secondary" style={{ marginTop: 0, marginBottom: 12 }}>
-                                Метрики портфеля еще не доступны. Ниже все равно показан состав draft ТС из последнего sweep.
-                              </Paragraph>
-                            )}
-                            <Card size="small" title="Список ТС-наборов из sweep" style={{ marginBottom: 12 }}>
-                              {adminSweepTsSetsAll.length === 0 ? (
-                                <Empty description="Sweep sets пока не найдены" />
-                              ) : (
-                                <List
-                                  size="small"
-                                  dataSource={adminSweepTsSetsAll}
-                                  pagination={{ pageSize: 6, showSizeChanger: false }}
-                                  renderItem={(set) => (
-                                    <List.Item
-                                      actions={[
-                                        <Button
-                                          key="pick"
-                                          size="small"
-                                          onClick={() => {
-                                            setSelectedAdminDraftTsOfferIds(set.offerIds);
-                                            setSelectedAdminDraftTsSetKey(String(set.snapshotKey || '').trim());
-                                            messageApi.success(`Выбран TS-набор ${set.displayName}: ${set.offerCount} оферов для sweep backtest`);
-                                          }}
-                                        >
-                                          Выбрать для бэктеста
-                                        </Button>,
-                                      ]}
-                                    >
-                                      <Space wrap>
-                                        <Text strong>{set.displayName}</Text>
-                                        {set.isDraft ? <Tag color="gold">draft</Tag> : (set as any).isSnapshot ? <Tag color="cyan">snapshot</Tag> : null}
-                                        <Tag color="processing">offers {set.offerCount}</Tag>
-                                        <Tag color={metricColor(Number(set.avgRet || 0), 'return')}>avg Ret {formatPercent(set.avgRet)}</Tag>
-                                        <Tag color={metricColor(Number(set.avgDd || 0), 'drawdown')}>avg DD {formatPercent(set.avgDd)}</Tag>
-                                        <Tag color={metricColor(Number(set.avgPf || 0), 'pf')}>avg PF {formatNumber(set.avgPf)}</Tag>
-                                      </Space>
-                                    </List.Item>
-                                  )}
-                                />
-                              )}
-                            </Card>
-                            <Space wrap style={{ marginBottom: 12 }}>
-                              <Button
-                                size="small"
-                                onClick={() => {
-                                  setSelectedAdminDraftTsOfferIds(adminDraftTsOfferIdsAll);
-                                  setSelectedAdminDraftTsSetKey('');
-                                }}
-                              >
-                                Выбрать все карточки ТС
-                              </Button>
-                              <Button
-                                size="small"
-                                onClick={() => {
-                                  setSelectedAdminDraftTsOfferIds([]);
-                                  setSelectedAdminDraftTsSetKey('');
-                                }}
-                              >
-                                Очистить выбор
-                              </Button>
-                            </Space>
-                            <List
-                              dataSource={adminTradingSystemDraft?.members || []}
-                              locale={{ emptyText: <Empty description="Недавний sweep еще не сформировал draft ТС" /> }}
-                              renderItem={(member, index) => (
-                                <List.Item>
-                                  <Space direction="vertical" size={0}>
-                                    <Text strong>{member.strategyName}</Text>
-                                    <Text type="secondary">{member.marketMode.toUpperCase()} • {member.market}</Text>
-                                  </Space>
-                                  <Space wrap>
-                                    <Tag color={index < 3 ? 'geekblue' : 'default'}>{index < 3 ? 'core' : 'satellite'}</Tag>
-                                    <Tag color="cyan">score {formatNumber(member.score)}</Tag>
-                                    <Tag color="purple">w {formatNumber(member.weight)}</Tag>
-                                    {(() => {
-                                      const linkedOffer = adminDraftTsOfferCandidates.find((offer) => Number(offer.strategyId || 0) === Number(member.strategyId || 0));
-                                      if (!linkedOffer?.offerId) {
-                                        return <Tag color="default">no offer card</Tag>;
-                                      }
-                                      const offerId = String(linkedOffer.offerId);
-                                      const checked = selectedAdminDraftTsOfferIds.includes(offerId);
-                                      return (
-                                        <Checkbox
-                                          checked={checked}
-                                          onChange={(event) => {
-                                            setSelectedAdminDraftTsSetKey('');
-                                            setSelectedAdminDraftTsOfferIds((prev) => {
-                                              const set = new Set((prev || []).map((item) => String(item || '')).filter(Boolean));
-                                              if (event.target.checked) {
-                                                set.add(offerId);
-                                              } else {
-                                                set.delete(offerId);
-                                              }
-                                              return Array.from(set);
-                                            });
-                                          }}
-                                        >
-                                          для sweep backtest
-                                        </Checkbox>
-                                      );
-                                    })()}
-                                  </Space>
-                                </List.Item>
-                              )}
-                            />
-                            <Space wrap style={{ marginTop: 12 }}>
-                              <Button size="small" loading={actionLoading === 'load-sweep-review'} onClick={() => void loadSweepReviewCandidates()}>
-                                Обновить из sweep
-                              </Button>
-                              <Button size="small" onClick={openBacktestDrawerForAdminTs}>
-                                Открыть бэктест ТС
-                              </Button>
-                              <Button
-                                type="primary"
-                                size="small"
-                                onClick={() => {
-                                  openAdminReviewContext('algofund-ts');
-                                }}
-                              >
-                                Открыть бэктест ТС
-                              </Button>
-                              <Button size="small" loading={actionLoading === 'publish'} onClick={() => void publishAdminTs()}>
-                                На витрину ТС
-                              </Button>
-                              <Button
-                                size="small"
-                                onClick={() => {
-                                  void openPublishedAdminTsForClients();
-                                }}
-                              >
-                                Применение к клиентам
-                              </Button>
-                            </Space>
-                          </Card>
-
-                          <Card className="battletoads-card" title="Отчёты и аналитика">
-                            <Space direction="vertical" style={{ width: '100%' }}>
-                              <Space wrap>
-                                <Select
-                                  value={reportPeriod}
-                                  style={{ width: 140 }}
-                                  options={[
-                                    { value: 'daily', label: 'daily' },
-                                    { value: 'weekly', label: 'weekly' },
-                                    { value: 'monthly', label: 'monthly' },
-                                  ]}
-                                  onChange={(value) => setReportPeriod(value)}
-                                />
-                                <Button loading={performanceReportLoading} onClick={() => void loadPerformanceReport(reportPeriod)}>Обновить отчёт</Button>
-                                <Button
-                                  loading={sendTelegramLoading}
-                                  disabled={!telegramControls?.tokenConfigured || !telegramControls?.chatConfigured}
-                                  onClick={() => void sendReportToTelegram()}
-                                >
-                                  Отправить в Telegram
-                                </Button>
-                              </Space>
-                              <Space wrap>
-                                <Tag color="blue">TS: {Number(performanceReport?.tradingSystems?.length || 0)}</Tag>
-                                <Tag color="geekblue">Offers: {Number(performanceReport?.offers?.length || 0)}</Tag>
-                                {performanceReport ? <Tag color="default">{performanceReport.generatedAt.slice(0, 16).replace('T', ' ')}</Tag> : null}
-                              </Space>
-                            </Space>
-                          </Card>
+                          <Alert
+                            type="info"
+                            showIcon
+                            message="Live-отчёты и сравнение runtime vs backtest перенесены во вкладку Мониторинг."
+                          />
                         </Space>
                       ),
                     },
@@ -6929,6 +6672,34 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 >
                                   Отправить сейчас
                                 </Button>
+                                <Divider type="vertical" />
+                                <Text>Интервал отчёта (мин)</Text>
+                                <InputNumber
+                                  size="small"
+                                  min={5}
+                                  max={1440}
+                                  step={5}
+                                  value={telegramControls?.reportIntervalMinutes ?? 60}
+                                  disabled={telegramControlsLoading}
+                                  onBlur={(e) => {
+                                    const val = parseInt(e.target.value, 10);
+                                    if (Number.isFinite(val) && val >= 5) {
+                                      void patchTelegramControls({ reportIntervalMinutes: val });
+                                    }
+                                  }}
+                                  style={{ width: 80 }}
+                                />
+                                <Divider type="vertical" />
+                                <Text>Reconciliation cycle</Text>
+                                <Switch
+                                  size="small"
+                                  checked={Boolean(telegramControls?.reconciliationCycleEnabled)}
+                                  loading={telegramControlsLoading}
+                                  onChange={(checked) => { void patchTelegramControls({ reconciliationCycleEnabled: checked }); }}
+                                />
+                                <Tag color={telegramControls?.reconciliationCycleEnabled ? 'success' : 'default'}>
+                                  runtime {telegramControls?.reconciliationCycleEnabled ? 'on' : 'off'}
+                                </Tag>
                               </Space>
                               <Divider style={{ margin: '6px 0' }} />
                               <Space>
@@ -7044,9 +6815,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         }}
                                       />
                                     </Space>
+                                    <Space>
+                                      <Text>Reconciliation runtime cycle</Text>
+                                      <Switch
+                                        checked={Boolean(telegramControls?.reconciliationCycleEnabled)}
+                                        loading={telegramControlsLoading}
+                                        onChange={(checked) => {
+                                          void patchTelegramControls({ reconciliationCycleEnabled: checked });
+                                        }}
+                                      />
+                                    </Space>
                                     <Space wrap>
                                       <Tag color={telegramControls?.tokenConfigured ? 'success' : 'default'}>token {telegramControls?.tokenConfigured ? 'ok' : 'missing'}</Tag>
                                       <Tag color={telegramControls?.chatConfigured ? 'success' : 'default'}>chat_id {telegramControls?.chatConfigured ? 'ok' : 'missing'}</Tag>
+                                      <Tag color={telegramControls?.reconciliationCycleEnabled ? 'success' : 'default'}>
+                                        reconciliation {telegramControls?.reconciliationCycleEnabled ? 'on' : 'off'}
+                                      </Tag>
                                     </Space>
                                     <Button
                                       size="small"
@@ -7062,7 +6846,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               </Col>
 
                               <Col xs={24} xl={14}>
-                                <Card size="small" className="battletoads-card" title="Low-lot recommendations (72h)">
+                                <Card size="small" className="battletoads-card" title="Рекомендации по лотам (последние 72ч)" extra={<Tooltip title="Стратегии, где за 72ч были ошибки ликвидности или нарушения маржина. Нажми 'Обновить low-lot' вверху для актуальных данных."><Text type="secondary" style={{ cursor: 'help', fontSize: 13 }}>ⓘ</Text></Tooltip>}>
                                   <Table
                                     size="small"
                                     rowKey={(row) => `${row.apiKeyName}:${row.strategyId}`}
@@ -7152,6 +6936,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               scroll={{ x: 1500 }}
                               loading={monitoringTabLoading && monitoringRows.length === 0}
                             />
+
+                            <Card size="small" className="battletoads-card" title="Сквозной отчет: карточка • аналитика • клиенты • соответствие • проблемы • предложения">
+                              <Table
+                                rowKey="key"
+                                size="small"
+                                pagination={{ pageSize: 8, showSizeChanger: false }}
+                                scroll={{ x: 2200 }}
+                                dataSource={monitoringCrossReportRows}
+                                columns={[
+                                  { title: 'Карточка', dataIndex: 'card', key: 'card', width: 220 },
+                                  { title: 'Аналитика', dataIndex: 'analytics', key: 'analytics', width: 360 },
+                                  { title: 'Клиенты', dataIndex: 'clients', key: 'clients', width: 260 },
+                                  { title: 'Соответствие', dataIndex: 'correspondence', key: 'correspondence', width: 420 },
+                                  { title: 'Проблемы', dataIndex: 'problems', key: 'problems', width: 360 },
+                                  { title: 'Предложения', dataIndex: 'suggestions', key: 'suggestions', width: 420 },
+                                ]}
+                              />
+                            </Card>
                           </Space>
                         </Card>
                         </Space>
@@ -7755,7 +7557,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Space wrap style={{ marginTop: 28 }}>
                                 <Button type="primary" onClick={() => void runStrategyPreview()} loading={strategyPreviewLoading}>{copy.preview}</Button>
                                 {strategyState.profile?.actual_enabled ? <Tag color="success">live enabled</Tag> : <Tag color="default">live disabled</Tag>}
-                                {strategyState.profile?.requested_enabled ? <Tag color="processing">requested active</Tag> : null}
+                                {strategyState.profile?.requested_enabled ? <Tag color="processing">запрошен запуск</Tag> : null}
                               </Space>
                             </Col>
                           </Row>
@@ -7844,9 +7646,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 </Space>
                               )}
                               <Space wrap>
-                                <Button type="primary" onClick={() => navigateToAdminTab('offer-ts')}>Перейти в approval center</Button>
+                                <Button type="primary" onClick={() => navigateToAdminTab('offer-ts')}>Оферы и ТС</Button>
                                 <Button onClick={() => navigateToAdminTab('clients')}>К клиентам Алгофонда</Button>
-                                <Button onClick={() => navigateToAdminTab('research-analysis')}>Бэктест</Button>
                               </Space>
                             </Space>
                           ) : (
@@ -7967,7 +7768,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         <Card className="battletoads-card">
                           <Row gutter={[16, 16]} align="middle">
                             <Col xs={24} lg={16}>
-                              <Text strong>{copy.risk}: {formatNumber(algofundRiskMultiplier)}</Text>
+                              <Text strong>{copy.risk}: {formatNumber(algofundRiskMultiplier)}x</Text>
                               <Slider
                                 min={0}
                                 max={isAdminSurface ? 10 : Number(algofundState.plan?.risk_cap_max || 1)}
@@ -7983,6 +7784,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 value={algofundRiskMultiplier}
                                 onChange={(value) => setAlgofundRiskMultiplier(clampPreviewValue(Number(value ?? 0), isAdminSurface ? 10 : Number(algofundState.plan?.risk_cap_max || 1)))}
                               />
+                              <Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+                                1.0x = базовый размер позиции выбранной ТС. Значение выше усиливает размер позиций, ниже уменьшает. Состав ТС и набор стратегий этот слайдер не меняет.
+                              </Paragraph>
                             </Col>
                             <Col xs={24} lg={8}>
                               <Space wrap style={{ marginTop: 24 }}>
@@ -8065,7 +7869,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                               navigateToAdminTab('offer-ts');
                                             }}
                                           >
-                                            В approval center
+                                            Оферы и ТС
                                           </Button>
                                           <Button
                                             size="small"
@@ -8294,11 +8098,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   type="warning"
                                   showIcon
                                   message="В admin-режиме здесь скрыт клиентский preview, привязанный к tenant/API key."
-                                  description="Для корректного preview витрины и admin TS используй Админ → Оферы и ТС (блок Published admin TS preview)."
+                                  description="Для корректного preview витрины и admin TS используй Админ → Оферы и ТС и запускай бэктест у выбранного офера или ТС-набора."
                                 />
                                 <Space wrap>
                                   <Button type="primary" onClick={() => navigateToAdminTab('offer-ts')}>
-                                    Открыть Approval Center
+                                    Оферы и ТС
                                   </Button>
                                   <Button onClick={() => { navigateToAdminTab('clients'); setClientsModeFilter('algofund_client'); }}>
                                     К клиентским привязкам TS
@@ -8342,7 +8146,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 <Button type="primary" onClick={() => void sendAlgofundRequest('start')} loading={actionLoading === 'algofund-start'} disabled={!algofundStartStopEnabled}>{copy.requestStart}</Button>
                                 <Button danger onClick={() => void sendAlgofundRequest('stop')} loading={actionLoading === 'algofund-stop'} disabled={!algofundStartStopEnabled}>{copy.requestStop}</Button>
                                 {algofundState.profile?.actual_enabled ? <Tag color="success">live enabled</Tag> : <Tag color="default">live disabled</Tag>}
-                                {algofundState.profile?.requested_enabled ? <Tag color="processing">requested start</Tag> : null}
+                                {algofundState.profile?.requested_enabled ? <Tag color="processing">запрошен запуск</Tag> : null}
                                 {!algofundStartStopEnabled ? <Tag color="default">{copy.capabilityStartStop}: off</Tag> : null}
                               </Space>
                             </Col>
@@ -9156,7 +8960,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             />
             {backtestDrawerContext.kind === 'algofund-ts' ? (
               <Space wrap>
-                <Tag color="geekblue">Тестируемая ТС: {String(backtestDrawerContext.title || '').replace(/^Бэктест ТС:\s*/u, '') || '—'}</Tag>
+                <Tag color="geekblue">Тестируемая ТС: {(() => {
+                  const rawTitle = String(backtestDrawerContext.title || '').trim();
+                  const prefix = 'Бэктест ТС:';
+                  return rawTitle.startsWith(prefix) ? rawTitle.slice(prefix.length).trim() || '—' : (rawTitle || '—');
+                })()}</Tag>
                 <Tag color="blue">Карточек в тесте: {Array.isArray(backtestDrawerContext.offerIds) ? backtestDrawerContext.offerIds.length : 0}</Tag>
               </Space>
             ) : null}
@@ -9232,7 +9040,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
             <Row gutter={[12, 12]}>
               <Col xs={24} md={6}>
-                <Card size="small" title={<Space>{adminSweepBacktestStale ? <Tag color="orange">⟳ Обновить</Tag> : null}<span>Риск (0-10)</span></Space>}>
+                <Card size="small" title={<Space>{adminSweepBacktestStale ? <Tag color="orange">⟳ Обновить</Tag> : null}<span>Риск бэктеста (0-10)</span></Space>}>
                   <Slider
                     min={0}
                     max={10}
@@ -9243,14 +9051,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       setAdminSweepBacktestRiskScore(next);
                       storeCurrentBacktestSettingsForContext(backtestDrawerContext, { riskScore: next });
                       const prevScore = adminSweepBacktestResult?.controls?.riskScore ?? 5;
-                      const expMap = (s: number) => Math.exp(Math.log(0.18) + (s / 10) * (Math.log(5.5) - Math.log(0.18)));
-                      const scale = expMap(next) / Math.max(0.01, expMap(prevScore));
+                      const scale = getBacktestRiskMultiplier(next, adminSweepBacktestRiskScaleMaxPercent)
+                        / Math.max(0.01, getBacktestRiskMultiplier(prevScore, adminSweepBacktestRiskScaleMaxPercent));
                       setAdminSweepPreviewRiskScale(Number(scale.toFixed(4)));
                       setAdminSweepBacktestStale(true);
                       scheduleBacktestDebounce();
                     }}
                   />
                   <Text type="secondary">Текущий уровень: {sliderValueToLevel(adminSweepBacktestRiskScore)}</Text>
+                  <br />
+                  <Text type="secondary">Текущий множитель: {formatNumber(getBacktestRiskMultiplier(adminSweepBacktestRiskScore, adminSweepBacktestRiskScaleMaxPercent), 2)}x к базовой позиции</Text>
                 </Card>
               </Col>
               <Col xs={24} md={6}>
@@ -9287,7 +9097,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 </Card>
               </Col>
               <Col xs={24} md={6}>
-                <Card size="small" title="Max risk scale, %">
+                <Card size="small" title="Потолок риска, %">
                   <InputNumber
                     min={0}
                     max={400}
@@ -9300,7 +9110,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       storeCurrentBacktestSettingsForContext(backtestDrawerContext, { riskScaleMaxPercent: next });
                     }}
                   />
-                  <Text type="secondary">10 по риску = {formatNumber(1 + adminSweepBacktestRiskScaleMaxPercent / 100, 2)}x к базовой позиции</Text>
+                  <Text type="secondary">Ограничивает верхний множитель риска. При score=10 потолок сейчас около {formatNumber(getBacktestRiskMultiplier(10, adminSweepBacktestRiskScaleMaxPercent), 2)}x.</Text>
                 </Card>
               </Col>
             </Row>
@@ -9335,6 +9145,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     const tradesCount = Number(summary.tradesCount ?? 0);
                     const maxDd = Number(summary.maxDrawdownPercent ?? (effectiveDrawdownCurve.length > 0 ? Math.max(...effectiveDrawdownCurve.map((point) => point.value)) : 0));
                     const marginLoad = Number(summary.marginLoadPercent ?? (effectiveMarginCurve.length > 0 ? Math.max(...effectiveMarginCurve.map((point) => point.value)) : fallbackCurves.maxMarginLoad));
+                    const rerunErrorText = String(adminSweepBacktestResult.rerun?.error || '').trim();
+                    const rerunNeedsHistoricalSweep = /Исторические свечи не найдены|No executable candles|No runnable strategies|No candles in selected date range/i.test(rerunErrorText);
 
                     return (
                       <>
@@ -9355,6 +9167,31 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.profitFactor || 0), 'pf')}>PF {formatNumber(adminSweepBacktestResult.preview.summary.profitFactor)}</Tag> : null}
                     {adminSweepBacktestResult.preview?.summary?.tradesCount !== undefined ? <Tag color="cyan">trades {formatNumber(adminSweepBacktestResult.preview.summary.tradesCount, 0)}</Tag> : null}
                   </Space>
+
+                  {adminSweepBacktestResult.rerun?.requested && rerunErrorText ? (
+                    <Alert
+                      type={rerunNeedsHistoricalSweep ? 'warning' : 'error'}
+                      showIcon
+                      message={rerunNeedsHistoricalSweep ? 'API rerun не смог найти исторические свечи для выбранного диапазона' : 'API rerun завершился с ошибкой'}
+                      description={(
+                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                          <Text>{rerunErrorText}</Text>
+                          {rerunNeedsHistoricalSweep ? (
+                            <Space wrap>
+                              <Button
+                                size="small"
+                                loading={actionLoading === 'admin-rerun-historical-sweep'}
+                                onClick={() => { void startHistoricalSweepForBacktest(); }}
+                              >
+                                Запустить historical sweep
+                              </Button>
+                              <Text type="secondary">Скачает исторические данные и обновит sweep-артефакты для этого API key.</Text>
+                            </Space>
+                          ) : null}
+                        </Space>
+                      )}
+                    />
+                  ) : null}
 
                   <Row gutter={[12, 12]}>
                     <Col xs={12} md={6}><Card size="small"><Statistic title="Сделки" value={Number.isFinite(tradesCount) ? tradesCount : 0} precision={0} /></Card></Col>
@@ -9418,7 +9255,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         render: (_, row: any) => (
                           <Space direction="vertical" size={0}>
                             <Text strong>{row.titleRu}</Text>
-                            <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                            <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market || '—'}</Text>
+                            <Text type="secondary">strategy #{Number(row.strategyId || 0)} • {String(row.strategyName || '').trim() || '—'}</Text>
                           </Space>
                         ),
                       },
@@ -9427,11 +9265,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         key: 'metrics',
                         render: (_, row: any) => (
                           <Space wrap>
-                            <Tag color={metricColor(Number(row.metrics?.ret || 0), 'return')}>Ret {formatPercent(row.metrics?.ret)}</Tag>
-                            <Tag color={metricColor(Number(row.metrics?.dd || 0), 'drawdown')}>DD {formatPercent(row.metrics?.dd)}</Tag>
-                            <Tag color={metricColor(Number(row.metrics?.pf || 0), 'pf')}>PF {formatNumber(row.metrics?.pf)}</Tag>
-                            <Tag color="blue">trades {formatNumber(row.metrics?.trades, 0)}</Tag>
-                            <Tag color="cyan">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
+                            {String(row.metricsSource || '') === 'snapshot_only' ? (
+                              <Tag color="default">источник: snapshot-only (без per-offer метрик)</Tag>
+                            ) : (
+                              <>
+                                <Tag color={metricColor(Number(row.metrics?.ret || 0), 'return')}>Ret {formatPercent(row.metrics?.ret)}</Tag>
+                                <Tag color={metricColor(Number(row.metrics?.dd || 0), 'drawdown')}>DD {formatPercent(row.metrics?.dd)}</Tag>
+                                <Tag color={metricColor(Number(row.metrics?.pf || 0), 'pf')}>PF {formatNumber(row.metrics?.pf)}</Tag>
+                                <Tag color="blue">trades {formatNumber(row.metrics?.trades, 0)}</Tag>
+                                <Tag color="cyan">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
+                              </>
+                            )}
                           </Space>
                         ),
                       },

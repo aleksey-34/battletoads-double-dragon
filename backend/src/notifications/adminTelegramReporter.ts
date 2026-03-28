@@ -10,6 +10,7 @@ type ReportNowOptions = {
   periodHours?: number;
   includeLoginAlerts?: boolean;
   runtimeOnly?: boolean;
+  format?: 'short' | 'full';
 };
 
 const toFinite = (value: unknown, fallback = 0): number => {
@@ -28,6 +29,13 @@ const isAdminReporterEnabledInDb = async (): Promise<boolean> => {
     return true;
   }
   return value !== '0';
+};
+
+const getReportIntervalMinutesFromDb = async (): Promise<number> => {
+  const row = await db.get('SELECT value FROM app_runtime_flags WHERE key = ?', ['telegram.admin.report_interval_minutes']);
+  const raw = String(row?.value || '').trim();
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed >= 5 ? Math.min(1440, parsed) : 60;
 };
 
 const isRuntimeOnlyEnabledInDb = async (): Promise<boolean> => {
@@ -90,6 +98,11 @@ const buildLowLotActionHint = (maxDeposit: number, lotPercent: number): string =
   const recommendedDeposit = Math.max(150, safeDeposit * 1.5);
 
   return `action: dep>=${recommendedDeposit.toFixed(0)} or lot>=${targetLot.toFixed(0)}% or replace pair via sweep`;
+};
+
+const getFreshAlertWindowHours = (periodHours: number): number => {
+  const configured = Math.max(1, Math.floor(Number(process.env.TELEGRAM_ADMIN_ALERT_FRESH_HOURS || 24) || 24));
+  return Math.max(1, Math.min(Math.floor(periodHours), configured));
 };
 
 const buildRuntimeClientLines = async (periodHours: number): Promise<string[]> => {
@@ -325,6 +338,7 @@ const buildAccountLines = async (periodHours: number, runtimeOnly = false): Prom
 };
 
 const buildDriftAlertLines = async (periodHours: number, limit = 8): Promise<string[]> => {
+  const freshHours = getFreshAlertWindowHours(periodHours);
   const rows = await db.all(
     `SELECT
        a.name AS api_key_name,
@@ -341,7 +355,7 @@ const buildDriftAlertLines = async (periodHours: number, limit = 8): Promise<str
      WHERE da.created_at >= (strftime('%s', 'now', ?) * 1000)
      ORDER BY da.created_at DESC
      LIMIT ?`,
-    [`-${periodHours} hours`, Math.max(1, Math.floor(limit))]
+    [`-${freshHours} hours`, Math.max(1, Math.floor(limit))]
   );
 
   const list = Array.isArray(rows) ? rows : [];
@@ -358,6 +372,7 @@ const buildDriftAlertLines = async (periodHours: number, limit = 8): Promise<str
 };
 
 const buildLowLotLines = async (periodHours: number, limit = 8): Promise<string[]> => {
+  const freshHours = getFreshAlertWindowHours(periodHours);
   const rows = await db.all(
     `SELECT
        a.name AS api_key_name,
@@ -365,20 +380,22 @@ const buildLowLotLines = async (periodHours: number, limit = 8): Promise<string[
        s.name AS strategy_name,
        s.base_symbol,
        s.quote_symbol,
-       s.last_error,
+       e.message AS last_error,
        s.max_deposit,
        s.leverage,
        s.lot_long_percent,
        s.lot_short_percent,
-       s.updated_at
-     FROM strategies s
+       datetime(e.created_at / 1000, 'unixepoch') AS updated_at
+     FROM strategy_runtime_events e
+     JOIN strategies s ON s.id = e.strategy_id
      JOIN api_keys a ON a.id = s.api_key_id
-     WHERE COALESCE(s.last_error, '') <> ''
-       AND datetime(s.updated_at) >= datetime('now', ?)
-       AND lower(s.last_error) LIKE '%order size too small%'
-     ORDER BY datetime(s.updated_at) DESC
+     WHERE e.event_type = 'low_lot_error'
+       AND e.resolved_at = 0
+       AND e.created_at >= (strftime('%s', 'now', ?) * 1000)
+       AND COALESCE(s.is_active, 0) = 1
+     ORDER BY e.created_at DESC
      LIMIT ?`,
-    [`-${periodHours} hours`, Math.max(1, Math.floor(limit))]
+    [`-${freshHours} hours`, Math.max(1, Math.floor(limit))]
   );
 
   const list = Array.isArray(rows) ? rows : [];
@@ -409,7 +426,41 @@ const trimTelegramText = (value: string, maxLen = 3900): string => {
   return `${text.slice(0, Math.max(0, maxLen - 21))}\n...message truncated`;
 };
 
-const sendPeriodicReport = async (periodHours: number, runtimeOnly = false): Promise<void> => {
+const sendPeriodicReportShort = async (periodHours: number, runtimeOnly = false): Promise<void> => {
+  const [lines, driftLines, lowLotLines] = await Promise.all([
+    buildAccountLines(periodHours, runtimeOnly),
+    buildDriftAlertLines(periodHours, 5),
+    buildLowLotLines(periodHours, 5),
+  ]);
+
+  const header = `<b>\u{1F4CA} BTDD (${periodHours}h)</b>`;
+  const parts: string[] = [header];
+
+  if (lines.length > 0) {
+    const topLines = lines.slice(0, 5);
+    parts.push('<b>Keys</b>');
+    parts.push(topLines.join('\n'));
+    if (lines.length > 5) {
+      parts.push(`<i>...+${lines.length - 5} more</i>`);
+    }
+  } else {
+    parts.push('No active keys');
+  }
+
+  const alerts = [...driftLines, ...lowLotLines];
+  if (alerts.length > 0) {
+    parts.push('');
+    parts.push(`<b>\u26A0\uFE0F Alerts (${alerts.length})</b>`);
+    parts.push(alerts.slice(0, 4).join('\n'));
+  }
+
+  await sendTelegramMessage(trimTelegramText(parts.join('\n')));
+};
+
+const sendPeriodicReport = async (periodHours: number, runtimeOnly = false, format: 'short' | 'full' = 'full'): Promise<void> => {
+  if (format === 'short') {
+    return sendPeriodicReportShort(periodHours, runtimeOnly);
+  }
   const [lines, driftLines, lowLotLines] = await Promise.all([
     buildAccountLines(periodHours, runtimeOnly),
     buildDriftAlertLines(periodHours),
@@ -479,6 +530,7 @@ export const runAdminTelegramReportNow = async (options?: ReportNowOptions): Pro
   const periodHours = Math.max(1, Math.floor(Number(options?.periodHours || process.env.TELEGRAM_ADMIN_REPORT_HOURS || 12) || 12));
   const includeLoginAlerts = options?.includeLoginAlerts !== false;
   const runtimeOnly = Boolean(options?.runtimeOnly);
+  const format = options?.format || 'full';
   const state: ReporterState = {
     lastReportAtMs: 0,
     lastLoginAtIso: await getLatestLoginAtIso(),
@@ -488,7 +540,7 @@ export const runAdminTelegramReportNow = async (options?: ReportNowOptions): Pro
     await sendNewLoginAlerts(state);
   }
 
-  await sendPeriodicReport(periodHours, runtimeOnly);
+  await sendPeriodicReport(periodHours, runtimeOnly, format);
 };
 
 export const startAdminTelegramReporter = async (): Promise<void> => {
@@ -515,9 +567,11 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
       await sendNewLoginAlerts(state);
 
       const nowMs = Date.now();
-      if (state.lastReportAtMs === 0 || nowMs - state.lastReportAtMs >= reportHours * 3600_000) {
+      const intervalMinutes = await getReportIntervalMinutesFromDb();
+      const intervalMs = intervalMinutes * 60_000;
+      if (state.lastReportAtMs === 0 || nowMs - state.lastReportAtMs >= intervalMs) {
         const runtimeOnly = await isRuntimeOnlyEnabledInDb();
-        await sendPeriodicReport(reportHours, runtimeOnly);
+        await sendPeriodicReport(reportHours, runtimeOnly, 'full');
         state.lastReportAtMs = nowMs;
       }
     } catch (error) {
@@ -530,5 +584,5 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
     void runTick();
   }, pollMinutes * 60_000);
 
-  logger.info(`[tg-admin] Started: report=${reportHours}h, poll=${pollMinutes}m`);
+  logger.info(`[tg-admin] Started: report=${reportHours}h, poll=${pollMinutes}m, interval=DB`);
 };

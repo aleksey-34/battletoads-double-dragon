@@ -4,6 +4,7 @@ import { runBacktest } from '../backtest/engine';
 import { createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
 import {
   createTradingSystem,
+  getTradingSystem,
   listTradingSystems,
   replaceTradingSystemMembers,
   runTradingSystemBacktest,
@@ -11,7 +12,7 @@ import {
   updateTradingSystem,
 } from '../bot/tradingSystems';
 import { getMonitoringLatest } from '../bot/monitoring';
-import { getPositions, closeAllPositions, cancelAllOrders } from '../bot/exchange';
+import { getPositions, closeAllPositions, cancelAllOrders, ensureExchangeClientInitialized } from '../bot/exchange';
 import { Strategy, saveApiKey } from '../config/settings';
 import { db, initDB } from '../utils/database';
 import logger from '../utils/logger';
@@ -2406,6 +2407,67 @@ const findSweepRecordByStrategyId = (sweep: SweepData | null, strategyId: number
   return rows.find((item) => Number(item.strategyId) === Number(strategyId)) || null;
 };
 
+const buildSweepRecordFallbackByStrategyId = async (strategyId: number): Promise<SweepRecord | null> => {
+  const id = Math.floor(asNumber(strategyId, 0));
+  if (!id) {
+    return null;
+  }
+
+  const row = await db.get(
+    `SELECT
+       s.id,
+       s.name,
+       s.strategy_type,
+       s.market_mode,
+       s.base_symbol,
+       s.quote_symbol,
+       s.interval,
+       s.price_channel_length,
+       s.take_profit_percent,
+       s.detection_source,
+       s.zscore_entry,
+       s.zscore_exit,
+       s.zscore_stop
+     FROM strategies s
+     WHERE s.id = ?`,
+    [id]
+  ) as Record<string, unknown> | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  const modeRaw = asString(row.market_mode, 'synthetic').trim().toLowerCase();
+  const marketMode = modeRaw === 'mono' ? 'mono' : 'synthetic';
+  const baseSymbol = asString(row.base_symbol, '').trim().toUpperCase();
+  const quoteSymbol = asString(row.quote_symbol, '').trim().toUpperCase();
+  const market = marketMode === 'mono'
+    ? (baseSymbol || 'BTCUSDT')
+    : `${baseSymbol || 'BTCUSDT'}/${quoteSymbol || 'ETHUSDT'}`;
+
+  return {
+    strategyId: id,
+    strategyName: asString(row.name, `strategy_${id}`),
+    strategyType: asString(row.strategy_type, 'DD_BattleToads'),
+    marketMode,
+    market,
+    interval: asString(row.interval, '4h'),
+    length: Math.max(2, Math.floor(asNumber(row.price_channel_length, 24))),
+    takeProfitPercent: asNumber(row.take_profit_percent, 0),
+    detectionSource: asString(row.detection_source, 'close') === 'wick' ? 'wick' : 'close',
+    zscoreEntry: asNumber(row.zscore_entry, 2),
+    zscoreExit: asNumber(row.zscore_exit, 0.5),
+    zscoreStop: asNumber(row.zscore_stop, 3),
+    totalReturnPercent: 0,
+    maxDrawdownPercent: 0,
+    winRatePercent: 0,
+    profitFactor: 0,
+    tradesCount: 0,
+    score: 0,
+    robust: true,
+  };
+};
+
 const normalizeModeForStrategy = (mode: string): 'mono' | 'synthetic' => (mode === 'mono' ? 'mono' : 'synthetic');
 
 const getRiskLotPercent = (riskLevel: Level3): number => {
@@ -2990,7 +3052,9 @@ const buildStrategyDraftFromRecord = (
 };
 
 const prefixStrategyName = (tenant: TenantRow, record: SweepRecord): string => {
-  return `SAAS::${tenant.slug}::${record.marketMode.toUpperCase()}::${record.strategyType}::${record.market}`;
+  const sourceStrategyId = Number(record.strategyId || 0);
+  const strategySuffix = sourceStrategyId > 0 ? `::SID${sourceStrategyId}` : '';
+  return `SAAS::${tenant.slug}::${record.marketMode.toUpperCase()}::${record.strategyType}::${record.market}${strategySuffix}`;
 };
 
 const getExistingTenantStrategies = async (apiKeyName: string, tenantSlug: string) => {
@@ -3173,6 +3237,40 @@ const normalizePublishOfferIds = (offerIds?: string[]): string[] => Array.from(n
     .filter(Boolean)
 ));
 
+const parseStrategyIdFromOfferId = (offerId: string): number => {
+  const parsed = Number((String(offerId || '').match(/(\d+)$/)?.[1]) || 0);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
+
+const getStrategyNameMapByIds = async (strategyIdsRaw: number[]): Promise<Map<number, string>> => {
+  const strategyIds = Array.from(new Set(
+    (Array.isArray(strategyIdsRaw) ? strategyIdsRaw : [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && value > 0)
+  ));
+
+  if (strategyIds.length === 0) {
+    return new Map<number, string>();
+  }
+
+  const placeholders = strategyIds.map(() => '?').join(', ');
+  const rows = await db.all(
+    `SELECT id, name FROM strategies WHERE id IN (${placeholders})`,
+    strategyIds
+  );
+
+  const byId = new Map<number, string>();
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const id = asNumber((row as Record<string, unknown>).id, 0);
+    const name = asString((row as Record<string, unknown>).name, '').trim();
+    if (id > 0 && name) {
+      byId.set(id, name);
+    }
+  }
+
+  return byId;
+};
+
 const buildSetSlug = (raw: string): string => asString(raw, '')
   .trim()
   .toLowerCase()
@@ -3199,23 +3297,29 @@ const buildPublishSystemSuffix = (setKey: string, offerIds: string[]): string =>
   return `set-${hash}`;
 };
 
-const resolvePublishDraftMembers = (
+const resolvePublishDraftMembers = async (
   catalog: CatalogData | null,
-  offerIds: string[]
-): CatalogData['adminTradingSystemDraft']['members'] => {
+  offerIds: string[],
+  setKey?: string
+): Promise<CatalogData['adminTradingSystemDraft']['members']> => {
   const fallbackMembers = Array.isArray(catalog?.adminTradingSystemDraft?.members)
     ? (catalog?.adminTradingSystemDraft?.members || [])
     : [];
 
   if (!catalog || offerIds.length === 0) {
-    return fallbackMembers;
+    // Continue to snapshot fallback below if setKey is provided.
+    if (!setKey) {
+      return fallbackMembers;
+    }
   }
 
   const offersById = new Map<string, CatalogOffer>();
-  for (const offer of getAllOffers(catalog)) {
-    const offerId = String(offer?.offerId || '').trim();
-    if (offerId) {
-      offersById.set(offerId, offer);
+  if (catalog) {
+    for (const offer of getAllOffers(catalog)) {
+      const offerId = String(offer?.offerId || '').trim();
+      if (offerId) {
+        offersById.set(offerId, offer);
+      }
     }
   }
 
@@ -3233,11 +3337,79 @@ const resolvePublishDraftMembers = (
     }))
     .filter((member) => Number.isFinite(member.strategyId) && member.strategyId > 0);
 
-  if (mapped.length === 0) {
+  if (mapped.length > 0) {
+    return mapped;
+  }
+
+  // Snapshot-based fallback: allows publishing historical saved sets
+  // even when they are absent from the current sweep catalog.
+  const offerStore = await getOfferStoreAdminState();
+  const snapshotMap = offerStore.tsBacktestSnapshots || {};
+  const normalizedSetKey = normalizeTsSnapshotMapKey(asString(setKey, ''));
+  const normalizedOfferIds = Array.from(new Set(
+    (Array.isArray(offerIds) ? offerIds : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+  ));
+
+  let snapshot = normalizedSetKey ? (snapshotMap[normalizedSetKey] || null) : null;
+  if (!snapshot && normalizedOfferIds.length > 0) {
+    snapshot = Object.values(snapshotMap).find((item) => {
+      const itemOfferIds = Array.from(new Set(
+        (Array.isArray(item.offerIds) ? item.offerIds : [])
+          .map((value) => String(value || '').trim())
+          .filter(Boolean)
+      ));
+      if (itemOfferIds.length === 0) {
+        return false;
+      }
+      return normalizedOfferIds.some((offerId) => itemOfferIds.includes(offerId));
+    }) || null;
+  }
+
+  if (!snapshot) {
     return fallbackMembers;
   }
 
-  return mapped;
+  const snapshotOfferIds = Array.from(new Set(
+    (Array.isArray(snapshot.offerIds) ? snapshot.offerIds : [])
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+  ));
+  if (snapshotOfferIds.length === 0) {
+    return fallbackMembers;
+  }
+
+  const offerStoreById = new Map(
+    (offerStore.offers || []).map((offer) => [String(offer.offerId || '').trim(), offer])
+  );
+
+  const snapshotMembers = snapshotOfferIds
+    .map((offerId, index, arr) => {
+      const offer = offerStoreById.get(offerId);
+      const strategyIdFromOffer = Number(offer?.strategyId || 0);
+      const parsedFromOfferId = parseStrategyIdFromOfferId(offerId);
+      const strategyId = strategyIdFromOffer > 0 ? strategyIdFromOffer : parsedFromOfferId;
+      if (!Number.isFinite(strategyId) || strategyId <= 0) {
+        return null;
+      }
+      return {
+        strategyId,
+        strategyName: asString(offer?.titleRu, `Snapshot strategy ${index + 1}`),
+        strategyType: 'DD_BattleToads',
+        marketMode: offer?.mode === 'synth' ? 'synthetic' : 'mono',
+        market: asString(offer?.market, ''),
+        score: Number(asNumber(offer?.score, 0).toFixed(3)),
+        weight: Number((1 / Math.max(1, arr.length)).toFixed(4)),
+      };
+    })
+    .filter((member): member is CatalogData['adminTradingSystemDraft']['members'][number] => Boolean(member));
+
+  if (snapshotMembers.length > 0) {
+    return snapshotMembers;
+  }
+
+  return fallbackMembers;
 };
 
 const ensurePublishedSourceSystem = async (
@@ -3698,8 +3870,10 @@ type AdminTelegramControls = {
   adminEnabled: boolean;
   clientsEnabled: boolean;
   runtimeOnly: boolean;
+  reconciliationCycleEnabled: boolean;
   tokenConfigured: boolean;
   chatConfigured: boolean;
+  reportIntervalMinutes: number;
 };
 
 export type LowLotRecommendation = {
@@ -3767,18 +3941,22 @@ const runWithSqliteBusyRetry = async <T>(fn: () => Promise<T>): Promise<T> => {
 };
 
 export const getAdminTelegramControls = async (): Promise<AdminTelegramControls> => {
-  const [adminEnabledRaw, clientsEnabledRaw, runtimeOnlyRaw] = await Promise.all([
+  const [adminEnabledRaw, clientsEnabledRaw, runtimeOnlyRaw, reconciliationCycleRaw, reportIntervalRaw] = await Promise.all([
     getRuntimeFlag('telegram.admin.enabled', '1'),
     getRuntimeFlag('telegram.clients.enabled', '0'),
     getRuntimeFlag('telegram.admin.runtimeonly', '0'),
+    getRuntimeFlag('runtime.cycle.reconciliation.enabled', '0'),
+    getRuntimeFlag('telegram.admin.report_interval_minutes', '60'),
   ]);
 
   return {
     adminEnabled: adminEnabledRaw !== '0',
     clientsEnabled: clientsEnabledRaw !== '0',
     runtimeOnly: runtimeOnlyRaw === '1',
+    reconciliationCycleEnabled: reconciliationCycleRaw !== '0',
     tokenConfigured: Boolean(String(process.env.TELEGRAM_ADMIN_BOT_TOKEN || '').trim()),
     chatConfigured: Boolean(String(process.env.TELEGRAM_ADMIN_CHAT_ID || '').trim()),
+    reportIntervalMinutes: Math.max(5, Math.min(1440, Math.floor(asNumber(reportIntervalRaw, 60)) || 60)),
   };
 };
 
@@ -3786,6 +3964,8 @@ export const updateAdminTelegramControls = async (payload: {
   adminEnabled?: boolean;
   clientsEnabled?: boolean;
   runtimeOnly?: boolean;
+  reconciliationCycleEnabled?: boolean;
+  reportIntervalMinutes?: number;
 }): Promise<AdminTelegramControls> => {
   if (payload.adminEnabled !== undefined) {
     await setRuntimeFlag('telegram.admin.enabled', payload.adminEnabled ? '1' : '0');
@@ -3795,6 +3975,13 @@ export const updateAdminTelegramControls = async (payload: {
   }
   if (payload.runtimeOnly !== undefined) {
     await setRuntimeFlag('telegram.admin.runtimeonly', payload.runtimeOnly ? '1' : '0');
+  }
+  if (payload.reconciliationCycleEnabled !== undefined) {
+    await setRuntimeFlag('runtime.cycle.reconciliation.enabled', payload.reconciliationCycleEnabled ? '1' : '0');
+  }
+  if (payload.reportIntervalMinutes !== undefined) {
+    const clamped = Math.max(5, Math.min(1440, Math.floor(asNumber(payload.reportIntervalMinutes, 60)) || 60));
+    await setRuntimeFlag('telegram.admin.report_interval_minutes', String(clamped));
   }
 
   return getAdminTelegramControls();
@@ -3986,6 +4173,7 @@ export const updateOfferStoreAdminState = async (payload: {
 
 export const previewAdminSweepBacktest = async (payload?: {
   kind?: 'offer' | 'algofund-ts';
+  setKey?: string;
   offerId?: string;
   offerIds?: string[];
   riskScore?: number;
@@ -4305,6 +4493,317 @@ export const previewAdminSweepBacktest = async (payload?: {
   }
 
   if (selectedOffers.length === 0) {
+    if (kind === 'algofund-ts') {
+      const snapshotMap = await getTsBacktestSnapshots();
+      const requestedSetKey = normalizeTsSnapshotMapKey(asString(payload?.setKey, ''));
+      const normalizeOfferIds = (raw: unknown): string[] => Array.from(new Set(
+        (Array.isArray(raw) ? raw : [])
+          .map((item) => asString(item, '').trim())
+          .filter(Boolean)
+      ));
+      const requestedOfferIds = normalizeOfferIds(offerIds);
+
+      let snapshot = requestedSetKey ? (snapshotMap[requestedSetKey] || null) : null;
+      if (!snapshot && requestedOfferIds.length > 0) {
+        snapshot = Object.values(snapshotMap).find((item) => {
+          const snapshotOfferIds = normalizeOfferIds(item.offerIds);
+          if (snapshotOfferIds.length === 0) {
+            return false;
+          }
+          return requestedOfferIds.some((offerId) => snapshotOfferIds.includes(offerId));
+        }) || null;
+      }
+
+      if (!snapshot) {
+        const legacySnapshot = await getTsBacktestSnapshot();
+        if (legacySnapshot) {
+          const legacySetKey = normalizeTsSnapshotMapKey(asString(legacySnapshot.setKey, ''));
+          const legacyOfferIds = normalizeOfferIds(legacySnapshot.offerIds);
+          if (
+            (requestedSetKey && legacySetKey === requestedSetKey)
+            || (requestedOfferIds.length > 0 && requestedOfferIds.some((offerId) => legacyOfferIds.includes(offerId)))
+          ) {
+            snapshot = legacySnapshot;
+          }
+        }
+      }
+
+      if (snapshot) {
+        const snapshotOfferIds = normalizeOfferIds(snapshot.offerIds);
+        if (snapshotOfferIds.length > 0) {
+          const offerStore = await getOfferStoreAdminState();
+          const offerStoreById = new Map(
+            (offerStore.offers || []).map((item) => [asString(item.offerId, '').trim(), item])
+          );
+          const strategyIds = Array.from(new Set(snapshotOfferIds
+            .map((offerId) => Number(offerStoreById.get(offerId)?.strategyId || parseStrategyIdFromOfferId(offerId)))
+            .filter((value) => Number.isFinite(value) && value > 0)));
+          const strategyNameById = await getStrategyNameMapByIds(strategyIds);
+
+          const snapshotSelectedOffers = snapshotOfferIds.map((offerId, index) => {
+            const known = offerStoreById.get(offerId);
+            const strategyId = Number(known?.strategyId || parseStrategyIdFromOfferId(offerId));
+            const strategyNameFromDb = strategyId > 0 ? asString(strategyNameById.get(strategyId), '') : '';
+            const titleFallback = strategyNameFromDb || `Strategy #${strategyId || (index + 1)}`;
+            const hasOfferMetrics = Boolean(known);
+            return {
+              offerId,
+              titleRu: asString(known?.titleRu, titleFallback),
+              mode: known?.mode === 'synth' ? 'synth' as const : 'mono' as const,
+              market: asString(known?.market, ''),
+              strategyId,
+              strategyName: asString(strategyNameFromDb, asString(known?.titleRu, titleFallback)),
+              score: Number(asNumber(known?.score, 0).toFixed(3)),
+              metrics: {
+                ret: Number(asNumber(known?.ret, 0).toFixed(3)),
+                pf: Number(asNumber(known?.pf, 0).toFixed(3)),
+                dd: Number(asNumber(known?.dd, 0).toFixed(3)),
+                wr: 0,
+                trades: Math.max(0, Math.floor(asNumber(known?.trades, 0))),
+              },
+              metricsSource: hasOfferMetrics ? 'offer_store' : 'snapshot_only',
+              tradesPerDay: Number(asNumber(known?.tradesPerDay, 0).toFixed(3)),
+              periodDays: Math.max(1, Math.floor(asNumber(known?.periodDays, snapshot.periodDays || periodDays))),
+              equityPoints: Array.isArray(known?.equityPoints)
+                ? known.equityPoints.map((value) => Number(asNumber(value, 0).toFixed(4)))
+                : [],
+            };
+          });
+
+          const snapshotEquity = (Array.isArray(snapshot.equityPoints) ? snapshot.equityPoints : [])
+            .map((value, index) => ({ time: index, equity: Number(asNumber(value, 0).toFixed(4)) }))
+            .filter((item) => Number.isFinite(item.equity));
+          const snapshotStrategyIds = Array.from(new Set(snapshotSelectedOffers
+            .map((item) => Number(item.strategyId || 0))
+            .filter((value) => Number.isFinite(value) && value > 0)));
+
+          let snapshotRerunFailureReason = '';
+          if (canTryRealBacktest && snapshotStrategyIds.length > 0) {
+            const sweepConfigAny = (sweep?.config || {}) as Record<string, unknown>;
+            const resolvedByStrategiesApiKey = await resolveApiKeyNameForStrategyIds(snapshotStrategyIds, '', { strict: false });
+            const preferredApiKey = asString(payload?.rerunApiKeyName, '')
+              || resolvedByStrategiesApiKey
+              || asString(snapshot.apiKeyName, '')
+              || asString((sweep as Record<string, unknown>)?.apiKeyName, '')
+              || asString(sweepConfigAny.apiKeyName, '')
+              || asString(catalog?.apiKeyName, '')
+              || asString((await getAvailableApiKeyNames())[0], '');
+
+            if (preferredApiKey) {
+              try {
+                // Ensure the exchange client is initialized so getMarketData can fetch candles from the exchange
+                await ensureExchangeClientInitialized(preferredApiKey);
+
+                const primaryRequest: Parameters<typeof runBacktest>[0] = {
+                  apiKeyName: preferredApiKey,
+                  mode: 'portfolio',
+                  strategyIds: snapshotStrategyIds,
+                  bars: asNumber(sweep?.config?.backtestBars, 6000),
+                  warmupBars: asNumber(sweep?.config?.warmupBars, 400),
+                  skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
+                  initialBalance,
+                  commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
+                  slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
+                  fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
+                  dateFrom: asString(sweep?.config?.dateFrom, ''),
+                  dateTo: asString(sweep?.config?.dateTo, ''),
+                };
+
+                let result;
+                let rerunRelaxedDateRange = false;
+                try {
+                  result = await runBacktest(primaryRequest);
+                } catch (primaryError) {
+                  const primaryMessage = asString((primaryError as Error).message, '');
+                  const canRelaxDateRange = /No executable candles after warmup|No runnable strategies in selected range/i.test(primaryMessage);
+                  if (!canRelaxDateRange) {
+                    throw primaryError;
+                  }
+
+                  result = await runBacktest({
+                    ...primaryRequest,
+                    // Snapshot can come from historical ranges that no longer overlap latest sweep window.
+                    // Retry without strict range to find executable candles for selected strategies.
+                    dateFrom: '',
+                    dateTo: '',
+                    warmupBars: Math.max(50, Math.min(180, asNumber(sweep?.config?.warmupBars, 400))),
+                  });
+                  rerunRelaxedDateRange = true;
+                }
+
+                const summaryAny = result.summary as Record<string, unknown>;
+                const scaledSummary = {
+                  ...result.summary,
+                  totalReturnPercent: result.summary.totalReturnPercent * rerunRiskMul,
+                  maxDrawdownPercent: result.summary.maxDrawdownPercent * rerunRiskMul,
+                  ...(summaryAny.netProfit != null ? { netProfit: Number(summaryAny.netProfit) * rerunRiskMul } : {}),
+                  marginLoadPercent: 0,
+                };
+                const scaledEquity = result.equityCurve.map((point) => ({
+                  ...point,
+                  equity: Number((initialBalance + (point.equity - initialBalance) * rerunRiskMul).toFixed(4)),
+                }));
+
+                return {
+                  kind,
+                  publishMeta: {
+                    offerIds: snapshotOfferIds,
+                    setKey: asString(snapshot.setKey, requestedSetKey),
+                    membersCount: snapshotOfferIds.length,
+                    systemName: asString(snapshot.systemName, ''),
+                  },
+                  controls: {
+                    riskScore,
+                    tradeFrequencyScore,
+                    riskLevel,
+                    tradeFrequencyLevel,
+                    riskScaleMaxPercent,
+                  },
+                  period,
+                  sweepApiKeyName: asString(snapshot.apiKeyName, ''),
+                  selectedOffers: snapshotSelectedOffers,
+                  preview: {
+                    source: 'admin_saved_ts_snapshot_rerun',
+                    summary: scaledSummary,
+                    equity: scaledEquity,
+                    curves: {
+                      pnl: scaledEquity.map((point) => ({ time: point.time, value: point.equity - initialBalance })),
+                      drawdownPercent: [],
+                      marginLoadPercent: [],
+                    },
+                    trades: result.trades,
+                    strictPresetMode: false,
+                    riskApproximated: rerunRiskMul !== 1,
+                  },
+                  rerun: {
+                    requested: true,
+                    executed: true,
+                    apiKeyName: preferredApiKey,
+                    strategyIds: snapshotStrategyIds,
+                    tsMembersCount: snapshotOfferIds.length,
+                    riskMul: rerunRiskMul,
+                    riskScaleMaxPercent,
+                    freqLevel: tradeFrequencyLevel,
+                    ...(rerunRelaxedDateRange ? { note: 'date_range_relaxed_for_snapshot_rerun' } : {}),
+                  },
+                };
+              } catch (error) {
+                const rawMessage = asString((error as Error).message, 'Unknown rerun error');
+                const isNoCandles = /No executable candles|No runnable strategies|No candles in selected date range/i.test(rawMessage);
+                snapshotRerunFailureReason = isNoCandles
+                  ? `Исторические свечи не найдены для стратегий снапшота. Запустите новый historical sweep для API ключа "${preferredApiKey}" чтобы скачать данные. (${rawMessage})`
+                  : rawMessage;
+                logger.warn(`Snapshot TS rerun fallback to synthetic mode: ${snapshotRerunFailureReason}`);
+              }
+            }
+          }
+
+          const baselineMetrics = {
+            ret: Number(asNumber(snapshot.ret, 0).toFixed(3)),
+            pf: Number(asNumber(snapshot.pf, 0).toFixed(3)),
+            dd: Number(asNumber(snapshot.dd, 0).toFixed(3)),
+            wr: 0,
+            trades: Math.max(0, Math.floor(asNumber(snapshot.trades, 0))),
+          };
+          const adjustedSnapshotMetrics = adjustPreviewMetrics(baselineMetrics, rerunRiskMul, tradeMul);
+          const baseEquity = snapshotEquity.length > 1
+            ? snapshotEquity
+            : [
+              { time: 0, equity: initialBalance },
+              { time: 1, equity: Number(asNumber(snapshot.finalEquity, initialBalance).toFixed(4)) },
+            ];
+          const baseStartEquity = asNumber(baseEquity[0]?.equity, initialBalance);
+          const baseEndEquity = asNumber(baseEquity[baseEquity.length - 1]?.equity, initialBalance);
+          const scaledEndEquityByRisk = initialBalance + (baseEndEquity - baseStartEquity) * rerunRiskMul;
+          const freqShapeFactor = clampNumber(0.7 + Math.log(Math.max(0.2, tradeMul)) * 0.45, 0.45, 1.8);
+          const waveAmplitude = Math.abs(scaledEndEquityByRisk - initialBalance) * 0.08 * clampNumber(tradeMul, 0.6, 1.9);
+
+          let adjustedSnapshotEquity = baseEquity.map((point, index, arr) => {
+            const progress = arr.length > 1 ? (index / Math.max(1, arr.length - 1)) : 1;
+            const scaledRaw = initialBalance + (asNumber(point.equity, baseStartEquity) - baseStartEquity) * rerunRiskMul;
+            const trendLine = initialBalance + (scaledEndEquityByRisk - initialBalance) * progress;
+            const deviation = scaledRaw - trendLine;
+            const wave = Math.sin(progress * Math.PI * 2 * (1 + tradeMul * 0.8)) * waveAmplitude * (0.25 + 0.75 * progress);
+            return {
+              time: point.time,
+              equity: Number((trendLine + deviation * freqShapeFactor + wave).toFixed(4)),
+            };
+          });
+
+          const targetFinalEquity = Number((initialBalance * (1 + adjustedSnapshotMetrics.ret / 100)).toFixed(4));
+          const currentFinalEquity = asNumber(adjustedSnapshotEquity[adjustedSnapshotEquity.length - 1]?.equity, initialBalance);
+          const currentPnl = currentFinalEquity - initialBalance;
+          const targetPnl = targetFinalEquity - initialBalance;
+          if (Math.abs(currentPnl) > 1e-6) {
+            const pnlScale = targetPnl / currentPnl;
+            adjustedSnapshotEquity = adjustedSnapshotEquity.map((point) => ({
+              time: point.time,
+              equity: Number((initialBalance + (point.equity - initialBalance) * pnlScale).toFixed(4)),
+            }));
+          }
+          if (adjustedSnapshotEquity.length > 0) {
+            adjustedSnapshotEquity[adjustedSnapshotEquity.length - 1] = {
+              ...adjustedSnapshotEquity[adjustedSnapshotEquity.length - 1],
+              equity: targetFinalEquity,
+            };
+          }
+
+          const snapshotCurves = buildDerivedPreviewCurves(adjustedSnapshotEquity, initialBalance, riskScore);
+
+          return {
+            kind,
+            publishMeta: {
+              offerIds: snapshotOfferIds,
+              setKey: asString(snapshot.setKey, requestedSetKey),
+              membersCount: snapshotOfferIds.length,
+              systemName: asString(snapshot.systemName, ''),
+            },
+            controls: {
+              riskScore,
+              tradeFrequencyScore,
+              riskLevel,
+              tradeFrequencyLevel,
+              riskScaleMaxPercent,
+            },
+            period,
+            sweepApiKeyName: asString(snapshot.apiKeyName, ''),
+            selectedOffers: snapshotSelectedOffers,
+            preview: {
+              source: 'admin_saved_ts_snapshot_synthetic',
+              summary: {
+                finalEquity: Number(asNumber(adjustedSnapshotEquity[adjustedSnapshotEquity.length - 1]?.equity, initialBalance).toFixed(4)),
+                totalReturnPercent: Number(adjustedSnapshotMetrics.ret.toFixed(3)),
+                maxDrawdownPercent: Number(adjustedSnapshotMetrics.dd.toFixed(3)),
+                profitFactor: Number(adjustedSnapshotMetrics.pf.toFixed(3)),
+                winRatePercent: 0,
+                tradesCount: Math.max(0, Math.floor(adjustedSnapshotMetrics.trades)),
+                unrealizedPnl: snapshotCurves.finalUnrealizedPnl,
+                marginLoadPercent: snapshotCurves.maxMarginLoadPercent,
+              },
+              equity: adjustedSnapshotEquity,
+              curves: {
+                pnl: snapshotCurves.pnl,
+                drawdownPercent: snapshotCurves.drawdownPercent,
+                marginLoadPercent: snapshotCurves.marginLoadPercent,
+              },
+              trades: [],
+              strictPresetMode: true,
+            },
+            rerun: {
+              requested: canTryRealBacktest,
+              executed: false,
+              ...(snapshotRerunFailureReason ? { error: snapshotRerunFailureReason } : {}),
+              apiKeyName: asString(payload?.rerunApiKeyName, asString(snapshot.apiKeyName, '')),
+              strategyIds: snapshotStrategyIds,
+              tsMembersCount: snapshotOfferIds.length,
+              riskMul: rerunRiskMul,
+              riskScaleMaxPercent,
+              freqLevel: tradeFrequencyLevel,
+            },
+          };
+        }
+      }
+    }
     throw new Error('No offers resolved for sweep backtest preview');
   }
 
@@ -4751,6 +5250,7 @@ export const getAdminLowLotRecommendations = async (options?: {
      FROM strategies s
      JOIN api_keys a ON a.id = s.api_key_id
      WHERE COALESCE(s.last_error, '') <> ''
+       AND COALESCE(s.is_active, 0) = 1
        AND datetime(s.updated_at) >= datetime('now', ?)
        AND lower(s.last_error) LIKE '%order size too small%'
      ORDER BY datetime(s.updated_at) DESC
@@ -4783,6 +5283,7 @@ export const getAdminLowLotRecommendations = async (options?: {
      LEFT JOIN strategies s ON s.id = e.strategy_id
      LEFT JOIN api_keys a ON a.name = e.api_key_name
      WHERE e.event_type = 'low_lot_error'
+       AND COALESCE(s.is_active, 0) = 1
        AND e.resolved_at = 0
        AND e.created_at >= ?
      ORDER BY e.created_at DESC
@@ -5177,7 +5678,9 @@ const listTenantSummaries = async (options?: {
         ? strategyProfile?.assigned_api_key_name
         : tenant.product_mode === 'algofund_client'
           ? (algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name)
-          : copytradingProfile?.master_api_key_name,
+          : Number(copytradingProfile?.copy_enabled || 0) === 1
+            ? copytradingProfile?.master_api_key_name
+            : '',
       tenant.assigned_api_key_name
     ).trim();
     const monitoring = capabilities.monitoring && effectiveMonitoringApiKeyName
@@ -6009,6 +6512,20 @@ const getAlgofundExecutionApiKeyName = (tenant: TenantRow, profile: AlgofundProf
   return asString(profile.execution_api_key_name || tenant.assigned_api_key_name || profile.assigned_api_key_name);
 };
 
+const getAlgofundPublishedSourceApiKeyName = (publishedSystemName: string): string => {
+  const normalized = asString(publishedSystemName, '').trim();
+  if (!normalized) {
+    return '';
+  }
+
+  const chunks = normalized.split('::').map((part) => part.trim()).filter(Boolean);
+  if (chunks.length >= 2 && chunks[0].toUpperCase() === 'ALGOFUND_MASTER') {
+    return asString(chunks[1], '');
+  }
+
+  return '';
+};
+
 const getAlgofundEngineState = async (
   tenant: TenantRow,
   profile: AlgofundProfileRow
@@ -6051,33 +6568,155 @@ const materializeAlgofundSystem = async (
     throw new Error('Assign an API key to this algofund client first');
   }
 
-  const draftMembers = catalog.adminTradingSystemDraft?.members || [];
+  const catalogDraftMembers = catalog.adminTradingSystemDraft?.members || [];
+  const sourceSystemName = asString(profile.published_system_name, '').trim();
+  const sourceSystemApiKeyName = asString(
+    getAlgofundPublishedSourceApiKeyName(sourceSystemName)
+    || profile.assigned_api_key_name
+    || tenant.assigned_api_key_name,
+    ''
+  ).trim();
+  let draftMembers = catalogDraftMembers;
+
+  if (sourceSystemApiKeyName && sourceSystemName) {
+    const sourceSystems = await listTradingSystems(sourceSystemApiKeyName).catch(() => []);
+    const sourceSystem = (Array.isArray(sourceSystems) ? sourceSystems : []).find((item) => asString(item.name, '') === sourceSystemName);
+    if (sourceSystem?.id) {
+      const fullSourceSystem = await getTradingSystem(sourceSystemApiKeyName, Number(sourceSystem.id)).catch(() => null);
+      const sourceMembers = Array.isArray((fullSourceSystem as any)?.members)
+        ? ((fullSourceSystem as any).members as Array<{ strategy_id?: number; strategy_name?: string; weight?: number }>)
+            .map((member, index) => ({
+              strategyId: Number(member?.strategy_id || 0),
+              strategyName: asString(member?.strategy_name, `published member ${index + 1}`),
+              strategyType: '',
+              marketMode: '',
+              market: '',
+              score: 0,
+              weight: asNumber(member?.weight, 1),
+            }))
+            .filter((member) => Number.isFinite(member.strategyId) && member.strategyId > 0)
+        : [];
+
+      if (sourceMembers.length > 0) {
+        draftMembers = sourceMembers;
+        logger.warn(`Algofund materialize: using published source system members (${sourceMembers.length}) from ${sourceSystemName} instead of latest admin draft.`);
+      }
+    }
+  }
+
   if (draftMembers.length === 0) {
     throw new Error('Admin TS draft members are empty in latest client catalog');
   }
 
   const riskMultiplier = Math.max(0, Math.min(asNumber(profile.risk_multiplier, 1), asNumber(plan.risk_cap_max, 1)));
+  let sourceSystemFallbackRecordsByStrategyId: Map<number, SweepRecord> | null = null;
+  let sourceSystemFallbackRecordsOrdered: SweepRecord[] | null = null;
+
+  const loadSourceSystemFallbackRecords = async (): Promise<void> => {
+    if (sourceSystemFallbackRecordsByStrategyId !== null && sourceSystemFallbackRecordsOrdered !== null) {
+      return;
+    }
+
+    sourceSystemFallbackRecordsByStrategyId = new Map<number, SweepRecord>();
+    sourceSystemFallbackRecordsOrdered = [];
+
+    if (!sourceSystemApiKeyName) {
+      return;
+    }
+
+    if (sourceSystemName) {
+      const systems = await listTradingSystems(sourceSystemApiKeyName).catch(() => []);
+      const sourceSystem = (Array.isArray(systems) ? systems : []).find((item) => asString(item.name, '') === sourceSystemName);
+
+      if (sourceSystem?.id) {
+        const fullSystem = await getTradingSystem(sourceSystemApiKeyName, Number(sourceSystem.id)).catch(() => null);
+        const members = Array.isArray((fullSystem as any)?.members) ? ((fullSystem as any).members as Array<{ strategy_id?: number }>) : [];
+        for (const member of members) {
+          const strategyId = Number(member?.strategy_id || 0);
+          if (!strategyId) {
+            continue;
+          }
+          const fallback = await buildSweepRecordFallbackByStrategyId(strategyId);
+          if (!fallback) {
+            continue;
+          }
+          sourceSystemFallbackRecordsByStrategyId.set(strategyId, fallback);
+          sourceSystemFallbackRecordsOrdered.push(fallback);
+        }
+      }
+    }
+
+    // If source system members are unavailable, fallback to currently active source strategies.
+    if (sourceSystemFallbackRecordsOrdered.length === 0) {
+      const sourceStrategies = await getStrategies(sourceSystemApiKeyName, { includeLotPreview: false }).catch(() => []);
+      for (const strategy of Array.isArray(sourceStrategies) ? sourceStrategies : []) {
+        const strategyId = Number((strategy as { id?: number })?.id || 0);
+        const isActive = Number((strategy as { is_active?: number | boolean })?.is_active ? 1 : 0) === 1;
+        if (!strategyId || !isActive) {
+          continue;
+        }
+        const fallback = await buildSweepRecordFallbackByStrategyId(strategyId);
+        if (!fallback) {
+          continue;
+        }
+        sourceSystemFallbackRecordsByStrategyId.set(strategyId, fallback);
+        sourceSystemFallbackRecordsOrdered.push(fallback);
+      }
+      if (sourceSystemFallbackRecordsOrdered.length > 0) {
+        logger.warn(`Algofund materialize fallback: using ${sourceSystemFallbackRecordsOrdered.length} active source strategies from api key ${sourceSystemApiKeyName}.`);
+      }
+    }
+  };
+
+  const recordsForMaterialization: Array<{
+    offerId: string;
+    record: SweepRecord;
+    metrics: CatalogMetricSet & { score: number };
+  }> = [];
+
+  for (let index = 0; index < draftMembers.length; index += 1) {
+    const member = draftMembers[index];
+    const strategyId = Number(member.strategyId || 0);
+    let record = findSweepRecordByStrategyId(sweep, strategyId);
+    if (!record) {
+      record = await buildSweepRecordFallbackByStrategyId(strategyId);
+      if (record) {
+        logger.warn(`Algofund materialize fallback: using DB strategy params for strategyId=${strategyId} (not found in latest sweep).`);
+      }
+    }
+    if (!record) {
+      await loadSourceSystemFallbackRecords();
+      const fallbackByIdMap: Map<number, SweepRecord> = sourceSystemFallbackRecordsByStrategyId || new Map<number, SweepRecord>();
+      const fallbackOrdered: SweepRecord[] = sourceSystemFallbackRecordsOrdered || [];
+      const byId = fallbackByIdMap.get(strategyId) || null;
+      const byIndex = fallbackOrdered[index] || null;
+      record = byId || byIndex;
+      if (record) {
+        logger.warn(`Algofund materialize fallback: using published source system member strategyId=${record.strategyId} for draft strategyId=${strategyId}.`);
+      }
+    }
+    if (!record) {
+      throw new Error(`Cannot materialize member strategyId=${member.strategyId}: no sweep record and no DB strategy fallback.`);
+    }
+
+    recordsForMaterialization.push({
+      offerId: `admin-ts-${index + 1}`,
+      record,
+      metrics: {
+        ret: asNumber(record.totalReturnPercent, 0),
+        pf: asNumber(record.profitFactor, 0),
+        dd: asNumber(record.maxDrawdownPercent, 0),
+        wr: asNumber(record.winRatePercent, 0),
+        trades: asNumber(record.tradesCount, 0),
+        score: asNumber(record.score, 0),
+      },
+    });
+  }
+
   const materializedStrategies = await upsertTenantStrategies(
     tenant,
     executionApiKeyName,
-    draftMembers.map((member, index) => {
-      const record = findSweepRecordByStrategyId(sweep, Number(member.strategyId));
-      if (!record) {
-        throw new Error(`Sweep record not found for admin TS strategyId=${member.strategyId}`);
-      }
-      return {
-        offerId: `admin-ts-${index + 1}`,
-        record,
-        metrics: {
-          ret: asNumber(record.totalReturnPercent, 0),
-          pf: asNumber(record.profitFactor, 0),
-          dd: asNumber(record.maxDrawdownPercent, 0),
-          wr: asNumber(record.winRatePercent, 0),
-          trades: asNumber(record.tradesCount, 0),
-          score: asNumber(record.score, 0),
-        },
-      };
-    }),
+    recordsForMaterialization,
     asNumber(plan.max_deposit_total, 1000),
     riskMultiplier <= 0.85 ? 'low' : riskMultiplier >= 1.4 ? 'high' : 'medium',
     activate || profile.requested_enabled === 1
@@ -6086,7 +6725,15 @@ const materializeAlgofundSystem = async (
   const systems = await listTradingSystems(executionApiKeyName);
   const systemName = getAlgofundClientSystemName(tenant);
   const existing = systems.find((item) => asString(item.name) === systemName);
-  const members = materializedStrategies.map((row, index) => ({
+  const uniqueMaterialized = materializedStrategies.filter((row, index, arr) => {
+    const strategyId = Number(row.strategyId || 0);
+    if (!strategyId) {
+      return false;
+    }
+    return arr.findIndex((item) => Number(item.strategyId || 0) === strategyId) === index;
+  });
+
+  const members = uniqueMaterialized.map((row, index) => ({
     strategy_id: Number(row.strategyId),
     weight: Number(((index === 0 ? 1.25 : index === 1 ? 1.1 : 1) * Math.max(0.25, riskMultiplier)).toFixed(4)),
     member_role: index < 3 ? 'core' : 'satellite',
@@ -6121,6 +6768,10 @@ const materializeAlgofundSystem = async (
     await setTradingSystemActivation(executionApiKeyName, systemId, true, true);
   }
 
+  const storefrontSystemName = asString(profile.published_system_name, '').trim().toUpperCase().startsWith('ALGOFUND_MASTER::')
+    ? asString(profile.published_system_name, '').trim()
+    : systemName;
+
   await db.run(
     `UPDATE algofund_profiles
      SET assigned_api_key_name = ?,
@@ -6128,7 +6779,7 @@ const materializeAlgofundSystem = async (
          published_system_name = ?,
          updated_at = CURRENT_TIMESTAMP
      WHERE tenant_id = ?`,
-    [executionApiKeyName, executionApiKeyName, systemName, tenant.id]
+    [executionApiKeyName, executionApiKeyName, storefrontSystemName, tenant.id]
   );
 
   return {
@@ -6159,10 +6810,13 @@ export const getAlgofundState = async (
   }
 
   const engine = await getAlgofundEngineState(tenant, profile);
+  const effectiveStorefrontSystemName = asString(profile.published_system_name, '').trim().toUpperCase().startsWith('ALGOFUND_MASTER::')
+    ? asString(profile.published_system_name, '').trim()
+    : (engine?.systemName || profile.published_system_name);
   const effectiveProfile: AlgofundProfileRow = {
     ...profile,
     actual_enabled: engine ? (engine.isActive ? 1 : 0) : profile.actual_enabled,
-    published_system_name: engine?.systemName || profile.published_system_name,
+    published_system_name: effectiveStorefrontSystemName,
     assigned_api_key_name: engine?.apiKeyName || profile.assigned_api_key_name,
     execution_api_key_name: profile.execution_api_key_name,
   };
@@ -6693,7 +7347,7 @@ export const publishAdminTradingSystem = async (payload?: { offerIds?: string[];
   const catalog = loadLatestClientCatalog();
   const offerIds = normalizePublishOfferIds(payload?.offerIds);
   const setKey = asString(payload?.setKey, '').trim();
-  const members = resolvePublishDraftMembers(catalog, offerIds);
+  const members = await resolvePublishDraftMembers(catalog, offerIds, setKey);
   const sourceSystem = await ensurePublishedSourceSystem(undefined, {
     draftMembersOverride: members,
     systemNameSuffix: buildPublishSystemSuffix(setKey, offerIds),

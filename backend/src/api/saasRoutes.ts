@@ -175,6 +175,12 @@ router.patch('/admin/telegram-controls', async (req, res) => {
       adminEnabled: req.body?.adminEnabled !== undefined ? toBool(req.body.adminEnabled) : undefined,
       clientsEnabled: req.body?.clientsEnabled !== undefined ? toBool(req.body.clientsEnabled) : undefined,
       runtimeOnly: req.body?.runtimeOnly !== undefined ? toBool(req.body.runtimeOnly) : undefined,
+      reconciliationCycleEnabled: req.body?.reconciliationCycleEnabled !== undefined
+        ? toBool(req.body.reconciliationCycleEnabled)
+        : undefined,
+      reportIntervalMinutes: req.body?.reportIntervalMinutes !== undefined
+        ? toOptionalNumber(req.body.reportIntervalMinutes)
+        : undefined,
     });
     res.json({ success: true, ...data });
   } catch (error) {
@@ -239,6 +245,7 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
   try {
     const data = await previewAdminSweepBacktest({
       kind: req.body?.kind === 'algofund-ts' ? 'algofund-ts' : 'offer',
+      setKey: req.body?.setKey ? String(req.body.setKey) : undefined,
       offerId: req.body?.offerId ? String(req.body.offerId) : undefined,
       offerIds: Array.isArray(req.body?.offerIds) ? req.body.offerIds.map((item: unknown) => String(item)) : undefined,
       riskScore: toOptionalNumber(req.body?.riskScore),
@@ -329,10 +336,12 @@ router.post('/admin/apply-low-lot-recommendation', async (req, res) => {
   }
 });
 
-router.post('/admin/reports/send-telegram', async (_req, res) => {
+router.post('/admin/reports/send-telegram', async (req, res) => {
   try {
     const controls = await getAdminTelegramControls();
-    await runAdminTelegramReportNow({ periodHours: 24, runtimeOnly: controls.runtimeOnly });
+    const formatRaw = String(req.body?.format || '').trim().toLowerCase();
+    const format = formatRaw === 'short' ? 'short' : 'full';
+    await runAdminTelegramReportNow({ periodHours: 24, runtimeOnly: controls.runtimeOnly, format });
     res.json({ success: true });
   } catch (error) {
     const err = error as Error;
