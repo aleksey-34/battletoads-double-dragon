@@ -54,6 +54,7 @@ type SaasBacktestContext = {
   offerPublished?: boolean;
   offerIds?: string[];
   setKey?: string;
+  systemName?: string;
 };
 
 type AdminSweepBacktestPreviewResponse = {
@@ -840,9 +841,12 @@ type AlgofundState = {
   } | null;
   availableSystems?: Array<{
     id: number;
+    apiKeyName?: string;
     name: string;
     isActive: boolean;
     updatedAt?: string;
+    memberCount?: number;
+    memberStrategyIds?: number[];
     metrics?: {
       equityUsd?: number;
       unrealizedPnl?: number;
@@ -2313,6 +2317,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [unpublishAcknowledge, setUnpublishAcknowledge] = useState(false);
   const [algofundActiveSystems, setAlgofundActiveSystems] = useState<Array<{id:number;systemName:string;weight:number;isEnabled:boolean;assignedBy:string}>>([]);
   const [algofundActiveSystemsLoading, setAlgofundActiveSystemsLoading] = useState(false);
+  const [algofundCardRiskDrafts, setAlgofundCardRiskDrafts] = useState<Record<string, number>>({});
   const [monitoringChartOpen, setMonitoringChartOpen] = useState(false);
   const [monitoringChartLoading, setMonitoringChartLoading] = useState(false);
   const [monitoringChartApiKey, setMonitoringChartApiKey] = useState('');
@@ -2349,6 +2354,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [removeStorefrontClosePositions, setRemoveStorefrontClosePositions] = useState(true);
   const [removeStorefrontConfirm, setRemoveStorefrontConfirm] = useState<{
     systemName: string;
+    mode: 'remove' | 'delete';
     clientCount: number;
     tenants: Array<{ id: number; display_name: string }>;
     positionsByApiKey: Array<{ apiKeyName: string; openPositions: number; symbols: string[] }>;
@@ -2478,12 +2484,38 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return acc;
   }, {});
   const publishedStorefrontOffers = offerStoreOffers.filter((offer) => Boolean(offer.published));
+  const offerStoreOfferByStrategyId = new Map(
+    offerStoreOffers
+      .map((offer) => [Number(offer.strategyId || 0), offer] as const)
+      .filter(([strategyId]) => Number.isFinite(strategyId) && strategyId > 0)
+  );
   const reviewableSweepOffersRaw = offerStoreOffers.filter(
     (offer) =>
       Number(offer.pf || 0) >= approvalMinProfitFactor &&
       (sweepReviewRecords.length === 0 || sweepRecordByStrategyId[Number(offer.strategyId || 0)] != null)
   );
   const reviewTargetTradesPerDay = Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0);
+  const classifyOfferGroup = (offer: any): string => {
+    const mode = String(offer?.mode || offer?.strategy?.mode || '').toLowerCase() === 'mono' ? 'mono' : 'synth';
+    const familySource = String(
+      offer?.strategyType
+      || offer?.strategy?.strategyType
+      || offer?.strategyName
+      || offer?.titleRu
+      || ''
+    ).toLowerCase();
+    if (familySource.includes('stat_arb')) {
+      return mode === 'synth' ? 'statarb synth core' : 'statarb mono anchor';
+    }
+    if (familySource.includes('dd_battletoads')) {
+      return mode === 'synth' ? 'dd synth decorrelation' : 'dd mono trend';
+    }
+    if (familySource.includes('zz_breakout')) {
+      return mode === 'synth' ? 'zz synth decorrelation' : 'zz mono trend';
+    }
+    return mode === 'synth' ? 'synth other' : 'mono other';
+  };
+
   const reviewableSweepOffers = [...reviewableSweepOffersRaw]
     .sort((a, b) => {
       const target = Number.isFinite(reviewTargetTradesPerDay) ? reviewTargetTradesPerDay : 0;
@@ -2493,7 +2525,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         return aDistance - bDistance;
       }
       return Number(b.score || 0) - Number(a.score || 0);
-    });
+    })
+    .map((offer) => ({
+      ...offer,
+      groupLabel: classifyOfferGroup(offer),
+    }));
   const researchCandidateOffers = reviewableSweepOffers.filter((offer) => !Boolean(offer.published));
   const adminReviewOfferPool = Array.from(
     new Map(
@@ -2503,7 +2539,53 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   );
   const selectedAdminReviewOffer = adminReviewOfferPool.find((offer) => String(offer.offerId) === selectedAdminReviewOfferId) || null;
   const adminTradingSystemDraft = summary?.catalog?.adminTradingSystemDraft || null;
+  const LEGACY_PRESET_SET_KEYS = new Set(['balancedbot', 'conservativebot', 'monostarter', 'synthstarter', 'momentumbot', 'premiummix']);
+  type ReviewableSweepOffer = {
+    offerId: string;
+    strategyId: number;
+    ret?: number;
+    pf?: number;
+    dd?: number;
+  };
+  const reviewableSweepOfferByStrategyId = new Map(
+    (offerStoreOffers as ReviewableSweepOffer[])
+      .map((offer: ReviewableSweepOffer) => [Number(offer.strategyId || 0), offer] as const)
+      .filter(([strategyId]) => Number.isFinite(strategyId) && strategyId > 0)
+  );
+  const runtimeMasterSystems = ((algofundState?.availableSystems || []) as Array<any>)
+    .filter((item: any) => String(item?.name || '').trim().toUpperCase().startsWith('ALGOFUND_MASTER::'))
+    .map((item: any) => {
+      const memberStrategyIds = Array.isArray(item?.memberStrategyIds)
+        ? item.memberStrategyIds.map((value: any) => Number(value || 0)).filter((value: number) => Number.isFinite(value) && value > 0)
+        : [];
+      const runtimeOffers: ReviewableSweepOffer[] = memberStrategyIds
+        .map((strategyId: number) => offerStoreOfferByStrategyId.get(strategyId) || reviewableSweepOfferByStrategyId.get(strategyId) || null)
+        .filter((offer: ReviewableSweepOffer | null): offer is ReviewableSweepOffer => Boolean(offer));
+      const runtimeOfferIds = Array.from(new Set(runtimeOffers.map((offer: ReviewableSweepOffer) => String(offer.offerId || '').trim()).filter(Boolean)));
+      const avgRet = runtimeOffers.length > 0
+        ? runtimeOffers.reduce((acc: number, offer: ReviewableSweepOffer) => acc + Number(offer.ret || 0), 0) / runtimeOffers.length
+        : 0;
+      const avgPf = runtimeOffers.length > 0
+        ? runtimeOffers.reduce((acc: number, offer: ReviewableSweepOffer) => acc + Number(offer.pf || 0), 0) / runtimeOffers.length
+        : 0;
+      const avgDd = runtimeOffers.length > 0
+        ? runtimeOffers.reduce((acc: number, offer: ReviewableSweepOffer) => acc + Number(offer.dd || 0), 0) / runtimeOffers.length
+        : 0;
+      return {
+        systemName: String(item?.name || '').trim(),
+        memberCount: Math.max(runtimeOfferIds.length, Number(item?.memberCount || 0)),
+        memberStrategyIds,
+        offerIds: runtimeOfferIds,
+        offers: runtimeOffers,
+        avgRet,
+        avgPf,
+        avgDd,
+      };
+    })
+    .filter((item) => item.systemName.length > 0);
+  const runtimeMasterSystemByName = new Map(runtimeMasterSystems.map((item) => [item.systemName, item] as const));
   const adminSweepTsSets = Object.entries(summary?.recommendedSets || {})
+    .filter(([setKey]) => !LEGACY_PRESET_SET_KEYS.has(String(setKey || '').trim().toLowerCase()))
     .map(([setKey, offers]) => {
       const safeOffers = Array.isArray(offers) ? offers : [];
       const offerIds = Array.from(new Set(safeOffers.map((offer) => String(offer.offerId || '')).filter(Boolean)));
@@ -2579,24 +2661,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     new Set([
       selectedAlgofundPublishedSystemName,
       ...publishedAlgofundSystems,
+      ...runtimeMasterSystems.map((item) => item.systemName),
     ].map((name) => String(name || '').trim()).filter(Boolean))
   )
     .filter((setName) => !adminSweepSetKeysNormalized.has(setName.toLowerCase()))
     .map((setName) => {
+      const runtimeSystem = runtimeMasterSystemByName.get(setName) || null;
       const snapshot = summary?.offerStore?.tsBacktestSnapshots?.[setName] || null;
       const snapshotOfferIds = Array.isArray(snapshot?.offerIds) ? (snapshot?.offerIds || []).map((item: any) => String(item)) : [];
+      const offerIds = runtimeSystem?.offerIds?.length ? runtimeSystem.offerIds : snapshotOfferIds;
+      const offerCount = runtimeSystem?.memberCount || snapshotOfferIds.length;
       return {
         setKey: setName,
         displayName: setName,
         snapshotKey: setName,
+        systemName: setName,
         isDraft: false,
         isPublishedLive: true,
-        offers: [],
-        offerIds: snapshotOfferIds,
-        offerCount: snapshotOfferIds.length,
-        avgRet: Number(snapshot?.ret || 0),
-        avgPf: Number(snapshot?.pf || 0),
-        avgDd: Number(snapshot?.dd || 0),
+        offers: runtimeSystem?.offers || [],
+        offerIds,
+        offerCount,
+        avgRet: runtimeSystem?.offers?.length ? Number(runtimeSystem.avgRet || 0) : Number(snapshot?.ret || 0),
+        avgPf: runtimeSystem?.offers?.length ? Number(runtimeSystem.avgPf || 0) : Number(snapshot?.pf || 0),
+        avgDd: runtimeSystem?.offers?.length ? Number(runtimeSystem.avgDd || 0) : Number(snapshot?.dd || 0),
       };
     });
   // Add saved snapshots that are NOT already covered by recommendedSets as explicit list entries
@@ -2780,7 +2867,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     const availableSystemNames = Array.from(new Set([
       ...availableSystems
-        .filter((item) => Boolean(item?.isActive))
         .map((item) => String(item?.name || '').trim())
         .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::')),
       ...batchEligibleAlgofundTenants
@@ -2790,7 +2876,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       String(publishResponse?.sourceSystem?.systemName || '').trim(),
     ].filter((name) => Boolean(name) && String(name).toUpperCase().startsWith('ALGOFUND_MASTER::'))));
 
-    return availableSystemNames.map((systemName) => {
+    const mapped = availableSystemNames.map((systemName) => {
     const storefrontLabel = `TS offer #${availableSystemNames.indexOf(systemName) + 1}`;
     const tenants = batchEligibleAlgofundTenants.filter((tenant) => {
       const tenantSystemName = String(tenant.algofundProfile?.published_system_name || '').trim();
@@ -2860,7 +2946,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       publishSummary
       || snapshotForSystem
       || tenants.length > 0
-      || Number(runtimeSystem?.isActive ? 1 : 0) === 1
+      || runtimeSystem
     );
 
     return {
@@ -2879,6 +2965,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       pendingCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.requested_enabled || 0) === 1 && Number(tenant.algofundProfile?.actual_enabled || 0) !== 1).length,
     };
     }).filter((item) => item.hasMeaningfulState && (!item.isArchived || item.tenantCount > 0));
+
+    const dedupedByToken = new Map<string, typeof mapped[number]>();
+    for (const item of mapped) {
+      const token = extractTsSuffixToken(item.systemName);
+      const key = token ? `token:${token.toLowerCase()}` : `name:${item.systemName.toLowerCase()}`;
+      const existing = dedupedByToken.get(key);
+      if (!existing) {
+        dedupedByToken.set(key, item);
+        continue;
+      }
+
+      const existingScore = (existing.tenantCount > 0 ? 4 : 0)
+        + (existing.runtimeSystemId ? 2 : 0)
+        + (existing.equityCurve?.length > 1 ? 1 : 0);
+      const nextScore = (item.tenantCount > 0 ? 4 : 0)
+        + (item.runtimeSystemId ? 2 : 0)
+        + (item.equityCurve?.length > 1 ? 1 : 0);
+      if (nextScore >= existingScore) {
+        dedupedByToken.set(key, item);
+      }
+    }
+
+    return Array.from(dedupedByToken.values());
   })();
   const offerTitleById = offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
@@ -2998,6 +3107,38 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       messageApi.success(published ? 'Offer published to store' : 'Offer unpublished from store');
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to update offer visibility'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const deleteOfferFromStorefrontDb = async (offerId: string) => {
+    const normalizedOfferId = String(offerId || '').trim();
+    const current = summary?.offerStore;
+    if (!normalizedOfferId || !current) {
+      return;
+    }
+
+    const confirmed = window.confirm('Удалить оффер из витрины и админ-снимков?');
+    if (!confirmed) {
+      return;
+    }
+
+    const nextPublished = new Set((current.publishedOfferIds || []).map((item) => String(item)));
+    nextPublished.delete(normalizedOfferId);
+
+    setActionLoading(`offer-delete:${normalizedOfferId}`);
+    try {
+      await axios.patch('/api/saas/admin/offer-store', {
+        publishedOfferIds: Array.from(nextPublished),
+        reviewSnapshotPatch: {
+          [normalizedOfferId]: null,
+        },
+      });
+      await loadSummary('full');
+      messageApi.success('Оффер удален из витрины и снимков');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось удалить оффер'));
     } finally {
       setActionLoading('');
     }
@@ -3850,6 +3991,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   }, [algofundTenantId, isAdminSurface]);
 
   useEffect(() => {
+    setAlgofundCardRiskDrafts(
+      Object.fromEntries((algofundActiveSystems || []).map((item) => [String(item.systemName || ''), Number(item.weight || 0)]))
+    );
+  }, [algofundActiveSystems]);
+
+  useEffect(() => {
     if (reportTargetSystemName || !resolvedReportSystemName) {
       return;
     }
@@ -4553,7 +4700,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
-  const initiateRemoveStorefront = async (systemName: string) => {
+  const initiateStorefrontSystemAction = async (systemName: string, mode: 'remove' | 'delete') => {
     setRemoveStorefrontTarget(systemName);
     try {
       const response = await axios.post<{
@@ -4562,24 +4709,28 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         affectedTenants: Array<{ id: number; display_name: string }>;
         positionsByApiKey: Array<{ apiKeyName: string; openPositions: number; symbols: string[] }>;
         warning?: string;
-      }>('/api/saas/admin/storefront-system/remove', { systemName, force: false, dryRun: true });
+      }>('/api/saas/admin/storefront-system/remove', { systemName, force: false, dryRun: true, hardDelete: mode === 'delete' });
       if (response.data.removed) {
-        messageApi.success(`TS "${systemName}" снята с витрины`);
+        messageApi.success(mode === 'delete' ? `TS "${systemName}" удалена из базы` : `TS "${systemName}" снята с витрины`);
         await loadSummary('full');
       } else {
         setRemoveStorefrontConfirm({
           systemName,
+          mode,
           clientCount: response.data.clientsAffected,
           tenants: response.data.affectedTenants || [],
           positionsByApiKey: response.data.positionsByApiKey || [],
         });
       }
     } catch (error: any) {
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Ошибка при снятии ТС с витрины'));
+      messageApi.error(String(error?.response?.data?.error || error?.message || (mode === 'delete' ? 'Ошибка при удалении ТС из базы' : 'Ошибка при снятии ТС с витрины')));
     } finally {
       setRemoveStorefrontTarget(null);
     }
   };
+
+  const initiateRemoveStorefront = async (systemName: string) => initiateStorefrontSystemAction(systemName, 'remove');
+  const initiateDeleteStorefrontFromDb = async (systemName: string) => initiateStorefrontSystemAction(systemName, 'delete');
 
   const confirmRemoveStorefront = async () => {
     const systemName = removeStorefrontConfirm?.systemName;
@@ -4590,13 +4741,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         systemName,
         force: true,
         closePositions: removeStorefrontClosePositions,
+        hardDelete: removeStorefrontConfirm?.mode === 'delete',
       });
       const closeFailed = Number(response.data?.closeResult?.failed || 0);
-      messageApi.success(`TS "${systemName}" снята с витрины. ${removeStorefrontConfirm?.clientCount || 0} клиентов отключено.${removeStorefrontClosePositions ? ` Ошибок закрытия: ${closeFailed}` : ''}`);
+      const hardDeleted = Number(response.data?.hardDeletedCount || 0);
+      if (removeStorefrontConfirm?.mode === 'delete') {
+        messageApi.success(`TS "${systemName}" удалена из базы (rows: ${hardDeleted}). ${removeStorefrontConfirm?.clientCount || 0} клиентов отключено.${removeStorefrontClosePositions ? ` Ошибок закрытия: ${closeFailed}` : ''}`);
+      } else {
+        messageApi.success(`TS "${systemName}" снята с витрины. ${removeStorefrontConfirm?.clientCount || 0} клиентов отключено.${removeStorefrontClosePositions ? ` Ошибок закрытия: ${closeFailed}` : ''}`);
+      }
       setRemoveStorefrontConfirm(null);
       await loadSummary('full');
     } catch (error: any) {
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Ошибка при принудительном снятии ТС с витрины'));
+      messageApi.error(String(error?.response?.data?.error || error?.message || (removeStorefrontConfirm?.mode === 'delete' ? 'Ошибка при удалении ТС из базы' : 'Ошибка при принудительном снятии ТС с витрины')));
     } finally {
       setActionLoading('');
     }
@@ -4774,6 +4931,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
         kind: targetContext.kind,
         setKey: targetContext.setKey,
+        systemName: targetContext.systemName,
         offerId: targetContext.offerId,
         offerIds: targetContext.offerIds,
         riskScore: adminSweepBacktestRiskScore,
@@ -4945,17 +5103,53 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       || 'BTDD D1 Expanded TS v2'
     ).trim();
     const defaultSnapshotKey = snapshotSetKey || fallbackDraftKey;
-    const promptDefault = defaultSnapshotKey || fallbackDraftKey;
-    const promptText = 'Сохранение TS: оставьте текущее имя для сохранения в эту же карточку, или введите новое имя для новой карточки.';
-    const enteredSnapshotKey = window.prompt(promptText, promptDefault);
-    if (enteredSnapshotKey === null) {
-      messageApi.info('Сохранение TS отменено');
-      return;
+
+    // Detect if this card is already published on the storefront
+    const contextSystemName = String(backtestDrawerContext?.systemName || snapshotSetKey || '').trim();
+    const isOnStorefront = Boolean(
+      (contextSystemName && (runtimeMasterSystemByName.has(contextSystemName) || publishedAlgofundSystems.includes(contextSystemName)))
+      || (snapshotSetKey && publishedAlgofundSystems.includes(snapshotSetKey))
+    );
+    const storefrontClientCount = isOnStorefront
+      ? algofundTenantsWithPublishedTs.filter((t) => String(t.algofundProfile?.published_system_name || '').trim() === contextSystemName).length
+      : 0;
+
+    let snapshotKey: string;
+    if (isOnStorefront) {
+      // Card is on storefront — no need to prompt for name, just use existing
+      snapshotKey = contextSystemName || defaultSnapshotKey;
+    } else {
+      const promptText = 'Сохранение TS: оставьте текущее имя для сохранения в эту же карточку, или введите новое имя для новой карточки.';
+      const enteredSnapshotKey = window.prompt(promptText, defaultSnapshotKey);
+      if (enteredSnapshotKey === null) {
+        messageApi.info('Сохранение TS отменено');
+        return;
+      }
+      snapshotKey = String(enteredSnapshotKey || '').trim() || defaultSnapshotKey;
     }
-    const snapshotKey = String(enteredSnapshotKey || '').trim() || defaultSnapshotKey;
+
     if (!snapshotKey) {
       messageApi.warning('Имя карточки TS не задано');
       return;
+    }
+
+    // If on storefront — ask confirmation that clients will be affected
+    if (isOnStorefront) {
+      try {
+        await new Promise<void>((resolve, reject) => {
+          Modal.confirm({
+            title: 'Карточка уже на витрине',
+            content: `Настройки риска и частоты сделок одни — сохранение обновит их${storefrontClientCount > 0 ? ` для ${storefrontClientCount} клиентов` : ''} в торговле. Продолжить?`,
+            okText: 'Сохранить и обновить витрину',
+            cancelText: 'Отмена',
+            onOk: () => resolve(),
+            onCancel: () => reject(new Error('cancelled')),
+          });
+        });
+      } catch {
+        messageApi.info('Сохранение отменено');
+        return;
+      }
     }
 
     setActionLoading('ts-review-snapshot');
@@ -4984,9 +5178,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           },
         },
       });
+      if (isOnStorefront) {
+        // Also re-publish to storefront so vitrina and offer-ts stay in sync
+        await axios.post('/api/saas/admin/publish', {
+          offerIds,
+          setKey: snapshotKey || undefined,
+        });
+        messageApi.success('Метрики ТС сохранены и витрина обновлена');
+      } else {
+        messageApi.success('Метрики ТС сохранены как черновик');
+      }
       await loadSummary('full');
       setSelectedAdminDraftTsSetKey(snapshotKey);
-      messageApi.success('Метрики ТС сохранены как черновик');
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось сохранить метрики ТС'));
     } finally {
@@ -5064,7 +5267,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
   };
 
-  const openDraftTsBacktest = (params?: { setKey?: string; offerIds?: string[] }) => {
+  const openDraftTsBacktest = (params?: { setKey?: string; offerIds?: string[]; systemName?: string }) => {
     const directOfferIds = (params?.offerIds || []).map((item) => String(item || '')).filter(Boolean);
     const selectedOfferIds = directOfferIds.length > 0
       ? directOfferIds
@@ -5079,14 +5282,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     ));
     const inferredSelectedTsName = String(params?.setKey || '').trim()
       || selectedAdminDraftTsSetKey
+      || String(params?.systemName || '').trim()
       || (selectedStrategyNames.length === 1 ? selectedStrategyNames[0] : '');
+    const runtimeSystemName = String(params?.systemName || '').trim();
+    const canUseRuntimeSystem = runtimeSystemName.length > 0;
 
-    if (Number(adminTradingSystemDraft?.members?.length || 0) === 0) {
+    if (!canUseRuntimeSystem && Number(adminTradingSystemDraft?.members?.length || 0) === 0) {
       messageApi.warning('Для бэктеста ТС нужен draft из последнего sweep');
       return;
     }
 
-    if (offerIds.length === 0) {
+    if (!canUseRuntimeSystem && offerIds.length === 0) {
       messageApi.warning('Для sweep бэктеста ТС выбери хотя бы одну карточку из draft ТС');
       return;
     }
@@ -5105,6 +5311,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       description: 'Sweep-портфельный бэктест draft ТС из последнего свепа. После проверки метрик можно отправлять ТС на витрину.',
       offerIds,
       setKey: String(params?.setKey || selectedAdminDraftTsSetKey || '').trim() || undefined,
+      systemName: runtimeSystemName || undefined,
     });
   };
 
@@ -5205,18 +5412,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
 
     const snapshot = resolveTsSnapshotForSystem(normalizedSystemName);
+    const runtimeSystem = runtimeMasterSystemByName.get(normalizedSystemName) || null;
     const setKey = String(snapshot?.setKey || '').trim();
     const rawSnapshotOfferIds = snapshot?.offerIds;
     const snapshotOfferIds = Array.isArray(rawSnapshotOfferIds) ? rawSnapshotOfferIds : [];
+    const runtimeOfferIds = Array.isArray(runtimeSystem?.offerIds) ? (runtimeSystem?.offerIds || []) : [];
     const offerIds = snapshotOfferIds.length > 0
       ? snapshotOfferIds.map((item) => String(item || '').trim()).filter(Boolean)
-      : [];
+      : runtimeOfferIds.map((item) => String(item || '').trim()).filter(Boolean);
 
     if (setKey) {
       setSelectedAdminDraftTsSetKey(setKey);
     }
 
-    openDraftTsBacktest({ setKey, offerIds });
+    openDraftTsBacktest({ setKey, offerIds, systemName: normalizedSystemName });
   };
 
   const navigateSaasTab = (tab: SaasTabKey, nextAdminTab?: AdminTabKey) => {
@@ -5367,6 +5576,36 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       await loadSummary('full');
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось применить TS к клиентам'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const saveAlgofundCardRisk = async (systemName: string) => {
+    if (!algofundTenantId) {
+      messageApi.warning('Сначала выбери клиента Алгофонда');
+      return;
+    }
+    const normalizedSystemName = String(systemName || '').trim();
+    if (!normalizedSystemName) {
+      return;
+    }
+    const nextWeight = Number(algofundCardRiskDrafts[normalizedSystemName] ?? 1);
+    if (!Number.isFinite(nextWeight) || nextWeight < 0) {
+      messageApi.warning('Риск карточки должен быть числом >= 0');
+      return;
+    }
+
+    setActionLoading(`algofund-card-risk:${normalizedSystemName}`);
+    try {
+      await axios.put(`/api/saas/algofund/${algofundTenantId}/active-systems`, {
+        systems: [{ systemName: normalizedSystemName, weight: nextWeight, isEnabled: true, assignedBy: 'client' }],
+        replace: false,
+      });
+      await loadAlgofundActiveSystems(algofundTenantId);
+      messageApi.success(`Риск карточки обновлен: ${normalizedSystemName}`);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось обновить риск карточки'));
     } finally {
       setActionLoading('');
     }
@@ -6367,7 +6606,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Space>
                           </Card>
 
-                          <Card className="battletoads-card" title="Кандидаты из sweep: Оферы и ТС">
+                          <Card className="battletoads-card" title="Кандидаты из sweep: Оферы и ТС" style={{ display: 'none' }}>
                             <Space direction="vertical" size={12} style={{ width: '100%' }}>
                               <Space wrap>
                                 <Text strong>Что показывать:</Text>
@@ -6404,6 +6643,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             {row.published ? <Tag color="success" style={{ marginLeft: 2 }}>витрина</Tag> : null}
                                           </Space>
                                           <Text type="secondary" style={{ paddingLeft: 16 }}>{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                          <Text type="secondary" style={{ paddingLeft: 16 }}>group: {String(row.groupLabel || '—')}</Text>
                                         </Space>
                                       ),
                                     },
@@ -6412,6 +6652,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       key: 'metrics',
                                       render: (_, row: any) => (
                                         <Space wrap>
+                                          <Tag color="geekblue">{String(row.groupLabel || 'group')}</Tag>
                                           <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
                                           <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
                                           <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
@@ -6454,7 +6695,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           key="pick"
                                           size="small"
                                           onClick={() => {
-                                            setSelectedAdminDraftTsOfferIds(set.offerIds);
+                                            const offerIds = (Array.isArray(set.offerIds) ? set.offerIds : []).map((item) => String(item || '')).filter(Boolean);
+                                            setSelectedAdminDraftTsOfferIds(offerIds);
                                             setSelectedAdminDraftTsSetKey(String(set.snapshotKey || '').trim());
                                             setSelectedAdminReviewKind('algofund-ts');
                                             messageApi.success(`Выбран TS-набор ${set.displayName}: ${set.offerCount} карточек`);
@@ -6467,15 +6709,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           type="primary"
                                           size="small"
                                           onClick={() => {
-                                            setSelectedAdminDraftTsOfferIds(set.offerIds);
+                                            const offerIds = (Array.isArray(set.offerIds) ? set.offerIds : []).map((item) => String(item || '')).filter(Boolean);
+                                            setSelectedAdminDraftTsOfferIds(offerIds);
                                             setSelectedAdminDraftTsSetKey(String(set.snapshotKey || '').trim());
                                             openDraftTsBacktest({
                                               setKey: String(set.snapshotKey || '').trim() || undefined,
-                                              offerIds: set.offerIds,
+                                              offerIds,
+                                              systemName: String((set as any).systemName || set.displayName || '').trim() || undefined,
                                             });
                                           }}
                                         >
                                           Бэктест ТС
+                                        </Button>,
+                                        <Button
+                                          key="delete-db"
+                                          danger
+                                          size="small"
+                                          loading={removeStorefrontTarget === set.displayName}
+                                          disabled={Boolean(set.isDraft)}
+                                          onClick={() => {
+                                            void initiateDeleteStorefrontFromDb(String(set.displayName || '').trim());
+                                          }}
+                                        >
+                                          Удалить из базы
                                         </Button>,
                                       ]}
                                     >
@@ -6499,7 +6755,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Card>
 
                           <div ref={reviewContextRef}>
-                          <Card className="battletoads-card" title="Детали и публикация выбранного">
+                          <Card className="battletoads-card" title="Детали и публикация выбранного" style={{ display: 'none' }}>
                             {selectedAdminReviewKind === 'algofund-ts' ? (
                               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                                 <Paragraph type="secondary" style={{ marginTop: 0 }}>
@@ -6675,22 +6931,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                               </Button>
                                               <Button
                                                 size="small"
-                                                loading={actionLoading === `offer-review-snapshot:${String(row.offerId || '')}`}
-                                                onClick={() => {
-                                                  void saveOfferReviewSnapshotFromRow(row);
-                                                }}
-                                              >
-                                                Сохранить
-                                              </Button>
-                                              <Button
-                                                size="small"
                                                 onClick={() => {
                                                   openOfferBacktest(row);
                                                 }}
                                               >
                                                 Бэктест
                                               </Button>
-                                              <Button size="small" danger onClick={() => void openUnpublishWizard(String(row.offerId))}>Снять</Button>
+                                              <Button
+                                                size="small"
+                                                danger
+                                                loading={actionLoading === `offer-delete:${String(row.offerId || '')}`}
+                                                onClick={() => {
+                                                  void deleteOfferFromStorefrontDb(String(row.offerId));
+                                                }}
+                                              >
+                                                Удалить из базы
+                                              </Button>
                                             </Space>
                                           ),
                                         },
@@ -6709,15 +6965,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       renderItem={(item) => (
                                         <List.Item
                                           actions={[
-                                            <Button key="review" size="small" onClick={() => openAdminReviewContext('algofund-ts')}>Бэктест</Button>,
+                                            <Button key="review" size="small" onClick={() => openBacktestDrawerForStorefrontTs(item.systemName)}>Бэктест ТС</Button>,
                                             <Button
-                                              key="apply"
+                                              key="connect"
                                               size="small"
-                                              disabled={!item.runtimeSystemId || batchTenantIds.length === 0}
-                                              loading={actionLoading === 'apply-published-admin-ts'}
-                                              onClick={() => void applyPublishedAdminTsToSelectedClients()}
+                                              disabled={!item.runtimeSystemId}
+                                              onClick={() => {
+                                                setStorefrontConnectTarget({
+                                                  systemId: Number(item.runtimeSystemId || 0),
+                                                  systemName: String(item.systemName || ''),
+                                                  tenantIds: item.tenants.map((tenant) => Number(tenant.tenant.id)).filter((id) => id > 0),
+                                                });
+                                              }}
                                             >
-                                              Apply ({batchTenantIds.length})
+                                              Подключить клиентов ({item.tenantCount})
+                                            </Button>,
+                                            <Button
+                                              key="delete-db"
+                                              danger
+                                              size="small"
+                                              loading={removeStorefrontTarget === item.systemName}
+                                              onClick={() => void initiateDeleteStorefrontFromDb(item.systemName)}
+                                            >
+                                              Удалить из базы
                                             </Button>,
                                           ]}
                                         >
@@ -7501,6 +7771,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   children: (() => {
                                     const runtime = selectedStrategyTenantSummary ? resolveTenantRuntimeStatus(selectedStrategyTenantSummary) : null;
                                     const billing = selectedStrategyTenantSummary ? extractTenantBillingInfo(selectedStrategyTenantSummary) : null;
+                                    const selectedOfferIds = Array.isArray(strategyState.profile?.selectedOfferIds)
+                                      ? (strategyState.profile?.selectedOfferIds || []).map((item) => String(item))
+                                      : [];
+                                    const offerById = new Map((strategyState.offers || []).map((item) => [String(item.offerId), item]));
                                     return (
                                       <Space direction="vertical" size={12} style={{ width: '100%' }}>
                                         <Alert
@@ -7591,6 +7865,34 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             {copy.createMagicLink}
                                           </Button>
                                         </Space>
+                                        <Card size="small" className="battletoads-card" title="Подключенные карточки клиента">
+                                          {selectedOfferIds.length === 0 ? (
+                                            <Empty description="Карточки не подключены" />
+                                          ) : (
+                                            <List
+                                              size="small"
+                                              dataSource={selectedOfferIds}
+                                              rowKey={(item) => item}
+                                              renderItem={(offerId) => {
+                                                const offer = offerById.get(String(offerId));
+                                                return (
+                                                  <List.Item>
+                                                    <Space direction="vertical" size={0} style={{ width: '100%' }}>
+                                                      <Text strong>{offer?.titleRu || `Карточка ${offerId}`}</Text>
+                                                      <Space wrap>
+                                                        <Tag color="blue">id {offerId}</Tag>
+                                                        {offer?.strategy?.market ? <Tag color="default">{offer.strategy.market}</Tag> : null}
+                                                        {offer?.metrics?.score !== undefined ? <Tag color="cyan">score {formatNumber(offer.metrics.score)}</Tag> : null}
+                                                        {offer?.metrics?.ret !== undefined ? <Tag color={metricColor(Number(offer.metrics.ret || 0), 'return')}>Ret {formatPercent(offer.metrics.ret)}</Tag> : null}
+                                                        {offer?.metrics?.dd !== undefined ? <Tag color={metricColor(Number(offer.metrics.dd || 0), 'drawdown')}>DD {formatPercent(offer.metrics.dd)}</Tag> : null}
+                                                      </Space>
+                                                    </Space>
+                                                  </List.Item>
+                                                );
+                                              }}
+                                            />
+                                          )}
+                                        </Card>
                                       </Space>
                                     );
                                   })(),
@@ -8228,6 +8530,59 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             {copy.createMagicLink}
                                           </Button>
                                         </Space>
+                                        <Card size="small" className="battletoads-card" title="Подключенные карточки (ТС) и клиентский риск">
+                                          {algofundActiveSystems.length === 0 ? (
+                                            <Empty description="У клиента нет подключенных карточек ТС" />
+                                          ) : (
+                                            <List
+                                              size="small"
+                                              rowKey={(item) => `${item.id}:${item.systemName}`}
+                                              dataSource={algofundActiveSystems}
+                                              renderItem={(item) => {
+                                                const draftWeight = Number(algofundCardRiskDrafts[String(item.systemName || '')] ?? item.weight ?? 0);
+                                                return (
+                                                  <List.Item
+                                                    actions={[
+                                                      <Button
+                                                        key="save"
+                                                        size="small"
+                                                        type="primary"
+                                                        loading={actionLoading === `algofund-card-risk:${item.systemName}`}
+                                                        onClick={() => void saveAlgofundCardRisk(item.systemName)}
+                                                      >
+                                                        Сохранить риск
+                                                      </Button>,
+                                                    ]}
+                                                  >
+                                                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                                      <Space wrap>
+                                                        <Text strong>{item.systemName}</Text>
+                                                        <Tag color={item.isEnabled ? 'success' : 'warning'}>{item.isEnabled ? 'active' : 'disabled'}</Tag>
+                                                        <Tag color={item.assignedBy === 'client' ? 'purple' : 'default'}>{item.assignedBy}</Tag>
+                                                      </Space>
+                                                      <Space wrap>
+                                                        <Text type="secondary">Клиентский риск карточки:</Text>
+                                                        <InputNumber
+                                                          min={0}
+                                                          max={10}
+                                                          step={0.05}
+                                                          value={draftWeight}
+                                                          onChange={(value) => {
+                                                            const next = Number(value ?? 0);
+                                                            setAlgofundCardRiskDrafts((current) => ({
+                                                              ...current,
+                                                              [String(item.systemName || '')]: Number.isFinite(next) ? next : 0,
+                                                            }));
+                                                          }}
+                                                        />
+                                                      </Space>
+                                                    </Space>
+                                                  </List.Item>
+                                                );
+                                              }}
+                                            />
+                                          )}
+                                        </Card>
                                       </Space>
                                     );
                                   })(),
@@ -8402,7 +8757,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       bordered
                                       title={
                                         <Space>
-                                          <Text strong>{item.storefrontLabel}</Text>
+                                          <Text strong>{item.systemName}</Text>
                                           {item.activeCount > 0
                                             ? <Badge status="success" text="active" />
                                             : item.pendingCount > 0
@@ -8420,22 +8775,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           <Tag color="green">active {Number(item.activeCount || 0)}</Tag>
                                           {item.pendingCount > 0 ? <Tag color="gold">pending {item.pendingCount}</Tag> : null}
                                           {!item.tenants.length && !item.runtimeSystemId ? <Tag color="default">legacy snapshot</Tag> : null}
-                                          {item.summary?.totalReturnPercent !== undefined && item.summary.totalReturnPercent !== 0
+                                          {item.summary?.totalReturnPercent !== undefined
                                             ? <Tag color={metricColor(Number(item.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(item.summary.totalReturnPercent)}</Tag>
                                             : null}
-                                          {item.summary?.maxDrawdownPercent !== undefined && item.summary.maxDrawdownPercent !== 0
+                                          {item.summary?.maxDrawdownPercent !== undefined
                                             ? <Tag color={metricColor(Number(item.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(item.summary.maxDrawdownPercent)}</Tag>
                                             : null}
-                                          {item.summary?.profitFactor !== undefined && item.summary.profitFactor !== 0
+                                          {item.summary?.profitFactor !== undefined
                                             ? <Tag color={metricColor(Number(item.summary.profitFactor || 0), 'pf')}>PF {formatNumber(item.summary.profitFactor)}</Tag>
                                             : null}
-                                          {item.summary?.tradesCount !== undefined && item.summary.tradesCount !== 0
+                                          {item.summary?.tradesCount !== undefined
                                             ? <Tag color="blue">сделок {formatNumber(item.summary.tradesCount, 0)}</Tag>
                                             : null}
                                         </Space>
                                         {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
                                           <ChartComponent data={item.equityCurve} type="line" />
-                                        ) : null}
+                                        ) : (
+                                          <Text type="secondary" style={{ fontSize: 12 }}>График не сохранен</Text>
+                                        )}
                                         {item.tenants.length > 0
                                           ? <Text type="secondary" style={{ fontSize: 12 }}>{item.tenants.map((t) => t.tenant.display_name).join(', ')}</Text>
                                           : <Text type="secondary" style={{ fontSize: 12 }}>Нет подключённых клиентов</Text>}
@@ -8472,9 +8829,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             size="small"
                                             danger
                                             loading={removeStorefrontTarget === item.systemName}
-                                            onClick={() => void initiateRemoveStorefront(item.systemName)}
+                                            onClick={() => void initiateDeleteStorefrontFromDb(item.systemName)}
                                           >
-                                            Снять с витрины
+                                            Удалить из базы
                                           </Button>
                                         </Space>
                                       </Space>
@@ -9154,12 +9511,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       </Modal>
 
       <Modal
-        title="Снять ТС с витрины"
+        title={removeStorefrontConfirm?.mode === 'delete' ? 'Удалить ТС из базы' : 'Снять ТС с витрины'}
         open={removeStorefrontConfirm !== null}
         onCancel={() => setRemoveStorefrontConfirm(null)}
         onOk={() => void confirmRemoveStorefront()}
         okButtonProps={{ danger: true, loading: actionLoading.startsWith('remove-storefront:') }}
-        okText="Подтвердить снятие"
+        okText={removeStorefrontConfirm?.mode === 'delete' ? 'Подтвердить удаление из базы' : 'Подтвердить снятие'}
         cancelText="Отмена"
       >
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -9167,7 +9524,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             type="warning"
             showIcon
             message={`TS "${removeStorefrontConfirm?.systemName}" подключена к ${removeStorefrontConfirm?.clientCount || 0} клиентам`}
-            description="После подтверждения клиенты будут отключены от этой ТС. Ниже можно выбрать, нужно ли пытаться закрыть открытые позиции через stop-flow."
+            description={removeStorefrontConfirm?.mode === 'delete'
+              ? 'После подтверждения клиенты будут отключены от этой ТС, а запись ТС удалена из базы. Ниже можно выбрать, нужно ли пытаться закрыть открытые позиции через stop-flow.'
+              : 'После подтверждения клиенты будут отключены от этой ТС. Ниже можно выбрать, нужно ли пытаться закрыть открытые позиции через stop-flow.'}
           />
           <Space>
             <Switch checked={removeStorefrontClosePositions} onChange={setRemoveStorefrontClosePositions} />
