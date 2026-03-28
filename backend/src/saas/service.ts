@@ -2609,9 +2609,13 @@ const getPreviewRiskMultiplier = (riskScore: number, riskScaleMaxPercent: number
 };
 
 const getPreviewTradeMultiplier = (tradeFrequencyScore: number): number => {
-  // freq=0 → 0.25x, freq=5 → 1.0x, freq=10 → 2.4x  — wider range than before
+  // Keep baseline behavior at mid slider:
+  // freq=0 -> ~0.42x, freq=5 -> 1.0x, freq=10 -> 2.4x.
+  // This avoids default (score=5) undercounting trades vs historical previews.
   const normalized = clampNumber(asNumber(tradeFrequencyScore, 5), 0, 10) / 10;
-  return Math.exp(Math.log(0.25) + normalized * (Math.log(2.4) - Math.log(0.25)));
+  const maxMul = 2.4;
+  const minMul = 1 / maxMul;
+  return Math.exp(Math.log(minMul) + normalized * (Math.log(maxMul) - Math.log(minMul)));
 };
 
 const adjustPreviewMetrics = (

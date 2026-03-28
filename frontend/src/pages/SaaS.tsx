@@ -7289,18 +7289,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                 {item.summary?.tradesCount !== undefined ? <Tag color="blue">trades {formatNumber(item.summary.tradesCount, 0)}</Tag> : null}
                                               </Space>
                                             }
-                                            description={
-                                              <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                                {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
-                                                  <div style={{ width: 220 }}>
-                                                    <ChartComponent data={item.equityCurve} type="line" fixedHeight={64} />
-                                                  </div>
-                                                ) : null}
-                                                <Text type="secondary" style={{ fontSize: 11 }}>
-                                                  {item.tenants.length > 0 ? item.tenants.map((tenant) => tenant.tenant.display_name).join(', ') : 'нет подключённых клиентов'}
-                                                </Text>
-                                              </Space>
-                                            }
+                                            description={<Text type="secondary" style={{ fontSize: 11 }}>{item.tenants.length > 0 ? item.tenants.map((tenant) => tenant.tenant.display_name).join(', ') : 'нет подключённых клиентов'}</Text>}
                                           />
                                         </List.Item>
                                       )}
@@ -8093,6 +8082,31 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                               ),
                                             },
                                             {
+                                              title: 'Snapshot chart',
+                                              key: 'mini-chart',
+                                              width: 190,
+                                              render: (_, row: any) => {
+                                                const points = downsampleNumericSeries(
+                                                  (Array.isArray(row.equityPoints) ? row.equityPoints : [])
+                                                    .map((value: unknown) => Number(value))
+                                                    .filter((value: number) => Number.isFinite(value)),
+                                                  40
+                                                );
+                                                if (points.length < 2) {
+                                                  return <Text type="secondary">no snapshot</Text>;
+                                                }
+                                                return (
+                                                  <div style={{ width: 170 }}>
+                                                    <ChartComponent
+                                                      data={points.map((value, index) => ({ time: index, equity: value }))}
+                                                      type="line"
+                                                      fixedHeight={78}
+                                                    />
+                                                  </div>
+                                                );
+                                              },
+                                            },
+                                            {
                                               title: 'Действия',
                                               key: 'actions',
                                               width: 280,
@@ -8760,6 +8774,44 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           <Text type="secondary">Клиентов с привязанной TS: {algofundTenantsWithPublishedTs.length}</Text>
                                         </Space>
                                       )}
+                                      {algofundStorefrontSystems.length > 0 ? (
+                                        <List
+                                          dataSource={algofundStorefrontSystems}
+                                          renderItem={(item) => (
+                                            <List.Item
+                                              key={item.systemName}
+                                              actions={[
+                                                <Button key="review" size="small" onClick={() => openBacktestDrawerForStorefrontTs(item.systemName)}>Бэктест ТС</Button>,
+                                              ]}
+                                            >
+                                              <List.Item.Meta
+                                                title={
+                                                  <Space wrap>
+                                                    <Text strong>{tsDisplayName(item.systemName)}</Text>
+                                                    <Tag color="processing">clients {item.tenantCount}</Tag>
+                                                    <Tag color="success">active {item.activeCount}</Tag>
+                                                    {item.summary ? <Tag color={metricColor(Number(item.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(item.summary.totalReturnPercent)}</Tag> : null}
+                                                    {item.summary ? <Tag color={metricColor(Number(item.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(item.summary.maxDrawdownPercent)}</Tag> : null}
+                                                    {item.summary ? <Tag color={metricColor(Number(item.summary.profitFactor || 0), 'pf')}>PF {formatNumber(item.summary.profitFactor)}</Tag> : null}
+                                                  </Space>
+                                                }
+                                                description={
+                                                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                                    {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
+                                                      <div style={{ width: 220 }}>
+                                                        <ChartComponent data={item.equityCurve} type="line" fixedHeight={64} />
+                                                      </div>
+                                                    ) : (
+                                                      <Text type="secondary" style={{ fontSize: 11 }}>График не сохранен</Text>
+                                                    )}
+                                                    <Text type="secondary" style={{ fontSize: 11 }}>{item.tenants.length > 0 ? item.tenants.map((tenant) => tenant.tenant.display_name).join(', ') : 'нет подключённых клиентов'}</Text>
+                                                  </Space>
+                                                }
+                                              />
+                                            </List.Item>
+                                          )}
+                                        />
+                                      ) : null}
                                       <Space wrap>
                                         <Button type="primary" onClick={() => navigateToAdminTab('offer-ts')}>Оферы и ТС</Button>
                                         <Button onClick={() => navigateToAdminTab('clients')}>К клиентам Алгофонда</Button>
@@ -10255,94 +10307,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 <Tag color="blue">Карточек в тесте: {Array.isArray(backtestDrawerContext.offerIds) ? backtestDrawerContext.offerIds.length : 0}</Tag>
               </Space>
             ) : null}
-            {backtestDrawerContext.kind === 'algofund-ts' ? (
-              <Card size="small" title="Состав ТС в backtest">
-                {(() => {
-                  const currentOfferIds = Array.from(new Set((backtestDrawerContext.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
-                  const optionMap = new Map<string, string>(
-                    storefrontOfferOptions.map((item) => [String(item.value), String(item.label)])
-                  );
-                  currentOfferIds.forEach((offerId) => {
-                    if (!optionMap.has(offerId)) {
-                      const title = String(offerTitleById[offerId] || offerId);
-                      optionMap.set(offerId, `${title} (${offerId})`);
-                    }
-                  });
-                  const options = Array.from(optionMap.entries()).map(([value, label]) => ({ value, label }));
-                  const normalizedWeights = normalizeBacktestTsWeights(currentOfferIds, backtestTsWeightsByOfferId);
-                  const totalWeight = currentOfferIds.reduce((acc, offerId) => acc + Number(normalizedWeights[offerId] || 0), 0);
-
-                  return (
-                    <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                      <Space wrap>
-                        <Select
-                          mode="multiple"
-                          style={{ minWidth: 560, maxWidth: '100%' }}
-                          placeholder="Добавь/убери офферы ТС"
-                          value={currentOfferIds}
-                          options={options}
-                          onChange={(values) => {
-                            updateBacktestTsComposition((values || []).map((item) => String(item || '')));
-                          }}
-                        />
-                        <Button
-                          size="small"
-                          onClick={() => {
-                            const equalWeights = Object.fromEntries(currentOfferIds.map((offerId) => [offerId, 1]));
-                            updateBacktestTsComposition(currentOfferIds, equalWeights);
-                          }}
-                          disabled={currentOfferIds.length === 0}
-                        >
-                          Равные веса
-                        </Button>
-                        <Tag color="blue">Σ весов: {formatNumber(totalWeight * 100, 2)}%</Tag>
-                      </Space>
-                      <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                        {currentOfferIds.map((offerId) => {
-                          const title = String(offerTitleById[offerId] || offerId);
-                          const weight = Number(normalizedWeights[offerId] || 0);
-                          return (
-                            <Space key={offerId} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-                              <Space>
-                                <Text strong>{title}</Text>
-                                <Text type="secondary">{offerId}</Text>
-                              </Space>
-                              <Space>
-                                <Text type="secondary">Вес</Text>
-                                <InputNumber
-                                  min={0.001}
-                                  max={1}
-                                  step={0.01}
-                                  value={weight}
-                                  onChange={(value) => {
-                                    const nextWeights = {
-                                      ...normalizedWeights,
-                                      [offerId]: Number(value || 0),
-                                    };
-                                    updateBacktestTsComposition(currentOfferIds, nextWeights);
-                                  }}
-                                  style={{ width: 96 }}
-                                />
-                                <Tag>{formatNumber(weight * 100, 2)}%</Tag>
-                                <Button
-                                  size="small"
-                                  danger
-                                  onClick={() => {
-                                    updateBacktestTsComposition(currentOfferIds.filter((id) => id !== offerId), normalizedWeights);
-                                  }}
-                                >
-                                  Удалить
-                                </Button>
-                              </Space>
-                            </Space>
-                          );
-                        })}
-                      </Space>
-                    </Space>
-                  );
-                })()}
-              </Card>
-            ) : null}
             <Space wrap>
               <Button size="small" onClick={returnToReviewFromBacktest}>
                 Вернуться к карточке
@@ -10614,6 +10578,61 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     </Col>
                   </Row>
 
+                  {backtestDrawerContext.kind === 'algofund-ts' ? (
+                    <Card size="small" title="Состав ТС в backtest (пары и веса)">
+                      {(() => {
+                        const idsFromResult = (adminSweepBacktestResult.selectedOffers || [])
+                          .map((item) => String(item.offerId || '').trim())
+                          .filter(Boolean);
+                        const idsFromContext = (backtestDrawerContext.offerIds || [])
+                          .map((item) => String(item || '').trim())
+                          .filter(Boolean);
+                        const currentOfferIds = Array.from(new Set([...idsFromResult, ...idsFromContext]));
+                        const optionMap = new Map<string, string>(
+                          storefrontOfferOptions.map((item) => [String(item.value), String(item.label)])
+                        );
+                        currentOfferIds.forEach((offerId) => {
+                          if (!optionMap.has(offerId)) {
+                            const title = String(offerTitleById[offerId] || offerId);
+                            optionMap.set(offerId, `${title} (${offerId})`);
+                          }
+                        });
+                        const options = Array.from(optionMap.entries()).map(([value, label]) => ({ value, label }));
+                        const normalizedWeights = normalizeBacktestTsWeights(currentOfferIds, backtestTsWeightsByOfferId);
+                        const totalWeight = currentOfferIds.reduce((acc, offerId) => acc + Number(normalizedWeights[offerId] || 0), 0);
+
+                        return (
+                          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                            <Space wrap>
+                              <Select
+                                mode="multiple"
+                                style={{ minWidth: 560, maxWidth: '100%' }}
+                                placeholder="Добавь/убери офферы ТС"
+                                value={currentOfferIds}
+                                options={options}
+                                onChange={(values) => {
+                                  updateBacktestTsComposition((values || []).map((item) => String(item || '')));
+                                }}
+                              />
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  const equalWeights = Object.fromEntries(currentOfferIds.map((offerId) => [offerId, 1]));
+                                  updateBacktestTsComposition(currentOfferIds, equalWeights);
+                                }}
+                                disabled={currentOfferIds.length === 0}
+                              >
+                                Равные веса
+                              </Button>
+                              <Tag color="blue">Σ весов: {formatNumber(totalWeight * 100, 2)}%</Tag>
+                            </Space>
+                            <Text type="secondary">Редактирование весов и состава выполняется в строках таблицы ниже, в колонке «Вес».</Text>
+                          </Space>
+                        );
+                      })()}
+                    </Card>
+                  ) : null}
+
                       </>
                     );
                   })()}
@@ -10638,14 +10657,61 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       {
                         title: 'Вес',
                         key: 'weight',
-                        width: 120,
+                        width: 240,
                         render: (_, row: any) => {
-                          const weight = Number(
-                            row?.weight
-                            ?? backtestTsWeightsByOfferId[String(row?.offerId || '')]
-                            ?? 0
+                          const offerId = String(row?.offerId || '').trim();
+                          const activeOfferIds = Array.from(new Set((backtestDrawerContext?.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
+                          const normalizedWeights = normalizeBacktestTsWeights(activeOfferIds, backtestTsWeightsByOfferId);
+                          const weight = Number(normalizedWeights[offerId] ?? row?.weight ?? 0);
+
+                          if (backtestDrawerContext.kind !== 'algofund-ts') {
+                            return weight > 0 ? `${formatNumber(weight * 100, 2)}%` : '—';
+                          }
+
+                          return (
+                            <Space wrap>
+                              <InputNumber
+                                min={0.001}
+                                max={1}
+                                step={0.01}
+                                value={weight > 0 ? weight : undefined}
+                                onChange={(value) => {
+                                  const nextWeights = {
+                                    ...normalizedWeights,
+                                    [offerId]: Number(value || 0),
+                                  };
+                                  updateBacktestTsComposition(activeOfferIds, nextWeights);
+                                }}
+                                style={{ width: 100 }}
+                              />
+                              <Tag>{formatNumber(weight * 100, 2)}%</Tag>
+                            </Space>
                           );
-                          return weight > 0 ? `${formatNumber(weight * 100, 2)}%` : '—';
+                        },
+                      },
+                      {
+                        title: 'Действия',
+                        key: 'row-actions',
+                        width: 140,
+                        render: (_, row: any) => {
+                          if (backtestDrawerContext.kind !== 'algofund-ts') {
+                            return '—';
+                          }
+                          const offerId = String(row?.offerId || '').trim();
+                          const activeOfferIds = Array.from(new Set((backtestDrawerContext?.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
+                          const normalizedWeights = normalizeBacktestTsWeights(activeOfferIds, backtestTsWeightsByOfferId);
+                          return (
+                            <Button
+                              size="small"
+                              danger
+                              disabled={activeOfferIds.length <= 1}
+                              onClick={() => {
+                                updateBacktestTsComposition(activeOfferIds.filter((id) => id !== offerId), normalizedWeights);
+                              }}
+                            >
+                              Удалить
+                            </Button>
+                          );
                         },
                       },
                       {
