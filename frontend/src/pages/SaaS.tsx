@@ -623,6 +623,68 @@ type AdminPerformanceReport = {
   }>;
 };
 
+type AdminTsHealthReport = {
+  success?: boolean;
+  generatedAt: string;
+  lookbackHours: number;
+  systems: Array<{
+    systemId: number;
+    systemName: string;
+    apiKeyName: string;
+    isActive: boolean;
+    connectedClients: number;
+    membersTotal: number;
+    membersEnabled: number;
+    membersWithRecentEvents: number;
+    latestAccountSnapshot?: {
+      equityUsd?: number;
+      unrealizedPnl?: number;
+      notionalUsd?: number;
+      marginLoadPercent?: number;
+      recordedAt?: string;
+    } | null;
+  }>;
+};
+
+type AdminClosedPositionsReport = {
+  success?: boolean;
+  generatedAt: string;
+  periodHours: number;
+  rows: Array<{
+    systemId: number;
+    systemName: string;
+    strategyId: number;
+    strategyName: string;
+    symbol: string;
+    side: string;
+    qty: number;
+    entryPrice: number;
+    exitPrice: number;
+    entryTime: number;
+    exitTime: number;
+    entryFee: number;
+    exitFee: number;
+    realizedPnl: number;
+    holdMinutes: number;
+  }>;
+  summary: {
+    closedCount: number;
+    wins: number;
+    losses: number;
+    winRatePercent: number;
+    totalRealizedPnl: number;
+  };
+};
+
+type AdminChartSnapshotReport = {
+  success?: boolean;
+  generatedAt: string;
+  candlesCount: number;
+  markersCount: number;
+  svg: string;
+  svgBase64: string;
+};
+
 type StrategyClientState = {
   tenant: Tenant;
   plan: Plan | null;
@@ -2125,6 +2187,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [reportPeriod, setReportPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [performanceReport, setPerformanceReport] = useState<AdminPerformanceReport | null>(null);
   const [performanceReportLoading, setPerformanceReportLoading] = useState(false);
+  const [reportTargetSystemName, setReportTargetSystemName] = useState('');
+  const [tsHealthReport, setTsHealthReport] = useState<AdminTsHealthReport | null>(null);
+  const [tsHealthLoading, setTsHealthLoading] = useState(false);
+  const [closedPositionsReport, setClosedPositionsReport] = useState<AdminClosedPositionsReport | null>(null);
+  const [closedPositionsLoading, setClosedPositionsLoading] = useState(false);
+  const [chartSnapshotReport, setChartSnapshotReport] = useState<AdminChartSnapshotReport | null>(null);
+  const [chartSnapshotLoading, setChartSnapshotLoading] = useState(false);
   const [sendTelegramLoading, setSendTelegramLoading] = useState(false);
   const reviewContextRef = useRef<HTMLDivElement | null>(null);
   const [strategyTenantId, setStrategyTenantId] = useState<number | null>(null);
@@ -2305,6 +2374,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const selectedAlgofundPublishedSystemName = String(
     selectedAlgofundTenantSummary?.algofundProfile?.published_system_name
     || algofundState?.profile?.published_system_name
+    || ''
+  ).trim();
+  const reportSystemOptions = Array.from(new Set([
+    selectedAlgofundPublishedSystemName,
+    ...publishedAlgofundSystems,
+    ...(algofundActiveSystems || []).map((item) => String(item.systemName || '').trim()),
+    String(adminSweepBacktestResult?.publishMeta?.systemName || '').trim(),
+  ].filter((name) => Boolean(name)))).map((name) => ({ label: name, value: name }));
+  const resolvedReportSystemName = String(
+    reportTargetSystemName
+    || selectedAlgofundPublishedSystemName
+    || reportSystemOptions[0]?.value
     || ''
   ).trim();
   const strategyCapabilities = strategyState?.capabilities || selectedStrategyTenantSummary?.capabilities;
@@ -2491,6 +2572,33 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const adminSweepTsSetsWithCurated = adminCuratedDraftTsSet
     ? [adminCuratedDraftTsSet, ...adminSweepTsSets.filter((item) => item.setKey !== adminCuratedDraftTsSet.setKey)]
     : adminSweepTsSets;
+  const adminSweepSetKeysNormalized = new Set(
+    adminSweepTsSetsWithCurated.map((item) => String(item.setKey || '').trim().toLowerCase()).filter(Boolean)
+  );
+  const adminPublishedTsSets = Array.from(
+    new Set([
+      selectedAlgofundPublishedSystemName,
+      ...publishedAlgofundSystems,
+    ].map((name) => String(name || '').trim()).filter(Boolean))
+  )
+    .filter((setName) => !adminSweepSetKeysNormalized.has(setName.toLowerCase()))
+    .map((setName) => {
+      const snapshot = summary?.offerStore?.tsBacktestSnapshots?.[setName] || null;
+      const snapshotOfferIds = Array.isArray(snapshot?.offerIds) ? (snapshot?.offerIds || []).map((item: any) => String(item)) : [];
+      return {
+        setKey: setName,
+        displayName: setName,
+        snapshotKey: setName,
+        isDraft: false,
+        isPublishedLive: true,
+        offers: [],
+        offerIds: snapshotOfferIds,
+        offerCount: snapshotOfferIds.length,
+        avgRet: Number(snapshot?.ret || 0),
+        avgPf: Number(snapshot?.pf || 0),
+        avgDd: Number(snapshot?.dd || 0),
+      };
+    });
   // Add saved snapshots that are NOT already covered by recommendedSets as explicit list entries
   const adminSweepSetKeys = new Set(adminSweepTsSets.map((item) => item.setKey));
   const adminSnapshotOnlyTsSets = Object.entries(summary?.offerStore?.tsBacktestSnapshots || {})
@@ -2508,9 +2616,36 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       avgPf: Number(snap.pf || 0),
       avgDd: Number(snap.dd || 0),
     }));
+  const adminSnapshotOnlyTsSetsDeduped = (() => {
+    const generatedPattern = /^ts_snapshot_\d+$/i;
+    const bySignature = new Map<string, typeof adminSnapshotOnlyTsSets>();
+    for (const item of adminSnapshotOnlyTsSets) {
+      const signature = [...(item.offerIds || [])].map((id) => String(id)).sort().join('|');
+      const key = signature || `__set__:${String(item.setKey || '')}`;
+      const list = bySignature.get(key) || [];
+      list.push(item);
+      bySignature.set(key, list);
+    }
+
+    const resolved: typeof adminSnapshotOnlyTsSets = [];
+    Array.from(bySignature.values()).forEach((variants) => {
+      if (variants.length <= 1) {
+        resolved.push(variants[0]);
+        return;
+      }
+      const named = variants.find((item: typeof variants[number]) => !generatedPattern.test(String(item.setKey || '').trim()));
+      if (named) {
+        resolved.push(named);
+        return;
+      }
+      resolved.push(variants[variants.length - 1]);
+    });
+    return resolved;
+  })();
   const adminSweepTsSetsAll = [
     ...adminSweepTsSetsWithCurated,
-    ...adminSnapshotOnlyTsSets,
+    ...adminPublishedTsSets,
+    ...adminSnapshotOnlyTsSetsDeduped,
   ];
   const adminDraftMemberStrategyIds = new Set(
     (adminTradingSystemDraft?.members || [])
@@ -2954,6 +3089,74 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load performance report'));
     } finally {
       setPerformanceReportLoading(false);
+    }
+  };
+
+  const loadTsHealthReport = async () => {
+    const targetSystemName = String(resolvedReportSystemName || '').trim();
+    if (!targetSystemName) {
+      messageApi.warning('Сначала выберите Algofund TS');
+      return;
+    }
+    setTsHealthLoading(true);
+    try {
+      const response = await axios.get<AdminTsHealthReport>('/api/saas/admin/reports/ts-health', {
+        params: {
+          systemName: targetSystemName,
+          lookbackHours: 24,
+        },
+      });
+      setTsHealthReport(response.data);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load TS health report'));
+    } finally {
+      setTsHealthLoading(false);
+    }
+  };
+
+  const loadClosedPositionsReport = async () => {
+    const targetSystemName = String(resolvedReportSystemName || '').trim();
+    if (!targetSystemName) {
+      messageApi.warning('Сначала выберите Algofund TS');
+      return;
+    }
+    setClosedPositionsLoading(true);
+    try {
+      const response = await axios.get<AdminClosedPositionsReport>('/api/saas/admin/reports/closed-positions', {
+        params: {
+          systemName: targetSystemName,
+          periodHours: 24 * 7,
+          limit: 40,
+        },
+      });
+      setClosedPositionsReport(response.data);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load closed positions report'));
+    } finally {
+      setClosedPositionsLoading(false);
+    }
+  };
+
+  const loadChartSnapshotReport = async () => {
+    const targetSystemName = String(resolvedReportSystemName || '').trim();
+    if (!targetSystemName) {
+      messageApi.warning('Сначала выберите Algofund TS');
+      return;
+    }
+    setChartSnapshotLoading(true);
+    try {
+      const response = await axios.post<AdminChartSnapshotReport>('/api/saas/admin/reports/chart-snapshot', {
+        systemName: targetSystemName,
+        candles: 180,
+        width: 1280,
+        height: 640,
+        interval: '1h',
+      });
+      setChartSnapshotReport(response.data);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load chart snapshot'));
+    } finally {
+      setChartSnapshotLoading(false);
     }
   };
 
@@ -3645,6 +3848,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       }
     }
   }, [algofundTenantId, isAdminSurface]);
+
+  useEffect(() => {
+    if (reportTargetSystemName || !resolvedReportSystemName) {
+      return;
+    }
+    setReportTargetSystemName(resolvedReportSystemName);
+  }, [reportTargetSystemName, resolvedReportSystemName]);
 
   useEffect(() => {
     if (copytradingTenantId !== null) {
@@ -4729,7 +4939,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       || adminSweepBacktestResult?.sweepApiKeyName
       || ''
     ).trim();
-    const snapshotKey = snapshotSetKey || `ts_snapshot_${Date.now()}`;
+    const fallbackDraftKey = String(
+      adminTradingSystemDraft?.name
+      || backtestDrawerContext?.title?.replace(/^Бэктест ТС:\s*/i, '')
+      || 'BTDD D1 Expanded TS v2'
+    ).trim();
+    const defaultSnapshotKey = snapshotSetKey || fallbackDraftKey;
+    const promptDefault = defaultSnapshotKey || fallbackDraftKey;
+    const promptText = 'Сохранение TS: оставьте текущее имя для сохранения в эту же карточку, или введите новое имя для новой карточки.';
+    const enteredSnapshotKey = window.prompt(promptText, promptDefault);
+    if (enteredSnapshotKey === null) {
+      messageApi.info('Сохранение TS отменено');
+      return;
+    }
+    const snapshotKey = String(enteredSnapshotKey || '').trim() || defaultSnapshotKey;
+    if (!snapshotKey) {
+      messageApi.warning('Имя карточки TS не задано');
+      return;
+    }
 
     setActionLoading('ts-review-snapshot');
     try {
@@ -4737,7 +4964,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         tsBacktestSnapshotsPatch: {
           [snapshotKey]: {
             apiKeyName: snapshotApiKeyName,
-            setKey: snapshotSetKey,
+            setKey: snapshotKey,
             systemName: adminSweepBacktestResult?.publishMeta?.systemName,
             ret: Number(summary.totalReturnPercent ?? 0),
             pf: Number(summary.profitFactor ?? 0),
@@ -4758,6 +4985,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         },
       });
       await loadSummary('full');
+      setSelectedAdminDraftTsSetKey(snapshotKey);
       messageApi.success('Метрики ТС сохранены как черновик');
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось сохранить метрики ТС'));
@@ -5221,6 +5449,76 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const resolveTenantRuntimeStatus = (row: TenantSummary) => {
+    const profile = row.tenant.product_mode === 'strategy_client' ? row.strategyProfile : row.algofundProfile;
+    const requestedEnabled = Number(profile?.requested_enabled || 0) === 1;
+    const actualEnabled = Number(profile?.actual_enabled || 0) === 1;
+    const apiKeyName = String(
+      profile?.assigned_api_key_name
+      || row.tenant.assigned_api_key_name
+      || row.copytradingProfile?.master_api_key_name
+      || ''
+    ).trim();
+
+    const hasMismatch = requestedEnabled !== actualEnabled;
+    const level: 'success' | 'warning' | 'error' = hasMismatch
+      ? 'error'
+      : requestedEnabled
+        ? 'success'
+        : 'warning';
+
+    const stateLabel = level === 'success' ? 'активен' : level === 'warning' ? 'выключен' : 'ошибка';
+    const details = [
+      `Тенант: ${row.tenant.status}`,
+      `Торговля: ${requestedEnabled ? 'включена' : 'выключена'}`,
+      `Движок: ${actualEnabled ? 'активен' : 'выключен'}`,
+      apiKeyName ? `API key: ${apiKeyName}` : 'API key: не назначен',
+      row.tenant.product_mode === 'algofund_client' && String(row.algofundProfile?.published_system_name || '').trim()
+        ? `TS: ${String(row.algofundProfile?.published_system_name || '').trim()}`
+        : '',
+      hasMismatch ? 'Состояния торговли и движка расходятся: требуется проверка materialization/runtime.' : '',
+    ].filter(Boolean).join(' | ');
+
+    return {
+      requestedEnabled,
+      actualEnabled,
+      level,
+      stateLabel,
+      details,
+    };
+  };
+
+  const extractTenantBillingInfo = (row: TenantSummary) => {
+    const raw = row as any;
+    const status = String(raw?.billing?.status || raw?.paymentStatus || raw?.payment_status || '').trim();
+    const daysRaw = raw?.billing?.daysToPayment ?? raw?.daysToPayment ?? raw?.days_to_payment;
+    const daysToPayment = Number.isFinite(Number(daysRaw)) ? Number(daysRaw) : null;
+
+    if (!status && daysToPayment === null) {
+      return {
+        color: 'default' as const,
+        label: 'n/a',
+        details: 'Поля оплаты будут добавлены позже.',
+      };
+    }
+
+    const normalized = status.toLowerCase();
+    const color: 'success' | 'warning' | 'error' | 'default' =
+      normalized.includes('paid') || normalized.includes('опла')
+        ? 'success'
+        : normalized.includes('due') || normalized.includes('ожида') || normalized.includes('pending')
+          ? 'warning'
+          : normalized.includes('overdue') || normalized.includes('error') || normalized.includes('проср')
+            ? 'error'
+            : 'default';
+
+    return {
+      color,
+      label: status || 'n/a',
+      details: daysToPayment !== null ? `До оплаты: ${daysToPayment} дн.` : 'Срок оплаты не указан.',
+    };
+  };
+
   const tenantColumns: ColumnsType<TenantSummary> = [
     {
       title: 'Tenant',
@@ -5242,6 +5540,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       title: copy.plan,
       key: 'plan',
       render: (_, row) => row.plan ? `${row.plan.title} • ${formatMoney(row.plan.price_usdt)}` : '—',
+    },
+    {
+      title: 'Оплата',
+      key: 'billing',
+      width: 170,
+      render: (_, row) => {
+        const billing = extractTenantBillingInfo(row);
+        return (
+          <Tooltip title={billing.details}>
+            <Tag color={billing.color}>{billing.label}</Tag>
+          </Tooltip>
+        );
+      },
     },
     {
       title: copy.apiKey,
@@ -5312,28 +5623,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       key: 'status',
       width: 220,
       render: (_, row) => {
-        const profile = row.tenant.product_mode === 'strategy_client' ? row.strategyProfile : row.algofundProfile;
-        const requestedEnabled = Number(profile?.requested_enabled || 0) === 1;
-        const actualEnabled = Number(profile?.actual_enabled || 0) === 1;
-        const hasError = requestedEnabled && !actualEnabled;
-        const runtimeColor = hasError ? 'error' : actualEnabled ? 'success' : 'warning';
-        const runtimeLabel = hasError ? 'ошибка запуска' : actualEnabled ? 'движок активен' : 'движок остановлен';
-        const statusDetails = [
-          `Тенант: ${row.tenant.status}`,
-          `Торговля: ${requestedEnabled ? 'включена' : 'выключена'}`,
-          `Движок: ${actualEnabled ? 'запущен' : 'остановлен'}`,
-          row.tenant.product_mode === 'algofund_client' && String(row.algofundProfile?.published_system_name || '').trim()
-            ? `TS: ${String(row.algofundProfile?.published_system_name || '').trim()}`
-            : '',
-          hasError ? 'Торговля включена, но движок не запустился или не материализовался.' : '',
-        ].filter(Boolean).join(' | ');
+        const runtime = resolveTenantRuntimeStatus(row);
         return (
-          <Tooltip title={statusDetails}>
+          <Tooltip title={runtime.details}>
             <Space direction="vertical" size={2}>
               <Tag color={row.tenant.status === 'active' ? 'success' : 'default'}>{row.tenant.status}</Tag>
               <Space size={4} wrap>
-                <Tag color={runtimeColor}>{runtimeLabel}</Tag>
-                <Tag color={requestedEnabled ? 'processing' : 'default'}>{requestedEnabled ? 'торговля включена' : 'торговля выключена'}</Tag>
+                <Tag color={runtime.level}>{runtime.stateLabel}</Tag>
+                <Tag color={runtime.requestedEnabled ? 'processing' : 'warning'}>{runtime.requestedEnabled ? 'торговля включена' : 'торговля выключена'}</Tag>
               </Space>
             </Space>
           </Tooltip>
@@ -6740,6 +7037,60 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 <Tag color="geekblue">Offers: {Number(performanceReport?.offers?.length || 0)}</Tag>
                                 {performanceReport ? <Tag color="default">{performanceReport.generatedAt.slice(0, 16).replace('T', ' ')}</Tag> : null}
                               </Space>
+                              <Divider style={{ margin: '6px 0' }} />
+                              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                <Text strong>Algofund reports MVP (1 TS card, connected clients)</Text>
+                                <Space wrap>
+                                  <Select
+                                    style={{ width: 360 }}
+                                    placeholder="Выберите Algofund TS"
+                                    value={resolvedReportSystemName || undefined}
+                                    options={reportSystemOptions}
+                                    onChange={(value) => setReportTargetSystemName(String(value || ''))}
+                                  />
+                                  <Button loading={tsHealthLoading} onClick={() => void loadTsHealthReport()}>TS Health</Button>
+                                  <Button loading={closedPositionsLoading} onClick={() => void loadClosedPositionsReport()}>Closed Positions</Button>
+                                  <Button loading={chartSnapshotLoading} onClick={() => void loadChartSnapshotReport()}>Chart Snapshot</Button>
+                                </Space>
+                                <Space wrap>
+                                  <Tag color="blue">health: {Number(tsHealthReport?.systems?.length || 0)} systems</Tag>
+                                  <Tag color="gold">closed: {Number(closedPositionsReport?.summary?.closedCount || 0)}</Tag>
+                                  <Tag color="purple">snapshot candles: {Number(chartSnapshotReport?.candlesCount || 0)}</Tag>
+                                  {chartSnapshotReport?.generatedAt ? <Tag>{chartSnapshotReport.generatedAt.slice(0, 16).replace('T', ' ')}</Tag> : null}
+                                </Space>
+                                {tsHealthReport?.systems?.[0] ? (
+                                  <Space wrap>
+                                    <Tag color="cyan">clients: {Number(tsHealthReport.systems[0].connectedClients || 0)}</Tag>
+                                    <Tag>members: {Number(tsHealthReport.systems[0].membersEnabled || 0)}/{Number(tsHealthReport.systems[0].membersTotal || 0)}</Tag>
+                                    <Tag color="green">live(24h): {Number(tsHealthReport.systems[0].membersWithRecentEvents || 0)}</Tag>
+                                    <Tag>equity: {formatMoney(tsHealthReport.systems[0].latestAccountSnapshot?.equityUsd)}</Tag>
+                                  </Space>
+                                ) : null}
+                                {closedPositionsReport?.rows?.length ? (
+                                  <Table
+                                    size="small"
+                                    pagination={{ pageSize: 5, showSizeChanger: false }}
+                                    rowKey={(row, index) => `${row.systemId}-${row.strategyId}-${row.exitTime}-${index}`}
+                                    dataSource={closedPositionsReport.rows.slice(0, 12)}
+                                    columns={[
+                                      { title: 'Time', dataIndex: 'exitTime', key: 'exitTime', render: (value: number) => new Date(value).toLocaleString() },
+                                      { title: 'Symbol', dataIndex: 'symbol', key: 'symbol' },
+                                      { title: 'Side', dataIndex: 'side', key: 'side' },
+                                      { title: 'PnL', dataIndex: 'realizedPnl', key: 'realizedPnl', render: (value: number) => formatMoney(value) },
+                                      { title: 'Hold min', dataIndex: 'holdMinutes', key: 'holdMinutes', render: (value: number) => formatNumber(value, 2) },
+                                    ]}
+                                  />
+                                ) : null}
+                                {chartSnapshotReport?.svgBase64 ? (
+                                  <div style={{ border: '1px solid #f0f0f0', borderRadius: 8, overflow: 'hidden' }}>
+                                    <img
+                                      src={`data:image/svg+xml;base64,${chartSnapshotReport.svgBase64}`}
+                                      alt="Algofund TS snapshot"
+                                      style={{ display: 'block', width: '100%', maxHeight: 360, objectFit: 'contain', background: '#f7f9fb' }}
+                                    />
+                                  </div>
+                                ) : null}
+                              </Space>
                             </Space>
                           </Card>
                           <Card className="battletoads-card" title="Живые клиенты и торговые движки">
@@ -7082,60 +7433,170 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       <>
                         <Card className="battletoads-card" title={isAdminSurface ? 'Витрина Клиент стратегий' : copy.tenantWorkspace}>
                           {isAdminSurface ? (
-                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                              <Alert
-                                type="info"
-                                showIcon
-                                message="Здесь для admin показывается витрина карточек. Кабинет клиента перенесен в Админ → Оферы и ТС."
-                              />
-                              {publishedStorefrontOffers.length === 0 ? (
-                                <Empty description="Витрина оферов пока пустая: сначала апрувни карточки в Админ → Оферы и ТС" />
-                              ) : (
-                                <Table
-                                  size="small"
-                                  rowKey="offerId"
-                                  dataSource={publishedStorefrontOffers}
-                                  pagination={{ pageSize: 8, showSizeChanger: false }}
-                                  scroll={{ x: 900 }}
-                                  columns={[
-                                    {
-                                      title: 'Карточка',
-                                      key: 'offer',
-                                      render: (_, row: any) => (
-                                        <Space direction="vertical" size={0}>
-                                          <Text strong>{row.titleRu}</Text>
-                                          <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                            <Tabs
+                              items={[
+                                {
+                                  key: 'strategy-storefront',
+                                  label: 'Витрина',
+                                  children: (
+                                    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                      <Alert
+                                        type="info"
+                                        showIcon
+                                        message="Витрина оферов Клиента стратегий: опубликованные карточки и быстрые действия."
+                                      />
+                                      {publishedStorefrontOffers.length === 0 ? (
+                                        <Empty description="Витрина оферов пока пустая: сначала апрувни карточки в Админ → Оферы и ТС" />
+                                      ) : (
+                                        <Table
+                                          size="small"
+                                          rowKey="offerId"
+                                          dataSource={publishedStorefrontOffers}
+                                          pagination={{ pageSize: 8, showSizeChanger: false }}
+                                          scroll={{ x: 900 }}
+                                          columns={[
+                                            {
+                                              title: 'Карточка',
+                                              key: 'offer',
+                                              render: (_, row: any) => (
+                                                <Space direction="vertical" size={0}>
+                                                  <Text strong>{row.titleRu}</Text>
+                                                  <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                                </Space>
+                                              ),
+                                            },
+                                            {
+                                              title: 'Период/метрики',
+                                              key: 'metrics',
+                                              render: (_, row: any) => (
+                                                <Space size={4} wrap>
+                                                  <Tag color="default">{Number(row.periodDays || 0)}d</Tag>
+                                                  <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
+                                                  <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
+                                                  <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                                </Space>
+                                              ),
+                                            },
+                                            {
+                                              title: 'Действия',
+                                              key: 'actions',
+                                              width: 280,
+                                              render: (_, row: any) => (
+                                                <Space size={4} wrap>
+                                                  <Button size="small" onClick={() => navigateToAdminTab('offer-ts')}>Редактировать</Button>
+                                                  <Button size="small" onClick={() => openAdminReviewContext('offer', String(row.offerId))}>Бэктест</Button>
+                                                  <Tag color="success">на витрине</Tag>
+                                                </Space>
+                                              ),
+                                            },
+                                          ]}
+                                        />
+                                      )}
+                                    </Space>
+                                  ),
+                                },
+                                {
+                                  key: 'strategy-client-card',
+                                  label: 'Карточка клиента',
+                                  children: (() => {
+                                    const runtime = selectedStrategyTenantSummary ? resolveTenantRuntimeStatus(selectedStrategyTenantSummary) : null;
+                                    const billing = selectedStrategyTenantSummary ? extractTenantBillingInfo(selectedStrategyTenantSummary) : null;
+                                    return (
+                                      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                        <Alert
+                                          type="info"
+                                          showIcon
+                                          message="Карточка клиента Strategy Client: выбор клиента, тариф, риск-профиль, метрики и настройки."
+                                        />
+                                        <Row gutter={[12, 12]}>
+                                          <Col xs={24} md={8}>
+                                            <Text strong>{copy.chooseTenant}</Text>
+                                            <Select
+                                              style={{ width: '100%', marginTop: 8 }}
+                                              value={strategyTenantId ?? undefined}
+                                              onChange={(value) => setStrategyTenantId(Number(value))}
+                                              options={strategyTenants.map((item) => ({ value: item.tenant.id, label: `${item.tenant.display_name} (${item.tenant.slug})` }))}
+                                            />
+                                          </Col>
+                                          <Col xs={24} md={8}>
+                                            <Text strong>{copy.displayName}</Text>
+                                            <Input style={{ marginTop: 8 }} value={strategyTenantDisplayName} onChange={(event) => setStrategyTenantDisplayName(event.target.value)} />
+                                          </Col>
+                                          <Col xs={24} md={8}>
+                                            <Text strong>{copy.apiKey}</Text>
+                                            <Select
+                                              style={{ width: '100%', marginTop: 8 }}
+                                              value={strategyApiKeyName || undefined}
+                                              onChange={setStrategyApiKeyName}
+                                              options={apiKeyOptions}
+                                              disabled={!strategyApiKeyEditable}
+                                            />
+                                          </Col>
+                                        </Row>
+                                        <Space wrap>
+                                          {runtime ? (
+                                            <Tooltip title={runtime.details}>
+                                              <Tag color={runtime.level}>Движок: {runtime.stateLabel}</Tag>
+                                            </Tooltip>
+                                          ) : null}
+                                          <Tag color={strategyState.profile?.requested_enabled ? 'processing' : 'warning'}>
+                                            {strategyState.profile?.requested_enabled ? 'торговля включена' : 'торговля выключена'}
+                                          </Tag>
+                                          <Tag color={strategyState.tenant.status === 'active' ? 'success' : 'default'}>{copy.tenantStatus}: {strategyState.tenant.status || '—'}</Tag>
+                                          {billing ? (
+                                            <Tooltip title={billing.details}>
+                                              <Tag color={billing.color}>Оплата: {billing.label}</Tag>
+                                            </Tooltip>
+                                          ) : null}
                                         </Space>
-                                      ),
-                                    },
-                                    {
-                                      title: 'Период/метрики',
-                                      key: 'metrics',
-                                      render: (_, row: any) => (
-                                        <Space size={4} wrap>
-                                          <Tag color="default">{Number(row.periodDays || 0)}d</Tag>
-                                          <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
-                                          <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
-                                          <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                        <Descriptions column={1} size="small" bordered>
+                                          <Descriptions.Item label={copy.displayName}>{strategyState.tenant.display_name || '—'}</Descriptions.Item>
+                                          <Descriptions.Item label={copy.plan}>{strategyState.plan ? `${strategyState.plan.title} • ${formatMoney(strategyState.plan.price_usdt)}` : '—'}</Descriptions.Item>
+                                          <Descriptions.Item label={copy.depositCap}>{formatMoney(strategyState.plan?.max_deposit_total)}</Descriptions.Item>
+                                          <Descriptions.Item label={copy.strategyLimit}>{formatNumber(strategyState.plan?.max_strategies_total, 0)}</Descriptions.Item>
+                                          <Descriptions.Item label={copy.risk}>{String(strategyState.profile?.risk_level || '—')}</Descriptions.Item>
+                                          <Descriptions.Item label={copy.tradeFrequency}>{String(strategyState.profile?.trade_frequency_level || '—')}</Descriptions.Item>
+                                        </Descriptions>
+                                        <Space wrap>
+                                          {strategyMonitoringEnabled && selectedStrategyTenantSummary?.monitoring ? <Tag color="green">Eq {formatMoney(selectedStrategyTenantSummary.monitoring.equity_usd)}</Tag> : null}
+                                          {strategyMonitoringEnabled && selectedStrategyTenantSummary?.monitoring ? <Tag color="geekblue">{copy.unrealizedPnl}: {formatMoney(selectedStrategyTenantSummary.monitoring.unrealized_pnl)}</Tag> : null}
+                                          {strategyMonitoringEnabled && selectedStrategyTenantSummary?.monitoring ? <Tag color="orange">DD {formatPercent(selectedStrategyTenantSummary.monitoring.drawdown_percent)}</Tag> : null}
+                                          {strategyMonitoringEnabled && selectedStrategyTenantSummary?.monitoring ? <Tag color="purple">{copy.marginLoad}: {formatPercent(selectedStrategyTenantSummary.monitoring.margin_load_percent)}</Tag> : null}
+                                          {!strategyMonitoringEnabled ? <Tag color="default">{copy.monitoring}: off</Tag> : null}
                                         </Space>
-                                      ),
-                                    },
-                                    {
-                                      title: 'Действия',
-                                      key: 'actions',
-                                      width: 280,
-                                      render: (_, row: any) => (
-                                        <Space size={4} wrap>
-                                          <Button size="small" onClick={() => navigateToAdminTab('offer-ts')}>Редактировать</Button>
-                                          <Button size="small" onClick={() => openAdminReviewContext('offer', String(row.offerId))}>Бэктест</Button>
-                                          <Tag color="success">на витрине</Tag>
+                                        <Space wrap>
+                                          <Select
+                                            value={strategyTenantPlanCode || undefined}
+                                            onChange={setStrategyTenantPlanCode}
+                                            style={{ width: 180 }}
+                                            options={strategyPlanOptions}
+                                          />
+                                          <Select
+                                            value={strategyTenantStatus}
+                                            onChange={setStrategyTenantStatus}
+                                            style={{ width: 180 }}
+                                            options={[
+                                              { value: 'active', label: 'active' },
+                                              { value: 'suspended', label: 'suspended' },
+                                              { value: 'paused', label: 'paused' },
+                                            ]}
+                                          />
+                                          <Button type="primary" onClick={() => void saveStrategyTenantAdmin()} loading={actionLoading === 'strategy-tenant-save'}>
+                                            {copy.saveTenant}
+                                          </Button>
+                                          <Button danger onClick={() => void emergencyStopStrategy()} loading={actionLoading === 'strategy-emergency'}>
+                                            {copy.emergencyStop}
+                                          </Button>
+                                          <Button onClick={() => void createStrategyMagicLink()} loading={actionLoading === 'strategy-magic-link'}>
+                                            {copy.createMagicLink}
+                                          </Button>
                                         </Space>
-                                      ),
-                                    },
-                                  ]}
-                                />
-                              )}
-                            </Space>
+                                      </Space>
+                                    );
+                                  })(),
+                                },
+                              ]}
+                            />
                           ) : (
                             <>
                           <Row gutter={[16, 16]} align="middle">
@@ -7630,26 +8091,149 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       <>
                         <Card className="battletoads-card" title={isAdminSurface ? 'Витрина Алгофонд' : copy.tenantWorkspace}>
                           {isAdminSurface ? (
-                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                              <Alert
-                                type="info"
-                                showIcon
-                                message="Здесь показывается одобренная витрина Алгофонда и текущие TS-офферы. Подготовка кандидатов и настройка draft TS остаются в Админ → Оферы и ТС."
-                              />
-                              {publishedAlgofundSystems.length === 0 ? (
-                                <Empty description="Витрина Алгофонда сейчас пуста: опубликованная TS еще не привязана к algofund-клиентам" />
-                              ) : (
-                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                  <Tag color="success">Опубликованные TS: {publishedAlgofundSystems.length}</Tag>
-                                  <Text>Витринные TS офферы синхронизированы и доступны в карточках ниже</Text>
-                                  <Text type="secondary">Клиентов с привязанной TS: {algofundTenantsWithPublishedTs.length}</Text>
-                                </Space>
-                              )}
-                              <Space wrap>
-                                <Button type="primary" onClick={() => navigateToAdminTab('offer-ts')}>Оферы и ТС</Button>
-                                <Button onClick={() => navigateToAdminTab('clients')}>К клиентам Алгофонда</Button>
-                              </Space>
-                            </Space>
+                            <Tabs
+                              items={[
+                                {
+                                  key: 'algofund-storefront',
+                                  label: 'Витрина',
+                                  children: (
+                                    <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                      <Alert
+                                        type="info"
+                                        showIcon
+                                        message="Одобренная витрина Алгофонда и текущие TS-офферы."
+                                      />
+                                      {publishedAlgofundSystems.length === 0 ? (
+                                        <Empty description="Витрина Алгофонда сейчас пуста: опубликованная TS еще не привязана к algofund-клиентам" />
+                                      ) : (
+                                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                          <Tag color="success">Опубликованные TS: {publishedAlgofundSystems.length}</Tag>
+                                          <Text>Витринные TS офферы синхронизированы и доступны в карточках ниже</Text>
+                                          <Text type="secondary">Клиентов с привязанной TS: {algofundTenantsWithPublishedTs.length}</Text>
+                                        </Space>
+                                      )}
+                                      <Space wrap>
+                                        <Button type="primary" onClick={() => navigateToAdminTab('offer-ts')}>Оферы и ТС</Button>
+                                        <Button onClick={() => navigateToAdminTab('clients')}>К клиентам Алгофонда</Button>
+                                      </Space>
+                                    </Space>
+                                  ),
+                                },
+                                {
+                                  key: 'algofund-client-card',
+                                  label: 'Карточка клиента',
+                                  children: (() => {
+                                    const runtime = selectedAlgofundTenantSummary ? resolveTenantRuntimeStatus(selectedAlgofundTenantSummary) : null;
+                                    const billing = selectedAlgofundTenantSummary ? extractTenantBillingInfo(selectedAlgofundTenantSummary) : null;
+                                    return (
+                                      <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                                        <Alert
+                                          type="info"
+                                          showIcon
+                                          message="Карточка клиента Algofund: выбор клиента, тариф, риск, метрики и настройки."
+                                        />
+                                        <Row gutter={[12, 12]}>
+                                          <Col xs={24} md={8}>
+                                            <Text strong>{copy.chooseTenant}</Text>
+                                            <Select
+                                              style={{ width: '100%', marginTop: 8 }}
+                                              value={algofundTenantId ?? undefined}
+                                              onChange={(value) => setAlgofundTenantId(Number(value))}
+                                              options={algofundTenants.map((item) => ({ value: item.tenant.id, label: `${item.tenant.display_name} (${item.tenant.slug})` }))}
+                                            />
+                                          </Col>
+                                          <Col xs={24} md={8}>
+                                            <Text strong>{copy.displayName}</Text>
+                                            <Input style={{ marginTop: 8 }} value={algofundTenantDisplayName} onChange={(event) => setAlgofundTenantDisplayName(event.target.value)} />
+                                          </Col>
+                                          <Col xs={24} md={8}>
+                                            <Text strong>{copy.apiKey}</Text>
+                                            <Select
+                                              style={{ width: '100%', marginTop: 8 }}
+                                              value={algofundApiKeyName || undefined}
+                                              onChange={setAlgofundApiKeyName}
+                                              options={apiKeyOptions}
+                                              disabled={!algofundApiKeyEditable}
+                                            />
+                                          </Col>
+                                        </Row>
+                                        <Space wrap>
+                                          {runtime ? (
+                                            <Tooltip title={runtime.details}>
+                                              <Tag color={runtime.level}>Движок: {runtime.stateLabel}</Tag>
+                                            </Tooltip>
+                                          ) : null}
+                                          <Tag color={algofundState.profile?.requested_enabled ? 'processing' : 'warning'}>
+                                            {algofundState.profile?.requested_enabled ? 'торговля включена' : 'торговля выключена'}
+                                          </Tag>
+                                          <Tag color={algofundState.tenant.status === 'active' ? 'success' : 'default'}>{copy.tenantStatus}: {algofundState.tenant.status || '—'}</Tag>
+                                          {billing ? (
+                                            <Tooltip title={billing.details}>
+                                              <Tag color={billing.color}>Оплата: {billing.label}</Tag>
+                                            </Tooltip>
+                                          ) : null}
+                                        </Space>
+                                        <Descriptions column={1} size="small" bordered>
+                                          <Descriptions.Item label={copy.displayName}>{algofundState.tenant.display_name || '—'}</Descriptions.Item>
+                                          <Descriptions.Item label={copy.plan}>{algofundState.plan ? `${algofundState.plan.title} • ${formatMoney(algofundState.plan.price_usdt)}` : '—'}</Descriptions.Item>
+                                          <Descriptions.Item label={copy.depositCap}>{formatMoney(algofundState.plan?.max_deposit_total)}</Descriptions.Item>
+                                          <Descriptions.Item label={copy.riskCap}>{formatNumber(algofundState.plan?.risk_cap_max)}</Descriptions.Item>
+                                          <Descriptions.Item label={copy.risk}>{formatNumber(algofundRiskMultiplier)}x</Descriptions.Item>
+                                          <Descriptions.Item label="Published TS">{String(algofundState.profile?.published_system_name || '—')}</Descriptions.Item>
+                                        </Descriptions>
+                                        <Space wrap>
+                                          {algofundMonitoringEnabled && selectedAlgofundTenantSummary?.monitoring ? <Tag color="green">Eq {formatMoney(selectedAlgofundTenantSummary.monitoring.equity_usd)}</Tag> : null}
+                                          {algofundMonitoringEnabled && selectedAlgofundTenantSummary?.monitoring ? <Tag color="geekblue">{copy.unrealizedPnl}: {formatMoney(selectedAlgofundTenantSummary.monitoring.unrealized_pnl)}</Tag> : null}
+                                          {algofundMonitoringEnabled && selectedAlgofundTenantSummary?.monitoring ? <Tag color="orange">DD {formatPercent(selectedAlgofundTenantSummary.monitoring.drawdown_percent)}</Tag> : null}
+                                          {algofundMonitoringEnabled && selectedAlgofundTenantSummary?.monitoring ? <Tag color="purple">{copy.marginLoad}: {formatPercent(selectedAlgofundTenantSummary.monitoring.margin_load_percent)}</Tag> : null}
+                                          {!algofundMonitoringEnabled ? <Tag color="default">{copy.monitoring}: off</Tag> : null}
+                                        </Space>
+                                        <Space wrap>
+                                          <Select
+                                            style={{ width: 180 }}
+                                            value={algofundTenantPlanCode || undefined}
+                                            onChange={setAlgofundTenantPlanCode}
+                                            options={algofundPlanOptions}
+                                          />
+                                          <InputNumber
+                                            min={0}
+                                            max={10}
+                                            step={0.05}
+                                            style={{ width: 140 }}
+                                            value={algofundRiskMultiplier}
+                                            onChange={(value) => setAlgofundRiskMultiplier(clampPreviewValue(Number(value ?? 0), 10))}
+                                          />
+                                          <Button onClick={() => void saveAlgofundProfile()} loading={actionLoading === 'algofund-save'} disabled={!algofundSettingsEnabled}>
+                                            {copy.saveProfile}
+                                          </Button>
+                                        </Space>
+                                        <Space wrap>
+                                          <Select
+                                            value={algofundTenantStatus}
+                                            onChange={setAlgofundTenantStatus}
+                                            style={{ width: 180 }}
+                                            options={[
+                                              { value: 'active', label: 'active' },
+                                              { value: 'suspended', label: 'suspended' },
+                                              { value: 'paused', label: 'paused' },
+                                            ]}
+                                          />
+                                          <Button type="primary" onClick={() => void saveAlgofundTenantAdmin()} loading={actionLoading === 'algofund-tenant-save'}>
+                                            {copy.saveTenant}
+                                          </Button>
+                                          <Button danger onClick={() => void emergencyStopAlgofund()} loading={actionLoading === 'algofund-emergency'}>
+                                            {copy.emergencyStop}
+                                          </Button>
+                                          <Button onClick={() => void createAlgofundMagicLink()} loading={actionLoading === 'algofund-magic-link'}>
+                                            {copy.createMagicLink}
+                                          </Button>
+                                        </Space>
+                                      </Space>
+                                    );
+                                  })(),
+                                },
+                              ]}
+                            />
                           ) : (
                             <>
                           <Row gutter={[16, 16]} align="middle">
