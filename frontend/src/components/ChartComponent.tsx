@@ -34,6 +34,7 @@ interface ChartComponentProps {
   onHoverOHLC?: (ohlc: HoverOHLC | null) => void;
   overlayLines?: OverlayLine[];
   markers?: ChartMarker[];
+  fixedHeight?: number;
 }
 
 const normalizeTime = (rawTime: any): number | null => {
@@ -141,7 +142,7 @@ const calculateChartHeight = (width: number): number => {
   return 400;
 };
 
-const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlestick', onHoverOHLC, overlayLines = [], markers = [] }) => {
+const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlestick', onHoverOHLC, overlayLines = [], markers = [], fixedHeight }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | ISeriesApi<'Line'> | null>(null);
@@ -177,7 +178,7 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
 
     const chart = createChart(chartContainerRef.current, {
       width: initialWidth,
-      height: calculateChartHeight(initialWidth),
+      height: Number.isFinite(Number(fixedHeight)) && Number(fixedHeight) > 40 ? Number(fixedHeight) : calculateChartHeight(initialWidth),
       layout: {
         background: { color: '#ffffff' },
         textColor: '#000000',
@@ -235,7 +236,9 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
         resizeFrameRef.current = null;
 
         const width = container.clientWidth || 320;
-        const height = calculateChartHeight(width);
+        const height = Number.isFinite(Number(fixedHeight)) && Number(fixedHeight) > 40
+          ? Number(fixedHeight)
+          : calculateChartHeight(width);
         const lastSize = lastSizeRef.current;
 
         if (lastSize.width === width && lastSize.height === height) {
@@ -272,7 +275,7 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
         observer.disconnect();
       }
     };
-  }, [type]);
+  }, [type, fixedHeight]);
 
   useEffect(() => {
     if (!seriesRef.current) {
@@ -604,7 +607,8 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
     markerPluginRef.current.setMarkers(normalized);
   }, [markers, data.length, type]);
 
-  return <div ref={chartContainerRef} style={{ width: '100%', minHeight: 260, touchAction: 'none' }} />;
+  const safeFixedHeight = Number.isFinite(Number(fixedHeight)) && Number(fixedHeight) > 40 ? Number(fixedHeight) : null;
+  return <div ref={chartContainerRef} style={{ width: '100%', minHeight: safeFixedHeight || 260, height: safeFixedHeight || undefined, touchAction: 'none' }} />;
 };
 
 export default ChartComponent;
