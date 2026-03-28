@@ -148,6 +148,7 @@ const buildRuntimeClientLines = async (periodHours: number): Promise<string[]> =
        ac.system_name,
        ac.risk_value,
        COALESCE(ms_latest.equity_usd, 0) AS equity_latest,
+       COALESCE(ms_latest.unrealized_pnl, 0) AS unrealized_pnl,
        COALESCE(ms_old.equity_usd, COALESCE(ms_latest.equity_usd, 0)) AS equity_old,
        COALESCE(ms_latest.margin_load_percent, 0) AS margin_load,
        COALESCE(ms_latest.drawdown_percent, 0) AS drawdown,
@@ -158,7 +159,7 @@ const buildRuntimeClientLines = async (periodHours: number): Promise<string[]> =
      FROM active_clients ac
      LEFT JOIN api_keys a ON a.name = ac.execution_api_key_name
      LEFT JOIN (
-       SELECT m1.api_key_id, m1.equity_usd, m1.margin_load_percent, m1.drawdown_percent
+       SELECT m1.api_key_id, m1.equity_usd, m1.unrealized_pnl, m1.margin_load_percent, m1.drawdown_percent
        FROM monitoring_snapshots m1
        JOIN (
          SELECT api_key_id, MAX(datetime(recorded_at)) AS max_at
@@ -208,6 +209,7 @@ const buildRuntimeClientLines = async (periodHours: number): Promise<string[]> =
     const systemName = String(row?.system_name || '').trim();
 
     const eqLatest = toFinite(row?.equity_latest, 0);
+  const upnl = toFinite(row?.unrealized_pnl, 0);
     const eqOld = toFinite(row?.equity_old, eqLatest);
     const delta = eqLatest - eqOld;
     const margin = toFinite(row?.margin_load, 0);
@@ -231,7 +233,7 @@ const buildRuntimeClientLines = async (periodHours: number): Promise<string[]> =
     const keyPart = `key=${escapeHtml(executionApiKeyName || '-')}`;
 
     out.push(
-      `${escapeHtml(displayName || tenantSlug || executionApiKeyName || 'client')} (${escapeHtml(mode)}#${profileId}) | ${keyPart}${scopePart} | trades=${trades} | delta=${delta.toFixed(2)} | eq=${eqLatest.toFixed(2)} | ml=${margin.toFixed(1)}% | dd=${dd.toFixed(1)}%${warnings.length ? ` | ${warnings.join(',')}` : ''}`
+      `${escapeHtml(displayName || tenantSlug || executionApiKeyName || 'client')} (${escapeHtml(mode)}#${profileId}) | ${keyPart}${scopePart} | trades=${trades} | delta=${delta.toFixed(2)} | upnl=${upnl.toFixed(2)} | eq=${eqLatest.toFixed(2)} | ml=${margin.toFixed(1)}% | dd=${dd.toFixed(1)}%${warnings.length ? ` | ${warnings.join(',')}` : ''}`
     );
   }
 
@@ -268,13 +270,14 @@ const buildAccountLines = async (periodHours: number, runtimeOnly = false): Prom
     `SELECT
        a.name AS api_key_name,
        COALESCE(ms_latest.equity_usd, 0) AS equity_latest,
+       COALESCE(ms_latest.unrealized_pnl, 0) AS unrealized_pnl,
        COALESCE(ms_old.equity_usd, COALESCE(ms_latest.equity_usd, 0)) AS equity_old,
        COALESCE(ms_latest.margin_load_percent, 0) AS margin_load,
        COALESCE(ms_latest.drawdown_percent, 0) AS drawdown,
        COALESCE(tr.cnt, 0) AS trades_count
      FROM api_keys a
      LEFT JOIN (
-       SELECT m1.api_key_id, m1.equity_usd, m1.margin_load_percent, m1.drawdown_percent
+       SELECT m1.api_key_id, m1.equity_usd, m1.unrealized_pnl, m1.margin_load_percent, m1.drawdown_percent
        FROM monitoring_snapshots m1
        JOIN (
          SELECT api_key_id, MAX(datetime(recorded_at)) AS max_at
@@ -312,6 +315,7 @@ const buildAccountLines = async (periodHours: number, runtimeOnly = false): Prom
     }
 
     const eqLatest = toFinite(row?.equity_latest, 0);
+  const upnl = toFinite(row?.unrealized_pnl, 0);
     const eqOld = toFinite(row?.equity_old, eqLatest);
     const delta = eqLatest - eqOld;
     const margin = toFinite(row?.margin_load, 0);
@@ -330,7 +334,7 @@ const buildAccountLines = async (periodHours: number, runtimeOnly = false): Prom
     }
 
     out.push(
-      `${escapeHtml(apiKeyName)} | trades=${trades} | delta=${delta.toFixed(2)} | eq=${eqLatest.toFixed(2)} | ml=${margin.toFixed(1)}% | dd=${dd.toFixed(1)}%${warnings.length ? ` | ${warnings.join(',')}` : ''}`
+      `${escapeHtml(apiKeyName)} | trades=${trades} | delta=${delta.toFixed(2)} | upnl=${upnl.toFixed(2)} | eq=${eqLatest.toFixed(2)} | ml=${margin.toFixed(1)}% | dd=${dd.toFixed(1)}%${warnings.length ? ` | ${warnings.join(',')}` : ''}`
     );
   }
 
