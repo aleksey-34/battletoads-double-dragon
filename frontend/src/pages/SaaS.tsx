@@ -77,6 +77,7 @@ type AdminSweepBacktestPreviewResponse = {
   selectedOffers: Array<{
     offerId: string;
     titleRu: string;
+    weight?: number;
     mode: 'mono' | 'synth';
     market: string;
     strategyId: number;
@@ -575,6 +576,19 @@ type SaasSummary = {
     offerDaily: boolean;
     offerWeekly: boolean;
     offerMonthly: boolean;
+    sweepSnapshotAutoRefreshEnabled?: boolean;
+    sweepSnapshotRefreshHours?: number;
+  };
+  snapshotRefresh?: {
+    lastRunAt?: string;
+    lastSweepPath?: string;
+    lastSweepTimestamp?: string;
+    lastResult?: 'success' | 'failed' | 'skipped' | 'idle';
+    lastReason?: string;
+    lastError?: string;
+    systemsUpdated?: number;
+    offersUpdated?: number;
+    durationMs?: number;
   };
 };
 
@@ -2333,6 +2347,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminWizardTarget, setAdminWizardTarget] = useState<'offer' | 'algofund-ts'>('offer');
   const [backtestDrawerVisible, setBacktestDrawerVisible] = useState(false);
   const [backtestDrawerContext, setBacktestDrawerContext] = useState<SaasBacktestContext | null>(null);
+  const [backtestTsWeightsByOfferId, setBacktestTsWeightsByOfferId] = useState<Record<string, number>>({});
   const [adminBacktestSettingsByCard, setAdminBacktestSettingsByCard] = useState<Record<string, BacktestCardSettings>>(() => {
     if (typeof window === 'undefined') {
       return {};
@@ -2801,11 +2816,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   const matchesTsSnapshotToken = (systemName: string, token: string): boolean => {
-    const normalizedToken = String(token || '').trim().toLowerCase();
-    if (!normalizedToken) {
+    const rawToken = String(token || '').trim().toLowerCase();
+    if (!rawToken) {
       return false;
     }
     const normalizedName = String(systemName || '').trim().toLowerCase();
+    const normalizedToken = rawToken.includes('::')
+      ? (extractTsSuffixToken(rawToken) || rawToken)
+      : rawToken;
+    if (normalizedName === rawToken || normalizedName === normalizedToken) {
+      return true;
+    }
     return normalizedName.endsWith(`::${normalizedToken}`) || normalizedName.includes(`::${normalizedToken}-`);
   };
 
@@ -2825,6 +2846,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const exactMatch = entries.find((item) => String(item.snapshot?.systemName || '').trim() === systemName);
     if (exactMatch?.snapshot) {
       return exactMatch.snapshot;
+    }
+
+    const exactKeyMatch = entries.find((item) => String(item.key || '').trim() === systemName);
+    if (exactKeyMatch?.snapshot) {
+      return exactKeyMatch.snapshot;
     }
 
     const suffixToken = extractTsSuffixToken(systemName);
@@ -2923,7 +2949,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         tradesCount: Number(snapshotForSystem.trades || 0),
       }
       : null;
-    const snapshotCurve = mapSnapshotEquityPoints(snapshotForSystem?.equityPoints);
+    const snapshotCurve = mapSnapshotEquityPoints(downsampleNumericSeries(Array.isArray(snapshotForSystem?.equityPoints) ? (snapshotForSystem?.equityPoints || []) : [], 64));
 
     const activeSetKey = String(selectedAdminDraftTsSetKey || '').trim();
     const latestBacktestMatchesSystem = activeSetKey
@@ -2955,10 +2981,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       isArchived: systemName.toUpperCase().startsWith('ARCHIVED::'),
       hasMeaningfulState,
       runtimeSystemId,
-      summary: publishSummary || snapshotSummary || fallbackSummary || safeLatestBacktestSummary || null,
-      equityCurve: publishEquityCurve.length > 1
-        ? publishEquityCurve
-        : (snapshotCurve.length > 1 ? snapshotCurve : (tenantCurves[0] || safeLatestBacktestCurve)),
+      summary: snapshotSummary || publishSummary || fallbackSummary || safeLatestBacktestSummary || null,
+      equityCurve: snapshotCurve.length > 1
+        ? snapshotCurve
+        : (publishEquityCurve.length > 1
+          ? publishEquityCurve.slice(-64)
+          : ((tenantCurves[0] || safeLatestBacktestCurve).slice(-64))),
       tenants,
       tenantCount: tenants.length,
       activeCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.actual_enabled || 0) === 1).length,
@@ -2976,15 +3004,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         continue;
       }
 
-      const existingScore = (existing.tenantCount > 0 ? 4 : 0)
-        + (existing.runtimeSystemId ? 2 : 0)
-        + (existing.equityCurve?.length > 1 ? 1 : 0);
-      const nextScore = (item.tenantCount > 0 ? 4 : 0)
-        + (item.runtimeSystemId ? 2 : 0)
-        + (item.equityCurve?.length > 1 ? 1 : 0);
-      if (nextScore >= existingScore) {
-        dedupedByToken.set(key, item);
-      }
+      const merged = {
+        ...existing,
+        ...item,
+        summary: existing.summary || item.summary,
+        equityCurve: (existing.equityCurve?.length || 0) >= (item.equityCurve?.length || 0)
+          ? existing.equityCurve
+          : item.equityCurve,
+        tenants: existing.tenants.length >= item.tenants.length ? existing.tenants : item.tenants,
+        tenantCount: Math.max(Number(existing.tenantCount || 0), Number(item.tenantCount || 0)),
+        activeCount: Math.max(Number(existing.activeCount || 0), Number(item.activeCount || 0)),
+        pendingCount: Math.max(Number(existing.pendingCount || 0), Number(item.pendingCount || 0)),
+      };
+      dedupedByToken.set(key, merged);
     }
 
     return Array.from(dedupedByToken.values());
@@ -2993,6 +3025,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
     return acc;
   }, {});
+  const normalizeBacktestTsWeights = (offerIds: string[], source: Record<string, number>) => {
+    const ids = Array.from(new Set((offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
+    if (ids.length === 0) {
+      return {} as Record<string, number>;
+    }
+
+    const next: Record<string, number> = {};
+    let total = 0;
+    ids.forEach((id) => {
+      const raw = Number(source[id]);
+      const safe = Number.isFinite(raw) && raw > 0 ? raw : 1;
+      next[id] = safe;
+      total += safe;
+    });
+    const safeTotal = total > 0 ? total : ids.length;
+    ids.forEach((id) => {
+      next[id] = Number((next[id] / safeTotal).toFixed(4));
+    });
+    return next;
+  };
+  const storefrontOfferOptions = offerStoreOffers.map((offer) => ({
+    label: `${String(offer.titleRu || offer.offerId)} (${String(offer.mode || '').toUpperCase()} ${String(offer.market || '').trim()})`,
+    value: String(offer.offerId || '').trim(),
+  })).filter((item) => item.value.length > 0);
   const clientsOfferFilterOptions = offerStoreOffers.map((offer) => ({
     value: String(offer.offerId),
     label: `${offer.titleRu} (${String(offer.mode || '').toUpperCase()} ${offer.market})`,
@@ -3193,15 +3249,32 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
-  const toggleReportSetting = async (key: keyof NonNullable<SaasSummary['reportSettings']>, value: boolean) => {
-    setActionLoading(`report-setting:${String(key)}`);
+  const updateReportSettings = async (patch: Partial<NonNullable<SaasSummary['reportSettings']>>) => {
+    const keys = Object.keys(patch || {});
+    const loadingKey = keys.length === 1 ? `report-setting:${String(keys[0])}` : 'report-setting:batch';
+    setActionLoading(loadingKey);
     try {
-      await axios.patch('/api/saas/admin/reports/settings', {
-        [key]: value,
-      });
+      await axios.patch('/api/saas/admin/reports/settings', patch || {});
       await loadSummary();
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to update report settings'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const toggleReportSetting = async (key: keyof NonNullable<SaasSummary['reportSettings']>, value: boolean) => {
+    await updateReportSettings({ [key]: value } as Partial<NonNullable<SaasSummary['reportSettings']>>);
+  };
+
+  const runSnapshotRefreshNow = async () => {
+    setActionLoading('snapshot-refresh');
+    try {
+      await axios.post('/api/saas/admin/snapshots/refresh', { force: true, reason: 'admin_manual' });
+      await loadSummary('full');
+      messageApi.success('Snapshot карточек обновлены');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось обновить snapshot карточек'));
     } finally {
       setActionLoading('');
     }
@@ -4934,6 +5007,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         systemName: targetContext.systemName,
         offerId: targetContext.offerId,
         offerIds: targetContext.offerIds,
+        offerWeightsById: targetContext.kind === 'algofund-ts'
+          ? normalizeBacktestTsWeights(
+            Array.from(new Set((targetContext.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean))),
+            backtestTsWeightsByOfferId,
+          )
+          : undefined,
         riskScore: adminSweepBacktestRiskScore,
         tradeFrequencyScore: adminSweepBacktestTradeScore,
         initialBalance: adminSweepBacktestInitialBalance,
@@ -4970,6 +5049,35 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         setAdminSweepBacktestLoading(false);
       }
     }
+  };
+
+  const updateBacktestTsComposition = (
+    nextOfferIdsRaw: string[],
+    nextWeightsRaw?: Record<string, number>,
+  ) => {
+    if (!backtestDrawerContext || backtestDrawerContext.kind !== 'algofund-ts') {
+      return;
+    }
+    const nextOfferIds = Array.from(new Set((nextOfferIdsRaw || [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)));
+    if (nextOfferIds.length === 0) {
+      messageApi.warning('Для backtest ТС нужен хотя бы один оффер');
+      return;
+    }
+
+    setBacktestTsWeightsByOfferId((prev) => normalizeBacktestTsWeights(nextOfferIds, nextWeightsRaw || prev));
+    setBacktestDrawerContext((prev) => {
+      if (!prev || prev.kind !== 'algofund-ts') {
+        return prev;
+      }
+      return {
+        ...prev,
+        offerIds: nextOfferIds,
+      };
+    });
+    setAdminSweepBacktestStale(true);
+    scheduleBacktestDebounce();
   };
 
   const startHistoricalSweepForBacktest = async () => {
@@ -5082,7 +5190,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         .filter((value) => Number.isFinite(value))
       : [];
     const equityPoints = downsampleNumericSeries(equityPointsRaw, 160);
-    const offerIds = (backtestDrawerContext.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean);
+    const resultOfferIds = (adminSweepBacktestResult.selectedOffers || [])
+      .map((item) => String(item.offerId || '').trim())
+      .filter(Boolean);
+    const offerIds = resultOfferIds.length > 0
+      ? Array.from(new Set(resultOfferIds))
+      : (backtestDrawerContext.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean);
     const periodDays = Number(getPeriodDurationDays(adminSweepBacktestResult.period || null) || 90);
     const finalEquity = Number(summary.finalEquity ?? (equityPoints.length > 0 ? equityPoints[equityPoints.length - 1] : adminSweepBacktestInitialBalance));
     const trades = Number(summary.tradesCount ?? 0);
@@ -5243,6 +5356,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     backtestRequestSeqRef.current += 1;
     const settings = resolveBacktestSettingsForContext(context);
     applyBacktestSettings(settings);
+    if (context.kind === 'algofund-ts') {
+      const offerIds = Array.from(new Set((context.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
+      setBacktestTsWeightsByOfferId((prev) => normalizeBacktestTsWeights(offerIds, prev));
+    } else {
+      setBacktestTsWeightsByOfferId({});
+    }
     setBacktestDrawerContext(context);
     setBacktestDrawerVisible(true);
     setAdminSweepBacktestResult(null);
@@ -5362,9 +5481,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
 
     if (backtestDrawerContext.kind === 'algofund-ts') {
+      const publishOfferIds = Array.from(new Set(
+        (adminSweepBacktestResult?.selectedOffers || [])
+          .map((item) => String(item.offerId || '').trim())
+          .filter(Boolean)
+      ));
       await saveTsReviewSnapshotFromBacktest();
       await publishAdminTs({
-        offerIds: backtestDrawerContext.offerIds,
+        offerIds: publishOfferIds.length > 0 ? publishOfferIds : backtestDrawerContext.offerIds,
         setKey: String(backtestDrawerContext.setKey || selectedAdminDraftTsSetKey || '').trim() || undefined,
       });
       setBacktestDrawerVisible(false);
@@ -6879,28 +7003,44 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       size="small"
                                       rowKey="offerId"
                                       dataSource={publishedStorefrontOffers}
-                                      expandable={{
-                                        expandedRowRender: (row: any) => {
-                                          const pts: number[] = Array.isArray(row.equityPoints) ? row.equityPoints : [];
-                                          if (pts.length === 0) {
-                                            return <Text type="secondary">Equity curve unavailable</Text>;
-                                          }
-                                          return <ChartComponent data={pts.map((v, i) => ({ time: i, equity: v }))} type="line" />;
-                                        },
-                                        rowExpandable: () => true,
-                                      }}
                                       pagination={{ pageSize: 6, showSizeChanger: false }}
-                                      scroll={{ x: 760 }}
+                                      scroll={{ x: 900 }}
                                       columns={[
                                         {
                                           title: 'Офер',
                                           key: 'offer',
+                                          width: 380,
                                           render: (_, row: any) => (
                                             <Space direction="vertical" size={0}>
                                               <Text strong>{row.titleRu}</Text>
                                               <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
                                             </Space>
                                           ),
+                                        },
+                                        {
+                                          title: 'Snapshot chart',
+                                          key: 'mini-chart',
+                                          width: 190,
+                                          render: (_, row: any) => {
+                                            const points = downsampleNumericSeries(
+                                              (Array.isArray(row.equityPoints) ? row.equityPoints : [])
+                                                .map((value: unknown) => Number(value))
+                                                .filter((value: number) => Number.isFinite(value)),
+                                              40
+                                            );
+                                            if (points.length < 2) {
+                                              return <Text type="secondary">no snapshot</Text>;
+                                            }
+                                            return (
+                                              <div style={{ width: 170 }}>
+                                                <ChartComponent
+                                                  data={points.map((value, index) => ({ time: index, equity: value }))}
+                                                  type="line"
+                                                  fixedHeight={78}
+                                                />
+                                              </div>
+                                            );
+                                          },
                                         },
                                         {
                                           title: 'Метрики',
@@ -7287,6 +7427,55 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 <Tag>Offer daily <Switch size="small" checked={Boolean(summary?.reportSettings?.offerDaily)} onChange={(checked) => { void toggleReportSetting('offerDaily', checked); }} /></Tag>
                                 <Tag>Offer weekly <Switch size="small" checked={Boolean(summary?.reportSettings?.offerWeekly)} onChange={(checked) => { void toggleReportSetting('offerWeekly', checked); }} /></Tag>
                                 <Tag>Offer monthly <Switch size="small" checked={Boolean(summary?.reportSettings?.offerMonthly)} onChange={(checked) => { void toggleReportSetting('offerMonthly', checked); }} /></Tag>
+                              </Space>
+                              <Divider style={{ margin: '6px 0' }} />
+                              <Space wrap>
+                                <Text>Авто-обновление snapshot из sweep</Text>
+                                <Switch
+                                  size="small"
+                                  checked={Boolean(summary?.reportSettings?.sweepSnapshotAutoRefreshEnabled ?? true)}
+                                  loading={actionLoading === 'report-setting:sweepSnapshotAutoRefreshEnabled'}
+                                  onChange={(checked) => {
+                                    void updateReportSettings({ sweepSnapshotAutoRefreshEnabled: checked });
+                                  }}
+                                />
+                                <Text type="secondary">Интервал (часы)</Text>
+                                <InputNumber
+                                  size="small"
+                                  min={1}
+                                  max={168}
+                                  step={1}
+                                  value={Number(summary?.reportSettings?.sweepSnapshotRefreshHours ?? 24)}
+                                  disabled={actionLoading.startsWith('report-setting:')}
+                                  onBlur={(e) => {
+                                    const val = Number.parseInt(e.target.value, 10);
+                                    if (Number.isFinite(val) && val >= 1) {
+                                      void updateReportSettings({ sweepSnapshotRefreshHours: val });
+                                    }
+                                  }}
+                                  style={{ width: 88 }}
+                                />
+                                <Button
+                                  size="small"
+                                  loading={actionLoading === 'snapshot-refresh'}
+                                  onClick={() => { void runSnapshotRefreshNow(); }}
+                                >
+                                  Обновить snapshot сейчас
+                                </Button>
+                              </Space>
+                              <Space wrap>
+                                <Tag color={String(summary?.snapshotRefresh?.lastResult || 'idle') === 'success' ? 'success' : (String(summary?.snapshotRefresh?.lastResult || 'idle') === 'failed' ? 'error' : 'default')}>
+                                  snapshot: {String(summary?.snapshotRefresh?.lastResult || 'idle')}
+                                </Tag>
+                                {summary?.snapshotRefresh?.lastRunAt ? (
+                                  <Tag color="blue">last run {String(summary.snapshotRefresh.lastRunAt).slice(0, 16).replace('T', ' ')}</Tag>
+                                ) : null}
+                                {summary?.snapshotRefresh?.systemsUpdated !== undefined ? (
+                                  <Tag color="geekblue">TS {Number(summary.snapshotRefresh.systemsUpdated || 0)}</Tag>
+                                ) : null}
+                                {summary?.snapshotRefresh?.offersUpdated !== undefined ? (
+                                  <Tag color="processing">offers {Number(summary.snapshotRefresh.offersUpdated || 0)}</Tag>
+                                ) : null}
                               </Space>
                               <Divider style={{ margin: '6px 0' }} />
                               <Space wrap>
@@ -8789,7 +8978,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             : null}
                                         </Space>
                                         {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
-                                          <ChartComponent data={item.equityCurve} type="line" />
+                                          <ChartComponent data={item.equityCurve} type="line" fixedHeight={120} />
                                         ) : (
                                           <Text type="secondary" style={{ fontSize: 12 }}>График не сохранен</Text>
                                         )}
@@ -9892,6 +10081,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         onClose={() => {
           setBacktestDrawerVisible(false);
           setBacktestDrawerContext(null);
+          setBacktestTsWeightsByOfferId({});
         }}
       >
         {backtestDrawerContext ? (
@@ -9910,6 +10100,94 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 })()}</Tag>
                 <Tag color="blue">Карточек в тесте: {Array.isArray(backtestDrawerContext.offerIds) ? backtestDrawerContext.offerIds.length : 0}</Tag>
               </Space>
+            ) : null}
+            {backtestDrawerContext.kind === 'algofund-ts' ? (
+              <Card size="small" title="Состав ТС в backtest">
+                {(() => {
+                  const currentOfferIds = Array.from(new Set((backtestDrawerContext.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
+                  const optionMap = new Map<string, string>(
+                    storefrontOfferOptions.map((item) => [String(item.value), String(item.label)])
+                  );
+                  currentOfferIds.forEach((offerId) => {
+                    if (!optionMap.has(offerId)) {
+                      const title = String(offerTitleById[offerId] || offerId);
+                      optionMap.set(offerId, `${title} (${offerId})`);
+                    }
+                  });
+                  const options = Array.from(optionMap.entries()).map(([value, label]) => ({ value, label }));
+                  const normalizedWeights = normalizeBacktestTsWeights(currentOfferIds, backtestTsWeightsByOfferId);
+                  const totalWeight = currentOfferIds.reduce((acc, offerId) => acc + Number(normalizedWeights[offerId] || 0), 0);
+
+                  return (
+                    <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                      <Space wrap>
+                        <Select
+                          mode="multiple"
+                          style={{ minWidth: 560, maxWidth: '100%' }}
+                          placeholder="Добавь/убери офферы ТС"
+                          value={currentOfferIds}
+                          options={options}
+                          onChange={(values) => {
+                            updateBacktestTsComposition((values || []).map((item) => String(item || '')));
+                          }}
+                        />
+                        <Button
+                          size="small"
+                          onClick={() => {
+                            const equalWeights = Object.fromEntries(currentOfferIds.map((offerId) => [offerId, 1]));
+                            updateBacktestTsComposition(currentOfferIds, equalWeights);
+                          }}
+                          disabled={currentOfferIds.length === 0}
+                        >
+                          Равные веса
+                        </Button>
+                        <Tag color="blue">Σ весов: {formatNumber(totalWeight * 100, 2)}%</Tag>
+                      </Space>
+                      <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                        {currentOfferIds.map((offerId) => {
+                          const title = String(offerTitleById[offerId] || offerId);
+                          const weight = Number(normalizedWeights[offerId] || 0);
+                          return (
+                            <Space key={offerId} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+                              <Space>
+                                <Text strong>{title}</Text>
+                                <Text type="secondary">{offerId}</Text>
+                              </Space>
+                              <Space>
+                                <Text type="secondary">Вес</Text>
+                                <InputNumber
+                                  min={0.001}
+                                  max={1}
+                                  step={0.01}
+                                  value={weight}
+                                  onChange={(value) => {
+                                    const nextWeights = {
+                                      ...normalizedWeights,
+                                      [offerId]: Number(value || 0),
+                                    };
+                                    updateBacktestTsComposition(currentOfferIds, nextWeights);
+                                  }}
+                                  style={{ width: 96 }}
+                                />
+                                <Tag>{formatNumber(weight * 100, 2)}%</Tag>
+                                <Button
+                                  size="small"
+                                  danger
+                                  onClick={() => {
+                                    updateBacktestTsComposition(currentOfferIds.filter((id) => id !== offerId), normalizedWeights);
+                                  }}
+                                >
+                                  Удалить
+                                </Button>
+                              </Space>
+                            </Space>
+                          );
+                        })}
+                      </Space>
+                    </Space>
+                  );
+                })()}
+              </Card>
             ) : null}
             <Space wrap>
               <Button size="small" onClick={returnToReviewFromBacktest}>
@@ -10202,6 +10480,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Text type="secondary">strategy #{Number(row.strategyId || 0)} • {String(row.strategyName || '').trim() || '—'}</Text>
                           </Space>
                         ),
+                      },
+                      {
+                        title: 'Вес',
+                        key: 'weight',
+                        width: 120,
+                        render: (_, row: any) => {
+                          const weight = Number(
+                            row?.weight
+                            ?? backtestTsWeightsByOfferId[String(row?.offerId || '')]
+                            ?? 0
+                          );
+                          return weight > 0 ? `${formatNumber(weight * 100, 2)}%` : '—';
+                        },
                       },
                       {
                         title: 'Метрики',

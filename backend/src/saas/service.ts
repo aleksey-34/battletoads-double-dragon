@@ -12,7 +12,7 @@ import {
   updateTradingSystem,
 } from '../bot/tradingSystems';
 import { getMonitoringLatest } from '../bot/monitoring';
-import { getPositions, closeAllPositions, cancelAllOrders, ensureExchangeClientInitialized } from '../bot/exchange';
+import { getPositions, closeAllPositions, cancelAllOrders, ensureExchangeClientInitialized, getMarketData } from '../bot/exchange';
 import { Strategy, saveApiKey } from '../config/settings';
 import { db, initDB } from '../utils/database';
 import logger from '../utils/logger';
@@ -285,6 +285,31 @@ export type AdminReportSettings = {
   offerDaily: boolean;
   offerWeekly: boolean;
   offerMonthly: boolean;
+  sweepSnapshotAutoRefreshEnabled: boolean;
+  sweepSnapshotRefreshHours: number;
+};
+
+type OfferStoreSnapshotRefreshState = {
+  lastRunAt: string;
+  lastSweepPath: string;
+  lastSweepTimestamp: string;
+  lastResult: 'success' | 'failed' | 'skipped' | 'idle';
+  lastReason: string;
+  lastError: string;
+  systemsUpdated: number;
+  offersUpdated: number;
+  durationMs: number;
+};
+
+type OfferStoreSnapshotRefreshResult = {
+  ok: boolean;
+  skipped: boolean;
+  reason: string;
+  settings: AdminReportSettings;
+  state: OfferStoreSnapshotRefreshState;
+  systemsUpdated: number;
+  offersUpdated: number;
+  errors: string[];
 };
 
 type TenantRow = {
@@ -818,6 +843,13 @@ const getAllOffers = (catalog: CatalogData): CatalogOffer[] => [
   ...(catalog?.clientCatalog?.synth || []),
 ];
 
+const catalogHasOffers = (catalog: CatalogData | null | undefined): boolean => {
+  if (!catalog) {
+    return false;
+  }
+  return getAllOffers(catalog).length > 0;
+};
+
 const DEFAULT_OFFER_STORE_DEFAULTS: OfferStoreDefaults = {
   periodDays: 90,
   targetTradesPerDay: 6,
@@ -832,6 +864,8 @@ const DEFAULT_ADMIN_REPORT_SETTINGS: AdminReportSettings = {
   offerDaily: true,
   offerWeekly: true,
   offerMonthly: true,
+  sweepSnapshotAutoRefreshEnabled: true,
+  sweepSnapshotRefreshHours: 24,
 };
 
 const getSweepPeriodDays = (sweep: SweepData | null, fallbackDays: number): number => {
@@ -979,7 +1013,16 @@ const getTsBacktestSnapshot = async (): Promise<TsBacktestSnapshot | null> => {
 
 const normalizeAdminReportSettings = (raw: unknown): AdminReportSettings => {
   const parsed = (raw && typeof raw === 'object') ? (raw as Record<string, unknown>) : {};
-  const pick = (key: keyof AdminReportSettings): boolean => {
+  type AdminReportBooleanKey =
+    | 'enabled'
+    | 'tsDaily'
+    | 'tsWeekly'
+    | 'tsMonthly'
+    | 'offerDaily'
+    | 'offerWeekly'
+    | 'offerMonthly'
+    | 'sweepSnapshotAutoRefreshEnabled';
+  const pick = (key: AdminReportBooleanKey): boolean => {
     const value = parsed[key];
     if (value === undefined || value === null || value === '') {
       return DEFAULT_ADMIN_REPORT_SETTINGS[key];
@@ -991,6 +1034,12 @@ const normalizeAdminReportSettings = (raw: unknown): AdminReportSettings => {
     return text === '1' || text === 'true' || text === 'yes' || text === 'on';
   };
 
+  const refreshHoursRaw = asNumber(
+    parsed.sweepSnapshotRefreshHours,
+    DEFAULT_ADMIN_REPORT_SETTINGS.sweepSnapshotRefreshHours,
+  );
+  const refreshHours = Math.max(1, Math.min(168, Math.floor(refreshHoursRaw)));
+
   return {
     enabled: pick('enabled'),
     tsDaily: pick('tsDaily'),
@@ -999,6 +1048,8 @@ const normalizeAdminReportSettings = (raw: unknown): AdminReportSettings => {
     offerDaily: pick('offerDaily'),
     offerWeekly: pick('offerWeekly'),
     offerMonthly: pick('offerMonthly'),
+    sweepSnapshotAutoRefreshEnabled: pick('sweepSnapshotAutoRefreshEnabled'),
+    sweepSnapshotRefreshHours: refreshHours,
   };
 };
 
@@ -1411,9 +1462,10 @@ export const loadCatalogAndSweepWithFallback = async (): Promise<{ catalog: Cata
   const sourceCatalog = loadLatestClientCatalog();
   const sourceSweep = loadLatestSweep();
   const fallbackCatalog = await buildFallbackCatalogFromPresets(sourceCatalog, []);
-  const catalog = getAllOffers(fallbackCatalog).length > 0
-    ? fallbackCatalog
-    : sourceCatalog || fallbackCatalog;
+  const sourceCatalogHasOffers = catalogHasOffers(sourceCatalog);
+  const catalog = sourceCatalogHasOffers
+    ? sourceCatalog
+    : (catalogHasOffers(fallbackCatalog) ? fallbackCatalog : sourceCatalog || fallbackCatalog);
   const sweep = sourceSweep || buildFallbackSweepData(catalog);
 
   if (catalog) {
@@ -4005,10 +4057,12 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     DEFAULT_OFFER_STORE_DEFAULTS,
   ));
   const publishedFromFlag = safeJsonParse<string[]>(publishedRaw, []);
-  const publishedOfferIds = publishedFromFlag
-    .map((item) => String(item || '').trim())
-    .filter((item) => offerIds.includes(item));
-  const publishedSet = new Set(publishedOfferIds);
+  const publishedFromFlagNormalized = Array.from(new Set(
+    publishedFromFlag
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+  ));
+  const publishedSet = new Set(publishedFromFlagNormalized);
   const periodDays = getSweepPeriodDays(sweep, defaults.periodDays);
   const sweepByStrategyId = new Map<number, SweepRecord>();
   (sweep?.evaluated || []).forEach((item) => {
@@ -4045,10 +4099,107 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     })
     .sort((left, right) => right.score - left.score);
 
+  const strategyIdToExistingOfferId = new Map<number, string>();
+  for (const row of rawOffers) {
+    if (Number(row.strategyId || 0) > 0 && !strategyIdToExistingOfferId.has(Number(row.strategyId))) {
+      strategyIdToExistingOfferId.set(Number(row.strategyId), String(row.offerId || ''));
+    }
+  }
+
+  const strategyIdToPublishedOfferId = new Map<number, string>();
+  for (const offerId of publishedFromFlagNormalized) {
+    const strategyId = parseStrategyIdFromOfferId(offerId);
+    if (strategyId > 0 && !strategyIdToPublishedOfferId.has(strategyId)) {
+      strategyIdToPublishedOfferId.set(strategyId, offerId);
+    }
+  }
+
+  const runtimeMasterStrategyRows = await db.all(
+    `SELECT DISTINCT s.id, s.name, s.strategy_type, s.market_mode, s.base_symbol, s.quote_symbol, s.interval
+     FROM trading_systems ts
+     JOIN trading_system_members tsm ON tsm.system_id = ts.id AND COALESCE(tsm.is_enabled, 1) = 1
+     JOIN strategies s ON s.id = tsm.strategy_id
+     WHERE ts.name LIKE 'ALGOFUND_MASTER::%'`
+  ) as Array<{
+    id?: number;
+    name?: string;
+    strategy_type?: string;
+    market_mode?: string;
+    base_symbol?: string;
+    quote_symbol?: string;
+    interval?: string;
+  }>;
+
+  const missingStrategyIds = new Set<number>();
+  for (const strategyId of strategyIdToPublishedOfferId.keys()) {
+    if (!strategyIdToExistingOfferId.has(strategyId)) {
+      missingStrategyIds.add(strategyId);
+    }
+  }
+  for (const row of runtimeMasterStrategyRows) {
+    const strategyId = Number(row.id || 0);
+    if (strategyId > 0 && !strategyIdToExistingOfferId.has(strategyId)) {
+      missingStrategyIds.add(strategyId);
+    }
+  }
+
+  const fallbackOffers = Array.from(missingStrategyIds)
+    .map((strategyId) => {
+      const row = runtimeMasterStrategyRows.find((item) => Number(item.id || 0) === strategyId);
+      if (!row) {
+        return null;
+      }
+      const mode: 'mono' | 'synth' = String(row.market_mode || '').toLowerCase().includes('synth') ? 'synth' : 'mono';
+      const strategyType = asString(row.strategy_type, 'DD_BattleToads');
+      const market = [asString(row.base_symbol, ''), asString(row.quote_symbol, '')].filter(Boolean).join('/');
+      const fallbackOfferId = strategyIdToPublishedOfferId.get(strategyId)
+        || `offer_${mode}_${strategyType.toLowerCase()}_${strategyId}`;
+      const snapshot = reviewSnapshots[fallbackOfferId] || null;
+      const trades = Math.max(0, Math.floor(asNumber(snapshot?.trades, 0)));
+      const periodDaysRow = Math.max(1, Math.floor(asNumber(snapshot?.periodDays, periodDays)));
+      return {
+        offerId: fallbackOfferId,
+        titleRu: `${mode.toUpperCase()} • ${strategyType} • ${market || asString(row.base_symbol, '')}`,
+        mode,
+        market,
+        strategyId,
+        score: 0,
+        ret: Number(asNumber(snapshot?.ret, 0).toFixed(3)),
+        pf: Number(asNumber(snapshot?.pf, 0).toFixed(3)),
+        dd: Number(asNumber(snapshot?.dd, 0).toFixed(3)),
+        trades,
+        tradesPerDay: Number(asNumber(snapshot?.tradesPerDay, trades / Math.max(1, periodDaysRow)).toFixed(3)),
+        periodDays: periodDaysRow,
+        published: publishedSet.has(fallbackOfferId),
+        snapshotUpdatedAt: asString(snapshot?.updatedAt, ''),
+        appearedAt: asString(sweep?.timestamp, ''),
+      };
+    })
+    .filter((item): item is {
+      offerId: string;
+      titleRu: string;
+      mode: 'mono' | 'synth';
+      market: string;
+      strategyId: number;
+      score: number;
+      ret: number;
+      pf: number;
+      dd: number;
+      trades: number;
+      tradesPerDay: number;
+      periodDays: number;
+      published: boolean;
+      snapshotUpdatedAt: string;
+      appearedAt: string;
+    } => Boolean(item));
+
+  const combinedRawOffers = [...rawOffers, ...fallbackOffers]
+    .sort((left, right) => right.score - left.score);
+
   // Batch-fetch equity curves from presets (medium risk, medium freq = default client view)
   const equityByOfferId = new Map<string, number[]>();
   await Promise.all(
-    rawOffers.map(async (row) => {
+    combinedRawOffers.map(async (row) => {
       try {
         const preset = await getPreset(row.offerId, 'medium', 'medium');
         if (preset && Array.isArray(preset.equity_curve) && preset.equity_curve.length > 0) {
@@ -4064,12 +4215,15 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     })
   );
 
+  const existingOfferIds = new Set(combinedRawOffers.map((row) => String(row.offerId || '')));
+  const publishedOfferIds = publishedFromFlagNormalized.filter((offerId) => existingOfferIds.has(offerId));
+
   return {
     defaults,
     publishedOfferIds,
     tsBacktestSnapshots,
     tsBacktestSnapshot,
-    offers: rawOffers.map((row) => ({
+    offers: combinedRawOffers.map((row) => ({
       ...row,
       equityPoints: reviewSnapshots[row.offerId]?.equityPoints || equityByOfferId.get(row.offerId) || [],
       backtestSettings: {
@@ -4174,8 +4328,10 @@ export const updateOfferStoreAdminState = async (payload: {
 export const previewAdminSweepBacktest = async (payload?: {
   kind?: 'offer' | 'algofund-ts';
   setKey?: string;
+  systemName?: string;
   offerId?: string;
   offerIds?: string[];
+  offerWeightsById?: Record<string, number>;
   riskScore?: number;
   tradeFrequencyScore?: number;
   initialBalance?: number;
@@ -4198,6 +4354,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   const tradeFrequencyScore = normalizePreferenceScore(payload?.tradeFrequencyScore, 'medium');
   const riskLevel = preferenceScoreToLevel(riskScore);
   const tradeFrequencyLevel = preferenceScoreToLevel(tradeFrequencyScore);
+  const requestedSystemName = asString(payload?.systemName, '').trim();
   const sweepEvaluatedRows: SweepRecord[] = Array.isArray(sweep?.evaluated)
     ? sweep.evaluated.filter((item): item is SweepRecord => Boolean(item && Number(item.strategyId || 0) > 0))
     : [];
@@ -4215,6 +4372,32 @@ export const previewAdminSweepBacktest = async (payload?: {
       : [];
     if (payloadOfferIds.length > 0) {
       offerIds = Array.from(new Set(payloadOfferIds));
+    } else if (requestedSystemName) {
+      const resolvedTargets = await resolveAlgofundSystemTargets({ systemName: requestedSystemName }).catch(() => []);
+      const resolvedTarget = resolvedTargets[0] || null;
+      const runtimeSystem = resolvedTarget
+        ? await getTradingSystem(resolvedTarget.apiKeyName, resolvedTarget.systemId).catch(() => null)
+        : null;
+      const runtimeStrategyIds = Array.isArray(runtimeSystem?.members)
+        ? Array.from(new Set(
+          runtimeSystem.members
+            .filter((member) => member && member.is_enabled !== false)
+            .map((member) => Number(member?.strategy_id || member?.strategy?.id || 0))
+            .filter((value) => Number.isFinite(value) && value > 0)
+        ))
+        : [];
+
+      if (runtimeStrategyIds.length > 0) {
+        const offerStore = await getOfferStoreAdminState().catch(() => null);
+        const byStrategyId = new Map(
+          (offerStore?.offers || [])
+            .map((row) => [Number(row?.strategyId || 0), String(row?.offerId || '')] as const)
+            .filter(([strategyId, offerId]) => strategyId > 0 && Boolean(offerId))
+        );
+        offerIds = runtimeStrategyIds
+          .map((strategyId) => byStrategyId.get(strategyId) || '')
+          .filter(Boolean);
+      }
     } else {
       const draftStrategyIds = new Set(
         (catalog.adminTradingSystemDraft?.members || [])
@@ -4303,6 +4486,83 @@ export const previewAdminSweepBacktest = async (payload?: {
       };
     });
 
+  if (kind === 'algofund-ts' && selectedOffers.length < offerIds.length) {
+    const existingOfferIds = new Set(selectedOffers.map((item) => String(item.offerId || '')));
+    const missingOfferIds = offerIds.filter((offerId) => !existingOfferIds.has(offerId));
+    if (missingOfferIds.length > 0) {
+      const offerStore = await getOfferStoreAdminState().catch(() => null);
+      const offerStoreById = new Map(
+        (offerStore?.offers || [])
+          .map((row) => [String(row?.offerId || ''), row] as const)
+          .filter(([offerId]) => Boolean(offerId))
+      );
+      const fallbackRiskMul = Math.max(0.2, Math.min(2, 0.25 + (riskScore / 10) * 1.75));
+      const fallbackFreqMul = Math.max(0.3, Math.min(2.5, 0.2 + (tradeFrequencyScore / 10) * 2.3));
+
+      const fallbackSelected = missingOfferIds
+        .map((offerId) => {
+          const row = offerStoreById.get(offerId);
+          if (!row) {
+            return null;
+          }
+          const baseTrades = Math.max(1, Math.floor(asNumber(row.trades, 0)));
+          const trades = Math.max(1, Math.floor(baseTrades * fallbackFreqMul));
+          const ret = asNumber(row.ret, 0) * fallbackRiskMul;
+          const dd = asNumber(row.dd, 0) * Math.max(0.7, fallbackRiskMul);
+          const pf = Math.max(0.2, asNumber(row.pf, 1) * (0.9 + fallbackRiskMul * 0.1));
+          return {
+            offerId: String(row.offerId || offerId),
+            titleRu: asString(row.titleRu, row.offerId || offerId),
+            mode: row.mode === 'synth' ? 'synth' as const : 'mono' as const,
+            market: asString(row.market, ''),
+            familyType: '',
+            familyMode: row.mode === 'synth' ? 'synthetic' as const : 'mono' as const,
+            familyInterval: asString(sweep?.config?.interval, ''),
+            strategyId: Number(row.strategyId || parseStrategyIdFromOfferId(offerId) || 0),
+            strategyName: asString(row.titleRu, row.offerId || offerId),
+            score: Number(asNumber(row.score, 0).toFixed(3)),
+            metricsSource: 'offer_store' as const,
+            metrics: {
+              ret: Number(ret.toFixed(3)),
+              pf: Number(pf.toFixed(3)),
+              dd: Number(dd.toFixed(3)),
+              wr: 0,
+              trades,
+            },
+            tradesPerDay: Number((trades / Math.max(1, periodDays)).toFixed(3)),
+            periodDays,
+            equityPoints: toPresetOnlyEquity(initialBalance, ret).map((point) => Number(asNumber(point.equity, 0).toFixed(4))),
+            preset: {
+              strategyId: Number(row.strategyId || parseStrategyIdFromOfferId(offerId) || 0),
+              strategyName: asString(row.titleRu, row.offerId || offerId),
+              score: Number(asNumber(row.score, 0).toFixed(3)),
+              metrics: {
+                ret: Number(ret.toFixed(3)),
+                pf: Number(pf.toFixed(3)),
+                dd: Number(dd.toFixed(3)),
+                wr: 0,
+                trades,
+              },
+              params: {
+                interval: asString(sweep?.config?.interval, '4h'),
+                length: 24,
+                takeProfitPercent: 5,
+                detectionSource: 'close',
+                zscoreEntry: 2,
+                zscoreExit: 0.5,
+                zscoreStop: 3.5,
+              },
+            },
+          };
+        })
+        .filter((item): item is NonNullable<typeof item> => Boolean(item));
+
+      if (fallbackSelected.length > 0) {
+        selectedOffers = [...selectedOffers, ...fallbackSelected];
+      }
+    }
+  }
+
   if (kind === 'algofund-ts' && selectedOffers.length > 0 && sweepEvaluatedRows.length > 0) {
     const grouped = new Map<string, number[]>();
     selectedOffers.forEach((item, index) => {
@@ -4382,6 +4642,36 @@ export const previewAdminSweepBacktest = async (payload?: {
       });
     });
   }
+
+  const normalizedOfferWeightsById: Record<string, number> = (() => {
+    if (kind !== 'algofund-ts') {
+      return {};
+    }
+    const ids = Array.from(new Set(
+      selectedOffers
+        .map((item) => asString(item.offerId, '').trim())
+        .filter(Boolean)
+    ));
+    if (ids.length === 0) {
+      return {};
+    }
+    const rawWeights = (payload?.offerWeightsById && typeof payload.offerWeightsById === 'object')
+      ? payload.offerWeightsById
+      : {};
+    const next: Record<string, number> = {};
+    let total = 0;
+    ids.forEach((offerId) => {
+      const raw = asNumber((rawWeights as Record<string, unknown>)[offerId], 1);
+      const safe = Number.isFinite(raw) && raw > 0 ? raw : 1;
+      next[offerId] = safe;
+      total += safe;
+    });
+    const safeTotal = total > 0 ? total : ids.length;
+    ids.forEach((offerId) => {
+      next[offerId] = Number((next[offerId] / safeTotal).toFixed(6));
+    });
+    return next;
+  })();
 
   const canTryRealBacktest = payload?.preferRealBacktest === true;
   const strategyIds = Array.from(new Set(
@@ -4808,9 +5098,13 @@ export const previewAdminSweepBacktest = async (payload?: {
   }
 
   const adjustedSelectedOffers = selectedOffers.map((item) => {
+    const weight = kind === 'algofund-ts'
+      ? asNumber(normalizedOfferWeightsById[item.offerId], 1 / Math.max(1, selectedOffers.length))
+      : 1;
     const adjustedMetrics = adjustPreviewMetrics(item.metrics, rerunRiskMul, tradeMul);
     return {
       ...item,
+      weight: Number(weight.toFixed(6)),
       metrics: adjustedMetrics,
       tradesPerDay: Number((adjustedMetrics.trades / Math.max(1, item.periodDays)).toFixed(3)),
       equityPoints: buildAdjustedPreviewEquity(
@@ -4881,23 +5175,29 @@ export const previewAdminSweepBacktest = async (payload?: {
   // Build portfolio equity directly from already-oscillated per-offer equityPoints
   // (averaging across all offers preserves the per-risk oscillation pattern)
   const allOfferEquityArrays = adjustedSelectedOffers
-    .map((item) => (Array.isArray(item.equityPoints) ? item.equityPoints as number[] : []))
-    .filter((pts) => pts.length >= 2);
+    .map((item) => ({
+      points: Array.isArray(item.equityPoints) ? item.equityPoints as number[] : [],
+      weight: kind === 'algofund-ts' ? Math.max(0, asNumber((item as Record<string, unknown>).weight, 0)) : 1,
+    }))
+    .filter((entry) => entry.points.length >= 2 && entry.weight > 0);
 
   let portfolioEquity: Array<{ time: number; equity: number }>;
   if (allOfferEquityArrays.length > 0) {
-    const maxLen = allOfferEquityArrays.reduce((acc, pts) => Math.max(acc, pts.length), 0);
+    const maxLen = allOfferEquityArrays.reduce((acc, entry) => Math.max(acc, entry.points.length), 0);
     const now = Date.now();
     const resolvedPeriodDays = Math.max(10, periodDays || 90);
     const periodMs = Math.round(resolvedPeriodDays * 24 * 3600 * 1000);
     portfolioEquity = Array.from({ length: maxLen }, (_, index) => {
-      let sum = 0;
-      let count = 0;
-      for (const pts of allOfferEquityArrays) {
-        const val = pts[Math.min(index, pts.length - 1)];
-        if (Number.isFinite(val)) { sum += val; count += 1; }
+      let weightedSum = 0;
+      let weightsSum = 0;
+      for (const entry of allOfferEquityArrays) {
+        const val = entry.points[Math.min(index, entry.points.length - 1)];
+        if (Number.isFinite(val)) {
+          weightedSum += val * entry.weight;
+          weightsSum += entry.weight;
+        }
       }
-      const avgEq = count > 0 ? sum / count : initialBalance;
+      const avgEq = weightsSum > 0 ? weightedSum / weightsSum : initialBalance;
       return {
         time: Math.round(now - periodMs + (index / Math.max(1, maxLen - 1)) * periodMs),
         equity: Number(avgEq.toFixed(4)),
@@ -4907,12 +5207,41 @@ export const previewAdminSweepBacktest = async (payload?: {
     portfolioEquity = buildPortfolioPreviewEquityFromPresets(adjustedSelectedOffers, initialBalance, periodDays);
   }
   const portfolioCurves = buildDerivedPreviewCurves(portfolioEquity, initialBalance, riskScore);
+  const getMemberWeight = (item: Record<string, unknown>): number => {
+    if (kind !== 'algofund-ts') {
+      return 1;
+    }
+    const raw = asNumber(item.weight, 0);
+    return raw > 0 ? raw : 0;
+  };
+  const weightedMetric = (pick: (item: Record<string, unknown>) => number): number => {
+    let weighted = 0;
+    let total = 0;
+    for (const item of adjustedSelectedOffers as unknown as Array<Record<string, unknown>>) {
+      const weight = getMemberWeight(item);
+      if (weight <= 0) {
+        continue;
+      }
+      weighted += pick(item) * weight;
+      total += weight;
+    }
+    if (total <= 0) {
+      return 0;
+    }
+    return weighted / total;
+  };
   const portfolioSummary = buildPresetOnlyPortfolioSummary(initialBalance, pseudoSelectedOffers as any, {
-    avgRet: adjustedSelectedOffers.reduce((acc, item) => acc + asNumber(item.metrics.ret, 0), 0) / Math.max(1, adjustedSelectedOffers.length),
-    avgPf: adjustedSelectedOffers.reduce((acc, item) => acc + asNumber(item.metrics.pf, 0), 0) / Math.max(1, adjustedSelectedOffers.length),
-    maxDd: adjustedSelectedOffers.reduce((acc, item) => Math.max(acc, asNumber(item.metrics.dd, 0)), 0),
-    avgWr: adjustedSelectedOffers.reduce((acc, item) => acc + asNumber(item.metrics.wr, 0), 0) / Math.max(1, adjustedSelectedOffers.length),
-    totalTrades: adjustedSelectedOffers.reduce((acc, item) => acc + Math.max(0, Math.floor(asNumber(item.metrics.trades, 0))), 0),
+    avgRet: weightedMetric((item) => asNumber((item.metrics as Record<string, unknown>)?.ret, 0)),
+    avgPf: weightedMetric((item) => asNumber((item.metrics as Record<string, unknown>)?.pf, 0)),
+    maxDd: weightedMetric((item) => asNumber((item.metrics as Record<string, unknown>)?.dd, 0)),
+    avgWr: weightedMetric((item) => asNumber((item.metrics as Record<string, unknown>)?.wr, 0)),
+    totalTrades: Math.max(0, Math.floor(
+      (adjustedSelectedOffers as Array<Record<string, unknown>>).reduce((acc, item) => {
+        const weight = getMemberWeight(item);
+        const trades = Math.max(0, asNumber((item.metrics as Record<string, unknown>)?.trades, 0));
+        return acc + trades * (weight > 0 ? weight : 0);
+      }, 0)
+    )),
   });
 
   return {
@@ -4954,6 +5283,327 @@ export const previewAdminSweepBacktest = async (payload?: {
 export const getAdminReportSettings = async (): Promise<AdminReportSettings> => {
   const raw = await getRuntimeFlag('admin.reports.settings', JSON.stringify(DEFAULT_ADMIN_REPORT_SETTINGS));
   return normalizeAdminReportSettings(safeJsonParse<Record<string, unknown>>(raw, DEFAULT_ADMIN_REPORT_SETTINGS));
+};
+
+const OFFER_STORE_SNAPSHOT_REFRESH_STATE_KEY = 'offer.store.snapshot_refresh_state';
+
+const DEFAULT_OFFER_STORE_SNAPSHOT_REFRESH_STATE: OfferStoreSnapshotRefreshState = {
+  lastRunAt: '',
+  lastSweepPath: '',
+  lastSweepTimestamp: '',
+  lastResult: 'idle',
+  lastReason: '',
+  lastError: '',
+  systemsUpdated: 0,
+  offersUpdated: 0,
+  durationMs: 0,
+};
+
+const normalizeOfferStoreSnapshotRefreshState = (raw: unknown): OfferStoreSnapshotRefreshState => {
+  const parsed = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const resultRaw = String(parsed.lastResult || '').trim().toLowerCase();
+  const lastResult: OfferStoreSnapshotRefreshState['lastResult'] = (
+    resultRaw === 'success' || resultRaw === 'failed' || resultRaw === 'skipped' || resultRaw === 'idle'
+      ? (resultRaw as OfferStoreSnapshotRefreshState['lastResult'])
+      : 'idle'
+  );
+
+  return {
+    lastRunAt: asString(parsed.lastRunAt, ''),
+    lastSweepPath: asString(parsed.lastSweepPath, ''),
+    lastSweepTimestamp: asString(parsed.lastSweepTimestamp, ''),
+    lastResult,
+    lastReason: asString(parsed.lastReason, ''),
+    lastError: asString(parsed.lastError, ''),
+    systemsUpdated: Math.max(0, Math.floor(asNumber(parsed.systemsUpdated, 0))),
+    offersUpdated: Math.max(0, Math.floor(asNumber(parsed.offersUpdated, 0))),
+    durationMs: Math.max(0, Math.floor(asNumber(parsed.durationMs, 0))),
+  };
+};
+
+export const getOfferStoreSnapshotRefreshState = async (): Promise<OfferStoreSnapshotRefreshState> => {
+  const raw = await getRuntimeFlag(
+    OFFER_STORE_SNAPSHOT_REFRESH_STATE_KEY,
+    JSON.stringify(DEFAULT_OFFER_STORE_SNAPSHOT_REFRESH_STATE),
+  );
+  return normalizeOfferStoreSnapshotRefreshState(
+    safeJsonParse<Record<string, unknown>>(raw, DEFAULT_OFFER_STORE_SNAPSHOT_REFRESH_STATE),
+  );
+};
+
+const setOfferStoreSnapshotRefreshState = async (state: OfferStoreSnapshotRefreshState): Promise<void> => {
+  await setRuntimeFlag(OFFER_STORE_SNAPSHOT_REFRESH_STATE_KEY, JSON.stringify(state));
+};
+
+const resolveTsSnapshotKeyBySystemName = (
+  map: Record<string, TsBacktestSnapshot>,
+  systemName: string,
+): string => {
+  const normalizedSystemName = String(systemName || '').trim();
+  if (!normalizedSystemName) {
+    return '';
+  }
+  const exactEntry = Object.entries(map).find(([, snapshot]) => String(snapshot?.systemName || '').trim() === normalizedSystemName);
+  if (exactEntry) {
+    return String(exactEntry[0] || '').trim();
+  }
+  const exactKey = Object.keys(map).find((key) => String(key || '').trim() === normalizedSystemName);
+  return String(exactKey || '').trim();
+};
+
+export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
+  force?: boolean;
+  reason?: string;
+  sweepTimestamp?: string;
+}): Promise<OfferStoreSnapshotRefreshResult> => {
+  const startedAtMs = Date.now();
+  const reason = asString(options?.reason, 'manual').trim() || 'manual';
+  const [settings, prevState] = await Promise.all([
+    getAdminReportSettings(),
+    getOfferStoreSnapshotRefreshState(),
+  ]);
+
+  const sweepPath = asString(getLatestSweepPath(), '');
+  const sweepTimestamp = asString(options?.sweepTimestamp, '') || asString(loadLatestSweep()?.timestamp, '');
+
+  if (!options?.force && !settings.sweepSnapshotAutoRefreshEnabled) {
+    const state: OfferStoreSnapshotRefreshState = {
+      ...prevState,
+      lastRunAt: new Date().toISOString(),
+      lastSweepPath: sweepPath,
+      lastSweepTimestamp: sweepTimestamp,
+      lastResult: 'skipped',
+      lastReason: `${reason}:disabled`,
+      lastError: '',
+      systemsUpdated: 0,
+      offersUpdated: 0,
+      durationMs: Date.now() - startedAtMs,
+    };
+    await setOfferStoreSnapshotRefreshState(state);
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'auto refresh disabled in settings',
+      settings,
+      state,
+      systemsUpdated: 0,
+      offersUpdated: 0,
+      errors: [],
+    };
+  }
+
+  const intervalMs = Math.max(1, settings.sweepSnapshotRefreshHours) * 3_600_000;
+  const prevRunAtMs = Date.parse(prevState.lastRunAt || '');
+  const sameSweep = Boolean(
+    sweepTimestamp
+    && prevState.lastSweepTimestamp
+    && sweepTimestamp === prevState.lastSweepTimestamp,
+  );
+  const tooSoon = Number.isFinite(prevRunAtMs) && (Date.now() - prevRunAtMs) < intervalMs;
+  if (!options?.force && sameSweep && tooSoon) {
+    const state: OfferStoreSnapshotRefreshState = {
+      ...prevState,
+      lastRunAt: new Date().toISOString(),
+      lastSweepPath: sweepPath,
+      lastSweepTimestamp: sweepTimestamp,
+      lastResult: 'skipped',
+      lastReason: `${reason}:interval`,
+      lastError: '',
+      systemsUpdated: 0,
+      offersUpdated: 0,
+      durationMs: Date.now() - startedAtMs,
+    };
+    await setOfferStoreSnapshotRefreshState(state);
+    return {
+      ok: true,
+      skipped: true,
+      reason: 'interval window not reached for unchanged sweep',
+      settings,
+      state,
+      systemsUpdated: 0,
+      offersUpdated: 0,
+      errors: [],
+    };
+  }
+
+  const errors: string[] = [];
+  let systemsUpdated = 0;
+  let offersUpdated = 0;
+
+  try {
+    const [offerStore, reviewSnapshots, tsSnapshotMap, legacySnapshot] = await Promise.all([
+      getOfferStoreAdminState(),
+      getOfferReviewSnapshots(),
+      getTsBacktestSnapshots(),
+      getTsBacktestSnapshot(),
+    ]);
+
+    const nextReviewSnapshots: Record<string, OfferReviewSnapshot> = {
+      ...reviewSnapshots,
+    };
+    const publishedOffers = new Set((offerStore.publishedOfferIds || []).map((item) => String(item || '').trim()).filter(Boolean));
+    for (const offer of (offerStore.offers || [])) {
+      const offerId = String(offer.offerId || '').trim();
+      if (!offerId || !publishedOffers.has(offerId)) {
+        continue;
+      }
+      const prev = nextReviewSnapshots[offerId] || null;
+      const normalized = normalizeOfferReviewSnapshot(offerId, {
+        ...(prev || {}),
+        offerId,
+        ret: Number(offer.ret || 0),
+        pf: Number(offer.pf || 0),
+        dd: Number(offer.dd || 0),
+        trades: Number(offer.trades || 0),
+        tradesPerDay: Number(offer.tradesPerDay || 0),
+        periodDays: Number(offer.periodDays || prev?.periodDays || offerStore.defaults.periodDays || 90),
+        equityPoints: Array.isArray(offer.equityPoints) ? offer.equityPoints : (prev?.equityPoints || []),
+        updatedAt: new Date().toISOString(),
+      });
+      if (normalized) {
+        nextReviewSnapshots[offerId] = normalized;
+        offersUpdated += 1;
+      }
+    }
+
+    const nextTsSnapshotMap: Record<string, TsBacktestSnapshot> = {
+      ...tsSnapshotMap,
+    };
+    const candidateSystemNames = new Set<string>();
+    Object.values(nextTsSnapshotMap).forEach((snapshot) => {
+      const name = String(snapshot?.systemName || '').trim();
+      if (name.toUpperCase().startsWith('ALGOFUND_MASTER::')) {
+        candidateSystemNames.add(name);
+      }
+    });
+    const legacySystemName = String(legacySnapshot?.systemName || '').trim();
+    if (legacySystemName.toUpperCase().startsWith('ALGOFUND_MASTER::')) {
+      candidateSystemNames.add(legacySystemName);
+    }
+
+    const tenantRows = await db.all(
+      `SELECT DISTINCT COALESCE(published_system_name, '') AS system_name
+       FROM algofund_profiles
+       WHERE TRIM(COALESCE(published_system_name, '')) != ''`
+    ) as Array<{ system_name?: string }>;
+    tenantRows.forEach((row) => {
+      const name = String(row?.system_name || '').trim();
+      if (name.toUpperCase().startsWith('ALGOFUND_MASTER::')) {
+        candidateSystemNames.add(name);
+      }
+    });
+
+    for (const systemName of Array.from(candidateSystemNames)) {
+      const existingKey = resolveTsSnapshotKeyBySystemName(nextTsSnapshotMap, systemName) || systemName;
+      const existing = nextTsSnapshotMap[existingKey] || null;
+      try {
+        const preview = await previewAdminSweepBacktest({
+          kind: 'algofund-ts',
+          systemName,
+          riskScore: Number(existing?.backtestSettings?.riskScore ?? 5),
+          tradeFrequencyScore: Number(existing?.backtestSettings?.tradeFrequencyScore ?? 5),
+          initialBalance: Number(existing?.backtestSettings?.initialBalance ?? 10000),
+          riskScaleMaxPercent: Number(existing?.backtestSettings?.riskScaleMaxPercent ?? 40),
+        });
+
+        const summary = preview.preview?.summary || {};
+        const equityPoints = Array.isArray(preview.preview?.equity)
+          ? (preview.preview?.equity || [])
+            .map((point) => Number((point as any)?.equity ?? (point as any)?.value ?? NaN))
+            .filter((value) => Number.isFinite(value))
+          : [];
+        const selectedOffers = Array.isArray(preview.selectedOffers) ? preview.selectedOffers : [];
+        const offerIds = Array.from(new Set(selectedOffers.map((item) => String((item as any)?.offerId || '').trim()).filter(Boolean)));
+        const periodDays = Math.max(1, Math.floor(Number(existing?.periodDays || offerStore.defaults.periodDays || 90)));
+
+        const normalized = normalizeTsBacktestSnapshot({
+          ...(existing || {}),
+          apiKeyName: asString(preview.sweepApiKeyName, existing?.apiKeyName || ''),
+          systemName,
+          setKey: asString(existing?.setKey, systemName),
+          ret: Number(summary.totalReturnPercent || 0),
+          pf: Number(summary.profitFactor || 0),
+          dd: Number(summary.maxDrawdownPercent || 0),
+          trades: Number(summary.tradesCount || 0),
+          tradesPerDay: Number(
+            ((Number(summary.tradesCount || 0)) / periodDays).toFixed(3)
+          ),
+          periodDays,
+          finalEquity: Number(summary.finalEquity || existing?.finalEquity || 0),
+          equityPoints,
+          offerIds,
+          backtestSettings: {
+            riskScore: Number(existing?.backtestSettings?.riskScore ?? 5),
+            tradeFrequencyScore: Number(existing?.backtestSettings?.tradeFrequencyScore ?? 5),
+            initialBalance: Number(existing?.backtestSettings?.initialBalance ?? 10000),
+            riskScaleMaxPercent: Number(existing?.backtestSettings?.riskScaleMaxPercent ?? 40),
+          },
+          updatedAt: new Date().toISOString(),
+        });
+        if (normalized) {
+          nextTsSnapshotMap[existingKey] = normalized;
+          systemsUpdated += 1;
+        }
+      } catch (error) {
+        const err = error as Error;
+        const msg = `[${systemName}] ${err.message}`;
+        errors.push(msg);
+        logger.warn(`[snapshot-refresh] ${msg}`);
+      }
+    }
+
+    await setRuntimeFlag('offer.store.review_snapshots', JSON.stringify(nextReviewSnapshots));
+    await setRuntimeFlag('offer.store.ts_backtest_snapshots', JSON.stringify(nextTsSnapshotMap));
+
+    const state: OfferStoreSnapshotRefreshState = {
+      lastRunAt: new Date().toISOString(),
+      lastSweepPath: sweepPath,
+      lastSweepTimestamp: sweepTimestamp,
+      lastResult: errors.length > 0 ? 'failed' : 'success',
+      lastReason: reason,
+      lastError: errors.length > 0 ? errors.join('; ').slice(0, 800) : '',
+      systemsUpdated,
+      offersUpdated,
+      durationMs: Date.now() - startedAtMs,
+    };
+    await setOfferStoreSnapshotRefreshState(state);
+
+    return {
+      ok: errors.length === 0,
+      skipped: false,
+      reason,
+      settings,
+      state,
+      systemsUpdated,
+      offersUpdated,
+      errors,
+    };
+  } catch (error) {
+    const err = error as Error;
+    const state: OfferStoreSnapshotRefreshState = {
+      ...prevState,
+      lastRunAt: new Date().toISOString(),
+      lastSweepPath: sweepPath,
+      lastSweepTimestamp: sweepTimestamp,
+      lastResult: 'failed',
+      lastReason: reason,
+      lastError: err.message,
+      systemsUpdated,
+      offersUpdated,
+      durationMs: Date.now() - startedAtMs,
+    };
+    await setOfferStoreSnapshotRefreshState(state);
+    return {
+      ok: false,
+      skipped: false,
+      reason,
+      settings,
+      state,
+      systemsUpdated,
+      offersUpdated,
+      errors: [err.message],
+    };
+  }
 };
 
 export const getHighTradeRecommendations = async (options?: {
@@ -5488,12 +6138,13 @@ export const getSaasAdminSummary = async (options?: {
   const sourceSweep = loadLatestSweep();
   const apiKeys = await getAvailableApiKeyNames();
   const fallbackCatalog = await buildFallbackCatalogFromPresets(sourceCatalog, []);
-  const catalog = getAllOffers(fallbackCatalog).length > 0
-    ? fallbackCatalog
-    : sourceCatalog || fallbackCatalog;
+  const sourceCatalogHasOffers = catalogHasOffers(sourceCatalog);
+  const catalog = sourceCatalogHasOffers
+    ? sourceCatalog
+    : (catalogHasOffers(fallbackCatalog) ? fallbackCatalog : sourceCatalog || fallbackCatalog);
   
   // Always use source draft if available, don't let fallback overwrite it
-  if (sourceCatalog?.adminTradingSystemDraft && 
+  if (catalog && sourceCatalog?.adminTradingSystemDraft && 
       sourceCatalog.adminTradingSystemDraft.name && 
       !sourceCatalog.adminTradingSystemDraft.name.includes('fallback')) {
     catalog.adminTradingSystemDraft = sourceCatalog.adminTradingSystemDraft;
@@ -5515,9 +6166,10 @@ export const getSaasAdminSummary = async (options?: {
   const tenants = await listTenantSummaries({ includeLatestPreview: false });
   const plans = await listPlans();
   const algofundRequests = await getAlgofundRequestsAll(200);
-  const [offerStore, reportSettings] = await Promise.all([
+  const [offerStore, reportSettings, snapshotRefresh] = await Promise.all([
     includeOfferStore ? getOfferStoreAdminState() : Promise.resolve(null),
     getAdminReportSettings(),
+    getOfferStoreSnapshotRefreshState(),
   ]);
   const backtestRequestCount = await db.get(
     `SELECT
@@ -5550,6 +6202,7 @@ export const getSaasAdminSummary = async (options?: {
     },
     ...(offerStore ? { offerStore } : {}),
     reportSettings,
+    snapshotRefresh,
   };
 };
 
@@ -6865,9 +7518,20 @@ export const getAlgofundState = async (
   }
   const availableSystems = Array.from(allAlgofundSystemsMap.values()).map((item: any) => ({
     id: Number(item?.id || 0),
+    apiKeyName: asString(item?.api_key_name || item?.apiKeyName || '', ''),
     name: asString(item?.name, ''),
     isActive: Boolean(item?.is_active),
     updatedAt: asString(item?.updated_at, ''),
+    memberCount: Array.isArray(item?.members)
+      ? item.members.filter((member: any) => member && member.is_enabled !== false).length
+      : 0,
+    memberStrategyIds: Array.isArray(item?.members)
+      ? Array.from(new Set(
+        item.members
+          .map((member: any) => Number(member?.strategy_id || member?.strategy?.id || 0))
+          .filter((value: number) => Number.isFinite(value) && value > 0)
+      ))
+      : [],
     metrics: item?.metrics ? {
       equityUsd: asNumber(item.metrics.equity_usd, 0),
       unrealizedPnl: asNumber(item.metrics.unrealized_pnl, 0),
@@ -7389,12 +8053,14 @@ export const removeAlgofundStorefrontSystem = async (payload: {
   force?: boolean;
   dryRun?: boolean;
   closePositions?: boolean;
+  hardDelete?: boolean;
 }): Promise<{
   removed: boolean;
   clientsAffected: number;
   affectedTenants: Array<{ id: number; display_name: string }>;
   positionsByApiKey: Array<{ apiKeyName: string; openPositions: number; symbols: string[] }>;
   closeResult?: { requested: number; failed: number };
+  hardDeletedCount?: number;
   warning?: string;
 }> => {
   const systemName = asString(payload.systemName, '').trim();
@@ -7521,22 +8187,35 @@ export const removeAlgofundStorefrontSystem = async (payload: {
   );
   await setRuntimeFlag('offer.store.ts_backtest_snapshots', JSON.stringify(nextTsSnapshotMap));
 
-  // Remove system from storefront listing by archiving its name away from ALGOFUND_MASTER::* prefix.
-  // Keeping the row (instead of hard-delete) preserves auditability and avoids FK side effects.
-  const archiveSuffix = `archived_${Date.now()}`;
-  for (const row of (Array.isArray(systemRows) ? systemRows : [])) {
-    const systemId = Number(row.id || 0);
-    const apiKeyName = asString(row.api_key_name, '').trim();
-    if (!systemId || !apiKeyName) {
-      continue;
+  let hardDeletedCount = 0;
+  if (payload.hardDelete) {
+    for (const row of (Array.isArray(systemRows) ? systemRows : [])) {
+      const systemId = Number(row.id || 0);
+      if (!systemId) {
+        continue;
+      }
+      await db.run('DELETE FROM trading_system_members WHERE system_id = ?', [systemId]);
+      await db.run('DELETE FROM trading_systems WHERE id = ?', [systemId]);
+      hardDeletedCount += 1;
     }
-    await updateTradingSystem(apiKeyName, systemId, {
-      name: `ARCHIVED::${systemName}::${archiveSuffix}`,
-      description: `Storefront removed at ${new Date().toISOString()}`,
-      auto_sync_members: false,
-      discovery_enabled: false,
-    });
-    await setTradingSystemActivation(apiKeyName, systemId, false, true).catch(() => undefined);
+  } else {
+    // Remove system from storefront listing by archiving its name away from ALGOFUND_MASTER::* prefix.
+    // Keeping the row (instead of hard-delete) preserves auditability and avoids FK side effects.
+    const archiveSuffix = `archived_${Date.now()}`;
+    for (const row of (Array.isArray(systemRows) ? systemRows : [])) {
+      const systemId = Number(row.id || 0);
+      const apiKeyName = asString(row.api_key_name, '').trim();
+      if (!systemId || !apiKeyName) {
+        continue;
+      }
+      await updateTradingSystem(apiKeyName, systemId, {
+        name: `ARCHIVED::${systemName}::${archiveSuffix}`,
+        description: `Storefront removed at ${new Date().toISOString()}`,
+        auto_sync_members: false,
+        discovery_enabled: false,
+      });
+      await setTradingSystemActivation(apiKeyName, systemId, false, true).catch(() => undefined);
+    }
   }
 
   return {
@@ -7544,6 +8223,7 @@ export const removeAlgofundStorefrontSystem = async (payload: {
     clientsAffected: clientCount,
     affectedTenants,
     positionsByApiKey,
+    ...(payload.hardDelete ? { hardDeletedCount } : {}),
     ...(closeResult ? { closeResult } : {}),
   };
 };
@@ -7645,13 +8325,140 @@ type AlgofundActiveSystem = {
   createdAt: string;
 };
 
+type ResolvedAlgofundSystem = {
+  systemId: number;
+  systemName: string;
+  apiKeyId: number;
+  apiKeyName: string;
+  isActive: boolean;
+};
+
+const resolveAlgofundProfileId = async (profileOrTenantId: number): Promise<number> => {
+  const direct = await db.get(
+    `SELECT id FROM algofund_profiles WHERE id = ?`,
+    [profileOrTenantId]
+  ) as { id?: number } | undefined;
+  if (Number(direct?.id || 0) > 0) {
+    return Number(direct?.id || 0);
+  }
+
+  const byTenant = await db.get(
+    `SELECT id FROM algofund_profiles WHERE tenant_id = ?`,
+    [profileOrTenantId]
+  ) as { id?: number } | undefined;
+  if (Number(byTenant?.id || 0) > 0) {
+    return Number(byTenant?.id || 0);
+  }
+
+  throw new Error(`Algofund profile not found for id/tenantId=${profileOrTenantId}`);
+};
+
+const resolveAlgofundSystemTargets = async (options: {
+  tenantId?: number;
+  systemName?: string;
+}): Promise<ResolvedAlgofundSystem[]> => {
+  const requestedSystemName = asString(options.systemName, '').trim();
+  if (requestedSystemName) {
+    const row = await db.get(
+      `SELECT ts.id AS system_id, ts.name AS system_name, ts.api_key_id, ak.name AS api_key_name, COALESCE(ts.is_active, 0) AS is_active
+       FROM trading_systems ts
+       JOIN api_keys ak ON ak.id = ts.api_key_id
+       WHERE ts.name = ?
+       ORDER BY ts.id DESC
+       LIMIT 1`,
+      [requestedSystemName]
+    ) as Record<string, unknown> | undefined;
+
+    if (!row) {
+      throw new Error(`Trading system not found: ${requestedSystemName}`);
+    }
+
+    return [{
+      systemId: asNumber(row.system_id, 0),
+      systemName: asString(row.system_name, ''),
+      apiKeyId: asNumber(row.api_key_id, 0),
+      apiKeyName: asString(row.api_key_name, ''),
+      isActive: asNumber(row.is_active, 0) === 1,
+    }].filter((item) => item.systemId > 0 && item.apiKeyId > 0 && item.apiKeyName);
+  }
+
+  const tenantId = asNumber(options.tenantId, 0);
+  if (tenantId <= 0) {
+    throw new Error('tenantId or systemName is required');
+  }
+
+  const profile = await getAlgofundProfile(tenantId);
+  if (!profile) {
+    throw new Error(`Algofund profile not found for tenant ${tenantId}`);
+  }
+
+  const rows = await db.all(
+    `SELECT ts.id AS system_id, ts.name AS system_name, ts.api_key_id, ak.name AS api_key_name, COALESCE(ts.is_active, 0) AS is_active
+     FROM trading_systems ts
+     JOIN api_keys ak ON ak.id = ts.api_key_id
+     WHERE ts.name IN (
+       SELECT DISTINCT system_name
+       FROM (
+         SELECT COALESCE(ap.published_system_name, '') AS system_name
+         FROM algofund_profiles ap
+         WHERE ap.tenant_id = ?
+         UNION ALL
+         SELECT COALESCE(aas.system_name, '') AS system_name
+         FROM algofund_active_systems aas
+         WHERE aas.profile_id = ? AND COALESCE(aas.is_enabled, 1) = 1
+       ) src
+       WHERE TRIM(system_name) != ''
+     )
+     ORDER BY ts.id DESC`,
+    [tenantId, profile.id]
+  ) as Array<Record<string, unknown>>;
+
+  const out = (Array.isArray(rows) ? rows : []).map((row) => ({
+    systemId: asNumber(row.system_id, 0),
+    systemName: asString(row.system_name, ''),
+    apiKeyId: asNumber(row.api_key_id, 0),
+    apiKeyName: asString(row.api_key_name, ''),
+    isActive: asNumber(row.is_active, 0) === 1,
+  })).filter((item) => item.systemId > 0 && item.apiKeyId > 0 && item.apiKeyName);
+
+  if (out.length > 0) {
+    return out;
+  }
+
+  const fallback = await db.get(
+    `SELECT ts.id AS system_id, ts.name AS system_name, ts.api_key_id, ak.name AS api_key_name, COALESCE(ts.is_active, 0) AS is_active
+     FROM trading_systems ts
+     JOIN api_keys ak ON ak.id = ts.api_key_id
+     WHERE ts.id = (
+       SELECT id FROM trading_systems
+       WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ? LIMIT 1)
+       ORDER BY is_active DESC, id DESC
+       LIMIT 1
+     )`,
+    [asString(profile.execution_api_key_name || profile.assigned_api_key_name, '')]
+  ) as Record<string, unknown> | undefined;
+
+  if (!fallback) {
+    throw new Error(`No linked trading systems for tenant ${tenantId}`);
+  }
+
+  return [{
+    systemId: asNumber(fallback.system_id, 0),
+    systemName: asString(fallback.system_name, ''),
+    apiKeyId: asNumber(fallback.api_key_id, 0),
+    apiKeyName: asString(fallback.api_key_name, ''),
+    isActive: asNumber(fallback.is_active, 0) === 1,
+  }].filter((item) => item.systemId > 0 && item.apiKeyId > 0 && item.apiKeyName);
+};
+
 export const getAlgofundActiveSystems = async (profileId: number): Promise<AlgofundActiveSystem[]> => {
+  const resolvedProfileId = await resolveAlgofundProfileId(profileId);
   const rows = await db.all(
     `SELECT id, profile_id, system_name, weight, is_enabled, assigned_by, created_at
      FROM algofund_active_systems
      WHERE profile_id = ?
      ORDER BY id ASC`,
-    [profileId]
+    [resolvedProfileId]
   ) as Array<Record<string, unknown>>;
 
   return (Array.isArray(rows) ? rows : []).map((row) => ({
@@ -7675,6 +8482,7 @@ export const checkAlgofundSystemPairConflicts = async (
   proposedSystemName: string,
   apiKeyName: string
 ): Promise<PairConflict[]> => {
+  const resolvedProfileId = await resolveAlgofundProfileId(profileId);
   // Get pairs used by the proposed system
   const proposedRows = await db.all(
     `SELECT DISTINCT s.base_symbol, s.quote_symbol
@@ -7702,7 +8510,7 @@ export const checkAlgofundSystemPairConflicts = async (
      JOIN strategies s ON s.id = tsm.strategy_id
      WHERE aas.profile_id = ? AND aas.is_enabled = 1 AND aas.system_name != ?
        AND ak.name = ? AND tsm.is_enabled = 1`,
-    [profileId, proposedSystemName, apiKeyName]
+    [resolvedProfileId, proposedSystemName, apiKeyName]
   ) as Array<{ base_symbol: string; quote_symbol: string; system_name: string }>;
 
   const conflicts: PairConflict[] = [];
@@ -7721,7 +8529,8 @@ export const assignAlgofundSystems = async (payload: {
   systems: Array<{ systemName: string; weight?: number; isEnabled?: boolean; assignedBy?: 'admin' | 'client' }>;
   replace?: boolean;
 }): Promise<AlgofundActiveSystem[]> => {
-  const { profileId, systems, replace = false } = payload;
+  const { systems, replace = false } = payload;
+  const profileId = await resolveAlgofundProfileId(payload.profileId);
 
   if (replace) {
     await db.run(`DELETE FROM algofund_active_systems WHERE profile_id = ?`, [profileId]);
@@ -7756,7 +8565,8 @@ export const toggleAlgofundSystem = async (payload: {
   apiKeyName: string;
   actorMode?: 'admin' | 'client';
 }): Promise<{ activeSystems: AlgofundActiveSystem[]; conflicts: PairConflict[] }> => {
-  const { profileId, systemName, isEnabled, apiKeyName } = payload;
+  const { systemName, isEnabled, apiKeyName } = payload;
+  const profileId = await resolveAlgofundProfileId(payload.profileId);
   const actorMode = payload.actorMode === 'client' ? 'client' : 'admin';
 
   let conflicts: PairConflict[] = [];
@@ -7787,10 +8597,483 @@ export const removeAlgofundSystemFromProfile = async (payload: {
   profileId: number;
   systemName: string;
 }): Promise<AlgofundActiveSystem[]> => {
+  const profileId = await resolveAlgofundProfileId(payload.profileId);
   await db.run(
     `DELETE FROM algofund_active_systems WHERE profile_id = ? AND system_name = ?`,
-    [payload.profileId, payload.systemName]
+    [profileId, payload.systemName]
   );
-  return getAlgofundActiveSystems(payload.profileId);
+  return getAlgofundActiveSystems(profileId);
+};
+
+export const getAlgofundSystemHealthReport = async (options: {
+  tenantId?: number;
+  systemName?: string;
+  lookbackHours?: number;
+}) => {
+  const lookbackHours = Math.max(1, Math.floor(asNumber(options.lookbackHours, 24)));
+  const sinceMs = Date.now() - lookbackHours * 3_600_000;
+  const systems = await resolveAlgofundSystemTargets({
+    tenantId: asNumber(options.tenantId, 0) || undefined,
+    systemName: asString(options.systemName, '') || undefined,
+  });
+
+  const reportSystems = [] as Array<Record<string, unknown>>;
+  for (const system of systems) {
+    const members = await db.all(
+      `SELECT
+         tsm.strategy_id,
+         COALESCE(tsm.is_enabled, 1) AS is_enabled,
+         COALESCE(tsm.weight, 1) AS weight,
+         COALESCE(tsm.member_role, '') AS member_role,
+         COALESCE(s.name, '') AS strategy_name,
+         COALESCE(s.base_symbol, '') AS base_symbol,
+         COALESCE(s.quote_symbol, '') AS quote_symbol,
+         COALESCE(s.last_signal, '') AS last_signal,
+         COALESCE(s.last_action, '') AS last_action,
+         COALESCE(s.updated_at, '') AS updated_at
+       FROM trading_system_members tsm
+       LEFT JOIN strategies s ON s.id = tsm.strategy_id
+       WHERE tsm.system_id = ?
+       ORDER BY tsm.id ASC`,
+      [system.systemId]
+    ) as Array<Record<string, unknown>>;
+
+    const strategyIds = (Array.isArray(members) ? members : [])
+      .map((row) => asNumber(row.strategy_id, 0))
+      .filter((id) => id > 0);
+    const strategyIdsUnique = Array.from(new Set(strategyIds));
+
+    const eventRows = strategyIdsUnique.length > 0
+      ? await db.all(
+        `SELECT strategy_id, COUNT(*) AS events_count, MAX(actual_time) AS last_event_time
+         FROM live_trade_events
+         WHERE strategy_id IN (${strategyIdsUnique.map(() => '?').join(',')})
+         GROUP BY strategy_id`,
+        strategyIdsUnique
+      ) as Array<Record<string, unknown>>
+      : [];
+
+    const eventRowsRecent = strategyIdsUnique.length > 0
+      ? await db.all(
+        `SELECT strategy_id, COUNT(*) AS events_count
+         FROM live_trade_events
+         WHERE strategy_id IN (${strategyIdsUnique.map(() => '?').join(',')}) AND actual_time >= ?
+         GROUP BY strategy_id`,
+        [...strategyIdsUnique, sinceMs]
+      ) as Array<Record<string, unknown>>
+      : [];
+
+    const eventByStrategy = new Map<number, { total: number; lastEventTime: number }>();
+    for (const row of (Array.isArray(eventRows) ? eventRows : [])) {
+      const strategyId = asNumber(row.strategy_id, 0);
+      if (strategyId <= 0) continue;
+      eventByStrategy.set(strategyId, {
+        total: asNumber(row.events_count, 0),
+        lastEventTime: asNumber(row.last_event_time, 0),
+      });
+    }
+    const recentByStrategy = new Map<number, number>();
+    for (const row of (Array.isArray(eventRowsRecent) ? eventRowsRecent : [])) {
+      const strategyId = asNumber(row.strategy_id, 0);
+      if (strategyId <= 0) continue;
+      recentByStrategy.set(strategyId, asNumber(row.events_count, 0));
+    }
+
+    const latestSnapshot = await db.get(
+      `SELECT equity_usd, unrealized_pnl, notional_usd, margin_load_percent, recorded_at
+       FROM monitoring_snapshots
+       WHERE api_key_id = ?
+       ORDER BY datetime(recorded_at) DESC
+       LIMIT 1`,
+      [system.apiKeyId]
+    ) as Record<string, unknown> | undefined;
+
+    const connectedClientsRow = await db.get(
+      `SELECT COUNT(DISTINCT ap.tenant_id) AS connected_clients
+       FROM algofund_profiles ap
+       LEFT JOIN algofund_active_systems aas ON aas.profile_id = ap.id AND COALESCE(aas.is_enabled, 1) = 1
+       WHERE COALESCE(ap.published_system_name, '') = ? OR COALESCE(aas.system_name, '') = ?`,
+      [system.systemName, system.systemName]
+    ) as Record<string, unknown> | undefined;
+
+    const strategyHealth = (Array.isArray(members) ? members : []).map((row) => {
+      const strategyId = asNumber(row.strategy_id, 0);
+      const pair = asString(row.quote_symbol, '')
+        ? `${asString(row.base_symbol, '')}/${asString(row.quote_symbol, '')}`
+        : asString(row.base_symbol, '');
+      const events = eventByStrategy.get(strategyId);
+      const recentEvents = recentByStrategy.get(strategyId) || 0;
+      return {
+        strategyId,
+        isEnabled: asNumber(row.is_enabled, 0) === 1,
+        weight: asNumber(row.weight, 1),
+        memberRole: asString(row.member_role, ''),
+        strategyName: asString(row.strategy_name, ''),
+        pair,
+        lastSignal: asString(row.last_signal, ''),
+        lastAction: asString(row.last_action, ''),
+        strategyUpdatedAt: asString(row.updated_at, ''),
+        liveEventsTotal: asNumber(events?.total, 0),
+        liveEventsLookback: recentEvents,
+        lastLiveEventAtMs: asNumber(events?.lastEventTime, 0),
+      };
+    });
+
+    const enabledMembers = strategyHealth.filter((row) => row.isEnabled).length;
+    const membersWithRecentEvents = strategyHealth.filter((row) => row.liveEventsLookback > 0).length;
+    reportSystems.push({
+      systemId: system.systemId,
+      systemName: system.systemName,
+      apiKeyName: system.apiKeyName,
+      isActive: system.isActive,
+      connectedClients: asNumber(connectedClientsRow?.connected_clients, 0),
+      membersTotal: strategyHealth.length,
+      membersEnabled: enabledMembers,
+      membersWithRecentEvents,
+      latestAccountSnapshot: latestSnapshot ? {
+        equityUsd: asNumber(latestSnapshot.equity_usd, 0),
+        unrealizedPnl: asNumber(latestSnapshot.unrealized_pnl, 0),
+        notionalUsd: asNumber(latestSnapshot.notional_usd, 0),
+        marginLoadPercent: asNumber(latestSnapshot.margin_load_percent, 0),
+        recordedAt: asString(latestSnapshot.recorded_at, ''),
+      } : null,
+      strategies: strategyHealth,
+    });
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    lookbackHours,
+    systems: reportSystems,
+  };
+};
+
+export const getAlgofundClosedPositionsReport = async (options: {
+  tenantId?: number;
+  systemName?: string;
+  periodHours?: number;
+  limit?: number;
+}) => {
+  const periodHours = Math.max(1, Math.floor(asNumber(options.periodHours, 24 * 7)));
+  const limit = Math.max(1, Math.min(500, Math.floor(asNumber(options.limit, 100))));
+  const sinceMs = Date.now() - periodHours * 3_600_000;
+  const systems = await resolveAlgofundSystemTargets({
+    tenantId: asNumber(options.tenantId, 0) || undefined,
+    systemName: asString(options.systemName, '') || undefined,
+  });
+
+  const rowsOut = [] as Array<Record<string, unknown>>;
+
+  for (const system of systems) {
+    const members = await db.all(
+      `SELECT strategy_id FROM trading_system_members WHERE system_id = ? AND COALESCE(is_enabled, 1) = 1`,
+      [system.systemId]
+    ) as Array<Record<string, unknown>>;
+    const strategyIds = Array.from(new Set((Array.isArray(members) ? members : [])
+      .map((row) => asNumber(row.strategy_id, 0))
+      .filter((id) => id > 0)));
+
+    if (strategyIds.length === 0) {
+      continue;
+    }
+
+    const strategyMetaRows = await db.all(
+      `SELECT id, COALESCE(name, '') AS name, COALESCE(base_symbol, '') AS base_symbol, COALESCE(quote_symbol, '') AS quote_symbol
+       FROM strategies
+       WHERE id IN (${strategyIds.map(() => '?').join(',')})`,
+      strategyIds
+    ) as Array<Record<string, unknown>>;
+    const strategyMeta = new Map<number, { name: string; pair: string }>();
+    for (const row of (Array.isArray(strategyMetaRows) ? strategyMetaRows : [])) {
+      const id = asNumber(row.id, 0);
+      if (id <= 0) continue;
+      const pair = asString(row.quote_symbol, '')
+        ? `${asString(row.base_symbol, '')}/${asString(row.quote_symbol, '')}`
+        : asString(row.base_symbol, '');
+      strategyMeta.set(id, { name: asString(row.name, ''), pair });
+    }
+
+    const events = await db.all(
+      `SELECT strategy_id, trade_type, side, entry_time, entry_price, position_size, actual_price, actual_time, actual_fee, source_symbol
+       FROM live_trade_events
+       WHERE strategy_id IN (${strategyIds.map(() => '?').join(',')})
+         AND actual_time >= ?
+       ORDER BY actual_time ASC, id ASC`,
+      [...strategyIds, sinceMs]
+    ) as Array<Record<string, unknown>>;
+
+    const openByKey = new Map<string, Array<Record<string, unknown>>>();
+    for (const event of (Array.isArray(events) ? events : [])) {
+      const strategyId = asNumber(event.strategy_id, 0);
+      if (strategyId <= 0) continue;
+      const side = asString(event.side, '');
+      const symbol = asString(event.source_symbol, '') || strategyMeta.get(strategyId)?.pair || '';
+      const key = `${strategyId}|${side}|${symbol}`;
+      if (asString(event.trade_type, '').toLowerCase() === 'entry') {
+        const list = openByKey.get(key) || [];
+        list.push(event);
+        openByKey.set(key, list);
+        continue;
+      }
+      if (asString(event.trade_type, '').toLowerCase() === 'exit') {
+        const list = openByKey.get(key) || [];
+        const entry = list.shift();
+        openByKey.set(key, list);
+        if (!entry) {
+          continue;
+        }
+        const qty = Math.max(0, asNumber(event.position_size, asNumber(entry.position_size, 0)));
+        const entryPrice = asNumber(entry.actual_price, asNumber(entry.entry_price, 0));
+        const exitPrice = asNumber(event.actual_price, 0);
+        const entryFee = asNumber(entry.actual_fee, 0);
+        const exitFee = asNumber(event.actual_fee, 0);
+        const gross = side.toLowerCase() === 'short'
+          ? (entryPrice - exitPrice) * qty
+          : (exitPrice - entryPrice) * qty;
+        const pnl = gross - entryFee - exitFee;
+        rowsOut.push({
+          systemId: system.systemId,
+          systemName: system.systemName,
+          strategyId,
+          strategyName: strategyMeta.get(strategyId)?.name || '',
+          symbol,
+          side,
+          qty,
+          entryPrice,
+          exitPrice,
+          entryTime: asNumber(entry.actual_time, asNumber(entry.entry_time, 0)),
+          exitTime: asNumber(event.actual_time, 0),
+          entryFee,
+          exitFee,
+          realizedPnl: Number(pnl.toFixed(8)),
+          holdMinutes: Number(((asNumber(event.actual_time, 0) - asNumber(entry.actual_time, asNumber(entry.entry_time, 0))) / 60_000).toFixed(2)),
+        });
+      }
+    }
+  }
+
+  const sorted = rowsOut.sort((left, right) => asNumber(right.exitTime, 0) - asNumber(left.exitTime, 0)).slice(0, limit);
+  const totalPnl = sorted.reduce((sum, row) => sum + asNumber(row.realizedPnl, 0), 0);
+  const wins = sorted.filter((row) => asNumber(row.realizedPnl, 0) > 0).length;
+
+  return {
+    generatedAt: new Date().toISOString(),
+    periodHours,
+    rows: sorted,
+    summary: {
+      closedCount: sorted.length,
+      wins,
+      losses: Math.max(0, sorted.length - wins),
+      winRatePercent: sorted.length > 0 ? Number(((wins / sorted.length) * 100).toFixed(2)) : 0,
+      totalRealizedPnl: Number(totalPnl.toFixed(8)),
+    },
+  };
+};
+
+const renderSimpleChartSvg = (input: {
+  candles: Array<{ ts: number; open: number; high: number; low: number; close: number }>;
+  markers: Array<{ ts: number; price: number; kind: 'entry' | 'exit'; side: string }>;
+  title: string;
+  width: number;
+  height: number;
+}): string => {
+  const width = Math.max(640, Math.floor(input.width));
+  const height = Math.max(360, Math.floor(input.height));
+  const left = 50;
+  const right = 20;
+  const top = 30;
+  const bottom = 36;
+  const plotW = width - left - right;
+  const plotH = height - top - bottom;
+  const candles = input.candles;
+
+  const highs = candles.map((c) => c.high);
+  const lows = candles.map((c) => c.low);
+  const minPrice = Math.min(...lows);
+  const maxPrice = Math.max(...highs);
+  const priceRange = Math.max(1e-9, maxPrice - minPrice);
+  const xStep = plotW / Math.max(1, candles.length - 1);
+  const candleBodyW = Math.max(2, Math.min(8, xStep * 0.7));
+
+  const y = (price: number): number => top + ((maxPrice - price) / priceRange) * plotH;
+
+  const candleSvg = candles.map((c, idx) => {
+    const x = left + idx * xStep;
+    const up = c.close >= c.open;
+    const color = up ? '#0a7f4f' : '#b3261e';
+    const yOpen = y(c.open);
+    const yClose = y(c.close);
+    const yHigh = y(c.high);
+    const yLow = y(c.low);
+    const bodyY = Math.min(yOpen, yClose);
+    const bodyH = Math.max(1, Math.abs(yClose - yOpen));
+    return `<g><line x1="${x.toFixed(2)}" y1="${yHigh.toFixed(2)}" x2="${x.toFixed(2)}" y2="${yLow.toFixed(2)}" stroke="${color}" stroke-width="1"/><rect x="${(x - candleBodyW / 2).toFixed(2)}" y="${bodyY.toFixed(2)}" width="${candleBodyW.toFixed(2)}" height="${bodyH.toFixed(2)}" fill="${color}" opacity="0.85"/></g>`;
+  }).join('');
+
+  const markerSvg = input.markers.map((m) => {
+    const idx = candles.findIndex((c) => c.ts >= m.ts);
+    if (idx < 0) return '';
+    const x = left + idx * xStep;
+    const yy = y(m.price);
+    const fill = m.kind === 'entry' ? '#1565c0' : '#ef6c00';
+    const label = m.kind === 'entry' ? (m.side.toLowerCase() === 'short' ? 'SE' : 'LE') : (m.side.toLowerCase() === 'short' ? 'SX' : 'LX');
+    return `<g><circle cx="${x.toFixed(2)}" cy="${yy.toFixed(2)}" r="4" fill="${fill}"/><text x="${(x + 6).toFixed(2)}" y="${(yy - 6).toFixed(2)}" font-size="10" fill="${fill}">${label}</text></g>`;
+  }).join('');
+
+  const axis = `<rect x="${left}" y="${top}" width="${plotW}" height="${plotH}" fill="#ffffff" stroke="#d0d7de"/><text x="${left}" y="18" font-size="14" fill="#111">${input.title.replace(/[&<>\"]/g, '')}</text><text x="${left}" y="${height - 10}" font-size="11" fill="#444">Bars: ${candles.length}</text><text x="${width - 200}" y="${height - 10}" font-size="11" fill="#444">Price ${minPrice.toFixed(6)} .. ${maxPrice.toFixed(6)}</text>`;
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#f7f9fb"/>${axis}${candleSvg}${markerSvg}</svg>`;
+};
+
+export const getAlgofundChartSnapshot = async (options: {
+  tenantId?: number;
+  systemName?: string;
+  strategyId?: number;
+  candles?: number;
+  width?: number;
+  height?: number;
+  interval?: string;
+}) => {
+  const systems = await resolveAlgofundSystemTargets({
+    tenantId: asNumber(options.tenantId, 0) || undefined,
+    systemName: asString(options.systemName, '') || undefined,
+  });
+  const system = systems[0];
+  if (!system) {
+    throw new Error('No resolved system for snapshot');
+  }
+
+  const row = options.strategyId
+    ? await db.get(
+      `SELECT s.*
+       FROM trading_system_members tsm
+       JOIN strategies s ON s.id = tsm.strategy_id
+       WHERE tsm.system_id = ? AND s.id = ?
+       LIMIT 1`,
+      [system.systemId, asNumber(options.strategyId, 0)]
+    ) as Record<string, unknown> | undefined
+    : await db.get(
+      `SELECT s.*
+       FROM trading_system_members tsm
+       JOIN strategies s ON s.id = tsm.strategy_id
+       WHERE tsm.system_id = ? AND COALESCE(tsm.is_enabled, 1) = 1
+       ORDER BY tsm.id ASC
+       LIMIT 1`,
+      [system.systemId]
+    ) as Record<string, unknown> | undefined;
+
+  if (!row) {
+    throw new Error('No strategy found for requested snapshot');
+  }
+
+  const strategyId = asNumber(row.id, 0);
+  const interval = asString(options.interval || row.interval, '4h');
+  const bars = Math.max(50, Math.min(500, Math.floor(asNumber(options.candles, 150))));
+  const base = asString(row.base_symbol, '');
+  const quote = asString(row.quote_symbol, '');
+  const symbol = quote ? `${base}/${quote}` : base;
+  let rawCandles: unknown[] = [];
+  try {
+    rawCandles = await getMarketData(system.apiKeyName, symbol, interval, bars);
+  } catch (error) {
+    const err = error as Error;
+    logger.warn(`[SaaS] chart snapshot market-data fallback for ${system.apiKeyName}/${symbol}: ${err.message}`);
+  }
+
+  const normalized = (Array.isArray(rawCandles) ? rawCandles : [])
+    .map((item) => {
+      if (!Array.isArray(item) || item.length < 5) return null;
+      const ts = asNumber(item[0], 0);
+      const open = asNumber(item[1], 0);
+      const high = asNumber(item[2], 0);
+      const low = asNumber(item[3], 0);
+      const close = asNumber(item[4], 0);
+      if (!Number.isFinite(ts) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
+        return null;
+      }
+      return { ts, open, high, low, close };
+    })
+    .filter((item): item is { ts: number; open: number; high: number; low: number; close: number } => Boolean(item))
+    .sort((a, b) => a.ts - b.ts)
+    .slice(-bars);
+
+  if (normalized.length < 20) {
+    const fallbackTradeRows = await db.all(
+      `SELECT actual_time, actual_price
+       FROM live_trade_events
+       WHERE strategy_id = ? AND actual_time > 0 AND actual_price > 0
+       ORDER BY actual_time ASC
+       LIMIT ?`,
+      [strategyId, bars]
+    ) as Array<Record<string, unknown>>;
+
+    if (Array.isArray(fallbackTradeRows) && fallbackTradeRows.length >= 20) {
+      const rebuilt = fallbackTradeRows
+        .map((trade) => ({
+          ts: asNumber(trade.actual_time, 0),
+          price: asNumber(trade.actual_price, 0),
+        }))
+        .filter((trade) => trade.ts > 0 && trade.price > 0)
+        .slice(-bars);
+
+      for (let idx = 0; idx < rebuilt.length; idx += 1) {
+        const current = rebuilt[idx];
+        const prev = rebuilt[idx - 1] || current;
+        const open = prev.price;
+        const close = current.price;
+        const high = Math.max(open, close);
+        const low = Math.min(open, close);
+        normalized.push({ ts: current.ts, open, high, low, close });
+      }
+    }
+  }
+
+  if (normalized.length < 20) {
+    throw new Error(`Not enough candles for snapshot (${normalized.length})`);
+  }
+
+  const fromTs = normalized[0].ts;
+  const toTs = normalized[normalized.length - 1].ts;
+  const eventRows = await db.all(
+    `SELECT trade_type, side, actual_time, actual_price, source_symbol
+     FROM live_trade_events
+     WHERE strategy_id = ? AND actual_time BETWEEN ? AND ?
+     ORDER BY actual_time ASC`,
+    [strategyId, fromTs, toTs]
+  ) as Array<Record<string, unknown>>;
+
+  const markers = (Array.isArray(eventRows) ? eventRows : []).map((rowEvent) => ({
+    ts: asNumber(rowEvent.actual_time, 0),
+    price: asNumber(rowEvent.actual_price, 0),
+    kind: asString(rowEvent.trade_type, '').toLowerCase() === 'exit' ? 'exit' as const : 'entry' as const,
+    side: asString(rowEvent.side, ''),
+  })).filter((item) => item.ts > 0 && Number.isFinite(item.price));
+
+  const svg = renderSimpleChartSvg({
+    candles: normalized,
+    markers,
+    title: `${system.systemName} :: ${asString(row.name, `Strategy ${strategyId}`)} :: ${symbol} ${interval}`,
+    width: Math.max(640, Math.floor(asNumber(options.width, 1280))),
+    height: Math.max(360, Math.floor(asNumber(options.height, 720))),
+  });
+
+  return {
+    generatedAt: new Date().toISOString(),
+    system: {
+      id: system.systemId,
+      name: system.systemName,
+      apiKeyName: system.apiKeyName,
+    },
+    strategy: {
+      id: strategyId,
+      name: asString(row.name, ''),
+      symbol,
+      interval,
+    },
+    candlesCount: normalized.length,
+    markersCount: markers.length,
+    svg,
+    svgBase64: Buffer.from(svg, 'utf-8').toString('base64'),
+  };
 };
 

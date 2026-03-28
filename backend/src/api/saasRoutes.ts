@@ -32,6 +32,11 @@ import {
   getAdminReportSettings,
   updateAdminReportSettings,
   getAdminPerformanceReport,
+  getOfferStoreSnapshotRefreshState,
+  refreshOfferStoreSnapshotsFromSweep,
+  getAlgofundSystemHealthReport,
+  getAlgofundClosedPositionsReport,
+  getAlgofundChartSnapshot,
   previewAdminSweepBacktest,
   listStrategyClientSystemProfilesState,
   createStrategyClientSystemProfile,
@@ -243,11 +248,26 @@ router.patch('/admin/offer-store', async (req, res) => {
 
 router.post('/admin/sweep-backtest-preview', async (req, res) => {
   try {
+    const source = String(req.body?.source || '').trim().toLowerCase();
+    const hasSystemName = String(req.body?.systemName || '').trim().length > 0;
+    const inferredKind = req.body?.kind === 'algofund-ts'
+      || source === 'offer_store'
+      || source === 'runtime_system'
+      || hasSystemName
+      ? 'algofund-ts'
+      : 'offer';
     const data = await previewAdminSweepBacktest({
-      kind: req.body?.kind === 'algofund-ts' ? 'algofund-ts' : 'offer',
+      kind: inferredKind,
       setKey: req.body?.setKey ? String(req.body.setKey) : undefined,
+      systemName: req.body?.systemName ? String(req.body.systemName) : undefined,
       offerId: req.body?.offerId ? String(req.body.offerId) : undefined,
       offerIds: Array.isArray(req.body?.offerIds) ? req.body.offerIds.map((item: unknown) => String(item)) : undefined,
+      offerWeightsById: req.body?.offerWeightsById && typeof req.body.offerWeightsById === 'object'
+        ? Object.fromEntries(
+          Object.entries(req.body.offerWeightsById as Record<string, unknown>)
+            .map(([key, value]) => [String(key), toOptionalNumber(value) ?? 0])
+        )
+        : undefined,
       riskScore: toOptionalNumber(req.body?.riskScore),
       tradeFrequencyScore: toOptionalNumber(req.body?.tradeFrequencyScore),
       initialBalance: toOptionalNumber(req.body?.initialBalance),
@@ -269,10 +289,11 @@ router.post('/admin/storefront-system/remove', async (req, res) => {
     const force = toBool(req.body?.force, false);
     const dryRun = toBool(req.body?.dryRun, false);
     const closePositions = toBool(req.body?.closePositions, false);
+    const hardDelete = toBool(req.body?.hardDelete, false);
     if (!systemName) {
       return res.status(400).json({ error: 'systemName is required' });
     }
-    const data = await removeAlgofundStorefrontSystem({ systemName, force, dryRun, closePositions });
+    const data = await removeAlgofundStorefrontSystem({ systemName, force, dryRun, closePositions, hardDelete });
     res.json({ success: true, ...data });
   } catch (error) {
     const err = error as Error;
@@ -303,6 +324,33 @@ router.patch('/admin/reports/settings', async (req, res) => {
   }
 });
 
+router.get('/admin/snapshots/refresh-status', async (_req, res) => {
+  try {
+    const [state, settings] = await Promise.all([
+      getOfferStoreSnapshotRefreshState(),
+      getAdminReportSettings(),
+    ]);
+    res.json({ success: true, state, settings });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS snapshot refresh-status error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/snapshots/refresh', async (req, res) => {
+  try {
+    const force = toBool(req.body?.force, false);
+    const reason = req.body?.reason ? String(req.body.reason) : undefined;
+    const data = await refreshOfferStoreSnapshotsFromSweep({ force, reason });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS snapshot refresh error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/admin/reports/performance', async (req, res) => {
   try {
     const periodRaw = String(req.query.period || '').trim().toLowerCase();
@@ -312,6 +360,61 @@ router.get('/admin/reports/performance', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS performance report error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/reports/ts-health', async (req, res) => {
+  try {
+    const tenantId = toOptionalNumber(req.query.tenantId);
+    const systemName = req.query.systemName ? String(req.query.systemName) : undefined;
+    const lookbackHours = toOptionalNumber(req.query.lookbackHours);
+    const data = await getAlgofundSystemHealthReport({ tenantId, systemName, lookbackHours });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS ts-health report error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/reports/closed-positions', async (req, res) => {
+  try {
+    const tenantId = toOptionalNumber(req.query.tenantId);
+    const systemName = req.query.systemName ? String(req.query.systemName) : undefined;
+    const periodHours = toOptionalNumber(req.query.periodHours);
+    const limit = toOptionalNumber(req.query.limit);
+    const data = await getAlgofundClosedPositionsReport({ tenantId, systemName, periodHours, limit });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS closed-positions report error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/reports/chart-snapshot', async (req, res) => {
+  try {
+    const tenantId = toOptionalNumber(req.body?.tenantId);
+    const strategyId = toOptionalNumber(req.body?.strategyId);
+    const candles = toOptionalNumber(req.body?.candles);
+    const width = toOptionalNumber(req.body?.width);
+    const height = toOptionalNumber(req.body?.height);
+    const interval = req.body?.interval ? String(req.body.interval) : undefined;
+    const systemName = req.body?.systemName ? String(req.body.systemName) : undefined;
+    const data = await getAlgofundChartSnapshot({
+      tenantId,
+      systemName,
+      strategyId,
+      candles,
+      width,
+      height,
+      interval,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS chart-snapshot report error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
