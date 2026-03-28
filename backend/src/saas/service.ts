@@ -5233,13 +5233,17 @@ export const previewAdminSweepBacktest = async (payload?: {
   const portfolioSummary = buildPresetOnlyPortfolioSummary(initialBalance, pseudoSelectedOffers as any, {
     avgRet: weightedMetric((item) => asNumber((item.metrics as Record<string, unknown>)?.ret, 0)),
     avgPf: weightedMetric((item) => asNumber((item.metrics as Record<string, unknown>)?.pf, 0)),
-    maxDd: weightedMetric((item) => asNumber((item.metrics as Record<string, unknown>)?.dd, 0)),
+    // Keep conservative DD semantics (worst member) to match historical TS preview behavior.
+    maxDd: (adjustedSelectedOffers as Array<Record<string, unknown>>).reduce((acc, item) => {
+      const value = asNumber((item.metrics as Record<string, unknown>)?.dd, 0);
+      return value > acc ? value : acc;
+    }, 0),
     avgWr: weightedMetric((item) => asNumber((item.metrics as Record<string, unknown>)?.wr, 0)),
+    // Trades count is strategy activity, not capital allocation. Keep sum semantics.
     totalTrades: Math.max(0, Math.floor(
       (adjustedSelectedOffers as Array<Record<string, unknown>>).reduce((acc, item) => {
-        const weight = getMemberWeight(item);
         const trades = Math.max(0, asNumber((item.metrics as Record<string, unknown>)?.trades, 0));
-        return acc + trades * (weight > 0 ? weight : 0);
+        return acc + trades;
       }, 0)
     )),
   });
@@ -7532,6 +7536,18 @@ export const getAlgofundState = async (
           .filter((value: number) => Number.isFinite(value) && value > 0)
       ))
       : [],
+    memberWeightsByStrategyId: Array.isArray(item?.members)
+      ? Object.fromEntries(
+        item.members
+          .filter((member: any) => member && member.is_enabled !== false)
+          .map((member: any) => {
+            const strategyId = Number(member?.strategy_id || member?.strategy?.id || 0);
+            const weight = asNumber(member?.weight, 1);
+            return [String(strategyId), Number((Number.isFinite(weight) && weight > 0 ? weight : 1).toFixed(6))] as const;
+          })
+          .filter(([strategyId]: [string, number]) => Number(strategyId) > 0)
+      )
+      : {},
     metrics: item?.metrics ? {
       equityUsd: asNumber(item.metrics.equity_usd, 0),
       unrealizedPnl: asNumber(item.metrics.unrealized_pnl, 0),

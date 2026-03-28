@@ -53,6 +53,7 @@ type SaasBacktestContext = {
   offerId?: string;
   offerPublished?: boolean;
   offerIds?: string[];
+  offerWeightsById?: Record<string, number>;
   setKey?: string;
   systemName?: string;
 };
@@ -2613,6 +2614,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       const memberStrategyIds = Array.isArray(item?.memberStrategyIds)
         ? item.memberStrategyIds.map((value: any) => Number(value || 0)).filter((value: number) => Number.isFinite(value) && value > 0)
         : [];
+      const rawMemberWeightsByStrategyId = item?.memberWeightsByStrategyId && typeof item.memberWeightsByStrategyId === 'object'
+        ? (item.memberWeightsByStrategyId as Record<string, number>)
+        : {};
       const runtimeOffers: ReviewableSweepOffer[] = memberStrategyIds
         .map((strategyId: number) => offerStoreOfferByStrategyId.get(strategyId) || reviewableSweepOfferByStrategyId.get(strategyId) || null)
         .filter((offer: ReviewableSweepOffer | null): offer is ReviewableSweepOffer => Boolean(offer));
@@ -2626,11 +2630,27 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       const avgDd = runtimeOffers.length > 0
         ? runtimeOffers.reduce((acc: number, offer: ReviewableSweepOffer) => acc + Number(offer.dd || 0), 0) / runtimeOffers.length
         : 0;
+
+      const offerWeightsById = Object.fromEntries(
+        runtimeOfferIds.map((offerId) => [offerId, 0])
+      ) as Record<string, number>;
+      memberStrategyIds.forEach((strategyId: number) => {
+        const offer = offerStoreOfferByStrategyId.get(strategyId) || reviewableSweepOfferByStrategyId.get(strategyId) || null;
+        const offerId = String(offer?.offerId || '').trim();
+        if (!offerId) {
+          return;
+        }
+        const strategyWeight = Number(rawMemberWeightsByStrategyId[String(strategyId)] || 0);
+        const safeWeight = Number.isFinite(strategyWeight) && strategyWeight > 0 ? strategyWeight : 1;
+        offerWeightsById[offerId] = Number((Number(offerWeightsById[offerId] || 0) + safeWeight).toFixed(6));
+      });
+
       return {
         systemName: String(item?.name || '').trim(),
         memberCount: Math.max(runtimeOfferIds.length, Number(item?.memberCount || 0)),
         memberStrategyIds,
         offerIds: runtimeOfferIds,
+        offerWeightsById,
         offers: runtimeOffers,
         avgRet,
         avgPf,
@@ -5456,7 +5476,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     applyBacktestSettings(settings);
     if (context.kind === 'algofund-ts') {
       const offerIds = Array.from(new Set((context.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
-      setBacktestTsWeightsByOfferId((prev) => normalizeBacktestTsWeights(offerIds, prev));
+      setBacktestTsWeightsByOfferId((prev) => {
+        const source = context.offerWeightsById && Object.keys(context.offerWeightsById).length > 0
+          ? context.offerWeightsById
+          : prev;
+        return normalizeBacktestTsWeights(offerIds, source);
+      });
     } else {
       setBacktestTsWeightsByOfferId({});
     }
@@ -5484,7 +5509,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
   };
 
-  const openDraftTsBacktest = (params?: { setKey?: string; offerIds?: string[]; systemName?: string }) => {
+  const openDraftTsBacktest = (params?: { setKey?: string; offerIds?: string[]; systemName?: string; offerWeightsById?: Record<string, number> }) => {
     const directOfferIds = (params?.offerIds || []).map((item) => String(item || '')).filter(Boolean);
     const selectedOfferIds = directOfferIds.length > 0
       ? directOfferIds
@@ -5527,6 +5552,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       title: `Бэктест ТС: ${tsName}`,
       description: 'Sweep-портфельный бэктест draft ТС из последнего свепа. После проверки метрик можно отправлять ТС на витрину.',
       offerIds,
+      offerWeightsById: params?.offerWeightsById,
       setKey: String(params?.setKey || selectedAdminDraftTsSetKey || '').trim() || undefined,
       systemName: runtimeSystemName || undefined,
     });
@@ -5647,7 +5673,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setSelectedAdminDraftTsSetKey(setKey);
     }
 
-    openDraftTsBacktest({ setKey, offerIds, systemName: normalizedSystemName });
+    openDraftTsBacktest({
+      setKey,
+      offerIds,
+      offerWeightsById: runtimeSystem?.offerWeightsById,
+      systemName: normalizedSystemName,
+    });
   };
 
   const navigateSaasTab = (tab: SaasTabKey, nextAdminTab?: AdminTabKey) => {
