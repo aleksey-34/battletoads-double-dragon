@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import {
   Alert,
@@ -2199,6 +2199,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const copytradingRequestSeqRef = useRef(0);
   const backtestRequestSeqRef = useRef(0);
   const backtestDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const monitoringAbortRef = useRef<AbortController | null>(null);
   const [summary, setSummary] = useState<SaasSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState('');
@@ -2377,17 +2378,34 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [selectedAdminDraftTsOfferIds, setSelectedAdminDraftTsOfferIds] = useState<string[]>([]);
   const [selectedAdminDraftTsSetKey, setSelectedAdminDraftTsSetKey] = useState('');
 
-  const strategyTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client');
-  const algofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
-  const copytradingTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'copytrading_client');
-  const batchEligibleAlgofundTenants = (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client');
-  const algofundTenantsWithPublishedTs = batchEligibleAlgofundTenants
-    .filter((item) => String(item.algofundProfile?.published_system_name || '').trim().length > 0);
-  const publishedAlgofundSystems = Array.from(new Set(
-    algofundTenantsWithPublishedTs
-      .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
-      .filter(Boolean)
-  ));
+  const strategyTenants = useMemo(
+    () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client'),
+    [summary?.tenants],
+  );
+  const algofundTenants = useMemo(
+    () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client'),
+    [summary?.tenants],
+  );
+  const copytradingTenants = useMemo(
+    () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'copytrading_client'),
+    [summary?.tenants],
+  );
+  const batchEligibleAlgofundTenants = useMemo(
+    () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client'),
+    [summary?.tenants],
+  );
+  const algofundTenantsWithPublishedTs = useMemo(
+    () => batchEligibleAlgofundTenants.filter((item) => String(item.algofundProfile?.published_system_name || '').trim().length > 0),
+    [batchEligibleAlgofundTenants],
+  );
+  const publishedAlgofundSystems = useMemo(
+    () => Array.from(new Set(
+      algofundTenantsWithPublishedTs
+        .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
+        .filter(Boolean)
+    )),
+    [algofundTenantsWithPublishedTs],
+  );
   const strategySystemProfiles = strategyState?.systemProfiles || [];
   const activeStrategySystemProfile = strategySystemProfiles.find((item) => item.isActive) || null;
   const selectedStrategyTenantSummary = strategyTenants.find((item) => item.tenant.id === strategyTenantId) || null;
@@ -2420,56 +2438,69 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const algofundStartStopEnabled = algofundCapabilities ? Boolean(algofundCapabilities.startStopRequests) : true;
   const strategyApiKeyEditable = isAdminSurface && Boolean(strategyCapabilities?.apiKeyUpdate ?? true);
   const algofundApiKeyEditable = isAdminSurface && Boolean(algofundCapabilities?.apiKeyUpdate ?? true);
-  const strategyPlanOptions = (summary?.plans || [])
+  const strategyPlanOptions = useMemo(() => (summary?.plans || [])
     .filter((plan) => plan.product_mode === 'strategy_client')
-    .map((plan) => ({ value: plan.code, label: `${plan.title} В· ${formatMoney(plan.price_usdt)}` }));
-  const algofundPlanOptions = (summary?.plans || [])
+    .map((plan) => ({ value: plan.code, label: `${plan.title} · ${formatMoney(plan.price_usdt)}` })),
+  [summary?.plans]);
+  const algofundPlanOptions = useMemo(() => (summary?.plans || [])
     .filter((plan) => plan.product_mode === 'algofund_client')
-    .map((plan) => ({ value: plan.code, label: `${plan.title} В· ${formatMoney(plan.price_usdt)}` }));
-  const copytradingPlanOptions = (summary?.plans || [])
+    .map((plan) => ({ value: plan.code, label: `${plan.title} · ${formatMoney(plan.price_usdt)}` })),
+  [summary?.plans]);
+  const copytradingPlanOptions = useMemo(() => (summary?.plans || [])
     .filter((plan) => plan.product_mode === 'copytrading_client')
-    .map((plan) => ({ value: plan.code, label: `${plan.title} В· ${formatMoney(plan.price_usdt)}` }));
-  const apiKeyOptions = (summary?.apiKeys || []).map((name) => ({ label: name, value: name }));
-  const summaryCatalogOffers = dedupeOffersById([
+    .map((plan) => ({ value: plan.code, label: `${plan.title} · ${formatMoney(plan.price_usdt)}` })),
+  [summary?.plans]);
+  const apiKeyOptions = useMemo(() => (summary?.apiKeys || []).map((name) => ({ label: name, value: name })), [summary?.apiKeys]);
+  const summaryCatalogOffers = useMemo(() => dedupeOffersById([
     ...(summary?.catalog?.clientCatalog?.mono || []),
     ...(summary?.catalog?.clientCatalog?.synth || []),
-  ]);
-  const strategyRecommendedOffers = dedupeOffersById(
+  ]), [summary?.catalog?.clientCatalog]);
+  const strategyRecommendedOffers = useMemo(() => dedupeOffersById(
     Object.values(strategyState?.recommendedSets || {}).reduce<CatalogOffer[]>((acc, items) => {
       if (Array.isArray(items)) {
         acc.push(...items);
       }
       return acc;
     }, [])
-  );
-  const summaryRecommendedOffers = dedupeOffersById(
+  ), [strategyState?.recommendedSets]);
+  const summaryRecommendedOffers = useMemo(() => dedupeOffersById(
     Object.values(summary?.recommendedSets || {}).reduce<CatalogOffer[]>((acc, items) => {
       if (Array.isArray(items)) {
         acc.push(...items);
       }
       return acc;
     }, [])
+  ), [summary?.recommendedSets]);
+  const publishedOfferIds = useMemo(
+    () => new Set((summary?.offerStore?.publishedOfferIds || []).map((item) => String(item))),
+    [summary?.offerStore?.publishedOfferIds],
   );
-  const publishedOfferIds = new Set((summary?.offerStore?.publishedOfferIds || []).map((item) => String(item)));
 
   const appendCopytradingLog = (line: string) => {
     const ts = new Date().toLocaleTimeString();
     setCopytradingLogs((prev) => [`${ts} - ${line}`, ...prev].slice(0, 24));
   };
-  const strategyOfferCatalog = dedupeOffersById(
+  const strategyOfferCatalog = useMemo(() => dedupeOffersById(
     (strategyState?.offers || []).length > 0
       ? (strategyState?.offers || [])
       : [...summaryCatalogOffers, ...strategyRecommendedOffers, ...summaryRecommendedOffers]
-  ).filter((offer) => publishedOfferIds.has(String(offer.offerId || '')));
-  const strategyDraftConstraints = buildDraftStrategyConstraints(strategyOfferIds, strategyOfferCatalog, strategyState?.constraints || null);
-  const pendingAlgofundRequests = (summary?.algofundRequestQueue?.items || []).filter((item) => item.status === 'pending');
-  const pendingSwitchSystemIds = new Set(
+  ).filter((offer) => publishedOfferIds.has(String(offer.offerId || ''))),
+  [strategyState?.offers, summaryCatalogOffers, strategyRecommendedOffers, summaryRecommendedOffers, publishedOfferIds]);
+  const strategyDraftConstraints = useMemo(
+    () => buildDraftStrategyConstraints(strategyOfferIds, strategyOfferCatalog, strategyState?.constraints || null),
+    [strategyOfferIds, strategyOfferCatalog, strategyState?.constraints],
+  );
+  const pendingAlgofundRequests = useMemo(
+    () => (summary?.algofundRequestQueue?.items || []).filter((item) => item.status === 'pending'),
+    [summary?.algofundRequestQueue?.items],
+  );
+  const pendingSwitchSystemIds = useMemo(() => new Set(
     pendingAlgofundRequests
       .filter((item) => item.request_type === 'switch_system')
       .map((item) => parseAlgofundRequestPayload(item.request_payload_json).targetSystemId)
       .filter((id): id is number => Number.isFinite(Number(id)) && Number(id) > 0)
-  );
-  const pendingAlgofundRequestsByTenant = pendingAlgofundRequests.reduce<Record<number, AlgofundRequest[]>>((acc, item) => {
+  ), [pendingAlgofundRequests]);
+  const pendingAlgofundRequestsByTenant = useMemo(() => pendingAlgofundRequests.reduce<Record<number, AlgofundRequest[]>>((acc, item) => {
     const key = Number(item.tenant_id || 0);
     if (!Number.isFinite(key) || key <= 0) {
       return acc;
@@ -2479,9 +2510,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     acc[key].push(item);
     return acc;
-  }, {});
-  const offerStoreOffers = summary?.offerStore?.offers || [];
-  const sweepReviewRecords = Array.from(
+  }, {}), [pendingAlgofundRequests]);
+  const offerStoreOffers = useMemo(() => summary?.offerStore?.offers || [], [summary?.offerStore?.offers]);
+  const sweepReviewRecords = useMemo(() => Array.from(
     new Map(
       [
         ...(summary?.sweepSummary?.selectedMembers || []),
@@ -2490,24 +2521,27 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         ...(summary?.sweepSummary?.topByMode?.synth || []),
       ].map((item) => [Number(item.strategyId || 0), item])
     ).values()
-  ).filter((item) => Number(item?.strategyId || 0) > 0);
-  const sweepRecordByStrategyId = sweepReviewRecords.reduce<Record<number, typeof sweepReviewRecords[number]>>((acc, item) => {
+  ).filter((item) => Number(item?.strategyId || 0) > 0), [summary?.sweepSummary]);
+  const sweepRecordByStrategyId = useMemo(() => sweepReviewRecords.reduce<Record<number, typeof sweepReviewRecords[number]>>((acc, item) => {
     const key = Number(item.strategyId || 0);
     if (key > 0) {
       acc[key] = item;
     }
     return acc;
-  }, {});
-  const publishedStorefrontOffers = offerStoreOffers.filter((offer) => Boolean(offer.published));
-  const offerStoreOfferByStrategyId = new Map(
+  }, {}), [sweepReviewRecords]);
+  const publishedStorefrontOffers = useMemo(() => offerStoreOffers.filter((offer) => Boolean(offer.published)), [offerStoreOffers]);
+  const offerStoreOfferByStrategyId = useMemo(() => new Map(
     offerStoreOffers
       .map((offer) => [Number(offer.strategyId || 0), offer] as const)
       .filter(([strategyId]) => Number.isFinite(strategyId) && strategyId > 0)
-  );
-  const reviewableSweepOffersRaw = offerStoreOffers.filter(
-    (offer) =>
-      Number(offer.pf || 0) >= approvalMinProfitFactor &&
-      (sweepReviewRecords.length === 0 || sweepRecordByStrategyId[Number(offer.strategyId || 0)] != null)
+  ), [offerStoreOffers]);
+  const reviewableSweepOffersRaw = useMemo(
+    () => offerStoreOffers.filter(
+      (offer) =>
+        Number(offer.pf || 0) >= approvalMinProfitFactor &&
+        (sweepReviewRecords.length === 0 || sweepRecordByStrategyId[Number(offer.strategyId || 0)] != null)
+    ),
+    [offerStoreOffers, sweepReviewRecords, sweepRecordByStrategyId, approvalMinProfitFactor],
   );
   const reviewTargetTradesPerDay = Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0);
   const classifyOfferGroup = (offer: any): string => {
@@ -2531,7 +2565,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return mode === 'synth' ? 'synth other' : 'mono other';
   };
 
-  const reviewableSweepOffers = [...reviewableSweepOffersRaw]
+  const reviewableSweepOffers = useMemo(() => [...reviewableSweepOffersRaw]
     .sort((a, b) => {
       const target = Number.isFinite(reviewTargetTradesPerDay) ? reviewTargetTradesPerDay : 0;
       const aDistance = Math.abs(Number(a.tradesPerDay || 0) - target);
@@ -2544,15 +2578,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     .map((offer) => ({
       ...offer,
       groupLabel: classifyOfferGroup(offer),
-    }));
-  const researchCandidateOffers = reviewableSweepOffers.filter((offer) => !Boolean(offer.published));
-  const adminReviewOfferPool = Array.from(
+    })), [reviewableSweepOffersRaw, reviewTargetTradesPerDay]);
+  const researchCandidateOffers = useMemo(
+    () => reviewableSweepOffers.filter((offer) => !Boolean(offer.published)),
+    [reviewableSweepOffers],
+  );
+  const adminReviewOfferPool = useMemo(() => Array.from(
     new Map(
       [...reviewableSweepOffers, ...publishedStorefrontOffers]
         .map((offer) => [String(offer.offerId), offer])
     ).values()
+  ), [reviewableSweepOffers, publishedStorefrontOffers]);
+  const selectedAdminReviewOffer = useMemo(
+    () => adminReviewOfferPool.find((offer) => String(offer.offerId) === selectedAdminReviewOfferId) || null,
+    [adminReviewOfferPool, selectedAdminReviewOfferId],
   );
-  const selectedAdminReviewOffer = adminReviewOfferPool.find((offer) => String(offer.offerId) === selectedAdminReviewOfferId) || null;
   const adminTradingSystemDraft = summary?.catalog?.adminTradingSystemDraft || null;
   const LEGACY_PRESET_SET_KEYS = new Set(['balancedbot', 'conservativebot', 'monostarter', 'synthstarter', 'momentumbot', 'premiummix']);
   type ReviewableSweepOffer = {
@@ -2562,12 +2602,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     pf?: number;
     dd?: number;
   };
-  const reviewableSweepOfferByStrategyId = new Map(
+  const reviewableSweepOfferByStrategyId = useMemo(() => new Map(
     (offerStoreOffers as ReviewableSweepOffer[])
       .map((offer: ReviewableSweepOffer) => [Number(offer.strategyId || 0), offer] as const)
       .filter(([strategyId]) => Number.isFinite(strategyId) && strategyId > 0)
-  );
-  const runtimeMasterSystems = ((algofundState?.availableSystems || []) as Array<any>)
+  ), [offerStoreOffers]);
+  const runtimeMasterSystems = useMemo(() => ((algofundState?.availableSystems || []) as Array<any>)
     .filter((item: any) => String(item?.name || '').trim().toUpperCase().startsWith('ALGOFUND_MASTER::'))
     .map((item: any) => {
       const memberStrategyIds = Array.isArray(item?.memberStrategyIds)
@@ -2597,9 +2637,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         avgDd,
       };
     })
-    .filter((item) => item.systemName.length > 0);
-  const runtimeMasterSystemByName = new Map(runtimeMasterSystems.map((item) => [item.systemName, item] as const));
-  const adminSweepTsSets = Object.entries(summary?.recommendedSets || {})
+    .filter((item) => item.systemName.length > 0),
+  [algofundState?.availableSystems, offerStoreOfferByStrategyId, reviewableSweepOfferByStrategyId]);
+  const runtimeMasterSystemByName = useMemo(
+    () => new Map(runtimeMasterSystems.map((item) => [item.systemName, item] as const)),
+    [runtimeMasterSystems],
+  );
+  const adminSweepTsSets = useMemo(() => Object.entries(summary?.recommendedSets || {})
     .filter(([setKey]) => !LEGACY_PRESET_SET_KEYS.has(String(setKey || '').trim().toLowerCase()))
     .map(([setKey, offers]) => {
       const safeOffers = Array.isArray(offers) ? offers : [];
@@ -2627,8 +2671,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         avgDd,
       };
     })
-    .filter((item) => item.offerCount > 0);
-  const adminCuratedDraftTsSet = (() => {
+    .filter((item) => item.offerCount > 0),
+  [summary?.recommendedSets]);
+  const adminCuratedDraftTsSet = useMemo(() => {
     const draftMembers = adminTradingSystemDraft?.members ?? [];
     if (draftMembers.length === 0) {
       return null;
@@ -2665,14 +2710,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       avgPf,
       avgDd,
     };
-  })();
-  const adminSweepTsSetsWithCurated = adminCuratedDraftTsSet
-    ? [adminCuratedDraftTsSet, ...adminSweepTsSets.filter((item) => item.setKey !== adminCuratedDraftTsSet.setKey)]
-    : adminSweepTsSets;
-  const adminSweepSetKeysNormalized = new Set(
-    adminSweepTsSetsWithCurated.map((item) => String(item.setKey || '').trim().toLowerCase()).filter(Boolean)
+  }, [adminTradingSystemDraft, reviewableSweepOffers]);
+  const adminSweepTsSetsWithCurated = useMemo(
+    () => adminCuratedDraftTsSet
+      ? [adminCuratedDraftTsSet, ...adminSweepTsSets.filter((item) => item.setKey !== adminCuratedDraftTsSet.setKey)]
+      : adminSweepTsSets,
+    [adminCuratedDraftTsSet, adminSweepTsSets],
   );
-  const adminPublishedTsSets = Array.from(
+  const adminSweepSetKeysNormalized = useMemo(
+    () => new Set(adminSweepTsSetsWithCurated.map((item) => String(item.setKey || '').trim().toLowerCase()).filter(Boolean)),
+    [adminSweepTsSetsWithCurated],
+  );
+  const adminPublishedTsSets = useMemo(() => Array.from(
     new Set([
       selectedAlgofundPublishedSystemName,
       ...publishedAlgofundSystems,
@@ -2700,25 +2749,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         avgPf: runtimeSystem?.offers?.length ? Number(runtimeSystem.avgPf || 0) : Number(snapshot?.pf || 0),
         avgDd: runtimeSystem?.offers?.length ? Number(runtimeSystem.avgDd || 0) : Number(snapshot?.dd || 0),
       };
-    });
+    }),
+  [selectedAlgofundPublishedSystemName, publishedAlgofundSystems, runtimeMasterSystems, adminSweepSetKeysNormalized, runtimeMasterSystemByName, summary?.offerStore?.tsBacktestSnapshots]);
   // Add saved snapshots that are NOT already covered by recommendedSets as explicit list entries
-  const adminSweepSetKeys = new Set(adminSweepTsSets.map((item) => item.setKey));
-  const adminSnapshotOnlyTsSets = Object.entries(summary?.offerStore?.tsBacktestSnapshots || {})
-    .filter(([key]) => !adminSweepSetKeys.has(key))
-    .map(([key, snap]) => ({
-      setKey: key,
-      displayName: key,
-      snapshotKey: key,
-      isDraft: false,
-      isSnapshot: true,
-      offers: [],
-      offerIds: Array.isArray(snap.offerIds) ? snap.offerIds.map(String) : [],
-      offerCount: Array.isArray(snap.offerIds) ? snap.offerIds.length : 0,
-      avgRet: Number(snap.ret || 0),
-      avgPf: Number(snap.pf || 0),
-      avgDd: Number(snap.dd || 0),
-    }));
-  const adminSnapshotOnlyTsSetsDeduped = (() => {
+  const adminSnapshotOnlyTsSetsDeduped = useMemo(() => {
+    const adminSweepSetKeys = new Set(adminSweepTsSets.map((item) => item.setKey));
+    const adminSnapshotOnlyTsSets = Object.entries(summary?.offerStore?.tsBacktestSnapshots || {})
+      .filter(([key]) => !adminSweepSetKeys.has(key))
+      .map(([key, snap]) => ({
+        setKey: key,
+        displayName: key,
+        snapshotKey: key,
+        isDraft: false,
+        isSnapshot: true,
+        offers: [],
+        offerIds: Array.isArray(snap.offerIds) ? snap.offerIds.map(String) : [],
+        offerCount: Array.isArray(snap.offerIds) ? snap.offerIds.length : 0,
+        avgRet: Number(snap.ret || 0),
+        avgPf: Number(snap.pf || 0),
+        avgDd: Number(snap.dd || 0),
+      }));
     const generatedPattern = /^ts_snapshot_\d+$/i;
     const bySignature = new Map<string, typeof adminSnapshotOnlyTsSets>();
     for (const item of adminSnapshotOnlyTsSets) {
@@ -2743,31 +2793,41 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       resolved.push(variants[variants.length - 1]);
     });
     return resolved;
-  })();
-  const adminSweepTsSetsAll = [
+  }, [adminSweepTsSets, summary?.offerStore?.tsBacktestSnapshots]);
+  const adminSweepTsSetsAll = useMemo(() => [
     ...adminSweepTsSetsWithCurated,
     ...adminPublishedTsSets,
     ...adminSnapshotOnlyTsSetsDeduped,
-  ];
-  const adminDraftMemberStrategyIds = new Set(
+  ], [adminSweepTsSetsWithCurated, adminPublishedTsSets, adminSnapshotOnlyTsSetsDeduped]);
+  const adminDraftMemberStrategyIds = useMemo(() => new Set(
     (adminTradingSystemDraft?.members || [])
       .map((member) => Number(member.strategyId || 0))
       .filter((value) => Number.isFinite(value) && value > 0)
+  ), [adminTradingSystemDraft?.members]);
+  const adminDraftTsOfferCandidates = useMemo(
+    () => reviewableSweepOffers.filter((offer) => adminDraftMemberStrategyIds.has(Number(offer.strategyId || 0))),
+    [reviewableSweepOffers, adminDraftMemberStrategyIds],
   );
-  const adminDraftTsOfferCandidates = reviewableSweepOffers.filter((offer) => adminDraftMemberStrategyIds.has(Number(offer.strategyId || 0)));
-  const adminDraftTsOfferIdsAll = adminDraftTsOfferCandidates.map((offer) => String(offer.offerId || '')).filter(Boolean);
-  const adminDraftMembersDetailed = (adminTradingSystemDraft?.members || []).map((member) => ({
-    ...member,
-    reviewRecord: sweepRecordByStrategyId[Number(member.strategyId || 0)] || null,
-  }));
+  const adminDraftTsOfferIdsAll = useMemo(
+    () => adminDraftTsOfferCandidates.map((offer) => String(offer.offerId || '')).filter(Boolean),
+    [adminDraftTsOfferCandidates],
+  );
+  const adminDraftMembersDetailed = useMemo(
+    () => (adminTradingSystemDraft?.members || []).map((member) => ({
+      ...member,
+      reviewRecord: sweepRecordByStrategyId[Number(member.strategyId || 0)] || null,
+    })),
+    [adminTradingSystemDraft?.members, sweepRecordByStrategyId],
+  );
   
   // Use per-set snapshot key if available; fall back to legacy single snapshot for backward compat
   const snapshotKeyForCurrentSet = String(selectedAdminDraftTsSetKey || '').trim();
-  const adminSavedTsSnapshot = snapshotKeyForCurrentSet
+  const adminSavedTsSnapshot = useMemo(() => snapshotKeyForCurrentSet
     ? (summary?.offerStore?.tsBacktestSnapshots?.[snapshotKeyForCurrentSet] || null)
-    : (summary?.offerStore?.tsBacktestSnapshot || null);
+    : (summary?.offerStore?.tsBacktestSnapshot || null),
+  [snapshotKeyForCurrentSet, summary?.offerStore?.tsBacktestSnapshots, summary?.offerStore?.tsBacktestSnapshot]);
   
-  const adminDraftPortfolioSummary = adminSavedTsSnapshot
+  const adminDraftPortfolioSummary = useMemo(() => adminSavedTsSnapshot
     ? {
       finalEquity: Number(adminSavedTsSnapshot.finalEquity || 0),
       totalReturnPercent: Number(adminSavedTsSnapshot.ret || 0),
@@ -2775,16 +2835,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       profitFactor: Number(adminSavedTsSnapshot.pf || 0),
       tradesCount: Number(adminSavedTsSnapshot.trades || 0),
     }
-    : (summary?.sweepSummary?.portfolioFull?.summary || null);
-  const adminDraftPeriodDays = getPeriodDurationDays(summary?.sweepSummary?.period || null);
-  const adminDraftTradesPerDay = adminSavedTsSnapshot
+    : (summary?.sweepSummary?.portfolioFull?.summary || null),
+  [adminSavedTsSnapshot, summary?.sweepSummary?.portfolioFull?.summary]);
+  const adminDraftPeriodDays = useMemo(
+    () => getPeriodDurationDays(summary?.sweepSummary?.period || null),
+    [summary?.sweepSummary?.period],
+  );
+  const adminDraftTradesPerDay = useMemo(() => adminSavedTsSnapshot
     ? Number(adminSavedTsSnapshot.tradesPerDay || 0)
     : (adminDraftPortfolioSummary && adminDraftPeriodDays && adminDraftPeriodDays > 0
       ? Number((Number(adminDraftPortfolioSummary.tradesCount || 0) / adminDraftPeriodDays).toFixed(2))
-      : null);
-  const adminDraftPeriodLabel = adminSavedTsSnapshot
+      : null),
+  [adminSavedTsSnapshot, adminDraftPortfolioSummary, adminDraftPeriodDays]);
+  const adminDraftPeriodLabel = useMemo(() => adminSavedTsSnapshot
     ? `snapshot ${formatNumber(Number(adminSavedTsSnapshot.periodDays || 0), 0)}d${adminSavedTsSnapshot.updatedAt ? ` • saved ${formatDateTimeShort(adminSavedTsSnapshot.updatedAt)}` : ''}`
-    : (summary?.sweepSummary?.period ? formatPeriodLabel(summary.sweepSummary.period) : '—');
+    : (summary?.sweepSummary?.period ? formatPeriodLabel(summary.sweepSummary.period) : '—'),
+  [adminSavedTsSnapshot, summary?.sweepSummary?.period]);
   const parseAlgofundPreviewSummary = (raw: any) => {
     const preview = raw?.preview && typeof raw.preview === 'object' ? raw.preview : raw;
     const summary = preview?.summary && typeof preview.summary === 'object' ? preview.summary : null;
@@ -2869,7 +2935,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return tokenMatch?.snapshot || null;
   };
 
-  const algofundStorefrontSystems = (() => {
+  const algofundStorefrontSystems = useMemo(() => {
     // Build storefront from active/relevant TS systems only to avoid mixing stale historical entries.
     const availableSystems = Array.isArray(algofundState?.availableSystems) ? (algofundState?.availableSystems || []) : [];
     const availableSystemByName = new Map(
@@ -2980,6 +3046,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       storefrontLabel,
       isArchived: systemName.toUpperCase().startsWith('ARCHIVED::'),
       hasMeaningfulState,
+      hasSnapshot: Boolean(snapshotForSystem),
+      hasPublishSummary: Boolean(publishSummary),
+      hasSnapshotCurve: snapshotCurve.length > 1,
+      hasAnyCurve: snapshotCurve.length > 1 || publishEquityCurve.length > 1 || (tenantCurves[0] || safeLatestBacktestCurve).length > 1,
       runtimeSystemId,
       summary: snapshotSummary || publishSummary || fallbackSummary || safeLatestBacktestSummary || null,
       equityCurve: snapshotCurve.length > 1
@@ -3004,14 +3074,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         continue;
       }
 
+      const scoreCard = (value: typeof mapped[number]) => (
+        (value.hasSnapshot ? 1000 : 0)
+        + (value.hasSnapshotCurve ? 300 : 0)
+        + (value.hasPublishSummary ? 120 : 0)
+        + (value.hasAnyCurve ? 40 : 0)
+        + Math.min(50, Number(value.tenantCount || 0) * 5)
+        + (value.runtimeSystemId ? 20 : 0)
+      );
+      const primary = scoreCard(item) > scoreCard(existing) ? item : existing;
+      const secondary = primary === item ? existing : item;
+      const mergedTenants = Array.from(new Map(
+        [...(existing.tenants || []), ...(item.tenants || [])]
+          .map((tenant) => [Number(tenant?.tenant?.id || 0), tenant] as const)
+      ).values()).filter((tenant) => Number(tenant?.tenant?.id || 0) > 0);
+
       const merged = {
-        ...existing,
-        ...item,
-        summary: existing.summary || item.summary,
-        equityCurve: (existing.equityCurve?.length || 0) >= (item.equityCurve?.length || 0)
-          ? existing.equityCurve
-          : item.equityCurve,
-        tenants: existing.tenants.length >= item.tenants.length ? existing.tenants : item.tenants,
+        ...secondary,
+        ...primary,
+        summary: primary.summary || secondary.summary,
+        equityCurve: (primary.equityCurve?.length || 0) >= (secondary.equityCurve?.length || 0)
+          ? primary.equityCurve
+          : secondary.equityCurve,
+        tenants: mergedTenants,
         tenantCount: Math.max(Number(existing.tenantCount || 0), Number(item.tenantCount || 0)),
         activeCount: Math.max(Number(existing.activeCount || 0), Number(item.activeCount || 0)),
         pendingCount: Math.max(Number(existing.pendingCount || 0), Number(item.pendingCount || 0)),
@@ -3019,12 +3104,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       dedupedByToken.set(key, merged);
     }
 
-    return Array.from(dedupedByToken.values());
-  })();
-  const offerTitleById = offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
+    return Array.from(dedupedByToken.values())
+      .sort((left, right) => {
+        const leftScore = (left.hasSnapshot ? 2 : 0) + (left.runtimeSystemId ? 1 : 0) + Number(left.tenantCount || 0);
+        const rightScore = (right.hasSnapshot ? 2 : 0) + (right.runtimeSystemId ? 1 : 0) + Number(right.tenantCount || 0);
+        return rightScore - leftScore;
+      });
+  }, [algofundState?.availableSystems, summary?.offerStore?.tsBacktestSnapshots, batchEligibleAlgofundTenants, publishResponse, adminSweepBacktestResult, backtestDrawerContext, selectedAdminDraftTsSetKey]);
+  const offerTitleById = useMemo(() => offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
     return acc;
-  }, {});
+  }, {}), [offerStoreOffers]);
   const normalizeBacktestTsWeights = (offerIds: string[], source: Record<string, number>) => {
     const ids = Array.from(new Set((offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
     if (ids.length === 0) {
@@ -3045,24 +3135,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
     return next;
   };
-  const storefrontOfferOptions = offerStoreOffers.map((offer) => ({
+  const storefrontOfferOptions = useMemo(() => offerStoreOffers.map((offer) => ({
     label: `${String(offer.titleRu || offer.offerId)} (${String(offer.mode || '').toUpperCase()} ${String(offer.market || '').trim()})`,
     value: String(offer.offerId || '').trim(),
-  })).filter((item) => item.value.length > 0);
-  const clientsOfferFilterOptions = offerStoreOffers.map((offer) => ({
+  })).filter((item) => item.value.length > 0), [offerStoreOffers]);
+  const clientsOfferFilterOptions = useMemo(() => offerStoreOffers.map((offer) => ({
     value: String(offer.offerId),
     label: `${offer.titleRu} (${String(offer.mode || '').toUpperCase()} ${offer.market})`,
-  }));
-  const clientsTsFilterOptions = Array.from(
+  })), [offerStoreOffers]);
+  const clientsTsFilterOptions = useMemo(() => Array.from(
     new Set(
       (summary?.tenants || [])
         .filter((item) => item.tenant.product_mode === 'algofund_client')
         .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
         .filter((item) => item.length > 0)
     )
-  ).map((name) => ({ value: name, label: name }));
+  ).map((name) => ({ value: name, label: name })), [summary?.tenants]);
 
-  const filteredClients = (summary?.tenants || []).filter((tenantSummary) => {
+  const filteredClients = useMemo(() => (summary?.tenants || []).filter((tenantSummary) => {
     if (clientsModeFilter !== 'all' && tenantSummary.tenant.product_mode !== clientsModeFilter) {
       return false;
     }
@@ -3085,7 +3175,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return String(tenantSummary.algofundProfile?.published_system_name || '') === clientsClassValue;
     }
     return true;
-  });
+  }), [summary?.tenants, clientsModeFilter, clientsClassKind, clientsClassValue]);
   const resolveSummaryScope = (): SummaryScope => {
     if (activeTab === 'admin' && adminTab === 'offer-ts') {
       return 'full';
@@ -3777,13 +3867,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
 
     setMonitoringTabLoading(true);
+    // Abort any previously in-flight monitoring request
+    monitoringAbortRef.current?.abort();
+    const controller = new AbortController();
+    monitoringAbortRef.current = controller;
+    const { signal } = controller;
     try {
       const entries = await Promise.all(
         apiKeys.map(async (apiKeyName) => {
           const [systems, positionsDigest, strategiesDigest, reconciliationDigest] = await Promise.all([
             (async (): Promise<TradingSystemListItem[]> => {
               try {
-                const response = await axios.get<TradingSystemListItem[]>(`/api/trading-systems/${encodeURIComponent(apiKeyName)}`);
+                const response = await axios.get<TradingSystemListItem[]>(`/api/trading-systems/${encodeURIComponent(apiKeyName)}`, { signal });
                 return Array.isArray(response.data) ? response.data : [];
               } catch {
                 return [];
@@ -3791,7 +3886,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             })(),
             (async (): Promise<MonitoringPositionsDigest> => {
               try {
-                const response = await axios.get<unknown[]>(`/api/positions/${encodeURIComponent(apiKeyName)}`);
+                const response = await axios.get<unknown[]>(`/api/positions/${encodeURIComponent(apiKeyName)}`, { signal });
                 const rows = Array.isArray(response.data) ? response.data : [];
                 const symbols = Array.from(new Set(rows
                   .map((item) => {
@@ -3809,7 +3904,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             })(),
             (async (): Promise<MonitoringStrategyDigest> => {
               try {
-                const response = await axios.get<unknown[]>(`/api/strategies/${encodeURIComponent(apiKeyName)}`);
+                const response = await axios.get<unknown[]>(`/api/strategies/${encodeURIComponent(apiKeyName)}`, { signal });
                 const rows = Array.isArray(response.data) ? response.data : [];
                 const activeRows = rows.filter((item) => Number((item as Record<string, unknown>).is_active ? 1 : 0) === 1);
                 const activeAutoRows = activeRows.filter((item) => Number((item as Record<string, unknown>).auto_update ? 1 : 0) === 1);
@@ -3828,7 +3923,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               try {
                 const response = await axios.get<{ reports?: unknown[] }>(
                   `/api/analytics/${encodeURIComponent(apiKeyName)}/reconciliation/reports`,
-                  { params: { limit: 200 } }
+                  { params: { limit: 200 }, signal }
                 );
                 const rows = Array.isArray(response.data?.reports) ? response.data?.reports : [];
                 const strategyIds = new Set<number>();
@@ -3946,7 +4041,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setMonitoringReconciliationByApiKey(nextReconciliationMap);
 
       try {
-        const logsResponse = await axios.get<string[]>('/api/logs');
+        const logsResponse = await axios.get<string[]>('/api/logs', { signal });
         setMonitoringLogCommentsByApiKey(buildApiKeyLogComments(logsResponse.data, apiKeys));
       } catch {
         setMonitoringLogCommentsByApiKey({});
@@ -3966,7 +4061,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         return next;
       });
     } finally {
-      setMonitoringTabLoading(false);
+      if (!signal.aborted) {
+        setMonitoringTabLoading(false);
+      }
     }
   }, [summary]);
 
@@ -4360,6 +4457,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         window.clearTimeout(algofundAutoPreviewTimerRef.current);
         algofundAutoPreviewTimerRef.current = null;
       }
+      monitoringAbortRef.current?.abort();
     };
   }, []);
 
@@ -6629,6 +6727,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               label: copy.admin,
               children: (
                 <Tabs
+                  destroyOnHidden
                   activeKey={adminTab}
                   onChange={(key) => {
                     const nextKey = key as AdminTabKey;
@@ -6990,7 +7089,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
                             </Space>
                             <Space wrap style={{ marginBottom: 16 }}>
-                              <Button size="small" onClick={() => openAdminReviewContext('algofund-ts')}>Открыть бэктест ТС</Button>
+                              <Button
+                                size="small"
+                                onClick={() => {
+                                  const firstStorefrontTs = algofundStorefrontSystems[0] || null;
+                                  if (firstStorefrontTs?.systemName) {
+                                    openBacktestDrawerForStorefrontTs(firstStorefrontTs.systemName);
+                                    return;
+                                  }
+                                  openDraftTsBacktest();
+                                }}
+                              >
+                                Открыть бэктест ТС
+                              </Button>
                             </Space>
 
                             <Row gutter={[16, 16]}>
@@ -7893,6 +8004,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         <Card className="battletoads-card" title={isAdminSurface ? 'Витрина Клиент стратегий' : copy.tenantWorkspace}>
                           {isAdminSurface ? (
                             <Tabs
+                              destroyOnHidden
                               items={[
                                 {
                                   key: 'strategy-storefront',
@@ -8583,6 +8695,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         <Card className="battletoads-card" title={isAdminSurface ? 'Витрина Алгофонд' : copy.tenantWorkspace}>
                           {isAdminSurface ? (
                             <Tabs
+                              destroyOnHidden
                               items={[
                                 {
                                   key: 'algofund-storefront',
