@@ -37,6 +37,7 @@ import ChartComponent from '../components/ChartComponent';
 import { useI18n } from '../i18n';
 
 const { Paragraph, Text, Title } = Typography;
+const LEGACY_PRESET_SET_KEYS = new Set(['balancedbot', 'conservativebot', 'monostarter', 'synthstarter', 'momentumbot', 'premiummix']);
 
 type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client';
 type Level3 = 'low' | 'medium' | 'high';
@@ -2495,12 +2496,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     () => (summary?.algofundRequestQueue?.items || []).filter((item) => item.status === 'pending'),
     [summary?.algofundRequestQueue?.items],
   );
-  const pendingSwitchSystemIds = useMemo(() => new Set(
-    pendingAlgofundRequests
-      .filter((item) => item.request_type === 'switch_system')
-      .map((item) => parseAlgofundRequestPayload(item.request_payload_json).targetSystemId)
-      .filter((id): id is number => Number.isFinite(Number(id)) && Number(id) > 0)
-  ), [pendingAlgofundRequests]);
   const pendingAlgofundRequestsByTenant = useMemo(() => pendingAlgofundRequests.reduce<Record<number, AlgofundRequest[]>>((acc, item) => {
     const key = Number(item.tenant_id || 0);
     if (!Number.isFinite(key) || key <= 0) {
@@ -2595,7 +2590,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     [adminReviewOfferPool, selectedAdminReviewOfferId],
   );
   const adminTradingSystemDraft = summary?.catalog?.adminTradingSystemDraft || null;
-  const LEGACY_PRESET_SET_KEYS = new Set(['balancedbot', 'conservativebot', 'monostarter', 'synthstarter', 'momentumbot', 'premiummix']);
   type ReviewableSweepOffer = {
     offerId: string;
     strategyId: number;
@@ -2896,29 +2890,36 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       .filter((point: { time: number; equity: number }) => Number.isFinite(point.time) && Number.isFinite(point.equity))
     : [];
 
-  const extractTsSuffixToken = (systemName: string): string => {
+  const extractTsSuffixToken = useCallback((systemName: string): string => {
     const parts = String(systemName || '').trim().split('::').filter(Boolean);
     return String(parts[parts.length - 1] || '').trim().toLowerCase();
-  };
+  }, []);
 
-  const tsDisplayName = (systemName: string): string => extractTsSuffixToken(systemName) || systemName;
+  const normalizeTsToken = useCallback((systemName: string): string => {
+    let token = extractTsSuffixToken(systemName);
+    token = token.replace(/^algofund-master-btdd-d1-/, '');
+    token = token.replace(/-h-([a-z0-9]{4,})$/i, '-$1');
+    return token;
+  }, [extractTsSuffixToken]);
 
-  const matchesTsSnapshotToken = (systemName: string, token: string): boolean => {
+  const tsDisplayName = (systemName: string): string => normalizeTsToken(systemName) || systemName;
+
+  const matchesTsSnapshotToken = useCallback((systemName: string, token: string): boolean => {
     const rawToken = String(token || '').trim().toLowerCase();
     if (!rawToken) {
       return false;
     }
-    const normalizedName = String(systemName || '').trim().toLowerCase();
+    const normalizedName = normalizeTsToken(systemName);
     const normalizedToken = rawToken.includes('::')
-      ? (extractTsSuffixToken(rawToken) || rawToken)
-      : rawToken;
-    if (normalizedName === rawToken || normalizedName === normalizedToken) {
+      ? (normalizeTsToken(rawToken) || rawToken)
+      : normalizeTsToken(rawToken);
+    if (normalizedName === normalizedToken) {
       return true;
     }
-    return normalizedName.endsWith(`::${normalizedToken}`) || normalizedName.includes(`::${normalizedToken}-`);
-  };
+    return normalizedName.endsWith(`-${normalizedToken}`) || normalizedName.includes(`${normalizedToken}-`);
+  }, [normalizeTsToken]);
 
-  const resolveTsSnapshotForSystem = (systemName: string) => {
+  const resolveTsSnapshotForSystem = useCallback((systemName: string) => {
     const snapshotMap = summary?.offerStore?.tsBacktestSnapshots || {};
     const entries = Object.entries(snapshotMap)
       .map(([key, snapshot]) => ({
@@ -2955,7 +2956,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
 
     return tokenMatch?.snapshot || null;
-  };
+  }, [summary?.offerStore?.tsBacktestSnapshots, matchesTsSnapshotToken, extractTsSuffixToken]);
 
   const algofundStorefrontSystems = useMemo(() => {
     // Build storefront from active/relevant TS systems only to avoid mixing stale historical entries.
@@ -2979,16 +2980,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     ].filter((name) => Boolean(name) && String(name).toUpperCase().startsWith('ALGOFUND_MASTER::'))));
     const singleMasterSystemName = masterSystemNames.length === 1 ? masterSystemNames[0] : '';
 
+    const publishedSystemSet = new Set(
+      publishedAlgofundSystems
+        .map((name) => String(name || '').trim())
+        .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::'))
+    );
+
     const availableSystemNames = Array.from(new Set([
-      ...availableSystems
-        .map((item) => String(item?.name || '').trim())
-        .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::')),
+      ...Array.from(publishedSystemSet),
       ...batchEligibleAlgofundTenants
         .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
-        .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::')),
-      ...snapshotSystemNames,
+        .filter((name) => publishedSystemSet.has(name)),
+      ...snapshotSystemNames.filter((name) => publishedSystemSet.has(name)),
       String(publishResponse?.sourceSystem?.systemName || '').trim(),
-    ].filter((name) => Boolean(name) && String(name).toUpperCase().startsWith('ALGOFUND_MASTER::'))));
+    ].filter((name) => Boolean(name) && publishedSystemSet.has(String(name)))));
 
     const mapped = availableSystemNames.map((systemName) => {
     const storefrontLabel = `TS offer #${availableSystemNames.indexOf(systemName) + 1}`;
@@ -3060,7 +3065,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       publishSummary
       || snapshotForSystem
       || tenants.length > 0
-      || runtimeSystem
     );
 
     return {
@@ -3088,7 +3092,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     const dedupedByToken = new Map<string, typeof mapped[number]>();
     for (const item of mapped) {
-      const token = extractTsSuffixToken(item.systemName);
+      const token = normalizeTsToken(item.systemName);
       const key = token ? `token:${token.toLowerCase()}` : `name:${item.systemName.toLowerCase()}`;
       const existing = dedupedByToken.get(key);
       if (!existing) {
@@ -3132,7 +3136,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         const rightScore = (right.hasSnapshot ? 2 : 0) + (right.runtimeSystemId ? 1 : 0) + Number(right.tenantCount || 0);
         return rightScore - leftScore;
       });
-  }, [algofundState?.availableSystems, summary?.offerStore?.tsBacktestSnapshots, batchEligibleAlgofundTenants, publishResponse, adminSweepBacktestResult, backtestDrawerContext, selectedAdminDraftTsSetKey]);
+  }, [algofundState?.availableSystems, summary?.offerStore?.tsBacktestSnapshots, batchEligibleAlgofundTenants, publishResponse, adminSweepBacktestResult, backtestDrawerContext, selectedAdminDraftTsSetKey, matchesTsSnapshotToken, resolveTsSnapshotForSystem, publishedAlgofundSystems, normalizeTsToken]);
   const offerTitleById = useMemo(() => offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
     return acc;
@@ -7450,6 +7454,107 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   </Space>
                                 </Space>
                               </Card>
+
+                              {algofundTenantId !== null ? (
+                                <Card
+                                  size="small"
+                                  className="battletoads-card"
+                                  title="Multi-TS назначение клиенту"
+                                  extra={<Button size="small" loading={algofundActiveSystemsLoading} onClick={() => void loadAlgofundActiveSystems(algofundTenantId)}>Обновить</Button>}
+                                >
+                                  <Space direction="vertical" style={{ width: '100%' }}>
+                                    <Space wrap>
+                                      <Text type="secondary">Клиент:</Text>
+                                      <Select
+                                        style={{ width: 320 }}
+                                        value={algofundTenantId ?? undefined}
+                                        onChange={(value) => setAlgofundTenantId(Number(value))}
+                                        options={algofundTenants.map((item) => ({ value: item.tenant.id, label: `${item.tenant.display_name} (${item.tenant.slug})` }))}
+                                      />
+                                    </Space>
+                                    {algofundActiveSystems.length === 0 ? (
+                                      <Text type="secondary">Нет назначенных TS (используется legacy single-system режим)</Text>
+                                    ) : (
+                                      algofundActiveSystems.map((sys) => (
+                                        <Space key={sys.id} style={{ width: '100%', justifyContent: 'space-between' }} wrap>
+                                          <Space>
+                                            <Switch
+                                              size="small"
+                                              checked={sys.isEnabled}
+                                              loading={algofundActiveSystemsLoading}
+                                              onChange={async (checked) => {
+                                                const apiKeyName = algofundState?.profile?.assigned_api_key_name || algofundState?.tenant?.assigned_api_key_name || '';
+                                                setAlgofundActiveSystemsLoading(true);
+                                                try {
+                                                  await axios.patch(`/api/saas/algofund/${algofundTenantId}/active-systems/${encodeURIComponent(sys.systemName)}/toggle`, {
+                                                    isEnabled: checked,
+                                                    apiKeyName,
+                                                    actorMode: 'admin',
+                                                  });
+                                                  await loadAlgofundActiveSystems(algofundTenantId);
+                                                } catch (err: any) {
+                                                  const conflicts = err?.response?.data?.conflicts;
+                                                  if (conflicts?.length) {
+                                                    messageApi.error(`Конфликт пар: ${conflicts.map((c: any) => `${c.pair} (${c.conflictingSystemName})`).join(', ')}`);
+                                                  } else {
+                                                    messageApi.error(String(err?.response?.data?.error || err.message || 'Error'));
+                                                  }
+                                                } finally {
+                                                  setAlgofundActiveSystemsLoading(false);
+                                                }
+                                              }}
+                                            />
+                                            <Text>{sys.systemName}</Text>
+                                            <Tag color="blue">w={sys.weight}</Tag>
+                                            <Tag color={sys.assignedBy === 'client' ? 'purple' : 'default'}>{sys.assignedBy}</Tag>
+                                          </Space>
+                                          <Button
+                                            size="small"
+                                            danger
+                                            onClick={async () => {
+                                              setAlgofundActiveSystemsLoading(true);
+                                              try {
+                                                await axios.delete(`/api/saas/algofund/${algofundTenantId}/active-systems/${encodeURIComponent(sys.systemName)}`);
+                                                await loadAlgofundActiveSystems(algofundTenantId);
+                                              } catch (err: any) {
+                                                messageApi.error(String(err?.response?.data?.error || err.message || 'Error'));
+                                              } finally {
+                                                setAlgofundActiveSystemsLoading(false);
+                                              }
+                                            }}
+                                          >Убрать</Button>
+                                        </Space>
+                                      ))
+                                    )}
+                                    <Space wrap style={{ marginTop: 8 }}>
+                                      {algofundStorefrontSystems.map((item) => (
+                                        algofundActiveSystems.some((s) => s.systemName === item.systemName) ? null : (
+                                          <Button
+                                            key={item.systemName}
+                                            size="small"
+                                            onClick={async () => {
+                                              setAlgofundActiveSystemsLoading(true);
+                                              try {
+                                                await axios.put(`/api/saas/algofund/${algofundTenantId}/active-systems`, {
+                                                  systems: [{ systemName: item.systemName, weight: 1, isEnabled: true, assignedBy: 'admin' }],
+                                                  replace: false,
+                                                });
+                                                await loadAlgofundActiveSystems(algofundTenantId);
+                                                messageApi.success(`TS ${item.systemName} добавлена`);
+                                              } catch (err: any) {
+                                                messageApi.error(String(err?.response?.data?.error || err.message || 'Error'));
+                                              } finally {
+                                                setAlgofundActiveSystemsLoading(false);
+                                              }
+                                            }}
+                                          >+ {item.storefrontLabel || item.systemName}</Button>
+                                        )
+                                      ))}
+                                    </Space>
+                                  </Space>
+                                </Card>
+                              ) : null}
+
                               <Table
                                 rowKey={(row) => row.tenant.id}
                                 columns={tenantColumns}
@@ -7467,6 +7572,54 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   }),
                                 }}
                               />
+                            </Space>
+                          </Card>
+
+                          <Card className="battletoads-card" title="Живые клиенты и торговые движки">
+                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                              <Paragraph type="secondary" style={{ marginTop: 0 }}>
+                                Совмещенный runtime-обзор клиентов: состояние движков, мониторинг, соответствие и сквозной отчёт.
+                              </Paragraph>
+                              <Space wrap>
+                                <Select
+                                  style={{ width: 260 }}
+                                  value={monitoringModeFilter}
+                                  onChange={(value) => setMonitoringModeFilter(value)}
+                                  options={[
+                                    { value: 'all', label: 'Все режимы' },
+                                    { value: 'strategy_client', label: 'Strategy Client' },
+                                    { value: 'algofund_client', label: 'Algofund' },
+                                  ]}
+                                />
+                                <Button onClick={() => void loadMonitoringTabData()} loading={monitoringTabLoading}>Обновить список систем</Button>
+                              </Space>
+
+                              <Table
+                                rowKey={(row) => row.tenant.id}
+                                columns={monitoringColumns}
+                                dataSource={monitoringRows}
+                                pagination={{ pageSize: 8 }}
+                                scroll={{ x: 1500 }}
+                                loading={monitoringTabLoading && monitoringRows.length === 0}
+                              />
+
+                              <Card size="small" className="battletoads-card" title="Сквозной отчет: карточка • аналитика • клиенты • соответствие • проблемы • предложения">
+                                <Table
+                                  rowKey="key"
+                                  size="small"
+                                  pagination={{ pageSize: 8, showSizeChanger: false }}
+                                  scroll={{ x: 2200 }}
+                                  dataSource={monitoringCrossReportRows}
+                                  columns={[
+                                    { title: 'Карточка', dataIndex: 'card', key: 'card', width: 220 },
+                                    { title: 'Аналитика', dataIndex: 'analytics', key: 'analytics', width: 360 },
+                                    { title: 'Клиенты', dataIndex: 'clients', key: 'clients', width: 260 },
+                                    { title: 'Соответствие', dataIndex: 'correspondence', key: 'correspondence', width: 420 },
+                                    { title: 'Проблемы', dataIndex: 'problems', key: 'problems', width: 360 },
+                                    { title: 'Предложения', dataIndex: 'suggestions', key: 'suggestions', width: 420 },
+                                  ]}
+                                />
+                              </Card>
                             </Space>
                           </Card>
 
@@ -7499,7 +7652,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     },
                     {
                       key: 'monitoring',
-                      label: 'Мониторинг',
+                      label: 'Настройки SaaS',
                       children: (
                         <Space direction="vertical" size={16} style={{ width: '100%' }}>
                           <Card className="battletoads-card" title="Admin обзор / отчёты">
@@ -7882,32 +8035,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               </Col>
                             </Row>
 
-                            <Table
-                              rowKey={(row) => row.tenant.id}
-                              columns={monitoringColumns}
-                              dataSource={monitoringRows}
-                              pagination={{ pageSize: 8 }}
-                              scroll={{ x: 1500 }}
-                              loading={monitoringTabLoading && monitoringRows.length === 0}
+                            <Alert
+                              type="info"
+                              showIcon
+                              message="Операционные таблицы перенесены во вкладку Клиенты"
+                              description="Здесь оставлены только настройки и отчёты SaaS/Telegram/аналитики."
                             />
-
-                            <Card size="small" className="battletoads-card" title="Сквозной отчет: карточка • аналитика • клиенты • соответствие • проблемы • предложения">
-                              <Table
-                                rowKey="key"
-                                size="small"
-                                pagination={{ pageSize: 8, showSizeChanger: false }}
-                                scroll={{ x: 2200 }}
-                                dataSource={monitoringCrossReportRows}
-                                columns={[
-                                  { title: 'Карточка', dataIndex: 'card', key: 'card', width: 220 },
-                                  { title: 'Аналитика', dataIndex: 'analytics', key: 'analytics', width: 360 },
-                                  { title: 'Клиенты', dataIndex: 'clients', key: 'clients', width: 260 },
-                                  { title: 'Соответствие', dataIndex: 'correspondence', key: 'correspondence', width: 420 },
-                                  { title: 'Проблемы', dataIndex: 'problems', key: 'problems', width: 360 },
-                                  { title: 'Предложения', dataIndex: 'suggestions', key: 'suggestions', width: 420 },
-                                ]}
-                              />
-                            </Card>
                           </Space>
                         </Card>
                         </Space>
@@ -8052,73 +8185,55 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       {publishedStorefrontOffers.length === 0 ? (
                                         <Empty description="Витрина оферов пока пустая: сначала апрувни карточки в Админ → Оферы и ТС" />
                                       ) : (
-                                        <Table
-                                          size="small"
-                                          rowKey="offerId"
+                                        <List
+                                          grid={{ gutter: 10, xs: 1, md: 2, xl: 4 }}
                                           dataSource={publishedStorefrontOffers}
-                                          pagination={{ pageSize: 8, showSizeChanger: false }}
-                                          scroll={{ x: 900 }}
-                                          columns={[
-                                            {
-                                              title: 'Карточка',
-                                              key: 'offer',
-                                              render: (_, row: any) => (
-                                                <Space direction="vertical" size={0}>
-                                                  <Text strong>{row.titleRu}</Text>
-                                                  <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
-                                                </Space>
-                                              ),
-                                            },
-                                            {
-                                              title: 'Период/метрики',
-                                              key: 'metrics',
-                                              render: (_, row: any) => (
-                                                <Space size={4} wrap>
-                                                  <Tag color="default">{Number(row.periodDays || 0)}d</Tag>
-                                                  <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
-                                                  <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
-                                                  <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
-                                                </Space>
-                                              ),
-                                            },
-                                            {
-                                              title: 'Snapshot chart',
-                                              key: 'mini-chart',
-                                              width: 190,
-                                              render: (_, row: any) => {
-                                                const points = downsampleNumericSeries(
-                                                  (Array.isArray(row.equityPoints) ? row.equityPoints : [])
-                                                    .map((value: unknown) => Number(value))
-                                                    .filter((value: number) => Number.isFinite(value)),
-                                                  40
-                                                );
-                                                if (points.length < 2) {
-                                                  return <Text type="secondary">no snapshot</Text>;
-                                                }
-                                                return (
-                                                  <div style={{ width: 170 }}>
-                                                    <ChartComponent
-                                                      data={points.map((value, index) => ({ time: index, equity: value }))}
-                                                      type="line"
-                                                      fixedHeight={78}
-                                                    />
-                                                  </div>
-                                                );
-                                              },
-                                            },
-                                            {
-                                              title: 'Действия',
-                                              key: 'actions',
-                                              width: 280,
-                                              render: (_, row: any) => (
-                                                <Space size={4} wrap>
-                                                  <Button size="small" onClick={() => navigateToAdminTab('offer-ts')}>Редактировать</Button>
-                                                  <Button size="small" onClick={() => openAdminReviewContext('offer', String(row.offerId))}>Бэктест</Button>
-                                                  <Tag color="success">на витрине</Tag>
-                                                </Space>
-                                              ),
-                                            },
-                                          ]}
+                                          renderItem={(row: any) => {
+                                            const points = downsampleNumericSeries(
+                                              (Array.isArray(row.equityPoints) ? row.equityPoints : [])
+                                                .map((value: unknown) => Number(value))
+                                                .filter((value: number) => Number.isFinite(value)),
+                                              36
+                                            );
+                                            return (
+                                              <List.Item key={String(row.offerId || '')}>
+                                                <Card size="small" bordered>
+                                                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                                                    <Space direction="vertical" size={0}>
+                                                      <Text strong>{row.titleRu}</Text>
+                                                      <Text type="secondary" style={{ fontSize: 11 }}>{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                                    </Space>
+                                                    <Space size={4} wrap>
+                                                      <Tag color="default">{Number(row.periodDays || 0)}d</Tag>
+                                                      <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
+                                                      <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
+                                                      <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                                    </Space>
+                                                    {points.length >= 2 ? (
+                                                      <ChartComponent
+                                                        data={points.map((value, index) => ({ time: index, equity: value }))}
+                                                        type="line"
+                                                        fixedHeight={72}
+                                                      />
+                                                    ) : (
+                                                      <Text type="secondary" style={{ fontSize: 11 }}>no snapshot</Text>
+                                                    )}
+                                                    <Space size={4} wrap>
+                                                      <Button size="small" onClick={() => navigateToAdminTab('offer-ts')}>Оферы и ТС</Button>
+                                                      <Button size="small" onClick={() => openAdminReviewContext('offer', String(row.offerId))}>Бэктест</Button>
+                                                      <Button
+                                                        size="small"
+                                                        danger
+                                                        onClick={() => { void openUnpublishWizard(String(row.offerId)); }}
+                                                      >
+                                                        Снять с витрины
+                                                      </Button>
+                                                    </Space>
+                                                  </Space>
+                                                </Card>
+                                              </List.Item>
+                                            );
+                                          }}
                                         />
                                       )}
                                     </Space>
@@ -8776,38 +8891,91 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       )}
                                       {algofundStorefrontSystems.length > 0 ? (
                                         <List
+                                          grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
                                           dataSource={algofundStorefrontSystems}
                                           renderItem={(item) => (
-                                            <List.Item
-                                              key={item.systemName}
-                                              actions={[
-                                                <Button key="review" size="small" onClick={() => openBacktestDrawerForStorefrontTs(item.systemName)}>Бэктест ТС</Button>,
-                                              ]}
-                                            >
-                                              <List.Item.Meta
+                                            <List.Item key={item.systemName}>
+                                              <Card
+                                                size="small"
+                                                bordered
                                                 title={
-                                                  <Space wrap>
+                                                  <Space>
                                                     <Text strong>{tsDisplayName(item.systemName)}</Text>
-                                                    <Tag color="processing">clients {item.tenantCount}</Tag>
-                                                    <Tag color="success">active {item.activeCount}</Tag>
-                                                    {item.summary ? <Tag color={metricColor(Number(item.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(item.summary.totalReturnPercent)}</Tag> : null}
-                                                    {item.summary ? <Tag color={metricColor(Number(item.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(item.summary.maxDrawdownPercent)}</Tag> : null}
-                                                    {item.summary ? <Tag color={metricColor(Number(item.summary.profitFactor || 0), 'pf')}>PF {formatNumber(item.summary.profitFactor)}</Tag> : null}
+                                                    {item.activeCount > 0
+                                                      ? <Badge status="success" text="active" />
+                                                      : item.pendingCount > 0
+                                                        ? <Badge status="processing" text="pending" />
+                                                        : <Badge status="default" text="no clients" />}
                                                   </Space>
                                                 }
-                                                description={
-                                                  <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                                    {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
-                                                      <div style={{ width: 220 }}>
-                                                        <ChartComponent data={item.equityCurve} type="line" fixedHeight={64} />
-                                                      </div>
-                                                    ) : (
-                                                      <Text type="secondary" style={{ fontSize: 11 }}>График не сохранен</Text>
-                                                    )}
-                                                    <Text type="secondary" style={{ fontSize: 11 }}>{item.tenants.length > 0 ? item.tenants.map((tenant) => tenant.tenant.display_name).join(', ') : 'нет подключённых клиентов'}</Text>
+                                              >
+                                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                                  <Space wrap>
+                                                    <Tag color="blue">clients {Number(item.tenantCount || 0)}</Tag>
+                                                    <Tag color="green">active {Number(item.activeCount || 0)}</Tag>
+                                                    {item.pendingCount > 0 ? <Tag color="gold">pending {item.pendingCount}</Tag> : null}
+                                                    {!item.tenants.length && !item.runtimeSystemId ? <Tag color="default">legacy snapshot</Tag> : null}
+                                                    {item.summary?.totalReturnPercent !== undefined
+                                                      ? <Tag color={metricColor(Number(item.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(item.summary.totalReturnPercent)}</Tag>
+                                                      : null}
+                                                    {item.summary?.maxDrawdownPercent !== undefined
+                                                      ? <Tag color={metricColor(Number(item.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(item.summary.maxDrawdownPercent)}</Tag>
+                                                      : null}
+                                                    {item.summary?.profitFactor !== undefined
+                                                      ? <Tag color={metricColor(Number(item.summary.profitFactor || 0), 'pf')}>PF {formatNumber(item.summary.profitFactor)}</Tag>
+                                                      : null}
+                                                    {item.summary?.tradesCount !== undefined
+                                                      ? <Tag color="blue">сделок {formatNumber(item.summary.tradesCount, 0)}</Tag>
+                                                      : null}
                                                   </Space>
-                                                }
-                                              />
+                                                  {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
+                                                    <ChartComponent data={item.equityCurve} type="line" fixedHeight={120} />
+                                                  ) : (
+                                                    <Text type="secondary" style={{ fontSize: 12 }}>График не сохранен</Text>
+                                                  )}
+                                                  {item.tenants.length > 0
+                                                    ? <Text type="secondary" style={{ fontSize: 12 }}>{item.tenants.map((t) => t.tenant.display_name).join(', ')}</Text>
+                                                    : <Text type="secondary" style={{ fontSize: 12 }}>Нет подключённых клиентов</Text>}
+                                                  <Space wrap>
+                                                    <Button size="small" onClick={() => openBacktestDrawerForStorefrontTs(item.systemName)}>Бэктест ТС</Button>
+                                                    <Button
+                                                      size="small"
+                                                      onClick={() => {
+                                                        const snapshot = resolveTsSnapshotForSystem(item.systemName);
+                                                        const setKey = String(snapshot?.setKey || '').trim();
+                                                        if (setKey) {
+                                                          setSelectedAdminDraftTsSetKey(setKey);
+                                                        }
+                                                        setSelectedAdminReviewKind('algofund-ts');
+                                                        navigateToAdminTab('offer-ts');
+                                                      }}
+                                                    >
+                                                      Оферы и ТС
+                                                    </Button>
+                                                    <Button
+                                                      size="small"
+                                                      onClick={() => {
+                                                        setStorefrontConnectTarget({
+                                                          systemId: Number(item.runtimeSystemId || 0),
+                                                          systemName: String(item.systemName || ''),
+                                                          tenantIds: item.tenants.map((tenant) => Number(tenant.tenant.id)).filter((id) => id > 0),
+                                                        });
+                                                      }}
+                                                      disabled={!item.runtimeSystemId}
+                                                    >
+                                                      Подключить клиентов
+                                                    </Button>
+                                                    <Button
+                                                      size="small"
+                                                      danger
+                                                      loading={removeStorefrontTarget === item.systemName}
+                                                      onClick={() => void initiateRemoveStorefront(item.systemName)}
+                                                    >
+                                                      Снять с витрины
+                                                    </Button>
+                                                  </Space>
+                                                </Space>
+                                              </Card>
                                             </List.Item>
                                           )}
                                         />
@@ -8981,6 +9149,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             />
                                           )}
                                         </Card>
+                                        <Alert
+                                          type="info"
+                                          showIcon
+                                          message="Multi-TS назначение перенесено во вкладку Клиенты"
+                                          description="Там же доступно управление активными TS, флагами и назначениями без дублирования блоков."
+                                          action={<Button size="small" onClick={() => navigateToAdminTab('clients')}>Открыть Клиенты</Button>}
+                                        />
                                       </Space>
                                     );
                                   })(),
@@ -9135,246 +9310,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Row>
                           <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>{copy.previewPlanCapHint}</Paragraph>
                         </Card>
-
-                        <Card className="battletoads-card" title="Algofund TS offers">
-                          {isAdminSurface ? (
-                            algofundStorefrontSystems.length === 0 ? (
-                              <Alert
-                                type="warning"
-                                showIcon
-                                message="Пока нет одобренных TS в витрине. Сначала сохрани snapshot и отправь TS на витрину в Админ → Оферы и ТС."
-                              />
-                            ) : (
-                              <List
-                                grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
-                                dataSource={algofundStorefrontSystems}
-                                renderItem={(item) => (
-                                  <List.Item key={item.systemName}>
-                                    <Card
-                                      size="small"
-                                      bordered
-                                      title={
-                                        <Space>
-                                          <Text strong>{tsDisplayName(item.systemName)}</Text>
-                                          {item.activeCount > 0
-                                            ? <Badge status="success" text="active" />
-                                            : item.pendingCount > 0
-                                              ? <Badge status="processing" text="pending" />
-                                              : <Badge status="default" text="no clients" />}
-                                        </Space>
-                                      }
-                                    >
-                                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                        <Space wrap>
-                                          <Tag color="blue">clients {Number(item.tenantCount || 0)}</Tag>
-                                          <Tag color="green">active {Number(item.activeCount || 0)}</Tag>
-                                          {item.pendingCount > 0 ? <Tag color="gold">pending {item.pendingCount}</Tag> : null}
-                                          {!item.tenants.length && !item.runtimeSystemId ? <Tag color="default">legacy snapshot</Tag> : null}
-                                          {item.summary?.totalReturnPercent !== undefined
-                                            ? <Tag color={metricColor(Number(item.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(item.summary.totalReturnPercent)}</Tag>
-                                            : null}
-                                          {item.summary?.maxDrawdownPercent !== undefined
-                                            ? <Tag color={metricColor(Number(item.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(item.summary.maxDrawdownPercent)}</Tag>
-                                            : null}
-                                          {item.summary?.profitFactor !== undefined
-                                            ? <Tag color={metricColor(Number(item.summary.profitFactor || 0), 'pf')}>PF {formatNumber(item.summary.profitFactor)}</Tag>
-                                            : null}
-                                          {item.summary?.tradesCount !== undefined
-                                            ? <Tag color="blue">сделок {formatNumber(item.summary.tradesCount, 0)}</Tag>
-                                            : null}
-                                        </Space>
-                                        {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
-                                          <ChartComponent data={item.equityCurve} type="line" fixedHeight={120} />
-                                        ) : (
-                                          <Text type="secondary" style={{ fontSize: 12 }}>График не сохранен</Text>
-                                        )}
-                                        {item.tenants.length > 0
-                                          ? <Text type="secondary" style={{ fontSize: 12 }}>{item.tenants.map((t) => t.tenant.display_name).join(', ')}</Text>
-                                          : <Text type="secondary" style={{ fontSize: 12 }}>Нет подключённых клиентов</Text>}
-                                        <Space wrap>
-                                          <Button size="small" onClick={() => openBacktestDrawerForStorefrontTs(item.systemName)}>Бэктест ТС</Button>
-                                          <Button
-                                            size="small"
-                                            onClick={() => {
-                                              const snapshot = resolveTsSnapshotForSystem(item.systemName);
-                                              const setKey = String(snapshot?.setKey || '').trim();
-                                              if (setKey) {
-                                                setSelectedAdminDraftTsSetKey(setKey);
-                                              }
-                                              setSelectedAdminReviewKind('algofund-ts');
-                                              navigateToAdminTab('offer-ts');
-                                            }}
-                                          >
-                                            Оферы и ТС
-                                          </Button>
-                                          <Button
-                                            size="small"
-                                            onClick={() => {
-                                              setStorefrontConnectTarget({
-                                                systemId: Number(item.runtimeSystemId || 0),
-                                                systemName: String(item.systemName || ''),
-                                                tenantIds: item.tenants.map((tenant) => Number(tenant.tenant.id)).filter((id) => id > 0),
-                                              });
-                                            }}
-                                            disabled={!item.runtimeSystemId}
-                                          >
-                                            Подключить клиентов
-                                          </Button>
-                                          <Button
-                                            size="small"
-                                            danger
-                                            loading={removeStorefrontTarget === item.systemName}
-                                            onClick={() => void initiateDeleteStorefrontFromDb(item.systemName)}
-                                          >
-                                            Удалить из базы
-                                          </Button>
-                                        </Space>
-                                      </Space>
-                                    </Card>
-                                  </List.Item>
-                                )}
-                              />
-                            )
-                          ) : Array.isArray(algofundState?.availableSystems) && algofundState.availableSystems.filter((item) => !String(item.name || '').toUpperCase().startsWith('ARCHIVED::')).length > 0 ? (
-                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                              <Space wrap>
-                                <Tag color="processing">Client can switch between published TS offers</Tag>
-                                <Tag color="blue">Current engine: {algofundState.engine?.systemName || 'not materialized'}</Tag>
-                                {pendingAlgofundRequestsByTenant[algofundState.tenant.id]?.length ? <Tag color="gold">Pending requests: {pendingAlgofundRequestsByTenant[algofundState.tenant.id].length}</Tag> : null}
-                              </Space>
-                              <List
-                                grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
-                                dataSource={(algofundState.availableSystems || []).filter((item) => !String(item.name || '').toUpperCase().startsWith('ARCHIVED::'))}
-                                renderItem={(item) => (
-                                  <List.Item key={item.id}>
-                                    <Card size="small" bordered>
-                                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                        <Text strong>{item.name}</Text>
-                                        <Text type="secondary">Trading System offer #{item.id}</Text>
-                                        <Space wrap>
-                                          {item.isActive ? <Tag color="success">active</Tag> : <Tag color="default">inactive</Tag>}
-                                          <Tag color="blue">Backtest period {formatPeriodLabel(algofundState.portfolioPassport?.period || null)}</Tag>
-                                          <Tag color="geekblue">Ret {formatPercent(algofundState.portfolioPassport?.portfolioSummary?.totalReturnPercent)}</Tag>
-                                          <Tag color="orange">DD {formatPercent(algofundState.portfolioPassport?.portfolioSummary?.maxDrawdownPercent)}</Tag>
-                                          <Tag color="purple">PF {formatNumber(algofundState.portfolioPassport?.portfolioSummary?.profitFactor)}</Tag>
-                                          {pendingSwitchSystemIds.has(Number(item.id)) ? <Tag color="gold">switch pending</Tag> : null}
-                                        </Space>
-                                        <Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                                          Для витрины показываем backtest/sweep-метрики и сравнение профиля риска. Runtime-метрики движка доступны отдельно в мониторинге.
-                                        </Paragraph>
-                                        <Button
-                                          type="primary"
-                                          size="small"
-                                          disabled={Boolean(item.isActive) || pendingSwitchSystemIds.has(Number(item.id))}
-                                          loading={actionLoading === 'algofund-switch_system'}
-                                          onClick={() => void sendAlgofundRequest('switch_system', {
-                                            targetSystemId: Number(item.id),
-                                            targetSystemName: String(item.name || ''),
-                                          })}
-                                        >
-                                          {item.isActive ? 'Current TS' : pendingSwitchSystemIds.has(Number(item.id)) ? 'Switch pending' : 'Request switch'}
-                                        </Button>
-                                      </Space>
-                                    </Card>
-                                  </List.Item>
-                                )}
-                              />
-                            </Space>
-                          ) : (
-                            <Empty description="Опубликованные TS для этого API key пока не найдены." />
-                          )}
-                        </Card>
-
-                        {isAdminSurface && algofundTenantId !== null ? (
-                          <Card
-                            className="battletoads-card"
-                            title="Multi-TS назначение клиенту"
-                            extra={<Button size="small" loading={algofundActiveSystemsLoading} onClick={() => void loadAlgofundActiveSystems(algofundTenantId)}>Обновить</Button>}
-                          >
-                            <Space direction="vertical" style={{ width: '100%' }}>
-                              {algofundActiveSystems.length === 0 ? (
-                                <Text type="secondary">Нет назначенных TS (используется legacy single-system режим)</Text>
-                              ) : (
-                                algofundActiveSystems.map((sys) => (
-                                  <Space key={sys.id} style={{ width: '100%', justifyContent: 'space-between' }} wrap>
-                                    <Space>
-                                      <Switch
-                                        size="small"
-                                        checked={sys.isEnabled}
-                                        loading={algofundActiveSystemsLoading}
-                                        onChange={async (checked) => {
-                                          const apiKeyName = algofundState?.profile?.assigned_api_key_name || algofundState?.tenant?.assigned_api_key_name || '';
-                                          setAlgofundActiveSystemsLoading(true);
-                                          try {
-                                            await axios.patch(`/api/saas/algofund/${algofundTenantId}/active-systems/${encodeURIComponent(sys.systemName)}/toggle`, {
-                                              isEnabled: checked,
-                                              apiKeyName,
-                                              actorMode: 'admin',
-                                            });
-                                            await loadAlgofundActiveSystems(algofundTenantId);
-                                          } catch (err: any) {
-                                            const conflicts = err?.response?.data?.conflicts;
-                                            if (conflicts?.length) {
-                                              messageApi.error(`Конфликт пар: ${conflicts.map((c: any) => `${c.pair} (${c.conflictingSystemName})`).join(', ')}`);
-                                            } else {
-                                              messageApi.error(String(err?.response?.data?.error || err.message || 'Error'));
-                                            }
-                                          } finally {
-                                            setAlgofundActiveSystemsLoading(false);
-                                          }
-                                        }}
-                                      />
-                                      <Text>{sys.systemName}</Text>
-                                      <Tag color="blue">w={sys.weight}</Tag>
-                                      <Tag color={sys.assignedBy === 'client' ? 'purple' : 'default'}>{sys.assignedBy}</Tag>
-                                    </Space>
-                                    <Button
-                                      size="small"
-                                      danger
-                                      onClick={async () => {
-                                        setAlgofundActiveSystemsLoading(true);
-                                        try {
-                                          await axios.delete(`/api/saas/algofund/${algofundTenantId}/active-systems/${encodeURIComponent(sys.systemName)}`);
-                                          await loadAlgofundActiveSystems(algofundTenantId);
-                                        } catch (err: any) {
-                                          messageApi.error(String(err?.response?.data?.error || err.message || 'Error'));
-                                        } finally {
-                                          setAlgofundActiveSystemsLoading(false);
-                                        }
-                                      }}
-                                    >Убрать</Button>
-                                  </Space>
-                                ))
-                              )}
-                              <Space wrap style={{ marginTop: 8 }}>
-                                {algofundStorefrontSystems.map((item) => (
-                                  algofundActiveSystems.some((s) => s.systemName === item.systemName) ? null : (
-                                    <Button
-                                      key={item.systemName}
-                                      size="small"
-                                      onClick={async () => {
-                                        const apiKeyName = algofundState?.profile?.assigned_api_key_name || algofundState?.tenant?.assigned_api_key_name || '';
-                                        setAlgofundActiveSystemsLoading(true);
-                                        try {
-                                          await axios.put(`/api/saas/algofund/${algofundTenantId}/active-systems`, {
-                                            systems: [{ systemName: item.systemName, weight: 1, isEnabled: true, assignedBy: 'admin' }],
-                                            replace: false,
-                                          });
-                                          await loadAlgofundActiveSystems(algofundTenantId);
-                                          messageApi.success(`TS ${item.systemName} добавлена`);
-                                        } catch (err: any) {
-                                          messageApi.error(String(err?.response?.data?.error || err.message || 'Error'));
-                                        } finally {
-                                          setAlgofundActiveSystemsLoading(false);
-                                        }
-                                      }}
-                                    >+ {item.storefrontLabel || item.systemName}</Button>
-                                  )
-                                ))}
-                              </Space>
-                            </Space>
-                          </Card>
-                        ) : null}
 
                         <Card className="battletoads-card" title={copy.engineStatus}>
                           <Space direction="vertical" size={12} style={{ width: '100%' }}>
