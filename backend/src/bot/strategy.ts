@@ -2200,6 +2200,23 @@ export const executeStrategy = async (
     });
   }
 
+  if (state !== 'flat' && livePairState === 'flat') {
+    await updateStrategy(apiKeyName, strategyId, {
+      ...executionBindingPatch,
+      state: 'flat',
+      entry_ratio: null,
+      tp_anchor_ratio: null,
+      last_action: 'state_resynced_flat',
+      last_error: null,
+    });
+
+    state = 'flat';
+    entryRatio = null;
+    mergedStrategy.state = 'flat';
+    mergedStrategy.entry_ratio = null;
+    mergedStrategy.tp_anchor_ratio = null;
+  }
+
   if (dedupeClosedBar) {
     const lastProcessedBarTimeMs = processedClosedBarByStrategy.get(processedBarCacheKey);
     if (lastProcessedBarTimeMs === evaluatedBarTimeMs) {

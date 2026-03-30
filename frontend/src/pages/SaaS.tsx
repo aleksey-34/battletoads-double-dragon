@@ -6122,6 +6122,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: 'Tenant',
       key: 'tenant',
+      width: 180,
       render: (_, row) => (
         <Space direction="vertical" size={0}>
           <Text strong>{row.tenant.display_name}</Text>
@@ -6138,6 +6139,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: copy.plan,
       key: 'plan',
+      width: 170,
       render: (_, row) => row.plan ? `${row.plan.title} • ${formatMoney(row.plan.price_usdt)}` : '—',
     },
     {
@@ -6156,6 +6158,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: copy.apiKey,
       key: 'apiKey',
+      width: 110,
       render: (_, row) => (
         <Space wrap>
           <Text>{row.tenant.product_mode === 'strategy_client'
@@ -6176,6 +6179,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: copy.monitoring,
       key: 'monitoring',
+      width: 280,
       render: (_, row) => row.capabilities?.monitoring ? (row.monitoring ? (
         <Space size={4} wrap>
           <Tag color="blue">Eq {formatMoney(row.monitoring.equity_usd)}</Tag>
@@ -6194,7 +6198,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: 'Классификация',
       key: 'classification',
-      width: 260,
+      width: 300,
       render: (_, row) => {
         if (row.tenant.product_mode === 'strategy_client') {
           const selected = Array.isArray(row.strategyProfile?.selectedOfferIds)
@@ -6239,7 +6243,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     {
       title: 'Action',
       key: 'action',
-      width: 260,
+      width: 280,
       render: (_, row) => row.tenant.product_mode === 'strategy_client' ? (
         <Button
           size="small"
@@ -7660,8 +7664,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 rowKey={(row) => row.tenant.id}
                                 columns={tenantColumns}
                                 dataSource={filteredClients}
+                                tableLayout="fixed"
                                 pagination={{ pageSize: 10, showSizeChanger: false }}
-                                scroll={{ x: 1100 }}
+                                scroll={{ x: 1700 }}
                                 rowSelection={{
                                   selectedRowKeys: batchTenantIds,
                                   onChange: (keys) => {

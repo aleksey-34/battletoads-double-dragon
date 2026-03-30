@@ -762,8 +762,12 @@ const Dashboard: React.FC = () => {
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [selectedApiKey, setSelectedApiKey] = useState<string>('');
   const [chartDataByKey, setChartDataByKey] = useState<{ [key: string]: any[] }>({});
+  const [strategyChartDataByKey, setStrategyChartDataByKey] = useState<{ [key: string]: { [strategyId: string]: any[] } }>({});
+  const [strategyChartLoadingByKey, setStrategyChartLoadingByKey] = useState<{ [key: string]: { [strategyId: string]: boolean } }>({});
+  const [strategyChartErrorByKey, setStrategyChartErrorByKey] = useState<{ [key: string]: { [strategyId: string]: string } }>({});
   const [lastOHLCByKey, setLastOHLCByKey] = useState<{ [key: string]: LastOHLC | null }>({});
   const [hoverOHLCByKey, setHoverOHLCByKey] = useState<{ [key: string]: HoverOHLC | null }>({});
+  const [strategyHoverOHLCByKey, setStrategyHoverOHLCByKey] = useState<{ [key: string]: { [strategyId: string]: HoverOHLC | null } }>({});
   const [keyStatuses, setKeyStatuses] = useState<{ [key: string]: KeyStatus }>({});
   const [apiKeyToggles, setApiKeyToggles] = useState<{ [key: string]: boolean }>({});
   const [balances, setBalances] = useState<{ [key: string]: any[] }>({});
@@ -904,6 +908,13 @@ const Dashboard: React.FC = () => {
         void loadChartForKey(selectedApiKey, { silent: true });
       }
 
+      const expandedPanels = new Set(activeStrategyPanelsByKey[selectedApiKey] || []);
+      selectedStrategies
+        .filter((strategy) => expandedPanels.has(String(strategy.id)) && strategy.show_chart)
+        .forEach((strategy) => {
+          void loadStrategyChart(selectedApiKey, strategy, { silent: true, force: true });
+        });
+
       if (shouldRefreshStrategies) {
         void fetchStrategies(selectedApiKey, { silent: true });
       }
@@ -918,7 +929,7 @@ const Dashboard: React.FC = () => {
     }, normalizedUpdateSec * 1000);
 
     return () => window.clearInterval(intervalId);
-  }, [selectedApiKey, chartSettings, apiKeyToggles, strategiesByKey]);
+  }, [selectedApiKey, chartSettings, apiKeyToggles, strategiesByKey, activeStrategyPanelsByKey]);
 
   const persistChartSettings = (nextSettings: { [key: string]: ChartSetting }) => {
     localStorage.setItem('chartSettings', JSON.stringify(nextSettings));
@@ -1279,9 +1290,6 @@ const Dashboard: React.FC = () => {
       const total = Number.isFinite(totalHeader) && totalHeader >= 0 ? totalHeader : payload.length;
 
       setStrategiesByKey((prev) => ({ ...prev, [keyName]: payload }));
-      setStrategyDetailsLoadedByKey((prev) => ({ ...prev, [keyName]: {} }));
-      setStrategyDetailsLoadingByKey((prev) => ({ ...prev, [keyName]: {} }));
-      setStrategyDetailsErrorByKey((prev) => ({ ...prev, [keyName]: {} }));
       setStrategiesTotalByKey((prev) => ({ ...prev, [keyName]: total }));
       setFullStrategiesLoadedByKey((prev) => ({ ...prev, [keyName]: full || payload.length >= total }));
       setStrategyRenderLimitByKey((prev) => {
@@ -1376,6 +1384,10 @@ const Dashboard: React.FC = () => {
           [strategyIdKey]: true,
         },
       }));
+
+      if (detailed.show_chart) {
+        void loadStrategyChart(keyName, detailed, { silent: true, force: true });
+      }
     } catch (error) {
       const fallback = 'Failed to load strategy details';
       const errorMessage = (error as any)?.response?.data?.error || (error as any)?.message || fallback;
@@ -1954,8 +1966,12 @@ const Dashboard: React.FC = () => {
     setSymbols((prev) => ({ ...prev, [key.name]: [] }));
     setSymbolsError((prev) => ({ ...prev, [key.name]: '' }));
     setChartDataByKey((prev) => ({ ...prev, [key.name]: [] }));
+    setStrategyChartDataByKey((prev) => ({ ...prev, [key.name]: {} }));
+    setStrategyChartLoadingByKey((prev) => ({ ...prev, [key.name]: {} }));
+    setStrategyChartErrorByKey((prev) => ({ ...prev, [key.name]: {} }));
     setLastOHLCByKey((prev) => ({ ...prev, [key.name]: null }));
     setHoverOHLCByKey((prev) => ({ ...prev, [key.name]: null }));
+    setStrategyHoverOHLCByKey((prev) => ({ ...prev, [key.name]: {} }));
     setSyntheticErrorByKey((prev) => ({ ...prev, [key.name]: '' }));
     setMonitoringByKey((prev) => ({
       ...prev,
@@ -2038,6 +2054,102 @@ const Dashboard: React.FC = () => {
       if (!silent) {
         setChartLoadingKey((prev) => (prev === keyName ? null : prev));
       }
+    }
+  };
+
+  const loadStrategyChart = async (
+    keyName: string,
+    strategy: DDStrategy,
+    options?: { silent?: boolean; force?: boolean }
+  ) => {
+    if (!isApiKeyActive(keyName)) {
+      return;
+    }
+
+    const strategyIdKey = String(strategy.id);
+    const existing = strategyChartDataByKey[keyName]?.[strategyIdKey];
+    if (!options?.force && Array.isArray(existing) && existing.length > 0) {
+      return;
+    }
+
+    const requestLockKey = `strategy-chart:${keyName}:${strategyIdKey}`;
+    if (!acquireRequestLock(requestLockKey)) {
+      return;
+    }
+
+    setStrategyChartLoadingByKey((prev) => ({
+      ...prev,
+      [keyName]: {
+        ...(prev[keyName] || {}),
+        [strategyIdKey]: true,
+      },
+    }));
+    setStrategyChartErrorByKey((prev) => ({
+      ...prev,
+      [keyName]: {
+        ...(prev[keyName] || {}),
+        [strategyIdKey]: '',
+      },
+    }));
+
+    try {
+      let payload: any[] = [];
+
+      if (strategy.market_mode === 'synthetic') {
+        if (!strategy.base_symbol || !strategy.quote_symbol) {
+          throw new Error('Synthetic strategy requires both base and quote symbols');
+        }
+
+        const res = await axios.get(`/api/synthetic-chart/${keyName}`, {
+          params: {
+            base: strategy.base_symbol,
+            quote: strategy.quote_symbol,
+            baseCoef: strategy.base_coef || 1,
+            quoteCoef: strategy.quote_coef || 1,
+            interval: strategy.interval || '1h',
+            limit: 100,
+          },
+        });
+        payload = Array.isArray(res.data) ? res.data : [];
+      } else {
+        const res = await axios.get(`/api/market-data/${keyName}`, {
+          params: {
+            symbol: strategy.base_symbol,
+            interval: strategy.interval || '1h',
+            limit: 100,
+          },
+        });
+        payload = Array.isArray(res.data) ? res.data : [];
+      }
+
+      setStrategyChartDataByKey((prev) => ({
+        ...prev,
+        [keyName]: {
+          ...(prev[keyName] || {}),
+          [strategyIdKey]: payload,
+        },
+      }));
+    } catch (error: any) {
+      const errorText = String(error?.response?.data?.error || error?.message || 'Failed to load strategy chart');
+      setStrategyChartErrorByKey((prev) => ({
+        ...prev,
+        [keyName]: {
+          ...(prev[keyName] || {}),
+          [strategyIdKey]: errorText,
+        },
+      }));
+      if (options?.silent !== true) {
+        console.error(error);
+      }
+    } finally {
+      releaseRequestLock(requestLockKey);
+      setStrategyChartLoadingByKey((prev) => ({
+        ...prev,
+        [keyName]: {
+          ...(prev[keyName] || {}),
+          [strategyIdKey]: false,
+        },
+      }));
     }
   };
 
@@ -2645,6 +2757,10 @@ const Dashboard: React.FC = () => {
                             const strategyId = Number(panelId);
                             if (Number.isFinite(strategyId) && strategyId > 0) {
                               void fetchStrategyDetails(keyName, strategyId, { silent: true });
+                              const expandedStrategy = (strategiesByKey[keyName] || []).find((item) => Number(item.id) === strategyId);
+                              if (expandedStrategy?.show_chart) {
+                                void loadStrategyChart(keyName, expandedStrategy, { silent: true });
+                              }
                             }
                           });
                         }}
@@ -2697,6 +2813,10 @@ const Dashboard: React.FC = () => {
                           const detailsLoaded = detailsLoadedForKey[strategyIdKey] === true;
                           const detailsLoading = detailsLoadingForKey[strategyIdKey] === true;
                           const detailsError = String(detailsErrorForKey[strategyIdKey] || '').trim();
+                          const strategyChartData = strategyChartDataByKey[keyName]?.[strategyIdKey];
+                          const strategyChartLoading = Boolean(strategyChartLoadingByKey[keyName]?.[strategyIdKey]);
+                          const strategyChartError = String(strategyChartErrorByKey[keyName]?.[strategyIdKey] || '').trim();
+                          const strategyHoverOHLC = strategyHoverOHLCByKey[keyName]?.[strategyIdKey] || null;
 
                           return {
                             key: String(strategy.id),
@@ -2764,35 +2884,39 @@ const Dashboard: React.FC = () => {
                                   ].filter((symbol) => Boolean(symbol))
                                 )
                               );
+                              const effectiveStrategyChartData = Array.isArray(strategyChartData) ? strategyChartData : [];
+                              const strategyLastOHLC = pickLatestOHLC(effectiveStrategyChartData);
+                              const strategyShownOHLC = strategyHoverOHLC || strategyLastOHLC;
+                              const strategyOhlcTitle = strategyHoverOHLC ? 'Hovered OHLC' : 'Last OHLC';
                               const donchian = strategy.show_indicators
                                 ? buildDonchianSnapshot(
-                                  Array.isArray(keyChartData) ? keyChartData : [],
+                                  effectiveStrategyChartData,
                                   strategy.price_channel_length,
                                   strategy.detection_source,
                                   `${keyName}:${strategy.id}`
                                 )
                                 : null;
                               const donchianHighValue = donchian
-                                ? pickOverlayValueAtTime(donchian.highSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
+                                ? pickOverlayValueAtTime(donchian.highSeries, strategy.show_values_each_bar ? strategyHoverOHLC?.time : undefined)
                                 : null;
                               const donchianLowValue = donchian
-                                ? pickOverlayValueAtTime(donchian.lowSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
+                                ? pickOverlayValueAtTime(donchian.lowSeries, strategy.show_values_each_bar ? strategyHoverOHLC?.time : undefined)
                                 : null;
                               const donchianCenterValue = donchian
-                                ? pickOverlayValueAtTime(donchian.centerSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
+                                ? pickOverlayValueAtTime(donchian.centerSeries, strategy.show_values_each_bar ? strategyHoverOHLC?.time : undefined)
                                 : null;
                               const tpWave = strategy.show_indicators
                                 ? buildTpWaveSnapshot(donchian, strategy.take_profit_percent, `${keyName}:${strategy.id}`)
                                 : null;
                               const tpLongWaveValue = tpWave
-                                ? pickOverlayValueAtTime(tpWave.longSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
+                                ? pickOverlayValueAtTime(tpWave.longSeries, strategy.show_values_each_bar ? strategyHoverOHLC?.time : undefined)
                                 : null;
                               const tpShortWaveValue = tpWave
-                                ? pickOverlayValueAtTime(tpWave.shortSeries, strategy.show_values_each_bar ? keyHoverOHLC?.time : undefined)
+                                ? pickOverlayValueAtTime(tpWave.shortSeries, strategy.show_values_each_bar ? strategyHoverOHLC?.time : undefined)
                                 : null;
                               const entryOverlay = strategy.show_positions_on_chart && strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
                                 ? buildEntryOverlay(
-                                  Array.isArray(keyChartData) ? keyChartData : [],
+                                  effectiveStrategyChartData,
                                   `${keyName}:${strategy.id}:entry`,
                                   Number(strategy.entry_ratio)
                                 )
@@ -3231,14 +3355,18 @@ const Dashboard: React.FC = () => {
                                     <Card size="small" title="Strategy Chart">
                                       {!strategy.show_chart
                                         ? <Alert type="info" showIcon message="Chart is hidden by strategy flag." />
-                                        : !Array.isArray(keyChartData) || keyChartData.length === 0
-                                          ? <Alert type="info" showIcon message="Load key chart first to preview strategy chart." />
+                                        : strategyChartLoading && effectiveStrategyChartData.length === 0
+                                          ? <Spin size="small" />
+                                          : strategyChartError
+                                            ? <Alert type="warning" showIcon message={strategyChartError} />
+                                            : effectiveStrategyChartData.length === 0
+                                              ? <Alert type="info" showIcon message="Loading strategy chart..." />
                                           : (
                                             <>
-                                              {shownOHLC
+                                              {strategyShownOHLC
                                                 ? (
                                                   <div style={{ marginBottom: 6 }}>
-                                                    <strong>{ohlcTitle}:</strong> O: {formatOHLCValue(shownOHLC.open)} H: {formatOHLCValue(shownOHLC.high)} L: {formatOHLCValue(shownOHLC.low)} C: {formatOHLCValue(shownOHLC.close)}
+                                                    <strong>{strategyOhlcTitle}:</strong> O: {formatOHLCValue(strategyShownOHLC.open)} H: {formatOHLCValue(strategyShownOHLC.high)} L: {formatOHLCValue(strategyShownOHLC.low)} C: {formatOHLCValue(strategyShownOHLC.close)}
                                                   </div>
                                                 )
                                                 : null}
@@ -3333,17 +3461,23 @@ const Dashboard: React.FC = () => {
                                                 : null}
 
                                               <ChartComponent
-                                                data={keyChartData}
+                                                data={effectiveStrategyChartData}
                                                 type={settings.chartType}
                                                 overlayLines={strategyOverlays}
                                                 markers={tradeMarkers}
                                                 onHoverOHLC={(ohlc) => {
-                                                  setHoverOHLCByKey((prev) => {
-                                                    const current = prev[keyName];
+                                                  setStrategyHoverOHLCByKey((prev) => {
+                                                    const current = prev[keyName]?.[strategyIdKey] || null;
                                                     if (isSameHoverOHLC(current, ohlc)) {
                                                       return prev;
                                                     }
-                                                    return { ...prev, [keyName]: ohlc };
+                                                    return {
+                                                      ...prev,
+                                                      [keyName]: {
+                                                        ...(prev[keyName] || {}),
+                                                        [strategyIdKey]: ohlc,
+                                                      },
+                                                    };
                                                   });
                                                 }}
                                               />
