@@ -131,6 +131,7 @@ export type OfferStoreDefaults = {
 export type OfferStoreState = {
   defaults: OfferStoreDefaults;
   publishedOfferIds: string[];
+  algofundStorefrontSystemNames?: string[];
   tsBacktestSnapshots?: Record<string, {
     systemName?: string;
     setKey?: string;
@@ -287,6 +288,7 @@ export type AdminReportSettings = {
   offerMonthly: boolean;
   sweepSnapshotAutoRefreshEnabled: boolean;
   sweepSnapshotRefreshHours: number;
+  watchdogEnabled: boolean;
 };
 
 type OfferStoreSnapshotRefreshState = {
@@ -866,6 +868,7 @@ const DEFAULT_ADMIN_REPORT_SETTINGS: AdminReportSettings = {
   offerMonthly: true,
   sweepSnapshotAutoRefreshEnabled: true,
   sweepSnapshotRefreshHours: 24,
+  watchdogEnabled: true,
 };
 
 const getSweepPeriodDays = (sweep: SweepData | null, fallbackDays: number): number => {
@@ -1021,7 +1024,8 @@ const normalizeAdminReportSettings = (raw: unknown): AdminReportSettings => {
     | 'offerDaily'
     | 'offerWeekly'
     | 'offerMonthly'
-    | 'sweepSnapshotAutoRefreshEnabled';
+    | 'sweepSnapshotAutoRefreshEnabled'
+    | 'watchdogEnabled';
   const pick = (key: AdminReportBooleanKey): boolean => {
     const value = parsed[key];
     if (value === undefined || value === null || value === '') {
@@ -1050,6 +1054,7 @@ const normalizeAdminReportSettings = (raw: unknown): AdminReportSettings => {
     offerMonthly: pick('offerMonthly'),
     sweepSnapshotAutoRefreshEnabled: pick('sweepSnapshotAutoRefreshEnabled'),
     sweepSnapshotRefreshHours: refreshHours,
+    watchdogEnabled: pick('watchdogEnabled'),
   };
 };
 
@@ -4049,12 +4054,19 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
   const allOffers = catalog ? getAllOffers(catalog) : [];
   const offerIds = allOffers.map((item) => String(item.offerId));
-  const [defaultsRaw, publishedRaw, reviewSnapshots, tsBacktestSnapshot, tsBacktestSnapshots] = await Promise.all([
+  const [defaultsRaw, publishedRaw, reviewSnapshots, tsBacktestSnapshot, tsBacktestSnapshots, storefrontRows] = await Promise.all([
     getRuntimeFlag('offer.store.defaults', JSON.stringify(DEFAULT_OFFER_STORE_DEFAULTS)),
     getRuntimeFlag('offer.store.published_ids', ''),
     getOfferReviewSnapshots(),
     getTsBacktestSnapshot(),
     getTsBacktestSnapshots(),
+    db.all(
+      `SELECT DISTINCT COALESCE(system_name, '') AS system_name
+       FROM algofund_active_systems
+       WHERE COALESCE(is_enabled, 1) = 1
+         AND TRIM(COALESCE(system_name, '')) != ''
+       ORDER BY system_name ASC`
+    ) as Promise<Array<{ system_name?: string }>>,
   ]);
   const defaults = normalizeOfferStoreDefaults(safeJsonParse(
     defaultsRaw,
@@ -4068,6 +4080,11 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   ));
   const publishedSet = new Set(publishedFromFlagNormalized);
   const periodDays = getSweepPeriodDays(sweep, defaults.periodDays);
+  const algofundStorefrontSystemNames = Array.from(new Set(
+    (Array.isArray(storefrontRows) ? storefrontRows : [])
+      .map((row) => asString(row?.system_name, '').trim())
+      .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::'))
+  ));
   const sweepByStrategyId = new Map<number, SweepRecord>();
   (sweep?.evaluated || []).forEach((item) => {
     const strategyId = Number(item.strategyId || 0);
@@ -4225,6 +4242,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   return {
     defaults,
     publishedOfferIds,
+    algofundStorefrontSystemNames,
     tsBacktestSnapshots,
     tsBacktestSnapshot,
     offers: combinedRawOffers.map((row) => ({
@@ -4340,6 +4358,8 @@ export const previewAdminSweepBacktest = async (payload?: {
   tradeFrequencyScore?: number;
   initialBalance?: number;
   riskScaleMaxPercent?: number;
+  dateFrom?: string;
+  dateTo?: string;
   preferRealBacktest?: boolean;
   rerunApiKeyName?: string;
 }) => {
@@ -4678,6 +4698,8 @@ export const previewAdminSweepBacktest = async (payload?: {
   })();
 
   const canTryRealBacktest = payload?.preferRealBacktest === true;
+  const requestedDateFrom = asString(payload?.dateFrom, '').trim();
+  const requestedDateTo = asString(payload?.dateTo, '').trim();
   const strategyIds = Array.from(new Set(
     selectedOffers
       .map((item) => Number(item.strategyId || 0))
@@ -4725,8 +4747,8 @@ export const previewAdminSweepBacktest = async (payload?: {
           commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
           slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
           fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
-          dateFrom: asString(sweep?.config?.dateFrom, ''),
-          dateTo: asString(sweep?.config?.dateTo, ''),
+          dateFrom: requestedDateFrom || asString(sweep?.config?.dateFrom, ''),
+          dateTo: requestedDateTo || asString(sweep?.config?.dateTo, ''),
         });
 
         // Apply risk multiplier to returns/DD/equity (position sizing approximation)
@@ -4899,8 +4921,8 @@ export const previewAdminSweepBacktest = async (payload?: {
                   commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
                   slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
                   fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
-                  dateFrom: asString(sweep?.config?.dateFrom, ''),
-                  dateTo: asString(sweep?.config?.dateTo, ''),
+                  dateFrom: requestedDateFrom || asString(sweep?.config?.dateFrom, ''),
+                  dateTo: requestedDateTo || asString(sweep?.config?.dateTo, ''),
                 };
 
                 let result;
@@ -5823,6 +5845,31 @@ export const getAdminLowLotRecommendations = async (options?: {
   const periodHours = Math.max(1, Math.floor(Number(options?.hours || 72) || 72));
   const limit = Math.max(1, Math.min(200, Math.floor(Number(options?.limit || 50) || 50)));
   const replLimit = Math.max(1, Math.min(5, Math.floor(Number(options?.perStrategyReplacementLimit || 3) || 3)));
+  const lowLotActiveByStrategyId = new Map<number, boolean>();
+
+  const isStrategyLowLotActive = async (strategyId: number): Promise<boolean> => {
+    const sid = Math.max(0, Math.floor(Number(strategyId || 0)));
+    if (!sid) {
+      return false;
+    }
+    if (lowLotActiveByStrategyId.has(sid)) {
+      return Boolean(lowLotActiveByStrategyId.get(sid));
+    }
+
+    const latest = await db.get(
+      `SELECT event_type, resolved_at
+       FROM strategy_runtime_events
+       WHERE strategy_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [sid]
+    ) as { event_type?: string; resolved_at?: number } | undefined;
+
+    const active = String(latest?.event_type || '') === 'low_lot_error'
+      && Number(latest?.resolved_at || 0) === 0;
+    lowLotActiveByStrategyId.set(sid, active);
+    return active;
+  };
 
   // ── Helper: build one recommendation item from a strategy row ─────────────
   const buildItem = async (
@@ -5874,8 +5921,8 @@ export const getAdminLowLotRecommendations = async (options?: {
         displayName: String(t.display_name || ''),
         mode: String(t.product_mode || 'strategy_client') as ProductMode,
       })),
-      suggestedDepositMin: Math.max(150, Number((maxDeposit * 1.5).toFixed(2))),
-      suggestedLotPercent: lotPercent < 40 ? 50 : Math.min(100, lotPercent + 20),
+      suggestedDepositMin: Math.max(100, Number((maxDeposit * 1.25).toFixed(2))),
+      suggestedLotPercent: lotPercent < 20 ? 20 : Math.min(60, lotPercent + 10),
       replacementCandidates: (Array.isArray(replacementRows) ? replacementRows : []).map((c: any) => {
         let note = '';
         try {
@@ -5918,33 +5965,59 @@ export const getAdminLowLotRecommendations = async (options?: {
   for (const row of Array.isArray(lastErrorRows) ? lastErrorRows : []) {
     const sid = Number((row as any).strategy_id || 0);
     if (!sid || seenStrategyIds.has(sid)) continue;
+    if (!(await isStrategyLowLotActive(sid))) continue;
     seenStrategyIds.add(sid);
     items.push(await buildItem(row as Record<string, unknown>, 'last_error'));
   }
 
   // ── Source 2: recent runtime events (low_lot_error, unresolved) ───────────
   const eventRows = await db.all(
-    `SELECT
-       e.strategy_id, e.api_key_name, e.message AS last_error,
-       datetime(e.created_at / 1000, 'unixepoch') AS updated_at,
-       a.id AS api_key_id,
-       COALESCE(s.market_mode, 'synthetic') AS market_mode,
-       COALESCE(s.base_symbol, '') AS base_symbol,
-       COALESCE(s.quote_symbol, '') AS quote_symbol,
-       COALESCE(s.max_deposit, 0) AS max_deposit,
-       COALESCE(s.leverage, 1) AS leverage,
-       COALESCE(s.lot_long_percent, 0) AS lot_long_percent,
-       COALESCE(s.lot_short_percent, 0) AS lot_short_percent,
-       COALESCE(s.name, e.strategy_name) AS strategy_name,
-       (SELECT tsm.system_id FROM trading_system_members tsm WHERE tsm.strategy_id = e.strategy_id ORDER BY tsm.id ASC LIMIT 1) AS system_id
-     FROM strategy_runtime_events e
-     LEFT JOIN strategies s ON s.id = e.strategy_id
-     LEFT JOIN api_keys a ON a.name = e.api_key_name
-     WHERE e.event_type = 'low_lot_error'
-       AND COALESCE(s.is_active, 0) = 1
-       AND e.resolved_at = 0
-       AND e.created_at >= ?
-     ORDER BY e.created_at DESC
+    `WITH ranked AS (
+       SELECT
+         e.strategy_id,
+         e.api_key_name,
+         e.message AS last_error,
+         datetime(e.created_at / 1000, 'unixepoch') AS updated_at,
+         e.created_at,
+         e.event_type,
+         e.resolved_at,
+         a.id AS api_key_id,
+         COALESCE(s.market_mode, 'synthetic') AS market_mode,
+         COALESCE(s.base_symbol, '') AS base_symbol,
+         COALESCE(s.quote_symbol, '') AS quote_symbol,
+         COALESCE(s.max_deposit, 0) AS max_deposit,
+         COALESCE(s.leverage, 1) AS leverage,
+         COALESCE(s.lot_long_percent, 0) AS lot_long_percent,
+         COALESCE(s.lot_short_percent, 0) AS lot_short_percent,
+         COALESCE(s.name, e.strategy_name) AS strategy_name,
+         (SELECT tsm.system_id FROM trading_system_members tsm WHERE tsm.strategy_id = e.strategy_id ORDER BY tsm.id ASC LIMIT 1) AS system_id,
+         ROW_NUMBER() OVER (PARTITION BY e.strategy_id ORDER BY e.created_at DESC) AS rn
+       FROM strategy_runtime_events e
+       LEFT JOIN strategies s ON s.id = e.strategy_id
+       LEFT JOIN api_keys a ON a.name = e.api_key_name
+       WHERE COALESCE(s.is_active, 0) = 1
+         AND e.created_at >= ?
+     )
+     SELECT
+       strategy_id,
+       api_key_name,
+       last_error,
+       updated_at,
+       api_key_id,
+       market_mode,
+       base_symbol,
+       quote_symbol,
+       max_deposit,
+       leverage,
+       lot_long_percent,
+       lot_short_percent,
+       strategy_name,
+       system_id
+     FROM ranked
+     WHERE rn = 1
+       AND event_type = 'low_lot_error'
+       AND resolved_at = 0
+     ORDER BY created_at DESC
      LIMIT ?`,
     [Date.now() - periodHours * 3600_000, limit]
   );
@@ -6019,6 +6092,8 @@ export const applyLowLotRecommendation = async (options: {
   strategyId: number;
   applyDepositFix: boolean;
   applyLotFix: boolean;
+  applyToSystem?: boolean;
+  systemId?: number;
   replacementSymbol?: string;
 }): Promise<{ success: boolean; changes: Record<string, unknown>; changeSummary: string[] }> => {
   const strategy = await db.get('SELECT * FROM strategies WHERE id = ?', [options.strategyId]);
@@ -6026,64 +6101,147 @@ export const applyLowLotRecommendation = async (options: {
     throw new Error(`Strategy ${options.strategyId} not found`);
   }
 
-  const changes: Record<string, unknown> = {};
-  const setClauses: string[] = [];
-  const values: unknown[] = [];
+  const targetStrategyIds: number[] = [Number(options.strategyId)];
+  let resolvedSystemId: number | null = null;
 
-  if (options.applyDepositFix) {
-    const currentDeposit = Math.max(0, Number(strategy.max_deposit || 0));
-    const newDeposit = Math.max(150, Number((currentDeposit * 1.5).toFixed(2)));
-    setClauses.push('max_deposit = ?');
-    values.push(newDeposit);
-    changes['max_deposit'] = { from: currentDeposit, to: newDeposit };
+  if (options.applyToSystem) {
+    const explicitSystemId = Math.max(0, Math.floor(Number(options.systemId || 0)));
+    if (explicitSystemId > 0) {
+      resolvedSystemId = explicitSystemId;
+    } else {
+      const systemRow = await db.get(
+        'SELECT system_id FROM trading_system_members WHERE strategy_id = ? ORDER BY id ASC LIMIT 1',
+        [options.strategyId]
+      ) as { system_id?: number } | undefined;
+      const inferredSystemId = Math.max(0, Number(systemRow?.system_id || 0));
+      resolvedSystemId = inferredSystemId > 0 ? inferredSystemId : null;
+    }
+
+    if (resolvedSystemId) {
+      const rows = await db.all(
+        `SELECT DISTINCT s.id
+         FROM trading_system_members tsm
+         JOIN strategies s ON s.id = tsm.strategy_id
+         WHERE tsm.system_id = ?
+           AND COALESCE(tsm.is_enabled, 1) = 1
+           AND COALESCE(s.is_active, 0) = 1`,
+        [resolvedSystemId]
+      ) as Array<{ id?: number }>;
+      const ids = (Array.isArray(rows) ? rows : [])
+        .map((row) => Math.floor(Number(row?.id || 0)))
+        .filter((id) => id > 0);
+      if (ids.length > 0) {
+        targetStrategyIds.splice(0, targetStrategyIds.length, ...Array.from(new Set(ids)));
+      }
+    }
   }
 
-  if (options.applyLotFix) {
-    const currentLot = Math.max(
-      0,
-      Number(strategy.lot_long_percent || 0),
-      Number(strategy.lot_short_percent || 0)
+  const changes: Record<string, unknown> = {
+    strategyCount: targetStrategyIds.length,
+    strategyIds: targetStrategyIds,
+    ...(resolvedSystemId ? { systemId: resolvedSystemId } : {}),
+  };
+  const changeSummary: string[] = [];
+  const details: Array<Record<string, unknown>> = [];
+
+  for (const sid of targetStrategyIds) {
+    const row = await db.get('SELECT * FROM strategies WHERE id = ?', [sid]);
+    if (!row) {
+      continue;
+    }
+
+    const setClauses: string[] = [];
+    const values: unknown[] = [];
+    const rowChanges: Record<string, unknown> = { strategyId: sid, strategyName: String(row.name || '') };
+
+    if (options.applyDepositFix) {
+      const currentDeposit = Math.max(0, Number(row.max_deposit || 0));
+      const newDeposit = Math.max(100, Number((currentDeposit * 1.25).toFixed(2)));
+      setClauses.push('max_deposit = ?');
+      values.push(newDeposit);
+      rowChanges['max_deposit'] = { from: currentDeposit, to: newDeposit };
+    }
+
+    if (options.applyLotFix) {
+      const currentLot = Math.max(
+        0,
+        Number(row.lot_long_percent || 0),
+        Number(row.lot_short_percent || 0)
+      );
+      const newLot = currentLot < 20 ? 20 : Math.min(60, currentLot + 10);
+      setClauses.push('lot_long_percent = ?');
+      values.push(newLot);
+      setClauses.push('lot_short_percent = ?');
+      values.push(newLot);
+      rowChanges['lot_percent'] = { from: currentLot, to: newLot };
+    }
+
+    // Symbol replacement is intentionally strategy-specific. Avoid rewriting the whole TS pair map.
+    if (options.replacementSymbol && !options.applyToSystem) {
+      const parts = String(options.replacementSymbol).split('/').map((s) => s.trim().toUpperCase());
+      const [base, quote] = parts;
+      if (base) {
+        setClauses.push('base_symbol = ?');
+        values.push(base);
+        rowChanges['base_symbol'] = { from: String(row.base_symbol || ''), to: base };
+      }
+      if (quote) {
+        setClauses.push('quote_symbol = ?');
+        values.push(quote);
+        rowChanges['quote_symbol'] = { from: String(row.quote_symbol || ''), to: quote };
+      }
+    }
+
+    if (setClauses.length === 0) {
+      continue;
+    }
+
+    setClauses.push('last_error = ?');
+    values.push('');
+    setClauses.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(sid);
+
+    await db.run(
+      `UPDATE strategies SET ${setClauses.join(', ')} WHERE id = ?`,
+      values
     );
-    const newLot = currentLot < 40 ? 50 : Math.min(100, currentLot + 20);
-    setClauses.push('lot_long_percent = ?');
-    values.push(newLot);
-    setClauses.push('lot_short_percent = ?');
-    values.push(newLot);
-    changes['lot_percent'] = { from: currentLot, to: newLot };
+
+    details.push(rowChanges);
   }
 
-  if (options.replacementSymbol) {
-    const parts = String(options.replacementSymbol).split('/').map((s) => s.trim().toUpperCase());
-    const [base, quote] = parts;
-    if (base) {
-      setClauses.push('base_symbol = ?');
-      values.push(base);
-      changes['base_symbol'] = { from: String(strategy.base_symbol || ''), to: base };
-    }
-    if (quote) {
-      setClauses.push('quote_symbol = ?');
-      values.push(quote);
-      changes['quote_symbol'] = { from: String(strategy.quote_symbol || ''), to: quote };
-    }
-  }
-
-  if (setClauses.length === 0) {
+  if (details.length === 0) {
     return { success: true, changes: {}, changeSummary: [] };
   }
 
-  setClauses.push('last_error = ?');
-  values.push('');
-  setClauses.push('updated_at = CURRENT_TIMESTAMP');
-  values.push(options.strategyId);
+  changes['details'] = details;
 
-  await db.run(
-    `UPDATE strategies SET ${setClauses.join(', ')} WHERE id = ?`,
-    values
-  );
+  const primaryChanges = details[0] || {};
+  if ((primaryChanges as any)['max_deposit']) {
+    const d = (primaryChanges as any)['max_deposit'] as { from: number; to: number };
+    changeSummary.push(`Deposit x1.25: $${d.from} -> $${d.to}`);
+  }
+  if ((primaryChanges as any)['lot_percent']) {
+    const l = (primaryChanges as any)['lot_percent'] as { from: number; to: number };
+    changeSummary.push(`Lot: ${l.from}% -> ${l.to}%`);
+  }
+  if ((primaryChanges as any)['base_symbol'] || (primaryChanges as any)['quote_symbol']) {
+    const oldPair = `${String(((primaryChanges as any)['base_symbol'] as any)?.from || strategy.base_symbol || '')}/${String(((primaryChanges as any)['quote_symbol'] as any)?.from || strategy.quote_symbol || '')}`;
+    const newPair = `${String(((primaryChanges as any)['base_symbol'] as any)?.to || strategy.base_symbol || '')}/${String(((primaryChanges as any)['quote_symbol'] as any)?.to || strategy.quote_symbol || '')}`;
+    changeSummary.push(`Pair: ${oldPair} -> ${newPair}`);
+  }
+  if (targetStrategyIds.length > 1) {
+    changeSummary.push(`Applied to ${targetStrategyIds.length} strategies`);
+  }
 
   const apiKeyRow = await db.get('SELECT name FROM api_keys WHERE id = ?', [strategy.api_key_id]);
   const apiKeyName = String(apiKeyRow?.name || '');
-  const payloadJson = JSON.stringify({ strategy_id: options.strategyId, strategy_name: String(strategy.name || ''), changes });
+  const payloadJson = JSON.stringify({
+    strategy_id: options.strategyId,
+    strategy_name: String(strategy.name || ''),
+    applyToSystem: Boolean(options.applyToSystem),
+    systemId: resolvedSystemId,
+    changes,
+  });
 
   if (apiKeyName) {
     const tenantRows = await db.all(
@@ -6110,29 +6268,16 @@ export const applyLowLotRecommendation = async (options: {
     );
   }
 
-  // Mark unresolved low-lot runtime events for this strategy as resolved.
+  // Mark unresolved low-lot runtime events for affected strategies as resolved.
+  const eventPlaceholders = targetStrategyIds.map(() => '?').join(', ');
   await db.run(
     `UPDATE strategy_runtime_events
      SET resolved_at = ?
-     WHERE strategy_id = ? AND event_type = 'low_lot_error' AND resolved_at = 0`,
-    [Date.now(), options.strategyId]
+     WHERE strategy_id IN (${eventPlaceholders})
+       AND event_type = 'low_lot_error'
+       AND resolved_at = 0`,
+    [Date.now(), ...targetStrategyIds]
   );
-
-  // Build human-readable change summary for the UI.
-  const changeSummary: string[] = [];
-  if (changes['max_deposit']) {
-    const d = changes['max_deposit'] as { from: number; to: number };
-     changeSummary.push(`Deposit: $${d.from} -> $${d.to}`);
-  }
-  if (changes['lot_percent']) {
-    const l = changes['lot_percent'] as { from: number; to: number };
-     changeSummary.push(`Lot%: ${l.from}% -> ${l.to}%`);
-  }
-  if (changes['base_symbol'] || changes['quote_symbol']) {
-    const oldPair = `${String((changes['base_symbol'] as any)?.from || strategy.base_symbol || '')}/${String((changes['quote_symbol'] as any)?.from || strategy.quote_symbol || '')}`;
-    const newPair = `${String((changes['base_symbol'] as any)?.to || strategy.base_symbol || '')}/${String((changes['quote_symbol'] as any)?.to || strategy.quote_symbol || '')}`;
-     changeSummary.push(`Pair: ${oldPair} -> ${newPair}`);
-  }
 
   return { success: true, changes, changeSummary };
 };
@@ -6260,9 +6405,9 @@ export const updateTenantAdminState = async (tenantId: number, payload: {
   } else {
     await db.run(
       `UPDATE algofund_profiles
-       SET execution_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+       SET assigned_api_key_name = ?, execution_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
        WHERE tenant_id = ?`,
-      [nextAssignedApiKeyName, tenantId]
+      [nextAssignedApiKeyName, nextAssignedApiKeyName, tenantId]
     );
   }
 
@@ -7425,7 +7570,8 @@ const materializeAlgofundSystem = async (
     systemId = Number(created.id);
   }
 
-  if (activate || profile.requested_enabled === 1) {
+  const shouldActivate = activate || profile.requested_enabled === 1;
+  if (shouldActivate) {
     await setTradingSystemActivation(executionApiKeyName, systemId, true, true);
   }
 
@@ -7438,9 +7584,18 @@ const materializeAlgofundSystem = async (
      SET assigned_api_key_name = ?,
          execution_api_key_name = ?,
          published_system_name = ?,
+         requested_enabled = ?,
+         actual_enabled = ?,
          updated_at = CURRENT_TIMESTAMP
      WHERE tenant_id = ?`,
-    [executionApiKeyName, executionApiKeyName, storefrontSystemName, tenant.id]
+    [
+      executionApiKeyName,
+      executionApiKeyName,
+      storefrontSystemName,
+      shouldActivate ? 1 : Number(profile.requested_enabled || 0),
+      shouldActivate ? 1 : Number(profile.actual_enabled || 0),
+      tenant.id,
+    ]
   );
 
   return {
@@ -7478,8 +7633,8 @@ export const getAlgofundState = async (
     ...profile,
     actual_enabled: engine ? (engine.isActive ? 1 : 0) : profile.actual_enabled,
     published_system_name: effectiveStorefrontSystemName,
-    assigned_api_key_name: engine?.apiKeyName || profile.assigned_api_key_name,
-    execution_api_key_name: profile.execution_api_key_name,
+    assigned_api_key_name: asString(profile.assigned_api_key_name, tenant.assigned_api_key_name),
+    execution_api_key_name: asString(profile.execution_api_key_name, tenant.assigned_api_key_name),
   };
 
   if (
@@ -7728,9 +7883,9 @@ export const updateAlgofundState = async (
 
   await db.run(
     `UPDATE algofund_profiles
-     SET risk_multiplier = ?, execution_api_key_name = ?, requested_enabled = ?, updated_at = CURRENT_TIMESTAMP
+     SET risk_multiplier = ?, assigned_api_key_name = ?, execution_api_key_name = ?, requested_enabled = ?, updated_at = CURRENT_TIMESTAMP
      WHERE tenant_id = ?`,
-    [nextRiskMultiplier, nextApiKeyName, nextRequestedEnabled ? 1 : 0, tenantId]
+    [nextRiskMultiplier, nextApiKeyName, nextApiKeyName, nextRequestedEnabled ? 1 : 0, tenantId]
   );
 
   await db.run(
@@ -7897,6 +8052,16 @@ const applyApprovedAlgofundAction = async (params: {
     try {
       await materializeAlgofundSystem(tenant, plan, { ...profile, requested_enabled: 1 }, true);
       await db.run('UPDATE algofund_profiles SET actual_enabled = 1, requested_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
+      const publishedSystemName = asString(profile.published_system_name, '').trim();
+      if (publishedSystemName) {
+        await db.run(
+          `INSERT INTO algofund_active_systems (profile_id, system_name, weight, is_enabled, assigned_by, created_at, updated_at)
+           VALUES (?, ?, 1, 1, 'admin', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+           ON CONFLICT(profile_id, system_name)
+           DO UPDATE SET is_enabled = 1, updated_at = CURRENT_TIMESTAMP`,
+          [profile.id, publishedSystemName]
+        );
+      }
     } catch (error) {
       const reason = (error as Error).message || 'Materialization failed';
       logger.warn(`Algofund request approve fallback for tenant ${row.tenant_id}: ${reason}`);
@@ -7928,74 +8093,46 @@ const applyApprovedAlgofundAction = async (params: {
     await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
   } else if (row.request_type === 'switch_system') {
     const targetSystemId = Math.floor(asNumber(requestPayload.targetSystemId, 0));
-    let apiKeyName = asString(requestPayload.targetApiKeyName || getAlgofundSystemApiKeyName(tenant, profile));
-
-    if (!apiKeyName && targetSystemId > 0) {
-      const globalTarget = await db.get(
-        `SELECT ak.name AS api_key_name
-         FROM trading_systems ts
-         JOIN api_keys ak ON ak.id = ts.api_key_id
-         WHERE ts.id = ?`,
-        [targetSystemId]
-      ) as { api_key_name?: string } | undefined;
-      apiKeyName = asString(globalTarget?.api_key_name, '');
-    }
-
-    if (!apiKeyName) {
-      throw new Error('Assign API key before approving switch request');
-    }
-
     if (targetSystemId <= 0) {
       throw new Error('Switch request payload is missing targetSystemId');
     }
 
-    let systems = await listTradingSystems(apiKeyName).catch(() => []);
-    let target = (Array.isArray(systems) ? systems : []).find((item) => Number(item.id) === targetSystemId);
+    const globalTarget = await db.get(
+      `SELECT ts.id AS system_id, ts.name AS system_name
+       FROM trading_systems ts
+       WHERE ts.id = ?`,
+      [targetSystemId]
+    ) as { system_id?: number; system_name?: string } | undefined;
 
-    if (!target?.id) {
-      const globalTarget = await db.get(
-        `SELECT ts.id AS system_id, ts.name AS system_name, ak.name AS api_key_name
-         FROM trading_systems ts
-         JOIN api_keys ak ON ak.id = ts.api_key_id
-         WHERE ts.id = ?`,
-        [targetSystemId]
-      ) as { system_id?: number; system_name?: string; api_key_name?: string } | undefined;
-
-      const globalApiKeyName = asString(globalTarget?.api_key_name, '');
-      if (globalTarget?.system_id && globalApiKeyName) {
-        apiKeyName = globalApiKeyName;
-        systems = await listTradingSystems(apiKeyName).catch(() => []);
-        target = (Array.isArray(systems) ? systems : []).find((item) => Number(item.id) === targetSystemId) || {
-          id: Number(globalTarget.system_id),
-          name: asString(globalTarget.system_name, ''),
-        } as any;
-      }
-    }
-
-    if (!target?.id) {
+    const targetSystemName = asString(
+      globalTarget?.system_name || requestPayload.targetSystemName,
+      ''
+    ).trim();
+    if (!targetSystemName) {
       throw new Error(`Target trading system not found: ${targetSystemId}`);
     }
 
-    // Do not implicitly rebind client execution key to the system owner key.
-
-    for (const item of systems) {
-      const id = Number(item.id || 0);
-      if (!id || id === Number(target.id) || !Boolean(item.is_active)) {
-        continue;
-      }
-      await setTradingSystemActivation(apiKeyName, id, false, true);
+    const runtimeApiKeyName = asString(getAlgofundExecutionApiKeyName(tenant, profile), '').trim();
+    if (!runtimeApiKeyName) {
+      throw new Error('Assign API key before approving switch request');
     }
 
-    await setTradingSystemActivation(apiKeyName, Number(target.id), true, true);
+    const switchProfile: AlgofundProfileRow = {
+      ...profile,
+      requested_enabled: 1,
+      actual_enabled: 1,
+      assigned_api_key_name: runtimeApiKeyName,
+      execution_api_key_name: runtimeApiKeyName,
+      published_system_name: targetSystemName,
+    };
+
+    await materializeAlgofundSystem(tenant, plan, switchProfile, true);
     await db.run(
-      `UPDATE algofund_profiles
-       SET actual_enabled = 1,
-           requested_enabled = 1,
-           assigned_api_key_name = ?,
-           published_system_name = ?,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE tenant_id = ?`,
-      [apiKeyName, asString(target.name), row.tenant_id]
+      `INSERT INTO algofund_active_systems (profile_id, system_name, weight, is_enabled, assigned_by, created_at, updated_at)
+       VALUES (?, ?, 1, 1, 'admin', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(profile_id, system_name)
+       DO UPDATE SET is_enabled = 1, updated_at = CURRENT_TIMESTAMP`,
+      [profile.id, targetSystemName]
     );
   }
 
@@ -8073,14 +8210,12 @@ export const removeAlgofundStorefrontSystem = async (payload: {
   force?: boolean;
   dryRun?: boolean;
   closePositions?: boolean;
-  hardDelete?: boolean;
 }): Promise<{
   removed: boolean;
   clientsAffected: number;
   affectedTenants: Array<{ id: number; display_name: string }>;
   positionsByApiKey: Array<{ apiKeyName: string; openPositions: number; symbols: string[] }>;
   closeResult?: { requested: number; failed: number };
-  hardDeletedCount?: number;
   warning?: string;
 }> => {
   const systemName = asString(payload.systemName, '').trim();
@@ -8100,13 +8235,6 @@ export const removeAlgofundStorefrontSystem = async (payload: {
   const clientCount = connectedRows.length;
   const affectedTenants = connectedRows.map((row) => ({ id: Number(row.id), display_name: asString(row.display_name, `tenant#${row.id}`) }));
   const apiKeys = Array.from(new Set(connectedRows.map((row) => asString(row.api_key_name, '')).filter(Boolean)));
-  const systemRows = await db.all(
-    `SELECT ts.id, ak.name AS api_key_name
-     FROM trading_systems ts
-     JOIN api_keys ak ON ak.id = ts.api_key_id
-     WHERE ts.name = ?`,
-    [systemName]
-  ) as Array<{ id?: number; api_key_name?: string }>;
   const positionsByApiKey: Array<{ apiKeyName: string; openPositions: number; symbols: string[] }> = [];
 
   for (const apiKeyName of apiKeys) {
@@ -8207,43 +8335,24 @@ export const removeAlgofundStorefrontSystem = async (payload: {
   );
   await setRuntimeFlag('offer.store.ts_backtest_snapshots', JSON.stringify(nextTsSnapshotMap));
 
-  let hardDeletedCount = 0;
-  if (payload.hardDelete) {
-    for (const row of (Array.isArray(systemRows) ? systemRows : [])) {
-      const systemId = Number(row.id || 0);
-      if (!systemId) {
-        continue;
-      }
-      await db.run('DELETE FROM trading_system_members WHERE system_id = ?', [systemId]);
-      await db.run('DELETE FROM trading_systems WHERE id = ?', [systemId]);
-      hardDeletedCount += 1;
-    }
-  } else {
-    // Remove system from storefront listing by archiving its name away from ALGOFUND_MASTER::* prefix.
-    // Keeping the row (instead of hard-delete) preserves auditability and avoids FK side effects.
-    const archiveSuffix = `archived_${Date.now()}`;
-    for (const row of (Array.isArray(systemRows) ? systemRows : [])) {
-      const systemId = Number(row.id || 0);
-      const apiKeyName = asString(row.api_key_name, '').trim();
-      if (!systemId || !apiKeyName) {
-        continue;
-      }
-      await updateTradingSystem(apiKeyName, systemId, {
-        name: `ARCHIVED::${systemName}::${archiveSuffix}`,
-        description: `Storefront removed at ${new Date().toISOString()}`,
-        auto_sync_members: false,
-        discovery_enabled: false,
-      });
-      await setTradingSystemActivation(apiKeyName, systemId, false, true).catch(() => undefined);
-    }
-  }
+  // Storefront is a visibility flag. Keep TS card in Offer/TS lists, only disable vitrine visibility.
+  await db.run(
+    `UPDATE algofund_active_systems
+     SET is_enabled = 0,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE system_name = ?`,
+    [systemName]
+  );
+
+  // NOTE: TS stays ACTIVE in Offer/TS tables - only removed from vitrine.
+  // This is safe removal: clients are disconnected, TS remains available for future reconnection or separate hard-delete.
+  // If true hard-delete is needed later, it should be a separate admin action with explicit confirmation.
 
   return {
     removed: true,
     clientsAffected: clientCount,
     affectedTenants,
     positionsByApiKey,
-    ...(payload.hardDelete ? { hardDeletedCount } : {}),
     ...(closeResult ? { closeResult } : {}),
   };
 };

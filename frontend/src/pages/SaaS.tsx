@@ -72,6 +72,7 @@ type AdminSweepBacktestPreviewResponse = {
     tradeFrequencyScore: number;
     riskLevel: Level3;
     tradeFrequencyLevel: Level3;
+    initialBalance?: number;
     riskScaleMaxPercent?: number;
   };
   period?: PeriodInfo | null;
@@ -506,6 +507,7 @@ type SaasSummary = {
       riskLevel: Level3;
     };
     publishedOfferIds: string[];
+    algofundStorefrontSystemNames?: string[];
     tsBacktestSnapshots?: Record<string, {
       apiKeyName?: string;
       systemName?: string;
@@ -580,6 +582,7 @@ type SaasSummary = {
     offerMonthly: boolean;
     sweepSnapshotAutoRefreshEnabled?: boolean;
     sweepSnapshotRefreshHours?: number;
+    watchdogEnabled?: boolean;
   };
   snapshotRefresh?: {
     lastRunAt?: string;
@@ -847,6 +850,7 @@ type AlgofundState = {
     requested_enabled: number;
     actual_enabled: number;
     assigned_api_key_name: string;
+    execution_api_key_name?: string;
     published_system_name?: string;
   };
   engine?: {
@@ -954,7 +958,7 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
     riskScore: Number.isFinite(riskScore) ? Math.min(10, Math.max(0, riskScore)) : DEFAULT_BACKTEST_SETTINGS.riskScore,
     tradeFrequencyScore: Number.isFinite(tradeFrequencyScore) ? Math.min(10, Math.max(0, tradeFrequencyScore)) : DEFAULT_BACKTEST_SETTINGS.tradeFrequencyScore,
     initialBalance: Number.isFinite(initialBalance) ? Math.max(100, Math.floor(initialBalance)) : DEFAULT_BACKTEST_SETTINGS.initialBalance,
-    riskScaleMaxPercent: Number.isFinite(riskScaleMaxPercent) ? Math.min(400, Math.max(0, riskScaleMaxPercent)) : DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent,
+    riskScaleMaxPercent: Number.isFinite(riskScaleMaxPercent) ? Math.min(1000, Math.max(0, riskScaleMaxPercent)) : DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent,
   };
 };
 
@@ -2215,6 +2219,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [closedPositionsLoading, setClosedPositionsLoading] = useState(false);
   const [chartSnapshotReport, setChartSnapshotReport] = useState<AdminChartSnapshotReport | null>(null);
   const [chartSnapshotLoading, setChartSnapshotLoading] = useState(false);
+  const [runtimeWindowBacktests, setRuntimeWindowBacktests] = useState<Record<string, AdminSweepBacktestPreviewResponse | null>>({});
+  const [runtimeWindowBacktestsLoading, setRuntimeWindowBacktestsLoading] = useState(false);
   const [sendTelegramLoading, setSendTelegramLoading] = useState(false);
   const reviewContextRef = useRef<HTMLDivElement | null>(null);
   const [strategyTenantId, setStrategyTenantId] = useState<number | null>(null);
@@ -2320,6 +2326,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [applyLowLotTarget, setApplyLowLotTarget] = useState<LowLotRecommendation | null>(null);
   const [applyLowLotDeposit, setApplyLowLotDeposit] = useState(true);
   const [applyLowLotLot, setApplyLowLotLot] = useState(true);
+  const [applyLowLotWholeSystem, setApplyLowLotWholeSystem] = useState(true);
   const [applyLowLotReplacement, setApplyLowLotReplacement] = useState('');
   const [applyLowLotWorking, setApplyLowLotWorking] = useState(false);
   const [batchTenantIds, setBatchTenantIds] = useState<number[]>([]);
@@ -2402,11 +2409,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   );
   const publishedAlgofundSystems = useMemo(
     () => Array.from(new Set(
-      algofundTenantsWithPublishedTs
-        .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
-        .filter(Boolean)
+      [
+        ...algofundTenantsWithPublishedTs
+          .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
+          .filter(Boolean),
+        ...((summary?.offerStore?.algofundStorefrontSystemNames || [])
+          .map((name) => String(name || '').trim())
+          .filter(Boolean)),
+      ]
     )),
-    [algofundTenantsWithPublishedTs],
+    [algofundTenantsWithPublishedTs, summary?.offerStore?.algofundStorefrontSystemNames],
   );
   const strategySystemProfiles = strategyState?.systemProfiles || [];
   const activeStrategySystemProfile = strategySystemProfiles.find((item) => item.isActive) || null;
@@ -2958,6 +2970,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return tokenMatch?.snapshot || null;
   }, [summary?.offerStore?.tsBacktestSnapshots, matchesTsSnapshotToken, extractTsSuffixToken]);
 
+  const masterSnapshotForReportSystem = useMemo(() => {
+    const systemName = String(resolvedReportSystemName || '').trim();
+    if (!systemName) {
+      return null;
+    }
+    return resolveTsSnapshotForSystem(systemName);
+  }, [resolvedReportSystemName, resolveTsSnapshotForSystem]);
+
   const algofundStorefrontSystems = useMemo(() => {
     // Build storefront from active/relevant TS systems only to avoid mixing stale historical entries.
     const availableSystems = Array.isArray(algofundState?.availableSystems) ? (algofundState?.availableSystems || []) : [];
@@ -3061,11 +3081,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const safeLatestBacktestSummary = snapshotForSystem ? latestBacktestSummary : null;
     const safeLatestBacktestCurve = snapshotForSystem ? latestBacktestCurve : [];
 
-    const hasMeaningfulState = Boolean(
-      publishSummary
-      || snapshotForSystem
-      || tenants.length > 0
-    );
+    const isStorefrontEnabled = publishedSystemSet.has(systemName);
+    const hasMeaningfulState = isStorefrontEnabled
+      || Boolean(publishSummary)
+      || Boolean(snapshotForSystem)
+      || tenants.length > 0;
 
     return {
       systemName,
@@ -3490,6 +3510,50 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const loadRuntimeWindowBacktests = async () => {
+    const targetSystemName = String(resolvedReportSystemName || '').trim();
+    if (!targetSystemName) {
+      messageApi.warning('Сначала выберите Algofund TS');
+      return;
+    }
+    setRuntimeWindowBacktestsLoading(true);
+    try {
+      const now = new Date();
+      const windows = [
+        { key: '1d', days: 1 },
+        { key: '7d', days: 7 },
+        { key: '30d', days: 30 },
+      ];
+
+      const results = await Promise.all(
+        windows.map(async (window) => {
+          const dateTo = now.toISOString();
+          const dateFromDate = new Date(now.getTime() - window.days * 24 * 60 * 60 * 1000);
+          const dateFrom = dateFromDate.toISOString();
+          const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
+            source: 'runtime_system',
+            kind: 'algofund-ts',
+            systemName: targetSystemName,
+            preferRealBacktest: true,
+            dateFrom,
+            dateTo,
+            initialBalance: adminSweepBacktestInitialBalance,
+            riskScore: adminSweepBacktestRiskScore,
+            tradeFrequencyScore: adminSweepBacktestTradeScore,
+            riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
+          });
+          return [window.key, response.data] as const;
+        })
+      );
+
+      setRuntimeWindowBacktests(Object.fromEntries(results));
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load runtime backtests'));
+    } finally {
+      setRuntimeWindowBacktestsLoading(false);
+    }
+  };
+
   const loadStrategyTenant = async (tenantId: number) => {
     setStrategyLoading(true);
     setStrategyError('');
@@ -3858,12 +3922,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           strategyId: applyLowLotTarget.strategyId,
           applyDepositFix: applyLowLotDeposit,
           applyLotFix: applyLowLotLot,
+          applyToSystem: applyLowLotWholeSystem && Boolean(applyLowLotTarget.systemId),
+          systemId: applyLowLotWholeSystem ? (applyLowLotTarget.systemId || undefined) : undefined,
           replacementSymbol: applyLowLotReplacement || undefined,
         }
       );
       const changeSummary = Array.isArray(resp.data?.changeSummary) ? resp.data.changeSummary : [];
       const summaryText = changeSummary.length > 0 ? ` (${changeSummary.join(', ')})` : '';
-      messageApi.success(`Применено к стратегии ${strategyName}${summaryText}`, 8);
+      messageApi.success(`Применено: ${strategyName}${summaryText}`, 8);
       setApplyLowLotTarget(null);
       void loadLowLotRecommendations();
     } catch (error: any) {
@@ -3871,7 +3937,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     } finally {
       setApplyLowLotWorking(false);
     }
-  }, [applyLowLotTarget, applyLowLotDeposit, applyLowLotLot, applyLowLotReplacement, messageApi, loadLowLotRecommendations]);
+  }, [applyLowLotTarget, applyLowLotDeposit, applyLowLotLot, applyLowLotWholeSystem, applyLowLotReplacement, messageApi, loadLowLotRecommendations]);
 
   const loadMonitoringTabData = useCallback(async () => {
     if (!summary) {
@@ -4245,7 +4311,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
     setAlgofundRiskMultiplier(Number(algofundState.preview?.riskMultiplier ?? algofundState.profile?.risk_multiplier ?? 1));
-    setAlgofundApiKeyName(algofundState.profile?.assigned_api_key_name || algofundState.tenant.assigned_api_key_name || '');
+    setAlgofundApiKeyName(
+      algofundState.profile?.execution_api_key_name
+      || algofundState.profile?.assigned_api_key_name
+      || algofundState.tenant.assigned_api_key_name
+      || ''
+    );
     setAlgofundTenantDisplayName(algofundState.tenant.display_name || '');
     setAlgofundTenantStatus(algofundState.tenant.status || 'active');
     setAlgofundTenantPlanCode(algofundState.plan?.code || '');
@@ -5113,7 +5184,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const runAdminSweepBacktestPreview = async (
     context?: SaasBacktestContext | null,
-    options?: { preferRealBacktest?: boolean }
+    options?: { preferRealBacktest?: boolean; settingsOverride?: Partial<BacktestCardSettings> }
   ) => {
     const targetContext = context || backtestDrawerContext;
     if (!targetContext) {
@@ -5124,6 +5195,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAdminSweepBacktestLoading(true);
     setAdminSweepBacktestStale(false);
     setAdminSweepPreviewRiskScale(1);
+
+    const effectiveRiskScore = Number(options?.settingsOverride?.riskScore ?? adminSweepBacktestRiskScore);
+    const effectiveTradeFrequencyScore = Number(options?.settingsOverride?.tradeFrequencyScore ?? adminSweepBacktestTradeScore);
+    const effectiveInitialBalance = Number(options?.settingsOverride?.initialBalance ?? adminSweepBacktestInitialBalance);
+    const effectiveRiskScaleMaxPercent = Number(options?.settingsOverride?.riskScaleMaxPercent ?? adminSweepBacktestRiskScaleMaxPercent);
     try {
       const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
         kind: targetContext.kind,
@@ -5137,10 +5213,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             backtestTsWeightsByOfferId,
           )
           : undefined,
-        riskScore: adminSweepBacktestRiskScore,
-        tradeFrequencyScore: adminSweepBacktestTradeScore,
-        initialBalance: adminSweepBacktestInitialBalance,
-        riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
+        riskScore: effectiveRiskScore,
+        tradeFrequencyScore: effectiveTradeFrequencyScore,
+        initialBalance: effectiveInitialBalance,
+        riskScaleMaxPercent: effectiveRiskScaleMaxPercent,
         preferRealBacktest: options?.preferRealBacktest === true,
         rerunApiKeyName: options?.preferRealBacktest
           ? (adminSweepBacktestRerunApiKey || undefined)
@@ -5156,10 +5232,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       }
       // Auto-store current settings for this context card
       storeCurrentBacktestSettingsForContext(targetContext, {
-        riskScore: adminSweepBacktestRiskScore,
-        tradeFrequencyScore: adminSweepBacktestTradeScore,
-        initialBalance: adminSweepBacktestInitialBalance,
-        riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
+        riskScore: effectiveRiskScore,
+        tradeFrequencyScore: effectiveTradeFrequencyScore,
+        initialBalance: effectiveInitialBalance,
+        riskScaleMaxPercent: effectiveRiskScaleMaxPercent,
       });
     } catch (error: any) {
       if (requestSeq !== backtestRequestSeqRef.current) {
@@ -5425,6 +5501,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       } else {
         messageApi.success('Метрики ТС сохранены как черновик');
       }
+      // Update localStorage under the new snapshotKey so re-opens use saved settings
+      storeCurrentBacktestSettingsForContext(
+        { ...backtestDrawerContext!, setKey: snapshotKey },
+        {
+          riskScore: Number(adminSweepBacktestRiskScore ?? 5),
+          tradeFrequencyScore: Number(adminSweepBacktestTradeScore ?? 5),
+          initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
+          riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 40),
+        }
+      );
       await loadSummary('full');
       setSelectedAdminDraftTsSetKey(snapshotKey);
     } catch (error: any) {
@@ -5480,6 +5566,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     backtestRequestSeqRef.current += 1;
     const settings = resolveBacktestSettingsForContext(context);
     applyBacktestSettings(settings);
+
+    // Persist resolved settings to localStorage under the context key so that
+    // re-opening the same card (even after server-side snapshot refresh) retains
+    // the last-known settings rather than falling through to defaults.
+    const contextKey = getBacktestContextKey(context);
+    if (contextKey) {
+      setAdminBacktestSettingsByCard((current) => {
+        if (current[contextKey]) {
+          return current; // already has explicit user settings — do not overwrite
+        }
+        const next = { ...current, [contextKey]: settings };
+        persistBacktestSettingsByCard(next);
+        return next;
+      });
+    }
     if (context.kind === 'algofund-ts') {
       const offerIds = Array.from(new Set((context.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
       setBacktestTsWeightsByOfferId((prev) => {
@@ -5496,7 +5597,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAdminSweepBacktestResult(null);
     setAdminSweepBacktestRerunApiKey('');
     window.setTimeout(() => {
-      void runAdminSweepBacktestPreview(context);
+      void runAdminSweepBacktestPreview(context, { settingsOverride: settings });
     }, 0);
   };
 
@@ -7752,6 +7853,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   }}
                                   style={{ width: 88 }}
                                 />
+                              </Space>
+                              <Space wrap>
+                                <Text>Watchdog: алерты при rate-limit / сбоях</Text>
+                                <Switch
+                                  size="small"
+                                  checked={Boolean(summary?.reportSettings?.watchdogEnabled ?? true)}
+                                  loading={actionLoading === 'report-setting:watchdogEnabled'}
+                                  onChange={(checked) => {
+                                    void updateReportSettings({ watchdogEnabled: checked });
+                                  }}
+                                />
+                                <Text type="secondary">При всплеске rate-limit (&ge;5 за 15 мин) или 10 сбоях подряд отправит алерт в Telegram</Text>
+                              </Space>
                                 <Button
                                   size="small"
                                   loading={actionLoading === 'snapshot-refresh'}
@@ -7806,14 +7920,110 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   />
                                   <Button loading={tsHealthLoading} onClick={() => void loadTsHealthReport()}>TS Health</Button>
                                   <Button loading={closedPositionsLoading} onClick={() => void loadClosedPositionsReport()}>Closed Positions</Button>
+                                  <Button loading={runtimeWindowBacktestsLoading} onClick={() => void loadRuntimeWindowBacktests()}>Backtest 1d/7d/30d</Button>
                                   <Button loading={chartSnapshotLoading} onClick={() => void loadChartSnapshotReport()}>Chart Snapshot</Button>
                                 </Space>
                                 <Space wrap>
                                   <Tag color="blue">health: {Number(tsHealthReport?.systems?.length || 0)} systems</Tag>
                                   <Tag color="gold">closed: {Number(closedPositionsReport?.summary?.closedCount || 0)}</Tag>
+                                  <Tag color="magenta">bt windows: {Object.keys(runtimeWindowBacktests || {}).length}</Tag>
                                   <Tag color="purple">snapshot candles: {Number(chartSnapshotReport?.candlesCount || 0)}</Tag>
                                   {chartSnapshotReport?.generatedAt ? <Tag>{chartSnapshotReport.generatedAt.slice(0, 16).replace('T', ' ')}</Tag> : null}
                                 </Space>
+                                <Row gutter={[12, 12]}>
+                                  <Col xs={24} xl={12}>
+                                    <Card size="small" title="Master backtest/live (card контур)">
+                                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                        {masterSnapshotForReportSystem ? (
+                                          <Space wrap>
+                                            <Tag color="blue">ret: {formatPercent(masterSnapshotForReportSystem.ret)}</Tag>
+                                            <Tag color="green">pf: {formatNumber(masterSnapshotForReportSystem.pf, 2)}</Tag>
+                                            <Tag color="orange">dd: {formatPercent(masterSnapshotForReportSystem.dd)}</Tag>
+                                            <Tag color="geekblue">trades: {Number(masterSnapshotForReportSystem.trades || 0)}</Tag>
+                                            <Tag color="cyan">period: {Number(masterSnapshotForReportSystem.periodDays || 0)}d</Tag>
+                                          </Space>
+                                        ) : (
+                                          <Text type="secondary">Нет snapshot master-бэктеста для выбранной карточки.</Text>
+                                        )}
+                                        <Text type="secondary">
+                                          Этот блок показывает метрики карточки/витрины (master).
+                                        </Text>
+                                      </Space>
+                                    </Card>
+                                  </Col>
+                                  <Col xs={24} xl={12}>
+                                    <Card size="small" title="Client runtime live (клиентский контур)">
+                                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                        {tsHealthReport?.systems?.[0] ? (
+                                          <Space wrap>
+                                            <Tag color="cyan">clients: {Number(tsHealthReport.systems[0].connectedClients || 0)}</Tag>
+                                            <Tag>members: {Number(tsHealthReport.systems[0].membersEnabled || 0)}/{Number(tsHealthReport.systems[0].membersTotal || 0)}</Tag>
+                                            <Tag color="green">members with events(24h): {Number(tsHealthReport.systems[0].membersWithRecentEvents || 0)}</Tag>
+                                            <Tag color="blue">equity: {formatMoney(tsHealthReport.systems[0].latestAccountSnapshot?.equityUsd)}</Tag>
+                                          </Space>
+                                        ) : (
+                                          <Text type="secondary">Live-данные runtime пока не загружены.</Text>
+                                        )}
+                                        {closedPositionsReport?.summary ? (
+                                          <Space wrap>
+                                            <Tag color="gold">closed(lookback): {Number(closedPositionsReport.summary.closedCount || 0)}</Tag>
+                                            <Tag color={(Number(closedPositionsReport.summary.totalRealizedPnl || 0) >= 0) ? 'green' : 'red'}>
+                                              pnl: {formatMoney(closedPositionsReport.summary.totalRealizedPnl)}
+                                            </Tag>
+                                          </Space>
+                                        ) : null}
+                                      </Space>
+                                    </Card>
+                                  </Col>
+                                </Row>
+                                {Object.keys(runtimeWindowBacktests || {}).length > 0 ? (
+                                  <Table
+                                    size="small"
+                                    pagination={false}
+                                    rowKey="window"
+                                    dataSource={[
+                                      { window: '1d', data: runtimeWindowBacktests['1d'] || null },
+                                      { window: '7d', data: runtimeWindowBacktests['7d'] || null },
+                                      { window: '30d', data: runtimeWindowBacktests['30d'] || null },
+                                    ]}
+                                    columns={[
+                                      { title: 'Window', dataIndex: 'window', key: 'window' },
+                                      {
+                                        title: 'Trades',
+                                        key: 'trades',
+                                        render: (_, row: { window: string; data: AdminSweepBacktestPreviewResponse | null }) => Number(row.data?.preview?.summary?.tradesCount || 0),
+                                      },
+                                      {
+                                        title: 'Return %',
+                                        key: 'ret',
+                                        render: (_, row: { window: string; data: AdminSweepBacktestPreviewResponse | null }) => formatPercent(row.data?.preview?.summary?.totalReturnPercent),
+                                      },
+                                      {
+                                        title: 'P/L',
+                                        key: 'pl',
+                                        render: (_, row: { window: string; data: AdminSweepBacktestPreviewResponse | null }) => {
+                                          const summary = row.data?.preview?.summary;
+                                          const initial = Number(adminSweepBacktestInitialBalance || 0);
+                                          const final = Number(summary?.finalEquity || 0);
+                                          if (!Number.isFinite(final) || !Number.isFinite(initial) || initial <= 0) {
+                                            return formatMoney(0);
+                                          }
+                                          return formatMoney(final - initial);
+                                        },
+                                      },
+                                      {
+                                        title: 'PF',
+                                        key: 'pf',
+                                        render: (_, row: { window: string; data: AdminSweepBacktestPreviewResponse | null }) => formatNumber(row.data?.preview?.summary?.profitFactor, 2),
+                                      },
+                                      {
+                                        title: 'DD %',
+                                        key: 'dd',
+                                        render: (_, row: { window: string; data: AdminSweepBacktestPreviewResponse | null }) => formatPercent(row.data?.preview?.summary?.maxDrawdownPercent),
+                                      },
+                                    ]}
+                                  />
+                                ) : null}
                                 {tsHealthReport?.systems?.[0] ? (
                                   <Space wrap>
                                     <Tag color="cyan">clients: {Number(tsHealthReport.systems[0].connectedClients || 0)}</Tag>
@@ -8022,6 +8232,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                               setApplyLowLotTarget(row);
                                               setApplyLowLotDeposit(true);
                                               setApplyLowLotLot(true);
+                                              setApplyLowLotWholeSystem(Boolean(row.systemId));
                                               setApplyLowLotReplacement(row.replacementCandidates?.[0]?.symbol ? `${row.replacementCandidates[0].symbol}/USDT` : '');
                                             }}
                                           >
@@ -9960,7 +10171,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             >
               Increase lot%: {applyLowLotTarget.lotPercent}% {'→'} {applyLowLotTarget.suggestedLotPercent}%
             </Checkbox>
-            {applyLowLotTarget.replacementCandidates?.length > 0 && (
+            {applyLowLotTarget.systemId ? (
+              <Checkbox
+                checked={applyLowLotWholeSystem}
+                onChange={(e) => setApplyLowLotWholeSystem(e.target.checked)}
+              >
+                Apply to whole TS system (preserve relative behavior across members)
+              </Checkbox>
+            ) : null}
+            {applyLowLotTarget.replacementCandidates?.length > 0 && !applyLowLotWholeSystem && (
               <div>
                 <Text strong>Replace pair optionally:</Text>
                 <Select
@@ -10374,12 +10593,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 <Card size="small" title="Потолок риска, %">
                   <InputNumber
                     min={0}
-                    max={400}
-                    step={5}
+                    max={1000}
+                    step={10}
                     style={{ width: '100%' }}
                     value={adminSweepBacktestRiskScaleMaxPercent}
                     onChange={(value) => {
-                      const next = Math.max(0, Math.min(400, Number(value || 40)));
+                      const next = Math.max(0, Math.min(1000, Number(value || 40)));
                       setAdminSweepBacktestRiskScaleMaxPercent(next);
                       storeCurrentBacktestSettingsForContext(backtestDrawerContext, { riskScaleMaxPercent: next });
                     }}
@@ -10441,6 +10660,49 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.profitFactor || 0), 'pf')}>PF {formatNumber(adminSweepBacktestResult.preview.summary.profitFactor)}</Tag> : null}
                     {adminSweepBacktestResult.preview?.summary?.tradesCount !== undefined ? <Tag color="cyan">trades {formatNumber(adminSweepBacktestResult.preview.summary.tradesCount, 0)}</Tag> : null}
                   </Space>
+
+                  {/* Low-lot / deposit warnings */}
+                  {(() => {
+                    const offersCount = adminSweepBacktestResult.selectedOffers.length || 1;
+                    const balance = Number(adminSweepBacktestInitialBalance || 10000);
+                    const riskMul = getBacktestRiskMultiplier(adminSweepBacktestRiskScore, adminSweepBacktestRiskScaleMaxPercent);
+                    const effectiveBalance = balance * Math.max(0.01, riskMul);
+                    const perStrategy = effectiveBalance / offersCount;
+                    const synthOffers = adminSweepBacktestResult.selectedOffers.filter((o) => o.mode === 'synth');
+                    const warnings: string[] = [];
+                    if (perStrategy < 150) {
+                      warnings.push(
+                        `На стратегию приходится ~${perStrategy.toFixed(0)} USDT — ниже минимального лота большинства пар (~150 USDT). `
+                        + `Увеличьте начальный баланс или снизьте количество стратегий.`
+                      );
+                    } else if (perStrategy < 300) {
+                      warnings.push(
+                        `На стратегию приходится ~${perStrategy.toFixed(0)} USDT — депозит около минимального порога. `
+                        + `Синтетические пары могут работать в режиме min-lot.`
+                      );
+                    }
+                    if (synthOffers.length > 0 && perStrategy < 400) {
+                      warnings.push(
+                        `${synthOffers.length} синт. ${synthOffers.length === 1 ? 'стратегия требует' : 'стратегии требуют'} балансировки двух ног: `
+                        + `рекомендуется ≥ 400 USDT на синт. пару. Сейчас ~${perStrategy.toFixed(0)} USDT.`
+                      );
+                    }
+                    if (warnings.length === 0) {
+                      return null;
+                    }
+                    return (
+                      <Alert
+                        type="warning"
+                        showIcon
+                        message="Предупреждение о размере лота"
+                        description={
+                          <ul style={{ margin: 0, paddingLeft: 16 }}>
+                            {warnings.map((w, i) => <li key={i}>{w}</li>)}
+                          </ul>
+                        }
+                      />
+                    );
+                  })()}
 
                   {adminSweepBacktestResult.rerun?.requested && rerunErrorText ? (
                     <Alert

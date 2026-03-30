@@ -100,6 +100,31 @@ const buildLowLotActionHint = (maxDeposit: number, lotPercent: number): string =
   return `action: dep>=${recommendedDeposit.toFixed(0)} or lot>=${targetLot.toFixed(0)}% or replace pair via sweep`;
 };
 
+const buildDriftHumanHint = (metricName: string, value: number, threshold: number): string => {
+  const metric = String(metricName || '').toLowerCase();
+  if (metric === 'win_rate_drop') {
+    return `win-rate live ${Math.max(0, value * 100).toFixed(1)}% vs ref ${Math.max(0, threshold * 100).toFixed(1)}%`;
+  }
+  if (metric === 'pnl_drop') {
+    return `PnL gap ${Math.abs(value * 100).toFixed(1)}% (allowed ${Math.abs(threshold * 100).toFixed(1)}%)`;
+  }
+  if (metric === 'entry_price_deviation') {
+    return `entry deviation ${Math.abs(value).toFixed(2)}% vs limit ${Math.abs(threshold).toFixed(2)}%`;
+  }
+  if (metric === 'slippage_drift') {
+    return `slippage ${Math.abs(value).toFixed(2)}% vs limit ${Math.abs(threshold).toFixed(2)}%`;
+  }
+  return `value ${value.toFixed(4)} vs threshold ${threshold.toFixed(4)}`;
+};
+
+const formatDriftPercent = (value: number): string => {
+  const drift = toFinite(value, 0);
+  if (Math.abs(drift) >= 500) {
+    return `${drift >= 0 ? '>=' : '<='}500%`;
+  }
+  return `${drift.toFixed(1)}%`;
+};
+
 const getFreshAlertWindowHours = (periodHours: number): number => {
   const configured = Math.max(1, Math.floor(Number(process.env.TELEGRAM_ADMIN_ALERT_FRESH_HOURS || 24) || 24));
   return Math.max(1, Math.min(Math.floor(periodHours), configured));
@@ -233,7 +258,13 @@ const buildRuntimeClientLines = async (periodHours: number): Promise<string[]> =
     const keyPart = `key=${escapeHtml(executionApiKeyName || '-')}`;
 
     out.push(
-      `${escapeHtml(displayName || tenantSlug || executionApiKeyName || 'client')} (${escapeHtml(mode)}#${profileId}) | ${keyPart}${scopePart} | trades=${trades} | delta=${delta.toFixed(2)} | upnl=${upnl.toFixed(2)} | eq=${eqLatest.toFixed(2)} | ml=${margin.toFixed(1)}% | dd=${dd.toFixed(1)}%${warnings.length ? ` | ${warnings.join(',')}` : ''}`
+      [
+        `• ${escapeHtml(displayName || tenantSlug || executionApiKeyName || 'client')} (${escapeHtml(mode)}#${profileId})`,
+        `  ключ: ${escapeHtml(executionApiKeyName || '-')}`,
+        systemName ? `  TS: ${escapeHtml(shorten(systemName, 72))}` : '',
+        `  сделки: ${trades} | equity: ${eqLatest.toFixed(2)} | uPnL: ${upnl.toFixed(2)}`,
+        `  delta: ${delta.toFixed(2)} | margin: ${margin.toFixed(1)}% | DD: ${dd.toFixed(1)}%${warnings.length ? ` | риски: ${warnings.join(',')}` : ''}`,
+      ].filter(Boolean).join('\n')
     );
   }
 
@@ -334,7 +365,7 @@ const buildAccountLines = async (periodHours: number, runtimeOnly = false): Prom
     }
 
     out.push(
-      `${escapeHtml(apiKeyName)} | trades=${trades} | delta=${delta.toFixed(2)} | upnl=${upnl.toFixed(2)} | eq=${eqLatest.toFixed(2)} | ml=${margin.toFixed(1)}% | dd=${dd.toFixed(1)}%${warnings.length ? ` | ${warnings.join(',')}` : ''}`
+      `• ${escapeHtml(apiKeyName)}: сделки=${trades}, equity=${eqLatest.toFixed(2)}, uPnL=${upnl.toFixed(2)}, delta=${delta.toFixed(2)}, margin=${margin.toFixed(1)}%, DD=${dd.toFixed(1)}%${warnings.length ? `, риски=${warnings.join(',')}` : ''}`
     );
   }
 
@@ -344,20 +375,41 @@ const buildAccountLines = async (periodHours: number, runtimeOnly = false): Prom
 const buildDriftAlertLines = async (periodHours: number, limit = 8): Promise<string[]> => {
   const freshHours = getFreshAlertWindowHours(periodHours);
   const rows = await db.all(
-    `SELECT
-       a.name AS api_key_name,
-       s.id AS strategy_id,
-       s.name AS strategy_name,
-       da.metric_name,
-       da.severity,
-       da.drift_percent,
-       da.description,
-       da.created_at
-     FROM drift_alerts da
-     JOIN strategies s ON s.id = da.strategy_id
-     JOIN api_keys a ON a.id = s.api_key_id
-     WHERE da.created_at >= (strftime('%s', 'now', ?) * 1000)
-     ORDER BY da.created_at DESC
+    `WITH ranked AS (
+       SELECT
+         a.name AS api_key_name,
+         s.id AS strategy_id,
+         s.name AS strategy_name,
+         da.metric_name,
+         da.severity,
+         da.drift_percent,
+         da.value,
+         da.threshold,
+         da.description,
+         da.created_at,
+         ROW_NUMBER() OVER (
+           PARTITION BY a.name, s.id, COALESCE(da.metric_name, '')
+           ORDER BY da.created_at DESC
+         ) AS rn
+       FROM drift_alerts da
+       JOIN strategies s ON s.id = da.strategy_id
+       JOIN api_keys a ON a.id = s.api_key_id
+       WHERE da.created_at >= (strftime('%s', 'now', ?) * 1000)
+     )
+     SELECT
+       api_key_name,
+       strategy_id,
+       strategy_name,
+       metric_name,
+       severity,
+       drift_percent,
+       value,
+       threshold,
+       description,
+       created_at
+     FROM ranked
+     WHERE rn = 1
+     ORDER BY created_at DESC
      LIMIT ?`,
     [`-${freshHours} hours`, Math.max(1, Math.floor(limit))]
   );
@@ -368,36 +420,63 @@ const buildDriftAlertLines = async (periodHours: number, limit = 8): Promise<str
     const strategyId = Math.max(0, Math.floor(toFinite(row?.strategy_id, 0)));
     const strategyName = escapeHtml(shorten(String(row?.strategy_name || ''), 40));
     const metric = escapeHtml(String(row?.metric_name || 'metric'));
+    const metricRaw = String(row?.metric_name || 'metric');
     const severity = String(row?.severity || 'warning').toLowerCase() === 'critical' ? 'critical' : 'warning';
     const drift = toFinite(row?.drift_percent, 0);
+    const value = toFinite(row?.value, 0);
+    const threshold = toFinite(row?.threshold, 0);
     const description = escapeHtml(shorten(String(row?.description || ''), 120));
-    return `${apiKey} | S#${strategyId} ${strategyName} | ${severity.toUpperCase()} ${metric} drift=${drift.toFixed(1)}% | ${description}`;
+    const hint = escapeHtml(buildDriftHumanHint(metricRaw, value, threshold));
+    return `${apiKey} | S#${strategyId} ${strategyName} | ${severity.toUpperCase()} ${metric} drift=${formatDriftPercent(drift)} | ${hint} | ${description}`;
   });
 };
 
 const buildLowLotLines = async (periodHours: number, limit = 8): Promise<string[]> => {
   const freshHours = getFreshAlertWindowHours(periodHours);
   const rows = await db.all(
-    `SELECT
-       a.name AS api_key_name,
-       s.id AS strategy_id,
-       s.name AS strategy_name,
-       s.base_symbol,
-       s.quote_symbol,
-       e.message AS last_error,
-       s.max_deposit,
-       s.leverage,
-       s.lot_long_percent,
-       s.lot_short_percent,
-       datetime(e.created_at / 1000, 'unixepoch') AS updated_at
-     FROM strategy_runtime_events e
-     JOIN strategies s ON s.id = e.strategy_id
-     JOIN api_keys a ON a.id = s.api_key_id
-     WHERE e.event_type = 'low_lot_error'
-       AND e.resolved_at = 0
-       AND e.created_at >= (strftime('%s', 'now', ?) * 1000)
-       AND COALESCE(s.is_active, 0) = 1
-     ORDER BY e.created_at DESC
+    `WITH ranked AS (
+       SELECT
+         a.name AS api_key_name,
+         s.id AS strategy_id,
+         s.name AS strategy_name,
+         s.base_symbol,
+         s.quote_symbol,
+         e.message AS last_error,
+         s.max_deposit,
+         s.leverage,
+         s.lot_long_percent,
+         s.lot_short_percent,
+         datetime(e.created_at / 1000, 'unixepoch') AS updated_at,
+         e.event_type,
+         e.resolved_at,
+         e.created_at,
+         ROW_NUMBER() OVER (
+           PARTITION BY a.name, s.id
+           ORDER BY e.created_at DESC
+         ) AS rn
+       FROM strategy_runtime_events e
+       JOIN strategies s ON s.id = e.strategy_id
+       JOIN api_keys a ON a.id = s.api_key_id
+       WHERE e.created_at >= (strftime('%s', 'now', ?) * 1000)
+         AND COALESCE(s.is_active, 0) = 1
+     )
+     SELECT
+       api_key_name,
+       strategy_id,
+       strategy_name,
+       base_symbol,
+       quote_symbol,
+       last_error,
+       max_deposit,
+       leverage,
+       lot_long_percent,
+       lot_short_percent,
+       updated_at
+     FROM ranked
+     WHERE rn = 1
+       AND event_type = 'low_lot_error'
+       AND resolved_at = 0
+     ORDER BY created_at DESC
      LIMIT ?`,
     [`-${freshHours} hours`, Math.max(1, Math.floor(limit))]
   );
@@ -437,24 +516,24 @@ const sendPeriodicReportShort = async (periodHours: number, runtimeOnly = false)
     buildLowLotLines(periodHours, 5),
   ]);
 
-  const header = `<b>\u{1F4CA} BTDD (${periodHours}h)</b>`;
+  const header = `<b>📊 BTDD: Короткий отчет за ${periodHours}ч</b>`;
   const parts: string[] = [header];
 
   if (lines.length > 0) {
     const topLines = lines.slice(0, 5);
-    parts.push('<b>Keys</b>');
+    parts.push('<b>Ключи / аккаунты</b>');
     parts.push(topLines.join('\n'));
     if (lines.length > 5) {
       parts.push(`<i>...+${lines.length - 5} more</i>`);
     }
   } else {
-    parts.push('No active keys');
+    parts.push('Активные ключи не найдены');
   }
 
   const alerts = [...driftLines, ...lowLotLines];
   if (alerts.length > 0) {
     parts.push('');
-    parts.push(`<b>\u26A0\uFE0F Alerts (${alerts.length})</b>`);
+    parts.push(`<b>⚠️ Алерты (${alerts.length})</b>`);
     parts.push(alerts.slice(0, 4).join('\n'));
   }
 
@@ -474,16 +553,16 @@ const sendPeriodicReport = async (periodHours: number, runtimeOnly = false, form
   const header = `<b>BTDD Admin Report (${periodHours}h)</b>`;
   const blocks: string[] = [];
 
-  blocks.push('<b>Accounts</b>');
-  blocks.push(lines.length > 0 ? lines.join('\n') : 'No accounts found');
+  blocks.push('<b>1) Аккаунты и runtime</b>');
+  blocks.push(lines.length > 0 ? lines.join('\n') : 'Нет данных по аккаунтам');
 
   blocks.push('');
-  blocks.push('<b>Drift alerts</b>');
-  blocks.push(driftLines.length > 0 ? driftLines.join('\n') : 'No drift alerts in period');
+  blocks.push('<b>2) Drift-алерты</b>');
+  blocks.push(driftLines.length > 0 ? driftLines.join('\n') : 'Drift-алертов за период нет');
 
   blocks.push('');
-  blocks.push('<b>Low-lot signals</b>');
-  blocks.push(lowLotLines.length > 0 ? lowLotLines.join('\n') : 'No low-lot signals in period');
+  blocks.push('<b>3) Low-lot сигналы</b>');
+  blocks.push(lowLotLines.length > 0 ? lowLotLines.join('\n') : 'Low-lot сигналов за период нет');
 
   const body = blocks.join('\n');
   await sendTelegramMessage(trimTelegramText(`${header}\n${body}`));
@@ -517,6 +596,110 @@ const sendNewLoginAlerts = async (state: ReporterState): Promise<void> => {
     if (latest) {
       state.lastLoginAtIso = latest;
     }
+  }
+};
+
+// ── Watchdog ─────────────────────────────────────────────────────────────────
+
+type WatchdogState = {
+  lastAlertAtMs: number;
+};
+
+const WATCHDOG_COOLDOWN_MS = 10 * 60_000; // 10 min between repeated alerts
+const watchdogState: WatchdogState = { lastAlertAtMs: 0 };
+
+const isWatchdogEnabledDb = async (): Promise<boolean> => {
+  const row = await db.get('SELECT value FROM app_runtime_flags WHERE key = ?', ['admin.report.settings']);
+  if (!row?.value) {
+    return true;
+  }
+  try {
+    const s = JSON.parse(String(row.value));
+    if (s && typeof s.watchdogEnabled === 'boolean') {
+      return s.watchdogEnabled;
+    }
+    if (s && typeof s.watchdogEnabled === 'string') {
+      return s.watchdogEnabled !== '0' && s.watchdogEnabled !== 'false';
+    }
+  } catch {
+    // ignore parse error
+  }
+  return true;
+};
+
+/**
+ * Checks for recent rate-limit bursts and API/runtime failure spikes.
+ * Sends an immediate Telegram alert if thresholds are exceeded.
+ * Hard cooldown 10 min to avoid spam.
+ */
+export const sendWatchdogAlertIfNeeded = async (): Promise<void> => {
+  if (!isEnabled()) {
+    return;
+  }
+  if (Date.now() - watchdogState.lastAlertAtMs < WATCHDOG_COOLDOWN_MS) {
+    return;
+  }
+  if (!(await isAdminReporterEnabledInDb())) {
+    return;
+  }
+  if (!(await isWatchdogEnabledDb())) {
+    return;
+  }
+
+  const windowMs = 15 * 60_000; // last 15 minutes
+  const since = Date.now() - windowMs;
+
+  const rateLimitRows = await db.all(
+    `SELECT COUNT(*) AS cnt
+     FROM strategy_runtime_events
+     WHERE event_type = 'rate_limit_error'
+       AND created_at >= ?`,
+    [since]
+  ) as Array<{ cnt?: number }>;
+  const rateLimitCount = Number(rateLimitRows[0]?.cnt || 0);
+
+  const lowLotRows = await db.all(
+    `SELECT COUNT(DISTINCT strategy_id) AS cnt
+     FROM strategy_runtime_events
+     WHERE event_type = 'low_lot_error'
+       AND resolved_at = 0
+       AND created_at >= ?`,
+    [since]
+  ) as Array<{ cnt?: number }>;
+  const lowLotCount = Number(lowLotRows[0]?.cnt || 0);
+
+  const failedCycleRows = await db.all(
+    `SELECT COUNT(*) AS cnt
+     FROM strategy_runtime_events
+     WHERE event_type = 'auto_cycle_failed'
+       AND created_at >= ?`,
+    [since]
+  ) as Array<{ cnt?: number }>;
+  const failedCount = Number(failedCycleRows[0]?.cnt || 0);
+
+  const alerts: string[] = [];
+  if (rateLimitCount >= 5) {
+    alerts.push(`🚦 <b>Rate-limit burst:</b> ${rateLimitCount} events за 15 мин`);
+  }
+  if (lowLotCount >= 2) {
+    alerts.push(`📉 <b>Low-lot:</b> ${lowLotCount} стратегий с ошибкой min lot за 15 мин`);
+  }
+  if (failedCount >= 10) {
+    alerts.push(`❌ <b>Цикл авто-торговли:</b> ${failedCount} сбоев подряд за 15 мин`);
+  }
+
+  if (alerts.length === 0) {
+    return;
+  }
+
+  watchdogState.lastAlertAtMs = Date.now();
+  const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+  const text = `⚠️ <b>BTDD Watchdog Alert</b> (${escapeHtml(dateStr)})\n\n${alerts.join('\n')}\n\n<i>Следующий алерт не раньше чем через 10 мин</i>`;
+  try {
+    await sendTelegramMessage(text);
+    logger.info(`[tg-watchdog] Alert sent: ${alerts.join('; ')}`);
+  } catch (error) {
+    logger.warn(`[tg-watchdog] Failed to send alert: ${(error as Error).message}`);
   }
 };
 
@@ -578,6 +761,9 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
         await sendPeriodicReport(reportHours, runtimeOnly, 'full');
         state.lastReportAtMs = nowMs;
       }
+
+      // Watchdog: instant alert for rate-limit burst / low-lot spike
+      await sendWatchdogAlertIfNeeded();
     } catch (error) {
       logger.warn(`[tg-admin] tick failed: ${(error as Error).message}`);
     }

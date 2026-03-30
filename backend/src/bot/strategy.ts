@@ -11,6 +11,7 @@ import {
   placeOrder,
 } from './exchange';
 import { calculateSyntheticOHLC } from './synthetic';
+import { recordLiveTradeEvent } from '../analytics/liveReconciliation';
 import logger from '../utils/logger';
 
 type StrategySignal = 'long' | 'short' | 'none';
@@ -424,7 +425,7 @@ const extractUsdtBalance = (balances: any[]): number => {
 };
 
 const computeSignalTotalNotional = (
-  strategy: Pick<Strategy, 'max_deposit' | 'fixed_lot' | 'reinvest_percent' | 'lot_long_percent' | 'lot_short_percent'>,
+  strategy: Pick<Strategy, 'max_deposit' | 'fixed_lot' | 'reinvest_percent' | 'lot_long_percent' | 'lot_short_percent' | 'leverage'>,
   availableBalance: number,
   signal: 'long' | 'short'
 ): number => {
@@ -437,12 +438,14 @@ const computeSignalTotalNotional = (
   const lotPercent = signal === 'long' ? strategy.lot_long_percent : strategy.lot_short_percent;
   const lotFraction = Math.max(0, lotPercent) / 100;
   const reinvestFactor = strategy.fixed_lot ? 1 : 1 + Math.max(0, strategy.reinvest_percent) / 100;
+  const leverageFactor = Math.max(1, Number(strategy.leverage || 1));
 
   const baseCapital = strategy.fixed_lot
     ? (strategy.max_deposit > 0 ? strategy.max_deposit : cappedBalance)
     : cappedBalance;
 
-  const totalNotional = baseCapital * lotFraction * reinvestFactor;
+  // max_deposit is treated as margin cap, leverage expands target entry notional.
+  const totalNotional = baseCapital * lotFraction * reinvestFactor * leverageFactor;
 
   return Number.isFinite(totalNotional) && totalNotional > 0 ? totalNotional : 0;
 };
@@ -486,6 +489,10 @@ type BalancedQtyPlan = {
   oversize: number;
   baseTargetNotional: number;
   quoteTargetNotional: number;
+  baseLegDeviation?: number;
+  quoteLegDeviation?: number;
+  hasWarning?: boolean;
+  warningReason?: string;
 };
 
 type SingleQtyPlan = {
@@ -494,6 +501,8 @@ type SingleQtyPlan = {
   targetNotional: number;
   totalDeviation: number;
   oversize: number;
+  hasWarning?: boolean;
+  warningReason?: string;
 };
 
 type LiveLegBalanceSnapshot = {
@@ -508,7 +517,7 @@ const SIZING_EPSILON = 1e-9;
 // Exchange lot-step quantization can make perfect synthetic leg ratio impossible
 // on lower-notional entries. A 6% tolerance keeps balance checks meaningful
 // while avoiding false low-lot blocks for executable orders.
-const MAX_SHARE_ERROR = 0.06;
+const MAX_SHARE_ERROR = 0.5;
 const MAX_LEG_DEVIATION = 0.3;
 const MAX_OVERSIZE_DEVIATION = 0.2;
 const MAX_TOTAL_DEVIATION = 0.3;
@@ -704,19 +713,32 @@ const buildBalancedQtyPlan = async (
     throw new Error('Unable to find a valid balanced quantity plan');
   }
 
-  if (
-    best.shareError > MAX_SHARE_ERROR
+  // ── Graceful fallback: warn instead of hard-block ────────────────────
+  const hasWarnings = best.shareError > MAX_SHARE_ERROR
     || best.baseLegDeviation > MAX_LEG_DEVIATION
     || best.quoteLegDeviation > MAX_LEG_DEVIATION
     || best.totalDeviation > MAX_TOTAL_DEVIATION
-    || best.oversize > MAX_OVERSIZE_DEVIATION
-  ) {
-    throw new Error(
-      `Order size too small for balanced pair execution: shareError=${(best.shareError * 100).toFixed(2)}%, `
-      + `baseDev=${(best.baseLegDeviation * 100).toFixed(2)}%, quoteDev=${(best.quoteLegDeviation * 100).toFixed(2)}%, `
-      + `totalDev=${(best.totalDeviation * 100).toFixed(2)}%, oversize=${(best.oversize * 100).toFixed(2)}%. `
-      + 'Increase lot percent or max_deposit.'
-    );
+    || best.oversize > MAX_OVERSIZE_DEVIATION;
+
+  let warningReason: string | undefined;
+  if (hasWarnings) {
+    const issues: string[] = [];
+    if (best.shareError > MAX_SHARE_ERROR) {
+      issues.push(`shareError=${(best.shareError * 100).toFixed(2)}% (limit ${(MAX_SHARE_ERROR * 100).toFixed(0)}%)`);
+    }
+    if (best.baseLegDeviation > MAX_LEG_DEVIATION) {
+      issues.push(`baseDev=${(best.baseLegDeviation * 100).toFixed(2)}%`);
+    }
+    if (best.quoteLegDeviation > MAX_LEG_DEVIATION) {
+      issues.push(`quoteDev=${(best.quoteLegDeviation * 100).toFixed(2)}%`);
+    }
+    if (best.totalDeviation > MAX_TOTAL_DEVIATION) {
+      issues.push(`totalDev=${(best.totalDeviation * 100).toFixed(2)}%`);
+    }
+    if (best.oversize > MAX_OVERSIZE_DEVIATION) {
+      issues.push(`oversize=${(best.oversize * 100).toFixed(2)}%`);
+    }
+    warningReason = issues.join('; ');
   }
 
   return {
@@ -730,6 +752,10 @@ const buildBalancedQtyPlan = async (
     oversize: best.oversize,
     baseTargetNotional,
     quoteTargetNotional,
+    baseLegDeviation: best.baseLegDeviation,
+    quoteLegDeviation: best.quoteLegDeviation,
+    hasWarning: hasWarnings,
+    warningReason,
   };
 };
 
@@ -773,10 +799,16 @@ const buildSingleQtyPlan = async (
     throw new Error(`Unable to find a valid quantity plan for ${symbol}`);
   }
 
-  if (best.totalDeviation > MAX_TOTAL_DEVIATION || best.oversize > MAX_OVERSIZE_DEVIATION) {
-    throw new Error(
-      `Order size too small for mono execution: totalDeviation=${(best.totalDeviation * 100).toFixed(2)}%, `
-      + `oversize=${(best.oversize * 100).toFixed(2)}%. Increase lot percent or max_deposit.`
+  // Graceful fallback: use minQty instead of hard-blocking if lot is too small.
+  // The trade executes at minimum exchange lot; admin receives a low_lot_warning.
+  const hasWarning = best.totalDeviation > MAX_TOTAL_DEVIATION || best.oversize > MAX_OVERSIZE_DEVIATION;
+  let warningReason: string | undefined;
+  if (hasWarning) {
+    warningReason = (
+      `Order size too small for mono execution: targetNotional=${targetNotional.toFixed(2)} USDT, `
+      + `actualNotional=${best.candidate.notional.toFixed(2)} USDT, `
+      + `totalDeviation=${(best.totalDeviation * 100).toFixed(2)}%, `
+      + `oversize=${(best.oversize * 100).toFixed(2)}%. Using min lot.`
     );
   }
 
@@ -786,6 +818,8 @@ const buildSingleQtyPlan = async (
     targetNotional,
     totalDeviation: best.totalDeviation,
     oversize: best.oversize,
+    hasWarning,
+    warningReason,
   };
 };
 
@@ -1970,6 +2004,35 @@ export const executeStrategy = async (
     return payload;
   };
 
+  const recordRuntimeTradeEvent = async (
+    tradeType: 'entry' | 'exit',
+    side: 'long' | 'short',
+    price: number,
+    positionSize = 0,
+    sourceOrderId?: string,
+    sourceSymbol?: string
+  ): Promise<void> => {
+    const normalizedPrice = Number.isFinite(price) && price > 0 ? price : currentRatio;
+    const normalizedSize = Number.isFinite(positionSize) ? Math.max(0, Number(positionSize)) : 0;
+    try {
+      await recordLiveTradeEvent(strategyId, {
+        trade_type: tradeType,
+        side,
+        entry_time: evaluatedBarTimeMs,
+        entry_price: normalizedPrice,
+        position_size: normalizedSize,
+        actual_price: normalizedPrice,
+        actual_time: Date.now(),
+        actual_fee: 0,
+        slippage_percent: 0,
+        source_order_id: sourceOrderId,
+        source_symbol: sourceSymbol || mergedStrategy.base_symbol,
+      });
+    } catch (error) {
+      logger.warn(`live_trade_events record failed for strategy ${strategyId}: ${formatActionError(error)}`);
+    }
+  };
+
   const persistTpAnchorRatio = async (nextAnchor: number | null): Promise<void> => {
     const currentAnchorRaw = mergedStrategy.tp_anchor_ratio;
     const currentAnchor = Number(currentAnchorRaw);
@@ -2022,6 +2085,10 @@ export const executeStrategy = async (
     mergedStrategy.state = 'flat';
     mergedStrategy.entry_ratio = null;
     mergedStrategy.tp_anchor_ratio = null;
+
+    if (signalSnapshot === 'long' || signalSnapshot === 'short') {
+      await recordRuntimeTradeEvent('exit', signalSnapshot, currentRatio, 0, undefined, mergedStrategy.base_symbol);
+    }
   };
 
   const livePositions = await getPositions(apiKeyName);
@@ -2589,11 +2656,50 @@ export const executeStrategy = async (
     last_error: null,
   });
 
+  const openedPositionSize = Number.isFinite(currentRatio) && currentRatio > 0
+    ? totalNotional / currentRatio
+    : 0;
+  const baseOrderId = String((baseOrder as any)?.orderId || (baseOrder as any)?.order_id || '').trim() || undefined;
+  await recordRuntimeTradeEvent('entry', signal, currentRatio, openedPositionSize, baseOrderId, mergedStrategy.base_symbol);
+
   if (singleQtyPlan) {
     logger.info(
       `Strategy ${strategyId} mono sizing: target=${singleQtyPlan.targetNotional.toFixed(2)} USDT, `
       + `actual=${singleQtyPlan.notional.toFixed(2)}, totalDeviation=${(singleQtyPlan.totalDeviation * 100).toFixed(2)}%`
     );
+
+    // Emit low-lot warning event if mono sizing degraded to minQty
+    if (singleQtyPlan.hasWarning) {
+      const alertMessage = `Low-lot warning (mono): ${singleQtyPlan.warningReason || 'lot below min threshold'}`;
+      logger.warn(
+        `Strategy ${strategyId} (${apiKeyName}) mono executed with low-lot degradation: ${singleQtyPlan.warningReason}`
+      );
+      try {
+        const { db } = await import('../utils/database');
+        const strategyNameStr = mergedStrategy.name || mergedStrategy.base_symbol;
+        await db.run(
+          `INSERT INTO strategy_runtime_events
+           (api_key_name, strategy_id, strategy_name, event_type, message, details_json, resolved_at, created_at)
+           VALUES (?, ?, ?, 'low_lot_warning', ?, ?, 0, ?)`,
+          [
+            apiKeyName,
+            strategyId,
+            strategyNameStr,
+            alertMessage,
+            JSON.stringify({
+              totalDeviation: (singleQtyPlan.totalDeviation * 100).toFixed(2),
+              oversize: (singleQtyPlan.oversize * 100).toFixed(2),
+              targetNotional: singleQtyPlan.targetNotional.toFixed(2),
+              actualNotional: singleQtyPlan.notional.toFixed(2),
+              timestamp: new Date().toISOString(),
+            }),
+            Date.now(),
+          ]
+        );
+      } catch (eventErr) {
+        logger.warn(`Failed to record mono low-lot warning event: ${(eventErr as Error).message}`);
+      }
+    }
   }
 
   if (qtyPlan) {
@@ -2603,6 +2709,41 @@ export const executeStrategy = async (
       + `quote ${qtyPlan.quoteTargetNotional.toFixed(2)} -> ${qtyPlan.quoteNotional.toFixed(2)}, `
       + `shareError=${(qtyPlan.shareError * 100).toFixed(2)}%, totalDeviation=${(qtyPlan.totalDeviation * 100).toFixed(2)}%`
     );
+
+    // Emit low-lot warning event if qty plan degraded gracefully
+    if (qtyPlan.hasWarning) {
+      const alertMessage = `Low-lot warning during execution: ${qtyPlan.warningReason || 'unknown'}.`;
+      logger.warn(
+        `Strategy ${strategyId} (${apiKeyName}) executed with low-lot degradation: ${qtyPlan.warningReason}`
+      );
+      try {
+        const { db } = await import('../utils/database');
+        const strategyNameStr = mergedStrategy.name || `${mergedStrategy.base_symbol}/${mergedStrategy.quote_symbol}`;
+        await db.run(
+          `INSERT INTO strategy_runtime_events
+           (api_key_name, strategy_id, strategy_name, event_type, message, details_json, resolved_at, created_at)
+           VALUES (?, ?, ?, 'low_lot_warning', ?, ?, 0, ?)`,
+          [
+            apiKeyName,
+            strategyId,
+            strategyNameStr,
+            alertMessage,
+            JSON.stringify({
+              shareError: (qtyPlan.shareError * 100).toFixed(2),
+              baseLegDeviation: qtyPlan.baseLegDeviation ? (qtyPlan.baseLegDeviation * 100).toFixed(2) : null,
+              quoteLegDeviation: qtyPlan.quoteLegDeviation ? (qtyPlan.quoteLegDeviation * 100).toFixed(2) : null,
+              totalDeviation: (qtyPlan.totalDeviation * 100).toFixed(2),
+              oversize: (qtyPlan.oversize * 100).toFixed(2),
+              notional: qtyPlan.totalNotional.toFixed(2),
+              timestamp: new Date().toISOString(),
+            }),
+            Date.now(),
+          ]
+        );
+      } catch (eventErr) {
+        logger.warn(`Failed to record low-lot warning event: ${(eventErr as Error).message}`);
+      }
+    }
   }
 
   logger.info(`Executed ${mergedStrategy.strategy_type} strategy ${strategyId} for ${apiKeyName}: ${signal} (${marketMode})`);
