@@ -27,6 +27,14 @@ type ApiKey = {
   exchange: string;
 };
 
+type BalanceRow = {
+  coin: string;
+  walletBalance: string;
+  availableBalance: string;
+  usdValue: string;
+  accountType?: string;
+};
+
 type PositionRow = {
   symbol: string;
   side: string;
@@ -118,12 +126,14 @@ const Positions: React.FC = () => {
   const [positionsByKey, setPositionsByKey] = useState<{ [key: string]: PositionRow[] }>({});
   const [ordersByKey, setOrdersByKey] = useState<{ [key: string]: OrderRow[] }>({});
   const [tradesByKey, setTradesByKey] = useState<{ [key: string]: TradeRow[] }>({});
+  const [balancesByKey, setBalancesByKey] = useState<{ [key: string]: BalanceRow[] }>({});
   const [loadingByKey, setLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [errorByKey, setErrorByKey] = useState<{ [key: string]: string }>({});
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [actionLoading, setActionLoading] = useState<{ [key: string]: boolean }>({});
   const [refreshAllLoading, setRefreshAllLoading] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<ViewMode>('all');
+  const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(false);
   const [manualOrderDraftByKey, setManualOrderDraftByKey] = useState<{ [key: string]: ManualOrderDraft }>({});
   const apiKeysRef = useRef<ApiKey[]>([]);
 
@@ -139,12 +149,18 @@ const Positions: React.FC = () => {
     void fetchApiKeys();
   }, []);
 
-  const refreshForKeys = async (keys: ApiKey[]) => {
-    for (const key of keys) {
-      await fetchPositions(key.name);
-      await fetchOrders(key.name);
-      await fetchTrades(key.name);
-    }
+  const refreshForKeys = async (keys: ApiKey[], options?: { includeTrades?: boolean }) => {
+    const includeTrades = options?.includeTrades === true;
+    await Promise.all(
+      keys.map(async (key) => {
+        await Promise.all([
+          fetchPositions(key.name),
+          fetchOrders(key.name),
+          fetchBalances(key.name),
+          includeTrades ? fetchTrades(key.name) : Promise.resolve(),
+        ]);
+      })
+    );
   };
 
   const fetchApiKeys = async () => {
@@ -169,7 +185,7 @@ const Positions: React.FC = () => {
         return next;
       });
 
-      await refreshForKeys(keys);
+      await refreshForKeys(keys, { includeTrades: false });
     } catch (error) {
       console.error(error);
     }
@@ -180,31 +196,21 @@ const Positions: React.FC = () => {
   }, [apiKeys]);
 
   useEffect(() => {
-    const softRefresh = () => {
+    if (!autoRefreshEnabled) {
+      return () => undefined;
+    }
+
+    const timerId = window.setInterval(() => {
       const keys = apiKeysRef.current;
       if (keys.length > 0) {
-        void refreshForKeys(keys);
-      } else {
-        void fetchApiKeys();
+        void refreshForKeys(keys, { includeTrades: false });
       }
-    };
-
-    const handleVisibility = () => {
-      if (!document.hidden) {
-        softRefresh();
-      }
-    };
-
-    window.addEventListener('focus', softRefresh);
-    document.addEventListener('visibilitychange', handleVisibility);
-    const timerId = window.setInterval(softRefresh, 15000);
+    }, 180000);
 
     return () => {
-      window.removeEventListener('focus', softRefresh);
-      document.removeEventListener('visibilitychange', handleVisibility);
       window.clearInterval(timerId);
     };
-  }, []);
+  }, [autoRefreshEnabled]);
 
   const fetchPositions = async (apiKeyName: string) => {
     setLoadingByKey((prev) => ({ ...prev, [apiKeyName]: true }));
@@ -234,7 +240,6 @@ const Positions: React.FC = () => {
       setPositionsByKey((prev) => ({ ...prev, [apiKeyName]: normalized }));
     } catch (error: any) {
       console.error(error);
-      setPositionsByKey((prev) => ({ ...prev, [apiKeyName]: [] }));
       setErrorByKey((prev) => ({
         ...prev,
         [apiKeyName]: error.response?.data?.error || t('positions.msg.loadPositionsFailed', 'Failed to load positions'),
@@ -264,7 +269,6 @@ const Positions: React.FC = () => {
       setOrdersByKey((prev) => ({ ...prev, [apiKeyName]: normalized }));
     } catch (error: any) {
       console.error(error);
-      setOrdersByKey((prev) => ({ ...prev, [apiKeyName]: [] }));
       setErrorByKey((prev) => ({
         ...prev,
         [apiKeyName]: error.response?.data?.error || t('positions.msg.loadOrdersFailed', 'Failed to load open orders'),
@@ -302,13 +306,36 @@ const Positions: React.FC = () => {
       setTradesByKey((prev) => ({ ...prev, [apiKeyName]: normalized }));
     } catch (error: any) {
       console.error(error);
-      setTradesByKey((prev) => ({ ...prev, [apiKeyName]: [] }));
       setErrorByKey((prev) => ({
         ...prev,
         [apiKeyName]: error.response?.data?.error || t('positions.msg.loadTradesFailed', 'Failed to load trade history'),
       }));
     } finally {
       setLoadingByKey((prev) => ({ ...prev, [`trades:${apiKeyName}`]: false }));
+    }
+  };
+
+  const fetchBalances = async (apiKeyName: string) => {
+    setLoadingByKey((prev) => ({ ...prev, [`balances:${apiKeyName}`]: true }));
+
+    try {
+      const res = await axios.get(`/api/balances/${apiKeyName}`);
+      const normalized = (Array.isArray(res.data) ? res.data : []).map((item: any) => ({
+        coin: String(item.coin || ''),
+        walletBalance: String(item.walletBalance || '0'),
+        availableBalance: String(item.availableBalance || '0'),
+        usdValue: String(item.usdValue || '0'),
+        accountType: String(item.accountType || ''),
+      }));
+      setBalancesByKey((prev) => ({ ...prev, [apiKeyName]: normalized }));
+    } catch (error: any) {
+      console.error(error);
+      setErrorByKey((prev) => ({
+        ...prev,
+        [apiKeyName]: error.response?.data?.error || t('positions.msg.loadBalancesFailed', 'Failed to load balances'),
+      }));
+    } finally {
+      setLoadingByKey((prev) => ({ ...prev, [`balances:${apiKeyName}`]: false }));
     }
   };
 
@@ -365,6 +392,7 @@ const Positions: React.FC = () => {
       await Promise.all([
         fetchPositions(apiKeyName),
         fetchOrders(apiKeyName),
+        fetchBalances(apiKeyName),
         fetchTrades(apiKeyName),
       ]);
     } catch (error: any) {
@@ -444,7 +472,7 @@ const Positions: React.FC = () => {
   const refreshAllPositions = async () => {
     setRefreshAllLoading(true);
     try {
-      await refreshForKeys(apiKeysRef.current);
+      await refreshForKeys(apiKeysRef.current, { includeTrades: true });
       message.success(t('positions.msg.refreshedAll', 'Positions, orders and trades refreshed for all API keys'));
     } catch (error) {
       console.error(error);
@@ -655,6 +683,12 @@ const Positions: React.FC = () => {
         <Button loading={refreshAllLoading} onClick={() => { void refreshAllPositions(); }}>
           {t('positions.refreshAll', 'Refresh all')}
         </Button>
+        <Tag color={autoRefreshEnabled ? 'green' : 'default'}>
+          {autoRefreshEnabled ? t('positions.autoRefreshOn', 'Auto refresh: ON (3m)') : t('positions.autoRefreshOff', 'Auto refresh: OFF')}
+        </Tag>
+        <Button onClick={() => setAutoRefreshEnabled((prev) => !prev)}>
+          {autoRefreshEnabled ? t('positions.disableAutoRefresh', 'Disable auto refresh') : t('positions.enableAutoRefresh', 'Enable auto refresh')}
+        </Button>
         <Segmented<ViewMode>
           value={viewMode}
           onChange={(value) => setViewMode(value as ViewMode)}
@@ -688,9 +722,16 @@ const Positions: React.FC = () => {
               const keyPositions = positionsByKey[key.name] || [];
               const keyOrders = ordersByKey[key.name] || [];
               const keyTrades = tradesByKey[key.name] || [];
+              const keyBalances = balancesByKey[key.name] || [];
               const positionsLoading = Boolean(loadingByKey[key.name]);
               const ordersLoading = Boolean(loadingByKey[`orders:${key.name}`]);
               const tradesLoading = Boolean(loadingByKey[`trades:${key.name}`]);
+              const balancesLoading = Boolean(loadingByKey[`balances:${key.name}`]);
+              const totalUsd = keyBalances.reduce((sum, item) => sum + toNumber(item.usdValue), 0);
+              const topBalances = keyBalances
+                .filter((item) => toNumber(item.walletBalance) > 0)
+                .sort((a, b) => toNumber(b.usdValue) - toNumber(a.usdValue))
+                .slice(0, 6);
               return (
                 <Card
                   className="battletoads-card"
@@ -703,11 +744,14 @@ const Positions: React.FC = () => {
                 >
                   <Space wrap style={{ marginBottom: 8 }}>
                     <Button
-                      loading={positionsLoading || ordersLoading}
+                      loading={positionsLoading || ordersLoading || tradesLoading || balancesLoading}
                       onClick={() => {
                         void fetchPositions(key.name);
                         void fetchOrders(key.name);
-                        void fetchTrades(key.name);
+                        void fetchBalances(key.name);
+                        if (shouldShowTrades) {
+                          void fetchTrades(key.name);
+                        }
                       }}
                     >
                       {t('common.refresh', 'Refresh')}
@@ -741,6 +785,22 @@ const Positions: React.FC = () => {
                       </Button>
                     </Popconfirm>
                   </Space>
+
+                  <Card className="battletoads-card" size="small" title={t('positions.balances', 'Balances')} style={{ marginBottom: 8 }} bodyStyle={{ padding: 10 }}>
+                    <Space direction="vertical" style={{ width: '100%' }} size={6}>
+                      <Space wrap>
+                        <Tag color="blue">{t('positions.totalBalance', 'Total USD')}: {formatCompact(totalUsd, 2)}</Tag>
+                        {balancesLoading ? <Tag color="processing">{t('common.loading', 'Loading')}</Tag> : null}
+                      </Space>
+                      <Space wrap>
+                        {topBalances.length > 0 ? topBalances.map((item) => (
+                          <Tag key={`${key.name}:${item.coin}`}>
+                            {item.coin}: {formatCompact(item.walletBalance, 6)} ({formatCompact(item.usdValue, 2)} USD)
+                          </Tag>
+                        )) : <span style={{ fontSize: 12, color: '#6b7280' }}>{t('positions.empty.balances', 'No non-zero balances')}</span>}
+                      </Space>
+                    </Space>
+                  </Card>
 
                   <Card className="battletoads-card" size="small" title={t('positions.quickManualOrder', 'Quick Manual Order')} style={{ marginBottom: 8 }} bodyStyle={{ padding: 10 }}>
                     <Space wrap>
