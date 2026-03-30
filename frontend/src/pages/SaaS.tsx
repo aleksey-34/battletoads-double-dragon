@@ -5812,13 +5812,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     navigateSaasTab('admin', tab);
   };
 
-  const openSaasBacktestFlow = () => {
+  const openSaasBacktestFlow = (offerOverride?: typeof adminReviewOfferPool[number] | null) => {
     if (selectedAdminReviewKind === 'algofund-ts') {
       openDraftTsBacktest();
       return;
     }
 
-    openOfferBacktest(selectedAdminReviewOffer || reviewableSweepOffers[0] || null);
+    const targetOffer = offerOverride || selectedAdminReviewOffer || reviewableSweepOffers[0] || null;
+    openOfferBacktest(targetOffer);
   };
 
   const preferredClientSwitchTarget = (() => {
@@ -7304,6 +7305,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                               <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
                                               <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
                                               <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                              <Tag color={Boolean(row.published) ? 'success' : 'warning'}>{Boolean(row.published) ? '✓ На витрине' : '⊘ Не на витрине'}</Tag>
                                             </Space>
                                           ),
                                         },
@@ -7320,7 +7322,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                   setSelectedAdminReviewOfferId(String(row.offerId));
                                                 }}
                                               >
-                                                Редактировать
+                                                Просмотр & Управление
                                               </Button>
                                               <Button
                                                 size="small"
@@ -8423,6 +8425,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                       <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
                                                       <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
                                                       <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                                      <Tag color={Boolean(row.published) ? 'success' : 'warning'}>{Boolean(row.published) ? '✓ На витрине' : '⊘ Не на витрине'}</Tag>
                                                     </Space>
                                                     {points.length >= 2 ? (
                                                       <ChartComponent
@@ -8658,7 +8661,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           <Space wrap style={{ marginTop: 12 }}>
                             <Button size="small" href="/settings" disabled={!strategySettingsEnabled}>{copy.openSettings}</Button>
                             <Button size="small" href="/positions" disabled={!strategyMonitoringEnabled && !isAdminSurface}>{copy.openMonitoring}</Button>
-                            <Button size="small" onClick={openSaasBacktestFlow} disabled={!strategyBacktestEnabled}>{copy.openBacktest}</Button>
+                            <Button size="small" onClick={() => openSaasBacktestFlow(reviewableSweepOffers[0] || null)} disabled={!strategyBacktestEnabled}>{copy.openBacktest}</Button>
                           </Space>
                           {isAdminSurface ? (
                             <>
@@ -8683,7 +8686,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   {copy.createMagicLink}
                                 </Button>
                               </Space>
-                              {strategyMagicLink ? (
+                              {strategyMagicLink && strategyMagicLink.loginUrl ? (
                                 <Alert
                                   style={{ marginTop: 8 }}
                                   type="info"
@@ -8691,8 +8694,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   message={copy.magicLinkReady}
                                   description={
                                     <>
-                                      <div><a href={strategyMagicLink.loginUrl} target="_blank" rel="noreferrer">{strategyMagicLink.loginUrl}</a></div>
-                                      <div>{copy.magicLinkExpires}: {new Date(strategyMagicLink.expiresAt).toLocaleString()}</div>
+                                      <div style={{ marginBottom: 8 }}><strong>Ссылка для входа:</strong></div>
+                                      <div><a href={strategyMagicLink.loginUrl} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>{strategyMagicLink.loginUrl}</a></div>
+                                      <div style={{ marginTop: 8 }}>{copy.magicLinkExpires}: {new Date(strategyMagicLink.expiresAt).toLocaleString()}</div>
                                     </>
                                   }
                                 />
@@ -9447,7 +9451,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           <Space wrap style={{ marginTop: 12 }}>
                             <Button size="small" href="/settings" disabled={!algofundSettingsEnabled}>{copy.openSettings}</Button>
                             <Button size="small" href="/positions" disabled={!algofundMonitoringEnabled && !isAdminSurface}>{copy.openMonitoring}</Button>
-                            <Button size="small" onClick={openSaasBacktestFlow} disabled={!algofundBacktestEnabled}>{copy.openBacktest}</Button>
+                            <Button size="small" onClick={() => openSaasBacktestFlow()} disabled={!algofundBacktestEnabled}>{copy.openBacktest}</Button>
                           </Space>
                           {isAdminSurface ? (
                             <>
@@ -9472,7 +9476,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   {copy.createMagicLink}
                                 </Button>
                               </Space>
-                              {algofundMagicLink ? (
+                              {algofundMagicLink && algofundMagicLink.loginUrl ? (
                                 <Alert
                                   style={{ marginTop: 8 }}
                                   type="info"
@@ -9480,8 +9484,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   message={copy.magicLinkReady}
                                   description={
                                     <>
-                                      <div><a href={algofundMagicLink.loginUrl} target="_blank" rel="noreferrer">{algofundMagicLink.loginUrl}</a></div>
-                                      <div>{copy.magicLinkExpires}: {new Date(algofundMagicLink.expiresAt).toLocaleString()}</div>
+                                      <div style={{ marginBottom: 8 }}><strong>Ссылка для входа:</strong></div>
+                                      <div><a href={algofundMagicLink.loginUrl} target="_blank" rel="noreferrer" style={{ wordBreak: 'break-all' }}>{algofundMagicLink.loginUrl}</a></div>
+                                      <div style={{ marginTop: 8 }}>{copy.magicLinkExpires}: {new Date(algofundMagicLink.expiresAt).toLocaleString()}</div>
                                     </>
                                   }
                                 />
