@@ -7873,7 +7873,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 >
                                   Обновить snapshot сейчас
                                 </Button>
-                              </Space>
                               <Space wrap>
                                 <Tag color={String(summary?.snapshotRefresh?.lastResult || 'idle') === 'success' ? 'success' : (String(summary?.snapshotRefresh?.lastResult || 'idle') === 'failed' ? 'error' : 'default')}>
                                   snapshot: {String(summary?.snapshotRefresh?.lastResult || 'idle')}
