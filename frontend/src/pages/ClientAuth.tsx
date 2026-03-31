@@ -188,7 +188,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
             </Typography.Paragraph>
           </div>
 
-          {magicLinkMode === 'idle' ? (
+          {magicLinkMode === 'idle' && (
             <>
               <Space wrap>
                 <Button type={mode === 'login' ? 'primary' : 'default'} onClick={() => setMode('login')}>
@@ -205,7 +205,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
               {errorText ? <Alert type="error" showIcon message={errorText} /> : null}
 
               {mode === 'login' ? (
-            <Form<LoginFormValues> layout="vertical" form={loginForm} onFinish={handleLogin}>
+                <Form<LoginFormValues> layout="vertical" form={loginForm} onFinish={handleLogin}>
               <Form.Item
                 label={t('client.auth.email', 'Email')}
                 name="email"
@@ -306,19 +306,20 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 </Button>
               </Form.Item>
             </Form>
+              ) : null}
             </>
-          ) : null}
+          )}
 
-          {magicLinkMode === 'processing' ? (
+          {magicLinkMode === 'processing' && (
             <div style={{ textAlign: 'center', padding: '40px 20px' }}>
               <Spin size="large" />
               <Typography.Paragraph style={{ marginTop: 16 }}>
                 {t('client.auth.processingMagicLink', 'Processing your login link...')}
               </Typography.Paragraph>
             </div>
-          ) : null}
+          )}
 
-          {magicLinkMode === 'password_setup' ? (
+          {magicLinkMode === 'password_setup' && (
             <>
               {errorText ? <Alert type="error" showIcon message={errorText} style={{ marginBottom: 12 }} /> : null}
               <Form<SetPasswordFormValues>
@@ -367,9 +368,9 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 </Form.Item>
               </Form>
             </>
-          ) : null}
+          )}
 
-          {magicLinkMode === 'success' ? (
+          {magicLinkMode === 'success' && (
             <div style={{ textAlign: 'center', padding: '40px 20px' }}>
               <Typography.Title level={5} style={{ marginBottom: 8 }}>
                 {t('client.auth.passwordSetSuccess', 'Password set successfully')}
@@ -378,9 +379,9 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 {t('client.auth.redirectingToCabinet', 'Redirecting to your cabinet...')}
               </Typography.Paragraph>
             </div>
-          ) : null}
+          )}
 
-          {magicLinkMode === 'idle' ? (
+          {magicLinkMode === 'idle' && (
             <>
               <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
                 {t('client.auth.helpText', 'After login you are redirected to your own workspace automatically.')}
@@ -389,7 +390,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 <Link to="/login">{t('client.auth.switchToAdmin', 'Need admin dashboard access? Use admin login.')}</Link>
               </Typography.Paragraph>
             </>
-          ) : null}
+          )}
         </Space>
       </Card>
     </div>
