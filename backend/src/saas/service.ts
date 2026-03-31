@@ -2728,7 +2728,9 @@ const buildDerivedPreviewCurves = (
     return {
       pnl: [] as Array<{ time: number; value: number }>,
       drawdownPercent: [] as Array<{ time: number; value: number }>,
+      marginLoadPercent: [] as Array<{ time: number; value: number }>,
       finalUnrealizedPnl: 0,
+      maxMarginLoadPercent: 0,
     };
   }
 
@@ -2756,10 +2758,17 @@ const buildDerivedPreviewCurves = (
 
   const finalUnrealizedPnl = pnl.length > 0 ? asNumber(pnl[pnl.length - 1].value, 0) : 0;
 
+  const marginLoadPercent = equityCurve.map((point) => ({
+    time: asNumber(point.time, Date.now()),
+    value: 0,
+  }));
+
   return {
     pnl,
     drawdownPercent,
+    marginLoadPercent,
     finalUnrealizedPnl: Number(finalUnrealizedPnl.toFixed(4)),
+    maxMarginLoadPercent: 0,
   };
 };
 
