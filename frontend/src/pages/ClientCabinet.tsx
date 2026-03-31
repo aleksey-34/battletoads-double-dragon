@@ -793,7 +793,7 @@ const ClientCabinet: React.FC = () => {
                         }}
                         extra={
                           strategyWorkspace.capabilities?.settings
-                            ? <Checkbox checked={strategyOfferIds.includes(offer.offerId)} onChange={(e) => { e.stopPropagation(); setStrategyOfferIds((current) => e.target.checked ? [...new Set([...current, offer.offerId])] : current.filter((id) => id !== offer.offerId)); }} />
+                            ? <Checkbox checked={strategyOfferIds.includes(offer.offerId)} onChange={(e) => { e.stopPropagation(); setStrategyOfferIds((current) => e.target.checked ? (current.includes(offer.offerId) ? current : [...current, offer.offerId]) : current.filter((id) => id !== offer.offerId)); }} />
                             : null
                         }
                       >
