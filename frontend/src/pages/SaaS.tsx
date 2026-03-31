@@ -1890,6 +1890,42 @@ const metricColor = (value: number, kind: 'return' | 'drawdown' | 'pf') => {
   return value >= 0 ? 'success' : 'error';
 };
 
+const calcSeriesChangePercent = (points: LinePoint[]): number | null => {
+  if (!Array.isArray(points) || points.length < 2) {
+    return null;
+  }
+  const first = Number(points[0]?.value);
+  const last = Number(points[points.length - 1]?.value);
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first === 0) {
+    return null;
+  }
+  return Number((((last - first) / first) * 100).toFixed(2));
+};
+
+const resolveTradeActivity = (tradesCountRaw: unknown, periodDaysRaw: unknown): { color: string; label: string } | null => {
+  const tradesCount = Number(tradesCountRaw);
+  const periodDays = Number(periodDaysRaw);
+  if (!Number.isFinite(tradesCount) || tradesCount < 0) {
+    return null;
+  }
+
+  const perDay = Number.isFinite(periodDays) && periodDays > 0
+    ? tradesCount / periodDays
+    : null;
+
+  if (perDay === null) {
+    return { color: 'blue', label: `сделок ${formatNumber(tradesCount, 0)}` };
+  }
+
+  if (perDay >= 8) {
+    return { color: 'volcano', label: `активность высокая (${formatNumber(perDay, 1)}/день)` };
+  }
+  if (perDay >= 3) {
+    return { color: 'gold', label: `активность средняя (${formatNumber(perDay, 1)}/день)` };
+  }
+  return { color: 'green', label: `активность низкая (${formatNumber(perDay, 1)}/день)` };
+};
+
 const buildDraftStrategyConstraints = (
   offerIds: string[],
   offers: CatalogOffer[],
@@ -7718,13 +7754,33 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           actions={[
                                             <Button key="review" size="small" onClick={() => openBacktestDrawerForStorefrontTs(item.systemName)}>Бэктест ТС</Button>,
                                             <Button
-                                              key="delete-db"
+                                              key="connect"
+                                              size="small"
+                                              onClick={() => {
+                                                const runtimeSystemId = Number(item.runtimeSystemId || 0);
+                                                if (!runtimeSystemId) {
+                                                  messageApi.warning('Для этой карточки пока нет runtime system id. Сначала опубликуйте/синхронизируйте ТС.');
+                                                  return;
+                                                }
+                                                setStorefrontConnectTarget({
+                                                  systemId: runtimeSystemId,
+                                                  systemName: item.systemName,
+                                                  tenantIds: (item.tenants || [])
+                                                    .map((tenant) => Number(tenant?.tenant?.id || 0))
+                                                    .filter((tenantId) => Number.isFinite(tenantId) && tenantId > 0),
+                                                });
+                                              }}
+                                            >
+                                              Подключить клиентов
+                                            </Button>,
+                                            <Button
+                                              key="remove-storefront"
                                               danger
                                               size="small"
                                               loading={removeStorefrontTarget === item.systemName}
-                                              onClick={() => void initiateDeleteStorefrontFromDb(item.systemName)}
+                                              onClick={() => void initiateRemoveStorefront(item.systemName)}
                                             >
-                                              Удалить из базы
+                                              Снять с витрины
                                             </Button>,
                                           ]}
                                         >
@@ -9513,7 +9569,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                       ? <Tag color={metricColor(Number(item.summary.profitFactor || 0), 'pf')}>PF {formatNumber(item.summary.profitFactor)}</Tag>
                                                       : null}
                                                     {item.summary?.tradesCount !== undefined
-                                                      ? <Tag color="blue">сделок {formatNumber(item.summary.tradesCount, 0)}</Tag>
+                                                      ? (() => {
+                                                          const activity = resolveTradeActivity(item.summary.tradesCount, item.summary?.periodDays);
+                                                          return activity
+                                                            ? <Tag color={activity.color}>{activity.label}</Tag>
+                                                            : <Tag color="blue">сделок {formatNumber(item.summary.tradesCount, 0)}</Tag>;
+                                                        })()
                                                       : null}
                                                   </Space>
                                                   {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
@@ -9528,11 +9589,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                     <Button size="small" onClick={() => openBacktestDrawerForStorefrontTs(item.systemName)}>Бэктест ТС</Button>
                                                     <Button
                                                       size="small"
+                                                      onClick={() => {
+                                                        const runtimeSystemId = Number(item.runtimeSystemId || 0);
+                                                        if (!runtimeSystemId) {
+                                                          messageApi.warning('Для этой карточки пока нет runtime system id. Сначала опубликуйте/синхронизируйте ТС.');
+                                                          return;
+                                                        }
+                                                        setStorefrontConnectTarget({
+                                                          systemId: runtimeSystemId,
+                                                          systemName: item.systemName,
+                                                          tenantIds: (item.tenants || [])
+                                                            .map((tenant) => Number(tenant?.tenant?.id || 0))
+                                                            .filter((tenantId) => Number.isFinite(tenantId) && tenantId > 0),
+                                                        });
+                                                      }}
+                                                    >
+                                                      Подключить клиентов
+                                                    </Button>
+                                                    <Button
+                                                      size="small"
                                                       danger
                                                       loading={removeStorefrontTarget === item.systemName}
-                                                      onClick={() => void initiateDeleteStorefrontFromDb(item.systemName)}
+                                                      onClick={() => void initiateRemoveStorefront(item.systemName)}
                                                     >
-                                                      Удалить из базы
+                                                      Снять с витрины
                                                     </Button>
                                                   </Space>
                                                 </Space>
@@ -11090,6 +11170,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           Показать цену BTCUSDT
                         </Checkbox>
                         {backtestBtcOverlayLoading ? <Tag color="processing">BTCUSDT: загрузка...</Tag> : null}
+                        {showBacktestBtcOverlay && !backtestBtcOverlayLoading && backtestBtcOverlayPoints.length > 1
+                          ? (() => {
+                              const btcChangePercent = calcSeriesChangePercent(backtestBtcOverlayPoints);
+                              if (btcChangePercent === null) {
+                                return null;
+                              }
+                              return (
+                                <Tag color={btcChangePercent >= 0 ? 'green' : 'red'}>
+                                  BTC {btcChangePercent >= 0 ? '+' : ''}{formatPercent(btcChangePercent)}
+                                </Tag>
+                              );
+                            })()
+                          : null}
                       </Space>
                       <ChartComponent
                         data={equitySeries.map((point) => ({ time: point.time, equity: point.value }))}

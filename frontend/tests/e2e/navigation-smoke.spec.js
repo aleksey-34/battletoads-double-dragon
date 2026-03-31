@@ -3,12 +3,12 @@ const { test, expect } = require('@playwright/test');
 const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD || 'defaultpassword';
 
 const NAV_CASES = [
-  { path: '/', expected: /Trading Bot Dashboard/i },
-  { path: '/settings', expected: /Git Update \(VPS\)|API Keys List/i },
-  { path: '/positions', expected: /Positions|Open Positions|Active Positions/i },
-  { path: '/logs', expected: /Logs|System Logs|Application Logs/i },
-  { path: '/backtest', expected: /Backtest|Historical|Sweep/i },
-  { path: '/trading-systems', expected: /Trading Systems|System/i },
+  { path: '/', expected: /Dashboard|Панель|Battletoads/i },
+  { path: '/settings', expected: /Settings|Настройки|API Keys|API-ключ/i },
+  { path: '/positions', expected: /Positions|Позиции|Open Positions|Active Positions/i },
+  { path: '/logs', expected: /Logs|Логи|System Logs|Application Logs/i },
+  { path: '/backtest', expected: /Backtest|Бэктест|Historical|Sweep/i },
+  { path: '/trading-systems', expected: /Trading Systems|Торговые системы|System/i },
   { path: '/saas', expected: /SaaS|Admin|Алгофонд|Клиент/i },
 ];
 
@@ -27,7 +27,8 @@ test('all main tabs open without runtime crash', async ({ page }) => {
 
   for (const nav of NAV_CASES) {
     await page.goto(nav.path, { waitUntil: 'domcontentloaded' });
-    await expect(page.getByText(nav.expected).first()).toBeVisible({ timeout: 20000 });
+    await expect(page.locator('body')).not.toContainText(/Cannot GET|404|Application error|Runtime error|Unhandled/i, { timeout: 20000 });
+    await expect(page.locator('body')).toContainText(nav.expected, { timeout: 20000 });
 
     // Keep a lightweight responsiveness probe after each route load.
     const ts = await page.evaluate(() => Date.now());

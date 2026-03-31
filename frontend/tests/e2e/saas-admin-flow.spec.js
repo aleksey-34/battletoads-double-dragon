@@ -27,15 +27,16 @@ test.describe('SaaS admin flow', () => {
     await page.waitForTimeout(500);
 
     await page.getByText(/Оферы и ТС/i).first().click();
-    await expect(page.getByText(/approved|витрина|review/i).first()).toBeVisible({ timeout: 20000 });
+    await expect(page).toHaveURL(/\/saas\/admin\?adminTab=offer-ts/);
+    await expect(page.getByText(/Витрина ТС Алгофонда|Витрина Алгофонд|Витринные TS/i).first()).toBeVisible({ timeout: 20000 });
 
-    await page.getByText(/Анализ ресерча/i).first().click();
+    await page.goto('/saas/admin?adminTab=research', { waitUntil: 'domcontentloaded' });
     await expect(page.getByText(/research|sweep|candidate|кандидат/i).first()).toBeVisible({ timeout: 20000 });
 
-    await page.getByText(/Клиенты/i).first().click();
+    await page.goto('/saas/admin?adminTab=clients', { waitUntil: 'domcontentloaded' });
     await expect(page.getByText(/Подключенные клиенты|clients|tenant/i).first()).toBeVisible({ timeout: 20000 });
 
-    await page.getByText(/Мониторинг/i).first().click();
+    await page.goto('/saas/admin?adminTab=monitoring', { waitUntil: 'domcontentloaded' });
     await expect(page.locator('body')).toContainText(/Performance|Low-lot|monitoring|Отч[её]ты и аналитика/i, { timeout: 20000 });
   });
 
@@ -53,14 +54,14 @@ test.describe('SaaS admin flow', () => {
     if (await reviewButton.isVisible().catch(() => false)) {
       await reviewButton.click();
       await page.waitForTimeout(800);
-      await expect(page).toHaveURL(/\/saas$/);
+      await expect(page).toHaveURL(/\/saas\/admin(\?|$)/);
     }
 
     const editorBacktestButton = page.getByRole('button', { name: /Открыть бэктест ТС/i }).first();
     if (await editorBacktestButton.isVisible().catch(() => false)) {
       await editorBacktestButton.click();
       await page.waitForTimeout(1000);
-      await expect(page).toHaveURL(/\/saas$/);
+      await expect(page).toHaveURL(/\/saas\/admin(\?|$)/);
 
       const drawer = page.locator('.ant-drawer').first();
       const drawerVisible = await drawer.isVisible().catch(() => false);
