@@ -204,109 +204,111 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
 
               {errorText ? <Alert type="error" showIcon message={errorText} /> : null}
 
-              {mode === 'login' ? (
+              {mode === 'login' && (
                 <Form<LoginFormValues> layout="vertical" form={loginForm} onFinish={handleLogin}>
-              <Form.Item
-                label={t('client.auth.email', 'Email')}
-                name="email"
-                rules={[
-                  { required: true, message: t('client.auth.emailRequired', 'Email is required') },
-                  { type: 'email', message: t('client.auth.emailInvalid', 'Enter valid email') },
-                ]}
-              >
-                <Input type="email" inputMode="email" autoComplete="email" placeholder="name@company.com" />
-              </Form.Item>
-              <Form.Item
-                label={t('client.auth.password', 'Password')}
-                name="password"
-                rules={[{ required: true, message: t('client.auth.passwordRequired', 'Password is required') }]}
-              >
-                <Input.Password autoComplete="current-password" placeholder={t('client.auth.password', 'Password')} />
-              </Form.Item>
-              <Form.Item style={{ marginBottom: 0 }}>
-                <Button type="primary" htmlType="submit" loading={loading} block>
-                  {t('client.auth.loginAction', 'Open my cabinet')}
-                </Button>
-              </Form.Item>
-            </Form>
-          ) : (
-            <Form<RegisterFormValues>
-              layout="vertical"
-              form={registerForm}
-              initialValues={{ productMode: 'strategy_client' }}
-              onFinish={handleRegister}
-            >
-              <Form.Item
-                label={t('client.auth.companyName', 'Company or workspace name')}
-                name="companyName"
-                rules={[{ required: true, message: t('client.auth.companyNameRequired', 'Company/workspace name is required') }]}
-              >
-                <Input placeholder={t('client.auth.companyNamePlaceholder', 'Acme Trading Desk')} />
-              </Form.Item>
-              <Form.Item
-                label={t('client.auth.fullName', 'Full name')}
-                name="fullName"
-                rules={[{ required: true, message: t('client.auth.fullNameRequired', 'Full name is required') }]}
-              >
-                <Input placeholder={t('client.auth.fullNamePlaceholder', 'John Smith')} />
-              </Form.Item>
-              <Form.Item
-                label={t('client.auth.email', 'Email')}
-                name="email"
-                rules={[
-                  { required: true, message: t('client.auth.emailRequired', 'Email is required') },
-                  { type: 'email', message: t('client.auth.emailInvalid', 'Enter valid email') },
-                ]}
-              >
-                <Input type="email" inputMode="email" autoComplete="email" placeholder="name@company.com" />
-              </Form.Item>
-              <Form.Item
-                label={t('client.auth.productMode', 'Workspace type')}
-                name="productMode"
-                rules={[{ required: true, message: t('client.auth.productModeRequired', 'Choose workspace type') }]}
-              >
-                <Select
-                  options={[
-                    { value: 'strategy_client', label: t('client.auth.productModeStrategy', 'Strategy Client') },
-                    { value: 'algofund_client', label: t('client.auth.productModeAlgofund', 'Algofund Client') },
-                  ]}
-                />
-              </Form.Item>
-              <Form.Item
-                label={t('client.auth.password', 'Password')}
-                name="password"
-                rules={[
-                  { required: true, message: t('client.auth.passwordRequired', 'Password is required') },
-                  { min: 10, message: t('client.auth.passwordMin', 'Password must be at least 10 characters') },
-                ]}
-              >
-                <Input.Password autoComplete="new-password" placeholder={t('client.auth.passwordPlaceholder', 'Strong password (10+ chars)')} />
-              </Form.Item>
-              <Form.Item
-                label={t('client.auth.confirmPassword', 'Confirm password')}
-                name="confirmPassword"
-                dependencies={['password']}
-                rules={[
-                  { required: true, message: t('client.auth.confirmPasswordRequired', 'Confirm your password') },
-                  ({ getFieldValue }) => ({
-                    validator(_, value) {
-                      if (!value || getFieldValue('password') === value) {
-                        return Promise.resolve();
-                      }
-                      return Promise.reject(new Error(t('client.auth.confirmPasswordMismatch', 'Passwords do not match')));
-                    },
-                  }),
-                ]}
-              >
-                <Input.Password autoComplete="new-password" placeholder={t('client.auth.confirmPasswordPlaceholder', 'Repeat your password')} />
-              </Form.Item>
-              <Form.Item style={{ marginBottom: 0 }}>
-                <Button type="primary" htmlType="submit" loading={loading} block>
-                  {t('client.auth.registerAction', 'Create account and open cabinet')}
-                </Button>
-              </Form.Item>
-            </Form>
-              ) : null}
+                  <Form.Item
+                    label={t('client.auth.email', 'Email')}
+                    name="email"
+                    rules={[
+                      { required: true, message: t('client.auth.emailRequired', 'Email is required') },
+                      { type: 'email', message: t('client.auth.emailInvalid', 'Enter valid email') },
+                    ]}
+                  >
+                    <Input type="email" inputMode="email" autoComplete="email" placeholder="name@company.com" />
+                  </Form.Item>
+                  <Form.Item
+                    label={t('client.auth.password', 'Password')}
+                    name="password"
+                    rules={[{ required: true, message: t('client.auth.passwordRequired', 'Password is required') }]}
+                  >
+                    <Input.Password autoComplete="current-password" placeholder={t('client.auth.password', 'Password')} />
+                  </Form.Item>
+                  <Form.Item style={{ marginBottom: 0 }}>
+                    <Button type="primary" htmlType="submit" loading={loading} block>
+                      {t('client.auth.loginAction', 'Open my cabinet')}
+                    </Button>
+                  </Form.Item>
+                </Form>
+              )}
+
+              {mode === 'register' && (
+                <Form<RegisterFormValues>
+                  layout="vertical"
+                  form={registerForm}
+                  initialValues={{ productMode: 'strategy_client' }}
+                  onFinish={handleRegister}
+                >
+                  <Form.Item
+                    label={t('client.auth.companyName', 'Company or workspace name')}
+                    name="companyName"
+                    rules={[{ required: true, message: t('client.auth.companyNameRequired', 'Company/workspace name is required') }]}
+                  >
+                    <Input placeholder={t('client.auth.companyNamePlaceholder', 'Acme Trading Desk')} />
+                  </Form.Item>
+                  <Form.Item
+                    label={t('client.auth.fullName', 'Full name')}
+                    name="fullName"
+                    rules={[{ required: true, message: t('client.auth.fullNameRequired', 'Full name is required') }]}
+                  >
+                    <Input placeholder={t('client.auth.fullNamePlaceholder', 'John Smith')} />
+                  </Form.Item>
+                  <Form.Item
+                    label={t('client.auth.email', 'Email')}
+                    name="email"
+                    rules={[
+                      { required: true, message: t('client.auth.emailRequired', 'Email is required') },
+                      { type: 'email', message: t('client.auth.emailInvalid', 'Enter valid email') },
+                    ]}
+                  >
+                    <Input type="email" inputMode="email" autoComplete="email" placeholder="name@company.com" />
+                  </Form.Item>
+                  <Form.Item
+                    label={t('client.auth.productMode', 'Workspace type')}
+                    name="productMode"
+                    rules={[{ required: true, message: t('client.auth.productModeRequired', 'Choose workspace type') }]}
+                  >
+                    <Select
+                      options={[
+                        { value: 'strategy_client', label: t('client.auth.productModeStrategy', 'Strategy Client') },
+                        { value: 'algofund_client', label: t('client.auth.productModeAlgofund', 'Algofund Client') },
+                      ]}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={t('client.auth.password', 'Password')}
+                    name="password"
+                    rules={[
+                      { required: true, message: t('client.auth.passwordRequired', 'Password is required') },
+                      { min: 10, message: t('client.auth.passwordMin', 'Password must be at least 10 characters') },
+                    ]}
+                  >
+                    <Input.Password autoComplete="new-password" placeholder={t('client.auth.passwordPlaceholder', 'Strong password (10+ chars)')} />
+                  </Form.Item>
+                  <Form.Item
+                    label={t('client.auth.confirmPassword', 'Confirm password')}
+                    name="confirmPassword"
+                    dependencies={['password']}
+                    rules={[
+                      { required: true, message: t('client.auth.confirmPasswordRequired', 'Confirm your password') },
+                      ({ getFieldValue }) => ({
+                        validator(_, value) {
+                          if (!value || getFieldValue('password') === value) {
+                            return Promise.resolve();
+                          }
+                          return Promise.reject(new Error(t('client.auth.confirmPasswordMismatch', 'Passwords do not match')));
+                        },
+                      }),
+                    ]}
+                  >
+                    <Input.Password autoComplete="new-password" placeholder={t('client.auth.confirmPasswordPlaceholder', 'Repeat your password')} />
+                  </Form.Item>
+                  <Form.Item style={{ marginBottom: 0 }}>
+                    <Button type="primary" htmlType="submit" loading={loading} block>
+                      {t('client.auth.registerAction', 'Create account and open cabinet')}
+                    </Button>
+                  </Form.Item>
+                </Form>
+              )}
             </>
           )}
 
