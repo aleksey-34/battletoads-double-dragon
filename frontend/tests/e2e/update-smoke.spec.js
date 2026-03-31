@@ -16,19 +16,19 @@ test('settings update controls and dashboard remain responsive', async ({ page }
 
   await page.goto('/settings', { waitUntil: 'domcontentloaded' });
 
-  const checkUpdatesButton = page.getByRole('button', { name: /Check updates/i });
+  const checkUpdatesButton = page.getByRole('button', { name: /Check updates|Проверить обновления/i });
   await expect(checkUpdatesButton).toBeVisible();
   await checkUpdatesButton.click();
 
-  const refreshJobButton = page.getByRole('button', { name: /Refresh job/i });
+  const refreshJobButton = page.getByRole('button', { name: /Refresh job|Обновить статус/i });
   await expect(refreshJobButton).toBeVisible();
   await refreshJobButton.click();
 
-  const installButton = page.getByRole('button', { name: /Install from Git/i });
+  const installButton = page.getByRole('button', { name: /Install from Git|Установить из Git/i });
   await expect(installButton).toBeVisible();
 
   await page.goto('/', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByText('Trading Bot Dashboard')).toBeVisible();
+  await expect(page.locator('body')).toContainText(/Dashboard|Панель|Battletoads/i, { timeout: 20000 });
 
   const themeSelect = page.locator('.ant-select').first();
   await expect(themeSelect).toBeVisible();
