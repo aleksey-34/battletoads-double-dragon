@@ -200,6 +200,11 @@ const getBingxPositionSideCandidates = (
   return [directional, 'BOTH', undefined];
 };
 
+const isBingxNoPositionError = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '');
+  return message.includes('101290') || message.includes('Reduce Only order can only decrease');
+};
+
 const isBingxPositionSideError = (error: unknown): boolean => {
   const message = String((error as any)?.message || error || '').toLowerCase();
   return message.includes('positionside') || message.includes('position side') || message.includes('109400') || message.includes('both');
@@ -1505,6 +1510,10 @@ export const closePosition = async (apiKeyName: string, symbol: string, qty: str
       throw new Error(`Failed to close BingX position for ${symbol}`);
     } catch (error) {
       const err = error as Error;
+      if (isBingxNoPositionError(error)) {
+        logger.warn(`BingX close skipped — position already closed or does not exist (101290): ${err.message}`);
+        return;
+      }
       logger.error(`Error closing position via ccxt: ${err.message}`);
       throw error;
     }
