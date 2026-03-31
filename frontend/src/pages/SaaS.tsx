@@ -1853,15 +1853,12 @@ const deriveBacktestCurvesFromEquity = (
     return {
       pnl: [] as LinePoint[],
       drawdown: [] as LinePoint[],
-      marginLoad: [] as LinePoint[],
-      maxMarginLoad: 0,
       finalPnl: 0,
     };
   }
 
   const safeInitial = Number.isFinite(initialBalance) && initialBalance > 0 ? initialBalance : equityPoints[0].value;
   let peak = equityPoints[0].value;
-  let maxMarginLoad = 0;
 
   const pnl = equityPoints.map((point) => ({
     time: point.time,
@@ -1876,20 +1873,9 @@ const deriveBacktestCurvesFromEquity = (
     return { time: point.time, value: Number(dd.toFixed(4)) };
   });
 
-  const marginLoad = drawdown.map((point) => {
-    const raw = point.value * 1.8 + Number(riskScore || 5) * 4;
-    const value = Number(Math.max(3, Math.min(95, raw)).toFixed(4));
-    if (value > maxMarginLoad) {
-      maxMarginLoad = value;
-    }
-    return { time: point.time, value };
-  });
-
   return {
     pnl,
     drawdown,
-    marginLoad,
-    maxMarginLoad: Number(maxMarginLoad.toFixed(4)),
     finalPnl: pnl.length > 0 ? Number(pnl[pnl.length - 1].value.toFixed(4)) : 0,
   };
 };
@@ -8284,6 +8270,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Button loading={closedPositionsLoading} onClick={() => void loadClosedPositionsReport()}>Closed Positions</Button>
                                   <Button loading={runtimeWindowBacktestsLoading} onClick={() => void loadRuntimeWindowBacktests()}>Backtest 1d/7d/30d</Button>
                                   <Button loading={chartSnapshotLoading} onClick={() => void loadChartSnapshotReport()}>Chart Snapshot</Button>
+                                  <Button
+                                    loading={chartSnapshotLoading}
+                                    onClick={async () => {
+                                      try {
+                                        const response = await axios.post('/api/saas/admin/reports/send-telegram', { format: 'full' });
+                                        if (response.data?.success) {
+                                          messageApi.success('Скриншот отправлен в Телеграм');
+                                        } else {
+                                          messageApi.error(response.data?.error || 'Failed to send telegram');
+                                        }
+                                      } catch (error: any) {
+                                        messageApi.error(String(error?.response?.data?.error || error?.message || 'Ошибка отправки в Телеграм'));
+                                      }
+                                    }}
+                                  >
+                                    Send to Telegram
+                                  </Button>
                                 </Space>
                                 <Space wrap style={{ marginTop: 8 }}>
                                   <Space>
@@ -10972,16 +10975,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                     const pnlCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.pnl || []);
                     const drawdownCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.drawdownPercent || []);
-                    const marginCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.marginLoadPercent || []);
-
                     const effectivePnlCurve = pnlCurve.length > 0 ? pnlCurve : fallbackCurves.pnl;
                     const effectiveDrawdownCurve = drawdownCurve.length > 0 ? drawdownCurve : fallbackCurves.drawdown;
-                    const effectiveMarginCurve = marginCurve.length > 0 ? marginCurve : fallbackCurves.marginLoad;
 
                     const finalPnl = Number(summary.unrealizedPnl ?? (effectivePnlCurve.length > 0 ? effectivePnlCurve[effectivePnlCurve.length - 1].value : fallbackCurves.finalPnl) ?? 0);
                     const tradesCount = Number(summary.tradesCount ?? 0);
                     const maxDd = Number(summary.maxDrawdownPercent ?? (effectiveDrawdownCurve.length > 0 ? Math.max(...effectiveDrawdownCurve.map((point) => point.value)) : 0));
-                    const marginLoad = Number(summary.marginLoadPercent ?? (effectiveMarginCurve.length > 0 ? Math.max(...effectiveMarginCurve.map((point) => point.value)) : fallbackCurves.maxMarginLoad));
+                    const marginLoad = Number(summary.marginLoadPercent ?? 0);
                     const rerunErrorText = String(adminSweepBacktestResult.rerun?.error || '').trim();
                     const rerunNeedsHistoricalSweep = /Исторические свечи не найдены|No executable candles|No runnable strategies|No candles in selected date range/i.test(rerunErrorText);
 
@@ -11150,15 +11150,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           <ChartComponent data={effectiveDrawdownCurve.map((point) => ({ time: point.time, equity: point.value }))} type="line" />
                         ) : (
                           <Empty description="Нет данных просадки" />
-                        )}
-                      </Card>
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Card size="small" title="График загрузки маржи">
-                        {effectiveMarginCurve.length > 0 ? (
-                          <ChartComponent data={effectiveMarginCurve.map((point) => ({ time: point.time, equity: point.value }))} type="line" />
-                        ) : (
-                          <Empty description="Нет данных загрузки маржи" />
                         )}
                       </Card>
                     </Col>
