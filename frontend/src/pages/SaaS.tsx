@@ -7495,10 +7495,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           loading={removeStorefrontTarget === set.displayName}
                                           disabled={Boolean(set.isDraft)}
                                           onClick={() => {
-                                            void initiateDeleteStorefrontFromDb(String(set.displayName || '').trim());
+                                            void initiateRemoveStorefront(String(set.displayName || '').trim());
                                           }}
                                         >
-                                          Удалить из базы
+                                          Снять с витрины
                                         </Button>,
                                       ]}
                                     >
@@ -7727,12 +7727,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                               <Button
                                                 size="small"
                                                 danger
-                                                loading={actionLoading === `offer-delete:${String(row.offerId || '')}`}
+                                                loading={actionLoading === `offer-store:${String(row.offerId || '')}`}
                                                 onClick={() => {
-                                                  void deleteOfferFromStorefrontDb(String(row.offerId));
+                                                  void openUnpublishWizard(String(row.offerId || ''));
                                                 }}
                                               >
-                                                Удалить из базы
+                                                Снять с витрины
                                               </Button>
                                             </Space>
                                           ),
