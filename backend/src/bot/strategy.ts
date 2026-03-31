@@ -1268,7 +1268,7 @@ type GetStrategiesOptions = {
 
 export type StrategySummary = Pick<
   Strategy,
-  'id' | 'name' | 'strategy_type' | 'is_active' | 'base_symbol' | 'quote_symbol' | 'interval' | 'state' | 'last_action' | 'last_error'
+  'id' | 'name' | 'strategy_type' | 'market_mode' | 'is_active' | 'base_symbol' | 'quote_symbol' | 'interval' | 'base_coef' | 'quote_coef' | 'state' | 'last_action' | 'last_error'
 > & {
   is_runtime: boolean;
   is_archived: boolean;
@@ -1351,7 +1351,7 @@ export const getStrategySummaries = async (
   const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? Math.floor(offsetRaw) : 0;
 
   const sqlParts = [
-    `SELECT s.id, s.name, s.strategy_type, s.is_active, s.base_symbol, s.quote_symbol, s.interval, s.state, s.last_action, s.last_error,
+    `SELECT s.id, s.name, s.strategy_type, s.market_mode, s.is_active, s.base_symbol, s.quote_symbol, s.interval, s.base_coef, s.quote_coef, s.state, s.last_action, s.last_error,
      COALESCE(s.is_runtime, 0) AS is_runtime, COALESCE(s.is_archived, 0) AS is_archived, COALESCE(s.origin, 'manual') AS origin`,
     `FROM strategies s`,
     `JOIN api_keys a ON a.id = s.api_key_id`,
@@ -1376,21 +1376,29 @@ export const getStrategySummaries = async (
 
   const rows = await db.all(sqlParts.join('\n'), params);
 
-  return rows.map((row: any) => ({
-    id: Number(row.id),
-    name: String(row.name || DEFAULT_STRATEGY.name),
-    strategy_type: normalizeStrategyType(row.strategy_type),
-    is_active: safeBoolean(row.is_active, true),
-    base_symbol: normalizeSymbol(String(row.base_symbol || DEFAULT_STRATEGY.base_symbol)),
-    quote_symbol: normalizeSymbol(String(row.quote_symbol || DEFAULT_STRATEGY.quote_symbol)),
-    interval: String(row.interval || DEFAULT_STRATEGY.interval),
-    state: String(row.state || 'flat') === 'long' ? 'long' : String(row.state || 'flat') === 'short' ? 'short' : 'flat',
-    last_action: row.last_action === undefined ? null : row.last_action,
-    last_error: row.last_error === undefined ? null : row.last_error,
-    is_runtime: safeBoolean(row.is_runtime, false),
-    is_archived: safeBoolean(row.is_archived, false),
-    origin: String(row.origin || 'manual'),
-  }));
+  return rows.map((row: any) => {
+    const marketMode = normalizeMarketMode(row.market_mode);
+    return {
+      id: Number(row.id),
+      name: String(row.name || DEFAULT_STRATEGY.name),
+      strategy_type: normalizeStrategyType(row.strategy_type),
+      market_mode: marketMode,
+      is_active: safeBoolean(row.is_active, true),
+      base_symbol: normalizeSymbol(String(row.base_symbol || DEFAULT_STRATEGY.base_symbol)),
+      quote_symbol: marketMode === 'mono'
+        ? normalizeSymbol(String(row.quote_symbol || ''))
+        : normalizeSymbol(String(row.quote_symbol || DEFAULT_STRATEGY.quote_symbol)),
+      interval: String(row.interval || DEFAULT_STRATEGY.interval),
+      base_coef: safeNumber(row.base_coef, DEFAULT_STRATEGY.base_coef),
+      quote_coef: marketMode === 'mono' ? safeNumber(row.quote_coef, 0) : safeNumber(row.quote_coef, DEFAULT_STRATEGY.quote_coef),
+      state: String(row.state || 'flat') === 'long' ? 'long' : String(row.state || 'flat') === 'short' ? 'short' : 'flat',
+      last_action: row.last_action === undefined ? null : row.last_action,
+      last_error: row.last_error === undefined ? null : row.last_error,
+      is_runtime: safeBoolean(row.is_runtime, false),
+      is_archived: safeBoolean(row.is_archived, false),
+      origin: String(row.origin || 'manual'),
+    };
+  });
 };
 
 export const getStrategyById = async (
@@ -1446,7 +1454,7 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
     ? normalizeSymbol(String(draft.quote_symbol || ''))
     : normalizeSymbol(String(draft.quote_symbol || DEFAULT_STRATEGY.quote_symbol));
   const baseCoef = safeNumber(draft.base_coef, DEFAULT_STRATEGY.base_coef);
-  const quoteCoef = marketMode === 'mono' ? safeNumber(draft.quote_coef, 0) : safeNumber(draft.quote_coef, DEFAULT_STRATEGY.quote_coef);
+  const quoteCoef = marketMode === 'mono' ? 0 : safeNumber(draft.quote_coef, DEFAULT_STRATEGY.quote_coef);
 
   const strategy: Strategy = {
     ...DEFAULT_STRATEGY,
@@ -1652,7 +1660,7 @@ export const updateStrategy = async (
     pushUpdate('market_mode', requestedMarketMode);
     if (requestedMarketMode === 'mono') {
       pushUpdate('quote_symbol', normalizeSymbol(String(patch.quote_symbol || '')));
-      pushUpdate('quote_coef', patch.quote_coef !== undefined ? safeNumber(patch.quote_coef, 0) : 0);
+      pushUpdate('quote_coef', 0);
     }
   }
   if (patch.price_channel_length !== undefined) {
@@ -1693,7 +1701,7 @@ export const updateStrategy = async (
     pushUpdate('base_coef', safeNumber(patch.base_coef, existing.base_coef));
   }
   if (patch.quote_coef !== undefined) {
-    pushUpdate('quote_coef', requestedMarketMode === 'mono' ? safeNumber(patch.quote_coef, 0) : safeNumber(patch.quote_coef, existing.quote_coef));
+    pushUpdate('quote_coef', requestedMarketMode === 'mono' ? 0 : safeNumber(patch.quote_coef, existing.quote_coef));
   }
   if (patch.long_enabled !== undefined) {
     pushUpdate('long_enabled', safeBoolean(patch.long_enabled, existing.long_enabled) ? 1 : 0);
@@ -1778,7 +1786,7 @@ export const updateStrategy = async (
       interval: patch.interval !== undefined ? String(patch.interval || '').trim() || existing.interval : existing.interval,
       base_coef: patch.base_coef !== undefined ? safeNumber(patch.base_coef, existing.base_coef) : existing.base_coef,
       quote_coef: patch.quote_coef !== undefined
-        ? (requestedMarketMode === 'mono' ? safeNumber(patch.quote_coef, 0) : safeNumber(patch.quote_coef, existing.quote_coef))
+        ? (requestedMarketMode === 'mono' ? 0 : safeNumber(patch.quote_coef, existing.quote_coef))
         : existing.quote_coef,
     });
   }

@@ -10,11 +10,13 @@ import {
   Empty,
   Input,
   List,
+  Popconfirm,
   Row,
   Slider,
   Space,
   Spin,
   Tag,
+  Tabs,
   Typography,
   message,
 } from 'antd';
@@ -100,6 +102,7 @@ type StrategyState = {
   tenant: Tenant;
   plan: Plan | null;
   capabilities?: TenantCapabilities;
+  monitoring?: Record<string, unknown> | null;
   profile: {
     selectedOfferIds: string[];
     risk_level: Level3;
@@ -157,6 +160,8 @@ type AlgofundState = {
     risk_multiplier: number;
     requested_enabled: number;
     actual_enabled: number;
+    published_system_name?: string;
+    assigned_api_key_name?: string;
   };
   preview: {
     riskMultiplier: number;
@@ -172,6 +177,71 @@ type AlgofundState = {
     blockedReason?: string;
   };
   requests: AlgofundRequest[];
+  availableSystems?: Array<{
+    id: number;
+    apiKeyName: string;
+    name: string;
+    isActive: boolean;
+    memberCount: number;
+  }>;
+};
+
+type ClientApiKeyInfo = {
+  id: number;
+  name: string;
+  exchange: string;
+  testnet: boolean;
+  demo: boolean;
+  createdAt: string;
+  updatedAt: string;
+  isAssigned: boolean;
+};
+
+type TariffPlan = {
+  code: string;
+  title: string;
+  price_usdt: number;
+  max_deposit_total: number;
+  max_strategies_total: number;
+  risk_cap_max: number;
+  allow_ts_start_stop_requests: number;
+};
+
+type TariffRequestItem = {
+  id: number;
+  createdAt: string;
+  payload: {
+    targetPlanCode?: string;
+    targetPlanTitle?: string;
+    note?: string;
+  };
+};
+
+type TariffPayload = {
+  success: boolean;
+  productMode: ProductMode;
+  currentPlan: TariffPlan | null;
+  availablePlans: TariffPlan[];
+  requests: TariffRequestItem[];
+};
+
+type MonitoringPayload = {
+  success: boolean;
+  apiKeyName: string;
+  latest: {
+    equity_usd?: number;
+    drawdown_pct?: number;
+    unrealized_pnl_usd?: number;
+    margin_usage_pct?: number;
+    ts?: string;
+  } | null;
+  points: Array<{
+    ts?: string;
+    equity_usd?: number;
+    equity?: number;
+    value?: number;
+    time?: number;
+  }>;
 };
 
 type ClientAuthUser = {
@@ -273,7 +343,14 @@ const ClientCabinet: React.FC = () => {
   const navigate = useNavigate();
   const [messageApi, contextHolder] = message.useMessage();
   const [workspace, setWorkspace] = useState<WorkspacePayload | null>(null);
+  const [strategyStateExtra, setStrategyStateExtra] = useState<StrategyState | null>(null);
+  const [algofundStateExtra, setAlgofundStateExtra] = useState<AlgofundState | null>(null);
   const [guides, setGuides] = useState<GuideItem[]>([]);
+  const [clientApiKeys, setClientApiKeys] = useState<ClientApiKeyInfo[]>([]);
+  const [tariff, setTariff] = useState<TariffPayload | null>(null);
+  const [targetPlanCode, setTargetPlanCode] = useState('');
+  const [tariffNote, setTariffNote] = useState('');
+  const [monitoring, setMonitoring] = useState<MonitoringPayload | null>(null);
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
   const [actionLoading, setActionLoading] = useState('');
@@ -301,12 +378,27 @@ const ClientCabinet: React.FC = () => {
 
   const strategyState = workspace?.strategyState || null;
   const algofundState = workspace?.algofundState || null;
+  const strategyWorkspace = strategyState || strategyStateExtra;
+  const algofundWorkspace = algofundState || algofundStateExtra;
   const clientUser = workspace?.auth?.user || null;
   const onboardingCompleted = Boolean(clientUser?.onboardingCompletedAt);
 
   const strategyPreviewSummary = strategySelectionPreview?.preview?.summary || {};
   const strategyPreviewSeries = useMemo(() => toLineSeriesData(strategySelectionPreview?.preview?.equity), [strategySelectionPreview]);
-  const algofundPreviewSeries = useMemo(() => toLineSeriesData(algofundState?.preview?.equityCurve), [algofundState]);
+  const algofundPreviewSeries = useMemo(() => toLineSeriesData(algofundWorkspace?.preview?.equityCurve), [algofundWorkspace]);
+  const algofundPublishedSystemName = String((algofundWorkspace?.profile as any)?.published_system_name || '').trim();
+  const algofundAssignedApiKey = String((algofundWorkspace?.profile as any)?.assigned_api_key_name || '').trim();
+  const algofundAvailableSystems = Array.isArray(algofundWorkspace?.availableSystems) ? (algofundWorkspace?.availableSystems || []) : [];
+  const algofundCurrentSystem = algofundPublishedSystemName
+    ? (algofundAvailableSystems.find((item) => String(item?.name || '').trim() === algofundPublishedSystemName) || null)
+    : null;
+  const monitoringSeries = useMemo(
+    () => toLineSeriesData((monitoring?.points || []).map((point) => ({
+      time: point.time ?? point.ts,
+      equity: point.equity_usd ?? point.equity ?? point.value,
+    }))),
+    [monitoring]
+  );
 
   const loadWorkspace = async () => {
     setLoading(true);
@@ -320,8 +412,22 @@ const ClientCabinet: React.FC = () => {
 
       setWorkspace(workspaceResponse.data);
       setGuides(Array.isArray(guidesResponse.data?.guides) ? guidesResponse.data.guides : []);
+
+      const [strategyResponse, algofundResponse, apiKeysResponse, tariffResponse, monitoringResponse] = await Promise.allSettled([
+        axios.get<{ success: boolean; state: StrategyState }>('/api/client/strategy/state'),
+        axios.get<{ success: boolean; state: AlgofundState }>('/api/client/algofund/state'),
+        axios.get<{ success: boolean; keys: ClientApiKeyInfo[] }>('/api/client/api-keys'),
+        axios.get<TariffPayload>('/api/client/tariff'),
+        axios.get<MonitoringPayload>('/api/client/monitoring'),
+      ]);
+
+      setStrategyStateExtra(strategyResponse.status === 'fulfilled' ? (strategyResponse.value.data?.state || null) : null);
+      setAlgofundStateExtra(algofundResponse.status === 'fulfilled' ? (algofundResponse.value.data?.state || null) : null);
+      setClientApiKeys(apiKeysResponse.status === 'fulfilled' ? (apiKeysResponse.value.data?.keys || []) : []);
+      setTariff(tariffResponse.status === 'fulfilled' ? (tariffResponse.value.data || null) : null);
+      setMonitoring(monitoringResponse.status === 'fulfilled' ? (monitoringResponse.value.data || null) : null);
     } catch (error: any) {
-      setErrorText(String(error?.response?.data?.error || error?.message || 'Failed to load client workspace'));
+      setErrorText(String(error?.response?.data?.error || error?.message || t('client.workspace.loadFailed', 'Failed to load client workspace')));
     } finally {
       setLoading(false);
     }
@@ -332,22 +438,22 @@ const ClientCabinet: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (!strategyState?.profile) {
+    if (!strategyWorkspace?.profile) {
       return;
     }
 
-    setStrategyOfferIds(Array.isArray(strategyState.profile.selectedOfferIds) ? strategyState.profile.selectedOfferIds : []);
-    setStrategyRiskInput(levelToSliderValue(strategyState.profile.risk_level || 'medium'));
-    setStrategyTradeInput(levelToSliderValue(strategyState.profile.trade_frequency_level || 'medium'));
-  }, [strategyState]);
+    setStrategyOfferIds(Array.isArray(strategyWorkspace.profile.selectedOfferIds) ? strategyWorkspace.profile.selectedOfferIds : []);
+    setStrategyRiskInput(levelToSliderValue(strategyWorkspace.profile.risk_level || 'medium'));
+    setStrategyTradeInput(levelToSliderValue(strategyWorkspace.profile.trade_frequency_level || 'medium'));
+  }, [strategyWorkspace]);
 
   useEffect(() => {
-    if (!algofundState?.profile) {
+    if (!algofundWorkspace?.profile) {
       return;
     }
 
-    setAlgofundRiskMultiplier(toFinite(algofundState.profile.risk_multiplier, 1));
-  }, [algofundState]);
+    setAlgofundRiskMultiplier(toFinite(algofundWorkspace.profile.risk_multiplier, 1));
+  }, [algofundWorkspace]);
 
   useEffect(() => {
     if (workspace?.productMode === 'strategy_client') {
@@ -374,7 +480,7 @@ const ClientCabinet: React.FC = () => {
       messageApi.success(t('client.onboarding.completed', 'Onboarding marked as completed'));
       await loadWorkspace();
     } catch (error: any) {
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to mark onboarding complete'));
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.onboarding.completeFailed', 'Failed to mark onboarding complete')));
     } finally {
       setActionLoading('');
     }
@@ -398,7 +504,7 @@ const ClientCabinet: React.FC = () => {
       });
       messageApi.success(t('client.strategy.saved', 'Preferences saved'));
     } catch (error: any) {
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to save strategy preferences'));
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.strategy.saveFailed', 'Failed to save strategy preferences')));
     } finally {
       setActionLoading('');
     }
@@ -418,7 +524,7 @@ const ClientCabinet: React.FC = () => {
       setStrategySelectionPreview(response.data);
       messageApi.success(t('client.strategy.previewReady', 'Preview updated'));
     } catch (error: any) {
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to build preview'));
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.strategy.previewFailed', 'Failed to build preview')));
       setStrategySelectionPreview(null);
     } finally {
       setStrategySelectionPreviewLoading(false);
@@ -437,7 +543,7 @@ const ClientCabinet: React.FC = () => {
   const sendBacktestPairRequest = async () => {
     const market = requestMarket.trim().toUpperCase();
     if (!market) {
-      messageApi.warning('Enter market, for example SOLUSDT or BTC/ETH');
+      messageApi.warning(t('client.strategy.backtestRequest.enterMarket', 'Enter market, for example SOLUSDT or BTC/ETH'));
       return;
     }
 
@@ -448,12 +554,12 @@ const ClientCabinet: React.FC = () => {
         interval: requestInterval || '1h',
         note: requestNote,
       });
-      messageApi.success('Backtest pair request sent');
+      messageApi.success(t('client.strategy.backtestRequest.sent', 'Backtest pair request sent'));
       setRequestMarket('');
       setRequestNote('');
       await loadBacktestRequests();
     } catch (error: any) {
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to send request'));
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.strategy.backtestRequest.sendFailed', 'Failed to send request')));
     } finally {
       setActionLoading('');
     }
@@ -475,7 +581,7 @@ const ClientCabinet: React.FC = () => {
       });
       messageApi.success(t('client.algofund.saved', 'Risk profile saved'));
     } catch (error: any) {
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to save algofund profile'));
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.algofund.saveFailed', 'Failed to save algofund profile')));
     } finally {
       setActionLoading('');
     }
@@ -498,7 +604,7 @@ const ClientCabinet: React.FC = () => {
         };
       });
     } catch (error: any) {
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to refresh algofund preview'));
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.algofund.refreshFailed', 'Failed to refresh algofund preview')));
     } finally {
       setActionLoading('');
     }
@@ -523,7 +629,7 @@ const ClientCabinet: React.FC = () => {
       setAlgofundNote('');
       messageApi.success(t('client.algofund.requestSent', 'Request sent'));
     } catch (error: any) {
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to send request'));
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.algofund.requestFailed', 'Failed to send request')));
     } finally {
       setActionLoading('');
     }
@@ -575,15 +681,10 @@ const ClientCabinet: React.FC = () => {
 
       setWorkspace((current) => {
         if (!current) return current;
-        if (response.data?.productMode === 'strategy_client') {
-          return {
-            ...current,
-            strategyState: response.data?.state || current.strategyState,
-          };
-        }
         return {
           ...current,
-          algofundState: response.data?.state || current.algofundState,
+          strategyState: response.data?.strategyState || current.strategyState,
+          algofundState: response.data?.algofundState || current.algofundState,
         };
       });
 
@@ -591,6 +692,54 @@ const ClientCabinet: React.FC = () => {
       await loadWorkspace();
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || t('client.apiKey.saveFailed', 'Failed to save API key')));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const deleteClientApiKey = async (id: number) => {
+    setActionLoading(`delete-client-api-key-${id}`);
+    try {
+      await axios.delete(`/api/client/api-keys/${id}`);
+      messageApi.success(t('client.apiKey.deleted', 'API key deleted'));
+      await loadWorkspace();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.apiKey.deleteFailed', 'Failed to delete API key')));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const sendTariffRequest = async () => {
+    const planCode = targetPlanCode.trim();
+    if (!planCode) {
+      messageApi.warning(t('client.tariff.selectPlanWarning', 'Select target tariff plan'));
+      return;
+    }
+
+    setActionLoading('tariff-request');
+    try {
+      await axios.post('/api/client/tariff/request', {
+        targetPlanCode: planCode,
+        note: tariffNote,
+      });
+      messageApi.success(t('client.tariff.requestSent', 'Tariff request sent'));
+      setTariffNote('');
+      await loadWorkspace();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.tariff.requestFailed', 'Failed to send tariff request')));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const refreshMonitoring = async () => {
+    setActionLoading('monitoring-refresh');
+    try {
+      const response = await axios.get<MonitoringPayload>('/api/client/monitoring');
+      setMonitoring(response.data);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.monitoring.loadFailed', 'Failed to load monitoring')));
     } finally {
       setActionLoading('');
     }
@@ -652,6 +801,69 @@ const ClientCabinet: React.FC = () => {
                 </Descriptions.Item>
                 <Descriptions.Item label={t('client.cabinet.status', 'Status')}>{clientUser?.tenantStatus || '—'}</Descriptions.Item>
               </Descriptions>
+            </Card>
+
+            <Card className="battletoads-card" title={t('client.workspaceShowcase.title', 'Product showcases')}>
+              <Typography.Paragraph className="client-cabinet-muted">
+                {t('client.workspaceShowcase.subtitle', 'Unified client area for Strategy and Algofund. If a product is not enabled, its tab remains available as a preview.')}
+              </Typography.Paragraph>
+              <Tabs
+                items={[
+                  {
+                    key: 'strategy-vitrine',
+                    label: t('client.workspaceShowcase.strategyLabel', 'Strategy Client'),
+                    children: strategyWorkspace ? (
+                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                        <Space wrap>
+                          <Tag color="blue">{t('client.workspaceShowcase.plan', 'Plan')}: {strategyWorkspace.plan?.title || '—'}</Tag>
+                          <Tag color="green">{t('client.workspaceShowcase.offers', 'Offers')}: {strategyWorkspace.offers?.length || 0}</Tag>
+                          <Tag color="purple">{t('client.workspaceShowcase.selected', 'Selected')}: {strategyWorkspace.profile?.selectedOfferIds?.length || 0}</Tag>
+                        </Space>
+                        {renderCapabilities(strategyWorkspace.capabilities)}
+                      </Space>
+                    ) : (
+                      <Empty description={t('client.workspaceShowcase.strategyUnavailable', 'Strategy showcase is not enabled for your tenant yet')} />
+                    ),
+                  },
+                  {
+                    key: 'algofund-vitrine',
+                    label: t('client.workspaceShowcase.algofundLabel', 'Algofund Client'),
+                    children: algofundWorkspace ? (
+                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                        <Space wrap>
+                          <Tag color="blue">{t('client.workspaceShowcase.plan', 'Plan')}: {algofundWorkspace.plan?.title || '—'}</Tag>
+                          <Tag color="cyan">{t('client.workspaceShowcase.publishedSystems', 'Published systems')}: {algofundWorkspace.availableSystems?.length || 0}</Tag>
+                          <Tag color={algofundWorkspace.profile?.actual_enabled ? 'success' : 'default'}>
+                            {algofundWorkspace.profile?.actual_enabled
+                              ? t('client.algofund.liveEnabled', 'Live enabled')
+                              : t('client.algofund.liveDisabled', 'Live disabled')}
+                          </Tag>
+                        </Space>
+                        {renderCapabilities(algofundWorkspace.capabilities)}
+                      </Space>
+                    ) : (
+                      <Empty description={t('client.workspaceShowcase.algofundUnavailable', 'Algofund showcase is not enabled for your tenant yet')} />
+                    ),
+                  },
+                ]}
+              />
+            </Card>
+
+            <Card className="battletoads-card" title={t('client.monitoring.title', 'Monitoring')}>
+              <Space wrap style={{ marginBottom: 12 }}>
+                <Tag color="blue">{t('client.monitoring.apiKey', 'API key')}: {monitoring?.apiKeyName || '—'}</Tag>
+                <Tag color="green">{t('client.monitoring.equity', 'Equity')}: {formatMoney(monitoring?.latest?.equity_usd)}</Tag>
+                <Tag color="orange">DD: {formatPercent(monitoring?.latest?.drawdown_pct)}</Tag>
+                <Tag color="purple">UPNL: {formatMoney(monitoring?.latest?.unrealized_pnl_usd)}</Tag>
+                <Button size="small" loading={actionLoading === 'monitoring-refresh'} onClick={() => void refreshMonitoring()}>
+                  {t('client.monitoring.refresh', 'Refresh monitoring')}
+                </Button>
+              </Space>
+              {monitoringSeries.length > 0 ? (
+                <ChartComponent data={monitoringSeries} type="line" />
+              ) : (
+                <Empty description={t('client.monitoring.empty', 'Monitoring chart is empty')} />
+              )}
             </Card>
 
             {!onboardingCompleted ? (
@@ -748,18 +960,104 @@ const ClientCabinet: React.FC = () => {
                   </Space>
                 </Col>
               </Row>
+
+              <Typography.Title level={5} className="client-cabinet-section-title">{t('client.apiKey.connectedTitle', 'Connected API keys')}</Typography.Title>
+              <List
+                size="small"
+                dataSource={clientApiKeys}
+                locale={{ emptyText: <Empty description={t('client.apiKey.noKeys', 'No API keys yet')} /> }}
+                renderItem={(item) => (
+                  <List.Item
+                    actions={[
+                      <Popconfirm
+                        key={`delete-${item.id}`}
+                        title={t('client.apiKey.deleteTitle', 'Delete API key')}
+                        description={t('client.apiKey.deleteDescription', 'This action removes the key from DB')}
+                        okText={t('client.apiKey.deleteAction', 'Delete')}
+                        cancelText={t('client.apiKey.cancelAction', 'Cancel')}
+                        onConfirm={() => void deleteClientApiKey(item.id)}
+                      >
+                        <Button danger size="small" loading={actionLoading === `delete-client-api-key-${item.id}`}>{t('client.apiKey.deleteAction', 'Delete')}</Button>
+                      </Popconfirm>,
+                    ]}
+                  >
+                    <Space wrap>
+                      <Typography.Text strong>{item.name}</Typography.Text>
+                      <Tag>{item.exchange}</Tag>
+                      {item.testnet ? <Tag color="gold">{t('client.apiKey.tagTestnet', 'testnet')}</Tag> : null}
+                      {item.demo ? <Tag color="magenta">{t('client.apiKey.tagDemo', 'demo')}</Tag> : null}
+                      {item.isAssigned ? <Tag color="success">{t('client.apiKey.tagAssigned', 'assigned')}</Tag> : null}
+                    </Space>
+                  </List.Item>
+                )}
+              />
             </Card>
 
-            {strategyState ? (
+            <Card className="battletoads-card" title={t('client.tariff.title', 'Tariff and limits')}>
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                <Space wrap>
+                  <Tag color="blue">{t('client.tariff.current', 'Current')}: {tariff?.currentPlan?.title || '—'}</Tag>
+                  <Tag color="green">{t('client.tariff.price', 'Price')}: {formatMoney(tariff?.currentPlan?.price_usdt)}</Tag>
+                  <Tag color="cyan">{t('client.tariff.maxDeposit', 'Max deposit')}: {formatMoney(tariff?.currentPlan?.max_deposit_total)}</Tag>
+                  <Tag color="purple">{t('client.tariff.riskCap', 'Risk cap')}: {formatNumber(tariff?.currentPlan?.risk_cap_max)}</Tag>
+                </Space>
+
+                <Typography.Text strong>{t('client.tariff.changeRequest', 'Tariff change request')}</Typography.Text>
+                <Row gutter={[12, 12]}>
+                  <Col xs={24} md={10}>
+                    <Input
+                      placeholder={t('client.tariff.planCodePlaceholder', 'Plan code')}
+                      value={targetPlanCode}
+                      onChange={(event) => setTargetPlanCode(event.target.value)}
+                    />
+                  </Col>
+                  <Col xs={24} md={14}>
+                    <Input
+                      placeholder={t('client.tariff.notePlaceholder', 'Optional note')}
+                      value={tariffNote}
+                      onChange={(event) => setTariffNote(event.target.value)}
+                    />
+                  </Col>
+                </Row>
+                <Space wrap>
+                  <Button type="primary" loading={actionLoading === 'tariff-request'} onClick={() => void sendTariffRequest()}>
+                    {t('client.tariff.sendRequest', 'Send tariff request')}
+                  </Button>
+                  {tariff?.availablePlans?.map((plan) => (
+                    <Button key={plan.code} onClick={() => setTargetPlanCode(plan.code)}>
+                      {plan.code} ({formatMoney(plan.price_usdt)})
+                    </Button>
+                  ))}
+                </Space>
+
+                <List
+                  size="small"
+                  header={t('client.tariff.recentRequests', 'Recent tariff requests')}
+                  dataSource={tariff?.requests || []}
+                  locale={{ emptyText: <Empty description={t('client.tariff.noRequests', 'No tariff requests yet')} /> }}
+                  renderItem={(item) => (
+                    <List.Item>
+                      <Space wrap>
+                        <Tag color="blue">#{item.id}</Tag>
+                        <Typography.Text>{item.payload?.targetPlanTitle || item.payload?.targetPlanCode || '—'}</Typography.Text>
+                        <Typography.Text type="secondary">{item.createdAt}</Typography.Text>
+                      </Space>
+                    </List.Item>
+                  )}
+                />
+              </Space>
+            </Card>
+
+            {strategyWorkspace ? (
               <>
                 <Card className="battletoads-card" title={t('client.strategy.workspace', 'Strategy Workspace')}>
                   <Space direction="vertical" size={10} style={{ width: '100%' }}>
                     <Space wrap>
-                      <Tag color="blue">{t('client.plan', 'Plan')}: {strategyState.plan?.title || '—'}</Tag>
-                      <Tag color="cyan">{t('client.depositCap', 'Deposit cap')}: {formatMoney(strategyState.plan?.max_deposit_total)}</Tag>
-                      <Tag color="purple">{t('client.strategyLimit', 'Strategy limit')}: {formatNumber(strategyState.plan?.max_strategies_total, 0)}</Tag>
+                      <Tag color="blue">{t('client.plan', 'Plan')}: {strategyWorkspace.plan?.title || '—'}</Tag>
+                      <Tag color="cyan">{t('client.depositCap', 'Deposit cap')}: {formatMoney(strategyWorkspace.plan?.max_deposit_total)}</Tag>
+                      <Tag color="purple">{t('client.strategyLimit', 'Strategy limit')}: {formatNumber(strategyWorkspace.plan?.max_strategies_total, 0)}</Tag>
                     </Space>
-                    {renderCapabilities(strategyState.capabilities)}
+                    {renderCapabilities(strategyWorkspace.capabilities)}
                   </Space>
                 </Card>
 
@@ -785,11 +1083,11 @@ const ClientCabinet: React.FC = () => {
                 </Card>
 
                 <Card className="battletoads-card" title={t('client.strategy.offers', 'Available offers')}>
-                  {strategyState.offers.length === 0 ? (
+                  {strategyWorkspace.offers.length === 0 ? (
                     <Empty description={t('client.strategy.noOffers', 'No offers available')} />
                   ) : (
                     <List
-                      dataSource={strategyState.offers}
+                      dataSource={strategyWorkspace.offers}
                       renderItem={(offer) => {
                         const checked = strategyOfferIds.includes(offer.offerId);
                         return (
@@ -849,18 +1147,18 @@ const ClientCabinet: React.FC = () => {
                   </Spin>
                 </Card>
 
-                <Card className="battletoads-card" title="Request New Pair Backtest">
+                <Card className="battletoads-card" title={t('client.strategy.backtestRequest.title', 'Request New Pair Backtest')}>
                   <Space direction="vertical" size={10} style={{ width: '100%' }}>
                     <Space wrap>
                       <Input
                         style={{ width: 240 }}
-                        placeholder="Market: SOLUSDT or BTC/ETH"
+                        placeholder={t('client.strategy.backtestRequest.marketPlaceholder', 'Market: SOLUSDT or BTC/ETH')}
                         value={requestMarket}
                         onChange={(event) => setRequestMarket(event.target.value)}
                       />
                       <Input
                         style={{ width: 90 }}
-                        placeholder="Interval"
+                        placeholder={t('client.strategy.backtestRequest.intervalPlaceholder', 'Interval')}
                         value={requestInterval}
                         onChange={(event) => setRequestInterval(event.target.value)}
                       />
@@ -869,19 +1167,19 @@ const ClientCabinet: React.FC = () => {
                       rows={2}
                       value={requestNote}
                       onChange={(event) => setRequestNote(event.target.value)}
-                      placeholder="Optional note for admin/research"
+                      placeholder={t('client.strategy.backtestRequest.notePlaceholder', 'Optional note for admin/research')}
                     />
                     <Space wrap>
                       <Button type="primary" loading={actionLoading === 'strategy-backtest-request'} onClick={() => void sendBacktestPairRequest()}>
-                        Send request
+                        {t('client.strategy.backtestRequest.send', 'Send request')}
                       </Button>
-                      <Button onClick={() => void loadBacktestRequests()}>Refresh list</Button>
+                      <Button onClick={() => void loadBacktestRequests()}>{t('client.strategy.backtestRequest.refresh', 'Refresh list')}</Button>
                     </Space>
 
                     <List
                       size="small"
                       dataSource={backtestRequests}
-                      locale={{ emptyText: <Empty description="No pair requests yet" /> }}
+                      locale={{ emptyText: <Empty description={t('client.strategy.backtestRequest.noRequests', 'No pair requests yet')} /> }}
                       renderItem={(item) => (
                         <List.Item>
                           <Space direction="vertical" size={0} style={{ width: '100%' }}>
@@ -901,16 +1199,38 @@ const ClientCabinet: React.FC = () => {
               </>
             ) : null}
 
-            {algofundState ? (
+            {algofundWorkspace ? (
               <>
                 <Card className="battletoads-card" title={t('client.algofund.workspace', 'Algofund Workspace')}>
                   <Space direction="vertical" size={10} style={{ width: '100%' }}>
                     <Space wrap>
-                      <Tag color="blue">{t('client.plan', 'Plan')}: {algofundState.plan?.title || '—'}</Tag>
-                      <Tag color="cyan">{t('client.depositCap', 'Deposit cap')}: {formatMoney(algofundState.plan?.max_deposit_total)}</Tag>
-                      <Tag color="purple">{t('client.riskCap', 'Risk cap')}: {formatNumber(algofundState.plan?.risk_cap_max)}</Tag>
+                      <Tag color="blue">{t('client.plan', 'Plan')}: {algofundWorkspace.plan?.title || '—'}</Tag>
+                      <Tag color="cyan">{t('client.depositCap', 'Deposit cap')}: {formatMoney(algofundWorkspace.plan?.max_deposit_total)}</Tag>
+                      <Tag color="purple">{t('client.riskCap', 'Risk cap')}: {formatNumber(algofundWorkspace.plan?.risk_cap_max)}</Tag>
                     </Space>
-                    {renderCapabilities(algofundState.capabilities)}
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Typography.Text strong>
+                        {t('client.algofund.currentSystem', 'Connected trading system')}: {algofundPublishedSystemName || t('client.algofund.noSystem', 'Not assigned')}
+                      </Typography.Text>
+                      <Space wrap>
+                        <Tag color={algofundWorkspace.profile?.actual_enabled ? 'success' : 'default'}>
+                          {algofundWorkspace.profile?.actual_enabled
+                            ? t('client.algofund.liveEnabled', 'Live enabled')
+                            : t('client.algofund.liveDisabled', 'Live disabled')}
+                        </Tag>
+                        <Tag color="geekblue">
+                          {t('client.algofund.availableSystems', 'Available TS')}: {algofundAvailableSystems.length}
+                        </Tag>
+                        {algofundAssignedApiKey ? <Tag color="blue">API: {algofundAssignedApiKey}</Tag> : null}
+                        {algofundCurrentSystem ? <Tag color="green">members: {Number(algofundCurrentSystem.memberCount || 0)}</Tag> : null}
+                      </Space>
+                      {algofundAvailableSystems.length > 0 ? (
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          {algofundAvailableSystems.map((item) => String(item?.name || '').trim()).filter(Boolean).join(' | ')}
+                        </Typography.Text>
+                      ) : null}
+                    </Space>
+                    {renderCapabilities(algofundWorkspace.capabilities)}
                   </Space>
                 </Card>
 
@@ -918,10 +1238,10 @@ const ClientCabinet: React.FC = () => {
                   <Typography.Text strong>{t('client.algofund.multiplier', 'Risk multiplier')}: {formatNumber(algofundRiskMultiplier, 2)}</Typography.Text>
                   <Slider
                     min={0}
-                    max={toFinite(algofundState.plan?.risk_cap_max, 1)}
+                    max={toFinite(algofundWorkspace.plan?.risk_cap_max, 1)}
                     step={0.05}
                     value={algofundRiskMultiplier}
-                    onChange={(value) => setAlgofundRiskMultiplier(Math.min(toFinite(value), toFinite(algofundState.plan?.risk_cap_max, 1)))}
+                    onChange={(value) => setAlgofundRiskMultiplier(Math.min(toFinite(value), toFinite(algofundWorkspace.plan?.risk_cap_max, 1)))}
                   />
                   <Space wrap>
                     <Button type="primary" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
@@ -934,15 +1254,15 @@ const ClientCabinet: React.FC = () => {
                 </Card>
 
                 <Card className="battletoads-card" title={t('client.algofund.preview', 'Portfolio preview')}>
-                  {algofundState.preview?.blockedByPlan ? (
-                    <Alert type="warning" showIcon message={algofundState.preview?.blockedReason || t('client.algofund.previewBlocked', 'Preview is blocked by your current plan')} />
+                  {algofundWorkspace.preview?.blockedByPlan ? (
+                    <Alert type="warning" showIcon message={algofundWorkspace.preview?.blockedReason || t('client.algofund.previewBlocked', 'Preview is blocked by your current plan')} />
                   ) : (
                     <>
                       <Space wrap style={{ marginBottom: 12 }}>
-                        <Tag color="green">{t('client.finalEquity', 'Final equity')}: {formatMoney(algofundState.preview?.summary?.finalEquity)}</Tag>
-                        <Tag color="cyan">{t('client.return', 'Return')}: {formatPercent(algofundState.preview?.summary?.totalReturnPercent)}</Tag>
-                        <Tag color="orange">DD: {formatPercent(algofundState.preview?.summary?.maxDrawdownPercent)}</Tag>
-                        <Tag color="purple">PF: {formatNumber(algofundState.preview?.summary?.profitFactor)}</Tag>
+                        <Tag color="green">{t('client.finalEquity', 'Final equity')}: {formatMoney(algofundWorkspace.preview?.summary?.finalEquity)}</Tag>
+                        <Tag color="cyan">{t('client.return', 'Return')}: {formatPercent(algofundWorkspace.preview?.summary?.totalReturnPercent)}</Tag>
+                        <Tag color="orange">DD: {formatPercent(algofundWorkspace.preview?.summary?.maxDrawdownPercent)}</Tag>
+                        <Tag color="purple">PF: {formatNumber(algofundWorkspace.preview?.summary?.profitFactor)}</Tag>
                       </Space>
                       {algofundPreviewSeries.length > 0 ? (
                         <ChartComponent data={algofundPreviewSeries} type="line" />
@@ -968,12 +1288,12 @@ const ClientCabinet: React.FC = () => {
                       <Button danger loading={actionLoading === 'algofund-stop'} onClick={() => void sendAlgofundRequest('stop')}>
                         {t('client.algofund.requestStop', 'Request stop')}
                       </Button>
-                      {algofundState.profile?.actual_enabled ? <Tag color="success">{t('client.algofund.liveEnabled', 'Live enabled')}</Tag> : <Tag color="default">{t('client.algofund.liveDisabled', 'Live disabled')}</Tag>}
+                      {algofundWorkspace.profile?.actual_enabled ? <Tag color="success">{t('client.algofund.liveEnabled', 'Live enabled')}</Tag> : <Tag color="default">{t('client.algofund.liveDisabled', 'Live disabled')}</Tag>}
                     </Space>
 
                     <List
                       header={t('client.algofund.requestHistory', 'Recent requests')}
-                      dataSource={algofundState.requests || []}
+                      dataSource={algofundWorkspace.requests || []}
                       locale={{ emptyText: t('client.algofund.noRequests', 'No requests yet') }}
                       renderItem={(item) => (
                         <List.Item>

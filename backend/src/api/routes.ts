@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import bcrypt from 'bcrypt';
 import {
   getMarketData,
   placeOrder,
@@ -407,6 +408,37 @@ router.post('/auth/client/magic-login', async (req, res) => {
   }
 });
 
+router.post('/auth/client/set-password', authenticateClient, async (req, res) => {
+  try {
+    const newPassword = String(req.body?.newPassword || '').trim();
+    if (!newPassword) {
+      return res.status(400).json({ error: 'New password is required' });
+    }
+    if (newPassword.length < 10) {
+      return res.status(400).json({ error: 'Password must be at least 10 characters' });
+    }
+
+    const session = (req as any).clientAuth;
+    if (!session?.user_id) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const userId = Number(session.user_id);
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+
+    await db.run(
+      `UPDATE client_users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [passwordHash, userId]
+    );
+
+    res.json({ success: true, message: 'Password set successfully' });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client set password error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/auth/client/me', authenticateClient, async (req, res) => {
   try {
     const session = (req as any).clientAuth;
@@ -490,24 +522,24 @@ router.get('/client/workspace', authenticateClient, async (req, res) => {
     const tenantId = Number(session.user.tenantId);
     const productMode = session.user.productMode;
 
-    if (productMode === 'strategy_client') {
-      const strategyState = await getStrategyClientState(tenantId);
-      return res.json({
-        success: true,
-        auth: getClientAuthPayloadFromSession(session),
-        productMode,
-        strategyState,
-        algofundState: null,
-      });
+    const [strategyResult, algofundResult] = await Promise.allSettled([
+      getStrategyClientState(tenantId),
+      getAlgofundState(tenantId, toOptionalNumber(req.query.riskMultiplier), false),
+    ]);
+
+    if (strategyResult.status === 'rejected') {
+      logger.warn(`Client workspace strategy state unavailable for tenant ${tenantId}: ${strategyResult.reason instanceof Error ? strategyResult.reason.message : String(strategyResult.reason)}`);
+    }
+    if (algofundResult.status === 'rejected') {
+      logger.warn(`Client workspace algofund state unavailable for tenant ${tenantId}: ${algofundResult.reason instanceof Error ? algofundResult.reason.message : String(algofundResult.reason)}`);
     }
 
-    const algofundState = await getAlgofundState(tenantId, toOptionalNumber(req.query.riskMultiplier), false);
     return res.json({
       success: true,
       auth: getClientAuthPayloadFromSession(session),
       productMode,
-      strategyState: null,
-      algofundState,
+      strategyState: strategyResult.status === 'fulfilled' ? strategyResult.value : null,
+      algofundState: algofundResult.status === 'fulfilled' ? algofundResult.value : null,
     });
   } catch (error) {
     const err = error as Error;
@@ -521,10 +553,6 @@ router.get('/client/strategy/state', authenticateClient, async (req, res) => {
     const session = (req as any).clientAuth;
     if (!session?.user) {
       return res.status(401).json({ error: 'Unauthorized client session' });
-    }
-
-    if (session.user.productMode !== 'strategy_client') {
-      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
     }
 
     const state = await getStrategyClientState(Number(session.user.tenantId));
@@ -541,10 +569,6 @@ router.patch('/client/strategy/profile', authenticateClient, async (req, res) =>
     const session = (req as any).clientAuth;
     if (!session?.user) {
       return res.status(401).json({ error: 'Unauthorized client session' });
-    }
-
-    if (session.user.productMode !== 'strategy_client') {
-      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
     }
 
     if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
@@ -575,10 +599,6 @@ router.get('/client/strategy/backtest-requests', authenticateClient, async (req,
     if (!session?.user) {
       return res.status(401).json({ error: 'Unauthorized client session' });
     }
-    if (session.user.productMode !== 'strategy_client') {
-      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
-    }
-
     const rows = await db.all(
       `SELECT id, tenant_id, base_symbol, quote_symbol, interval, note, status, created_at, decided_at
        FROM strategy_backtest_pair_requests
@@ -602,10 +622,6 @@ router.post('/client/strategy/backtest-request', authenticateClient, async (req,
     if (!session?.user) {
       return res.status(401).json({ error: 'Unauthorized client session' });
     }
-    if (session.user.productMode !== 'strategy_client') {
-      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
-    }
-
     const market = String(req.body?.market || '').trim().toUpperCase();
     const baseSymbolRaw = String(req.body?.baseSymbol || '').trim().toUpperCase();
     const quoteSymbolRaw = String(req.body?.quoteSymbol || '').trim().toUpperCase();
@@ -673,10 +689,6 @@ router.post('/client/strategy/preview', authenticateClient, async (req, res) => 
       return res.status(401).json({ error: 'Unauthorized client session' });
     }
 
-    if (session.user.productMode !== 'strategy_client') {
-      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
-    }
-
     const offerId = String(req.body?.offerId || '').trim();
     if (!offerId) {
       return res.status(400).json({ error: 'offerId is required' });
@@ -710,10 +722,6 @@ router.post('/client/strategy/selection-preview', authenticateClient, async (req
     const session = (req as any).clientAuth;
     if (!session?.user) {
       return res.status(401).json({ error: 'Unauthorized client session' });
-    }
-
-    if (session.user.productMode !== 'strategy_client') {
-      return res.status(403).json({ error: 'Strategy workspace is not available for this account' });
     }
 
     if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
@@ -809,10 +817,6 @@ router.get('/client/algofund/state', authenticateClient, async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized client session' });
     }
 
-    if (session.user.productMode !== 'algofund_client') {
-      return res.status(403).json({ error: 'Algofund workspace is not available for this account' });
-    }
-
     const state = await getAlgofundState(
       Number(session.user.tenantId),
       toOptionalNumber(req.query.riskMultiplier),
@@ -834,10 +838,6 @@ router.patch('/client/algofund/profile', authenticateClient, async (req, res) =>
       return res.status(401).json({ error: 'Unauthorized client session' });
     }
 
-    if (session.user.productMode !== 'algofund_client') {
-      return res.status(403).json({ error: 'Algofund workspace is not available for this account' });
-    }
-
     const state = await updateAlgofundState(Number(session.user.tenantId), {
       riskMultiplier: toOptionalNumber(req.body?.riskMultiplier),
     });
@@ -855,10 +855,6 @@ router.post('/client/algofund/request', authenticateClient, async (req, res) => 
     const session = (req as any).clientAuth;
     if (!session?.user) {
       return res.status(401).json({ error: 'Unauthorized client session' });
-    }
-
-    if (session.user.productMode !== 'algofund_client') {
-      return res.status(403).json({ error: 'Algofund workspace is not available for this account' });
     }
 
     const requestTypeRaw = String(req.body?.requestType || '').trim().toLowerCase();
@@ -922,20 +918,278 @@ router.post('/client/api-key', authenticateClient, async (req, res) => {
       demo,
     });
 
-    if (session.user.productMode === 'strategy_client') {
-      const state = await updateStrategyClientState(tenantId, {
-        assignedApiKeyName: keyName,
-      });
-      return res.json({ success: true, keyName, state, productMode: session.user.productMode });
+    const [strategyResult, algofundResult] = await Promise.allSettled([
+      updateStrategyClientState(tenantId, { assignedApiKeyName: keyName }),
+      updateAlgofundState(tenantId, { assignedApiKeyName: keyName }),
+    ]);
+
+    if (strategyResult.status === 'rejected') {
+      logger.warn(`Client api key save: strategy profile update unavailable for tenant ${tenantId}: ${strategyResult.reason instanceof Error ? strategyResult.reason.message : String(strategyResult.reason)}`);
+    }
+    if (algofundResult.status === 'rejected') {
+      logger.warn(`Client api key save: algofund profile update unavailable for tenant ${tenantId}: ${algofundResult.reason instanceof Error ? algofundResult.reason.message : String(algofundResult.reason)}`);
     }
 
-    const state = await updateAlgofundState(tenantId, {
-      assignedApiKeyName: keyName,
+    return res.json({
+      success: true,
+      keyName,
+      productMode: session.user.productMode,
+      strategyState: strategyResult.status === 'fulfilled' ? strategyResult.value : null,
+      algofundState: algofundResult.status === 'fulfilled' ? algofundResult.value : null,
     });
-    return res.json({ success: true, keyName, state, productMode: session.user.productMode });
   } catch (error) {
     const err = error as Error;
     logger.error(`Client api key save error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/client/api-keys', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user?.tenantId) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const tenantId = Number(session.user.tenantId);
+    const tenantPrefix = `tenant-${tenantId}-`;
+    const rows = await db.all(
+      `SELECT id, name, exchange, testnet, demo, created_at, updated_at
+       FROM api_keys
+       WHERE name LIKE ?
+       ORDER BY id DESC`,
+      [`${tenantPrefix}%`]
+    ) as Array<Record<string, unknown>>;
+
+    const tenant = await db.get(
+      'SELECT assigned_api_key_name FROM tenants WHERE id = ?',
+      [tenantId]
+    ) as { assigned_api_key_name?: string } | undefined;
+    const assignedName = String(tenant?.assigned_api_key_name || '').trim();
+
+    res.json({
+      success: true,
+      assignedApiKeyName: assignedName,
+      keys: (rows || []).map((row) => ({
+        id: Number(row.id || 0),
+        name: String(row.name || ''),
+        exchange: String(row.exchange || ''),
+        testnet: Boolean(row.testnet),
+        demo: Boolean(row.demo),
+        createdAt: String(row.created_at || ''),
+        updatedAt: String(row.updated_at || ''),
+        isAssigned: String(row.name || '') === assignedName,
+      })),
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client api key list error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/client/api-keys/:id', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user?.tenantId) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const tenantId = Number(session.user.tenantId);
+    const apiKeyId = Number.parseInt(String(req.params.id || '0'), 10);
+    if (!Number.isFinite(apiKeyId) || apiKeyId <= 0) {
+      return res.status(400).json({ error: 'Invalid API key id' });
+    }
+
+    const row = await db.get(
+      'SELECT id, name FROM api_keys WHERE id = ?',
+      [apiKeyId]
+    ) as { id?: number; name?: string } | undefined;
+
+    if (!row?.id) {
+      return res.status(404).json({ error: 'API key not found' });
+    }
+
+    const keyName = String(row.name || '').trim();
+    if (!keyName.startsWith(`tenant-${tenantId}-`)) {
+      return res.status(403).json({ error: 'API key is not owned by current tenant' });
+    }
+
+    const tenant = await db.get('SELECT assigned_api_key_name FROM tenants WHERE id = ?', [tenantId]) as { assigned_api_key_name?: string } | undefined;
+    if (String(tenant?.assigned_api_key_name || '').trim() === keyName) {
+      return res.status(409).json({ error: 'Cannot delete currently assigned API key. Assign another key first.' });
+    }
+
+    await db.run('DELETE FROM risk_settings WHERE api_key_id = ?', [apiKeyId]);
+    await db.run('DELETE FROM strategies WHERE api_key_id = ?', [apiKeyId]);
+    await db.run('DELETE FROM monitoring_snapshots WHERE api_key_id = ?', [apiKeyId]);
+    await db.run('DELETE FROM api_keys WHERE id = ?', [apiKeyId]);
+    removeExchangeClient(keyName);
+
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (?, 'client', 'client_api_key_delete', ?, CURRENT_TIMESTAMP)`,
+      [tenantId, JSON.stringify({ apiKeyId, keyName })]
+    );
+
+    res.json({ success: true, id: apiKeyId, name: keyName });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client api key delete error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/client/tariff', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user?.tenantId || !session?.user?.productMode) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const tenantId = Number(session.user.tenantId);
+    const productMode = String(session.user.productMode);
+
+    const currentPlan = await db.get(
+      `SELECT p.code, p.title, p.product_mode, p.price_usdt, p.max_deposit_total, p.max_strategies_total, p.risk_cap_max,
+              p.allow_ts_start_stop_requests, p.features_json
+       FROM subscriptions s
+       JOIN plans p ON p.id = s.plan_id
+       WHERE s.tenant_id = ?
+       ORDER BY s.id DESC
+       LIMIT 1`,
+      [tenantId]
+    ) as Record<string, unknown> | undefined;
+
+    const availablePlans = await db.all(
+      `SELECT code, title, product_mode, price_usdt, max_deposit_total, max_strategies_total, risk_cap_max,
+              allow_ts_start_stop_requests, features_json
+       FROM plans
+       WHERE is_active = 1 AND product_mode = ?
+       ORDER BY price_usdt ASC, id ASC`,
+      [productMode]
+    ) as Array<Record<string, unknown>>;
+
+    const requests = await db.all(
+      `SELECT id, action, payload_json, created_at
+       FROM saas_audit_log
+       WHERE tenant_id = ? AND action = 'client_tariff_request'
+       ORDER BY id DESC
+       LIMIT 30`,
+      [tenantId]
+    ) as Array<Record<string, unknown>>;
+
+    res.json({
+      success: true,
+      productMode,
+      currentPlan: currentPlan || null,
+      availablePlans: availablePlans || [],
+      requests: (requests || []).map((item) => ({
+        id: Number(item.id || 0),
+        createdAt: String(item.created_at || ''),
+        payload: (() => {
+          try {
+            return JSON.parse(String(item.payload_json || '{}'));
+          } catch {
+            return {};
+          }
+        })(),
+      })),
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client tariff load error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/client/tariff/request', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user?.tenantId || !session?.user?.productMode) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const tenantId = Number(session.user.tenantId);
+    const productMode = String(session.user.productMode);
+    const targetPlanCode = String(req.body?.targetPlanCode || '').trim();
+    const note = String(req.body?.note || '').trim().slice(0, 500);
+
+    if (!targetPlanCode) {
+      return res.status(400).json({ error: 'targetPlanCode is required' });
+    }
+
+    const targetPlan = await db.get(
+      'SELECT code, title, product_mode FROM plans WHERE code = ? AND is_active = 1 LIMIT 1',
+      [targetPlanCode]
+    ) as { code?: string; title?: string; product_mode?: string } | undefined;
+
+    if (!targetPlan?.code) {
+      return res.status(404).json({ error: 'Target plan not found' });
+    }
+    if (String(targetPlan.product_mode || '') !== productMode) {
+      return res.status(400).json({ error: 'Target plan belongs to another product mode' });
+    }
+
+    const payload = {
+      targetPlanCode: targetPlan.code,
+      targetPlanTitle: String(targetPlan.title || targetPlan.code),
+      note,
+    };
+
+    const insert = await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (?, 'client', 'client_tariff_request', ?, CURRENT_TIMESTAMP)`,
+      [tenantId, JSON.stringify(payload)]
+    );
+
+    res.json({
+      success: true,
+      request: {
+        id: Number((insert as any)?.lastID || 0),
+        ...payload,
+      },
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client tariff request error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/client/monitoring', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user?.tenantId) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const tenantId = Number(session.user.tenantId);
+    const limitRaw = Number.parseInt(String(req.query.limit || '120'), 10);
+    const limit = Math.min(500, Math.max(10, Number.isFinite(limitRaw) ? limitRaw : 120));
+
+    const tenant = await db.get(
+      'SELECT assigned_api_key_name FROM tenants WHERE id = ?',
+      [tenantId]
+    ) as { assigned_api_key_name?: string } | undefined;
+
+    const apiKeyName = String(tenant?.assigned_api_key_name || '').trim();
+    if (!apiKeyName) {
+      return res.json({ success: true, apiKeyName: '', latest: null, points: [] });
+    }
+
+    const points = await getMonitoringSnapshots(apiKeyName, limit);
+    const latest = points.length > 0 ? points[points.length - 1] : await getMonitoringLatest(apiKeyName);
+
+    res.json({
+      success: true,
+      apiKeyName,
+      latest: latest || null,
+      points: points || [],
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client monitoring load error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -2130,10 +2384,98 @@ router.get('/trades/:apiKeyName', async (req, res) => {
   const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 500) : 200;
 
   try {
-    // Some exchanges (e.g. BingX/Bitget via ccxt) require symbol for my trades.
-    // Return empty list instead of 500 to keep dashboard responsive.
+    // Some exchanges require symbol for my trades.
+    // If no symbol is provided, aggregate by active strategy symbols for this key.
     if (!symbol) {
-      return res.json([]);
+      const symbolRows = await db.all(
+        `SELECT DISTINCT
+           UPPER(TRIM(COALESCE(base_symbol, ''))) AS base_symbol,
+           UPPER(TRIM(COALESCE(quote_symbol, ''))) AS quote_symbol
+         FROM strategies s
+         JOIN api_keys a ON a.id = s.api_key_id
+         WHERE a.name = ?
+           AND (
+             TRIM(COALESCE(base_symbol, '')) <> ''
+             OR TRIM(COALESCE(quote_symbol, '')) <> ''
+           )`,
+        [apiKeyName]
+      ) as Array<{ base_symbol?: string; quote_symbol?: string }>;
+
+      const recentEventSymbolRows = await db.all(
+        `SELECT DISTINCT UPPER(TRIM(COALESCE(s.base_symbol, ''))) AS base_symbol
+         FROM live_trade_events lte
+         JOIN strategies s ON s.id = lte.strategy_id
+         JOIN api_keys a ON a.id = s.api_key_id
+         WHERE a.name = ?
+           AND lte.actual_time >= (strftime('%s', 'now', '-30 days') * 1000)
+           AND TRIM(COALESCE(s.base_symbol, '')) <> ''`,
+        [apiKeyName]
+      ) as Array<{ base_symbol?: string }>;
+
+      const positionRows = await getPositions(apiKeyName).catch(() => []);
+
+      const candidateSymbols = Array.from(new Set([
+        ...(Array.isArray(symbolRows) ? symbolRows : []).flatMap((row) => [
+          String(row?.base_symbol || '').trim().toUpperCase(),
+          String(row?.quote_symbol || '').trim().toUpperCase(),
+        ]),
+        ...(Array.isArray(positionRows) ? positionRows : []).map((row: any) => String(row?.symbol || '').trim().toUpperCase()),
+        ...(Array.isArray(recentEventSymbolRows) ? recentEventSymbolRows : []).map((row) => String(row?.base_symbol || '').trim().toUpperCase()),
+      ].filter(Boolean)));
+
+      if (!candidateSymbols.length) {
+        return res.json([]);
+      }
+
+      const apiKeyInfo = await db.get('SELECT exchange FROM api_keys WHERE name = ?', [apiKeyName]) as { exchange?: string } | undefined;
+      const exchange = String(apiKeyInfo?.exchange || '').toLowerCase();
+      const symbolFanoutLimit = exchange === 'bingx' ? 8 : 24;
+      const perSymbolLimit = Math.min(100, Math.max(10, Math.ceil(limit / Math.min(candidateSymbols.length, 10))));
+      const aggregateErrors: string[] = [];
+      const tradesBySymbol = await Promise.all(
+        candidateSymbols.slice(0, symbolFanoutLimit).map(async (candidate) => {
+          try {
+            const list = await getRecentTrades(apiKeyName, candidate, perSymbolLimit);
+            return Array.isArray(list) ? list : [];
+          } catch (error) {
+            const message = (error as Error)?.message || String(error);
+            aggregateErrors.push(`${candidate}: ${message}`);
+            return [];
+          }
+        })
+      );
+
+      const merged = tradesBySymbol.flat();
+      const deduped = Array.from(new Map(
+        merged.map((trade: any) => {
+          const tradeId = String(trade?.tradeId || '');
+          const tradeSymbol = String(trade?.symbol || '');
+          const ts = String(trade?.timestamp || trade?.createdTime || '0');
+          return [`${tradeId}|${tradeSymbol}|${ts}`, trade] as const;
+        })
+      ).values());
+
+      deduped.sort((a: any, b: any) => {
+        const ta = Number(a?.timestamp || a?.createdTime || 0);
+        const tb = Number(b?.timestamp || b?.createdTime || 0);
+        return tb - ta;
+      });
+
+      if (!deduped.length && aggregateErrors.length > 0) {
+        const aggregateText = aggregateErrors.join(' | ');
+        const isRateLimit = /100410|frequency limit|too many|429|rate limit/i.test(aggregateText);
+        if (isRateLimit) {
+          logger.warn(`Trade history rate-limited for ${apiKeyName}; returning empty trades snapshot`);
+          return res.json([]);
+        }
+
+        const sample = aggregateErrors[0];
+        return res.status(502).json({
+          error: `Trade history temporarily unavailable for ${apiKeyName}: ${sample}`,
+        });
+      }
+
+      return res.json(deduped.slice(0, limit));
     }
 
     const trades = await getRecentTrades(apiKeyName, symbol, limit);

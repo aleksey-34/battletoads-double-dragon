@@ -1,0 +1,430 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - img "BattleToads icon" [ref=e8]
+        - generic [ref=e9]: BattleToads Control
+      - generic [ref=e10]: "Section: SaaS Admin"
+      - menu [ref=e11]:
+        - menuitem "Dashboard" [ref=e12] [cursor=pointer]
+        - menuitem "Settings" [ref=e13] [cursor=pointer]
+        - menuitem "Positions" [ref=e14] [cursor=pointer]
+        - menuitem "Logs" [ref=e15] [cursor=pointer]
+        - menuitem "SaaS" [ref=e16] [cursor=pointer]
+        - menuitem "Research" [ref=e17] [cursor=pointer]
+        - menuitem "Docs" [ref=e18] [cursor=pointer]
+        - menuitem [disabled]:
+          - img:
+            - img
+      - generic [ref=e19]:
+        - generic [ref=e21] [cursor=pointer]:
+          - generic [ref=e23]:
+            - combobox [ref=e25]
+            - generic "English" [ref=e26]
+          - generic:
+            - img:
+              - img
+        - generic [ref=e28]: "Session: active"
+        - button "Check" [ref=e30] [cursor=pointer]:
+          - generic [ref=e31]: Check
+        - button "Logout" [ref=e33] [cursor=pointer]:
+          - generic [ref=e34]: Logout
+  - main [ref=e35]:
+    - generic [ref=e36]:
+      - generic [ref=e39]:
+        - generic [ref=e40]:
+          - heading "SaaS Control Room" [level=3] [ref=e41]
+          - generic [ref=e42]: One MVP surface for admin, strategy-client, and algofund modes on top of the latest sweep/catalog artifacts.
+        - generic [ref=e44]:
+          - button "Refresh" [ref=e46] [cursor=pointer]:
+            - generic [ref=e47]: Refresh
+          - button "Seed demo tenants" [ref=e49] [cursor=pointer]:
+            - generic [ref=e50]: Seed demo tenants
+          - button "Create new user" [ref=e52] [cursor=pointer]:
+            - generic [ref=e53]: Create new user
+          - button "Publish admin TS" [ref=e55] [cursor=pointer]:
+            - generic [ref=e56]: Publish admin TS
+      - generic [ref=e59]:
+        - tablist [ref=e60]:
+          - generic [ref=e62]:
+            - tab "Admin" [selected] [ref=e64] [cursor=pointer]
+            - tab "Strategy Client" [ref=e66] [cursor=pointer]
+            - tab "Algofund" [ref=e68] [cursor=pointer]
+            - tab "Copytrading" [ref=e70] [cursor=pointer]
+        - tabpanel "Admin" [ref=e73]:
+          - generic [ref=e74]:
+            - tablist [ref=e75]:
+              - generic [ref=e77]:
+                - tab "Оферы и ТС" [active] [selected] [ref=e79] [cursor=pointer]
+                - tab "Клиенты" [ref=e81] [cursor=pointer]
+                - tab "Настройки SaaS" [ref=e83] [cursor=pointer]
+                - tab "Создать пользователя" [ref=e85] [cursor=pointer]
+            - tabpanel "Оферы и ТС" [ref=e88]:
+              - generic [ref=e89]:
+                - alert [ref=e91]:
+                  - img "info-circle" [ref=e92]:
+                    - img [ref=e93]
+                  - generic [ref=e96]: "Period: 2025-01-01 -> 2026-03-28 • 4h • 452d"
+                - alert [ref=e98]:
+                  - img "check-circle" [ref=e99]:
+                    - img [ref=e100]
+                  - generic [ref=e103]: "Каталог из sweep · 2026-03-28 15:11 UTC · 0 mono + 0 synth оферов · draft TS: 0 стратегий"
+                - generic [ref=e105]:
+                  - generic [ref=e108]:
+                    - generic [ref=e109]:
+                      - generic [ref=e110]: Latest client catalog
+                      - generic [ref=e111]:
+                        - generic [ref=e112]: "0"
+                        - generic [ref=e113]: mono / 0 synth
+                    - generic [ref=e115]: 2026-03-28 15:11
+                  - generic [ref=e118]:
+                    - generic [ref=e119]:
+                      - generic [ref=e120]: Latest historical sweep
+                      - generic [ref=e121]:
+                        - generic [ref=e122]: "0"
+                        - generic [ref=e123]: / 0
+                    - text: /opt/battletoads-double-dragon/results/btdd_d1_historical_sweep_2026-03-28T15-11-15-274Z.json
+                  - generic [ref=e126]:
+                    - generic [ref=e127]:
+                      - generic [ref=e128]: Admin portfolio draft
+                      - generic [ref=e129]:
+                        - generic [ref=e130]: "0"
+                        - generic [ref=e131]: members
+                    - text: HISTSWEEP BTDD_D1 Candidate
+                - generic [ref=e133]:
+                  - generic [ref=e136]: "Pipeline: Sweep → Backtest → Storefront"
+                  - generic [ref=e138]:
+                    - generic [ref=e140]: "Жесткий путь без параллельных веток: сначала обнови sweep-кандидаты, затем backtest, затем публикация на витрину, затем применение к клиентам."
+                    - generic [ref=e142]:
+                      - generic [ref=e144] [cursor=pointer]:
+                        - generic [ref=e146]:
+                          - combobox [ref=e148]
+                          - generic "Поток оффера на витрину" [ref=e149]
+                        - generic:
+                          - img:
+                            - img
+                      - generic [ref=e151]: "шаг 1: sweep"
+                      - generic [ref=e153]: "шаг 2: backtest"
+                      - generic [ref=e155]: "шаг 3: storefront"
+                      - generic [ref=e157]: "шаг 4: apply clients"
+                    - generic [ref=e159]:
+                      - generic [ref=e161]:
+                        - img "check" [ref=e164]:
+                          - img [ref=e165]
+                        - generic [ref=e167]:
+                          - generic [ref=e168]: Sweep
+                          - generic [ref=e169]: 16 кандидатов
+                      - generic [ref=e171]:
+                        - img "check" [ref=e174]:
+                          - img [ref=e175]
+                        - generic [ref=e177]:
+                          - generic [ref=e178]: Backtest
+                          - generic [ref=e179]: "offer #offer_synth_stat_arb_zscore_79079"
+                      - generic [ref=e181]:
+                        - generic [ref=e182]: "3"
+                        - generic [ref=e183]:
+                          - generic [ref=e184]: Storefront
+                          - generic [ref=e185]: на витрину офферов
+                      - generic [ref=e187]:
+                        - generic [ref=e188]: "4"
+                        - generic [ref=e189]:
+                          - generic [ref=e190]: Apply
+                          - generic [ref=e191]: применить опубликованное к клиентам
+                    - generic [ref=e193]:
+                      - button "1) Обновить из sweep" [ref=e195] [cursor=pointer]:
+                        - generic [ref=e196]: 1) Обновить из sweep
+                      - button "2) Открыть детали" [ref=e198] [cursor=pointer]:
+                        - generic [ref=e199]: 2) Открыть детали
+                      - button "3) Открыть backtest" [ref=e201] [cursor=pointer]:
+                        - generic [ref=e202]: 3) Открыть backtest
+                      - button "4) На витрину" [ref=e204] [cursor=pointer]:
+                        - generic [ref=e205]: 4) На витрину
+                - generic [ref=e207]:
+                  - generic [ref=e210]: Оферы и ТС на витринах
+                  - generic [ref=e211]:
+                    - generic [ref=e212]: Здесь только опубликованные оферы и ТС. Чтобы пересчитать или перепубликовать, выбери офер или ТС-набор выше.
+                    - generic [ref=e213]:
+                      - generic [ref=e215]: "storefront offers: 16"
+                      - generic [ref=e217]: "waitlist offers: 0"
+                      - generic [ref=e219]: "period: 90d"
+                      - generic [ref=e221]: "target: 1/day"
+                    - button "Открыть бэктест ТС" [ref=e224] [cursor=pointer]:
+                      - generic [ref=e225]: Открыть бэктест ТС
+                    - generic [ref=e226]:
+                      - generic [ref=e228]:
+                        - generic [ref=e231]: Витрина оферов клиентов стратегий
+                        - generic [ref=e235]:
+                          - table [ref=e239]:
+                            - rowgroup [ref=e245]:
+                              - row "Офер Snapshot chart Метрики Действия" [ref=e246]:
+                                - columnheader "Офер" [ref=e247]
+                                - columnheader "Snapshot chart" [ref=e248]
+                                - columnheader "Метрики" [ref=e249]
+                                - columnheader "Действия" [ref=e250]
+                            - rowgroup [ref=e251]:
+                              - row "SYNTH • DD_BattleToads • IPUSDT/ZECUSDT SYNTH • IPUSDT/ZECUSDT Charting by TradingView 60d Ret 34.19% DD 4.89% PF 1.15 ✓ На витрине Бэктест Удалить из базы" [ref=e252]:
+                                - cell "SYNTH • DD_BattleToads • IPUSDT/ZECUSDT SYNTH • IPUSDT/ZECUSDT" [ref=e253]:
+                                  - generic [ref=e254]:
+                                    - strong [ref=e257]: SYNTH • DD_BattleToads • IPUSDT/ZECUSDT
+                                    - generic [ref=e259]: SYNTH • IPUSDT/ZECUSDT
+                                - cell "Charting by TradingView" [ref=e260]:
+                                  - table [ref=e264]:
+                                    - row "Charting by TradingView" [ref=e265]:
+                                      - cell
+                                      - cell "Charting by TradingView" [ref=e266]:
+                                        - link "Charting by TradingView" [ref=e270] [cursor=pointer]:
+                                          - /url: https://www.tradingview.com/?utm_medium=lwc-link&utm_campaign=lwc-chart&utm_source=176.57.184.98/saas/admin
+                                          - img [ref=e271]
+                                      - cell [ref=e275]
+                                    - row [ref=e279]:
+                                      - cell
+                                      - cell [ref=e280]
+                                      - cell [ref=e284]
+                                - cell "60d Ret 34.19% DD 4.89% PF 1.15 ✓ На витрине" [ref=e287]:
+                                  - generic [ref=e288]:
+                                    - generic [ref=e290]: 60d
+                                    - generic [ref=e292]: Ret 34.19%
+                                    - generic [ref=e294]: DD 4.89%
+                                    - generic [ref=e296]: PF 1.15
+                                    - generic [ref=e298]: ✓ На витрине
+                                - cell "Бэктест Удалить из базы" [ref=e299]:
+                                  - generic [ref=e300]:
+                                    - button "Бэктест" [ref=e302] [cursor=pointer]:
+                                      - generic [ref=e303]: Бэктест
+                                    - button "Удалить из базы" [ref=e305] [cursor=pointer]:
+                                      - generic [ref=e306]: Удалить из базы
+                              - row "SYNTH • zz_breakout • IPUSDT/ZECUSDT SYNTH • IPUSDT/ZECUSDT Charting by TradingView 60d Ret 34.12% DD 4.86% PF 1.12 ✓ На витрине Бэктест Удалить из базы" [ref=e307]:
+                                - cell "SYNTH • zz_breakout • IPUSDT/ZECUSDT SYNTH • IPUSDT/ZECUSDT" [ref=e308]:
+                                  - generic [ref=e309]:
+                                    - strong [ref=e312]: SYNTH • zz_breakout • IPUSDT/ZECUSDT
+                                    - generic [ref=e314]: SYNTH • IPUSDT/ZECUSDT
+                                - cell "Charting by TradingView" [ref=e315]:
+                                  - table [ref=e319]:
+                                    - row "Charting by TradingView" [ref=e320]:
+                                      - cell
+                                      - cell "Charting by TradingView" [ref=e321]:
+                                        - link "Charting by TradingView" [ref=e325] [cursor=pointer]:
+                                          - /url: https://www.tradingview.com/?utm_medium=lwc-link&utm_campaign=lwc-chart&utm_source=176.57.184.98/saas/admin
+                                          - img [ref=e326]
+                                      - cell [ref=e330]
+                                    - row [ref=e334]:
+                                      - cell
+                                      - cell [ref=e335]
+                                      - cell [ref=e339]
+                                - cell "60d Ret 34.12% DD 4.86% PF 1.12 ✓ На витрине" [ref=e342]:
+                                  - generic [ref=e343]:
+                                    - generic [ref=e345]: 60d
+                                    - generic [ref=e347]: Ret 34.12%
+                                    - generic [ref=e349]: DD 4.86%
+                                    - generic [ref=e351]: PF 1.12
+                                    - generic [ref=e353]: ✓ На витрине
+                                - cell "Бэктест Удалить из базы" [ref=e354]:
+                                  - generic [ref=e355]:
+                                    - button "Бэктест" [ref=e357] [cursor=pointer]:
+                                      - generic [ref=e358]: Бэктест
+                                    - button "Удалить из базы" [ref=e360] [cursor=pointer]:
+                                      - generic [ref=e361]: Удалить из базы
+                              - row "SYNTH • stat_arb_zscore • VETUSDT/GRTUSDT SYNTH • VETUSDT/GRTUSDT no snapshot 60d Ret 0.69% DD 0.1% PF 2.87 ✓ На витрине Бэктест Удалить из базы" [ref=e362]:
+                                - cell "SYNTH • stat_arb_zscore • VETUSDT/GRTUSDT SYNTH • VETUSDT/GRTUSDT" [ref=e363]:
+                                  - generic [ref=e364]:
+                                    - strong [ref=e367]: SYNTH • stat_arb_zscore • VETUSDT/GRTUSDT
+                                    - generic [ref=e369]: SYNTH • VETUSDT/GRTUSDT
+                                - cell "no snapshot" [ref=e370]
+                                - cell "60d Ret 0.69% DD 0.1% PF 2.87 ✓ На витрине" [ref=e371]:
+                                  - generic [ref=e372]:
+                                    - generic [ref=e374]: 60d
+                                    - generic [ref=e376]: Ret 0.69%
+                                    - generic [ref=e378]: DD 0.1%
+                                    - generic [ref=e380]: PF 2.87
+                                    - generic [ref=e382]: ✓ На витрине
+                                - cell "Бэктест Удалить из базы" [ref=e383]:
+                                  - generic [ref=e384]:
+                                    - button "Бэктест" [ref=e386] [cursor=pointer]:
+                                      - generic [ref=e387]: Бэктест
+                                    - button "Удалить из базы" [ref=e389] [cursor=pointer]:
+                                      - generic [ref=e390]: Удалить из базы
+                              - row "MONO • DD_BattleToads • IPUSDT MONO • IPUSDT no snapshot 60d Ret 2.8% DD 0.61% PF 2.71 ✓ На витрине Бэктест Удалить из базы" [ref=e391]:
+                                - cell "MONO • DD_BattleToads • IPUSDT MONO • IPUSDT" [ref=e392]:
+                                  - generic [ref=e393]:
+                                    - strong [ref=e396]: MONO • DD_BattleToads • IPUSDT
+                                    - generic [ref=e398]: MONO • IPUSDT
+                                - cell "no snapshot" [ref=e399]
+                                - cell "60d Ret 2.8% DD 0.61% PF 2.71 ✓ На витрине" [ref=e400]:
+                                  - generic [ref=e401]:
+                                    - generic [ref=e403]: 60d
+                                    - generic [ref=e405]: Ret 2.8%
+                                    - generic [ref=e407]: DD 0.61%
+                                    - generic [ref=e409]: PF 2.71
+                                    - generic [ref=e411]: ✓ На витрине
+                                - cell "Бэктест Удалить из базы" [ref=e412]:
+                                  - generic [ref=e413]:
+                                    - button "Бэктест" [ref=e415] [cursor=pointer]:
+                                      - generic [ref=e416]: Бэктест
+                                    - button "Удалить из базы" [ref=e418] [cursor=pointer]:
+                                      - generic [ref=e419]: Удалить из базы
+                              - row "MONO • zz_breakout • IPUSDT MONO • IPUSDT no snapshot 60d Ret 2.8% DD 0.61% PF 2.71 ✓ На витрине Бэктест Удалить из базы" [ref=e420]:
+                                - cell "MONO • zz_breakout • IPUSDT MONO • IPUSDT" [ref=e421]:
+                                  - generic [ref=e422]:
+                                    - strong [ref=e425]: MONO • zz_breakout • IPUSDT
+                                    - generic [ref=e427]: MONO • IPUSDT
+                                - cell "no snapshot" [ref=e428]
+                                - cell "60d Ret 2.8% DD 0.61% PF 2.71 ✓ На витрине" [ref=e429]:
+                                  - generic [ref=e430]:
+                                    - generic [ref=e432]: 60d
+                                    - generic [ref=e434]: Ret 2.8%
+                                    - generic [ref=e436]: DD 0.61%
+                                    - generic [ref=e438]: PF 2.71
+                                    - generic [ref=e440]: ✓ На витрине
+                                - cell "Бэктест Удалить из базы" [ref=e441]:
+                                  - generic [ref=e442]:
+                                    - button "Бэктест" [ref=e444] [cursor=pointer]:
+                                      - generic [ref=e445]: Бэктест
+                                    - button "Удалить из базы" [ref=e447] [cursor=pointer]:
+                                      - generic [ref=e448]: Удалить из базы
+                              - row "SYNTH • DD_BattleToads • BERAUSDT/ZECUSDT SYNTH • BERAUSDT/ZECUSDT no snapshot 60d Ret 3.04% DD 0.51% PF 2.51 ✓ На витрине Бэктест Удалить из базы" [ref=e449]:
+                                - cell "SYNTH • DD_BattleToads • BERAUSDT/ZECUSDT SYNTH • BERAUSDT/ZECUSDT" [ref=e450]:
+                                  - generic [ref=e451]:
+                                    - strong [ref=e454]: SYNTH • DD_BattleToads • BERAUSDT/ZECUSDT
+                                    - generic [ref=e456]: SYNTH • BERAUSDT/ZECUSDT
+                                - cell "no snapshot" [ref=e457]
+                                - cell "60d Ret 3.04% DD 0.51% PF 2.51 ✓ На витрине" [ref=e458]:
+                                  - generic [ref=e459]:
+                                    - generic [ref=e461]: 60d
+                                    - generic [ref=e463]: Ret 3.04%
+                                    - generic [ref=e465]: DD 0.51%
+                                    - generic [ref=e467]: PF 2.51
+                                    - generic [ref=e469]: ✓ На витрине
+                                - cell "Бэктест Удалить из базы" [ref=e470]:
+                                  - generic [ref=e471]:
+                                    - button "Бэктест" [ref=e473] [cursor=pointer]:
+                                      - generic [ref=e474]: Бэктест
+                                    - button "Удалить из базы" [ref=e476] [cursor=pointer]:
+                                      - generic [ref=e477]: Удалить из базы
+                          - list [ref=e478]:
+                            - listitem "Previous Page" [ref=e479]:
+                              - button "left" [disabled] [ref=e480]:
+                                - img "left" [ref=e481]:
+                                  - img [ref=e482]
+                            - listitem "1" [ref=e484] [cursor=pointer]:
+                              - generic [ref=e485]: "1"
+                            - listitem "2" [ref=e486] [cursor=pointer]:
+                              - generic [ref=e487]: "2"
+                            - listitem "3" [ref=e488] [cursor=pointer]:
+                              - generic [ref=e489]: "3"
+                            - listitem "Next Page" [ref=e490] [cursor=pointer]:
+                              - button "right" [ref=e491]:
+                                - img "right" [ref=e492]:
+                                  - img [ref=e493]
+                      - generic [ref=e496]:
+                        - generic [ref=e499]: Витрина ТС Алгофонда
+                        - list [ref=e504]:
+                          - listitem [ref=e505]:
+                            - generic [ref=e507]:
+                              - 'heading "ts-multiset-v2-h6e6sh system #31 clients 5 active 5 Ret 42.46% DD 15.3% PF 0.84 trades 5543" [level=4] [ref=e508]':
+                                - generic [ref=e509]:
+                                  - strong [ref=e512]: ts-multiset-v2-h6e6sh
+                                  - generic [ref=e514]: "system #31"
+                                  - generic [ref=e516]: clients 5
+                                  - generic [ref=e518]: active 5
+                                  - generic [ref=e520]: Ret 42.46%
+                                  - generic [ref=e522]: DD 15.3%
+                                  - generic [ref=e524]: PF 0.84
+                                  - generic [ref=e526]: trades 5543
+                              - generic [ref=e527]: Mehmet_bingx, BTDD_D1, Ruslan, Ali, Mustafa
+                            - list [ref=e528]:
+                              - listitem [ref=e529]:
+                                - button "Бэктест ТС" [ref=e530] [cursor=pointer]:
+                                  - generic [ref=e531]: Бэктест ТС
+                                - emphasis [ref=e532]
+                              - listitem [ref=e533]:
+                                - button "Удалить из базы" [ref=e534] [cursor=pointer]:
+                                  - generic [ref=e535]: Удалить из базы
+                          - listitem [ref=e536]:
+                            - generic [ref=e538]:
+                              - 'heading "high-trade-curated-pu213v system #25 clients 0 active 0 Ret 42.78% DD 32.35% PF 0.26 trades 219" [level=4] [ref=e539]':
+                                - generic [ref=e540]:
+                                  - strong [ref=e543]: high-trade-curated-pu213v
+                                  - generic [ref=e545]: "system #25"
+                                  - generic [ref=e547]: clients 0
+                                  - generic [ref=e549]: active 0
+                                  - generic [ref=e551]: Ret 42.78%
+                                  - generic [ref=e553]: DD 32.35%
+                                  - generic [ref=e555]: PF 0.26
+                                  - generic [ref=e557]: trades 219
+                              - generic [ref=e558]: нет подключённых клиентов
+                            - list [ref=e559]:
+                              - listitem [ref=e560]:
+                                - button "Бэктест ТС" [ref=e561] [cursor=pointer]:
+                                  - generic [ref=e562]: Бэктест ТС
+                                - emphasis [ref=e563]
+                              - listitem [ref=e564]:
+                                - button "Удалить из базы" [ref=e565] [cursor=pointer]:
+                                  - generic [ref=e566]: Удалить из базы
+                          - listitem [ref=e567]:
+                            - generic [ref=e569]:
+                              - heading "ts-curated-synth-5pairs-v1 clients 0 active 0 Ret 67.23% DD 20.13% PF 1.05 trades 2054" [level=4] [ref=e570]:
+                                - generic [ref=e571]:
+                                  - strong [ref=e574]: ts-curated-synth-5pairs-v1
+                                  - generic [ref=e576]: clients 0
+                                  - generic [ref=e578]: active 0
+                                  - generic [ref=e580]: Ret 67.23%
+                                  - generic [ref=e582]: DD 20.13%
+                                  - generic [ref=e584]: PF 1.05
+                                  - generic [ref=e586]: trades 2054
+                              - generic [ref=e587]: нет подключённых клиентов
+                            - list [ref=e588]:
+                              - listitem [ref=e589]:
+                                - button "Бэктест ТС" [ref=e590] [cursor=pointer]:
+                                  - generic [ref=e591]: Бэктест ТС
+                                - emphasis [ref=e592]
+                              - listitem [ref=e593]:
+                                - button "Удалить из базы" [ref=e594] [cursor=pointer]:
+                                  - generic [ref=e595]: Удалить из базы
+                          - listitem [ref=e596]:
+                            - generic [ref=e598]:
+                              - heading "ts-curated-mono-3markets-v1 clients 0 active 0 Ret 14.83% DD 3.96% PF 0.96 trades 962" [level=4] [ref=e599]:
+                                - generic [ref=e600]:
+                                  - strong [ref=e603]: ts-curated-mono-3markets-v1
+                                  - generic [ref=e605]: clients 0
+                                  - generic [ref=e607]: active 0
+                                  - generic [ref=e609]: Ret 14.83%
+                                  - generic [ref=e611]: DD 3.96%
+                                  - generic [ref=e613]: PF 0.96
+                                  - generic [ref=e615]: trades 962
+                              - generic [ref=e616]: нет подключённых клиентов
+                            - list [ref=e617]:
+                              - listitem [ref=e618]:
+                                - button "Бэктест ТС" [ref=e619] [cursor=pointer]:
+                                  - generic [ref=e620]: Бэктест ТС
+                                - emphasis [ref=e621]
+                              - listitem [ref=e622]:
+                                - button "Удалить из базы" [ref=e623] [cursor=pointer]:
+                                  - generic [ref=e624]: Удалить из базы
+                          - listitem [ref=e625]:
+                            - generic [ref=e627]:
+                              - heading "ts-curated-balanced-7-v1 clients 0 active 0 Ret 21.65% DD 8.73% PF 1.48 trades 2155" [level=4] [ref=e628]:
+                                - generic [ref=e629]:
+                                  - strong [ref=e632]: ts-curated-balanced-7-v1
+                                  - generic [ref=e634]: clients 0
+                                  - generic [ref=e636]: active 0
+                                  - generic [ref=e638]: Ret 21.65%
+                                  - generic [ref=e640]: DD 8.73%
+                                  - generic [ref=e642]: PF 1.48
+                                  - generic [ref=e644]: trades 2155
+                              - generic [ref=e645]: нет подключённых клиентов
+                            - list [ref=e646]:
+                              - listitem [ref=e647]:
+                                - button "Бэктест ТС" [ref=e648] [cursor=pointer]:
+                                  - generic [ref=e649]: Бэктест ТС
+                                - emphasis [ref=e650]
+                              - listitem [ref=e651]:
+                                - button "Удалить из базы" [ref=e652] [cursor=pointer]:
+                                  - generic [ref=e653]: Удалить из базы
+                - alert [ref=e655]:
+                  - img "info-circle" [ref=e656]:
+                    - img [ref=e657]
+                  - generic [ref=e660]: Live-отчёты и сравнение runtime vs backtest перенесены во вкладку Мониторинг.
+```

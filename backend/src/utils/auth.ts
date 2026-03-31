@@ -654,7 +654,7 @@ export const createClientMagicLink = async (
   const linkId = randomBytes(16).toString('hex');
   const token = randomBytes(32).toString('hex');
   const tokenHash = hashSessionToken(token);
-  const ttlMin = Math.max(5, Number.parseInt(String(process.env.CLIENT_MAGIC_LINK_TTL_MIN || '60'), 10) || 60);
+  const ttlMin = Math.max(5, Number.parseInt(String(process.env.CLIENT_MAGIC_LINK_TTL_MIN || '1440'), 10) || 1440);
   const expiresAt = new Date(Date.now() + ttlMin * 60 * 1000).toISOString();
   const clientBaseUrl = String(process.env.CLIENT_BASE_URL || process.env.APP_BASE_URL || '').trim();
   const loginUrl = `${clientBaseUrl || ''}/client/login?token=${encodeURIComponent(token)}`;

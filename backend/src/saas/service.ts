@@ -2603,14 +2603,12 @@ const toPresetOnlyEquity = (initialBalance: number, retPercent: number, periodDa
 };
 
 const getPreviewRiskMultiplier = (riskScore: number, riskScaleMaxPercent: number): number => {
-  // Exponential scaling: risk=0 → ~0.18x, risk=5 → 1.0x, risk=10 → ~5.5x.
-  // This gives a visually dramatic spread between low and high risk settings.
-  const normalized = clampNumber(asNumber(riskScore, 5), 0, 10) / 10; // 0..1
-  // Cap drives the max; use riskScaleMaxPercent to shift the ceiling.
-  // Default 40 → maxMul ≈ 4.5; 100 → maxMul ≈ 6.0.
-  const logMax = Math.log(Math.max(2.0, 1 + riskScaleMaxPercent / 15));
-  const logMin = -logMax * 0.9; // floor near 0.18x at risk=0
-  return Math.exp(logMin + normalized * (logMax - logMin));
+  // Keep default score=5 neutral (1.0x) so preview matches card metrics at baseline.
+  // Then scale exponentially around the midpoint for stronger low/high separation.
+  const centered = (clampNumber(asNumber(riskScore, 5), 0, 10) - 5) / 5; // -1..1
+  const maxMul = Math.max(1.4, 1 + riskScaleMaxPercent / 45);
+  const logMax = Math.log(maxMul);
+  return Math.exp(centered * logMax);
 };
 
 const getPreviewTradeMultiplier = (tradeFrequencyScore: number): number => {
@@ -2621,6 +2619,25 @@ const getPreviewTradeMultiplier = (tradeFrequencyScore: number): number => {
   const maxMul = 2.4;
   const minMul = 1 / maxMul;
   return Math.exp(Math.log(minMul) + normalized * (Math.log(maxMul) - Math.log(minMul)));
+};
+
+const scaleEquityByRiskWithReinvest = (
+  pointEquity: number,
+  startEquity: number,
+  initialBalance: number,
+  riskMul: number,
+  reinvestShare: number,
+): number => {
+  const safeRiskMul = Math.max(0.01, asNumber(riskMul, 1));
+  const safeReinvestShare = clampNumber(asNumber(reinvestShare, 1), 0, 1);
+  const safeStart = Math.max(0.0001, asNumber(startEquity, initialBalance));
+  const safePoint = Math.max(0.0001, asNumber(pointEquity, safeStart));
+
+  const linearScaled = initialBalance + (safePoint - safeStart) * safeRiskMul;
+  const returnRatio = safePoint / safeStart;
+  const compoundedScaled = initialBalance * Math.pow(returnRatio, safeRiskMul);
+
+  return Number((linearScaled * (1 - safeReinvestShare) + compoundedScaled * safeReinvestShare).toFixed(4));
 };
 
 const adjustPreviewMetrics = (
@@ -2682,14 +2699,19 @@ const buildAdjustedPreviewEquity = (
   const periodMs = Math.round(Math.max(10, periodDays) * 24 * 3600 * 1000);
   // Oscillation amplitude driven by both risk (via dd) and oscillationFactor
   const waveFreq = 1.2 + oscillationFactor * 1.2; // more risk = higher frequency oscillations
-  const waveAmp = (targetDd / 100) * 0.12 * oscillationFactor; // more risk = bigger swings
+  const targetRetAbs = Math.abs(targetRet / 100);
+  // Keep volatility visually plausible without breaking direction for low-return setups.
+  const waveAmpCap = Math.max(0.004, targetRetAbs * 0.35);
+  const waveAmpRaw = (targetDd / 100) * 0.12 * oscillationFactor;
+  const waveAmp = Math.min(waveAmpRaw, waveAmpCap);
 
   return normalized.map((value, index) => {
     const t = normalized.length <= 1 ? 1 : index / (normalized.length - 1);
     // Multi-frequency noise makes it look more realistic
+    const edgeEnvelope = Math.sin(Math.PI * t) ** 2;
     const primaryWave = Math.sin(t * Math.PI * waveFreq) * waveAmp * (1 - t * 0.08);
     const secondaryWave = Math.sin(t * Math.PI * waveFreq * 2.3 + 0.7) * waveAmp * 0.3;
-    const adjustedReturn = value * scale + primaryWave + secondaryWave;
+    const adjustedReturn = value * scale + (primaryWave + secondaryWave) * edgeEnvelope;
     return {
       time: Math.round(now - periodMs + t * periodMs),
       equity: Number((initialBalance * (1 + adjustedReturn)).toFixed(4)),
@@ -4357,6 +4379,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   riskScore?: number;
   tradeFrequencyScore?: number;
   initialBalance?: number;
+  reinvestPercent?: number;
   riskScaleMaxPercent?: number;
   dateFrom?: string;
   dateTo?: string;
@@ -4433,15 +4456,82 @@ export const previewAdminSweepBacktest = async (payload?: {
         .map((offer) => String(offer.offerId || ''))
         .filter(Boolean);
     }
-    if (offerIds.length === 0) {
+    const requestedSetKey = normalizeTsSnapshotMapKey(asString(payload?.setKey, ''));
+    if (offerIds.length === 0 && !requestedSetKey) {
       throw new Error('No offerIds resolved for TS sweep backtest preview');
     }
   }
 
-  let selectedOffers = offerIds
-    .map((offerId) => findOfferByIdOrNull(catalog, offerId))
-    .filter((offer): offer is CatalogOffer => Boolean(offer))
-    .map((offer) => {
+  const offerStoreState = await getOfferStoreAdminState().catch(() => null);
+  const offerStoreById = new Map(
+    ((offerStoreState?.offers || []) as Array<Record<string, unknown>>)
+      .map((row) => [asString(row?.offerId, '').trim(), row] as const)
+      .filter(([offerId]) => Boolean(offerId))
+  );
+
+  let selectedOffers = kind === 'offer' && offerIds.length > 0 && offerStoreById.has(offerIds[0])
+    ? (() => {
+      const row = offerStoreById.get(offerIds[0]) as Record<string, unknown>;
+      const strategyId = Number(row?.strategyId || parseStrategyIdFromOfferId(offerIds[0]) || 0);
+      const ret = asNumber(row?.ret, 0);
+      const pf = asNumber(row?.pf, 1);
+      const dd = asNumber(row?.dd, 0);
+      const trades = Math.max(0, Math.floor(asNumber(row?.trades, 0)));
+      const wr = 0;
+      const periodDaysFromStore = Math.max(1, Math.floor(asNumber(row?.periodDays, periodDays)));
+      const intervalFromSweep = asString(sweep?.config?.interval, '4h');
+
+      return [{
+        offerId: asString(row?.offerId, offerIds[0]),
+        titleRu: asString(row?.titleRu, offerIds[0]),
+        mode: asString(row?.mode, 'mono') === 'synth' ? 'synth' : 'mono',
+        market: asString(row?.market, ''),
+        familyType: '',
+        familyMode: asString(row?.mode, 'mono') === 'synth' ? 'synthetic' : 'mono',
+        familyInterval: intervalFromSweep,
+        strategyId,
+        strategyName: asString(row?.titleRu, `Strategy #${strategyId || 0}`),
+        score: Number(asNumber(row?.score, 0).toFixed(3)),
+        metricsSource: 'offer_store' as const,
+        metrics: {
+          ret: Number(ret.toFixed(3)),
+          pf: Number(pf.toFixed(3)),
+          dd: Number(dd.toFixed(3)),
+          wr: Number(wr.toFixed(3)),
+          trades,
+        },
+        tradesPerDay: Number(asNumber(row?.tradesPerDay, trades / Math.max(1, periodDaysFromStore)).toFixed(3)),
+        periodDays: periodDaysFromStore,
+        equityPoints: Array.isArray(row?.equityPoints)
+          ? (row.equityPoints as unknown[]).map((value) => Number(asNumber(value, 0).toFixed(4))).filter((value) => Number.isFinite(value))
+          : toPresetOnlyEquity(initialBalance, ret).map((point) => Number(asNumber(point.equity, 0).toFixed(4))),
+        preset: {
+          strategyId,
+          strategyName: asString(row?.titleRu, `Strategy #${strategyId || 0}`),
+          score: Number(asNumber(row?.score, 0).toFixed(3)),
+          metrics: {
+            ret: Number(ret.toFixed(3)),
+            pf: Number(pf.toFixed(3)),
+            dd: Number(dd.toFixed(3)),
+            wr: Number(wr.toFixed(3)),
+            trades,
+          },
+          params: {
+            interval: intervalFromSweep,
+            length: 24,
+            takeProfitPercent: 5,
+            detectionSource: 'close',
+            zscoreEntry: 2,
+            zscoreExit: 0.5,
+            zscoreStop: 3.5,
+          },
+        },
+      }];
+    })()
+    : offerIds
+      .map((offerId) => findOfferByIdOrNull(catalog, offerId))
+      .filter((offer): offer is CatalogOffer => Boolean(offer))
+      .map((offer) => {
       const matrixPreset = kind === 'algofund-ts'
         ? (offer.presetMatrix?.[riskLevel]?.[tradeFrequencyLevel] || null)
         : null;
@@ -4485,38 +4575,37 @@ export const previewAdminSweepBacktest = async (payload?: {
       const pf = asNumber(familyVariant?.profitFactor, asNumber(preset.metrics?.pf, offer.metrics?.pf || 0));
       const dd = asNumber(familyVariant?.maxDrawdownPercent, asNumber(preset.metrics?.dd, offer.metrics?.dd || 0));
       const tradesPerDay = Number((trades / Math.max(1, periodDays)).toFixed(3));
-      return {
-        offerId: String(offer.offerId || ''),
-        titleRu: asString(offer.titleRu, offer.offerId),
-        mode: offer.strategy?.mode === 'synth' ? 'synth' : 'mono',
-        market: asString(offer.strategy?.market, ''),
-        familyType: asString(offer.strategy?.type, ''),
-        familyMode: offer.strategy?.mode === 'synth' ? 'synthetic' : 'mono',
-        familyInterval: asString(preset.params?.interval || offer.strategy?.params?.interval, ''),
-        strategyId: resolvedStrategyId,
-        strategyName: asString(familyVariant?.strategyName, asString(preset.strategyName, offer.strategy?.name || '')),
-        score: Number(asNumber(preset.score, offer.metrics?.score || 0).toFixed(3)),
-        metrics: {
-          ret: Number(ret.toFixed(3)),
-          pf: Number(pf.toFixed(3)),
-          dd: Number(dd.toFixed(3)),
-          wr: Number(asNumber(familyVariant?.winRatePercent, asNumber(preset.metrics?.wr, offer.metrics?.wr || 0)).toFixed(3)),
-          trades,
-        },
-        tradesPerDay,
-        periodDays,
-        equityPoints: toPresetOnlyEquity(initialBalance, ret).map((point) => Number(asNumber(point.equity, 0).toFixed(4))),
-        preset,
-      };
-    });
+        return {
+          offerId: String(offer.offerId || ''),
+          titleRu: asString(offer.titleRu, offer.offerId),
+          mode: offer.strategy?.mode === 'synth' ? 'synth' : 'mono',
+          market: asString(offer.strategy?.market, ''),
+          familyType: asString(offer.strategy?.type, ''),
+          familyMode: offer.strategy?.mode === 'synth' ? 'synthetic' : 'mono',
+          familyInterval: asString(preset.params?.interval || offer.strategy?.params?.interval, ''),
+          strategyId: resolvedStrategyId,
+          strategyName: asString(familyVariant?.strategyName, asString(preset.strategyName, offer.strategy?.name || '')),
+          score: Number(asNumber(preset.score, offer.metrics?.score || 0).toFixed(3)),
+          metrics: {
+            ret: Number(ret.toFixed(3)),
+            pf: Number(pf.toFixed(3)),
+            dd: Number(dd.toFixed(3)),
+            wr: Number(asNumber(familyVariant?.winRatePercent, asNumber(preset.metrics?.wr, offer.metrics?.wr || 0)).toFixed(3)),
+            trades,
+          },
+          tradesPerDay,
+          periodDays,
+          equityPoints: toPresetOnlyEquity(initialBalance, ret).map((point) => Number(asNumber(point.equity, 0).toFixed(4))),
+          preset,
+        };
+      });
 
   if (kind === 'algofund-ts' && selectedOffers.length < offerIds.length) {
     const existingOfferIds = new Set(selectedOffers.map((item) => String(item.offerId || '')));
     const missingOfferIds = offerIds.filter((offerId) => !existingOfferIds.has(offerId));
     if (missingOfferIds.length > 0) {
-      const offerStore = await getOfferStoreAdminState().catch(() => null);
       const offerStoreById = new Map(
-        (offerStore?.offers || [])
+        ((offerStoreState?.offers || []) as Array<Record<string, unknown>>)
           .map((row) => [String(row?.offerId || ''), row] as const)
           .filter(([offerId]) => Boolean(offerId))
       );
@@ -4536,14 +4625,14 @@ export const previewAdminSweepBacktest = async (payload?: {
           const pf = Math.max(0.2, asNumber(row.pf, 1) * (0.9 + fallbackRiskMul * 0.1));
           return {
             offerId: String(row.offerId || offerId),
-            titleRu: asString(row.titleRu, row.offerId || offerId),
+            titleRu: asString(row.titleRu, String(row.offerId || offerId)),
             mode: row.mode === 'synth' ? 'synth' as const : 'mono' as const,
             market: asString(row.market, ''),
             familyType: '',
             familyMode: row.mode === 'synth' ? 'synthetic' as const : 'mono' as const,
             familyInterval: asString(sweep?.config?.interval, ''),
             strategyId: Number(row.strategyId || parseStrategyIdFromOfferId(offerId) || 0),
-            strategyName: asString(row.titleRu, row.offerId || offerId),
+            strategyName: asString(row.titleRu, String(row.offerId || offerId)),
             score: Number(asNumber(row.score, 0).toFixed(3)),
             metricsSource: 'offer_store' as const,
             metrics: {
@@ -4558,7 +4647,7 @@ export const previewAdminSweepBacktest = async (payload?: {
             equityPoints: toPresetOnlyEquity(initialBalance, ret).map((point) => Number(asNumber(point.equity, 0).toFixed(4))),
             preset: {
               strategyId: Number(row.strategyId || parseStrategyIdFromOfferId(offerId) || 0),
-              strategyName: asString(row.titleRu, row.offerId || offerId),
+              strategyName: asString(row.titleRu, String(row.offerId || offerId)),
               score: Number(asNumber(row.score, 0).toFixed(3)),
               metrics: {
                 ret: Number(ret.toFixed(3)),
@@ -4709,6 +4798,8 @@ export const previewAdminSweepBacktest = async (payload?: {
   // Risk multiplier applied post-hoc to real backtest result.
   // Exponential: risk=0 → ~0.18x, risk=5 → 1.0x, risk=10 → ~5.5x.
   const riskScaleMaxPercent = clampNumber(asNumber(payload?.riskScaleMaxPercent, 40), 0, 400);
+  const reinvestPercent = clampNumber(asNumber(payload?.reinvestPercent, 100), 0, 100);
+  const reinvestShare = reinvestPercent / 100;
   const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
   const tradeMul = getPreviewTradeMultiplier(tradeFrequencyScore);
   // oscillationFactor: low risk + low freq → near 0 (straight smooth line);
@@ -4762,7 +4853,13 @@ export const previewAdminSweepBacktest = async (payload?: {
         };
         const scaledEquity = result.equityCurve.map((point) => ({
           ...point,
-          equity: Number((initialBalance + (point.equity - initialBalance) * rerunRiskMul).toFixed(4)),
+          equity: scaleEquityByRiskWithReinvest(
+            asNumber(point.equity, initialBalance),
+            initialBalance,
+            initialBalance,
+            rerunRiskMul,
+            reinvestShare,
+          ),
         }));
 
         return {
@@ -4773,6 +4870,7 @@ export const previewAdminSweepBacktest = async (payload?: {
             riskLevel,
             tradeFrequencyLevel,
             riskScaleMaxPercent,
+            reinvestPercent,
           },
           period,
           sweepApiKeyName: asString((sweep as Record<string, unknown>)?.apiKeyName || ((sweep as Record<string, unknown>)?.config as Record<string, unknown>)?.apiKeyName, ''),
@@ -4809,6 +4907,67 @@ export const previewAdminSweepBacktest = async (payload?: {
   }
 
   if (selectedOffers.length === 0) {
+    if (kind === 'offer') {
+      const fallbackOfferId = asString(offerIds[0], '').trim();
+      if (fallbackOfferId) {
+        const offerStore = await getOfferStoreAdminState().catch(() => null);
+        const fallbackRow = (offerStore?.offers || []).find((item) => asString(item?.offerId, '').trim() === fallbackOfferId) || null;
+        if (fallbackRow) {
+          const baseTrades = Math.max(1, Math.floor(asNumber(fallbackRow.trades, 0)));
+          const trades = Math.max(1, Math.floor(baseTrades * tradeMul));
+          const ret = asNumber(fallbackRow.ret, 0) * rerunRiskMul;
+          const dd = asNumber(fallbackRow.dd, 0) * Math.max(0.7, rerunRiskMul);
+          const pf = Math.max(0.2, asNumber(fallbackRow.pf, 1) * (0.9 + rerunRiskMul * 0.1));
+          const fallbackStrategyId = Number(fallbackRow.strategyId || parseStrategyIdFromOfferId(fallbackOfferId) || 0);
+
+          selectedOffers = [
+            {
+              offerId: fallbackOfferId,
+              titleRu: asString(fallbackRow.titleRu, fallbackOfferId),
+              mode: fallbackRow.mode === 'synth' ? 'synth' : 'mono',
+              market: asString(fallbackRow.market, ''),
+              familyType: '',
+              familyMode: fallbackRow.mode === 'synth' ? 'synthetic' : 'mono',
+              familyInterval: asString(sweep?.config?.interval, ''),
+              strategyId: fallbackStrategyId,
+              strategyName: asString(fallbackRow.titleRu, fallbackOfferId),
+              score: Number(asNumber(fallbackRow.score, 0).toFixed(3)),
+              metrics: {
+                ret: Number(ret.toFixed(3)),
+                pf: Number(pf.toFixed(3)),
+                dd: Number(dd.toFixed(3)),
+                wr: 0,
+                trades,
+              },
+              tradesPerDay: Number((trades / Math.max(1, periodDays)).toFixed(3)),
+              periodDays,
+              equityPoints: toPresetOnlyEquity(initialBalance, ret).map((point) => Number(asNumber(point.equity, 0).toFixed(4))),
+              preset: {
+                strategyId: fallbackStrategyId,
+                strategyName: asString(fallbackRow.titleRu, fallbackOfferId),
+                score: Number(asNumber(fallbackRow.score, 0).toFixed(3)),
+                metrics: {
+                  ret: Number(ret.toFixed(3)),
+                  pf: Number(pf.toFixed(3)),
+                  dd: Number(dd.toFixed(3)),
+                  wr: 0,
+                  trades,
+                },
+                params: {
+                  interval: asString(sweep?.config?.interval, '4h'),
+                  length: 24,
+                  takeProfitPercent: 5,
+                  detectionSource: 'close',
+                  zscoreEntry: 2,
+                  zscoreExit: 0.5,
+                  zscoreStop: 3.5,
+                },
+              },
+            },
+          ];
+        }
+      }
+    }
     if (kind === 'algofund-ts') {
       const snapshotMap = await getTsBacktestSnapshots();
       const requestedSetKey = normalizeTsSnapshotMapKey(asString(payload?.setKey, ''));
@@ -4820,13 +4979,17 @@ export const previewAdminSweepBacktest = async (payload?: {
       const requestedOfferIds = normalizeOfferIds(offerIds);
 
       let snapshot = requestedSetKey ? (snapshotMap[requestedSetKey] || null) : null;
-      if (!snapshot && requestedOfferIds.length > 0) {
+      if (!snapshot && !requestedSetKey && requestedOfferIds.length > 0) {
+        const requestedSorted = Array.from(new Set(requestedOfferIds)).sort();
         snapshot = Object.values(snapshotMap).find((item) => {
-          const snapshotOfferIds = normalizeOfferIds(item.offerIds);
+          const snapshotOfferIds = normalizeOfferIds(item.offerIds).sort();
           if (snapshotOfferIds.length === 0) {
             return false;
           }
-          return requestedOfferIds.some((offerId) => snapshotOfferIds.includes(offerId));
+          if (snapshotOfferIds.length !== requestedSorted.length) {
+            return false;
+          }
+          return requestedSorted.every((offerId, index) => snapshotOfferIds[index] === offerId);
         }) || null;
       }
 
@@ -4834,10 +4997,16 @@ export const previewAdminSweepBacktest = async (payload?: {
         const legacySnapshot = await getTsBacktestSnapshot();
         if (legacySnapshot) {
           const legacySetKey = normalizeTsSnapshotMapKey(asString(legacySnapshot.setKey, ''));
-          const legacyOfferIds = normalizeOfferIds(legacySnapshot.offerIds);
+          const legacyOfferIds = normalizeOfferIds(legacySnapshot.offerIds).sort();
+          const requestedSorted = Array.from(new Set(requestedOfferIds)).sort();
           if (
             (requestedSetKey && legacySetKey === requestedSetKey)
-            || (requestedOfferIds.length > 0 && requestedOfferIds.some((offerId) => legacyOfferIds.includes(offerId)))
+            || (
+              !requestedSetKey
+              && requestedSorted.length > 0
+              && legacyOfferIds.length === requestedSorted.length
+              && requestedSorted.every((offerId, index) => legacyOfferIds[index] === offerId)
+            )
           ) {
             snapshot = legacySnapshot;
           }
@@ -4957,7 +5126,13 @@ export const previewAdminSweepBacktest = async (payload?: {
                 };
                 const scaledEquity = result.equityCurve.map((point) => ({
                   ...point,
-                  equity: Number((initialBalance + (point.equity - initialBalance) * rerunRiskMul).toFixed(4)),
+                  equity: scaleEquityByRiskWithReinvest(
+                    asNumber(point.equity, initialBalance),
+                    initialBalance,
+                    initialBalance,
+                    rerunRiskMul,
+                    reinvestShare,
+                  ),
                 }));
 
                 return {
@@ -4974,6 +5149,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                     riskLevel,
                     tradeFrequencyLevel,
                     riskScaleMaxPercent,
+                    reinvestPercent,
                   },
                   period,
                   sweepApiKeyName: asString(snapshot.apiKeyName, ''),
@@ -5021,7 +5197,18 @@ export const previewAdminSweepBacktest = async (payload?: {
             wr: 0,
             trades: Math.max(0, Math.floor(asNumber(snapshot.trades, 0))),
           };
-          const adjustedSnapshotMetrics = adjustPreviewMetrics(baselineMetrics, rerunRiskMul, tradeMul);
+          const snapshotBacktestSettings = (snapshot.backtestSettings && typeof snapshot.backtestSettings === 'object')
+            ? (snapshot.backtestSettings as Record<string, unknown>)
+            : {};
+          const snapshotRiskScore = clampNumber(asNumber(snapshotBacktestSettings.riskScore, 5), 0, 10);
+          const snapshotTradeFrequencyScore = clampNumber(asNumber(snapshotBacktestSettings.tradeFrequencyScore, 5), 0, 10);
+          const snapshotRiskScaleMaxPercent = clampNumber(asNumber(snapshotBacktestSettings.riskScaleMaxPercent, 40), 0, 400);
+          const snapshotRiskMul = getPreviewRiskMultiplier(snapshotRiskScore, snapshotRiskScaleMaxPercent);
+          const snapshotTradeMul = getPreviewTradeMultiplier(snapshotTradeFrequencyScore);
+          const relativeRiskMul = rerunRiskMul / Math.max(0.01, snapshotRiskMul);
+          const relativeTradeMul = tradeMul / Math.max(0.01, snapshotTradeMul);
+
+          const adjustedSnapshotMetrics = adjustPreviewMetrics(baselineMetrics, relativeRiskMul, relativeTradeMul);
           const baseEquity = snapshotEquity.length > 1
             ? snapshotEquity
             : [
@@ -5030,16 +5217,25 @@ export const previewAdminSweepBacktest = async (payload?: {
             ];
           const baseStartEquity = asNumber(baseEquity[0]?.equity, initialBalance);
           const baseEndEquity = asNumber(baseEquity[baseEquity.length - 1]?.equity, initialBalance);
-          const scaledEndEquityByRisk = initialBalance + (baseEndEquity - baseStartEquity) * rerunRiskMul;
-          const freqShapeFactor = clampNumber(0.7 + Math.log(Math.max(0.2, tradeMul)) * 0.45, 0.45, 1.8);
-          const waveAmplitude = Math.abs(scaledEndEquityByRisk - initialBalance) * 0.08 * clampNumber(tradeMul, 0.6, 1.9);
+          const scaledEndEquityByRisk = initialBalance + (baseEndEquity - baseStartEquity) * relativeRiskMul;
+          const freqShapeFactor = clampNumber(1 + Math.log(Math.max(0.2, relativeTradeMul)) * 0.45, 0.45, 1.8);
+          const waveAmplitude = Math.abs(scaledEndEquityByRisk - initialBalance)
+            * 0.08
+            * Math.abs(relativeTradeMul - 1)
+            * clampNumber(relativeTradeMul, 0.6, 1.9);
 
           let adjustedSnapshotEquity = baseEquity.map((point, index, arr) => {
             const progress = arr.length > 1 ? (index / Math.max(1, arr.length - 1)) : 1;
-            const scaledRaw = initialBalance + (asNumber(point.equity, baseStartEquity) - baseStartEquity) * rerunRiskMul;
+            const scaledRaw = scaleEquityByRiskWithReinvest(
+              asNumber(point.equity, baseStartEquity),
+              baseStartEquity,
+              initialBalance,
+              relativeRiskMul,
+              reinvestShare,
+            );
             const trendLine = initialBalance + (scaledEndEquityByRisk - initialBalance) * progress;
             const deviation = scaledRaw - trendLine;
-            const wave = Math.sin(progress * Math.PI * 2 * (1 + tradeMul * 0.8)) * waveAmplitude * (0.25 + 0.75 * progress);
+            const wave = Math.sin(progress * Math.PI * 2 * (1 + relativeTradeMul * 0.8)) * waveAmplitude * (0.25 + 0.75 * progress);
             return {
               time: point.time,
               equity: Number((trendLine + deviation * freqShapeFactor + wave).toFixed(4)),
@@ -5054,7 +5250,13 @@ export const previewAdminSweepBacktest = async (payload?: {
             const pnlScale = targetPnl / currentPnl;
             adjustedSnapshotEquity = adjustedSnapshotEquity.map((point) => ({
               time: point.time,
-              equity: Number((initialBalance + (point.equity - initialBalance) * pnlScale).toFixed(4)),
+              equity: scaleEquityByRiskWithReinvest(
+                asNumber(point.equity, initialBalance),
+                initialBalance,
+                initialBalance,
+                pnlScale,
+                reinvestShare,
+              ),
             }));
           }
           if (adjustedSnapshotEquity.length > 0) {
@@ -5080,6 +5282,7 @@ export const previewAdminSweepBacktest = async (payload?: {
               riskLevel,
               tradeFrequencyLevel,
               riskScaleMaxPercent,
+              reinvestPercent,
             },
             period,
             sweepApiKeyName: asString(snapshot.apiKeyName, ''),
@@ -5996,6 +6199,7 @@ export const getAdminLowLotRecommendations = async (options?: {
        LEFT JOIN strategies s ON s.id = e.strategy_id
        LEFT JOIN api_keys a ON a.name = e.api_key_name
        WHERE COALESCE(s.is_active, 0) = 1
+         AND lower(COALESCE(s.last_error, '')) LIKE '%order size too small%'
          AND e.created_at >= ?
      )
      SELECT
@@ -6533,9 +6737,6 @@ const listTenantSummaries = async (options?: {
 export const getStrategyClientState = async (tenantId: number) => {
   await ensureSaasSeedData();
   const tenant = await getTenantById(tenantId);
-  if (tenant.product_mode !== 'strategy_client') {
-    throw new Error('Tenant is not a strategy client');
-  }
   const plan = await getPlanForTenant(tenantId);
   const capabilities = resolvePlanCapabilities(plan);
   const profile = await getStrategyClientProfile(tenantId);
@@ -6677,10 +6878,7 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
 };
 
 export const listStrategyClientSystemProfilesState = async (tenantId: number) => {
-  const tenant = await getTenantById(tenantId);
-  if (tenant.product_mode !== 'strategy_client') {
-    throw new Error('Tenant is not a strategy client');
-  }
+  await getTenantById(tenantId);
   const profile = await getStrategyClientProfile(tenantId);
   const fallback = profile ? safeJsonParse<string[]>(profile.selected_offer_ids_json, []) : [];
   const rows = await ensureDefaultStrategyClientSystemProfile(tenantId, fallback);
@@ -7615,9 +7813,6 @@ export const getAlgofundState = async (
 ) => {
   await ensureSaasSeedData();
   const tenant = await getTenantById(tenantId);
-  if (tenant.product_mode !== 'algofund_client') {
-    throw new Error('Tenant is not an algofund client');
-  }
 
   const plan = await getPlanForTenant(tenantId);
   const profile = await getAlgofundProfile(tenantId);
@@ -8127,6 +8322,15 @@ const applyApprovedAlgofundAction = async (params: {
     };
 
     await materializeAlgofundSystem(tenant, plan, switchProfile, true);
+    await db.run(
+      `UPDATE algofund_active_systems
+       SET is_enabled = 0,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE profile_id = ?
+         AND system_name != ?
+         AND COALESCE(is_enabled, 1) = 1`,
+      [profile.id, targetSystemName]
+    );
     await db.run(
       `INSERT INTO algofund_active_systems (profile_id, system_name, weight, is_enabled, assigned_by, created_at, updated_at)
        VALUES (?, ?, 1, 1, 'admin', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)

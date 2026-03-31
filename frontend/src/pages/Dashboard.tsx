@@ -236,6 +236,143 @@ const formatCompactNumber = (value: number | string, digits: number = 2) => {
   return numeric.toFixed(digits).replace(/\.?0+$/, '');
 };
 
+type DiagnosticLiveState = 'flat' | 'long' | 'short' | 'mixed';
+type StrategyDiagnosticStatus = 'ok' | 'warning' | 'error';
+
+type StrategyDiagnosticRow = {
+  strategyId: number;
+  strategyName: string;
+  pair: string;
+  runtimeState: string;
+  liveState: DiagnosticLiveState;
+  lastSignal: string;
+  status: StrategyDiagnosticStatus;
+  reason: string;
+  liveSymbols: string;
+};
+
+const normalizePositionSide = (value: unknown): 'long' | 'short' | 'flat' => {
+  const side = String(value || '').trim().toLowerCase();
+  if (side === 'buy') {
+    return 'long';
+  }
+  if (side === 'sell') {
+    return 'short';
+  }
+  return 'flat';
+};
+
+const inferLiveStateForStrategy = (strategy: DDStrategy, positions: any[]): DiagnosticLiveState => {
+  const safePositions = Array.isArray(positions) ? positions : [];
+
+  const getOpenSymbolPosition = (symbolRaw: string): any | null => {
+    const symbol = String(symbolRaw || '').toUpperCase().trim();
+    if (!symbol) {
+      return null;
+    }
+
+    return safePositions.find((row: any) => {
+      const rowSymbol = String(row?.symbol || '').toUpperCase().trim();
+      const size = Number(row?.size || 0);
+      return rowSymbol === symbol && Number.isFinite(size) && size > 0;
+    }) || null;
+  };
+
+  const basePosition = getOpenSymbolPosition(strategy.base_symbol);
+  if (strategy.market_mode === 'mono') {
+    const baseSide = normalizePositionSide(basePosition?.side);
+    if (!basePosition || baseSide === 'flat') {
+      return 'flat';
+    }
+    return baseSide;
+  }
+
+  const quotePosition = getOpenSymbolPosition(strategy.quote_symbol);
+  const baseSide = normalizePositionSide(basePosition?.side);
+  const quoteSide = normalizePositionSide(quotePosition?.side);
+
+  if (!basePosition && !quotePosition) {
+    return 'flat';
+  }
+
+  if (!basePosition || !quotePosition || baseSide === 'flat' || quoteSide === 'flat') {
+    return 'mixed';
+  }
+
+  if (baseSide === 'long' && quoteSide === 'short') {
+    return 'long';
+  }
+
+  if (baseSide === 'short' && quoteSide === 'long') {
+    return 'short';
+  }
+
+  return 'mixed';
+};
+
+const buildStrategyDiagnostics = (strategies: DDStrategy[], positions: any[]): StrategyDiagnosticRow[] => {
+  return (Array.isArray(strategies) ? strategies : []).map((strategy) => {
+    const liveState = inferLiveStateForStrategy(strategy, positions);
+    const runtimeState = String(strategy.state || 'flat').toLowerCase();
+    const normalizedRuntimeState = runtimeState === 'long' || runtimeState === 'short' ? runtimeState : 'flat';
+    const lastSignal = String(strategy.last_signal || '').trim().toLowerCase();
+
+    const strategySymbols = strategy.market_mode === 'mono'
+      ? [strategy.base_symbol]
+      : [strategy.base_symbol, strategy.quote_symbol]
+      .map((symbol) => String(symbol || '').toUpperCase().trim())
+      .filter((symbol, index, array) => Boolean(symbol) && array.indexOf(symbol) === index);
+
+    const liveSymbolRows = (Array.isArray(positions) ? positions : [])
+      .filter((row: any) => {
+        const symbol = String(row?.symbol || '').toUpperCase().trim();
+        const size = Number(row?.size || 0);
+        return strategySymbols.includes(symbol) && Number.isFinite(size) && size > 0;
+      })
+      .map((row: any) => {
+        const symbol = String(row?.symbol || '').toUpperCase().trim();
+        const side = normalizePositionSide(row?.side);
+        const size = formatCompactNumber(row?.size, 6);
+        return `${symbol}:${side}:${size}`;
+      });
+
+    let status: StrategyDiagnosticStatus = 'ok';
+    let reason = 'synced';
+
+    if (liveState === 'mixed') {
+      status = 'error';
+      reason = 'mixed_live_legs';
+    } else if (normalizedRuntimeState === 'flat' && liveState !== 'flat') {
+      status = 'error';
+      reason = 'ghost_live_position';
+    } else if (normalizedRuntimeState !== 'flat' && liveState === 'flat') {
+      status = 'error';
+      reason = 'stale_runtime_state';
+    } else if (normalizedRuntimeState !== 'flat' && liveState !== 'flat' && normalizedRuntimeState !== liveState) {
+      status = 'error';
+      reason = 'side_mismatch';
+    } else if (String(strategy.last_error || '').trim()) {
+      status = 'warning';
+      reason = 'runtime_error_present';
+    } else if (lastSignal && lastSignal !== 'none' && normalizedRuntimeState === 'flat' && liveState === 'flat') {
+      status = 'warning';
+      reason = 'signal_without_position';
+    }
+
+    return {
+      strategyId: Number(strategy.id || 0),
+      strategyName: String(strategy.name || `strategy-${strategy.id}`),
+      pair: strategySymbols.join('/'),
+      runtimeState: normalizedRuntimeState,
+      liveState,
+      lastSignal: lastSignal || '-',
+      status,
+      reason,
+      liveSymbols: liveSymbolRows.length > 0 ? liveSymbolRows.join(' | ') : 'flat',
+    };
+  });
+};
+
 const resolveLotUsdt = (
   runtimeLotUsdt: number | null | undefined,
   maxDeposit: number,
@@ -709,6 +846,23 @@ const parseStrategy = (raw: any): DDStrategy => {
     return Number.isFinite(numeric) ? numeric : fallback;
   };
 
+  const nameText = String(raw?.name || '').toUpperCase();
+  const modeRaw = String(raw?.market_mode || '').trim().toLowerCase();
+  const inferredMarketMode: 'mono' | 'synthetic' =
+    modeRaw === 'mono'
+      ? 'mono'
+      : modeRaw === 'synthetic'
+        ? 'synthetic'
+        : nameText.includes('::MONO::')
+          ? 'mono'
+          : nameText.includes('::SYNTHETIC::')
+            ? 'synthetic'
+            : (String(raw?.quote_symbol || '').trim() ? 'synthetic' : 'mono');
+
+  const normalizedQuoteSymbol = inferredMarketMode === 'mono'
+    ? ''
+    : String(raw?.quote_symbol || 'ETHUSDT').toUpperCase();
+
   return {
     id: Number(raw?.id || 0),
     name: String(raw?.name || 'DD_BattleToads'),
@@ -717,14 +871,14 @@ const parseStrategy = (raw: any): DDStrategy => {
       : String(raw?.strategy_type || 'DD_BattleToads') === 'stat_arb_zscore'
         ? 'stat_arb_zscore'
         : 'DD_BattleToads',
-    market_mode: String(raw?.market_mode || 'synthetic') === 'mono' ? 'mono' : 'synthetic',
+    market_mode: inferredMarketMode,
     is_active: readBoolean(raw?.is_active, true),
     display_on_chart: readBoolean(raw?.display_on_chart, true),
     take_profit_percent: readNumber(raw?.take_profit_percent, 7.5),
     price_channel_length: Math.max(2, Math.floor(readNumber(raw?.price_channel_length, 50))),
     detection_source: String(raw?.detection_source || 'close') === 'wick' ? 'wick' : 'close',
     base_symbol: String(raw?.base_symbol || 'BTCUSDT').toUpperCase(),
-    quote_symbol: String(raw?.quote_symbol || 'ETHUSDT').toUpperCase(),
+    quote_symbol: normalizedQuoteSymbol,
     interval: String(raw?.interval || '1h'),
     base_coef: readNumber(raw?.base_coef, 1),
     quote_coef: readNumber(raw?.quote_coef, 1),
@@ -2241,6 +2395,9 @@ const Dashboard: React.FC = () => {
     const runningStrategies = keyStrategies.filter((strategy) => strategy.is_active).length;
     const pausedStrategies = Math.max(0, totalStrategies - runningStrategies);
     const errorStrategies = keyStrategies.filter((strategy) => Boolean(String(strategy.last_error || '').trim())).length;
+    const strategyDiagnostics = buildStrategyDiagnostics(keyStrategies, keyPositions);
+    const desyncCount = strategyDiagnostics.filter((row) => row.status === 'error').length;
+    const warningCount = strategyDiagnostics.filter((row) => row.status === 'warning').length;
     const setTypeOptions: Array<{ value: StrategyKind; label: string }> = [
       { value: 'DD_BattleToads', label: 'DD' },
       { value: 'zz_breakout', label: 'ZZ' },
@@ -2264,6 +2421,9 @@ const Dashboard: React.FC = () => {
           <Tag color="green">running: {runningStrategies}</Tag>
           <Tag color="orange">paused: {pausedStrategies}</Tag>
           {errorStrategies > 0 ? <Tag color="red">errors: {errorStrategies}</Tag> : null}
+          {desyncCount > 0
+            ? <Tag color="red">desync: {desyncCount}</Tag>
+            : <Tag color="green">desync: 0</Tag>}
         </div>
       ),
       children: (
@@ -2595,6 +2755,57 @@ const Dashboard: React.FC = () => {
 
           <Row style={{ marginTop: 16 }}>
             <Col span={24}>
+              <Card title="Runtime vs Exchange Diagnostic">
+                <Space wrap style={{ marginBottom: 12 }}>
+                  <Tag color={desyncCount > 0 ? 'red' : 'green'}>Errors: {desyncCount}</Tag>
+                  <Tag color={warningCount > 0 ? 'gold' : 'blue'}>Warnings: {warningCount}</Tag>
+                  <Tag color="blue">Strategies: {strategyDiagnostics.length}</Tag>
+                </Space>
+
+                {strategyDiagnostics.length === 0
+                  ? <Alert type="info" showIcon message="No strategies loaded yet for diagnostics." />
+                  : (
+                    <div style={{ overflowX: 'auto', maxHeight: 360, overflowY: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead>
+                          <tr>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Strategy</th>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Pair</th>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Runtime state</th>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Live state</th>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Signal</th>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Status</th>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Reason</th>
+                            <th style={{ textAlign: 'left', padding: '6px 8px' }}>Live legs</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {strategyDiagnostics.map((row) => (
+                            <tr key={`diag-${keyName}-${row.strategyId}`} style={{ borderTop: '1px solid #f0f0f0' }}>
+                              <td style={{ padding: '6px 8px' }}>{row.strategyName}</td>
+                              <td style={{ padding: '6px 8px' }}>{row.pair}</td>
+                              <td style={{ padding: '6px 8px' }}>{row.runtimeState}</td>
+                              <td style={{ padding: '6px 8px' }}>{row.liveState}</td>
+                              <td style={{ padding: '6px 8px' }}>{row.lastSignal}</td>
+                              <td style={{ padding: '6px 8px' }}>
+                                <Tag color={row.status === 'error' ? 'red' : row.status === 'warning' ? 'gold' : 'green'}>
+                                  {row.status}
+                                </Tag>
+                              </td>
+                              <td style={{ padding: '6px 8px' }}>{row.reason}</td>
+                              <td style={{ padding: '6px 8px' }}>{row.liveSymbols}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+              </Card>
+            </Col>
+          </Row>
+
+          <Row style={{ marginTop: 16 }}>
+            <Col span={24}>
               <Card title="Sets">
                 <Space style={{ marginBottom: 12 }} wrap>
                   <Input
@@ -2757,10 +2968,6 @@ const Dashboard: React.FC = () => {
                             const strategyId = Number(panelId);
                             if (Number.isFinite(strategyId) && strategyId > 0) {
                               void fetchStrategyDetails(keyName, strategyId, { silent: true });
-                              const expandedStrategy = (strategiesByKey[keyName] || []).find((item) => Number(item.id) === strategyId);
-                              if (expandedStrategy?.show_chart) {
-                                void loadStrategyChart(keyName, expandedStrategy, { silent: true });
-                              }
                             }
                           });
                         }}
@@ -2771,7 +2978,9 @@ const Dashboard: React.FC = () => {
                             const size = Number.parseFloat(String(position?.size || '0'));
                             return Number.isFinite(size) && size > 0 && (symbol === strategy.base_symbol || symbol === strategy.quote_symbol);
                           });
-                          const pairSymbols = [strategy.base_symbol, strategy.quote_symbol]
+                          const pairSymbols = strategy.market_mode === 'mono'
+                            ? [strategy.base_symbol]
+                            : [strategy.base_symbol, strategy.quote_symbol]
                             .map((symbol) => String(symbol || '').toUpperCase())
                             .filter((symbol, index, array) => Boolean(symbol) && array.indexOf(symbol) === index);
                           const orderedPairRows = pairSymbols.map((symbol) => {
@@ -2833,7 +3042,11 @@ const Dashboard: React.FC = () => {
                                 <Tag color={strategy.state === 'long' ? 'green' : strategy.state === 'short' ? 'red' : 'default'}>
                                   state: {strategy.state}
                                 </Tag>
-                                <Tag color="blue">{strategy.base_symbol}/{strategy.quote_symbol}</Tag>
+                                <Tag color="blue">
+                                  {strategy.market_mode === 'mono'
+                                    ? strategy.base_symbol
+                                    : `${strategy.base_symbol}/${strategy.quote_symbol}`}
+                                </Tag>
                                 <Tag>{strategy.interval}</Tag>
                                 <span style={{ color: '#6b7280' }}>{strategyStatus.text}</span>
                                 <span style={{ color: '#4b5563', fontSize: 12 }}>{collapsedPairSummary || 'Pair positions: flat'}</span>

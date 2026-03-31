@@ -24,6 +24,11 @@ type RegisterFormValues = {
   productMode: 'strategy_client' | 'algofund_client';
 };
 
+type SetPasswordFormValues = {
+  password: string;
+  confirmPassword: string;
+};
+
 const CLIENT_SESSION_STORAGE_KEY = 'clientSessionToken';
 
 const saveClientSessionToken = (token: string) => {
@@ -41,6 +46,9 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
   const [errorText, setErrorText] = useState('');
   const [loginForm] = Form.useForm<LoginFormValues>();
   const [registerForm] = Form.useForm<RegisterFormValues>();
+  const [setPasswordForm] = Form.useForm<SetPasswordFormValues>();
+  const [magicLinkMode, setMagicLinkMode] = useState<'idle' | 'processing' | 'password_setup' | 'success'>('idle');
+  const [magicLinkEmail, setMagicLinkEmail] = useState<string>('');
 
   useEffect(() => {
     setMode(initialMode);
@@ -55,11 +63,12 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
     let cancelled = false;
 
     const consumeMagicToken = async () => {
-      setLoading(true);
+      setMagicLinkMode('processing');
       setErrorText('');
       try {
         const response = await axios.post('/api/auth/client/magic-login', { token });
         const sessionToken = String(response?.data?.token || '');
+        const email = String(response?.data?.email || '');
         if (!sessionToken) {
           throw new Error('Session token is missing in magic login response');
         }
@@ -67,15 +76,13 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
           return;
         }
         saveClientSessionToken(sessionToken);
+        setMagicLinkEmail(email);
+        setMagicLinkMode('password_setup');
         messageApi.success(t('client.auth.magicSuccess', 'One-time login successful'));
-        navigate('/cabinet', { replace: true });
       } catch (error: any) {
         if (!cancelled) {
           setErrorText(String(error?.response?.data?.error || error?.message || t('client.auth.magicFailed', 'Magic login failed')));
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
+          setMagicLinkMode('idle');
         }
       }
     };
@@ -85,7 +92,33 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
     return () => {
       cancelled = true;
     };
-  }, [messageApi, navigate, searchParams, t]);
+  }, [messageApi, searchParams, t]);
+
+  const handleSetPassword = async (values: SetPasswordFormValues) => {
+    if (values.password !== values.confirmPassword) {
+      setErrorText(t('client.auth.passwordMismatch', 'Passwords do not match'));
+      return;
+    }
+
+    setLoading(true);
+    setErrorText('');
+
+    try {
+      await axios.post('/api/auth/client/set-password', {
+        newPassword: values.password,
+      });
+
+      setMagicLinkMode('success');
+      messageApi.success(t('client.auth.passwordSetSuccess', 'Password set successfully'));
+      setTimeout(() => {
+        navigate('/cabinet', { replace: true });
+      }, 1000);
+    } catch (error: any) {
+      setErrorText(String(error?.response?.data?.error || error?.message || t('client.auth.passwordSetFailed', 'Failed to set password')));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleLogin = async (values: LoginFormValues) => {
     setLoading(true);
@@ -155,21 +188,23 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
             </Typography.Paragraph>
           </div>
 
-          <Space wrap>
-            <Button type={mode === 'login' ? 'primary' : 'default'} onClick={() => setMode('login')}>
-              {t('client.auth.loginTab', 'Login')}
-            </Button>
-            <Button type={mode === 'register' ? 'primary' : 'default'} onClick={() => setMode('register')}>
-              {t('client.auth.registerTab', 'Register')}
-            </Button>
-            <Button type="link" href="/login">
-              {t('client.auth.adminLogin', 'Admin login')}
-            </Button>
-          </Space>
+          {magicLinkMode === 'idle' ? (
+            <>
+              <Space wrap>
+                <Button type={mode === 'login' ? 'primary' : 'default'} onClick={() => setMode('login')}>
+                  {t('client.auth.loginTab', 'Login')}
+                </Button>
+                <Button type={mode === 'register' ? 'primary' : 'default'} onClick={() => setMode('register')}>
+                  {t('client.auth.registerTab', 'Register')}
+                </Button>
+                <Button type="link" href="/login">
+                  {t('client.auth.adminLogin', 'Admin login')}
+                </Button>
+              </Space>
 
-          {errorText ? <Alert type="error" showIcon message={errorText} /> : null}
+              {errorText ? <Alert type="error" showIcon message={errorText} /> : null}
 
-          {mode === 'login' ? (
+              {mode === 'login' ? (
             <Form<LoginFormValues> layout="vertical" form={loginForm} onFinish={handleLogin}>
               <Form.Item
                 label={t('client.auth.email', 'Email')}
@@ -271,14 +306,90 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 </Button>
               </Form.Item>
             </Form>
-          )}
+            </>
+          ) : null}
 
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            {t('client.auth.helpText', 'After login you are redirected to your own workspace automatically.')}
-          </Typography.Paragraph>
-          <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-            <Link to="/login">{t('client.auth.switchToAdmin', 'Need admin dashboard access? Use admin login.')}</Link>
-          </Typography.Paragraph>
+          {magicLinkMode === 'processing' ? (
+            <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+              <Spin size="large" />
+              <Typography.Paragraph style={{ marginTop: 16 }}>
+                {t('client.auth.processingMagicLink', 'Processing your login link...')}
+              </Typography.Paragraph>
+            </div>
+          ) : null}
+
+          {magicLinkMode === 'password_setup' ? (
+            <>
+              {errorText ? <Alert type="error" showIcon message={errorText} style={{ marginBottom: 12 }} /> : null}
+              <Form<SetPasswordFormValues>
+                layout="vertical"
+                form={setPasswordForm}
+                onFinish={handleSetPassword}
+              >
+                <Typography.Title level={5} style={{ marginBottom: 12 }}>
+                  {t('client.auth.setPasswordTitle', 'Set Your Password')}
+                </Typography.Title>
+                <Typography.Paragraph type="secondary" style={{ marginBottom: 16 }}>
+                  {t('client.auth.setPasswordSubtitle', `You've successfully logged in. Now set a password for your account (${magicLinkEmail}).`)}
+                </Typography.Paragraph>
+                <Form.Item
+                  label={t('client.auth.password', 'Password')}
+                  name="password"
+                  rules={[
+                    { required: true, message: t('client.auth.passwordRequired', 'Password is required') },
+                    { min: 10, message: t('client.auth.passwordMin', 'Password must be at least 10 characters') },
+                  ]}
+                >
+                  <Input.Password autoComplete="new-password" placeholder={t('client.auth.passwordPlaceholder', 'Strong password (10+ chars)')} />
+                </Form.Item>
+                <Form.Item
+                  label={t('client.auth.confirmPassword', 'Confirm password')}
+                  name="confirmPassword"
+                  dependencies={['password']}
+                  rules={[
+                    { required: true, message: t('client.auth.confirmPasswordRequired', 'Confirm your password') },
+                    ({ getFieldValue }) => ({
+                      validator(_, value) {
+                        if (!value || getFieldValue('password') === value) {
+                          return Promise.resolve();
+                        }
+                        return Promise.reject(new Error(t('client.auth.confirmPasswordMismatch', 'Passwords do not match')));
+                      },
+                    }),
+                  ]}
+                >
+                  <Input.Password autoComplete="new-password" placeholder={t('client.auth.confirmPasswordPlaceholder', 'Repeat your password')} />
+                </Form.Item>
+                <Form.Item style={{ marginBottom: 0 }}>
+                  <Button type="primary" htmlType="submit" loading={loading} block>
+                    {t('client.auth.setPasswordAction', 'Confirm and enter my cabinet')}
+                  </Button>
+                </Form.Item>
+              </Form>
+            </>
+          ) : null}
+
+          {magicLinkMode === 'success' ? (
+            <div style={{ textAlign: 'center', padding: '40px 20px' }}>
+              <Typography.Title level={5} style={{ marginBottom: 8 }}>
+                {t('client.auth.passwordSetSuccess', 'Password set successfully')}
+              </Typography.Title>
+              <Typography.Paragraph type="secondary">
+                {t('client.auth.redirectingToCabinet', 'Redirecting to your cabinet...')}
+              </Typography.Paragraph>
+            </div>
+          ) : null}
+
+          {magicLinkMode === 'idle' ? (
+            <>
+              <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                {t('client.auth.helpText', 'After login you are redirected to your own workspace automatically.')}
+              </Typography.Paragraph>
+              <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+                <Link to="/login">{t('client.auth.switchToAdmin', 'Need admin dashboard access? Use admin login.')}</Link>
+              </Typography.Paragraph>
+            </>
+          ) : null}
         </Space>
       </Card>
     </div>

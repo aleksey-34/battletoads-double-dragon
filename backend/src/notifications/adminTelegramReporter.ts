@@ -395,6 +395,8 @@ const buildDriftAlertLines = async (periodHours: number, limit = 8): Promise<str
        JOIN strategies s ON s.id = da.strategy_id
        JOIN api_keys a ON a.id = s.api_key_id
        WHERE da.created_at >= (strftime('%s', 'now', ?) * 1000)
+         AND COALESCE(s.is_active, 0) = 1
+         AND datetime(COALESCE(s.updated_at, '1970-01-01 00:00:00')) >= datetime('now', ?)
      )
      SELECT
        api_key_name,
@@ -411,7 +413,7 @@ const buildDriftAlertLines = async (periodHours: number, limit = 8): Promise<str
      WHERE rn = 1
      ORDER BY created_at DESC
      LIMIT ?`,
-    [`-${freshHours} hours`, Math.max(1, Math.floor(limit))]
+    [`-${freshHours} hours`, `-${freshHours} hours`, Math.max(1, Math.floor(limit))]
   );
 
   const list = Array.isArray(rows) ? rows : [];
@@ -459,6 +461,7 @@ const buildLowLotLines = async (periodHours: number, limit = 8): Promise<string[
        JOIN api_keys a ON a.id = s.api_key_id
        WHERE e.created_at >= (strftime('%s', 'now', ?) * 1000)
          AND COALESCE(s.is_active, 0) = 1
+         AND lower(COALESCE(s.last_error, '')) LIKE '%order size too small%'
      )
      SELECT
        api_key_name,

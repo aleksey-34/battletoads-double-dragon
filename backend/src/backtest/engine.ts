@@ -557,6 +557,9 @@ const openPosition = (
     ? 1
     : 1 + Math.max(0, asNumber(strategy.reinvest_percent, 0)) / 100;
 
+  // Include leverage factor in notional calculation (matching live trading) 
+  const leverageFactor = Math.max(1, asNumber(strategy.leverage, 1));
+
   const maxDeposit = asNumber(strategy.max_deposit, 0);
   const cappedBalance = maxDeposit > 0
     ? Math.min(portfolioEquityNow, maxDeposit)
@@ -566,7 +569,7 @@ const openPosition = (
     ? (maxDeposit > 0 ? maxDeposit : portfolioEquityNow)
     : cappedBalance;
 
-  const notional = baseCapital * lotFraction * reinvestFactor;
+  const notional = baseCapital * lotFraction * reinvestFactor * leverageFactor;
   if (!Number.isFinite(notional) || notional <= 0) {
     return false;
   }

@@ -672,14 +672,19 @@ export const runTradingSystemBacktest = async (
 
   const incomingRiskMultiplier = Number(requestPatch?.riskMultiplier);
   const riskMultiplier = Number.isFinite(incomingRiskMultiplier)
-    ? Math.max(0.25, Math.min(3, incomingRiskMultiplier))
+    ? Math.max(0.25, Math.min(10, incomingRiskMultiplier))
     : 1;
+
+  const skipMissingSymbols = requestPatch?.skipMissingSymbols !== undefined
+    ? requestPatch.skipMissingSymbols === true
+    : true;
 
   const baseResult = await runBacktest({
     ...(requestPatch || {}),
     apiKeyName,
     mode: 'portfolio',
     strategyIds,
+    skipMissingSymbols,
     initialBalance,
     strategyId: undefined,
   });

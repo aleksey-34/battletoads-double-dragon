@@ -512,7 +512,7 @@ body.battletoads-theme {
   margin-top: 8px;
 }
 
-.saas-page .ant-descriptions-bordered .ant-descriptions-item-label {
+.saas-page:not(.client-cabinet-page) .ant-descriptions-bordered .ant-descriptions-item-label {
   width: 44%;
 }
 
@@ -542,6 +542,14 @@ body.battletoads-theme {
 
 .client-onboarding-list li {
   margin-bottom: 6px;
+}
+
+.client-cabinet-section-title {
+  margin: 0 0 8px 0;
+}
+
+.client-cabinet-muted {
+  color: var(--bt-text-muted);
 }
 
 @media (max-width: 900px) {

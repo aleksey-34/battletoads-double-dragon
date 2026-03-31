@@ -250,12 +250,16 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
   try {
     const source = String(req.body?.source || '').trim().toLowerCase();
     const hasSystemName = String(req.body?.systemName || '').trim().length > 0;
-    const inferredKind = req.body?.kind === 'algofund-ts'
-      || source === 'offer_store'
-      || source === 'runtime_system'
-      || hasSystemName
-      ? 'algofund-ts'
-      : 'offer';
+    const requestedKind = String(req.body?.kind || '').trim().toLowerCase();
+    const inferredKind = requestedKind === 'offer' || requestedKind === 'algofund-ts'
+      ? requestedKind as 'offer' | 'algofund-ts'
+      : (
+        source === 'offer_store'
+        || source === 'runtime_system'
+        || hasSystemName
+          ? 'algofund-ts'
+          : 'offer'
+      );
     const data = await previewAdminSweepBacktest({
       kind: inferredKind,
       setKey: req.body?.setKey ? String(req.body.setKey) : undefined,
@@ -272,6 +276,8 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
       tradeFrequencyScore: toOptionalNumber(req.body?.tradeFrequencyScore),
       initialBalance: toOptionalNumber(req.body?.initialBalance),
       riskScaleMaxPercent: toOptionalNumber(req.body?.riskScaleMaxPercent),
+      dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
+      dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
       rerunApiKeyName: req.body?.rerunApiKeyName ? String(req.body.rerunApiKeyName) : undefined,
       preferRealBacktest: req.body?.preferRealBacktest !== undefined ? toBool(req.body.preferRealBacktest, false) : undefined,
     });
@@ -289,11 +295,10 @@ router.post('/admin/storefront-system/remove', async (req, res) => {
     const force = toBool(req.body?.force, false);
     const dryRun = toBool(req.body?.dryRun, false);
     const closePositions = toBool(req.body?.closePositions, false);
-    const hardDelete = toBool(req.body?.hardDelete, false);
     if (!systemName) {
       return res.status(400).json({ error: 'systemName is required' });
     }
-    const data = await removeAlgofundStorefrontSystem({ systemName, force, dryRun, closePositions, hardDelete });
+    const data = await removeAlgofundStorefrontSystem({ systemName, force, dryRun, closePositions });
     res.json({ success: true, ...data });
   } catch (error) {
     const err = error as Error;
@@ -429,6 +434,8 @@ router.post('/admin/apply-low-lot-recommendation', async (req, res) => {
       strategyId,
       applyDepositFix: toBool(req.body?.applyDepositFix, false),
       applyLotFix: toBool(req.body?.applyLotFix, false),
+      applyToSystem: toBool(req.body?.applyToSystem, false),
+      systemId: toOptionalNumber(req.body?.systemId),
       replacementSymbol: req.body?.replacementSymbol ? String(req.body.replacementSymbol).trim() : undefined,
     });
     res.json(data);

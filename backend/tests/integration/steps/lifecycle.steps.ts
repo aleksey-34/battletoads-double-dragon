@@ -9,45 +9,18 @@ import { AfterAll, BeforeAll, Given, Then, When, setDefaultTimeout } from '@cucu
 // Reuse the shared HTTP app state from the existing api.steps.ts
 // We import the sharedState to avoid re-initializing – but since each
 // feature runs in its own worker, we initialize independently here.
-import routes from '../../../src/api/routes';
-import { initDB } from '../../../src/utils/database';
+// Reuse the shared state from api.steps.ts (app, response, password all handled there)
+const apiSteps = require('./api.steps');
+const state: any = apiSteps.sharedState;
 
-type LifecycleState = {
-  response: import('supertest').Response | null;
-  app: ReturnType<typeof express>;
-  dbFile: string;
-  publishedOfferId: string | null;
-  createdTenantId: number | null;
-};
-
-const state: LifecycleState = {
-  response: null,
-  app: express(),
-  dbFile: '',
-  publishedOfferId: null,
-  createdTenantId: null,
-};
+// Lifecycle-specific tracking
+let publishedOfferId: string | null = null;
+let createdTenantId: number | null = null;
 
 setDefaultTimeout(60_000);
 
-BeforeAll(async () => {
-  state.dbFile = path.join(os.tmpdir(), `btdd-lifecycle-${Date.now()}.sqlite`);
-  process.env.DB_FILE = state.dbFile;
-  process.env.ENABLE_GIT_UPDATE = '0';
 
-  await initDB();
-
-  state.app = express();
-  state.app.use(express.json({ limit: '4mb' }));
-  state.app.use('/api', routes);
-});
-
-AfterAll(async () => {
-  if (state.dbFile && fs.existsSync(state.dbFile)) {
-    try { fs.rmSync(state.dbFile, { force: true }); } catch { /* ignore */ }
-  }
-});
-
+// BeforeAll/AfterAll handled by api.steps.ts; state is shared across all step files
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 const app = () => request(state.app);
@@ -69,12 +42,13 @@ Given('an offer exists in the catalog with any offerId', async () => {
   // No offer assertion here: if catalog is empty, subsequent When step will handle gracefully.
 });
 
+
 Given('at least one offer is published to the storefront', async () => {
   // Read published IDs; if none, skip this Given (scenario will still pass structurally).
   const res = await app().get('/api/saas/admin/offer-store');
   const body = safeBody(res);
   const publishedIds = Array.isArray(body.publishedIds) ? body.publishedIds as string[] : [];
-  state.publishedOfferId = publishedIds[0] || null;
+  publishedOfferId = publishedIds[0] || null;
 });
 
 Given('an offer is published but has no active client tenants', async () => {
@@ -82,21 +56,20 @@ Given('an offer is published but has no active client tenants', async () => {
   const res = await app().get('/api/saas/admin/offer-store');
   const body = safeBody(res);
   const publishedIds = Array.isArray(body.publishedIds) ? body.publishedIds as string[] : [];
-  state.publishedOfferId = publishedIds[0] || null;
+  publishedOfferId = publishedIds[0] || null;
 });
 
 Given('an algofund_client tenant exists', async () => {
   // Ensure seed data exists (plan + tenant).
-  if (!state.createdTenantId) {
+  if (!createdTenantId) {
     const res = await app()
       .post('/api/saas/admin/tenants')
       .send({ displayName: 'Lifecycle Algofund', productMode: 'algofund_client', planCode: 'algofund_20' });
     const body = safeBody(res);
     const tenants = Array.isArray(body.tenants) ? body.tenants as Array<{ id: number }> : [];
-    state.createdTenantId = tenants.find((t) => Number(t.id) > 0)?.id ?? null;
+    createdTenantId = tenants.find((t) => Number(t.id) > 0)?.id ?? null;
   }
 });
-
 Given('an algofund_client tenant is connected to a published offer', async () => {
   // Reuse existing published state.
   await Given('at least one offer is published to the storefront', () => undefined);
@@ -109,6 +82,7 @@ When('I send a GET request to {string}', async (routePath: string) => {
   state.response = await app().get(routePath);
 });
 
+
 When('I publish the first available offer via {string}', async (routePath: string) => {
   // First fetch offers to get a real offerId.
   const storeRes = await app().get('/api/saas/admin/offer-store');
@@ -117,19 +91,19 @@ When('I publish the first available offer via {string}', async (routePath: strin
     ? body.offers as Array<{ offerId?: string }>
     : [];
   const offerId = offers[0]?.offerId || 'offer_mono_test_1';
-  state.publishedOfferId = offerId;
+  publishedOfferId = offerId;
   state.response = await app().patch(routePath).send({ action: 'add', offerIds: [offerId] });
 });
 
 When('I request unpublish impact for the published offer via {string}', async (routeTemplate: string) => {
-  const offerId = state.publishedOfferId;
+  const offerId = publishedOfferId;
   assert.ok(offerId, 'Expected a publishedOfferId to be set');
   const routePath = routeTemplate.replace(':offerId', encodeURIComponent(offerId));
   state.response = await app().get(routePath);
 });
 
 When('I request unpublish impact for that offer', async () => {
-  const offerId = state.publishedOfferId;
+  const offerId = publishedOfferId;
   if (!offerId) {
     // No published offer — simulate with a dummy offerId; endpoint should return gracefully.
     state.response = await app().get('/api/saas/admin/offer-store/unpublish-impact/offer_dummy');
@@ -139,7 +113,7 @@ When('I request unpublish impact for that offer', async () => {
 });
 
 When('I unpublish the offer via {string}', async (routePath: string) => {
-  const offerId = state.publishedOfferId;
+  const offerId = publishedOfferId;
   if (!offerId) {
     state.response = await app().patch(routePath).send({ action: 'remove', offerIds: [] });
     return;
@@ -155,18 +129,17 @@ When('I POST to {string} with body:', async (routePath: string, rawBody: string)
   // Capture createdTenantId for downstream steps.
   const resBody = safeBody(state.response);
   const tenants = Array.isArray(resBody.tenants) ? resBody.tenants as Array<{ id?: number }> : [];
-  if (tenants.length > 0 && !state.createdTenantId) {
-    state.createdTenantId = Number(tenants[tenants.length - 1]?.id ?? 0) || null;
+  if (tenants.length > 0 && !createdTenantId) {
+    createdTenantId = Number(tenants[tenants.length - 1]?.id ?? 0) || null;
   }
 });
 
 When('I POST to {string} with action {string}', async (routeTemplate: string, action: string) => {
-  const tenantId = state.createdTenantId;
+  const tenantId = createdTenantId;
   assert.ok(tenantId, 'Expected a tenantId from a previous step');
   const routePath = routeTemplate.replace(':tenantId', String(tenantId));
   state.response = await app().post(routePath).send({ requestType: action });
 });
-
 When('I PATCH {string} with body:', async (routePath: string, rawBody: string) => {
   let body: Record<string, unknown> = {};
   try { body = JSON.parse(rawBody) as Record<string, unknown>; } catch { /* ignore */ }
@@ -175,36 +148,20 @@ When('I PATCH {string} with body:', async (routePath: string, rawBody: string) =
 
 // ─── Then ─────────────────────────────────────────────────────────────────────
 
-Then('the response status should be {int}', (statusCode: number) => {
-  assert.ok(state.response, 'Expected response to be set');
-  assert.strictEqual(
-    state.response!.status,
-    statusCode,
-    `Status mismatch: got ${state.response!.status}, expected ${statusCode}. Body: ${JSON.stringify(state.response!.body).slice(0, 300)}`
-  );
-});
 
-Then('the response JSON should include key {string}', (key: string) => {
-  assert.ok(state.response, 'Expected response to be set');
-  assert.ok(
-    state.response!.body && typeof state.response!.body === 'object',
-    'Expected JSON response body'
-  );
-  assert.ok(
-    Object.prototype.hasOwnProperty.call(state.response!.body, key),
-    `Expected response to have key "${key}". Keys present: ${Object.keys(state.response!.body as object).join(', ')}`
-  );
-});
+// REMOVED: These steps are defined in api.steps.ts (source of truth for response assertions)
+// Then('the response status should be {int}', ...)
+// Then('the response JSON should include key {string}', ...)
 
 Then('the published offer appears in the published IDs list', async () => {
   const res = await app().get('/api/saas/admin/offer-store');
   const body = safeBody(res);
   const publishedIds = Array.isArray(body.publishedIds) ? body.publishedIds as string[] : [];
   // If no offerId was set (empty catalog), accept as-is.
-  if (!state.publishedOfferId) return;
+  if (!publishedOfferId) return;
   assert.ok(
-    publishedIds.includes(state.publishedOfferId),
-    `Expected "${state.publishedOfferId}" to be in publishedIds: ${publishedIds.join(', ')}`
+    publishedIds.includes(publishedOfferId),
+    `Expected "${publishedOfferId}" to be in publishedIds: ${publishedIds.join(', ')}`
   );
 });
 
@@ -212,13 +169,12 @@ Then('the offer is no longer in the published IDs list', async () => {
   const res = await app().get('/api/saas/admin/offer-store');
   const body = safeBody(res);
   const publishedIds = Array.isArray(body.publishedIds) ? body.publishedIds as string[] : [];
-  if (!state.publishedOfferId) return;
+  if (!publishedOfferId) return;
   assert.ok(
-    !publishedIds.includes(state.publishedOfferId),
-    `Expected "${state.publishedOfferId}" to be removed from publishedIds: ${publishedIds.join(', ')}`
+    !publishedIds.includes(publishedOfferId),
+    `Expected "${publishedOfferId}" to be removed from publishedIds: ${publishedIds.join(', ')}`
   );
 });
-
 Then('the tenants list includes a tenant with slug matching {string}', (slugPattern: string) => {
   assert.ok(state.response, 'Expected response to be set');
   const body = safeBody(state.response);
@@ -256,6 +212,7 @@ Then('the response JSON field {string} is at most {int}', (field: string, max: n
   assert.ok(val <= max, `Expected ${field} <= ${max}, got ${val}`);
 });
 
+
 Then('the affectedTenants count is greater than {int}', (min: number) => {
   assert.ok(state.response, 'Expected response to be set');
   const body = safeBody(state.response);
@@ -264,5 +221,5 @@ Then('the affectedTenants count is greater than {int}', (min: number) => {
   const affected = Array.isArray(body.affectedTenants) ? (body.affectedTenants as unknown[]).length : 0;
   // In our test DB there may be no real clients, so just validate structure exists.
   assert.ok(typeof body.affectedTenants !== 'undefined', 'Expected affectedTenants field in response');
-  void min; // structural check only in isolation
+  void min; // structural check only in isolation; keep para for linting
 });
