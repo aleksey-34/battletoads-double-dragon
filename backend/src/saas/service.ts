@@ -2728,14 +2728,11 @@ const buildDerivedPreviewCurves = (
     return {
       pnl: [] as Array<{ time: number; value: number }>,
       drawdownPercent: [] as Array<{ time: number; value: number }>,
-      marginLoadPercent: [] as Array<{ time: number; value: number }>,
-      maxMarginLoadPercent: 0,
       finalUnrealizedPnl: 0,
     };
   }
 
   let peak = asNumber(equityCurve[0]?.equity, initialBalance);
-  let maxMarginLoadPercent = 0;
 
   const pnl = equityCurve.map((point) => {
     const equity = asNumber(point.equity, initialBalance);
@@ -2757,25 +2754,11 @@ const buildDerivedPreviewCurves = (
     };
   });
 
-  const marginLoadPercent = drawdownPercent.map((point) => {
-    const base = asNumber(point.value, 0) * 1.8 + asNumber(riskScore, 5) * 4;
-    const clamped = Math.max(3, Math.min(95, base));
-    if (clamped > maxMarginLoadPercent) {
-      maxMarginLoadPercent = clamped;
-    }
-    return {
-      time: point.time,
-      value: Number(clamped.toFixed(4)),
-    };
-  });
-
   const finalUnrealizedPnl = pnl.length > 0 ? asNumber(pnl[pnl.length - 1].value, 0) : 0;
 
   return {
     pnl,
     drawdownPercent,
-    marginLoadPercent,
-    maxMarginLoadPercent: Number(maxMarginLoadPercent.toFixed(4)),
     finalUnrealizedPnl: Number(finalUnrealizedPnl.toFixed(4)),
   };
 };
