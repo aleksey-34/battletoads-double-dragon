@@ -572,6 +572,8 @@ export const initDB = async () => {
   await ensureColumn('api_keys', 'testnet BOOLEAN DEFAULT 0');
   await ensureColumn('api_keys', 'demo BOOLEAN DEFAULT 0');
   await ensureColumn('api_keys', "passphrase TEXT DEFAULT ''");
+  await ensureColumn('api_keys', "created_at TEXT DEFAULT ''");
+  await ensureColumn('api_keys', "updated_at TEXT DEFAULT ''");
   await ensureColumn('strategies', "strategy_type TEXT DEFAULT 'DD_BattleToads'");
   await ensureColumn('strategies', "market_mode TEXT DEFAULT 'synthetic'");
   await ensureColumn('strategies', 'show_settings BOOLEAN DEFAULT 1');

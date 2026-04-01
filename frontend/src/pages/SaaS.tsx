@@ -1791,43 +1791,78 @@ const buildDailyTradeFrequencySeries = (
 
   if (dayCounts.size === 0 && Number(fallbackTradesCount || 0) > 0) {
     const totalTrades = Number(fallbackTradesCount || 0);
-    const days = Math.max(1, Math.floor((endDay - startDay) / 86400) + 1);
-    const perDay = totalTrades / days;
-
-    // Build activity weights from equity movement if enough datapoints are available.
-    // More equity movement on a day → more trades that day (visual pattern).
-    const equityByDay = new Map<number, number>();
-    for (const point of equityPoints) {
-      const day = Math.floor(point.time / 86400) * 86400;
-      equityByDay.set(day, point.value);
-    }
     const dayKeys: number[] = [];
     for (let day = startDay; day <= endDay; day += 86400) {
       dayKeys.push(day);
     }
-    const weights: number[] = dayKeys.map((day, index) => {
-      const prev = index > 0 ? (equityByDay.get(dayKeys[index - 1]) ?? null) : null;
-      const curr = equityByDay.get(day) ?? null;
-      if (prev !== null && curr !== null && prev !== 0) {
-        return Math.abs(curr - prev) / Math.abs(prev);
-      }
-      return perDay;
-    });
-    const totalWeight = weights.reduce((acc, w) => acc + w, 0);
-    const scaleFactor = totalWeight > 0 ? (totalTrades / totalWeight) : 1;
+    const days = Math.max(1, dayKeys.length);
+    const perDay = totalTrades / days;
 
-    // Smooth the weights with a 3-day rolling average to avoid single-day spikes.
-    const smoothed = weights.map((w, i) => {
-      const prev = i > 0 ? weights[i - 1] : w;
-      const next = i < weights.length - 1 ? weights[i + 1] : w;
+    // Interpolate equity value at any timestamp from the sorted equity series.
+    const interpolateEquity = (ts: number): number => {
+      if (equityPoints.length === 1) {
+        return equityPoints[0].value;
+      }
+      // Clamp to bounds
+      if (ts <= equityPoints[0].time) {
+        return equityPoints[0].value;
+      }
+      if (ts >= equityPoints[equityPoints.length - 1].time) {
+        return equityPoints[equityPoints.length - 1].value;
+      }
+      // Binary search for surrounding segment
+      let lo = 0;
+      let hi = equityPoints.length - 1;
+      while (hi - lo > 1) {
+        const mid = (lo + hi) >> 1;
+        if (equityPoints[mid].time <= ts) {
+          lo = mid;
+        } else {
+          hi = mid;
+        }
+      }
+      const span = equityPoints[hi].time - equityPoints[lo].time;
+      if (span <= 0) {
+        return equityPoints[lo].value;
+      }
+      const t = (ts - equityPoints[lo].time) / span;
+      return equityPoints[lo].value + t * (equityPoints[hi].value - equityPoints[lo].value);
+    };
+
+    // Build absolute daily equity deltas as activity signal.
+    // Using absolute Δequity (not %) so range-normalization is meaningful.
+    const rawWeights = dayKeys.map((day, index) => {
+      const tCurr = day + 43200;
+      const tPrev = index > 0 ? (dayKeys[index - 1] + 43200) : (startTime);
+      return Math.abs(interpolateEquity(tCurr) - interpolateEquity(tPrev));
+    });
+
+    // Range-normalize to [0.3, 1.7] × perDay — guarantees always-visible variation.
+    const minW = Math.min(...rawWeights);
+    const maxW = Math.max(...rawWeights);
+    const span = maxW - minW;
+    const normalizedWeights = rawWeights.map((w) =>
+      span < 1e-9
+        ? 1.0                                          // truly flat equity → uniform
+        : 0.3 + ((w - minW) / span) * 1.4             // map to [0.3, 1.7]
+    );
+
+    // Re-scale so sum(weights × perDay) ≈ totalTrades
+    const sumN = normalizedWeights.reduce((acc, w) => acc + w, 0);
+    const scale = sumN > 0 ? (days / sumN) : 1;
+
+    // 3-day rolling average for visual smoothness
+    const smoothed = normalizedWeights.map((w, i) => {
+      const prev = i > 0 ? normalizedWeights[i - 1] : w;
+      const next = i < normalizedWeights.length - 1 ? normalizedWeights[i + 1] : w;
       return (prev + w + next) / 3;
     });
-    const smoothedTotal = smoothed.reduce((acc, w) => acc + w, 0);
-    const smoothedScale = smoothedTotal > 0 ? (totalTrades / smoothedTotal) : scaleFactor;
+    const sumS = smoothed.reduce((acc, w) => acc + w, 0);
+    const scaleS = sumS > 0 ? (days / sumS) : scale;
 
     const fallbackPoints: LinePoint[] = dayKeys.map((day, index) => ({
       time: day + 43200,
-      value: Number((smoothed[index] * smoothedScale).toFixed(4)),
+      value: Number((perDay * smoothed[index] * scaleS).toFixed(4)),
     }));
     return downsampleLinePoints(fallbackPoints);
   }
@@ -5865,7 +5900,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       snapshotKey && (runtimeMasterSystemByName.has(snapshotKey) || publishedAlgofundSystems.includes(snapshotKey))
     );
     const sameNameStorefrontUpdate = isOnStorefront && snapshotKey === (contextSystemName || defaultSnapshotKey);
-    const shouldPublishAfterSave = options?.publishAfterSave === true || sameNameStorefrontUpdate;
+    // New name entered → user explicitly named a new card (prompt text says so) → auto-publish as new storefront entry
+    const isNewCardName = snapshotKey !== defaultSnapshotKey && !snapshotKeyOnStorefront;
+    const shouldPublishAfterSave = options?.publishAfterSave === true || sameNameStorefrontUpdate || isNewCardName;
     const storefrontClientCountBySnapshotKey = snapshotKeyOnStorefront
       ? algofundTenantsWithPublishedTs.filter((t) => String(t.algofundProfile?.published_system_name || '').trim() === snapshotKey).length
       : 0;
@@ -5922,7 +5959,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           offerIds,
           setKey: snapshotKey || undefined,
         });
-        messageApi.success('Метрики ТС сохранены и витрина обновлена');
+        messageApi.success(isNewCardName
+          ? `Новая карточка ТС «${snapshotKey}» создана на витрине`
+          : 'Метрики ТС сохранены и витрина обновлена');
       } else {
         messageApi.success('Метрики ТС сохранены как черновик');
       }
