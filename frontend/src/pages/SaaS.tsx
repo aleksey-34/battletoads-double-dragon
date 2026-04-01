@@ -1790,13 +1790,46 @@ const buildDailyTradeFrequencySeries = (
   const endDay = Math.floor(endTime / 86400) * 86400;
 
   if (dayCounts.size === 0 && Number(fallbackTradesCount || 0) > 0) {
+    const totalTrades = Number(fallbackTradesCount || 0);
     const days = Math.max(1, Math.floor((endDay - startDay) / 86400) + 1);
-    const perDay = Number(fallbackTradesCount || 0) / days;
-    const flatPoints: LinePoint[] = [];
-    for (let day = startDay; day <= endDay; day += 86400) {
-      flatPoints.push({ time: day + 43200, value: Number(perDay.toFixed(4)) });
+    const perDay = totalTrades / days;
+
+    // Build activity weights from equity movement if enough datapoints are available.
+    // More equity movement on a day → more trades that day (visual pattern).
+    const equityByDay = new Map<number, number>();
+    for (const point of equityPoints) {
+      const day = Math.floor(point.time / 86400) * 86400;
+      equityByDay.set(day, point.value);
     }
-    return downsampleLinePoints(flatPoints);
+    const dayKeys: number[] = [];
+    for (let day = startDay; day <= endDay; day += 86400) {
+      dayKeys.push(day);
+    }
+    const weights: number[] = dayKeys.map((day, index) => {
+      const prev = index > 0 ? (equityByDay.get(dayKeys[index - 1]) ?? null) : null;
+      const curr = equityByDay.get(day) ?? null;
+      if (prev !== null && curr !== null && prev !== 0) {
+        return Math.abs(curr - prev) / Math.abs(prev);
+      }
+      return perDay;
+    });
+    const totalWeight = weights.reduce((acc, w) => acc + w, 0);
+    const scaleFactor = totalWeight > 0 ? (totalTrades / totalWeight) : 1;
+
+    // Smooth the weights with a 3-day rolling average to avoid single-day spikes.
+    const smoothed = weights.map((w, i) => {
+      const prev = i > 0 ? weights[i - 1] : w;
+      const next = i < weights.length - 1 ? weights[i + 1] : w;
+      return (prev + w + next) / 3;
+    });
+    const smoothedTotal = smoothed.reduce((acc, w) => acc + w, 0);
+    const smoothedScale = smoothedTotal > 0 ? (totalTrades / smoothedTotal) : scaleFactor;
+
+    const fallbackPoints: LinePoint[] = dayKeys.map((day, index) => ({
+      time: day + 43200,
+      value: Number((smoothed[index] * smoothedScale).toFixed(4)),
+    }));
+    return downsampleLinePoints(fallbackPoints);
   }
 
   const points: LinePoint[] = [];
@@ -2581,9 +2614,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const reportSystemOptions = Array.from(new Set([
     selectedAlgofundPublishedSystemName,
     ...publishedAlgofundSystems,
-    ...(algofundActiveSystems || []).map((item) => String(item.systemName || '').trim()),
     String(adminSweepBacktestResult?.publishMeta?.systemName || '').trim(),
-  ].filter((name) => Boolean(name)))).map((name) => ({ label: name, value: name }));
+  ].filter((name) => {
+    const safeName = String(name || '').trim();
+    return safeName.length > 0 && safeName.toUpperCase().startsWith('ALGOFUND_MASTER::');
+  }))).map((name) => {
+    const rawName = String(name || '').trim();
+    const parts = rawName.split('::').filter(Boolean);
+    let token = String(parts[parts.length - 1] || '').trim().toLowerCase();
+    token = token.replace(/^algofund-master-btdd-d1-/, '');
+    token = token.replace(/-h-([a-z0-9]{4,})$/i, '-$1');
+    return { label: token || rawName, value: rawName };
+  });
   const resolvedReportSystemName = String(
     reportTargetSystemName
     || selectedAlgofundPublishedSystemName
@@ -3930,6 +3972,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     if (!String(copyKeyDraftApiKey || '').trim() || !String(copyKeyDraftSecret || '').trim()) {
       messageApi.warning('Укажите API key и Secret');
+      return;
+    }
+    if (['bitget', 'weex'].includes(String(copyKeyDraftExchange || '').trim().toLowerCase()) && !String(copyKeyDraftPassphrase || '').trim()) {
+      messageApi.warning('Для Bitget и WEEX укажите passphrase');
       return;
     }
 
@@ -6380,8 +6426,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     const inlineApiKey = createTenantInlineApiKey.trim();
     const inlineApiSecret = createTenantInlineApiSecret.trim();
+    const inlineApiPassphrase = createTenantInlineApiPassphrase.trim();
     if ((inlineApiKey && !inlineApiSecret) || (!inlineApiKey && inlineApiSecret)) {
       messageApi.error('Для нового API ключа заполните и API Key, и API Secret');
+      return;
+    }
+    if (inlineApiKey && ['bitget', 'weex'].includes(String(createTenantInlineApiExchange || '').trim().toLowerCase()) && !inlineApiPassphrase) {
+      messageApi.error('Для Bitget и WEEX укажите passphrase');
       return;
     }
     setActionLoading('createTenant');
@@ -6394,7 +6445,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         inlineApiKeyName: createTenantInlineApiKeyName.trim() || undefined,
         inlineApiKey: inlineApiKey || undefined,
         inlineApiSecret: inlineApiSecret || undefined,
-        inlineApiPassphrase: createTenantInlineApiPassphrase.trim() || undefined,
+        inlineApiPassphrase: inlineApiPassphrase || undefined,
         inlineApiExchange: createTenantInlineApiExchange || undefined,
         inlineApiSpeedLimit: createTenantInlineApiSpeedLimit || undefined,
         inlineApiTestnet: createTenantInlineApiTestnet,
@@ -7673,36 +7724,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           ),
                                         },
                                         {
-                                          title: 'Snapshot chart',
-                                          key: 'mini-chart',
-                                          width: 190,
-                                          render: (_, row: any) => {
-                                            const points = downsampleNumericSeries(
-                                              (Array.isArray(row.equityPoints) ? row.equityPoints : [])
-                                                .map((value: unknown) => Number(value))
-                                                .filter((value: number) => Number.isFinite(value)),
-                                              40
-                                            );
-                                            if (points.length < 2) {
-                                              return <Text type="secondary">no snapshot</Text>;
-                                            }
-                                            return (
-                                              <div style={{ width: 170 }}>
-                                                <ChartComponent
-                                                  data={points.map((value, index) => ({ time: index, equity: value }))}
-                                                  type="line"
-                                                  fixedHeight={78}
-                                                />
-                                              </div>
-                                            );
-                                          },
-                                        },
-                                        {
                                           title: 'Метрики',
                                           key: 'metrics',
                                           render: (_, row: any) => (
                                             <Space wrap>
-                                              <Tag>{Number(row.periodDays || 0)}d</Tag>
                                               <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
                                               <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
                                               <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
@@ -8732,6 +8757,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   { value: 'bingx', label: 'BingX' },
                                   { value: 'bitget', label: 'Bitget' },
                                   { value: 'binance', label: 'Binance Futures' },
+                                  { value: 'weex', label: 'WEEX Futures' },
+                                  { value: 'mexc', label: 'MEXC Futures' },
                                 ]}
                               />
                             </div>
@@ -8760,7 +8787,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 style={{ marginTop: 4 }}
                                 value={createTenantInlineApiPassphrase}
                                 onChange={(e) => setCreateTenantInlineApiPassphrase(e.target.value)}
-                                placeholder="Для Bitget обязательно, иначе опционально"
+                                placeholder="Для Bitget и WEEX обязательно, иначе опционально"
                               />
                             </div>
                             <div>
@@ -10227,11 +10254,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       { value: 'bingx', label: 'BingX Futures' },
                                       { value: 'bybit', label: 'Bybit Futures' },
                                       { value: 'bitget', label: 'Bitget Futures' },
+                                      { value: 'weex', label: 'WEEX Futures' },
+                                      { value: 'mexc', label: 'MEXC Futures' },
                                     ]}
                                   />
                                 </Col>
                                 <Col xs={24} md={6}>
-                                  <Text strong>Passphrase (optional)</Text>
+                                  <Text strong>Passphrase (Bitget / WEEX required)</Text>
                                   <Input style={{ marginTop: 8 }} value={copyKeyDraftPassphrase} onChange={(event) => setCopyKeyDraftPassphrase(event.target.value)} />
                                 </Col>
                                 <Col xs={24} md={8}>
