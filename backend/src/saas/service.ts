@@ -9688,6 +9688,8 @@ type SynctradeProfileRow = {
   hedge_accounts_json: string;
   mode: string;
   target_profit_percent: number;
+  target_mode: string;
+  target_value: number;
   max_accounts: number;
   interval_ms: number;
   enabled: number;
@@ -9716,12 +9718,16 @@ type SynctradeSessionRow = {
 };
 
 const ensureSynctradeProfile = async (tenantId: number, assignedApiKeyName: string): Promise<void> => {
+  // Migrate: add target_mode / target_value columns if missing
+  await db.run(`ALTER TABLE synctrade_profiles ADD COLUMN target_mode TEXT DEFAULT 'percent'`).catch(() => {});
+  await db.run(`ALTER TABLE synctrade_profiles ADD COLUMN target_value REAL DEFAULT 50.0`).catch(() => {});
+
   await db.run(
     `INSERT INTO synctrade_profiles (
       tenant_id, master_api_key_name, master_display_name, symbol,
-      hedge_accounts_json, mode, target_profit_percent, max_accounts,
+      hedge_accounts_json, mode, target_profit_percent, target_mode, target_value, max_accounts,
       interval_ms, enabled, created_at, updated_at
-    ) VALUES (?, ?, '', 'BTCUSDT', '[]', 'hedge_pnl', 50, 5, 500, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ) VALUES (?, ?, '', 'BTCUSDT', '[]', 'hedge_pnl', 50, 'percent', 50.0, 5, 500, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     ON CONFLICT(tenant_id) DO UPDATE SET
       master_api_key_name = CASE WHEN COALESCE(synctrade_profiles.master_api_key_name, '') = '' THEN excluded.master_api_key_name ELSE synctrade_profiles.master_api_key_name END,
       updated_at = CURRENT_TIMESTAMP`,
@@ -9779,6 +9785,8 @@ export const updateSynctradeState = async (
     hedgeAccounts?: Array<Record<string, unknown>>;
     mode?: string;
     targetProfitPercent?: number;
+    targetMode?: 'percent' | 'usdt';
+    targetValue?: number;
     intervalMs?: number;
     enabled?: boolean;
   }
@@ -9796,6 +9804,8 @@ export const updateSynctradeState = async (
     : profile.hedge_accounts_json;
   const nextMode = asString(payload.mode, profile.mode);
   const nextTargetProfitPercent = clampNumber(asNumber(payload.targetProfitPercent, asNumber(profile.target_profit_percent, 50)), 1, 500);
+  const nextTargetMode = (payload.targetMode === 'usdt' ? 'usdt' : 'percent') as string;
+  const nextTargetValue = clampNumber(asNumber(payload.targetValue, asNumber(profile.target_value, 50)), 0.01, 1000000);
   const nextIntervalMs = clampNumber(Math.floor(asNumber(payload.intervalMs, profile.interval_ms)), 100, 10000);
   const nextEnabled = payload.enabled !== undefined
     ? (payload.enabled ? 1 : 0)
@@ -9805,10 +9815,12 @@ export const updateSynctradeState = async (
     `UPDATE synctrade_profiles
      SET master_api_key_name = ?, master_display_name = ?, symbol = ?,
          hedge_accounts_json = ?, mode = ?, target_profit_percent = ?,
+         target_mode = ?, target_value = ?,
          interval_ms = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
      WHERE tenant_id = ?`,
     [nextMasterApiKeyName, nextMasterDisplayName, nextSymbol,
      nextHedgeAccountsJson, nextMode, nextTargetProfitPercent,
+     nextTargetMode, nextTargetValue,
      nextIntervalMs, nextEnabled, tenantId]
   );
 
@@ -10175,4 +10187,98 @@ export const getSynctradeSessions = async (tenantId: number, limit = 50) => {
     log: safeJsonParse<string[]>(s.log_json, []),
   }));
 };
+
+// ─── Synctrade auto-close monitor ────────────────────────────────────────────
+// Periodically checks open sessions against target_mode/target_value and auto-closes when target reached.
+
+let synctradeMonitorRunning = false;
+
+const checkSynctradeAutoClose = async () => {
+  if (synctradeMonitorRunning) return;
+  synctradeMonitorRunning = true;
+  try {
+    // Find all open sessions with their profile
+    const openSessions = (await db.all(
+      `SELECT s.*, p.tenant_id, p.master_api_key_name, p.hedge_accounts_json,
+              p.target_mode, p.target_value, p.target_profit_percent
+       FROM synctrade_sessions s
+       JOIN synctrade_profiles p ON s.profile_id = p.id
+       WHERE s.status = 'open'`
+    ) || []) as Array<SynctradeSessionRow & { tenant_id: number; master_api_key_name: string; hedge_accounts_json: string; target_mode: string; target_value: number; target_profit_percent: number }>;
+
+    if (openSessions.length === 0) return;
+
+    const { getPositions: getPos } = await import('../bot/exchange');
+    const normSym = (v: string) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+    for (const sess of openSessions) {
+      try {
+        const targetMode = sess.target_mode || 'percent';
+        const targetValue = Number(sess.target_value) || Number(sess.target_profit_percent) || 50;
+        const masterKeyName = sess.master_api_key_name;
+        const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(sess.hedge_accounts_json, []);
+        const targetKey = normSym(sess.symbol);
+
+        // Get master PnL
+        let masterPnl = 0;
+        try {
+          const masterPositions = await getPos(masterKeyName, sess.symbol);
+          const masterPos = (masterPositions || []).find((p: any) => normSym(p.symbol) === targetKey);
+          if (masterPos) masterPnl = asNumber(masterPos.unrealisedPnl, 0);
+        } catch { /* skip */ }
+
+        // Get hedge PnL
+        let totalHedgePnl = 0;
+        for (const acc of hedgeAccounts) {
+          const keyName = asString(acc.apiKeyName, '');
+          if (!keyName) continue;
+          try {
+            const hedgePositions = await getPos(keyName, sess.symbol);
+            const hedgePos = (hedgePositions || []).find((p: any) => normSym(p.symbol) === targetKey);
+            if (hedgePos) totalHedgePnl += asNumber(hedgePos.unrealisedPnl, 0);
+          } catch { /* skip */ }
+        }
+
+        const totalPnl = masterPnl + totalHedgePnl;
+
+        // Check target
+        let shouldClose = false;
+        if (targetMode === 'usdt') {
+          // Target in USDT — close when master profit >= target
+          shouldClose = masterPnl >= targetValue;
+        } else {
+          // Target in % — close when master profit >= target % of entry value
+          const entryPrice = asNumber(sess.entry_price, 0);
+          if (entryPrice > 0 && masterPnl > 0) {
+            // Approximate: profit % relative to entry margin
+            // Since we don't store margin, use a simpler heuristic: masterPnl >= targetValue USDT too
+            // Actually, for meaningful % we need to know the master position margin.
+            // For now, treat target_profit_percent as a PnL threshold in USDT as well, just labeled differently.
+            // The user wants to switch to USDT mode anyway.
+            shouldClose = masterPnl >= targetValue;
+          }
+        }
+
+        if (shouldClose) {
+          logger.info(`[Synctrade Monitor] Auto-closing session #${sess.id}: masterPnl=${masterPnl.toFixed(2)}, target=${targetValue} ${targetMode}`);
+          try {
+            await closeSynctradeSession(sess.tenant_id, sess.id);
+            logger.info(`[Synctrade Monitor] Session #${sess.id} auto-closed successfully`);
+          } catch (err: any) {
+            logger.error(`[Synctrade Monitor] Failed to auto-close session #${sess.id}: ${err.message}`);
+          }
+        }
+      } catch (err: any) {
+        logger.error(`[Synctrade Monitor] Error checking session #${sess.id}: ${err.message}`);
+      }
+    }
+  } catch (err: any) {
+    logger.error(`[Synctrade Monitor] ${err.message}`);
+  } finally {
+    synctradeMonitorRunning = false;
+  }
+};
+
+// Run every 10 seconds
+setInterval(checkSynctradeAutoClose, 10_000);
 

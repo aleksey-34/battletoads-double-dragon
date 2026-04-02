@@ -507,6 +507,8 @@ CREATE TABLE IF NOT EXISTS synctrade_profiles (
   hedge_accounts_json TEXT DEFAULT '[]',
   mode TEXT DEFAULT 'hedge_pnl',
   target_profit_percent REAL DEFAULT 50.0,
+  target_mode TEXT DEFAULT 'percent',
+  target_value REAL DEFAULT 50.0,
   max_accounts INTEGER DEFAULT 5,
   interval_ms INTEGER DEFAULT 500,
   enabled BOOLEAN DEFAULT 0,

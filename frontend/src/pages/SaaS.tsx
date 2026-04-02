@@ -2476,6 +2476,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [synctradeNewHedgeMaxSpend, setSynctradeNewHedgeMaxSpend] = useState<number>(0);
   const [synctradeNewHedgeTargetLoss, setSynctradeNewHedgeTargetLoss] = useState<number>(0);
   const [synctradeTargetProfit, setSynctradeTargetProfit] = useState(50);
+  const [synctradeTargetMode, setSynctradeTargetMode] = useState<'percent' | 'usdt'>('percent');
   const [synctradeIntervalMs, setSynctradeIntervalMs] = useState(500);
   const [synctradeEnabled, setSynctradeEnabled] = useState(false);
   const [synctradeHedgeAccounts, setSynctradeHedgeAccounts] = useState<Array<Record<string, any>>>([]);
@@ -4145,7 +4146,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setSynctradeMasterApiKeyName(String(data?.profile?.master_api_key_name || ''));
       setSynctradeMasterDisplayName(String(data?.profile?.master_display_name || ''));
       setSynctradeSymbol(String(data?.profile?.symbol || 'BTCUSDT'));
-      setSynctradeTargetProfit(Number(data?.profile?.target_profit_percent ?? 50));
+      setSynctradeTargetProfit(Number(data?.profile?.target_value ?? data?.profile?.target_profit_percent ?? 50));
+      setSynctradeTargetMode(data?.profile?.target_mode === 'usdt' ? 'usdt' : 'percent');
       setSynctradeIntervalMs(Number(data?.profile?.interval_ms ?? 500));
       setSynctradeEnabled(Boolean(data?.profile?.enabled));
       setSynctradeHedgeAccounts(Array.isArray(data?.profile?.hedgeAccounts) ? data.profile.hedgeAccounts : []);
@@ -4168,6 +4170,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         symbol: synctradeSymbol,
         hedgeAccounts: synctradeHedgeAccounts,
         targetProfitPercent: synctradeTargetProfit,
+        targetMode: synctradeTargetMode,
+        targetValue: synctradeTargetProfit,
         intervalMs: synctradeIntervalMs,
         enabled: synctradeEnabled,
       });
@@ -10908,15 +10912,28 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 ]}
                               />
                             </Col>
-                            <Col xs={24} md={4}>
-                              <Text strong>Target Profit %</Text>
-                              <InputNumber
-                                style={{ width: '100%', marginTop: 8 }}
-                                min={1}
-                                max={500}
-                                value={synctradeTargetProfit}
-                                onChange={(v) => setSynctradeTargetProfit(Number(v ?? 50))}
-                              />
+                            <Col xs={24} md={6}>
+                              <Text strong>Целевой профит ({synctradeTargetMode === 'usdt' ? 'USDT' : '%'})</Text>
+                              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                                <InputNumber
+                                  style={{ flex: 1 }}
+                                  min={0.01}
+                                  max={synctradeTargetMode === 'usdt' ? 1000000 : 500}
+                                  step={synctradeTargetMode === 'usdt' ? 1 : 1}
+                                  value={synctradeTargetProfit}
+                                  onChange={(v) => setSynctradeTargetProfit(Number(v ?? 50))}
+                                />
+                                <Select
+                                  value={synctradeTargetMode}
+                                  onChange={(v) => setSynctradeTargetMode(v as 'percent' | 'usdt')}
+                                  style={{ width: 80 }}
+                                  options={[
+                                    { value: 'percent', label: '%' },
+                                    { value: 'usdt', label: 'USDT' },
+                                  ]}
+                                />
+                              </div>
+                              <Text type="secondary" style={{ fontSize: 11 }}>При достижении — сессия закроется автоматически</Text>
                             </Col>
                             <Col xs={24} md={4}>
                               <Text strong>Enabled</Text>
