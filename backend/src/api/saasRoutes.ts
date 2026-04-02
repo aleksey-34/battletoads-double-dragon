@@ -52,6 +52,7 @@ import {
   executeSynctradeSession,
   closeSynctradeSession,
   getSynctradeSessions,
+  getSynctradeLivePnl,
   getAlgofundActiveSystems,
   assignAlgofundSystems,
   toggleAlgofundSystem,
@@ -1163,6 +1164,22 @@ router.get('/synctrade/:tenantId/sessions', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS synctrade sessions error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/synctrade/:tenantId/live-pnl/:sessionId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  const sessionId = Number(req.params.sessionId);
+  if (!Number.isFinite(tenantId) || tenantId <= 0 || !Number.isFinite(sessionId) || sessionId <= 0) {
+    return res.status(400).json({ error: 'Invalid tenantId or sessionId' });
+  }
+  try {
+    const result = await getSynctradeLivePnl(tenantId, sessionId);
+    res.json(result);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS synctrade live-pnl error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

@@ -2487,6 +2487,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [synctradeExecLeverage, setSynctradeExecLeverage] = useState(5);
   const [synctradeExecLotPercent, setSynctradeExecLotPercent] = useState(10);
   const [synctradeExecuting, setSynctradeExecuting] = useState(false);
+  const [synctradeLivePnl, setSynctradeLivePnl] = useState<Record<number, { masterPnl: number; totalPnl: number }>>({});
 
   const [strategyOfferIds, setStrategyOfferIds] = useState<string[]>([]);
   const [strategySystemProfileId, setStrategySystemProfileId] = useState<number | null>(null);
@@ -4806,6 +4807,33 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       void loadSynctradeTenant(synctradeTenantId);
     }
   }, [synctradeTenantId]);
+
+  // Live PnL polling for open synctrade sessions
+  useEffect(() => {
+    if (!synctradeTenantId) return;
+    const openSessions = synctradeSessions.filter((s: any) => s.status === 'open');
+    if (openSessions.length === 0) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      const updates: Record<number, { masterPnl: number; totalPnl: number }> = {};
+      for (const s of openSessions) {
+        try {
+          const resp = await axios.get(`/api/saas/synctrade/${synctradeTenantId}/live-pnl/${s.id}`);
+          updates[s.id] = { masterPnl: Number(resp.data?.masterPnl || 0), totalPnl: Number(resp.data?.totalPnl || 0) };
+        } catch { /* skip */ }
+      }
+      if (!cancelled) setSynctradeLivePnl(updates);
+    };
+
+    void poll();
+    const timer = setInterval(poll, 5000);
+    // Also refresh sessions list every 15s to catch auto-close
+    const refreshTimer = setInterval(() => {
+      if (synctradeTenantId) void loadSynctradeTenant(synctradeTenantId);
+    }, 15000);
+    return () => { cancelled = true; clearInterval(timer); clearInterval(refreshTimer); };
+  }, [synctradeTenantId, synctradeSessions]);
 
   useEffect(() => {
     const nextDrafts = Object.fromEntries((summary?.plans || []).map((plan) => [plan.code, { ...plan }])) as Record<string, Plan>;
@@ -11096,7 +11124,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   expandedRowRender: (record: any) => {
                                     const sessionLog: string[] = Array.isArray(record.log) ? record.log : [];
                                     return sessionLog.length > 0 ? (
-                                      <pre style={{ margin: 0, fontSize: 11, maxHeight: 300, overflow: 'auto', background: '#f5f5f5', padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>
+                                      <pre style={{ margin: 0, fontSize: 11, maxHeight: 300, overflow: 'auto', background: '#1a1a2e', color: '#00ff88', padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
                                         {sessionLog.join('\n')}
                                       </pre>
                                     ) : <Text type="secondary">Нет логов</Text>;
@@ -11117,10 +11145,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   { title: 'Entry', dataIndex: 'entry_price', width: 100, render: (v: number) => v ? Number(v).toFixed(4) : '—' },
                                   { title: 'Exit', dataIndex: 'exit_price', width: 100, render: (v: number) => v ? Number(v).toFixed(4) : '—' },
                                   { title: 'Master PnL', dataIndex: 'master_pnl', width: 100,
-                                    render: (v: number) => <Text type={v > 0 ? 'success' : v < 0 ? 'danger' : undefined}>{Number(v || 0).toFixed(4)}</Text>,
+                                    render: (v: number, record: any) => {
+                                      const live = record.status === 'open' ? synctradeLivePnl[record.id] : null;
+                                      const val = live ? live.masterPnl : Number(v || 0);
+                                      return <Text type={val > 0 ? 'success' : val < 0 ? 'danger' : undefined} strong={!!live}>{val.toFixed(4)}{live ? ' ⚡' : ''}</Text>;
+                                    },
                                   },
                                   { title: 'Total PnL', dataIndex: 'total_pnl', width: 100,
-                                    render: (v: number) => <Text type={v > 0 ? 'success' : v < 0 ? 'danger' : undefined}>{Number(v || 0).toFixed(4)}</Text>,
+                                    render: (v: number, record: any) => {
+                                      const live = record.status === 'open' ? synctradeLivePnl[record.id] : null;
+                                      const val = live ? live.totalPnl : Number(v || 0);
+                                      return <Text type={val > 0 ? 'success' : val < 0 ? 'danger' : undefined} strong={!!live}>{val.toFixed(4)}{live ? ' ⚡' : ''}</Text>;
+                                    },
                                   },
                                   { title: 'Дата', dataIndex: 'started_at', width: 160, render: (v: string) => v ? String(v).slice(0, 19).replace('T', ' ') : '—' },
                                   {

@@ -10289,3 +10289,46 @@ const checkSynctradeAutoClose = async () => {
 // Run every 10 seconds
 setInterval(checkSynctradeAutoClose, 10_000);
 
+export const getSynctradeLivePnl = async (tenantId: number, sessionId: number) => {
+  const profile = await getSynctradeProfile(tenantId);
+  if (!profile) throw new Error('Synctrade profile not found');
+
+  const session = await db.get(
+    `SELECT * FROM synctrade_sessions WHERE id = ? AND profile_id = ?`,
+    [sessionId, profile.id]
+  ) as SynctradeSessionRow | null;
+  if (!session) throw new Error('Session not found');
+  if (session.status !== 'open') return { masterPnl: session.master_pnl, hedgePnl: safeJsonParse<Record<string, number>>(session.hedge_pnl_json, {}), totalPnl: session.total_pnl, status: session.status };
+
+  const masterKeyName = asString(profile.master_api_key_name, '');
+  const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
+  const normSym = (v: string) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const targetKey = normSym(session.symbol);
+
+  const { getPositions: getPos } = await import('../bot/exchange');
+
+  let masterPnl = 0;
+  try {
+    const positions = await getPos(masterKeyName, session.symbol);
+    const pos = (positions || []).find((p: any) => normSym(p.symbol) === targetKey);
+    if (pos) masterPnl = asNumber(pos.unrealisedPnl, 0);
+  } catch { /* skip */ }
+
+  const hedgePnl: Record<string, number> = {};
+  for (const acc of hedgeAccounts) {
+    const keyName = asString(acc.apiKeyName, '');
+    const displayName = asString(acc.displayName, keyName);
+    if (!keyName) continue;
+    try {
+      const positions = await getPos(keyName, session.symbol);
+      const pos = (positions || []).find((p: any) => normSym(p.symbol) === targetKey);
+      hedgePnl[displayName] = pos ? asNumber(pos.unrealisedPnl, 0) : 0;
+    } catch {
+      hedgePnl[displayName] = 0;
+    }
+  }
+
+  const totalPnl = masterPnl + Object.values(hedgePnl).reduce((s, v) => s + v, 0);
+  return { masterPnl, hedgePnl, totalPnl, status: 'open', entryPrice: session.entry_price, symbol: session.symbol };
+};
+
