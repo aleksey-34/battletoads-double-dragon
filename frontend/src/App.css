@@ -178,29 +178,29 @@ body.battletoads-theme {
 
 .strategy-flag-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 4px;
 }
 
 .strategy-flag-item {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   flex-wrap: nowrap;
-  gap: 10px;
-  padding: 6px 8px;
-  min-height: 42px;
+  gap: 6px;
+  padding: 3px 6px;
+  min-height: 28px;
   border: 1px solid #e5e7eb;
-  border-radius: 6px;
-  font-size: 12px;
+  border-radius: 4px;
+  font-size: 11px;
   color: #374151;
 }
 
 .strategy-flag-item > span {
   flex: 1 1 auto;
   min-width: 0;
-  line-height: 1.25;
-  padding-right: 4px;
+  line-height: 1.2;
+  padding-right: 2px;
   white-space: normal;
   word-break: normal;
   overflow-wrap: anywhere;
@@ -208,7 +208,14 @@ body.battletoads-theme {
 
 .strategy-flag-item .ant-switch {
   flex: 0 0 auto;
-  margin-top: 2px;
+  min-width: 28px;
+  height: 16px;
+  line-height: 16px;
+}
+
+.strategy-flag-item .ant-switch::after {
+  width: 12px;
+  height: 12px;
 }
 
 .app-header-row {

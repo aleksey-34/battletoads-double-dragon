@@ -405,7 +405,8 @@ const normalizeTimestampMs = (value: any): number | null => {
 
 const buildStrategyTradeMarkers = (
   trades: TradeHistoryRow[],
-  symbols: string[]
+  symbols: string[],
+  markerLimit: number = 500
 ): ChartMarker[] => {
   if (!Array.isArray(trades) || trades.length === 0 || symbols.length === 0) {
     return [];
@@ -435,7 +436,7 @@ const buildStrategyTradeMarkers = (
     })
     .filter((marker): marker is ChartMarker => !!marker)
     .sort((left, right) => left.time - right.time)
-    .slice(-500);
+    .slice(-Math.max(10, Math.min(2000, markerLimit)));
 };
 
 type DonchianSnapshot = {
@@ -3721,10 +3722,14 @@ const Dashboard: React.FC = () => {
                                                 ? (
                                                   <div style={{ marginBottom: 8 }}>
                                                     <strong>Position:</strong> {strategy.state.toUpperCase()}
+                                                    {' '}<Tag color="cyan">SID{strategy.id}</Tag>
                                                     {strategy.last_signal ? ` | Signal: ${String(strategy.last_signal).toUpperCase()}` : ''}
                                                     {strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
                                                       ? ` | Entry ratio: ${formatOHLCValue(strategy.entry_ratio)}`
                                                       : ''}
+                                                    {strategy.last_action
+                                                      ? <span style={{ marginLeft: 8, color: '#6b7280', fontSize: 11 }}>({String(strategy.last_action).split('@')[0]})</span>
+                                                      : null}
                                                     {orderedPairRows.length > 0
                                                       ? orderedPairRows.map(({ symbol, position }) => {
                                                         const sideRaw = String(position?.side || '').toLowerCase();

@@ -418,7 +418,11 @@ type BacktestContext = {
 };
 
 const computeLockedMargin = (runtimes: RuntimeStrategy[]): number => {
-  return runtimes.reduce((sum, rt) => sum + (rt.state !== 'flat' ? rt.notional : 0), 0);
+  return runtimes.reduce((sum, rt) => {
+    if (rt.state === 'flat') return sum;
+    const leverage = Math.max(1, asNumber(rt.strategy.leverage, 1));
+    return sum + rt.notional / leverage;
+  }, 0);
 };
 
 const executionPrice = (price: number, side: 'long' | 'short', phase: 'entry' | 'exit', slippageRate: number): number => {

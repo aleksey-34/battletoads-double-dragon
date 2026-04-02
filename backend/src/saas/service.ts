@@ -3147,7 +3147,7 @@ const upsertTenantStrategies = async (
 ): Promise<StrategyMaterializedRow[]> => {
   const existing = await getExistingTenantStrategies(apiKeyName, tenant.slug);
   const existingByName = new Map(existing.map((item) => [asString(item.name), item]));
-  const perStrategyDeposit = records.length > 0 ? Math.max(50, Number((maxDepositTotal / records.length).toFixed(2))) : maxDepositTotal;
+  const perStrategyDeposit = Math.max(50, maxDepositTotal);
   const desiredNames = new Set<string>();
   const out: StrategyMaterializedRow[] = [];
 
