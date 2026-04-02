@@ -605,7 +605,7 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
       .sort((a, b) => Number(a.time) - Number(b.time));
 
     markerPluginRef.current.setMarkers(normalized);
-  }, [markers, data.length, type]);
+  }, [markers, data, type]);
 
   const safeFixedHeight = Number.isFinite(Number(fixedHeight)) && Number(fixedHeight) > 40 ? Number(fixedHeight) : null;
   return <div ref={chartContainerRef} style={{ width: '100%', minHeight: safeFixedHeight || 260, height: safeFixedHeight || undefined, touchAction: 'none' }} />;
