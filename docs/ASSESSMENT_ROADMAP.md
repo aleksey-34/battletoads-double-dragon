@@ -1,6 +1,6 @@
 # Оценка рантайма и рекомендации по развитию
 **Дата:** 2026-04-02  
-**Версия:** 1.0
+**Версия:** 2.0 (расширенная)
 
 ---
 
@@ -332,4 +332,518 @@ if (strategy.adx_filter_enabled && adx < strategy.adx_min_threshold) {
 
 ---
 
-*Последнее обновление: 2026-04-02*
+## 7. Глубокий аудит API-коннектора (exchange.ts)
+
+### 7.1 Текущее состояние
+
+Главный файл: `backend/src/bot/exchange.ts` — **~2100+ строк**, который обслуживает **6 бирж**:
+
+| Биржа | Реализация | Версия API |
+|---|---|---|
+| **Bybit** | Нативный клиент (`bybit-api` RestClientV5) | **v5** (последняя) |
+| **Bitget** | CCXT | Unified |
+| **BingX** | CCXT + кастомные обработки ошибок | Unified |
+| **Binance** | CCXT | Unified |
+| **MEXC** | CCXT | Unified |
+| **WEEX** | Отдельный REST-клиент с HMAC-auth (`weexClient.ts`) | Custom |
+
+**Нормализация данных:**
+- `NormalizedBalance`, `NormalizedTrade` — выходные DTO одинаковы для всех бирж ✅
+- `placeOrder()`, `getPositions()`, `getBalances()` — ветвление через `if (ccxtClients[key])` ❌
+
+**Rate Limiting:**
+- Bottleneck per API key с `minTime = 1000 / speed_limit` (по умолчанию 10 req/s) ✅
+- CCXT также имеет свой `enableRateLimit: true` ✅
+
+**WebSocket:**
+- **Нет.** Все данные — REST polling. Нет реалтайм-подписок на позиции/ордера/стаканы.
+
+---
+
+### 7.2 Архитектурные проблемы
+
+**1. Нет интерфейсной абстракции:**
+Каждая функция содержит `if ccxtClient / else bybitClient` ветвление. При добавлении новой биржи нужно модифицировать каждую из ~20 функций. Это нарушает Open/Closed Principle.
+
+**Рекомендация:**
+```typescript
+interface IExchangeConnector {
+  getBalances(): Promise<NormalizedBalance[]>;
+  getPositions(symbol?: string): Promise<NormalizedPosition[]>;
+  placeOrder(symbol: string, side: Side, qty: number, price?: number, opts?: OrderOptions): Promise<OrderResult>;
+  cancelAllOrders(symbol?: string): Promise<void>;
+  closeAllPositions(): Promise<CloseResult>;
+  getMarketData(symbol: string, interval: string, limit: number): Promise<Candle[]>;
+  getTickersSnapshot(): Promise<Ticker[]>;
+}
+
+class BybitConnector implements IExchangeConnector { ... }
+class CcxtConnector implements IExchangeConnector { ... }
+class WeexConnector implements IExchangeConnector { ... }
+```
+
+**2. Файл слишком большой (2100+ строк):**
+Разбить на:
+- `exchange/types.ts` — NormalizedBalance, NormalizedTrade, etc.
+- `exchange/bybit.ts` — нативный Bybit коннектор
+- `exchange/ccxt.ts` — CCXT-based коннектор
+- `exchange/weex.ts` — WEEX коннектор
+- `exchange/factory.ts` — фабрика коннекторов
+- `exchange/index.ts` — экспорт
+
+**3. Нет WebSocket:**
+- В 2026 году **все топовые системы** используют WebSocket для:
+  - Execution updates (order fills) — сейчас полируются REST-запросами
+  - Position monitoring — текущая реализация опрашивает `/positions` каждые N секунд
+  - Book data (order book depth) для market-making стратегий
+- **Bybit v5 WS** поддерживает `order`, `position`, `execution`, `kline`, `publicTrade`
+- Без WS round-trip latency ~200-500ms vs ~10-50ms с WS
+
+**Рекомендация:**
+```
+Фаза 1: WebSocket для order/position updates (снижает polling load)
+Фаза 2: WebSocket для реалтайм kline (для более быстрых стратегий)
+Фаза 3: WebSocket для order book (для market-making)
+```
+
+**4. Нет circuit breaker / centralized retry:**
+- BingX имеет ручной retry для position-side errors
+- Timestamp sync error обрабатывается отдельно
+- Нет единого паттерна: при 3 неудачных вызовах → backoff → alert
+
+**5. In-memory client cache:**
+- `clients` и `ccxtClients` словари живут в памяти процесса
+- При restart — пересоздаются (нет persistence)
+- Нет health-check / reconnection / watchdog
+
+**6. 5-минутный cache TTL для market data:**
+- В быстрых рынках 5 минут — это много. Для 1h-стратегий OK, для 15min — рискованно.
+
+---
+
+### 7.3 Сравнение с индустриальным стандартом 2026
+
+| Характеристика | Наш рантайм | Индустрия (top-20 quant platforms) |
+|---|---|---|
+| Multi-exchange | ✅ 6 бирж | ✅ 5–15 бирж |
+| WebSocket | ❌ Нет | ✅ Обязательно |
+| Connector interface | ❌ if/else | ✅ Полиморфизм / Plugin |
+| Order types | Market only | Market + Limit + Stop + Trailing |
+| Rate limit | ✅ Bottleneck | ✅ Token bucket / Leaky bucket |
+| Circuit breaker | ❌ Нет | ✅ Hystrix-style |
+| Spot + Futures + Options | Futures only | ✅ Multi-venue |
+| Smart order routing | ❌ Нет | ✅ Best-execution across venues |
+| FIX protocol | ❌ Нет | ✅ Для институциональных клиентов |
+
+---
+
+## 8. Топовые тенденции крипто-квант 2025–2026 и соответствие рантайма
+
+### 8.1 Machine Learning в signal generation
+
+**Тенденция:** Random Forest / XGBoost / Transformer-based модели для прогнозирования direction/magnitude.  
+**Наш рантайм:** Нет ML. Сигналы чисто rule-based (Donchian, Z-score).
+
+**Оценка:** Rule-based подход — **правильный выбор** для текущей стадии. ML-модели в крипте:
+- Требуют огромных данных (orderbook L2/L3, social sentiment, on-chain metrics)
+- Склонны к overfitting значительно больше чем rule-based
+- Нуждаются в MLOps инфраструктуре (training pipeline, model versioning, A/B testing)
+
+**Рекомендация:** ML добавлять только как **фильтр** (regime detection), не как основной сигнал. Простой HMM (Hidden Markov Model) с 2 состояниями (trending/mean-reverting) уже даёт 10–15% улучшения Sharpe при правильной калибровке.
+
+---
+
+### 8.2 On-chain data и MEV-aware execution
+
+**Тенденция:** Крупные фонды (Jump, Wintermute, Alameda-replacements) анализируют:
+- Mempool для фронтранинга (ETH/L1)
+- Token flow между биржами (whale alerts)
+- Smart money tracking (copy-trade institutional wallets)
+- Funding rate arbitrage (funding > 0.01% → short carries)
+
+**Наш рантайм:** Нет on-chain интеграции. Нет funding rate как сигнала.
+
+**Рекомендация (низкий порог входа):**
+- **Funding rate как фильтр**: Bybit API возвращает funding rate. Если funding > +0.05% (лонги переплачивают) → bias в сторону short. Если < -0.05% → bias в сторону long.
+- Параметр: `funding_bias_enabled`, `funding_threshold`
+- Реализация: ~30 строк в `computeDonchianSignal` + `computeStatArbSignal`
+
+---
+
+### 8.3 Multi-timeframe (MTF) analysis
+
+**Тенденция:** Большинство институциональных систем не работают на одном таймфрейме. Классический подход: direction на старшем TF, entry на младшем.
+
+**Наш рантайм:** Одно-таймфреймные стратегии. Если strategy на 4h — сигнал генерируется только по 4h-свече.
+
+**Рекомендация:**
+```
+DD на 4h с MTF-фильтром:
+  1. На 1d: вычислить тренд (SMA20 > SMA50 → bullish bias)  
+  2. На 4h: стандартный Donchian breakout
+  3. Если daily bullish → ТОЛЬКО long breakouts на 4h
+  4. Если daily bearish → ТОЛЬКО short breakouts на 4h
+```
+Параметры: `mtf_filter_enabled`, `mtf_higher_interval`, `mtf_trend_method: 'sma_cross'|'adx'|'donchian'`
+
+---
+
+### 8.4 Execution quality и slippage minimization
+
+**Тенденция:** Лучшие платформы в 2026 используют:
+- TWAP (Time-Weighted Average Price) для крупных ордеров
+- Iceberg orders (скрытая ликвидность)
+- Adaptive order placement (limit → wait → market if not filled)
+
+**Наш рантайм:** Market orders only. Для маленьких размеров ($100–5000) — OK. Для $10K+ — потенциально дорого по slippage.
+
+**Рекомендация:**
+```typescript
+// Адаптивный ордер:
+async function smartOrder(apiKeyName, symbol, side, qty) {
+  // 1. Поставить limit по mid-price
+  const order = await placeOrder(apiKeyName, symbol, side, qty, midPrice, { type: 'limit' });
+  // 2. Подождать fillTimeout (e.g. 15s)
+  await sleep(15000);
+  // 3. Проверить статус
+  const status = await getOrderStatus(apiKeyName, order.orderId);
+  if (status === 'filled') return;
+  // 4. Отменить остаток + выставить market
+  await cancelOrder(apiKeyName, order.orderId);
+  await placeOrder(apiKeyName, symbol, side, remainingQty);
+}
+```
+
+---
+
+## 9. Развёрнутые новые режимы стратегий
+
+### 9.1 Фарминг ликвидности (Liquidity Provision)
+
+**Что это:** Размещение limit-ордеров по обе стороны стакана (bid + ask) для сбора спреда. Это модель market-making, адаптированная для retail.
+
+**Применимость в нашем рантайме:**
+
+| Аспект | Текущий рантайм | Что нужно |
+|---|---|---|
+| Order types | Market only | Limit + Cancel + Amend |
+| Book data | Нет | Order book L2 (5–20 levels) |
+| Position tracking | Есть (via getPositions) | ✅ Достаточно |
+| Speed | REST polling | WebSocket (обязательно!) |
+| Inventory management | Нет | Отслеживание net position + hedging |
+
+**Конкретная реализация (Grid MM):**
+```
+Стратегия: GridMarketMaker
+Параметры:
+  grid_levels: 10        — число уровней с каждой стороны
+  grid_spacing: 0.15%    — расстояние между уровнями
+  order_size: $50         — размер каждого ордера
+  max_inventory: $500     — макс. чистая позиция
+  rebalance_threshold: 70% — при достижении 70% inventory → hedge market order
+
+Поведение:
+  1. Каждый цикл (5s):
+     - Получить mid-price
+     - Разместить 10 bid levels: mid - 0.15%, mid - 0.30%, ..., mid - 1.50%
+     - Разместить 10 ask levels: mid + 0.15%, mid + 0.30%, ..., mid + 1.50%
+  2. При заполнении ордера:
+     - inventory += filled_qty (или -= для ask)
+     - Если |inventory| > max_inventory × rebalance_threshold → hedging order
+  3. P&L = spread × volume - inventory_risk
+
+Ожидаемая доходность: 5–15% годовых при стабильном рынке
+Риск: Inventory loss при сильном движении (нужен inventory hedge)
+```
+
+**Что нужно добавить в рантайм:**
+1. Limit order support в `placeOrder()` — **уже есть** (параметр `price`)
+2. Order amendment — `amendOrder()` — нет, но CCXT + Bybit API поддерживают
+3. WebSocket для order fills — необходимо
+4. Новый strategy_type: `grid_market_maker`
+5. Book data: `getOrderBook(apiKeyName, symbol, depth)` — нужно добавить
+
+---
+
+### 9.2 Рыночно-нейтральные стратегии (Market-Neutral, высокая частота)
+
+**Текущее:** StatArb Z-score уже является market-neutral на уровне пар. Но:
+- Нет beta-hedging → не полностью нейтрален к BTC
+- Низкая частота сделок (Z-score с lookback=120 на 4h = сделка раз в 1–3 недели)
+- Нет учёта коинтеграции (z-score работает с корреляцией, не коинтеграцией)
+
+**Улучшения для высокой частоты с минимальным убытком:**
+
+**A. Коинтеграция вместо корреляции:**
+```
+Текущий подход (корреляция):
+  Z = (price - mean(price)) / std(price)
+  
+Правильный (коинтеграция):
+  1. Регрессия: Price_A = beta × Price_B + residual
+  2. Тест Энгла-Грэнджера на residual (должен быть стационарный)
+  3. Z = (residual - mean(residual)) / std(residual)
+  
+Разница: коинтеграция работает даже когда два актива имеют разные тренды,
+  но их РАЗНИЦА стационарна. Корреляция ломается при diverging trends.
+```
+
+Параметры для добавления:
+```
+strategy_type: 'stat_arb_cointegration'
+coint_lookback: 240       — окно для регрессии
+coint_hedge_ratio_update: 48  — пересчёт beta каждые N баров  
+zscore_entry: 1.8
+zscore_exit: 0.3
+zscore_stop: 3.0
+```
+
+**B. Faster mean-reversion (Ornstein-Uhlenbeck):**
+```
+OU process: dX = θ(μ - X)dt + σdW
+  θ = скорость возврата к среднему (the higher, the better for trading)
+  μ = долгосрочное среднее
+  σ = волатильность случайного компонента
+
+Halflife = ln(2) / θ
+  Если halflife < 24 бара → pair пригодна для быстрого mean-revert
+
+Фильтр при свипе:
+  1. Для каждой пары вычислить OU halflife
+  2. Отбросить пары с halflife > 72 (слишком медленный возврат)
+  3. Предпочитать пары с halflife 12–36 (быстрый возврат = больше сделок)
+```
+
+**C. Волатильность-нейтральность (Vega-neutral):**
+```
+При сильном росте implied vol на Bybit futures:
+  reduce position size → maintain constant risk per trade
+  
+Проще: ATR-normalized position sizing (уже рекомендовано в §3.2)
+```
+
+**Ожидаемый профиль:**
+- Сделки: 2–5 в неделю на пару (vs 1 в 1–3 недели сейчас)
+- Max DD: 3–8% (vs 10–22% текущий)
+- Annual return: 15–40% (at low DD)
+- Sharpe: 1.5–3.0
+
+---
+
+### 9.3 Трендовые стратегии с долгим удержанием
+
+**Текущее:** DD/ZZ держат позицию до signal_flip или center cross. При TP=7.5% и хорошем тренде — выход происходит рано (7.5% trailing от пика).
+
+**Проблема:** 7.5% трейлинг — это агрессивный выход. В сильном тренде (BTC +60% за 2 месяца) стратегия зафиксирует лишь 15–20% из движения, потому что:
+1. Войдёт поздно (breakout = уже +N%)
+2. Выйдет рано (7.5% откат от пика)
+
+**Решение A — Adaptive Trailing Stop:**
+```
+Вместо фиксированного TP%:
+  
+Dynamic TP = baseline_tp_percent × (1 + trend_strength_factor)
+
+trend_strength_factor = min(2.0, max(0, (current_price / entry_price - 1) × K))
+
+Пример для long:
+  Entry = 100, current = 130 (30% прибыль)
+  K = 2
+  trend_strength = min(2.0, (1.30 - 1) × 2) = min(2.0, 0.6) = 0.6
+  Dynamic TP = 7.5% × (1 + 0.6) = 12%
+  
+  Anchor = 130, trailing stop = 130 × (1 - 0.12) = 114.4
+  
+Без адаптации: stop = 130 × (1 - 0.075) = 120.25 — выход раньше
+
+При current = 160 (60%):
+  trend_strength = min(2.0, (1.60 - 1) × 2) = min(2, 1.2) = 1.2
+  Dynamic TP = 7.5% × 2.2 = 16.5%
+  stop = 160 × 0.835 = 133.6 — широкий стоп, удержание в тренде
+```
+
+Параметры: `adaptive_tp_enabled`, `adaptive_tp_k`, `tp_max_multiplier`
+
+**Решение B — Donchian Exit на старшем TF:**
+```
+Вход: Donchian breakout на 4h с L=12
+Выход: НЕ по текущему donchian center, а по donchian center на Daily:
+  donchianCenter_daily = (max(high[-20d]) + min(low[-20d])) / 2
+  
+Это даёт более широкий "канал" для удержания позиции в тренде.
+Выход происходит только когда тренд ДЕЙСТВИТЕЛЬНО разворачивается на дневном уровне.
+```
+
+Параметры: `exit_timeframe`, `exit_donchian_length`
+
+**Решение C — Partial profit-taking + runner:**
+```
+При достижении +5% от entry:
+  Закрыть 50% позиции (фиксация прибыли)
+  Оставшиеся 50% — "runner" с широким трейлинг (15%+)
+  
+При достижении +15% от entry:
+  Закрыть ещё 25% (75% закрыто)
+  Оставшиеся 25% — runner с 20% трейлинг
+```
+
+Параметры: `partial_tp_levels: [{pct: 5, closeFraction: 0.5}, {pct: 15, closeFraction: 0.5}]`
+
+**Ожидаемый профиль:**
+- Удержание: 5–30 дней (vs 1–5 дней сейчас)
+- Capture of major moves: 40–70% (vs 15–25%)
+- Fewer trades, higher avg win
+- Max DD: может быть выше (wider stops), но компенсируется larger winners
+
+---
+
+### 9.4 Декорреляция активов и её арбитраж
+
+**Текущее:** Синтетический инструмент с коэффициентами 1:1. Нет анализа корреляции при отборе пар. Пары выбраны вручную.
+
+**Улучшения:**
+
+**A. Автоматический подбор pairs (pair screening):**
+```
+Вход: список из N активов (e.g. 30 altcoins)
+Для каждой пары (i, j), i < j:
+  1. Вычислить rolling correlation(120 bars)
+  2. Тест коинтеграции (Engle-Granger или Johansen)
+  3. Вычислить OU halflife
+  4. Score = cointegration_pvalue < 0.05 ? (1.0 / halflife) × (1 - abs(correlation)) : 0
+  
+Отобрать top-10 pairs по score.
+Обновлять каждый месяц (пары могут терять коинтеграцию).
+```
+
+**B. Dynamic hedge ratio (rolling beta):**
+```
+Текущее: baseCoef = quoteCoef = 1 (всегда)
+Правильно:
+  beta = regression_slope(base_returns, quote_returns, window=60)
+  hedge_ratio = beta
+  
+  Long synthetic: BUY $1000 of base, SELL $1000×beta of quote
+  Short synthetic: SELL $1000 of base, BUY $1000×beta of quote
+  
+  Пересчитывать beta каждые 24–48 баров
+```
+
+Параметры: `dynamic_hedge_ratio`, `hedge_ratio_window`, `hedge_ratio_update_interval`
+
+**C. Regime-aware pair selection:**
+```
+В bull market: breakout стратегии на trending pairs
+В range market: mean-reversion на cointegrated pairs
+В crash: все в стоп (или short-only breakout)
+
+Простой regime detector:
+  btc_sma_20 = SMA(BTC, 20d)
+  btc_sma_50 = SMA(BTC, 50d)
+  
+  if btc_sma_20 > btc_sma_50: BULL → mostly DD/ZZ
+  if btc_sma_20 < btc_sma_50: BEAR → mostly StatArb + short DD
+  if |btc_sma_20 - btc_sma_50| / btc_sma_50 < 2%: RANGE → only StatArb
+```
+
+**D. Cross-exchange basis arbitrage:**
+```
+Один и тот же актив на разных биржах имеет РАЗНЫЕ цены.
+Если Bybit ETHUSDT = 3500 и BingX ETHUSDT = 3505:
+  BUY на Bybit, SELL на BingX → $5 risk-free spread
+  
+Требования:
+  - Два коннектора (уже есть: Bybit + BingX/CCXT)
+  - Синхронные данные (WebSocket!)
+  - Быстрое исполнение (< 100ms)
+  - Accounting: track cross-exchange PnL
+```
+
+**E. Funding rate arbitrage:**
+```
+Bybit perpetual funding rate обновляется каждые 8 часов.
+Если funding rate = +0.03%:
+  Short perpetual: получаешь 0.03% × 3 = 0.09% в день ≈ 33% годовых
+  Hedge: Long spot (или long на другой бирже с отрицательным funding)
+  
+  Net PnL = funding_income - hedging_cost
+  
+  Это чистый carry trade, market-neutral.
+  
+  Средний funding rate на altcoins: 0.01-0.05% → 10-50% APY
+  Нужно: spot balance + futures balance + auto-rebalance
+```
+
+---
+
+## 10. Конкретные улучшения логики без overfitting
+
+### 10.1 Что БЕЗОПАСНО улучшить (не overfitting):
+
+1. **OOS-валидация в свипе** — это не "улучшение модели", а методология отбора. Не добавляет параметров.
+
+2. **ATR-normalized sizing** — адаптация к текущему рынку, а не к истории. Единственный параметр — baseline_vol (калибруется 1 раз).
+
+3. **Funding rate bias** — фундаментальный фактор, не pattern-fitting. Funding высокий → рынок перекуплен → bias в сторону short. Это экономическая логика.
+
+4. **Коинтеграция вместо корреляции** — статистически обоснованный framework, не подгонка. Тест Энгла-Грэнджера — стандартный статистический тест.
+
+5. **OU halflife filter** — убирает пары с медленным mean-revert. Это отсев "плохих" кандидатов, не подгонка параметров.
+
+6. **Session hours filter** — фильтрация по времени суток. Работает потому что азиатская и американская сессии ОБЪЕКТИВНО разные по ликвидности и волатильности.
+
+### 10.2 Что может привести к overfitting (осторожно!):
+
+1. ❌ Добавление 3+ индикаторов (RSI + MACD + BB + ...) в сигнал — каждый индикатор = +2-3 параметра → exponential growth parameter space
+2. ❌ Оптимизация `computeScore` весов через grid search — это мета-оптимизация на train set
+3. ❌ Machine learning на daily returns без cross-validation — будет идеально fit историю и fail forward
+4. ❌ Per-symbol параметры (разный length для BTCUSDT и ETHUSDT) — N symbols × M params = huge overfit risk
+
+### 10.3 Красные линии (никогда не делать):
+
+1. ❌ Подгонка `zscore_entry` под конкретный бык/медведь рынок
+2. ❌ Отключение стопов для "улучшения" backtest metrics
+3. ❌ Cherry-picking периодов: "если убрать март 2025 — PF 3.0!" 
+4. ❌ Выбор пар только потому что "исторически работали" без проверки коинтеграции
+
+---
+
+## 11. Приоритетная дорожная карта v2
+
+```
+ФАЗА 1 — Методология (2 недели):
+  ✅ Уже: trailing TP, multi-TS, synthetic, sweep+score
+  → OOS-валидация в свипе
+  → ATR-normalized sizing
+  → Funding rate bias фильтр
+
+ФАЗА 2 — Стратегическое улучшение (1 месяц):
+  → Коинтеграция (Engle-Granger) вместо корреляции для StatArb
+  → OU halflife filter при отборе пар
+  → Adaptive trailing stop (dynamic TP%)
+  → ADX-фильтр для DD/ZZ
+  → MTF-фильтр (daily trend → 4h entry)
+
+ФАЗА 3 — Инфраструктура (1–2 месяца):
+  → exchange.ts → interface + factory pattern (рефакторинг)
+  → WebSocket для order/position updates
+  → Smart order execution (limit → wait → market)
+  → Drift monitoring + auto-disable
+
+ФАЗА 4 — Новые режимы (2–3 месяца):
+  → Grid Market Maker (ликвидность)
+  → Funding rate arbitrage (carry trade)
+  → Cross-exchange basis arb
+  → Partial profit-taking (runner)
+
+ФАЗА 5 — Advanced (3–6 месяцев):
+  → Walk-forward с rolling window
+  → Автоматический pair screening (коинт. + halflife)
+  → HMM-based regime detection (2 states)
+  → Dynamic hedge ratio (rolling beta)
+  → Order book data + WS
+```
+
+---
+
+*Последнее обновление: 2026-04-02 v2.0*
