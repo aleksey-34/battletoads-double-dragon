@@ -1436,6 +1436,7 @@ export const getInstrumentInfo = async (apiKeyName: string, symbol: string) => {
 
       const info = {
         symbol: toUiSymbol(market?.id || market?.symbol),
+        contractSize: Number(market?.contractSize ?? 1),
         lotSizeFilter: {
           qtyStep: String(qtyStep),
           minOrderQty: String(Number.isFinite(minOrderQty) ? minOrderQty : 0),

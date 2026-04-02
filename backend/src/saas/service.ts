@@ -9904,14 +9904,17 @@ export const executeSynctradeSession = async (
     // Get instrument info for minLot / qtyStep
     let minOrderQty = 1;
     let qtyStep = 1;
+    let contractSize = 1;
     try {
       const instInfo = await getInstrumentInfo(masterKeyName, symbol);
       const lotFilter = (instInfo as any)?.lotSizeFilter;
       const rawMin = Number(lotFilter?.minOrderQty ?? 0);
       const rawStep = Number(lotFilter?.qtyStep ?? 0);
+      const rawCS = Number((instInfo as any)?.contractSize ?? 1);
       if (Number.isFinite(rawMin) && rawMin > 0) minOrderQty = rawMin;
       if (Number.isFinite(rawStep) && rawStep > 0) qtyStep = rawStep;
-      addLog(`Instrument: minQty=${minOrderQty} qtyStep=${qtyStep}`);
+      if (Number.isFinite(rawCS) && rawCS > 0) contractSize = rawCS;
+      addLog(`Instrument: minQty=${minOrderQty} qtyStep=${qtyStep} contractSize=${contractSize}`);
     } catch (err: any) {
       addLog(`⚠ Could not get instrument info: ${err.message}`);
     }
@@ -9966,9 +9969,9 @@ export const executeSynctradeSession = async (
     if (price <= 0) throw new Error('Cannot get current market price');
     addLog(`Market price ${symbol}: ${price}`);
 
-    const rawQty = (orderValueUsdt * leverageMaster) / price;
+    const rawQty = (orderValueUsdt * leverageMaster) / (price * contractSize);
     const qty = enforceMinLot(rawQty);
-    addLog(`Master order: ${masterSide === 'long' ? 'Buy' : 'Sell'} qty=${qty} (raw=${rawQty.toFixed(6)}, value=${orderValueUsdt.toFixed(2)} USDT)`);
+    addLog(`Master order: ${masterSide === 'long' ? 'Buy' : 'Sell'} qty=${qty} contracts (raw=${rawQty.toFixed(6)}, value=${orderValueUsdt.toFixed(2)} USDT, csz=${contractSize})`);
 
     if (qty <= 0) throw new Error('Calculated quantity is too small');
 
@@ -10006,9 +10009,9 @@ export const executeSynctradeSession = async (
           addLog(`Hedge ${displayName}: capped by target loss to ${targetLoss} USDT`);
         }
 
-        const hedgeRawQty = (hedgeOrderValue * leverageHedge) / price;
+        const hedgeRawQty = (hedgeOrderValue * leverageHedge) / (price * contractSize);
         const hedgeQty = enforceMinLot(hedgeRawQty);
-        addLog(`Hedge ${displayName}: ${hedgeSide === 'long' ? 'Buy' : 'Sell'} qty=${hedgeQty} (raw=${hedgeRawQty.toFixed(6)}, value=${hedgeOrderValue.toFixed(2)} USDT)`);
+        addLog(`Hedge ${displayName}: ${hedgeSide === 'long' ? 'Buy' : 'Sell'} qty=${hedgeQty} contracts (raw=${hedgeRawQty.toFixed(6)}, value=${hedgeOrderValue.toFixed(2)} USDT)`);
 
         if (hedgeQty > 0) {
           await placeOrder(keyName, symbol,
