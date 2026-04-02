@@ -248,8 +248,9 @@ The platform is designed with strict domain-level isolation:
 
 ### 7.1 Algofund (Managed Account)
 
-The simplest entry point for investors. The client deposits USDT into their exchange account, connects API keys (trade-only, no withdrawal), and the platform manages everything:
+The simplest entry point for investors. The client connects their exchange API key (trade-only, **no withdrawal permission**) — funds always remain on the client's own exchange account. The platform trades automatically, generating passive income.
 
+- **Key principle:** Your money never leaves your exchange. Simple, secure API connection.
 - **Admin controls:** Strategy selection, parameters, rebalancing
 - **Client sees:** Equity curve, return %, key metrics, risk multiplier
 - **Client actions:** Start/stop requests, risk cap adjustment
@@ -258,9 +259,9 @@ The simplest entry point for investors. The client deposits USDT into their exch
 
 ### 7.2 Strategy Client (Self-Directed)
 
-For investors who want to choose their own strategies:
+For those who want to explore deeper:
 
-- **Catalog browsing:** View all published strategies with full metrics
+- **Easy setup:** Connect API key, pick individual strategies from the catalog, and build your own trading system in a few clicks
 - **Two-slider UX:** Risk level (1–5) × Trade frequency (1–5) → maps to optimized preset
 - **Equity preview:** Backtest results for selected configuration before going live
 - **Strategy quota:** 1–3 strategies per subscription tier
@@ -268,7 +269,7 @@ For investors who want to choose their own strategies:
 
 ### 7.3 Copy Trading (Social)
 
-Mirrors an existing subscriber's portfolio:
+1 API key — multiple copied accounts. Trade with your own software and share with friends. No hassle like copy-trading on exchanges.
 
 - **Auto-scaling:** Adjusts position sizes proportionally to the copier's deposit
 - **Independent risk control:** The copier can set their own risk limits
@@ -414,7 +415,7 @@ The robustness filter requires a minimum of 40 trades to ensure statistical sign
 **Contact:**
 - **Email:** aiaetrade17@gmail.com
 - **Telegram:** @yakovbyakov
-- **GitHub:** [github.com/aleksey-34/battletoads-double-dragon](https://github.com/aleksey-34/battletoads-double-dragon)
+- **GitHub:** Private repository (available upon request for due diligence)
 
 ---
 

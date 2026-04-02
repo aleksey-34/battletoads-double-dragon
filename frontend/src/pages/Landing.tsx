@@ -337,7 +337,7 @@ export default function Landing() {
       <div style={styles.section}>
         <div style={styles.sectionTitle}>Три режима для клиентов</div>
         <div style={styles.sectionSub}>
-          От пассивного инвестора до продвинутого трейдера — у каждого свой путь
+          От пассивного дохода до полного контроля — выберите свой стиль
         </div>
         <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
           {CLIENT_MODES.map((m) => (
