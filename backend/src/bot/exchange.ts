@@ -1109,6 +1109,27 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
         positions = single ? [single] : [];
       }
 
+      // Collect unique symbols that need ticker data for mark price / UPNL
+      const tickerCache: Record<string, number> = {};
+      const needsTicker = (pos: any) => {
+        const mp = Number(pos?.markPrice ?? pos?.info?.markPrice ?? pos?.info?.markPx ?? 0);
+        const ep = Number(pos?.entryPrice ?? pos?.info?.entryPrice ?? 0);
+        const upnlRaw = pos?.unrealizedPnl ?? pos?.info?.unrealizedPnl ?? pos?.info?.upl;
+        // Need ticker when markPrice is missing/equals entryPrice AND no explicit UPNL
+        return (!mp || mp === ep) && (upnlRaw === undefined || upnlRaw === null || Number(upnlRaw) === 0);
+      };
+      for (const pos of positions) {
+        if (Math.abs(Number(pos?.contracts ?? 0)) > 0 && needsTicker(pos)) {
+          const sym = pos?.symbol || resolvedSymbol;
+          if (sym && !tickerCache[sym]) {
+            try {
+              const ticker: any = await entry.limiter.schedule(() => entry.client.fetchTicker(sym));
+              tickerCache[sym] = Number(ticker?.last ?? ticker?.info?.fairPrice ?? ticker?.info?.lastPrice ?? 0);
+            } catch { /* skip */ }
+          }
+        }
+      }
+
       const normalized = positions
         .map((position: any) => {
           const contractsRaw = Number(
@@ -1131,13 +1152,24 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
           const side = sideRaw.includes('long') || sideRaw === 'buy' ? 'Buy' : 'Sell';
 
           const entryPrice = Number(position?.entryPrice ?? position?.info?.entryPrice ?? position?.info?.openPrice ?? 0);
-          const markPrice = Number(position?.markPrice ?? position?.info?.markPrice ?? position?.info?.markPx ?? entryPrice);
+          // Use CCXT markPrice, fall back to ticker, then entryPrice
+          const posSymbol = position?.symbol || resolvedSymbol || '';
+          const rawMark = Number(position?.markPrice ?? position?.info?.markPrice ?? position?.info?.markPx ?? 0);
+          const markPrice = (rawMark && rawMark !== entryPrice) ? rawMark : (tickerCache[posSymbol] || rawMark || entryPrice);
+
           const explicitNotional = Number(position?.notional);
           const derivedNotional = sizeInBase * (Number.isFinite(markPrice) ? markPrice : 0);
           const notional = Number.isFinite(explicitNotional) ? explicitNotional : Math.abs(derivedNotional);
           const leverage = Number(position?.leverage ?? position?.info?.leverage ?? 1);
           const liquidation = Number(position?.liquidationPrice ?? position?.info?.liquidationPrice ?? position?.info?.liqPx ?? 0);
-          const upnl = Number(position?.unrealizedPnl ?? position?.info?.unrealizedPnl ?? position?.info?.upl ?? 0);
+
+          // Compute UPNL: prefer explicit, else calculate from mark vs entry
+          const rawUpnl = Number(position?.unrealizedPnl ?? position?.info?.unrealizedPnl ?? position?.info?.upl ?? 0);
+          let upnl = rawUpnl;
+          if ((!rawUpnl || rawUpnl === 0) && markPrice !== entryPrice && entryPrice > 0) {
+            const dir = side === 'Buy' ? 1 : -1;
+            upnl = dir * (markPrice - entryPrice) * Math.abs(contractsRaw) * (Number.isFinite(contractSize) && contractSize > 0 ? contractSize : 1);
+          }
 
           return {
             symbol: toUiSymbol(position?.info?.symbol || position?.symbol || resolvedSymbol || symbol),

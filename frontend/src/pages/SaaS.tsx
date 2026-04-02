@@ -4809,30 +4809,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   }, [synctradeTenantId]);
 
   // Live PnL polling for open synctrade sessions
+  // Auto-refresh sessions list every 15s to catch auto-close
   useEffect(() => {
     if (!synctradeTenantId) return;
     const openSessions = synctradeSessions.filter((s: any) => s.status === 'open');
     if (openSessions.length === 0) return;
 
-    let cancelled = false;
-    const poll = async () => {
-      const updates: Record<number, { masterPnl: number; totalPnl: number }> = {};
-      for (const s of openSessions) {
-        try {
-          const resp = await axios.get(`/api/saas/synctrade/${synctradeTenantId}/live-pnl/${s.id}`);
-          updates[s.id] = { masterPnl: Number(resp.data?.masterPnl || 0), totalPnl: Number(resp.data?.totalPnl || 0) };
-        } catch { /* skip */ }
-      }
-      if (!cancelled) setSynctradeLivePnl(updates);
-    };
-
-    void poll();
-    const timer = setInterval(poll, 5000);
-    // Also refresh sessions list every 15s to catch auto-close
     const refreshTimer = setInterval(() => {
       if (synctradeTenantId) void loadSynctradeTenant(synctradeTenantId);
     }, 15000);
-    return () => { cancelled = true; clearInterval(timer); clearInterval(refreshTimer); };
+    return () => { clearInterval(refreshTimer); };
   }, [synctradeTenantId, synctradeSessions]);
 
   useEffect(() => {
