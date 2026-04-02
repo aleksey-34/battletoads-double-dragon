@@ -47,6 +47,11 @@ import {
   removeAlgofundStorefrontSystem,
   getCopytradingState,
   updateCopytradingState,
+  getSynctradeState,
+  updateSynctradeState,
+  executeSynctradeSession,
+  closeSynctradeSession,
+  getSynctradeSessions,
   getAlgofundActiveSystems,
   assignAlgofundSystems,
   toggleAlgofundSystem,
@@ -1080,6 +1085,84 @@ router.delete('/admin/tenants/:tenantId', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS delete tenant error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Synctrade routes ────────────────────────────────────────────────────────
+
+router.get('/synctrade/:tenantId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId) || tenantId <= 0) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const state = await getSynctradeState(tenantId);
+    res.json(state);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS synctrade GET error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/synctrade/:tenantId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId) || tenantId <= 0) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const state = await updateSynctradeState(tenantId, req.body || {});
+    res.json(state);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS synctrade PATCH error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/synctrade/:tenantId/execute', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId) || tenantId <= 0) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const result = await executeSynctradeSession(tenantId, req.body || {});
+    res.json(result);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS synctrade execute error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/synctrade/:tenantId/close/:sessionId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  const sessionId = Number(req.params.sessionId);
+  if (!Number.isFinite(tenantId) || tenantId <= 0 || !Number.isFinite(sessionId) || sessionId <= 0) {
+    return res.status(400).json({ error: 'Invalid tenantId or sessionId' });
+  }
+  try {
+    const result = await closeSynctradeSession(tenantId, sessionId);
+    res.json(result);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS synctrade close error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/synctrade/:tenantId/sessions', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId) || tenantId <= 0) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const sessions = await getSynctradeSessions(tenantId);
+    res.json({ sessions });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS synctrade sessions error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

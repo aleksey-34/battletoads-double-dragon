@@ -39,10 +39,10 @@ import { useI18n } from '../i18n';
 const { Paragraph, Text, Title } = Typography;
 const LEGACY_PRESET_SET_KEYS = new Set(['balancedbot', 'conservativebot', 'monostarter', 'synthstarter', 'momentumbot', 'premiummix']);
 
-type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client';
+type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'synctrade_client';
 type Level3 = 'low' | 'medium' | 'high';
 type RequestStatus = 'pending' | 'approved' | 'rejected';
-type SaasTabKey = 'admin' | 'strategy-client' | 'algofund' | 'copytrading';
+type SaasTabKey = 'admin' | 'strategy-client' | 'algofund' | 'copytrading' | 'synctrade';
 type AdminTabKey = 'offer-ts' | 'clients' | 'monitoring' | 'create-user';
 type SummaryScope = 'light' | 'full';
 type CopytradingUiStatus = 'idle' | 'copying' | 'stopped' | 'saving' | 'error';
@@ -2464,6 +2464,27 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [copytradingUiStatus, setCopytradingUiStatus] = useState<CopytradingUiStatus>('idle');
   const [copytradingUiMessage, setCopytradingUiMessage] = useState('Ожидание данных copytrading');
   const [copytradingLogs, setCopytradingLogs] = useState<string[]>([]);
+
+  // ─── Synctrade state ───────────────────────────────────────────────────────
+  const [synctradeTenantId, setSynctradeTenantId] = useState<number | null>(null);
+  const [synctradeState, setSynctradeState] = useState<Record<string, any> | null>(null);
+  const [synctradeLoading, setSynctradeLoading] = useState(false);
+  const [synctradeError, setSynctradeError] = useState('');
+  const [synctradeMasterApiKeyName, setSynctradeMasterApiKeyName] = useState('');
+  const [synctradeMasterDisplayName, setSynctradeMasterDisplayName] = useState('');
+  const [synctradeSymbol, setSynctradeSymbol] = useState('BTCUSDT');
+  const [synctradeTargetProfit, setSynctradeTargetProfit] = useState(50);
+  const [synctradeIntervalMs, setSynctradeIntervalMs] = useState(500);
+  const [synctradeEnabled, setSynctradeEnabled] = useState(false);
+  const [synctradeHedgeAccounts, setSynctradeHedgeAccounts] = useState<Array<Record<string, any>>>([]);
+  const [synctradeNewHedgeName, setSynctradeNewHedgeName] = useState('');
+  const [synctradeNewHedgeApiKey, setSynctradeNewHedgeApiKey] = useState('');
+  const [synctradeSessions, setSynctradeSessions] = useState<Array<Record<string, any>>>([]);
+  const [synctradeExecSide, setSynctradeExecSide] = useState<'long' | 'short'>('long');
+  const [synctradeExecLeverage, setSynctradeExecLeverage] = useState(5);
+  const [synctradeExecLotPercent, setSynctradeExecLotPercent] = useState(10);
+  const [synctradeExecuting, setSynctradeExecuting] = useState(false);
+
   const [strategyOfferIds, setStrategyOfferIds] = useState<string[]>([]);
   const [strategySystemProfileId, setStrategySystemProfileId] = useState<number | null>(null);
   const [strategyNewProfileName, setStrategyNewProfileName] = useState('');
@@ -2607,6 +2628,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   );
   const copytradingTenants = useMemo(
     () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'copytrading_client'),
+    [summary?.tenants],
+  );
+  const synctradeTenants = useMemo(
+    () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'synctrade_client'),
     [summary?.tenants],
   );
   const batchEligibleAlgofundTenants = useMemo(
@@ -4107,6 +4132,129 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setCopytradingFollowers((current) => (current || []).filter((_, idx) => idx !== index));
   };
 
+  // ─── Synctrade functions ─────────────────────────────────────────────────
+  const loadSynctradeTenant = async (tenantId: number) => {
+    setSynctradeLoading(true);
+    setSynctradeError('');
+    try {
+      const response = await axios.get<Record<string, any>>(`/api/saas/synctrade/${tenantId}`);
+      const data = response.data as any;
+      setSynctradeState(data);
+      setSynctradeMasterApiKeyName(String(data?.profile?.master_api_key_name || ''));
+      setSynctradeMasterDisplayName(String(data?.profile?.master_display_name || ''));
+      setSynctradeSymbol(String(data?.profile?.symbol || 'BTCUSDT'));
+      setSynctradeTargetProfit(Number(data?.profile?.target_profit_percent ?? 50));
+      setSynctradeIntervalMs(Number(data?.profile?.interval_ms ?? 500));
+      setSynctradeEnabled(Boolean(data?.profile?.enabled));
+      setSynctradeHedgeAccounts(Array.isArray(data?.profile?.hedgeAccounts) ? data.profile.hedgeAccounts : []);
+      setSynctradeSessions(Array.isArray(data?.sessions) ? data.sessions : []);
+    } catch (error: any) {
+      setSynctradeError(String(error?.response?.data?.error || error?.message || 'Failed to load synctrade state'));
+      setSynctradeState(null);
+    } finally {
+      setSynctradeLoading(false);
+    }
+  };
+
+  const saveSynctradeSettings = async () => {
+    if (!synctradeTenantId) return;
+    setSynctradeLoading(true);
+    try {
+      await axios.patch(`/api/saas/synctrade/${synctradeTenantId}`, {
+        masterApiKeyName: synctradeMasterApiKeyName,
+        masterDisplayName: synctradeMasterDisplayName,
+        symbol: synctradeSymbol,
+        hedgeAccounts: synctradeHedgeAccounts,
+        targetProfitPercent: synctradeTargetProfit,
+        intervalMs: synctradeIntervalMs,
+        enabled: synctradeEnabled,
+      });
+      await loadSynctradeTenant(synctradeTenantId);
+      messageApi.success('Synctrade settings saved');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to save'));
+    } finally {
+      setSynctradeLoading(false);
+    }
+  };
+
+  const executeSynctradeSession = async () => {
+    if (!synctradeTenantId) return;
+    setSynctradeExecuting(true);
+    try {
+      const result = await axios.post(`/api/saas/synctrade/${synctradeTenantId}/execute`, {
+        symbol: synctradeSymbol,
+        masterSide: synctradeExecSide,
+        leverageMaster: synctradeExecLeverage,
+        leverageHedge: synctradeExecLeverage,
+        lotPercent: synctradeExecLotPercent,
+      });
+      messageApi.success(`Session #${result.data?.sessionId} opened`);
+      await loadSynctradeTenant(synctradeTenantId);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to execute'));
+    } finally {
+      setSynctradeExecuting(false);
+    }
+  };
+
+  const closeSynctradeSessionById = async (sessionId: number) => {
+    if (!synctradeTenantId) return;
+    setSynctradeExecuting(true);
+    try {
+      const result = await axios.post(`/api/saas/synctrade/${synctradeTenantId}/close/${sessionId}`);
+      messageApi.success(`Session #${sessionId} closed, PnL: ${Number(result.data?.totalPnl || 0).toFixed(2)} USDT`);
+      await loadSynctradeTenant(synctradeTenantId);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to close session'));
+    } finally {
+      setSynctradeExecuting(false);
+    }
+  };
+
+  const addSynctradeHedgeAccount = () => {
+    if (!synctradeNewHedgeApiKey) {
+      messageApi.warning('Выберите API key для hedge-аккаунта');
+      return;
+    }
+    if (synctradeHedgeAccounts.length >= 5) {
+      messageApi.warning('Максимум 5 hedge-аккаунтов');
+      return;
+    }
+    const displayName = String(synctradeNewHedgeName || '').trim() || `Hedge ${synctradeHedgeAccounts.length + 1}`;
+    setSynctradeHedgeAccounts([...synctradeHedgeAccounts, { apiKeyName: synctradeNewHedgeApiKey, displayName }]);
+    setSynctradeNewHedgeName('');
+    setSynctradeNewHedgeApiKey('');
+  };
+
+  const removeSynctradeHedgeAccount = (index: number) => {
+    setSynctradeHedgeAccounts((current) => current.filter((_, idx) => idx !== index));
+  };
+
+  const createSynctradeTenantQuick = async () => {
+    setActionLoading('create-synctrade-tenant');
+    try {
+      const defaultApiKey = apiKeyOptions?.[0]?.value;
+      await axios.post('/api/saas/admin/tenants', {
+        displayName: `Synctrade Client ${(synctradeTenants.length || 0) + 1}`,
+        productMode: 'synctrade_client',
+        planCode: 'synctrade_100',
+        assignedApiKeyName: defaultApiKey || undefined,
+        language,
+      });
+      const nextSummary = await loadSummary('full');
+      const firstSynctradeTenantId = Number((nextSummary?.tenants || []).find((item: any) => item.tenant.product_mode === 'synctrade_client')?.tenant.id || 0);
+      if (firstSynctradeTenantId > 0) {
+        setSynctradeTenantId(firstSynctradeTenantId);
+      }
+      messageApi.success('Synctrade client created');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to create synctrade tenant'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   useEffect(() => {
     void loadSummary(isAdminSurface ? 'full' : 'light');
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4632,6 +4780,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       void loadCopytradingTenant(copytradingTenantId);
     }
   }, [copytradingTenantId]);
+
+  useEffect(() => {
+    if (synctradeTenantId !== null) {
+      void loadSynctradeTenant(synctradeTenantId);
+    }
+  }, [synctradeTenantId]);
 
   useEffect(() => {
     const nextDrafts = Object.fromEntries((summary?.plans || []).map((plan) => [plan.code, { ...plan }])) as Record<string, Plan>;
@@ -9247,6 +9401,47 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             />
                           ) : (
                             <>
+                          {/* Клиентская витрина Стратегий */}
+                          {publishedStorefrontOffers.length > 0 ? (
+                            <Card className="battletoads-card" title="Витрина стратегий" style={{ marginBottom: 16 }}>
+                              <List
+                                grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
+                                dataSource={publishedStorefrontOffers}
+                                renderItem={(offer: any) => {
+                                  const points = downsampleNumericSeries(
+                                    (Array.isArray(offer.equityPoints) ? offer.equityPoints : [])
+                                      .map((value: unknown) => Number(value))
+                                      .filter((value: number) => Number.isFinite(value)),
+                                    36
+                                  );
+                                  return (
+                                  <List.Item key={offer.offerId}>
+                                    <Card size="small" bordered title={<Text strong>{offer.titleRu || offer.offerId}</Text>}>
+                                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                        <Space wrap>
+                                          {offer.mode ? <Tag color="blue">{String(offer.mode).toUpperCase()}</Tag> : null}
+                                          {offer.market ? <Tag color="default">{offer.market}</Tag> : null}
+                                          {offer.ret !== undefined ? <Tag color={metricColor(Number(offer.ret || 0), 'return')}>Ret {formatPercent(offer.ret)}</Tag> : null}
+                                          {offer.dd !== undefined ? <Tag color={metricColor(Number(offer.dd || 0), 'drawdown')}>DD {formatPercent(offer.dd)}</Tag> : null}
+                                          {offer.pf !== undefined ? <Tag color={metricColor(Number(offer.pf || 0), 'pf')}>PF {formatNumber(offer.pf)}</Tag> : null}
+                                        </Space>
+                                        {points.length >= 2 ? (
+                                          <ChartComponent data={points.map((value: number, index: number) => ({ time: index, equity: value }))} type="line" fixedHeight={120} />
+                                        ) : (
+                                          <Text type="secondary" style={{ fontSize: 12 }}>График не сохранен</Text>
+                                        )}
+                                        <Button size="small" onClick={() => openSaasBacktestFlow(offer.offerId)}>Бэктест</Button>
+                                      </Space>
+                                    </Card>
+                                  </List.Item>
+                                  );
+                                }}
+                              />
+                            </Card>
+                          ) : (
+                            <Alert type="info" showIcon message="Витрина стратегий пока пуста" style={{ marginBottom: 16 }} />
+                          )}
+
                           <Row gutter={[16, 16]} align="middle">
                             {isAdminSurface ? (
                               <Col xs={24} md={6}>
@@ -9615,89 +9810,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           )}
                         </Card>
 
-                        <Card
-                          className="battletoads-card"
-                          title={copy.selectedOffersPreview}
-                          extra={strategySelectionPreviewLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}
-                        >
-                          <Spin spinning={strategySelectionPreviewLoading}>
-                            {strategySelectionPreview && strategySelectionPreviewOffers.length > 0 ? (
-                              <Row gutter={[16, 16]}>
-                                <Col xs={24} lg={8}>
-                                  <Descriptions column={1} size="small" bordered>
-                                    <Descriptions.Item label="Offers">{strategySelectionPreviewOffers.length}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategySelectionPreviewPeriod)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney((strategySelectionPreviewSummary as any)?.finalEquity ?? strategySelectionPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent((strategySelectionPreviewSummary as any)?.totalReturnPercent ?? strategySelectionPreviewDerivedSummary?.totalReturnPercent)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.drawdown}>{formatPercent((strategySelectionPreviewSummary as any)?.maxDrawdownPercent ?? strategySelectionPreviewDerivedSummary?.maxDrawdownPercent)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.profitFactor}>{formatNumber((strategySelectionPreviewSummary as any)?.profitFactor)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.trades}>{formatNumber((strategySelectionPreviewSummary as any)?.tradesCount, 0)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.persistedBucket}>{strategySelectionPreview.controls?.riskLevel || strategyPersistedRiskBucket} / {strategySelectionPreview.controls?.tradeFrequencyLevel || strategyPersistedTradeBucket}</Descriptions.Item>
-                                  </Descriptions>
-                                </Col>
-                                <Col xs={24} lg={16}>
-                                  <Space wrap style={{ marginBottom: 12 }}>
-                                    {strategySelectionPreviewOffers.map((item) => (
-                                      <Tag key={item.offerId} color={item.mode === 'mono' ? 'green' : 'blue'}>
-                                        {item.market} • {formatNumber(item.score)}
-                                      </Tag>
-                                    ))}
-                                  </Space>
-                                  {strategySelectionPreviewPoints.length > 0 ? <ChartComponent data={strategySelectionPreviewPoints} type="line" /> : <Empty description={copy.selectedOffersPreview} />}
-                                </Col>
-                              </Row>
-                            ) : (
-                              <Empty description={copy.selectedOffersPreview} />
-                            )}
-                          </Spin>
-                        </Card>
-
-                        <Card className="battletoads-card" title={copy.previewTitle} extra={strategyPreviewLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}>
-                          <Row gutter={[16, 16]} align="middle">
-                            <Col xs={24} md={10}>
-                              <Text strong>{copy.chooseOffer}</Text>
-                              <Select
-                                style={{ width: '100%', marginTop: 8 }}
-                                value={strategyPreviewOfferId || undefined}
-                                onChange={setStrategyPreviewOfferId}
-                                options={strategyOfferCatalog.map((offer) => ({ value: offer.offerId, label: `${offer.titleRu} • ${offer.strategy.market}` }))}
-                              />
-                            </Col>
-                            <Col xs={24} md={14}>
-                              <Space wrap style={{ marginTop: 28 }}>
-                                <Button type="primary" onClick={() => void runStrategyPreview()} loading={strategyPreviewLoading}>{copy.preview}</Button>
-                                {strategyState.profile?.actual_enabled ? <Tag color="success">live enabled</Tag> : <Tag color="default">live disabled</Tag>}
-                                {strategyState.profile?.requested_enabled ? <Tag color="processing">запрошен запуск</Tag> : null}
-                              </Space>
-                            </Col>
-                          </Row>
-
-                          <Spin spinning={strategyPreviewLoading}>
-                            {strategyPreview ? (
-                              <Row gutter={[16, 16]} style={{ marginTop: 12 }}>
-                                <Col xs={24} lg={8}>
-                                  <Descriptions column={1} size="small" bordered>
-                                    <Descriptions.Item label="Offer">{strategyPreviewOffer?.titleRu || '—'}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.period}>{formatPeriodLabel(strategyPreviewPeriod)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.score}>{formatNumber(strategyPreview?.preset?.score ?? strategyPreviewMetrics?.score)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney((strategyPreviewSummary as any)?.finalEquity ?? strategyPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent((strategyPreviewSummary as any)?.totalReturnPercent ?? strategyPreviewDerivedSummary?.totalReturnPercent ?? strategyPreviewMetrics?.ret)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.drawdown}>{formatPercent((strategyPreviewSummary as any)?.maxDrawdownPercent ?? strategyPreviewDerivedSummary?.maxDrawdownPercent ?? strategyPreviewMetrics?.dd)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.profitFactor}>{formatNumber((strategyPreviewSummary as any)?.profitFactor ?? strategyPreviewMetrics?.pf)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.trades}>{formatNumber((strategyPreviewSummary as any)?.tradesCount ?? strategyPreviewMetrics?.trades, 0)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.persistedBucket}>{strategyPreview.controls?.riskLevel || strategyPersistedRiskBucket} / {strategyPreview.controls?.tradeFrequencyLevel || strategyPersistedTradeBucket}</Descriptions.Item>
-                                  </Descriptions>
-                                </Col>
-                                <Col xs={24} lg={16}>
-                                  {strategyPreviewPoints.length > 0 ? <ChartComponent data={strategyPreviewPoints} type="line" /> : <Empty description={copy.noCatalog} />}
-                                </Col>
-                              </Row>
-                            ) : (
-                              <Empty style={{ marginTop: 16 }} description={copy.previewTitle} />
-                            )}
-                          </Spin>
-                        </Card>
-
                         {materializeResponse?.strategies?.length ? (
                           <Card className="battletoads-card" title="Materialized strategies">
                             <List
@@ -10035,6 +10147,51 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             />
                           ) : (
                             <>
+                          {/* Клиентская витрина Алгофонда */}
+                          {algofundStorefrontSystems.length > 0 ? (
+                            <Card className="battletoads-card" title="Витрина Алгофонда" style={{ marginBottom: 16 }}>
+                              <List
+                                grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
+                                dataSource={algofundStorefrontSystems}
+                                renderItem={(item) => (
+                                  <List.Item key={item.systemName}>
+                                    <Card size="small" bordered title={<Text strong>{tsDisplayName(item.systemName)}</Text>}>
+                                      <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                        <Space wrap>
+                                          {item.summary?.totalReturnPercent !== undefined
+                                            ? <Tag color={metricColor(Number(item.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(item.summary.totalReturnPercent)}</Tag>
+                                            : null}
+                                          {item.summary?.maxDrawdownPercent !== undefined
+                                            ? <Tag color={metricColor(Number(item.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(item.summary.maxDrawdownPercent)}</Tag>
+                                            : null}
+                                          {item.summary?.profitFactor !== undefined
+                                            ? <Tag color={metricColor(Number(item.summary.profitFactor || 0), 'pf')}>PF {formatNumber(item.summary.profitFactor)}</Tag>
+                                            : null}
+                                          {item.summary?.tradesCount !== undefined
+                                            ? (() => {
+                                                const activity = resolveTradeActivity(item.summary.tradesCount, item.summary?.periodDays);
+                                                return activity
+                                                  ? <Tag color={activity.color}>{activity.label}</Tag>
+                                                  : <Tag color="blue">сделок {formatNumber(item.summary.tradesCount, 0)}</Tag>;
+                                              })()
+                                            : null}
+                                        </Space>
+                                        {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
+                                          <ChartComponent data={item.equityCurve} type="line" fixedHeight={120} />
+                                        ) : (
+                                          <Text type="secondary" style={{ fontSize: 12 }}>График не сохранен</Text>
+                                        )}
+                                        <Button size="small" onClick={() => openBacktestDrawerForStorefrontTs(item.systemName)}>Бэктест</Button>
+                                      </Space>
+                                    </Card>
+                                  </List.Item>
+                                )}
+                              />
+                            </Card>
+                          ) : (
+                            <Alert type="info" showIcon message="Витрина Алгофонда пока пуста" style={{ marginBottom: 16 }} />
+                          )}
+
                           <Row gutter={[16, 16]} align="middle">
                             {isAdminSurface ? (
                               <Col xs={24} md={6}>
@@ -10231,51 +10388,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               />
                             ) : null}
                           </Space>
-                        </Card>
-
-                        <Card className="battletoads-card" title={copy.previewTitle} extra={algofundLoading ? <Tag color="processing">{copy.previewRefreshing}</Tag> : null}>
-                          <Spin spinning={algofundLoading}>
-                            {isAdminSurface ? (
-                              <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                                <Alert
-                                  type="warning"
-                                  showIcon
-                                  message="В admin-режиме здесь скрыт клиентский preview, привязанный к tenant/API key."
-                                  description="Для корректного preview витрины и admin TS используй Админ → Оферы и ТС и запускай бэктест у выбранного офера или ТС-набора."
-                                />
-                                <Space wrap>
-                                  <Button onClick={() => { navigateToAdminTab('clients'); setClientsModeFilter('algofund_client'); }}>
-                                    К клиентским привязкам TS
-                                  </Button>
-                                </Space>
-                                {!selectedAlgofundPublishedSystemName ? <Empty description="Для выбранного клиента TS пока не привязана" /> : null}
-                              </Space>
-                            ) : (
-                              <Row gutter={[16, 16]}>
-                                <Col xs={24} lg={8}>
-                                  <Descriptions column={1} size="small" bordered>
-                                    <Descriptions.Item label={copy.sourceSystem}>{algofundState.preview?.sourceSystem?.systemName || '—'}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.period}>{formatPeriodLabel(algofundPreviewPeriod)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.riskApplied}>
-                                      <Tag color={Number(algofundState.preview?.riskMultiplier ?? 1) === 1 ? 'green' : 'blue'}>
-                                        {formatNumber(algofundState.preview?.riskMultiplier ?? algofundRiskMultiplier)}x
-                                      </Tag>
-                                      {Number(algofundState.preview?.riskMultiplier ?? 1) === 1 ? <span style={{ fontSize: 11, color: '#888', marginLeft: 4 }}>= Trading Systems baseline</span> : null}
-                                    </Descriptions.Item>
-                                    <Descriptions.Item label={copy.initialBalance}>{formatMoney(algofundState.preview?.summary?.initialBalance)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.finalEquity}>{formatMoney(algofundState.preview?.summary?.finalEquity ?? algofundPreviewDerivedSummary?.finalEquity)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.returnLabel}>{formatPercent(algofundState.preview?.summary?.totalReturnPercent ?? algofundPreviewDerivedSummary?.totalReturnPercent)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.drawdown}>{formatPercent(algofundState.preview?.summary?.maxDrawdownPercent ?? algofundPreviewDerivedSummary?.maxDrawdownPercent)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.profitFactor}>{formatNumber(algofundState.preview?.summary?.profitFactor)}</Descriptions.Item>
-                                    <Descriptions.Item label={copy.trades}>{formatNumber(algofundState.preview?.summary?.tradesCount, 0)}</Descriptions.Item>
-                                  </Descriptions>
-                                </Col>
-                                <Col xs={24} lg={16}>
-                                  {algofundPreviewPoints.length > 0 ? <ChartComponent data={algofundPreviewPoints} type="line" /> : <Empty description={copy.previewTitle} />}
-                                </Col>
-                              </Row>
-                            )}
-                          </Spin>
                         </Card>
 
                         <Card className="battletoads-card" title="Client requests">

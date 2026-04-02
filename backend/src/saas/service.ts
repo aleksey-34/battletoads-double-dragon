@@ -20,7 +20,7 @@ import { initResearchDb } from '../research/db';
 import { getPreset, listOfferIds } from '../research/presetBuilder';
 import { computeReconciliationMetrics } from '../analytics/liveReconciliation';
 
-export type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client';
+export type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'synctrade_client';
 export type Level3 = 'low' | 'medium' | 'high';
 export type RequestStatus = 'pending' | 'approved' | 'rejected';
 export type AlgofundRequestType = 'start' | 'stop' | 'switch_system';
@@ -647,6 +647,24 @@ const copytradingPlans: PlanSeed[] = [
       copyTenantLimit: 5,
       copyAlgorithm: 'vwap_basic',
       copyPrecision: 'standard',
+    },
+  },
+];
+
+const synctradePlans: PlanSeed[] = [
+  {
+    code: 'synctrade_100',
+    title: 'Synctrade 100',
+    productMode: 'synctrade_client',
+    priceUsdt: 100,
+    maxDepositTotal: 10000,
+    riskCapMax: 0,
+    maxStrategiesTotal: 0,
+    allowTsStartStopRequests: false,
+    features: {
+      maxHedgeAccounts: 5,
+      syncIntervalMs: 500,
+      supportedExchange: 'mexc',
     },
   },
 ];
@@ -1681,7 +1699,7 @@ const buildRecommendedSets = (catalog: CatalogData | null) => {
 };
 
 export const ensureSaasSeedData = async (): Promise<void> => {
-  for (const plan of [...strategyClientPlans, ...algofundPlans, ...copytradingPlans]) {
+  for (const plan of [...strategyClientPlans, ...algofundPlans, ...copytradingPlans, ...synctradePlans]) {
     await upsertPlan(plan);
   }
 
@@ -3824,8 +3842,8 @@ const ensurePublishedSourceSystem = async (
   }) => {
     const displayName = asString(payload.displayName, '').trim();
     if (!displayName) throw new Error('displayName is required');
-    if (payload.productMode !== 'strategy_client' && payload.productMode !== 'algofund_client' && payload.productMode !== 'copytrading_client') {
-      throw new Error('productMode must be strategy_client, algofund_client or copytrading_client');
+    if (payload.productMode !== 'strategy_client' && payload.productMode !== 'algofund_client' && payload.productMode !== 'copytrading_client' && payload.productMode !== 'synctrade_client') {
+      throw new Error('productMode must be strategy_client, algofund_client, copytrading_client or synctrade_client');
     }
 
     await ensureSaasSeedData();
@@ -3921,8 +3939,10 @@ const ensurePublishedSourceSystem = async (
       await ensureStrategyClientProfile(tenant.id, [], apiKeyName);
     } else if (payload.productMode === 'algofund_client') {
       await ensureAlgofundProfile(tenant.id, apiKeyName);
-    } else {
+    } else if (payload.productMode === 'copytrading_client') {
       await ensureCopytradingProfile(tenant.id, apiKeyName);
+    } else {
+      await ensureSynctradeProfile(tenant.id, apiKeyName);
     }
 
     // Optionally create a client user account if email is provided
@@ -6632,6 +6652,13 @@ export const updateTenantAdminState = async (tenantId: number, payload: {
        WHERE tenant_id = ?`,
       [nextAssignedApiKeyName, tenantId]
     );
+  } else if (tenant.product_mode === 'synctrade_client') {
+    await db.run(
+      `UPDATE synctrade_profiles
+       SET master_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [nextAssignedApiKeyName, tenantId]
+    );
   } else {
     await db.run(
       `UPDATE algofund_profiles
@@ -6709,14 +6736,17 @@ const listTenantSummaries = async (options?: {
     const strategyProfile = await getStrategyClientProfile(tenant.id);
     const algofundProfile = await getAlgofundProfile(tenant.id);
     const copytradingProfile = await getCopytradingProfile(tenant.id);
+    const synctradeProfile = await getSynctradeProfile(tenant.id);
     const effectiveMonitoringApiKeyName = asString(
       tenant.product_mode === 'strategy_client'
         ? strategyProfile?.assigned_api_key_name
         : tenant.product_mode === 'algofund_client'
           ? (algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name)
-          : Number(copytradingProfile?.copy_enabled || 0) === 1
-            ? copytradingProfile?.master_api_key_name
-            : '',
+          : tenant.product_mode === 'synctrade_client'
+            ? synctradeProfile?.master_api_key_name
+            : Number(copytradingProfile?.copy_enabled || 0) === 1
+              ? copytradingProfile?.master_api_key_name
+              : '',
       tenant.assigned_api_key_name
     ).trim();
     const monitoring = capabilities.monitoring && effectiveMonitoringApiKeyName
@@ -6752,6 +6782,10 @@ const listTenantSummaries = async (options?: {
       copytradingProfile: copytradingProfile ? {
         ...copytradingProfile,
         tenants: safeJsonParse<Array<Record<string, unknown>>>(copytradingProfile.tenants_json, []),
+      } : null,
+      synctradeProfile: synctradeProfile ? {
+        ...synctradeProfile,
+        hedgeAccounts: safeJsonParse<Array<Record<string, unknown>>>(synctradeProfile.hedge_accounts_json, []),
       } : null,
       monitoring,
     });
@@ -9519,5 +9553,388 @@ export const getAlgofundChartSnapshot = async (options: {
     svg,
     svgBase64: Buffer.from(svg, 'utf-8').toString('base64'),
   };
+};
+
+// ─── Synctrade ───────────────────────────────────────────────────────────────
+
+type SynctradeProfileRow = {
+  id: number;
+  tenant_id: number;
+  master_api_key_name: string;
+  master_display_name: string;
+  symbol: string;
+  hedge_accounts_json: string;
+  mode: string;
+  target_profit_percent: number;
+  max_accounts: number;
+  interval_ms: number;
+  enabled: number;
+  last_run_at: string | null;
+  last_result_json: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type SynctradeSessionRow = {
+  id: number;
+  profile_id: number;
+  status: string;
+  symbol: string;
+  master_side: string;
+  entry_price: number | null;
+  exit_price: number | null;
+  master_pnl: number;
+  hedge_pnl_json: string;
+  total_pnl: number;
+  duration_ms: number;
+  error: string | null;
+  started_at: string;
+  finished_at: string | null;
+};
+
+const ensureSynctradeProfile = async (tenantId: number, assignedApiKeyName: string): Promise<void> => {
+  await db.run(
+    `INSERT INTO synctrade_profiles (
+      tenant_id, master_api_key_name, master_display_name, symbol,
+      hedge_accounts_json, mode, target_profit_percent, max_accounts,
+      interval_ms, enabled, created_at, updated_at
+    ) VALUES (?, ?, '', 'BTCUSDT', '[]', 'hedge_pnl', 50, 5, 500, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    ON CONFLICT(tenant_id) DO UPDATE SET
+      master_api_key_name = CASE WHEN COALESCE(synctrade_profiles.master_api_key_name, '') = '' THEN excluded.master_api_key_name ELSE synctrade_profiles.master_api_key_name END,
+      updated_at = CURRENT_TIMESTAMP`,
+    [tenantId, assignedApiKeyName]
+  );
+};
+
+const getSynctradeProfile = async (tenantId: number): Promise<SynctradeProfileRow | null> => {
+  const row = await db.get('SELECT * FROM synctrade_profiles WHERE tenant_id = ?', [tenantId]);
+  return (row || null) as SynctradeProfileRow | null;
+};
+
+export const getSynctradeState = async (tenantId: number) => {
+  await ensureSaasSeedData();
+  const tenant = await getTenantById(tenantId);
+  if (tenant.product_mode !== 'synctrade_client') {
+    throw new Error('Tenant is not a synctrade client');
+  }
+  const plan = await getPlanForTenant(tenantId);
+  const profile = await getSynctradeProfile(tenantId);
+  if (!profile) {
+    throw new Error('Synctrade profile not found');
+  }
+  const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []).slice(0, 5);
+  const lastResult = safeJsonParse<Record<string, unknown>>(profile.last_result_json, {});
+
+  // Recent sessions
+  const sessions = (await db.all(
+    `SELECT * FROM synctrade_sessions WHERE profile_id = ? ORDER BY started_at DESC LIMIT 50`,
+    [profile.id]
+  ) || []) as SynctradeSessionRow[];
+
+  return {
+    tenant,
+    plan,
+    profile: {
+      ...profile,
+      hedgeAccounts,
+      lastResult,
+    },
+    sessions: sessions.map((s) => ({
+      ...s,
+      hedge_pnl: safeJsonParse<Record<string, number>>(s.hedge_pnl_json, {}),
+    })),
+  };
+};
+
+export const updateSynctradeState = async (
+  tenantId: number,
+  payload: {
+    masterApiKeyName?: string;
+    masterDisplayName?: string;
+    symbol?: string;
+    hedgeAccounts?: Array<Record<string, unknown>>;
+    mode?: string;
+    targetProfitPercent?: number;
+    intervalMs?: number;
+    enabled?: boolean;
+  }
+) => {
+  const profile = await getSynctradeProfile(tenantId);
+  if (!profile) {
+    throw new Error('Synctrade profile not found');
+  }
+
+  const nextMasterApiKeyName = asString(payload.masterApiKeyName, profile.master_api_key_name);
+  const nextMasterDisplayName = asString(payload.masterDisplayName, profile.master_display_name);
+  const nextSymbol = asString(payload.symbol, profile.symbol);
+  const nextHedgeAccountsJson = payload.hedgeAccounts !== undefined
+    ? JSON.stringify(payload.hedgeAccounts.slice(0, 5))
+    : profile.hedge_accounts_json;
+  const nextMode = asString(payload.mode, profile.mode);
+  const nextTargetProfitPercent = clampNumber(asNumber(payload.targetProfitPercent, asNumber(profile.target_profit_percent, 50)), 1, 500);
+  const nextIntervalMs = clampNumber(Math.floor(asNumber(payload.intervalMs, profile.interval_ms)), 100, 10000);
+  const nextEnabled = payload.enabled !== undefined
+    ? (payload.enabled ? 1 : 0)
+    : Number(profile.enabled || 0);
+
+  await db.run(
+    `UPDATE synctrade_profiles
+     SET master_api_key_name = ?, master_display_name = ?, symbol = ?,
+         hedge_accounts_json = ?, mode = ?, target_profit_percent = ?,
+         interval_ms = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE tenant_id = ?`,
+    [nextMasterApiKeyName, nextMasterDisplayName, nextSymbol,
+     nextHedgeAccountsJson, nextMode, nextTargetProfitPercent,
+     nextIntervalMs, nextEnabled, tenantId]
+  );
+
+  if (payload.masterApiKeyName !== undefined) {
+    await db.run(
+      `UPDATE tenants SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [nextMasterApiKeyName, tenantId]
+    );
+  }
+
+  return getSynctradeState(tenantId);
+};
+
+export const executeSynctradeSession = async (
+  tenantId: number,
+  payload: {
+    symbol?: string;
+    masterSide?: 'long' | 'short';
+    leverageMaster?: number;
+    leverageHedge?: number;
+    lotPercent?: number;
+  }
+) => {
+  const profile = await getSynctradeProfile(tenantId);
+  if (!profile) throw new Error('Synctrade profile not found');
+  if (!Number(profile.enabled)) throw new Error('Synctrade is not enabled for this profile');
+
+  const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
+  if (hedgeAccounts.length === 0) throw new Error('No hedge accounts configured');
+
+  const symbol = asString(payload.symbol, profile.symbol) || 'BTCUSDT';
+  const masterSide = payload.masterSide === 'short' ? 'short' : 'long';
+  const hedgeSide = masterSide === 'long' ? 'short' : 'long';
+  const leverageMaster = clampNumber(Math.floor(asNumber(payload.leverageMaster, 5)), 1, 50);
+  const leverageHedge = clampNumber(Math.floor(asNumber(payload.leverageHedge, 5)), 1, 50);
+  const lotPercent = clampNumber(asNumber(payload.lotPercent, 10), 1, 100);
+
+  // Create session record
+  const sessionResult = await db.run(
+    `INSERT INTO synctrade_sessions (profile_id, status, symbol, master_side, started_at)
+     VALUES (?, 'running', ?, ?, CURRENT_TIMESTAMP)`,
+    [profile.id, symbol, masterSide]
+  );
+  const sessionId = (sessionResult as any)?.lastID;
+
+  try {
+    // Initialize master account
+    const masterKeyName = asString(profile.master_api_key_name, '');
+    if (!masterKeyName) throw new Error('Master API key not configured');
+
+    await ensureExchangeClientInitialized(masterKeyName);
+
+    // Initialize hedge accounts
+    for (const acc of hedgeAccounts) {
+      const keyName = asString(acc.apiKeyName, '');
+      if (keyName) {
+        await ensureExchangeClientInitialized(keyName);
+      }
+    }
+
+    // Get master account balance
+    const { getBalances, placeOrder, setLeverage: setLev } = await import('../bot/exchange');
+
+    // Set leverage on master
+    try {
+      await setLev(masterKeyName, symbol, leverageMaster);
+    } catch { /* leverage may already be set */ }
+
+    // Set leverage on hedges
+    for (const acc of hedgeAccounts) {
+      const keyName = asString(acc.apiKeyName, '');
+      if (keyName) {
+        try {
+          await setLev(keyName, symbol, leverageHedge);
+        } catch { /* leverage may already be set */ }
+      }
+    }
+
+    // Get master balance to calculate lot
+    const masterBalances = await getBalances(masterKeyName);
+    const masterEquity = asNumber(masterBalances?.totalEquity || masterBalances?.totalWalletBalance, 0);
+    const orderValueUsdt = (masterEquity * lotPercent) / 100;
+
+    // Get current price
+    const marketData = await getMarketData(masterKeyName, symbol, '1m', 1);
+    const price = asNumber(marketData?.[0]?.close, 0);
+    if (price <= 0) throw new Error('Cannot get current market price');
+
+    const qty = Math.floor((orderValueUsdt * leverageMaster / price) * 1000) / 1000;
+    if (qty <= 0) throw new Error('Calculated quantity is too small');
+
+    // Place master order (profit side)
+    const masterOrder = await placeOrder(masterKeyName, symbol,
+      masterSide === 'long' ? 'Buy' : 'Sell', qty);
+
+    // Place hedge orders (loss side) — simultaneous
+    const hedgePnl: Record<string, number> = {};
+    const hedgePromises = hedgeAccounts.map(async (acc) => {
+      const keyName = asString(acc.apiKeyName, '');
+      const displayName = asString(acc.displayName, keyName);
+      if (!keyName) return;
+
+      try {
+        const hedgeBalances = await getBalances(keyName);
+        const hedgeEquity = asNumber(hedgeBalances?.totalEquity || hedgeBalances?.totalWalletBalance, 0);
+        const hedgeOrderValue = (hedgeEquity * lotPercent) / 100;
+        const hedgeQty = Math.floor((hedgeOrderValue * leverageHedge / price) * 1000) / 1000;
+
+        if (hedgeQty > 0) {
+          await placeOrder(keyName, symbol,
+            hedgeSide === 'long' ? 'Buy' : 'Sell', hedgeQty);
+          hedgePnl[displayName] = 0;
+        }
+      } catch (err: any) {
+        hedgePnl[displayName] = 0;
+        logger.warn(`[Synctrade] Hedge order failed for ${displayName}: ${err.message}`);
+      }
+    });
+
+    await Promise.all(hedgePromises);
+
+    // Update session
+    await db.run(
+      `UPDATE synctrade_sessions
+       SET status = 'open', entry_price = ?, hedge_pnl_json = ?
+       WHERE id = ?`,
+      [price, JSON.stringify(hedgePnl), sessionId]
+    );
+
+    await db.run(
+      `UPDATE synctrade_profiles SET last_run_at = CURRENT_TIMESTAMP, last_result_json = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?`,
+      [JSON.stringify({ sessionId, symbol, masterSide, entryPrice: price, status: 'open' }), tenantId]
+    );
+
+    logger.info(`[Synctrade] Session ${sessionId} opened: ${symbol} master=${masterSide} qty=${qty} price=${price}`);
+
+    return {
+      sessionId,
+      status: 'open',
+      symbol,
+      masterSide,
+      entryPrice: price,
+      masterOrder,
+      hedgeAccounts: Object.keys(hedgePnl),
+    };
+  } catch (err: any) {
+    await db.run(
+      `UPDATE synctrade_sessions SET status = 'error', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [String(err.message || err).slice(0, 500), sessionId]
+    );
+    throw err;
+  }
+};
+
+export const closeSynctradeSession = async (tenantId: number, sessionId: number) => {
+  const profile = await getSynctradeProfile(tenantId);
+  if (!profile) throw new Error('Synctrade profile not found');
+
+  const session = await db.get(
+    `SELECT * FROM synctrade_sessions WHERE id = ? AND profile_id = ?`,
+    [sessionId, profile.id]
+  ) as SynctradeSessionRow | null;
+  if (!session) throw new Error('Session not found');
+  if (session.status !== 'open') throw new Error('Session is not open');
+
+  const symbol = session.symbol;
+  const masterKeyName = asString(profile.master_api_key_name, '');
+  const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
+
+  const { closePosition, getPositions: getPos } = await import('../bot/exchange');
+
+  // Close master position
+  let masterPnl = 0;
+  try {
+    const masterPositions = await getPos(masterKeyName, symbol);
+    const masterPos = (masterPositions || []).find((p: any) => p.symbol === symbol || p.data?.symbol === symbol);
+    if (masterPos) {
+      const posQty = asNumber(masterPos.size || masterPos.data?.size, 0);
+      const posSide = String(masterPos.side || masterPos.data?.side || '').toLowerCase();
+      if (posQty > 0) {
+        await closePosition(masterKeyName, symbol, posQty, posSide.includes('buy') || posSide.includes('long') ? 'Buy' : 'Sell');
+      }
+      masterPnl = asNumber(masterPos.unrealisedPnl || masterPos.data?.unrealisedPnl, 0);
+    }
+  } catch (err: any) {
+    logger.warn(`[Synctrade] Failed to close master position: ${err.message}`);
+  }
+
+  // Close hedge positions
+  const hedgePnl: Record<string, number> = {};
+  for (const acc of hedgeAccounts) {
+    const keyName = asString(acc.apiKeyName, '');
+    const displayName = asString(acc.displayName, keyName);
+    if (!keyName) continue;
+
+    try {
+      const hedgePositions = await getPos(keyName, symbol);
+      const hedgePos = (hedgePositions || []).find((p: any) => p.symbol === symbol || p.data?.symbol === symbol);
+      if (hedgePos) {
+        const posQty = asNumber(hedgePos.size || hedgePos.data?.size, 0);
+        const posSide = String(hedgePos.side || hedgePos.data?.side || '').toLowerCase();
+        if (posQty > 0) {
+          await closePosition(keyName, symbol, posQty, posSide.includes('buy') || posSide.includes('long') ? 'Buy' : 'Sell');
+        }
+        hedgePnl[displayName] = asNumber(hedgePos.unrealisedPnl || hedgePos.data?.unrealisedPnl, 0);
+      }
+    } catch (err: any) {
+      logger.warn(`[Synctrade] Failed to close hedge position for ${displayName}: ${err.message}`);
+    }
+  }
+
+  const totalPnl = masterPnl + Object.values(hedgePnl).reduce((sum, v) => sum + v, 0);
+  const startTime = new Date(session.started_at).getTime();
+  const durationMs = Date.now() - (Number.isFinite(startTime) ? startTime : Date.now());
+
+  // Get exit price
+  const { getMarketData: getMD } = await import('../bot/exchange');
+  const marketData = await getMD(masterKeyName, symbol, '1m', 1);
+  const exitPrice = asNumber(marketData?.[0]?.close, 0);
+
+  await db.run(
+    `UPDATE synctrade_sessions
+     SET status = 'closed', exit_price = ?, master_pnl = ?, hedge_pnl_json = ?,
+         total_pnl = ?, duration_ms = ?, finished_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [exitPrice, masterPnl, JSON.stringify(hedgePnl), totalPnl, durationMs, sessionId]
+  );
+
+  await db.run(
+    `UPDATE synctrade_profiles SET last_result_json = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?`,
+    [JSON.stringify({ sessionId, status: 'closed', masterPnl, hedgePnl, totalPnl }), tenantId]
+  );
+
+  logger.info(`[Synctrade] Session ${sessionId} closed: masterPnl=${masterPnl}, hedgePnl=${JSON.stringify(hedgePnl)}, totalPnl=${totalPnl}`);
+
+  return { sessionId, status: 'closed', exitPrice, masterPnl, hedgePnl, totalPnl, durationMs };
+};
+
+export const getSynctradeSessions = async (tenantId: number, limit = 50) => {
+  const profile = await getSynctradeProfile(tenantId);
+  if (!profile) throw new Error('Synctrade profile not found');
+
+  const sessions = (await db.all(
+    `SELECT * FROM synctrade_sessions WHERE profile_id = ? ORDER BY started_at DESC LIMIT ?`,
+    [profile.id, Math.min(limit, 200)]
+  ) || []) as SynctradeSessionRow[];
+
+  return sessions.map((s) => ({
+    ...s,
+    hedge_pnl: safeJsonParse<Record<string, number>>(s.hedge_pnl_json, {}),
+  }));
 };
 
