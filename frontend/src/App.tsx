@@ -303,6 +303,7 @@ function AppShell() {
           <Route path="/saas/strategy-client" element={<Navigate to="/saas/admin?adminTab=strategy-client" replace />} />
           <Route path="/saas/algofund" element={<Navigate to="/saas/admin?adminTab=algofund" replace />} />
           <Route path="/saas/copytrading" element={<Navigate to="/saas/admin?adminTab=copytrading" replace />} />
+          <Route path="/saas/synctrade" element={<Navigate to="/saas/admin?adminTab=synctrade" replace />} />
           <Route path="/research" element={<Research />} />
           <Route path="/admin-docs" element={<AdminDocs />} />
         </Routes>
