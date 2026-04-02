@@ -3,6 +3,7 @@ import Bottleneck from 'bottleneck';
 import logger from '../utils/logger';
 import { ApiKey } from '../config/settings';
 import { db } from '../utils/database';
+import { createWeexClient } from './weexClient';
 
 type ExchangeClientEntry = {
   client: RestClientV5;
@@ -12,7 +13,7 @@ type ExchangeClientEntry = {
 };
 
 type CcxtClientEntry = {
-  exchange: 'bitget' | 'bingx' | 'binance';
+  exchange: 'bitget' | 'bingx' | 'binance' | 'mexc' | 'weex';
   client: any;
   limiter: Bottleneck;
   symbolMap: Map<string, string>;
@@ -54,6 +55,8 @@ const clients: { [key: string]: ExchangeClientEntry } = {};
 const ccxtClients: { [key: string]: CcxtClientEntry } = {};
 const cache = new Map<string, { data: any; timestamp: number }>();
 const bingxOneWayAttempted = new Set<string>();
+// Accounts confirmed to be in one-way mode (keyed by apiKeyName)
+const bingxConfirmedOneWay = new Set<string>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 min
 
 const normalizeSymbolKey = (value: any): string => {
@@ -67,7 +70,7 @@ const toUiSymbol = (value: any): string => {
   return withoutSlash.replace(/[^A-Z0-9]/g, '');
 };
 
-const detectExchange = (exchange: string): 'bybit' | 'bitget' | 'bingx' | 'binance' => {
+const detectExchange = (exchange: string): 'bybit' | 'bitget' | 'bingx' | 'binance' | 'mexc' | 'weex' => {
   const normalized = String(exchange || '').trim().toLowerCase();
 
   if (normalized.includes('bitget')) {
@@ -76,6 +79,14 @@ const detectExchange = (exchange: string): 'bybit' | 'bitget' | 'bingx' | 'binan
 
   if (normalized.includes('bingx') || normalized.includes('bing x')) {
     return 'bingx';
+  }
+
+  if (normalized.includes('mexc') || normalized.includes('mexc futures') || normalized.includes('mxc')) {
+    return 'mexc';
+  }
+
+  if (normalized.includes('weex') || normalized.includes('wee x')) {
+    return 'weex';
   }
 
   if (normalized.includes('binance')) {
@@ -188,13 +199,19 @@ const getBingxPositionSide = (side: 'Buy' | 'Sell'): 'LONG' | 'SHORT' => {
 
 const getBingxPositionSideCandidates = (
   side: 'Buy' | 'Sell',
-  reduceOnly?: boolean
+  reduceOnly?: boolean,
+  apiKeyName?: string,
 ): Array<'BOTH' | 'LONG' | 'SHORT' | undefined> => {
   const directional = getBingxPositionSide(side);
 
   if (reduceOnly) {
     // In one-way mode BingX requires BOTH. In hedge mode LONG/SHORT can be required.
     return ['BOTH', undefined, directional];
+  }
+
+  // If we already confirmed this account is in one-way mode, start with BOTH to skip the retry cycle
+  if (apiKeyName && bingxConfirmedOneWay.has(apiKeyName)) {
+    return ['BOTH', undefined];
   }
 
   return [directional, 'BOTH', undefined];
@@ -218,6 +235,13 @@ const isTimestampSyncError = (error: unknown): boolean => {
     || message.includes('expired')
     || message.includes('code":109400')
     || message.includes('code 109400');
+};
+
+const isBingxTradeEndpointDisabledError = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '').toLowerCase();
+  return message.includes('100410')
+    || message.includes('disabled period')
+    || message.includes('trigger frequency limit rule');
 };
 
 const syncCcxtClock = async (apiKeyName: string, entry: CcxtClientEntry): Promise<void> => {
@@ -364,25 +388,33 @@ export const initExchangeClient = (apiKey: ApiKey) => {
       ? ccxt.bitget
       : exchange === 'binance'
         ? ccxt.binanceusdm
-        : ccxt.bingx;
+        : exchange === 'mexc'
+          ? ccxt.mexc
+          : exchange === 'bingx'
+            ? ccxt.bingx
+            : undefined;
 
-    if (!ExchangeClass) {
+    const client = exchange === 'weex'
+      ? createWeexClient(apiKey)
+      : ExchangeClass
+        ? new ExchangeClass({
+          apiKey: apiKey.api_key,
+          secret: apiKey.secret,
+          password: apiKey.passphrase || undefined,
+          enableRateLimit: true,
+          adjustForTimeDifference: true,
+          recvWindow: 10000,
+          options: {
+            defaultType: 'swap',
+            adjustForTimeDifference: true,
+            recvWindow: 10000,
+          },
+        })
+        : undefined;
+
+    if (!client) {
       throw new Error(`Exchange ${exchange} is not available in ccxt`);
     }
-
-    const client = new ExchangeClass({
-      apiKey: apiKey.api_key,
-      secret: apiKey.secret,
-      password: apiKey.passphrase || undefined,
-      enableRateLimit: true,
-      adjustForTimeDifference: true,
-      recvWindow: 10000,
-      options: {
-        defaultType: 'swap',
-        adjustForTimeDifference: true,
-        recvWindow: 10000,
-      },
-    });
 
     if (apiKey.testnet && typeof client.setSandboxMode === 'function') {
       client.setSandboxMode(true);
@@ -806,7 +838,7 @@ export const placeOrder = async (
       }
 
       let lastError: Error | null = null;
-      for (const candidateSide of getBingxPositionSideCandidates(side, options?.reduceOnly)) {
+      for (const candidateSide of getBingxPositionSideCandidates(side, options?.reduceOnly, apiKeyName)) {
         try {
           const order = await submitOrderAttempt(candidateSide);
           logger.info(
@@ -817,6 +849,11 @@ export const placeOrder = async (
           lastError = error as Error;
           if (!isBingxPositionSideError(error)) {
             throw error;
+          }
+          // Mark this account as confirmed one-way so next orders start with BOTH directly
+          if (!bingxConfirmedOneWay.has(apiKeyName)) {
+            bingxConfirmedOneWay.add(apiKeyName);
+            logger.info(`BingX one-way mode confirmed for account ${apiKeyName} (positionSide ${candidateSide} rejected)`);
           }
           logger.warn(
             `BingX order retry for ${apiKeyName} ${symbol}: positionSide=${candidateSide || 'omitted'} failed (${lastError.message})`
@@ -1627,6 +1664,10 @@ export const getRecentTrades = async (apiKeyName: string, symbol?: string, limit
         .sort((left, right) => Number(right.timestamp) - Number(left.timestamp))
         .slice(0, safeLimit);
     } catch (error) {
+      if (isBingxTradeEndpointDisabledError(error)) {
+        logger.warn(`Trade history temporarily unavailable for ${apiKeyName}: ${(error as Error).message}`);
+        return [];
+      }
       logger.error(`Error loading trades via ccxt for ${apiKeyName}: ${(error as Error).message}`);
       throw error;
     }

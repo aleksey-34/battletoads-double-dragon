@@ -3869,6 +3869,9 @@ const ensurePublishedSourceSystem = async (
       if (!inlineApiKey || !inlineApiSecret) {
         throw new Error('inlineApiKey and inlineApiSecret are required when creating an inline API key');
       }
+      if (['bitget', 'weex'].includes(inlineApiExchange.toLowerCase()) && !inlineApiPassphrase) {
+        throw new Error('inlineApiPassphrase is required for Bitget and WEEX');
+      }
 
       const keyBase = (inlineApiKeyNameRaw || `${baseSlug}-api`)
         .toLowerCase()
@@ -7856,9 +7859,10 @@ export const getAlgofundState = async (
   for (const apiKeyName of allApiKeyNames) {
     const systems = await listTradingSystems(apiKeyName).catch(() => []);
     for (const item of (Array.isArray(systems) ? systems : [])) {
-      const systemName = asString(item?.name, '');
-      // Collect all ALGOFUND_MASTER systems published to the storefront
-      if (systemName && systemName.toUpperCase().includes('ALGOFUND_MASTER')) {
+      const systemName = asString(item?.name, '').trim();
+      const normalizedSystemName = systemName.toUpperCase();
+      // Only expose live master storefront cards here; hide archived/client-runtime systems.
+      if (systemName && normalizedSystemName.startsWith('ALGOFUND_MASTER::')) {
         const key = `${systemName}`;
         if (!allAlgofundSystemsMap.has(key)) {
           allAlgofundSystemsMap.set(key, item);
@@ -9322,6 +9326,60 @@ export const getAlgofundChartSnapshot = async (options: {
     .sort((a, b) => a.ts - b.ts)
     .slice(-bars);
 
+  if (normalized.length < 20 && base && quote) {
+    try {
+      const [baseRawCandles, quoteRawCandles] = await Promise.all([
+        getMarketData(system.apiKeyName, base, interval, bars),
+        getMarketData(system.apiKeyName, quote, interval, bars),
+      ]);
+
+      const normalizeCandles = (items: unknown[]) => (Array.isArray(items) ? items : [])
+        .map((item) => {
+          if (!Array.isArray(item) || item.length < 5) return null;
+          const ts = asNumber(item[0], 0);
+          const open = asNumber(item[1], 0);
+          const high = asNumber(item[2], 0);
+          const low = asNumber(item[3], 0);
+          const close = asNumber(item[4], 0);
+          if (!Number.isFinite(ts) || !Number.isFinite(open) || !Number.isFinite(high) || !Number.isFinite(low) || !Number.isFinite(close)) {
+            return null;
+          }
+          return { ts, open, high, low, close };
+        })
+        .filter((item): item is { ts: number; open: number; high: number; low: number; close: number } => Boolean(item))
+        .sort((a, b) => a.ts - b.ts)
+        .slice(-bars);
+
+      const baseCandles = normalizeCandles(baseRawCandles);
+      const quoteCandles = normalizeCandles(quoteRawCandles);
+      const quoteByTs = new Map(quoteCandles.map((item) => [item.ts, item] as const));
+      const syntheticCandles = baseCandles
+        .map((baseCandle) => {
+          const quoteCandle = quoteByTs.get(baseCandle.ts);
+          if (!quoteCandle) return null;
+          if (quoteCandle.open <= 0 || quoteCandle.high <= 0 || quoteCandle.low <= 0 || quoteCandle.close <= 0) {
+            return null;
+          }
+          return {
+            ts: baseCandle.ts,
+            open: baseCandle.open / quoteCandle.open,
+            high: baseCandle.high / quoteCandle.high,
+            low: baseCandle.low / quoteCandle.low,
+            close: baseCandle.close / quoteCandle.close,
+          };
+        })
+        .filter((item): item is { ts: number; open: number; high: number; low: number; close: number } => Boolean(item))
+        .slice(-bars);
+
+      if (syntheticCandles.length >= 2) {
+        normalized.splice(0, normalized.length, ...syntheticCandles);
+      }
+    } catch (error) {
+      const err = error as Error;
+      logger.warn(`[SaaS] synthetic chart snapshot fallback failed for ${system.apiKeyName}/${base}/${quote}: ${err.message}`);
+    }
+  }
+
   if (normalized.length < 20) {
     const fallbackTradeRows = await db.all(
       `SELECT actual_time, actual_price
@@ -9332,7 +9390,7 @@ export const getAlgofundChartSnapshot = async (options: {
       [strategyId, bars]
     ) as Array<Record<string, unknown>>;
 
-    if (Array.isArray(fallbackTradeRows) && fallbackTradeRows.length >= 20) {
+    if (Array.isArray(fallbackTradeRows) && fallbackTradeRows.length >= 2) {
       const rebuilt = fallbackTradeRows
         .map((trade) => ({
           ts: asNumber(trade.actual_time, 0),
@@ -9353,8 +9411,17 @@ export const getAlgofundChartSnapshot = async (options: {
     }
   }
 
-  if (normalized.length < 20) {
-    throw new Error(`Not enough candles for snapshot (${normalized.length})`);
+  if (normalized.length < 2) {
+    logger.warn(`[SaaS] chart snapshot: not enough candles (${normalized.length}) for ${system.systemName} / strategy ${strategyId} / ${symbol}`);
+    return {
+      generatedAt: new Date().toISOString(),
+      system: { id: system.systemId, name: system.systemName, apiKeyName: system.apiKeyName },
+      strategy: { id: strategyId, name: asString(row.name, ''), symbol, interval },
+      candlesCount: 0,
+      markersCount: 0,
+      svg: '',
+      svgBase64: '',
+    };
   }
 
   const fromTs = normalized[0].ts;
