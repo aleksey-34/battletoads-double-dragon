@@ -2232,7 +2232,7 @@ const strategyLevelMarks = {
 
 type SaaSProps = {
   initialTab?: SaasTabKey;
-  surfaceMode?: 'admin' | 'strategy-client' | 'algofund' | 'copytrading';
+  surfaceMode?: 'admin' | 'strategy-client' | 'algofund' | 'copytrading' | 'synctrade';
 };
 
 const clampPreviewValue = (value: number, max = 10): number => Math.min(max, Math.max(0, value));
@@ -4736,6 +4736,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       (summary.tenants || []).find((item) => item.tenant.product_mode === 'copytrading_client')?.tenant.id
       || null;
 
+    const nextSynctradeTenant =
+      (summary.tenants || []).find((item) => item.tenant.product_mode === 'synctrade_client')?.tenant.id
+      || null;
+
     if (strategyTenantId === null && nextStrategyTenant !== null) {
       setStrategyTenantId(nextStrategyTenant);
     }
@@ -4745,7 +4749,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (copytradingTenantId === null && nextCopytradingTenant !== null) {
       setCopytradingTenantId(nextCopytradingTenant);
     }
-  }, [summary, strategyTenantId, algofundTenantId, copytradingTenantId]);
+    if (synctradeTenantId === null && nextSynctradeTenant !== null) {
+      setSynctradeTenantId(nextSynctradeTenant);
+    }
+  }, [summary, strategyTenantId, algofundTenantId, copytradingTenantId, synctradeTenantId]);
 
   useEffect(() => {
     if (strategyTenantId !== null) {
@@ -5604,6 +5611,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (row.tenant.product_mode === 'copytrading_client') {
       setCopytradingTenantId(tenantId);
       navigateSaasTab('copytrading');
+      return;
+    }
+
+    if (row.tenant.product_mode === 'synctrade_client') {
+      setSynctradeTenantId(tenantId);
+      navigateSaasTab('synctrade');
       return;
     }
 
@@ -6486,6 +6499,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       navigate('/saas/algofund');
     } else if (tab === 'copytrading') {
       navigate('/saas/copytrading');
+    } else if (tab === 'synctrade') {
+      navigate('/saas/synctrade');
     }
     setActiveTab(tab);
     if (tab === 'admin' && nextAdminTab) {
@@ -7008,6 +7023,42 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             }}
           >
             Copytrading
+          </Button>
+          <Button
+            size="small"
+            danger
+            onClick={() => {
+              Modal.confirm({
+                title: `Удалить клиента «${row.tenant.display_name}»?`,
+                content: 'Будут удалены: профиль, API ключ и все связанные данные. Действие необратимо.',
+                okText: 'Удалить',
+                okType: 'danger',
+                cancelText: 'Отмена',
+                onOk: async () => {
+                  try {
+                    await axios.delete(`/api/saas/admin/tenants/${row.tenant.id}`);
+                    messageApi.success(`Клиент «${row.tenant.display_name}» удалён`);
+                    void loadSummary('full');
+                  } catch (err: any) {
+                    messageApi.error(String(err?.response?.data?.error || err.message || 'Ошибка удаления'));
+                  }
+                },
+              });
+            }}
+          >
+            Удалить
+          </Button>
+        </Space>
+      ) : row.tenant.product_mode === 'synctrade_client' ? (
+        <Space size={4} wrap>
+          <Button
+            size="small"
+            onClick={() => {
+              setSynctradeTenantId(row.tenant.id);
+              navigateSaasTab('synctrade');
+            }}
+          >
+            Синхротрейд
           </Button>
           <Button
             size="small"
@@ -10737,6 +10788,263 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 </Space>
               ),
             },
+            {
+              key: 'synctrade',
+              label: 'Синхротрейд',
+              children: (
+                <Space direction="vertical" size={16} style={{ width: '100%' }}>
+                  {synctradeTenants.length === 0 ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="Нет клиентов Синхротрейд"
+                      description={isAdminSurface ? (
+                        <Button
+                          style={{ marginTop: 8 }}
+                          type="primary"
+                          loading={actionLoading === 'create-synctrade-tenant'}
+                          onClick={() => void createSynctradeTenantQuick()}
+                        >
+                          Создать synctrade-клиента
+                        </Button>
+                      ) : undefined}
+                    />
+                  ) : null}
+                  {synctradeError ? <Alert type="error" showIcon message={synctradeError} /> : null}
+
+                  <Spin spinning={synctradeLoading && !synctradeState}>
+                    {synctradeState ? (
+                      <>
+                        <Card className="battletoads-card" title="Синхротрейд · Hedge PnL Engine">
+                          <Alert
+                            type="warning"
+                            showIcon
+                            message="Синхронная торговля на MEXC Futures"
+                            description="Мастер-аккаунт генерирует прибыль (+), hedge-аккаунты генерируют управляемый убыток (−). Суммарный P&L = 0 ± комиссии."
+                            style={{ marginBottom: 16 }}
+                          />
+                          <Row gutter={[16, 16]} align="middle">
+                            {isAdminSurface ? (
+                              <Col xs={24} md={6}>
+                                <Text strong>Клиент</Text>
+                                <Select
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  value={synctradeTenantId ?? undefined}
+                                  onChange={(value) => setSynctradeTenantId(Number(value))}
+                                  options={synctradeTenants.map((item) => ({ value: item.tenant.id, label: `${item.tenant.display_name} (${item.tenant.slug})` }))}
+                                />
+                              </Col>
+                            ) : null}
+                            <Col xs={24} md={6}>
+                              <Text strong>Master API Key (MEXC)</Text>
+                              {isAdminSurface ? (
+                                <Select
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  value={synctradeMasterApiKeyName || undefined}
+                                  onChange={setSynctradeMasterApiKeyName}
+                                  options={apiKeyOptions}
+                                />
+                              ) : (
+                                <div style={{ marginTop: 8 }}><Text>{synctradeMasterApiKeyName || '—'}</Text></div>
+                              )}
+                            </Col>
+                            <Col xs={24} md={4}>
+                              <Text strong>Символ</Text>
+                              <Select
+                                style={{ width: '100%', marginTop: 8 }}
+                                value={synctradeSymbol}
+                                onChange={setSynctradeSymbol}
+                                options={[
+                                  { value: 'BTCUSDT', label: 'BTCUSDT' },
+                                  { value: 'ETHUSDT', label: 'ETHUSDT' },
+                                  { value: 'SOLUSDT', label: 'SOLUSDT' },
+                                  { value: 'XRPUSDT', label: 'XRPUSDT' },
+                                  { value: 'DOGEUSDT', label: 'DOGEUSDT' },
+                                ]}
+                              />
+                            </Col>
+                            <Col xs={24} md={4}>
+                              <Text strong>Target Profit %</Text>
+                              <InputNumber
+                                style={{ width: '100%', marginTop: 8 }}
+                                min={1}
+                                max={500}
+                                value={synctradeTargetProfit}
+                                onChange={(v) => setSynctradeTargetProfit(Number(v ?? 50))}
+                              />
+                            </Col>
+                            <Col xs={24} md={4}>
+                              <Text strong>Enabled</Text>
+                              <div style={{ marginTop: 8 }}>
+                                <Switch checked={synctradeEnabled} onChange={setSynctradeEnabled} />
+                              </div>
+                            </Col>
+                          </Row>
+
+                          {isAdminSurface ? (
+                            <Space style={{ marginTop: 16 }}>
+                              <Button type="primary" onClick={() => void saveSynctradeSettings()} loading={synctradeLoading}>
+                                Сохранить настройки
+                              </Button>
+                            </Space>
+                          ) : null}
+
+                          {/* Hedge Accounts */}
+                          <Card size="small" title="Hedge-аккаунты (убыточная сторона)" style={{ marginTop: 16 }}>
+                            {isAdminSurface ? (
+                              <Space direction="vertical" size={12} style={{ width: '100%', marginBottom: 12 }}>
+                                <Row gutter={[12, 12]}>
+                                  <Col xs={24} md={8}>
+                                    <Text strong>Имя аккаунта</Text>
+                                    <Input style={{ marginTop: 8 }} value={synctradeNewHedgeName} onChange={(e) => setSynctradeNewHedgeName(e.target.value)} placeholder="Hedge Account 1" />
+                                  </Col>
+                                  <Col xs={24} md={8}>
+                                    <Text strong>API Key (MEXC)</Text>
+                                    <Select
+                                      style={{ width: '100%', marginTop: 8 }}
+                                      value={synctradeNewHedgeApiKey || undefined}
+                                      onChange={setSynctradeNewHedgeApiKey}
+                                      options={apiKeyOptions}
+                                    />
+                                  </Col>
+                                  <Col xs={24} md={4}>
+                                    <Button style={{ marginTop: 30, width: '100%' }} onClick={addSynctradeHedgeAccount}>
+                                      + Добавить
+                                    </Button>
+                                  </Col>
+                                </Row>
+                                <Text type="secondary">Лимит: до 5 hedge-аккаунтов</Text>
+                              </Space>
+                            ) : null}
+
+                            {synctradeHedgeAccounts.length === 0 ? (
+                              <Empty description="Hedge-аккаунты не настроены" />
+                            ) : (
+                              <Table
+                                size="small"
+                                rowKey={(_, idx) => String(idx)}
+                                dataSource={synctradeHedgeAccounts}
+                                pagination={false}
+                                columns={[
+                                  { title: 'Имя', dataIndex: 'displayName', width: 200 },
+                                  { title: 'API Key', dataIndex: 'apiKeyName', width: 250 },
+                                  ...(isAdminSurface ? [{
+                                    title: '',
+                                    key: 'action',
+                                    width: 100,
+                                    render: (_: any, __: any, index: number) => (
+                                      <Button danger size="small" onClick={() => removeSynctradeHedgeAccount(index)}>Удалить</Button>
+                                    ),
+                                  }] : []),
+                                ]}
+                              />
+                            )}
+                          </Card>
+
+                          {/* Execution Panel */}
+                          <Card size="small" title="Запуск сессии" style={{ marginTop: 16 }}>
+                            <Row gutter={[16, 16]} align="middle">
+                              <Col xs={24} md={4}>
+                                <Text strong>Master Side</Text>
+                                <Select
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  value={synctradeExecSide}
+                                  onChange={setSynctradeExecSide}
+                                  options={[
+                                    { value: 'long', label: 'Long (Profit)' },
+                                    { value: 'short', label: 'Short (Profit)' },
+                                  ]}
+                                />
+                              </Col>
+                              <Col xs={24} md={4}>
+                                <Text strong>Leverage</Text>
+                                <InputNumber
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  min={1}
+                                  max={50}
+                                  value={synctradeExecLeverage}
+                                  onChange={(v) => setSynctradeExecLeverage(Number(v ?? 5))}
+                                />
+                              </Col>
+                              <Col xs={24} md={4}>
+                                <Text strong>Lot %</Text>
+                                <InputNumber
+                                  style={{ width: '100%', marginTop: 8 }}
+                                  min={1}
+                                  max={100}
+                                  value={synctradeExecLotPercent}
+                                  onChange={(v) => setSynctradeExecLotPercent(Number(v ?? 10))}
+                                />
+                              </Col>
+                              <Col xs={24} md={6}>
+                                <Button
+                                  type="primary"
+                                  danger
+                                  style={{ marginTop: 28, width: '100%' }}
+                                  loading={synctradeExecuting}
+                                  disabled={!synctradeEnabled || synctradeHedgeAccounts.length === 0}
+                                  onClick={() => void executeSynctradeSession()}
+                                >
+                                  Открыть хедж-сессию
+                                </Button>
+                              </Col>
+                            </Row>
+                          </Card>
+
+                          {/* Sessions History */}
+                          <Card size="small" title="История сессий" style={{ marginTop: 16 }}>
+                            {synctradeSessions.length === 0 ? (
+                              <Empty description="Нет сессий" />
+                            ) : (
+                              <Table
+                                size="small"
+                                rowKey="id"
+                                dataSource={synctradeSessions}
+                                pagination={{ pageSize: 10 }}
+                                columns={[
+                                  { title: 'ID', dataIndex: 'id', width: 60 },
+                                  { title: 'Символ', dataIndex: 'symbol', width: 100 },
+                                  { title: 'Master Side', dataIndex: 'master_side', width: 100 },
+                                  { title: 'Статус', dataIndex: 'status', width: 80,
+                                    render: (status: string) => (
+                                      <Tag color={status === 'open' ? 'blue' : status === 'closed' ? 'green' : status === 'error' ? 'red' : 'default'}>{status}</Tag>
+                                    ),
+                                  },
+                                  { title: 'Entry', dataIndex: 'entry_price', width: 100, render: (v: number) => v ? Number(v).toFixed(2) : '—' },
+                                  { title: 'Exit', dataIndex: 'exit_price', width: 100, render: (v: number) => v ? Number(v).toFixed(2) : '—' },
+                                  { title: 'Master PnL', dataIndex: 'master_pnl', width: 100,
+                                    render: (v: number) => <Text type={v > 0 ? 'success' : v < 0 ? 'danger' : undefined}>{Number(v || 0).toFixed(2)}</Text>,
+                                  },
+                                  { title: 'Total PnL', dataIndex: 'total_pnl', width: 100,
+                                    render: (v: number) => <Text type={v > 0 ? 'success' : v < 0 ? 'danger' : undefined}>{Number(v || 0).toFixed(2)}</Text>,
+                                  },
+                                  { title: 'Дата', dataIndex: 'started_at', width: 160, render: (v: string) => v ? String(v).slice(0, 19).replace('T', ' ') : '—' },
+                                  {
+                                    title: '',
+                                    key: 'action',
+                                    width: 120,
+                                    render: (_: any, record: any) => record.status === 'open' ? (
+                                      <Button
+                                        size="small"
+                                        danger
+                                        loading={synctradeExecuting}
+                                        onClick={() => void closeSynctradeSessionById(record.id)}
+                                      >
+                                        Закрыть
+                                      </Button>
+                                    ) : null,
+                                  },
+                                ]}
+                              />
+                            )}
+                          </Card>
+                        </Card>
+                      </>
+                    ) : null}
+                  </Spin>
+                </Space>
+              ),
+            },
           ].filter((item) => isAdminSurface || item.key === surfaceMode)}
         />
       </Spin>
@@ -11219,9 +11527,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       </Modal>
 
       <Drawer
-        title={backtestDrawerContext?.title || 'Backtest из SaaS'}
+        title={isAdminSurface ? (backtestDrawerContext?.title || 'Backtest из SaaS') : 'Бэктест стратегии'}
         placement="right"
-        width="92vw"
+        width={isAdminSurface ? '92vw' : '60vw'}
         open={backtestDrawerVisible}
         onClose={() => {
           setBacktestDrawerVisible(false);
@@ -11234,9 +11542,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             <Alert
               type="info"
               showIcon
-              message="Sweep backtest: настрой риск и частоту сделок, проверь сделки/PnL/DD/margin и графики, сохрани метрики карточки и реши — отправить на витрину или закрыть."
+              message={isAdminSurface
+                ? "Sweep backtest: настрой риск и частоту сделок, проверь сделки/PnL/DD/margin и графики, сохрани метрики карточки и реши — отправить на витрину или закрыть."
+                : "Настройте уровень риска и посмотрите, как изменится кривая доходности вашего портфеля."
+              }
             />
-            {backtestDrawerContext.kind === 'algofund-ts' ? (
+            {isAdminSurface && backtestDrawerContext.kind === 'algofund-ts' ? (
               <Space wrap>
                 <Tag color="geekblue">Тестируемая ТС: {(() => {
                   const rawTitle = String(backtestDrawerContext.title || '').trim();
@@ -11247,9 +11558,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               </Space>
             ) : null}
             <Space wrap>
-              <Button size="small" onClick={returnToReviewFromBacktest}>
-                Вернуться к карточке
-              </Button>
+              {isAdminSurface && (
+                <Button size="small" onClick={returnToReviewFromBacktest}>
+                  Вернуться к карточке
+                </Button>
+              )}
               <Button
                 size="small"
                 loading={adminSweepBacktestLoading}
@@ -11257,68 +11570,72 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   void runAdminSweepBacktestPreview();
                 }}
               >
-                Пересчитать sweep backtest
+                {isAdminSurface ? 'Пересчитать sweep backtest' : 'Пересчитать'}
               </Button>
-              <Select
-                allowClear
-                size="small"
-                style={{ minWidth: 220 }}
-                placeholder="API key для real rerun (опц.)"
-                value={adminSweepBacktestRerunApiKey || undefined}
-                onChange={(value) => setAdminSweepBacktestRerunApiKey(String(value || ''))}
-                options={apiKeyOptions}
-              />
-              <Button
-                size="small"
-                loading={adminSweepBacktestLoading}
-                onClick={() => {
-                  void runAdminSweepBacktestPreview(undefined, { preferRealBacktest: true });
-                }}
-              >
-                API rerun (реальный)
-              </Button>
-              {backtestDrawerContext.kind === 'offer' ? (
-                <Button
-                  size="small"
-                  loading={actionLoading === `offer-review-snapshot:${String(backtestDrawerContext.offerId || '')}`}
-                  onClick={() => {
-                    void saveOfferReviewSnapshotFromBacktest();
-                  }}
-                >
-                  Сохранить
-                </Button>
-              ) : null}
-              {backtestDrawerContext.kind === 'algofund-ts' ? (
-                <Button
-                  size="small"
-                  loading={actionLoading === 'ts-review-snapshot'}
-                  onClick={() => {
-                    void saveTsReviewSnapshotFromBacktest({ publishAfterSave: false });
-                  }}
-                >
-                  Сохранить
-                </Button>
-              ) : null}
-              <Button
-                type="primary"
-                size="small"
-                loading={
-                  backtestDrawerContext.kind === 'algofund-ts'
-                    ? actionLoading === 'publish' || actionLoading === 'ts-review-snapshot'
-                    : actionLoading === `offer-store:${String(backtestDrawerContext.offerId || '')}`
-                      || actionLoading === `offer-review-snapshot:${String(backtestDrawerContext.offerId || '')}`
-                }
-                onClick={() => void publishFromBacktestContext()}
-              >
-                {backtestDrawerContext.kind === 'algofund-ts'
-                  ? 'Сохранить и отправить ТС на витрину'
-                  : (backtestDrawerContext.offerPublished ? 'Сохранить и обновить витрину оффера' : 'Сохранить и отправить оффер на витрину')}
-              </Button>
+              {isAdminSurface && (
+                <>
+                  <Select
+                    allowClear
+                    size="small"
+                    style={{ minWidth: 220 }}
+                    placeholder="API key для real rerun (опц.)"
+                    value={adminSweepBacktestRerunApiKey || undefined}
+                    onChange={(value) => setAdminSweepBacktestRerunApiKey(String(value || ''))}
+                    options={apiKeyOptions}
+                  />
+                  <Button
+                    size="small"
+                    loading={adminSweepBacktestLoading}
+                    onClick={() => {
+                      void runAdminSweepBacktestPreview(undefined, { preferRealBacktest: true });
+                    }}
+                  >
+                    API rerun (реальный)
+                  </Button>
+                  {backtestDrawerContext.kind === 'offer' ? (
+                    <Button
+                      size="small"
+                      loading={actionLoading === `offer-review-snapshot:${String(backtestDrawerContext.offerId || '')}`}
+                      onClick={() => {
+                        void saveOfferReviewSnapshotFromBacktest();
+                      }}
+                    >
+                      Сохранить
+                    </Button>
+                  ) : null}
+                  {backtestDrawerContext.kind === 'algofund-ts' ? (
+                    <Button
+                      size="small"
+                      loading={actionLoading === 'ts-review-snapshot'}
+                      onClick={() => {
+                        void saveTsReviewSnapshotFromBacktest({ publishAfterSave: false });
+                      }}
+                    >
+                      Сохранить
+                    </Button>
+                  ) : null}
+                  <Button
+                    type="primary"
+                    size="small"
+                    loading={
+                      backtestDrawerContext.kind === 'algofund-ts'
+                        ? actionLoading === 'publish' || actionLoading === 'ts-review-snapshot'
+                        : actionLoading === `offer-store:${String(backtestDrawerContext.offerId || '')}`
+                          || actionLoading === `offer-review-snapshot:${String(backtestDrawerContext.offerId || '')}`
+                    }
+                    onClick={() => void publishFromBacktestContext()}
+                  >
+                    {backtestDrawerContext.kind === 'algofund-ts'
+                      ? 'Сохранить и отправить ТС на витрину'
+                      : (backtestDrawerContext.offerPublished ? 'Сохранить и обновить витрину оффера' : 'Сохранить и отправить оффер на витрину')}
+                  </Button>
+                </>
+              )}
             </Space>
 
             <Row gutter={[12, 12]}>
-              <Col xs={24} md={6}>
-                <Card size="small" title={<Space>{adminSweepBacktestStale ? <Tag color="orange">⟳ Обновить</Tag> : null}<span>Риск бэктеста (0-10)</span></Space>}>
+              <Col xs={24} md={isAdminSurface ? 6 : 12}>
+                <Card size="small" title={<Space>{adminSweepBacktestStale ? <Tag color="orange">⟳ Обновить</Tag> : null}<span>Риск{isAdminSurface ? ' бэктеста' : ''} (0-10)</span></Space>}>
                   <Slider
                     min={0}
                     max={10}
@@ -11341,56 +11658,62 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Text type="secondary">Текущий множитель: {formatNumber(getBacktestRiskMultiplier(adminSweepBacktestRiskScore, adminSweepBacktestRiskScaleMaxPercent), 2)}x к базовой позиции</Text>
                 </Card>
               </Col>
-              <Col xs={24} md={6}>
-                <Card size="small" title={<Space>{adminSweepBacktestStale ? <Tag color="orange">⟳ Обновить</Tag> : null}<span>Частота сделок (0-10)</span></Space>}>
-                  <Slider
-                    min={0}
-                    max={10}
-                    step={0.1}
-                    value={adminSweepBacktestTradeScore}
-                    onChange={(value) => {
-                      const next = Number(value || 0);
-                      setAdminSweepBacktestTradeScore(next);
-                      storeCurrentBacktestSettingsForContext(backtestDrawerContext, { tradeFrequencyScore: next });
-                      setAdminSweepBacktestStale(true);
-                      scheduleBacktestDebounce();
-                    }}
-                  />
-                  <Text type="secondary">Текущий уровень: {sliderValueToLevel(adminSweepBacktestTradeScore)}</Text>
-                </Card>
-              </Col>
-              <Col xs={24} md={6}>
-                <Card size="small" title="Начальный баланс">
-                  <InputNumber
-                    min={100}
-                    step={100}
-                    style={{ width: '100%' }}
-                    value={adminSweepBacktestInitialBalance}
-                    onChange={(value) => {
-                      const next = Math.max(100, Number(value || 10000));
-                      setAdminSweepBacktestInitialBalance(next);
-                      storeCurrentBacktestSettingsForContext(backtestDrawerContext, { initialBalance: next });
-                    }}
-                  />
-                </Card>
-              </Col>
-              <Col xs={24} md={6}>
-                <Card size="small" title="Потолок риска, %">
-                  <InputNumber
-                    min={0}
-                    max={1000}
-                    step={10}
-                    style={{ width: '100%' }}
-                    value={adminSweepBacktestRiskScaleMaxPercent}
-                    onChange={(value) => {
-                      const next = Math.max(0, Math.min(1000, Number(value || 40)));
-                      setAdminSweepBacktestRiskScaleMaxPercent(next);
-                      storeCurrentBacktestSettingsForContext(backtestDrawerContext, { riskScaleMaxPercent: next });
-                    }}
-                  />
-                  <Text type="secondary">Ограничивает верхний множитель риска. При score=10 потолок сейчас около {formatNumber(getBacktestRiskMultiplier(10, adminSweepBacktestRiskScaleMaxPercent), 2)}x.</Text>
-                </Card>
-              </Col>
+              {(isAdminSurface || activeTab === 'strategy-client') && (
+                <Col xs={24} md={isAdminSurface ? 6 : 12}>
+                  <Card size="small" title={<Space>{adminSweepBacktestStale ? <Tag color="orange">⟳ Обновить</Tag> : null}<span>Частота сделок (0-10)</span></Space>}>
+                    <Slider
+                      min={0}
+                      max={10}
+                      step={0.1}
+                      value={adminSweepBacktestTradeScore}
+                      onChange={(value) => {
+                        const next = Number(value || 0);
+                        setAdminSweepBacktestTradeScore(next);
+                        storeCurrentBacktestSettingsForContext(backtestDrawerContext, { tradeFrequencyScore: next });
+                        setAdminSweepBacktestStale(true);
+                        scheduleBacktestDebounce();
+                      }}
+                    />
+                    <Text type="secondary">Текущий уровень: {sliderValueToLevel(adminSweepBacktestTradeScore)}</Text>
+                  </Card>
+                </Col>
+              )}
+              {isAdminSurface && (
+                <Col xs={24} md={6}>
+                  <Card size="small" title="Начальный баланс">
+                    <InputNumber
+                      min={100}
+                      step={100}
+                      style={{ width: '100%' }}
+                      value={adminSweepBacktestInitialBalance}
+                      onChange={(value) => {
+                        const next = Math.max(100, Number(value || 10000));
+                        setAdminSweepBacktestInitialBalance(next);
+                        storeCurrentBacktestSettingsForContext(backtestDrawerContext, { initialBalance: next });
+                      }}
+                    />
+                  </Card>
+                </Col>
+              )}
+              {isAdminSurface && (
+                <Col xs={24} md={6}>
+                  <Card size="small" title="Потолок риска, %">
+                    <InputNumber
+                      min={0}
+                      max={1000}
+                      step={10}
+                      style={{ width: '100%' }}
+                      value={adminSweepBacktestRiskScaleMaxPercent}
+                      onChange={(value) => {
+                        const next = Math.max(0, Math.min(1000, Number(value || 40)));
+                        setAdminSweepBacktestRiskScaleMaxPercent(next);
+                        storeCurrentBacktestSettingsForContext(backtestDrawerContext, { riskScaleMaxPercent: next });
+                      }}
+                    />
+                    <Text type="secondary">Ограничивает верхний множитель риска. При score=10 потолок сейчас около {formatNumber(getBacktestRiskMultiplier(10, adminSweepBacktestRiskScaleMaxPercent), 2)}x.</Text>
+                  </Card>
+                </Col>
+              )}
             </Row>
 
             {adminSweepBacktestResult ? (
@@ -11425,6 +11748,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                     return (
                       <>
+                  {isAdminSurface ? (
                   <Space wrap>
                     <Tag color="blue">offers: {adminSweepBacktestResult.selectedOffers.length}</Tag>
                     <Tag color="geekblue">risk: {adminSweepBacktestResult.controls.riskLevel}</Tag>
@@ -11442,9 +11766,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.profitFactor || 0), 'pf')}>PF {formatNumber(adminSweepBacktestResult.preview.summary.profitFactor)}</Tag> : null}
                     {adminSweepBacktestResult.preview?.summary?.tradesCount !== undefined ? <Tag color="cyan">trades {formatNumber(adminSweepBacktestResult.preview.summary.tradesCount, 0)}</Tag> : null}
                   </Space>
+                  ) : (
+                  <Space wrap>
+                    <Tag color="geekblue">Риск: {adminSweepBacktestResult.controls.riskLevel}</Tag>
+                    {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.totalReturnPercent || 0), 'return')}>Доходность {formatPercent(adminSweepBacktestResult.preview.summary.totalReturnPercent)}</Tag> : null}
+                    {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.maxDrawdownPercent || 0), 'drawdown')}>Просадка {formatPercent(adminSweepBacktestResult.preview.summary.maxDrawdownPercent)}</Tag> : null}
+                  </Space>
+                  )}
 
                   {/* Low-lot / deposit warnings */}
-                  {(() => {
+                  {isAdminSurface && (() => {
                     const offersCount = adminSweepBacktestResult.selectedOffers.length || 1;
                     const balance = Number(adminSweepBacktestInitialBalance || 10000);
                     const riskMul = getBacktestRiskMultiplier(adminSweepBacktestRiskScore, adminSweepBacktestRiskScaleMaxPercent);
@@ -11486,7 +11817,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     );
                   })()}
 
-                  {adminSweepBacktestResult.rerun?.requested && rerunErrorText ? (
+                  {isAdminSurface && adminSweepBacktestResult.rerun?.requested && rerunErrorText ? (
                     <Alert
                       type={rerunNeedsHistoricalSweep ? 'warning' : 'error'}
                       showIcon
@@ -11511,15 +11842,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     />
                   ) : null}
 
+                  {isAdminSurface && (
                   <Row gutter={[12, 12]}>
                     <Col xs={12} md={6}><Card size="small"><Statistic title="Сделки" value={Number.isFinite(tradesCount) ? tradesCount : 0} precision={0} /></Card></Col>
                     <Col xs={12} md={6}><Card size="small"><Statistic title="P/L" value={finalPnl} precision={2} suffix="USDT" /></Card></Col>
                     <Col xs={12} md={6}><Card size="small"><Statistic title="Max DD" value={maxDd} precision={2} suffix="%" /></Card></Col>
                     <Col xs={12} md={6}><Card size="small"><Statistic title="Margin load" value={marginLoad} precision={2} suffix="%" /></Card></Col>
                   </Row>
+                  )}
 
                   {equitySeries.length > 0 ? (
                     <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                      {isAdminSurface && (
                       <Space wrap>
                         <Checkbox checked={showBacktestTradeFreqOverlay} onChange={(event) => setShowBacktestTradeFreqOverlay(event.target.checked)}>
                           Показать частоту сделок по дням
@@ -11542,6 +11876,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             })()
                           : null}
                       </Space>
+                      )}
                       <ChartComponent
                         data={equitySeries.map((point) => ({ time: point.time, equity: point.value }))}
                         type="line"
@@ -11585,6 +11920,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     <Empty description="Пока нет equity-кривой" />
                   )}
 
+                  {isAdminSurface && (
                   <Row gutter={[12, 12]}>
                     <Col xs={24} md={8}>
                       <Card size="small" title="График P/L">
@@ -11605,8 +11941,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       </Card>
                     </Col>
                   </Row>
+                  )}
 
-                  {backtestDrawerContext.kind === 'algofund-ts' ? (
+                  {isAdminSurface && backtestDrawerContext.kind === 'algofund-ts' ? (
                     <Card size="small" title="Состав ТС в backtest (пары и веса)">
                       {(() => {
                         const idsFromResult = (adminSweepBacktestResult.selectedOffers || [])
@@ -11665,6 +12002,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     );
                   })()}
 
+                  {isAdminSurface && (
                   <Table
                     size="small"
                     rowKey="offerId"
@@ -11763,6 +12101,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       },
                     ]}
                   />
+                  )}
                 </Space>
               </Card>
             ) : (
