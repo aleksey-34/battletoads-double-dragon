@@ -102,6 +102,22 @@ const DEFAULT_STRATEGY: Omit<Strategy, 'api_key_id' | 'id'> = {
   last_error: null,
 };
 
+const getTypeAwareStrategyDefaults = (strategyType: StrategyType) => {
+  if (strategyType === 'stat_arb_zscore') {
+    return {
+      take_profit_percent: 0,
+      price_channel_length: 120,
+      detection_source: 'close' as const,
+    };
+  }
+
+  return {
+    take_profit_percent: DEFAULT_STRATEGY.take_profit_percent,
+    price_channel_length: DEFAULT_STRATEGY.price_channel_length,
+    detection_source: DEFAULT_STRATEGY.detection_source,
+  };
+};
+
 const safeBoolean = (value: any, fallback: boolean): boolean => {
   if (value === undefined || value === null) {
     return fallback;
@@ -212,6 +228,7 @@ const normalizeSymbolKey = (value: any): string => {
 const normalizeStrategy = (row: any): Strategy => {
   const strategyType = normalizeStrategyType(row.strategy_type);
   const marketMode = normalizeMarketMode(row.market_mode);
+  const typeDefaults = getTypeAwareStrategyDefaults(strategyType);
   const zscoreEntry = normalizeZscoreEntry(row.zscore_entry, DEFAULT_STRATEGY.zscore_entry);
   const zscoreExit = normalizeZscoreExit(row.zscore_exit, DEFAULT_STRATEGY.zscore_exit, zscoreEntry);
   const zscoreStop = normalizeZscoreStop(row.zscore_stop, DEFAULT_STRATEGY.zscore_stop, zscoreEntry);
@@ -231,9 +248,9 @@ const normalizeStrategy = (row: any): Strategy => {
     show_trades_on_chart: safeBoolean(row.show_trades_on_chart, false),
     show_values_each_bar: safeBoolean(row.show_values_each_bar, false),
     auto_update: safeBoolean(row.auto_update, true),
-    take_profit_percent: safeNumber(row.take_profit_percent, DEFAULT_STRATEGY.take_profit_percent),
-    price_channel_length: Math.max(2, Math.floor(safeNumber(row.price_channel_length, DEFAULT_STRATEGY.price_channel_length))),
-    detection_source: String(row.detection_source || DEFAULT_STRATEGY.detection_source) === 'wick' ? 'wick' : 'close',
+    take_profit_percent: safeNumber(row.take_profit_percent, typeDefaults.take_profit_percent),
+    price_channel_length: Math.max(2, Math.floor(safeNumber(row.price_channel_length, typeDefaults.price_channel_length))),
+    detection_source: String(row.detection_source || typeDefaults.detection_source) === 'wick' ? 'wick' : 'close',
     zscore_entry: zscoreEntry,
     zscore_exit: zscoreExit,
     zscore_stop: zscoreStop,
@@ -438,14 +455,14 @@ const computeSignalTotalNotional = (
   const lotPercent = signal === 'long' ? strategy.lot_long_percent : strategy.lot_short_percent;
   const lotFraction = Math.max(0, lotPercent) / 100;
   const reinvestFactor = strategy.fixed_lot ? 1 : 1 + Math.max(0, strategy.reinvest_percent) / 100;
-  const leverageFactor = Math.max(1, Number(strategy.leverage || 1));
 
   const baseCapital = strategy.fixed_lot
     ? (strategy.max_deposit > 0 ? strategy.max_deposit : cappedBalance)
     : cappedBalance;
 
-  // max_deposit is treated as margin cap, leverage expands target entry notional.
-  const totalNotional = baseCapital * lotFraction * reinvestFactor * leverageFactor;
+  // Notional = capital × lot_fraction. Leverage is an exchange margin setting only,
+  // NOT a position-size multiplier. Position weight is controlled via lot_percent/max_deposit.
+  const totalNotional = baseCapital * lotFraction * reinvestFactor;
 
   return Number.isFinite(totalNotional) && totalNotional > 0 ? totalNotional : 0;
 };
@@ -1446,6 +1463,7 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
 
   const strategyType = normalizeStrategyType(draft.strategy_type || DEFAULT_STRATEGY.strategy_type);
   const marketMode = normalizeMarketMode(draft.market_mode || DEFAULT_STRATEGY.market_mode);
+  const typeDefaults = getTypeAwareStrategyDefaults(strategyType);
   const zscoreEntry = normalizeZscoreEntry(draft.zscore_entry, DEFAULT_STRATEGY.zscore_entry);
   const zscoreExit = normalizeZscoreExit(draft.zscore_exit, DEFAULT_STRATEGY.zscore_exit, zscoreEntry);
   const zscoreStop = normalizeZscoreStop(draft.zscore_stop, DEFAULT_STRATEGY.zscore_stop, zscoreEntry);
@@ -1471,9 +1489,9 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
     show_trades_on_chart: safeBoolean(draft.show_trades_on_chart, DEFAULT_STRATEGY.show_trades_on_chart || false),
     show_values_each_bar: safeBoolean(draft.show_values_each_bar, DEFAULT_STRATEGY.show_values_each_bar),
     auto_update: safeBoolean(draft.auto_update, DEFAULT_STRATEGY.auto_update),
-    take_profit_percent: safeNumber(draft.take_profit_percent, DEFAULT_STRATEGY.take_profit_percent),
-    price_channel_length: Math.max(2, Math.floor(safeNumber(draft.price_channel_length, DEFAULT_STRATEGY.price_channel_length))),
-    detection_source: draft.detection_source === 'wick' ? 'wick' : 'close',
+    take_profit_percent: safeNumber(draft.take_profit_percent, typeDefaults.take_profit_percent),
+    price_channel_length: Math.max(2, Math.floor(safeNumber(draft.price_channel_length, typeDefaults.price_channel_length))),
+    detection_source: draft.detection_source === 'wick' ? 'wick' : typeDefaults.detection_source,
     zscore_entry: zscoreEntry,
     zscore_exit: zscoreExit,
     zscore_stop: zscoreStop,

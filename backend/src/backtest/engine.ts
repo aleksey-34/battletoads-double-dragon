@@ -557,9 +557,6 @@ const openPosition = (
     ? 1
     : 1 + Math.max(0, asNumber(strategy.reinvest_percent, 0)) / 100;
 
-  // Include leverage factor in notional calculation (matching live trading) 
-  const leverageFactor = Math.max(1, asNumber(strategy.leverage, 1));
-
   const maxDeposit = asNumber(strategy.max_deposit, 0);
   const cappedBalance = maxDeposit > 0
     ? Math.min(portfolioEquityNow, maxDeposit)
@@ -569,7 +566,9 @@ const openPosition = (
     ? (maxDeposit > 0 ? maxDeposit : portfolioEquityNow)
     : cappedBalance;
 
-  const notional = baseCapital * lotFraction * reinvestFactor * leverageFactor;
+  // Notional = capital × lot_fraction. Leverage is an exchange margin setting only,
+  // NOT a position-size multiplier (consistent with live trading).
+  const notional = baseCapital * lotFraction * reinvestFactor;
   if (!Number.isFinite(notional) || notional <= 0) {
     return false;
   }
