@@ -6900,6 +6900,14 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
     [nextAssignedApiKeyName, tenantId]
   );
 
+  // When toggling OFF: cancel orders, close positions
+  const wasEnabled = Number(existing.requested_enabled || 0) === 1;
+  if (wasEnabled && !nextRequestedEnabled && nextAssignedApiKeyName) {
+    logger.info(`[updateStrategyClientState] Tenant ${tenantId} toggled OFF — stopping orders/positions for ${nextAssignedApiKeyName}`);
+    try { await cancelAllOrders(nextAssignedApiKeyName); } catch (e) { logger.warn(`cancelAllOrders on toggle-off for ${nextAssignedApiKeyName}: ${(e as Error).message}`); }
+    try { await closeAllPositions(nextAssignedApiKeyName); } catch (e) { logger.warn(`closeAllPositions on toggle-off for ${nextAssignedApiKeyName}: ${(e as Error).message}`); }
+  }
+
   return getStrategyClientState(tenantId);
 };
 
@@ -8103,6 +8111,8 @@ export const updateAlgofundState = async (
     ? payload.requestedEnabled
     : Number(profile.requested_enabled || 0) === 1;
 
+  const wasEnabled = Number(profile.requested_enabled || 0) === 1;
+
   await db.run(
     `UPDATE algofund_profiles
      SET risk_multiplier = ?, assigned_api_key_name = ?, execution_api_key_name = ?, requested_enabled = ?, updated_at = CURRENT_TIMESTAMP
@@ -8116,6 +8126,17 @@ export const updateAlgofundState = async (
      WHERE id = ?`,
     [nextApiKeyName, tenantId]
   );
+
+  // When toggling OFF: cancel orders, close positions, mark actual_enabled = 0
+  if (wasEnabled && !nextRequestedEnabled && nextApiKeyName) {
+    logger.info(`[updateAlgofundState] Tenant ${tenantId} toggled OFF — stopping orders/positions for ${nextApiKeyName}`);
+    try { await cancelAllOrders(nextApiKeyName); } catch (e) { logger.warn(`cancelAllOrders on toggle-off for ${nextApiKeyName}: ${(e as Error).message}`); }
+    try { await closeAllPositions(nextApiKeyName); } catch (e) { logger.warn(`closeAllPositions on toggle-off for ${nextApiKeyName}: ${(e as Error).message}`); }
+    await db.run(
+      `UPDATE algofund_profiles SET actual_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?`,
+      [tenantId]
+    );
+  }
 
   return getAlgofundState(tenantId, nextRiskMultiplier);
 };

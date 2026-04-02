@@ -17,6 +17,7 @@ import Research from './pages/Research';
 import SaaS from './pages/SaaS';
 import AdminDocs from './pages/AdminDocs';
 import Landing from './pages/Landing';
+import Whitepaper from './pages/Whitepaper';
 import { I18nProvider, useI18n, UILanguage } from './i18n';
 import './App.css';
 
@@ -339,6 +340,7 @@ function AppWithProviders() {
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/landing" element={<Landing />} />
+          <Route path="/whitepaper" element={<Whitepaper />} />
           <Route path="*" element={<AppShell />} />
         </Routes>
       </Router>

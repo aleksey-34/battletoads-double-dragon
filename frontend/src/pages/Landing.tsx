@@ -13,6 +13,7 @@ import {
   BulbOutlined,
   GlobalOutlined,
   CopyOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
 
 const { Title, Paragraph, Text } = Typography;
@@ -290,6 +291,22 @@ export default function Landing() {
           >
             Войти <ArrowRightOutlined />
           </Button>
+          <Button
+            size="large"
+            icon={<FileTextOutlined />}
+            href="/whitepaper"
+            style={{
+              height: 48,
+              paddingInline: 28,
+              fontSize: 16,
+              borderRadius: 10,
+              background: 'rgba(255,255,255,0.03)',
+              border: '1px solid rgba(255,255,255,0.1)',
+              color: '#8899aa',
+            }}
+          >
+            Whitepaper
+          </Button>
         </Space>
         <div style={{ marginTop: 20 }}>
           <Tag color="green" style={{ fontSize: 12 }}>6 бирж · All Live</Tag>
@@ -481,7 +498,7 @@ export default function Landing() {
             <Button
               size="large"
               icon={<ArrowRightOutlined />}
-              href="https://t.me/"
+              href="https://t.me/yakovbyakov"
               target="_blank"
               style={{
                 height: 52,
@@ -510,6 +527,7 @@ export default function Landing() {
         <div style={{ display: 'flex', justifyContent: 'center', gap: 24, flexWrap: 'wrap' }}>
           <a href="/client/login" style={{ color: '#556677' }}>Клиентский вход</a>
           <a href="/client/register" style={{ color: '#556677' }}>Регистрация</a>
+          <a href="/whitepaper" style={{ color: '#556677' }}>Whitepaper</a>
           <a href="/login" style={{ color: '#556677' }}>Администратор</a>
         </div>
         <div style={{ marginTop: 16 }}>

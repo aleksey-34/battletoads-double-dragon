@@ -1,0 +1,579 @@
+<h1>BTDD Platform — Whitepaper v1.0</h1>
+<p><strong>Algorithmic Trading SaaS for Crypto Markets</strong></p>
+<p><em>April 2026</em></p>
+<hr>
+<h2>Table of Contents</h2>
+<ol>
+<li><a href="#1-executive-summary">Executive Summary</a></li>
+<li><a href="#2-problem-statement">Problem Statement</a></li>
+<li><a href="#3-solution-overview">Solution Overview</a></li>
+<li><a href="#4-trading-engine--strategies">Trading Engine &amp; Strategies</a></li>
+<li><a href="#5-backtesting--validation-pipeline">Backtesting &amp; Validation Pipeline</a></li>
+<li><a href="#6-platform-architecture">Platform Architecture</a></li>
+<li><a href="#7-client-modes--offerings">Client Modes &amp; Offerings</a></li>
+<li><a href="#8-risk-management">Risk Management</a></li>
+<li><a href="#9-exchange-integrations">Exchange Integrations</a></li>
+<li><a href="#10-performance-metrics">Performance Metrics</a></li>
+<li><a href="#11-technology-stack">Technology Stack</a></li>
+<li><a href="#12-roadmap">Roadmap</a></li>
+<li><a href="#13-team--contact">Team &amp; Contact</a></li>
+</ol>
+<hr>
+<h2>1. Executive Summary</h2>
+<p>BTDD Platform is a multi-tenant algorithmic trading SaaS that automates portfolio-level cryptocurrency trading for retail investors, fund managers, and copy-traders.</p>
+<p>The platform delivers a complete pipeline: <strong>market data collection → parametric strategy optimization → robustness filtering → portfolio construction → live execution</strong> — fully automated with institutional-grade backtesting rigor applied at retail scale.</p>
+<p><strong>Key results (validated on 15+ months of 4h Bybit data, Jan 2025 – Mar 2026):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Historical backtests completed</td>
+<td>9,108</td>
+</tr>
+<tr>
+<td>Robust strategy candidates</td>
+<td>3,129</td>
+</tr>
+<tr>
+<td>Portfolio return</td>
+<td><strong>+28.7%</strong></td>
+</tr>
+<tr>
+<td>Profit Factor</td>
+<td><strong>3.28</strong></td>
+</tr>
+<tr>
+<td>Max Drawdown</td>
+<td><strong>4.4%</strong></td>
+</tr>
+<tr>
+<td>Win Rate</td>
+<td>43.75% (181/416 trades)</td>
+</tr>
+<tr>
+<td>Exchanges connected</td>
+<td>6 (live)</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>2. Problem Statement</h2>
+<p>Retail crypto traders face compounding disadvantages:</p>
+<ul>
+<li><strong>Emotional trading</strong> leads to average retail loss rates of 70–90% across leveraged products</li>
+<li><strong>Strategy validation</strong> requires infrastructure (data feeds, backtest engines, cost modeling) that individual traders cannot easily build</li>
+<li><strong>Execution discipline</strong> — even profitable strategies underperform when manually executed due to missed entries, premature exits, and revenge trading</li>
+<li><strong>Multi-exchange complexity</strong> — each exchange has different APIs, fee structures, order types, and rate limits</li>
+<li><strong>Statistical illiteracy</strong> — most &quot;profitable&quot; strategies promoted online suffer from lookahead bias, curve fitting, or commission-free backtesting</li>
+</ul>
+<p>The core problem: <strong>there is no accessible, transparent platform where retail investors can invest in rigorously validated algorithmic strategies without trusting a black box.</strong></p>
+<hr>
+<h2>3. Solution Overview</h2>
+<p>BTDD Platform bridges the gap between institutional quantitative trading and retail accessibility:</p>
+<h3>3.1 Transparent Backtesting</h3>
+<p>Every performance number published on the platform is <strong>verifiable</strong>:</p>
+<ul>
+<li>Commissions included (0.06% entry + 0.06% exit)</li>
+<li>Slippage modeled (0.03% bid-ask spread)</li>
+<li>No lookahead bias — each bar processed sequentially</li>
+<li>Full parameter-to-result traceability</li>
+</ul>
+<h3>3.2 Multi-Strategy Portfolios</h3>
+<p>Rather than betting on a single strategy, the platform constructs <strong>portfolios</strong> of uncorrelated strategies across different markets and timeframes, reducing drawdown through diversification.</p>
+<h3>3.3 Multi-Tenant Isolation</h3>
+<p>Each client operates in an isolated environment with:</p>
+<ul>
+<li>Dedicated API key management</li>
+<li>Per-client risk parameters</li>
+<li>Separate monitoring and audit logs</li>
+<li>No cross-client data leakage</li>
+</ul>
+<h3>3.4 Three Access Modes</h3>
+<p>The platform serves different investor profiles through three distinct modes: Algofund (managed), Strategy Client (self-directed), and Copy Trading (social).</p>
+<hr>
+<h2>4. Trading Engine &amp; Strategies</h2>
+<h3>4.1 Strategy Types</h3>
+<p>The platform currently operates three validated strategy families:</p>
+<h4>DoubleDragon Breakout (DD_BattleToads)</h4>
+<ul>
+<li><strong>Type:</strong> Trend-following breakout</li>
+<li><strong>Signal:</strong> Donchian channel breakout (N-bar high/low penetration)</li>
+<li><strong>Entry detection:</strong> Close-based (conservative) or Wick-based (aggressive)</li>
+<li><strong>Exit — Profit:</strong> Trailing stop from equity peak (TP = 2–10%)</li>
+<li><strong>Exit — Loss:</strong> Donchian channel center as hard stop-loss</li>
+<li><strong>Modes:</strong> Mono (single asset) and Synthetic (pair trading)</li>
+<li><strong>Optimal parameters:</strong> Length 12–36 bars, TP 5–7.5%, 4h timeframe</li>
+<li><strong>Best conditions:</strong> Trending markets with clear directional impulses</li>
+</ul>
+<h4>ZigZag Breakout (zz_breakout)</h4>
+<ul>
+<li><strong>Type:</strong> Structural breakout, faster variant</li>
+<li><strong>Signal:</strong> Same Donchian mechanism as DD with shorter lookback periods</li>
+<li><strong>Differentiator:</strong> Length 5–16 bars for quicker reaction to regime changes</li>
+<li><strong>Exit:</strong> Tighter trailing TP (2–5%) generating higher trade frequency</li>
+<li><strong>Win Rate:</strong> 43–51% on robust candidates</li>
+<li><strong>Best conditions:</strong> High-volatility choppy markets</li>
+</ul>
+<h4>Statistical Arbitrage Z-Score (stat_arb_zscore)</h4>
+<ul>
+<li><strong>Type:</strong> Mean-reversion / statistical arbitrage</li>
+<li><strong>Signal:</strong> Z-score deviation on synthetic instrument pair<ul>
+<li><strong>Entry Long:</strong> Z &lt; −2.0σ (pair undervalued)</li>
+<li><strong>Entry Short:</strong> Z &gt; +2.0σ (pair overvalued)</li>
+<li><strong>Exit (revert):</strong> Z returns within ±0.5σ of mean</li>
+<li><strong>Stop (trend break):</strong> Z exceeds ±3.5σ (regime change)</li>
+</ul>
+</li>
+<li><strong>Formula:</strong> <code>Z = (price − mean[120 bars]) / σ</code></li>
+<li><strong>Ideal Pairs:</strong> Correlated crypto ecosystems — DeFi tokens, Layer-2 protocols, oracle networks</li>
+<li><strong>Example pairs:</strong> ORDI/ZEC, IP/ZEC, GRT/INJ, BERA/ZEC</li>
+</ul>
+<h3>4.2 Market Modes</h3>
+<p><strong>Mono Mode</strong> — Single instrument execution (BTCUSDT, ETHUSDT, etc.). Standard OHLCV data, single order fills.</p>
+<p><strong>Synthetic Mode</strong> — Two-instrument pair trading. The platform constructs a synthetic price:</p>
+<p>$$P_{synthetic} = \frac{\alpha \cdot P_{base}}{\beta \cdot P_{quote}}$$</p>
+<p>where α, β are balancing coefficients. Execution requires parallel orders on both legs with balanced notional. This mode <strong>reduces market beta</strong> and increases signal stationarity — an edge unavailable to single-coin platforms.</p>
+<h3>4.3 Position Sizing</h3>
+<p>Target notional is calculated as:</p>
+<p>$$N_{target} = Balance \times \frac{lot%}{100} \times R_{reinvest}$$</p>
+<p>The engine performs a grid search over quantity candidates (±3 steps from raw quantity) with multi-criteria scoring: share error (1000 pts) + leg deviation (200 pts) + oversize penalty (10 pts). Maximum share error tolerance: 50%.</p>
+<hr>
+<h2>5. Backtesting &amp; Validation Pipeline</h2>
+<h3>5.1 Event Loop Architecture</h3>
+<pre><code>For each closed bar:
+  1. Load candle (OHLCV or synthetic computed)
+  2. Deduplicate — process each final bar exactly once
+  3. Compute signal (Donchian breakout or Z-score threshold)
+  4. Check exit conditions (TP trailing, center SL, Z thresholds)
+  5. Check entry conditions (signal ≠ &#39;none&#39;)
+  6. Record state, equity, and realized PnL
+</code></pre>
+<h3>5.2 Cost Model</h3>
+<p>Every backtest includes realistic execution costs:</p>
+<table>
+<thead>
+<tr>
+<th>Cost Component</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Maker/Taker commission</td>
+<td>0.06% per side</td>
+</tr>
+<tr>
+<td>Slippage (bid-ask model)</td>
+<td>0.03%</td>
+</tr>
+<tr>
+<td>Funding rate</td>
+<td>Per-bar accrual if leveraged</td>
+</tr>
+<tr>
+<td><strong>Total round-trip cost</strong></td>
+<td><strong>~0.15%</strong></td>
+</tr>
+</tbody></table>
+<h3>5.3 Historical Sweep (9,108 Variants)</h3>
+<p>The platform performed an exhaustive parametric sweep across all strategy families:</p>
+<table>
+<thead>
+<tr>
+<th>Strategy</th>
+<th>Parameter Grid</th>
+<th>Variants per Market</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>DoubleDragon</td>
+<td>length[5,8,12,16,24,36] × TP[2–10%] × source[close,wick]</td>
+<td>72</td>
+</tr>
+<tr>
+<td>ZigZag</td>
+<td>length[5,8,12,16] × TP[2–5%] × source[close,wick]</td>
+<td>48</td>
+</tr>
+<tr>
+<td>StatArb</td>
+<td>length[24–120] × ZE[1.25–2.25] × ZX[0.5–1.0] × ZS[2.5–3.5]</td>
+<td>270</td>
+</tr>
+</tbody></table>
+<p>Applied across 12 mono markets + N² synthetic pairs on 4h Bybit historical data (Jan 2025 – Mar 2026).</p>
+<h3>5.4 Robustness Filter</h3>
+<p>A strategy candidate passes the robustness filter only if ALL criteria are met:</p>
+<ul>
+<li><strong>Profit Factor ≥ 1.15</strong> (gross profit / gross loss)</li>
+<li><strong>Max Drawdown ≤ 22%</strong> (peak-to-trough equity decline)</li>
+<li><strong>Trade Count ≥ 40</strong> (statistical significance threshold)</li>
+</ul>
+<p><strong>Result:</strong> 3,129 out of 9,108 variants passed (34.4% pass rate).</p>
+<h3>5.5 Portfolio Construction</h3>
+<p>The top 8 candidates per market type are selected for portfolio construction. Portfolio equity is the aggregate of all constituent strategies:</p>
+<p>$$Equity_{portfolio}(t) = Cash(t) + \sum_{i=1}^{N} UPnL_i(t)$$</p>
+<p>$$Drawdown(t) = \frac{Peak(t) - Equity(t)}{Peak(t)} \times 100%$$</p>
+<p>The resulting portfolio achieves <strong>+28.7% return with only 4.4% max drawdown</strong> — a return-to-risk ratio of <strong>6.5:1</strong>.</p>
+<hr>
+<h2>6. Platform Architecture</h2>
+<h3>6.1 Three-Circuit Isolation</h3>
+<p>The platform is designed with strict domain-level isolation:</p>
+<pre><code>┌─────────────────────────────────────────────────────┐
+│                    BTDD Platform                     │
+│                                                      │
+│  ┌──────────┐  ┌───────────┐  ┌──────────────────┐  │
+│  │ RUNTIME  │  │ RESEARCH  │  │  PRODUCTION/SaaS │  │
+│  │ Circuit  │  │ Circuit   │  │     Circuit       │  │
+│  │          │  │           │  │                   │  │
+│  │runtime.db│  │research.db│  │     main.db       │  │
+│  │          │  │           │  │                   │  │
+│  │• Execute │  │• Backtest │  │• Tenant mgmt     │  │
+│  │• Monitor │  │• Sweep    │  │• Subscriptions   │  │
+│  │• Risk    │  │• Optimize │  │• Client catalog  │  │
+│  │• Trade   │  │• Publish  │  │• RBAC &amp; auth     │  │
+│  └──────────┘  └───────────┘  └──────────────────┘  │
+│                                                      │
+│  ┌──────────────────────────────────────────────────┐│
+│  │              API Gateway (Express)               ││
+│  │  /api/admin/*  /api/research/*  /api/client/*    ││
+│  └──────────────────────────────────────────────────┘│
+└─────────────────────────────────────────────────────┘
+</code></pre>
+<p><strong>Runtime Circuit</strong> handles live trade execution with zero-downtime guarantees. It runs as an isolated systemd service with its own database, ensuring that research or SaaS operations never interfere with order execution.</p>
+<p><strong>Research Circuit</strong> manages backtesting, parametric sweeps, and strategy optimization. It includes checkpoint/resume for long-running sweeps and a publish gate that promotes validated candidates to the runtime circuit.</p>
+<p><strong>Production Circuit</strong> serves the multi-tenant SaaS layer — tenant management, subscription billing, client catalogs, and role-based access control.</p>
+<h3>6.2 API Gateway</h3>
+<table>
+<thead>
+<tr>
+<th>Endpoint Pattern</th>
+<th>Access</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>/api/admin/*</code></td>
+<td>Admin auth</td>
+<td>Runtime + research read/write</td>
+</tr>
+<tr>
+<td><code>/api/research/*</code></td>
+<td>Admin auth</td>
+<td>Backtest, sweep, candidates</td>
+</tr>
+<tr>
+<td><code>/api/client/*</code></td>
+<td>Client auth</td>
+<td>Catalog, preview, subscribe</td>
+</tr>
+<tr>
+<td><code>/api/saas/*</code></td>
+<td>Admin/Client</td>
+<td>Tenant management, algofund</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>7. Client Modes &amp; Offerings</h2>
+<h3>7.1 Algofund (Managed Account)</h3>
+<p>The simplest entry point for investors. The client deposits USDT into their exchange account, connects API keys (trade-only, no withdrawal), and the platform manages everything:</p>
+<ul>
+<li><strong>Admin controls:</strong> Strategy selection, parameters, rebalancing</li>
+<li><strong>Client sees:</strong> Equity curve, return %, key metrics, risk multiplier</li>
+<li><strong>Client actions:</strong> Start/stop requests, risk cap adjustment</li>
+<li><strong>Pricing:</strong> 20–200 USDT/month depending on deposit tier</li>
+<li><strong>Risk cap range:</strong> 0–2.5× (client-adjustable within admin bounds)</li>
+</ul>
+<h3>7.2 Strategy Client (Self-Directed)</h3>
+<p>For investors who want to choose their own strategies:</p>
+<ul>
+<li><strong>Catalog browsing:</strong> View all published strategies with full metrics</li>
+<li><strong>Two-slider UX:</strong> Risk level (1–5) × Trade frequency (1–5) → maps to optimized preset</li>
+<li><strong>Equity preview:</strong> Backtest results for selected configuration before going live</li>
+<li><strong>Strategy quota:</strong> 1–3 strategies per subscription tier</li>
+<li><strong>Pricing:</strong> 15–100 USDT/month, max deposit 1,000–10,000 USDT</li>
+</ul>
+<h3>7.3 Copy Trading (Social)</h3>
+<p>Mirrors an existing subscriber&#39;s portfolio:</p>
+<ul>
+<li><strong>Auto-scaling:</strong> Adjusts position sizes proportionally to the copier&#39;s deposit</li>
+<li><strong>Independent risk control:</strong> The copier can set their own risk limits</li>
+<li><strong>Transparency:</strong> Full visibility into the signal source&#39;s track record</li>
+</ul>
+<hr>
+<h2>8. Risk Management</h2>
+<h3>8.1 Strategy-Level Controls</h3>
+<p>Each active strategy has configurable risk parameters:</p>
+<table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Description</th>
+<th>Typical Range</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>lot_percent</code></td>
+<td>Position size as % of balance</td>
+<td>3–15%</td>
+</tr>
+<tr>
+<td><code>leverage</code></td>
+<td>Exchange margin leverage</td>
+<td>1–10×</td>
+</tr>
+<tr>
+<td><code>margin_type</code></td>
+<td>Cross or Isolated margin</td>
+<td>Per strategy</td>
+</tr>
+<tr>
+<td><code>max_deposit</code></td>
+<td>Maximum capital per strategy</td>
+<td>500–5,000 USDT</td>
+</tr>
+<tr>
+<td><code>emergency_stop_dd</code></td>
+<td>Auto-stop drawdown threshold</td>
+<td>15–25%</td>
+</tr>
+</tbody></table>
+<h3>8.2 Portfolio-Level Controls</h3>
+<ul>
+<li><strong>Monitoring snapshots:</strong> Equity, unrealized PnL, drawdown, and margin load sampled every N seconds</li>
+<li><strong>Emergency stop:</strong> If portfolio drawdown exceeds threshold → automatic pause → close all positions</li>
+<li><strong>Margin load tracking:</strong> Alerts when total margin utilization approaches exchange limits</li>
+</ul>
+<h3>8.3 Client-Level Isolation</h3>
+<ul>
+<li>Each client has independent API keys stored encrypted</li>
+<li>Position actions are scoped to the client&#39;s sub-account</li>
+<li>No shared order books or cross-client exposure</li>
+<li>Audit log for every trade action, start/stop, parameter change</li>
+</ul>
+<hr>
+<h2>9. Exchange Integrations</h2>
+<table>
+<thead>
+<tr>
+<th>Exchange</th>
+<th>Integration</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Bybit</strong></td>
+<td>Native (RestClientV5)</td>
+<td>✅ Live Primary</td>
+<td>Full feature support, derivatives + spot</td>
+</tr>
+<tr>
+<td><strong>Binance</strong></td>
+<td>ccxt + native extensions</td>
+<td>✅ Live</td>
+<td>USDt-M Futures</td>
+</tr>
+<tr>
+<td><strong>Bitget</strong></td>
+<td>ccxt</td>
+<td>✅ Live</td>
+<td>USDT-M Contracts</td>
+</tr>
+<tr>
+<td><strong>BingX</strong></td>
+<td>ccxt</td>
+<td>✅ Live</td>
+<td>Standard contracts</td>
+</tr>
+<tr>
+<td><strong>MEXC</strong></td>
+<td>ccxt</td>
+<td>✅ Live</td>
+<td>USDT-M Futures</td>
+</tr>
+<tr>
+<td><strong>Weex</strong></td>
+<td>Native client</td>
+<td>✅ Live</td>
+<td>Custom connector</td>
+</tr>
+</tbody></table>
+<p>The platform uses a unified exchange abstraction layer (<code>detectExchange()</code>) that routes orders to the correct connector based on the client&#39;s configured exchange. Adding new exchanges requires only implementing the connector interface — no changes to strategy or risk logic.</p>
+<hr>
+<h2>10. Performance Metrics</h2>
+<h3>10.1 Portfolio Summary (Full Range)</h3>
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Measurement period</td>
+<td>Jan 2025 – Mar 2026 (15 months)</td>
+</tr>
+<tr>
+<td>Timeframe</td>
+<td>4h bars</td>
+</tr>
+<tr>
+<td>Data source</td>
+<td>Bybit historical OHLCV</td>
+</tr>
+<tr>
+<td>Total backtests</td>
+<td>9,108</td>
+</tr>
+<tr>
+<td>Robust candidates</td>
+<td>3,129 (34.4%)</td>
+</tr>
+<tr>
+<td><strong>Portfolio return</strong></td>
+<td><strong>+28.7%</strong></td>
+</tr>
+<tr>
+<td><strong>Profit Factor</strong></td>
+<td><strong>3.28</strong></td>
+</tr>
+<tr>
+<td><strong>Max Drawdown</strong></td>
+<td><strong>4.4%</strong></td>
+</tr>
+<tr>
+<td>Win Rate</td>
+<td>43.75%</td>
+</tr>
+<tr>
+<td>Total trades</td>
+<td>416</td>
+</tr>
+<tr>
+<td><strong>Return / MaxDD ratio</strong></td>
+<td><strong>6.5:1</strong></td>
+</tr>
+</tbody></table>
+<h3>10.2 Interpretation</h3>
+<ul>
+<li>A Profit Factor of 3.28 means <strong>for every $1 lost, the portfolio earned $3.28</strong></li>
+<li>Max Drawdown of 4.4% means <strong>the worst peak-to-trough decline was only 4.4%</strong> — significantly lower than typical crypto fund drawdowns (20–40%)</li>
+<li>The 43.75% win rate is expected for trend-following strategies — profits are earned through positive expectancy (winners significantly larger than losers), not win frequency</li>
+</ul>
+<h3>10.3 Out-of-Sample Validation</h3>
+<p>The robustness filter requires a minimum of 40 trades to ensure statistical significance. Candidates are evaluated on the <strong>full historical range</strong> — there is no in-sample/out-of-sample split in the current methodology. Walk-forward validation is planned for v2.0.</p>
+<hr>
+<h2>11. Technology Stack</h2>
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Technology</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Backend runtime</td>
+<td>Node.js 20, TypeScript, Express</td>
+</tr>
+<tr>
+<td>Database</td>
+<td>SQLite (3 isolated databases)</td>
+</tr>
+<tr>
+<td>Frontend</td>
+<td>React 18, Ant Design 5, TypeScript</td>
+</tr>
+<tr>
+<td>Charts</td>
+<td>Lightweight Charts (TradingView)</td>
+</tr>
+<tr>
+<td>Exchange SDK</td>
+<td>Bybit RestClientV5 (native), ccxt (multi-exchange)</td>
+</tr>
+<tr>
+<td>Process management</td>
+<td>systemd (3 services: api, runtime, research)</td>
+</tr>
+<tr>
+<td>Reverse proxy</td>
+<td>nginx</td>
+</tr>
+<tr>
+<td>SSL/CDN</td>
+<td>Cloudflare Tunnel</td>
+</tr>
+<tr>
+<td>CI/CD</td>
+<td>GitHub → VPS pull-deploy</td>
+</tr>
+<tr>
+<td>Monitoring</td>
+<td>Internal snapshots + audit log</td>
+</tr>
+<tr>
+<td>Localization</td>
+<td>RU / EN / TR</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>12. Roadmap</h2>
+<h3>Phase 1 — Current (Q1 2026) ✅</h3>
+<ul>
+<li>✅ Live MVP with 3 strategy types</li>
+<li>✅ 9,108 backtest sweep completed</li>
+<li>✅ 6 exchange integrations</li>
+<li>✅ Multi-tenant SaaS with 3 client modes</li>
+<li>✅ Admin panel + client cabinet</li>
+<li>✅ Dark theme, professional UI</li>
+<li>✅ Landing page with real metrics</li>
+</ul>
+<h3>Phase 2 — Growth (Q2 2026)</h3>
+<ul>
+<li>Walk-forward out-of-sample validation</li>
+<li>Telegram bot notifications for trades &amp; alerts</li>
+<li>On-boarding funnel with automated KYC-light</li>
+<li>OKX exchange integration</li>
+<li>Payment integration (crypto billing)</li>
+<li>Client referral program</li>
+</ul>
+<h3>Phase 3 — Scale (Q3–Q4 2026)</h3>
+<ul>
+<li>Redis-based event queue for horizontal scaling</li>
+<li>Separate execution-plane and research-plane VPS instances</li>
+<li>Reinforcement learning for dynamic parameter adjustment</li>
+<li>Mobile-responsive client dashboard</li>
+<li>Institutional API access tier</li>
+<li>Compliance audit &amp; security penetration testing</li>
+<li>Multi-language documentation expansion</li>
+</ul>
+<h3>Phase 4 — Ecosystem (2027)</h3>
+<ul>
+<li>DEX integration (on-chain execution)</li>
+<li>Strategy marketplace (third-party strategy submission)</li>
+<li>Social trading leaderboard</li>
+<li>DAO governance for fee parameters (optional)</li>
+</ul>
+<hr>
+<h2>13. Team &amp; Contact</h2>
+<p><strong>Founder &amp; CTO:</strong> Алексей Лазарев / Aleksei Lazarev</p>
+<ul>
+<li>5+ years in algorithmic trading systems development</li>
+<li>Node.js / TypeScript specialist</li>
+<li>Crypto derivatives market experience</li>
+</ul>
+<p><strong>Contact:</strong></p>
+<ul>
+<li><strong>Email:</strong> <a href="mailto:aiaetrade17@gmail.com">aiaetrade17@gmail.com</a></li>
+<li><strong>Telegram:</strong> @yakovbyakov</li>
+<li><strong>GitHub:</strong> <a href="https://github.com/aleksey-34/battletoads-double-dragon">github.com/aleksey-34/battletoads-double-dragon</a></li>
+</ul>
+<hr>
+<h2>Disclaimer</h2>
+<p>Past performance does not guarantee future results. All metrics presented are based on historical backtesting with simulated execution costs. Live trading involves additional risks including but not limited to: exchange downtime, API rate limits, liquidity gaps, regulatory changes, and black swan events. Users should only invest capital they can afford to lose. BTDD Platform does not provide financial advice.</p>
+<hr>
+<p><em>BTDD Platform Whitepaper v1.0 — April 2026</em>
+<em>© 2026 BTDD Platform. All rights reserved.</em></p>
