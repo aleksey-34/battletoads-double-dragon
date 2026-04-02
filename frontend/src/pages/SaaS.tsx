@@ -3186,6 +3186,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const tsDisplayName = (systemName: string): string => normalizeTsToken(systemName) || systemName;
 
+  const getTsStrategyHint = (systemName: string): string | null => {
+    const upper = String(systemName || '').toUpperCase();
+    if (upper.includes('_SA_') || upper.includes('STAT_ARB') || upper.includes('STATARB') || upper.includes('-SA-')) {
+      return 'StatArb Z-Score — возврат к среднему\nОткрывает позицию когда цена отклоняется на ≥N σ от скользящего среднего пары и ждёт возврата к среднему.\nЛучше работает на синтетических парах в боковом рынке.';
+    }
+    if (upper.includes('_ZZ_') || upper.includes('ZIGZAG') || upper.includes('-ZZ-') || upper.includes('ZZ_BREAKOUT')) {
+      return 'ZigZag Breakout — пробой канала (короткий период)\nЛонг/шорт при пробое N-бар максимума/минимума по Дончиану.\nКороткий период = более частые сделки, ниже удержание.';
+    }
+    if (upper.includes('_DD_') || upper.includes('BTDD') || upper.includes('DD_BATTLETOADS') || upper.includes('-DD-')) {
+      return 'DoubleDragon Breakout — пробой канала Дончиана\nЛонг/шорт при пробое N-бар максимума/минимума.\nТрейлинговый TP от пика позиции. Работает на моно и синтетических парах.';
+    }
+    return null;
+  };
+
   const matchesTsSnapshotToken = useCallback((systemName: string, token: string): boolean => {
     const rawToken = String(token || '').trim().toLowerCase();
     if (!rawToken) {
@@ -7951,7 +7965,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           <List.Item.Meta
                                             title={
                                               <Space wrap>
-                                                <Text strong>{tsDisplayName(item.systemName)}</Text>
+                                                <Tooltip title={getTsStrategyHint(item.systemName) ?? undefined} placement="topLeft"><Text strong style={{ cursor: getTsStrategyHint(item.systemName) ? 'help' : undefined }}>{tsDisplayName(item.systemName)}</Text></Tooltip>
                                                 {item.runtimeSystemId ? <Tag color="geekblue">system #{item.runtimeSystemId}</Tag> : null}
                                                 <Tag color="processing">clients {item.tenantCount}</Tag>
                                                 <Tag color="success">active {item.activeCount}</Tag>
@@ -9723,7 +9737,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                 bordered
                                                 title={
                                                   <Space>
-                                                    <Text strong>{tsDisplayName(item.systemName)}</Text>
+                                                    <Tooltip title={getTsStrategyHint(item.systemName) ?? undefined} placement="topLeft"><Text strong style={{ cursor: getTsStrategyHint(item.systemName) ? 'help' : undefined }}>{tsDisplayName(item.systemName)}</Text></Tooltip>
                                                     {item.activeCount > 0
                                                       ? <Badge status="success" text="active" />
                                                       : item.pendingCount > 0

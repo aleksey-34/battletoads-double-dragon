@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BTDD Admin Docs</title>
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      min-height: 100vh;
+    }
+    header {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 16px 32px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    header h1 {
+      font-size: 18px;
+      font-weight: 600;
+      color: #f0f6fc;
+    }
+    header span.badge {
+      background: #1f6feb;
+      color: #fff;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+    }
+    nav {
+      background: #161b22;
+      border-bottom: 1px solid #30363d;
+      padding: 0 32px;
+      display: flex;
+      gap: 0;
+    }
+    nav button {
+      background: none;
+      border: none;
+      border-bottom: 2px solid transparent;
+      color: #8b949e;
+      cursor: pointer;
+      font-size: 14px;
+      padding: 12px 16px;
+      transition: color 0.15s, border-color 0.15s;
+    }
+    nav button:hover { color: #c9d1d9; }
+    nav button.active {
+      color: #f0f6fc;
+      border-bottom-color: #f78166;
+    }
+    main {
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 32px;
+    }
+    .doc-header {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 24px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .doc-header .title { font-size: 16px; font-weight: 600; color: #f0f6fc; }
+    .doc-header .meta { font-size: 12px; color: #8b949e; }
+    #content {
+      background: #161b22;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 32px;
+      line-height: 1.7;
+    }
+    #loading {
+      text-align: center;
+      padding: 48px;
+      color: #8b949e;
+    }
+    /* Markdown styles */
+    #content h1 { font-size: 28px; font-weight: 600; color: #f0f6fc; margin: 0 0 24px; padding-bottom: 12px; border-bottom: 1px solid #30363d; }
+    #content h2 { font-size: 22px; font-weight: 600; color: #f0f6fc; margin: 32px 0 16px; padding-bottom: 8px; border-bottom: 1px solid #21262d; }
+    #content h3 { font-size: 18px; font-weight: 600; color: #e6edf3; margin: 24px 0 12px; }
+    #content h4 { font-size: 15px; font-weight: 600; color: #c9d1d9; margin: 16px 0 8px; }
+    #content p { margin: 8px 0 16px; }
+    #content ul, #content ol { margin: 8px 0 16px; padding-left: 24px; }
+    #content li { margin: 4px 0; }
+    #content code {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 4px;
+      padding: 2px 6px;
+      font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+      font-size: 13px;
+      color: #f2cc60;
+    }
+    #content pre {
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 16px;
+      overflow-x: auto;
+      margin: 16px 0;
+    }
+    #content pre code {
+      background: none;
+      border: none;
+      padding: 0;
+      color: #a5d6ff;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    #content table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 14px;
+    }
+    #content th {
+      background: #21262d;
+      border: 1px solid #30363d;
+      padding: 8px 12px;
+      text-align: left;
+      color: #f0f6fc;
+      font-weight: 600;
+    }
+    #content td {
+      border: 1px solid #30363d;
+      padding: 8px 12px;
+      color: #c9d1d9;
+    }
+    #content tr:nth-child(even) td { background: #161b22; }
+    #content tr:hover td { background: #21262d; }
+    #content blockquote {
+      border-left: 4px solid #1f6feb;
+      margin: 16px 0;
+      padding: 8px 16px;
+      background: #0d2045;
+      border-radius: 0 4px 4px 0;
+      color: #79c0ff;
+    }
+    #content hr { border: none; border-top: 1px solid #30363d; margin: 24px 0; }
+    #content a { color: #58a6ff; text-decoration: none; }
+    #content a:hover { text-decoration: underline; }
+    #content strong { color: #f0f6fc; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🐸 BattleToads DD — Admin Docs</h1>
+    <span class="badge">Internal</span>
+  </header>
+  <nav id="nav">
+    <button data-doc="RUNTIME_ARCHITECTURE" class="active">Рантайм</button>
+    <button data-doc="STRATEGIES_DEEP_DIVE">Стратегии</button>
+    <button data-doc="ASSESSMENT_ROADMAP">Оценка и план</button>
+  </nav>
+  <main>
+    <div class="doc-header">
+      <div class="title" id="doc-title">Runtime Architecture</div>
+      <div class="meta" id="doc-meta">Загрузка...</div>
+    </div>
+    <div id="loading">Загрузка документа...</div>
+    <div id="content" style="display:none"></div>
+  </main>
+
+  <script>
+    const docs = {
+      'RUNTIME_ARCHITECTURE': { title: 'Карта рантайма — движок / бэктест / свип', file: 'RUNTIME_ARCHITECTURE.md' },
+      'STRATEGIES_DEEP_DIVE': { title: 'Описание стратегий — DD, ZigZag, StatArb', file: 'STRATEGIES_DEEP_DIVE.md' },
+      'ASSESSMENT_ROADMAP':   { title: 'Оценка системы и дорожная карта', file: 'ASSESSMENT_ROADMAP.md' },
+    };
+
+    let currentDoc = 'RUNTIME_ARCHITECTURE';
+
+    function setActive(key) {
+      document.querySelectorAll('nav button').forEach(b => {
+        b.classList.toggle('active', b.dataset.doc === key);
+      });
+    }
+
+    async function loadDoc(key) {
+      currentDoc = key;
+      setActive(key);
+      const meta = docs[key];
+      document.getElementById('doc-title').textContent = meta.title;
+      document.getElementById('doc-meta').textContent = 'Загрузка...';
+      document.getElementById('loading').style.display = 'block';
+      document.getElementById('content').style.display = 'none';
+
+      try {
+        const res = await fetch(meta.file + '?_=' + Date.now());
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const text = await res.text();
+        const html = marked.parse(text);
+        document.getElementById('content').innerHTML = html;
+        document.getElementById('loading').style.display = 'none';
+        document.getElementById('content').style.display = 'block';
+
+        // Extract date from first h1 line area
+        const dateMatch = text.match(/\*\*Дата:\*\*\s*([\d\-]+)/);
+        const verMatch  = text.match(/\*\*Версия:\*\*\s*([\S]+)/);
+        const dateStr = dateMatch ? dateMatch[1] : '';
+        const verStr  = verMatch  ? verMatch[1]  : '';
+        document.getElementById('doc-meta').textContent =
+          [dateStr && ('Дата: ' + dateStr), verStr && ('v' + verStr)].filter(Boolean).join(' · ');
+      } catch (e) {
+        document.getElementById('loading').textContent = 'Ошибка загрузки: ' + e.message;
+      }
+    }
+
+    document.querySelectorAll('nav button').forEach(btn => {
+      btn.addEventListener('click', () => loadDoc(btn.dataset.doc));
+    });
+
+    loadDoc('RUNTIME_ARCHITECTURE');
+  </script>
+</body>
+</html>
