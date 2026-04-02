@@ -417,6 +417,13 @@ export const initExchangeClient = (apiKey: ApiKey) => {
       throw new Error(`Exchange ${exchange} is not available in ccxt`);
     }
 
+    // CCXT 4.5.42 mexc driver hardcodes unavailableContracts in its constructor,
+    // ignoring the option passed via config. Force-clear it after instantiation
+    // so BTC/USDT:USDT, LTC/USDT:USDT, ETH/USDT:USDT can be traded.
+    if (exchange === 'mexc' && client.options?.unavailableContracts) {
+      client.options.unavailableContracts = {};
+    }
+
     if (apiKey.testnet && typeof client.setSandboxMode === 'function') {
       client.setSandboxMode(true);
     }
