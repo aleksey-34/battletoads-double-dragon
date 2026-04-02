@@ -167,6 +167,26 @@ const CLIENT_EXCHANGE_GUIDES: Record<string, { id: string; title: string; fileNa
     title: 'BingX API Key Quick Guide',
     fileName: 'bingx-api-key-quick-guide.md',
   },
+  bitget: {
+    id: 'bitget',
+    title: 'Bitget API Key Quick Guide',
+    fileName: 'bitget-api-key-quick-guide.md',
+  },
+  weex: {
+    id: 'weex',
+    title: 'WEEX API Key Quick Guide',
+    fileName: 'weex-api-key-quick-guide.md',
+  },
+  mexc: {
+    id: 'mexc',
+    title: 'MEXC API Key Quick Guide',
+    fileName: 'mexc-api-key-quick-guide.md',
+  },
+};
+
+const exchangeRequiresPassphrase = (exchange: string): boolean => {
+  const normalized = String(exchange || '').trim().toLowerCase();
+  return normalized.includes('bitget') || normalized.includes('weex');
 };
 
 type AdminMarkdownDocRecord = {
@@ -582,6 +602,7 @@ router.patch('/client/strategy/profile', authenticateClient, async (req, res) =>
       selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
       riskLevel: req.body?.riskLevel,
       tradeFrequencyLevel: req.body?.tradeFrequencyLevel,
+      assignedApiKeyName: req.body?.assignedApiKeyName !== undefined ? String(req.body.assignedApiKeyName || '').trim() : undefined,
       requestedEnabled: toOptionalBool(req.body?.requestedEnabled),
     });
 
@@ -840,6 +861,8 @@ router.patch('/client/algofund/profile', authenticateClient, async (req, res) =>
 
     const state = await updateAlgofundState(Number(session.user.tenantId), {
       riskMultiplier: toOptionalNumber(req.body?.riskMultiplier),
+      assignedApiKeyName: req.body?.assignedApiKeyName !== undefined ? String(req.body.assignedApiKeyName || '').trim() : undefined,
+      requestedEnabled: toOptionalBool(req.body?.requestedEnabled),
     });
 
     res.json({ success: true, state });
@@ -901,6 +924,9 @@ router.post('/client/api-key', authenticateClient, async (req, res) => {
     }
     if (!apiKey || !secret) {
       return res.status(400).json({ error: 'apiKey and secret are required' });
+    }
+    if (exchangeRequiresPassphrase(exchange) && !passphrase) {
+      return res.status(400).json({ error: 'passphrase is required for this exchange' });
     }
 
     const tenantId = Number(session.user.tenantId);
@@ -965,11 +991,23 @@ router.get('/client/api-keys', authenticateClient, async (req, res) => {
       'SELECT assigned_api_key_name FROM tenants WHERE id = ?',
       [tenantId]
     ) as { assigned_api_key_name?: string } | undefined;
+    const strategyProfile = await db.get(
+      'SELECT assigned_api_key_name FROM strategy_client_profiles WHERE tenant_id = ?',
+      [tenantId]
+    ) as { assigned_api_key_name?: string } | undefined;
+    const algofundProfile = await db.get(
+      'SELECT assigned_api_key_name, execution_api_key_name FROM algofund_profiles WHERE tenant_id = ?',
+      [tenantId]
+    ) as { assigned_api_key_name?: string; execution_api_key_name?: string } | undefined;
     const assignedName = String(tenant?.assigned_api_key_name || '').trim();
+    const strategyAssignedName = String(strategyProfile?.assigned_api_key_name || '').trim();
+    const algofundAssignedName = String(algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name || '').trim();
 
     res.json({
       success: true,
       assignedApiKeyName: assignedName,
+      strategyAssignedApiKeyName: strategyAssignedName,
+      algofundAssignedApiKeyName: algofundAssignedName,
       keys: (rows || []).map((row) => ({
         id: Number(row.id || 0),
         name: String(row.name || ''),
@@ -979,11 +1017,79 @@ router.get('/client/api-keys', authenticateClient, async (req, res) => {
         createdAt: String(row.created_at || ''),
         updatedAt: String(row.updated_at || ''),
         isAssigned: String(row.name || '') === assignedName,
+        usedByStrategy: String(row.name || '') === strategyAssignedName,
+        usedByAlgofund: String(row.name || '') === algofundAssignedName,
       })),
     });
   } catch (error) {
     const err = error as Error;
     logger.error(`Client api key list error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/client/api-keys/:id', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user?.tenantId) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const tenantId = Number(session.user.tenantId);
+    const apiKeyId = Number.parseInt(String(req.params.id || '0'), 10);
+    if (!Number.isFinite(apiKeyId) || apiKeyId <= 0) {
+      return res.status(400).json({ error: 'Invalid API key id' });
+    }
+
+    const row = await db.get(
+      'SELECT id, name FROM api_keys WHERE id = ?',
+      [apiKeyId]
+    ) as { id?: number; name?: string } | undefined;
+
+    if (!row?.id) {
+      return res.status(404).json({ error: 'API key not found' });
+    }
+
+    const keyName = String(row.name || '').trim();
+    if (!keyName.startsWith(`tenant-${tenantId}-`)) {
+      return res.status(403).json({ error: 'API key is not owned by current tenant' });
+    }
+
+    const exchange = String(req.body?.exchange || '').trim().toLowerCase();
+    const apiKey = String(req.body?.apiKey || '').trim();
+    const secret = String(req.body?.secret || '').trim();
+    const passphrase = String(req.body?.passphrase || '').trim();
+    const testnet = Boolean(req.body?.testnet);
+    const demo = Boolean(req.body?.demo);
+
+    if (!exchange) {
+      return res.status(400).json({ error: 'exchange is required' });
+    }
+    if (!apiKey || !secret) {
+      return res.status(400).json({ error: 'apiKey and secret are required' });
+    }
+    if (exchangeRequiresPassphrase(exchange) && !passphrase) {
+      return res.status(400).json({ error: 'passphrase is required for this exchange' });
+    }
+
+    await db.run(
+      `UPDATE api_keys
+       SET exchange = ?, api_key = ?, secret = ?, passphrase = ?, testnet = ?, demo = ?
+       WHERE id = ?`,
+      [exchange, apiKey, secret, passphrase, testnet ? 1 : 0, demo ? 1 : 0, apiKeyId]
+    );
+    removeExchangeClient(keyName);
+
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (?, 'client', 'client_api_key_update', ?, CURRENT_TIMESTAMP)`,
+      [tenantId, JSON.stringify({ apiKeyId, keyName, exchange, testnet, demo })]
+    );
+
+    res.json({ success: true, id: apiKeyId, name: keyName });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client api key update error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1167,25 +1273,82 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
     const tenantId = Number(session.user.tenantId);
     const limitRaw = Number.parseInt(String(req.query.limit || '120'), 10);
     const limit = Math.min(500, Math.max(10, Number.isFinite(limitRaw) ? limitRaw : 120));
+    const daysRaw = Number.parseInt(String(req.query.days || '0'), 10);
+    const days = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : undefined;
 
-    const tenant = await db.get(
-      'SELECT assigned_api_key_name FROM tenants WHERE id = ?',
-      [tenantId]
-    ) as { assigned_api_key_name?: string } | undefined;
+    const requestedMode = String(req.query.mode || '').trim().toLowerCase();
+    const [tenant, strategyProfile, algofundProfile] = await Promise.all([
+      db.get(
+        'SELECT assigned_api_key_name FROM tenants WHERE id = ?',
+        [tenantId]
+      ) as Promise<{ assigned_api_key_name?: string } | undefined>,
+      db.get(
+        'SELECT assigned_api_key_name FROM strategy_client_profiles WHERE tenant_id = ?',
+        [tenantId]
+      ) as Promise<{ assigned_api_key_name?: string } | undefined>,
+      db.get(
+        'SELECT assigned_api_key_name, execution_api_key_name FROM algofund_profiles WHERE tenant_id = ?',
+        [tenantId]
+      ) as Promise<{ assigned_api_key_name?: string; execution_api_key_name?: string } | undefined>,
+    ]);
 
-    const apiKeyName = String(tenant?.assigned_api_key_name || '').trim();
+    const tenantApiKeyName = String(tenant?.assigned_api_key_name || '').trim();
+    const strategyApiKeyName = String(strategyProfile?.assigned_api_key_name || '').trim();
+    const algofundApiKeyName = String(algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name || '').trim();
+
+    const resolveApiKeyName = () => {
+      if (requestedMode === 'algofund') {
+        return algofundApiKeyName || strategyApiKeyName || tenantApiKeyName;
+      }
+      if (requestedMode === 'strategy') {
+        return strategyApiKeyName || algofundApiKeyName || tenantApiKeyName;
+      }
+      return strategyApiKeyName || algofundApiKeyName || tenantApiKeyName;
+    };
+
+    const apiKeyName = resolveApiKeyName();
     if (!apiKeyName) {
-      return res.json({ success: true, apiKeyName: '', latest: null, points: [] });
+      return res.json({
+        success: true,
+        apiKeyName: '',
+        latest: null,
+        points: [],
+        streams: {
+          strategy: { apiKeyName: strategyApiKeyName, latest: null, points: [] },
+          algofund: { apiKeyName: algofundApiKeyName, latest: null, points: [] },
+        },
+      });
     }
 
-    const points = await getMonitoringSnapshots(apiKeyName, limit);
-    const latest = points.length > 0 ? points[points.length - 1] : await getMonitoringLatest(apiKeyName);
+    const loadStream = async (targetApiKeyName: string) => {
+      const safeName = String(targetApiKeyName || '').trim();
+      if (!safeName) {
+        return { apiKeyName: '', latest: null, points: [] as any[] };
+      }
+      const points = await getMonitoringSnapshots(safeName, limit, days);
+      const latest = points.length > 0 ? points[points.length - 1] : await getMonitoringLatest(safeName);
+      return {
+        apiKeyName: safeName,
+        latest: latest || null,
+        points: points || [],
+      };
+    };
+
+    const [selectedStream, strategyStream, algofundStream] = await Promise.all([
+      loadStream(apiKeyName),
+      loadStream(strategyApiKeyName),
+      loadStream(algofundApiKeyName),
+    ]);
 
     res.json({
       success: true,
-      apiKeyName,
-      latest: latest || null,
-      points: points || [],
+      apiKeyName: selectedStream.apiKeyName,
+      latest: selectedStream.latest,
+      points: selectedStream.points,
+      streams: {
+        strategy: strategyStream,
+        algofund: algofundStream,
+      },
     });
   } catch (error) {
     const err = error as Error;
@@ -1405,6 +1568,16 @@ router.get('/system/update/job', async (req, res) => {
 router.post('/api-keys', async (req, res) => {
   const key: ApiKey = req.body;
   try {
+    if (!String(key?.name || '').trim() || !String(key?.exchange || '').trim()) {
+      return res.status(400).json({ error: 'name and exchange are required' });
+    }
+    if (!String(key?.api_key || '').trim() || !String(key?.secret || '').trim()) {
+      return res.status(400).json({ error: 'api_key and secret are required' });
+    }
+    if (exchangeRequiresPassphrase(String(key?.exchange || '')) && !String(key?.passphrase || '').trim()) {
+      return res.status(400).json({ error: 'passphrase is required for this exchange' });
+    }
+
     await saveApiKey(key);
     // Инициализировать клиент
     const { apiKeys } = await loadSettings();
@@ -1422,6 +1595,16 @@ router.put('/api-keys/:id', async (req, res) => {
   const { id } = req.params;
   const key: ApiKey = req.body;
   try {
+    if (!String(key?.name || '').trim() || !String(key?.exchange || '').trim()) {
+      return res.status(400).json({ error: 'name and exchange are required' });
+    }
+    if (!String(key?.api_key || '').trim() || !String(key?.secret || '').trim()) {
+      return res.status(400).json({ error: 'api_key and secret are required' });
+    }
+    if (exchangeRequiresPassphrase(String(key?.exchange || '')) && !String(key?.passphrase || '').trim()) {
+      return res.status(400).json({ error: 'passphrase is required for this exchange' });
+    }
+
     await db.run(
       'UPDATE api_keys SET name = ?, exchange = ?, api_key = ?, secret = ?, passphrase = ?, speed_limit = ?, testnet = ?, demo = ? WHERE id = ?',
       [
@@ -2518,13 +2701,15 @@ router.get('/monitoring/:apiKeyName', async (req, res) => {
   const capture = String(req.query.capture || '0') === '1' || String(req.query.capture || '').toLowerCase() === 'true';
   const limitRaw = Number.parseInt(String(req.query.limit || '240'), 10);
   const limit = Number.isFinite(limitRaw) ? limitRaw : 240;
+  const daysRaw = Number.parseInt(String(req.query.days || '0'), 10);
+  const days = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : undefined;
 
   try {
     if (capture) {
       await recordMonitoringSnapshot(apiKeyName);
     }
 
-    const points = await getMonitoringSnapshots(apiKeyName, limit);
+    const points = await getMonitoringSnapshots(apiKeyName, limit, days);
     const latest = points.length > 0 ? points[points.length - 1] : await getMonitoringLatest(apiKeyName);
 
     res.json({ points, latest });

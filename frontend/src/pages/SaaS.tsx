@@ -2552,6 +2552,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [monitoringChartApiKey, setMonitoringChartApiKey] = useState('');
   const [monitoringChartPoints, setMonitoringChartPoints] = useState<LinePoint[]>([]);
   const [monitoringChartLatest, setMonitoringChartLatest] = useState<MonitoringSnapshotPoint | null>(null);
+  const [monitoringChartDays, setMonitoringChartDays] = useState(1);
   const [planDrafts, setPlanDrafts] = useState<Record<string, Plan>>({});
   const [actionLoading, setActionLoading] = useState<string>('');
   const [activeTab, setActiveTab] = useState<SaasTabKey>(initialTab);
@@ -4482,19 +4483,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   }, [summary]);
 
-  const openMonitoringChart = async (apiKeyName: string) => {
-    const key = String(apiKeyName || '').trim();
-    if (!key) {
-      return;
-    }
-
-    setMonitoringChartOpen(true);
-    setMonitoringChartApiKey(key);
+  const loadMonitoringChartData = async (key: string, days: number) => {
     setMonitoringChartLoading(true);
     try {
+      const params: Record<string, number> = days > 1 ? { days } : { limit: 288 };
       const response = await axios.get<{ points?: MonitoringSnapshotPoint[]; latest?: MonitoringSnapshotPoint }>(
         `/api/monitoring/${encodeURIComponent(key)}`,
-        { params: { limit: 240 } }
+        { params }
       );
 
       const rows = Array.isArray(response.data?.points) ? response.data.points : [];
@@ -4520,6 +4515,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const openMonitoringChart = async (apiKeyName: string) => {
+    const key = String(apiKeyName || '').trim();
+    if (!key) {
+      return;
+    }
+
+    setMonitoringChartOpen(true);
+    setMonitoringChartApiKey(key);
+    setMonitoringChartDays(1);
+    await loadMonitoringChartData(key, 1);
+  };
+
   useEffect(() => {
     if (activeTab === 'admin' && adminTab === 'monitoring') {
       void loadMonitoringTabData();
@@ -4531,6 +4538,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab, adminTab, loadMonitoringTabData, loadTelegramControls, loadLowLotRecommendations, performanceReport]);
+
+  useEffect(() => {
+    if (monitoringChartOpen && monitoringChartApiKey) {
+      void loadMonitoringChartData(monitoringChartApiKey, monitoringChartDays);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [monitoringChartDays]);
 
   useEffect(() => {
     if (!summary) {
@@ -10607,11 +10621,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       >
         <Spin spinning={monitoringChartLoading}>
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Space wrap>
-              {monitoringChartLatest ? <Tag color="blue">Eq {formatMoney(monitoringChartLatest.equity_usd)}</Tag> : null}
-              {monitoringChartLatest ? <Tag color="purple">ML {formatPercent(monitoringChartLatest.margin_load_percent)}</Tag> : null}
-              {monitoringChartLatest ? <Tag color="red">Lev {formatNumber(monitoringChartLatest.effective_leverage, 2)}x</Tag> : null}
-              {monitoringChartLatest ? <Tag color="orange">DD {formatPercent(monitoringChartLatest.drawdown_percent)}</Tag> : null}
+            <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
+              <Space wrap>
+                {monitoringChartLatest ? <Tag color="blue">Eq {formatMoney(monitoringChartLatest.equity_usd)}</Tag> : null}
+                {monitoringChartLatest ? <Tag color="purple">ML {formatPercent(monitoringChartLatest.margin_load_percent)}</Tag> : null}
+                {monitoringChartLatest ? <Tag color="red">Lev {formatNumber(monitoringChartLatest.effective_leverage, 2)}x</Tag> : null}
+                {monitoringChartLatest ? <Tag color="orange">DD {formatPercent(monitoringChartLatest.drawdown_percent)}</Tag> : null}
+              </Space>
+              <Segmented
+                options={[
+                  { label: '1д', value: 1 },
+                  { label: '7д', value: 7 },
+                  { label: '30д', value: 30 },
+                  { label: '60д', value: 60 },
+                  { label: '90д', value: 90 },
+                ]}
+                value={monitoringChartDays}
+                onChange={(v) => setMonitoringChartDays(Number(v))}
+              />
             </Space>
             {monitoringChartPoints.length > 0 ? (
               <ChartComponent data={monitoringChartPoints} type="line" />

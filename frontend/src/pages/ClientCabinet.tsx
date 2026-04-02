@@ -13,6 +13,7 @@ import {
   List,
   Popconfirm,
   Row,
+  Segmented,
   Select,
   Slider,
   Space,
@@ -112,6 +113,8 @@ type StrategyState = {
     trade_frequency_level: Level3;
     requested_enabled: number;
     actual_enabled: number;
+    assigned_api_key_name?: string;
+    activeSystemProfileId?: number | null;
   } | null;
   offers: StrategyOffer[];
 };
@@ -198,6 +201,8 @@ type ClientApiKeyInfo = {
   createdAt: string;
   updatedAt: string;
   isAssigned: boolean;
+  usedByStrategy?: boolean;
+  usedByAlgofund?: boolean;
 };
 
 type TariffPlan = {
@@ -245,6 +250,18 @@ type MonitoringPayload = {
     value?: number;
     time?: number;
   }>;
+  streams?: {
+    strategy?: {
+      apiKeyName?: string;
+      latest?: Record<string, unknown> | null;
+      points?: Array<Record<string, unknown>>;
+    };
+    algofund?: {
+      apiKeyName?: string;
+      latest?: Record<string, unknown> | null;
+      points?: Array<Record<string, unknown>>;
+    };
+  };
 };
 
 type ClientAuthUser = {
@@ -354,6 +371,7 @@ const ClientCabinet: React.FC = () => {
   const [targetPlanCode, setTargetPlanCode] = useState('');
   const [tariffNote, setTariffNote] = useState('');
   const [monitoring, setMonitoring] = useState<MonitoringPayload | null>(null);
+  const [monitoringDays, setMonitoringDays] = useState(1);
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
   const [actionLoading, setActionLoading] = useState('');
@@ -365,6 +383,10 @@ const ClientCabinet: React.FC = () => {
     testnet: false,
     demo: false,
   });
+  const [editingApiKeyId, setEditingApiKeyId] = useState<number | null>(null);
+  const [editingApiKeyName, setEditingApiKeyName] = useState('');
+  const [strategyAssignedApiKeyName, setStrategyAssignedApiKeyName] = useState('');
+  const [algofundAssignedApiKeyName, setAlgofundAssignedApiKeyName] = useState('');
 
   const [strategyOfferIds, setStrategyOfferIds] = useState<string[]>([]);
   const [strategyRiskInput, setStrategyRiskInput] = useState(5);
@@ -448,6 +470,7 @@ const ClientCabinet: React.FC = () => {
     setStrategyOfferIds(Array.isArray(strategyWorkspace.profile.selectedOfferIds) ? strategyWorkspace.profile.selectedOfferIds : []);
     setStrategyRiskInput(levelToSliderValue(strategyWorkspace.profile.risk_level || 'medium'));
     setStrategyTradeInput(levelToSliderValue(strategyWorkspace.profile.trade_frequency_level || 'medium'));
+    setStrategyAssignedApiKeyName(String(strategyWorkspace.profile.assigned_api_key_name || '').trim());
   }, [strategyWorkspace]);
 
   useEffect(() => {
@@ -456,6 +479,7 @@ const ClientCabinet: React.FC = () => {
     }
 
     setAlgofundRiskMultiplier(toFinite(algofundWorkspace.profile.risk_multiplier, 1));
+    setAlgofundAssignedApiKeyName(String(algofundWorkspace.profile.assigned_api_key_name || '').trim());
   }, [algofundWorkspace]);
 
   useEffect(() => {
@@ -489,13 +513,15 @@ const ClientCabinet: React.FC = () => {
     }
   };
 
-  const saveStrategyProfile = async () => {
-    setActionLoading('strategy-save');
+  const saveStrategyProfile = async (requestedEnabled?: boolean) => {
+    setActionLoading(requestedEnabled === undefined ? 'strategy-save' : requestedEnabled ? 'strategy-start' : 'strategy-stop');
     try {
       const response = await axios.patch('/api/client/strategy/profile', {
         selectedOfferIds: strategyOfferIds,
         riskLevel: sliderValueToLevel(strategyRiskInput),
         tradeFrequencyLevel: sliderValueToLevel(strategyTradeInput),
+        assignedApiKeyName: strategyAssignedApiKeyName || undefined,
+        requestedEnabled,
       });
 
       setWorkspace((current) => {
@@ -505,7 +531,13 @@ const ClientCabinet: React.FC = () => {
           strategyState: response.data?.state || current.strategyState,
         };
       });
-      messageApi.success(t('client.strategy.saved', 'Preferences saved'));
+      messageApi.success(
+        requestedEnabled === undefined
+          ? t('client.strategy.saved', 'Preferences saved')
+          : requestedEnabled
+            ? 'Запрос на запуск отправлен'
+            : 'Запрос на остановку отправлен'
+      );
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || t('client.strategy.saveFailed', 'Failed to save strategy preferences')));
     } finally {
@@ -573,6 +605,7 @@ const ClientCabinet: React.FC = () => {
     try {
       const response = await axios.patch('/api/client/algofund/profile', {
         riskMultiplier: algofundRiskMultiplier,
+        assignedApiKeyName: algofundAssignedApiKeyName || undefined,
       });
 
       setWorkspace((current) => {
@@ -658,29 +691,53 @@ const ClientCabinet: React.FC = () => {
     }
   };
 
+  const resetApiKeyDraft = () => {
+    setApiKeyDraft({
+      exchange: 'bybit',
+      apiKey: '',
+      secret: '',
+      passphrase: '',
+      testnet: false,
+      demo: false,
+    });
+    setEditingApiKeyId(null);
+    setEditingApiKeyName('');
+  };
+
   const saveClientApiKey = async () => {
     if (!apiKeyDraft.apiKey.trim() || !apiKeyDraft.secret.trim()) {
       messageApi.error(t('client.apiKey.required', 'API key and secret are required'));
       return;
     }
 
+    const requiresPassphrase = ['bitget', 'weex'].includes(String(apiKeyDraft.exchange || '').trim().toLowerCase());
+    if (requiresPassphrase && !String(apiKeyDraft.passphrase || '').trim()) {
+      messageApi.error('Для Bitget и WEEX нужен passphrase');
+      return;
+    }
+
+    const isEditing = editingApiKeyId !== null;
     setActionLoading('client-api-key');
     try {
-      const response = await axios.post('/api/client/api-key', {
-        exchange: apiKeyDraft.exchange,
-        apiKey: apiKeyDraft.apiKey,
-        secret: apiKeyDraft.secret,
-        passphrase: apiKeyDraft.passphrase,
-        testnet: apiKeyDraft.testnet,
-        demo: apiKeyDraft.demo,
-      });
+      const response = isEditing
+        ? await axios.patch(`/api/client/api-keys/${editingApiKeyId}`, {
+            exchange: apiKeyDraft.exchange,
+            apiKey: apiKeyDraft.apiKey,
+            secret: apiKeyDraft.secret,
+            passphrase: apiKeyDraft.passphrase,
+            testnet: apiKeyDraft.testnet,
+            demo: apiKeyDraft.demo,
+          })
+        : await axios.post('/api/client/api-key', {
+            exchange: apiKeyDraft.exchange,
+            apiKey: apiKeyDraft.apiKey,
+            secret: apiKeyDraft.secret,
+            passphrase: apiKeyDraft.passphrase,
+            testnet: apiKeyDraft.testnet,
+            demo: apiKeyDraft.demo,
+          });
 
-      setApiKeyDraft((current) => ({
-        ...current,
-        apiKey: '',
-        secret: '',
-        passphrase: '',
-      }));
+      resetApiKeyDraft();
 
       setWorkspace((current) => {
         if (!current) return current;
@@ -691,13 +748,26 @@ const ClientCabinet: React.FC = () => {
         };
       });
 
-      messageApi.success(t('client.apiKey.saved', 'API key saved and connected to your workspace'));
+      messageApi.success(isEditing ? 'API ключ обновлён' : t('client.apiKey.saved', 'API key saved and connected to your workspace'));
       await loadWorkspace();
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || t('client.apiKey.saveFailed', 'Failed to save API key')));
     } finally {
       setActionLoading('');
     }
+  };
+
+  const startEditingApiKey = (item: ClientApiKeyInfo) => {
+    setEditingApiKeyId(item.id);
+    setEditingApiKeyName(item.name);
+    setApiKeyDraft({
+      exchange: item.exchange || 'bybit',
+      apiKey: '',
+      secret: '',
+      passphrase: '',
+      testnet: Boolean(item.testnet),
+      demo: Boolean(item.demo),
+    });
   };
 
   const deleteClientApiKey = async (id: number) => {
@@ -736,10 +806,11 @@ const ClientCabinet: React.FC = () => {
     }
   };
 
-  const refreshMonitoring = async () => {
+  const refreshMonitoring = async (days?: number) => {
     setActionLoading('monitoring-refresh');
     try {
-      const response = await axios.get<MonitoringPayload>('/api/client/monitoring');
+      const params = days && days > 1 ? { days } : { limit: 288 };
+      const response = await axios.get<MonitoringPayload>('/api/client/monitoring', { params });
       setMonitoring(response.data);
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || t('client.monitoring.loadFailed', 'Failed to load monitoring')));
@@ -752,28 +823,28 @@ const ClientCabinet: React.FC = () => {
     if (!capabilities) return null;
     return (
       <Space wrap>
-        {capabilityTag('РќР°СЃС‚СЂРѕР№РєРё', Boolean(capabilities.settings))}
-        {capabilityTag('РњРѕРЅРёС‚РѕСЂРёРЅРі', Boolean(capabilities.monitoring))}
-        {capabilityTag('Р‘СЌРєС‚РµСЃС‚', Boolean(capabilities.backtest))}
-        {capabilityTag('РЎС‚Р°СЂС‚/РЎС‚РѕРї', Boolean(capabilities.startStopRequests))}
+        {capabilityTag('Настройки', Boolean(capabilities.settings))}
+        {capabilityTag('Мониторинг', Boolean(capabilities.monitoring))}
+        {capabilityTag('Бэктест', Boolean(capabilities.backtest))}
+        {capabilityTag('Старт/Стоп', Boolean(capabilities.startStopRequests))}
       </Space>
     );
   };
 
-  // в”Ђв”Ђ Tab: РЎС‚СЂР°С‚РµРіРёРё в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // — Tab: Стратегии —————————————————————————————————————————————
   const strategyTabContent = (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {strategyWorkspace ? (
         <>
-          {/* Р’РёС‚СЂРёРЅР° РѕС„С„РµСЂРѕРІ */}
-          <Card className="battletoads-card" title="Р’РёС‚СЂРёРЅР° СЃС‚СЂР°С‚РµРіРёР№" size="small">
+          {/* Витрина офферов */}
+          <Card className="battletoads-card" title="Витрина стратегий" size="small">
             {strategyWorkspace.offers.length === 0 ? (
-              <Empty description="РћС„С„РµСЂРѕРІ РЅР° РІРёС‚СЂРёРЅРµ РїРѕРєР° РЅРµС‚" />
+              <Empty description="Офферов на витрине пока нет" />
             ) : (
               <Space direction="vertical" size={12} style={{ width: '100%' }}>
                 {strategyWorkspace.capabilities?.settings ? (
                   <Typography.Text type="secondary">
-                    Р’С‹Р±РµСЂРёС‚Рµ СЃС‚СЂР°С‚РµРіРёРё РґР»СЏ РІР°С€РµРіРѕ РїРѕСЂС‚С„РµР»СЏ Рё РЅР°Р¶РјРёС‚Рµ В«РЎРѕС…СЂР°РЅРёС‚СЊ РІС‹Р±РѕСЂВ».
+                    Выберите стратегии для вашего портфеля и нажмите «Сохранить выбор».
                   </Typography.Text>
                 ) : null}
                 <Row gutter={[12, 12]}>
@@ -808,7 +879,7 @@ const ClientCabinet: React.FC = () => {
                             <Tag color="green">Ret: {formatPercent(offer.metrics.ret)}</Tag>
                             <Tag color="orange">DD: {formatPercent(offer.metrics.dd)}</Tag>
                             <Tag color="blue">PF: {formatNumber(offer.metrics.pf)}</Tag>
-                            {offer.metrics.trades ? <Tag color="cyan">РЎРґРµР»РєРё: {formatNumber(offer.metrics.trades, 0)}</Tag> : null}
+                            {offer.metrics.trades ? <Tag color="cyan">Сделки: {formatNumber(offer.metrics.trades, 0)}</Tag> : null}
                           </Space>
                         </Space>
                       </Card>
@@ -818,13 +889,13 @@ const ClientCabinet: React.FC = () => {
                 {strategyWorkspace.capabilities?.settings ? (
                   <Space wrap>
                     <Typography.Text>
-                      Р’С‹Р±СЂР°РЅРѕ: <Typography.Text strong>{strategyOfferIds.length}</Typography.Text> РёР· {strategyWorkspace.offers.length}
+                      Выбрано: <Typography.Text strong>{strategyOfferIds.length}</Typography.Text> из {strategyWorkspace.offers.length}
                     </Typography.Text>
                     <Button type="primary" loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>
-                      РЎРѕС…СЂР°РЅРёС‚СЊ РІС‹Р±РѕСЂ
+                      Сохранить выбор
                     </Button>
                     <Button loading={strategySelectionPreviewLoading} onClick={() => void runStrategySelectionPreview()}>
-                      РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РїРѕСЂС‚С„РµР»СЏ
+                      Предпросмотр портфеля
                     </Button>
                   </Space>
                 ) : null}
@@ -832,94 +903,101 @@ const ClientCabinet: React.FC = () => {
             )}
           </Card>
 
-          {/* РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РїРѕСЂС‚С„РµР»СЏ */}
+          {/* Предпросмотр портфеля */}
           {strategySelectionPreview ? (
-            <Card className="battletoads-card" title="РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РІС‹Р±СЂР°РЅРЅС‹С… СЃС‚СЂР°С‚РµРіРёР№" size="small">
+            <Card className="battletoads-card" title="Предпросмотр выбранных стратегий" size="small">
               <Space wrap style={{ marginBottom: 12 }}>
-                <Tag color="cyan">РЎС‚СЂР°С‚РµРіРёР№: {strategySelectionPreview.selectedOffers.length}</Tag>
-                <Tag color="green">Р”РѕС…РѕРґРЅРѕСЃС‚СЊ: {formatPercent((strategyPreviewSummary as any)?.totalReturnPercent)}</Tag>
+                <Tag color="cyan">Стратегий: {strategySelectionPreview.selectedOffers.length}</Tag>
+                <Tag color="green">Доходность: {formatPercent((strategyPreviewSummary as any)?.totalReturnPercent)}</Tag>
                 <Tag color="orange">DD: {formatPercent((strategyPreviewSummary as any)?.maxDrawdownPercent)}</Tag>
                 <Tag color="purple">PF: {formatNumber((strategyPreviewSummary as any)?.profitFactor)}</Tag>
               </Space>
               {strategyPreviewSeries.length > 0 ? (
                 <ChartComponent data={strategyPreviewSeries} type="line" />
               ) : (
-                <Empty description="РќРµС‚ РґР°РЅРЅС‹С… РґР»СЏ РїСЂРµРґРїСЂРѕСЃРјРѕС‚СЂР°" />
+                <Empty description="Нет данных для предпросмотра" />
               )}
             </Card>
           ) : null}
 
-          {/* РќР°СЃС‚СЂРѕР№РєРё СЂРёСЃРєР° */}
+          {/* Настройки риска */}
           {strategyWorkspace.capabilities?.settings ? (
-            <Card className="battletoads-card" title="РќР°СЃС‚СЂРѕР№РєРё СЂРёСЃРєР° Рё С‡Р°СЃС‚РѕС‚С‹" size="small">
+            <Card className="battletoads-card" title="Настройки риска и частоты" size="small">
               <Row gutter={[16, 16]}>
                 <Col xs={24} md={12}>
-                  <Typography.Text strong>Р РёСЃРє: {formatNumber(strategyRiskInput, 1)}</Typography.Text>
+                  <Typography.Text strong>Риск: {formatNumber(strategyRiskInput, 1)}</Typography.Text>
                   <Slider min={0} max={10} step={0.1} value={strategyRiskInput} onChange={(v) => setStrategyRiskInput(toFinite(v))} />
                 </Col>
                 <Col xs={24} md={12}>
-                  <Typography.Text strong>Р§Р°СЃС‚РѕС‚Р° СЃРґРµР»РѕРє: {formatNumber(strategyTradeInput, 1)}</Typography.Text>
+                  <Typography.Text strong>Частота сделок: {formatNumber(strategyTradeInput, 1)}</Typography.Text>
                   <Slider min={0} max={10} step={0.1} value={strategyTradeInput} onChange={(v) => setStrategyTradeInput(toFinite(v))} />
                 </Col>
               </Row>
               <Button type="primary" style={{ marginTop: 8 }} loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>
-                РЎРѕС…СЂР°РЅРёС‚СЊ РЅР°СЃС‚СЂРѕР№РєРё
+                Сохранить настройки
               </Button>
             </Card>
           ) : null}
 
-          {/* РЎС‚Р°С‚СѓСЃ С‚РѕСЂРіРѕРІР»Рё */}
-          <Card className="battletoads-card" title="РЎС‚Р°С‚СѓСЃ С‚РѕСЂРіРѕРІР»Рё" size="small">
-            <Space wrap>
-              <Tag color="blue">РўР°СЂРёС„: {strategyWorkspace.plan?.title || 'вЂ”'}</Tag>
-              <Tag color="cyan">Р”РµРїРѕР·РёС‚ РґРѕ: {formatMoney(strategyWorkspace.plan?.max_deposit_total)}</Tag>
-              <Tag color="purple">РЎС‚СЂР°С‚РµРіРёР№ РґРѕ: {formatNumber(strategyWorkspace.plan?.max_strategies_total, 0)}</Tag>
+          <Card className="battletoads-card" title="Статус торговли" size="small">
+            <Space wrap style={{ marginBottom: 8 }}>
+              <Tag color="blue">Тариф: {strategyWorkspace.plan?.title || '—'}</Tag>
+              <Tag color="cyan">Депозит до: {formatMoney(strategyWorkspace.plan?.max_deposit_total)}</Tag>
+              <Tag color="purple">Стратегий до: {formatNumber(strategyWorkspace.plan?.max_strategies_total, 0)}</Tag>
               <Tag color={strategyWorkspace.profile?.actual_enabled ? 'success' : 'default'}>
-                {strategyWorkspace.profile?.actual_enabled ? 'РўРѕСЂРіРѕРІР»СЏ Р°РєС‚РёРІРЅР°' : 'РўРѕСЂРіРѕРІР»СЏ РѕСЃС‚Р°РЅРѕРІР»РµРЅР°'}
+                {strategyWorkspace.profile?.actual_enabled ? 'Торговля активна' : 'Торговля остановлена'}
               </Tag>
               <Tag color={strategyWorkspace.profile?.requested_enabled ? 'processing' : 'default'}>
-                Р—Р°РїСЂРѕСЃ: {strategyWorkspace.profile?.requested_enabled ? 'Р·Р°РїСѓС‰РµРЅ' : 'РѕСЃС‚Р°РЅРѕРІР»РµРЅ'}
+                Запрос: {strategyWorkspace.profile?.requested_enabled ? 'запуск' : 'остановка'}
               </Tag>
             </Space>
+
+            {clientApiKeys.length > 0 ? (
+              <Space wrap style={{ marginBottom: 8 }}>
+                <Typography.Text type="secondary">API ключ для потока стратегий:</Typography.Text>
+                <Select
+                  style={{ minWidth: 240 }}
+                  value={strategyAssignedApiKeyName || undefined}
+                  placeholder="Выберите API ключ"
+                  onChange={(value) => setStrategyAssignedApiKeyName(String(value || ''))}
+                  options={clientApiKeys.map((item) => ({ value: item.name, label: `${item.name} (${item.exchange})` }))}
+                />
+                <Button loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>
+                  Сохранить API/настройки
+                </Button>
+              </Space>
+            ) : null}
+
             {renderCapabilities(strategyWorkspace.capabilities)}
           </Card>
 
-          {/* Р—Р°РїСЂРѕСЃС‹ РЅР° СЃС‚Р°СЂС‚/СЃС‚РѕРї */}
           {strategyWorkspace.capabilities?.startStopRequests ? (
-            <Card className="battletoads-card" title="Р—Р°РїСЂРѕСЃРёС‚СЊ Р·Р°РїСѓСЃРє / РѕСЃС‚Р°РЅРѕРІРєСѓ" size="small">
-              <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                <Input.TextArea
-                  rows={2}
-                  value={algofundNote}
-                  onChange={(e) => setAlgofundNote(e.target.value)}
-                  placeholder="РљРѕРјРјРµРЅС‚Р°СЂРёР№ Рє Р·Р°РїСЂРѕСЃСѓ (РЅРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ)"
-                />
-                <Space wrap>
-                  <Button type="primary" loading={actionLoading === 'algofund-start'} onClick={() => void sendAlgofundRequest('start')}>
-                    Р—Р°РїСЂРѕСЃРёС‚СЊ Р·Р°РїСѓСЃРє
-                  </Button>
-                  <Button danger loading={actionLoading === 'algofund-stop'} onClick={() => void sendAlgofundRequest('stop')}>
-                    Р—Р°РїСЂРѕСЃРёС‚СЊ РѕСЃС‚Р°РЅРѕРІРєСѓ
-                  </Button>
-                </Space>
+            <Card className="battletoads-card" title="Подключение / отключение" size="small">
+              <Space wrap>
+                <Button type="primary" loading={actionLoading === 'strategy-start'} onClick={() => void saveStrategyProfile(true)}>
+                  Запросить запуск
+                </Button>
+                <Button danger loading={actionLoading === 'strategy-stop'} onClick={() => void saveStrategyProfile(false)}>
+                  Запросить остановку
+                </Button>
               </Space>
             </Card>
           ) : null}
 
-          {/* Р—Р°РїСЂРѕСЃРёС‚СЊ Р±СЌРєС‚РµСЃС‚ РїР°СЂС‹ */}
-          <Card className="battletoads-card" title="Р—Р°РїСЂРѕСЃРёС‚СЊ Р±СЌРєС‚РµСЃС‚ РїРѕ РїР°СЂРµ" size="small">
+          {/* Запросить бэктест пары */}
+          <Card className="battletoads-card" title="Запросить бэктест по паре" size="small">
             <Space direction="vertical" size={10} style={{ width: '100%' }}>
               <Row gutter={[8, 8]}>
                 <Col xs={24} sm={12}>
                   <Input
-                    placeholder="РџР°СЂР°: SOLUSDT РёР»Рё BTC/ETH"
+                    placeholder="Пара: SOLUSDT или BTC/ETH"
                     value={requestMarket}
                     onChange={(e) => setRequestMarket(e.target.value)}
                   />
                 </Col>
                 <Col xs={24} sm={12}>
                   <Input
-                    placeholder="РРЅС‚РµСЂРІР°Р» (1h, 4h, 1d)"
+                    placeholder="Интервал (1h, 4h, 1d)"
                     value={requestInterval}
                     onChange={(e) => setRequestInterval(e.target.value)}
                   />
@@ -929,13 +1007,13 @@ const ClientCabinet: React.FC = () => {
                 rows={2}
                 value={requestNote}
                 onChange={(e) => setRequestNote(e.target.value)}
-                placeholder="РљРѕРјРјРµРЅС‚Р°СЂРёР№ РґР»СЏ РёСЃСЃР»РµРґРѕРІР°РЅРёСЏ (РЅРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ)"
+                placeholder="Комментарий для исследования (необязательно)"
               />
               <Space wrap>
                 <Button type="primary" loading={actionLoading === 'strategy-backtest-request'} onClick={() => void sendBacktestPairRequest()}>
-                  РћС‚РїСЂР°РІРёС‚СЊ Р·Р°РїСЂРѕСЃ
+                  Отправить запрос
                 </Button>
-                <Button onClick={() => void loadBacktestRequests()}>РћР±РЅРѕРІРёС‚СЊ СЃРїРёСЃРѕРє</Button>
+                <Button onClick={() => void loadBacktestRequests()}>Обновить список</Button>
               </Space>
               {backtestRequests.length > 0 ? (
                 <List
@@ -962,8 +1040,8 @@ const ClientCabinet: React.FC = () => {
           <Empty
             description={
               <Space direction="vertical" size={8}>
-                <Typography.Text>Р’РёС‚СЂРёРЅР° СЃС‚СЂР°С‚РµРіРёР№ РЅРµРґРѕСЃС‚СѓРїРЅР° РґР»СЏ РІР°С€РµРіРѕ Р°РєРєР°СѓРЅС‚Р°.</Typography.Text>
-                <Typography.Text type="secondary">РћР±СЂР°С‚РёС‚РµСЃСЊ Рє Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂСѓ РґР»СЏ РїРѕРґРєР»СЋС‡РµРЅРёСЏ Рє РїСЂРѕРґСѓРєС‚Сѓ В«РљР»РёРµРЅС‚ СЃС‚СЂР°С‚РµРіРёР№В».</Typography.Text>
+                <Typography.Text>Витрина стратегий недоступна для вашего аккаунта.</Typography.Text>
+                <Typography.Text type="secondary">Обратитесь к администратору для подключения к продукту «Клиент стратегий».</Typography.Text>
               </Space>
             }
           />
@@ -972,75 +1050,95 @@ const ClientCabinet: React.FC = () => {
     </Space>
   );
 
-  // в”Ђв”Ђ Tab: РђР»РіРѕС„РѕРЅРґ в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // — Tab: Алгофонд —————————————————————————————————————————————
   const algofundTabContent = (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {algofundWorkspace ? (
         <>
-          {/* РЎС‚Р°С‚СѓСЃ */}
-          <Card className="battletoads-card" title="РЎС‚Р°С‚СѓСЃ РђР»РіРѕС„РѕРЅРґР°" size="small">
-            <Space wrap>
-              <Tag color="blue">РўР°СЂРёС„: {algofundWorkspace.plan?.title || 'вЂ”'}</Tag>
-              <Tag color="cyan">Р”РµРїРѕР·РёС‚ РґРѕ: {formatMoney(algofundWorkspace.plan?.max_deposit_total)}</Tag>
-              <Tag color="purple">Р РёСЃРє-РєР°Рї: {formatNumber(algofundWorkspace.plan?.risk_cap_max)}</Tag>
+          <Card className="battletoads-card" title="Статус Алгофонда" size="small">
+            <Space wrap style={{ marginBottom: 8 }}>
+              <Tag color="blue">Тариф: {algofundWorkspace.plan?.title || '—'}</Tag>
+              <Tag color="cyan">Депозит до: {formatMoney(algofundWorkspace.plan?.max_deposit_total)}</Tag>
+              <Tag color="purple">Риск-кап: {formatNumber(algofundWorkspace.plan?.risk_cap_max)}</Tag>
               <Tag color={algofundWorkspace.profile?.actual_enabled ? 'success' : 'default'}>
-                {algofundWorkspace.profile?.actual_enabled ? 'РўРѕСЂРіРѕРІР»СЏ Р°РєС‚РёРІРЅР°' : 'РўРѕСЂРіРѕРІР»СЏ РѕСЃС‚Р°РЅРѕРІР»РµРЅР°'}
+                {algofundWorkspace.profile?.actual_enabled ? 'Торговля активна' : 'Торговля остановлена'}
               </Tag>
               {algofundAssignedApiKey ? <Tag color="geekblue">API: {algofundAssignedApiKey}</Tag> : null}
             </Space>
+
+            {clientApiKeys.length > 0 ? (
+              <Space wrap style={{ marginBottom: 8 }}>
+                <Typography.Text type="secondary">API ключ для потока Алгофонда:</Typography.Text>
+                <Select
+                  style={{ minWidth: 240 }}
+                  value={algofundAssignedApiKeyName || undefined}
+                  placeholder="Выберите API ключ"
+                  onChange={(value) => setAlgofundAssignedApiKeyName(String(value || ''))}
+                  options={clientApiKeys.map((item) => ({ value: item.name, label: `${item.name} (${item.exchange})` }))}
+                />
+                <Button loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
+                  Сохранить API/риск-профиль
+                </Button>
+              </Space>
+            ) : null}
+
             {renderCapabilities(algofundWorkspace.capabilities)}
           </Card>
 
-          {/* Р’РёС‚СЂРёРЅР° РўРЎ РђР»РіРѕС„РѕРЅРґР° */}
-          <Card className="battletoads-card" title="Р”РѕСЃС‚СѓРїРЅС‹Рµ С‚РѕСЂРіРѕРІС‹Рµ СЃРёСЃС‚РµРјС‹" size="small">
+          <Card className="battletoads-card" title="Витрина торговых систем Алгофонда" size="small">
             {algofundAvailableSystems.length === 0 ? (
-              <Empty description="РўРѕСЂРіРѕРІС‹Рµ СЃРёСЃС‚РµРјС‹ РђР»РіРѕС„РѕРЅРґР° РЅРµ РѕРїСѓР±Р»РёРєРѕРІР°РЅС‹" />
+              <Empty description="Торговые системы Алгофонда пока не опубликованы" />
             ) : (
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                <List
-                  dataSource={algofundAvailableSystems}
-                  renderItem={(system) => {
-                    const isCurrent = String(system?.name || '').trim() === algofundPublishedSystemName;
-                    return (
-                      <List.Item>
-                        <Space wrap style={{ width: '100%' }}>
-                          <Typography.Text strong>{system.name}</Typography.Text>
+              <Row gutter={[12, 12]}>
+                {algofundAvailableSystems.map((system) => {
+                  const isCurrent = String(system?.name || '').trim() === algofundPublishedSystemName;
+                  return (
+                    <Col xs={24} md={12} xl={8} key={String(system?.id || system?.name || Math.random())}>
+                      <Card
+                        size="small"
+                        className="battletoads-card"
+                        title={<Typography.Text strong>{system.name}</Typography.Text>}
+                      >
+                        <Space wrap style={{ marginBottom: 8 }}>
                           <Tag color="blue">API: {system.apiKeyName}</Tag>
-                          <Tag color="cyan">РЈС‡Р°СЃС‚РЅРёРєРё: {Number(system.memberCount || 0)}</Tag>
-                          {system.isActive ? <Tag color="success">РђРєС‚РёРІРЅР°</Tag> : <Tag color="default">РќРµР°РєС‚РёРІРЅР°</Tag>}
-                          {isCurrent ? <Tag color="gold">Р’Р°С€Р° С‚РµРєСѓС‰Р°СЏ РўРЎ</Tag> : null}
+                          <Tag color="cyan">Участников: {Number(system.memberCount || 0)}</Tag>
+                          {system.isActive ? <Tag color="success">Активна</Tag> : <Tag color="default">Неактивна</Tag>}
+                          {isCurrent ? <Tag color="gold">Ваша текущая ТС</Tag> : null}
                         </Space>
-                      </List.Item>
-                    );
-                  }}
-                />
-              </Space>
+                        <Typography.Text type="secondary">
+                          {isCurrent
+                            ? 'Эта карточка сейчас привязана к вашему Алгофонду.'
+                            : 'Можно запросить подключение через блок «Подключение / отключение» ниже.'}
+                        </Typography.Text>
+                      </Card>
+                    </Col>
+                  );
+                })}
+              </Row>
             )}
           </Card>
 
-          {/* РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РїРѕСЂС‚С„РµР»СЏ Р°Р»РіРѕС„РѕРЅРґР° */}
           {!algofundWorkspace.preview?.blockedByPlan ? (
-            <Card className="battletoads-card" title="РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РїРѕСЂС‚С„РµР»СЏ" size="small">
+            <Card className="battletoads-card" title="Предпросмотр портфеля" size="small">
               <Space wrap style={{ marginBottom: 12 }}>
-                <Tag color="green">Р”РѕС…РѕРґРЅРѕСЃС‚СЊ: {formatPercent(algofundWorkspace.preview?.summary?.totalReturnPercent)}</Tag>
+                <Tag color="green">Доходность: {formatPercent(algofundWorkspace.preview?.summary?.totalReturnPercent)}</Tag>
                 <Tag color="orange">DD: {formatPercent(algofundWorkspace.preview?.summary?.maxDrawdownPercent)}</Tag>
                 <Tag color="purple">PF: {formatNumber(algofundWorkspace.preview?.summary?.profitFactor)}</Tag>
-                <Tag color="blue">РЎРґРµР»РєРё: {formatNumber(algofundWorkspace.preview?.summary?.tradesCount, 0)}</Tag>
+                <Tag color="blue">Сделки: {formatNumber(algofundWorkspace.preview?.summary?.tradesCount, 0)}</Tag>
               </Space>
               {algofundPreviewSeries.length > 0 ? (
                 <ChartComponent data={algofundPreviewSeries} type="line" />
               ) : (
-                <Empty description="РќРµС‚ РґР°РЅРЅС‹С… РїСЂРµРґРїСЂРѕСЃРјРѕС‚СЂР°" />
+                <Empty description="Нет данных для предпросмотра" />
               )}
             </Card>
           ) : (
-            <Alert type="warning" showIcon message={algofundWorkspace.preview?.blockedReason || 'РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ Р·Р°Р±Р»РѕРєРёСЂРѕРІР°РЅ С‚РµРєСѓС‰РёРј С‚Р°СЂРёС„РѕРј'} />
+            <Alert type="warning" showIcon message={algofundWorkspace.preview?.blockedReason || 'Предпросмотр заблокирован текущим тарифом'} />
           )}
 
-          {/* Р РёСЃРє-РїСЂРѕС„РёР»СЊ */}
           {algofundWorkspace.capabilities?.settings ? (
-            <Card className="battletoads-card" title="Р РёСЃРє-РїСЂРѕС„РёР»СЊ" size="small">
-              <Typography.Text strong>РњСѓР»СЊС‚РёРїР»РёРєР°С‚РѕСЂ СЂРёСЃРєР°: {formatNumber(algofundRiskMultiplier, 2)}</Typography.Text>
+            <Card className="battletoads-card" title="Риск-профиль" size="small">
+              <Typography.Text strong>Мультипликатор риска: {formatNumber(algofundRiskMultiplier, 2)}</Typography.Text>
               <Slider
                 min={0}
                 max={toFinite(algofundWorkspace.plan?.risk_cap_max, 1)}
@@ -1050,36 +1148,35 @@ const ClientCabinet: React.FC = () => {
               />
               <Space wrap style={{ marginTop: 8 }}>
                 <Button type="primary" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
-                  РЎРѕС…СЂР°РЅРёС‚СЊ СЂРёСЃРє-РїСЂРѕС„РёР»СЊ
+                  Сохранить риск-профиль
                 </Button>
                 <Button loading={actionLoading === 'algofund-refresh'} onClick={() => void refreshAlgofundState()}>
-                  РћР±РЅРѕРІРёС‚СЊ РїСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ
+                  Обновить предпросмотр
                 </Button>
               </Space>
             </Card>
           ) : null}
 
-          {/* Р—Р°РїСЂРѕСЃС‹ РЅР° СЃС‚Р°СЂС‚/СЃС‚РѕРї */}
-          <Card className="battletoads-card" title="РџРѕРґРєР»СЋС‡РµРЅРёРµ / РѕС‚РєР»СЋС‡РµРЅРёРµ" size="small">
+          <Card className="battletoads-card" title="Подключение / отключение" size="small">
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
               <Input.TextArea
                 rows={2}
                 value={algofundNote}
                 onChange={(e) => setAlgofundNote(e.target.value)}
-                placeholder="РљРѕРјРјРµРЅС‚Р°СЂРёР№ Рє Р·Р°РїСЂРѕСЃСѓ (РЅРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ)"
+                placeholder="Комментарий к запросу (необязательно)"
               />
               <Space wrap>
                 <Button type="primary" loading={actionLoading === 'algofund-start'} onClick={() => void sendAlgofundRequest('start')}>
-                  Р—Р°РїСЂРѕСЃРёС‚СЊ РїРѕРґРєР»СЋС‡РµРЅРёРµ
+                  Запросить подключение
                 </Button>
                 <Button danger loading={actionLoading === 'algofund-stop'} onClick={() => void sendAlgofundRequest('stop')}>
-                  Р—Р°РїСЂРѕСЃРёС‚СЊ РѕС‚РєР»СЋС‡РµРЅРёРµ
+                  Запросить отключение
                 </Button>
               </Space>
 
               {(algofundWorkspace.requests || []).length > 0 ? (
                 <>
-                  <Typography.Text type="secondary">РСЃС‚РѕСЂРёСЏ Р·Р°РїСЂРѕСЃРѕРІ:</Typography.Text>
+                  <Typography.Text type="secondary">История запросов:</Typography.Text>
                   <List
                     size="small"
                     dataSource={algofundWorkspace.requests || []}
@@ -1087,9 +1184,9 @@ const ClientCabinet: React.FC = () => {
                       <List.Item>
                         <Space wrap>
                           <Tag color="blue">#{item.id}</Tag>
-                          <Tag color={item.request_type === 'start' ? 'success' : 'orange'}>{item.request_type === 'start' ? 'РџРѕРґРєР»СЋС‡РµРЅРёРµ' : 'РћС‚РєР»СЋС‡РµРЅРёРµ'}</Tag>
+                          <Tag color={item.request_type === 'start' ? 'success' : 'orange'}>{item.request_type === 'start' ? 'Подключение' : 'Отключение'}</Tag>
                           <Tag color={item.status === 'approved' ? 'success' : item.status === 'rejected' ? 'error' : 'processing'}>
-                            {item.status === 'approved' ? 'РћРґРѕР±СЂРµРЅРѕ' : item.status === 'rejected' ? 'РћС‚РєР»РѕРЅРµРЅРѕ' : 'Р’ РѕР±СЂР°Р±РѕС‚РєРµ'}
+                            {item.status === 'approved' ? 'Одобрено' : item.status === 'rejected' ? 'Отклонено' : 'В обработке'}
                           </Tag>
                           <Typography.Text type="secondary">{item.created_at}</Typography.Text>
                           {item.note ? <Typography.Text type="secondary">{item.note}</Typography.Text> : null}
@@ -1108,8 +1205,8 @@ const ClientCabinet: React.FC = () => {
           <Empty
             description={
               <Space direction="vertical" size={8}>
-                <Typography.Text>РђР»РіРѕС„РѕРЅРґ РЅРµРґРѕСЃС‚СѓРїРµРЅ РґР»СЏ РІР°С€РµРіРѕ Р°РєРєР°СѓРЅС‚Р°.</Typography.Text>
-                <Typography.Text type="secondary">РћР±СЂР°С‚РёС‚РµСЃСЊ Рє Р°РґРјРёРЅРёСЃС‚СЂР°С‚РѕСЂСѓ РґР»СЏ РїРѕРґРєР»СЋС‡РµРЅРёСЏ Рє РїСЂРѕРґСѓРєС‚Сѓ В«РђР»РіРѕС„РѕРЅРґВ».</Typography.Text>
+                <Typography.Text>Алгофонд недоступен для вашего аккаунта.</Typography.Text>
+                <Typography.Text type="secondary">Обратитесь к администратору для подключения к продукту «Алгофонд».</Typography.Text>
               </Space>
             }
           />
@@ -1118,11 +1215,10 @@ const ClientCabinet: React.FC = () => {
     </Space>
   );
 
-  // в”Ђв”Ђ Tab: РќР°СЃС‚СЂРѕР№РєРё Рё РјРѕРЅРёС‚РѕСЂРёРЅРі в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+  // — Tab: Настройки и мониторинг ————————————————————————————
   const settingsTabContent = (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {/* РђРєРєР°СѓРЅС‚ */}
-      <Card className="battletoads-card" title="РђРєРєР°СѓРЅС‚" size="small">
+      <Card className="battletoads-card" title="Аккаунт" size="small">
         <Descriptions
           column={{ xs: 1, sm: 2 }}
           size="small"
@@ -1130,77 +1226,98 @@ const ClientCabinet: React.FC = () => {
           labelStyle={{ minWidth: 130, fontWeight: 600 }}
         >
           <Descriptions.Item label="Email">
-            <span style={{ wordBreak: 'break-all' }}>{clientUser?.email || 'вЂ”'}</span>
+            <span style={{ wordBreak: 'break-all' }}>{clientUser?.email || '—'}</span>
           </Descriptions.Item>
-          <Descriptions.Item label="РРјСЏ">{clientUser?.fullName || 'вЂ”'}</Descriptions.Item>
-          <Descriptions.Item label="Tenant">{clientUser?.tenantDisplayName || 'вЂ”'}</Descriptions.Item>
-          <Descriptions.Item label="Slug">{clientUser?.tenantSlug || 'вЂ”'}</Descriptions.Item>
-          <Descriptions.Item label="Р РµР¶РёРј">
-            {workspace?.productMode === 'algofund_client' ? 'РђР»РіРѕС„РѕРЅРґ-РєР»РёРµРЅС‚' : 'РљР»РёРµРЅС‚ СЃС‚СЂР°С‚РµРіРёР№'}
+          <Descriptions.Item label="Имя">{clientUser?.fullName || '—'}</Descriptions.Item>
+          <Descriptions.Item label="Tenant">{clientUser?.tenantDisplayName || '—'}</Descriptions.Item>
+          <Descriptions.Item label="Slug">{clientUser?.tenantSlug || '—'}</Descriptions.Item>
+          <Descriptions.Item label="Режим">
+            {workspace?.productMode === 'algofund_client' ? 'Алгофонд-клиент' : 'Клиент стратегий'}
           </Descriptions.Item>
-          <Descriptions.Item label="РЎС‚Р°С‚СѓСЃ">{clientUser?.tenantStatus || 'вЂ”'}</Descriptions.Item>
+          <Descriptions.Item label="Статус">{clientUser?.tenantStatus || '—'}</Descriptions.Item>
         </Descriptions>
         <div style={{ marginTop: 8 }}>
           <Space wrap>
             {!onboardingCompleted ? (
               <Button loading={actionLoading === 'onboarding'} onClick={() => void markOnboardingCompleted()}>
-                РћС‚РјРµС‚РёС‚СЊ onboarding РїСЂРѕР№РґРµРЅРЅС‹Рј
+                Отметить onboarding пройденным
               </Button>
             ) : null}
           </Space>
         </div>
       </Card>
 
-      {/* РњРѕРЅРёС‚РѕСЂРёРЅРі */}
       <Card
         className="battletoads-card"
-        title="РњРѕРЅРёС‚РѕСЂРёРЅРі СЃС‡С‘С‚Р°"
+        title="Мониторинг счёта"
         size="small"
-        extra={<Button size="small" loading={actionLoading === 'monitoring-refresh'} onClick={() => void refreshMonitoring()}>РћР±РЅРѕРІРёС‚СЊ</Button>}
+        extra={
+          <Space>
+            <Segmented
+              size="small"
+              options={[
+                { label: '1д', value: 1 },
+                { label: '7д', value: 7 },
+                { label: '30д', value: 30 },
+                { label: '60д', value: 60 },
+              ]}
+              value={monitoringDays}
+              onChange={(v) => {
+                const d = Number(v);
+                setMonitoringDays(d);
+                void refreshMonitoring(d);
+              }}
+            />
+            <Button size="small" loading={actionLoading === 'monitoring-refresh'} onClick={() => void refreshMonitoring(monitoringDays)}>Обновить</Button>
+          </Space>
+        }
       >
         <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
           <Col xs={12} sm={6}>
-            <Statistic title="РљР°РїРёС‚Р°Р»" value={formatMoney(monitoring?.latest?.equity_usd)} precision={0} />
+            <Statistic title="Капитал" value={formatMoney(monitoring?.latest?.equity_usd)} precision={0} />
           </Col>
           <Col xs={12} sm={6}>
-            <Statistic title="РџСЂРѕСЃР°РґРєР°" value={formatPercent(monitoring?.latest?.drawdown_pct)} />
+            <Statistic title="Просадка" value={formatPercent(monitoring?.latest?.drawdown_pct)} />
           </Col>
           <Col xs={12} sm={6}>
-            <Statistic title="РќРµСЂРµР°Р». P/L" value={formatMoney(monitoring?.latest?.unrealized_pnl_usd)} />
+            <Statistic title="Нереал. P/L" value={formatMoney(monitoring?.latest?.unrealized_pnl_usd)} />
           </Col>
           <Col xs={12} sm={6}>
-            <Statistic title="Р—Р°РіСЂСѓР·РєР° РјР°СЂР¶Рё" value={formatPercent(monitoring?.latest?.margin_usage_pct)} />
+            <Statistic title="Загрузка маржи" value={formatPercent(monitoring?.latest?.margin_usage_pct)} />
           </Col>
         </Row>
-        {monitoring?.apiKeyName ? <Tag color="blue" style={{ marginBottom: 8 }}>API: {monitoring.apiKeyName}</Tag> : null}
+        <Space wrap style={{ marginBottom: 8 }}>
+          {monitoring?.apiKeyName ? <Tag color="blue">Активный API: {monitoring.apiKeyName}</Tag> : null}
+          {monitoring?.streams?.strategy?.apiKeyName ? <Tag color="geekblue">Стратегии: {monitoring.streams.strategy.apiKeyName}</Tag> : null}
+          {monitoring?.streams?.algofund?.apiKeyName ? <Tag color="purple">Алгофонд: {monitoring.streams.algofund.apiKeyName}</Tag> : null}
+        </Space>
         {monitoringSeries.length > 0 ? (
           <ChartComponent data={monitoringSeries} type="line" />
         ) : (
-          <Empty description="РќРµС‚ РґР°РЅРЅС‹С… РјРѕРЅРёС‚РѕСЂРёРЅРіР°" />
+          <Empty description="Нет данных мониторинга" />
         )}
       </Card>
 
-      {/* API РєР»СЋС‡Рё */}
-      <Card className="battletoads-card" title="API РєР»СЋС‡Рё Р±РёСЂР¶Рё" size="small">
+      <Card className="battletoads-card" title="API ключи биржи" size="small">
         {!onboardingCompleted ? (
           <Alert
             type="info"
             showIcon
             style={{ marginBottom: 12 }}
-            message="РџРµСЂРІС‹Р№ РІС…РѕРґ вЂ” С‡РµРє-Р»РёСЃС‚"
+            message="Первый вход — чек-лист"
             description={
               <>
                 <ol style={{ margin: '8px 0 8px 18px', padding: 0 }}>
-                  <li>РЎРѕР·РґР°Р№С‚Рµ API-РєР»СЋС‡ РЅР° Р±РёСЂР¶Рµ СЃ СЂР°Р·СЂРµС€РµРЅРёСЏРјРё Trade Рё Read.</li>
-                  <li>Р”РѕР±Р°РІСЊС‚Рµ IP-Р°РґСЂРµСЃ СЃРµСЂРІРµСЂР° РІ Р±РµР»С‹Р№ СЃРїРёСЃРѕРє Р±РёСЂР¶Рё.</li>
-                  <li>Р’СЃС‚Р°РІСЊС‚Рµ РєР»СЋС‡ Рё СЃРµРєСЂРµС‚ РІ С„РѕСЂРјСѓ РЅРёР¶Рµ.</li>
+                  <li>Создайте API ключ на бирже с правами Trade и Read.</li>
+                  <li>Добавьте IP адрес сервера в белый список биржи.</li>
+                  <li>Вставьте ключ и секрет в форму ниже и подключите его к нужному потоку.</li>
                 </ol>
                 <Space wrap>
                   {guides.length > 0 ? guides.map((guide) => (
                     <Button key={guide.id} size="small" loading={actionLoading === `guide-${guide.id}`} onClick={() => void downloadGuide(guide)}>
                       {guide.title}
                     </Button>
-                  )) : <Tag>Р“Р°Р№РґС‹ РЅРµРґРѕСЃС‚СѓРїРЅС‹</Tag>}
+                  )) : <Tag>Гайды временно недоступны</Tag>}
                 </Space>
               </>
             }
@@ -1215,14 +1332,23 @@ const ClientCabinet: React.FC = () => {
           </Space>
         ) : null}
 
-        <Typography.Text strong>Р”РѕР±Р°РІРёС‚СЊ РЅРѕРІС‹Р№ РєР»СЋС‡</Typography.Text>
+        <Typography.Text strong>
+          {editingApiKeyId ? `Редактировать ключ: ${editingApiKeyName}` : 'Добавить новый ключ'}
+        </Typography.Text>
         <Row gutter={[8, 8]} style={{ marginTop: 8 }}>
           <Col xs={24} sm={8}>
-            <Input
-              addonBefore="Р‘РёСЂР¶Р°"
-              value={apiKeyDraft.exchange}
-              onChange={(e) => setApiKeyDraft((cur) => ({ ...cur, exchange: e.target.value.trim().toLowerCase() || 'bybit' }))}
-              placeholder="bybit"
+            <Select
+              style={{ width: '100%' }}
+              value={apiKeyDraft.exchange || 'bybit'}
+              onChange={(value) => setApiKeyDraft((cur) => ({ ...cur, exchange: String(value || 'bybit').trim().toLowerCase() || 'bybit' }))}
+              options={[
+                { value: 'bybit', label: 'Bybit Futures' },
+                { value: 'binance', label: 'Binance Futures' },
+                { value: 'bingx', label: 'BingX Futures' },
+                { value: 'bitget', label: 'Bitget Futures' },
+                { value: 'weex', label: 'WEEX Futures' },
+                { value: 'mexc', label: 'MEXC Futures' },
+              ]}
             />
           </Col>
           <Col xs={24} sm={8}>
@@ -1246,7 +1372,7 @@ const ClientCabinet: React.FC = () => {
               addonBefore="Passphrase"
               value={apiKeyDraft.passphrase}
               onChange={(e) => setApiKeyDraft((cur) => ({ ...cur, passphrase: e.target.value }))}
-              placeholder="РўРѕР»СЊРєРѕ РґР»СЏ РЅРµРєРѕС‚РѕСЂС‹С… Р±РёСЂР¶"
+              placeholder="Для Bitget и WEEX обязателен"
             />
           </Col>
           <Col xs={24} sm={16}>
@@ -1254,8 +1380,9 @@ const ClientCabinet: React.FC = () => {
               <Checkbox checked={apiKeyDraft.testnet} onChange={(e) => setApiKeyDraft((cur) => ({ ...cur, testnet: e.target.checked }))}>Testnet</Checkbox>
               <Checkbox checked={apiKeyDraft.demo} onChange={(e) => setApiKeyDraft((cur) => ({ ...cur, demo: e.target.checked }))}>Demo Trading</Checkbox>
               <Button type="primary" loading={actionLoading === 'client-api-key'} onClick={() => void saveClientApiKey()}>
-                РЎРѕС…СЂР°РЅРёС‚СЊ Рё РїРѕРґРєР»СЋС‡РёС‚СЊ
+                {editingApiKeyId ? 'Сохранить изменения' : 'Сохранить и подключить'}
               </Button>
+              {editingApiKeyId ? <Button onClick={resetApiKeyDraft}>Отмена</Button> : null}
             </Space>
           </Col>
         </Row>
@@ -1263,7 +1390,7 @@ const ClientCabinet: React.FC = () => {
         {clientApiKeys.length > 0 ? (
           <>
             <Divider style={{ margin: '12px 0' }} />
-            <Typography.Text strong>РџРѕРґРєР»СЋС‡С‘РЅРЅС‹Рµ РєР»СЋС‡Рё</Typography.Text>
+            <Typography.Text strong>Подключённые ключи</Typography.Text>
             <List
               size="small"
               style={{ marginTop: 8 }}
@@ -1271,15 +1398,18 @@ const ClientCabinet: React.FC = () => {
               renderItem={(item) => (
                 <List.Item
                   actions={[
+                    <Button key={`edit-${item.id}`} size="small" onClick={() => startEditingApiKey(item)}>
+                      Редактировать
+                    </Button>,
                     <Popconfirm
                       key={`del-${item.id}`}
-                      title="РЈРґР°Р»РёС‚СЊ API РєР»СЋС‡?"
-                      description="РљР»СЋС‡ Р±СѓРґРµС‚ СѓРґР°Р»С‘РЅ РёР· Р±Р°Р·С‹ РґР°РЅРЅС‹С…."
-                      okText="РЈРґР°Р»РёС‚СЊ"
-                      cancelText="РћС‚РјРµРЅР°"
+                      title="Удалить API ключ?"
+                      description="Ключ будет удалён из базы данных."
+                      okText="Удалить"
+                      cancelText="Отмена"
                       onConfirm={() => void deleteClientApiKey(item.id)}
                     >
-                      <Button danger size="small" loading={actionLoading === `delete-client-api-key-${item.id}`}>РЈРґР°Р»РёС‚СЊ</Button>
+                      <Button danger size="small" loading={actionLoading === `delete-client-api-key-${item.id}`}>Удалить</Button>
                     </Popconfirm>,
                   ]}
                 >
@@ -1288,7 +1418,9 @@ const ClientCabinet: React.FC = () => {
                     <Tag>{item.exchange}</Tag>
                     {item.testnet ? <Tag color="gold">testnet</Tag> : null}
                     {item.demo ? <Tag color="magenta">demo</Tag> : null}
-                    {item.isAssigned ? <Tag color="success">РїРѕРґРєР»СЋС‡С‘РЅ Рє РїРѕС‚РѕРєСѓ</Tag> : <Tag>РЅРµ РїРѕРґРєР»СЋС‡С‘РЅ</Tag>}
+                    {item.usedByStrategy ? <Tag color="blue">поток стратегий</Tag> : null}
+                    {item.usedByAlgofund ? <Tag color="purple">поток Алгофонда</Tag> : null}
+                    {!item.usedByStrategy && !item.usedByAlgofund ? <Tag>не назначен</Tag> : null}
                   </Space>
                 </List.Item>
               )}
@@ -1297,46 +1429,45 @@ const ClientCabinet: React.FC = () => {
         ) : null}
       </Card>
 
-      {/* РўР°СЂРёС„ */}
-      <Card className="battletoads-card" title="РўР°СЂРёС„ Рё Р»РёРјРёС‚С‹" size="small">
+      <Card className="battletoads-card" title="Тариф и лимиты" size="small">
         <Space wrap style={{ marginBottom: 12 }}>
-          <Tag color="blue">РўР°СЂРёС„: {tariff?.currentPlan?.title || 'вЂ”'}</Tag>
-          <Tag color="green">Р¦РµРЅР°: {formatMoney(tariff?.currentPlan?.price_usdt)}/РјРµСЃ</Tag>
-          <Tag color="cyan">РњР°РєСЃ. РґРµРїРѕР·РёС‚: {formatMoney(tariff?.currentPlan?.max_deposit_total)}</Tag>
-          <Tag color="purple">Р РёСЃРє-РєР°Рї: {formatNumber(tariff?.currentPlan?.risk_cap_max)}</Tag>
-          {tariff?.currentPlan?.allow_ts_start_stop_requests ? <Tag color="success">РЎС‚Р°СЂС‚/РЎС‚РѕРї: РІРєР»</Tag> : null}
+          <Tag color="blue">Тариф: {tariff?.currentPlan?.title || '—'}</Tag>
+          <Tag color="green">Цена: {formatMoney(tariff?.currentPlan?.price_usdt)}/мес</Tag>
+          <Tag color="cyan">Макс. депозит: {formatMoney(tariff?.currentPlan?.max_deposit_total)}</Tag>
+          <Tag color="purple">Риск-кап: {formatNumber(tariff?.currentPlan?.risk_cap_max)}</Tag>
+          {tariff?.currentPlan?.allow_ts_start_stop_requests ? <Tag color="success">Старт/Стоп: вкл</Tag> : null}
         </Space>
 
-        <Typography.Text strong>Р—Р°РїСЂРѕСЃРёС‚СЊ СЃРјРµРЅСѓ С‚Р°СЂРёС„Р°</Typography.Text>
+        <Typography.Text strong>Запросить смену тарифа</Typography.Text>
         <Row gutter={[8, 8]} style={{ marginTop: 8 }}>
           <Col xs={24} sm={12}>
             <Select
               style={{ width: '100%' }}
-              placeholder="Р’С‹Р±РµСЂРёС‚Рµ С‚Р°СЂРёС„"
+              placeholder="Выберите тариф"
               value={targetPlanCode || undefined}
               onChange={setTargetPlanCode}
               options={(tariff?.availablePlans || []).map((plan) => ({
                 value: plan.code,
-                label: `${plan.title} (${formatMoney(plan.price_usdt)}/РјРµСЃ вЂ” РґРѕ ${formatMoney(plan.max_deposit_total)})`,
+                label: `${plan.title} (${formatMoney(plan.price_usdt)}/мес — до ${formatMoney(plan.max_deposit_total)})`,
               }))}
             />
           </Col>
           <Col xs={24} sm={12}>
             <Input
-              placeholder="РљРѕРјРјРµРЅС‚Р°СЂРёР№ (РЅРµРѕР±СЏР·Р°С‚РµР»СЊРЅРѕ)"
+              placeholder="Комментарий (необязательно)"
               value={tariffNote}
               onChange={(e) => setTariffNote(e.target.value)}
             />
           </Col>
         </Row>
         <Button type="primary" style={{ marginTop: 8 }} loading={actionLoading === 'tariff-request'} onClick={() => void sendTariffRequest()}>
-          РћС‚РїСЂР°РІРёС‚СЊ Р·Р°СЏРІРєСѓ РЅР° СЃРјРµРЅСѓ С‚Р°СЂРёС„Р°
+          Отправить заявку на смену тарифа
         </Button>
 
         {(tariff?.requests || []).length > 0 ? (
           <>
             <Divider style={{ margin: '12px 0' }} />
-            <Typography.Text type="secondary">РџРѕСЃР»РµРґРЅРёРµ Р·Р°СЏРІРєРё:</Typography.Text>
+            <Typography.Text type="secondary">Последние заявки:</Typography.Text>
             <List
               size="small"
               style={{ marginTop: 8 }}
@@ -1345,7 +1476,7 @@ const ClientCabinet: React.FC = () => {
                 <List.Item>
                   <Space wrap>
                     <Tag color="blue">#{item.id}</Tag>
-                    <Typography.Text>{item.payload?.targetPlanTitle || item.payload?.targetPlanCode || 'вЂ”'}</Typography.Text>
+                    <Typography.Text>{item.payload?.targetPlanTitle || item.payload?.targetPlanCode || '—'}</Typography.Text>
                     <Typography.Text type="secondary">{item.createdAt}</Typography.Text>
                   </Space>
                 </List.Item>
@@ -1361,19 +1492,19 @@ const ClientCabinet: React.FC = () => {
     <div className="saas-page client-cabinet-page">
       {contextHolder}
 
-      {/* в”Ђв”Ђ РЁР°РїРєР° в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ */}
+      {/* — Шапка ——————————————————————————————————————————————————— */}
       <Card className="battletoads-card" bordered={false} style={{ marginBottom: 0 }}>
         <Row align="middle" justify="space-between" gutter={[8, 8]}>
           <Col>
-            <Typography.Title level={3} style={{ margin: 0 }}>Р›РёС‡РЅС‹Р№ РєР°Р±РёРЅРµС‚</Typography.Title>
+            <Typography.Title level={3} style={{ margin: 0 }}>Личный кабинет</Typography.Title>
             <Typography.Text type="secondary" style={{ wordBreak: 'break-all' }}>
-              {clientUser?.email || 'вЂ”'}{clientUser?.tenantDisplayName ? ` В· ${clientUser.tenantDisplayName}` : ''}
+              {clientUser?.email || '—'}{clientUser?.tenantDisplayName ? ` · ${clientUser.tenantDisplayName}` : ''}
             </Typography.Text>
           </Col>
           <Col>
             <Space wrap>
-              <Button onClick={() => void loadWorkspace()} loading={loading}>РћР±РЅРѕРІРёС‚СЊ</Button>
-              <Button danger onClick={() => void logoutClient()}>Р’С‹Р№С‚Рё</Button>
+              <Button onClick={() => void loadWorkspace()} loading={loading}>Обновить</Button>
+              <Button danger onClick={() => void logoutClient()}>Выйти</Button>
             </Space>
           </Col>
         </Row>
@@ -1388,23 +1519,23 @@ const ClientCabinet: React.FC = () => {
             items={[
               {
                 key: 'strategy',
-                label: 'РљР»РёРµРЅС‚ СЃС‚СЂР°С‚РµРіРёР№',
+                label: 'Клиент стратегий',
                 children: strategyTabContent,
               },
               {
                 key: 'algofund',
-                label: 'РђР»РіРѕС„РѕРЅРґ',
+                label: 'Алгофонд',
                 children: algofundTabContent,
               },
               {
                 key: 'settings',
-                label: 'РќР°СЃС‚СЂРѕР№РєРё Рё РјРѕРЅРёС‚РѕСЂРёРЅРі',
+                label: 'Настройки и мониторинг',
                 children: settingsTabContent,
               },
             ]}
           />
         ) : !loading ? (
-          <Alert type="warning" showIcon message="РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ СЂР°Р±РѕС‡РµРµ РїСЂРѕСЃС‚СЂР°РЅСЃС‚РІРѕ. РџРѕРїСЂРѕР±СѓР№С‚Рµ РѕР±РЅРѕРІРёС‚СЊ СЃС‚СЂР°РЅРёС†Сѓ." />
+          <Alert type="warning" showIcon message="Не удалось загрузить рабочее пространство. Попробуйте обновить страницу." />
         ) : null}
       </Spin>
     </div>

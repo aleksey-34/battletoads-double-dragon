@@ -160,20 +160,47 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
   return created;
 };
 
-export const getMonitoringSnapshots = async (apiKeyName: string, limit: number = 240) => {
+const MAX_CHART_POINTS = 720;
+
+export const getMonitoringSnapshots = async (
+  apiKeyName: string,
+  limit: number = 240,
+  sinceDays?: number
+) => {
   const key = await getApiKeyRow(apiKeyName);
-  const safeLimit = Math.max(1, Math.min(5000, Number.isFinite(limit) ? Math.floor(limit) : 240));
 
-  const rows = await db.all(
-    `SELECT *
-     FROM monitoring_snapshots
-     WHERE api_key_id = ?
-     ORDER BY datetime(recorded_at) DESC
-     LIMIT ?`,
-    [key.id, safeLimit]
-  );
+  let rows: any[];
 
-  return rows.reverse();
+  if (sinceDays && Number.isFinite(sinceDays) && sinceDays > 0) {
+    const safeDays = Math.min(90, Math.max(1, Math.floor(sinceDays)));
+    rows = await db.all(
+      `SELECT *
+       FROM monitoring_snapshots
+       WHERE api_key_id = ?
+         AND datetime(recorded_at) >= datetime('now', ? || ' days')
+       ORDER BY datetime(recorded_at) ASC`,
+      [key.id, `-${safeDays}`]
+    );
+  } else {
+    const safeLimit = Math.max(1, Math.min(5000, Number.isFinite(limit) ? Math.floor(limit) : 240));
+    rows = await db.all(
+      `SELECT *
+       FROM monitoring_snapshots
+       WHERE api_key_id = ?
+       ORDER BY datetime(recorded_at) DESC
+       LIMIT ?`,
+      [key.id, safeLimit]
+    );
+    rows.reverse();
+  }
+
+  // Downsample to keep chart responsive
+  if (rows.length > MAX_CHART_POINTS) {
+    const step = Math.ceil(rows.length / MAX_CHART_POINTS);
+    rows = rows.filter((_, i) => i % step === 0 || i === rows.length - 1);
+  }
+
+  return rows;
 };
 
 export const getMonitoringLatest = async (apiKeyName: string) => {
