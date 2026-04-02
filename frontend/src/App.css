@@ -1,135 +1,358 @@
-.battletoads-theme {
-  --bt-bg-main: #e8ffd0;
-  --bt-bg-surface: #f7ffe7;
-  --bt-bg-accent: #fff6cc;
-  --bt-primary: #2f8f3f;
-  --bt-primary-strong: #1f6e31;
-  --bt-lime: #d8ff55;
-  --bt-orange: #ff922e;
-  --bt-border: #92d66a;
-  --bt-text-main: #20442b;
-  --bt-text-muted: #486a54;
+/* ═══════════════════════════════════════════════════
+   BTDD Platform — Dark Theme
+   ═══════════════════════════════════════════════════ */
+
+:root {
+  --btdd-bg-primary: #0a0a12;
+  --btdd-bg-surface: #12121e;
+  --btdd-bg-card: #16162a;
+  --btdd-bg-elevated: #1c1c36;
+  --btdd-border: #2a2a48;
+  --btdd-border-strong: #3a3a5c;
+  --btdd-text-primary: #e0e0f0;
+  --btdd-text-secondary: #8888aa;
+  --btdd-text-muted: #555570;
+  --btdd-accent: #4096ff;
+  --btdd-accent-hover: #5aafff;
+  --btdd-teal: #36cfc9;
+  --btdd-green: #52c41a;
+  --btdd-orange: #fa8c16;
+  --btdd-red: #ff4d4f;
+  --btdd-magenta: #eb2f96;
 }
 
-.app-root-layout .ant-layout-header {
-  background: linear-gradient(92deg, #0f5ed6 0%, #1677ff 50%, #2a88ff 100%);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
-  box-shadow: 0 8px 22px rgba(11, 73, 165, 0.22);
+body {
+  margin: 0;
+  font-family: 'Inter', 'Segoe UI', 'Trebuchet MS', sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background: var(--btdd-bg-primary);
+  color: var(--btdd-text-primary);
 }
 
-.battletoads-theme body,
-body.battletoads-theme {
-  background:
-    radial-gradient(720px 260px at 0% -5%, rgba(216, 255, 85, 0.6), transparent 64%),
-    radial-gradient(640px 240px at 100% 8%, rgba(47, 143, 63, 0.28), transparent 68%),
-    linear-gradient(135deg, #e6ffd3 0%, #f6ffea 46%, #fff5d0 100%);
-  color: var(--bt-text-main);
+code {
+  font-family: 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
 }
 
-.battletoads-theme .ant-layout {
+/* ─── Layout & Header ─── */
+.app-root-layout {
+  background: var(--btdd-bg-primary) !important;
+  min-height: 100vh;
+}
+
+.app-root-layout .ant-layout {
   background: transparent;
 }
 
-.battletoads-theme .ant-layout-header {
-  background: linear-gradient(92deg, #235d36 0%, #2f8f3f 46%, #3ba651 100%);
-  border-bottom: 2px solid rgba(216, 255, 85, 0.45);
-  box-shadow: 0 10px 24px rgba(25, 85, 44, 0.28);
+.app-root-layout .ant-layout-header {
+  background: linear-gradient(92deg, #0c0c1a 0%, #141430 50%, #0e0e22 100%) !important;
+  border-bottom: 1px solid var(--btdd-border);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+.app-root-layout .ant-layout-content {
+  background: transparent;
 }
 
 .app-brand-title {
-  color: #f5ffd6 !important;
+  color: var(--btdd-teal) !important;
   font-size: 14px;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
-  font-weight: 700;
+  font-weight: 800;
   white-space: nowrap;
 }
 
 .app-language-select {
-  min-width: 120px;
+  min-width: 110px;
 }
 
-.battletoads-theme .app-language-select .ant-select-selector {
-  background: #f8ffd7 !important;
-  border-color: #c9ee90 !important;
+.app-language-select .ant-select-selector {
+  background: var(--btdd-bg-card) !important;
+  border-color: var(--btdd-border) !important;
+  color: var(--btdd-text-primary) !important;
 }
 
-.battletoads-form-shell {
-  background: transparent;
+.app-header-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 64px;
 }
 
-.battletoads-theme .battletoads-card,
-.battletoads-theme .ant-card {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(246, 255, 227, 0.92));
-  border-color: var(--bt-border);
-  box-shadow: 0 7px 20px rgba(43, 117, 62, 0.18);
+.app-main-menu {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
-.battletoads-theme .ant-card-head {
-  background: linear-gradient(92deg, #f8ffd5 0%, #ecffc4 48%, #ffeec8 100%);
-  border-bottom-color: #c5e98d;
+.app-account-menu {
+  flex: 0 0 auto;
 }
 
-.battletoads-theme .battletoads-form .ant-form-item-label > label,
-.battletoads-theme .ant-form-item-label > label {
-  color: var(--bt-text-main);
+/* ─── Global Ant Design Dark Overrides ─── */
+.ant-card {
+  background: var(--btdd-bg-card) !important;
+  border-color: var(--btdd-border) !important;
+  color: var(--btdd-text-primary);
+  border-radius: 12px;
+}
+
+.ant-card-head {
+  background: var(--btdd-bg-elevated) !important;
+  border-bottom-color: var(--btdd-border) !important;
+  color: var(--btdd-text-primary) !important;
+  border-radius: 12px 12px 0 0;
+}
+
+.ant-card-head-title {
+  color: var(--btdd-text-primary) !important;
+}
+
+.ant-card-body {
+  color: var(--btdd-text-primary);
+}
+
+.ant-input, .ant-input-password, .ant-input-number, .ant-select-selector,
+.ant-input-textarea textarea {
+  background: var(--btdd-bg-surface) !important;
+  border-color: var(--btdd-border) !important;
+  color: var(--btdd-text-primary) !important;
+}
+
+.ant-input:focus, .ant-input-focused,
+.ant-input-number-focused,
+.ant-select-focused .ant-select-selector {
+  border-color: var(--btdd-accent) !important;
+  box-shadow: 0 0 0 2px rgba(64, 150, 255, 0.15) !important;
+}
+
+.ant-input::placeholder, .ant-input-number::placeholder {
+  color: var(--btdd-text-muted) !important;
+}
+
+.ant-btn-primary {
+  background: linear-gradient(135deg, var(--btdd-accent) 0%, #2570d6 100%);
+  border-color: var(--btdd-accent);
+  box-shadow: 0 4px 12px rgba(64, 150, 255, 0.25);
+}
+
+.ant-btn-primary:hover, .ant-btn-primary:focus {
+  background: linear-gradient(135deg, var(--btdd-accent-hover) 0%, #3a8aee 100%);
+  border-color: var(--btdd-accent-hover);
+}
+
+.ant-btn-default {
+  background: var(--btdd-bg-card);
+  border-color: var(--btdd-border);
+  color: var(--btdd-text-primary);
+}
+
+.ant-btn-default:hover {
+  border-color: var(--btdd-accent);
+  color: var(--btdd-accent);
+}
+
+.ant-btn-dangerous {
+  border-color: var(--btdd-red);
+  color: var(--btdd-red);
+}
+
+.ant-tag {
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 1px 8px;
+  line-height: 20px;
+}
+
+.ant-switch {
+  min-width: 36px !important;
+  height: 20px !important;
+}
+
+.ant-switch-handle {
+  width: 16px !important;
+  height: 16px !important;
+}
+
+.ant-switch-checked {
+  background: var(--btdd-accent) !important;
+}
+
+.ant-tabs-tab {
+  color: var(--btdd-text-secondary) !important;
+}
+
+.ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--btdd-accent) !important;
+}
+
+.ant-tabs-ink-bar {
+  background: var(--btdd-accent) !important;
+}
+
+.ant-table {
+  background: var(--btdd-bg-card) !important;
+  color: var(--btdd-text-primary) !important;
+}
+
+.ant-table-thead > tr > th {
+  background: var(--btdd-bg-elevated) !important;
+  color: var(--btdd-text-secondary) !important;
+  border-bottom-color: var(--btdd-border) !important;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.ant-table-tbody > tr > td {
+  border-bottom-color: var(--btdd-border) !important;
+  color: var(--btdd-text-primary) !important;
+}
+
+.ant-table-tbody > tr:hover > td {
+  background: rgba(64, 150, 255, 0.05) !important;
+}
+
+.ant-table-cell {
+  background: transparent !important;
+}
+
+.ant-empty-description {
+  color: var(--btdd-text-muted) !important;
+}
+
+.ant-descriptions-bordered .ant-descriptions-item-label {
+  background: var(--btdd-bg-elevated) !important;
+  color: var(--btdd-text-secondary) !important;
+  border-color: var(--btdd-border) !important;
+}
+
+.ant-descriptions-bordered .ant-descriptions-item-content {
+  background: var(--btdd-bg-card) !important;
+  color: var(--btdd-text-primary) !important;
+  border-color: var(--btdd-border) !important;
+}
+
+.ant-alert {
+  background: var(--btdd-bg-elevated) !important;
+  border-color: var(--btdd-border) !important;
+  color: var(--btdd-text-primary) !important;
+}
+
+.ant-alert-info {
+  border-color: rgba(64, 150, 255, 0.3) !important;
+}
+
+.ant-alert-success {
+  border-color: rgba(82, 196, 26, 0.3) !important;
+}
+
+.ant-form-item-label > label {
+  color: var(--btdd-text-primary) !important;
   font-weight: 600;
 }
 
-.battletoads-theme .battletoads-form .ant-input,
-.battletoads-theme .battletoads-form .ant-input-password,
-.battletoads-theme .battletoads-form .ant-input-number,
-.battletoads-theme .battletoads-form .ant-select-selector,
-.battletoads-theme .ant-input,
-.battletoads-theme .ant-input-password,
-.battletoads-theme .ant-input-number,
-.battletoads-theme .ant-select-selector {
-  background: #fbffe7;
-  border-color: #b9df83;
-  color: #21442d;
+.ant-modal-content {
+  background: var(--btdd-bg-surface) !important;
+  color: var(--btdd-text-primary) !important;
 }
 
-.battletoads-theme .battletoads-form .ant-input:focus,
-.battletoads-theme .battletoads-form .ant-input-focused,
-.battletoads-theme .battletoads-form .ant-input-number-focused,
-.battletoads-theme .battletoads-form .ant-select-focused .ant-select-selector,
-.battletoads-theme .ant-input:focus,
-.battletoads-theme .ant-input-focused,
-.battletoads-theme .ant-input-number-focused,
-.battletoads-theme .ant-select-focused .ant-select-selector {
-  border-color: var(--bt-primary);
-  box-shadow: 0 0 0 2px rgba(47, 143, 63, 0.18);
+.ant-modal-header {
+  background: var(--btdd-bg-elevated) !important;
+  border-bottom-color: var(--btdd-border) !important;
 }
 
-.battletoads-theme .ant-btn-primary {
-  background: linear-gradient(180deg, #309444 0%, #237934 100%);
-  border-color: #287f39;
-  box-shadow: 0 4px 10px rgba(32, 98, 50, 0.3);
+.ant-modal-title {
+  color: var(--btdd-text-primary) !important;
 }
 
-.battletoads-theme .ant-btn-primary:hover,
-.battletoads-theme .ant-btn-primary:focus {
-  background: linear-gradient(180deg, #3ca851 0%, #2a8f3e 100%);
-  border-color: #2f8f3f;
+.ant-segmented {
+  background: var(--btdd-bg-surface) !important;
+  color: var(--btdd-text-secondary) !important;
 }
 
-.battletoads-theme .ant-btn-dangerous {
-  border-color: #ff7f3f;
-  color: #b64820;
+.ant-segmented-item-selected {
+  background: var(--btdd-bg-card) !important;
+  color: var(--btdd-text-primary) !important;
 }
 
-.battletoads-theme .ant-tag {
-  border-color: #b6df83;
-  background: #f4ffde;
-  color: #285333;
+.ant-statistic-title {
+  color: var(--btdd-text-secondary) !important;
+  font-size: 12px;
 }
 
-.battletoads-theme .ant-switch-checked {
-  background: var(--bt-orange);
+.ant-statistic-content {
+  color: var(--btdd-text-primary) !important;
 }
 
-.battletoads-theme .ant-alert {
-  border-color: #c7e995;
+.ant-progress .ant-progress-bg {
+  background: linear-gradient(90deg, var(--btdd-accent), var(--btdd-teal)) !important;
+}
+
+.ant-slider-rail {
+  background: var(--btdd-border) !important;
+}
+
+.ant-slider-track {
+  background: var(--btdd-accent) !important;
+}
+
+.ant-popover-inner {
+  background: var(--btdd-bg-elevated) !important;
+  color: var(--btdd-text-primary) !important;
+}
+
+.ant-tooltip-inner {
+  background: var(--btdd-bg-elevated) !important;
+}
+
+.ant-collapse {
+  background: var(--btdd-bg-card) !important;
+  border-color: var(--btdd-border) !important;
+  color: var(--btdd-text-primary) !important;
+}
+
+.ant-collapse-header {
+  color: var(--btdd-text-primary) !important;
+}
+
+.ant-collapse-content {
+  background: var(--btdd-bg-surface) !important;
+  border-top-color: var(--btdd-border) !important;
+  color: var(--btdd-text-primary) !important;
+}
+
+.ant-dropdown-menu {
+  background: var(--btdd-bg-elevated) !important;
+}
+
+.ant-dropdown-menu-item {
+  color: var(--btdd-text-primary) !important;
+}
+
+.ant-dropdown-menu-item:hover {
+  background: rgba(64, 150, 255, 0.1) !important;
+}
+
+.ant-select-dropdown {
+  background: var(--btdd-bg-elevated) !important;
+}
+
+.ant-select-item {
+  color: var(--btdd-text-primary) !important;
+}
+
+.ant-select-item-option-active {
+  background: rgba(64, 150, 255, 0.12) !important;
+}
+
+.ant-select-item-option-selected {
+  background: rgba(64, 150, 255, 0.2) !important;
+}
+
+/* ─── Dashboard ─── */
+.dashboard-page {
+  padding: 2px;
 }
 
 .dashboard-compact-form .ant-form-item {
@@ -172,10 +395,7 @@ body.battletoads-theme {
   height: 28px !important;
 }
 
-.dashboard-page {
-  padding: 2px;
-}
-
+/* ─── Strategy Flags ─── */
 .strategy-flag-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -190,10 +410,11 @@ body.battletoads-theme {
   gap: 6px;
   padding: 3px 6px;
   min-height: 28px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--btdd-border);
   border-radius: 4px;
   font-size: 11px;
-  color: #374151;
+  color: var(--btdd-text-secondary);
+  background: var(--btdd-bg-surface);
 }
 
 .strategy-flag-item > span {
@@ -218,51 +439,25 @@ body.battletoads-theme {
   height: 12px;
 }
 
-.app-header-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-height: 64px;
-}
-
-.app-main-menu {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.app-account-menu {
-  flex: 0 0 auto;
-}
-
+/* ─── Docs Markdown ─── */
 .docs-markdown-frame .ant-card-body {
   padding: 0;
-  background:
-    radial-gradient(580px 140px at 0% 0%, rgba(216, 255, 85, 0.18), transparent 55%),
-    linear-gradient(180deg, rgba(252, 255, 245, 0.96), rgba(245, 255, 229, 0.92));
+  background: var(--btdd-bg-surface) !important;
 }
 
 .docs-markdown-body {
   padding: 24px 26px;
-  color: #244230;
+  color: var(--btdd-text-primary);
   line-height: 1.75;
   font-size: 15px;
 }
 
-.docs-markdown-body > :first-child {
-  margin-top: 0;
-}
+.docs-markdown-body > :first-child { margin-top: 0; }
+.docs-markdown-body > :last-child { margin-bottom: 0; }
 
-.docs-markdown-body > :last-child {
-  margin-bottom: 0;
-}
-
-.docs-markdown-body h1,
-.docs-markdown-body h2,
-.docs-markdown-body h3,
-.docs-markdown-body h4,
-.docs-markdown-body h5,
-.docs-markdown-body h6 {
-  color: #173d25;
+.docs-markdown-body h1, .docs-markdown-body h2, .docs-markdown-body h3,
+.docs-markdown-body h4, .docs-markdown-body h5, .docs-markdown-body h6 {
+  color: var(--btdd-text-primary);
   letter-spacing: 0.01em;
   margin-top: 1.6em;
   margin-bottom: 0.55em;
@@ -272,72 +467,61 @@ body.battletoads-theme {
 .docs-markdown-body h1 {
   font-size: 2rem;
   padding-bottom: 0.35em;
-  border-bottom: 1px solid rgba(47, 143, 63, 0.2);
+  border-bottom: 1px solid var(--btdd-border);
 }
 
-.docs-markdown-body h2 {
-  font-size: 1.55rem;
-}
+.docs-markdown-body h2 { font-size: 1.55rem; }
+.docs-markdown-body h3 { font-size: 1.22rem; }
 
-.docs-markdown-body h3 {
-  font-size: 1.22rem;
-}
-
-.docs-markdown-body p,
-.docs-markdown-body ul,
-.docs-markdown-body ol,
-.docs-markdown-body pre,
-.docs-markdown-body blockquote {
+.docs-markdown-body p, .docs-markdown-body ul, .docs-markdown-body ol,
+.docs-markdown-body pre, .docs-markdown-body blockquote {
   margin-top: 0;
   margin-bottom: 1em;
 }
 
-.docs-markdown-body ul,
-.docs-markdown-body ol {
+.docs-markdown-body ul, .docs-markdown-body ol {
   padding-left: 1.4em;
 }
 
-.docs-markdown-body li + li {
-  margin-top: 0.28em;
-}
+.docs-markdown-body li + li { margin-top: 0.28em; }
 
 .docs-markdown-body hr {
   border: 0;
-  border-top: 1px solid rgba(47, 143, 63, 0.18);
+  border-top: 1px solid var(--btdd-border);
   margin: 1.8em 0;
 }
 
 .docs-markdown-body a {
-  color: #1763c6;
+  color: var(--btdd-accent);
   text-decoration: none;
-  border-bottom: 1px solid rgba(23, 99, 198, 0.2);
+  border-bottom: 1px solid rgba(64, 150, 255, 0.2);
 }
 
 .docs-markdown-body a:hover {
-  color: #0f4c9a;
-  border-bottom-color: rgba(15, 76, 154, 0.42);
+  color: var(--btdd-accent-hover);
+  border-bottom-color: rgba(90, 175, 255, 0.4);
 }
 
 .docs-markdown-body :not(pre) > code {
-  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
   font-size: 0.92em;
   padding: 0.14em 0.38em;
   border-radius: 6px;
-  background: rgba(32, 68, 43, 0.08);
-  color: #173d25;
+  background: rgba(64, 150, 255, 0.1);
+  color: var(--btdd-teal);
 }
 
 .docs-markdown-body pre {
   overflow-x: auto;
   padding: 14px 16px;
   border-radius: 12px;
-  background: #183327;
-  color: #efffd2;
-  box-shadow: inset 0 0 0 1px rgba(216, 255, 85, 0.08);
+  background: #0a0a18;
+  color: #c8d8ff;
+  border: 1px solid var(--btdd-border);
 }
 
 .docs-code-block {
-  font-family: "IBM Plex Mono", "Consolas", monospace;
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
   font-size: 13px;
   line-height: 1.7;
   white-space: pre;
@@ -346,10 +530,10 @@ body.battletoads-theme {
 .docs-blockquote {
   margin-left: 0;
   padding: 12px 16px;
-  border-left: 4px solid #7dbe45;
+  border-left: 4px solid var(--btdd-accent);
   border-radius: 0 10px 10px 0;
-  background: rgba(216, 255, 85, 0.1);
-  color: #335240;
+  background: rgba(64, 150, 255, 0.06);
+  color: var(--btdd-text-secondary);
 }
 
 .docs-table-wrap {
@@ -361,118 +545,25 @@ body.battletoads-theme {
   width: 100%;
   border-collapse: collapse;
   min-width: 480px;
-  background: rgba(255, 255, 255, 0.68);
+  background: var(--btdd-bg-card);
   border-radius: 12px;
   overflow: hidden;
 }
 
-.docs-markdown-body th,
-.docs-markdown-body td {
+.docs-markdown-body th, .docs-markdown-body td {
   padding: 10px 12px;
-  border: 1px solid rgba(125, 190, 69, 0.16);
+  border: 1px solid var(--btdd-border);
   vertical-align: top;
 }
 
 .docs-markdown-body th {
-  background: rgba(216, 255, 85, 0.22);
+  background: var(--btdd-bg-elevated);
   text-align: left;
   font-weight: 700;
+  color: var(--btdd-text-secondary);
 }
 
-.dashboard-page.theme-battletoads {
-  --battle-primary: #1f7a3d;
-  --battle-accent: #d9ff53;
-  --battle-orange: #ff8a1f;
-  --battle-cyan: #24d0c3;
-  --battle-magenta: #ff4f9b;
-  --battle-surface: #f7ffe8;
-  --battle-border: #93d86f;
-  background:
-    radial-gradient(760px 300px at 8% -10%, rgba(218, 255, 83, 0.52), transparent 60%),
-    radial-gradient(520px 260px at 96% 2%, rgba(36, 208, 195, 0.22), transparent 64%),
-    radial-gradient(540px 280px at 88% 98%, rgba(255, 79, 155, 0.12), transparent 70%),
-    repeating-linear-gradient(130deg, rgba(18, 79, 52, 0.04) 0 14px, rgba(255, 255, 255, 0) 14px 32px),
-    linear-gradient(135deg, #f3ffd7 0%, #ecffe9 36%, #e7fff9 58%, #fff3cf 100%);
-  border-radius: 10px;
-}
-
-.dashboard-page.theme-battletoads .ant-card {
-  border-color: var(--battle-border);
-  box-shadow: 0 7px 18px rgba(39, 122, 66, 0.16), 0 1px 0 rgba(255, 255, 255, 0.7) inset;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(238, 255, 245, 0.92));
-}
-
-.dashboard-page.theme-battletoads .battletoads-card {
-  border-radius: 14px;
-}
-
-.dashboard-page.theme-battletoads .battletoads-card:nth-of-type(2n) {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(233, 252, 255, 0.92));
-}
-
-.dashboard-page.theme-battletoads .battletoads-card:nth-of-type(3n) {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(255, 242, 234, 0.9));
-}
-
-.dashboard-page.theme-battletoads .ant-card-head {
-  background: linear-gradient(90deg, #f8ffd2 0%, #dcffe7 42%, #d8fcff 68%, #ffe8bc 100%);
-}
-
-.dashboard-page.theme-battletoads .ant-tag-blue {
-  color: #0f5a52;
-  border-color: #26b6ac;
-  background: #d7fff9;
-}
-
-.dashboard-page.theme-battletoads .ant-tag-purple,
-.dashboard-page.theme-battletoads .ant-tag-magenta {
-  color: #7a1c55;
-  border-color: #f06fa8;
-  background: #ffe1f0;
-}
-
-.dashboard-page.theme-battletoads .ant-tag-green {
-  color: #1f6a2c;
-  border-color: #6bcf72;
-  background: #e8ffe4;
-}
-
-.dashboard-page.theme-battletoads .ant-tag-orange,
-.dashboard-page.theme-battletoads .ant-tag-volcano {
-  color: #8b3f00;
-  border-color: #ffb37a;
-  background: #fff0de;
-}
-
-.dashboard-page.theme-battletoads .ant-btn-primary {
-  background: linear-gradient(135deg, #1f7a3d, #1f9f66);
-  border-color: #1f7a3d;
-}
-
-.dashboard-page.theme-battletoads .ant-btn-primary:hover,
-.dashboard-page.theme-battletoads .ant-btn-primary:focus {
-  background: linear-gradient(135deg, #28964b, #1fb191);
-  border-color: #28964b;
-}
-
-.dashboard-page.theme-battletoads .ant-switch-checked {
-  background: linear-gradient(135deg, var(--battle-orange), #ff4f9b);
-}
-
-.dashboard-page.theme-battletoads .ant-table-thead > tr > th {
-  background: linear-gradient(90deg, rgba(218, 255, 83, 0.24), rgba(36, 208, 195, 0.12));
-}
-
-.dashboard-page.theme-battletoads .ant-progress .ant-progress-bg {
-  background: linear-gradient(90deg, #7dbe45, #24d0c3, #ff8a1f);
-}
-
-.dashboard-page.theme-battletoads .strategy-flag-item {
-  border-color: #99d87a;
-  background: #f6ffe6;
-}
-
-/* Positions page: remove empty-state icons in tables and tighten placeholder spacing. */
+/* ─── Positions Page ─── */
 .positions-page .ant-table-placeholder .ant-empty-image,
 .positions-page .ant-table-placeholder .ant-empty-img-simple {
   display: none;
@@ -487,6 +578,7 @@ body.battletoads-theme {
   padding-bottom: 6px !important;
 }
 
+/* ─── SaaS Page ─── */
 .saas-page {
   display: flex;
   flex-direction: column;
@@ -511,8 +603,15 @@ body.battletoads-theme {
 .saas-offer-badges {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 6px;
   margin-top: 8px;
+}
+
+.saas-offer-badges .ant-tag {
+  font-size: 11px;
+  padding: 0 7px;
+  line-height: 22px;
+  border-radius: 4px;
 }
 
 .saas-segment-wrap {
@@ -527,6 +626,7 @@ body.battletoads-theme {
   min-height: 84px;
 }
 
+/* ─── Client Auth ─── */
 .client-auth-shell {
   max-width: 680px;
   margin: 32px auto;
@@ -537,6 +637,7 @@ body.battletoads-theme {
   width: 100%;
 }
 
+/* ─── Client Cabinet ─── */
 .client-cabinet-page {
   padding-bottom: 22px;
 }
@@ -544,7 +645,7 @@ body.battletoads-theme {
 .client-onboarding-list {
   margin: 0 0 14px 18px;
   padding: 0;
-  color: var(--bt-text-main);
+  color: var(--btdd-text-secondary);
 }
 
 .client-onboarding-list li {
@@ -553,12 +654,14 @@ body.battletoads-theme {
 
 .client-cabinet-section-title {
   margin: 0 0 8px 0;
+  color: var(--btdd-text-primary);
 }
 
 .client-cabinet-muted {
-  color: var(--bt-text-muted);
+  color: var(--btdd-text-muted);
 }
 
+/* ─── Responsive ─── */
 @media (max-width: 900px) {
   .strategy-flag-grid {
     grid-template-columns: 1fr;
@@ -626,17 +729,11 @@ body.battletoads-theme {
   }
 }
 
-body {
-  margin: 0;
-  font-family: 'Trebuchet MS', 'Verdana', 'Tahoma', sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
-}
+/* ─── Legacy class compatibility (deprecated, kept for transition) ─── */
+.battletoads-theme { /* no-op, keep for class references */ }
+.battletoads-card { /* inherits from .ant-card dark overrides */ }
+.battletoads-form-shell { background: transparent; }
+.dashboard-page.theme-battletoads { /* no special paint — uses global dark */ }
 
 /* ── Mobile / Safari fixes ─────────────────────────────────────────────── */
 

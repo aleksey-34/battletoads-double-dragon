@@ -3359,6 +3359,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         .map((item) => String(item.algofundProfile?.published_system_name || '').trim())
         .filter(Boolean),
       ...snapshotSystemNames,
+      ...snapshotMasterSystemNames,
       String(publishResponse?.sourceSystem?.systemName || '').trim(),
     ].filter((name) => isStorefrontSystemName(String(name || '')))));
 
@@ -9742,11 +9743,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         showIcon
                                         message="Одобренная витрина Алгофонда и текущие TS-офферы."
                                       />
-                                      {publishedAlgofundSystems.length === 0 ? (
+                                      {algofundStorefrontSystems.length === 0 ? (
                                         <Empty description="Витрина Алгофонда сейчас пуста: опубликованная TS еще не привязана к algofund-клиентам" />
                                       ) : (
                                         <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                          <Tag color="success">Опубликованные TS: {publishedAlgofundSystems.length}</Tag>
+                                          <Tag color="success">Опубликованные TS: {algofundStorefrontSystems.length}</Tag>
                                           <Text>Витринные TS офферы синхронизированы и доступны в карточках ниже</Text>
                                           <Text type="secondary">Клиентов с привязанной TS: {algofundTenantsWithPublishedTs.length}</Text>
                                         </Space>

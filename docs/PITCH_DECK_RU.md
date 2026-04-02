@@ -215,8 +215,9 @@
 ## Контакты
 
 **Платформа**: BTDD Platform — Algorithmic Trading SaaS  
-**Telegram**: @[ваш_контакт]  
-**Email**: [ваш_email]  
+**Основатель**: Алексей Лазарев / Aleksei Lazarev  
+**Telegram**: @yakovbyakov  
+**Email**: aiaetrade17@gmail.com  
 **Demo**: https://btdd.vercel.app  
 **GitHub**: (приватный, по запросу)
 

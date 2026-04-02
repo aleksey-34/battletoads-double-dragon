@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Layout, Menu, FloatButton, Tag, Button, Space, Select, Typography, ConfigProvider } from 'antd';
+import { Layout, Menu, FloatButton, Tag, Button, Space, Select, Typography, ConfigProvider, theme } from 'antd';
 import enUS from 'antd/locale/en_US';
 import ruRU from 'antd/locale/ru_RU';
 import trTR from 'antd/locale/tr_TR';
@@ -321,7 +321,20 @@ function AppWithProviders() {
   }, [language]);
 
   return (
-    <ConfigProvider locale={antdLocale}>
+    <ConfigProvider locale={antdLocale} theme={{
+      algorithm: theme.darkAlgorithm,
+      token: {
+        colorPrimary: '#4096ff',
+        colorBgBase: '#0a0a12',
+        colorBgContainer: '#16162a',
+        colorBgElevated: '#1c1c36',
+        colorBorder: '#2a2a48',
+        colorText: '#e0e0f0',
+        colorTextSecondary: '#8888aa',
+        borderRadius: 10,
+        fontFamily: "'Inter', 'Segoe UI', 'Trebuchet MS', sans-serif",
+      },
+    }}>
       <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route path="/" element={<Landing />} />
