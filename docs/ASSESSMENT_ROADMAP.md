@@ -311,6 +311,7 @@ if (strategy.adx_filter_enabled && adx < strategy.adx_min_threshold) {
   → Второй биржевой коннектор
 
 Фаза 4 (долгосрочно):
+  → Клиенты-стратеги могут публиковать свои ТС на копитрейдинг (marketplace)
   → Полноценный walk-forward с rolling window
   → ML-assisted regime detection (simple: HMM с 2 состояниями)
   → Cross-exchange арбитраж

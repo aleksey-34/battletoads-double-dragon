@@ -1,0 +1,481 @@
+<h1>BTDD Platform — Teknik Rapor v1.0</h1>
+<p><strong>Kripto Piyasaları için Hizmet Olarak Algoritmik Ticaret</strong></p>
+<p><em>Nisan 2026</em></p>
+<hr>
+<h2>İçindekiler</h2>
+<ol>
+<li><a href="#1-y%C3%B6netici-%C3%B6zeti">Yönetici Özeti</a></li>
+<li><a href="#2-problem-tan%C4%B1m%C4%B1">Problem Tanımı</a></li>
+<li><a href="#3-%C3%A7%C3%B6z%C3%BCm-genel-bak%C4%B1%C5%9F">Çözüm Genel Bakış</a></li>
+<li><a href="#4-ticaret-motoru-ve-stratejiler">Ticaret Motoru ve Stratejiler</a></li>
+<li><a href="#5-geriye-d%C3%B6n%C3%BCk-test-ve-do%C4%9Frulama">Geriye Dönük Test ve Doğrulama</a></li>
+<li><a href="#6-platform-mimarisi">Platform Mimarisi</a></li>
+<li><a href="#7-m%C3%BC%C5%9Fteri-modlar%C4%B1">Müşteri Modları</a></li>
+<li><a href="#8-risk-y%C3%B6netimi">Risk Yönetimi</a></li>
+<li><a href="#9-borsa-entegrasyonlar%C4%B1">Borsa Entegrasyonları</a></li>
+<li><a href="#10-performans-metrikleri">Performans Metrikleri</a></li>
+<li><a href="#11-teknoloji-y%C4%B1%C4%9F%C4%B1n%C4%B1">Teknoloji Yığını</a></li>
+<li><a href="#12-yol-haritas%C4%B1">Yol Haritası</a></li>
+<li><a href="#13-ekip-ve-ileti%C5%9Fim">Ekip ve İletişim</a></li>
+</ol>
+<hr>
+<h2>1. Yönetici Özeti</h2>
+<p>BTDD Platform, bireysel yatırımcılar, fon yöneticileri ve kopya tüccarları için portföy düzeyinde kripto para ticaretini otomatikleştiren çok kiracılı algoritmik ticaret SaaS platformudur.</p>
+<p>Platform eksiksiz bir boru hattı sunar: <strong>piyasa verisi toplama → parametrik strateji optimizasyonu → sağlamlık filtreleme → portföy oluşturma → canlı yürütme</strong> — kurumsal düzeyde geriye dönük test titizliğiyle tamamen otomatikleştirilmiş.</p>
+<p><strong>Temel sonuçlar (15+ aylık Bybit 4s verilerinde doğrulanmış, Oca 2025 – Mar 2026):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Metrik</th>
+<th>Değer</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Tamamlanan geriye dönük testler</td>
+<td>9.108</td>
+</tr>
+<tr>
+<td>Sağlam strateji adayları</td>
+<td>3.129</td>
+</tr>
+<tr>
+<td>Portföy getirisi</td>
+<td><strong>+%28,7</strong></td>
+</tr>
+<tr>
+<td>Kâr Faktörü</td>
+<td><strong>3,28</strong></td>
+</tr>
+<tr>
+<td>Maks. Düşüş</td>
+<td><strong>%4,4</strong></td>
+</tr>
+<tr>
+<td>Kazanma Oranı</td>
+<td>%43,75 (181/416 işlem)</td>
+</tr>
+<tr>
+<td>Bağlı borsalar</td>
+<td>6 (canlı)</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>2. Problem Tanımı</h2>
+<p>Bireysel kripto tüccarları artan dezavantajlarla karşı karşıyadır:</p>
+<ul>
+<li><strong>Duygusal ticaret</strong> kaldıraçlı ürünlerde ortalama %70–90 bireysel kayıp oranlarına yol açar</li>
+<li><strong>Strateji doğrulama</strong> altyapı gerektirir (veri akışları, geriye dönük test motorları, maliyet modellemesi) ki bireysel tüccarlar bunu kolay oluşturamaz</li>
+<li><strong>Yürütme disiplini</strong> — kârlı stratejiler bile kaçırılan girişler, erken çıkışlar ve intikam ticareti nedeniyle düşük performans gösterir</li>
+<li><strong>Çoklu borsa karmaşıklığı</strong> — her borsanın farklı API&#39;leri, komisyon yapıları, emir türleri ve oran limitleri vardır</li>
+<li><strong>İstatistiksel okuryazarsızlık</strong> — çevrimiçi tanıtılan çoğu &quot;kârlı&quot; strateji geleceğe bakma önyargısı, eğri uydurma veya komisyonsuz geriye dönük testten muzdariptir</li>
+</ul>
+<p>Temel problem: <strong>bireysel yatırımcıların kara kutuya güvenmeden titizlikle doğrulanmış algoritmik stratejilere yatırım yapabilecekleri erişilebilir, şeffaf bir platform yoktur.</strong></p>
+<hr>
+<h2>3. Çözüm Genel Bakış</h2>
+<p>BTDD Platform kurumsal kantitatif ticaret ile bireysel erişilebilirlik arasında köprü kurar:</p>
+<h3>3.1 Şeffaf Geriye Dönük Test</h3>
+<p>Platformda yayınlanan her performans numarası <strong>doğrulanabilir</strong>:</p>
+<ul>
+<li>Komisyonlar dahil (%0,06 giriş + %0,06 çıkış)</li>
+<li>Kayma modellenmiş (%0,03 alış-satış farkı)</li>
+<li>Geleceğe bakma önyargısı yok — her bar sırayla işlenir</li>
+<li>Parametreden sonuca tam izlenebilirlik</li>
+</ul>
+<h3>3.2 Çoklu Strateji Portföyleri</h3>
+<p>Tek bir stratejiye bahis yerine, platform farklı piyasalar ve zaman dilimlerinde korelasyonsuz stratejilerden <strong>portföyler</strong> oluşturur, çeşitlendirme yoluyla düşüşü azaltır.</p>
+<h3>3.3 Çok Kiracılı İzolasyon</h3>
+<p>Her müşteri izole bir ortamda çalışır:</p>
+<ul>
+<li>Özel API anahtar yönetimi</li>
+<li>Müşteri başına risk parametreleri</li>
+<li>Ayrı izleme ve denetim günlükleri</li>
+<li>Müşteriler arası veri sızıntısı yok</li>
+</ul>
+<h3>3.4 Üç Erişim Modu</h3>
+<p>Platform farklı yatırımcı profillerine üç mod üzerinden hizmet verir: Algofon (yönetilen), Stratejist (kendi kendini yöneten) ve Kopya Ticaret (sosyal).</p>
+<hr>
+<h2>4. Ticaret Motoru ve Stratejiler</h2>
+<h3>4.1 Strateji Türleri</h3>
+<p>Platform şu anda üç doğrulanmış strateji ailesini çalıştırmaktadır:</p>
+<h4>DoubleDragon Breakout (DD_BattleToads)</h4>
+<ul>
+<li><strong>Tür:</strong> Trend takipli kırılma</li>
+<li><strong>Sinyal:</strong> Donchian kanalı kırılması (N-bar yüksek/düşük penetrasyonu)</li>
+<li><strong>Giriş algılama:</strong> Kapanış bazlı (muhafazakâr) veya Fitil bazlı (agresif)</li>
+<li><strong>Çıkış — Kâr:</strong> Eşitlik zirvesinden takip eden stop (TP = %2–10)</li>
+<li><strong>Çıkış — Zarar:</strong> Donchian kanalı merkezi sabit stop-loss olarak</li>
+<li><strong>Modlar:</strong> Mono (tek varlık) ve Sentetik (çift ticaret)</li>
+<li><strong>Optimal parametreler:</strong> Uzunluk 12–36 bar, TP %5–7,5, 4s zaman dilimi</li>
+<li><strong>En iyi koşullar:</strong> Net yönlü impulslarla trend piyasaları</li>
+</ul>
+<h4>ZigZag Breakout (zz_breakout)</h4>
+<ul>
+<li><strong>Tür:</strong> Yapısal kırılma, hızlı varyant</li>
+<li><strong>Sinyal:</strong> Daha kısa geri bakış dönemleriyle aynı Donchian mekanizması</li>
+<li><strong>Fark:</strong> Rejim değişikliklerine daha hızlı tepki için uzunluk 5–16 bar</li>
+<li><strong>Çıkış:</strong> Daha sıkı takip eden TP (%2–5) daha yüksek işlem frekansı</li>
+<li><strong>Kazanma Oranı:</strong> Sağlam adaylarda %43–51</li>
+<li><strong>En iyi koşullar:</strong> Yüksek volatiliteli dalgalı piyasalar</li>
+</ul>
+<h4>Statistical Arbitrage Z-Score (stat_arb_zscore)</h4>
+<ul>
+<li><strong>Tür:</strong> Ortalamaya dönüş / istatistiksel arbitraj</li>
+<li><strong>Sinyal:</strong> Sentetik enstrüman çiftinde Z-skoru sapması<ul>
+<li><strong>Long Giriş:</strong> Z &lt; −2,0σ (çift düşük değerli)</li>
+<li><strong>Short Giriş:</strong> Z &gt; +2,0σ (çift yüksek değerli)</li>
+<li><strong>Çıkış (dönüş):</strong> Z ortalamadan ±0,5σ içine döner</li>
+<li><strong>Stop (trend kırılması):</strong> Z ±3,5σ&#39;yı aşar (rejim değişikliği)</li>
+</ul>
+</li>
+<li><strong>Formül:</strong> <code>Z = (fiyat − ortalama[120 bar]) / σ</code></li>
+<li><strong>İdeal Çiftler:</strong> Korelasyonlu kripto ekosistemleri — DeFi tokenleri, Layer-2 protokolleri, oracle ağları</li>
+<li><strong>Örnek çiftler:</strong> ORDI/ZEC, IP/ZEC, GRT/INJ, BERA/ZEC</li>
+</ul>
+<h3>4.2 Piyasa Modları</h3>
+<p><strong>Mono Mod</strong> — Tek enstrüman yürütme (BTCUSDT, ETHUSDT, vb.). Standart OHLCV verileri, tekil emir doldurma.</p>
+<p><strong>Sentetik Mod</strong> — İki enstrümanlı çift ticaret. Platform sentetik bir fiyat oluşturur:</p>
+<p>$$P_{sentetik} = \frac{\alpha \cdot P_{baz}}{\beta \cdot P_{karşı}}$$</p>
+<p>burada α, β dengeleme katsayılarıdır. Yürütme, dengelenmiş nominal ile her iki bacakta paralel emirler gerektirir. Bu mod <strong>piyasa betasını azaltır</strong> ve sinyal durağanlığını artırır — tek coin platformlarında bulunmayan bir avantaj.</p>
+<hr>
+<h2>5. Geriye Dönük Test ve Doğrulama</h2>
+<h3>5.1 Maliyet Modeli</h3>
+<p>Her geriye dönük test gerçekçi yürütme maliyetleri içerir:</p>
+<table>
+<thead>
+<tr>
+<th>Maliyet Bileşeni</th>
+<th>Değer</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Yapıcı/Alıcı komisyonu</td>
+<td>Taraf başına %0,06</td>
+</tr>
+<tr>
+<td>Kayma (alış-satış farkı modeli)</td>
+<td>%0,03</td>
+</tr>
+<tr>
+<td>Fonlama oranı</td>
+<td>Kaldıraçlıysa bar başına tahakkuk</td>
+</tr>
+<tr>
+<td><strong>Toplam gidiş-dönüş maliyeti</strong></td>
+<td><strong>~%0,15</strong></td>
+</tr>
+</tbody></table>
+<h3>5.2 Tarihsel Tarama (9.108 Varyant)</h3>
+<table>
+<thead>
+<tr>
+<th>Strateji</th>
+<th>Parametre Izgarası</th>
+<th>Piyasa Başına Varyant</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>DoubleDragon</td>
+<td>uzunluk[5,8,12,16,24,36] × TP[%2–10] × kaynak[kapanış,fitil]</td>
+<td>72</td>
+</tr>
+<tr>
+<td>ZigZag</td>
+<td>uzunluk[5,8,12,16] × TP[%2–5] × kaynak[kapanış,fitil]</td>
+<td>48</td>
+</tr>
+<tr>
+<td>StatArb</td>
+<td>uzunluk[24–120] × ZE[1,25–2,25] × ZX[0,5–1,0] × ZS[2,5–3,5]</td>
+<td>270</td>
+</tr>
+</tbody></table>
+<p>12 mono piyasa + N² sentetik çift üzerinde 4s Bybit tarihsel verilerle uygulanmıştır (Oca 2025 – Mar 2026).</p>
+<h3>5.3 Sağlamlık Filtresi</h3>
+<p>Bir strateji adayı ancak TÜM kriterler karşılanırsa sağlamlık filtresini geçer:</p>
+<ul>
+<li><strong>Kâr Faktörü ≥ 1,15</strong></li>
+<li><strong>Maks. Düşüş ≤ %22</strong></li>
+<li><strong>İşlem Sayısı ≥ 40</strong> (istatistiksel anlamlılık eşiği)</li>
+</ul>
+<p><strong>Sonuç:</strong> 9.108 varyanttan 3.129&#39;u geçti (%34,4 geçme oranı).</p>
+<hr>
+<h2>6. Platform Mimarisi</h2>
+<h3>6.1 Üç Devreli İzolasyon</h3>
+<pre><code>┌─────────────────────────────────────────────────────┐
+│                    BTDD Platform                     │
+│                                                      │
+│  ┌──────────┐  ┌───────────┐  ┌──────────────────┐  │
+│  │ RUNTIME  │  │ RESEARCH  │  │  PRODUCTION/SaaS │  │
+│  │ Devre    │  │ Devre     │  │     Devre         │  │
+│  │          │  │           │  │                   │  │
+│  │runtime.db│  │research.db│  │     main.db       │  │
+│  │          │  │           │  │                   │  │
+│  │• Yürütme │  │• G.D.Test │  │• Kiracı yönet.  │  │
+│  │• İzleme  │  │• Tarama   │  │• Abonelikler    │  │
+│  │• Risk    │  │• Optimiz. │  │• Müşteri katalog│  │
+│  │• Ticaret │  │• Yayınla  │  │• RBAC &amp; kimlik  │  │
+│  └──────────┘  └───────────┘  └──────────────────┘  │
+└─────────────────────────────────────────────────────┘
+</code></pre>
+<p><strong>Runtime Devre</strong> sıfır kesinti garantisiyle canlı ticaret yürütmesini yönetir. İzole bir systemd servisi olarak çalışır.</p>
+<p><strong>Research Devre</strong> geriye dönük testi, parametrik taramaları ve strateji optimizasyonunu yönetir.</p>
+<p><strong>Production Devre</strong> çok kiracılı SaaS katmanına hizmet eder — kiracı yönetimi, abonelik faturalandırma, müşteri katalogları ve rol tabanlı erişim kontrolü.</p>
+<hr>
+<h2>7. Müşteri Modları</h2>
+<h3>7.1 Algofon (Yönetilen Hesap)</h3>
+<p>Yatırımcılar için en basit giriş noktası. Müşteri borsa API anahtarını bağlar (sadece ticaret, <strong>çekim izni yok</strong>) — fonlar her zaman müşterinin kendi borsa hesabında kalır. Platform otomatik olarak işlem yapar, pasif gelir üretir.</p>
+<ul>
+<li><strong>Temel ilke:</strong> Paranız asla borsanızdan ayrılmaz. Basit, güvenli API bağlantısı.</li>
+<li><strong>Tarifeler:</strong> Depozito katmanına bağlı olarak 20–200 USDT/ay</li>
+<li><strong>Risk aralığı:</strong> 0–2,5× (müşteri tarafından ayarlanabilir)</li>
+</ul>
+<h3>7.2 Stratejist (Kendi Kendini Yöneten)</h3>
+<p>Daha derine inmek isteyenler için:</p>
+<ul>
+<li><strong>Kolay kurulum:</strong> API anahtarı bağlayın, katalogdan stratejiler seçin ve birkaç tıklamayla kendi ticaret sisteminizi oluşturun</li>
+<li><strong>İki kaydırıcı:</strong> Risk seviyesi (1–5) × İşlem frekansı (1–5) → optimize edilmiş ön ayara haritalanır</li>
+<li><strong>Eşitlik önizleme:</strong> Canlıya geçmeden önce seçilen yapılandırma için geriye dönük test sonuçları</li>
+<li><strong>Tarifeler:</strong> 15–100 USDT/ay, maks. depozito 1.000–10.000 USDT</li>
+</ul>
+<h3>7.3 Kopya Ticaret (Sosyal)</h3>
+<p>1 API anahtarı — ve birden fazla kopyalanan hesap. Kendi kurulumunuzla işlem yapın — arkadaşlarınızla paylaşın. Borsalardaki gibi ekstra zahmet yok.</p>
+<ul>
+<li><strong>Otomatik ölçekleme:</strong> Pozisyon boyutlarını kopyalayıcının depozitosuna orantılı olarak ayarlar</li>
+<li><strong>Bağımsız risk kontrolü:</strong> Kopyalayıcı kendi risk limitlerini belirleyebilir</li>
+<li><strong>Şeffaflık:</strong> Sinyal kaynağının performans geçmişine tam görünürlük</li>
+</ul>
+<hr>
+<h2>8. Risk Yönetimi</h2>
+<table>
+<thead>
+<tr>
+<th>Parametre</th>
+<th>Açıklama</th>
+<th>Tipik Aralık</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>lot_percent</code></td>
+<td>Bakiyenin %&#39;si olarak pozisyon boyutu</td>
+<td>%3–15</td>
+</tr>
+<tr>
+<td><code>leverage</code></td>
+<td>Borsa marjin kaldıracı</td>
+<td>1–10×</td>
+</tr>
+<tr>
+<td><code>margin_type</code></td>
+<td>Cross veya İzole marjin</td>
+<td>Strateji başına</td>
+</tr>
+<tr>
+<td><code>max_deposit</code></td>
+<td>Strateji başına maksimum sermaye</td>
+<td>500–5.000 USDT</td>
+</tr>
+<tr>
+<td><code>emergency_stop_dd</code></td>
+<td>Otomatik durdurma DD eşiği</td>
+<td>%15–25</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>9. Borsa Entegrasyonları</h2>
+<table>
+<thead>
+<tr>
+<th>Borsa</th>
+<th>Entegrasyon</th>
+<th>Durum</th>
+<th>Notlar</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><strong>Bybit</strong></td>
+<td>Native (RestClientV5)</td>
+<td>✅ Canlı Birincil</td>
+<td>Tam özellik desteği</td>
+</tr>
+<tr>
+<td><strong>Binance</strong></td>
+<td>ccxt + native uzantılar</td>
+<td>✅ Canlı</td>
+<td>USDt-M Vadeli</td>
+</tr>
+<tr>
+<td><strong>Bitget</strong></td>
+<td>ccxt</td>
+<td>✅ Canlı</td>
+<td>USDT-M Sözleşmeler</td>
+</tr>
+<tr>
+<td><strong>BingX</strong></td>
+<td>ccxt</td>
+<td>✅ Canlı</td>
+<td>Standart sözleşmeler</td>
+</tr>
+<tr>
+<td><strong>MEXC</strong></td>
+<td>ccxt</td>
+<td>✅ Canlı</td>
+<td>USDT-M Vadeli</td>
+</tr>
+<tr>
+<td><strong>Weex</strong></td>
+<td>Native istemci</td>
+<td>✅ Canlı</td>
+<td>Özel bağlayıcı</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>10. Performans Metrikleri</h2>
+<table>
+<thead>
+<tr>
+<th>Metrik</th>
+<th>Değer</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Ölçüm dönemi</td>
+<td>Oca 2025 – Mar 2026 (15 ay)</td>
+</tr>
+<tr>
+<td>Zaman dilimi</td>
+<td>4s barlar</td>
+</tr>
+<tr>
+<td>Veri kaynağı</td>
+<td>Bybit tarihsel OHLCV</td>
+</tr>
+<tr>
+<td>Toplam geriye dönük testler</td>
+<td>9.108</td>
+</tr>
+<tr>
+<td>Sağlam adaylar</td>
+<td>3.129 (%34,4)</td>
+</tr>
+<tr>
+<td><strong>Portföy getirisi</strong></td>
+<td><strong>+%28,7</strong></td>
+</tr>
+<tr>
+<td><strong>Kâr Faktörü</strong></td>
+<td><strong>3,28</strong></td>
+</tr>
+<tr>
+<td><strong>Maks. Düşüş</strong></td>
+<td><strong>%4,4</strong></td>
+</tr>
+<tr>
+<td>Kazanma Oranı</td>
+<td>%43,75</td>
+</tr>
+<tr>
+<td>Toplam işlemler</td>
+<td>416</td>
+</tr>
+<tr>
+<td><strong>Getiri / MaksDüşüş oranı</strong></td>
+<td><strong>6,5:1</strong></td>
+</tr>
+</tbody></table>
+<hr>
+<h2>11. Teknoloji Yığını</h2>
+<table>
+<thead>
+<tr>
+<th>Katman</th>
+<th>Teknoloji</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Backend runtime</td>
+<td>Node.js 20, TypeScript, Express</td>
+</tr>
+<tr>
+<td>Veritabanı</td>
+<td>SQLite (3 izole veritabanı)</td>
+</tr>
+<tr>
+<td>Frontend</td>
+<td>React 18, Ant Design 5, TypeScript</td>
+</tr>
+<tr>
+<td>Grafikler</td>
+<td>Lightweight Charts (TradingView)</td>
+</tr>
+<tr>
+<td>Exchange SDK</td>
+<td>Bybit RestClientV5 (native), ccxt (çoklu borsa)</td>
+</tr>
+<tr>
+<td>Süreç yönetimi</td>
+<td>systemd (3 servis: api, runtime, research)</td>
+</tr>
+<tr>
+<td>Ters proxy</td>
+<td>nginx</td>
+</tr>
+<tr>
+<td>SSL/CDN</td>
+<td>Cloudflare Tunnel</td>
+</tr>
+<tr>
+<td>Yerelleştirme</td>
+<td>RU / EN / TR</td>
+</tr>
+</tbody></table>
+<hr>
+<h2>12. Yol Haritası</h2>
+<h3>Faz 1 — Mevcut (Q1 2026) ✅</h3>
+<ul>
+<li>✅ 3 strateji türüyle Canlı MVP</li>
+<li>✅ 9.108 geriye dönük test taraması tamamlandı</li>
+<li>✅ 6 borsa entegrasyonu</li>
+<li>✅ 3 müşteri moduyla çok kiracılı SaaS</li>
+<li>✅ Yönetici paneli + müşteri kabini</li>
+</ul>
+<h3>Faz 2 — Büyüme (Q2 2026)</h3>
+<ul>
+<li>Walk-forward örneklem dışı doğrulama</li>
+<li>İşlem ve uyarılar için Telegram bot bildirimleri</li>
+<li>Otomatik KYC-light ile onboarding hunisi</li>
+<li>OKX borsa entegrasyonu</li>
+<li>Kripto ödeme entegrasyonu</li>
+</ul>
+<h3>Faz 3 — Ölçeklendirme (Q3–Q4 2026)</h3>
+<ul>
+<li>Yatay ölçekleme için Redis tabanlı olay kuyruğu</li>
+<li>Ayrı yürütme ve araştırma VPS örnekleri</li>
+<li>Mobil duyarlı müşteri panosu</li>
+<li>Kurumsal API erişim katmanı</li>
+</ul>
+<h3>Faz 4 — Ekosistem (2027)</h3>
+<ul>
+<li>Stratejist müşteriler TS&#39;lerini kopya ticarete yayınlayabilir (pazaryeri)</li>
+<li>DEX entegrasyonu (on-chain yürütme)</li>
+<li>Sosyal ticaret lider tablosu</li>
+</ul>
+<hr>
+<h2>13. Ekip ve İletişim</h2>
+<p><strong>Kurucu &amp; CTO:</strong> Aleksei Lazarev</p>
+<ul>
+<li>5+ yıl algoritmik ticaret sistemleri geliştirme</li>
+<li>Node.js / TypeScript uzmanı</li>
+<li>Kripto türev piyasası deneyimi</li>
+</ul>
+<p><strong>İletişim:</strong></p>
+<ul>
+<li><strong>Email:</strong> <a href="mailto:aiaetrade17@gmail.com">aiaetrade17@gmail.com</a></li>
+<li><strong>Telegram:</strong> @yakovbyakov</li>
+<li><strong>GitHub:</strong> Özel depo (due diligence için talep üzerine erişilebilir)</li>
+</ul>
+<hr>
+<h2>Sorumluluk Reddi</h2>
+<p>Geçmiş performans gelecekteki sonuçları garanti etmez. Sunulan tüm metrikler simüle edilmiş yürütme maliyetleriyle tarihsel geriye dönük teste dayanmaktadır. Canlı ticaret ek riskler içerir: borsa kesintisi, API oran limitleri, likidite boşlukları, düzenleyici değişiklikler ve siyah kuğu olayları. Yalnızca kaybetmeyi göze alabileceğiniz sermayeyle yatırım yapın. BTDD Platform finansal tavsiye sağlamaz.</p>
+<hr>
+<p><em>BTDD Platform Teknik Rapor v1.0 — Nisan 2026</em>
+<em>© 2026 BTDD Platform. Tüm hakları saklıdır.</em></p>
