@@ -5943,12 +5943,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     setActionLoading('ts-review-snapshot');
     try {
+      // When publishing (incl. new card), do publish FIRST to get the actual new systemName,
+      // then save the snapshot with the correct systemName so the vitrine card resolves properly.
+      let resolvedSystemName = String(adminSweepBacktestResult?.publishMeta?.systemName || '').trim();
+
+      if (shouldPublishAfterSave) {
+        const publishRes = await axios.post('/api/saas/admin/publish', {
+          offerIds,
+          setKey: snapshotKey || undefined,
+        });
+        const publishedSystemName = String(publishRes.data?.sourceSystem?.systemName || '').trim();
+        if (publishedSystemName) {
+          resolvedSystemName = publishedSystemName;
+        }
+        messageApi.success(isNewCardName
+          ? `Новая карточка ТС «${snapshotKey}» создана на витрине`
+          : 'Метрики ТС сохранены и витрина обновлена');
+      }
+
       await axios.patch('/api/saas/admin/offer-store', {
         tsBacktestSnapshotsPatch: {
           [snapshotKey]: {
             apiKeyName: snapshotApiKeyName,
             setKey: snapshotKey,
-            systemName: adminSweepBacktestResult?.publishMeta?.systemName,
+            systemName: resolvedSystemName || undefined,
             ret: Number(summary.totalReturnPercent ?? 0),
             pf: Number(summary.profitFactor ?? 0),
             dd: Number(summary.maxDrawdownPercent ?? 0),
@@ -5968,15 +5986,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         },
       });
 
-      if (shouldPublishAfterSave) {
-        await axios.post('/api/saas/admin/publish', {
-          offerIds,
-          setKey: snapshotKey || undefined,
-        });
-        messageApi.success(isNewCardName
-          ? `Новая карточка ТС «${snapshotKey}» создана на витрине`
-          : 'Метрики ТС сохранены и витрина обновлена');
-      } else {
+      if (!shouldPublishAfterSave) {
         messageApi.success('Метрики ТС сохранены как черновик');
       }
       // Update localStorage under the new snapshotKey so re-opens use saved settings
@@ -6751,25 +6761,77 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       key: 'action',
       width: 280,
       render: (_, row) => row.tenant.product_mode === 'strategy_client' ? (
-        <Button
-          size="small"
-          onClick={() => {
-            setStrategyTenantId(row.tenant.id);
-            navigateSaasTab('strategy-client');
-          }}
-        >
-          {copy.openStrategyClient}
-        </Button>
+        <Space size={4} wrap>
+          <Button
+            size="small"
+            onClick={() => {
+              setStrategyTenantId(row.tenant.id);
+              navigateSaasTab('strategy-client');
+            }}
+          >
+            {copy.openStrategyClient}
+          </Button>
+          <Button
+            size="small"
+            danger
+            onClick={() => {
+              Modal.confirm({
+                title: `Удалить клиента «${row.tenant.display_name}»?`,
+                content: 'Будут удалены: профиль, API ключ и все связанные данные. Действие необратимо.',
+                okText: 'Удалить',
+                okType: 'danger',
+                cancelText: 'Отмена',
+                onOk: async () => {
+                  try {
+                    await axios.delete(`/api/saas/admin/tenants/${row.tenant.id}`);
+                    messageApi.success(`Клиент «${row.tenant.display_name}» удалён`);
+                    void loadSummary('full');
+                  } catch (err: any) {
+                    messageApi.error(String(err?.response?.data?.error || err.message || 'Ошибка удаления'));
+                  }
+                },
+              });
+            }}
+          >
+            Удалить
+          </Button>
+        </Space>
       ) : row.tenant.product_mode === 'copytrading_client' ? (
-        <Button
-          size="small"
-          onClick={() => {
-            setCopytradingTenantId(row.tenant.id);
-            navigateSaasTab('copytrading');
-          }}
-        >
-          Copytrading
-        </Button>
+        <Space size={4} wrap>
+          <Button
+            size="small"
+            onClick={() => {
+              setCopytradingTenantId(row.tenant.id);
+              navigateSaasTab('copytrading');
+            }}
+          >
+            Copytrading
+          </Button>
+          <Button
+            size="small"
+            danger
+            onClick={() => {
+              Modal.confirm({
+                title: `Удалить клиента «${row.tenant.display_name}»?`,
+                content: 'Будут удалены: профиль, API ключ и все связанные данные. Действие необратимо.',
+                okText: 'Удалить',
+                okType: 'danger',
+                cancelText: 'Отмена',
+                onOk: async () => {
+                  try {
+                    await axios.delete(`/api/saas/admin/tenants/${row.tenant.id}`);
+                    messageApi.success(`Клиент «${row.tenant.display_name}» удалён`);
+                    void loadSummary('full');
+                  } catch (err: any) {
+                    messageApi.error(String(err?.response?.data?.error || err.message || 'Ошибка удаления'));
+                  }
+                },
+              });
+            }}
+          >
+            Удалить
+          </Button>
+        </Space>
       ) : (
         <Space size={4} wrap>
           <Button
@@ -6804,6 +6866,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             onClick={() => void runSingleAlgofundAction(Number(row.tenant.id), 'switch_system', Number(preferredClientSwitchTarget?.systemId || 0))}
           >
             Switch TS
+          </Button>
+          <Button
+            size="small"
+            danger
+            onClick={() => {
+              Modal.confirm({
+                title: `Удалить клиента «${row.tenant.display_name}»?`,
+                content: 'Будут удалены: профиль, API ключ и все связанные данные. Действие необратимо.',
+                okText: 'Удалить',
+                okType: 'danger',
+                cancelText: 'Отмена',
+                onOk: async () => {
+                  try {
+                    await axios.delete(`/api/saas/admin/tenants/${row.tenant.id}`);
+                    messageApi.success(`Клиент «${row.tenant.display_name}» удалён`);
+                    void loadSummary('full');
+                  } catch (err: any) {
+                    messageApi.error(String(err?.response?.data?.error || err.message || 'Ошибка удаления'));
+                  }
+                },
+              });
+            }}
+          >
+            Удалить
           </Button>
         </Space>
       ),
@@ -7876,7 +7962,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                 {item.summary?.tradesCount !== undefined ? <Tag color="blue">trades {formatNumber(item.summary.tradesCount, 0)}</Tag> : null}
                                               </Space>
                                             }
-                                            description={<Text type="secondary" style={{ fontSize: 11 }}>{item.tenants.length > 0 ? item.tenants.map((tenant) => tenant.tenant.display_name).join(', ') : 'нет подключённых клиентов'}</Text>}
+                                            description={
+                                            <Space wrap size={4} style={{ fontSize: 11 }}>
+                                              {item.tenants.length > 0
+                                                ? item.tenants.map((tenant) => {
+                                                    const isActive = Number(tenant.algofundProfile?.actual_enabled || 0) === 1;
+                                                    return (
+                                                      <Tag key={tenant.tenant.id} color={isActive ? 'success' : 'default'} style={{ fontSize: 11 }}>
+                                                        {tenant.tenant.display_name}{!isActive ? ' · стоп' : ''}
+                                                      </Tag>
+                                                    );
+                                                  })
+                                                : <Text type="secondary" style={{ fontSize: 11 }}>нет подключённых клиентов</Text>}
+                                            </Space>
+                                          }
                                           />
                                         </List.Item>
                                       )}

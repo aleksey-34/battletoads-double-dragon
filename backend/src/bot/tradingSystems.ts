@@ -583,7 +583,12 @@ export const replaceTradingSystemMembersSafely = async (
   if (settings.syncMemberActivation) {
     for (const strategyId of removedStrategyIds) {
       try {
-        await updateStrategy(apiKeyName, strategyId, { is_active: false }, { source: 'system_safe_replace_removed' });
+        await updateStrategy(
+          apiKeyName,
+          strategyId,
+          { is_active: false, auto_update: false },
+          { source: 'system_safe_replace_removed' }
+        );
       } catch (error) {
         warnings.push(`deactivate strategy ${strategyId} failed: ${(error as Error).message}`);
       }
@@ -591,7 +596,12 @@ export const replaceTradingSystemMembersSafely = async (
 
     for (const strategyId of addedStrategyIds) {
       try {
-        await updateStrategy(apiKeyName, strategyId, { is_active: Boolean(system.is_active) }, { source: 'system_safe_replace_added' });
+        await updateStrategy(
+          apiKeyName,
+          strategyId,
+          { is_active: Boolean(system.is_active), auto_update: Boolean(system.is_active) },
+          { source: 'system_safe_replace_added' }
+        );
       } catch (error) {
         warnings.push(`activate strategy ${strategyId} failed: ${(error as Error).message}`);
       }
@@ -630,6 +640,7 @@ export const setTradingSystemActivation = async (
       }
       await updateStrategy(apiKeyName, member.strategy_id, {
         is_active: isActive,
+        auto_update: isActive,
       });
     }
   }

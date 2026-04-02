@@ -358,6 +358,8 @@ const Settings: React.FC = () => {
               <Option value="Bitget">Bitget Futures</Option>
               <Option value="BingX">BingX Futures</Option>
               <Option value="Binance">Binance Futures</Option>
+              <Option value="Weex">WEEX Futures</Option>
+              <Option value="MEXC">MEXC Futures</Option>
             </Select>
           </Form.Item>
           <Form.Item label={t('settings.form.apiKey', 'API Key')} name="api_key" rules={[{ required: true }]}>
@@ -369,7 +371,7 @@ const Settings: React.FC = () => {
           <Form.Item shouldUpdate noStyle>
             {() => {
               const exchange = String(form.getFieldValue('exchange') || '');
-              const needsPassphrase = exchange === 'Bitget';
+              const needsPassphrase = exchange === 'Bitget' || exchange === 'Weex';
 
               return (
                 <Form.Item

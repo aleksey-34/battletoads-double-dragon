@@ -3944,6 +3944,37 @@ const ensurePublishedSourceSystem = async (
     return listTenantSummaries();
   };
 
+  export const deleteTenantById = async (tenantId: number): Promise<void> => {
+    // Stop all active strategies on API keys belonging to this tenant
+    const tenantApiKeyRows = (await db.all(
+      `SELECT name FROM api_keys WHERE name LIKE ?`,
+      [`tenant-${tenantId}-%`]
+    )) as Array<{ name: string }>;
+    for (const row of tenantApiKeyRows) {
+      await db.run(
+        `UPDATE strategies SET is_active = 0 WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ?)`,
+        [row.name]
+      );
+    }
+
+    // Delete profile rows (order matters for FK constraints)
+    await db.run(`DELETE FROM algofund_active_systems WHERE profile_id IN (SELECT id FROM algofund_profiles WHERE tenant_id = ?)`, [tenantId]);
+    await db.run(`DELETE FROM algofund_profiles WHERE tenant_id = ?`, [tenantId]);
+    await db.run(`DELETE FROM strategy_client_profiles WHERE tenant_id = ?`, [tenantId]);
+    await db.run(`DELETE FROM copytrading_profiles WHERE tenant_id = ?`, [tenantId]).catch(() => { /* table may not exist yet */ });
+    await db.run(`DELETE FROM client_users WHERE tenant_id = ?`, [tenantId]);
+
+    // Delete API keys that belong to this tenant
+    for (const row of tenantApiKeyRows) {
+      await db.run(`DELETE FROM api_keys WHERE name = ?`, [row.name]);
+    }
+
+    // Delete the tenant record last
+    await db.run(`DELETE FROM tenants WHERE id = ?`, [tenantId]);
+
+    logger.info(`[SaaS] Deleted tenant ${tenantId} along with ${tenantApiKeyRows.length} API key(s)`);
+  };
+
 type AdminTelegramControls = {
   adminEnabled: boolean;
   clientsEnabled: boolean;

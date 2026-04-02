@@ -51,6 +51,7 @@ import {
   assignAlgofundSystems,
   toggleAlgofundSystem,
   removeAlgofundSystemFromProfile,
+  deleteTenantById,
 } from '../saas/service';
 
 const router = Router();
@@ -1064,6 +1065,21 @@ router.delete('/algofund/:tenantId/active-systems/:systemName', async (req, res)
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS algofund remove-system error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/admin/tenants/:tenantId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId) || tenantId <= 0) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    await deleteTenantById(tenantId);
+    res.json({ success: true });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS delete tenant error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
