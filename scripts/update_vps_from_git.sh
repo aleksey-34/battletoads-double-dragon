@@ -15,6 +15,9 @@ MANIFEST_PATH="${MANIFEST_PATH:-$APP_DIR/deploy-manifest.json}"
 # 1 => после frontend build синхронизировать артефакты в nginx root и reload nginx.
 # Важно для VPS-контура, где nginx отдает статику напрямую и может оставаться старый UI.
 SYNC_FRONTEND_NGINX="${SYNC_FRONTEND_NGINX:-1}"
+# Явный путь к nginx root — фоллбэк если nginx -T не может определить roots
+# (например: nginx не доступен текущему пользователю, нестандартный конфиг).
+NGINX_ROOT_FALLBACK="${NGINX_ROOT_FALLBACK:-/var/www/html}"
 
 # В multi-режиме рестартуем эти три сервиса
 MULTI_SERVICES="${MULTI_SERVICES:-btdd-api btdd-runtime btdd-research}"
@@ -24,6 +27,16 @@ RESTART_RUNTIME="${RESTART_RUNTIME:-1}"
 # 1 => не блокировать деплой при изменениях tracked-файлов и принудительно
 # выбросить локальные правки через git reset --hard origin/<branch>.
 ALLOW_DIRTY_TRACKED="${ALLOW_DIRTY_TRACKED:-0}"
+
+# ── Инкрементальные билды ─────────────────────────────────────────────────────
+# auto (default) = билдить только если файлы изменились с прошлого деплоя.
+# always = всегда билдить.   never = пропустить билд полностью.
+BACKEND_BUILD="${BACKEND_BUILD:-auto}"
+FRONTEND_BUILD_MODE="${FRONTEND_BUILD_MODE:-auto}"
+# Лимит памяти Node для тяжёлого CRA/webpack билда (МБ). 0 = без лимита.
+NODE_MEM_LIMIT="${NODE_MEM_LIMIT:-3072}"
+# Sourcemaps увеличивают время билда и расход RAM. На VPS обычно не нужны.
+GENERATE_SOURCEMAP="${GENERATE_SOURCEMAP:-false}"
 
 log() {
 	printf '[btdd-update] %s\n' "$*"
@@ -41,6 +54,18 @@ run() {
 	"$@"
 }
 
+timer_start() {
+	_TIMER_START="$(date +%s)"
+}
+
+timer_elapsed() {
+	local label="$1"
+	local now
+	now="$(date +%s)"
+	local diff=$(( now - _TIMER_START ))
+	log "$label completed in ${diff}s"
+}
+
 require_cmd() {
 	command -v "$1" >/dev/null 2>&1 || fail "Required command not found: $1"
 }
@@ -48,6 +73,31 @@ require_cmd() {
 require_cmd git
 require_cmd npm
 require_cmd systemctl
+
+# Проверяем, изменились ли файлы между двумя коммитами в заданной директории.
+# Возвращает 0 (true) если есть изменения, 1 если нет.
+has_changes_in() {
+	local dir="$1"
+	local old_head="$2"
+	local new_head="$3"
+	if [[ "$old_head" == "$new_head" ]]; then
+		return 1
+	fi
+	local count
+	count="$(git diff --name-only "$old_head" "$new_head" -- "$dir" | wc -l | tr -d ' ')"
+	[[ "$count" -gt 0 ]]
+}
+
+# Проверяем, изменился ли package-lock.json между коммитами.
+lockfile_changed() {
+	local dir="$1"
+	local old_head="$2"
+	local new_head="$3"
+	if [[ "$old_head" == "$new_head" ]]; then
+		return 1
+	fi
+	git diff --name-only "$old_head" "$new_head" -- "$dir/package-lock.json" "$dir/package.json" | grep -q .
+}
 
 hash_file_or_empty() {
 	local file="$1"
@@ -161,6 +211,7 @@ fi
 
 cd "$APP_DIR"
 
+DEPLOY_START="$(date +%s)"
 local_head="$(git rev-parse --short HEAD)"
 log "Starting deploy in $APP_DIR"
 log "Local HEAD before update: $local_head"
@@ -193,16 +244,66 @@ run git reset --hard "origin/$BRANCH"
 local_head_after="$(git rev-parse --short HEAD)"
 log "Local HEAD after update: $local_head_after"
 
-cd "$BACKEND_DIR"
+# ── Backend build ─────────────────────────────────────────────────────────────
+NEED_BACKEND_BUILD=1
+if [[ "$BACKEND_BUILD" == "never" ]]; then
+	NEED_BACKEND_BUILD=0
+	log "Backend build skipped (BACKEND_BUILD=never)"
+elif [[ "$BACKEND_BUILD" == "auto" ]]; then
+	if has_changes_in "backend/" "$local_head" "$local_head_after"; then
+		log "Backend files changed — will rebuild"
+	else
+		NEED_BACKEND_BUILD=0
+		log "No backend changes detected — skip backend build"
+	fi
+fi
 
-install_node_deps "$BACKEND_DIR"
-run npm run build
+if [[ "$NEED_BACKEND_BUILD" == "1" ]]; then
+	cd "$BACKEND_DIR"
+	timer_start
+	if lockfile_changed "backend" "$local_head" "$local_head_after"; then
+		install_node_deps "$BACKEND_DIR"
+	else
+		log "Backend package-lock.json unchanged — skip npm ci"
+	fi
+	run npm run build
+	timer_elapsed "Backend build"
+fi
 
+# ── Frontend build ────────────────────────────────────────────────────────────
+NEED_FRONTEND_BUILD=0
 if [[ "$BUILD_FRONTEND" == "1" ]]; then
+	NEED_FRONTEND_BUILD=1
+	if [[ "$FRONTEND_BUILD_MODE" == "never" ]]; then
+		NEED_FRONTEND_BUILD=0
+		log "Frontend build skipped (FRONTEND_BUILD_MODE=never)"
+	elif [[ "$FRONTEND_BUILD_MODE" == "auto" ]]; then
+		if has_changes_in "frontend/" "$local_head" "$local_head_after"; then
+			log "Frontend files changed — will rebuild"
+		else
+			NEED_FRONTEND_BUILD=0
+			log "No frontend changes detected — skip frontend build"
+		fi
+	fi
+fi
+
+if [[ "$NEED_FRONTEND_BUILD" == "1" ]]; then
 	cd "$FRONTEND_DIR"
-	install_node_deps "$FRONTEND_DIR" "react-scripts"
-	# CRA treats warnings as errors when CI=true; force production build without CI strict mode on VPS deploy.
-	run env CI=false npm run build
+	timer_start
+	if lockfile_changed "frontend" "$local_head" "$local_head_after"; then
+		install_node_deps "$FRONTEND_DIR" "react-scripts"
+	else
+		log "Frontend package-lock.json unchanged — skip npm ci"
+	fi
+
+	# CRA treats warnings as errors when CI=true; force production build without CI strict mode.
+	# NODE_OPTIONS увеличивает лимит heap для webpack на VPS с ограниченной RAM.
+	local_node_opts=""
+	if [[ "$NODE_MEM_LIMIT" -gt 0 ]] 2>/dev/null; then
+		local_node_opts="--max-old-space-size=$NODE_MEM_LIMIT"
+	fi
+	run env CI=false GENERATE_SOURCEMAP="$GENERATE_SOURCEMAP" NODE_OPTIONS="$local_node_opts" npm run build
+	timer_elapsed "Frontend build"
 
 	[[ -f "$FRONTEND_DIR/build/index.html" ]] || fail "Frontend build missing index.html"
 	FRONTEND_MAIN_BUNDLE_PATH="$(ls -1 "$FRONTEND_DIR"/build/static/js/main.*.js 2>/dev/null | head -n 1 || true)"
@@ -244,7 +345,23 @@ if [[ "$BUILD_FRONTEND" == "1" ]]; then
 			if [[ "$SYNCED" == "1" ]]; then
 				run systemctl reload nginx
 			else
-				log "WARN: nginx roots not detected or not accessible, skip frontend sync"
+				# Фоллбэк: если nginx -T не вернул roots, используем NGINX_ROOT_FALLBACK.
+				if [[ -d "$NGINX_ROOT_FALLBACK" ]]; then
+					log "nginx -T roots not detected, using NGINX_ROOT_FALLBACK=$NGINX_ROOT_FALLBACK"
+					if command -v rsync >/dev/null 2>&1; then
+						run rsync -a --delete "$FRONTEND_DIR/build/" "$NGINX_ROOT_FALLBACK/"
+					else
+						run rm -rf "$NGINX_ROOT_FALLBACK"/*
+						run cp -a "$FRONTEND_DIR/build/." "$NGINX_ROOT_FALLBACK/"
+					fi
+					run find "$NGINX_ROOT_FALLBACK" -type d -exec chmod 755 {} +
+					run find "$NGINX_ROOT_FALLBACK" -type f -exec chmod 644 {} +
+					[[ -f "$NGINX_ROOT_FALLBACK/index.html" ]] || fail "Nginx fallback root missing index.html: $NGINX_ROOT_FALLBACK"
+					log "Frontend synced to nginx fallback root: $NGINX_ROOT_FALLBACK"
+					run systemctl reload nginx
+				else
+					log "WARN: nginx roots not detected and fallback dir not found ($NGINX_ROOT_FALLBACK), skip frontend sync"
+				fi
 			fi
 		else
 			log "WARN: nginx is not installed, skip frontend sync"
@@ -279,5 +396,6 @@ fi
 
 write_deploy_manifest
 
-log "Deploy finished successfully"
+DEPLOY_END="$(date +%s)"
+log "Deploy finished successfully in $(( DEPLOY_END - DEPLOY_START ))s"
 
