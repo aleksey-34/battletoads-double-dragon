@@ -2535,7 +2535,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [applyLowLotReplacement, setApplyLowLotReplacement] = useState('');
   const [applyLowLotWorking, setApplyLowLotWorking] = useState(false);
   const [batchTenantIds, setBatchTenantIds] = useState<number[]>([]);
-  const [storefrontConnectTarget, setStorefrontConnectTarget] = useState<null | { systemId: number; systemName: string; tenantIds: number[] }>(null);
+  const [storefrontConnectTarget, setStorefrontConnectTarget] = useState<null | { systemId: number; systemName: string; tenantIds: number[]; originalTenantIds: number[] }>(null);
   const [batchAlgofundAction, setBatchAlgofundAction] = useState<'start' | 'stop' | 'switch_system'>('start');
   const [batchTargetSystemId, setBatchTargetSystemId] = useState<number | null>(null);
   const [batchActionNote, setBatchActionNote] = useState('');
@@ -6426,18 +6426,40 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const systemId = Number(storefrontConnectTarget?.systemId || 0);
     const systemName = String(storefrontConnectTarget?.systemName || '').trim();
     const selectedTenantIds = Array.from(new Set((storefrontConnectTarget?.tenantIds || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+    const originalTenantIds = Array.from(new Set((storefrontConnectTarget?.originalTenantIds || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+    const deselectedTenantIds = originalTenantIds.filter((id) => !selectedTenantIds.includes(id));
 
     if (!systemId || !systemName) {
       messageApi.warning('Не найдена TS для применения');
       return;
     }
-    if (selectedTenantIds.length === 0) {
-      messageApi.warning('Выберите хотя бы одного клиента Алгофонда');
-      return;
-    }
 
     setActionLoading('apply-storefront-ts');
     try {
+      // Stop deselected tenants (cancelled from TS connection) — close positions and cancel orders
+      if (deselectedTenantIds.length > 0) {
+        try {
+          await axios.post('/api/saas/admin/algofund-batch-actions', {
+            tenantIds: deselectedTenantIds,
+            requestType: 'stop',
+            note: `Disconnected from storefront TS ${systemName}`,
+            directExecute: true,
+          });
+        } catch (stopError: any) {
+          messageApi.warning(`Ошибка при остановке отключённых клиентов: ${String(stopError?.response?.data?.error || stopError?.message || 'stop failed')}`);
+        }
+      }
+
+      if (selectedTenantIds.length === 0) {
+        // Only disconnections, no new switches
+        setStorefrontConnectTarget(null);
+        if (deselectedTenantIds.length > 0) {
+          messageApi.success(`Отключено клиентов: ${deselectedTenantIds.length}. Позиции закрыты.`);
+        }
+        await loadSummary('full');
+        return;
+      }
+
       const response = await axios.post('/api/saas/admin/algofund-batch-actions', {
         tenantIds: selectedTenantIds,
         requestType: 'switch_system',
@@ -6448,7 +6470,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       });
       const created = Number(response.data?.createdCount || 0);
       const failed = Number(response.data?.failedCount || 0);
-      messageApi.success(`TS применена: switched ${created}, failed ${failed}`);
+      const stopNote = deselectedTenantIds.length > 0 ? ` Отключено и остановлено: ${deselectedTenantIds.length}.` : '';
+      messageApi.success(`TS применена: switched ${created}, failed ${failed}.${stopNote}`);
       const failures = Array.isArray(response.data?.failures) ? response.data.failures : [];
       if (failures.length > 0) {
         const details = failures
@@ -7940,12 +7963,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                   messageApi.warning('Для этой карточки пока нет runtime system id. Сначала опубликуйте/синхронизируйте ТС.');
                                                   return;
                                                 }
+                                                const initialIds = (item.tenants || [])
+                                                    .map((tenant) => Number(tenant?.tenant?.id || 0))
+                                                    .filter((tenantId) => Number.isFinite(tenantId) && tenantId > 0);
                                                 setStorefrontConnectTarget({
                                                   systemId: runtimeSystemId,
                                                   systemName: item.systemName,
-                                                  tenantIds: (item.tenants || [])
-                                                    .map((tenant) => Number(tenant?.tenant?.id || 0))
-                                                    .filter((tenantId) => Number.isFinite(tenantId) && tenantId > 0),
+                                                  tenantIds: initialIds,
+                                                  originalTenantIds: initialIds,
                                                 });
                                               }}
                                             >
@@ -9788,12 +9813,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                           messageApi.warning('Для этой карточки пока нет runtime system id. Сначала опубликуйте/синхронизируйте ТС.');
                                                           return;
                                                         }
+                                                        const initialIds2 = (item.tenants || [])
+                                                            .map((tenant) => Number(tenant?.tenant?.id || 0))
+                                                            .filter((tenantId) => Number.isFinite(tenantId) && tenantId > 0);
                                                         setStorefrontConnectTarget({
                                                           systemId: runtimeSystemId,
                                                           systemName: item.systemName,
-                                                          tenantIds: (item.tenants || [])
-                                                            .map((tenant) => Number(tenant?.tenant?.id || 0))
-                                                            .filter((tenantId) => Number.isFinite(tenantId) && tenantId > 0),
+                                                          tenantIds: initialIds2,
+                                                          originalTenantIds: initialIds2,
                                                         });
                                                       }}
                                                     >
