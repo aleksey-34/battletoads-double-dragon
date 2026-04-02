@@ -1111,7 +1111,7 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
 
       const normalized = positions
         .map((position: any) => {
-          const sizeRaw = Number(
+          const contractsRaw = Number(
             position?.contracts ??
             position?.info?.size ??
             position?.info?.positionAmt ??
@@ -1119,9 +1119,13 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
             0
           );
 
-          if (!Number.isFinite(sizeRaw) || Math.abs(sizeRaw) <= 0) {
+          if (!Number.isFinite(contractsRaw) || Math.abs(contractsRaw) <= 0) {
             return null;
           }
+
+          // contractSize converts contracts → base asset units (e.g. 0.0001 BTC per contract on MEXC).
+          const contractSize = Number(position?.contractSize ?? 1);
+          const sizeInBase = Math.abs(contractsRaw) * (Number.isFinite(contractSize) && contractSize > 0 ? contractSize : 1);
 
           const sideRaw = String(position?.side || position?.info?.holdSide || '').toLowerCase();
           const side = sideRaw.includes('long') || sideRaw === 'buy' ? 'Buy' : 'Sell';
@@ -1129,7 +1133,7 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
           const entryPrice = Number(position?.entryPrice ?? position?.info?.entryPrice ?? position?.info?.openPrice ?? 0);
           const markPrice = Number(position?.markPrice ?? position?.info?.markPrice ?? position?.info?.markPx ?? entryPrice);
           const explicitNotional = Number(position?.notional);
-          const derivedNotional = Number(sizeRaw) * (Number.isFinite(markPrice) ? markPrice : 0);
+          const derivedNotional = sizeInBase * (Number.isFinite(markPrice) ? markPrice : 0);
           const notional = Number.isFinite(explicitNotional) ? explicitNotional : Math.abs(derivedNotional);
           const leverage = Number(position?.leverage ?? position?.info?.leverage ?? 1);
           const liquidation = Number(position?.liquidationPrice ?? position?.info?.liquidationPrice ?? position?.info?.liqPx ?? 0);
@@ -1138,7 +1142,7 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
           return {
             symbol: toUiSymbol(position?.info?.symbol || position?.symbol || resolvedSymbol || symbol),
             side,
-            size: String(Math.abs(sizeRaw)),
+            size: String(Math.abs(contractsRaw)),
             avgPrice: String(Number.isFinite(entryPrice) ? entryPrice : 0),
             markPrice: String(Number.isFinite(markPrice) ? markPrice : 0),
             liqPrice: Number.isFinite(liquidation) && liquidation > 0 ? String(liquidation) : '',
