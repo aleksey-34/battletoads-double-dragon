@@ -1760,13 +1760,17 @@ export const ensureSaasSeedData = async (): Promise<void> => {
   const strategyTenant = await ensureTenant('client-bot-01', 'Client Bot 01', 'strategy_client', 'ru', strategyClientApiKey);
   const algofundTenant = await ensureTenant('algofund-01', 'Algofund Client 01', 'algofund_client', 'ru', algofundApiKey);
   const copytradingTenant = await ensureTenant('copytrading-01', 'Copytrading Client 01', 'copytrading_client', 'ru', copytradingApiKey);
+  const synctradeApiKey = clientKeys[3] || clientKeys[2] || clientKeys[1] || clientKeys[0] || sourceApiKeyName;
+  const synctradeTenant = await ensureTenant('synctrade-client-1', 'Synctrade Client 1', 'synctrade_client', 'ru', synctradeApiKey);
 
   await ensureSubscription(strategyTenant.id, (await getPlanByCode('strategy_20')).id);
   await ensureSubscription(algofundTenant.id, (await getPlanByCode('algofund_20')).id);
   await ensureSubscription(copytradingTenant.id, (await getPlanByCode('copytrading_100')).id);
+  await ensureSubscription(synctradeTenant.id, (await getPlanByCode('synctrade_100')).id);
   await ensureStrategyClientProfile(strategyTenant.id, offerIds, strategyClientApiKey);
   await ensureAlgofundProfile(algofundTenant.id, algofundApiKey);
   await ensureCopytradingProfile(copytradingTenant.id, copytradingApiKey);
+  await ensureSynctradeProfile(synctradeTenant.id, synctradeApiKey);
 };
 
 const getPlanForTenant = async (tenantId: number): Promise<PlanRow | null> => {
