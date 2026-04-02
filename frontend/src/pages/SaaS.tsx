@@ -2472,7 +2472,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [synctradeError, setSynctradeError] = useState('');
   const [synctradeMasterApiKeyName, setSynctradeMasterApiKeyName] = useState('');
   const [synctradeMasterDisplayName, setSynctradeMasterDisplayName] = useState('');
-  const [synctradeSymbol, setSynctradeSymbol] = useState('BTCUSDT');
+  const [synctradeSymbol, setSynctradeSymbol] = useState('DOGEUSDT');
+  const [synctradeNewHedgeMaxSpend, setSynctradeNewHedgeMaxSpend] = useState<number>(0);
+  const [synctradeNewHedgeTargetLoss, setSynctradeNewHedgeTargetLoss] = useState<number>(0);
   const [synctradeTargetProfit, setSynctradeTargetProfit] = useState(50);
   const [synctradeIntervalMs, setSynctradeIntervalMs] = useState(500);
   const [synctradeEnabled, setSynctradeEnabled] = useState(false);
@@ -4222,9 +4224,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
     const displayName = String(synctradeNewHedgeName || '').trim() || `Hedge ${synctradeHedgeAccounts.length + 1}`;
-    setSynctradeHedgeAccounts([...synctradeHedgeAccounts, { apiKeyName: synctradeNewHedgeApiKey, displayName }]);
+    setSynctradeHedgeAccounts([...synctradeHedgeAccounts, {
+      apiKeyName: synctradeNewHedgeApiKey,
+      displayName,
+      maxSpendUsdt: synctradeNewHedgeMaxSpend > 0 ? synctradeNewHedgeMaxSpend : 0,
+      targetLossUsdt: synctradeNewHedgeTargetLoss > 0 ? synctradeNewHedgeTargetLoss : 0,
+    }]);
     setSynctradeNewHedgeName('');
     setSynctradeNewHedgeApiKey('');
+    setSynctradeNewHedgeMaxSpend(0);
+    setSynctradeNewHedgeTargetLoss(0);
   };
 
   const removeSynctradeHedgeAccount = (index: number) => {
@@ -10934,7 +10943,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     <Text strong>Имя аккаунта</Text>
                                     <Input style={{ marginTop: 8 }} value={synctradeNewHedgeName} onChange={(e) => setSynctradeNewHedgeName(e.target.value)} placeholder="Hedge Account 1" />
                                   </Col>
-                                  <Col xs={24} md={8}>
+                                  <Col xs={24} md={6}>
                                     <Text strong>API Key (MEXC)</Text>
                                     <Select
                                       style={{ width: '100%', marginTop: 8 }}
@@ -10944,8 +10953,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     />
                                   </Col>
                                   <Col xs={24} md={4}>
+                                    <Text strong>Макс расход USDT</Text>
+                                    <InputNumber
+                                      style={{ width: '100%', marginTop: 8 }}
+                                      min={0}
+                                      max={100000}
+                                      value={synctradeNewHedgeMaxSpend}
+                                      onChange={(v) => setSynctradeNewHedgeMaxSpend(Number(v ?? 0))}
+                                      placeholder="0 = авто"
+                                    />
+                                  </Col>
+                                  <Col xs={24} md={4}>
+                                    <Text strong>Целевой убыток USDT</Text>
+                                    <InputNumber
+                                      style={{ width: '100%', marginTop: 8 }}
+                                      min={0}
+                                      max={100000}
+                                      value={synctradeNewHedgeTargetLoss}
+                                      onChange={(v) => setSynctradeNewHedgeTargetLoss(Number(v ?? 0))}
+                                      placeholder="0 = авто"
+                                    />
+                                  </Col>
+                                  <Col xs={24} md={2}>
                                     <Button style={{ marginTop: 30, width: '100%' }} onClick={addSynctradeHedgeAccount}>
-                                      + Добавить
+                                      +
                                     </Button>
                                   </Col>
                                 </Row>
@@ -10962,8 +10993,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 dataSource={synctradeHedgeAccounts}
                                 pagination={false}
                                 columns={[
-                                  { title: 'Имя', dataIndex: 'displayName', width: 200 },
-                                  { title: 'API Key', dataIndex: 'apiKeyName', width: 250 },
+                                  { title: 'Имя', dataIndex: 'displayName', width: 180 },
+                                  { title: 'API Key', dataIndex: 'apiKeyName', width: 220 },
+                                  { title: 'Макс расход USDT', dataIndex: 'maxSpendUsdt', width: 130, render: (v: number) => v > 0 ? `${v} USDT` : 'авто' },
+                                  { title: 'Целевой убыток USDT', dataIndex: 'targetLossUsdt', width: 150, render: (v: number) => v > 0 ? `${v} USDT` : 'авто' },
                                   ...(isAdminSurface ? [{
                                     title: '',
                                     key: 'action',
@@ -11021,9 +11054,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   disabled={!synctradeEnabled || synctradeHedgeAccounts.length === 0}
                                   onClick={() => void executeSynctradeSession()}
                                 >
-                                  Открыть хедж-сессию
+                                  {synctradeExecuting ? 'Выполняется...' : 'Открыть хедж-сессию'}
                                 </Button>
                               </Col>
+                              {synctradeExecuting ? (
+                                <Col xs={24}>
+                                  <Alert type="info" showIcon message="Идёт открытие позиций на всех аккаунтах..." />
+                                </Col>
+                              ) : null}
                             </Row>
                           </Card>
 
@@ -11037,36 +11075,49 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 rowKey="id"
                                 dataSource={synctradeSessions}
                                 pagination={{ pageSize: 10 }}
+                                expandable={{
+                                  expandedRowRender: (record: any) => {
+                                    const sessionLog: string[] = Array.isArray(record.log) ? record.log : [];
+                                    return sessionLog.length > 0 ? (
+                                      <pre style={{ margin: 0, fontSize: 11, maxHeight: 300, overflow: 'auto', background: '#f5f5f5', padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>
+                                        {sessionLog.join('\n')}
+                                      </pre>
+                                    ) : <Text type="secondary">Нет логов</Text>;
+                                  },
+                                  rowExpandable: () => true,
+                                }}
                                 columns={[
                                   { title: 'ID', dataIndex: 'id', width: 60 },
                                   { title: 'Символ', dataIndex: 'symbol', width: 100 },
                                   { title: 'Master Side', dataIndex: 'master_side', width: 100 },
-                                  { title: 'Статус', dataIndex: 'status', width: 80,
+                                  { title: 'Статус', dataIndex: 'status', width: 100,
                                     render: (status: string) => (
-                                      <Tag color={status === 'open' ? 'blue' : status === 'closed' ? 'green' : status === 'error' ? 'red' : 'default'}>{status}</Tag>
+                                      <Tag color={status === 'open' ? 'blue' : status === 'closed' ? 'green' : status === 'error' ? 'red' : status === 'running' ? 'orange' : 'default'}>
+                                        {status === 'running' ? '⏳ running' : status === 'open' ? '🟢 open' : status === 'closed' ? '✅ closed' : status === 'error' ? '❌ error' : status}
+                                      </Tag>
                                     ),
                                   },
-                                  { title: 'Entry', dataIndex: 'entry_price', width: 100, render: (v: number) => v ? Number(v).toFixed(2) : '—' },
-                                  { title: 'Exit', dataIndex: 'exit_price', width: 100, render: (v: number) => v ? Number(v).toFixed(2) : '—' },
+                                  { title: 'Entry', dataIndex: 'entry_price', width: 100, render: (v: number) => v ? Number(v).toFixed(4) : '—' },
+                                  { title: 'Exit', dataIndex: 'exit_price', width: 100, render: (v: number) => v ? Number(v).toFixed(4) : '—' },
                                   { title: 'Master PnL', dataIndex: 'master_pnl', width: 100,
-                                    render: (v: number) => <Text type={v > 0 ? 'success' : v < 0 ? 'danger' : undefined}>{Number(v || 0).toFixed(2)}</Text>,
+                                    render: (v: number) => <Text type={v > 0 ? 'success' : v < 0 ? 'danger' : undefined}>{Number(v || 0).toFixed(4)}</Text>,
                                   },
                                   { title: 'Total PnL', dataIndex: 'total_pnl', width: 100,
-                                    render: (v: number) => <Text type={v > 0 ? 'success' : v < 0 ? 'danger' : undefined}>{Number(v || 0).toFixed(2)}</Text>,
+                                    render: (v: number) => <Text type={v > 0 ? 'success' : v < 0 ? 'danger' : undefined}>{Number(v || 0).toFixed(4)}</Text>,
                                   },
                                   { title: 'Дата', dataIndex: 'started_at', width: 160, render: (v: string) => v ? String(v).slice(0, 19).replace('T', ' ') : '—' },
                                   {
                                     title: '',
                                     key: 'action',
                                     width: 120,
-                                    render: (_: any, record: any) => record.status === 'open' ? (
+                                    render: (_: any, record: any) => ['open', 'running', 'error'].includes(record.status) ? (
                                       <Button
                                         size="small"
                                         danger
                                         loading={synctradeExecuting}
                                         onClick={() => void closeSynctradeSessionById(record.id)}
                                       >
-                                        Закрыть
+                                        {synctradeExecuting ? 'Закрытие...' : record.status === 'error' ? 'Закрыть (force)' : 'Закрыть'}
                                       </Button>
                                     ) : null,
                                   },

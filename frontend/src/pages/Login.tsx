@@ -49,7 +49,7 @@ const Login: React.FC = () => {
       axios.defaults.headers.common.Authorization = `Bearer ${values.password}`;
       window.dispatchEvent(new Event('auth-changed'));
       message.success(t('login.loggedIn', 'Logged in'));
-      window.location.href = '/';
+      window.location.href = '/dashboard';
     } catch (error: any) {
       const status = Number(error?.response?.status || 0);
       if (status === 401) {

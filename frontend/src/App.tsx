@@ -118,7 +118,7 @@ function AppShell() {
       await axios.get('/api/api-keys');
       setAdminAuthState('ok');
       if (location.pathname === '/login') {
-        navigate('/');
+        navigate('/dashboard');
       }
     } catch (error: any) {
       if (Number(error?.response?.status || 0) === 401) {
@@ -289,23 +289,29 @@ function AppShell() {
           <Route path="/login" element={<Login />} />
           <Route path="/client/login" element={<ClientAuth initialMode="login" />} />
           <Route path="/client/register" element={<ClientAuth initialMode="register" />} />
-          <Route path="/cabinet" element={<ClientCabinet />} />
-          <Route path="/" element={<Navigate to="/saas" replace />} />
-          <Route path="/dashboard" element={<Dashboard />} />
-          <Route path="/settings" element={<Settings />} />
-          <Route path="/positions" element={<Positions />} />
-          <Route path="/logs" element={<Logs />} />
+          <Route path="/cabinet" element={
+            clientAuthState === 'ok' ? <ClientCabinet /> :
+            clientAuthState === 'checking' ? null :
+            <Navigate to="/client/login" replace />
+          } />
+          <Route path="/" element={
+            adminAuthState === 'ok' ? <Navigate to="/saas" replace /> : <Navigate to="/login" replace />
+          } />
+          <Route path="/dashboard" element={adminAuthState === 'ok' ? <Dashboard /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/settings" element={adminAuthState === 'ok' ? <Settings /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/positions" element={adminAuthState === 'ok' ? <Positions /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/logs" element={adminAuthState === 'ok' ? <Logs /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
           <Route path="/backtest" element={<Navigate to="/saas" replace />} />
           <Route path="/trading-systems" element={<Navigate to="/saas/admin?adminTab=offer-ts" replace />} />
-          <Route path="/trading-systems-workbench" element={<TradingSystems />} />
-          <Route path="/saas" element={<SaaS surfaceMode="admin" />} />
-          <Route path="/saas/admin" element={<SaaS initialTab="admin" surfaceMode="admin" />} />
+          <Route path="/trading-systems-workbench" element={adminAuthState === 'ok' ? <TradingSystems /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/saas" element={adminAuthState === 'ok' ? <SaaS surfaceMode="admin" /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/saas/admin" element={adminAuthState === 'ok' ? <SaaS initialTab="admin" surfaceMode="admin" /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
           <Route path="/saas/strategy-client" element={<Navigate to="/saas/admin?adminTab=strategy-client" replace />} />
           <Route path="/saas/algofund" element={<Navigate to="/saas/admin?adminTab=algofund" replace />} />
           <Route path="/saas/copytrading" element={<Navigate to="/saas/admin?adminTab=copytrading" replace />} />
           <Route path="/saas/synctrade" element={<Navigate to="/saas/admin?adminTab=synctrade" replace />} />
-          <Route path="/research" element={<Research />} />
-          <Route path="/admin-docs" element={<AdminDocs />} />
+          <Route path="/research" element={adminAuthState === 'ok' ? <Research /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/admin-docs" element={adminAuthState === 'ok' ? <AdminDocs /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
         </Routes>
       </Content>
       <FloatButton.BackTop visibilityHeight={280} />

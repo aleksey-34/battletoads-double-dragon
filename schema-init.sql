@@ -533,6 +533,7 @@ CREATE TABLE IF NOT EXISTS synctrade_sessions (
   total_pnl REAL DEFAULT 0,
   duration_ms INTEGER DEFAULT 0,
   error TEXT,
+  log_json TEXT DEFAULT '[]',
   started_at TEXT DEFAULT CURRENT_TIMESTAMP,
   finished_at TEXT,
   FOREIGN KEY (profile_id) REFERENCES synctrade_profiles(id)

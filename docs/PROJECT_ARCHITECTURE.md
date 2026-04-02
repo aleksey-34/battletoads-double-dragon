@@ -29,11 +29,11 @@ SaaS-платформа автоматизированной торговли к
 │   ├── src/
 │   │   ├── api/
 │   │   │   ├── routes.ts            # Основные API (dashboard, strategies, positions)
-│   │   │   ├── saasRoutes.ts        # SaaS API (~1080 строк, 56 эндпоинтов)
+│   │   │   ├── saasRoutes.ts        # SaaS API (~1170 строк, 62 эндпоинта)
 │   │   │   ├── analyticsRoutes.ts   # Аналитика
 │   │   │   └── researchRoutes.ts    # Исследования/свипы
 │   │   ├── saas/
-│   │   │   └── service.ts           # Главный SaaS сервис (~9200 строк)
+│   │   │   └── service.ts           # Главный SaaS сервис (~10 060 строк)
 │   │   ├── utils/
 │   │   │   ├── database.ts          # SQLite обёртка
 │   │   │   ├── auth.ts              # Авторизация, magic-links
@@ -46,7 +46,7 @@ SaaS-платформа автоматизированной торговли к
 ├── frontend/
 │   ├── src/
 │   │   ├── pages/
-│   │   │   ├── SaaS.tsx             # Главная SaaS-страница (~11 560 строк)
+│   │   │   ├── SaaS.tsx             # Главная SaaS-страница (~12 155 строк)
 │   │   │   ├── Dashboard.tsx        # Дашборд трейдера
 │   │   │   ├── ClientCabinet.tsx    # Вход клиента через magic-link
 │   │   │   ├── ClientAuth.tsx       # Авторизация клиента
@@ -58,7 +58,7 @@ SaaS-платформа автоматизированной торговли к
 │   ├── build/                        # Сборка → /var/www/battletoads-double-dragon/
 │   ├── package.json
 │   └── tsconfig.json
-├── schema-init.sql                   # DDL всех таблиц (499 строк, 29 таблиц)
+├── schema-init.sql                   # DDL всех таблиц (559 строк, 31 таблица)
 ├── scripts/                          # Утилиты: бэктесты, каталоги, проверки
 ├── docs/                             # Документация
 └── deploy.sh                         # Скрипт деплоя
@@ -89,7 +89,8 @@ SaaS-платформа автоматизированной торговли к
 | `algofund_profiles` | Профиль algofund-клиента (risk_multiplier, api_key, enabled) |
 | `algofund_start_stop_requests` | Очередь запросов старт/стоп алгофонда |
 | `copytrading_profiles` | Копитрейдинг (master + followers) |
-| `synctrade_profiles` | Синхрон-трейдинг |
+| `synctrade_profiles` | Синхрон-трейдинг (master + hedge аккаунты MEXC) |
+| `synctrade_sessions` | Журнал торговых сессий синхротрейда (open/closed/error, PnL) |
 | `client_users` / `client_sessions` / `client_magic_links` | Авторизация клиентов |
 | `saas_audit_log` | Аудит-лог действий |
 
@@ -138,6 +139,13 @@ SaaS-платформа автоматизированной торговли к
 - `PUT /algofund/:id/active-systems` — назначение систем
 - `PATCH /algofund/:id/active-systems/:name/toggle` — вкл/выкл системы
 - `POST /algofund/:id/request` — запрос старт/стоп
+
+### Synctrade (5 routes)
+- `GET /synctrade/:id` — состояние профиля (master, hedge accounts, sessions)
+- `PATCH /synctrade/:id` — обновление настроек (символ, leverage, target profit, hedge accounts)
+- `POST /synctrade/:id/execute` — открыть хедж-сессию (master Long + hedges Short или наоборот)
+- `POST /synctrade/:id/close/:sessionId` — закрыть сессию (все позиции, подсчёт PnL)
+- `GET /synctrade/:id/sessions` — история сессий
 
 ---
 

@@ -9710,6 +9710,7 @@ type SynctradeSessionRow = {
   total_pnl: number;
   duration_ms: number;
   error: string | null;
+  log_json: string;
   started_at: string;
   finished_at: string | null;
 };
@@ -9764,6 +9765,7 @@ export const getSynctradeState = async (tenantId: number) => {
     sessions: sessions.map((s) => ({
       ...s,
       hedge_pnl: safeJsonParse<Record<string, number>>(s.hedge_pnl_json, {}),
+      log: safeJsonParse<string[]>(s.log_json, []),
     })),
   };
 };
@@ -9837,20 +9839,32 @@ export const executeSynctradeSession = async (
   const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
   if (hedgeAccounts.length === 0) throw new Error('No hedge accounts configured');
 
-  const symbol = asString(payload.symbol, profile.symbol) || 'BTCUSDT';
+  const symbol = asString(payload.symbol, profile.symbol) || 'DOGEUSDT';
   const masterSide = payload.masterSide === 'short' ? 'short' : 'long';
   const hedgeSide = masterSide === 'long' ? 'short' : 'long';
   const leverageMaster = clampNumber(Math.floor(asNumber(payload.leverageMaster, 5)), 1, 50);
   const leverageHedge = clampNumber(Math.floor(asNumber(payload.leverageHedge, 5)), 1, 50);
   const lotPercent = clampNumber(asNumber(payload.lotPercent, 10), 1, 100);
 
+  const log: string[] = [];
+  const addLog = (msg: string) => {
+    const ts = new Date().toISOString().slice(11, 23);
+    log.push(`[${ts}] ${msg}`);
+    logger.info(`[Synctrade] ${msg}`);
+  };
+
   // Create session record
   const sessionResult = await db.run(
-    `INSERT INTO synctrade_sessions (profile_id, status, symbol, master_side, started_at)
-     VALUES (?, 'running', ?, ?, CURRENT_TIMESTAMP)`,
+    `INSERT INTO synctrade_sessions (profile_id, status, symbol, master_side, log_json, started_at)
+     VALUES (?, 'running', ?, ?, '[]', CURRENT_TIMESTAMP)`,
     [profile.id, symbol, masterSide]
   );
   const sessionId = (sessionResult as any)?.lastID;
+  addLog(`Session #${sessionId} created: ${symbol} master=${masterSide} lev=${leverageMaster} lot=${lotPercent}%`);
+
+  const saveLog = async () => {
+    await db.run(`UPDATE synctrade_sessions SET log_json = ? WHERE id = ?`, [JSON.stringify(log), sessionId]);
+  };
 
   try {
     // Initialize master account
@@ -9858,49 +9872,96 @@ export const executeSynctradeSession = async (
     if (!masterKeyName) throw new Error('Master API key not configured');
 
     await ensureExchangeClientInitialized(masterKeyName);
+    addLog(`Master key initialized: ${masterKeyName}`);
 
     // Initialize hedge accounts
     for (const acc of hedgeAccounts) {
       const keyName = asString(acc.apiKeyName, '');
       if (keyName) {
         await ensureExchangeClientInitialized(keyName);
+        addLog(`Hedge key initialized: ${asString(acc.displayName, keyName)}`);
       }
     }
 
-    // Get master account balance
-    const { getBalances, placeOrder, applySymbolRiskSettings } = await import('../bot/exchange');
+    const { getBalances, placeOrder, applySymbolRiskSettings, getInstrumentInfo } = await import('../bot/exchange');
+
+    // Get instrument info for minLot / qtyStep
+    let minOrderQty = 1;
+    let qtyStep = 1;
+    try {
+      const instInfo = await getInstrumentInfo(masterKeyName, symbol);
+      const lotFilter = (instInfo as any)?.lotSizeFilter;
+      const rawMin = Number(lotFilter?.minOrderQty ?? 0);
+      const rawStep = Number(lotFilter?.qtyStep ?? 0);
+      if (Number.isFinite(rawMin) && rawMin > 0) minOrderQty = rawMin;
+      if (Number.isFinite(rawStep) && rawStep > 0) qtyStep = rawStep;
+      addLog(`Instrument: minQty=${minOrderQty} qtyStep=${qtyStep}`);
+    } catch (err: any) {
+      addLog(`⚠ Could not get instrument info: ${err.message}`);
+    }
+
+    const roundToStep = (val: number): number => {
+      if (qtyStep <= 0) return val;
+      const result = Math.floor(val / qtyStep) * qtyStep;
+      // round to avoid floating point dust
+      const decimals = String(qtyStep).includes('.') ? String(qtyStep).split('.')[1].length : 0;
+      return Number(result.toFixed(decimals));
+    };
+
+    const enforceMinLot = (val: number): number => {
+      const rounded = roundToStep(val);
+      return rounded < minOrderQty ? minOrderQty : rounded;
+    };
 
     // Set leverage on master
     try {
       await applySymbolRiskSettings(masterKeyName, symbol, 'cross', leverageMaster);
-    } catch { /* leverage may already be set */ }
+      addLog(`Master leverage set: ${leverageMaster}x`);
+    } catch (err: any) {
+      addLog(`⚠ Master leverage: ${err.message}`);
+    }
 
     // Set leverage on hedges
     for (const acc of hedgeAccounts) {
       const keyName = asString(acc.apiKeyName, '');
+      const dn = asString(acc.displayName, keyName);
       if (keyName) {
         try {
           await applySymbolRiskSettings(keyName, symbol, 'cross', leverageHedge);
-        } catch { /* leverage may already be set */ }
+          addLog(`Hedge ${dn} leverage set: ${leverageHedge}x`);
+        } catch (err: any) {
+          addLog(`⚠ Hedge ${dn} leverage: ${err.message}`);
+        }
       }
     }
 
     // Get master balance to calculate lot
     const masterBalances = await getBalances(masterKeyName);
-    const masterEquity = asNumber(masterBalances?.totalEquity || masterBalances?.totalWalletBalance, 0);
+    const usdtBal = (masterBalances || []).find((b: any) => String(b.coin).toUpperCase() === 'USDT');
+    const masterEquity = asNumber(usdtBal?.walletBalance, 0);
+    addLog(`Master USDT balance: ${masterEquity.toFixed(2)}`);
+    if (masterEquity <= 0) throw new Error('Master account has no USDT balance');
+
     const orderValueUsdt = (masterEquity * lotPercent) / 100;
 
     // Get current price
     const marketData = await getMarketData(masterKeyName, symbol, '1m', 1);
-    const price = asNumber(marketData?.[0]?.close, 0);
+    const price = asNumber((marketData?.[0] as any)?.[4], 0);
     if (price <= 0) throw new Error('Cannot get current market price');
+    addLog(`Market price ${symbol}: ${price}`);
 
-    const qty = Math.floor((orderValueUsdt * leverageMaster / price) * 1000) / 1000;
+    const rawQty = (orderValueUsdt * leverageMaster) / price;
+    const qty = enforceMinLot(rawQty);
+    addLog(`Master order: ${masterSide === 'long' ? 'Buy' : 'Sell'} qty=${qty} (raw=${rawQty.toFixed(6)}, value=${orderValueUsdt.toFixed(2)} USDT)`);
+
     if (qty <= 0) throw new Error('Calculated quantity is too small');
+
+    await saveLog();
 
     // Place master order (profit side)
     const masterOrder = await placeOrder(masterKeyName, symbol,
       masterSide === 'long' ? 'Buy' : 'Sell', String(qty));
+    addLog(`✓ Master order placed`);
 
     // Place hedge orders (loss side) — simultaneous
     const hedgePnl: Record<string, number> = {};
@@ -9911,18 +9972,39 @@ export const executeSynctradeSession = async (
 
       try {
         const hedgeBalances = await getBalances(keyName);
-        const hedgeEquity = asNumber(hedgeBalances?.totalEquity || hedgeBalances?.totalWalletBalance, 0);
-        const hedgeOrderValue = (hedgeEquity * lotPercent) / 100;
-        const hedgeQty = Math.floor((hedgeOrderValue * leverageHedge / price) * 1000) / 1000;
+        const hedgeUsdtBal = (hedgeBalances || []).find((b: any) => String(b.coin).toUpperCase() === 'USDT');
+        const hedgeEquity = asNumber(hedgeUsdtBal?.walletBalance, 0);
+        addLog(`Hedge ${displayName} USDT balance: ${hedgeEquity.toFixed(2)}`);
+
+        // Respect maxSpendUsdt if set
+        const maxSpend = asNumber(acc.maxSpendUsdt, 0);
+        // Respect targetLossUsdt — hedge order value = targetLossUsdt (worst-case 100% loss = targetLossUsdt)
+        const targetLoss = asNumber(acc.targetLossUsdt, 0);
+        let hedgeOrderValue = (hedgeEquity * lotPercent) / 100;
+        if (maxSpend > 0 && hedgeOrderValue > maxSpend) {
+          hedgeOrderValue = maxSpend;
+          addLog(`Hedge ${displayName}: capped spend to ${maxSpend} USDT`);
+        }
+        if (targetLoss > 0 && hedgeOrderValue > targetLoss) {
+          hedgeOrderValue = targetLoss;
+          addLog(`Hedge ${displayName}: capped by target loss to ${targetLoss} USDT`);
+        }
+
+        const hedgeRawQty = (hedgeOrderValue * leverageHedge) / price;
+        const hedgeQty = enforceMinLot(hedgeRawQty);
+        addLog(`Hedge ${displayName}: ${hedgeSide === 'long' ? 'Buy' : 'Sell'} qty=${hedgeQty} (raw=${hedgeRawQty.toFixed(6)}, value=${hedgeOrderValue.toFixed(2)} USDT)`);
 
         if (hedgeQty > 0) {
           await placeOrder(keyName, symbol,
             hedgeSide === 'long' ? 'Buy' : 'Sell', String(hedgeQty));
+          addLog(`✓ Hedge ${displayName} order placed`);
           hedgePnl[displayName] = 0;
+        } else {
+          addLog(`✗ Hedge ${displayName}: qty too small, skipped`);
         }
       } catch (err: any) {
         hedgePnl[displayName] = 0;
-        logger.warn(`[Synctrade] Hedge order failed for ${displayName}: ${err.message}`);
+        addLog(`✗ Hedge ${displayName} order FAILED: ${err.message}`);
       }
     });
 
@@ -9931,9 +10013,9 @@ export const executeSynctradeSession = async (
     // Update session
     await db.run(
       `UPDATE synctrade_sessions
-       SET status = 'open', entry_price = ?, hedge_pnl_json = ?
+       SET status = 'open', entry_price = ?, hedge_pnl_json = ?, log_json = ?
        WHERE id = ?`,
-      [price, JSON.stringify(hedgePnl), sessionId]
+      [price, JSON.stringify(hedgePnl), JSON.stringify(log), sessionId]
     );
 
     await db.run(
@@ -9941,7 +10023,8 @@ export const executeSynctradeSession = async (
       [JSON.stringify({ sessionId, symbol, masterSide, entryPrice: price, status: 'open' }), tenantId]
     );
 
-    logger.info(`[Synctrade] Session ${sessionId} opened: ${symbol} master=${masterSide} qty=${qty} price=${price}`);
+    addLog(`Session #${sessionId} → open ✓`);
+    await saveLog();
 
     return {
       sessionId,
@@ -9951,11 +10034,13 @@ export const executeSynctradeSession = async (
       entryPrice: price,
       masterOrder,
       hedgeAccounts: Object.keys(hedgePnl),
+      log,
     };
   } catch (err: any) {
+    addLog(`✗ FATAL: ${err.message}`);
     await db.run(
-      `UPDATE synctrade_sessions SET status = 'error', error = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      [String(err.message || err).slice(0, 500), sessionId]
+      `UPDATE synctrade_sessions SET status = 'error', error = ?, log_json = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [String(err.message || err).slice(0, 500), JSON.stringify(log), sessionId]
     );
     throw err;
   }
@@ -9970,29 +10055,47 @@ export const closeSynctradeSession = async (tenantId: number, sessionId: number)
     [sessionId, profile.id]
   ) as SynctradeSessionRow | null;
   if (!session) throw new Error('Session not found');
-  if (session.status !== 'open') throw new Error('Session is not open');
+  if (!['open', 'running', 'error'].includes(session.status)) throw new Error(`Session status "${session.status}" cannot be closed`);
 
   const symbol = session.symbol;
   const masterKeyName = asString(profile.master_api_key_name, '');
   const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
 
+  const log: string[] = safeJsonParse<string[]>(session.log_json, []);
+  const addLog = (msg: string) => {
+    const ts = new Date().toISOString().slice(11, 23);
+    log.push(`[${ts}] ${msg}`);
+    logger.info(`[Synctrade] ${msg}`);
+  };
+
+  addLog(`Closing session #${sessionId}: ${symbol}`);
+
   const { closePosition, getPositions: getPos } = await import('../bot/exchange');
+
+  // Helper to normalize symbol for comparison (strip /, :, etc.)
+  const normSym = (v: string) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const targetKey = normSym(symbol);
 
   // Close master position
   let masterPnl = 0;
   try {
     const masterPositions = await getPos(masterKeyName, symbol);
-    const masterPos = (masterPositions || []).find((p: any) => p.symbol === symbol || p.data?.symbol === symbol);
+    addLog(`Master positions found: ${(masterPositions || []).length}`);
+    const masterPos = (masterPositions || []).find((p: any) => normSym(p.symbol) === targetKey);
     if (masterPos) {
-      const posQty = asNumber(masterPos.size || masterPos.data?.size, 0);
-      const posSide = String(masterPos.side || masterPos.data?.side || '').toLowerCase();
+      const posQty = asNumber(masterPos.size, 0);
+      const posSide: 'Buy' | 'Sell' = String(masterPos.side).includes('Buy') || String(masterPos.side).includes('buy') ? 'Buy' : 'Sell';
+      addLog(`Master position: side=${posSide} qty=${posQty} uPnL=${masterPos.unrealisedPnl}`);
       if (posQty > 0) {
-        await closePosition(masterKeyName, symbol, String(posQty), posSide.includes('buy') || posSide.includes('long') ? 'Buy' : 'Sell');
+        await closePosition(masterKeyName, symbol, String(posQty), posSide);
+        addLog(`✓ Master position closed`);
       }
-      masterPnl = asNumber(masterPos.unrealisedPnl || masterPos.data?.unrealisedPnl, 0);
+      masterPnl = asNumber(masterPos.unrealisedPnl, 0);
+    } else {
+      addLog(`⚠ Master: no open position found for ${symbol}`);
     }
   } catch (err: any) {
-    logger.warn(`[Synctrade] Failed to close master position: ${err.message}`);
+    addLog(`✗ Master close failed: ${err.message}`);
   }
 
   // Close hedge positions
@@ -10004,17 +10107,24 @@ export const closeSynctradeSession = async (tenantId: number, sessionId: number)
 
     try {
       const hedgePositions = await getPos(keyName, symbol);
-      const hedgePos = (hedgePositions || []).find((p: any) => p.symbol === symbol || p.data?.symbol === symbol);
+      addLog(`Hedge ${displayName} positions found: ${(hedgePositions || []).length}`);
+      const hedgePos = (hedgePositions || []).find((p: any) => normSym(p.symbol) === targetKey);
       if (hedgePos) {
-        const posQty = asNumber(hedgePos.size || hedgePos.data?.size, 0);
-        const posSide = String(hedgePos.side || hedgePos.data?.side || '').toLowerCase();
+        const posQty = asNumber(hedgePos.size, 0);
+        const posSide: 'Buy' | 'Sell' = String(hedgePos.side).includes('Buy') || String(hedgePos.side).includes('buy') ? 'Buy' : 'Sell';
+        addLog(`Hedge ${displayName}: side=${posSide} qty=${posQty} uPnL=${hedgePos.unrealisedPnl}`);
         if (posQty > 0) {
-          await closePosition(keyName, symbol, String(posQty), posSide.includes('buy') || posSide.includes('long') ? 'Buy' : 'Sell');
+          await closePosition(keyName, symbol, String(posQty), posSide);
+          addLog(`✓ Hedge ${displayName} position closed`);
         }
-        hedgePnl[displayName] = asNumber(hedgePos.unrealisedPnl || hedgePos.data?.unrealisedPnl, 0);
+        hedgePnl[displayName] = asNumber(hedgePos.unrealisedPnl, 0);
+      } else {
+        addLog(`⚠ Hedge ${displayName}: no open position found for ${symbol}`);
+        hedgePnl[displayName] = 0;
       }
     } catch (err: any) {
-      logger.warn(`[Synctrade] Failed to close hedge position for ${displayName}: ${err.message}`);
+      addLog(`✗ Hedge ${displayName} close failed: ${err.message}`);
+      hedgePnl[displayName] = 0;
     }
   }
 
@@ -10024,15 +10134,20 @@ export const closeSynctradeSession = async (tenantId: number, sessionId: number)
 
   // Get exit price
   const { getMarketData: getMD } = await import('../bot/exchange');
-  const marketData = await getMD(masterKeyName, symbol, '1m', 1);
-  const exitPrice = asNumber(marketData?.[0]?.close, 0);
+  let exitPrice = 0;
+  try {
+    const marketData = await getMD(masterKeyName, symbol, '1m', 1);
+    exitPrice = asNumber((marketData?.[0] as any)?.[4], 0);
+  } catch { /* non-critical */ }
+
+  addLog(`Result: masterPnl=${masterPnl.toFixed(4)} hedgePnl=${JSON.stringify(hedgePnl)} totalPnl=${totalPnl.toFixed(4)} duration=${(durationMs / 1000).toFixed(1)}s`);
 
   await db.run(
     `UPDATE synctrade_sessions
      SET status = 'closed', exit_price = ?, master_pnl = ?, hedge_pnl_json = ?,
-         total_pnl = ?, duration_ms = ?, finished_at = CURRENT_TIMESTAMP
+         total_pnl = ?, duration_ms = ?, log_json = ?, finished_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
-    [exitPrice, masterPnl, JSON.stringify(hedgePnl), totalPnl, durationMs, sessionId]
+    [exitPrice, masterPnl, JSON.stringify(hedgePnl), totalPnl, durationMs, JSON.stringify(log), sessionId]
   );
 
   await db.run(
@@ -10040,9 +10155,9 @@ export const closeSynctradeSession = async (tenantId: number, sessionId: number)
     [JSON.stringify({ sessionId, status: 'closed', masterPnl, hedgePnl, totalPnl }), tenantId]
   );
 
-  logger.info(`[Synctrade] Session ${sessionId} closed: masterPnl=${masterPnl}, hedgePnl=${JSON.stringify(hedgePnl)}, totalPnl=${totalPnl}`);
+  addLog(`Session #${sessionId} → closed ✓`);
 
-  return { sessionId, status: 'closed', exitPrice, masterPnl, hedgePnl, totalPnl, durationMs };
+  return { sessionId, status: 'closed', exitPrice, masterPnl, hedgePnl, totalPnl, durationMs, log };
 };
 
 export const getSynctradeSessions = async (tenantId: number, limit = 50) => {
@@ -10057,6 +10172,7 @@ export const getSynctradeSessions = async (tenantId: number, limit = 50) => {
   return sessions.map((s) => ({
     ...s,
     hedge_pnl: safeJsonParse<Record<string, number>>(s.hedge_pnl_json, {}),
+    log: safeJsonParse<string[]>(s.log_json, []),
   }));
 };
 

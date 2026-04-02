@@ -408,6 +408,7 @@ export const initExchangeClient = (apiKey: ApiKey) => {
             defaultType: 'swap',
             adjustForTimeDifference: true,
             recvWindow: 10000,
+            unavailableContracts: {},
           },
         })
         : undefined;
