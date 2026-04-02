@@ -3982,6 +3982,8 @@ const ensurePublishedSourceSystem = async (
     await db.run(`DELETE FROM algofund_profiles WHERE tenant_id = ?`, [tenantId]);
     await db.run(`DELETE FROM strategy_client_profiles WHERE tenant_id = ?`, [tenantId]);
     await db.run(`DELETE FROM copytrading_profiles WHERE tenant_id = ?`, [tenantId]).catch(() => { /* table may not exist yet */ });
+    await db.run(`DELETE FROM synctrade_sessions WHERE profile_id IN (SELECT id FROM synctrade_profiles WHERE tenant_id = ?)`, [tenantId]).catch(() => { /* table may not exist yet */ });
+    await db.run(`DELETE FROM synctrade_profiles WHERE tenant_id = ?`, [tenantId]).catch(() => { /* table may not exist yet */ });
     await db.run(`DELETE FROM client_users WHERE tenant_id = ?`, [tenantId]);
 
     // Delete API keys that belong to this tenant
@@ -6888,6 +6890,12 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
     : activeOfferIds;
   const nextAssignedApiKeyName = asString(payload.assignedApiKeyName, existing.assigned_api_key_name || tenant.assigned_api_key_name);
   const nextRequestedEnabled = payload.requestedEnabled !== undefined ? payload.requestedEnabled : existing.requested_enabled === 1;
+
+  // D1+D2: проверка что ключ не занят другим тенантом / другим режимом
+  if (payload.assignedApiKeyName && payload.assignedApiKeyName !== (existing.assigned_api_key_name || tenant.assigned_api_key_name)) {
+    await validateApiKeyNotAssigned(nextAssignedApiKeyName, tenantId, 'strategy-client');
+  }
+
   const { catalog: sourceCatalog } = await loadCatalogAndSweepWithFallback();
   const offerStore = await getOfferStoreAdminState();
   const publishedSet = new Set(offerStore.publishedOfferIds);
@@ -8145,6 +8153,11 @@ export const updateAlgofundState = async (
     ? payload.requestedEnabled
     : Number(profile.requested_enabled || 0) === 1;
 
+  // D1+D2: проверка что ключ не занят другим тенантом / другим режимом
+  if (payload.assignedApiKeyName && payload.assignedApiKeyName !== currentExecutionApiKeyName) {
+    await validateApiKeyNotAssigned(nextApiKeyName, tenantId, 'algofund');
+  }
+
   const wasEnabled = Number(profile.requested_enabled || 0) === 1;
 
   await db.run(
@@ -8890,6 +8903,71 @@ export const getAlgofundActiveSystems = async (profileId: number): Promise<Algof
 type PairConflict = {
   pair: string;
   conflictingSystemName: string;
+};
+
+/**
+ * D1+D2: Проверяет, что API-ключ не назначен другому тенанту (в любом режиме).
+ * Кидает Error если ключ уже занят.
+ */
+export const validateApiKeyNotAssigned = async (
+  apiKeyName: string,
+  currentTenantId: number,
+  targetMode: 'algofund' | 'strategy-client'
+): Promise<void> => {
+  if (!apiKeyName) return;
+
+  // D1: Проверка — ключ уже назначен другому algofund-профилю?
+  const algofundConflict = await db.get(
+    `SELECT ap.tenant_id, t.slug FROM algofund_profiles ap
+     JOIN tenants t ON t.id = ap.tenant_id
+     WHERE ap.assigned_api_key_name = ? AND ap.tenant_id != ?`,
+    [apiKeyName, currentTenantId]
+  );
+  if (algofundConflict) {
+    throw new Error(
+      `API-ключ "${apiKeyName}" уже назначен algofund-клиенту "${algofundConflict.slug}" (tenant #${algofundConflict.tenant_id}). Один ключ = один клиент.`
+    );
+  }
+
+  // D1: Проверка — ключ уже назначен другому strategy-client-профилю?
+  const strategyConflict = await db.get(
+    `SELECT scp.tenant_id, t.slug FROM strategy_client_profiles scp
+     JOIN tenants t ON t.id = scp.tenant_id
+     WHERE scp.assigned_api_key_name = ? AND scp.tenant_id != ?`,
+    [apiKeyName, currentTenantId]
+  );
+  if (strategyConflict) {
+    throw new Error(
+      `API-ключ "${apiKeyName}" уже назначен strategy-клиенту "${strategyConflict.slug}" (tenant #${strategyConflict.tenant_id}). Один ключ = один клиент.`
+    );
+  }
+
+  // D2: Кросс-мод блокировка — ключ из algofund нельзя использовать в strategy и наоборот
+  if (targetMode === 'algofund') {
+    const crossConflict = await db.get(
+      `SELECT scp.tenant_id, t.slug FROM strategy_client_profiles scp
+       JOIN tenants t ON t.id = scp.tenant_id
+       WHERE scp.assigned_api_key_name = ?`,
+      [apiKeyName]
+    );
+    if (crossConflict) {
+      throw new Error(
+        `API-ключ "${apiKeyName}" используется в режиме strategy-client у "${crossConflict.slug}". Нельзя использовать один ключ в двух режимах (Algofund↔Strategy).`
+      );
+    }
+  } else {
+    const crossConflict = await db.get(
+      `SELECT ap.tenant_id, t.slug FROM algofund_profiles ap
+       JOIN tenants t ON t.id = ap.tenant_id
+       WHERE ap.assigned_api_key_name = ?`,
+      [apiKeyName]
+    );
+    if (crossConflict) {
+      throw new Error(
+        `API-ключ "${apiKeyName}" используется в режиме algofund у "${crossConflict.slug}". Нельзя использовать один ключ в двух режимах (Algofund↔Strategy).`
+      );
+    }
+  }
 };
 
 export const checkAlgofundSystemPairConflicts = async (
@@ -9746,11 +9824,11 @@ export const executeSynctradeSession = async (
     }
 
     // Get master account balance
-    const { getBalances, placeOrder, setLeverage: setLev } = await import('../bot/exchange');
+    const { getBalances, placeOrder, applySymbolRiskSettings } = await import('../bot/exchange');
 
     // Set leverage on master
     try {
-      await setLev(masterKeyName, symbol, leverageMaster);
+      await applySymbolRiskSettings(masterKeyName, symbol, 'cross', leverageMaster);
     } catch { /* leverage may already be set */ }
 
     // Set leverage on hedges
@@ -9758,7 +9836,7 @@ export const executeSynctradeSession = async (
       const keyName = asString(acc.apiKeyName, '');
       if (keyName) {
         try {
-          await setLev(keyName, symbol, leverageHedge);
+          await applySymbolRiskSettings(keyName, symbol, 'cross', leverageHedge);
         } catch { /* leverage may already be set */ }
       }
     }
@@ -9778,7 +9856,7 @@ export const executeSynctradeSession = async (
 
     // Place master order (profit side)
     const masterOrder = await placeOrder(masterKeyName, symbol,
-      masterSide === 'long' ? 'Buy' : 'Sell', qty);
+      masterSide === 'long' ? 'Buy' : 'Sell', String(qty));
 
     // Place hedge orders (loss side) — simultaneous
     const hedgePnl: Record<string, number> = {};
@@ -9795,7 +9873,7 @@ export const executeSynctradeSession = async (
 
         if (hedgeQty > 0) {
           await placeOrder(keyName, symbol,
-            hedgeSide === 'long' ? 'Buy' : 'Sell', hedgeQty);
+            hedgeSide === 'long' ? 'Buy' : 'Sell', String(hedgeQty));
           hedgePnl[displayName] = 0;
         }
       } catch (err: any) {
@@ -9865,7 +9943,7 @@ export const closeSynctradeSession = async (tenantId: number, sessionId: number)
       const posQty = asNumber(masterPos.size || masterPos.data?.size, 0);
       const posSide = String(masterPos.side || masterPos.data?.side || '').toLowerCase();
       if (posQty > 0) {
-        await closePosition(masterKeyName, symbol, posQty, posSide.includes('buy') || posSide.includes('long') ? 'Buy' : 'Sell');
+        await closePosition(masterKeyName, symbol, String(posQty), posSide.includes('buy') || posSide.includes('long') ? 'Buy' : 'Sell');
       }
       masterPnl = asNumber(masterPos.unrealisedPnl || masterPos.data?.unrealisedPnl, 0);
     }
@@ -9887,7 +9965,7 @@ export const closeSynctradeSession = async (tenantId: number, sessionId: number)
         const posQty = asNumber(hedgePos.size || hedgePos.data?.size, 0);
         const posSide = String(hedgePos.side || hedgePos.data?.side || '').toLowerCase();
         if (posQty > 0) {
-          await closePosition(keyName, symbol, posQty, posSide.includes('buy') || posSide.includes('long') ? 'Buy' : 'Sell');
+          await closePosition(keyName, symbol, String(posQty), posSide.includes('buy') || posSide.includes('long') ? 'Buy' : 'Sell');
         }
         hedgePnl[displayName] = asNumber(hedgePos.unrealisedPnl || hedgePos.data?.unrealisedPnl, 0);
       }
