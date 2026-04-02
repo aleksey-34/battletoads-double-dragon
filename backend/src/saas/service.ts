@@ -669,6 +669,50 @@ const synctradePlans: PlanSeed[] = [
   },
 ];
 
+// D3: Combined plans — Algofund + Strategy addon
+const combinedPlans: PlanSeed[] = [
+  {
+    code: 'combined_70',
+    title: 'Algofund + Strategy 70',
+    productMode: 'algofund_client',
+    priceUsdt: 70,
+    maxDepositTotal: 5000,
+    riskCapMax: 1.5,
+    maxStrategiesTotal: 3,
+    allowTsStartStopRequests: true,
+    features: {
+      managedTs: true,
+      strategyAddon: true,
+      monoOrSynth: 3,
+      customTsBuilder: true,
+      customTsMinOffers: 2,
+      customTsMaxOffers: 3,
+      customTsMaxCount: 1,
+    },
+  },
+  {
+    code: 'combined_120',
+    title: 'Algofund + Strategy 120',
+    productMode: 'algofund_client',
+    priceUsdt: 120,
+    maxDepositTotal: 10000,
+    riskCapMax: 2,
+    maxStrategiesTotal: 5,
+    allowTsStartStopRequests: true,
+    features: {
+      managedTs: true,
+      strategyAddon: true,
+      mono: 3,
+      synth: 3,
+      complexTs: true,
+      customTsBuilder: true,
+      customTsMinOffers: 2,
+      customTsMaxOffers: 5,
+      customTsMaxCount: 2,
+    },
+  },
+];
+
 const asNumber = (value: unknown, fallback = 0): number => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
@@ -1699,7 +1743,7 @@ const buildRecommendedSets = (catalog: CatalogData | null) => {
 };
 
 export const ensureSaasSeedData = async (): Promise<void> => {
-  for (const plan of [...strategyClientPlans, ...algofundPlans, ...copytradingPlans, ...synctradePlans]) {
+  for (const plan of [...strategyClientPlans, ...algofundPlans, ...copytradingPlans, ...synctradePlans, ...combinedPlans]) {
     await upsertPlan(plan);
   }
 

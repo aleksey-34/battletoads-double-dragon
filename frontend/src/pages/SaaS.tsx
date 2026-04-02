@@ -6756,20 +6756,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
-  const toggleTenantRequestedEnabled = async (row: TenantSummary, nextEnabled: boolean) => {
-    const tenantId = Number(row.tenant.id);
-    if (!Number.isFinite(tenantId) || tenantId <= 0) {
-      return;
-    }
-
+  const doToggleTenantEnabled = async (tenantId: number, productMode: string, nextEnabled: boolean, displayName: string) => {
     setActionLoading(`monitor-toggle-${tenantId}`);
     try {
-      if (row.tenant.product_mode === 'strategy_client') {
+      if (productMode === 'strategy_client') {
         await axios.patch(`/api/saas/strategy-clients/${tenantId}`, { requestedEnabled: nextEnabled });
       } else {
         await axios.patch(`/api/saas/algofund/${tenantId}`, { requestedEnabled: nextEnabled });
       }
-      messageApi.success(`Updated ${row.tenant.display_name}: requested ${nextEnabled ? 'ON' : 'OFF'}`);
+      messageApi.success(`Updated ${displayName}: requested ${nextEnabled ? 'ON' : 'OFF'}`);
       await loadSummary();
       if (activeTab === 'admin' && adminTab === 'monitoring') {
         await loadMonitoringTabData();
@@ -6779,6 +6774,33 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     } finally {
       setActionLoading('');
     }
+  };
+
+  const toggleTenantRequestedEnabled = async (row: TenantSummary, nextEnabled: boolean) => {
+    const tenantId = Number(row.tenant.id);
+    if (!Number.isFinite(tenantId) || tenantId <= 0) {
+      return;
+    }
+
+    // E1: При отключении — подтверждение с опцией архивации стратегий
+    if (!nextEnabled) {
+      Modal.confirm({
+        title: `Отключить торговлю для ${row.tenant.display_name || row.tenant.slug}?`,
+        content: (
+          <Space direction="vertical" size={8}>
+            <Text>Все открытые ордера будут отменены, позиции закрыты.</Text>
+            <Text type="secondary">Стратегии клиента останутся в системе для возможного переподключения.</Text>
+          </Space>
+        ),
+        okText: 'Отключить',
+        okType: 'danger',
+        cancelText: 'Отмена',
+        onOk: () => doToggleTenantEnabled(tenantId, row.tenant.product_mode, false, row.tenant.display_name || row.tenant.slug),
+      });
+      return;
+    }
+
+    await doToggleTenantEnabled(tenantId, row.tenant.product_mode, nextEnabled, row.tenant.display_name || row.tenant.slug);
   };
 
   const resolveTenantRuntimeStatus = (row: TenantSummary) => {
@@ -9524,7 +9546,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   disabled={!strategyApiKeyEditable}
                                 />
                               ) : (
-                                <div style={{ marginTop: 8 }}><Text>{strategyApiKeyName || '—'}</Text></div>
+                                <div style={{ marginTop: 8 }}>
+                                  <Space>
+                                    <Text>{strategyApiKeyName || '—'}</Text>
+                                    {strategyApiKeyName
+                                      ? <Tag color={strategyState?.profile?.actual_enabled ? 'success' : 'default'}>{strategyState?.profile?.actual_enabled ? 'подключён' : 'не активен'}</Tag>
+                                      : null}
+                                  </Space>
+                                </div>
                               )}
                             </Col>
                             <Col xs={24} md={isAdminSurface ? 6 : 8}>
@@ -9609,18 +9638,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                         {!isAdminSurface ? (
                         <>
-                        <Card className="battletoads-card" title="Custom TS profiles">
+                        <Card className="battletoads-card" title="Мои торговые системы">
                           <Space direction="vertical" size={12} style={{ width: '100%' }}>
                             <Space wrap>
-                              <Tag color="blue">Profiles: {strategySystemProfiles.length}</Tag>
+                              <Tag color="blue">Профилей: {strategySystemProfiles.length}</Tag>
                               {strategyState?.constraints?.limits?.maxCustomSystems !== null && strategyState?.constraints?.limits?.maxCustomSystems !== undefined ? (
-                                <Tag color="purple">Plan cap: {strategyState?.constraints?.limits?.maxCustomSystems}</Tag>
+                                <Tag color="purple">Лимит по тарифу: {strategyState?.constraints?.limits?.maxCustomSystems}</Tag>
                               ) : null}
-                              {activeStrategySystemProfile ? <Tag color="success">Active: {activeStrategySystemProfile.profileName}</Tag> : null}
+                              {activeStrategySystemProfile ? <Tag color="success">Активная: {activeStrategySystemProfile.profileName}</Tag> : null}
                             </Space>
                             <Row gutter={[12, 12]}>
                               <Col xs={24} lg={12}>
-                                <Text strong>Active profile</Text>
+                                <Text strong>Активный профиль</Text>
                                 <Select
                                   style={{ width: '100%', marginTop: 8 }}
                                   value={strategySystemProfileId || undefined}
@@ -9631,17 +9660,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   }}
                                   options={strategySystemProfiles.map((item) => ({
                                     value: Number(item.id),
-                                    label: `${item.profileName}${item.isActive ? ' [active]' : ''}`,
+                                    label: `${item.profileName}${item.isActive ? ' [активный]' : ''}`,
                                   }))}
                                 />
                               </Col>
                               <Col xs={24} lg={7}>
-                                <Text strong>New profile name</Text>
+                                <Text strong>Название нового профиля</Text>
                                 <Input
                                   style={{ marginTop: 8 }}
                                   value={strategyNewProfileName}
                                   onChange={(event) => setStrategyNewProfileName(event.target.value)}
-                                  placeholder={`Custom TS ${strategySystemProfiles.length + 1}`}
+                                  placeholder={`Мой ТС ${strategySystemProfiles.length + 1}`}
                                 />
                               </Col>
                               <Col xs={12} lg={3}>
@@ -9656,7 +9685,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     && strategySystemProfiles.length >= Number(strategyState?.constraints?.limits?.maxCustomSystems || 0)
                                   }
                                 >
-                                  Create
+                                  Создать
                                 </Button>
                               </Col>
                               <Col xs={12} lg={2}>
@@ -9668,18 +9697,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   disabled={!strategySystemProfileId || strategySystemProfiles.length <= 1}
                                   onClick={() => {
                                     Modal.confirm({
-                                      title: 'Delete custom TS profile?',
-                                      content: 'Selected profile will be removed. Active profile cannot be deleted.',
-                                      okText: 'Delete',
+                                      title: 'Удалить профиль ТС?',
+                                      content: 'Выбранный профиль будет удалён. Активный профиль удалить нельзя.',
+                                      okText: 'Удалить',
                                       okType: 'danger',
-                                      cancelText: 'Cancel',
+                                      cancelText: 'Отмена',
                                       onOk: async () => {
                                         await deleteStrategySystemProfile();
                                       },
                                     });
                                   }}
                                 >
-                                  Delete
+                                  Удалить
                                 </Button>
                               </Col>
                             </Row>
@@ -9690,23 +9719,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               pagination={false}
                               columns={[
                                 {
-                                  title: 'Profile',
+                                  title: 'Профиль',
                                   key: 'profileName',
                                   render: (_, row: any) => (
                                     <Space>
                                       <Text strong>{row.profileName}</Text>
-                                      {row.isActive ? <Tag color="success">active</Tag> : <Tag color="default">inactive</Tag>}
+                                      {row.isActive ? <Tag color="success">активный</Tag> : <Tag color="default">неактивный</Tag>}
                                     </Space>
                                   ),
                                 },
                                 {
-                                  title: 'Offers',
+                                  title: 'Оферы',
                                   key: 'offers',
                                   render: (_, row: any) => Array.isArray(row.selectedOfferIds) ? row.selectedOfferIds.length : 0,
                                   width: 100,
                                 },
                                 {
-                                  title: 'Updated',
+                                  title: 'Обновлено',
                                   dataIndex: 'updatedAt',
                                   width: 200,
                                   render: (value: any) => value || '—',
@@ -9740,11 +9769,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Space>
                         </Card>
 
-                        <Card className="battletoads-card" title="Builder constraints">
+                        <Card className="battletoads-card" title="Ограничения конструктора">
                           <Row gutter={[12, 12]}>
                             <Col xs={24} md={6}>
                               <Statistic
-                                title="Selected"
+                                title="Выбрано"
                                 value={`${strategyDraftConstraints.usage?.selected ?? 0}${strategyDraftConstraints.limits?.maxOffersPerSystem !== null && strategyDraftConstraints.limits?.maxOffersPerSystem !== undefined ? ` / ${strategyDraftConstraints.limits?.maxOffersPerSystem}` : strategyDraftConstraints.limits?.maxStrategies !== null && strategyDraftConstraints.limits?.maxStrategies !== undefined ? ` / ${strategyDraftConstraints.limits?.maxStrategies}` : ''}`}
                               />
                             </Col>
@@ -9752,20 +9781,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Statistic title="Mono / Synth" value={`${strategyDraftConstraints.usage?.mono ?? 0} / ${strategyDraftConstraints.usage?.synth ?? 0}`} />
                             </Col>
                             <Col xs={24} md={6}>
-                              <Statistic title="Markets" value={strategyDraftConstraints.usage?.uniqueMarkets ?? 0} />
+                              <Statistic title="Рынки" value={strategyDraftConstraints.usage?.uniqueMarkets ?? 0} />
                             </Col>
                             <Col xs={24} md={6}>
-                              <Statistic title="Deposit per TS" value={strategyDraftConstraints.usage?.estimatedDepositPerStrategy ?? 0} precision={2} suffix="USDT" />
+                              <Statistic title="Депозит на ТС" value={strategyDraftConstraints.usage?.estimatedDepositPerStrategy ?? 0} precision={2} suffix="USDT" />
                             </Col>
                           </Row>
                           <Space wrap style={{ marginTop: 12 }}>
-                            {strategyDraftConstraints.usage?.remainingSlots !== null && strategyDraftConstraints.usage?.remainingSlots !== undefined ? <Tag color="blue">Remaining slots: {strategyDraftConstraints.usage?.remainingSlots}</Tag> : null}
-                            {strategyDraftConstraints.limits?.minOffersPerSystem !== null && strategyDraftConstraints.limits?.minOffersPerSystem !== undefined ? <Tag color="purple">Min offers per TS: {strategyDraftConstraints.limits?.minOffersPerSystem}</Tag> : null}
-                            {strategyDraftConstraints.limits?.maxOffersPerSystem !== null && strategyDraftConstraints.limits?.maxOffersPerSystem !== undefined ? <Tag color="purple">Max offers per TS: {strategyDraftConstraints.limits?.maxOffersPerSystem}</Tag> : null}
-                            {strategyDraftConstraints.limits?.maxCustomSystems !== null && strategyDraftConstraints.limits?.maxCustomSystems !== undefined ? <Tag color="cyan">Custom TS cap: {strategyDraftConstraints.limits?.maxCustomSystems}</Tag> : null}
-                            {strategyDraftConstraints.limits?.mono !== null && strategyDraftConstraints.limits?.mono !== undefined ? <Tag color="green">Mono cap: {strategyDraftConstraints.limits?.mono}</Tag> : null}
-                            {strategyDraftConstraints.limits?.synth !== null && strategyDraftConstraints.limits?.synth !== undefined ? <Tag color="geekblue">Synth cap: {strategyDraftConstraints.limits?.synth}</Tag> : null}
-                            {strategyDraftConstraints.limits?.depositCap !== null && strategyDraftConstraints.limits?.depositCap !== undefined ? <Tag color="gold">Deposit cap: {formatMoney(strategyDraftConstraints.limits?.depositCap)}</Tag> : null}
+                            {strategyDraftConstraints.usage?.remainingSlots !== null && strategyDraftConstraints.usage?.remainingSlots !== undefined ? <Tag color="blue">Осталось слотов: {strategyDraftConstraints.usage?.remainingSlots}</Tag> : null}
+                            {strategyDraftConstraints.limits?.minOffersPerSystem !== null && strategyDraftConstraints.limits?.minOffersPerSystem !== undefined ? <Tag color="purple">Мин оферов в ТС: {strategyDraftConstraints.limits?.minOffersPerSystem}</Tag> : null}
+                            {strategyDraftConstraints.limits?.maxOffersPerSystem !== null && strategyDraftConstraints.limits?.maxOffersPerSystem !== undefined ? <Tag color="purple">Макс оферов в ТС: {strategyDraftConstraints.limits?.maxOffersPerSystem}</Tag> : null}
+                            {strategyDraftConstraints.limits?.maxCustomSystems !== null && strategyDraftConstraints.limits?.maxCustomSystems !== undefined ? <Tag color="cyan">Лимит ТС: {strategyDraftConstraints.limits?.maxCustomSystems}</Tag> : null}
+                            {strategyDraftConstraints.limits?.mono !== null && strategyDraftConstraints.limits?.mono !== undefined ? <Tag color="green">Лимит Mono: {strategyDraftConstraints.limits?.mono}</Tag> : null}
+                            {strategyDraftConstraints.limits?.synth !== null && strategyDraftConstraints.limits?.synth !== undefined ? <Tag color="geekblue">Лимит Synth: {strategyDraftConstraints.limits?.synth}</Tag> : null}
+                            {strategyDraftConstraints.limits?.depositCap !== null && strategyDraftConstraints.limits?.depositCap !== undefined ? <Tag color="gold">Лимит депозита: {formatMoney(strategyDraftConstraints.limits?.depositCap)}</Tag> : null}
                           </Space>
                           {(strategyDraftConstraints.violations || []).map((item) => (
                             <Alert key={item} style={{ marginTop: 12 }} type="error" showIcon message={item} />
@@ -9862,7 +9891,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         </Card>
 
                         {materializeResponse?.strategies?.length ? (
-                          <Card className="battletoads-card" title="Materialized strategies">
+                          <Card className="battletoads-card" title="Материализованные стратегии">
                             <List
                               dataSource={materializeResponse.strategies}
                               renderItem={(item) => (
@@ -10274,7 +10303,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   disabled={!algofundApiKeyEditable}
                                 />
                               ) : (
-                                <div style={{ marginTop: 8 }}><Text>{algofundApiKeyName || '—'}</Text></div>
+                                <div style={{ marginTop: 8 }}>
+                                  <Space>
+                                    <Text>{algofundApiKeyName || '—'}</Text>
+                                    {algofundApiKeyName
+                                      ? <Tag color={algofundState.profile?.actual_enabled ? 'success' : 'default'}>{algofundState.profile?.actual_enabled ? 'подключён' : 'не активен'}</Tag>
+                                      : null}
+                                  </Space>
+                                </div>
                               )}
                             </Col>
                             <Col xs={24} md={isAdminSurface ? 6 : 8}>
