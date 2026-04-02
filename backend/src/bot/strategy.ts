@@ -2420,6 +2420,35 @@ export const executeStrategy = async (
     });
   }
 
+  const closedSameSide = closedAction !== null && (
+    (signal === 'long' && closedAction.endsWith('_long')) ||
+    (signal === 'short' && closedAction.endsWith('_short'))
+  );
+
+  if (closedSameSide) {
+    const updated = await updateStrategy(apiKeyName, strategyId, {
+      ...executionBindingPatch,
+      state: 'flat',
+      entry_ratio: null,
+      tp_anchor_ratio: null,
+      last_signal: signal,
+      last_action: `${closedAction}_cooldown_skip@${currentRatio}`,
+      last_error: null,
+    });
+
+    logger.info(`Cooldown: skipping same-side re-entry ${signal} after ${closedAction} for strategy ${strategyId} (${apiKeyName})`);
+
+    return returnWithProcessedBar({
+      result: closedResult || `Position closed; same-direction re-entry skipped (cooldown after ${closedAction})`,
+      action: `${closedAction}_cooldown_skip`,
+      strategy: updated,
+      currentRatio,
+      donchianHigh,
+      donchianLow,
+      donchianCenter,
+    });
+  }
+
   const balances = await getBalances(apiKeyName);
   const availableBalance = extractUsdtBalance(balances);
 

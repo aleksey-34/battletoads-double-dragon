@@ -410,10 +410,15 @@ type RuntimeStrategy = {
 
 type BacktestContext = {
   cashEquity: number;
+  lockedMargin: number;
   commissionRate: number;
   slippageRate: number;
   fundingRate: number;
   trades: BacktestTrade[];
+};
+
+const computeLockedMargin = (runtimes: RuntimeStrategy[]): number => {
+  return runtimes.reduce((sum, rt) => sum + (rt.state !== 'flat' ? rt.notional : 0), 0);
 };
 
 const executionPrice = (price: number, side: 'long' | 'short', phase: 'entry' | 'exit', slippageRate: number): number => {
@@ -502,6 +507,7 @@ const closePosition = (
 
   const exitFee = notional * ctx.commissionRate;
   ctx.cashEquity += grossPnl - exitFee;
+  ctx.lockedMargin = Math.max(0, ctx.lockedMargin - notional);
 
   const netPnl = grossPnl - runtime.openTrade.entryFee - exitFee + runtime.openTrade.funding;
   const pnlPercent = entryPrice > 0
@@ -590,6 +596,8 @@ const openPosition = (
     entryFee,
     funding: 0,
   };
+
+  ctx.lockedMargin += notional;
 
   return true;
 };
@@ -918,6 +926,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
 
   const ctx: BacktestContext = {
     cashEquity: request.initialBalance,
+    lockedMargin: 0,
     commissionRate: request.commissionPercent / 100,
     slippageRate: request.slippagePercent / 100,
     fundingRate: request.fundingRatePercent / 100,
@@ -1060,8 +1069,14 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'signal_flip');
     }
 
+    if (closedOnCurrentBar && runtime.state === 'flat') {
+      pushEquityPoint(event.timeMs);
+      continue;
+    }
+
     const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
-    openPosition(ctx, runtime, signalPayload.signal, event.timeMs, signalPayload.current, equityNow);
+    const availableBalance = Math.max(0, equityNow - computeLockedMargin(runtimes));
+    openPosition(ctx, runtime, signalPayload.signal, event.timeMs, signalPayload.current, availableBalance);
     pushEquityPoint(event.timeMs);
   }
 

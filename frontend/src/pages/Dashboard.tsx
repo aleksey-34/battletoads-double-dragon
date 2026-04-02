@@ -91,6 +91,7 @@ type DDStrategy = {
   is_runtime?: boolean;
   is_archived?: boolean;
   origin?: string;
+  isDirty?: boolean;
 };
 
 type TradeHistoryRow = {
@@ -434,7 +435,7 @@ const buildStrategyTradeMarkers = (
     })
     .filter((marker): marker is ChartMarker => !!marker)
     .sort((left, right) => left.time - right.time)
-    .slice(-120);
+    .slice(-500);
 };
 
 type DonchianSnapshot = {
@@ -820,6 +821,59 @@ const isSameHoverOHLC = (left: HoverOHLC | null | undefined, right: HoverOHLC | 
   );
 };
 
+const getStrategyUiDefaults = (strategyType: StrategyKind) => {
+  if (strategyType === 'stat_arb_zscore') {
+    return {
+      takeProfitPercent: 0,
+      channelLength: 120,
+      detectionSource: 'close' as DetectionSource,
+    };
+  }
+
+  return {
+    takeProfitPercent: 7.5,
+    channelLength: 50,
+    detectionSource: 'close' as DetectionSource,
+  };
+};
+
+const mergeDirtyStrategyWithServer = (serverStrategy: DDStrategy, localStrategy?: DDStrategy | null): DDStrategy => {
+  if (!localStrategy?.isDirty) {
+    return serverStrategy;
+  }
+
+  return {
+    ...serverStrategy,
+    name: localStrategy.name,
+    display_on_chart: localStrategy.display_on_chart,
+    take_profit_percent: localStrategy.take_profit_percent,
+    price_channel_length: localStrategy.price_channel_length,
+    detection_source: localStrategy.detection_source,
+    base_symbol: localStrategy.base_symbol,
+    quote_symbol: localStrategy.quote_symbol,
+    interval: localStrategy.interval,
+    base_coef: localStrategy.base_coef,
+    quote_coef: localStrategy.quote_coef,
+    show_chart: localStrategy.show_chart,
+    show_settings: localStrategy.show_settings,
+    show_indicators: localStrategy.show_indicators,
+    show_positions_on_chart: localStrategy.show_positions_on_chart,
+    show_trades_on_chart: localStrategy.show_trades_on_chart,
+    show_values_each_bar: localStrategy.show_values_each_bar,
+    auto_update: localStrategy.auto_update,
+    long_enabled: localStrategy.long_enabled,
+    short_enabled: localStrategy.short_enabled,
+    lot_long_percent: localStrategy.lot_long_percent,
+    lot_short_percent: localStrategy.lot_short_percent,
+    max_deposit: localStrategy.max_deposit,
+    margin_type: localStrategy.margin_type,
+    leverage: localStrategy.leverage,
+    fixed_lot: localStrategy.fixed_lot,
+    reinvest_percent: localStrategy.reinvest_percent,
+    isDirty: true,
+  };
+};
+
 const parseStrategy = (raw: any): DDStrategy => {
   const readBoolean = (value: any, fallback: boolean): boolean => {
     if (value === undefined || value === null) {
@@ -859,6 +913,13 @@ const parseStrategy = (raw: any): DDStrategy => {
             ? 'synthetic'
             : (String(raw?.quote_symbol || '').trim() ? 'synthetic' : 'mono');
 
+  const strategyType: StrategyKind = String(raw?.strategy_type || 'DD_BattleToads') === 'zz_breakout'
+    ? 'zz_breakout'
+    : String(raw?.strategy_type || 'DD_BattleToads') === 'stat_arb_zscore'
+      ? 'stat_arb_zscore'
+      : 'DD_BattleToads';
+  const strategyDefaults = getStrategyUiDefaults(strategyType);
+
   const normalizedQuoteSymbol = inferredMarketMode === 'mono'
     ? ''
     : String(raw?.quote_symbol || 'ETHUSDT').toUpperCase();
@@ -866,17 +927,13 @@ const parseStrategy = (raw: any): DDStrategy => {
   return {
     id: Number(raw?.id || 0),
     name: String(raw?.name || 'DD_BattleToads'),
-    strategy_type: String(raw?.strategy_type || 'DD_BattleToads') === 'zz_breakout'
-      ? 'zz_breakout'
-      : String(raw?.strategy_type || 'DD_BattleToads') === 'stat_arb_zscore'
-        ? 'stat_arb_zscore'
-        : 'DD_BattleToads',
+    strategy_type: strategyType,
     market_mode: inferredMarketMode,
     is_active: readBoolean(raw?.is_active, true),
     display_on_chart: readBoolean(raw?.display_on_chart, true),
-    take_profit_percent: readNumber(raw?.take_profit_percent, 7.5),
-    price_channel_length: Math.max(2, Math.floor(readNumber(raw?.price_channel_length, 50))),
-    detection_source: String(raw?.detection_source || 'close') === 'wick' ? 'wick' : 'close',
+    take_profit_percent: readNumber(raw?.take_profit_percent, strategyDefaults.takeProfitPercent),
+    price_channel_length: Math.max(2, Math.floor(readNumber(raw?.price_channel_length, strategyDefaults.channelLength))),
+    detection_source: String(raw?.detection_source || strategyDefaults.detectionSource) === 'wick' ? 'wick' : 'close',
     base_symbol: String(raw?.base_symbol || 'BTCUSDT').toUpperCase(),
     quote_symbol: normalizedQuoteSymbol,
     interval: String(raw?.interval || '1h'),
@@ -909,6 +966,7 @@ const parseStrategy = (raw: any): DDStrategy => {
     is_runtime: readBoolean(raw?.is_runtime, false),
     is_archived: readBoolean(raw?.is_archived, false),
     origin: String(raw?.origin || 'manual'),
+    isDirty: false,
   };
 };
 
@@ -1255,13 +1313,30 @@ const Dashboard: React.FC = () => {
     }
 
     try {
-      const res = await axios.get(`/api/trades/${keyName}`, {
+      const res = await axios.get(`/api/strategy-trades/${keyName}`, {
         params: {
-          limit: 240,
+          limit: 1000,
+          days: 90,
         },
       });
 
-      const payload = Array.isArray(res.data) ? res.data : [];
+      const raw = Array.isArray(res.data) ? res.data : [];
+      const payload: TradeHistoryRow[] = raw.map((row: any) => ({
+        tradeId: String(row.id || ''),
+        orderId: String(row.strategyId || ''),
+        symbol: String(row.symbol || ''),
+        side: (row.tradeType === 'entry'
+          ? (row.side === 'long' ? 'Buy' : 'Sell')
+          : (row.side === 'long' ? 'Sell' : 'Buy')) as 'Buy' | 'Sell',
+        price: String(row.price || '0'),
+        qty: String(row.qty || '0'),
+        notional: String(Number(row.price || 0) * Number(row.qty || 0)),
+        fee: String(row.fee || '0'),
+        feeCurrency: 'USDT',
+        realizedPnl: '0',
+        isMaker: false,
+        timestamp: String(row.timestamp || '0'),
+      }));
       setTradesByKey((prev) => ({ ...prev, [keyName]: payload }));
     } catch (error) {
       if (options?.silent !== true) {
@@ -1443,7 +1518,12 @@ const Dashboard: React.FC = () => {
       const totalHeader = Number(res.headers?.['x-total-count']);
       const total = Number.isFinite(totalHeader) && totalHeader >= 0 ? totalHeader : payload.length;
 
-      setStrategiesByKey((prev) => ({ ...prev, [keyName]: payload }));
+      setStrategiesByKey((prev) => {
+        const currentList = prev[keyName] || [];
+        const currentById = new Map(currentList.map((item) => [Number(item.id), item]));
+        const mergedPayload = payload.map((item) => mergeDirtyStrategyWithServer(item, currentById.get(Number(item.id))));
+        return { ...prev, [keyName]: mergedPayload };
+      });
       setStrategiesTotalByKey((prev) => ({ ...prev, [keyName]: total }));
       setFullStrategiesLoadedByKey((prev) => ({ ...prev, [keyName]: full || payload.length >= total }));
       setStrategyRenderLimitByKey((prev) => {
@@ -1527,7 +1607,7 @@ const Dashboard: React.FC = () => {
         const list = prev[keyName] || [];
         return {
           ...prev,
-          [keyName]: list.map((strategy) => (strategy.id === strategyId ? { ...strategy, ...detailed } : strategy)),
+          [keyName]: list.map((strategy) => (strategy.id === strategyId ? mergeDirtyStrategyWithServer(detailed, strategy) : strategy)),
         };
       });
 
@@ -1571,7 +1651,11 @@ const Dashboard: React.FC = () => {
       const list = prev[keyName] || [];
       return {
         ...prev,
-        [keyName]: list.map((strategy) => (strategy.id === strategyId ? { ...strategy, ...patch } : strategy)),
+        [keyName]: list.map((strategy) => (
+          strategy.id === strategyId
+            ? { ...strategy, ...patch, isDirty: patch.isDirty ?? true }
+            : strategy
+        )),
       };
     });
   };
@@ -1581,6 +1665,7 @@ const Dashboard: React.FC = () => {
     const settings = chartSettings[keyName] || defaultChartSetting();
 
     const strategyType = newSetStrategyTypeByKey[keyName] || 'DD_BattleToads';
+    const newStrategyDefaults = getStrategyUiDefaults(strategyType);
     const name = (newStrategyNameByKey[keyName] || '').trim() || strategyType;
 
     try {
@@ -1598,9 +1683,9 @@ const Dashboard: React.FC = () => {
         show_trades_on_chart: false,
         show_values_each_bar: false,
         auto_update: true,
-        take_profit_percent: 7.5,
-        price_channel_length: 50,
-        detection_source: 'close',
+        take_profit_percent: newStrategyDefaults.takeProfitPercent,
+        price_channel_length: newStrategyDefaults.channelLength,
+        detection_source: newStrategyDefaults.detectionSource,
         base_symbol: strategyBinding.base,
         quote_symbol: strategyBinding.quote,
         interval: strategyBinding.interval,
@@ -1728,7 +1813,7 @@ const Dashboard: React.FC = () => {
         throw new Error(`Unexpected strategy id in response: expected ${strategyId}, got ${updated.id}`);
       }
 
-      updateStrategyDraft(keyName, strategyId, updated);
+      updateStrategyDraft(keyName, strategyId, { ...updated, isDirty: false });
       await fetchStrategies(keyName, { silent: true });
       message.success(`Strategy ${strategyToSave.name} saved`);
     } catch (error: any) {
@@ -3256,10 +3341,13 @@ const Dashboard: React.FC = () => {
                                               />
                                             </Form.Item>
 
-                                            <Form.Item label="Take-profit %">
+                                            <Form.Item
+                                              label="Take-profit %"
+                                              extra={strategy.strategy_type === 'stat_arb_zscore' ? '0 = TP disabled for stat-arb' : undefined}
+                                            >
                                               <InputNumber
                                                 value={strategy.take_profit_percent}
-                                                min={0.1}
+                                                min={0}
                                                 max={200}
                                                 step={0.1}
                                                 style={{ width: '100%' }}

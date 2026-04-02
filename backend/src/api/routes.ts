@@ -2560,6 +2560,35 @@ router.get('/orders/:apiKeyName', async (req, res) => {
   }
 });
 
+router.get('/strategy-trades/:apiKeyName', async (req, res) => {
+  const { apiKeyName } = req.params;
+  const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 500));
+  const days = Math.min(365, Math.max(1, Number(req.query.days) || 90));
+
+  try {
+    const cutoffMs = Date.now() - days * 86400000;
+    const rows = await db.all(
+      `SELECT lte.id, lte.strategy_id AS strategyId, lte.trade_type AS tradeType,
+              lte.side, lte.source_symbol AS symbol, lte.actual_price AS price,
+              lte.position_size AS qty, lte.actual_time AS timestamp,
+              lte.actual_fee AS fee
+       FROM live_trade_events lte
+       JOIN strategies s ON s.id = lte.strategy_id
+       JOIN api_keys a ON a.id = s.api_key_id
+       WHERE a.name = ? AND lte.actual_time >= ?
+       ORDER BY lte.actual_time DESC
+       LIMIT ?`,
+      [apiKeyName, cutoffMs, limit]
+    );
+
+    res.json(Array.isArray(rows) ? rows : []);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading strategy trades for ${apiKeyName}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/trades/:apiKeyName', async (req, res) => {
   const { apiKeyName } = req.params;
   const symbol = req.query.symbol ? String(req.query.symbol) : undefined;
