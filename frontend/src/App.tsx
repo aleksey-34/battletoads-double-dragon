@@ -16,6 +16,7 @@ import Logs from './pages/Logs';
 import Research from './pages/Research';
 import SaaS from './pages/SaaS';
 import AdminDocs from './pages/AdminDocs';
+import Landing from './pages/Landing';
 import { I18nProvider, useI18n, UILanguage } from './i18n';
 import './App.css';
 
@@ -322,7 +323,11 @@ function AppWithProviders() {
   return (
     <ConfigProvider locale={antdLocale}>
       <Router future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-        <AppShell />
+        <Routes>
+          <Route path="/" element={<Landing />} />
+          <Route path="/landing" element={<Landing />} />
+          <Route path="*" element={<AppShell />} />
+        </Routes>
       </Router>
     </ConfigProvider>
   );
