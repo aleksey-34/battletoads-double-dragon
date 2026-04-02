@@ -3318,7 +3318,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       .map((item) => item.key)
       .filter(Boolean);
 
+    // Only include the snapshot's systemName when the snapshot key itself wouldn't appear
+    // on the storefront (avoids duplicate cards for ts-curated-* entries whose key already passes).
     const snapshotMasterSystemNames = snapshotEntries
+      .filter((item) => {
+        const key = String(item.key || '').trim();
+        if (!key) return true;
+        const lower = key.toLowerCase();
+        // key already qualifies as storefront name → don't duplicate via systemName
+        if (key.toUpperCase().startsWith('ALGOFUND_MASTER::') || lower.startsWith('ts-')) return false;
+        return true;
+      })
       .map((item) => String(item.snapshot?.systemName || '').trim())
       .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::'));
 

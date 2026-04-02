@@ -12,6 +12,8 @@ type ApiKey = {
   id: number;
   name: string;
   exchange: string;
+  tenantDisplayName?: string;
+  tenantProductMode?: string;
 };
 
 type KeyStatus = {
@@ -2501,6 +2503,7 @@ const Dashboard: React.FC = () => {
       label: (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span>{key.name} ({key.exchange})</span>
+          {key.tenantDisplayName ? <Tag color={key.tenantProductMode === 'algofund_client' ? 'purple' : key.tenantProductMode === 'strategy_client' ? 'cyan' : 'default'}>{key.tenantDisplayName}{key.tenantProductMode === 'algofund_client' ? ' · Алгофонд' : key.tenantProductMode === 'strategy_client' ? ' · Стратегии' : ''}</Tag> : <Tag color='default'>без привязки</Tag>}
           <StatusIndicator status={keyStatus.status} message={keyStatus.message} />
           <span style={{ fontSize: 12, color: '#666666' }}>API: {keyStatusText}</span>
           <Tag color="blue">sets: {keyStrategiesTotal}</Tag>
@@ -3733,31 +3736,37 @@ const Dashboard: React.FC = () => {
                                                     {orderedPairRows.length > 0
                                                       ? orderedPairRows.map(({ symbol, position }) => {
                                                         const sideRaw = String(position?.side || '').toLowerCase();
-                                                        const sideLabel = sideRaw === 'buy' ? 'LONG' : sideRaw === 'sell' ? 'SHORT' : '-';
+                                                        const sideLabel = sideRaw === 'buy' ? 'LONG' : sideRaw === 'sell' ? 'SHORT' : 'FLAT';
                                                         const sideTagColor = sideRaw === 'buy' ? 'green' : sideRaw === 'sell' ? 'red' : 'default';
+                                                        const sideBg = sideRaw === 'buy' ? 'rgba(22,163,74,0.08)' : sideRaw === 'sell' ? 'rgba(220,38,38,0.08)' : 'transparent';
                                                         const pnlRaw = Number(position?.unrealisedPnl);
                                                         const pnlColor = pnlRaw > 0 ? '#16a34a' : pnlRaw < 0 ? '#dc2626' : '#6b7280';
-                                                        const sizeText = position ? formatCompactNumber(position?.size, 6) : '0';
+                                                        const sizeRaw = Number(position?.size || 0);
+                                                        const sizeText = position ? formatCompactNumber(sizeRaw, 6) : '0';
+                                                        const markPriceRaw = Number(position?.markPrice ?? position?.avgPrice ?? 0);
+                                                        const sizeUsdt = Math.abs(sizeRaw) * markPriceRaw;
                                                         const entryRaw = Number(position?.avgPrice ?? position?.entryPrice);
                                                         const entryText = position && Number.isFinite(entryRaw)
                                                           ? formatCompactNumber(entryRaw, 6)
                                                           : '-';
-                                                        const liqText = position
-                                                          ? (Number.isFinite(Number(position?.liqPrice)) ? formatCompactNumber(position?.liqPrice, 6) : '-')
+                                                        const liqRaw = Number(position?.liqPrice);
+                                                        const liqText = position && Number.isFinite(liqRaw) && liqRaw > 0
+                                                          ? formatCompactNumber(liqRaw, 6)
                                                           : '-';
                                                         return (
                                                           <div
                                                             key={symbol}
-                                                            style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}
+                                                            style={{ marginTop: 4, display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', padding: '3px 6px', borderRadius: 4, background: sideBg }}
                                                           >
+                                                            <Tag color={sideTagColor} style={{ fontWeight: 600 }}>{sideLabel}</Tag>
                                                             <Tag color="blue">{symbol}</Tag>
-                                                            <span>position {sizeText}</span>
+                                                            <span>{sizeText} coin</span>
+                                                            <span style={{ color: '#6b7280' }}>≈ {Number.isFinite(sizeUsdt) && sizeUsdt > 0 ? formatCompactNumber(sizeUsdt, 2) : '-'} USDT</span>
                                                             <span>entry {entryText}</span>
-                                                            <Tag color={sideTagColor}>{sideLabel}</Tag>
-                                                            <span style={{ color: pnlColor }}>
-                                                              UPnL {position ? (Number.isFinite(pnlRaw) ? formatCompactNumber(pnlRaw, 6) : '-') : '0'}
+                                                            <span style={{ color: pnlColor, fontWeight: 600 }}>
+                                                              UPnL {position ? (Number.isFinite(pnlRaw) ? formatCompactNumber(pnlRaw, 4) : '-') : '0'} USDT
                                                             </span>
-                                                            <span>liq {liqText}</span>
+                                                            <span style={{ color: liqText !== '-' ? '#d97706' : '#6b7280' }}>liq {liqText}</span>
                                                           </div>
                                                         );
                                                       })

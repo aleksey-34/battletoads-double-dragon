@@ -21,8 +21,8 @@ const { Title, Paragraph, Text } = Typography;
 const METRICS = [
   { value: '9 108', label: 'бектестов прогнано', sub: 'исторический sweep' },
   { value: '3 129', label: 'робастных кандидатов', sub: 'прошли robustness-фильтр' },
-  { value: '+28.7%', label: 'доходность портфеля', sub: 'full-range, 4h, 2025–2026' },
-  { value: '3.28', label: 'Profit Factor', sub: 'на 416 сделках в портфеле' },
+  { value: '+28.7%', label: 'средняя доходность', sub: 'по площадке, 2025–2026' },
+  { value: '3.28', label: 'Profit Factor', sub: 'средний по портфелям' },
   { value: '4.4%', label: 'макс. просадка', sub: 'портфельная DD' },
   { value: '6 бирж', label: 'подключено', sub: 'Bybit · Binance · Bitget + ещё' },
 ];
@@ -33,21 +33,21 @@ const STRATEGIES = [
     name: 'DoubleDragon Breakout',
     code: 'DD_BattleToads',
     desc: 'Пробой канала Дончиана с трейлинговым TP. Работает на mono и synthetic парах. Ловит направленный импульс и удерживает тренд.',
-    tags: ['mono', 'synthetic', 'trend-following'],
+    tags: ['классика', 'арбитраж', 'trend-following'],
   },
   {
     icon: <LineChartOutlined style={{ fontSize: 28, color: '#52c41a' }} />,
     name: 'StatArb Z-Score',
     code: 'stat_arb_zscore',
     desc: 'Возврат к среднему по Z-счёту на синтетическом инструменте. Торгует схождение/расхождение двух связанных активов.',
-    tags: ['synthetic', 'mean-reversion', 'stat-arb'],
+    tags: ['арбитраж', 'mean-reversion', 'stat-arb'],
   },
   {
     icon: <BarChartOutlined style={{ fontSize: 28, color: '#1677ff' }} />,
     name: 'ZigZag Breakout',
     code: 'zz_breakout',
     desc: 'Структурный пробой с Дончианом. Оптимален при смене рыночного режима и резких направленных движениях.',
-    tags: ['mono', 'synthetic', 'breakout'],
+    tags: ['классика', 'арбитраж', 'breakout'],
   },
 ];
 
@@ -55,19 +55,19 @@ const CLIENT_MODES = [
   {
     icon: <TeamOutlined style={{ fontSize: 32, color: '#1677ff' }} />,
     title: 'Алгофонд',
-    desc: 'Клиент отдаёт депозит под управление. Видит единую торговую систему, эквити-кривую, статистику. Подаёт заявки на старт/стоп. Никакой лишней сложности.',
+    desc: 'Простое безопасное API-подключение — средства всегда остаются на вашей бирже. Никаких переводов. Подключаете ключ, платформа торгует за вас. Пассивный доход без лишней сложности.',
     highlight: true,
   },
   {
     icon: <RocketOutlined style={{ fontSize: 32, color: '#52c41a' }} />,
     title: 'Стратег',
-    desc: 'Продвинутый пользователь. Подключает свои API-ключи биржи, выбирает стратегии из каталога, настраивает риск-профиль и запускает автоторговлю в рамках выбранного тарифа.',
+    desc: 'Для тех кто хочет разобраться глубже. Подключите API-ключ, выберите отдельные стратегии из каталога и соберите собственную торговую систему в пару кликов.',
     highlight: false,
   },
   {
     icon: <CopyOutlined style={{ fontSize: 32, color: '#f5a623' }} />,
     title: 'Копитрейдинг',
-    desc: 'Подключается к готовой торговой системе другого подписчика. Автоматически повторяет сделки ведущего трейдера с настройкой риска под свой размер депозита.',
+    desc: '1 API‑ключ — и несколько копируемых аккаунтов. Торгуете своим софтом — поделитесь с друзьями. Без лишней мороки как на биржах.',
     highlight: false,
   },
 ];
@@ -94,12 +94,12 @@ const CIRCUITS = [
 ];
 
 const EXCHANGES = [
-  { name: 'Bybit', status: 'live', note: 'primary' },
-  { name: 'Binance', status: 'live', note: 'ccxt' },
-  { name: 'Bitget', status: 'live', note: 'ccxt' },
-  { name: 'BingX', status: 'live', note: 'ccxt' },
-  { name: 'MEXC', status: 'live', note: 'ccxt' },
-  { name: 'Weex', status: 'live', note: 'native' },
+  { name: 'Bybit', status: 'live', note: 'primary', ref: 'https://www.bybit.com/invite?ref=BTDD' },
+  { name: 'Binance', status: 'live', note: 'ccxt', ref: 'https://accounts.binance.com/register?ref=BTDD' },
+  { name: 'Bitget', status: 'live', note: 'ccxt', ref: 'https://www.bitget.com/referral/register?clacCode=BTDD' },
+  { name: 'BingX', status: 'live', note: 'ccxt', ref: 'https://bingx.com/invite/BTDD' },
+  { name: 'MEXC', status: 'live', note: 'ccxt', ref: 'https://www.mexc.com/register?inviteCode=BTDD' },
+  { name: 'Weex', status: 'live', note: 'native', ref: 'https://www.weex.com/register?ref=BTDD' },
 ];
 
 const styles: Record<string, React.CSSProperties> = {
@@ -310,8 +310,8 @@ export default function Landing() {
         </Space>
         <div style={{ marginTop: 20 }}>
           <Tag color="green" style={{ fontSize: 12 }}>6 бирж · All Live</Tag>
-          <Tag color="default" style={{ fontSize: 12 }}>4h timeframe</Tag>
-          <Tag color="default" style={{ fontSize: 12 }}>mono + synthetic</Tag>
+          <Tag color="default" style={{ fontSize: 12 }}>Мульти таймфрейм</Tag>
+          <Tag color="default" style={{ fontSize: 12, cursor: 'help' }} title="Классика — торговля одним инструментом. Арбитраж — синтетические пары из двух активов для снижения рыночного риска.">классика + арбитраж ⓘ</Tag>
           <Tag color="blue" style={{ fontSize: 12 }}>Multi-tenant SaaS</Tag>
         </div>
       </section>
@@ -412,7 +412,7 @@ export default function Landing() {
             Доказанная методология
           </div>
           <div style={{ ...styles.sectionSub, marginBottom: 36 }}>
-            Портфельный бэктест: 6 стратегий IPUSDT/ZECUSDT, full-range 2025–2026
+            Средние показатели по площадке на основе 9 108 бектестов, 2025–2026
           </div>
           <div style={{
             display: 'grid',
@@ -420,9 +420,9 @@ export default function Landing() {
             gap: 16,
           }}>
             {[
-              { label: 'Стратегий в портфеле', value: '6', note: 'DD + ZZ, synthetic' },
-              { label: 'Период', value: '15+ мес', note: '4h bars, 2025–2026' },
-              { label: 'Доходность', value: '+28.7%', note: 'full-range' },
+              { label: 'Типов стратегий', value: '3', note: 'DD + ZZ + StatArb' },
+              { label: 'Период', value: '15+ мес', note: 'мульти ТФ, 2025–2026' },
+              { label: 'Ср. доходность', value: '+28.7%', note: 'по портфелям площадки' },
               { label: 'Profit Factor', value: '3.28', note: '>3.0 = превосходно' },
               { label: 'Max Drawdown', value: '4.4%', note: 'портфельная' },
               { label: 'Сделок', value: '416', note: 'Win Rate 43.75%' },
@@ -457,19 +457,21 @@ export default function Landing() {
         </div>
         <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'center' }}>
           {EXCHANGES.map((ex) => (
-            <div key={ex.name} style={{
+            <a key={ex.name} href={ex.ref} target="_blank" rel="noopener noreferrer" style={{
               background: 'rgba(82,196,26,0.07)',
               border: '1px solid rgba(82,196,26,0.28)',
               borderRadius: 12,
               padding: '16px 24px',
               minWidth: 110,
+              textDecoration: 'none',
+              transition: 'transform 0.2s',
             }}>
               <div style={{ fontSize: 16, fontWeight: 700, color: '#73d13d' }}>
                 {ex.name}
               </div>
               <Tag color="green" style={{ marginTop: 6, fontSize: 10 }}>✓ LIVE</Tag>
-              <div style={{ fontSize: 10, color: '#445566', marginTop: 4 }}>{ex.note}</div>
-            </div>
+              <div style={{ fontSize: 10, color: '#445566', marginTop: 4 }}>Регистрация →</div>
+            </a>
           ))}
         </div>
       </div>

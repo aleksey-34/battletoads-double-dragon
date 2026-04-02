@@ -1368,7 +1368,21 @@ router.use('/analytics', analyticsRoutes);
 router.get('/api-keys', async (req, res) => {
   try {
     const { apiKeys } = await loadSettings();
-    res.json(apiKeys);
+    // Enrich with tenant info for Dashboard labels
+    const tenantMapping = await db.all(
+      `SELECT t.display_name, t.product_mode, COALESCE(t.assigned_api_key_name, '') AS api_key_name
+       FROM tenants t WHERE t.status != 'deleted'`
+    ).catch(() => []) as Array<{ display_name: string; product_mode: string; api_key_name: string }>;
+    const tenantByApiKey = new Map<string, { displayName: string; productMode: string }>();
+    for (const row of tenantMapping) {
+      const key = String(row.api_key_name || '').trim();
+      if (key) tenantByApiKey.set(key, { displayName: row.display_name, productMode: row.product_mode });
+    }
+    const enriched = apiKeys.map((k: any) => {
+      const tenant = tenantByApiKey.get(String(k.name || ''));
+      return tenant ? { ...k, tenantDisplayName: tenant.displayName, tenantProductMode: tenant.productMode } : k;
+    });
+    res.json(enriched);
   } catch (error) {
     const err = error as Error;
     logger.error(`Error loading API keys: ${err.message}`);
