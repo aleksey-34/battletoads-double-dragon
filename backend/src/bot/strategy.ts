@@ -14,6 +14,40 @@ import { calculateSyntheticOHLC } from './synthetic';
 import { recordLiveTradeEvent } from '../analytics/liveReconciliation';
 import logger from '../utils/logger';
 
+// ── Market data cache for auto-strategy cycle ────────────────────────────────
+// Avoids re-fetching the same symbol+interval when multiple strategies share them.
+// TTL = 25s (auto cycle runs every 30s, so stale data is refreshed next cycle).
+const CANDLE_CACHE_TTL_MS = 25_000;
+interface CandleCacheEntry { data: any[]; fetchedAt: number; }
+const candleAutoCache = new Map<string, CandleCacheEntry>();
+
+const getCachedMarketData = async (
+  apiKeyName: string, symbol: string, interval: string, limit: number,
+  options?: { startMs?: number; endMs?: number },
+): Promise<any[]> => {
+  // Only cache when no custom time range (standard auto-cycle fetch)
+  if (options?.startMs || options?.endMs) {
+    return getMarketData(apiKeyName, symbol, interval, limit, options);
+  }
+  const key = `${apiKeyName}:${symbol}:${interval}:${limit}`;
+  const cached = candleAutoCache.get(key);
+  if (cached && Date.now() - cached.fetchedAt < CANDLE_CACHE_TTL_MS) {
+    return cached.data;
+  }
+  const data = await getMarketData(apiKeyName, symbol, interval, limit, options);
+  const arr = Array.isArray(data) ? data : [];
+  candleAutoCache.set(key, { data: arr, fetchedAt: Date.now() });
+  return arr;
+};
+
+// Periodic cleanup to prevent memory growth
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of candleAutoCache) {
+    if (now - v.fetchedAt > CANDLE_CACHE_TTL_MS * 2) candleAutoCache.delete(k);
+  }
+}, 60_000);
+
 type StrategySignal = 'long' | 'short' | 'none';
 
 type StrategyDraft = Partial<Strategy> & {
@@ -364,7 +398,7 @@ const loadStrategyCandles = async (
   const marketMode = normalizeMarketMode(strategy.market_mode);
 
   if (marketMode === 'mono') {
-    const raw = await getMarketData(
+    const raw = await getCachedMarketData(
       apiKeyName,
       strategy.base_symbol,
       strategy.interval,

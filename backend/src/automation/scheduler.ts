@@ -5,6 +5,10 @@ import { recordMonitoringSnapshot } from '../bot/monitoring';
 import { runReconciliationForApiKey } from './reconciliationEngine';
 import { runLiquidityScanForApiKey } from './liquidityScanner';
 
+// Maximum concurrency for parallel API key operations.
+// Keeps total API load manageable while still being faster than sequential.
+const MONITORING_CONCURRENCY = 4;
+
 const loadApiKeysWithActiveStrategies = async (): Promise<string[]> => {
   const rows = await db.all(
     `SELECT DISTINCT a.name
@@ -43,14 +47,27 @@ export const runMonitoringCycle = async (): Promise<{ processed: number; failed:
   let processed = 0;
   let failed = 0;
 
+  // Ensure all clients initialized first (lightweight, idempotent)
   for (const apiKeyName of apiKeys) {
-    try {
-      await ensureExchangeClientInitialized(apiKeyName);
-      await recordMonitoringSnapshot(apiKeyName);
-      processed += 1;
-    } catch (error) {
-      failed += 1;
-      logger.warn(`Monitoring cycle failed for ${apiKeyName}: ${(error as Error).message}`);
+    try { await ensureExchangeClientInitialized(apiKeyName); } catch { /* skip */ }
+  }
+
+  // Process in parallel batches of MONITORING_CONCURRENCY
+  for (let i = 0; i < apiKeys.length; i += MONITORING_CONCURRENCY) {
+    const batch = apiKeys.slice(i, i + MONITORING_CONCURRENCY);
+    const results = await Promise.allSettled(
+      batch.map(async (apiKeyName) => {
+        await recordMonitoringSnapshot(apiKeyName);
+        return apiKeyName;
+      }),
+    );
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        processed += 1;
+      } else {
+        failed += 1;
+        logger.warn(`Monitoring cycle failed for batch item: ${(r.reason as Error)?.message}`);
+      }
     }
   }
 
