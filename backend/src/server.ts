@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import routes from './api/routes';
 import researchRoutes from './api/researchRoutes';
+import razgonRoutes from './razgon/razgonRoutes';
 import { initDB, getDbFilePath } from './utils/database';
 import logger from './utils/logger';
 import { runAutoStrategiesCycle } from './bot/strategy';
@@ -16,6 +17,7 @@ app.use(cors());
 app.use(express.json());
 app.use('/api', routes);
 app.use('/api/research', researchRoutes);
+app.use('/api/razgon', razgonRoutes);
 
 import { loadSettings } from './config/settings';
 import { initExchangeClient } from './bot/exchange';
