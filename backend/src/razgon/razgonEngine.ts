@@ -130,18 +130,31 @@ export async function startRazgon(cfg: RazgonConfig): Promise<{ ok: boolean; err
 
     // Start loops
     if (cfg.momentum.enabled) {
-      momentumTimer = setInterval(
-        () => momentumTick().catch(err => logger.error(`[Razgon:Momentum] ${err.message}`)),
-        cfg.momentum.tickIntervalSec * 1000,
-      );
+      let momentumBusy = false;
+      momentumTimer = setInterval(() => {
+        if (momentumBusy) { logger.debug('[Razgon:Momentum] skip tick — previous still running'); return; }
+        momentumBusy = true;
+        const deadline = setTimeout(() => {
+          logger.warn('[Razgon:Momentum] tick timed out (30s), resetting busy flag');
+          momentumBusy = false;
+        }, 30_000);
+        momentumTick()
+          .catch(err => logger.error(`[Razgon:Momentum] ${err.message}`))
+          .finally(() => { clearTimeout(deadline); momentumBusy = false; });
+      }, cfg.momentum.tickIntervalSec * 1000);
       logger.info(`[Razgon] Momentum scalping started (${cfg.momentum.tickIntervalSec}s tick)`);
     }
 
     if (cfg.sniper.enabled) {
-      sniperTimer = setInterval(
-        () => sniperTick().catch(err => logger.error(`[Razgon:Sniper] ${err.message}`)),
-        cfg.sniper.scanIntervalSec * 1000,
-      );
+      let sniperBusy = false;
+      sniperTimer = setInterval(() => {
+        if (sniperBusy) return;
+        sniperBusy = true;
+        const deadline = setTimeout(() => { sniperBusy = false; }, 60_000);
+        sniperTick()
+          .catch(err => logger.error(`[Razgon:Sniper] ${err.message}`))
+          .finally(() => { clearTimeout(deadline); sniperBusy = false; });
+      }, cfg.sniper.scanIntervalSec * 1000);
       logger.info(`[Razgon] Listing sniper started (${cfg.sniper.scanIntervalSec}s scan)`);
     }
 
@@ -206,10 +219,8 @@ async function momentumTick(): Promise<void> {
   const cfg = config.momentum;
   momentumTickCount++;
 
-  // Log every 60 ticks (~5 min) for visibility
-  if (momentumTickCount % 60 === 1) {
-    logger.info(`[Razgon:Momentum] tick #${momentumTickCount} | balance=$${balance.toFixed(2)} | openPos=${openPositions.length} | watchlist=${cfg.watchlist.length} symbols`);
-  }
+  // Log every tick for diagnosing (can reduce to % 12 later = every 1 min)
+  logger.info(`[Razgon:Momentum] tick #${momentumTickCount} | bal=$${balance.toFixed(2)} | pos=${openPositions.length} | symbols=${cfg.watchlist.length}`);
 
   // Check & manage existing positions first
   await checkMomentumExits();
@@ -269,8 +280,8 @@ async function checkMomentumEntryFromCandles(symbol: string, candles: Candle1m[]
     cfg.atrFilterMin,
   );
 
-  // Log signal check for diagnostics (every 60 ticks per symbol)
-  if (momentumTickCount % 60 === 1) {
+  // Log signal check for diagnostics
+  if (result.signal !== 'none' || momentumTickCount % 12 === 1) {
     logger.info(`[Razgon:Momentum] ${symbol} signal=${result.signal} price=${latestCandle.close} candles=${candles.length}`);
   }
 
