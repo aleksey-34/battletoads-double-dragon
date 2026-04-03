@@ -10,6 +10,7 @@ import {
   getAllSymbols,
   applySymbolRiskSettings,
   initExchangeClient,
+  batchGetMarketData,
 } from '../bot/exchange';
 import { RazgonRiskManager } from './razgonRisk';
 import { computeMomentumSignal } from './razgonStrategy';
@@ -220,22 +221,32 @@ async function momentumTick(): Promise<void> {
   const momPositions = openPositions.filter(p => p.subStrategy === 'momentum');
   if (momPositions.length >= cfg.maxConcurrentPositions) return;
 
-  // Batch-fetch all watchlist candles in parallel, then check signals
+  // Batch-fetch all watchlist candles in parallel via exchange batch utility
   const candidates = cfg.watchlist.filter(
     sym => !openPositions.some(p => p.symbol === sym),
   );
   const minBars = Math.max(cfg.donchianPeriod, 21) + 5;
-  const batchResults = await Promise.allSettled(
-    candidates.map(sym => fetchAndCache1mCandles(sym, minBars).then(candles => ({ sym, candles }))),
-  );
+  const batchResults = await batchGetMarketData(config.apiKeyName, candidates, '1m', minBars + 5, 8000);
 
-  for (const r of batchResults) {
-    if (momPositions.length + openPositions.filter(p => p.subStrategy === 'momentum').length >= cfg.maxConcurrentPositions) break;
-    if (r.status !== 'fulfilled' || !r.value.candles.length) continue;
+  // Update candle cache from batch results
+  for (const br of batchResults) {
+    if (br.candles.length > 0) {
+      const parsed: Candle1m[] = br.candles.map((c: any) => ({
+        timeMs: Number(c[0] ?? 0), open: Number(c[1] ?? 0), high: Number(c[2] ?? 0),
+        low: Number(c[3] ?? 0), close: Number(c[4] ?? 0), volume: Number(c[5] ?? 0),
+      }));
+      candleCache.set(br.symbol, parsed.slice(-MAX_CANDLE_CACHE));
+    }
+  }
+
+  for (const br of batchResults) {
+    if (openPositions.filter(p => p.subStrategy === 'momentum').length >= cfg.maxConcurrentPositions) break;
+    const candles = candleCache.get(br.symbol);
+    if (!candles || candles.length < cfg.donchianPeriod) continue;
     try {
-      await checkMomentumEntryFromCandles(r.value.sym, r.value.candles);
+      await checkMomentumEntryFromCandles(br.symbol, candles);
     } catch (e) {
-      logger.debug(`[Razgon:Momentum] Signal check failed for ${r.value.sym}: ${(e as Error).message}`);
+      logger.debug(`[Razgon:Momentum] Signal check failed for ${br.symbol}: ${(e as Error).message}`);
     }
   }
 }

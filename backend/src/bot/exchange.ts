@@ -2275,3 +2275,106 @@ export const closeAllPositions = async (apiKeyName: string) => {
 
   return { closed: actionable.length };
 };
+
+// ─── Batch Utilities ─────────────────────────────────────────────────────────
+// Parallel fetch with per-item timeout, respecting existing Bottleneck limiter.
+// All biržas are per-symbol (no native batch), so we parallelize at app level.
+
+export interface BatchMarketDataResult {
+  symbol: string;
+  candles: any[];
+  error?: string;
+}
+
+/**
+ * Fetch OHLCV candles for multiple symbols in parallel.
+ * Each individual fetch is protected by an 8s timeout + the per-key Bottleneck limiter.
+ * Failed/timed-out symbols return empty candles (graceful degradation).
+ */
+export const batchGetMarketData = async (
+  apiKeyName: string,
+  symbols: string[],
+  interval: string,
+  limit: number,
+  timeoutMs: number = 8000,
+): Promise<BatchMarketDataResult[]> => {
+  const results = await Promise.allSettled(
+    symbols.map(async (symbol): Promise<BatchMarketDataResult> => {
+      const candles = await Promise.race([
+        getMarketData(apiKeyName, symbol, interval, limit),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('batch fetch timeout')), timeoutMs),
+        ),
+      ]);
+      return { symbol, candles: Array.isArray(candles) ? candles : [] };
+    }),
+  );
+
+  return results.map((r, i) => {
+    if (r.status === 'fulfilled') return r.value;
+    return { symbol: symbols[i], candles: [], error: (r.reason as Error)?.message || 'unknown' };
+  });
+};
+
+export interface BatchPositionsResult {
+  apiKeyName: string;
+  positions: any[];
+  error?: string;
+}
+
+/**
+ * Fetch positions for multiple API keys in parallel.
+ * Useful for monitoring loops that scan all client accounts.
+ */
+export const batchGetPositions = async (
+  apiKeyNames: string[],
+  timeoutMs: number = 10000,
+): Promise<BatchPositionsResult[]> => {
+  const results = await Promise.allSettled(
+    apiKeyNames.map(async (name): Promise<BatchPositionsResult> => {
+      const positions = await Promise.race([
+        getPositions(name),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('positions fetch timeout')), timeoutMs),
+        ),
+      ]);
+      return { apiKeyName: name, positions };
+    }),
+  );
+
+  return results.map((r, i) => {
+    if (r.status === 'fulfilled') return r.value;
+    return { apiKeyName: apiKeyNames[i], positions: [], error: (r.reason as Error)?.message || 'unknown' };
+  });
+};
+
+export interface BatchBalancesResult {
+  apiKeyName: string;
+  balances: any[];
+  error?: string;
+}
+
+/**
+ * Fetch balances for multiple API keys in parallel.
+ */
+export const batchGetBalances = async (
+  apiKeyNames: string[],
+  timeoutMs: number = 10000,
+): Promise<BatchBalancesResult[]> => {
+  const results = await Promise.allSettled(
+    apiKeyNames.map(async (name): Promise<BatchBalancesResult> => {
+      const balances = await Promise.race([
+        getBalances(name),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('balances fetch timeout')), timeoutMs),
+        ),
+      ]);
+      return { apiKeyName: name, balances };
+    }),
+  );
+
+  return results.map((r, i) => {
+    if (r.status === 'fulfilled') return r.value;
+    return { apiKeyName: apiKeyNames[i], balances: [], error: (r.reason as Error)?.message || 'unknown' };
+  });
+};
