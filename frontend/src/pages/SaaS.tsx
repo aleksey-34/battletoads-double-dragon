@@ -6641,6 +6641,33 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
+    // If there are deselected tenants, show confirmation before proceeding
+    if (deselectedTenantIds.length > 0) {
+      const deselectedNames = (summary?.tenants || [])
+        .filter((row: any) => deselectedTenantIds.includes(Number(row.tenant?.id)))
+        .map((row: any) => row.tenant?.display_name || row.tenant?.slug || `tenant-${row.tenant?.id}`)
+        .join(', ');
+      Modal.confirm({
+        title: `Отключить ${deselectedTenantIds.length} клиент(ов) от TS?`,
+        content: (
+          <Space direction="vertical" size={8}>
+            <Text>Клиенты: <Text strong>{deselectedNames || deselectedTenantIds.join(', ')}</Text></Text>
+            <Text>Все открытые позиции будут закрыты, ордера отменены.</Text>
+            <Text type="secondary">TS будет снята с дашборда для отключённых клиентов.</Text>
+          </Space>
+        ),
+        okText: 'Отключить и закрыть позиции',
+        okType: 'danger',
+        cancelText: 'Отмена',
+        onOk: () => executeApplyStorefrontTs(systemId, systemName, selectedTenantIds, deselectedTenantIds),
+      });
+      return;
+    }
+
+    await executeApplyStorefrontTs(systemId, systemName, selectedTenantIds, deselectedTenantIds);
+  };
+
+  const executeApplyStorefrontTs = async (systemId: number, systemName: string, selectedTenantIds: number[], deselectedTenantIds: number[]) => {
     setActionLoading('apply-storefront-ts');
     try {
       // Stop deselected tenants (cancelled from TS connection) — close positions and cancel orders
