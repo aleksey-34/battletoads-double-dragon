@@ -8035,6 +8035,41 @@ export const getAlgofundState = async (
       effectiveLeverage: asNumber(item.metrics.effective_leverage, 0),
     } : null,
   })).filter((item) => item.id > 0);
+
+  // Attach cached tsBacktestSnapshots to each available system (lightweight — reads from app_runtime_flags)
+  const tsSnapshots = await getTsBacktestSnapshots().catch(() => ({} as Record<string, TsBacktestSnapshot>));
+  const snapshotKeys = Object.keys(tsSnapshots);
+  for (const system of availableSystems) {
+    const systemName = system.name;
+    // Try exact match first
+    let snapshot = tsSnapshots[systemName] || null;
+    if (!snapshot) {
+      // Extract short name from ALGOFUND_MASTER::API_KEY::short-name
+      const parts = systemName.split('::').filter(Boolean);
+      const shortName = parts.length >= 3 ? parts[parts.length - 1] : '';
+      if (shortName) {
+        snapshot = tsSnapshots[shortName] || null;
+        // Fuzzy: check if any key ends with the short name
+        if (!snapshot) {
+          const matchKey = snapshotKeys.find((k) => k.endsWith(`::${shortName}`) || k.endsWith(`:${shortName}`));
+          if (matchKey) snapshot = tsSnapshots[matchKey];
+        }
+      }
+    }
+    if (snapshot) {
+      (system as any).backtestSnapshot = {
+        ret: snapshot.ret,
+        pf: snapshot.pf,
+        dd: snapshot.dd,
+        trades: snapshot.trades,
+        tradesPerDay: snapshot.tradesPerDay,
+        periodDays: snapshot.periodDays,
+        finalEquity: snapshot.finalEquity,
+        equityPoints: snapshot.equityPoints,
+      };
+    }
+  }
+
   const maxPreviewRiskMultiplier = allowPreviewAbovePlan
     ? Math.max(10, asNumber(plan.risk_cap_max, 1))
     : asNumber(plan.risk_cap_max, 1);

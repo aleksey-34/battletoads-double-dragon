@@ -197,6 +197,16 @@ type AlgofundState = {
       marginLoadPercent?: number;
       effectiveLeverage?: number;
     } | null;
+    backtestSnapshot?: {
+      ret: number;
+      pf: number;
+      dd: number;
+      trades: number;
+      tradesPerDay: number;
+      periodDays: number;
+      finalEquity: number;
+      equityPoints: number[];
+    } | null;
   }>;
 };
 
@@ -423,6 +433,7 @@ const ClientCabinet: React.FC = () => {
 
   const [algofundRiskMultiplier, setAlgofundRiskMultiplier] = useState(1);
   const [algofundNote, setAlgofundNote] = useState('');
+  const [systemDetailModal, setSystemDetailModal] = useState<{ name: string; id: number } | null>(null);
 
   const strategyState = workspace?.strategyState || null;
   const algofundState = workspace?.algofundState || null;
@@ -1156,13 +1167,18 @@ const ClientCabinet: React.FC = () => {
                 <Row gutter={[12, 12]}>
                   {algofundAvailableSystems.map((system) => {
                     const isCurrent = String(system?.name || '').trim() === algofundPublishedSystemName;
+                    const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number } | null | undefined;
                     const previewSummary = isCurrent ? (algofundWorkspace?.preview?.summary || null) : null;
+                    const eqPts = snap?.equityPoints;
+                    const hasChart = isCurrent ? algofundPreviewSeries.length > 0 : (Array.isArray(eqPts) && eqPts.length > 1);
                     return (
                       <Col xs={24} md={12} xl={8} key={String(system?.id || system?.name || Math.random())}>
                         <Card
                           size="small"
                           className="battletoads-card"
-                          style={isCurrent ? { borderColor: '#52c41a', borderWidth: 2 } : { opacity: 0.85 }}
+                          hoverable
+                          onClick={() => setSystemDetailModal({ name: system.name, id: system.id })}
+                          style={isCurrent ? { borderColor: '#52c41a', borderWidth: 2, cursor: 'pointer' } : { cursor: 'pointer' }}
                           title={
                             <Space>
                               <Typography.Text strong>{tsDisplayName(system.name)}</Typography.Text>
@@ -1173,24 +1189,35 @@ const ClientCabinet: React.FC = () => {
                           <Space wrap style={{ marginBottom: 8 }}>
                             <Tag color="cyan">Участников: {Number(system.memberCount || 0)}</Tag>
                             {system.isActive ? <Tag color="success">Торгуется</Tag> : <Tag color="default">Приостановлена</Tag>}
+                            {snap?.periodDays ? <Tag>{Math.round(snap.periodDays)}д бектест</Tag> : null}
                           </Space>
-                          {isCurrent && algofundPreviewSeries.length > 0 ? (
-                            <div style={{ height: 120, marginBottom: 8 }}>
-                              <ChartComponent data={algofundPreviewSeries} type="line" />
+                          {hasChart ? (
+                            <div style={{ height: 100, marginBottom: 8 }}>
+                              <ChartComponent
+                                data={isCurrent && algofundPreviewSeries.length > 0
+                                  ? algofundPreviewSeries
+                                  : (eqPts || []).map((v, i) => ({ time: i, value: v }))}
+                                type="line"
+                              />
                             </div>
                           ) : null}
-                          {previewSummary ? (
-                            <Row gutter={[8, 4]} style={{ marginBottom: 8 }}>
-                              {previewSummary.totalReturnPercent != null ? <Col span={12}><Statistic title="Доход" value={formatPercent(previewSummary.totalReturnPercent)} valueStyle={{ fontSize: 14 }} /></Col> : null}
-                              {previewSummary.maxDrawdownPercent != null ? <Col span={12}><Statistic title="Макс. DD" value={formatPercent(previewSummary.maxDrawdownPercent)} valueStyle={{ fontSize: 14 }} /></Col> : null}
-                              {previewSummary.profitFactor != null ? <Col span={12}><Statistic title="PF" value={formatNumber(previewSummary.profitFactor)} valueStyle={{ fontSize: 14 }} /></Col> : null}
-                              {previewSummary.tradesCount != null ? <Col span={12}><Statistic title="Сделки" value={formatNumber(previewSummary.tradesCount, 0)} valueStyle={{ fontSize: 14 }} /></Col> : null}
+                          {snap ? (
+                            <Row gutter={[6, 2]}>
+                              <Col span={12}><Statistic title="Доход" value={formatPercent(previewSummary?.totalReturnPercent ?? snap.ret)} valueStyle={{ fontSize: 13, color: (previewSummary?.totalReturnPercent ?? snap.ret) >= 0 ? '#52c41a' : '#ff4d4f' }} /></Col>
+                              <Col span={12}><Statistic title="Макс. DD" value={formatPercent(previewSummary?.maxDrawdownPercent ?? snap.dd)} valueStyle={{ fontSize: 13, color: '#ff7a45' }} /></Col>
+                              <Col span={12}><Statistic title="PF" value={formatNumber(previewSummary?.profitFactor ?? snap.pf)} valueStyle={{ fontSize: 13 }} /></Col>
+                              <Col span={12}><Statistic title="Сделки" value={formatNumber(previewSummary?.tradesCount ?? snap.trades, 0)} valueStyle={{ fontSize: 13 }} /></Col>
+                            </Row>
+                          ) : previewSummary ? (
+                            <Row gutter={[6, 2]}>
+                              {previewSummary.totalReturnPercent != null ? <Col span={12}><Statistic title="Доход" value={formatPercent(previewSummary.totalReturnPercent)} valueStyle={{ fontSize: 13 }} /></Col> : null}
+                              {previewSummary.maxDrawdownPercent != null ? <Col span={12}><Statistic title="Макс. DD" value={formatPercent(previewSummary.maxDrawdownPercent)} valueStyle={{ fontSize: 13 }} /></Col> : null}
+                              {previewSummary.profitFactor != null ? <Col span={12}><Statistic title="PF" value={formatNumber(previewSummary.profitFactor)} valueStyle={{ fontSize: 13 }} /></Col> : null}
+                              {previewSummary.tradesCount != null ? <Col span={12}><Statistic title="Сделки" value={formatNumber(previewSummary.tradesCount, 0)} valueStyle={{ fontSize: 13 }} /></Col> : null}
                             </Row>
                           ) : null}
-                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                            {isCurrent
-                              ? 'Подключена к вашему аккаунту'
-                              : 'Запросите подключение ниже'}
+                          <Typography.Text type="secondary" style={{ fontSize: 11, marginTop: 4, display: 'block' }}>
+                            Нажмите для подробностей
                           </Typography.Text>
                         </Card>
                       </Col>
@@ -1200,6 +1227,79 @@ const ClientCabinet: React.FC = () => {
               </>
             )}
           </Card>
+
+          {/* Detail modal for a selected system card */}
+          <Modal
+            title={systemDetailModal ? tsDisplayName(systemDetailModal.name) : ''}
+            open={!!systemDetailModal}
+            onCancel={() => setSystemDetailModal(null)}
+            footer={null}
+            width={640}
+          >
+            {(() => {
+              if (!systemDetailModal) return null;
+              const system = algofundAvailableSystems.find((s) => s.id === systemDetailModal.id);
+              if (!system) return <Empty description="Система не найдена" />;
+              const isCurrent = String(system.name || '').trim() === algofundPublishedSystemName;
+              const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number } | null | undefined;
+              const eqPts = snap?.equityPoints;
+              const chartData = isCurrent && algofundPreviewSeries.length > 0
+                ? algofundPreviewSeries
+                : Array.isArray(eqPts) && eqPts.length > 1
+                  ? eqPts.map((v, i) => ({ time: i, value: v }))
+                  : [];
+              return (
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Space wrap>
+                    {isCurrent ? <Tag color="gold">Подключена к вашему аккаунту</Tag> : <Tag color="blue">Доступна для подключения</Tag>}
+                    {system.isActive ? <Tag color="success">Торгуется</Tag> : <Tag color="default">Приостановлена</Tag>}
+                    <Tag color="cyan">Участников: {Number(system.memberCount || 0)}</Tag>
+                    {snap?.periodDays ? <Tag>Период: {Math.round(snap.periodDays)}д</Tag> : null}
+                  </Space>
+                  {chartData.length > 0 ? (
+                    <div style={{ height: 240 }}>
+                      <ChartComponent data={chartData} type="line" />
+                    </div>
+                  ) : null}
+                  {snap ? (
+                    <Row gutter={[12, 12]}>
+                      <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(snap.ret)} valueStyle={{ color: snap.ret >= 0 ? '#52c41a' : '#ff4d4f' }} /></Col>
+                      <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(snap.dd)} valueStyle={{ color: '#ff7a45' }} /></Col>
+                      <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(snap.pf)} /></Col>
+                      <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(snap.trades, 0)} /></Col>
+                      <Col xs={12} sm={6}><Statistic title="Сд./день" value={formatNumber(snap.tradesPerDay, 1)} /></Col>
+                      <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(snap.finalEquity)} /></Col>
+                    </Row>
+                  ) : null}
+                  {algofundWorkspace?.capabilities?.settings ? (
+                    <div style={{ padding: '8px 0' }}>
+                      <Typography.Text strong>Мультипликатор риска: × {formatNumber(algofundRiskMultiplier, 2)}</Typography.Text>
+                      <Slider
+                        min={0}
+                        max={toFinite(algofundWorkspace.plan?.risk_cap_max, 1)}
+                        step={0.05}
+                        value={algofundRiskMultiplier}
+                        onChange={(v) => setAlgofundRiskMultiplier(Math.min(toFinite(v), toFinite(algofundWorkspace.plan?.risk_cap_max, 1)))}
+                      />
+                      <Space wrap>
+                        <Button type="primary" size="small" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
+                          Сохранить риск
+                        </Button>
+                        <Button size="small" loading={actionLoading === 'algofund-refresh'} onClick={() => void refreshAlgofundState()}>
+                          Обновить предпросмотр
+                        </Button>
+                      </Space>
+                    </div>
+                  ) : null}
+                  {!isCurrent ? (
+                    <Typography.Text type="secondary">
+                      Для подключения этой системы используйте раздел «Подключение / отключение» ниже.
+                    </Typography.Text>
+                  ) : null}
+                </Space>
+              );
+            })()}
+          </Modal>
 
           <Card className="battletoads-card" title="Подключение / отключение" size="small">
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
