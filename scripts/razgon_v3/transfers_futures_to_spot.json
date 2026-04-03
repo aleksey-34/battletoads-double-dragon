@@ -1,0 +1,126 @@
+{
+  "rows": [
+    {
+      "tranId": "bc2c9f2e619a4f3aba1e79967a00a469",
+      "clientTranId": null,
+      "asset": "USDT",
+      "amount": "49.17252194",
+      "fromAccountType": "FUTURES",
+      "toAccountType": "SPOT",
+      "symbol": null,
+      "status": "SUCCESS",
+      "timestamp": 1775073147000
+    },
+    {
+      "tranId": "a98874a38de04c77aaa172b8dfd64800",
+      "clientTranId": null,
+      "asset": "USDT",
+      "amount": "300",
+      "fromAccountType": "FUTURES",
+      "toAccountType": "SPOT",
+      "symbol": null,
+      "status": "SUCCESS",
+      "timestamp": 1775031107000
+    },
+    {
+      "tranId": "6c00d3df4bad4c3f822d3f0b31a54a3d",
+      "clientTranId": null,
+      "asset": "USDT",
+      "amount": "500",
+      "fromAccountType": "FUTURES",
+      "toAccountType": "SPOT",
+      "symbol": null,
+      "status": "SUCCESS",
+      "timestamp": 1774977116000
+    },
+    {
+      "tranId": "0269f5308c0744fbac9a2efeaea751eb",
+      "clientTranId": null,
+      "asset": "USDT",
+      "amount": "20",
+      "fromAccountType": "FUTURES",
+      "toAccountType": "SPOT",
+      "symbol": null,
+      "status": "SUCCESS",
+      "timestamp": 1774904721000
+    },
+    {
+      "tranId": "2f22abd734a74aabb1ece0fbcf0ded24",
+      "clientTranId": null,
+      "asset": "USDT",
+      "amount": "500",
+      "fromAccountType": "FUTURES",
+      "toAccountType": "SPOT",
+      "symbol": null,
+      "status": "SUCCESS",
+      "timestamp": 1774904507000
+    },
+    {
+      "tranId": "5abae5b0107d45d1b0a6c81aeb1953c4",
+      "clientTranId": null,
+      "asset": "USDT",
+      "amount": "202",
+      "fromAccountType": "FUTURES",
+      "toAccountType": "SPOT",
+      "symbol": null,
+      "status": "SUCCESS",
+      "timestamp": 1774794996000
+    },
+    {
+      "tranId": "e53476f957984cde90515e5de71dbfbc",
+      "clientTranId": null,
+      "asset": "USDT",
+      "amount": "300",
+      "fromAccountType": "FUTURES",
+      "toAccountType": "SPOT",
+      "symbol": null,
+      "status": "SUCCESS",
+      "timestamp": 1774703201000
+    },
+    {
+      "tranId": "ea9cfbd74e9544b5b1e4222c6edc15f3",
+      "clientTranId": null,
+      "asset": "USDT",
+      "amount": "204",
+      "fromAccountType": "FUTURES",
+      "toAccountType": "SPOT",
+      "symbol": null,
+      "status": "SUCCESS",
+      "timestamp": 1774634198000
+    },
+    {
+      "tranId": "4e53b2a570974df9af36b4c6104717ad",
+      "clientTranId": null,
+      "asset": "USDT",
+      "amount": "302",
+      "fromAccountType": "FUTURES",
+      "toAccountType": "SPOT",
+      "symbol": null,
+      "status": "SUCCESS",
+      "timestamp": 1774615445000
+    },
+    {
+      "tranId": "e6b0c6b0aa4d4965bb873c5586a292b6",
+      "clientTranId": null,
+      "asset": "USDT",
+      "amount": "300",
+      "fromAccountType": "FUTURES",
+      "toAccountType": "SPOT",
+      "symbol": null,
+      "status": "SUCCESS",
+      "timestamp": 1774551974000
+    },
+    {
+      "tranId": "bd3d04a3791e41c2a086a95f5aa8f534",
+      "clientTranId": null,
+      "asset": "USDT",
+      "amount": "100",
+      "fromAccountType": "FUTURES",
+      "toAccountType": "SPOT",
+      "symbol": null,
+      "status": "SUCCESS",
+      "timestamp": 1774470507000
+    }
+  ],
+  "total": 11
+}

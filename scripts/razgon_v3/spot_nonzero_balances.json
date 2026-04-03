@@ -1,0 +1,26 @@
+[
+  {
+    "asset": "USDT",
+    "free": "0.000000008266960783",
+    "locked": "0",
+    "available": "0.000000008266960783"
+  },
+  {
+    "asset": "USDC",
+    "free": "0.1031456584",
+    "locked": "0",
+    "available": "0.1031456584"
+  },
+  {
+    "asset": "PALMAI",
+    "free": "75.34",
+    "locked": "0",
+    "available": "75.34"
+  },
+  {
+    "asset": "MX",
+    "free": "0.00852972",
+    "locked": "0",
+    "available": "0.00852972"
+  }
+]

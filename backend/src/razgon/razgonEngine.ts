@@ -220,25 +220,30 @@ async function momentumTick(): Promise<void> {
   const momPositions = openPositions.filter(p => p.subStrategy === 'momentum');
   if (momPositions.length >= cfg.maxConcurrentPositions) return;
 
-  // Check each watchlist symbol for signal
-  for (const symbol of cfg.watchlist) {
-    if (momPositions.length >= cfg.maxConcurrentPositions) break;
-    if (openPositions.some(p => p.symbol === symbol)) continue; // already in this symbol
+  // Batch-fetch all watchlist candles in parallel, then check signals
+  const candidates = cfg.watchlist.filter(
+    sym => !openPositions.some(p => p.symbol === sym),
+  );
+  const minBars = Math.max(cfg.donchianPeriod, 21) + 5;
+  const batchResults = await Promise.allSettled(
+    candidates.map(sym => fetchAndCache1mCandles(sym, minBars).then(candles => ({ sym, candles }))),
+  );
 
+  for (const r of batchResults) {
+    if (momPositions.length + openPositions.filter(p => p.subStrategy === 'momentum').length >= cfg.maxConcurrentPositions) break;
+    if (r.status !== 'fulfilled' || !r.value.candles.length) continue;
     try {
-      await checkMomentumEntry(symbol);
+      await checkMomentumEntryFromCandles(r.value.sym, r.value.candles);
     } catch (e) {
-      logger.debug(`[Razgon:Momentum] Signal check failed for ${symbol}: ${(e as Error).message}`);
+      logger.debug(`[Razgon:Momentum] Signal check failed for ${r.value.sym}: ${(e as Error).message}`);
     }
   }
 }
 
-async function checkMomentumEntry(symbol: string): Promise<void> {
+async function checkMomentumEntryFromCandles(symbol: string, candles: Candle1m[]): Promise<void> {
   if (!config || !riskManager) return;
   const cfg = config.momentum;
 
-  // Fetch 1m candles
-  const candles = await fetchAndCache1mCandles(symbol, Math.max(cfg.donchianPeriod, 21) + 5);
   if (candles.length < cfg.donchianPeriod) return;
 
   const latestCandle = candles[candles.length - 1];
@@ -545,8 +550,13 @@ async function fetchAndCache1mCandles(symbol: string, minBars: number): Promise<
   if (!config) return [];
 
   try {
-    const raw = await getMarketData(config.apiKeyName, symbol, '1m', minBars + 5);
-    if (!Array.isArray(raw) || raw.length === 0) return [];
+    // Timeout after 8s to prevent tick stalling in shared limiter queue
+    const timeoutMs = 8000;
+    const raw = await Promise.race([
+      getMarketData(config.apiKeyName, symbol, '1m', minBars + 5),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('fetch timeout')), timeoutMs)),
+    ]);
+    if (!Array.isArray(raw) || raw.length === 0) return candleCache.get(symbol) ?? [];
 
     const candles: Candle1m[] = raw.map((c: any) => ({
       timeMs: Number(c[0] ?? c.timeMs ?? c.timestamp ?? 0),
