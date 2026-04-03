@@ -9,6 +9,7 @@ import { runAutoStrategiesCycle } from './bot/strategy';
 import { startPreviewWorker } from './workers/previewWorker';
 import { startResearchSchedulerWorker } from './workers/researchSchedulerWorker';
 import { runLiquidityScanCycle, runMonitoringCycle, runReconciliationCycle } from './automation/scheduler';
+import { resumeSyncAutoEngine } from './saas/service';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -44,6 +45,13 @@ const startServer = async () => {
   const researchWorkersEnabled = process.env.BTDD_DISABLE_RESEARCH_WORKERS !== '1';
   // Когда BTDD_DISABLE_TRADING=1 — торговые циклы запускаются отдельным btdd-runtime.service
   const tradingEnabled = process.env.BTDD_DISABLE_TRADING !== '1';
+
+  // Resume SyncAuto engine if there are open sessions from before restart
+  try {
+    await resumeSyncAutoEngine();
+  } catch (e) {
+    logger.error(`SyncAuto resume error: ${(e as Error).message}`);
+  }
 
   app.listen(PORT, () => {
     logger.info(`Server running on http://localhost:${PORT}`);

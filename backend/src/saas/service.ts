@@ -8828,6 +8828,426 @@ export const updateCopytradingState = async (
   return getCopytradingState(tenantId);
 };
 
+// ─── Copytrading sessions ─────────────────────────────────────────────────────
+
+const ensureCopytradingSessionsTable = async (): Promise<void> => {
+  await db.run(`
+    CREATE TABLE IF NOT EXISTS copytrading_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      profile_id INTEGER NOT NULL,
+      status TEXT DEFAULT 'pending',
+      symbol TEXT NOT NULL,
+      master_side TEXT NOT NULL,
+      market_type TEXT DEFAULT 'swap',
+      entry_price REAL,
+      exit_price REAL,
+      follower_results_json TEXT DEFAULT '{}',
+      total_pnl REAL DEFAULT 0,
+      duration_ms INTEGER DEFAULT 0,
+      error TEXT,
+      log_json TEXT DEFAULT '[]',
+      started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      finished_at TEXT,
+      FOREIGN KEY (profile_id) REFERENCES copytrading_profiles(id)
+    )
+  `).catch(() => {});
+  await db.run(`
+    CREATE INDEX IF NOT EXISTS idx_copytrading_sessions_profile
+      ON copytrading_sessions (profile_id, started_at DESC)
+  `).catch(() => {});
+};
+
+export const executeCopytradingSession = async (
+  tenantId: number,
+  payload: {
+    symbol?: string;
+    masterSide?: 'long' | 'short';
+    leverage?: number;
+    lotPercent?: number;
+    marketType?: 'spot' | 'swap';
+  }
+) => {
+  await ensureCopytradingSessionsTable();
+
+  const profile = await getCopytradingProfile(tenantId);
+  if (!profile) throw new Error('Copytrading profile not found');
+  if (!Number(profile.copy_enabled)) throw new Error('Copytrading is not enabled for this profile');
+
+  const followers = safeJsonParse<Array<Record<string, unknown>>>(profile.tenants_json, []);
+  if (followers.length === 0) throw new Error('No follower accounts configured');
+
+  const symbol = asString(payload.symbol, 'BTCUSDT') || 'BTCUSDT';
+  const masterSide = payload.masterSide === 'short' ? 'short' : 'long';
+  const leverage = clampNumber(Math.floor(asNumber(payload.leverage, 5)), 1, 125);
+  const lotPercent = clampNumber(asNumber(payload.lotPercent, 10), 1, 100);
+  const marketType = payload.marketType === 'spot' ? 'spot' : 'swap';
+  const isSpot = marketType === 'spot';
+  const copyRatio = clampNumber(asNumber(profile.copy_ratio, 1), 0.01, 100);
+
+  const log: string[] = [];
+  const addLog = (msg: string) => {
+    const ts = new Date().toISOString().slice(11, 23);
+    log.push(`[${ts}] ${msg}`);
+    logger.info(`[Copytrading] ${msg}`);
+  };
+
+  const sessionResult = await db.run(
+    `INSERT INTO copytrading_sessions (profile_id, status, symbol, master_side, market_type, log_json, started_at)
+     VALUES (?, 'running', ?, ?, ?, '[]', CURRENT_TIMESTAMP)`,
+    [profile.id, symbol, masterSide, marketType]
+  );
+  const sessionId = (sessionResult as any)?.lastID;
+  addLog(`Session #${sessionId} created: ${symbol} master=${masterSide} lev=${leverage} lot=${lotPercent}% market=${marketType} ratio=${copyRatio}`);
+
+  const saveLog = async () => {
+    await db.run(`UPDATE copytrading_sessions SET log_json = ? WHERE id = ?`, [JSON.stringify(log), sessionId]);
+  };
+
+  try {
+    const masterKeyName = asString(profile.master_api_key_name, '');
+    if (!masterKeyName) throw new Error('Master API key not configured');
+
+    await ensureExchangeClientInitialized(masterKeyName);
+    addLog(`Master key initialized: ${masterKeyName}`);
+
+    for (const f of followers) {
+      const keyName = asString(f.apiKeyName, '');
+      if (keyName) {
+        await ensureExchangeClientInitialized(keyName);
+        addLog(`Follower key initialized: ${asString(f.displayName, keyName)}`);
+      }
+    }
+
+    const { getBalances, placeOrder, applySymbolRiskSettings, getInstrumentInfo } = await import('../bot/exchange');
+
+    // Instrument info (futures only — for contractSize / minQty)
+    let minOrderQty = 1;
+    let qtyStep = 1;
+    let contractSize = 1;
+    if (!isSpot) {
+      try {
+        const instInfo = await getInstrumentInfo(masterKeyName, symbol);
+        const lotFilter = (instInfo as any)?.lotSizeFilter;
+        const rawMin = Number(lotFilter?.minOrderQty ?? 0);
+        const rawStep = Number(lotFilter?.qtyStep ?? 0);
+        const rawCS = Number((instInfo as any)?.contractSize ?? 1);
+        if (Number.isFinite(rawMin) && rawMin > 0) minOrderQty = rawMin;
+        if (Number.isFinite(rawStep) && rawStep > 0) qtyStep = rawStep;
+        if (Number.isFinite(rawCS) && rawCS > 0) contractSize = rawCS;
+        addLog(`Instrument: minQty=${minOrderQty} qtyStep=${qtyStep} contractSize=${contractSize}`);
+      } catch (err: any) {
+        addLog(`⚠ Could not get instrument info: ${err.message}`);
+      }
+    }
+
+    const roundToStep = (val: number): number => {
+      if (qtyStep <= 0) return val;
+      const result = Math.floor(val / qtyStep) * qtyStep;
+      const decimals = String(qtyStep).includes('.') ? String(qtyStep).split('.')[1].length : 0;
+      return Number(result.toFixed(decimals));
+    };
+
+    const enforceMinLot = (val: number): number => {
+      const rounded = roundToStep(val);
+      return rounded < minOrderQty ? minOrderQty : rounded;
+    };
+
+    // Apply leverage on master (futures only)
+    if (!isSpot) {
+      try {
+        await applySymbolRiskSettings(masterKeyName, symbol, 'cross', leverage);
+        addLog(`Master leverage set: ${leverage}x`);
+      } catch (err: any) {
+        addLog(`⚠ Master leverage: ${err.message}`);
+      }
+    }
+
+    // Master balance
+    const masterBalances = await getBalances(masterKeyName);
+    const usdtBal = (masterBalances || []).find((b: any) => String(b.coin).toUpperCase() === 'USDT');
+    const masterEquity = asNumber(usdtBal?.walletBalance, 0);
+    addLog(`Master USDT balance: ${masterEquity.toFixed(2)}`);
+    if (masterEquity <= 0) throw new Error('Master account has no USDT balance');
+
+    const orderValueUsdt = (masterEquity * lotPercent) / 100;
+
+    // Get current price
+    const { getMarketData } = await import('../bot/exchange');
+    const marketData = await getMarketData(masterKeyName, symbol, '1m', 1);
+    const price = asNumber((marketData?.[0] as any)?.[4], 0);
+    if (price <= 0) throw new Error('Cannot get current market price');
+    addLog(`Market price ${symbol}: ${price}`);
+
+    // Calculate master qty
+    let masterQty: number;
+    if (isSpot) {
+      // Spot: buy base asset with orderValueUsdt
+      masterQty = orderValueUsdt / price;
+      const spotDecimals = 6;
+      masterQty = Number(masterQty.toFixed(spotDecimals));
+    } else {
+      masterQty = enforceMinLot((orderValueUsdt * leverage) / (price * contractSize));
+    }
+
+    if (masterQty <= 0) throw new Error('Calculated quantity is too small');
+    addLog(`Master order: ${masterSide === 'long' ? 'Buy' : 'Sell'} qty=${masterQty} (value=${orderValueUsdt.toFixed(2)} USDT)`);
+
+    await saveLog();
+
+    // Place master order
+    const masterOrder = await placeOrder(
+      masterKeyName,
+      symbol,
+      masterSide === 'long' ? 'Buy' : 'Sell',
+      String(masterQty),
+      undefined,
+      { marketType }
+    );
+    addLog(`✓ Master order placed`);
+
+    // Place follower orders
+    const followerResults: Record<string, { qty: number; status: 'ok' | 'failed'; error?: string }> = {};
+
+    const followerPromises = followers.map(async (f) => {
+      const keyName = asString(f.apiKeyName, '');
+      const displayName = asString(f.displayName, keyName);
+      if (!keyName) return;
+
+      try {
+        // Apply leverage on follower (futures only)
+        if (!isSpot) {
+          try {
+            const followerLev = clampNumber(Math.floor(asNumber(f.leverage, leverage)), 1, 125);
+            await applySymbolRiskSettings(keyName, symbol, 'cross', followerLev);
+          } catch { /* non-critical */ }
+        }
+
+        const followerBalances = await getBalances(keyName);
+        const followerUsdtBal = (followerBalances || []).find((b: any) => String(b.coin).toUpperCase() === 'USDT');
+        const followerEquity = asNumber(followerUsdtBal?.walletBalance, 0);
+        addLog(`Follower ${displayName} USDT: ${followerEquity.toFixed(2)}`);
+
+        // Apply copy ratio to scale the position relative to follower balance
+        const followerOrderValue = (followerEquity * lotPercent) / 100 * copyRatio;
+        let followerQty: number;
+        if (isSpot) {
+          followerQty = followerOrderValue / price;
+          followerQty = Number(followerQty.toFixed(6));
+        } else {
+          followerQty = enforceMinLot((followerOrderValue * leverage) / (price * contractSize));
+        }
+
+        if (followerQty <= 0) {
+          addLog(`✗ Follower ${displayName}: qty too small, skipped`);
+          followerResults[displayName] = { qty: 0, status: 'failed', error: 'qty too small' };
+          return;
+        }
+
+        addLog(`Follower ${displayName}: ${masterSide === 'long' ? 'Buy' : 'Sell'} qty=${followerQty} (ratio=${copyRatio})`);
+
+        await placeOrder(
+          keyName,
+          symbol,
+          masterSide === 'long' ? 'Buy' : 'Sell',
+          String(followerQty),
+          undefined,
+          { marketType }
+        );
+        addLog(`✓ Follower ${displayName} order placed`);
+        followerResults[displayName] = { qty: followerQty, status: 'ok' };
+      } catch (err: any) {
+        addLog(`✗ Follower ${displayName} FAILED: ${err.message}`);
+        followerResults[displayName] = { qty: 0, status: 'failed', error: err.message };
+      }
+    });
+
+    await Promise.all(followerPromises);
+
+    await db.run(
+      `UPDATE copytrading_sessions
+       SET status = 'open', entry_price = ?, follower_results_json = ?, log_json = ?
+       WHERE id = ?`,
+      [price, JSON.stringify(followerResults), JSON.stringify(log), sessionId]
+    );
+
+    await db.run(
+      `UPDATE copytrading_profiles SET updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?`,
+      [tenantId]
+    );
+
+    addLog(`Session #${sessionId} → open ✓`);
+    await saveLog();
+
+    return {
+      sessionId,
+      status: 'open',
+      symbol,
+      masterSide,
+      marketType,
+      entryPrice: price,
+      masterOrder,
+      followerResults,
+      log,
+    };
+  } catch (err: any) {
+    addLog(`✗ FATAL: ${err.message}`);
+    await db.run(
+      `UPDATE copytrading_sessions SET status = 'error', error = ?, log_json = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [String(err.message || err).slice(0, 500), JSON.stringify(log), sessionId]
+    );
+    throw err;
+  }
+};
+
+export const closeCopytradingSession = async (tenantId: number, sessionId: number) => {
+  await ensureCopytradingSessionsTable();
+
+  const profile = await getCopytradingProfile(tenantId);
+  if (!profile) throw new Error('Copytrading profile not found');
+
+  const session = await db.get(
+    `SELECT * FROM copytrading_sessions WHERE id = ? AND profile_id = ?`,
+    [sessionId, profile.id]
+  ) as Record<string, unknown> | null;
+  if (!session) throw new Error('Session not found');
+  const sessionStatus = asString(session.status, '');
+  if (!['open', 'running', 'error'].includes(sessionStatus)) {
+    throw new Error(`Session status "${sessionStatus}" cannot be closed`);
+  }
+
+  const symbol = asString(session.symbol, '');
+  const masterSide = asString(session.master_side, 'long') as 'long' | 'short';
+  const marketType = asString(session.market_type, 'swap') as 'spot' | 'swap';
+  const isSpot = marketType === 'spot';
+  const masterKeyName = asString(profile.master_api_key_name, '');
+  const followers = safeJsonParse<Array<Record<string, unknown>>>(profile.tenants_json, []);
+
+  const log: string[] = safeJsonParse<string[]>(asString(session.log_json, '[]'), []);
+  const addLog = (msg: string) => {
+    const ts = new Date().toISOString().slice(11, 23);
+    log.push(`[${ts}] ${msg}`);
+    logger.info(`[Copytrading] ${msg}`);
+  };
+
+  addLog(`Closing session #${sessionId}: ${symbol} [${marketType}]`);
+
+  const { closePosition, getPositions: getPos, getBalances } = await import('../bot/exchange');
+  const normSym = (v: string) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const targetKey = normSym(symbol);
+
+  // Close master position
+  let masterClosed = false;
+  try {
+    if (isSpot) {
+      // Spot: sell the base asset balance
+      const masterBalances = await getBalances(masterKeyName);
+      const baseCoin = symbol.replace(/USDT$/i, '').replace(/USDC$/i, '').toUpperCase();
+      const baseBal = (masterBalances || []).find((b: any) => String(b.coin).toUpperCase() === baseCoin);
+      const baseQty = asNumber(baseBal?.walletBalance, 0);
+      addLog(`Master spot balance: ${baseCoin}=${baseQty}`);
+      if (baseQty > 0) {
+        await closePosition(masterKeyName, symbol, String(baseQty), 'Buy', { marketType: 'spot' });
+        addLog(`✓ Master spot position closed (sold ${baseQty} ${baseCoin})`);
+        masterClosed = true;
+      } else {
+        addLog(`⚠ Master: no ${baseCoin} balance to close`);
+      }
+    } else {
+      const masterPositions = await getPos(masterKeyName, symbol);
+      addLog(`Master positions found: ${(masterPositions || []).length}`);
+      const masterPos = (masterPositions || []).find((p: any) => normSym(p.symbol) === targetKey);
+      if (masterPos && asNumber(masterPos.size, 0) > 0) {
+        const posSide: 'Buy' | 'Sell' = String(masterPos.side).includes('uy') ? 'Buy' : 'Sell';
+        await closePosition(masterKeyName, symbol, String(masterPos.size), posSide);
+        addLog(`✓ Master futures position closed`);
+        masterClosed = true;
+      } else {
+        addLog(`⚠ Master: no open futures position for ${symbol}`);
+      }
+    }
+  } catch (err: any) {
+    addLog(`✗ Master close failed: ${err.message}`);
+  }
+
+  // Close follower positions
+  const followerResults: Record<string, string> = {};
+  for (const f of followers) {
+    const keyName = asString(f.apiKeyName, '');
+    const displayName = asString(f.displayName, keyName);
+    if (!keyName) continue;
+
+    try {
+      if (isSpot) {
+        const followerBalances = await getBalances(keyName);
+        const baseCoin = symbol.replace(/USDT$/i, '').replace(/USDC$/i, '').toUpperCase();
+        const baseBal = (followerBalances || []).find((b: any) => String(b.coin).toUpperCase() === baseCoin);
+        const baseQty = asNumber(baseBal?.walletBalance, 0);
+        if (baseQty > 0) {
+          await closePosition(keyName, symbol, String(baseQty), 'Buy', { marketType: 'spot' });
+          addLog(`✓ Follower ${displayName} spot closed (sold ${baseQty} ${baseCoin})`);
+          followerResults[displayName] = 'closed';
+        } else {
+          addLog(`⚠ Follower ${displayName}: no spot balance`);
+          followerResults[displayName] = 'no_balance';
+        }
+      } else {
+        const followerPositions = await getPos(keyName, symbol);
+        const followerPos = (followerPositions || []).find((p: any) => normSym(p.symbol) === targetKey);
+        if (followerPos && asNumber(followerPos.size, 0) > 0) {
+          const posSide: 'Buy' | 'Sell' = String(followerPos.side).includes('uy') ? 'Buy' : 'Sell';
+          await closePosition(keyName, symbol, String(followerPos.size), posSide);
+          addLog(`✓ Follower ${displayName} futures closed`);
+          followerResults[displayName] = 'closed';
+        } else {
+          addLog(`⚠ Follower ${displayName}: no open position`);
+          followerResults[displayName] = 'no_position';
+        }
+      }
+    } catch (err: any) {
+      addLog(`✗ Follower ${displayName} close failed: ${err.message}`);
+      followerResults[displayName] = `error: ${err.message}`;
+    }
+  }
+
+  // Get exit price
+  let exitPrice = 0;
+  try {
+    const { getMarketData: getMD } = await import('../bot/exchange');
+    const md = await getMD(masterKeyName, symbol, '1m', 1);
+    exitPrice = asNumber((md?.[0] as any)?.[4], 0);
+  } catch { /* non-critical */ }
+
+  const startTime = new Date(asString(session.started_at, '')).getTime();
+  const durationMs = Date.now() - (Number.isFinite(startTime) ? startTime : Date.now());
+
+  addLog(`Session #${sessionId} closed. masterClosed=${masterClosed} followers=${JSON.stringify(followerResults)}`);
+
+  await db.run(
+    `UPDATE copytrading_sessions
+     SET status = 'closed', exit_price = ?, follower_results_json = ?,
+         duration_ms = ?, log_json = ?, finished_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [exitPrice, JSON.stringify(followerResults), durationMs, JSON.stringify(log), sessionId]
+  );
+
+  return { sessionId, status: 'closed', exitPrice, masterClosed, followerResults, durationMs, log };
+};
+
+export const getCopytradingSessions = async (tenantId: number, limit = 50) => {
+  await ensureCopytradingSessionsTable();
+  const profile = await getCopytradingProfile(tenantId);
+  if (!profile) throw new Error('Copytrading profile not found');
+  const sessions = (await db.all(
+    `SELECT * FROM copytrading_sessions WHERE profile_id = ? ORDER BY started_at DESC LIMIT ?`,
+    [profile.id, Math.min(limit, 200)]
+  ) || []) as Array<Record<string, unknown>>;
+  return sessions.map((s) => ({
+    ...s,
+    followerResults: safeJsonParse<Record<string, unknown>>(asString(s.follower_results_json, '{}'), {}),
+    log: safeJsonParse<string[]>(asString(s.log_json, '[]'), []),
+  }));
+};
+
 export const seedDemoSaasData = async () => {
   await ensureSaasSeedData();
   return getSaasAdminSummary();
@@ -10802,5 +11222,62 @@ export const getSyncAutoStatus = () => {
     lastRebalanceAt: syncAutoState.lastRebalanceAt ? new Date(syncAutoState.lastRebalanceAt).toISOString() : null,
     recentErrors: syncAutoState.errors.slice(-10),
   };
+};
+
+/**
+ * Resume auto-engine on server restart: reload open sessions from DB, restart timers.
+ */
+export const resumeSyncAutoEngine = async () => {
+  if (syncAutoState.running) return;
+
+  // Find profiles with open sessions
+  const openSessions: any[] = await db.all(
+    `SELECT s.id, s.profile_id, s.symbol, s.master_side, s.entry_price, s.started_at,
+            p.tenant_id
+     FROM synctrade_sessions s
+     JOIN synctrade_profiles p ON p.id = s.profile_id
+     WHERE s.status = 'open'`
+  );
+
+  if (!openSessions || openSessions.length === 0) {
+    syncAutoLog('Resume: no open sessions found, skipping');
+    return;
+  }
+
+  const tenantId = openSessions[0].tenant_id;
+  const profile = await getSynctradeProfile(tenantId);
+  if (!profile || !Number(profile.enabled)) {
+    syncAutoLog('Resume: profile not found or not enabled, skipping');
+    return;
+  }
+
+  const cfg = { ...SYNC_AUTO_DEFAULTS };
+  syncAutoState.running = true;
+  syncAutoState.tenantId = tenantId;
+  syncAutoState.config = cfg;
+  syncAutoState.activePairs = new Map();
+  syncAutoState.errors = [];
+
+  for (const sess of openSessions) {
+    syncAutoState.activePairs.set(sess.symbol, {
+      sessionId: sess.id,
+      leverage: cfg.leverageRange[0],
+      entryPrice: Number(sess.entry_price) || 0,
+      openedAt: new Date(sess.started_at).getTime() || Date.now(),
+    });
+  }
+
+  syncAutoLog(`Resume: restored ${openSessions.length} open sessions for tenant=${tenantId}: ${openSessions.map((s: any) => s.symbol).join(', ')}`);
+
+  // Start timers (same as startSyncAutoEngine)
+  syncAutoState.scanTimer = setInterval(async () => {
+    if (!syncAutoState.running) return;
+    try { await syncAutoScanAndOpen(); } catch (err: any) { syncAutoErr(`Scan tick: ${err.message}`); }
+  }, cfg.scanIntervalMs);
+
+  syncAutoState.rebalanceTimer = setInterval(async () => {
+    if (!syncAutoState.running) return;
+    try { await syncAutoRebalance(); } catch (err: any) { syncAutoErr(`Rebalance tick: ${err.message}`); }
+  }, cfg.rebalanceIntervalMs);
 };
 
