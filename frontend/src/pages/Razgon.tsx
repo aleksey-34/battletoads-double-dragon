@@ -116,12 +116,19 @@ export default function Razgon() {
   useEffect(() => {
     fetchStatus();
     fetchConfig();
-    axios.get('/api/api-keys').then(r => setApiKeys(Array.isArray(r.data) ? r.data : [])).catch(() => {});
+    axios.get('/api/api-keys').then(r => {
+      const keys = Array.isArray(r.data) ? r.data as ApiKeyRecord[] : [];
+      setApiKeys(keys);
+    }).catch(err => console.error('Failed to load API keys:', err));
     pollRef.current = setInterval(fetchStatus, 3000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchStatus, fetchConfig]);
 
   const handleStart = async () => {
+    if (!config.apiKeyName || !apiKeys.some(k => k.name === config.apiKeyName)) {
+      message.warning('Сначала выберите API ключ!');
+      return;
+    }
     setLoading(true);
     try {
       const res = await axios.post(`${API}/start`, config);
@@ -484,33 +491,28 @@ export default function Razgon() {
         <Col xs={24} lg={12}>
           <Card title="Подключение" size="small">
             <Row gutter={[8, 8]}>
-              <Col span={8}>
-                <Text type="secondary">Биржа</Text>
-                <Select value={config.exchange} style={{ width: '100%' }} size="small"
-                  onChange={v => setConfig(c => ({ ...c, exchange: v }))} disabled={isRunning}
-                  options={[
-                    { value: 'mexc', label: 'MEXC' },
-                    { value: 'bitget', label: 'Bitget' },
-                    { value: 'bybit', label: 'Bybit' },
-                    { value: 'binance', label: 'Binance' },
-                    { value: 'bingx', label: 'BingX' },
-                  ]}
-                />
-              </Col>
-              <Col span={8}>
-                <Text type="secondary">API Key</Text>
-                <Select value={config.apiKeyName} style={{ width: '100%' }} size="small"
+              <Col span={12}>
+                <Text type="secondary">API ключ (биржа)</Text>
+                <Select
+                  value={apiKeys.some(k => k.name === config.apiKeyName) ? config.apiKeyName : undefined}
+                  style={{ width: '100%' }}
                   onChange={v => {
                     const key = apiKeys.find(k => k.name === v);
-                    setConfig(c => ({ ...c, apiKeyName: v, exchange: key?.exchange || c.exchange }));
+                    setConfig(c => ({ ...c, apiKeyName: v, exchange: key?.exchange?.toLowerCase() || c.exchange }));
                   }}
                   disabled={isRunning}
                   options={apiKeys.map(k => ({ value: k.name, label: `${k.name} (${k.exchange})` }))}
                   showSearch
-                  placeholder="Выберите API ключ"
+                  placeholder="— Выберите API ключ —"
+                  notFoundContent="Нет ключей. Добавьте в Настройках."
                 />
               </Col>
-              <Col span={8}>
+              <Col span={6}>
+                <Text type="secondary">Биржа</Text>
+                <Input value={(config.exchange || '').toUpperCase()} size="small" readOnly
+                  style={{ background: '#1a1a2e' }} />
+              </Col>
+              <Col span={6}>
                 <Text type="secondary">Стартовый баланс</Text>
                 <InputNumber min={1} value={config.startBalance} size="small" style={{ width: '100%' }}
                   onChange={v => setConfig(c => ({ ...c, startBalance: v ?? 40 }))}
