@@ -1043,6 +1043,34 @@ const ClientCabinet: React.FC = () => {
             </Space>
           </Card>
         </>
+      ) : workspace?.productMode === 'algofund_client' && algofundAvailableSystems.length > 0 ? (
+        <Card className="battletoads-card" title="Доступные торговые системы" size="small">
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            Ваш аккаунт подключён к продукту «Алгофонд». Подробности — на вкладке «Алгофонд».
+          </Typography.Text>
+          <Row gutter={[12, 12]}>
+            {algofundAvailableSystems.map((system) => {
+              const isCurrent = String(system?.name || '').trim() === algofundPublishedSystemName;
+              return (
+                <Col xs={24} sm={12} xl={8} key={String(system?.id || system?.name || Math.random())}>
+                  <Card
+                    size="small"
+                    style={isCurrent ? { borderColor: '#52c41a', borderWidth: 2 } : undefined}
+                  >
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Typography.Text strong style={{ fontSize: 13 }}>{tsDisplayName(system.name)}</Typography.Text>
+                      <Space size={4} wrap>
+                        {isCurrent ? <Tag color="gold">Подключена</Tag> : null}
+                        {system.isActive ? <Tag color="success">Торгуется</Tag> : <Tag color="default">Приостановлена</Tag>}
+                        <Tag color="cyan">Участников: {Number(system.memberCount || 0)}</Tag>
+                      </Space>
+                    </Space>
+                  </Card>
+                </Col>
+              );
+            })}
+          </Row>
+        </Card>
       ) : (
         <Card className="battletoads-card" size="small">
           <Empty
@@ -1097,64 +1125,81 @@ const ClientCabinet: React.FC = () => {
             {algofundAvailableSystems.length === 0 ? (
               <Empty description="Торговые системы Алгофонда пока не опубликованы" />
             ) : (
-              <Row gutter={[12, 12]}>
-                {algofundAvailableSystems.map((system) => {
-                  const isCurrent = String(system?.name || '').trim() === algofundPublishedSystemName;
-                  return (
-                    <Col xs={24} md={12} xl={8} key={String(system?.id || system?.name || Math.random())}>
-                      <Card
-                        size="small"
-                        className="battletoads-card"
-                        style={isCurrent ? { borderColor: '#52c41a', borderWidth: 2 } : undefined}
-                        title={
-                          <Space>
-                            <Typography.Text strong>{tsDisplayName(system.name)}</Typography.Text>
-                            {isCurrent ? <Tag color="gold" style={{ marginLeft: 4 }}>Активна</Tag> : null}
-                          </Space>
-                        }
-                      >
-                        <Space wrap style={{ marginBottom: 8 }}>
-                          <Tag color="cyan">Участников: {Number(system.memberCount || 0)}</Tag>
-                          {system.isActive ? <Tag color="success">Торгуется</Tag> : <Tag color="default">Приостановлена</Tag>}
+              <>
+                {algofundWorkspace.capabilities?.settings ? (
+                  <div style={{ marginBottom: 16, padding: '8px 12px', background: '#fafafa', borderRadius: 6 }}>
+                    <Row align="middle" gutter={16}>
+                      <Col flex="auto">
+                        <Typography.Text strong>Риск × {formatNumber(algofundRiskMultiplier, 2)}</Typography.Text>
+                        <Slider
+                          style={{ margin: '4px 0 0' }}
+                          min={0}
+                          max={toFinite(algofundWorkspace.plan?.risk_cap_max, 1)}
+                          step={0.05}
+                          value={algofundRiskMultiplier}
+                          onChange={(v) => setAlgofundRiskMultiplier(Math.min(toFinite(v), toFinite(algofundWorkspace.plan?.risk_cap_max, 1)))}
+                        />
+                      </Col>
+                      <Col>
+                        <Space>
+                          <Button size="small" type="primary" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
+                            Сохранить
+                          </Button>
+                          <Button size="small" loading={actionLoading === 'algofund-refresh'} onClick={() => void refreshAlgofundState()}>
+                            Обновить
+                          </Button>
                         </Space>
-                        {isCurrent && algofundPreviewSeries.length > 0 ? (
-                          <div style={{ height: 120, marginBottom: 8 }}>
-                            <ChartComponent data={algofundPreviewSeries} type="line" />
-                          </div>
-                        ) : null}
-                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                          {isCurrent
-                            ? 'Подключена к вашему аккаунту'
-                            : 'Запросите подключение ниже'}
-                        </Typography.Text>
-                      </Card>
-                    </Col>
-                  );
-                })}
-              </Row>
+                      </Col>
+                    </Row>
+                  </div>
+                ) : null}
+                <Row gutter={[12, 12]}>
+                  {algofundAvailableSystems.map((system) => {
+                    const isCurrent = String(system?.name || '').trim() === algofundPublishedSystemName;
+                    const previewSummary = isCurrent ? (algofundWorkspace?.preview?.summary || null) : null;
+                    return (
+                      <Col xs={24} md={12} xl={8} key={String(system?.id || system?.name || Math.random())}>
+                        <Card
+                          size="small"
+                          className="battletoads-card"
+                          style={isCurrent ? { borderColor: '#52c41a', borderWidth: 2 } : { opacity: 0.85 }}
+                          title={
+                            <Space>
+                              <Typography.Text strong>{tsDisplayName(system.name)}</Typography.Text>
+                              {isCurrent ? <Tag color="gold" style={{ marginLeft: 4 }}>Подключена</Tag> : null}
+                            </Space>
+                          }
+                        >
+                          <Space wrap style={{ marginBottom: 8 }}>
+                            <Tag color="cyan">Участников: {Number(system.memberCount || 0)}</Tag>
+                            {system.isActive ? <Tag color="success">Торгуется</Tag> : <Tag color="default">Приостановлена</Tag>}
+                          </Space>
+                          {isCurrent && algofundPreviewSeries.length > 0 ? (
+                            <div style={{ height: 120, marginBottom: 8 }}>
+                              <ChartComponent data={algofundPreviewSeries} type="line" />
+                            </div>
+                          ) : null}
+                          {previewSummary ? (
+                            <Row gutter={[8, 4]} style={{ marginBottom: 8 }}>
+                              {previewSummary.totalReturnPercent != null ? <Col span={12}><Statistic title="Доход" value={formatPercent(previewSummary.totalReturnPercent)} valueStyle={{ fontSize: 14 }} /></Col> : null}
+                              {previewSummary.maxDrawdownPercent != null ? <Col span={12}><Statistic title="Макс. DD" value={formatPercent(previewSummary.maxDrawdownPercent)} valueStyle={{ fontSize: 14 }} /></Col> : null}
+                              {previewSummary.profitFactor != null ? <Col span={12}><Statistic title="PF" value={formatNumber(previewSummary.profitFactor)} valueStyle={{ fontSize: 14 }} /></Col> : null}
+                              {previewSummary.tradesCount != null ? <Col span={12}><Statistic title="Сделки" value={formatNumber(previewSummary.tradesCount, 0)} valueStyle={{ fontSize: 14 }} /></Col> : null}
+                            </Row>
+                          ) : null}
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            {isCurrent
+                              ? 'Подключена к вашему аккаунту'
+                              : 'Запросите подключение ниже'}
+                          </Typography.Text>
+                        </Card>
+                      </Col>
+                    );
+                  })}
+                </Row>
+              </>
             )}
           </Card>
-
-          {algofundWorkspace.capabilities?.settings ? (
-            <Card className="battletoads-card" title="Риск-профиль" size="small">
-              <Typography.Text strong>Мультипликатор риска: {formatNumber(algofundRiskMultiplier, 2)}</Typography.Text>
-              <Slider
-                min={0}
-                max={toFinite(algofundWorkspace.plan?.risk_cap_max, 1)}
-                step={0.05}
-                value={algofundRiskMultiplier}
-                onChange={(v) => setAlgofundRiskMultiplier(Math.min(toFinite(v), toFinite(algofundWorkspace.plan?.risk_cap_max, 1)))}
-              />
-              <Space wrap style={{ marginTop: 8 }}>
-                <Button type="primary" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
-                  Сохранить риск-профиль
-                </Button>
-                <Button loading={actionLoading === 'algofund-refresh'} onClick={() => void refreshAlgofundState()}>
-                  Обновить предпросмотр
-                </Button>
-              </Space>
-            </Card>
-          ) : null}
 
           <Card className="battletoads-card" title="Подключение / отключение" size="small">
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
