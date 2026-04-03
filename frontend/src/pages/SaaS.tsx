@@ -2489,6 +2489,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [synctradeExecuting, setSynctradeExecuting] = useState(false);
   const [synctradeLivePnl, setSynctradeLivePnl] = useState<Record<number, { masterPnl: number; totalPnl: number }>>({});
 
+  // SyncAuto state
+  const [syncAutoStatus, setSyncAutoStatus] = useState<any>(null);
+  const [syncAutoLoading, setSyncAutoLoading] = useState(false);
+  const [syncAutoMaxPairs, setSyncAutoMaxPairs] = useState(6);
+  const [syncAutoLevMin, setSyncAutoLevMin] = useState(15);
+  const [syncAutoLevMax, setSyncAutoLevMax] = useState(30);
+  const [syncAutoLotPercent, setSyncAutoLotPercent] = useState(80);
+
   const [strategyOfferIds, setStrategyOfferIds] = useState<string[]>([]);
   const [strategySystemProfileId, setStrategySystemProfileId] = useState<number | null>(null);
   const [strategyNewProfileName, setStrategyNewProfileName] = useState('');
@@ -4153,6 +4161,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setSynctradeEnabled(Boolean(data?.profile?.enabled));
       setSynctradeHedgeAccounts(Array.isArray(data?.profile?.hedgeAccounts) ? data.profile.hedgeAccounts : []);
       setSynctradeSessions(Array.isArray(data?.sessions) ? data.sessions : []);
+      // Also fetch auto-engine status
+      try { const autoRes = await axios.get('/api/saas/synctrade/auto/status'); setSyncAutoStatus(autoRes.data); } catch { /* ignore */ }
     } catch (error: any) {
       setSynctradeError(String(error?.response?.data?.error || error?.message || 'Failed to load synctrade state'));
       setSynctradeState(null);
@@ -4216,6 +4226,46 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to close session'));
     } finally {
       setSynctradeExecuting(false);
+    }
+  };
+
+  // SyncAuto handlers
+  const fetchSyncAutoStatus = async () => {
+    try {
+      const res = await axios.get('/api/saas/synctrade/auto/status');
+      setSyncAutoStatus(res.data);
+    } catch { /* ignore */ }
+  };
+
+  const startSyncAuto = async () => {
+    if (!synctradeTenantId) return;
+    setSyncAutoLoading(true);
+    try {
+      await axios.post(`/api/saas/synctrade/${synctradeTenantId}/auto/start`, {
+        maxPairs: syncAutoMaxPairs,
+        leverageRange: [syncAutoLevMin, syncAutoLevMax],
+        lotPercent: syncAutoLotPercent,
+      });
+      messageApi.success('SyncAuto запущен');
+      await fetchSyncAutoStatus();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Ошибка запуска'));
+    } finally {
+      setSyncAutoLoading(false);
+    }
+  };
+
+  const stopSyncAuto = async (closeAll: boolean) => {
+    setSyncAutoLoading(true);
+    try {
+      const res = await axios.post(`/api/saas/synctrade/${synctradeTenantId}/auto/stop`, { closeAll });
+      messageApi.success(`SyncAuto остановлен. Открыто: ${res.data?.totalOpened}, Закрыто: ${res.data?.totalClosed}`);
+      setSyncAutoStatus(null);
+      if (synctradeTenantId) await loadSynctradeTenant(synctradeTenantId);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Ошибка остановки'));
+    } finally {
+      setSyncAutoLoading(false);
     }
   };
 
@@ -11121,6 +11171,69 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 </Col>
                               ) : null}
                             </Row>
+                          </Card>
+
+                          {/* SyncAuto Engine */}
+                          <Card size="small" title="⚡ Авто-режим (SyncAuto Engine)" style={{ marginTop: 16 }}>
+                            {syncAutoStatus?.running ? (
+                              <>
+                                <Alert type="success" showIcon message={`Движок работает. Активных пар: ${Object.keys(syncAutoStatus.activePairs || {}).length}/${syncAutoStatus.config?.maxPairs || '?'}, циклов: ${syncAutoStatus.totalCycles || 0}`} style={{ marginBottom: 12 }} />
+                                <Row gutter={[12, 8]}>
+                                  {Object.entries(syncAutoStatus.activePairs || {}).map(([sym, info]: [string, any]) => (
+                                    <Col key={sym} xs={12} md={6}>
+                                      <div style={{ background: '#1a1a2e', padding: '8px 12px', borderRadius: 6, fontSize: 12 }}>
+                                        <div style={{ color: '#00ff88', fontWeight: 600 }}>{sym}</div>
+                                        <div style={{ color: '#aaa' }}>lev: {info.leverage}x | entry: {info.entryPrice}</div>
+                                        <div style={{ color: '#888' }}>{Math.round(info.runningMs / 60000)} мин</div>
+                                      </div>
+                                    </Col>
+                                  ))}
+                                </Row>
+                                {(syncAutoStatus.recentErrors || []).length > 0 && (
+                                  <Alert type="warning" showIcon message="Последние ошибки" description={<pre style={{ fontSize: 11, margin: 0, maxHeight: 100, overflow: 'auto' }}>{(syncAutoStatus.recentErrors || []).join('\n')}</pre>} style={{ marginTop: 8 }} />
+                                )}
+                                <Row gutter={12} style={{ marginTop: 12 }}>
+                                  <Col>
+                                    <Button onClick={() => void fetchSyncAutoStatus()} loading={syncAutoLoading}>Обновить</Button>
+                                  </Col>
+                                  <Col>
+                                    <Button danger onClick={() => void stopSyncAuto(false)} loading={syncAutoLoading}>Стоп (оставить позиции)</Button>
+                                  </Col>
+                                  <Col>
+                                    <Button danger type="primary" onClick={() => void stopSyncAuto(true)} loading={syncAutoLoading}>Стоп + закрыть все</Button>
+                                  </Col>
+                                </Row>
+                              </>
+                            ) : (
+                              <>
+                                <Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+                                  Автоматический скан ликвидных пар, открытие позиций с адаптивным leverage, защита от ликвидации.
+                                </Text>
+                                <Row gutter={[16, 12]} align="middle">
+                                  <Col xs={12} md={4}>
+                                    <Text strong style={{ fontSize: 12 }}>Макс пар</Text>
+                                    <InputNumber style={{ width: '100%', marginTop: 4 }} min={1} max={20} value={syncAutoMaxPairs} onChange={(v) => setSyncAutoMaxPairs(Number(v ?? 6))} />
+                                  </Col>
+                                  <Col xs={12} md={4}>
+                                    <Text strong style={{ fontSize: 12 }}>Lev мин</Text>
+                                    <InputNumber style={{ width: '100%', marginTop: 4 }} min={1} max={50} value={syncAutoLevMin} onChange={(v) => setSyncAutoLevMin(Number(v ?? 15))} />
+                                  </Col>
+                                  <Col xs={12} md={4}>
+                                    <Text strong style={{ fontSize: 12 }}>Lev макс</Text>
+                                    <InputNumber style={{ width: '100%', marginTop: 4 }} min={1} max={50} value={syncAutoLevMax} onChange={(v) => setSyncAutoLevMax(Number(v ?? 30))} />
+                                  </Col>
+                                  <Col xs={12} md={4}>
+                                    <Text strong style={{ fontSize: 12 }}>Lot %</Text>
+                                    <InputNumber style={{ width: '100%', marginTop: 4 }} min={1} max={100} value={syncAutoLotPercent} onChange={(v) => setSyncAutoLotPercent(Number(v ?? 80))} />
+                                  </Col>
+                                  <Col xs={24} md={6}>
+                                    <Button type="primary" style={{ marginTop: 20, width: '100%', background: '#7c3aed' }} loading={syncAutoLoading} disabled={!synctradeEnabled || synctradeHedgeAccounts.length === 0} onClick={() => void startSyncAuto()}>
+                                      ⚡ Запустить авто
+                                    </Button>
+                                  </Col>
+                                </Row>
+                              </>
+                            )}
                           </Card>
 
                           {/* Sessions History */}
