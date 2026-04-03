@@ -1869,19 +1869,19 @@ export const applySymbolRiskSettings = async (
 
     try {
       if (typeof entry.client.setLeverage === 'function') {
-        // MEXC requires setting leverage for both long and short sides
-        try {
+        const isMexc = entry.client.id === 'mexc';
+        if (isMexc) {
+          // MEXC requires openType (1=isolated,2=cross) + positionType (1=long,2=short)
+          const openType = marginType === 'isolated' ? 1 : 2;
           await entry.limiter.schedule(() =>
-            entry.client.setLeverage(safeLeverage, ccxtSymbol, { side: 'long' })
+            entry.client.setLeverage(safeLeverage, ccxtSymbol, { openType, positionType: 1 })
           );
-        } catch { /* some exchanges don't support side param */ }
-        try {
           await entry.limiter.schedule(() =>
-            entry.client.setLeverage(safeLeverage, ccxtSymbol, { side: 'short' })
+            entry.client.setLeverage(safeLeverage, ccxtSymbol, { openType, positionType: 2 })
           );
-        } catch { /* some exchanges don't support side param */ }
-        // Also try without side (works for most exchanges)
-        await entry.limiter.schedule(() => entry.client.setLeverage(safeLeverage, ccxtSymbol));
+        } else {
+          await entry.limiter.schedule(() => entry.client.setLeverage(safeLeverage, ccxtSymbol));
+        }
         logger.info(`Set leverage ${safeLeverage}x for ${apiKeyName} ${symbol}`);
       }
     } catch (error) {
