@@ -404,6 +404,7 @@ type CopytradingProfileRow = {
   copy_precision: string;
   copy_ratio: number;
   copy_enabled: number;
+  last_master_positions_json?: string;
 };
 
 type AlgofundRequestRow = {
@@ -8828,7 +8829,15 @@ export const updateCopytradingState = async (
   return getCopytradingState(tenantId);
 };
 
-// ─── Copytrading sessions ─────────────────────────────────────────────────────
+export const stopCopytradingBaseline = async (tenantId: number) => {
+  await db.run(
+    `UPDATE copytrading_profiles
+     SET copy_enabled = 0, last_master_positions_json = '[]', updated_at = CURRENT_TIMESTAMP
+     WHERE tenant_id = ?`,
+    [tenantId]
+  );
+  return getCopytradingState(tenantId);
+};
 
 const ensureCopytradingSessionsTable = async (): Promise<void> => {
   await db.run(`
@@ -8841,7 +8850,12 @@ const ensureCopytradingSessionsTable = async (): Promise<void> => {
       market_type TEXT DEFAULT 'swap',
       entry_price REAL,
       exit_price REAL,
+      master_qty REAL DEFAULT 0,
       follower_results_json TEXT DEFAULT '{}',
+      avg_delay_ms REAL DEFAULT 0,
+      avg_match_pct REAL DEFAULT 0,
+      followers_ok INTEGER DEFAULT 0,
+      followers_total INTEGER DEFAULT 0,
       total_pnl REAL DEFAULT 0,
       duration_ms INTEGER DEFAULT 0,
       error TEXT,
@@ -8855,17 +8869,20 @@ const ensureCopytradingSessionsTable = async (): Promise<void> => {
     CREATE INDEX IF NOT EXISTS idx_copytrading_sessions_profile
       ON copytrading_sessions (profile_id, started_at DESC)
   `).catch(() => {});
+  // Migrations for existing table
+  await db.run(`ALTER TABLE copytrading_sessions ADD COLUMN master_qty REAL DEFAULT 0`).catch(() => {});
+  await db.run(`ALTER TABLE copytrading_sessions ADD COLUMN avg_delay_ms REAL DEFAULT 0`).catch(() => {});
+  await db.run(`ALTER TABLE copytrading_sessions ADD COLUMN avg_match_pct REAL DEFAULT 0`).catch(() => {});
+  await db.run(`ALTER TABLE copytrading_sessions ADD COLUMN followers_ok INTEGER DEFAULT 0`).catch(() => {});
+  await db.run(`ALTER TABLE copytrading_sessions ADD COLUMN followers_total INTEGER DEFAULT 0`).catch(() => {});
 };
 
 export const executeCopytradingSession = async (
   tenantId: number,
   payload: {
-    symbol?: string;
-    masterSide?: 'long' | 'short';
-    leverage?: number;
-    lotPercent?: number;
     marketType?: 'spot' | 'swap';
-  }
+    symbol?: string; // optional: filter sync to a specific symbol only
+  } = {}
 ) => {
   await ensureCopytradingSessionsTable();
 
@@ -8876,28 +8893,25 @@ export const executeCopytradingSession = async (
   const followers = safeJsonParse<Array<Record<string, unknown>>>(profile.tenants_json, []);
   if (followers.length === 0) throw new Error('No follower accounts configured');
 
-  const symbol = asString(payload.symbol, 'BTCUSDT') || 'BTCUSDT';
-  const masterSide = payload.masterSide === 'short' ? 'short' : 'long';
-  const leverage = clampNumber(Math.floor(asNumber(payload.leverage, 5)), 1, 125);
-  const lotPercent = clampNumber(asNumber(payload.lotPercent, 10), 1, 100);
   const marketType = payload.marketType === 'spot' ? 'spot' : 'swap';
   const isSpot = marketType === 'spot';
   const copyRatio = clampNumber(asNumber(profile.copy_ratio, 1), 0.01, 100);
+  const normKey = (s: unknown) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
   const log: string[] = [];
+  const tsStr = () => new Date().toISOString().slice(11, 23);
   const addLog = (msg: string) => {
-    const ts = new Date().toISOString().slice(11, 23);
-    log.push(`[${ts}] ${msg}`);
-    logger.info(`[Copytrading] ${msg}`);
+    log.push(`[${tsStr()}] ${msg}`);
+    logger.info(`[Copytrading Mirror] ${msg}`);
   };
 
   const sessionResult = await db.run(
     `INSERT INTO copytrading_sessions (profile_id, status, symbol, master_side, market_type, log_json, started_at)
-     VALUES (?, 'running', ?, ?, ?, '[]', CURRENT_TIMESTAMP)`,
-    [profile.id, symbol, masterSide, marketType]
+     VALUES (?, 'running', 'MULTI', 'mirror', ?, '[]', CURRENT_TIMESTAMP)`,
+    [profile.id, marketType]
   );
   const sessionId = (sessionResult as any)?.lastID;
-  addLog(`Session #${sessionId} created: ${symbol} master=${masterSide} lev=${leverage} lot=${lotPercent}% market=${marketType} ratio=${copyRatio}`);
+  addLog(`Sync session #${sessionId}: mirror mode, marketType=${marketType}, copyRatio=${copyRatio}`);
 
   const saveLog = async () => {
     await db.run(`UPDATE copytrading_sessions SET log_json = ? WHERE id = ?`, [JSON.stringify(log), sessionId]);
@@ -8908,184 +8922,229 @@ export const executeCopytradingSession = async (
     if (!masterKeyName) throw new Error('Master API key not configured');
 
     await ensureExchangeClientInitialized(masterKeyName);
-    addLog(`Master key initialized: ${masterKeyName}`);
 
     for (const f of followers) {
       const keyName = asString(f.apiKeyName, '');
-      if (keyName) {
-        await ensureExchangeClientInitialized(keyName);
-        addLog(`Follower key initialized: ${asString(f.displayName, keyName)}`);
-      }
+      if (keyName) await ensureExchangeClientInitialized(keyName);
     }
 
-    const { getBalances, placeOrder, applySymbolRiskSettings, getInstrumentInfo } = await import('../bot/exchange');
+    const { getBalances, placeOrder, closePosition, getPositions, applySymbolRiskSettings, getInstrumentInfo } =
+      await import('../bot/exchange');
 
-    // Instrument info (futures only — for contractSize / minQty)
-    let minOrderQty = 1;
-    let qtyStep = 1;
-    let contractSize = 1;
-    if (!isSpot) {
-      try {
-        const instInfo = await getInstrumentInfo(masterKeyName, symbol);
-        const lotFilter = (instInfo as any)?.lotSizeFilter;
-        const rawMin = Number(lotFilter?.minOrderQty ?? 0);
-        const rawStep = Number(lotFilter?.qtyStep ?? 0);
-        const rawCS = Number((instInfo as any)?.contractSize ?? 1);
-        if (Number.isFinite(rawMin) && rawMin > 0) minOrderQty = rawMin;
-        if (Number.isFinite(rawStep) && rawStep > 0) qtyStep = rawStep;
-        if (Number.isFinite(rawCS) && rawCS > 0) contractSize = rawCS;
-        addLog(`Instrument: minQty=${minOrderQty} qtyStep=${qtyStep} contractSize=${contractSize}`);
-      } catch (err: any) {
-        addLog(`⚠ Could not get instrument info: ${err.message}`);
+    // === READ master positions (READ-ONLY — no trading on master key) ===
+    addLog(`Reading master positions from ${masterKeyName}...`);
+    let masterPositions: any[];
+    try {
+      masterPositions = await getPositions(masterKeyName);
+    } catch (err: any) {
+      const msg = String(err?.message || err || '');
+      if (msg.includes('700007') || msg.includes('No permission to access the endpoint')) {
+        throw new Error(
+          `MEXC API key "${masterKeyName}" lacks Contract Read permission. Enable it in MEXC → API Management.`
+        );
       }
+      throw err;
     }
 
-    const roundToStep = (val: number): number => {
-      if (qtyStep <= 0) return val;
-      const result = Math.floor(val / qtyStep) * qtyStep;
-      const decimals = String(qtyStep).includes('.') ? String(qtyStep).split('.')[1].length : 0;
+    // Filter by symbol if requested
+    const masterPosFiltered = payload.symbol
+      ? masterPositions.filter((p: any) => normKey(p.symbol) === normKey(payload.symbol))
+      : masterPositions;
+
+    addLog(`Master has ${masterPosFiltered.length} open position(s)`);
+
+    // Load last known master positions from DB
+    const lastPositions = safeJsonParse<Array<Record<string, unknown>>>(
+      asString((profile as any).last_master_positions_json, '[]'),
+      []
+    );
+
+    const posKey = (p: any) => `${normKey(p.symbol)}_${String(p.side).toLowerCase()}`;
+    const currentPosMap = new Map<string, any>(masterPosFiltered.map((p: any) => [posKey(p), p]));
+    const lastPosMap = new Map<string, any>(lastPositions.map((p: any) => [posKey(p), p]));
+
+    // NEW positions: in current master but not in last snapshot
+    const newPositions = masterPosFiltered.filter((p: any) => !lastPosMap.has(posKey(p)));
+    // CLOSED positions: in last snapshot but no longer in master
+    const closedPositions = lastPositions.filter((p: any) => !currentPosMap.has(posKey(p)));
+
+    addLog(`Delta: ${newPositions.length} new, ${closedPositions.length} closed`);
+
+    // Get master equity for proportional sizing
+    const masterBalances = await getBalances(masterKeyName);
+    const masterUsdtBal = (masterBalances || []).find((b: any) => String(b.coin).toUpperCase() === 'USDT');
+    const masterEquity = asNumber(masterUsdtBal?.walletBalance, 0);
+    addLog(`Master USDT equity: ${masterEquity.toFixed(2)}`);
+
+    // Instrument info cache (for futures sizing)
+    const instCache: Record<string, { minQty: number; qtyStep: number; contractSize: number }> = {};
+    const getInst = async (sym: string) => {
+      if (instCache[sym]) return instCache[sym];
+      let minQty = 1, qtyStep = 1, contractSize = 1;
+      if (!isSpot) {
+        try {
+          const info = await getInstrumentInfo(masterKeyName, sym);
+          const lf = (info as any)?.lotSizeFilter;
+          const rawMin = Number(lf?.minOrderQty ?? 0);
+          const rawStep = Number(lf?.qtyStep ?? 0);
+          const rawCS = Number((info as any)?.contractSize ?? 1);
+          if (Number.isFinite(rawMin) && rawMin > 0) minQty = rawMin;
+          if (Number.isFinite(rawStep) && rawStep > 0) qtyStep = rawStep;
+          if (Number.isFinite(rawCS) && rawCS > 0) contractSize = rawCS;
+        } catch { /* non-critical, use defaults */ }
+      }
+      instCache[sym] = { minQty, qtyStep, contractSize };
+      return instCache[sym];
+    };
+
+    const roundToStep = (val: number, step: number): number => {
+      if (step <= 0) return val;
+      const result = Math.floor(val / step) * step;
+      const decimals = String(step).includes('.') ? String(step).split('.')[1].length : 0;
       return Number(result.toFixed(decimals));
     };
-
-    const enforceMinLot = (val: number): number => {
-      const rounded = roundToStep(val);
-      return rounded < minOrderQty ? minOrderQty : rounded;
+    const enforceMin = (val: number, min: number, step: number): number => {
+      const r = roundToStep(val, step);
+      return r < min ? min : r;
     };
 
-    // Apply leverage on master (futures only)
-    if (!isSpot) {
-      try {
-        await applySymbolRiskSettings(masterKeyName, symbol, 'cross', leverage);
-        addLog(`Master leverage set: ${leverage}x`);
-      } catch (err: any) {
-        addLog(`⚠ Master leverage: ${err.message}`);
+    const followerResults: Record<string, any> = {};
+    let followersOk = 0;
+    let followersTotal = 0;
+
+    // === OPEN new positions on followers ===
+    for (const masterPos of newPositions) {
+      const sym = asString(masterPos.symbol, '');
+      const side = asString(masterPos.side, 'Buy') as 'Buy' | 'Sell';
+      const masterContracts = asNumber((masterPos as any).size, 0);
+      const leverage = clampNumber(asNumber((masterPos as any).leverage, 5), 1, 125);
+      const { minQty, qtyStep } = await getInst(sym);
+
+      addLog(`NEW: ${sym} ${side} x${masterContracts} contracts (lev ${leverage}x)`);
+
+      for (const f of followers) {
+        const keyName = asString(f.apiKeyName, '');
+        const displayName = asString(f.displayName, keyName);
+        if (!keyName) continue;
+
+        followersTotal++;
+        const resultKey = `open:${sym}:${side}:${displayName}`;
+        const startAt = Date.now();
+
+        try {
+          // Set leverage on follower (non-critical)
+          if (!isSpot) {
+            try {
+              const followerLev = clampNumber(Math.floor(asNumber(f.leverage, leverage)), 1, 125);
+              await applySymbolRiskSettings(keyName, sym, 'cross', followerLev);
+            } catch { /* non-critical */ }
+          }
+
+          // Get follower equity for proportional sizing
+          const folBalances = await getBalances(keyName);
+          const folUsdtBal = (folBalances || []).find((b: any) => String(b.coin).toUpperCase() === 'USDT');
+          const followerEquity = asNumber(folUsdtBal?.walletBalance, 0);
+
+          // Scale contracts: master qty × (follower equity / master equity) × copyRatio
+          const equityRatio = masterEquity > 0 ? followerEquity / masterEquity : 1;
+          const rawQty = masterContracts * equityRatio * copyRatio;
+          const followerContracts = isSpot
+            ? Number(rawQty.toFixed(6))
+            : enforceMin(rawQty, minQty, qtyStep);
+
+          if (followerContracts <= 0) {
+            addLog(`✗ ${displayName}: qty too small (equity=${followerEquity.toFixed(2)})`);
+            followerResults[resultKey] = { status: 'skipped', error: 'qty too small' };
+            continue;
+          }
+
+          addLog(`${displayName}: ${side} ${followerContracts} ${sym} (equityRatio=${equityRatio.toFixed(3)}, copyRatio=${copyRatio})`);
+          await placeOrder(keyName, sym, side, String(followerContracts), undefined, { marketType });
+
+          const delayMs = Date.now() - startAt;
+          addLog(`✓ ${displayName} opened in ${delayMs}ms`);
+          followerResults[resultKey] = { status: 'ok', qty: followerContracts, delayMs };
+          followersOk++;
+        } catch (err: any) {
+          addLog(`✗ ${displayName} FAILED: ${err.message}`);
+          followerResults[resultKey] = { status: 'failed', error: err.message };
+        }
       }
     }
 
-    // Master balance
-    const masterBalances = await getBalances(masterKeyName);
-    const usdtBal = (masterBalances || []).find((b: any) => String(b.coin).toUpperCase() === 'USDT');
-    const masterEquity = asNumber(usdtBal?.walletBalance, 0);
-    addLog(`Master USDT balance: ${masterEquity.toFixed(2)}`);
-    if (masterEquity <= 0) throw new Error('Master account has no USDT balance');
+    // === CLOSE removed positions on followers ===
+    for (const closedPos of closedPositions) {
+      const sym = asString(closedPos.symbol, '');
+      const side = asString(closedPos.side, 'Buy') as 'Buy' | 'Sell';
 
-    const orderValueUsdt = (masterEquity * lotPercent) / 100;
+      addLog(`CLOSED by master: ${sym} ${side} → closing followers`);
 
-    // Get current price
-    const { getMarketData } = await import('../bot/exchange');
-    const marketData = await getMarketData(masterKeyName, symbol, '1m', 1);
-    const price = asNumber((marketData?.[0] as any)?.[4], 0);
-    if (price <= 0) throw new Error('Cannot get current market price');
-    addLog(`Market price ${symbol}: ${price}`);
+      for (const f of followers) {
+        const keyName = asString(f.apiKeyName, '');
+        const displayName = asString(f.displayName, keyName);
+        if (!keyName) continue;
 
-    // Calculate master qty
-    let masterQty: number;
-    if (isSpot) {
-      // Spot: buy base asset with orderValueUsdt
-      masterQty = orderValueUsdt / price;
-      const spotDecimals = 6;
-      masterQty = Number(masterQty.toFixed(spotDecimals));
-    } else {
-      masterQty = enforceMinLot((orderValueUsdt * leverage) / (price * contractSize));
+        followersTotal++;
+        const resultKey = `close:${sym}:${side}:${displayName}`;
+
+        try {
+          // Read follower's actual open position to get qty
+          const folPositions = await getPositions(keyName, sym);
+          const folPos = folPositions.find(
+            (p: any) =>
+              normKey(p.symbol) === normKey(sym) &&
+              String(p.side).toLowerCase() === String(side).toLowerCase()
+          );
+
+          if (!folPos || asNumber((folPos as any).size, 0) <= 0) {
+            addLog(`${displayName}: no matching ${sym} ${side} position, skipping`);
+            followerResults[resultKey] = { status: 'skipped', error: 'position not found' };
+            continue;
+          }
+
+          const qty = asNumber((folPos as any).size, 0);
+          await closePosition(keyName, sym, String(qty), side, { marketType });
+          addLog(`✓ ${displayName}: closed ${qty} ${sym} ${side}`);
+          followerResults[resultKey] = { status: 'ok', qty };
+          followersOk++;
+        } catch (err: any) {
+          addLog(`✗ ${displayName} close FAILED: ${err.message}`);
+          followerResults[resultKey] = { status: 'failed', error: err.message };
+        }
+      }
     }
 
-    if (masterQty <= 0) throw new Error('Calculated quantity is too small');
-    addLog(`Master order: ${masterSide === 'long' ? 'Buy' : 'Sell'} qty=${masterQty} (value=${orderValueUsdt.toFixed(2)} USDT)`);
-
-    await saveLog();
-
-    // Place master order
-    const masterOrder = await placeOrder(
-      masterKeyName,
-      symbol,
-      masterSide === 'long' ? 'Buy' : 'Sell',
-      String(masterQty),
-      undefined,
-      { marketType }
+    // === Persist current master positions as new baseline ===
+    await db.run(
+      `UPDATE copytrading_profiles SET last_master_positions_json = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?`,
+      [JSON.stringify(masterPosFiltered), tenantId]
     );
-    addLog(`✓ Master order placed`);
 
-    // Place follower orders
-    const followerResults: Record<string, { qty: number; status: 'ok' | 'failed'; error?: string }> = {};
-
-    const followerPromises = followers.map(async (f) => {
-      const keyName = asString(f.apiKeyName, '');
-      const displayName = asString(f.displayName, keyName);
-      if (!keyName) return;
-
-      try {
-        // Apply leverage on follower (futures only)
-        if (!isSpot) {
-          try {
-            const followerLev = clampNumber(Math.floor(asNumber(f.leverage, leverage)), 1, 125);
-            await applySymbolRiskSettings(keyName, symbol, 'cross', followerLev);
-          } catch { /* non-critical */ }
-        }
-
-        const followerBalances = await getBalances(keyName);
-        const followerUsdtBal = (followerBalances || []).find((b: any) => String(b.coin).toUpperCase() === 'USDT');
-        const followerEquity = asNumber(followerUsdtBal?.walletBalance, 0);
-        addLog(`Follower ${displayName} USDT: ${followerEquity.toFixed(2)}`);
-
-        // Apply copy ratio to scale the position relative to follower balance
-        const followerOrderValue = (followerEquity * lotPercent) / 100 * copyRatio;
-        let followerQty: number;
-        if (isSpot) {
-          followerQty = followerOrderValue / price;
-          followerQty = Number(followerQty.toFixed(6));
-        } else {
-          followerQty = enforceMinLot((followerOrderValue * leverage) / (price * contractSize));
-        }
-
-        if (followerQty <= 0) {
-          addLog(`✗ Follower ${displayName}: qty too small, skipped`);
-          followerResults[displayName] = { qty: 0, status: 'failed', error: 'qty too small' };
-          return;
-        }
-
-        addLog(`Follower ${displayName}: ${masterSide === 'long' ? 'Buy' : 'Sell'} qty=${followerQty} (ratio=${copyRatio})`);
-
-        await placeOrder(
-          keyName,
-          symbol,
-          masterSide === 'long' ? 'Buy' : 'Sell',
-          String(followerQty),
-          undefined,
-          { marketType }
-        );
-        addLog(`✓ Follower ${displayName} order placed`);
-        followerResults[displayName] = { qty: followerQty, status: 'ok' };
-      } catch (err: any) {
-        addLog(`✗ Follower ${displayName} FAILED: ${err.message}`);
-        followerResults[displayName] = { qty: 0, status: 'failed', error: err.message };
-      }
-    });
-
-    await Promise.all(followerPromises);
+    const summary = {
+      masterPositions: masterPosFiltered.length,
+      newPositions: newPositions.length,
+      closedPositions: closedPositions.length,
+      followersOk,
+      followersTotal,
+    };
+    addLog(
+      `Done: masterPos=${summary.masterPositions}, opened=${summary.newPositions}, closed=${summary.closedPositions}, followers=${followersOk}/${followersTotal}`
+    );
+    await saveLog();
 
     await db.run(
       `UPDATE copytrading_sessions
-       SET status = 'open', entry_price = ?, follower_results_json = ?, log_json = ?
+       SET status = 'open', follower_results_json = ?, followers_ok = ?, followers_total = ?, log_json = ?
        WHERE id = ?`,
-      [price, JSON.stringify(followerResults), JSON.stringify(log), sessionId]
+      [JSON.stringify(followerResults), followersOk, followersTotal, JSON.stringify(log), sessionId]
     );
-
-    await db.run(
-      `UPDATE copytrading_profiles SET updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?`,
-      [tenantId]
-    );
-
-    addLog(`Session #${sessionId} → open ✓`);
-    await saveLog();
 
     return {
       sessionId,
-      status: 'open',
-      symbol,
-      masterSide,
+      status: 'synced',
       marketType,
-      entryPrice: price,
-      masterOrder,
+      summary,
+      masterPositions: masterPosFiltered,
       followerResults,
       log,
     };
@@ -9246,6 +9305,84 @@ export const getCopytradingSessions = async (tenantId: number, limit = 50) => {
     followerResults: safeJsonParse<Record<string, unknown>>(asString(s.follower_results_json, '{}'), {}),
     log: safeJsonParse<string[]>(asString(s.log_json, '[]'), []),
   }));
+};
+
+export const getCopytradingStatus = async (tenantId: number) => {
+  await ensureCopytradingSessionsTable();
+  const profile = await getCopytradingProfile(tenantId);
+  if (!profile) throw new Error('Copytrading profile not found');
+  const active = (await db.all(
+    `SELECT id, symbol, master_side, market_type, status, entry_price, master_qty,
+            avg_delay_ms, avg_match_pct, followers_ok, followers_total, started_at
+     FROM copytrading_sessions
+     WHERE profile_id = ? AND status IN ('open', 'running')
+     ORDER BY started_at DESC`,
+    [profile.id]
+  ) || []) as Array<Record<string, unknown>>;
+  return {
+    isActive: active.length > 0,
+    activeSessions: active.length,
+    sessions: active,
+  };
+};
+
+export const getCopytradingReport = async (tenantId: number) => {
+  await ensureCopytradingSessionsTable();
+  const profile = await getCopytradingProfile(tenantId);
+  if (!profile) throw new Error('Copytrading profile not found');
+
+  const sessions = (await db.all(
+    `SELECT symbol, market_type, status, entry_price, exit_price, master_qty,
+            avg_delay_ms, avg_match_pct, followers_ok, followers_total,
+            total_pnl, duration_ms, started_at, finished_at
+     FROM copytrading_sessions
+     WHERE profile_id = ?
+     ORDER BY started_at DESC`,
+    [profile.id]
+  ) || []) as Array<Record<string, unknown>>;
+
+  const total = sessions.length;
+  const open = sessions.filter((s) => s.status === 'open' || s.status === 'running').length;
+  const closed = sessions.filter((s) => s.status === 'closed').length;
+  const errored = sessions.filter((s) => s.status === 'error').length;
+
+  const withMatch = sessions.filter((s) => asNumber(s.avg_match_pct, 0) > 0);
+  const avgMatchPct = withMatch.length > 0
+    ? withMatch.reduce((acc, s) => acc + asNumber(s.avg_match_pct, 0), 0) / withMatch.length
+    : 0;
+
+  const withDelay = sessions.filter((s) => asNumber(s.avg_delay_ms, 0) > 0);
+  const avgDelayMs = withDelay.length > 0
+    ? withDelay.reduce((acc, s) => acc + asNumber(s.avg_delay_ms, 0), 0) / withDelay.length
+    : 0;
+
+  const totalFollowers = sessions.reduce((acc, s) => acc + asNumber(s.followers_total, 0), 0);
+  const okFollowers = sessions.reduce((acc, s) => acc + asNumber(s.followers_ok, 0), 0);
+  const successRate = totalFollowers > 0 ? (okFollowers / totalFollowers) * 100 : 0;
+
+  // Per-symbol breakdown
+  const bySymbol: Record<string, { count: number; avgMatch: number; avgDelay: number }> = {};
+  for (const s of sessions) {
+    const sym = asString(s.symbol, '?');
+    if (!bySymbol[sym]) bySymbol[sym] = { count: 0, avgMatch: 0, avgDelay: 0 };
+    bySymbol[sym].count++;
+    bySymbol[sym].avgMatch += asNumber(s.avg_match_pct, 0);
+    bySymbol[sym].avgDelay += asNumber(s.avg_delay_ms, 0);
+  }
+  for (const sym of Object.keys(bySymbol)) {
+    const n = bySymbol[sym].count;
+    bySymbol[sym].avgMatch = Number((bySymbol[sym].avgMatch / n).toFixed(1));
+    bySymbol[sym].avgDelay = Math.round(bySymbol[sym].avgDelay / n);
+  }
+
+  return {
+    total, open, closed, errored,
+    avgMatchPct: Number(avgMatchPct.toFixed(1)),
+    avgDelayMs: Math.round(avgDelayMs),
+    totalFollowers, okFollowers,
+    successRate: Number(successRate.toFixed(1)),
+    bySymbol,
+  };
 };
 
 export const seedDemoSaasData = async () => {

@@ -624,6 +624,7 @@ export const initDB = async () => {
   await ensureColumn('strategy_client_profiles', 'active_system_profile_id INTEGER');
   await ensureColumn('algofund_profiles', "execution_api_key_name TEXT DEFAULT ''");
   await ensureColumn('copytrading_profiles', 'copy_ratio REAL DEFAULT 1');
+  await ensureColumn('copytrading_profiles', "last_master_positions_json TEXT DEFAULT '[]'");
 
   await db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_live_trade_events_source_trade_id

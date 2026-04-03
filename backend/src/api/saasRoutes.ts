@@ -47,6 +47,12 @@ import {
   removeAlgofundStorefrontSystem,
   getCopytradingState,
   updateCopytradingState,
+  stopCopytradingBaseline,
+  executeCopytradingSession,
+  closeCopytradingSession,
+  getCopytradingSessions,
+  getCopytradingReport,
+  getCopytradingStatus,
   getSynctradeState,
   updateSynctradeState,
   executeSynctradeSession,
@@ -983,6 +989,100 @@ router.patch('/copytrading/:tenantId', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS copytrading update error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/copytrading/:tenantId/execute', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const result = await executeCopytradingSession(tenantId, {
+      symbol: req.body.symbol,
+      marketType: req.body.marketType === 'spot' ? 'spot' : 'swap',
+    });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS copytrading execute error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/copytrading/:tenantId/stop', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const data = await stopCopytradingBaseline(tenantId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS copytrading stop error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/copytrading/:tenantId/close/:sessionId', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  const sessionId = Number(req.params.sessionId);
+  if (!Number.isFinite(tenantId) || !Number.isFinite(sessionId)) {
+    return res.status(400).json({ error: 'Invalid tenantId or sessionId' });
+  }
+  try {
+    const result = await closeCopytradingSession(tenantId, sessionId);
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS copytrading close error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/copytrading/:tenantId/sessions', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const sessions = await getCopytradingSessions(tenantId);
+    res.json({ success: true, sessions });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS copytrading sessions error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/copytrading/:tenantId/status', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const status = await getCopytradingStatus(tenantId);
+    res.json({ success: true, ...status });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS copytrading status error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/copytrading/:tenantId/report', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const report = await getCopytradingReport(tenantId);
+    res.json({ success: true, report });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS copytrading report error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

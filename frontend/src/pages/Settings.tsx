@@ -359,7 +359,7 @@ const Settings: React.FC = () => {
               <Option value="BingX">BingX Futures</Option>
               <Option value="Binance">Binance Futures</Option>
               <Option value="Weex">WEEX Futures</Option>
-              <Option value="MEXC">MEXC Futures</Option>
+              <Option value="MEXC Spot+Futures">MEXC Spot+Futures</Option>
             </Select>
           </Form.Item>
           <Form.Item label={t('settings.form.apiKey', 'API Key')} name="api_key" rules={[{ required: true }]}>

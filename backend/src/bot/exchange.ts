@@ -25,10 +25,13 @@ type NormalizedBalance = {
   availableBalance: string;
   usdValue: string;
   accountType: string;
+  marginUsed?: string;   // margin locked in positions (e.g. positionMargin for MEXC swap)
+  unrealisedPnl?: string; // unrealized PnL component of equity
 };
 
 type OrderOptions = {
   reduceOnly?: boolean;
+  marketType?: 'spot' | 'swap';
 };
 
 type MarketDataOptions = {
@@ -68,6 +71,12 @@ const toUiSymbol = (value: any): string => {
   const beforeColon = raw.split(':')[0];
   const withoutSlash = beforeColon.replace('/', '');
   return withoutSlash.replace(/[^A-Z0-9]/g, '');
+};
+
+// Convert swap ccxt symbol to spot: 'BTC/USDT:USDT' → 'BTC/USDT'
+const toSpotCcxtSymbol = (swapSymbol: string): string => {
+  const colonIdx = swapSymbol.indexOf(':');
+  return colonIdx > 0 ? swapSymbol.slice(0, colonIdx) : swapSymbol;
 };
 
 const detectExchange = (exchange: string): 'bybit' | 'bitget' | 'bingx' | 'binance' | 'mexc' | 'weex' => {
@@ -164,32 +173,61 @@ const ensureCcxtSymbolMap = async (entry: CcxtClientEntry): Promise<Map<string, 
   const markets = await entry.limiter.schedule(() => entry.client.loadMarkets());
   const values = Object.values(markets || {}) as any[];
 
+  // For MEXC: spot and swap share same id (e.g. BTCUSDT). We build two separate maps:
+  // spotMap   — keyed by normalizedId → spot symbol ('BTC/USDT')
+  // swapMap   — keyed by normalizedId → swap symbol ('BTC/USDT:USDT')
+  // Default symbolMap gets swap priority for MEXC (since defaultType='swap');
+  // spot-only lookup uses swapMap miss → spotMap fallback.
+  const isMexcLike = entry.exchange === 'mexc';
+  const spotMap = new Map<string, string>();
+
   for (const market of values) {
     const symbol = String(market?.symbol || '');
     const id = String(market?.id || '');
+    const isSwap = Boolean(market?.swap || market?.contract);
+    const isSpotM = Boolean(market?.spot) && !isSwap;
 
     const normalizedSymbol = normalizeSymbolKey(symbol);
     const normalizedId = normalizeSymbolKey(id);
 
-    if (normalizedSymbol) {
-      entry.symbolMap.set(normalizedSymbol, symbol);
-    }
-
-    if (normalizedId) {
-      entry.symbolMap.set(normalizedId, symbol);
+    if (isMexcLike) {
+      if (isSpotM) {
+        if (normalizedSymbol) spotMap.set(normalizedSymbol, symbol);
+        if (normalizedId) spotMap.set(normalizedId, symbol);
+      } else if (isSwap) {
+        // Swap takes priority in symbolMap for MEXC
+        if (normalizedSymbol) entry.symbolMap.set(normalizedSymbol, symbol);
+        if (normalizedId) entry.symbolMap.set(normalizedId, symbol);
+      }
+    } else {
+      if (normalizedSymbol) entry.symbolMap.set(normalizedSymbol, symbol);
+      if (normalizedId) entry.symbolMap.set(normalizedId, symbol);
     }
   }
+
+  // Attach spotMap to entry for spot-only resolution
+  (entry as any)._spotMap = spotMap;
 
   return entry.symbolMap;
 };
 
-const resolveCcxtSymbol = async (entry: CcxtClientEntry, symbol: string): Promise<string> => {
+const resolveCcxtSymbol = async (
+  entry: CcxtClientEntry,
+  symbol: string,
+  marketType?: 'spot' | 'swap'
+): Promise<string> => {
   const normalized = normalizeSymbolKey(symbol);
   if (!normalized) {
     return symbol;
   }
 
   const symbolMap = await ensureCcxtSymbolMap(entry);
+
+  if (marketType === 'spot') {
+    const spotMap: Map<string, string> = (entry as any)._spotMap || symbolMap;
+    return spotMap.get(normalized) || symbolMap.get(normalized) || symbol;
+  }
+
   return symbolMap.get(normalized) || symbol;
 };
 
@@ -235,6 +273,13 @@ const isTimestampSyncError = (error: unknown): boolean => {
     || message.includes('expired')
     || message.includes('code":109400')
     || message.includes('code 109400');
+};
+
+// MEXC error 700007 = "No permission to access the endpoint"
+// Means the API key lacks Contract Trading permission (futures/swap)
+const isMexcNoPermissionError = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '');
+  return message.includes('700007') || message.includes('No permission to access the endpoint');
 };
 
 const isBingxTradeEndpointDisabledError = (error: unknown): boolean => {
@@ -804,27 +849,29 @@ export const placeOrder = async (
 ) => {
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
-    const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
-    const amount = Number.parseFloat(String(qty || '0'));
-    const numericPrice = price !== undefined ? Number.parseFloat(String(price)) : undefined;
-
-    if (!Number.isFinite(amount) || amount <= 0) {
-      throw new Error(`Invalid qty for order: ${qty}`);
-    }
-
-    const orderType = numericPrice && numericPrice > 0 ? 'limit' : 'market';
+    const isSpot = options?.marketType === 'spot';
+    const rawCcxtSymbol = await resolveCcxtSymbol(entry, symbol, isSpot ? 'spot' : 'swap');
+    const ccxtSymbol = isSpot ? toSpotCcxtSymbol(rawCcxtSymbol) : rawCcxtSymbol;
 
     try {
-      await tryEnsureBingxOneWayMode(apiKeyName, entry, ccxtSymbol);
+      const numericPrice = price ? Number(price) : undefined;
+      const orderType = price && numericPrice && Number.isFinite(numericPrice) ? 'limit' : 'market';
+      const amount = Number(qty);
 
       const submitOrderAttempt = async (positionSide?: 'BOTH' | 'LONG' | 'SHORT') => {
         const params: any = {};
-        if (entry.exchange === 'bingx' && positionSide) {
+        if (isSpot) {
+          params.type = 'spot';
+        }
+        if (entry.exchange === 'bingx' && positionSide && !isSpot) {
           params.positionSide = positionSide;
         }
-        if (options?.reduceOnly) {
+        if (options?.reduceOnly && !isSpot) {
           params.reduceOnly = true;
-          params.closePosition = true;
+          // closePosition flag is Binance-specific; skip for MEXC to avoid API errors
+          if (entry.exchange === 'binance') {
+            params.closePosition = true;
+          }
         }
 
         return entry.limiter.schedule(() =>
@@ -839,9 +886,9 @@ export const placeOrder = async (
         );
       };
 
-      if (entry.exchange !== 'bingx') {
+      if (entry.exchange !== 'bingx' || isSpot) {
         const order = await submitOrderAttempt();
-        logger.info(`Placed ccxt order: ${side} ${qty} ${symbol}`);
+        logger.info(`Placed ccxt order: ${side} ${qty} ${symbol}${isSpot ? ' [spot]' : ''}`);
         return order;
       }
 
@@ -962,19 +1009,61 @@ export const getBalances = async (apiKeyName: string) => {
       try {
         payload = await entry.limiter.schedule(() => entry.client.fetchBalance());
       } catch (error) {
-        if (!isTimestampSyncError(error)) {
+        if (isTimestampSyncError(error)) {
+          await syncCcxtClock(apiKeyName, entry);
+          payload = await entry.limiter.schedule(() => entry.client.fetchBalance());
+        } else if (entry.exchange === 'mexc' && isMexcNoPermissionError(error)) {
+          // API key lacks Contract Trading permission → fall back to spot balance
+          logger.warn(`${apiKeyName}: MEXC contract balance forbidden (700007), falling back to spot balance`);
+          payload = await entry.limiter.schedule(() => entry.client.fetchBalance({ type: 'spot' }));
+        } else {
           throw error;
         }
-        await syncCcxtClock(apiKeyName, entry);
-        payload = await entry.limiter.schedule(() => entry.client.fetchBalance());
       }
       const total = payload?.total || {};
       const free = payload?.free || {};
+      const used = payload?.used || {};
+
+      // MEXC swap: ccxt's customParseBalance uses frozenBalance (not positionMargin) for 'used',
+      // and omits equity entirely → walletBalance shows only availableBalance+frozenBalance.
+      // Parse raw payload.info.data directly to get the real equity and positionMargin.
+      if (entry.exchange === 'mexc') {
+        const rawData: Array<Record<string, unknown>> = Array.isArray(payload?.info?.data)
+          ? payload.info.data
+          : [];
+        if (rawData.length > 0) {
+          const mexcBalances: NormalizedBalance[] = [];
+          for (const item of rawData) {
+            const currency = String(item?.currency ?? '').toUpperCase();
+            if (!currency) continue;
+            const equity = Number(item?.equity ?? 0);
+            const available = Number(item?.availableBalance ?? 0);
+            const posMargin = Number(item?.positionMargin ?? 0);
+            const frozen = Number(item?.frozenBalance ?? 0);
+            const unrealized = Number(item?.unrealized ?? 0);
+            // Only include assets with any non-zero value
+            if (equity <= 0 && available <= 0 && posMargin <= 0) continue;
+            const stable = ['USDT', 'USDC', 'USD'].includes(currency);
+            mexcBalances.push({
+              coin: currency,
+              walletBalance: String(equity),
+              availableBalance: String(available),
+              usdValue: stable ? String(equity) : '0',
+              accountType: 'swap',
+              marginUsed: posMargin + frozen > 0 ? String(posMargin + frozen) : undefined,
+              unrealisedPnl: unrealized !== 0 ? String(unrealized) : undefined,
+            });
+          }
+          return mexcBalances;
+        }
+        // Fallback to standard parsing if info.data is empty
+      }
 
       const balances: NormalizedBalance[] = Object.keys(total)
         .map((coin) => {
           const walletValue = Number(total[coin] ?? 0);
           const freeValue = Number(free[coin] ?? walletValue ?? 0);
+          const usedValue = Number(used[coin] ?? 0);
 
           if (!Number.isFinite(walletValue) || walletValue <= 0) {
             return null;
@@ -982,13 +1071,15 @@ export const getBalances = async (apiKeyName: string) => {
 
           const stable = ['USDT', 'USDC', 'USD'].includes(String(coin).toUpperCase());
 
-          return {
+          const entry2: NormalizedBalance = {
             coin: String(coin).toUpperCase(),
             walletBalance: String(walletValue),
             availableBalance: String(Number.isFinite(freeValue) ? freeValue : walletValue),
             usdValue: stable ? String(walletValue) : '0',
             accountType: 'swap',
           };
+          if (Number.isFinite(usedValue) && usedValue > 0) entry2.marginUsed = String(usedValue);
+          return entry2;
         })
         .filter((item): item is NormalizedBalance => !!item);
 
@@ -1202,6 +1293,10 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
       return deduped;
     } catch (error) {
       const err = error as Error;
+      if (entry.exchange === 'mexc' && isMexcNoPermissionError(error)) {
+        logger.warn(`${apiKeyName}: MEXC contract positions forbidden (700007) — API key lacks Contract Trading permission`);
+        return [];
+      }
       logger.error(`Error getting positions via ccxt for ${apiKeyName}: ${err.message}`);
       throw error;
     }
@@ -1511,10 +1606,18 @@ export const getInstrumentInfo = async (apiKeyName: string, symbol: string) => {
   }
 };
 
-export const closePosition = async (apiKeyName: string, symbol: string, qty: string, currentSide: 'Buy' | 'Sell' = 'Buy') => {
+export const closePosition = async (
+  apiKeyName: string,
+  symbol: string,
+  qty: string,
+  currentSide: 'Buy' | 'Sell' = 'Buy',
+  closeOptions?: { marketType?: 'spot' | 'swap' }
+) => {
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
-    const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
+    const isSpot = closeOptions?.marketType === 'spot';
+    const rawCcxtSymbol = await resolveCcxtSymbol(entry, symbol, isSpot ? 'spot' : 'swap');
+    const ccxtSymbol = isSpot ? toSpotCcxtSymbol(rawCcxtSymbol) : rawCcxtSymbol;
     const amount = Number.parseFloat(String(qty || '0'));
 
     if (!Number.isFinite(amount) || amount <= 0) {
@@ -1522,6 +1625,21 @@ export const closePosition = async (apiKeyName: string, symbol: string, qty: str
     }
 
     const closeSide = currentSide === 'Buy' ? 'sell' : 'buy';
+
+    // For spot: just place a regular opposite-side market sell (no reduceOnly)
+    if (isSpot) {
+      try {
+        const order = await entry.limiter.schedule(() =>
+          entry.client.createOrder(ccxtSymbol, 'market', closeSide, amount, undefined, { type: 'spot' })
+        );
+        logger.info(`Closed spot position via ccxt: ${qty} ${symbol}`);
+        return order;
+      } catch (error) {
+        const err = error as Error;
+        logger.error(`Error closing spot position via ccxt: ${err.message}`);
+        throw error;
+      }
+    }
 
     try {
       await tryEnsureBingxOneWayMode(apiKeyName, entry, ccxtSymbol);
@@ -1553,7 +1671,9 @@ export const closePosition = async (apiKeyName: string, symbol: string, qty: str
       };
 
       if (entry.exchange !== 'bingx') {
-        const order = await submitCloseOrder();
+        // closePosition:true is Binance-specific — skip for MEXC to avoid API rejection
+        const useClosePositionFlag = entry.exchange === 'binance';
+        const order = await submitCloseOrder(undefined, useClosePositionFlag);
         logger.info(`Closed position via ccxt: ${qty} ${symbol}`);
         return order;
       }

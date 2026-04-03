@@ -38,6 +38,8 @@ type BalanceRow = {
   availableBalance: string;
   usdValue: string;
   accountType?: string;
+  marginUsed?: string;
+  unrealisedPnl?: string;
 };
 
 type PositionRow = {
@@ -347,6 +349,8 @@ const Positions: React.FC = () => {
         availableBalance: String(item.availableBalance || '0'),
         usdValue: String(item.usdValue || '0'),
         accountType: String(item.accountType || ''),
+        marginUsed: item.marginUsed != null ? String(item.marginUsed) : undefined,
+        unrealisedPnl: item.unrealisedPnl != null ? String(item.unrealisedPnl) : undefined,
       }));
       setBalancesByKey((prev) => ({ ...prev, [apiKeyName]: normalized }));
     } catch (error: any) {
@@ -683,9 +687,22 @@ const Positions: React.FC = () => {
     },
   ];
 
+  const canonicalExchange = (raw: string): string => {
+    const s = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (s.startsWith('mexc')) return 'MEXC';
+    if (s.startsWith('bybit')) return 'Bybit';
+    if (s.startsWith('binance')) return 'Binance';
+    if (s.startsWith('bingx')) return 'BingX';
+    if (s.startsWith('bitget')) return 'Bitget';
+    if (s.startsWith('weex')) return 'WEEX';
+    if (s.startsWith('okx')) return 'OKX';
+    if (s.startsWith('htx') || s.startsWith('huobi')) return 'HTX';
+    return raw;
+  };
+
   const apiKeysByExchange = useMemo(() => {
     return apiKeys.reduce((acc, apiKey) => {
-      const exchange = apiKey.exchange || t('common.unknown', 'Unknown');
+      const exchange = canonicalExchange(apiKey.exchange || t('common.unknown', 'Unknown'));
       if (!acc[exchange]) {
         acc[exchange] = [];
       }
@@ -887,6 +904,8 @@ const Positions: React.FC = () => {
                         {topBalances.length > 0 ? topBalances.map((item) => (
                           <Tag key={`${key.name}:${item.coin}`}>
                             {item.coin}: {formatCompact(item.walletBalance, 6)} ({formatCompact(item.usdValue, 2)} USD)
+                            {item.marginUsed && toNumber(item.marginUsed) > 0 ? <span style={{ color: '#f59e0b', marginLeft: 4 }}>margin: {formatCompact(item.marginUsed, 4)}</span> : null}
+                            {item.unrealisedPnl && toNumber(item.unrealisedPnl) !== 0 ? <span style={{ color: toNumber(item.unrealisedPnl) >= 0 ? '#22c55e' : '#ef4444', marginLeft: 4 }}>PnL: {formatCompact(item.unrealisedPnl, 4)}</span> : null}
                           </Tag>
                         )) : <span style={{ fontSize: 12, color: '#6b7280' }}>{t('positions.empty.balances', 'No non-zero balances')}</span>}
                       </Space>

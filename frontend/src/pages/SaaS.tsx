@@ -2440,6 +2440,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [copytradingState, setCopytradingState] = useState<Record<string, any> | null>(null);
   const [copytradingLoading, setCopytradingLoading] = useState(false);
   const [copytradingError, setCopytradingError] = useState('');
+  const [copytradingSyncing, setCopytradingSyncing] = useState(false);
+  const [copytradingSyncMarketType, setCopytradingSyncMarketType] = useState<'swap' | 'spot'>('swap');
   const [copytradingMasterApiKeyName, setCopytradingMasterApiKeyName] = useState('');
   const [copytradingMasterName, setCopytradingMasterName] = useState('');
   const [copytradingMasterTags, setCopytradingMasterTags] = useState('copytrading-master');
@@ -4192,6 +4194,44 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to save'));
     } finally {
       setSynctradeLoading(false);
+    }
+  };
+
+  const syncCopytradingSession = async () => {
+    if (!copytradingTenantId) return;
+    setCopytradingSyncing(true);
+    try {
+      const result = await axios.post(`/api/saas/copytrading/${copytradingTenantId}/execute`, {
+        marketType: copytradingSyncMarketType,
+      });
+      const s = result.data?.summary;
+      const msg = s
+        ? `Sync done: master=${s.masterPositions}, opened=${s.newPositions}, closed=${s.closedPositions}, followers ${s.followersOk}/${s.followersTotal}`
+        : 'Sync complete';
+      messageApi.success(msg);
+      await loadCopytradingTenant(copytradingTenantId);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Sync failed'));
+    } finally {
+      setCopytradingSyncing(false);
+    }
+  };
+
+  const stopCopytradingAndReset = async () => {
+    if (!copytradingTenantId) return;
+    setCopytradingLoading(true);
+    try {
+      await axios.post(`/api/saas/copytrading/${copytradingTenantId}/stop`);
+      setCopytradingCopyEnabled(false);
+      setCopytradingUiStatus('stopped');
+      setCopytradingUiMessage('Копирование остановлено, базовые позиции сброшены');
+      appendCopytradingLog(`Tenant #${copytradingTenantId}: стоп + сброс базовых позиций`);
+      await loadCopytradingTenant(copytradingTenantId);
+      messageApi.success('Копирование остановлено');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Stop failed'));
+    } finally {
+      setCopytradingLoading(false);
     }
   };
 
@@ -10644,7 +10684,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Spin spinning={copytradingLoading && !copytradingState}>
                     {copytradingState ? (
                       <>
-                        <Card className="battletoads-card" title="Copytrading">
+                        <Card className="battletoads-card" title="Copytrading — Mirror Mode">
+                          {/* ── Top row: tenant + master key + plan ─────────────────── */}
                           <Row gutter={[16, 16]} align="middle">
                             {isAdminSurface ? (
                               <Col xs={24} md={6}>
@@ -10658,7 +10699,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               </Col>
                             ) : null}
                             <Col xs={24} md={isAdminSurface ? 6 : 8}>
-                              <Text strong>{copy.displayName}</Text>
+                              <Text strong>Название</Text>
                               {isAdminSurface ? (
                                 <Input style={{ marginTop: 8 }} value={copytradingTenantDisplayName} onChange={(event) => setCopytradingTenantDisplayName(event.target.value)} />
                               ) : (
@@ -10666,261 +10707,218 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               )}
                             </Col>
                             <Col xs={24} md={isAdminSurface ? 6 : 8}>
-                              <Text strong>Master API Key</Text>
+                              <Text strong>API ключ мастера</Text>
                               {isAdminSurface ? (
                                 <Select
                                   style={{ width: '100%', marginTop: 8 }}
                                   value={copytradingMasterApiKeyName || undefined}
                                   onChange={setCopytradingMasterApiKeyName}
                                   options={apiKeyOptions}
+                                  placeholder="Выбрать из существующих"
                                 />
                               ) : (
                                 <div style={{ marginTop: 8 }}><Text>{copytradingMasterApiKeyName || '—'}</Text></div>
                               )}
                             </Col>
-                            <Col xs={24} md={isAdminSurface ? 6 : 8}>
-                              <Text strong>{copy.plan}</Text>
-                              {isAdminSurface ? (
+                            {isAdminSurface ? (
+                              <Col xs={24} md={6}>
+                                <Text strong>{copy.plan}</Text>
                                 <Select style={{ width: '100%', marginTop: 8 }} value={copytradingTenantPlanCode || undefined} onChange={setCopytradingTenantPlanCode} options={copytradingPlanOptions} />
-                              ) : (
-                                <div style={{ marginTop: 8 }}><Text>{copytradingState.plan ? `${copytradingState.plan.title} · ${formatMoney(copytradingState.plan.price_usdt)}` : '—'}</Text></div>
-                              )}
-                            </Col>
+                              </Col>
+                            ) : null}
                           </Row>
 
+                          {/* ── Status strip ─────────────────────────────────────────── */}
                           <Space wrap style={{ marginTop: 12 }}>
-                            <Tag color="blue">Algorithm: vwap_basic</Tag>
-                            <Tag color="gold">Precision: standard</Tag>
-                            <Tag color="purple">Copy ratio: {formatNumber(copytradingCopyRatio, 2)}x</Tag>
-                            <Tag color="cyan">{copy.tenantStatus}: {copytradingState.tenant?.status}</Tag>
+                            <Tag color="purple">Ratio: {formatNumber(copytradingCopyRatio, 2)}x</Tag>
                             <Tag color={copytradingCopyEnabled ? 'success' : 'default'}>
-                              Copy: {copytradingCopyEnabled ? 'enabled' : 'disabled'}
+                              {copytradingCopyEnabled ? '● Копирование ВКЛ' : '○ Копирование ВЫКЛ'}
                             </Tag>
-                            <Tag color="green">Plan: copytrading_100 (100 USDT/mo)</Tag>
+                            <Tag color="cyan">{copytradingState.tenant?.status}</Tag>
+                            <Tag color="green">{copytradingState.plan?.title || 'copytrading_100'}</Tag>
                           </Space>
 
                           {isAdminSurface ? (
-                            <Card size="small" title="Master + copy settings" style={{ marginTop: 16 }}>
-                              <Row gutter={[12, 12]}>
-                                <Col xs={24} md={8}>
-                                  <Text strong>Master name</Text>
-                                  <Input style={{ marginTop: 8 }} value={copytradingMasterName} onChange={(event) => setCopytradingMasterName(event.target.value)} />
-                                </Col>
-                                <Col xs={24} md={8}>
-                                  <Text strong>Master tags</Text>
-                                  <Input style={{ marginTop: 8 }} value={copytradingMasterTags} onChange={(event) => setCopytradingMasterTags(event.target.value)} />
-                                </Col>
-                                <Col xs={24} md={8}>
-                                  <Text strong>Коэффициент копирования</Text>
-                                  <InputNumber
-                                    style={{ width: '100%', marginTop: 8 }}
-                                    min={0.01}
-                                    max={100}
-                                    step={0.01}
-                                    value={copytradingCopyRatio}
-                                    onChange={(value) => setCopytradingCopyRatio(Number(value || 1))}
-                                  />
-                                </Col>
-                                <Col xs={24} md={12}>
-                                  <Space align="center" style={{ marginTop: 28 }}>
-                                    <Switch checked={copytradingCopyEnabled} onChange={setCopytradingCopyEnabled} />
-                                    <Text>Copy enabled</Text>
-                                  </Space>
-                                </Col>
-                              </Row>
-                            </Card>
-                          ) : null}
-
-                          {isAdminSurface ? (
-                            <Card size="small" title="Добавить API key в этой форме" style={{ marginTop: 16 }}>
-                              <Row gutter={[12, 12]}>
-                                <Col xs={24} md={6}>
-                                  <Text strong>Role</Text>
-                                  <Select
-                                    style={{ width: '100%', marginTop: 8 }}
-                                    value={copyKeyDraftRole}
-                                    onChange={(value) => setCopyKeyDraftRole(value)}
-                                    options={[
-                                      { value: 'master', label: 'copytrading-master' },
-                                      { value: 'tenant', label: 'copytrading-tenant' },
-                                    ]}
-                                  />
-                                </Col>
-                                <Col xs={24} md={6}>
-                                  <Text strong>API key name</Text>
-                                  <Input style={{ marginTop: 8 }} value={copyKeyDraftName} onChange={(event) => setCopyKeyDraftName(event.target.value)} />
-                                </Col>
-                                <Col xs={24} md={6}>
-                                  <Text strong>Exchange</Text>
-                                  <Select
-                                    style={{ width: '100%', marginTop: 8 }}
-                                    value={copyKeyDraftExchange}
-                                    onChange={setCopyKeyDraftExchange}
-                                    options={[
-                                      { value: 'binance', label: 'Binance Futures' },
-                                      { value: 'bingx', label: 'BingX Futures' },
-                                      { value: 'bybit', label: 'Bybit Futures' },
-                                      { value: 'bitget', label: 'Bitget Futures' },
-                                      { value: 'weex', label: 'WEEX Futures' },
-                                      { value: 'mexc', label: 'MEXC Futures' },
-                                    ]}
-                                  />
-                                </Col>
-                                <Col xs={24} md={6}>
-                                  <Text strong>Passphrase (Bitget / WEEX required)</Text>
-                                  <Input style={{ marginTop: 8 }} value={copyKeyDraftPassphrase} onChange={(event) => setCopyKeyDraftPassphrase(event.target.value)} />
-                                </Col>
-                                <Col xs={24} md={8}>
-                                  <Text strong>API key</Text>
-                                  <Input style={{ marginTop: 8 }} value={copyKeyDraftApiKey} onChange={(event) => setCopyKeyDraftApiKey(event.target.value)} />
-                                </Col>
-                                <Col xs={24} md={8}>
-                                  <Text strong>Secret</Text>
-                                  <Input.Password style={{ marginTop: 8 }} value={copyKeyDraftSecret} onChange={(event) => setCopyKeyDraftSecret(event.target.value)} />
-                                </Col>
-                                <Col xs={24} md={8}>
-                                  <Space wrap style={{ marginTop: 28 }}>
-                                    <Checkbox checked={copyKeyDraftTestnet} onChange={(event) => setCopyKeyDraftTestnet(event.target.checked)}>testnet</Checkbox>
-                                    <Checkbox checked={copyKeyDraftDemo} onChange={(event) => setCopyKeyDraftDemo(event.target.checked)}>demo</Checkbox>
-                                    <Button type="primary" loading={actionLoading === 'copytrading-create-key'} onClick={() => void createCopytradingApiKeyInline()}>
-                                      Добавить ключ
-                                    </Button>
-                                  </Space>
-                                </Col>
-                              </Row>
-                            </Card>
-                          ) : null}
-
-                          <Card size="small" title="Copy status" style={{ marginTop: 16 }}>
-                            <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                              <Alert
-                                showIcon
-                                type={copytradingUiStatus === 'error' ? 'error' : copytradingUiStatus === 'copying' ? 'success' : copytradingUiStatus === 'saving' ? 'warning' : 'info'}
-                                message={copytradingUiMessage}
-                              />
-                              <Badge
-                                status={copytradingUiStatus === 'error' ? 'error' : copytradingUiStatus === 'copying' ? 'processing' : copytradingUiStatus === 'saving' ? 'warning' : 'default'}
-                                text={`State: ${copytradingUiStatus}`}
-                              />
-                              <List
-                                size="small"
-                                bordered
-                                dataSource={copytradingLogs}
-                                locale={{ emptyText: 'Лог пуст' }}
-                                renderItem={(item) => <List.Item>{item}</List.Item>}
-                                style={{ maxHeight: 180, overflowY: 'auto' }}
-                              />
-                            </Space>
-                          </Card>
-
-                          {isAdminSurface ? (
-                            <Space wrap style={{ marginTop: 16 }}>
-                              <Button
-                                type="primary"
-                                loading={copytradingLoading}
-                                onClick={async () => {
-                                  try {
-                                    if (!copytradingTenantId) {
-                                      return;
-                                    }
-                                    setCopytradingUiStatus('saving');
-                                    setCopytradingUiMessage('Сохраняем настройки copytrading...');
-                                    appendCopytradingLog(`Tenant #${copytradingTenantId}: отправка обновления copytrading профиля`);
-
-                                    await axios.patch(`/api/saas/admin/tenants/${copytradingTenantId}`, {
-                                      displayName: copytradingTenantDisplayName,
-                                      planCode: copytradingTenantPlanCode,
-                                      assignedApiKeyName: copytradingMasterApiKeyName,
-                                    });
-
-                                    await axios.patch(`/api/saas/copytrading/${copytradingTenantId}`, {
-                                      masterApiKeyName: copytradingMasterApiKeyName,
-                                      masterName: copytradingMasterName,
-                                      masterTags: copytradingMasterTags,
-                                      tenants: copytradingFollowers,
-                                      copyAlgorithm: 'vwap_basic',
-                                      copyPrecision: 'standard',
-                                      copyRatio: copytradingCopyRatio,
-                                      copyEnabled: copytradingCopyEnabled,
-                                    });
-                                    appendCopytradingLog(`Tenant #${copytradingTenantId}: обновление применено`);
-                                    await loadSummary('light');
-                                    await loadCopytradingTenant(copytradingTenantId);
-                                  } catch (err: any) {
-                                    const msg = String(err?.response?.data?.error || err?.message || 'Update failed');
-                                    setCopytradingError(msg);
-                                    setCopytradingUiStatus('error');
-                                    setCopytradingUiMessage(`Ошибка сохранения: ${msg}`);
-                                    appendCopytradingLog(`Tenant #${copytradingTenantId || 0}: ошибка сохранения (${msg})`);
-                                  }
-                                }}
-                              >
-                                Сохранить
-                              </Button>
-                            </Space>
-                          ) : null}
-
-                          <Card size="small" title="Follower tenants" style={{ marginTop: 16 }}>
-                            {isAdminSurface ? (
-                              <Space direction="vertical" size={12} style={{ width: '100%', marginBottom: 12 }}>
+                            <>
+                              {/* ── Master + ratio settings ─────────────────────────── */}
+                              <Card size="small" title="Настройки мастера" style={{ marginTop: 16 }}>
                                 <Row gutter={[12, 12]}>
+                                  <Col xs={24} md={10}>
+                                    <Text strong>Имя мастера</Text>
+                                    <Input style={{ marginTop: 8 }} value={copytradingMasterName} onChange={(event) => setCopytradingMasterName(event.target.value)} />
+                                  </Col>
                                   <Col xs={24} md={6}>
-                                    <Text strong>Tenant name</Text>
-                                    <Input style={{ marginTop: 8 }} value={copyFollowerTenantName} onChange={(event) => setCopyFollowerTenantName(event.target.value)} />
-                                  </Col>
-                                  <Col xs={24} md={5}>
-                                    <Text strong>Slug</Text>
-                                    <Input style={{ marginTop: 8 }} value={copyFollowerTenantSlug} onChange={(event) => setCopyFollowerTenantSlug(event.target.value)} />
-                                  </Col>
-                                  <Col xs={24} md={5}>
-                                    <Text strong>Follower API key</Text>
-                                    <Select
+                                    <Text strong>Коэффициент копирования</Text>
+                                    <InputNumber
                                       style={{ width: '100%', marginTop: 8 }}
+                                      min={0.01} max={100} step={0.01}
+                                      value={copytradingCopyRatio}
+                                      onChange={(value) => setCopytradingCopyRatio(Number(value || 1))}
+                                    />
+                                  </Col>
+                                  <Col xs={24} md={8}>
+                                    <Space align="center" style={{ marginTop: 28 }}>
+                                      <Switch checked={copytradingCopyEnabled} onChange={setCopytradingCopyEnabled} />
+                                      <Text>Копирование включено</Text>
+                                    </Space>
+                                  </Col>
+                                </Row>
+                              </Card>
+
+                              {/* ── Follower tenants ─────────────────────────────────── */}
+                              <Card size="small" title={`Подключённые фолловеры (${(copytradingFollowers || []).length}/5)`} style={{ marginTop: 16 }}>
+                                {/* Add follower row — select from existing API keys */}
+                                <Row gutter={[12, 8]} style={{ marginBottom: 12 }}>
+                                  <Col xs={24} md={9}>
+                                    <Select
+                                      style={{ width: '100%' }}
                                       value={copyFollowerApiKeyName || undefined}
                                       onChange={setCopyFollowerApiKeyName}
                                       options={apiKeyOptions}
+                                      placeholder="API ключ фолловера"
+                                      showSearch
                                     />
                                   </Col>
-                                  <Col xs={24} md={5}>
-                                    <Text strong>Tags</Text>
-                                    <Input style={{ marginTop: 8 }} value={copyFollowerTags} onChange={(event) => setCopyFollowerTags(event.target.value)} />
+                                  <Col xs={24} md={9}>
+                                    <Input
+                                      value={copyFollowerTenantName}
+                                      onChange={(e) => setCopyFollowerTenantName(e.target.value)}
+                                      placeholder="Имя (необязательно)"
+                                    />
                                   </Col>
-                                  <Col xs={24} md={3}>
-                                    <Button style={{ marginTop: 30, width: '100%' }} onClick={addCopytradingFollower}>
-                                      + Add
+                                  <Col xs={24} md={6}>
+                                    <Button style={{ width: '100%' }} onClick={addCopytradingFollower} disabled={(copytradingFollowers || []).length >= 5}>
+                                      + Добавить
                                     </Button>
                                   </Col>
                                 </Row>
-                                <Text type="secondary">Лимит: до 5 копирующих tenant</Text>
-                              </Space>
-                            ) : null}
 
-                            {(copytradingFollowers || []).length === 0 ? (
-                              <Empty description="No follower tenants configured" />
-                            ) : (
-                              <Table
-                                size="small"
-                                rowKey={(_, idx) => String(idx)}
-                                dataSource={copytradingFollowers || []}
-                                pagination={false}
-                                columns={[
-                                  { title: 'Tenant', dataIndex: 'displayName', width: 160 },
-                                  { title: 'Tenant ID', dataIndex: 'tenantId', width: 120 },
-                                  { title: 'Slug', dataIndex: 'slug', width: 180 },
-                                  { title: 'API Key', dataIndex: 'apiKeyName', width: 200 },
-                                  { title: 'Tags', dataIndex: 'tags', width: 180 },
-                                  ...(isAdminSurface ? [{
-                                    title: 'Action',
-                                    key: 'action',
-                                    width: 100,
-                                    render: (_: any, __: any, index: number) => (
-                                      <Button danger size="small" onClick={() => removeCopytradingFollower(index)}>Remove</Button>
-                                    ),
-                                  }] : []),
-                                ]}
+                                {(copytradingFollowers || []).length === 0 ? (
+                                  <Empty description="Нет подключённых фолловеров" />
+                                ) : (
+                                  <Table
+                                    size="small"
+                                    rowKey={(_, idx) => String(idx)}
+                                    dataSource={copytradingFollowers || []}
+                                    pagination={false}
+                                    columns={[
+                                      { title: 'Имя', dataIndex: 'displayName', width: 160 },
+                                      { title: 'API Key', dataIndex: 'apiKeyName', width: 200 },
+                                      { title: 'Tags', dataIndex: 'tags', width: 160 },
+                                      {
+                                        title: '',
+                                        key: 'action',
+                                        width: 80,
+                                        render: (_: any, __: any, index: number) => (
+                                          <Button danger size="small" onClick={() => removeCopytradingFollower(index)}>Удалить</Button>
+                                        ),
+                                      },
+                                    ]}
+                                  />
+                                )}
+                                <Text type="secondary" style={{ marginTop: 8, display: 'block' }}>Лимит: до 5 фолловеров</Text>
+                              </Card>
+
+                              {/* ── Copy status / log ────────────────────────────────── */}
+                              <Card size="small" title="Статус копирования" style={{ marginTop: 16 }}>
+                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                  <Alert
+                                    showIcon
+                                    type={copytradingUiStatus === 'error' ? 'error' : copytradingUiStatus === 'copying' ? 'success' : copytradingUiStatus === 'saving' ? 'warning' : 'info'}
+                                    message={copytradingUiMessage}
+                                  />
+                                  <List
+                                    size="small"
+                                    bordered
+                                    dataSource={copytradingLogs.slice(-8)}
+                                    locale={{ emptyText: 'Лог пуст' }}
+                                    renderItem={(item) => <List.Item style={{ fontSize: 12 }}>{item}</List.Item>}
+                                    style={{ maxHeight: 160, overflowY: 'auto' }}
+                                  />
+                                </Space>
+                              </Card>
+
+                              {/* ── Action buttons ──────────────────────────────────── */}
+                              <Space wrap style={{ marginTop: 16 }}>
+                                <Button
+                                  type="primary"
+                                  loading={copytradingLoading}
+                                  onClick={async () => {
+                                    try {
+                                      if (!copytradingTenantId) return;
+                                      setCopytradingUiStatus('saving');
+                                      setCopytradingUiMessage('Сохраняем настройки copytrading...');
+                                      appendCopytradingLog(`Tenant #${copytradingTenantId}: отправка обновления`);
+                                      await axios.patch(`/api/saas/admin/tenants/${copytradingTenantId}`, {
+                                        displayName: copytradingTenantDisplayName,
+                                        planCode: copytradingTenantPlanCode,
+                                        assignedApiKeyName: copytradingMasterApiKeyName,
+                                      });
+                                      await axios.patch(`/api/saas/copytrading/${copytradingTenantId}`, {
+                                        masterApiKeyName: copytradingMasterApiKeyName,
+                                        masterName: copytradingMasterName,
+                                        masterTags: copytradingMasterTags,
+                                        tenants: copytradingFollowers,
+                                        copyAlgorithm: 'vwap_basic',
+                                        copyPrecision: 'standard',
+                                        copyRatio: copytradingCopyRatio,
+                                        copyEnabled: copytradingCopyEnabled,
+                                      });
+                                      appendCopytradingLog(`Tenant #${copytradingTenantId}: обновление применено`);
+                                      await loadSummary('light');
+                                      await loadCopytradingTenant(copytradingTenantId);
+                                    } catch (err: any) {
+                                      const msg = String(err?.response?.data?.error || err?.message || 'Update failed');
+                                      setCopytradingError(msg);
+                                      setCopytradingUiStatus('error');
+                                      setCopytradingUiMessage(`Ошибка: ${msg}`);
+                                    }
+                                  }}
+                                >
+                                  💾 Сохранить
+                                </Button>
+
+                                <Select
+                                  value={copytradingSyncMarketType}
+                                  onChange={(v) => setCopytradingSyncMarketType(v)}
+                                  style={{ width: 110 }}
+                                  options={[
+                                    { value: 'swap', label: 'Futures' },
+                                    { value: 'spot', label: 'Spot' },
+                                  ]}
+                                />
+                                <Button
+                                  type="primary"
+                                  style={{ background: '#52c41a', borderColor: '#52c41a' }}
+                                  loading={copytradingSyncing}
+                                  onClick={() => void syncCopytradingSession()}
+                                  disabled={!copytradingCopyEnabled || !copytradingTenantId}
+                                  title="Читает позиции мастера и зеркалирует изменения фолловерам"
+                                >
+                                  🔄 Синхронизировать позиции
+                                </Button>
+
+                                <Button
+                                  danger
+                                  loading={copytradingLoading}
+                                  onClick={() => void stopCopytradingAndReset()}
+                                  disabled={!copytradingTenantId}
+                                  title="Выключает копирование и сбрасывает базовые позиции"
+                                >
+                                  ⛔ Стоп + Сброс
+                                </Button>
+                              </Space>
+                            </>
+                          ) : (
+                            /* ── Client view ──────────────────────────────────────── */
+                            <Card size="small" title="Статус копирования" style={{ marginTop: 16 }}>
+                              <Alert
+                                showIcon
+                                type={copytradingUiStatus === 'error' ? 'error' : copytradingUiStatus === 'copying' ? 'success' : 'info'}
+                                message={copytradingUiMessage}
                               />
-                            )}
-                          </Card>
+                            </Card>
+                          )}
                         </Card>
                       </>
                     ) : null}
