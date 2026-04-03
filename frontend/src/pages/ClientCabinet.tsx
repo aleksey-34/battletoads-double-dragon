@@ -309,11 +309,16 @@ const formatPercent = (value: unknown, digits = 2): string => `${formatNumber(va
 const formatMoney = (value: unknown): string => `$${formatNumber(value, 2)}`;
 
 const normalizeTime = (value: unknown): number | null => {
+  if (value == null) return null;
   const numeric = Number(value);
-  if (!Number.isFinite(numeric) || numeric <= 0) {
-    return null;
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
   }
-  return numeric > 9999999999 ? Math.floor(numeric / 1000) : Math.floor(numeric);
+  if (typeof value === 'string' && value.length >= 10) {
+    const ms = new Date(value).getTime();
+    if (Number.isFinite(ms) && ms > 0) return Math.floor(ms / 1000);
+  }
+  return null;
 };
 
 const toLineSeriesData = (payload: unknown): LinePoint[] => {
@@ -436,7 +441,7 @@ const ClientCabinet: React.FC = () => {
     : null;
   const monitoringSeries = useMemo(
     () => toLineSeriesData((monitoring?.points || []).map((point) => ({
-      time: point.time ?? point.ts,
+      time: point.time ?? point.ts ?? point.recorded_at,
       equity: point.equity_usd ?? point.equity ?? point.value,
     }))),
     [monitoring]
@@ -1111,12 +1116,6 @@ const ClientCabinet: React.FC = () => {
                           <Tag color="cyan">Участников: {Number(system.memberCount || 0)}</Tag>
                           {system.isActive ? <Tag color="success">Торгуется</Tag> : <Tag color="default">Приостановлена</Tag>}
                         </Space>
-                        {system.metrics ? (
-                          <Row gutter={[8, 4]} style={{ marginBottom: 8 }}>
-                            {system.metrics.equityUsd != null ? <Col span={12}><Statistic title="Капитал" value={formatMoney(system.metrics.equityUsd)} valueStyle={{ fontSize: 14 }} /></Col> : null}
-                            {system.metrics.drawdownPercent != null ? <Col span={12}><Statistic title="DD" value={formatPercent(system.metrics.drawdownPercent)} valueStyle={{ fontSize: 14 }} /></Col> : null}
-                          </Row>
-                        ) : null}
                         {isCurrent && algofundPreviewSeries.length > 0 ? (
                           <div style={{ height: 120, marginBottom: 8 }}>
                             <ChartComponent data={algofundPreviewSeries} type="line" />
