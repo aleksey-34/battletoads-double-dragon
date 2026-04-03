@@ -10538,8 +10538,8 @@ const syncAutoScanAndOpen = async () => {
         const absChange = Math.abs(cand.ticker.change24hPercent);
         const leverage = adaptiveLeverage(absChange, cfg);
 
-        // Random master side — diversify direction risk
-        const masterSide: 'long' | 'short' = Math.random() > 0.5 ? 'long' : 'short';
+        // Master side follows 24h trend — master profits when trend continues
+        const masterSide: 'long' | 'short' = cand.ticker.change24hPercent >= 0 ? 'long' : 'short';
 
         syncAutoLog(`Opening ${cand.symbol} lev=${leverage}x side=${masterSide} budget=${perPairUsdt.toFixed(1)} USDT`);
 

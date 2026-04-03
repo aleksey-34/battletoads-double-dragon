@@ -13,6 +13,8 @@ import {
   InputNumber,
   Popconfirm,
   Divider,
+  Modal,
+  Tabs,
 } from 'antd';
 import axios from 'axios';
 import { useI18n } from '../i18n';
@@ -132,7 +134,8 @@ const Positions: React.FC = () => {
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [actionLoading, setActionLoading] = useState<{ [key: string]: boolean }>({});
   const [refreshAllLoading, setRefreshAllLoading] = useState<boolean>(false);
-  const [viewMode, setViewMode] = useState<ViewMode>('all');
+  const [viewMode, setViewMode] = useState<ViewMode>('positions');
+  const [monitorModalOpen, setMonitorModalOpen] = useState(false);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(false);
   const [manualOrderDraftByKey, setManualOrderDraftByKey] = useState<{ [key: string]: ManualOrderDraft }>({});
   const apiKeysRef = useRef<ApiKey[]>([]);
@@ -689,6 +692,9 @@ const Positions: React.FC = () => {
         <Button onClick={() => setAutoRefreshEnabled((prev) => !prev)}>
           {autoRefreshEnabled ? t('positions.disableAutoRefresh', 'Disable auto refresh') : t('positions.enableAutoRefresh', 'Enable auto refresh')}
         </Button>
+        <Button type="primary" style={{ background: '#7c3aed' }} onClick={() => setMonitorModalOpen(true)}>
+          📊 Мониторинг
+        </Button>
         <Segmented<ViewMode>
           value={viewMode}
           onChange={(value) => setViewMode(value as ViewMode)}
@@ -701,8 +707,46 @@ const Positions: React.FC = () => {
         />
       </Space>
 
-      {Object.entries(apiKeysByExchange).map(([exchange, keys]) => (
-        <Card className="battletoads-card" key={exchange} title={`${t('positions.exchange', 'Exchange')}: ${exchange}`} size="small" style={{ marginBottom: 12 }}>
+      <Modal
+        title="📊 Мониторинг позиций"
+        open={monitorModalOpen}
+        onCancel={() => setMonitorModalOpen(false)}
+        footer={null}
+        width={900}
+      >
+        {Object.entries(apiKeysByExchange).map(([exchange, keys]) => (
+          <Card key={exchange} title={exchange} size="small" style={{ marginBottom: 12 }}>
+            {keys.map((key) => {
+              const positions = positionsByKey[key.name] || [];
+              const totalPnl = positions.reduce((s, p) => s + Number(p.unrealisedPnl || 0), 0);
+              const totalValue = positions.reduce((s, p) => s + Number(p.positionValueUsdt || p.positionValue || 0), 0);
+              return positions.length > 0 ? (
+                <div key={key.name} style={{ marginBottom: 8 }}>
+                  <Tag color="blue">{key.display_name || key.name}</Tag>
+                  <Tag>{positions.length} поз.</Tag>
+                  <Tag color={totalPnl >= 0 ? 'green' : 'red'}>UPNL: {totalPnl.toFixed(2)} USDT</Tag>
+                  <Tag>Объём: {totalValue.toFixed(1)} USDT</Tag>
+                  <Table size="small" rowKey="symbol" dataSource={positions} pagination={false} columns={[
+                    { title: 'Символ', dataIndex: 'symbol', width: 120 },
+                    { title: 'Сторона', dataIndex: 'side', width: 70, render: (v: string) => <Tag color={v === 'long' ? 'green' : 'red'}>{v}</Tag> },
+                    { title: 'Размер', dataIndex: 'size', width: 100 },
+                    { title: 'Lev', dataIndex: 'leverage', width: 60 },
+                    { title: 'Вход', dataIndex: 'avgPrice', width: 100 },
+                    { title: 'Марк', dataIndex: 'markPrice', width: 100 },
+                    { title: 'UPNL', dataIndex: 'unrealisedPnl', width: 100, render: (v: string) => <span style={{ color: Number(v) >= 0 ? '#52c41a' : '#ff4d4f' }}>{Number(v).toFixed(4)}</span> },
+                    { title: 'Ликв.', dataIndex: 'liqPrice', width: 100 },
+                  ]} />
+                </div>
+              ) : null;
+            })}
+          </Card>
+        ))}
+      </Modal>
+
+      <Tabs type="card" items={Object.entries(apiKeysByExchange).map(([exchange, keys]) => ({
+        key: exchange,
+        label: `${exchange} (${keys.length})`,
+        children: (
           <Space direction="vertical" style={{ width: '100%' }}>
             {keys.map((key) => {
               const manualDraft = manualOrderDraftByKey[key.name] || {
@@ -983,8 +1027,8 @@ const Positions: React.FC = () => {
               );
             })}
           </Space>
-        </Card>
-      ))}
+        ),
+      }))} />
     </div>
   );
 };
