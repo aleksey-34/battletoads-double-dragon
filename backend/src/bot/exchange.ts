@@ -1869,7 +1869,20 @@ export const applySymbolRiskSettings = async (
 
     try {
       if (typeof entry.client.setLeverage === 'function') {
+        // MEXC requires setting leverage for both long and short sides
+        try {
+          await entry.limiter.schedule(() =>
+            entry.client.setLeverage(safeLeverage, ccxtSymbol, { side: 'long' })
+          );
+        } catch { /* some exchanges don't support side param */ }
+        try {
+          await entry.limiter.schedule(() =>
+            entry.client.setLeverage(safeLeverage, ccxtSymbol, { side: 'short' })
+          );
+        } catch { /* some exchanges don't support side param */ }
+        // Also try without side (works for most exchanges)
         await entry.limiter.schedule(() => entry.client.setLeverage(safeLeverage, ccxtSymbol));
+        logger.info(`Set leverage ${safeLeverage}x for ${apiKeyName} ${symbol}`);
       }
     } catch (error) {
       logger.warn(`Could not set leverage via ccxt for ${symbol}: ${(error as Error).message}`);

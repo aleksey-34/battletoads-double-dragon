@@ -9999,19 +9999,22 @@ export const executeSynctradeSession = async (
         const maxSpend = asNumber(acc.maxSpendUsdt, 0);
         // Respect targetLossUsdt — hedge order value = targetLossUsdt (worst-case 100% loss = targetLossUsdt)
         const targetLoss = asNumber(acc.targetLossUsdt, 0);
-        let hedgeOrderValue = (hedgeEquity * lotPercent) / 100;
-        if (maxSpend > 0 && hedgeOrderValue > maxSpend) {
-          hedgeOrderValue = maxSpend;
-          addLog(`Hedge ${displayName}: capped spend to ${maxSpend} USDT`);
-        }
-        if (targetLoss > 0 && hedgeOrderValue > targetLoss) {
-          hedgeOrderValue = targetLoss;
-          addLog(`Hedge ${displayName}: capped by target loss to ${targetLoss} USDT`);
-        }
 
-        const hedgeRawQty = (hedgeOrderValue * leverageHedge) / (price * contractSize);
-        const hedgeQty = enforceMinLot(hedgeRawQty);
-        addLog(`Hedge ${displayName}: ${hedgeSide === 'long' ? 'Buy' : 'Sell'} qty=${hedgeQty} contracts (raw=${hedgeRawQty.toFixed(6)}, value=${hedgeOrderValue.toFixed(2)} USDT)`);
+        // Hedge mirrors master qty for perfect balance; cap only if maxSpend/targetLoss limits are tighter
+        let hedgeQty = qty; // start with master qty
+        if (maxSpend > 0 || targetLoss > 0) {
+          const capValue = Math.min(
+            maxSpend > 0 ? maxSpend : Infinity,
+            targetLoss > 0 ? targetLoss : Infinity
+          );
+          const cappedRawQty = (capValue * leverageHedge) / (price * contractSize);
+          const cappedQty = enforceMinLot(cappedRawQty);
+          if (cappedQty < hedgeQty) {
+            hedgeQty = cappedQty;
+            addLog(`Hedge ${displayName}: qty capped to ${hedgeQty} (maxSpend=${maxSpend}, targetLoss=${targetLoss})`);
+          }
+        }
+        addLog(`Hedge ${displayName}: ${hedgeSide === 'long' ? 'Buy' : 'Sell'} qty=${hedgeQty} contracts (mirror master, balance=${hedgeEquity.toFixed(2)} USDT)`);
 
         if (hedgeQty > 0) {
           await placeOrder(keyName, symbol,
