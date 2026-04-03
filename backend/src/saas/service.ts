@@ -10344,3 +10344,411 @@ export const getSynctradeLivePnl = async (tenantId: number, sessionId: number) =
   return { masterPnl, hedgePnl, totalPnl, status: 'open', entryPrice: session.entry_price, symbol: session.symbol };
 };
 
+// ─── SyncAuto Engine — automated multi-pair synctrade strategy ───────────────
+// Scans liquid pairs, opens hedged positions across many symbols,
+// manages load to stay ~2-3% from liquidation, auto-adjusts to volatility.
+
+interface SyncAutoConfig {
+  maxPairs: number;           // max simultaneous pairs (default 6)
+  leverageRange: [number, number]; // [min, max] adaptive leverage
+  lotPercent: number;         // base lot % per pair from total equity
+  minVolume24h: number;       // min 24h turnover USDT to consider pair
+  maxSpread: number;          // max 24h change % (avoid pumps/dumps)
+  liquidationBuffer: number;  // target distance to liq as fraction (0.03 = 3%)
+  scanIntervalMs: number;     // how often to scan (default 60s)
+  rebalanceIntervalMs: number; // how often to check load (default 15s)
+  maxContractSizeUsdt: number; // skip pairs with contractSize > X USDT (prefer small ticks)
+}
+
+const SYNC_AUTO_DEFAULTS: SyncAutoConfig = {
+  maxPairs: 6,
+  leverageRange: [15, 30],
+  lotPercent: 80,
+  minVolume24h: 500_000,
+  maxSpread: 15,
+  liquidationBuffer: 0.03,
+  scanIntervalMs: 60_000,
+  rebalanceIntervalMs: 15_000,
+  maxContractSizeUsdt: 5,
+};
+
+interface SyncAutoState {
+  running: boolean;
+  tenantId: number | null;
+  config: SyncAutoConfig;
+  activePairs: Map<string, { sessionId: number; leverage: number; entryPrice: number; openedAt: number }>;
+  lastScanAt: number;
+  lastRebalanceAt: number;
+  scanTimer: ReturnType<typeof setInterval> | null;
+  rebalanceTimer: ReturnType<typeof setInterval> | null;
+  totalCycles: number;
+  totalOpened: number;
+  totalClosed: number;
+  errors: string[];
+}
+
+const syncAutoState: SyncAutoState = {
+  running: false,
+  tenantId: null,
+  config: { ...SYNC_AUTO_DEFAULTS },
+  activePairs: new Map(),
+  lastScanAt: 0,
+  lastRebalanceAt: 0,
+  scanTimer: null,
+  rebalanceTimer: null,
+  totalCycles: 0,
+  totalOpened: 0,
+  totalClosed: 0,
+  errors: [],
+};
+
+const syncAutoLog = (msg: string) => logger.info(`[SyncAuto] ${msg}`);
+const syncAutoErr = (msg: string) => {
+  logger.error(`[SyncAuto] ${msg}`);
+  syncAutoState.errors.push(`[${new Date().toISOString().slice(11, 19)}] ${msg}`);
+  if (syncAutoState.errors.length > 100) syncAutoState.errors.splice(0, 50);
+};
+
+/**
+ * Score a pair for suitability: high volume, moderate volatility, small contract size.
+ * Returns 0 if pair should be skipped.
+ */
+const scorePair = (
+  ticker: { symbol: string; turnover24h: number; lastPrice: number; change24hPercent: number },
+  contractSizeUsdt: number,
+  cfg: SyncAutoConfig
+): number => {
+  if (ticker.turnover24h < cfg.minVolume24h) return 0;
+  const absChange = Math.abs(ticker.change24hPercent);
+  if (absChange > cfg.maxSpread) return 0; // skip pumps/dumps
+  if (absChange < 0.5) return 0; // too stable, slow profit
+  if (contractSizeUsdt > cfg.maxContractSizeUsdt) return 0; // contract too big for fine-grained entry
+  if (ticker.lastPrice <= 0) return 0;
+
+  // Score: volume × moderate_volatility_bonus
+  const volScore = Math.log10(Math.max(1, ticker.turnover24h));
+  const volBonus = absChange >= 1 && absChange <= 8 ? 1.5 : 1;
+  const sizeBonus = contractSizeUsdt < 1 ? 1.3 : 1;
+  return volScore * volBonus * sizeBonus;
+};
+
+/**
+ * Calculate adaptive leverage based on how much margin buffer we want.
+ * Higher volatility → lower leverage to maintain distance to liquidation.
+ */
+const adaptiveLeverage = (absChange24h: number, cfg: SyncAutoConfig): number => {
+  const [minLev, maxLev] = cfg.leverageRange;
+  // Low vol (1%) → max leverage; High vol (10%) → min leverage
+  const t = Math.min(1, Math.max(0, (absChange24h - 1) / 9));
+  const lev = Math.round(maxLev - t * (maxLev - minLev));
+  return Math.max(minLev, Math.min(maxLev, lev));
+};
+
+/**
+ * Scan market and open new hedged pairs if we have capacity.
+ */
+const syncAutoScanAndOpen = async () => {
+  const { tenantId, config: cfg, activePairs } = syncAutoState;
+  if (!tenantId) return;
+
+  const profile = await getSynctradeProfile(tenantId);
+  if (!profile || !Number(profile.enabled)) return;
+
+  const masterKeyName = asString(profile.master_api_key_name, '');
+  const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
+  if (!masterKeyName || hedgeAccounts.length === 0) return;
+
+  const slotsAvailable = cfg.maxPairs - activePairs.size;
+  if (slotsAvailable <= 0) return;
+
+  syncAutoState.totalCycles++;
+
+  try {
+    const { getTickersSnapshot, getBalances, getInstrumentInfo } = await import('../bot/exchange');
+
+    // Get all tickers (cached per CACHE_TTL)
+    const tickers = await getTickersSnapshot(masterKeyName);
+    if (!tickers || tickers.length === 0) return;
+
+    // Get master balance for lot sizing
+    const balances = await getBalances(masterKeyName);
+    const usdtBal = (balances || []).find((b: any) => String(b.coin).toUpperCase() === 'USDT');
+    const equity = asNumber(usdtBal?.walletBalance, 0);
+    if (equity <= 1) {
+      syncAutoLog(`Low balance: ${equity.toFixed(2)} USDT, skipping`);
+      return;
+    }
+
+    // Per-pair budget
+    const perPairUsdt = (equity * cfg.lotPercent / 100) / cfg.maxPairs;
+
+    // Score and rank pairs (exclude already active)
+    const activeSymbols = new Set(activePairs.keys());
+    const candidates: Array<{ symbol: string; score: number; ticker: typeof tickers[0]; csUsdt: number }> = [];
+
+    for (const t of tickers) {
+      const sym = String(t.symbol).replace(/[^A-Z0-9]/g, '');
+      if (activeSymbols.has(sym)) continue;
+      if (!sym.endsWith('USDT')) continue;
+      // Quick contract size estimate: contractSize * lastPrice
+      const csUsdt = t.lastPrice; // rough estimate, refined below
+      const score = scorePair(t, csUsdt, cfg);
+      if (score > 0) candidates.push({ symbol: sym, score, ticker: t, csUsdt });
+    }
+
+    candidates.sort((a, b) => b.score - a.score);
+    const toOpen = candidates.slice(0, slotsAvailable);
+
+    for (const cand of toOpen) {
+      try {
+        // Get precise instrument info
+        let contractSize = 1;
+        let minOrderQty = 1;
+        let qtyStep = 1;
+        try {
+          const inst = await getInstrumentInfo(masterKeyName, cand.symbol);
+          const lf = (inst as any)?.lotSizeFilter;
+          const cs = Number((inst as any)?.contractSize ?? 1);
+          if (cs > 0) contractSize = cs;
+          if (Number(lf?.minOrderQty) > 0) minOrderQty = Number(lf.minOrderQty);
+          if (Number(lf?.qtyStep) > 0) qtyStep = Number(lf.qtyStep);
+        } catch { /* use defaults */ }
+
+        // Recheck contract size in USDT
+        const csUsdt = contractSize * cand.ticker.lastPrice;
+        if (csUsdt > cfg.maxContractSizeUsdt) continue;
+
+        const absChange = Math.abs(cand.ticker.change24hPercent);
+        const leverage = adaptiveLeverage(absChange, cfg);
+
+        // Random master side — diversify direction risk
+        const masterSide: 'long' | 'short' = Math.random() > 0.5 ? 'long' : 'short';
+
+        syncAutoLog(`Opening ${cand.symbol} lev=${leverage}x side=${masterSide} budget=${perPairUsdt.toFixed(1)} USDT`);
+
+        const result = await executeSynctradeSession(tenantId, {
+          symbol: cand.symbol,
+          masterSide,
+          leverageMaster: leverage,
+          leverageHedge: leverage,
+          lotPercent: Math.round((perPairUsdt / equity) * 100),
+        });
+
+        if (result?.sessionId) {
+          activePairs.set(cand.symbol, {
+            sessionId: result.sessionId,
+            leverage,
+            entryPrice: result.entryPrice || 0,
+            openedAt: Date.now(),
+          });
+          syncAutoState.totalOpened++;
+          syncAutoLog(`✓ ${cand.symbol} session #${result.sessionId} opened`);
+        }
+      } catch (err: any) {
+        syncAutoErr(`Failed to open ${cand.symbol}: ${err.message}`);
+      }
+    }
+
+    syncAutoState.lastScanAt = Date.now();
+  } catch (err: any) {
+    syncAutoErr(`Scan error: ${err.message}`);
+  }
+};
+
+/**
+ * Rebalance — check load, distance to liquidation, close over-leveraged,
+ * detect liquidations and emergency-close hedge side.
+ */
+const syncAutoRebalance = async () => {
+  const { tenantId, config: cfg, activePairs } = syncAutoState;
+  if (!tenantId || activePairs.size === 0) return;
+
+  const profile = await getSynctradeProfile(tenantId);
+  if (!profile) return;
+
+  const masterKeyName = asString(profile.master_api_key_name, '');
+  const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
+
+  try {
+    const { getPositions: getPos, closePosition } = await import('../bot/exchange');
+    const normSym = (v: string) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+    // Fetch all master positions at once
+    const allMasterPos = await getPos(masterKeyName);
+    const masterPosMap = new Map<string, any>();
+    for (const p of (allMasterPos || [])) {
+      masterPosMap.set(normSym(p.symbol), p);
+    }
+
+    const toClose: string[] = [];
+
+    for (const [sym, info] of activePairs.entries()) {
+      const masterPos = masterPosMap.get(normSym(sym));
+
+      // CASE 1: Master position gone (liquidated or externally closed)
+      if (!masterPos || asNumber(masterPos.size, 0) === 0) {
+        syncAutoLog(`⚠ ${sym} master position gone — emergency closing hedge`);
+        // Emergency close all hedge positions for this symbol
+        for (const acc of hedgeAccounts) {
+          const keyName = asString(acc.apiKeyName, '');
+          if (!keyName) continue;
+          try {
+            const hedgePositions = await getPos(keyName, sym);
+            const hedgePos = (hedgePositions || []).find((p: any) => normSym(p.symbol) === normSym(sym));
+            if (hedgePos && asNumber(hedgePos.size, 0) > 0) {
+              const posSide: 'Buy' | 'Sell' = String(hedgePos.side).includes('uy') ? 'Buy' : 'Sell';
+              await closePosition(keyName, sym, String(hedgePos.size), posSide);
+              syncAutoLog(`✓ Emergency closed hedge ${asString(acc.displayName, keyName)} ${sym}`);
+            }
+          } catch (err: any) {
+            syncAutoErr(`Emergency close hedge ${sym}: ${err.message}`);
+          }
+        }
+        toClose.push(sym);
+        continue;
+      }
+
+      // CASE 2: Check distance to liquidation
+      const entryPrice = asNumber(masterPos.entryPrice, 0);
+      const markPrice = asNumber(masterPos.markPrice, 0);
+      const leverage = asNumber(masterPos.leverage, info.leverage);
+
+      if (entryPrice > 0 && markPrice > 0 && leverage > 0) {
+        // Approximate liquidation distance: 1/leverage - maintenance_margin(~0.5%)
+        const liqDistance = (1 / leverage) - 0.005;
+        const currentDistance = Math.abs(markPrice - entryPrice) / entryPrice;
+        const distanceToLiq = liqDistance - currentDistance;
+
+        if (distanceToLiq < cfg.liquidationBuffer * 0.5) {
+          // Too close to liquidation — close this pair
+          syncAutoLog(`⚠ ${sym} too close to liq (${(distanceToLiq * 100).toFixed(2)}%) — closing`);
+          try {
+            await closeSynctradeSession(tenantId, info.sessionId);
+            syncAutoState.totalClosed++;
+            syncAutoLog(`✓ ${sym} session #${info.sessionId} closed (liq protection)`);
+          } catch (err: any) {
+            syncAutoErr(`Close ${sym} for liq protection: ${err.message}`);
+          }
+          toClose.push(sym);
+        }
+      }
+    }
+
+    // Clean up closed pairs
+    for (const sym of toClose) {
+      activePairs.delete(sym);
+    }
+
+    syncAutoState.lastRebalanceAt = Date.now();
+  } catch (err: any) {
+    syncAutoErr(`Rebalance error: ${err.message}`);
+  }
+};
+
+/**
+ * Start the auto-engine for a tenant.
+ */
+export const startSyncAutoEngine = async (tenantId: number, config?: Partial<SyncAutoConfig>) => {
+  if (syncAutoState.running) {
+    throw new Error('SyncAuto engine is already running');
+  }
+
+  const profile = await getSynctradeProfile(tenantId);
+  if (!profile || !Number(profile.enabled)) {
+    throw new Error('Synctrade profile not found or not enabled');
+  }
+
+  const cfg = { ...SYNC_AUTO_DEFAULTS, ...config };
+  syncAutoState.running = true;
+  syncAutoState.tenantId = tenantId;
+  syncAutoState.config = cfg;
+  syncAutoState.activePairs = new Map();
+  syncAutoState.totalCycles = 0;
+  syncAutoState.totalOpened = 0;
+  syncAutoState.totalClosed = 0;
+  syncAutoState.errors = [];
+
+  syncAutoLog(`Engine started: tenant=${tenantId} maxPairs=${cfg.maxPairs} lev=${cfg.leverageRange} lot=${cfg.lotPercent}%`);
+
+  // Initial scan
+  await syncAutoScanAndOpen();
+
+  // Start timers
+  syncAutoState.scanTimer = setInterval(async () => {
+    if (!syncAutoState.running) return;
+    try { await syncAutoScanAndOpen(); } catch (err: any) { syncAutoErr(`Scan tick: ${err.message}`); }
+  }, cfg.scanIntervalMs);
+
+  syncAutoState.rebalanceTimer = setInterval(async () => {
+    if (!syncAutoState.running) return;
+    try { await syncAutoRebalance(); } catch (err: any) { syncAutoErr(`Rebalance tick: ${err.message}`); }
+  }, cfg.rebalanceIntervalMs);
+
+  return { status: 'started', config: cfg };
+};
+
+/**
+ * Stop the auto-engine. Close all active pairs if requested.
+ */
+export const stopSyncAutoEngine = async (closeAll: boolean = false) => {
+  if (!syncAutoState.running) {
+    return { status: 'not_running' };
+  }
+
+  syncAutoLog(`Stopping engine... closeAll=${closeAll}`);
+
+  if (syncAutoState.scanTimer) clearInterval(syncAutoState.scanTimer);
+  if (syncAutoState.rebalanceTimer) clearInterval(syncAutoState.rebalanceTimer);
+  syncAutoState.scanTimer = null;
+  syncAutoState.rebalanceTimer = null;
+  syncAutoState.running = false;
+
+  if (closeAll && syncAutoState.tenantId) {
+    const pairs = [...syncAutoState.activePairs.entries()];
+    for (const [sym, info] of pairs) {
+      try {
+        await closeSynctradeSession(syncAutoState.tenantId, info.sessionId);
+        syncAutoState.totalClosed++;
+        syncAutoLog(`✓ Closed ${sym} session #${info.sessionId}`);
+      } catch (err: any) {
+        syncAutoErr(`Failed to close ${sym}: ${err.message}`);
+      }
+    }
+    syncAutoState.activePairs.clear();
+  }
+
+  syncAutoLog(`Engine stopped. Opened=${syncAutoState.totalOpened} Closed=${syncAutoState.totalClosed}`);
+  return {
+    status: 'stopped',
+    totalCycles: syncAutoState.totalCycles,
+    totalOpened: syncAutoState.totalOpened,
+    totalClosed: syncAutoState.totalClosed,
+    remainingPairs: syncAutoState.activePairs.size,
+  };
+};
+
+/**
+ * Get current auto-engine status.
+ */
+export const getSyncAutoStatus = () => {
+  return {
+    running: syncAutoState.running,
+    tenantId: syncAutoState.tenantId,
+    config: syncAutoState.config,
+    activePairs: Object.fromEntries(
+      [...syncAutoState.activePairs.entries()].map(([sym, info]) => [sym, {
+        sessionId: info.sessionId,
+        leverage: info.leverage,
+        entryPrice: info.entryPrice,
+        runningMs: Date.now() - info.openedAt,
+      }])
+    ),
+    totalCycles: syncAutoState.totalCycles,
+    totalOpened: syncAutoState.totalOpened,
+    totalClosed: syncAutoState.totalClosed,
+    lastScanAt: syncAutoState.lastScanAt ? new Date(syncAutoState.lastScanAt).toISOString() : null,
+    lastRebalanceAt: syncAutoState.lastRebalanceAt ? new Date(syncAutoState.lastRebalanceAt).toISOString() : null,
+    recentErrors: syncAutoState.errors.slice(-10),
+  };
+};
+

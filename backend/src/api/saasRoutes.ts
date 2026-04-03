@@ -53,6 +53,9 @@ import {
   closeSynctradeSession,
   getSynctradeSessions,
   getSynctradeLivePnl,
+  startSyncAutoEngine,
+  stopSyncAutoEngine,
+  getSyncAutoStatus,
   getAlgofundActiveSystems,
   assignAlgofundSystems,
   toggleAlgofundSystem,
@@ -1180,6 +1183,50 @@ router.get('/synctrade/:tenantId/live-pnl/:sessionId', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS synctrade live-pnl error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── SyncAuto engine routes ──────────────────────────────────────────────────
+
+router.post('/synctrade/:tenantId/auto/start', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId) || tenantId <= 0) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const result = await startSyncAutoEngine(tenantId, req.body || {});
+    res.json(result);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SyncAuto start error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/synctrade/:tenantId/auto/stop', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId) || tenantId <= 0) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const closeAll = Boolean(req.body?.closeAll);
+    const result = await stopSyncAutoEngine(closeAll);
+    res.json(result);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SyncAuto stop error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/synctrade/auto/status', async (_req, res) => {
+  try {
+    const status = getSyncAutoStatus();
+    res.json(status);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SyncAuto status error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
