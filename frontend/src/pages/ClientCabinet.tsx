@@ -100,6 +100,7 @@ type StrategyOffer = {
     type: string;
   };
   metrics: MetricSet;
+  equityPoints?: number[];
 };
 
 type StrategyState = {
@@ -889,6 +890,11 @@ const ClientCabinet: React.FC = () => {
                             <Tag color="blue">PF: {formatNumber(offer.metrics.pf)}</Tag>
                             {offer.metrics.trades ? <Tag color="cyan">Сделки: {formatNumber(offer.metrics.trades, 0)}</Tag> : null}
                           </Space>
+                          {Array.isArray(offer.equityPoints) && offer.equityPoints.length > 0 ? (
+                            <div style={{ height: 80, marginTop: 4 }}>
+                              <ChartComponent data={offer.equityPoints.map((v, i) => ({ time: i, value: v }))} type="line" />
+                            </div>
+                          ) : null}
                         </Space>
                       </Card>
                     </Col>
@@ -902,31 +908,11 @@ const ClientCabinet: React.FC = () => {
                     <Button type="primary" loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>
                       Сохранить выбор
                     </Button>
-                    <Button loading={strategySelectionPreviewLoading} onClick={() => void runStrategySelectionPreview()}>
-                      Предпросмотр портфеля
-                    </Button>
                   </Space>
                 ) : null}
               </Space>
             )}
           </Card>
-
-          {/* Предпросмотр портфеля */}
-          {strategySelectionPreview ? (
-            <Card className="battletoads-card" title="Предпросмотр выбранных стратегий" size="small">
-              <Space wrap style={{ marginBottom: 12 }}>
-                <Tag color="cyan">Стратегий: {strategySelectionPreview.selectedOffers.length}</Tag>
-                <Tag color="green">Доходность: {formatPercent((strategyPreviewSummary as any)?.totalReturnPercent)}</Tag>
-                <Tag color="orange">DD: {formatPercent((strategyPreviewSummary as any)?.maxDrawdownPercent)}</Tag>
-                <Tag color="purple">PF: {formatNumber((strategyPreviewSummary as any)?.profitFactor)}</Tag>
-              </Space>
-              {strategyPreviewSeries.length > 0 ? (
-                <ChartComponent data={strategyPreviewSeries} type="line" />
-              ) : (
-                <Empty description="Нет данных для предпросмотра" />
-              )}
-            </Card>
-          ) : null}
 
           {/* Настройки риска */}
           {strategyWorkspace.capabilities?.settings ? (
@@ -1108,11 +1094,15 @@ const ClientCabinet: React.FC = () => {
                         title={<Typography.Text strong>{tsDisplayName(system.name)}</Typography.Text>}
                       >
                         <Space wrap style={{ marginBottom: 8 }}>
-                          <Tag color="blue">API: {system.apiKeyName}</Tag>
                           <Tag color="cyan">Участников: {Number(system.memberCount || 0)}</Tag>
                           {system.isActive ? <Tag color="success">Активна</Tag> : <Tag color="default">Неактивна</Tag>}
                           {isCurrent ? <Tag color="gold">Ваша текущая ТС</Tag> : null}
                         </Space>
+                        {isCurrent && algofundPreviewSeries.length > 0 ? (
+                          <div style={{ height: 120, marginBottom: 8 }}>
+                            <ChartComponent data={algofundPreviewSeries} type="line" />
+                          </div>
+                        ) : null}
                         <Typography.Text type="secondary">
                           {isCurrent
                             ? 'Эта карточка сейчас привязана к вашему Алгофонду.'
