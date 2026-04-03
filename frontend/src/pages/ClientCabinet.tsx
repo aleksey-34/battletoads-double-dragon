@@ -253,6 +253,7 @@ type MonitoringPayload = {
   } | null;
   points: Array<{
     ts?: string;
+    recorded_at?: string;
     equity_usd?: number;
     equity?: number;
     value?: number;
