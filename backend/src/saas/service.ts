@@ -8428,14 +8428,16 @@ const applyApprovedAlgofundAction = async (params: {
         logger.warn(`closeAllPositions on stop for ${algofundApiKey}: ${(error as Error).message}`);
       }
     }
-    await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
+    await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 0, published_system_name = \'\', updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
     // Disable all active systems for this profile
-    await db.run(
+    logger.info(`[algofund-stop] Disabling active_systems for profile_id=${profile.id} tenant_id=${row.tenant_id}`);
+    const stopResult = await db.run(
       `UPDATE algofund_active_systems
        SET is_enabled = 0, updated_at = CURRENT_TIMESTAMP
        WHERE profile_id = ? AND COALESCE(is_enabled, 1) = 1`,
       [profile.id]
     );
+    logger.info(`[algofund-stop] active_systems update result: changes=${(stopResult as any)?.changes ?? 'unknown'} profile_id=${profile.id}`);
   } else if (row.request_type === 'switch_system') {
     const targetSystemId = Math.floor(asNumber(requestPayload.targetSystemId, 0));
     if (targetSystemId <= 0) {
