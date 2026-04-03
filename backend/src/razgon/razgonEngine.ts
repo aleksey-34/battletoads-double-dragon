@@ -198,9 +198,17 @@ export function updateRazgonConfig(patch: Partial<RazgonConfig>): void {
 
 // ── Momentum Tick ────────────────────────────────────────────────────────
 
+let momentumTickCount = 0;
+
 async function momentumTick(): Promise<void> {
   if (!config || !riskManager || status !== 'running') return;
   const cfg = config.momentum;
+  momentumTickCount++;
+
+  // Log every 60 ticks (~5 min) for visibility
+  if (momentumTickCount % 60 === 1) {
+    logger.info(`[Razgon:Momentum] tick #${momentumTickCount} | balance=$${balance.toFixed(2)} | openPos=${openPositions.length} | watchlist=${cfg.watchlist.length} symbols`);
+  }
 
   // Check & manage existing positions first
   await checkMomentumExits();
@@ -244,6 +252,11 @@ async function checkMomentumEntry(symbol: string): Promise<void> {
     cfg.volumeMultiplier,
     cfg.atrFilterMin,
   );
+
+  // Log signal check for diagnostics (every 60 ticks per symbol)
+  if (momentumTickCount % 60 === 1) {
+    logger.info(`[Razgon:Momentum] ${symbol} signal=${result.signal} price=${latestCandle.close} candles=${candles.length}`);
+  }
 
   if (result.signal === 'none') return;
 
