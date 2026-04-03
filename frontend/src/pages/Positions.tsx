@@ -15,9 +15,12 @@ import {
   Divider,
   Modal,
   Tabs,
+  Spin,
+  Empty,
 } from 'antd';
 import axios from 'axios';
 import { useI18n } from '../i18n';
+import ChartComponent from '../components/ChartComponent';
 
 /* eslint-disable react-hooks/exhaustive-deps */
 
@@ -79,6 +82,15 @@ type TradeRow = {
 
 type ViewMode = 'positions' | 'orders' | 'trades' | 'all';
 
+type LinePoint = { time: number; value: number };
+type MonitoringSnapshot = {
+  recorded_at?: string;
+  equity_usd?: number;
+  margin_load_percent?: number;
+  effective_leverage?: number;
+  drawdown_percent?: number;
+};
+
 type ManualAmountMode = 'coin' | 'usdt';
 type ManualOrderType = 'market' | 'limit';
 
@@ -136,6 +148,12 @@ const Positions: React.FC = () => {
   const [refreshAllLoading, setRefreshAllLoading] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<ViewMode>('positions');
   const [monitorModalOpen, setMonitorModalOpen] = useState(false);
+  const [monChartOpen, setMonChartOpen] = useState(false);
+  const [monChartKey, setMonChartKey] = useState('');
+  const [monChartDays, setMonChartDays] = useState(1);
+  const [monChartLoading, setMonChartLoading] = useState(false);
+  const [monChartPoints, setMonChartPoints] = useState<LinePoint[]>([]);
+  const [monChartLatest, setMonChartLatest] = useState<MonitoringSnapshot | null>(null);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(false);
   const [manualOrderDraftByKey, setManualOrderDraftByKey] = useState<{ [key: string]: ManualOrderDraft }>({});
   const apiKeysRef = useRef<ApiKey[]>([]);
@@ -676,6 +694,32 @@ const Positions: React.FC = () => {
     }, {} as { [exchange: string]: ApiKey[] });
   }, [apiKeys, t]);
 
+  const loadMonChart = async (key: string, days: number) => {
+    setMonChartLoading(true);
+    try {
+      const params: Record<string, number> = days > 1 ? { days } : { limit: 288 };
+      const res = await axios.get<{ points?: MonitoringSnapshot[]; latest?: MonitoringSnapshot }>(
+        `/api/monitoring/${encodeURIComponent(key)}`, { params }
+      );
+      const rows = Array.isArray(res.data?.points) ? res.data.points : [];
+      setMonChartPoints(rows.map(r => {
+        const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
+        const v = Number(r.equity_usd);
+        return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
+      }).filter((x): x is LinePoint => x !== null));
+      setMonChartLatest(res.data?.latest || null);
+    } catch { setMonChartPoints([]); setMonChartLatest(null); } finally { setMonChartLoading(false); }
+  };
+
+  const openMonChart = (key: string) => {
+    setMonChartOpen(true); setMonChartKey(key); setMonChartDays(1);
+    void loadMonChart(key, 1);
+  };
+
+  useEffect(() => { if (monChartOpen && monChartKey) void loadMonChart(monChartKey, monChartDays); }, [monChartDays]);
+
+  const fmtNum = (v: unknown, d = 2) => { const n = Number(v); return Number.isFinite(n) ? n.toFixed(d) : '-'; };
+
   const shouldShowPositions = viewMode === 'positions' || viewMode === 'all';
   const shouldShowOrders = viewMode === 'orders' || viewMode === 'all';
   const shouldShowTrades = viewMode === 'trades' || viewMode === 'all';
@@ -693,7 +737,7 @@ const Positions: React.FC = () => {
           {autoRefreshEnabled ? t('positions.disableAutoRefresh', 'Disable auto refresh') : t('positions.enableAutoRefresh', 'Enable auto refresh')}
         </Button>
         <Button type="primary" style={{ background: '#7c3aed' }} onClick={() => setMonitorModalOpen(true)}>
-          📊 Мониторинг
+          📊 Сводка
         </Button>
         <Segmented<ViewMode>
           value={viewMode}
@@ -787,6 +831,9 @@ const Positions: React.FC = () => {
                   bodyStyle={{ padding: 10 }}
                 >
                   <Space wrap style={{ marginBottom: 8 }}>
+                    <Button size="small" onClick={() => openMonChart(key.name)} style={{ background: '#7c3aed', color: '#fff', border: 'none' }}>
+                      📈 Мониторинг
+                    </Button>
                     <Button
                       loading={positionsLoading || ordersLoading || tradesLoading || balancesLoading}
                       onClick={() => {
@@ -1029,6 +1076,44 @@ const Positions: React.FC = () => {
           </Space>
         ),
       }))} />
+
+      {/* Monitoring Chart Modal */}
+      <Modal
+        title={`Мониторинг: ${monChartKey || '—'}`}
+        open={monChartOpen}
+        onCancel={() => setMonChartOpen(false)}
+        footer={null}
+        width={960}
+      >
+        <Spin spinning={monChartLoading}>
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
+              <Space wrap>
+                {monChartLatest ? <Tag color="blue">Eq ${fmtNum(monChartLatest.equity_usd)}</Tag> : null}
+                {monChartLatest ? <Tag color="purple">ML {fmtNum(monChartLatest.margin_load_percent)}%</Tag> : null}
+                {monChartLatest ? <Tag color="red">Lev {fmtNum(monChartLatest.effective_leverage)}x</Tag> : null}
+                {monChartLatest ? <Tag color="orange">DD {fmtNum(monChartLatest.drawdown_percent)}%</Tag> : null}
+              </Space>
+              <Segmented
+                options={[
+                  { label: '1д', value: 1 },
+                  { label: '7д', value: 7 },
+                  { label: '30д', value: 30 },
+                  { label: '60д', value: 60 },
+                  { label: '90д', value: 90 },
+                ]}
+                value={monChartDays}
+                onChange={(v) => setMonChartDays(Number(v))}
+              />
+            </Space>
+            {monChartPoints.length > 0 ? (
+              <ChartComponent data={monChartPoints} type="line" />
+            ) : (
+              <Empty description="Нет данных мониторинга" />
+            )}
+          </Space>
+        </Spin>
+      </Modal>
     </div>
   );
 };
