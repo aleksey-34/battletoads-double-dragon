@@ -309,10 +309,22 @@ const Settings: React.FC = () => {
     }
   };
 
+  const normalizeExchangeForForm = (raw: string): string => {
+    const s = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (s.startsWith('bybit')) return 'bybit';
+    if (s.startsWith('bitget')) return 'bitget';
+    if (s.startsWith('bingx')) return 'bingx';
+    if (s.startsWith('binance')) return 'binance';
+    if (s.startsWith('weex')) return 'weex';
+    if (s.startsWith('mexc') || s.startsWith('mxc')) return 'mexc';
+    return String(raw || '').trim().toLowerCase();
+  };
+
   const editApiKey = (key: ApiKeyRecord) => {
     setEditingKey(key);
     form.setFieldsValue({
       ...key,
+      exchange: normalizeExchangeForForm(key.exchange),
       passphrase: key.passphrase || '',
       testnet: Boolean(key.testnet),
       demo: Boolean(key.demo),
@@ -348,18 +360,18 @@ const Settings: React.FC = () => {
   return (
     <div className="battletoads-form-shell">
       <Card className="battletoads-card" title={editingKey ? t('settings.form.editApiKey', 'Edit API Key') : t('settings.form.addApiKey', 'Add API Key')}>
-        <Form className="battletoads-form" form={form} onFinish={onFinishApiKey} initialValues={{ exchange: 'Bybit', passphrase: '', speed_limit: 10, testnet: false, demo: false }}>
+        <Form className="battletoads-form" form={form} onFinish={onFinishApiKey} initialValues={{ exchange: 'bybit', passphrase: '', speed_limit: 10, testnet: false, demo: false }}>
           <Form.Item label={t('settings.form.name', 'Name')} name="name" rules={[{ required: true }]}>
             <Input placeholder={t('settings.form.name', 'Name')} />
           </Form.Item>
           <Form.Item label={t('settings.form.exchange', 'Exchange')} name="exchange" rules={[{ required: true }]}>
             <Select placeholder={t('settings.form.exchange', 'Exchange')}>
-              <Option value="Bybit">Bybit</Option>
-              <Option value="Bitget">Bitget Futures</Option>
-              <Option value="BingX">BingX Futures</Option>
-              <Option value="Binance">Binance Futures</Option>
-              <Option value="Weex">WEEX Futures</Option>
-              <Option value="MEXC Spot+Futures">MEXC Spot+Futures</Option>
+              <Option value="bybit">Bybit</Option>
+              <Option value="bitget">Bitget Futures</Option>
+              <Option value="bingx">BingX Futures</Option>
+              <Option value="binance">Binance Futures</Option>
+              <Option value="weex">WEEX Futures</Option>
+              <Option value="mexc">MEXC Futures</Option>
             </Select>
           </Form.Item>
           <Form.Item label={t('settings.form.apiKey', 'API Key')} name="api_key" rules={[{ required: true }]}>
@@ -371,7 +383,7 @@ const Settings: React.FC = () => {
           <Form.Item shouldUpdate noStyle>
             {() => {
               const exchange = String(form.getFieldValue('exchange') || '');
-              const needsPassphrase = exchange === 'Bitget' || exchange === 'Weex';
+              const needsPassphrase = exchange === 'bitget' || exchange === 'weex';
 
               return (
                 <Form.Item

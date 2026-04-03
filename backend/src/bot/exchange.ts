@@ -1018,7 +1018,13 @@ export const getBalances = async (apiKeyName: string) => {
         } else if (isMexcExchange(entry.exchange) && isMexcNoPermissionError(error)) {
           // API key lacks Contract Trading permission → fall back to spot balance
           logger.warn(`${apiKeyName}: MEXC contract balance forbidden (700007), falling back to spot balance`);
-          payload = await entry.limiter.schedule(() => entry.client.fetchBalance({ type: 'spot' }));
+          try {
+            payload = await entry.limiter.schedule(() => entry.client.fetchBalance({ type: 'spot' }));
+          } catch {
+            // Spot also unavailable (no read permission) → return empty gracefully
+            logger.warn(`${apiKeyName}: MEXC spot balance also unavailable, returning empty balances`);
+            return [];
+          }
         } else {
           throw error;
         }
