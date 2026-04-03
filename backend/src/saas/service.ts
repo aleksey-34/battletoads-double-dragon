@@ -10352,24 +10352,26 @@ interface SyncAutoConfig {
   maxPairs: number;           // max simultaneous pairs (default 6)
   leverageRange: [number, number]; // [min, max] adaptive leverage
   lotPercent: number;         // base lot % per pair from total equity
-  minVolume24h: number;       // min 24h turnover USDT to consider pair
+  minVolume24h: number;       // min 24h turnover USDT to consider pair (auto-scaled by deposit)
   maxSpread: number;          // max 24h change % (avoid pumps/dumps)
   liquidationBuffer: number;  // target distance to liq as fraction (0.03 = 3%)
   scanIntervalMs: number;     // how often to scan (default 60s)
   rebalanceIntervalMs: number; // how often to check load (default 15s)
   maxContractSizeUsdt: number; // skip pairs with contractSize > X USDT (prefer small ticks)
+  minVolumeMultiplier: number; // min volume must be >= deposit × notional × this (default 50)
 }
 
 const SYNC_AUTO_DEFAULTS: SyncAutoConfig = {
   maxPairs: 6,
   leverageRange: [15, 30],
   lotPercent: 80,
-  minVolume24h: 500_000,
+  minVolume24h: 2_000_000,
   maxSpread: 15,
   liquidationBuffer: 0.03,
   scanIntervalMs: 60_000,
   rebalanceIntervalMs: 15_000,
   maxContractSizeUsdt: 5,
+  minVolumeMultiplier: 50,
 };
 
 interface SyncAutoState {
@@ -10410,26 +10412,37 @@ const syncAutoErr = (msg: string) => {
 };
 
 /**
- * Score a pair for suitability: high volume, moderate volatility, small contract size.
+ * Score a pair for suitability.
+ * Filters: volume (absolute + relative to notional), volatility, contract size.
+ * perPairNotional = per-pair budget × leverage — our expected position size.
+ * Volume must be >> notional so we don't move the market.
  * Returns 0 if pair should be skipped.
  */
 const scorePair = (
   ticker: { symbol: string; turnover24h: number; lastPrice: number; change24hPercent: number },
   contractSizeUsdt: number,
-  cfg: SyncAutoConfig
+  cfg: SyncAutoConfig,
+  perPairNotional: number
 ): number => {
+  // Absolute volume floor
   if (ticker.turnover24h < cfg.minVolume24h) return 0;
+  // Relative volume: our notional should be tiny vs 24h volume
+  const minRelativeVolume = perPairNotional * cfg.minVolumeMultiplier;
+  if (ticker.turnover24h < minRelativeVolume) return 0;
+
   const absChange = Math.abs(ticker.change24hPercent);
   if (absChange > cfg.maxSpread) return 0; // skip pumps/dumps
   if (absChange < 0.5) return 0; // too stable, slow profit
-  if (contractSizeUsdt > cfg.maxContractSizeUsdt) return 0; // contract too big for fine-grained entry
+  if (contractSizeUsdt > cfg.maxContractSizeUsdt) return 0;
   if (ticker.lastPrice <= 0) return 0;
 
-  // Score: volume × moderate_volatility_bonus
+  // Score: volume × volatility_bonus × size_bonus × liquidity_ratio
   const volScore = Math.log10(Math.max(1, ticker.turnover24h));
   const volBonus = absChange >= 1 && absChange <= 8 ? 1.5 : 1;
   const sizeBonus = contractSizeUsdt < 1 ? 1.3 : 1;
-  return volScore * volBonus * sizeBonus;
+  // Bonus for pairs where our notional is tiny vs volume (better fills)
+  const liqRatio = Math.min(2, Math.log10(Math.max(1, ticker.turnover24h / Math.max(1, perPairNotional))) / 3);
+  return volScore * volBonus * sizeBonus * (1 + liqRatio);
 };
 
 /**
@@ -10479,8 +10492,12 @@ const syncAutoScanAndOpen = async () => {
       return;
     }
 
-    // Per-pair budget
+    // Per-pair budget and estimated notional (for volume filtering)
     const perPairUsdt = (equity * cfg.lotPercent / 100) / cfg.maxPairs;
+    const midLeverage = (cfg.leverageRange[0] + cfg.leverageRange[1]) / 2;
+    const perPairNotional = perPairUsdt * midLeverage;
+
+    syncAutoLog(`Scan: equity=${equity.toFixed(1)} perPair=${perPairUsdt.toFixed(1)} notional~${perPairNotional.toFixed(0)} slots=${slotsAvailable}`);
 
     // Score and rank pairs (exclude already active)
     const activeSymbols = new Set(activePairs.keys());
@@ -10490,9 +10507,9 @@ const syncAutoScanAndOpen = async () => {
       const sym = String(t.symbol).replace(/[^A-Z0-9]/g, '');
       if (activeSymbols.has(sym)) continue;
       if (!sym.endsWith('USDT')) continue;
-      // Quick contract size estimate: contractSize * lastPrice
-      const csUsdt = t.lastPrice; // rough estimate, refined below
-      const score = scorePair(t, csUsdt, cfg);
+      // Rough contract size estimate (refined after selection)
+      const csUsdt = t.lastPrice;
+      const score = scorePair(t, csUsdt, cfg, perPairNotional);
       if (score > 0) candidates.push({ symbol: sym, score, ticker: t, csUsdt });
     }
 
