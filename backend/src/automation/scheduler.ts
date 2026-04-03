@@ -18,6 +18,13 @@ const loadApiKeysWithActiveStrategies = async (): Promise<string[]> => {
     .filter((name) => name.length > 0);
 };
 
+const loadAllApiKeys = async (): Promise<string[]> => {
+  const rows = await db.all(`SELECT name FROM api_keys`);
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => String(row?.name || '').trim())
+    .filter((name) => name.length > 0);
+};
+
 const loadApiKeysWithDiscoverySystems = async (): Promise<string[]> => {
   const rows = await db.all(
     `SELECT DISTINCT a.name
@@ -32,7 +39,7 @@ const loadApiKeysWithDiscoverySystems = async (): Promise<string[]> => {
 };
 
 export const runMonitoringCycle = async (): Promise<{ processed: number; failed: number }> => {
-  const apiKeys = await loadApiKeysWithActiveStrategies();
+  const apiKeys = await loadAllApiKeys();
   let processed = 0;
   let failed = 0;
 
