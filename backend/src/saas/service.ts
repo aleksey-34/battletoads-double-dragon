@@ -8429,6 +8429,13 @@ const applyApprovedAlgofundAction = async (params: {
       }
     }
     await db.run('UPDATE algofund_profiles SET actual_enabled = 0, requested_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [row.tenant_id]);
+    // Disable all active systems for this profile
+    await db.run(
+      `UPDATE algofund_active_systems
+       SET is_enabled = 0, updated_at = CURRENT_TIMESTAMP
+       WHERE profile_id = ? AND COALESCE(is_enabled, 1) = 1`,
+      [profile.id]
+    );
   } else if (row.request_type === 'switch_system') {
     const targetSystemId = Math.floor(asNumber(requestPayload.targetSystemId, 0));
     if (targetSystemId <= 0) {
