@@ -356,6 +356,14 @@ const levelToSliderValue = (level: Level3): number => {
   return 5;
 };
 
+const tsDisplayName = (systemName: string): string => {
+  const parts = String(systemName || '').trim().split('::').filter(Boolean);
+  let token = String(parts[parts.length - 1] || '').trim().toLowerCase();
+  token = token.replace(/^algofund-master-btdd-d1-/, '');
+  token = token.replace(/-h-([a-z0-9]{4,})$/i, '-$1');
+  return token || systemName;
+};
+
 const capabilityTag = (label: string, enabled: boolean) => <Tag color={enabled ? 'success' : 'default'}>{label}: {enabled ? 'on' : 'off'}</Tag>;
 
 const ClientCabinet: React.FC = () => {
@@ -1097,7 +1105,7 @@ const ClientCabinet: React.FC = () => {
                       <Card
                         size="small"
                         className="battletoads-card"
-                        title={<Typography.Text strong>{system.name}</Typography.Text>}
+                        title={<Typography.Text strong>{tsDisplayName(system.name)}</Typography.Text>}
                       >
                         <Space wrap style={{ marginBottom: 8 }}>
                           <Tag color="blue">API: {system.apiKeyName}</Tag>
@@ -1117,24 +1125,6 @@ const ClientCabinet: React.FC = () => {
               </Row>
             )}
           </Card>
-
-          {!algofundWorkspace.preview?.blockedByPlan ? (
-            <Card className="battletoads-card" title="Предпросмотр портфеля" size="small">
-              <Space wrap style={{ marginBottom: 12 }}>
-                <Tag color="green">Доходность: {formatPercent(algofundWorkspace.preview?.summary?.totalReturnPercent)}</Tag>
-                <Tag color="orange">DD: {formatPercent(algofundWorkspace.preview?.summary?.maxDrawdownPercent)}</Tag>
-                <Tag color="purple">PF: {formatNumber(algofundWorkspace.preview?.summary?.profitFactor)}</Tag>
-                <Tag color="blue">Сделки: {formatNumber(algofundWorkspace.preview?.summary?.tradesCount, 0)}</Tag>
-              </Space>
-              {algofundPreviewSeries.length > 0 ? (
-                <ChartComponent data={algofundPreviewSeries} type="line" />
-              ) : (
-                <Empty description="Нет данных для предпросмотра" />
-              )}
-            </Card>
-          ) : (
-            <Alert type="warning" showIcon message={algofundWorkspace.preview?.blockedReason || 'Предпросмотр заблокирован текущим тарифом'} />
-          )}
 
           {algofundWorkspace.capabilities?.settings ? (
             <Card className="battletoads-card" title="Риск-профиль" size="small">
