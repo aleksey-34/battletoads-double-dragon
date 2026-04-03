@@ -178,7 +178,7 @@ const ensureCcxtSymbolMap = async (entry: CcxtClientEntry): Promise<Map<string, 
   // swapMap   — keyed by normalizedId → swap symbol ('BTC/USDT:USDT')
   // Default symbolMap gets swap priority for MEXC (since defaultType='swap');
   // spot-only lookup uses swapMap miss → spotMap fallback.
-  const isMexcLike = entry.exchange === 'mexc';
+  const isMexcLike = isMexcExchange(entry.exchange);
   const spotMap = new Map<string, string>();
 
   for (const market of values) {
@@ -281,6 +281,9 @@ const isMexcNoPermissionError = (error: unknown): boolean => {
   const message = String((error as any)?.message || error || '');
   return message.includes('700007') || message.includes('No permission to access the endpoint');
 };
+
+// Entry.exchange stores raw DB value (e.g. "MEXC Spot+Futures") — use detectExchange for reliable check
+const isMexcExchange = (exchange: string): boolean => detectExchange(exchange) === 'mexc';
 
 const isBingxTradeEndpointDisabledError = (error: unknown): boolean => {
   const message = String((error as any)?.message || error || '').toLowerCase();
@@ -1012,7 +1015,7 @@ export const getBalances = async (apiKeyName: string) => {
         if (isTimestampSyncError(error)) {
           await syncCcxtClock(apiKeyName, entry);
           payload = await entry.limiter.schedule(() => entry.client.fetchBalance());
-        } else if (entry.exchange === 'mexc' && isMexcNoPermissionError(error)) {
+        } else if (isMexcExchange(entry.exchange) && isMexcNoPermissionError(error)) {
           // API key lacks Contract Trading permission → fall back to spot balance
           logger.warn(`${apiKeyName}: MEXC contract balance forbidden (700007), falling back to spot balance`);
           payload = await entry.limiter.schedule(() => entry.client.fetchBalance({ type: 'spot' }));
@@ -1027,7 +1030,7 @@ export const getBalances = async (apiKeyName: string) => {
       // MEXC swap: ccxt's customParseBalance uses frozenBalance (not positionMargin) for 'used',
       // and omits equity entirely → walletBalance shows only availableBalance+frozenBalance.
       // Parse raw payload.info.data directly to get the real equity and positionMargin.
-      if (entry.exchange === 'mexc') {
+      if (isMexcExchange(entry.exchange)) {
         const rawData: Array<Record<string, unknown>> = Array.isArray(payload?.info?.data)
           ? payload.info.data
           : [];
@@ -1293,7 +1296,7 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
       return deduped;
     } catch (error) {
       const err = error as Error;
-      if (entry.exchange === 'mexc' && isMexcNoPermissionError(error)) {
+      if (isMexcExchange(entry.exchange) && isMexcNoPermissionError(error)) {
         logger.warn(`${apiKeyName}: MEXC contract positions forbidden (700007) — API key lacks Contract Trading permission`);
         return [];
       }
