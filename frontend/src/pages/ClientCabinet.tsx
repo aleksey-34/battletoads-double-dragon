@@ -11,6 +11,7 @@ import {
   Empty,
   Input,
   List,
+  Modal,
   Popconfirm,
   Row,
   Segmented,
@@ -190,6 +191,12 @@ type AlgofundState = {
     name: string;
     isActive: boolean;
     memberCount: number;
+    metrics?: {
+      equityUsd?: number;
+      drawdownPercent?: number;
+      marginLoadPercent?: number;
+      effectiveLeverage?: number;
+    } | null;
   }>;
 };
 
@@ -381,6 +388,7 @@ const ClientCabinet: React.FC = () => {
   const [tariffNote, setTariffNote] = useState('');
   const [monitoring, setMonitoring] = useState<MonitoringPayload | null>(null);
   const [monitoringDays, setMonitoringDays] = useState(1);
+  const [monitoringModalVisible, setMonitoringModalVisible] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
   const [actionLoading, setActionLoading] = useState('');
@@ -1091,22 +1099,33 @@ const ClientCabinet: React.FC = () => {
                       <Card
                         size="small"
                         className="battletoads-card"
-                        title={<Typography.Text strong>{tsDisplayName(system.name)}</Typography.Text>}
+                        style={isCurrent ? { borderColor: '#52c41a', borderWidth: 2 } : undefined}
+                        title={
+                          <Space>
+                            <Typography.Text strong>{tsDisplayName(system.name)}</Typography.Text>
+                            {isCurrent ? <Tag color="gold" style={{ marginLeft: 4 }}>Активна</Tag> : null}
+                          </Space>
+                        }
                       >
                         <Space wrap style={{ marginBottom: 8 }}>
                           <Tag color="cyan">Участников: {Number(system.memberCount || 0)}</Tag>
-                          {system.isActive ? <Tag color="success">Активна</Tag> : <Tag color="default">Неактивна</Tag>}
-                          {isCurrent ? <Tag color="gold">Ваша текущая ТС</Tag> : null}
+                          {system.isActive ? <Tag color="success">Торгуется</Tag> : <Tag color="default">Приостановлена</Tag>}
                         </Space>
+                        {system.metrics ? (
+                          <Row gutter={[8, 4]} style={{ marginBottom: 8 }}>
+                            {system.metrics.equityUsd != null ? <Col span={12}><Statistic title="Капитал" value={formatMoney(system.metrics.equityUsd)} valueStyle={{ fontSize: 14 }} /></Col> : null}
+                            {system.metrics.drawdownPercent != null ? <Col span={12}><Statistic title="DD" value={formatPercent(system.metrics.drawdownPercent)} valueStyle={{ fontSize: 14 }} /></Col> : null}
+                          </Row>
+                        ) : null}
                         {isCurrent && algofundPreviewSeries.length > 0 ? (
                           <div style={{ height: 120, marginBottom: 8 }}>
                             <ChartComponent data={algofundPreviewSeries} type="line" />
                           </div>
                         ) : null}
-                        <Typography.Text type="secondary">
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
                           {isCurrent
-                            ? 'Эта карточка сейчас привязана к вашему Алгофонду.'
-                            : 'Можно запросить подключение через блок «Подключение / отключение» ниже.'}
+                            ? 'Подключена к вашему аккаунту'
+                            : 'Запросите подключение ниже'}
                         </Typography.Text>
                       </Card>
                     </Col>
@@ -1227,31 +1246,41 @@ const ClientCabinet: React.FC = () => {
         </div>
       </Card>
 
-      <Card
-        className="battletoads-card"
+      <Card className="battletoads-card" title="Мониторинг счёта" size="small">
+        <Space wrap>
+          <Button type="primary" onClick={() => { setMonitoringModalVisible(true); void refreshMonitoring(monitoringDays); }}>
+            Открыть мониторинг
+          </Button>
+          {monitoring?.latest?.equity_usd != null ? <Tag color="blue">Капитал: {formatMoney(monitoring.latest.equity_usd)}</Tag> : null}
+          {monitoring?.latest?.drawdown_pct != null ? <Tag color="orange">DD: {formatPercent(monitoring.latest.drawdown_pct)}</Tag> : null}
+        </Space>
+      </Card>
+
+      <Modal
         title="Мониторинг счёта"
-        size="small"
-        extra={
-          <Space>
-            <Segmented
-              size="small"
-              options={[
-                { label: '1д', value: 1 },
-                { label: '7д', value: 7 },
-                { label: '30д', value: 30 },
-                { label: '60д', value: 60 },
-              ]}
-              value={monitoringDays}
-              onChange={(v) => {
-                const d = Number(v);
-                setMonitoringDays(d);
-                void refreshMonitoring(d);
-              }}
-            />
-            <Button size="small" loading={actionLoading === 'monitoring-refresh'} onClick={() => void refreshMonitoring(monitoringDays)}>Обновить</Button>
-          </Space>
-        }
+        open={monitoringModalVisible}
+        onCancel={() => setMonitoringModalVisible(false)}
+        footer={null}
+        width={720}
       >
+        <Space wrap style={{ marginBottom: 12 }}>
+          <Segmented
+            size="small"
+            options={[
+              { label: '1д', value: 1 },
+              { label: '7д', value: 7 },
+              { label: '30д', value: 30 },
+              { label: '60д', value: 60 },
+            ]}
+            value={monitoringDays}
+            onChange={(v) => {
+              const d = Number(v);
+              setMonitoringDays(d);
+              void refreshMonitoring(d);
+            }}
+          />
+          <Button size="small" loading={actionLoading === 'monitoring-refresh'} onClick={() => void refreshMonitoring(monitoringDays)}>Обновить</Button>
+        </Space>
         <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
           <Col xs={12} sm={6}>
             <Statistic title="Капитал" value={formatMoney(monitoring?.latest?.equity_usd)} precision={0} />
@@ -1276,7 +1305,7 @@ const ClientCabinet: React.FC = () => {
         ) : (
           <Empty description="Нет данных мониторинга" />
         )}
-      </Card>
+      </Modal>
 
       <Card className="battletoads-card" title="API ключи биржи" size="small">
         {!onboardingCompleted ? (
