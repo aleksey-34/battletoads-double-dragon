@@ -109,7 +109,9 @@ export default function Razgon() {
   const fetchConfig = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/config`);
-      setConfig(res.data);
+      if (res.data && typeof res.data === 'object' && res.data.apiKeyName) {
+        setConfig(res.data);
+      }
     } catch { /* ignore */ }
   }, []);
 

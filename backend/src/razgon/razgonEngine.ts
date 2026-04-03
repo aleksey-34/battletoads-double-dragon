@@ -1,5 +1,7 @@
 // ─── Razgon Engine — Main Tick Loop ──────────────────────────────────────────
 import { v4 as uuid } from 'uuid';
+import * as fs from 'fs';
+import * as path from 'path';
 import logger from '../utils/logger';
 import {
   getMarketData,
@@ -48,6 +50,34 @@ let knownSymbols: Set<string> = new Set();
 // Candle cache per symbol: last N 1m candles
 const candleCache: Map<string, Candle1m[]> = new Map();
 const MAX_CANDLE_CACHE = 60; // keep 60 1m candles per symbol
+
+// ── Config Persistence ───────────────────────────────────────────────────
+// Save last-used config to disk so it survives API restarts.
+const CONFIG_FILE = path.join(__dirname, '..', '..', 'razgon_config.json');
+
+function saveConfigToDisk(): void {
+  if (!config) return;
+  try {
+    fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), 'utf-8');
+  } catch (e) {
+    logger.debug(`[Razgon] Failed to save config: ${(e as Error).message}`);
+  }
+}
+
+function loadConfigFromDisk(): RazgonConfig | null {
+  try {
+    if (!fs.existsSync(CONFIG_FILE)) return null;
+    const raw = fs.readFileSync(CONFIG_FILE, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (parsed && parsed.apiKeyName && parsed.exchange) return parsed as RazgonConfig;
+  } catch (e) {
+    logger.debug(`[Razgon] Failed to load config: ${(e as Error).message}`);
+  }
+  return null;
+}
+
+// Load saved config on module init (so GET /config returns it even before Start)
+config = loadConfigFromDisk();
 
 // ── Public API ───────────────────────────────────────────────────────────
 
@@ -99,6 +129,7 @@ export async function startRazgon(cfg: RazgonConfig): Promise<{ ok: boolean; err
 
   try {
     config = cfg;
+    saveConfigToDisk();
 
     // Fetch initial balance
     const balances = await getBalances(cfg.apiKeyName);
@@ -192,6 +223,7 @@ export async function stopRazgon(): Promise<void> {
     }
   }
 
+  // Keep config in memory so UI can read it after stop
   status = 'stopped';
   logger.info('[Razgon] Engine stopped');
 }
@@ -208,6 +240,7 @@ export function updateRazgonConfig(patch: Partial<RazgonConfig>): void {
   if (!config) return;
   config = { ...config, ...patch };
   if (riskManager) riskManager.updateConfig(config);
+  saveConfigToDisk();
 }
 
 // ── Momentum Tick ────────────────────────────────────────────────────────
