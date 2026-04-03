@@ -722,7 +722,7 @@ const Positions: React.FC = () => {
               const totalValue = positions.reduce((s, p) => s + Number(p.positionValueUsdt || p.positionValue || 0), 0);
               return positions.length > 0 ? (
                 <div key={key.name} style={{ marginBottom: 8 }}>
-                  <Tag color="blue">{key.display_name || key.name}</Tag>
+                  <Tag color="blue">{key.name}</Tag>
                   <Tag>{positions.length} поз.</Tag>
                   <Tag color={totalPnl >= 0 ? 'green' : 'red'}>UPNL: {totalPnl.toFixed(2)} USDT</Tag>
                   <Tag>Объём: {totalValue.toFixed(1)} USDT</Tag>
