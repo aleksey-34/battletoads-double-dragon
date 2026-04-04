@@ -10345,6 +10345,7 @@ const ensureSynctradeProfile = async (tenantId: number, assignedApiKeyName: stri
   // Migrate: add target_mode / target_value columns if missing
   await db.run(`ALTER TABLE synctrade_profiles ADD COLUMN target_mode TEXT DEFAULT 'percent'`).catch(() => {});
   await db.run(`ALTER TABLE synctrade_profiles ADD COLUMN target_value REAL DEFAULT 50.0`).catch(() => {});
+  await db.run(`ALTER TABLE synctrade_profiles ADD COLUMN auto_config_json TEXT DEFAULT NULL`).catch(() => {});
 
   await db.run(
     `INSERT INTO synctrade_profiles (
@@ -11313,7 +11314,15 @@ export const startSyncAutoEngine = async (tenantId: number, config?: Partial<Syn
   syncAutoState.totalClosed = 0;
   syncAutoState.errors = [];
 
-  syncAutoLog(`Engine started: tenant=${tenantId} maxPairs=${cfg.maxPairs} lev=${cfg.leverageRange} lot=${cfg.lotPercent}%`);
+  syncAutoLog(`Engine started: tenant=${tenantId} maxPairs=${cfg.maxPairs} lev=${cfg.leverageRange} lot=${cfg.lotPercent}% SL=${cfg.stopLossUsdt}`);
+
+  // Persist config so resume picks it up after restart
+  try {
+    await db.run(
+      `UPDATE synctrade_profiles SET auto_config_json = ? WHERE tenant_id = ?`,
+      [JSON.stringify(cfg), tenantId]
+    );
+  } catch { /* column may not exist yet */ }
 
   // Initial scan
   await syncAutoScanAndOpen();
@@ -11425,6 +11434,17 @@ export const resumeSyncAutoEngine = async () => {
   }
 
   const cfg = { ...SYNC_AUTO_DEFAULTS };
+
+  // Try to load saved config
+  try {
+    const savedConfig = (profile as any).auto_config_json;
+    if (savedConfig) {
+      const parsed = safeJsonParse<Partial<SyncAutoConfig>>(savedConfig, {});
+      Object.assign(cfg, parsed);
+      syncAutoLog(`Resume: loaded saved config: maxPairs=${cfg.maxPairs} lev=${cfg.leverageRange} SL=${cfg.stopLossUsdt}`);
+    }
+  } catch { /* ignore */ }
+
   syncAutoState.running = true;
   syncAutoState.tenantId = tenantId;
   syncAutoState.config = cfg;
