@@ -3,6 +3,7 @@ import cors from 'cors';
 import routes from './api/routes';
 import researchRoutes from './api/researchRoutes';
 import razgonRoutes from './razgon/razgonRoutes';
+import { startRazgon, getRazgonConfig } from './razgon/razgonEngine';
 import { initDB, getDbFilePath } from './utils/database';
 import logger from './utils/logger';
 import { runAutoStrategiesCycle } from './bot/strategy';
@@ -51,6 +52,22 @@ const startServer = async () => {
     await resumeSyncAutoEngine();
   } catch (e) {
     logger.error(`SyncAuto resume error: ${(e as Error).message}`);
+  }
+
+  // Auto-start Razgon if config was saved from previous run
+  try {
+    const savedRazgonCfg = getRazgonConfig();
+    if (savedRazgonCfg) {
+      logger.info('[Razgon] Found saved config, auto-starting...');
+      const result = await startRazgon(savedRazgonCfg);
+      if (result.ok) {
+        logger.info('[Razgon] Auto-started successfully');
+      } else {
+        logger.warn(`[Razgon] Auto-start failed: ${result.error}`);
+      }
+    }
+  } catch (e) {
+    logger.error(`[Razgon] Auto-start error: ${(e as Error).message}`);
   }
 
   app.listen(PORT, () => {
