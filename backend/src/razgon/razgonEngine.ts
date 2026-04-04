@@ -315,7 +315,10 @@ async function checkMomentumEntryFromCandles(symbol: string, candles: Candle1m[]
 
   // Log signal check for diagnostics
   if (result.signal !== 'none' || momentumTickCount % 12 === 1) {
-    logger.info(`[Razgon:Momentum] ${symbol} signal=${result.signal} price=${latestCandle.close} candles=${candles.length}`);
+    const volRatio = result.avgVolume > 0 ? (result.volume / result.avgVolume).toFixed(2) : '0';
+    const priceVsDH = result.donchianHigh > 0 ? ((latestCandle.close / result.donchianHigh - 1) * 100).toFixed(3) : '?';
+    const priceVsDL = result.donchianLow > 0 ? ((latestCandle.close / result.donchianLow - 1) * 100).toFixed(3) : '?';
+    logger.info(`[Razgon:Momentum] ${symbol} sig=${result.signal} p=${latestCandle.close} dH=${result.donchianHigh} dL=${result.donchianLow} p/dH=${priceVsDH}% p/dL=${priceVsDL}% vol=${volRatio}x atr=${(result.normAtr*100).toFixed(3)}% atrMin=${(cfg.atrFilterMin*100).toFixed(3)}% volMul=${cfg.volumeMultiplier}`);
   }
 
   if (result.signal === 'none') return;

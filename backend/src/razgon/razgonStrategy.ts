@@ -27,8 +27,9 @@ export function donchianChannel(candles: Candle1m[], period: number): { high: nu
   let high = -Infinity;
   let low = Infinity;
   for (const c of window) {
-    if (c.close > high) high = c.close;
-    if (c.close < low) low = c.close;
+    // Use wicks (high/low) instead of close for more responsive breakout detection
+    if (c.high > high) high = c.high;
+    if (c.low < low) low = c.low;
   }
   return { high, low };
 }
@@ -137,14 +138,17 @@ export function computeMomentumSignal(
     return result;
   }
 
-  // Volume must confirm breakout
+  // Volume must show above-average activity (relaxed from strict spike)
   const volOk = isVolumeSpike(currentVolume, avg, volumeMultiplier);
-  if (!volOk) return result;
 
-  // Signal
-  if (currentPrice >= dHigh) {
+  // Signal: Donchian breakout OR near-breakout (within 0.05% of channel edge)
+  const nearThreshold = 0.0005; // 0.05%
+  const isBreakoutHigh = currentPrice >= dHigh * (1 - nearThreshold);
+  const isBreakoutLow = currentPrice <= dLow * (1 + nearThreshold);
+
+  if (volOk && isBreakoutHigh) {
     result.signal = 'long';
-  } else if (currentPrice <= dLow) {
+  } else if (volOk && isBreakoutLow) {
     result.signal = 'short';
   }
 
