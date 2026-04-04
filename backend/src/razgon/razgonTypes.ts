@@ -137,14 +137,14 @@ export const DEFAULT_RAZGON_CONFIG: RazgonConfig = {
     allocation: 0.60,
     leverage: 25,
     marginType: 'isolated',
-    donchianPeriod: 10,
-    volumeMultiplier: 1.3,
+    donchianPeriod: 5,
+    volumeMultiplier: 1.2,
     trailingTpPercent: 0.3,
     stopLossPercent: 0.2,
     maxPositionTimeSec: 900,    // 15 min
     tickIntervalSec: 5,
     maxConcurrentPositions: 3,
-    atrFilterMin: 0.002,
+    atrFilterMin: 0.0001,
     watchlist: ['PEPEUSDT', 'WIFUSDT', 'SUIUSDT', 'DOGEUSDT', 'SOLUSDT', 'ARBUSDT', 'ORDIUSDT'],
   },
 

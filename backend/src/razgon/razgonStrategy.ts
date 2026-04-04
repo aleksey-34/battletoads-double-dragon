@@ -133,22 +133,35 @@ export function computeMomentumSignal(
     normAtr: nAtr,
   };
 
-  // Market too quiet → skip
-  if (nAtr < atrMin) {
-    return result;
-  }
+  // --- Aggressive scalping logic ---
+  // Two independent entry triggers (either one is enough):
+  //
+  // Trigger A: Donchian breakout (price beyond channel edge)
+  //   → momentum trade, ride the breakout
+  //
+  // Trigger B: Volume spike + price moving in one direction
+  //   → volume-driven move, even without full breakout
+  //
+  // ATR is informational only — does NOT block entries
 
-  // Volume must show above-average activity (relaxed from strict spike)
   const volOk = isVolumeSpike(currentVolume, avg, volumeMultiplier);
+  const nearPct = 0.001; // 0.1% proximity zone
 
-  // Signal: Donchian breakout OR near-breakout (within 0.05% of channel edge)
-  const nearThreshold = 0.0005; // 0.05%
-  const isBreakoutHigh = currentPrice >= dHigh * (1 - nearThreshold);
-  const isBreakoutLow = currentPrice <= dLow * (1 + nearThreshold);
+  const breakoutHigh = currentPrice >= dHigh;
+  const breakoutLow = currentPrice <= dLow;
+  const nearHigh = currentPrice >= dHigh * (1 - nearPct);
+  const nearLow = currentPrice <= dLow * (1 + nearPct);
 
-  if (volOk && isBreakoutHigh) {
+  // Trigger A: clean breakout (no volume requirement)
+  if (breakoutHigh) {
     result.signal = 'long';
-  } else if (volOk && isBreakoutLow) {
+  } else if (breakoutLow) {
+    result.signal = 'short';
+  }
+  // Trigger B: volume spike + near channel edge
+  else if (volOk && nearHigh) {
+    result.signal = 'long';
+  } else if (volOk && nearLow) {
     result.signal = 'short';
   }
 
