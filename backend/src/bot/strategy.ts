@@ -459,9 +459,13 @@ const extractUsdtBalance = (balances: any[]): number => {
   const usdt = list.find((item: any) => String(item?.coin || '').toUpperCase() === 'USDT');
 
   if (usdt) {
-    const available = Number.parseFloat(String(usdt.availableBalance ?? '0'));
     const wallet = Number.parseFloat(String(usdt.walletBalance ?? '0'));
-    const fromUsdt = Number.isFinite(available) && available > 0 ? available : wallet;
+    const available = Number.parseFloat(String(usdt.availableBalance ?? '0'));
+    // Use walletBalance (total balance) for lot sizing — consistent with backtester
+    // which uses portfolioEquityNow (total equity). max_deposit caps it per tariff.
+    const fromUsdt = Number.isFinite(wallet) && wallet > 0 ? wallet
+      : Number.isFinite(available) && available > 0 ? available
+      : 0;
     if (Number.isFinite(fromUsdt) && fromUsdt > 0) {
       return fromUsdt;
     }
