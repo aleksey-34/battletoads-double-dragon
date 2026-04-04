@@ -81,6 +81,59 @@ config = loadConfigFromDisk();
 
 // ── Public API ───────────────────────────────────────────────────────────
 
+/** Live refresh: fetch equity + positions from exchange, update in-memory state */
+export async function refreshRazgonLive(): Promise<RazgonStats> {
+  if (!config) return getRazgonStatus();
+  try {
+    const bals = await getBalances(config.apiKeyName);
+    const usdtBal = bals.find(b => b.coin === 'USDT');
+    const equity = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
+    if (equity > 0) {
+      balance = equity;
+      if (startBalance === 0) startBalance = equity;
+      if (balance > peakBalance) peakBalance = balance;
+    }
+    // Sync positions from exchange
+    const exchPositions = await getPositions(config.apiKeyName);
+    const livePositions: typeof openPositions = [];
+    for (const ep of exchPositions) {
+      const sz = Math.abs(Number(ep.size ?? 0));
+      if (sz <= 0) continue;
+      const sym = String(ep.symbol ?? '').replace(/[/:]/g, '');
+      const side: 'long' | 'short' = String(ep.side ?? '').toLowerCase() === 'long' ? 'long' : 'short';
+      const entryPrice = Number(ep.entryPrice ?? 0);
+      const notional = Number(ep.positionValue ?? 0) || sz * entryPrice;
+      const upnl = Number(ep.unrealisedPnl ?? 0);
+      // Reuse existing in-memory position if matched, else create new
+      const existing = openPositions.find(p => p.symbol === sym && p.side === side);
+      if (existing) {
+        existing.unrealizedPnl = upnl;
+        existing.notional = notional;
+        livePositions.push(existing);
+      } else {
+        livePositions.push({
+          id: uuid(),
+          subStrategy: 'momentum',
+          symbol: sym,
+          side,
+          entryPrice,
+          notional,
+          margin: notional / (config.momentum?.leverage ?? 25),
+          leverage: config.momentum?.leverage ?? 25,
+          openedAt: Date.now(),
+          tpAnchor: entryPrice,
+          slPrice: entryPrice * (side === 'long' ? (1 - 0.002) : (1 + 0.002)),
+          unrealizedPnl: upnl,
+        });
+      }
+    }
+    openPositions = livePositions;
+  } catch (e) {
+    logger.debug(`[Razgon] Live refresh failed: ${(e as Error).message}`);
+  }
+  return getRazgonStatus();
+}
+
 export function getRazgonStatus(): RazgonStats {
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
@@ -292,6 +345,21 @@ async function momentumTick(): Promise<void> {
 
   // Log every tick for diagnosing (can reduce to % 12 later = every 1 min)
   logger.info(`[Razgon:Momentum] tick #${momentumTickCount} | bal=$${balance.toFixed(2)} | pos=${openPositions.length} | symbols=${cfg.watchlist.length}`);
+
+  // Sync equity from exchange every ~1 min (12 ticks * 5s = 60s)
+  if (momentumTickCount % 12 === 0 && config) {
+    try {
+      const bals = await getBalances(config.apiKeyName);
+      const usdtBal = bals.find(b => b.coin === 'USDT');
+      const equity = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
+      if (equity > 0) {
+        balance = equity;
+        if (balance > peakBalance) peakBalance = balance;
+      }
+    } catch (e) {
+      logger.debug(`[Razgon] Equity sync failed: ${(e as Error).message}`);
+    }
+  }
 
   // Check & manage existing positions first
   await checkMomentumExits();

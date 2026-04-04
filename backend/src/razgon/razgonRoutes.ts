@@ -8,6 +8,7 @@ import {
   getRazgonConfig,
   getTradeHistory,
   updateRazgonConfig,
+  refreshRazgonLive,
 } from './razgonEngine';
 import { DEFAULT_RAZGON_CONFIG } from './razgonTypes';
 import type { RazgonConfig } from './razgonTypes';
@@ -18,6 +19,16 @@ const router = Router();
 // GET /api/razgon/status
 router.get('/status', (_req: Request, res: Response) => {
   res.json(getRazgonStatus());
+});
+
+// POST /api/razgon/refresh — live refresh from exchange
+router.post('/refresh', async (_req: Request, res: Response) => {
+  try {
+    const data = await refreshRazgonLive();
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
 });
 
 // GET /api/razgon/config

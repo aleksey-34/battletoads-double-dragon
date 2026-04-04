@@ -93,12 +93,26 @@ export default function Razgon() {
   const [config, setConfig] = useState(DEFAULT_CONFIG);
   const [loading, setLoading] = useState(false);
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
+  const [showPositions, setShowPositions] = useState(false);
+  const [posAutoRefresh, setPosAutoRefresh] = useState(false);
+  const posRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchStatus = useCallback(async () => {
     try {
       const [sRes, tRes] = await Promise.all([
         axios.get(`${API}/status`),
+        axios.get(`${API}/trades?limit=50`),
+      ]);
+      setStats(sRes.data);
+      setTrades(tRes.data);
+    } catch { /* ignore */ }
+  }, []);
+
+  const fetchLiveRefresh = useCallback(async () => {
+    try {
+      const [sRes, tRes] = await Promise.all([
+        axios.post(`${API}/refresh`),
         axios.get(`${API}/trades?limit=50`),
       ]);
       setStats(sRes.data);
@@ -125,6 +139,15 @@ export default function Razgon() {
     pollRef.current = setInterval(fetchStatus, 3000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchStatus, fetchConfig]);
+
+  // Positions auto-refresh (slow, 30s)
+  useEffect(() => {
+    if (posRefreshRef.current) { clearInterval(posRefreshRef.current); posRefreshRef.current = null; }
+    if (posAutoRefresh && showPositions) {
+      posRefreshRef.current = setInterval(fetchLiveRefresh, 30000);
+    }
+    return () => { if (posRefreshRef.current) clearInterval(posRefreshRef.current); };
+  }, [posAutoRefresh, showPositions, fetchLiveRefresh]);
 
   const handleStart = async () => {
     if (!config.apiKeyName || !apiKeys.some(k => k.name === config.apiKeyName)) {
@@ -176,18 +199,18 @@ export default function Razgon() {
     },
     { title: 'Символ', dataIndex: 'symbol', key: 'sym', width: 120 },
     { title: 'Сторона', dataIndex: 'side', key: 'side', width: 80,
-      render: (v: string) => <Tag color={v === 'long' ? 'green' : 'red'}>{v.toUpperCase()}</Tag>,
+      render: (v: string) => <Tag color={v === 'long' ? 'green' : 'red'}>{(v ?? '').toUpperCase()}</Tag>,
     },
     { title: 'Нотионал', dataIndex: 'notional', key: 'not', width: 100,
-      render: (v: number) => `$${v.toFixed(0)}`,
+      render: (v: number) => `$${(v ?? 0).toFixed(0)}`,
     },
     { title: 'PnL', dataIndex: 'netPnl', key: 'pnl', width: 100,
-      render: (v: number) => <Text style={{ color: pnlColor(v) }}>{v >= 0 ? '+' : ''}{v.toFixed(2)}</Text>,
+      render: (v: number) => { const n = v ?? 0; return <Text style={{ color: pnlColor(n) }}>{n >= 0 ? '+' : ''}{n.toFixed(2)}</Text>; },
     },
     { title: 'Выход', dataIndex: 'exitReason', key: 'exit', width: 90,
       render: (v: string) => {
         const colors: Record<string, string> = { tp: 'green', sl: 'red', timeout: 'orange', manual: 'default', daily_limit: 'purple' };
-        return <Tag color={colors[v] || 'default'}>{v}</Tag>;
+        return <Tag color={colors[v] || 'default'}>{v ?? '-'}</Tag>;
       },
     },
   ];
@@ -195,15 +218,15 @@ export default function Razgon() {
   const positionColumns = [
     { title: 'Символ', dataIndex: 'symbol', key: 'sym' },
     { title: 'Стратегия', dataIndex: 'subStrategy', key: 'sub',
-      render: (v: string) => <Tag color={v === 'momentum' ? 'blue' : v === 'sniper' ? 'volcano' : 'green'}>{v}</Tag>,
+      render: (v: string) => <Tag color={v === 'momentum' ? 'blue' : v === 'sniper' ? 'volcano' : 'green'}>{v ?? '-'}</Tag>,
     },
     { title: 'Сторона', dataIndex: 'side', key: 'side',
-      render: (v: string) => <Tag color={v === 'long' ? 'green' : 'red'}>{v.toUpperCase()}</Tag>,
+      render: (v: string) => <Tag color={v === 'long' ? 'green' : 'red'}>{(v ?? '').toUpperCase()}</Tag>,
     },
-    { title: 'Вход', dataIndex: 'entryPrice', key: 'entry', render: (v: number) => v.toFixed(6) },
-    { title: 'Нотионал', dataIndex: 'notional', key: 'not', render: (v: number) => `$${v.toFixed(0)}` },
+    { title: 'Вход', dataIndex: 'entryPrice', key: 'entry', render: (v: number) => (v ?? 0).toFixed(6) },
+    { title: 'Нотионал', dataIndex: 'notional', key: 'not', render: (v: number) => `$${(v ?? 0).toFixed(0)}` },
     { title: 'UPnL', dataIndex: 'unrealizedPnl', key: 'upnl',
-      render: (v: number) => <Text style={{ color: pnlColor(v) }}>{v >= 0 ? '+' : ''}{v.toFixed(2)}</Text>,
+      render: (v: number) => { const n = v ?? 0; return <Text style={{ color: pnlColor(n) }}>{n >= 0 ? '+' : ''}{n.toFixed(2)}</Text>; },
     },
     { title: 'Время', dataIndex: 'openedAt', key: 'time',
       render: (v: number) => { const s = Math.floor((Date.now() - v) / 1000); return `${s}s`; },
@@ -293,17 +316,39 @@ export default function Razgon() {
       </Row>
 
       {/* Open Positions */}
-      {(stats?.openPositions?.length ?? 0) > 0 && (
-        <Card title="Открытые позиции" size="small" style={{ marginBottom: 16 }}>
+      <Card
+        title={<Space>
+          <span>Открытые позиции</span>
+          <Badge count={stats?.openPositions?.length ?? 0} style={{ backgroundColor: '#1890ff' }} />
+        </Space>}
+        size="small"
+        style={{ marginBottom: 16 }}
+        extra={
+          <Space>
+            <Button size="small" icon={<ReloadOutlined />} onClick={() => fetchLiveRefresh()}>Обновить</Button>
+            <Tag color={posAutoRefresh ? 'green' : 'default'}>
+              {posAutoRefresh ? 'Авто: 30с' : 'Авто: выкл'}
+            </Tag>
+            <Button size="small" onClick={() => setPosAutoRefresh(p => !p)}>
+              {posAutoRefresh ? 'Выкл авто' : 'Вкл авто'}
+            </Button>
+            <Button size="small" type={showPositions ? 'primary' : 'default'} onClick={() => setShowPositions(p => !p)}>
+              {showPositions ? 'Свернуть' : 'Развернуть'}
+            </Button>
+          </Space>
+        }
+      >
+        {showPositions && (
           <Table
             dataSource={stats?.openPositions ?? []}
             columns={positionColumns}
             rowKey="id"
             pagination={false}
             size="small"
+            locale={{ emptyText: 'Нет открытых позиций' }}
           />
-        </Card>
-      )}
+        )}
+      </Card>
 
       {/* Configuration */}
       <Row gutter={[16, 16]} style={{ marginBottom: 16 }}>
