@@ -877,7 +877,7 @@ const ClientCabinet: React.FC = () => {
   // — Tab: Стратегии —————————————————————————————————————————————
   const strategyTabContent = (
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
-      {strategyWorkspace ? (
+      {strategyWorkspace && strategyWorkspace.offers.length > 0 ? (
         <>
           {/* Витрина офферов */}
           <Card className="battletoads-card" title="Витрина стратегий" size="small">
@@ -1085,7 +1085,6 @@ const ClientCabinet: React.FC = () => {
                     {isCurrent ? <Tag color="gold" style={{ marginLeft: 4, fontSize: 10 }}>Подключена</Tag> : null}
                     <div style={{ marginTop: 4 }}>
                       <Space size={4} wrap>
-                        {system.isActive ? <Tag color="success" style={{ fontSize: 11 }}>Торгуется</Tag> : <Tag color="default" style={{ fontSize: 11 }}>Приост.</Tag>}
                         {snap?.ret != null ? <Tag color="green" style={{ fontSize: 11 }}>{formatPercent(snap.ret)}</Tag> : null}
                         {snap?.dd != null ? <Tag color="orange" style={{ fontSize: 11 }}>DD {formatPercent(snap.dd)}</Tag> : null}
                       </Space>
@@ -1206,9 +1205,8 @@ const ClientCabinet: React.FC = () => {
                           }
                         >
                           <Space wrap size={4} style={{ marginBottom: 4 }}>
-                            {system.isActive ? <Tag color="success" style={{ fontSize: 11 }}>Торгуется</Tag> : <Tag color="default" style={{ fontSize: 11 }}>Приост.</Tag>}
-                            <Tag color="cyan" style={{ fontSize: 11 }}>Уч.: {Number(system.memberCount || 0)}</Tag>
                             {snap?.periodDays ? <Tag style={{ fontSize: 11 }}>{Math.round(snap.periodDays)}д</Tag> : null}
+                            {snap?.trades ? <Tag style={{ fontSize: 11 }}>{snap.trades} сд.</Tag> : null}
                           </Space>
                           {hasChart ? (
                             <div style={{ height: 80, marginBottom: 4 }}>
@@ -1236,7 +1234,7 @@ const ClientCabinet: React.FC = () => {
                             </Row>
                           ) : null}
                           <Typography.Text type="secondary" style={{ fontSize: 10, marginTop: 2, display: 'block' }}>
-                            ⚙ Нажмите для настройки
+                            📊 Нажмите для бэктеста
                           </Typography.Text>
                         </Card>
                       </Col>
@@ -1271,9 +1269,8 @@ const ClientCabinet: React.FC = () => {
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   <Space wrap>
                     {isCurrent ? <Tag color="gold">Подключена к вашему аккаунту</Tag> : <Tag color="blue">Доступна для подключения</Tag>}
-                    {system.isActive ? <Tag color="success">Торгуется</Tag> : <Tag color="default">Приостановлена</Tag>}
-                    <Tag color="cyan">Участников: {Number(system.memberCount || 0)}</Tag>
                     {snap?.periodDays ? <Tag>Период: {Math.round(snap.periodDays)}д</Tag> : null}
+                    {snap?.trades ? <Tag>{snap.trades} сделок</Tag> : null}
                   </Space>
                   {chartData.length > 0 ? (
                     <div style={{ height: 240 }}>
