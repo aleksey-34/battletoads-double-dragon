@@ -8040,20 +8040,39 @@ export const getAlgofundState = async (
   // Attach cached tsBacktestSnapshots to each available system (lightweight — reads from app_runtime_flags)
   const tsSnapshots = await getTsBacktestSnapshots().catch(() => ({} as Record<string, TsBacktestSnapshot>));
   const snapshotKeys = Object.keys(tsSnapshots);
+  const snapshotKeysLower = snapshotKeys.map((k) => k.toLowerCase());
   for (const system of availableSystems) {
     const systemName = system.name;
+    const systemNameLower = systemName.toLowerCase();
     // Try exact match first
     let snapshot = tsSnapshots[systemName] || null;
     if (!snapshot) {
+      // Case-insensitive exact match
+      const ciIdx = snapshotKeysLower.indexOf(systemNameLower);
+      if (ciIdx >= 0) snapshot = tsSnapshots[snapshotKeys[ciIdx]];
+    }
+    if (!snapshot) {
       // Extract short name from ALGOFUND_MASTER::API_KEY::short-name
       const parts = systemName.split('::').filter(Boolean);
-      const shortName = parts.length >= 3 ? parts[parts.length - 1] : '';
+      const shortName = parts.length >= 3 ? parts[parts.length - 1] : (parts.length === 2 ? parts[1] : '');
       if (shortName) {
+        const shortLower = shortName.toLowerCase();
         snapshot = tsSnapshots[shortName] || null;
-        // Fuzzy: check if any key ends with the short name
         if (!snapshot) {
-          const matchKey = snapshotKeys.find((k) => k.endsWith(`::${shortName}`) || k.endsWith(`:${shortName}`));
-          if (matchKey) snapshot = tsSnapshots[matchKey];
+          // Case-insensitive short name match
+          const matchIdx = snapshotKeysLower.findIndex((k) => k === shortLower || k.endsWith(`::${shortLower}`) || k.endsWith(`:${shortLower}`));
+          if (matchIdx >= 0) snapshot = tsSnapshots[snapshotKeys[matchIdx]];
+        }
+        // Fuzzy: strip common prefixes from short name and try partial match
+        if (!snapshot) {
+          const stripped = shortLower.replace(/^(algofund-master-|btdd-d1-|btdd_d1-)/gi, '');
+          if (stripped.length >= 5) {
+            const matchIdx = snapshotKeysLower.findIndex((k) => {
+              const kStripped = k.replace(/.*::/, '').replace(/^(algofund-master-|btdd-d1-|btdd_d1-)/gi, '').toLowerCase();
+              return kStripped === stripped || kStripped.startsWith(stripped.slice(0, 15));
+            });
+            if (matchIdx >= 0) snapshot = tsSnapshots[snapshotKeys[matchIdx]];
+          }
         }
       }
     }
