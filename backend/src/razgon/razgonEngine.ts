@@ -149,6 +149,42 @@ export async function startRazgon(cfg: RazgonConfig): Promise<{ ok: boolean; err
     tradeHistory = [];
     candleCache.clear();
 
+    // Restore open positions from exchange
+    try {
+      const exchangePositions = await getPositions(cfg.apiKeyName);
+      const watchSymbols = new Set(cfg.momentum.watchlist);
+      for (const pos of exchangePositions) {
+        const sz = Math.abs(Number(pos.size ?? 0));
+        if (sz <= 0) continue;
+        const sym = String(pos.symbol ?? '').replace(/[/:]/g, '');
+        if (!watchSymbols.has(sym)) continue;
+        const side: 'long' | 'short' = String(pos.side ?? '').toLowerCase() === 'long' ? 'long' : 'short';
+        const entryPrice = Number(pos.entryPrice ?? 0);
+        const notional = Number(pos.positionValue ?? 0) || sz * entryPrice;
+        const margin = notional / cfg.momentum.leverage;
+        const slPrice = riskManager.computeStopLoss(entryPrice, side, cfg.momentum.stopLossPercent);
+        openPositions.push({
+          id: uuid(),
+          subStrategy: 'momentum',
+          symbol: sym,
+          side,
+          entryPrice,
+          notional,
+          margin,
+          leverage: cfg.momentum.leverage,
+          openedAt: Date.now(),
+          tpAnchor: entryPrice,
+          slPrice,
+          unrealizedPnl: Number(pos.unrealisedPnl ?? 0),
+        });
+      }
+      if (openPositions.length > 0) {
+        logger.info(`[Razgon] Restored ${openPositions.length} positions from exchange: ${openPositions.map(p => `${p.symbol} ${p.side}`).join(', ')}`);
+      }
+    } catch (e) {
+      logger.warn(`[Razgon] Failed to restore positions: ${(e as Error).message}`);
+    }
+
     // Seed known symbols for sniper
     if (cfg.sniper.enabled) {
       try {
