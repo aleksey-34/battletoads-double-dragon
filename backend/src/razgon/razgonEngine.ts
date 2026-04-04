@@ -131,18 +131,20 @@ export async function startRazgon(cfg: RazgonConfig): Promise<{ ok: boolean; err
     config = cfg;
     saveConfigToDisk();
 
-    // Fetch initial balance
+    // Fetch initial balance (use equity = walletBalance, not just available)
     const balances = await getBalances(cfg.apiKeyName);
     const usdtBal = balances.find(b => b.coin === 'USDT');
-    balance = usdtBal ? parseFloat(usdtBal.availableBalance) : 0;
+    const equity = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
+    const available = usdtBal ? parseFloat(usdtBal.availableBalance) : 0;
+    balance = equity;
 
-    if (balance < 5) {
-      return { ok: false, error: `Insufficient balance: $${balance.toFixed(2)}` };
+    if (equity < 1) {
+      return { ok: false, error: `Insufficient equity: $${equity.toFixed(2)} (available: $${available.toFixed(2)})` };
     }
 
-    startBalance = balance;
-    peakBalance = balance;
-    riskManager = new RazgonRiskManager(cfg, balance);
+    startBalance = equity;
+    peakBalance = equity;
+    riskManager = new RazgonRiskManager(cfg, equity);
     openPositions = [];
     tradeHistory = [];
     candleCache.clear();
