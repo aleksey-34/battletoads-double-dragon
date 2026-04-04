@@ -236,7 +236,7 @@ const CIRCUIT_META = [
 const EXCHANGES = [
   { name: 'Bybit', status: 'live', note: 'primary', ref: 'https://www.bybit.com/invite?ref=P2GAX' },
   { name: 'Binance', status: 'live', note: 'ccxt', ref: 'https://www.binance.com/referral/earn-together/refer2earn-usdc/claim?hl=ru&ref=GRO_28502_9VNRB&utm_source=referral_entrance' },
-  { name: 'Bitget', status: 'live', note: 'ccxt', ref: 'https://www.bitget.com/referral/register?clacCode=BTDD' },
+  { name: 'Bitget', status: 'live', note: 'ccxt', ref: 'https://partner.bitget.com/bg/VJ90ZR' },
   { name: 'BingX', status: 'live', note: 'ccxt', ref: 'https://bingxdao.com/invite/AD0H6D/' },
   { name: 'MEXC', status: 'live', note: 'native', ref: 'https://www.mexc.com/acquisition/custom-sign-up?shareCode=mexc-12A4vC' },
   { name: 'Weex', status: 'live', note: 'native', ref: 'https://www.weex.com/register?ref=BTDD' },
