@@ -6,7 +6,7 @@ import {
 import {
   PlayCircleOutlined, PauseCircleOutlined, StopOutlined,
   ThunderboltOutlined, RocketOutlined, DollarOutlined,
-  ReloadOutlined, SettingOutlined,
+  ReloadOutlined, SettingOutlined, SaveOutlined,
 } from '@ant-design/icons';
 import axios from 'axios';
 import { useI18n } from '../i18n';
@@ -151,6 +151,15 @@ export default function Razgon() {
     await axios.post(`${API}/pause`);
     message.info('Разгон на паузе');
     fetchStatus();
+  };
+
+  const handleSaveConfig = async () => {
+    try {
+      await axios.patch(`${API}/config`, config);
+      message.success('Настройки сохранены');
+    } catch (e: any) {
+      message.error(e.response?.data?.error || 'Ошибка сохранения');
+    }
   };
 
   const pnlColor = (v: number) => v >= 0 ? '#3f8600' : '#cf1322';
@@ -522,6 +531,15 @@ export default function Razgon() {
               </Col>
             </Row>
           </Card>
+        </Col>
+      </Row>
+
+      {/* Save Config Button */}
+      <Row style={{ marginBottom: 16 }}>
+        <Col span={24} style={{ textAlign: 'right' }}>
+          <Button type="primary" icon={<SaveOutlined />} onClick={handleSaveConfig} size="large">
+            Сохранить настройки
+          </Button>
         </Col>
       </Row>
 
