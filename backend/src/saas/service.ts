@@ -10970,6 +10970,7 @@ interface SyncAutoConfig {
   rebalanceIntervalMs: number; // how often to check load (default 15s)
   maxContractSizeUsdt: number; // skip pairs with contractSize > X USDT (prefer small ticks)
   minVolumeMultiplier: number; // min volume must be >= deposit × notional × this (default 50)
+  stopLossUsdt: number;        // max master loss per session before auto-close (default 25)
 }
 
 const SYNC_AUTO_DEFAULTS: SyncAutoConfig = {
@@ -10983,6 +10984,7 @@ const SYNC_AUTO_DEFAULTS: SyncAutoConfig = {
   rebalanceIntervalMs: 15_000,
   maxContractSizeUsdt: 5,
   minVolumeMultiplier: 50,
+  stopLossUsdt: 25,
 };
 
 interface SyncAutoState {
@@ -11236,7 +11238,22 @@ const syncAutoRebalance = async () => {
         continue;
       }
 
-      // CASE 2: Check distance to liquidation
+      // CASE 2: Stop-loss — close if master uPnL exceeds threshold
+      const masterUPnl = asNumber(masterPos.unrealisedPnl, 0);
+      if (cfg.stopLossUsdt > 0 && masterUPnl <= -cfg.stopLossUsdt) {
+        syncAutoLog(`⛔ ${sym} SL hit: master uPnL=${masterUPnl.toFixed(2)} <= -${cfg.stopLossUsdt} — closing session`);
+        try {
+          await closeSynctradeSession(tenantId, info.sessionId);
+          syncAutoState.totalClosed++;
+          syncAutoLog(`✓ ${sym} session #${info.sessionId} closed (stop-loss)`);
+        } catch (err: any) {
+          syncAutoErr(`SL close ${sym}: ${err.message}`);
+        }
+        toClose.push(sym);
+        continue;
+      }
+
+      // CASE 3: Check distance to liquidation
       const entryPrice = asNumber(masterPos.entryPrice, 0);
       const markPrice = asNumber(masterPos.markPrice, 0);
       const leverage = asNumber(masterPos.leverage, info.leverage);
