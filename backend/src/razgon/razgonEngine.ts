@@ -1,4 +1,4 @@
-// ─── Razgon Engine — Main Tick Loop ──────────────────────────────────────────
+// ─── Razgon Engine — Multi-Key Parallel ─────────────────────────────────────
 import { v4 as uuid } from 'uuid';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -11,7 +11,6 @@ import {
   closePosition,
   getAllSymbols,
   applySymbolRiskSettings,
-  initExchangeClient,
   batchGetMarketData,
 } from '../bot/exchange';
 import { RazgonRiskManager } from './razgonRisk';
@@ -27,29 +26,33 @@ import type {
   Candle1m,
 } from './razgonTypes';
 
-// ── Engine State ─────────────────────────────────────────────────────────
+// ── Per-Key Instance ─────────────────────────────────────────────────────
+
+interface RazgonInstance {
+  keyName: string;
+  exchange: string;
+  label: string;
+  balance: number;
+  startBalance: number;
+  peakBalance: number;
+  openPositions: RazgonPosition[];
+  tradeHistory: RazgonTrade[];
+  riskManager: RazgonRiskManager;
+  candleCache: Map<string, Candle1m[]>;
+  knownSymbols: Set<string>;
+  momentumTimer: ReturnType<typeof setInterval> | null;
+  sniperTimer: ReturnType<typeof setInterval> | null;
+  fundingTimer: ReturnType<typeof setInterval> | null;
+  tickCount: number;
+}
+
+// ── Global Engine State ───────────────────────────────────────────────────
 
 let config: RazgonConfig | null = null;
 let status: RazgonStatus = 'stopped';
-let riskManager: RazgonRiskManager | null = null;
+const instanceMap = new Map<string, RazgonInstance>();
 
-let openPositions: RazgonPosition[] = [];
-let tradeHistory: RazgonTrade[] = [];
-let balance = 0;
-let startBalance = 0;
-let peakBalance = 0;
-
-// Timers
-let momentumTimer: ReturnType<typeof setInterval> | null = null;
-let sniperTimer: ReturnType<typeof setInterval> | null = null;
-let fundingTimer: ReturnType<typeof setInterval> | null = null;
-
-// Sniper known symbols cache
-let knownSymbols: Set<string> = new Set();
-
-// Candle cache per symbol: last N 1m candles
-const candleCache: Map<string, Candle1m[]> = new Map();
-const MAX_CANDLE_CACHE = 60; // keep 60 1m candles per symbol
+const MAX_CANDLE_CACHE = 60;
 
 // ── Config Persistence ───────────────────────────────────────────────────
 // Save last-used config to disk so it survives API restarts.
@@ -81,56 +84,53 @@ config = loadConfigFromDisk();
 
 // ── Public API ───────────────────────────────────────────────────────────
 
-/** Live refresh: fetch equity + positions from exchange, update in-memory state */
+/** Live refresh: fetch equity + positions from exchange for all instances */
 export async function refreshRazgonLive(): Promise<RazgonStats> {
   if (!config) return getRazgonStatus();
-  try {
-    const bals = await getBalances(config.apiKeyName);
-    const usdtBal = bals.find(b => b.coin === 'USDT');
-    const equity = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
-    if (equity > 0) {
-      balance = equity;
-      if (startBalance === 0) startBalance = equity;
-      if (balance > peakBalance) peakBalance = balance;
-    }
-    // Sync positions from exchange
-    const exchPositions = await getPositions(config.apiKeyName);
-    const livePositions: typeof openPositions = [];
-    for (const ep of exchPositions) {
-      const sz = Math.abs(Number(ep.size ?? 0));
-      if (sz <= 0) continue;
-      const sym = String(ep.symbol ?? '').replace(/[/:]/g, '');
-      const side: 'long' | 'short' = String(ep.side ?? '').toLowerCase() === 'long' ? 'long' : 'short';
-      const entryPrice = Number(ep.entryPrice ?? 0);
-      const notional = Number(ep.positionValue ?? 0) || sz * entryPrice;
-      const upnl = Number(ep.unrealisedPnl ?? 0);
-      // Reuse existing in-memory position if matched, else create new
-      const existing = openPositions.find(p => p.symbol === sym && p.side === side);
-      if (existing) {
-        existing.unrealizedPnl = upnl;
-        existing.notional = notional;
-        livePositions.push(existing);
-      } else {
-        livePositions.push({
-          id: uuid(),
-          subStrategy: 'momentum',
-          symbol: sym,
-          side,
-          entryPrice,
-          notional,
-          margin: notional / (config.momentum?.leverage ?? 25),
-          leverage: config.momentum?.leverage ?? 25,
-          openedAt: Date.now(),
-          tpAnchor: entryPrice,
-          slPrice: entryPrice * (side === 'long' ? (1 - 0.002) : (1 + 0.002)),
-          unrealizedPnl: upnl,
-        });
+  const instances = instanceMap.size > 0 ? [...instanceMap.values()] : null;
+  if (!instances) return getRazgonStatus();
+
+  await Promise.all(instances.map(async inst => {
+    try {
+      const bals = await getBalances(inst.keyName);
+      const usdtBal = bals.find(b => b.coin === 'USDT');
+      const equity = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
+      if (equity > 0) {
+        inst.balance = equity;
+        if (inst.startBalance === 0) inst.startBalance = equity;
+        if (inst.balance > inst.peakBalance) inst.peakBalance = inst.balance;
       }
+      const exchPositions = await getPositions(inst.keyName);
+      const livePositions: RazgonPosition[] = [];
+      for (const ep of exchPositions) {
+        const sz = Math.abs(Number(ep.size ?? 0));
+        if (sz <= 0) continue;
+        const sym = String(ep.symbol ?? '').replace(/[/:]/g, '');
+        const side: 'long' | 'short' = String(ep.side ?? '').toLowerCase() === 'long' ? 'long' : 'short';
+        const entryPrice = Number(ep.entryPrice ?? 0);
+        const notional = Number(ep.positionValue ?? 0) || sz * entryPrice;
+        const upnl = Number(ep.unrealisedPnl ?? 0);
+        const existing = inst.openPositions.find(p => p.symbol === sym && p.side === side);
+        if (existing) {
+          existing.unrealizedPnl = upnl;
+          existing.notional = notional;
+          livePositions.push(existing);
+        } else {
+          livePositions.push({
+            id: uuid(), subStrategy: 'momentum', symbol: sym, side, entryPrice, notional,
+            margin: notional / (config!.momentum?.leverage ?? 20),
+            leverage: config!.momentum?.leverage ?? 20,
+            openedAt: Date.now(), tpAnchor: entryPrice,
+            slPrice: entryPrice * (side === 'long' ? (1 - 0.003) : (1 + 0.003)),
+            unrealizedPnl: upnl,
+          });
+        }
+      }
+      inst.openPositions = livePositions;
+    } catch (e) {
+      logger.debug(`[Razgon:${inst.keyName}] Live refresh failed: ${(e as Error).message}`);
     }
-    openPositions = livePositions;
-  } catch (e) {
-    logger.debug(`[Razgon] Live refresh failed: ${(e as Error).message}`);
-  }
+  }));
   return getRazgonStatus();
 }
 
@@ -139,31 +139,48 @@ export function getRazgonStatus(): RazgonStats {
   todayStart.setHours(0, 0, 0, 0);
   const todayMs = todayStart.getTime();
 
-  const todayTrades = tradeHistory.filter(t => t.closedAt >= todayMs);
-  const totalWins = tradeHistory.filter(t => t.netPnl > 0).length;
-  const winRate = tradeHistory.length > 0 ? totalWins / tradeHistory.length : 0;
+  // Aggregate across all instances
+  const allPositions: RazgonPosition[] = [];
+  const allTrades: RazgonTrade[] = [];
+  let totalBalance = 0;
+  let totalStartBalance = 0;
+  let totalPeakBalance = 0;
 
+  for (const inst of instanceMap.values()) {
+    allPositions.push(...inst.openPositions);
+    allTrades.push(...inst.tradeHistory);
+    totalBalance += inst.balance;
+    totalStartBalance += inst.startBalance;
+    totalPeakBalance += inst.peakBalance;
+  }
+
+  // If no instances running, use config-loaded values (stopped state)
+  if (instanceMap.size === 0 && config) {
+    // no trades/positions to show
+  }
+
+  const todayTrades = allTrades.filter(t => t.closedAt >= todayMs);
+  const totalWins = allTrades.filter(t => t.netPnl > 0).length;
+  const winRate = allTrades.length > 0 ? totalWins / allTrades.length : 0;
   const avgWin = totalWins > 0
-    ? tradeHistory.filter(t => t.netPnl > 0).reduce((s, t) => s + t.netPnl, 0) / totalWins
-    : 0;
-  const totalLosses = tradeHistory.filter(t => t.netPnl <= 0).length;
+    ? allTrades.filter(t => t.netPnl > 0).reduce((s, t) => s + t.netPnl, 0) / totalWins : 0;
+  const totalLosses = allTrades.filter(t => t.netPnl <= 0).length;
   const avgLoss = totalLosses > 0
-    ? Math.abs(tradeHistory.filter(t => t.netPnl <= 0).reduce((s, t) => s + t.netPnl, 0) / totalLosses)
-    : 0;
+    ? Math.abs(allTrades.filter(t => t.netPnl <= 0).reduce((s, t) => s + t.netPnl, 0) / totalLosses) : 0;
   const avgRR = avgLoss > 0 ? avgWin / avgLoss : 0;
 
   return {
     status,
-    balance,
-    startBalance,
-    peakBalance,
-    totalPnl: balance - startBalance,
+    balance: totalBalance,
+    startBalance: totalStartBalance,
+    peakBalance: totalPeakBalance,
+    totalPnl: totalBalance - totalStartBalance,
     todayPnl: todayTrades.reduce((s, t) => s + t.netPnl, 0),
-    totalTrades: tradeHistory.length,
+    totalTrades: allTrades.length,
     todayTrades: todayTrades.length,
     winRate,
     avgRR,
-    openPositions: [...openPositions],
+    openPositions: allPositions,
   };
 }
 
@@ -172,7 +189,9 @@ export function getRazgonConfig(): RazgonConfig | null {
 }
 
 export function getTradeHistory(limit: number = 100): RazgonTrade[] {
-  return tradeHistory.slice(-limit);
+  const all: RazgonTrade[] = [];
+  for (const inst of instanceMap.values()) all.push(...inst.tradeHistory);
+  return all.sort((a, b) => b.closedAt - a.closedAt).slice(0, limit);
 }
 
 /** Fetch live USDT balance for each configured api key */
@@ -186,174 +205,195 @@ export async function getRazgonKeyBalances(): Promise<Array<{ name: string; exch
       const equity = usdtBal ? parseFloat(usdtBal.walletBalance || '0') : 0;
       const avail = usdtBal ? parseFloat(usdtBal.availableBalance || '0') : 0;
       return { name: k.name, exchange: k.exchange, label: k.label, enabled: k.enabled, balance: avail, equity };
-    } catch (e) {
+    } catch {
       return { name: k.name, exchange: k.exchange, label: k.label, enabled: k.enabled, balance: 0, equity: 0 };
     }
   }));
   return results;
 }
 
-export async function startRazgon(cfg: RazgonConfig): Promise<{ ok: boolean; error?: string }> {
-  if (status === 'running') {
-    return { ok: false, error: 'Already running' };
+// ── Instance lifecycle ───────────────────────────────────────────────────
+
+async function createInstance(
+  keyEntry: { name: string; exchange: string; enabled: boolean; startBalancePct?: number; label?: string },
+  cfg: RazgonConfig,
+): Promise<RazgonInstance> {
+  // Fetch balance (exchange client already initialised at boot from DB)
+  const balances = await getBalances(keyEntry.name);
+  const usdtBal = balances.find(b => b.coin === 'USDT');
+  const totalEquity = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
+  const available = usdtBal ? parseFloat(usdtBal.availableBalance) : 0;
+
+  const keyPct = keyEntry.startBalancePct ?? 0;
+  const globalPct = cfg.startBalancePct ?? 0;
+  const effectivePct = keyPct > 0 ? keyPct : globalPct;
+  const equity = effectivePct > 0 ? totalEquity * effectivePct : (cfg.startBalance || totalEquity);
+
+  if (equity < 1) {
+    throw new Error(`Insufficient equity for ${keyEntry.name}: $${equity.toFixed(2)} (available: $${available.toFixed(2)})`);
   }
 
+  const riskManager = new RazgonRiskManager(cfg, equity);
+
+  const inst: RazgonInstance = {
+    keyName: keyEntry.name,
+    exchange: keyEntry.exchange,
+    label: keyEntry.label ?? keyEntry.name,
+    balance: equity,
+    startBalance: equity,
+    peakBalance: equity,
+    openPositions: [],
+    tradeHistory: [],
+    riskManager,
+    candleCache: new Map(),
+    knownSymbols: new Set(),
+    momentumTimer: null,
+    sniperTimer: null,
+    fundingTimer: null,
+    tickCount: 0,
+  };
+
+  // Restore open positions from exchange
   try {
-    config = cfg;
-    // Normalise: ensure new fields have defaults for old saved configs
-    if (!config.apiKeys || config.apiKeys.length === 0) {
-      config.apiKeys = [{ name: cfg.apiKeyName, exchange: cfg.exchange, enabled: true, startBalancePct: 0.9, label: cfg.exchange.toUpperCase() }];
+    const exchangePositions = await getPositions(keyEntry.name);
+    const watchSymbols = new Set(cfg.momentum.watchlist);
+    for (const pos of exchangePositions) {
+      const sz = Math.abs(Number(pos.size ?? 0));
+      if (sz <= 0) continue;
+      const sym = String(pos.symbol ?? '').replace(/[/:]/g, '');
+      if (!watchSymbols.has(sym)) continue;
+      const side: 'long' | 'short' = String(pos.side ?? '').toLowerCase() === 'long' ? 'long' : 'short';
+      const entryPrice = Number(pos.entryPrice ?? 0);
+      const notional = Number(pos.positionValue ?? 0) || sz * entryPrice;
+      const margin = notional / cfg.momentum.leverage;
+      const slPrice = riskManager.computeStopLoss(entryPrice, side, cfg.momentum.stopLossPercent);
+      inst.openPositions.push({
+        id: uuid(), subStrategy: 'momentum', symbol: sym, side, entryPrice, notional, margin,
+        leverage: cfg.momentum.leverage, openedAt: Date.now(), tpAnchor: entryPrice, slPrice,
+        unrealizedPnl: Number(pos.unrealisedPnl ?? 0),
+      });
     }
-    if (typeof config.startBalancePct !== 'number') config.startBalancePct = 0;
-    if (!config.presetMode) config.presetMode = 'high';
-    saveConfigToDisk();
-
-    // Fetch initial balance — use primary enabled key, respect startBalancePct
-    const primaryKey = config.apiKeys.find(k => k.enabled) ?? config.apiKeys[0];
-    const keyName = primaryKey?.name ?? cfg.apiKeyName;
-    const balances = await getBalances(keyName);
-    const usdtBal = balances.find(b => b.coin === 'USDT');
-    const totalEquity = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
-    const available = usdtBal ? parseFloat(usdtBal.availableBalance) : 0;
-    // Apply startBalancePct: per-key overrides global (e.g. 0.9 = use 90% of account)
-    const keyPct = primaryKey?.startBalancePct ?? 0;
-    const globalPct = config.startBalancePct ?? 0;
-    const effectivePct = keyPct > 0 ? keyPct : globalPct;
-    const equity = effectivePct > 0 ? totalEquity * effectivePct : (cfg.startBalance || totalEquity);
-    balance = equity;
-
-    if (equity < 1) {
-      return { ok: false, error: `Insufficient equity: $${equity.toFixed(2)} (available: $${available.toFixed(2)})` };
+    if (inst.openPositions.length > 0) {
+      logger.info(`[Razgon:${keyEntry.name}] Restored ${inst.openPositions.length} positions: ${inst.openPositions.map(p => `${p.symbol} ${p.side}`).join(', ')}`);
     }
-
-    startBalance = equity;
-    peakBalance = equity;
-    riskManager = new RazgonRiskManager(cfg, equity);
-    openPositions = [];
-    tradeHistory = [];
-    candleCache.clear();
-
-    // Restore open positions from exchange
-    try {
-      const exchangePositions = await getPositions(cfg.apiKeyName);
-      const watchSymbols = new Set(cfg.momentum.watchlist);
-      for (const pos of exchangePositions) {
-        const sz = Math.abs(Number(pos.size ?? 0));
-        if (sz <= 0) continue;
-        const sym = String(pos.symbol ?? '').replace(/[/:]/g, '');
-        if (!watchSymbols.has(sym)) continue;
-        const side: 'long' | 'short' = String(pos.side ?? '').toLowerCase() === 'long' ? 'long' : 'short';
-        const entryPrice = Number(pos.entryPrice ?? 0);
-        const notional = Number(pos.positionValue ?? 0) || sz * entryPrice;
-        const margin = notional / cfg.momentum.leverage;
-        const slPrice = riskManager.computeStopLoss(entryPrice, side, cfg.momentum.stopLossPercent);
-        openPositions.push({
-          id: uuid(),
-          subStrategy: 'momentum',
-          symbol: sym,
-          side,
-          entryPrice,
-          notional,
-          margin,
-          leverage: cfg.momentum.leverage,
-          openedAt: Date.now(),
-          tpAnchor: entryPrice,
-          slPrice,
-          unrealizedPnl: Number(pos.unrealisedPnl ?? 0),
-        });
-      }
-      if (openPositions.length > 0) {
-        logger.info(`[Razgon] Restored ${openPositions.length} positions from exchange: ${openPositions.map(p => `${p.symbol} ${p.side}`).join(', ')}`);
-      }
-    } catch (e) {
-      logger.warn(`[Razgon] Failed to restore positions: ${(e as Error).message}`);
-    }
-
-    // Seed known symbols for sniper
-    if (cfg.sniper.enabled) {
-      try {
-        const symbols = await getAllSymbols(cfg.apiKeyName);
-        knownSymbols = new Set(symbols.map((s: any) => typeof s === 'string' ? s : s.symbol || ''));
-        logger.info(`[Razgon] Sniper seeded with ${knownSymbols.size} known symbols`);
-      } catch (e) {
-        logger.warn(`[Razgon] Failed to seed symbols: ${(e as Error).message}`);
-        knownSymbols = new Set();
-      }
-    }
-
-    // Start loops
-    if (cfg.momentum.enabled) {
-      let momentumBusy = false;
-      momentumTimer = setInterval(() => {
-        if (momentumBusy) { logger.debug('[Razgon:Momentum] skip tick — previous still running'); return; }
-        momentumBusy = true;
-        const deadline = setTimeout(() => {
-          logger.warn('[Razgon:Momentum] tick timed out (30s), resetting busy flag');
-          momentumBusy = false;
-        }, 30_000);
-        momentumTick()
-          .catch(err => logger.error(`[Razgon:Momentum] ${err.message}`))
-          .finally(() => { clearTimeout(deadline); momentumBusy = false; });
-      }, cfg.momentum.tickIntervalSec * 1000);
-      logger.info(`[Razgon] Momentum scalping started (${cfg.momentum.tickIntervalSec}s tick)`);
-    }
-
-    if (cfg.sniper.enabled) {
-      let sniperBusy = false;
-      sniperTimer = setInterval(() => {
-        if (sniperBusy) return;
-        sniperBusy = true;
-        const deadline = setTimeout(() => { sniperBusy = false; }, 60_000);
-        sniperTick()
-          .catch(err => logger.error(`[Razgon:Sniper] ${err.message}`))
-          .finally(() => { clearTimeout(deadline); sniperBusy = false; });
-      }, cfg.sniper.scanIntervalSec * 1000);
-      logger.info(`[Razgon] Listing sniper started (${cfg.sniper.scanIntervalSec}s scan)`);
-    }
-
-    if (cfg.funding.enabled) {
-      fundingTimer = setInterval(
-        () => fundingTick().catch(err => logger.error(`[Razgon:Funding] ${err.message}`)),
-        cfg.funding.scanIntervalSec * 1000,
-      );
-      logger.info(`[Razgon] Funding farming started (${cfg.funding.scanIntervalSec}s scan)`);
-    }
-
-    status = 'running';
-    logger.info(`[Razgon] Engine started. Balance: $${balance.toFixed(2)}, Exchange: ${cfg.exchange}`);
-    return { ok: true };
   } catch (e) {
-    status = 'error';
-    return { ok: false, error: (e as Error).message };
+    logger.warn(`[Razgon:${keyEntry.name}] Failed to restore positions: ${(e as Error).message}`);
+  }
+
+  // Seed sniper symbols
+  if (cfg.sniper.enabled) {
+    try {
+      const symbols = await getAllSymbols(keyEntry.name);
+      inst.knownSymbols = new Set(symbols.map((s: any) => typeof s === 'string' ? s : s.symbol || ''));
+    } catch { inst.knownSymbols = new Set(); }
+  }
+
+  return inst;
+}
+
+function startInstanceTimers(inst: RazgonInstance, cfg: RazgonConfig): void {
+  if (cfg.momentum.enabled) {
+    let busy = false;
+    inst.momentumTimer = setInterval(() => {
+      if (busy) return;
+      busy = true;
+      const deadline = setTimeout(() => { busy = false; }, 30_000);
+      momentumTick(inst)
+        .catch(err => logger.error(`[Razgon:${inst.keyName}:Momentum] ${err.message}`))
+        .finally(() => { clearTimeout(deadline); busy = false; });
+    }, cfg.momentum.tickIntervalSec * 1000);
+    logger.info(`[Razgon:${inst.keyName}] Momentum started (${cfg.momentum.tickIntervalSec}s tick)`);
+  }
+
+  if (cfg.sniper.enabled) {
+    let busy = false;
+    inst.sniperTimer = setInterval(() => {
+      if (busy) return;
+      busy = true;
+      const deadline = setTimeout(() => { busy = false; }, 60_000);
+      sniperTick(inst)
+        .catch(err => logger.error(`[Razgon:${inst.keyName}:Sniper] ${err.message}`))
+        .finally(() => { clearTimeout(deadline); busy = false; });
+    }, cfg.sniper.scanIntervalSec * 1000);
+  }
+
+  if (cfg.funding.enabled) {
+    inst.fundingTimer = setInterval(
+      () => fundingTick(inst).catch(err => logger.error(`[Razgon:${inst.keyName}:Funding] ${err.message}`)),
+      cfg.funding.scanIntervalSec * 1000,
+    );
   }
 }
 
-export async function stopRazgon(): Promise<void> {
-  if (momentumTimer) { clearInterval(momentumTimer); momentumTimer = null; }
-  if (sniperTimer) { clearInterval(sniperTimer); sniperTimer = null; }
-  if (fundingTimer) { clearInterval(fundingTimer); fundingTimer = null; }
-
-  // Close all open positions
+async function stopInstance(inst: RazgonInstance): Promise<void> {
+  if (inst.momentumTimer) { clearInterval(inst.momentumTimer); inst.momentumTimer = null; }
+  if (inst.sniperTimer) { clearInterval(inst.sniperTimer); inst.sniperTimer = null; }
+  if (inst.fundingTimer) { clearInterval(inst.fundingTimer); inst.fundingTimer = null; }
   if (config) {
-    for (const pos of openPositions) {
+    for (const pos of inst.openPositions) {
       try {
-        await closePosition(config.apiKeyName, pos.symbol, pos.side === 'long' ? 'Buy' : 'Sell');
-        recordClose(pos, pos.entryPrice, 'manual'); // approximate
+        await closePosition(inst.keyName, pos.symbol, pos.side === 'long' ? 'Sell' : 'Buy');
+        recordClose(inst, pos, pos.entryPrice, 'manual');
       } catch (e) {
-        logger.error(`[Razgon] Error closing ${pos.symbol}: ${(e as Error).message}`);
+        logger.error(`[Razgon:${inst.keyName}] Error closing ${pos.symbol}: ${(e as Error).message}`);
       }
     }
   }
+  logger.info(`[Razgon:${inst.keyName}] Instance stopped`);
+}
 
-  // Keep config in memory so UI can read it after stop
+export async function startRazgon(cfg: RazgonConfig): Promise<{ ok: boolean; error?: string }> {
+  if (status === 'running') return { ok: false, error: 'Already running' };
+
+  config = cfg;
+  if (!config.apiKeys || config.apiKeys.length === 0) {
+    config.apiKeys = [{ name: cfg.apiKeyName, exchange: cfg.exchange, enabled: true, startBalancePct: 0.9, label: cfg.exchange.toUpperCase() }];
+  }
+  if (typeof config.startBalancePct !== 'number') config.startBalancePct = 0;
+  if (!config.presetMode) config.presetMode = 'high';
+  saveConfigToDisk();
+
+  instanceMap.clear();
+  const enabledKeys = config.apiKeys.filter(k => k.enabled);
+  if (enabledKeys.length === 0) enabledKeys.push({ name: cfg.apiKeyName, exchange: cfg.exchange, enabled: true, startBalancePct: 0.9 });
+
+  const errors: string[] = [];
+  for (const keyEntry of enabledKeys) {
+    try {
+      const inst = await createInstance(keyEntry, cfg);
+      instanceMap.set(keyEntry.name, inst);
+      startInstanceTimers(inst, cfg);
+      logger.info(`[Razgon] Instance started: ${keyEntry.name} ($${inst.balance.toFixed(2)})`);
+    } catch (e) {
+      const msg = (e as Error).message;
+      errors.push(`${keyEntry.name}: ${msg}`);
+      logger.error(`[Razgon] Failed to start ${keyEntry.name}: ${msg}`);
+    }
+  }
+
+  if (instanceMap.size === 0) {
+    return { ok: false, error: errors.join('; ') || 'No instances started' };
+  }
+
+  status = 'running';
+  const totalBal = [...instanceMap.values()].reduce((s, i) => s + i.balance, 0);
+  logger.info(`[Razgon] Started ${instanceMap.size} instance(s). Total balance: $${totalBal.toFixed(2)}`);
+  return { ok: true };
+}
+
+export async function stopRazgon(): Promise<void> {
+  for (const inst of instanceMap.values()) await stopInstance(inst);
+  instanceMap.clear();
   status = 'stopped';
   logger.info('[Razgon] Engine stopped');
 }
 
 export async function pauseRazgon(): Promise<void> {
-  if (momentumTimer) { clearInterval(momentumTimer); momentumTimer = null; }
-  if (sniperTimer) { clearInterval(sniperTimer); sniperTimer = null; }
-  if (fundingTimer) { clearInterval(fundingTimer); fundingTimer = null; }
+  for (const inst of instanceMap.values()) {
+    if (inst.momentumTimer) { clearInterval(inst.momentumTimer); inst.momentumTimer = null; }
+    if (inst.sniperTimer) { clearInterval(inst.sniperTimer); inst.sniperTimer = null; }
+    if (inst.fundingTimer) { clearInterval(inst.fundingTimer); inst.fundingTimer = null; }
+  }
   status = 'paused';
   logger.info('[Razgon] Engine paused (positions kept open)');
 }
@@ -361,71 +401,67 @@ export async function pauseRazgon(): Promise<void> {
 export function updateRazgonConfig(patch: Partial<RazgonConfig>): void {
   if (!config) return;
   config = { ...config, ...patch };
-  if (riskManager) riskManager.updateConfig(config);
+  for (const inst of instanceMap.values()) inst.riskManager.updateConfig(config!);
   saveConfigToDisk();
 }
 
 // ── Momentum Tick ────────────────────────────────────────────────────────
 
-let momentumTickCount = 0;
-
-async function momentumTick(): Promise<void> {
-  if (!config || !riskManager || status !== 'running') return;
+async function momentumTick(inst: RazgonInstance): Promise<void> {
+  if (!config || status !== 'running') return;
   const cfg = config.momentum;
-  momentumTickCount++;
+  inst.tickCount++;
 
-  // Log every tick for diagnosing (can reduce to % 12 later = every 1 min)
-  logger.info(`[Razgon:Momentum] tick #${momentumTickCount} | bal=$${balance.toFixed(2)} | pos=${openPositions.length} | symbols=${cfg.watchlist.length}`);
+  logger.info(`[Razgon:${inst.keyName}] tick #${inst.tickCount} | bal=$${inst.balance.toFixed(2)} | pos=${inst.openPositions.length}`);
 
   // Sync equity from exchange every ~1 min (12 ticks * 5s = 60s)
-  if (momentumTickCount % 12 === 0 && config) {
+  if (inst.tickCount % 12 === 0) {
     try {
-      const bals = await getBalances(config.apiKeyName);
+      const bals = await getBalances(inst.keyName);
       const usdtBal = bals.find(b => b.coin === 'USDT');
       const equity = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
       if (equity > 0) {
-        balance = equity;
-        if (balance > peakBalance) peakBalance = balance;
+        inst.balance = equity;
+        if (inst.balance > inst.peakBalance) inst.peakBalance = inst.balance;
       }
     } catch (e) {
-      logger.debug(`[Razgon] Equity sync failed: ${(e as Error).message}`);
+      logger.debug(`[Razgon:${inst.keyName}] Equity sync failed: ${(e as Error).message}`);
     }
   }
 
   // Check & manage existing positions first
-  await checkMomentumExits();
+  await checkMomentumExits(inst);
 
   // Skip new entries if daily limit hit
-  if (riskManager.isDailyLimitHit(balance)) return;
+  if (inst.riskManager.isDailyLimitHit(inst.balance)) return;
 
   // Count currently open momentum positions
-  const momPositions = openPositions.filter(p => p.subStrategy === 'momentum');
+  const momPositions = inst.openPositions.filter(p => p.subStrategy === 'momentum');
   if (momPositions.length >= cfg.maxConcurrentPositions) return;
 
-  // FIX 1: Check available balance from exchange before attempting entries
+  // Check available balance from exchange before attempting entries
   let availableBalance = 0;
   try {
-    const bals = await getBalances(config.apiKeyName);
+    const bals = await getBalances(inst.keyName);
     const usdtBal = bals.find(b => b.coin === 'USDT');
     availableBalance = usdtBal ? parseFloat(usdtBal.availableBalance) : 0;
   } catch (e) {
-    logger.debug(`[Razgon] Available balance check failed: ${(e as Error).message}`);
+    logger.debug(`[Razgon:${inst.keyName}] Available balance check failed: ${(e as Error).message}`);
   }
-  const minMarginNeeded = balance * 0.02; // at least 2% of balance free
+  const minMarginNeeded = inst.balance * 0.02;
   if (availableBalance < minMarginNeeded) {
-    if (momentumTickCount % 12 === 1) {
-      logger.info(`[Razgon:Momentum] Skipping entries: available=$${availableBalance.toFixed(2)} < min=$${minMarginNeeded.toFixed(2)}`);
+    if (inst.tickCount % 12 === 1) {
+      logger.info(`[Razgon:${inst.keyName}] Skipping entries: available=$${availableBalance.toFixed(2)} < min=$${minMarginNeeded.toFixed(2)}`);
     }
     return;
   }
 
-  // Batch-fetch all watchlist candles in parallel via exchange batch utility
-  // FIX 2: skip symbols where we already have ANY position (avoid opposite/duplicate)
+  // Skip symbols where we already have ANY position (avoid opposite/duplicate)
   const candidates = cfg.watchlist.filter(
-    sym => !openPositions.some(p => p.symbol === sym),
+    sym => !inst.openPositions.some(p => p.symbol === sym),
   );
   const minBars = Math.max(cfg.donchianPeriod, 21) + 5;
-  const batchResults = await batchGetMarketData(config.apiKeyName, candidates, '1m', minBars + 5, 8000);
+  const batchResults = await batchGetMarketData(inst.keyName, candidates, '1m', minBars + 5, 8000);
 
   // Update candle cache from batch results
   for (const br of batchResults) {
@@ -434,30 +470,30 @@ async function momentumTick(): Promise<void> {
         timeMs: Number(c[0] ?? 0), open: Number(c[1] ?? 0), high: Number(c[2] ?? 0),
         low: Number(c[3] ?? 0), close: Number(c[4] ?? 0), volume: Number(c[5] ?? 0),
       }));
-      candleCache.set(br.symbol, parsed.slice(-MAX_CANDLE_CACHE));
+      inst.candleCache.set(br.symbol, parsed.slice(-MAX_CANDLE_CACHE));
     }
   }
 
   for (const br of batchResults) {
-    if (openPositions.filter(p => p.subStrategy === 'momentum').length >= cfg.maxConcurrentPositions) break;
-    const candles = candleCache.get(br.symbol);
+    if (inst.openPositions.filter(p => p.subStrategy === 'momentum').length >= cfg.maxConcurrentPositions) break;
+    const candles = inst.candleCache.get(br.symbol);
     if (!candles || candles.length < cfg.donchianPeriod) continue;
     try {
-      await checkMomentumEntryFromCandles(br.symbol, candles);
+      await checkMomentumEntryFromCandles(inst, br.symbol, candles);
     } catch (e) {
-      logger.debug(`[Razgon:Momentum] Signal check failed for ${br.symbol}: ${(e as Error).message}`);
+      logger.debug(`[Razgon:${inst.keyName}] Signal check failed for ${br.symbol}: ${(e as Error).message}`);
     }
   }
 }
 
-async function checkMomentumEntryFromCandles(symbol: string, candles: Candle1m[]): Promise<void> {
-  if (!config || !riskManager) return;
+async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: string, candles: Candle1m[]): Promise<void> {
+  if (!config) return;
   const cfg = config.momentum;
 
   if (candles.length < cfg.donchianPeriod) return;
 
   const latestCandle = candles[candles.length - 1];
-  const closedCandles = candles.slice(0, -1); // exclude current forming bar
+  const closedCandles = candles.slice(0, -1);
 
   const result = computeMomentumSignal(
     closedCandles,
@@ -469,11 +505,11 @@ async function checkMomentumEntryFromCandles(symbol: string, candles: Candle1m[]
   );
 
   // Log signal check for diagnostics
-  if (result.signal !== 'none' || momentumTickCount % 12 === 1) {
+  if (result.signal !== 'none' || inst.tickCount % 12 === 1) {
     const volRatio = result.avgVolume > 0 ? (result.volume / result.avgVolume).toFixed(2) : '0';
     const priceVsDH = result.donchianHigh > 0 ? ((latestCandle.close / result.donchianHigh - 1) * 100).toFixed(3) : '?';
     const priceVsDL = result.donchianLow > 0 ? ((latestCandle.close / result.donchianLow - 1) * 100).toFixed(3) : '?';
-    logger.info(`[Razgon:Momentum] ${symbol} sig=${result.signal} p=${latestCandle.close} dH=${result.donchianHigh} dL=${result.donchianLow} p/dH=${priceVsDH}% p/dL=${priceVsDL}% vol=${volRatio}x atr=${(result.normAtr*100).toFixed(3)}% atrMin=${(cfg.atrFilterMin*100).toFixed(3)}% volMul=${cfg.volumeMultiplier}`);
+    logger.info(`[Razgon:${inst.keyName}] ${symbol} sig=${result.signal} p=${latestCandle.close} dH=${result.donchianHigh} dL=${result.donchianLow} p/dH=${priceVsDH}% p/dL=${priceVsDL}% vol=${volRatio}x atr=${(result.normAtr*100).toFixed(3)}%`);
   }
 
   if (result.signal === 'none') return;
@@ -481,120 +517,102 @@ async function checkMomentumEntryFromCandles(symbol: string, candles: Candle1m[]
   const side = result.signal;
   const entryPrice = latestCandle.close;
 
-  // FIX 2b: double-check no existing position on this symbol (any side)
-  if (openPositions.some(p => p.symbol === symbol)) {
-    logger.debug(`[Razgon:Momentum] Skip ${symbol}: already have position`);
+  // double-check no existing position on this symbol (any side)
+  if (inst.openPositions.some(p => p.symbol === symbol)) {
+    logger.debug(`[Razgon:${inst.keyName}] Skip ${symbol}: already have position`);
     return;
   }
 
   // Position sizing
-  const margin = riskManager.computeMargin(
-    balance,
+  const margin = inst.riskManager.computeMargin(
+    inst.balance,
     cfg.allocation,
     cfg.leverage,
     cfg.stopLossPercent,
-    openPositions,
+    inst.openPositions,
   );
   if (margin <= 0) return;
 
   const notional = margin * cfg.leverage;
-  const slPrice = riskManager.computeStopLoss(entryPrice, side, cfg.stopLossPercent);
+  const slPrice = inst.riskManager.computeStopLoss(entryPrice, side, cfg.stopLossPercent);
 
-  logger.info(`[Razgon:Momentum] ${side.toUpperCase()} ${symbol} @ ${entryPrice} | notional=$${notional.toFixed(0)} SL=${slPrice.toFixed(6)}`);
+  logger.info(`[Razgon:${inst.keyName}] ${side.toUpperCase()} ${symbol} @ ${entryPrice} | notional=$${notional.toFixed(0)} SL=${slPrice.toFixed(6)}`);
 
   try {
-    // Apply leverage & margin type
-    await applySymbolRiskSettings(config.apiKeyName, symbol, cfg.marginType, cfg.leverage);
-
-    // Place market order
+    await applySymbolRiskSettings(inst.keyName, symbol, cfg.marginType, cfg.leverage);
     const orderSide = side === 'long' ? 'Buy' : 'Sell';
     const qty = notional / entryPrice;
-    await placeOrder(config.apiKeyName, symbol, orderSide, String(qty), 'Market');
+    await placeOrder(inst.keyName, symbol, orderSide, String(qty), 'Market');
 
-    // Record position
     const pos: RazgonPosition = {
-      id: uuid(),
-      subStrategy: 'momentum',
-      symbol,
-      side,
-      entryPrice,
-      notional,
-      margin,
-      leverage: cfg.leverage,
-      openedAt: Date.now(),
-      tpAnchor: entryPrice,
-      slPrice,
-      unrealizedPnl: 0,
+      id: uuid(), subStrategy: 'momentum', symbol, side, entryPrice, notional, margin,
+      leverage: cfg.leverage, openedAt: Date.now(), tpAnchor: entryPrice, slPrice, unrealizedPnl: 0,
     };
-    openPositions.push(pos);
-    balance -= margin; // lock margin
+    inst.openPositions.push(pos);
+    inst.balance -= margin;
   } catch (e) {
-    logger.error(`[Razgon:Momentum] Order failed ${symbol}: ${(e as Error).message}`);
+    logger.error(`[Razgon:${inst.keyName}] Order failed ${symbol}: ${(e as Error).message}`);
   }
 }
 
-async function checkMomentumExits(): Promise<void> {
-  if (!config || !riskManager) return;
+async function checkMomentumExits(inst: RazgonInstance): Promise<void> {
+  if (!config) return;
   const cfg = config.momentum;
 
-  const momPositions = openPositions.filter(p => p.subStrategy === 'momentum');
+  const momPositions = inst.openPositions.filter(p => p.subStrategy === 'momentum');
 
   for (const pos of momPositions) {
     try {
-      const candles = await fetchAndCache1mCandles(pos.symbol, 5);
+      const candles = await fetchAndCache1mCandles(inst, pos.symbol, 5);
       if (candles.length === 0) continue;
 
       const currentPrice = candles[candles.length - 1].close;
 
-      // Update trailing anchor
-      pos.tpAnchor = riskManager.updateAnchor(pos.tpAnchor, currentPrice, pos.side);
-      const tpTrailPrice = riskManager.computeTrailingTp(pos.tpAnchor, pos.side, cfg.trailingTpPercent);
+      pos.tpAnchor = inst.riskManager.updateAnchor(pos.tpAnchor, currentPrice, pos.side);
+      const tpTrailPrice = inst.riskManager.computeTrailingTp(pos.tpAnchor, pos.side, cfg.trailingTpPercent);
 
-      // Update unrealised PnL
-      pos.unrealizedPnl = riskManager.computeGrossPnl(pos.entryPrice, currentPrice, pos.notional, pos.side);
+      pos.unrealizedPnl = inst.riskManager.computeGrossPnl(pos.entryPrice, currentPrice, pos.notional, pos.side);
 
       // Check exit conditions
       let exitReason: RazgonTrade['exitReason'] | null = null;
 
-      if (riskManager.isStopLossHit(currentPrice, pos.slPrice, pos.side)) {
+      if (inst.riskManager.isStopLossHit(currentPrice, pos.slPrice, pos.side)) {
         exitReason = 'sl';
-      } else if (riskManager.isTrailingTpHit(currentPrice, tpTrailPrice, pos.side)) {
+      } else if (inst.riskManager.isTrailingTpHit(currentPrice, tpTrailPrice, pos.side)) {
         exitReason = 'tp';
-      } else if (riskManager.isTimedOut(pos.openedAt, cfg.maxPositionTimeSec)) {
+      } else if (inst.riskManager.isTimedOut(pos.openedAt, cfg.maxPositionTimeSec)) {
         exitReason = 'timeout';
-      } else if (riskManager.isDailyLimitHit(balance)) {
+      } else if (inst.riskManager.isDailyLimitHit(inst.balance)) {
         exitReason = 'daily_limit';
       }
 
       if (exitReason) {
-        await executeClose(pos, currentPrice, exitReason);
+        await executeClose(inst, pos, currentPrice, exitReason);
       }
     } catch (e) {
-      logger.debug(`[Razgon:Momentum] Exit check failed ${pos.symbol}: ${(e as Error).message}`);
+      logger.debug(`[Razgon:${inst.keyName}] Exit check failed ${pos.symbol}: ${(e as Error).message}`);
     }
   }
 }
 
 // ── Sniper Tick ──────────────────────────────────────────────────────────
 
-async function sniperTick(): Promise<void> {
-  if (!config || !riskManager || status !== 'running') return;
+async function sniperTick(inst: RazgonInstance): Promise<void> {
+  if (!config || status !== 'running') return;
   const cfg = config.sniper;
 
-  // Check existing sniper positions for exit
-  const sniperPositions = openPositions.filter(p => p.subStrategy === 'sniper');
+  const sniperPositions = inst.openPositions.filter(p => p.subStrategy === 'sniper');
   for (const pos of sniperPositions) {
     try {
-      const candles = await fetchAndCache1mCandles(pos.symbol, 3);
+      const candles = await fetchAndCache1mCandles(inst, pos.symbol, 3);
       if (candles.length === 0) continue;
       const price = candles[candles.length - 1].close;
 
-      pos.unrealizedPnl = riskManager.computeGrossPnl(pos.entryPrice, price, pos.notional, pos.side);
+      pos.unrealizedPnl = inst.riskManager.computeGrossPnl(pos.entryPrice, price, pos.notional, pos.side);
 
       let exitReason: RazgonTrade['exitReason'] | null = null;
-      if (riskManager.isStopLossHit(price, pos.slPrice, pos.side)) exitReason = 'sl';
-      else if (riskManager.isTimedOut(pos.openedAt, cfg.maxPositionTimeSec)) exitReason = 'timeout';
-      // TP for sniper is fixed, not trailing
+      if (inst.riskManager.isStopLossHit(price, pos.slPrice, pos.side)) exitReason = 'sl';
+      else if (inst.riskManager.isTimedOut(pos.openedAt, cfg.maxPositionTimeSec)) exitReason = 'timeout';
       const tpPrice = pos.side === 'long'
         ? pos.entryPrice * (1 + cfg.takeProfitPercent / 100)
         : pos.entryPrice * (1 - cfg.takeProfitPercent / 100);
@@ -602,30 +620,27 @@ async function sniperTick(): Promise<void> {
         exitReason = 'tp';
       }
 
-      if (exitReason) await executeClose(pos, price, exitReason);
+      if (exitReason) await executeClose(inst, pos, price, exitReason);
     } catch (_) { /* skip */ }
   }
 
-  // Detect new listings
-  if (sniperPositions.length > 0) return; // max 1 sniper position
+  if (sniperPositions.length > 0) return;
 
   try {
-    const symbols = await getAllSymbols(config.apiKeyName);
+    const symbols = await getAllSymbols(inst.keyName);
     const symList = symbols.map((s: any) => typeof s === 'string' ? s : s.symbol || '');
-    const newListings = detectNewListings(symList, knownSymbols);
+    const newListings = detectNewListings(symList, inst.knownSymbols);
 
-    // Update known set
-    for (const s of symList) knownSymbols.add(s);
+    for (const s of symList) inst.knownSymbols.add(s);
 
     if (newListings.length === 0) return;
 
-    for (const sym of newListings.slice(0, 1)) { // process max 1 new listing per cycle
-      logger.info(`[Razgon:Sniper] New listing detected: ${sym}`);
+    for (const sym of newListings.slice(0, 1)) {
+      logger.info(`[Razgon:${inst.keyName}:Sniper] New listing detected: ${sym}`);
 
-      // Wait entry delay
       await new Promise(res => setTimeout(res, Math.min(cfg.entryDelayMs, 10_000)));
 
-      const candles = await fetchAndCache1mCandles(sym, 5);
+      const candles = await fetchAndCache1mCandles(inst, sym, 5);
       if (candles.length === 0) continue;
 
       const price = candles[candles.length - 1].close;
@@ -633,19 +648,19 @@ async function sniperTick(): Promise<void> {
 
       const decision = decideSniperEntry(price, openPrice, cfg);
       if (decision.action === 'skip') {
-        logger.info(`[Razgon:Sniper] Skipping ${sym}: ${decision.reason}`);
+        logger.info(`[Razgon:${inst.keyName}:Sniper] Skipping ${sym}: ${decision.reason}`);
         continue;
       }
 
-      const margin = riskManager.computeMargin(balance, cfg.allocation, cfg.leverage, cfg.stopLossPercent, openPositions);
+      const margin = inst.riskManager.computeMargin(inst.balance, cfg.allocation, cfg.leverage, cfg.stopLossPercent, inst.openPositions);
       if (margin <= 0) continue;
 
       const notional = margin * cfg.leverage;
 
       try {
-        await applySymbolRiskSettings(config.apiKeyName, sym, cfg.marginType, cfg.leverage);
+        await applySymbolRiskSettings(inst.keyName, sym, cfg.marginType, cfg.leverage);
         const qty = notional / price;
-        await placeOrder(config.apiKeyName, sym, 'Buy', String(qty), 'Market');
+        await placeOrder(inst.keyName, sym, 'Buy', String(qty), 'Market');
 
         const pos: RazgonPosition = {
           id: uuid(),
@@ -661,38 +676,36 @@ async function sniperTick(): Promise<void> {
           slPrice: decision.suggestedSl ?? price * 0.95,
           unrealizedPnl: 0,
         };
-        openPositions.push(pos);
-        balance -= margin;
+        inst.openPositions.push(pos);
+        inst.balance -= margin;
 
-        logger.info(`[Razgon:Sniper] Entered ${sym} LONG @ ${price} | notional=$${notional.toFixed(0)}`);
+        logger.info(`[Razgon:${inst.keyName}:Sniper] Entered ${sym} LONG @ ${price} | notional=$${notional.toFixed(0)}`);
       } catch (e) {
-        logger.error(`[Razgon:Sniper] Order failed ${sym}: ${(e as Error).message}`);
+        logger.error(`[Razgon:${inst.keyName}:Sniper] Order failed ${sym}: ${(e as Error).message}`);
       }
     }
   } catch (e) {
-    logger.debug(`[Razgon:Sniper] Scan failed: ${(e as Error).message}`);
+    logger.debug(`[Razgon:${inst.keyName}:Sniper] Scan failed: ${(e as Error).message}`);
   }
 }
 
 // ── Funding Tick ─────────────────────────────────────────────────────────
 
-async function fundingTick(): Promise<void> {
-  if (!config || !riskManager || status !== 'running') return;
+async function fundingTick(inst: RazgonInstance): Promise<void> {
+  if (!config || status !== 'running') return;
   const cfg = config.funding;
 
-  // Check existing funding positions
-  const fundPositions = openPositions.filter(p => p.subStrategy === 'funding');
-  // For simplicity, just check timeout/SL (funding rate check requires exchange-specific API)
+  const fundPositions = inst.openPositions.filter(p => p.subStrategy === 'funding');
   for (const pos of fundPositions) {
     try {
-      const candles = await fetchAndCache1mCandles(pos.symbol, 3);
+      const candles = await fetchAndCache1mCandles(inst, pos.symbol, 3);
       if (candles.length === 0) continue;
       const price = candles[candles.length - 1].close;
-      pos.unrealizedPnl = riskManager.computeGrossPnl(pos.entryPrice, price, pos.notional, pos.side);
+      pos.unrealizedPnl = inst.riskManager.computeGrossPnl(pos.entryPrice, price, pos.notional, pos.side);
 
       const unrealizedPct = (pos.unrealizedPnl / pos.margin) * 100;
       if (unrealizedPct <= -cfg.stopLossPercent) {
-        await executeClose(pos, price, 'sl');
+        await executeClose(inst, pos, price, 'sl');
       }
     } catch (_) { /* skip */ }
   }
@@ -700,35 +713,29 @@ async function fundingTick(): Promise<void> {
   // Open new funding positions if slots available
   if (fundPositions.length >= cfg.maxPositions) return;
 
-  // Note: MEXC ccxt doesn't expose funding rates directly.
-  // This is a placeholder — in production, use exchange-specific endpoint.
-  logger.debug('[Razgon:Funding] Funding scan tick (placeholder — needs exchange funding rate API)');
+  logger.debug(`[Razgon:${inst.keyName}:Funding] Funding scan tick (placeholder)`);
 }
 
 // ── Shared Helpers ───────────────────────────────────────────────────────
 
 async function executeClose(
+  inst: RazgonInstance,
   pos: RazgonPosition,
   exitPrice: number,
   exitReason: RazgonTrade['exitReason'],
 ): Promise<void> {
-  if (!config || !riskManager) return;
-
   try {
     const closeSide = pos.side === 'long' ? 'Sell' : 'Buy';
-    await closePosition(config.apiKeyName, pos.symbol, closeSide);
+    await closePosition(inst.keyName, pos.symbol, closeSide);
   } catch (e) {
-    logger.error(`[Razgon] Close order failed ${pos.symbol}: ${(e as Error).message}`);
+    logger.error(`[Razgon:${inst.keyName}] Close order failed ${pos.symbol}: ${(e as Error).message}`);
   }
-
-  recordClose(pos, exitPrice, exitReason);
+  recordClose(inst, pos, exitPrice, exitReason);
 }
 
-function recordClose(pos: RazgonPosition, exitPrice: number, exitReason: RazgonTrade['exitReason']): void {
-  if (!riskManager) return;
-
-  const grossPnl = riskManager.computeGrossPnl(pos.entryPrice, exitPrice, pos.notional, pos.side);
-  const fee = riskManager.computeFee(pos.notional);
+function recordClose(inst: RazgonInstance, pos: RazgonPosition, exitPrice: number, exitReason: RazgonTrade['exitReason']): void {
+  const grossPnl = inst.riskManager.computeGrossPnl(pos.entryPrice, exitPrice, pos.notional, pos.side);
+  const fee = inst.riskManager.computeFee(pos.notional);
   const netPnl = grossPnl - fee;
 
   const trade: RazgonTrade = {
@@ -746,36 +753,30 @@ function recordClose(pos: RazgonPosition, exitPrice: number, exitReason: RazgonT
     closedAt: Date.now(),
     exitReason,
   };
-  tradeHistory.push(trade);
+  inst.tradeHistory.push(trade);
 
-  // Return margin + PnL to balance
-  balance += pos.margin + netPnl;
-  if (balance > peakBalance) peakBalance = balance;
+  inst.balance += pos.margin + netPnl;
+  if (inst.balance > inst.peakBalance) inst.peakBalance = inst.balance;
 
-  // Remove from open positions
-  openPositions = openPositions.filter(p => p.id !== pos.id);
+  inst.openPositions = inst.openPositions.filter(p => p.id !== pos.id);
 
-  riskManager.recordTrade(trade, balance);
+  inst.riskManager.recordTrade(trade, inst.balance);
 
   const emoji = netPnl >= 0 ? '✅' : '❌';
   logger.info(
-    `[Razgon] ${emoji} ${exitReason.toUpperCase()} ${pos.side} ${pos.symbol} | ` +
+    `[Razgon:${inst.keyName}] ${emoji} ${exitReason.toUpperCase()} ${pos.side} ${pos.symbol} | ` +
     `Entry=${pos.entryPrice.toFixed(6)} Exit=${exitPrice.toFixed(6)} | ` +
-    `PnL=${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(2)} | Balance=$${balance.toFixed(2)}`,
+    `PnL=${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(2)} | Balance=$${inst.balance.toFixed(2)}`,
   );
 }
 
-async function fetchAndCache1mCandles(symbol: string, minBars: number): Promise<Candle1m[]> {
-  if (!config) return [];
-
+async function fetchAndCache1mCandles(inst: RazgonInstance, symbol: string, minBars: number): Promise<Candle1m[]> {
   try {
-    // Timeout after 8s to prevent tick stalling in shared limiter queue
-    const timeoutMs = 8000;
     const raw = await Promise.race([
-      getMarketData(config.apiKeyName, symbol, '1m', minBars + 5),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('fetch timeout')), timeoutMs)),
+      getMarketData(inst.keyName, symbol, '1m', minBars + 5),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('fetch timeout')), 8000)),
     ]);
-    if (!Array.isArray(raw) || raw.length === 0) return candleCache.get(symbol) ?? [];
+    if (!Array.isArray(raw) || raw.length === 0) return inst.candleCache.get(symbol) ?? [];
 
     const candles: Candle1m[] = raw.map((c: any) => ({
       timeMs: Number(c[0] ?? c.timeMs ?? c.timestamp ?? 0),
@@ -786,10 +787,9 @@ async function fetchAndCache1mCandles(symbol: string, minBars: number): Promise<
       volume: Number(c[5] ?? c.volume ?? 0),
     }));
 
-    candleCache.set(symbol, candles.slice(-MAX_CANDLE_CACHE));
+    inst.candleCache.set(symbol, candles.slice(-MAX_CANDLE_CACHE));
     return candles;
-  } catch (e) {
-    // Fallback to cache
-    return candleCache.get(symbol) ?? [];
+  } catch {
+    return inst.candleCache.get(symbol) ?? [];
   }
 }
