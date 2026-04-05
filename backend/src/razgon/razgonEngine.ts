@@ -175,6 +175,24 @@ export function getTradeHistory(limit: number = 100): RazgonTrade[] {
   return tradeHistory.slice(-limit);
 }
 
+/** Fetch live USDT balance for each configured api key */
+export async function getRazgonKeyBalances(): Promise<Array<{ name: string; exchange: string; label?: string; enabled: boolean; balance: number; equity: number }>> {
+  const cfg = config;
+  const keys = cfg?.apiKeys ?? (cfg ? [{ name: cfg.apiKeyName, exchange: cfg.exchange, enabled: true, startBalancePct: 0.9 }] : []);
+  const results = await Promise.all(keys.map(async k => {
+    try {
+      const bals = await getBalances(k.name);
+      const usdtBal = bals.find(b => b.coin === 'USDT');
+      const equity = usdtBal ? parseFloat(usdtBal.walletBalance || '0') : 0;
+      const avail = usdtBal ? parseFloat(usdtBal.availableBalance || '0') : 0;
+      return { name: k.name, exchange: k.exchange, label: k.label, enabled: k.enabled, balance: avail, equity };
+    } catch (e) {
+      return { name: k.name, exchange: k.exchange, label: k.label, enabled: k.enabled, balance: 0, equity: 0 };
+    }
+  }));
+  return results;
+}
+
 export async function startRazgon(cfg: RazgonConfig): Promise<{ ok: boolean; error?: string }> {
   if (status === 'running') {
     return { ok: false, error: 'Already running' };
@@ -182,13 +200,23 @@ export async function startRazgon(cfg: RazgonConfig): Promise<{ ok: boolean; err
 
   try {
     config = cfg;
+    // Normalise: ensure new fields have defaults for old saved configs
+    if (!config.apiKeys || config.apiKeys.length === 0) {
+      config.apiKeys = [{ name: cfg.apiKeyName, exchange: cfg.exchange, enabled: true, startBalancePct: 0.9, label: cfg.exchange.toUpperCase() }];
+    }
+    if (typeof config.startBalancePct !== 'number') config.startBalancePct = 0;
+    if (!config.presetMode) config.presetMode = 'high';
     saveConfigToDisk();
 
-    // Fetch initial balance (use equity = walletBalance, not just available)
-    const balances = await getBalances(cfg.apiKeyName);
+    // Fetch initial balance — use primary enabled key, respect startBalancePct
+    const primaryKey = config.apiKeys.find(k => k.enabled) ?? config.apiKeys[0];
+    const keyName = primaryKey?.name ?? cfg.apiKeyName;
+    const balances = await getBalances(keyName);
     const usdtBal = balances.find(b => b.coin === 'USDT');
-    const equity = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
+    const totalEquity = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
     const available = usdtBal ? parseFloat(usdtBal.availableBalance) : 0;
+    // Apply startBalancePct if set (e.g. 0.9 = use 90% of account)
+    const equity = config.startBalancePct > 0 ? totalEquity * config.startBalancePct : (cfg.startBalance || totalEquity);
     balance = equity;
 
     if (equity < 1) {

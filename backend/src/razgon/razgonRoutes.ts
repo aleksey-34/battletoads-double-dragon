@@ -9,6 +9,7 @@ import {
   getTradeHistory,
   updateRazgonConfig,
   refreshRazgonLive,
+  getRazgonKeyBalances,
 } from './razgonEngine';
 import { DEFAULT_RAZGON_CONFIG } from './razgonTypes';
 import type { RazgonConfig } from './razgonTypes';
@@ -81,6 +82,28 @@ router.post('/pause', async (_req: Request, res: Response) => {
 router.get('/trades', (req: Request, res: Response) => {
   const limit = Math.min(Number(req.query.limit) || 100, 1000);
   res.json(getTradeHistory(limit));
+});
+
+// GET /api/razgon/key-balances — fetch live balance for each configured api key
+router.get('/key-balances', async (_req: Request, res: Response) => {
+  try {
+    const data = await getRazgonKeyBalances();
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message });
+  }
+});
+
+// POST /api/razgon/key-toggle — enable/disable a key (body: { name, enabled })
+router.post('/key-toggle', (req: Request, res: Response) => {
+  const { name, enabled } = req.body as { name: string; enabled: boolean };
+  const cfg = getRazgonConfig();
+  if (!cfg) { res.status(400).json({ error: 'Engine not configured' }); return; }
+  const key = cfg.apiKeys?.find(k => k.name === name);
+  if (!key) { res.status(404).json({ error: `Key ${name} not found` }); return; }
+  key.enabled = enabled;
+  updateRazgonConfig({ apiKeys: cfg.apiKeys });
+  res.json({ ok: true });
 });
 
 export default router;

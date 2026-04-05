@@ -59,10 +59,23 @@ export interface RazgonWithdrawConfig {
   cooldownHours: number;
 }
 
+export type RazgonPresetMode = 'low' | 'mid' | 'high';
+
+export interface RazgonApiKeyEntry {
+  name: string;          // api key name in DB
+  exchange: string;      // 'mexc' | 'bybit' | 'bitget'
+  enabled: boolean;
+  startBalancePct: number; // % of account balance to use (0.0–1.0)
+  label?: string;        // display name
+}
+
 export interface RazgonConfig {
-  exchange: string;             // 'mexc' | 'bitget' | ...
-  apiKeyName: string;
-  startBalance: number;
+  exchange: string;             // primary exchange (legacy, kept for compat)
+  apiKeyName: string;           // primary api key name (legacy)
+  apiKeys: RazgonApiKeyEntry[]; // multi-key list
+  startBalance: number;         // absolute USDT (legacy fallback)
+  startBalancePct: number;      // fraction of account equity to use (0 = use startBalance)
+  presetMode: RazgonPresetMode; // 'low' | 'mid' | 'high'
   momentum: RazgonMomentumConfig;
   sniper: RazgonSniperConfig;
   funding: RazgonFundingConfig;
@@ -129,22 +142,25 @@ export interface Candle1m {
 
 export const DEFAULT_RAZGON_CONFIG: RazgonConfig = {
   exchange: 'mexc',
-  apiKeyName: 'razgon_mexc',
+  apiKeyName: 'BTDD_MEX_1',
+  apiKeys: [{ name: 'BTDD_MEX_1', exchange: 'mexc', enabled: true, startBalancePct: 0.9, label: 'MEXC Main' }],
   startBalance: 40,
+  startBalancePct: 0,
+  presetMode: 'high',
 
   momentum: {
     enabled: true,
-    allocation: 0.60,
-    leverage: 25,
+    allocation: 0.25,
+    leverage: 20,
     marginType: 'isolated',
     donchianPeriod: 5,
-    volumeMultiplier: 1.2,
-    trailingTpPercent: 0.3,
-    stopLossPercent: 0.2,
-    maxPositionTimeSec: 900,    // 15 min
+    volumeMultiplier: 1.5,
+    trailingTpPercent: 0.45,
+    stopLossPercent: 0.30,
+    maxPositionTimeSec: 900,
     tickIntervalSec: 5,
-    maxConcurrentPositions: 3,
-    atrFilterMin: 0.0001,
+    maxConcurrentPositions: 2,
+    atrFilterMin: 0.0015,
     watchlist: ['PEPEUSDT', 'WIFUSDT', 'SUIUSDT', 'DOGEUSDT', 'SOLUSDT', 'ARBUSDT', 'ORDIUSDT'],
   },
 
@@ -156,7 +172,7 @@ export const DEFAULT_RAZGON_CONFIG: RazgonConfig = {
     entryDelayMs: 60_000,
     takeProfitPercent: 15,
     stopLossPercent: 5,
-    maxPositionTimeSec: 300,    // 5 min
+    maxPositionTimeSec: 300,
     scanIntervalSec: 30,
   },
 
@@ -169,12 +185,12 @@ export const DEFAULT_RAZGON_CONFIG: RazgonConfig = {
     minVolume24h: 5_000_000,
     maxPositions: 3,
     stopLossPercent: 3,
-    scanIntervalSec: 14_400,    // 4h
+    scanIntervalSec: 14_400,
   },
 
   risk: {
     maxRiskPerTrade: 0.05,
-    maxDailyLoss: 0.20,
+    maxDailyLoss: 0.10,
     rescaleThreshold: 0.25,
     noAveragingDown: true,
     forceIsolatedMargin: true,
@@ -187,5 +203,31 @@ export const DEFAULT_RAZGON_CONFIG: RazgonConfig = {
     minWithdraw: 10,
     targetAddress: '',
     cooldownHours: 24,
+  },
+};
+
+// ── Preset Configs ────────────────────────────────────────────────────────
+
+type MomentumPreset = Pick<RazgonMomentumConfig, 'leverage' | 'allocation' | 'stopLossPercent' | 'trailingTpPercent' | 'maxConcurrentPositions' | 'atrFilterMin' | 'volumeMultiplier'>;
+type RiskPreset = Pick<RazgonRiskConfig, 'maxDailyLoss' | 'maxRiskPerTrade'>;
+
+export const RAZGON_PRESETS: Record<RazgonPresetMode, { label: string; color: string; momentum: MomentumPreset; risk: RiskPreset }> = {
+  low: {
+    label: 'Low (Safe)',
+    color: 'green',
+    momentum: { leverage: 10, allocation: 0.20, stopLossPercent: 0.50, trailingTpPercent: 0.60, maxConcurrentPositions: 2, atrFilterMin: 0.002, volumeMultiplier: 1.8 },
+    risk: { maxDailyLoss: 0.08, maxRiskPerTrade: 0.03 },
+  },
+  mid: {
+    label: 'Mid (Balanced)',
+    color: 'orange',
+    momentum: { leverage: 15, allocation: 0.22, stopLossPercent: 0.40, trailingTpPercent: 0.50, maxConcurrentPositions: 2, atrFilterMin: 0.0018, volumeMultiplier: 1.6 },
+    risk: { maxDailyLoss: 0.10, maxRiskPerTrade: 0.04 },
+  },
+  high: {
+    label: 'High (Turbo)',
+    color: 'red',
+    momentum: { leverage: 20, allocation: 0.25, stopLossPercent: 0.30, trailingTpPercent: 0.45, maxConcurrentPositions: 2, atrFilterMin: 0.0015, volumeMultiplier: 1.5 },
+    risk: { maxDailyLoss: 0.10, maxRiskPerTrade: 0.05 },
   },
 };

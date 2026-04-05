@@ -2,11 +2,12 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   Card, Row, Col, Statistic, Button, Space, Switch, Tag, Table, InputNumber,
   Select, Input, Divider, Typography, Alert, Tooltip, Progress, Badge, message,
+  Segmented, Popconfirm,
 } from 'antd';
 import {
   PlayCircleOutlined, PauseCircleOutlined, StopOutlined,
   ThunderboltOutlined, RocketOutlined, DollarOutlined,
-  ReloadOutlined, SettingOutlined, SaveOutlined,
+  ReloadOutlined, SettingOutlined, SaveOutlined, ControlOutlined,
 } from '@ant-design/icons';
 import axios from 'axios';
 import { useI18n } from '../i18n';
@@ -55,15 +56,25 @@ const statusColors: Record<string, string> = {
   error: 'red',
 };
 
+const PRESET_CONFIGS = {
+  low:  { label: 'Low',  color: 'green',  momentum: { leverage: 10, allocation: 0.20, stopLossPercent: 0.50, trailingTpPercent: 0.60, maxConcurrentPositions: 2, atrFilterMin: 0.002,  volumeMultiplier: 1.8 }, risk: { maxDailyLoss: 0.08, maxRiskPerTrade: 0.03 } },
+  mid:  { label: 'Mid',  color: 'orange', momentum: { leverage: 15, allocation: 0.22, stopLossPercent: 0.40, trailingTpPercent: 0.50, maxConcurrentPositions: 2, atrFilterMin: 0.0018, volumeMultiplier: 1.6 }, risk: { maxDailyLoss: 0.10, maxRiskPerTrade: 0.04 } },
+  high: { label: 'High', color: 'red',    momentum: { leverage: 20, allocation: 0.25, stopLossPercent: 0.30, trailingTpPercent: 0.45, maxConcurrentPositions: 2, atrFilterMin: 0.0015, volumeMultiplier: 1.5 }, risk: { maxDailyLoss: 0.10, maxRiskPerTrade: 0.05 } },
+} as const;
+type PresetMode = keyof typeof PRESET_CONFIGS;
+
 const DEFAULT_CONFIG = {
   exchange: 'mexc',
-  apiKeyName: 'razgon_mexc',
+  apiKeyName: 'BTDD_MEX_1',
+  apiKeys: [{ name: 'BTDD_MEX_1', exchange: 'mexc', enabled: true, startBalancePct: 0.9, label: 'MEXC Main' }] as Array<{ name: string; exchange: string; enabled: boolean; startBalancePct: number; label?: string }>,
   startBalance: 40,
+  startBalancePct: 0,
+  presetMode: 'high' as PresetMode,
   momentum: {
-    enabled: true, allocation: 0.60, leverage: 25, marginType: 'isolated' as const,
-    donchianPeriod: 15, volumeMultiplier: 2.0, trailingTpPercent: 0.3,
-    stopLossPercent: 0.2, maxPositionTimeSec: 900, tickIntervalSec: 5,
-    maxConcurrentPositions: 3, atrFilterMin: 0.005,
+    enabled: true, allocation: 0.25, leverage: 20, marginType: 'isolated' as const,
+    donchianPeriod: 5, volumeMultiplier: 1.5, trailingTpPercent: 0.45,
+    stopLossPercent: 0.30, maxPositionTimeSec: 900, tickIntervalSec: 5,
+    maxConcurrentPositions: 2, atrFilterMin: 0.0015,
     watchlist: ['PEPEUSDT', 'WIFUSDT', 'SUIUSDT', 'DOGEUSDT', 'SOLUSDT', 'ARBUSDT', 'ORDIUSDT'],
   },
   sniper: {
@@ -77,7 +88,7 @@ const DEFAULT_CONFIG = {
     stopLossPercent: 3, scanIntervalSec: 14400,
   },
   risk: {
-    maxRiskPerTrade: 0.05, maxDailyLoss: 0.20,
+    maxRiskPerTrade: 0.05, maxDailyLoss: 0.10,
     rescaleThreshold: 0.25, noAveragingDown: true, forceIsolatedMargin: true,
   },
   withdraw: {
@@ -96,6 +107,34 @@ export default function Razgon() {
   const [showPositions, setShowPositions] = useState(false);
   const [posAutoRefresh, setPosAutoRefresh] = useState(false);
   const posRefreshRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [keyBalances, setKeyBalances] = useState<Array<{ name: string; exchange: string; label?: string; enabled: boolean; balance: number; equity: number }>>([]);
+
+  const fetchKeyBalances = useCallback(async () => {
+    try {
+      const res = await axios.get(`${API}/key-balances`);
+      setKeyBalances(Array.isArray(res.data) ? res.data : []);
+    } catch { /* ignore */ }
+  }, []);
+
+  const applyPreset = useCallback((mode: PresetMode) => {
+    const p = PRESET_CONFIGS[mode];
+    setConfig(c => ({
+      ...c,
+      presetMode: mode,
+      momentum: { ...c.momentum, ...p.momentum },
+      risk: { ...c.risk, ...p.risk },
+    }));
+  }, []);
+
+  const handleKeyToggle = async (keyName: string, enabled: boolean) => {
+    try {
+      await axios.post(`${API}/key-toggle`, { name: keyName, enabled });
+      setConfig(c => ({ ...c, apiKeys: (c.apiKeys ?? []).map(k => k.name === keyName ? { ...k, enabled } : k) }));
+      message.success(`Ключ ${keyName} ${enabled ? 'включён' : 'выключён'}`);
+    } catch (e: any) {
+      message.error(e.response?.data?.error || 'Ошибка');
+    }
+  };
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchStatus = useCallback(async () => {
@@ -123,8 +162,8 @@ export default function Razgon() {
   const fetchConfig = useCallback(async () => {
     try {
       const res = await axios.get(`${API}/config`);
-      if (res.data && typeof res.data === 'object' && res.data.apiKeyName) {
-        setConfig(res.data);
+      if (res.data && typeof res.data === 'object') {
+        setConfig(c => ({ ...c, ...res.data }));
       }
     } catch { /* ignore */ }
   }, []);
@@ -132,6 +171,7 @@ export default function Razgon() {
   useEffect(() => {
     fetchStatus();
     fetchConfig();
+    fetchKeyBalances();
     axios.get('/api/api-keys').then(r => {
       const keys = Array.isArray(r.data) ? r.data as ApiKeyRecord[] : [];
       setApiKeys(keys);
@@ -139,6 +179,13 @@ export default function Razgon() {
     pollRef.current = setInterval(fetchStatus, 3000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchStatus, fetchConfig]);
+
+  // Sync presetMode from loaded config
+  useEffect(() => {
+    if (config.presetMode && PRESET_CONFIGS[config.presetMode as PresetMode]) {
+      // config already loaded with preset values, no override needed
+    }
+  }, [config.presetMode]);
 
   // Positions auto-refresh (slow, 30s)
   useEffect(() => {
@@ -544,35 +591,104 @@ export default function Razgon() {
             </Row>
           </Card>
         </Col>
-        <Col xs={24} lg={12}>
-          <Card title="Подключение" size="small">
-            <Row gutter={[8, 8]}>
+        <Col xs={24} lg={12}>          <Card title={<><ControlOutlined /> Подключение & Режим</>} size="small">
+            {/* Preset Switcher */}
+            <div style={{ marginBottom: 12 }}>
+              <Text type="secondary" style={{ display: 'block', marginBottom: 4 }}>Режим риска</Text>
+              <Segmented
+                value={config.presetMode ?? 'high'}
+                onChange={v => applyPreset(v as PresetMode)}
+                disabled={isRunning}
+                options={[
+                  { label: <Tag color="green">○ Low</Tag>, value: 'low' },
+                  { label: <Tag color="orange">● Mid</Tag>, value: 'mid' },
+                  { label: <Tag color="red">⚡ High</Tag>, value: 'high' },
+                ]}
+                style={{ width: '100%' }}
+              />
+            </div>
+            {/* API Keys */}
+            <div style={{ marginBottom: 8 }}>
+              <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                <Text type="secondary">Ключи API</Text>
+                <Button size="small" icon={<ReloadOutlined />} onClick={fetchKeyBalances}>Балансы</Button>
+              </Space>
+            </div>
+            {(config.apiKeys ?? []).map(k => (
+              <div key={k.name} style={{ marginBottom: 6, padding: '6px 8px', background: '#1a1a2e', borderRadius: 6 }}>
+                <Row align="middle" gutter={8}>
+                  <Col flex="auto">
+                    <Text strong style={{ fontSize: 12 }}>{k.label ?? k.name}</Text>
+                    <Tag color="blue" style={{ marginLeft: 4, fontSize: 10 }}>{k.exchange.toUpperCase()}</Tag>
+                    {keyBalances.find(b => b.name === k.name) && (
+                      <Text type="secondary" style={{ fontSize: 11, marginLeft: 4 }}>
+                        ${keyBalances.find(b => b.name === k.name)?.equity.toFixed(2)}
+                      </Text>
+                    )}
+                  </Col>
+                  <Col>
+                    <Text type="secondary" style={{ fontSize: 10, marginRight: 4 }}>
+                      {Math.round((k.startBalancePct ?? 0.9) * 100)}%
+                    </Text>
+                    {k.enabled ? (
+                      <Popconfirm
+                        title="Выключить ключ?"
+                        description="Закрыть позиции и отменить ордера?"
+                        onConfirm={() => handleKeyToggle(k.name, false)}
+                        okText="Да, выключить" cancelText="Отмена"
+                      >
+                        <Switch size="small" checked={true} />
+                      </Popconfirm>
+                    ) : (
+                      <Switch size="small" checked={false} onChange={v => v && handleKeyToggle(k.name, true)} />
+                    )}
+                  </Col>
+                </Row>
+              </div>
+            ))}
+            {/* Add new key */}
+            <Select
+              style={{ width: '100%', marginTop: 8 }}
+              placeholder="+ Добавить API ключ"
+              size="small"
+              value={undefined}
+              onChange={(v: string) => {
+                const key = apiKeys.find(k => k.name === v);
+                if (!key) return;
+                const already = (config.apiKeys ?? []).some(k => k.name === v);
+                if (already) { message.info('Ключ уже добавлен'); return; }
+                setConfig(c => ({
+                  ...c,
+                  apiKeyName: c.apiKeyName || v,
+                  apiKeys: [...(c.apiKeys ?? []), { name: v, exchange: key.exchange?.toLowerCase() || 'mexc', enabled: true, startBalancePct: 0.9, label: `${key.exchange?.toUpperCase()} ${v}` }],
+                }));
+              }}
+              options={apiKeys.filter(k => !(config.apiKeys ?? []).some(ck => ck.name === k.name)).map(k => ({ value: k.name, label: `${k.name} (${k.exchange})` }))}
+              disabled={isRunning}
+              showSearch
+              notFoundContent="Нет ключей. Добавьте в Настройках."
+            />
+            <Row gutter={8} style={{ marginTop: 8 }}>
               <Col span={12}>
-                <Text type="secondary">API ключ (биржа)</Text>
-                <Select
-                  value={apiKeys.some(k => k.name === config.apiKeyName) ? config.apiKeyName : undefined}
-                  style={{ width: '100%' }}
-                  onChange={v => {
-                    const key = apiKeys.find(k => k.name === v);
-                    setConfig(c => ({ ...c, apiKeyName: v, exchange: key?.exchange?.toLowerCase() || c.exchange }));
-                  }}
+                <Text type="secondary" style={{ fontSize: 11 }}>Старт. бал. % (от аккаунта)</Text>
+                <InputNumber
+                  min={0} max={100} step={5}
+                  value={Math.round((config.startBalancePct ?? 0) * 100)}
+                  size="small" style={{ width: '100%' }}
+                  formatter={v => `${v}%`}
+                  parser={v => Number((v ?? '0').replace('%', ''))}
+                  onChange={v => setConfig(c => ({ ...c, startBalancePct: (v ?? 0) / 100 }))}
                   disabled={isRunning}
-                  options={apiKeys.map(k => ({ value: k.name, label: `${k.name} (${k.exchange})` }))}
-                  showSearch
-                  placeholder="— Выберите API ключ —"
-                  notFoundContent="Нет ключей. Добавьте в Настройках."
                 />
               </Col>
-              <Col span={6}>
-                <Text type="secondary">Биржа</Text>
-                <Input value={(config.exchange || '').toUpperCase()} size="small" readOnly
-                  style={{ background: '#1a1a2e' }} />
-              </Col>
-              <Col span={6}>
-                <Text type="secondary">Стартовый баланс</Text>
-                <InputNumber min={1} value={config.startBalance} size="small" style={{ width: '100%' }}
+              <Col span={12}>
+                <Text type="secondary" style={{ fontSize: 11 }}>Старт. бал. USDT (если % = 0)</Text>
+                <InputNumber
+                  min={1} value={config.startBalance}
+                  size="small" style={{ width: '100%' }}
                   onChange={v => setConfig(c => ({ ...c, startBalance: v ?? 40 }))}
-                  disabled={isRunning} />
+                  disabled={isRunning || (config.startBalancePct ?? 0) > 0}
+                />
               </Col>
             </Row>
           </Card>
