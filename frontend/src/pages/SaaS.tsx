@@ -10210,11 +10210,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         <Row gutter={[12, 12]}>
                                           <Col xs={24} md={8}>
                                             <Text strong>{copy.chooseTenant}</Text>
+                                            <div style={{ marginTop: 4, marginBottom: 4 }}>
+                                              <Segmented
+                                                size="small"
+                                                value={algofundTenantStatus}
+                                                onChange={(v) => setAlgofundTenantStatus(String(v))}
+                                                options={[
+                                                  { label: 'Активные', value: 'active' },
+                                                  { label: 'Стоп', value: 'standby' },
+                                                  { label: 'Все', value: 'all' },
+                                                ]}
+                                              />
+                                            </div>
                                             <Select
-                                              style={{ width: '100%', marginTop: 8 }}
+                                              style={{ width: '100%', marginTop: 4 }}
                                               value={algofundTenantId ?? undefined}
                                               onChange={(value) => setAlgofundTenantId(Number(value))}
-                                              options={algofundTenants.map((item) => ({ value: item.tenant.id, label: `${item.tenant.display_name} (${item.tenant.slug})` }))}
+                                              options={algofundTenants
+                                                .filter((item) => {
+                                                  if (algofundTenantStatus === 'all') return true;
+                                                  const enabled = !!item.algofundProfile?.actual_enabled;
+                                                  return algofundTenantStatus === 'active' ? enabled : !enabled;
+                                                })
+                                                .map((item) => ({ value: item.tenant.id, label: `${item.tenant.display_name} (${item.tenant.slug})` }))}
                                             />
                                           </Col>
                                           <Col xs={24} md={8}>

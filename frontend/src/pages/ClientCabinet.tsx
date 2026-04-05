@@ -1071,7 +1071,7 @@ const ClientCabinet: React.FC = () => {
           <Row gutter={[8, 8]}>
             {algofundAvailableSystems.map((system) => {
               const isCurrent = algofundPublishedSystemName.length > 0 && String(system?.name || '').trim() === algofundPublishedSystemName;
-              const snap = (system as any).backtestSnapshot as { equityPoints?: number[]; periodDays?: number; ret?: number; dd?: number } | null;
+              const snap = (system as any).backtestSnapshot as { equityPoints?: number[]; periodDays?: number; ret?: number; dd?: number; pf?: number; trades?: number } | null;
               const eqPts = snap?.equityPoints;
               return (
                 <Col xs={24} sm={12} md={8} xl={6} key={String(system?.id || system?.name || Math.random())}>
@@ -1083,17 +1083,20 @@ const ClientCabinet: React.FC = () => {
                   >
                     <Typography.Text strong style={{ fontSize: 12 }}>{tsDisplayName(system.name)}</Typography.Text>
                     {isCurrent ? <Tag color="gold" style={{ marginLeft: 4, fontSize: 10 }}>Подключена</Tag> : null}
-                    <div style={{ marginTop: 4 }}>
-                      <Space size={4} wrap>
-                        {snap?.ret != null ? <Tag color="green" style={{ fontSize: 11 }}>{formatPercent(snap.ret)}</Tag> : null}
-                        {snap?.dd != null ? <Tag color="orange" style={{ fontSize: 11 }}>DD {formatPercent(snap.dd)}</Tag> : null}
-                      </Space>
-                    </div>
                     {Array.isArray(eqPts) && eqPts.length > 1 ? (
                       <div style={{ height: 60, marginTop: 4 }}>
                         <ChartComponent data={equityPointsToSeries(eqPts, snap?.periodDays)} type="line" />
                       </div>
                     ) : null}
+                    {snap ? (
+                      <Row gutter={[4, 0]} style={{ marginTop: 4 }}>
+                        <Col span={12}><Statistic title="Доход" value={formatPercent(snap.ret ?? 0)} valueStyle={{ fontSize: 12, color: (snap.ret ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }} /></Col>
+                        <Col span={12}><Statistic title="DD" value={formatPercent(snap.dd ?? 0)} valueStyle={{ fontSize: 12, color: '#ff7a45' }} /></Col>
+                      </Row>
+                    ) : null}
+                    <Typography.Text type="secondary" style={{ fontSize: 10, marginTop: 2, display: 'block' }}>
+                      📊 Нажмите для настройки
+                    </Typography.Text>
                   </Card>
                 </Col>
               );
@@ -1217,7 +1220,11 @@ const ClientCabinet: React.FC = () => {
                                 type="line"
                               />
                             </div>
-                          ) : null}
+                          ) : (
+                            <div style={{ height: 80, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
+                              <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
+                            </div>
+                          )}
                           {snap ? (
                             <Row gutter={[4, 0]}>
                               <Col span={12}><Statistic title="Доход" value={formatPercent(previewSummary?.totalReturnPercent ?? snap.ret)} valueStyle={{ fontSize: 12, color: (previewSummary?.totalReturnPercent ?? snap.ret) >= 0 ? '#52c41a' : '#ff4d4f' }} /></Col>
@@ -1296,6 +1303,7 @@ const ClientCabinet: React.FC = () => {
                         step={0.05}
                         value={algofundRiskMultiplier}
                         onChange={(v) => setAlgofundRiskMultiplier(Math.min(toFinite(v), toFinite(algofundWorkspace.plan?.risk_cap_max, 1)))}
+                        onAfterChange={() => void refreshAlgofundState()}
                       />
                       <Space wrap>
                         <Button type="primary" size="small" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>

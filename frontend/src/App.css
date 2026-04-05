@@ -281,6 +281,14 @@ code {
   font-size: 12px;
 }
 
+.ant-typography.ant-typography-secondary {
+  color: var(--btdd-text-secondary) !important;
+}
+
+.ant-typography {
+  color: var(--btdd-text-primary);
+}
+
 .ant-statistic-content {
   color: var(--btdd-text-primary) !important;
 }
