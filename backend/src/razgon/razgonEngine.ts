@@ -215,8 +215,11 @@ export async function startRazgon(cfg: RazgonConfig): Promise<{ ok: boolean; err
     const usdtBal = balances.find(b => b.coin === 'USDT');
     const totalEquity = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
     const available = usdtBal ? parseFloat(usdtBal.availableBalance) : 0;
-    // Apply startBalancePct if set (e.g. 0.9 = use 90% of account)
-    const equity = config.startBalancePct > 0 ? totalEquity * config.startBalancePct : (cfg.startBalance || totalEquity);
+    // Apply startBalancePct: per-key overrides global (e.g. 0.9 = use 90% of account)
+    const keyPct = primaryKey?.startBalancePct ?? 0;
+    const globalPct = config.startBalancePct ?? 0;
+    const effectivePct = keyPct > 0 ? keyPct : globalPct;
+    const equity = effectivePct > 0 ? totalEquity * effectivePct : (cfg.startBalance || totalEquity);
     balance = equity;
 
     if (equity < 1) {

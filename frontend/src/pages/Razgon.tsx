@@ -627,9 +627,19 @@ export default function Razgon() {
                     )}
                   </Col>
                   <Col>
-                    <Text type="secondary" style={{ fontSize: 10, marginRight: 4 }}>
-                      {Math.round((k.startBalancePct ?? 0.9) * 100)}%
-                    </Text>
+                    <InputNumber
+                      min={10} max={100} step={10}
+                      value={Math.round((k.startBalancePct ?? 0.9) * 100)}
+                      size="small"
+                      style={{ width: 60 }}
+                      formatter={v => `${v}%`}
+                      parser={v => Number((v ?? '90').replace('%', ''))}
+                      onChange={v => setConfig(c => ({
+                        ...c,
+                        apiKeys: (c.apiKeys ?? []).map(ak => ak.name === k.name ? { ...ak, startBalancePct: (v ?? 90) / 100 } : ak),
+                      }))}
+                      disabled={isRunning}
+                    />
                     {k.enabled ? (
                       <Popconfirm
                         title="Выключить ключ?"
@@ -668,29 +678,18 @@ export default function Razgon() {
               showSearch
               notFoundContent="Нет ключей. Добавьте в Настройках."
             />
-            <Row gutter={8} style={{ marginTop: 8 }}>
-              <Col span={12}>
-                <Text type="secondary" style={{ fontSize: 11 }}>Старт. бал. % (от аккаунта)</Text>
-                <InputNumber
-                  min={0} max={100} step={5}
-                  value={Math.round((config.startBalancePct ?? 0) * 100)}
-                  size="small" style={{ width: '100%' }}
-                  formatter={v => `${v}%`}
-                  parser={v => Number((v ?? '0').replace('%', ''))}
-                  onChange={v => setConfig(c => ({ ...c, startBalancePct: (v ?? 0) / 100 }))}
-                  disabled={isRunning}
-                />
-              </Col>
-              <Col span={12}>
-                <Text type="secondary" style={{ fontSize: 11 }}>Старт. бал. USDT (если % = 0)</Text>
-                <InputNumber
-                  min={1} value={config.startBalance}
-                  size="small" style={{ width: '100%' }}
-                  onChange={v => setConfig(c => ({ ...c, startBalance: v ?? 40 }))}
-                  disabled={isRunning || (config.startBalancePct ?? 0) > 0}
-                />
-              </Col>
-            </Row>
+            <div style={{ marginTop: 8, padding: '6px 8px', background: '#1a1a2e', borderRadius: 6 }}>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                % от счёта задаётся для каждого ключа выше. Если % = 0 — укажите фикс. USDT:
+              </Text>
+              <InputNumber
+                min={0} value={config.startBalance}
+                size="small" style={{ width: '100%', marginTop: 4 }}
+                addonAfter="USDT"
+                onChange={v => setConfig(c => ({ ...c, startBalance: v ?? 0 }))}
+                disabled={isRunning}
+              />
+            </div>
           </Card>
         </Col>
       </Row>
