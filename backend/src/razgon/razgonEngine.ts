@@ -371,7 +371,25 @@ async function momentumTick(): Promise<void> {
   const momPositions = openPositions.filter(p => p.subStrategy === 'momentum');
   if (momPositions.length >= cfg.maxConcurrentPositions) return;
 
+  // FIX 1: Check available balance from exchange before attempting entries
+  let availableBalance = 0;
+  try {
+    const bals = await getBalances(config.apiKeyName);
+    const usdtBal = bals.find(b => b.coin === 'USDT');
+    availableBalance = usdtBal ? parseFloat(usdtBal.availableBalance) : 0;
+  } catch (e) {
+    logger.debug(`[Razgon] Available balance check failed: ${(e as Error).message}`);
+  }
+  const minMarginNeeded = balance * 0.02; // at least 2% of balance free
+  if (availableBalance < minMarginNeeded) {
+    if (momentumTickCount % 12 === 1) {
+      logger.info(`[Razgon:Momentum] Skipping entries: available=$${availableBalance.toFixed(2)} < min=$${minMarginNeeded.toFixed(2)}`);
+    }
+    return;
+  }
+
   // Batch-fetch all watchlist candles in parallel via exchange batch utility
+  // FIX 2: skip symbols where we already have ANY position (avoid opposite/duplicate)
   const candidates = cfg.watchlist.filter(
     sym => !openPositions.some(p => p.symbol === sym),
   );
@@ -431,6 +449,12 @@ async function checkMomentumEntryFromCandles(symbol: string, candles: Candle1m[]
 
   const side = result.signal;
   const entryPrice = latestCandle.close;
+
+  // FIX 2b: double-check no existing position on this symbol (any side)
+  if (openPositions.some(p => p.symbol === symbol)) {
+    logger.debug(`[Razgon:Momentum] Skip ${symbol}: already have position`);
+    return;
+  }
 
   // Position sizing
   const margin = riskManager.computeMargin(

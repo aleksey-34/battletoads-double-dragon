@@ -80,6 +80,38 @@ export function normalisedATR(candles: Candle1m[], period: number = 14): number 
   return lastClose > 0 ? atr / lastClose : 0;
 }
 
+// ── EMA Trend Filter ──────────────────────────────────────────────────────
+
+/**
+ * Compute EMA of close prices.
+ */
+export function computeEMA(candles: Candle1m[], period: number): number[] {
+  if (candles.length === 0) return [];
+  const k = 2 / (period + 1);
+  const ema: number[] = [candles[0].close];
+  for (let i = 1; i < candles.length; i++) {
+    ema.push(candles[i].close * k + ema[i - 1] * (1 - k));
+  }
+  return ema;
+}
+
+/**
+ * Determine trend direction from EMA slope over last `lookback` bars.
+ * Returns 'up' | 'down' | 'flat'.
+ * Flat if slope < threshold (default 0.02% per bar).
+ */
+export function emaTrend(candles: Candle1m[], period: number = 20, lookback: number = 5, flatThreshold: number = 0.0002): 'up' | 'down' | 'flat' {
+  const ema = computeEMA(candles, period);
+  if (ema.length < lookback + 1) return 'flat';
+  const recent = ema[ema.length - 1];
+  const past = ema[ema.length - 1 - lookback];
+  if (past <= 0) return 'flat';
+  const slope = (recent - past) / past;
+  if (slope > flatThreshold) return 'up';
+  if (slope < -flatThreshold) return 'down';
+  return 'flat';
+}
+
 // ── Main Signal Generator ────────────────────────────────────────────────
 
 /**
@@ -163,6 +195,18 @@ export function computeMomentumSignal(
     result.signal = 'long';
   } else if (volOk && nearLow) {
     result.signal = 'short';
+  }
+
+  // FIX 3: EMA trend filter — don't trade against the trend, skip flat
+  if (result.signal !== 'none') {
+    const trend = emaTrend(closedCandles, 20, 5, 0.0002);
+    if (trend === 'flat') {
+      result.signal = 'none'; // no clear trend → skip
+    } else if (result.signal === 'long' && trend === 'down') {
+      result.signal = 'none'; // don't long in downtrend
+    } else if (result.signal === 'short' && trend === 'up') {
+      result.signal = 'none'; // don't short in uptrend
+    }
   }
 
   return result;
