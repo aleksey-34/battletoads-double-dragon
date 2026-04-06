@@ -1,6 +1,6 @@
 import fs from 'fs';
 import { getDbFilePath, db as mainDb } from '../utils/database';
-import { loadCatalogAndSweepWithFallback, refreshOfferStoreSnapshotsFromSweep } from '../saas/service';
+import { loadCatalogAndSweepWithFallback, refreshOfferStoreSnapshotsFromSweep, syncAllTenantStrategyMaxDeposit } from '../saas/service';
 import logger from '../utils/logger';
 import { getResearchDb, getResearchDbFilePath } from './db';
 import { importSweepCandidates, registerSweepRun } from './profileService';
@@ -314,6 +314,14 @@ const runDailyIncrementalSweep = async (): Promise<{ status: SchedulerStatus; de
     logger.info(`[researchScheduler] Auto snapshot refresh: ok=${snapshotResult.ok}, skipped=${snapshotResult.skipped}, systems=${snapshotResult.systemsUpdated}`);
   } catch (err) {
     logger.error(`[researchScheduler] Auto snapshot refresh failed: ${(err as Error).message}`);
+  }
+
+  // Auto-sync strategy max_deposit from subscription plans
+  try {
+    const syncResult = await syncAllTenantStrategyMaxDeposit();
+    logger.info(`[researchScheduler] Auto max_deposit sync: updated=${syncResult.updated}, checked=${syncResult.checked}, errors=${syncResult.errors.length}`);
+  } catch (err) {
+    logger.error(`[researchScheduler] Auto max_deposit sync failed: ${(err as Error).message}`);
   }
 
   return {

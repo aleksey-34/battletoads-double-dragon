@@ -5683,6 +5683,60 @@ const resolveTsSnapshotKeyBySystemName = (
   return String(exactKey || '').trim();
 };
 
+export const syncAllTenantStrategyMaxDeposit = async (): Promise<{ updated: number; checked: number; errors: string[] }> => {
+  const errors: string[] = [];
+  let updated = 0;
+  let checked = 0;
+
+  const tenants = (await db.all('SELECT * FROM tenants WHERE status = ?', ['active'])) as TenantRow[];
+
+  for (const tenant of tenants) {
+    try {
+      const plan = await getPlanForTenant(tenant.id);
+      if (!plan || !plan.max_deposit_total || plan.max_deposit_total <= 0) continue;
+
+      const planMaxDeposit = Math.max(50, plan.max_deposit_total);
+
+      // Determine API key name based on product mode
+      let apiKeyName = '';
+      if (tenant.product_mode === 'algofund_client') {
+        const profile = await getAlgofundProfile(tenant.id);
+        if (profile) {
+          apiKeyName = getAlgofundExecutionApiKeyName(tenant, profile);
+        }
+      } else if (tenant.product_mode === 'strategy_client') {
+        apiKeyName = asString(tenant.assigned_api_key_name, '');
+      }
+
+      if (!apiKeyName) continue;
+
+      const staleRows = await db.all(
+        `SELECT s.id, s.max_deposit
+         FROM strategies s
+         JOIN api_keys ak ON ak.id = s.api_key_id
+         WHERE ak.name = ? AND s.is_runtime = 1 AND s.is_archived = 0 AND s.max_deposit != ?`,
+        [apiKeyName, planMaxDeposit]
+      ) as Array<{ id: number; max_deposit: number }>;
+
+      checked += 1;
+
+      for (const row of staleRows) {
+        await db.run('UPDATE strategies SET max_deposit = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [planMaxDeposit, row.id]);
+        updated += 1;
+      }
+
+      if (staleRows.length > 0) {
+        logger.info(`[syncMaxDeposit] ${tenant.slug}: updated ${staleRows.length} strategies max_deposit ${staleRows[0].max_deposit} -> ${planMaxDeposit}`);
+      }
+    } catch (err) {
+      errors.push(`${tenant.slug}: ${(err as Error).message}`);
+    }
+  }
+
+  logger.info(`[syncMaxDeposit] done: checked=${checked} updated=${updated} errors=${errors.length}`);
+  return { updated, checked, errors };
+};
+
 export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
   force?: boolean;
   reason?: string;
