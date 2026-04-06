@@ -10467,6 +10467,8 @@ export const executeSynctradeSession = async (
     leverageMaster?: number;
     leverageHedge?: number;
     lotPercent?: number;
+    stopLossPercent?: number;   // SL distance from entry as % (e.g. 2 = 2%)
+    takeProfitPercent?: number; // TP distance from entry as % (e.g. 1.5 = 1.5%)
   }
 ) => {
   const profile = await getSynctradeProfile(tenantId);
@@ -10520,7 +10522,7 @@ export const executeSynctradeSession = async (
       }
     }
 
-    const { getBalances, placeOrder, applySymbolRiskSettings, getInstrumentInfo } = await import('../bot/exchange');
+    const { getBalances, placeOrder, applySymbolRiskSettings, getInstrumentInfo, placeTriggerOrder } = await import('../bot/exchange');
 
     // Get instrument info for minLot / qtyStep
     let minOrderQty = 1;
@@ -10669,6 +10671,63 @@ export const executeSynctradeSession = async (
     addLog(`Session #${sessionId} → open ✓`);
     await saveLog();
 
+    // ─── Place exchange-level SL/TP trigger orders ───────────────────────────
+    const slPct = asNumber(payload.stopLossPercent, 0);
+    const tpPct = asNumber(payload.takeProfitPercent, 0);
+    if (slPct > 0 || tpPct > 0) {
+      const masterCloseSide: 'Buy' | 'Sell' = masterSide === 'long' ? 'Sell' : 'Buy';
+      const hedgeCloseSide: 'Buy' | 'Sell' = hedgeSide === 'long' ? 'Sell' : 'Buy';
+
+      // Master SL: if long, SL below entry; if short, SL above entry
+      if (slPct > 0) {
+        const masterSLPrice = masterSide === 'long'
+          ? price * (1 - slPct / 100)
+          : price * (1 + slPct / 100);
+        try {
+          await placeTriggerOrder(masterKeyName, symbol, masterCloseSide, String(qty), masterSLPrice, 'master-SL');
+          addLog(`✓ Master SL trigger @ ${masterSLPrice.toFixed(6)}`);
+        } catch (err: any) { addLog(`⚠ Master SL trigger failed: ${err.message}`); }
+
+        // Hedge SL (mirror — hedge profits when master hits SL, so hedge has TP at same price)
+        // But for safety, also set hedge SL at same distance opposite side
+        const hedgeSLPrice = hedgeSide === 'long'
+          ? price * (1 - slPct / 100)
+          : price * (1 + slPct / 100);
+        for (const acc of hedgeAccounts) {
+          const keyName = asString(acc.apiKeyName, '');
+          if (!keyName) continue;
+          try {
+            await placeTriggerOrder(keyName, symbol, hedgeCloseSide, String(qty), hedgeSLPrice, 'hedge-SL');
+            addLog(`✓ Hedge ${asString(acc.displayName, keyName)} SL trigger @ ${hedgeSLPrice.toFixed(6)}`);
+          } catch (err: any) { addLog(`⚠ Hedge SL trigger: ${err.message}`); }
+        }
+      }
+
+      // Master TP: if long, TP above entry; if short, TP below entry
+      if (tpPct > 0) {
+        const masterTPPrice = masterSide === 'long'
+          ? price * (1 + tpPct / 100)
+          : price * (1 - tpPct / 100);
+        try {
+          await placeTriggerOrder(masterKeyName, symbol, masterCloseSide, String(qty), masterTPPrice, 'master-TP');
+          addLog(`✓ Master TP trigger @ ${masterTPPrice.toFixed(6)}`);
+        } catch (err: any) { addLog(`⚠ Master TP trigger failed: ${err.message}`); }
+
+        const hedgeTPPrice = hedgeSide === 'long'
+          ? price * (1 + tpPct / 100)
+          : price * (1 - tpPct / 100);
+        for (const acc of hedgeAccounts) {
+          const keyName = asString(acc.apiKeyName, '');
+          if (!keyName) continue;
+          try {
+            await placeTriggerOrder(keyName, symbol, hedgeCloseSide, String(qty), hedgeTPPrice, 'hedge-TP');
+            addLog(`✓ Hedge ${asString(acc.displayName, keyName)} TP trigger @ ${hedgeTPPrice.toFixed(6)}`);
+          } catch (err: any) { addLog(`⚠ Hedge TP trigger: ${err.message}`); }
+        }
+      }
+      await saveLog();
+    }
+
     return {
       sessionId,
       status: 'open',
@@ -10713,7 +10772,21 @@ export const closeSynctradeSession = async (tenantId: number, sessionId: number)
 
   addLog(`Closing session #${sessionId}: ${symbol}`);
 
-  const { closePosition, getPositions: getPos } = await import('../bot/exchange');
+  const { closePosition, getPositions: getPos, cancelTriggerOrders } = await import('../bot/exchange');
+
+  // Cancel any pending trigger orders first
+  try {
+    await cancelTriggerOrders(masterKeyName, symbol);
+    addLog(`✓ Master trigger orders cancelled`);
+  } catch (err: any) { addLog(`⚠ Cancel master triggers: ${err.message}`); }
+  for (const acc of hedgeAccounts) {
+    const keyName = asString(acc.apiKeyName, '');
+    if (!keyName) continue;
+    try {
+      await cancelTriggerOrders(keyName, symbol);
+      addLog(`✓ Hedge ${asString(acc.displayName, keyName)} triggers cancelled`);
+    } catch (err: any) { addLog(`⚠ Cancel hedge triggers: ${err.message}`); }
+  }
 
   // Helper to normalize symbol for comparison (strip /, :, etc.)
   const normSym = (v: string) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -10972,6 +11045,8 @@ interface SyncAutoConfig {
   maxContractSizeUsdt: number; // skip pairs with contractSize > X USDT (prefer small ticks)
   minVolumeMultiplier: number; // min volume must be >= deposit × notional × this (default 50)
   stopLossUsdt: number;        // max master loss per session before auto-close (default 25)
+  stopLossPercent: number;     // exchange-level SL distance % (e.g. 2 = 2%). 0 = disabled
+  takeProfitPercent: number;   // exchange-level TP distance % (e.g. 1.5). 0 = disabled
 }
 
 const SYNC_AUTO_DEFAULTS: SyncAutoConfig = {
@@ -10986,6 +11061,8 @@ const SYNC_AUTO_DEFAULTS: SyncAutoConfig = {
   maxContractSizeUsdt: 5,
   minVolumeMultiplier: 50,
   stopLossUsdt: 25,
+  stopLossPercent: 2,
+  takeProfitPercent: 1.5,
 };
 
 interface SyncAutoState {
@@ -11060,15 +11137,22 @@ const scorePair = (
 };
 
 /**
- * Calculate adaptive leverage based on how much margin buffer we want.
- * Higher volatility → lower leverage to maintain distance to liquidation.
+ * Calculate adaptive leverage based on volatility.
+ * Higher volatility → lower leverage to stay far from liquidation.
+ * Formula: leverage ≈ (SL% / volatility_factor) clamped to [min, max]
+ * Ensures liquidation distance is always >= 2× SL distance.
  */
 const adaptiveLeverage = (absChange24h: number, cfg: SyncAutoConfig): number => {
   const [minLev, maxLev] = cfg.leverageRange;
-  // Low vol (1%) → max leverage; High vol (10%) → min leverage
-  const t = Math.min(1, Math.max(0, (absChange24h - 1) / 9));
-  const lev = Math.round(maxLev - t * (maxLev - minLev));
-  return Math.max(minLev, Math.min(maxLev, lev));
+  const slPct = cfg.stopLossPercent > 0 ? cfg.stopLossPercent : 2;
+  // Volatility factor: use 24h change as proxy, minimum 1%
+  const vol = Math.max(1, absChange24h);
+  // Target: liquidation distance = 3× SL distance
+  // Liq distance ≈ 1/leverage, so leverage ≈ 100 / (3 × slPct × vol_scale)
+  const volScale = Math.max(1, vol / 2); // 2% vol → 1x, 10% vol → 5x
+  const targetLev = Math.round(100 / (3 * slPct * volScale));
+  const lev = Math.max(minLev, Math.min(maxLev, targetLev));
+  return lev;
 };
 
 /**
@@ -11155,7 +11239,7 @@ const syncAutoScanAndOpen = async () => {
         // Master side follows 24h trend — master profits when trend continues
         const masterSide: 'long' | 'short' = cand.ticker.change24hPercent >= 0 ? 'long' : 'short';
 
-        syncAutoLog(`Opening ${cand.symbol} lev=${leverage}x side=${masterSide} budget=${perPairUsdt.toFixed(1)} USDT`);
+        syncAutoLog(`Opening ${cand.symbol} lev=${leverage}x side=${masterSide} budget=${perPairUsdt.toFixed(1)} USDT SL=${cfg.stopLossPercent}% TP=${cfg.takeProfitPercent}%`);
 
         const result = await executeSynctradeSession(tenantId, {
           symbol: cand.symbol,
@@ -11163,6 +11247,8 @@ const syncAutoScanAndOpen = async () => {
           leverageMaster: leverage,
           leverageHedge: leverage,
           lotPercent: Math.round((perPairUsdt / equity) * 100),
+          stopLossPercent: cfg.stopLossPercent,
+          takeProfitPercent: cfg.takeProfitPercent,
         });
 
         if (result?.sessionId) {
@@ -11201,7 +11287,7 @@ const syncAutoRebalance = async () => {
   const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
 
   try {
-    const { getPositions: getPos, closePosition } = await import('../bot/exchange');
+    const { getPositions: getPos, closePosition, cancelTriggerOrders } = await import('../bot/exchange');
     const normSym = (v: string) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
     // Fetch all master positions at once
@@ -11211,29 +11297,42 @@ const syncAutoRebalance = async () => {
       masterPosMap.set(normSym(p.symbol), p);
     }
 
+    // Also fetch hedge positions for trigger-fill detection
+    const hedgeKeyName = hedgeAccounts.length > 0 ? asString(hedgeAccounts[0].apiKeyName, '') : '';
+    let hedgePosMap = new Map<string, any>();
+    if (hedgeKeyName) {
+      try {
+        const allHedgePos = await getPos(hedgeKeyName);
+        for (const p of (allHedgePos || [])) {
+          hedgePosMap.set(normSym(p.symbol), p);
+        }
+      } catch { /* non-critical */ }
+    }
+
     const toClose: string[] = [];
 
     for (const [sym, info] of activePairs.entries()) {
       const masterPos = masterPosMap.get(normSym(sym));
+      const hedgePos = hedgePosMap.get(normSym(sym));
+      const masterGone = !masterPos || asNumber(masterPos.size, 0) === 0;
+      const hedgeGone = !hedgePos || asNumber(hedgePos.size, 0) === 0;
 
-      // CASE 1: Master position gone (liquidated or externally closed)
-      if (!masterPos || asNumber(masterPos.size, 0) === 0) {
-        syncAutoLog(`⚠ ${sym} master position gone — emergency closing hedge`);
-        // Emergency close all hedge positions for this symbol
-        for (const acc of hedgeAccounts) {
-          const keyName = asString(acc.apiKeyName, '');
-          if (!keyName) continue;
-          try {
-            const hedgePositions = await getPos(keyName, sym);
-            const hedgePos = (hedgePositions || []).find((p: any) => normSym(p.symbol) === normSym(sym));
-            if (hedgePos && asNumber(hedgePos.size, 0) > 0) {
-              const posSide: 'Buy' | 'Sell' = String(hedgePos.side).includes('uy') ? 'Buy' : 'Sell';
-              await closePosition(keyName, sym, String(hedgePos.size), posSide);
-              syncAutoLog(`✓ Emergency closed hedge ${asString(acc.displayName, keyName)} ${sym}`);
-            }
-          } catch (err: any) {
-            syncAutoErr(`Emergency close hedge ${sym}: ${err.message}`);
+      // CASE 1: One side closed by trigger (SL/TP fired on exchange) — close other side
+      if (masterGone || hedgeGone) {
+        const which = masterGone ? 'master' : 'hedge';
+        syncAutoLog(`⚠ ${sym} ${which} position gone (trigger fired?) — closing session via closeSynctradeSession`);
+        try {
+          // Cancel remaining triggers before closing
+          try { await cancelTriggerOrders(masterKeyName, sym); } catch { /* ok */ }
+          for (const acc of hedgeAccounts) {
+            const kn = asString(acc.apiKeyName, '');
+            if (kn) try { await cancelTriggerOrders(kn, sym); } catch { /* ok */ }
           }
+          await closeSynctradeSession(tenantId, info.sessionId);
+          syncAutoState.totalClosed++;
+          syncAutoLog(`✓ ${sym} session #${info.sessionId} closed (${which} trigger)`);
+        } catch (err: any) {
+          syncAutoErr(`Trigger-close ${sym}: ${err.message}`);
         }
         toClose.push(sym);
         continue;

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import { getDbFilePath, db as mainDb } from '../utils/database';
-import { loadCatalogAndSweepWithFallback } from '../saas/service';
+import { loadCatalogAndSweepWithFallback, refreshOfferStoreSnapshotsFromSweep } from '../saas/service';
 import logger from '../utils/logger';
 import { getResearchDb, getResearchDbFilePath } from './db';
 import { importSweepCandidates, registerSweepRun } from './profileService';
@@ -305,6 +305,16 @@ const runDailyIncrementalSweep = async (): Promise<{ status: SchedulerStatus; de
       }),
     ]
   );
+
+  // Auto-refresh backtest snapshots in offer store after successful daily sweep
+  try {
+    const snapshotResult = await refreshOfferStoreSnapshotsFromSweep({
+      reason: 'daily_sweep_auto',
+    });
+    logger.info(`[researchScheduler] Auto snapshot refresh: ok=${snapshotResult.ok}, skipped=${snapshotResult.skipped}, systems=${snapshotResult.systemsUpdated}`);
+  } catch (err) {
+    logger.error(`[researchScheduler] Auto snapshot refresh failed: ${(err as Error).message}`);
+  }
 
   return {
     status: 'done',

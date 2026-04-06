@@ -2387,3 +2387,75 @@ export const batchGetBalances = async (
     return { apiKeyName: apiKeyNames[i], balances: [], error: (r.reason as Error)?.message || 'unknown' };
   });
 };
+
+// ─── Trigger orders (exchange-level SL/TP) ───────────────────────────────────
+
+/**
+ * Place a trigger (stop/take-profit) order on the exchange.
+ * This order lives on the exchange and triggers independently of our server.
+ *
+ * @param triggerPrice - the price at which the order activates
+ * @param side - 'Buy' or 'Sell' (the closing side, opposite of position)
+ * @param qty - number of contracts to close
+ */
+export const placeTriggerOrder = async (
+  apiKeyName: string,
+  symbol: string,
+  side: 'Buy' | 'Sell',
+  qty: string,
+  triggerPrice: number,
+  orderTag?: string
+) => {
+  const entry = ccxtClients[apiKeyName];
+  if (!entry) throw new Error(`Client not initialized for key: ${apiKeyName}`);
+  if (!entry.client) throw new Error(`No ccxt client for key: ${apiKeyName}`);
+
+  const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
+  const amount = Number(qty);
+  const ccxtSide = side === 'Buy' ? 'buy' : 'sell';
+
+  const params: any = {
+    triggerPrice,
+    reduceOnly: true,
+  };
+
+  // MEXC-specific: use stopPrice alias  
+  if (entry.exchange === 'mexc') {
+    params.stopPrice = triggerPrice;
+  }
+
+  const order = await entry.limiter.schedule(() =>
+    entry.client.createOrder(ccxtSymbol, 'market', ccxtSide, amount, undefined, params)
+  );
+
+  logger.info(`[TriggerOrder] ${orderTag || ''} ${side} ${qty} ${symbol} @ trigger=${triggerPrice} placed`);
+  return order;
+};
+
+/**
+ * Cancel all open trigger/conditional orders for a symbol.
+ */
+export const cancelTriggerOrders = async (
+  apiKeyName: string,
+  symbol: string
+) => {
+  const entry = ccxtClients[apiKeyName];
+  if (!entry?.client) return;
+
+  const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
+  try {
+    const openOrders = await entry.limiter.schedule(() =>
+      entry.client.fetchOpenOrders(ccxtSymbol)
+    );
+    for (const order of (openOrders || [])) {
+      try {
+        await entry.limiter.schedule(() =>
+          entry.client.cancelOrder(order.id, ccxtSymbol)
+        );
+      } catch { /* order may have already triggered */ }
+    }
+    logger.info(`[TriggerOrder] Cancelled ${(openOrders || []).length} orders for ${symbol} on ${apiKeyName}`);
+  } catch (err: any) {
+    logger.warn(`[TriggerOrder] Cancel orders failed for ${symbol}: ${err.message}`);
+  }
+};
