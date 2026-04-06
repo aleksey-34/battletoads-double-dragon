@@ -2074,16 +2074,20 @@ export const executeStrategy = async (
     price: number,
     positionSize = 0,
     sourceOrderId?: string,
-    sourceSymbol?: string
+    sourceSymbol?: string,
+    entryPriceOverride?: number
   ): Promise<void> => {
     const normalizedPrice = Number.isFinite(price) && price > 0 ? price : currentRatio;
     const normalizedSize = Number.isFinite(positionSize) ? Math.max(0, Number(positionSize)) : 0;
+    const resolvedEntryPrice = tradeType === 'exit' && Number.isFinite(entryPriceOverride) && (entryPriceOverride as number) > 0
+      ? entryPriceOverride as number
+      : normalizedPrice;
     try {
       await recordLiveTradeEvent(strategyId, {
         trade_type: tradeType,
         side,
         entry_time: evaluatedBarTimeMs,
-        entry_price: normalizedPrice,
+        entry_price: resolvedEntryPrice,
         position_size: normalizedSize,
         actual_price: normalizedPrice,
         actual_time: Date.now(),
@@ -2134,6 +2138,7 @@ export const executeStrategy = async (
     action: StrategyCloseAction,
     signalSnapshot: StrategySignal
   ): Promise<void> => {
+    const exitEntryRatio = entryRatio;
     await updateStrategy(apiKeyName, strategyId, {
       ...executionBindingPatch,
       state: 'flat',
@@ -2151,7 +2156,7 @@ export const executeStrategy = async (
     mergedStrategy.tp_anchor_ratio = null;
 
     if (signalSnapshot === 'long' || signalSnapshot === 'short') {
-      await recordRuntimeTradeEvent('exit', signalSnapshot, currentRatio, 0, undefined, mergedStrategy.base_symbol);
+      await recordRuntimeTradeEvent('exit', signalSnapshot, currentRatio, 0, undefined, mergedStrategy.base_symbol, exitEntryRatio ?? undefined);
     }
   };
 

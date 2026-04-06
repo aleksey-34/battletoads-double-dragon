@@ -261,6 +261,7 @@ type TsBacktestSnapshot = {
   ret: number;
   pf: number;
   dd: number;
+  winRate: number;
   trades: number;
   tradesPerDay: number;
   periodDays: number;
@@ -1034,6 +1035,7 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
     ret: Number(asNumber(parsed.ret, 0).toFixed(3)),
     pf: Number(asNumber(parsed.pf, 0).toFixed(3)),
     dd: Number(asNumber(parsed.dd, 0).toFixed(3)),
+    winRate: Number(clampNumber(asNumber(parsed.winRate, 0), 0, 100).toFixed(2)),
     trades: Math.max(0, Math.floor(asNumber(parsed.trades, 0))),
     tradesPerDay: Number(asNumber(parsed.tradesPerDay, 0).toFixed(3)),
     periodDays: Math.max(1, Math.floor(asNumber(parsed.periodDays, 90))),
@@ -5854,6 +5856,7 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
           ret: Number(summary.totalReturnPercent || 0),
           pf: Number(summary.profitFactor || 0),
           dd: Number(summary.maxDrawdownPercent || 0),
+          winRate: Number(summary.winRatePercent || 0),
           trades: Number(summary.tradesCount || 0),
           tradesPerDay: Number(
             ((Number(summary.tradesCount || 0)) / periodDays).toFixed(3)
