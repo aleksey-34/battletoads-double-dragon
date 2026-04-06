@@ -2446,15 +2446,16 @@ export const cancelTriggerOrders = async (
   try {
     const openOrders = await entry.limiter.schedule(() =>
       entry.client.fetchOpenOrders(ccxtSymbol)
-    );
-    for (const order of (openOrders || [])) {
+    ) as any[];
+    const orderList = Array.isArray(openOrders) ? openOrders : [];
+    for (const order of orderList) {
       try {
         await entry.limiter.schedule(() =>
           entry.client.cancelOrder(order.id, ccxtSymbol)
         );
       } catch { /* order may have already triggered */ }
     }
-    logger.info(`[TriggerOrder] Cancelled ${(openOrders || []).length} orders for ${symbol} on ${apiKeyName}`);
+    logger.info(`[TriggerOrder] Cancelled ${orderList.length} orders for ${symbol} on ${apiKeyName}`);
   } catch (err: any) {
     logger.warn(`[TriggerOrder] Cancel orders failed for ${symbol}: ${err.message}`);
   }
