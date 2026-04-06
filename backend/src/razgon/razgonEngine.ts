@@ -377,7 +377,9 @@ export async function startRazgon(cfg: RazgonConfig): Promise<{ ok: boolean; err
 
   status = 'running';
   const totalBal = [...instanceMap.values()].reduce((s, i) => s + i.balance, 0);
-  logger.info(`[Razgon] Started ${instanceMap.size} instance(s). Total balance: $${totalBal.toFixed(2)}`);
+  const startMsg = `[Razgon] Started ${instanceMap.size} instance(s). Total balance: $${totalBal.toFixed(2)}`;
+  logger.info(startMsg);
+  console.log(startMsg);
   return { ok: true };
 }
 
@@ -385,6 +387,7 @@ export async function stopRazgon(): Promise<void> {
   for (const inst of instanceMap.values()) await stopInstance(inst);
   instanceMap.clear();
   status = 'stopped';
+  console.log('[Razgon] Engine stopped');
   logger.info('[Razgon] Engine stopped');
 }
 
@@ -412,7 +415,9 @@ async function momentumTick(inst: RazgonInstance): Promise<void> {
   const cfg = config.momentum;
   inst.tickCount++;
 
-  logger.info(`[Razgon:${inst.keyName}] tick #${inst.tickCount} | bal=$${inst.balance.toFixed(2)} | pos=${inst.openPositions.length}`);
+  const tickMsg = `[Razgon:${inst.keyName}] tick #${inst.tickCount} | bal=$${inst.balance.toFixed(2)} | pos=${inst.openPositions.length}`;
+  logger.info(tickMsg);
+  if (inst.tickCount % 60 === 1) console.log(tickMsg); // log to journal every ~5min
 
   // Sync equity from exchange every ~1 min (12 ticks * 5s = 60s)
   if (inst.tickCount % 12 === 0) {
@@ -517,10 +522,28 @@ async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: strin
   const side = result.signal;
   const entryPrice = latestCandle.close;
 
-  // double-check no existing position on this symbol (any side)
+  // double-check no existing position on this symbol (any side) — in-memory
   if (inst.openPositions.some(p => p.symbol === symbol)) {
-    logger.debug(`[Razgon:${inst.keyName}] Skip ${symbol}: already have position`);
+    logger.debug(`[Razgon:${inst.keyName}] Skip ${symbol}: already have in-memory position`);
     return;
+  }
+
+  // CRITICAL: also check exchange-level positions to prevent opposite positions after restarts
+  try {
+    const exchPos = await getPositions(inst.keyName);
+    const hasExchangePos = exchPos.some((ep: any) => {
+      const sz = Math.abs(Number(ep.size ?? 0));
+      const sym = String(ep.symbol ?? '').replace(/[/:]/g, '');
+      return sz > 0 && sym === symbol;
+    });
+    if (hasExchangePos) {
+      logger.warn(`[Razgon:${inst.keyName}] Skip ${symbol}: already have EXCHANGE position (not in memory)`);
+      console.log(`[Razgon:${inst.keyName}] BLOCKED opposite entry on ${symbol} — exchange position exists`);
+      return;
+    }
+  } catch (e) {
+    logger.warn(`[Razgon:${inst.keyName}] Exchange position check failed for ${symbol}, skipping entry: ${(e as Error).message}`);
+    return; // fail-safe: don't open if we can't verify
   }
 
   // Position sizing
@@ -536,7 +559,9 @@ async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: strin
   const notional = margin * cfg.leverage;
   const slPrice = inst.riskManager.computeStopLoss(entryPrice, side, cfg.stopLossPercent);
 
-  logger.info(`[Razgon:${inst.keyName}] ${side.toUpperCase()} ${symbol} @ ${entryPrice} | notional=$${notional.toFixed(0)} SL=${slPrice.toFixed(6)}`);
+  const entryMsg = `[Razgon:${inst.keyName}] ENTRY ${side.toUpperCase()} ${symbol} @ ${entryPrice} | notional=$${notional.toFixed(0)} margin=$${margin.toFixed(2)} SL=${slPrice.toFixed(6)}`;
+  logger.info(entryMsg);
+  console.log(entryMsg);
 
   try {
     await applySymbolRiskSettings(inst.keyName, symbol, cfg.marginType, cfg.leverage);
@@ -550,8 +575,11 @@ async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: strin
     };
     inst.openPositions.push(pos);
     inst.balance -= margin;
+    console.log(`[Razgon:${inst.keyName}] ORDER OK ${symbol} ${side} qty=${qty.toFixed(4)}`);
   } catch (e) {
-    logger.error(`[Razgon:${inst.keyName}] Order failed ${symbol}: ${(e as Error).message}`);
+    const errMsg = `[Razgon:${inst.keyName}] Order FAILED ${symbol}: ${(e as Error).message}`;
+    logger.error(errMsg);
+    console.error(errMsg);
   }
 }
 
@@ -763,11 +791,9 @@ function recordClose(inst: RazgonInstance, pos: RazgonPosition, exitPrice: numbe
   inst.riskManager.recordTrade(trade, inst.balance);
 
   const emoji = netPnl >= 0 ? '✅' : '❌';
-  logger.info(
-    `[Razgon:${inst.keyName}] ${emoji} ${exitReason.toUpperCase()} ${pos.side} ${pos.symbol} | ` +
-    `Entry=${pos.entryPrice.toFixed(6)} Exit=${exitPrice.toFixed(6)} | ` +
-    `PnL=${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(2)} | Balance=$${inst.balance.toFixed(2)}`,
-  );
+  const closeMsg = `[Razgon:${inst.keyName}] ${emoji} EXIT ${exitReason.toUpperCase()} ${pos.side} ${pos.symbol} | Entry=${pos.entryPrice.toFixed(6)} Exit=${exitPrice.toFixed(6)} | PnL=${netPnl >= 0 ? '+' : ''}${netPnl.toFixed(2)} fee=${fee.toFixed(2)} | Balance=$${inst.balance.toFixed(2)}`;
+  logger.info(closeMsg);
+  console.log(closeMsg);
 }
 
 async function fetchAndCache1mCandles(inst: RazgonInstance, symbol: string, minBars: number): Promise<Candle1m[]> {
