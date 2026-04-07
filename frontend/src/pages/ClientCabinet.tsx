@@ -443,6 +443,7 @@ const ClientCabinet: React.FC = () => {
   const [algofundRiskMultiplier, setAlgofundRiskMultiplier] = useState(1);
   const [algofundNote, setAlgofundNote] = useState('');
   const [systemDetailModal, setSystemDetailModal] = useState<{ name: string; id: number } | null>(null);
+  const [strategyOfferDetail, setStrategyOfferDetail] = useState<string | null>(null);
 
   const strategyState = workspace?.strategyState || null;
   const algofundState = workspace?.algofundState || null;
@@ -896,15 +897,9 @@ const ClientCabinet: React.FC = () => {
                       <Card
                         size="small"
                         bordered
-                        style={{ height: '100%', cursor: strategyWorkspace.capabilities?.settings ? 'pointer' : 'default' }}
-                        onClick={() => {
-                          if (!strategyWorkspace.capabilities?.settings) return;
-                          setStrategyOfferIds((current) =>
-                            current.includes(offer.offerId)
-                              ? current.filter((id) => id !== offer.offerId)
-                              : [...current, offer.offerId]
-                          );
-                        }}
+                        hoverable
+                        style={{ height: '100%', cursor: 'pointer' }}
+                        onClick={() => setStrategyOfferDetail(offer.offerId)}
                         extra={
                           strategyWorkspace.capabilities?.settings
                             ? <Checkbox checked={strategyOfferIds.includes(offer.offerId)} onChange={(e) => { e.stopPropagation(); setStrategyOfferIds((current) => e.target.checked ? (current.includes(offer.offerId) ? current : [...current, offer.offerId]) : current.filter((id) => id !== offer.offerId)); }} />
@@ -929,6 +924,9 @@ const ClientCabinet: React.FC = () => {
                               <ChartComponent data={offer.equityPoints.map((v, i) => ({ time: i, value: v }))} type="line" />
                             </div>
                           ) : null}
+                          <Typography.Text type="secondary" style={{ fontSize: 10, marginTop: 2, display: 'block' }}>
+                            📊 Нажмите для подробностей
+                          </Typography.Text>
                         </Space>
                       </Card>
                     </Col>
@@ -947,6 +945,66 @@ const ClientCabinet: React.FC = () => {
               </Space>
             )}
           </Card>
+
+          {/* Strategy offer detail modal */}
+          <Modal
+            title={(() => {
+              const o = strategyWorkspace?.offers.find((x) => x.offerId === strategyOfferDetail);
+              return o ? o.titleRu : '';
+            })()}
+            open={!!strategyOfferDetail}
+            onCancel={() => setStrategyOfferDetail(null)}
+            footer={null}
+            width={640}
+          >
+            {(() => {
+              const offer = strategyWorkspace?.offers.find((x) => x.offerId === strategyOfferDetail);
+              if (!offer) return <Empty description="Стратегия не найдена" />;
+              const eqPts = offer.equityPoints;
+              const hasChart = Array.isArray(eqPts) && eqPts.length > 1;
+              const isSelected = strategyOfferIds.includes(offer.offerId);
+              const startBalance = hasChart ? eqPts![0] : null;
+              const endBalance = hasChart ? eqPts![eqPts!.length - 1] : null;
+              return (
+                <Space direction="vertical" size={12} style={{ width: '100%' }}>
+                  <Space wrap>
+                    {isSelected ? <Tag color="gold">В вашем портфеле</Tag> : <Tag color="blue">Доступна для подключения</Tag>}
+                    <Tag>{offer.strategy.mode.toUpperCase()}</Tag>
+                    <Tag>{offer.strategy.market}</Tag>
+                    {offer.strategy.type ? <Tag>{offer.strategy.type}</Tag> : null}
+                  </Space>
+                  {hasChart ? (
+                    <div style={{ height: 240 }}>
+                      <ChartComponent key={`strat-${offer.offerId}`} data={equityPointsToSeries(eqPts!, 365)} type="line" />
+                    </div>
+                  ) : null}
+                  <Row gutter={[12, 12]}>
+                    {startBalance != null ? <Col xs={12} sm={6}><Statistic title="Старт. капитал" value={formatMoney(startBalance)} /></Col> : null}
+                    {endBalance != null ? <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(endBalance)} valueStyle={{ color: endBalance >= (startBalance || 0) ? '#52c41a' : '#ff4d4f' }} /></Col> : null}
+                    <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(offer.metrics.ret)} valueStyle={{ color: (offer.metrics.ret ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }} /></Col>
+                    <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(offer.metrics.dd)} valueStyle={{ color: '#ff7a45' }} /></Col>
+                    <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(offer.metrics.pf)} /></Col>
+                    {offer.metrics.trades ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(offer.metrics.trades, 0)} /></Col> : null}
+                  </Row>
+                  {strategyWorkspace?.capabilities?.settings ? (
+                    <Button
+                      type={isSelected ? 'default' : 'primary'}
+                      danger={isSelected}
+                      onClick={() => {
+                        setStrategyOfferIds((current) =>
+                          isSelected
+                            ? current.filter((id) => id !== offer.offerId)
+                            : [...current, offer.offerId]
+                        );
+                      }}
+                    >
+                      {isSelected ? 'Убрать из портфеля' : 'Добавить в портфель'}
+                    </Button>
+                  ) : null}
+                </Space>
+              );
+            })()}
+          </Modal>
 
           {/* Настройки риска */}
           {strategyWorkspace.capabilities?.settings ? (
@@ -1070,6 +1128,7 @@ const ClientCabinet: React.FC = () => {
               <Space direction="vertical" size={8}>
                 <Typography.Text>Ваш аккаунт подключён к продукту «Алгофонд».</Typography.Text>
                 <Typography.Text type="secondary">Торговые системы доступны на вкладке «Алгофонд».</Typography.Text>
+                <Typography.Text type="secondary">Хотите также подключить индивидуальные стратегии? Обратитесь к администратору.</Typography.Text>
               </Space>
             }
           />
@@ -1243,6 +1302,13 @@ const ClientCabinet: React.FC = () => {
                 : Array.isArray(eqPts) && eqPts.length > 1
                   ? equityPointsToSeries(eqPts, snap?.periodDays)
                   : [];
+              const startBalance = Array.isArray(eqPts) && eqPts.length > 0 ? eqPts[0] : null;
+              const endBalance = isCurrent && algofundWorkspace?.preview?.summary?.finalEquity != null
+                ? algofundWorkspace.preview.summary.finalEquity
+                : snap?.finalEquity ?? null;
+              const chartKey = isCurrent
+                ? `af-preview-${algofundRiskMultiplier}-${algofundPreviewSeries.length}`
+                : `af-snap-${systemDetailModal?.id}`;
               return (
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   <Space wrap>
@@ -1252,17 +1318,18 @@ const ClientCabinet: React.FC = () => {
                   </Space>
                   {chartData.length > 0 ? (
                     <div style={{ height: 240 }}>
-                      <ChartComponent data={chartData} type="line" />
+                      <ChartComponent key={chartKey} data={chartData} type="line" />
                     </div>
                   ) : null}
-                  {snap ? (
+                  {(snap || startBalance != null) ? (
                     <Row gutter={[12, 12]}>
-                      <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(snap.ret)} valueStyle={{ color: snap.ret >= 0 ? '#52c41a' : '#ff4d4f' }} /></Col>
-                      <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(snap.dd)} valueStyle={{ color: '#ff7a45' }} /></Col>
-                      <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(snap.pf)} /></Col>
-                      <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(snap.trades, 0)} /></Col>
-                      <Col xs={12} sm={6}><Statistic title="Сд./день" value={formatNumber(snap.tradesPerDay, 1)} /></Col>
-                      <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(snap.finalEquity)} /></Col>
+                      {startBalance != null ? <Col xs={12} sm={6}><Statistic title="Старт. капитал" value={formatMoney(startBalance)} /></Col> : null}
+                      {endBalance != null ? <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(endBalance)} valueStyle={{ color: endBalance >= (startBalance || 0) ? '#52c41a' : '#ff4d4f' }} /></Col> : null}
+                      {snap ? <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(snap.ret)} valueStyle={{ color: snap.ret >= 0 ? '#52c41a' : '#ff4d4f' }} /></Col> : null}
+                      {snap ? <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(snap.dd)} valueStyle={{ color: '#ff7a45' }} /></Col> : null}
+                      {snap ? <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(snap.pf)} /></Col> : null}
+                      {snap ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(snap.trades, 0)} /></Col> : null}
+                      {snap ? <Col xs={12} sm={6}><Statistic title="Сд./день" value={formatNumber(snap.tradesPerDay, 1)} /></Col> : null}
                     </Row>
                   ) : null}
                   {algofundWorkspace?.capabilities?.settings ? (
@@ -1286,9 +1353,17 @@ const ClientCabinet: React.FC = () => {
                       </Space>
                     </div>
                   ) : null}
-                  {!isCurrent ? (
+                  {!isCurrent && algofundWorkspace?.capabilities?.startStopRequests ? (
+                    <Button type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start'); setSystemDetailModal(null); }}>
+                      Запросить подключение этой системы
+                    </Button>
+                  ) : isCurrent && algofundWorkspace?.capabilities?.startStopRequests ? (
+                    <Button danger loading={actionLoading === 'algofund-stop'} onClick={() => { void sendAlgofundRequest('stop'); setSystemDetailModal(null); }}>
+                      Запросить отключение
+                    </Button>
+                  ) : !isCurrent ? (
                     <Typography.Text type="secondary">
-                      Для подключения этой системы используйте раздел «Подключение / отключение» ниже.
+                      Для подключения обратитесь к администратору.
                     </Typography.Text>
                   ) : null}
                 </Space>
@@ -1345,7 +1420,7 @@ const ClientCabinet: React.FC = () => {
             description={
               <Space direction="vertical" size={8}>
                 <Typography.Text>Алгофонд недоступен для вашего аккаунта.</Typography.Text>
-                <Typography.Text type="secondary">Обратитесь к администратору для подключения к продукту «Алгофонд».</Typography.Text>
+                <Typography.Text type="secondary">Хотите подключить автоматическое управление через Алгофонд? Обратитесь к администратору.</Typography.Text>
               </Space>
             }
           />
