@@ -40,6 +40,7 @@ interface RazgonInstance {
   riskManager: RazgonRiskManager;
   candleCache: Map<string, Candle1m[]>;
   knownSymbols: Set<string>;
+  failedSymbols: Map<string, number>; // symbol → timestamp of last failure (cooldown)
   momentumTimer: ReturnType<typeof setInterval> | null;
   sniperTimer: ReturnType<typeof setInterval> | null;
   fundingTimer: ReturnType<typeof setInterval> | null;
@@ -247,6 +248,7 @@ async function createInstance(
     riskManager,
     candleCache: new Map(),
     knownSymbols: new Set(),
+    failedSymbols: new Map(),
     momentumTimer: null,
     sniperTimer: null,
     fundingTimer: null,
@@ -258,20 +260,28 @@ async function createInstance(
     const exchangePositions = await getPositions(keyEntry.name);
     const watchSymbols = new Set(cfg.momentum.watchlist);
     for (const pos of exchangePositions) {
-      const sz = Math.abs(Number(pos.size ?? 0));
+      const sz = Math.abs(Number(pos.size ?? pos.contracts ?? 0));
       if (sz <= 0) continue;
       const sym = String(pos.symbol ?? '').replace(/[/:]/g, '');
       if (!watchSymbols.has(sym)) continue;
-      const side: 'long' | 'short' = String(pos.side ?? '').toLowerCase() === 'long' ? 'long' : 'short';
-      const entryPrice = Number(pos.entryPrice ?? 0);
-      const notional = Number(pos.positionValue ?? 0) || sz * entryPrice;
+      // Normalize side: ccxt uses 'long'/'short', some exchanges use 'Buy'/'Sell'
+      const rawSide = String(pos.side ?? '').toLowerCase();
+      const side: 'long' | 'short' = (rawSide === 'long' || rawSide === 'buy') ? 'long' : 'short';
+      const entryPrice = Number(pos.entryPrice ?? pos.avgPrice ?? pos.markPrice ?? 0);
+      if (entryPrice <= 0) {
+        logger.warn(`[Razgon:${keyEntry.name}] Skipping restore of ${sym} ${side}: entryPrice=0`);
+        continue;
+      }
+      const notional = Number(pos.positionValue ?? pos.notional ?? 0) || sz * entryPrice;
+      if (notional <= 0) continue;
       const margin = notional / cfg.momentum.leverage;
       const slPrice = riskManager.computeStopLoss(entryPrice, side, cfg.momentum.stopLossPercent);
       inst.openPositions.push({
         id: uuid(), subStrategy: 'momentum', symbol: sym, side, entryPrice, notional, margin,
         leverage: cfg.momentum.leverage, openedAt: Date.now(), tpAnchor: entryPrice, slPrice,
-        unrealizedPnl: Number(pos.unrealisedPnl ?? 0),
+        unrealizedPnl: Number(pos.unrealisedPnl ?? pos.unrealizedPnl ?? 0),
       });
+      logger.info(`[Razgon:${keyEntry.name}] Restored ${sym} ${side} entry=${entryPrice} notional=$${notional.toFixed(2)} margin=$${margin.toFixed(2)}`);
     }
     if (inst.openPositions.length > 0) {
       logger.info(`[Razgon:${keyEntry.name}] Restored ${inst.openPositions.length} positions: ${inst.openPositions.map(p => `${p.symbol} ${p.side}`).join(', ')}`);
@@ -444,27 +454,40 @@ async function momentumTick(inst: RazgonInstance): Promise<void> {
   const momPositions = inst.openPositions.filter(p => p.subStrategy === 'momentum');
   if (momPositions.length >= cfg.maxConcurrentPositions) return;
 
-  // Check available balance from exchange before attempting entries
+  // Check REAL available balance from exchange before attempting entries
   let availableBalance = 0;
   try {
     const bals = await getBalances(inst.keyName);
     const usdtBal = bals.find(b => b.coin === 'USDT');
     availableBalance = usdtBal ? parseFloat(usdtBal.availableBalance) : 0;
+    // Also sync wallet balance for accurate state
+    const walletBal = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
+    if (walletBal > 0) inst.balance = walletBal;
   } catch (e) {
     logger.debug(`[Razgon:${inst.keyName}] Available balance check failed: ${(e as Error).message}`);
+    return; // fail-safe: don't trade if we can't check balance
   }
-  const minMarginNeeded = inst.balance * 0.02;
-  if (availableBalance < minMarginNeeded) {
-    if (inst.tickCount % 12 === 1) {
-      logger.info(`[Razgon:${inst.keyName}] Skipping entries: available=$${availableBalance.toFixed(2)} < min=$${minMarginNeeded.toFixed(2)}`);
+  // Need at least $2 free to open any position
+  const MIN_AVAILABLE = 2;
+  if (availableBalance < MIN_AVAILABLE) {
+    if (inst.tickCount % 60 === 1) {
+      const msg = `[Razgon:${inst.keyName}] Skipping entries: available=$${availableBalance.toFixed(2)} < min=$${MIN_AVAILABLE}`;
+      logger.info(msg);
+      console.log(msg);
     }
     return;
   }
 
   // Skip symbols where we already have ANY position (avoid opposite/duplicate)
-  const candidates = cfg.watchlist.filter(
-    sym => !inst.openPositions.some(p => p.symbol === sym),
-  );
+  // Also skip symbols on cooldown from recent order failures (60s cooldown)
+  const now = Date.now();
+  const FAIL_COOLDOWN_MS = 60_000;
+  const candidates = cfg.watchlist.filter(sym => {
+    if (inst.openPositions.some(p => p.symbol === sym)) return false;
+    const lastFail = inst.failedSymbols.get(sym);
+    if (lastFail && (now - lastFail) < FAIL_COOLDOWN_MS) return false;
+    return true;
+  });
   const minBars = Math.max(cfg.donchianPeriod, 21) + 5;
   const batchResults = await batchGetMarketData(inst.keyName, candidates, '1m', minBars + 5, 8000);
 
@@ -537,8 +560,11 @@ async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: strin
       return sz > 0 && sym === symbol;
     });
     if (hasExchangePos) {
-      logger.warn(`[Razgon:${inst.keyName}] Skip ${symbol}: already have EXCHANGE position (not in memory)`);
-      console.log(`[Razgon:${inst.keyName}] BLOCKED opposite entry on ${symbol} — exchange position exists`);
+      // Add to cooldown so we don't spam this check every 5s
+      inst.failedSymbols.set(symbol, Date.now());
+      if (inst.tickCount % 60 === 1) { // only log once per ~5min
+        console.log(`[Razgon:${inst.keyName}] BLOCKED opposite entry on ${symbol} — exchange position exists`);
+      }
       return;
     }
   } catch (e) {
@@ -546,8 +572,24 @@ async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: strin
     return; // fail-safe: don't open if we can't verify
   }
 
-  // Position sizing
-  const margin = inst.riskManager.computeMargin(
+  // Fetch REAL available balance to cap margin
+  let availableForEntry = 0;
+  try {
+    const bals = await getBalances(inst.keyName);
+    const usdtBal = bals.find(b => b.coin === 'USDT');
+    availableForEntry = usdtBal ? parseFloat(usdtBal.availableBalance) : 0;
+  } catch (e) {
+    logger.warn(`[Razgon:${inst.keyName}] Cannot fetch available balance for ${symbol}, skipping`);
+    return;
+  }
+
+  if (availableForEntry < 2) {
+    logger.debug(`[Razgon:${inst.keyName}] Skip ${symbol}: available=$${availableForEntry.toFixed(2)} too low`);
+    return;
+  }
+
+  // Position sizing — cap to real available balance
+  let margin = inst.riskManager.computeMargin(
     inst.balance,
     cfg.allocation,
     cfg.leverage,
@@ -556,10 +598,19 @@ async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: strin
   );
   if (margin <= 0) return;
 
+  // CRITICAL: never exceed what's actually available on exchange
+  if (margin > availableForEntry * 0.95) {
+    margin = availableForEntry * 0.90; // leave 10% buffer
+    if (margin < 2) {
+      logger.debug(`[Razgon:${inst.keyName}] Skip ${symbol}: capped margin=$${margin.toFixed(2)} too small`);
+      return;
+    }
+  }
+
   const notional = margin * cfg.leverage;
   const slPrice = inst.riskManager.computeStopLoss(entryPrice, side, cfg.stopLossPercent);
 
-  const entryMsg = `[Razgon:${inst.keyName}] ENTRY ${side.toUpperCase()} ${symbol} @ ${entryPrice} | notional=$${notional.toFixed(0)} margin=$${margin.toFixed(2)} SL=${slPrice.toFixed(6)}`;
+  const entryMsg = `[Razgon:${inst.keyName}] ENTRY ${side.toUpperCase()} ${symbol} @ ${entryPrice} | notional=$${notional.toFixed(0)} margin=$${margin.toFixed(2)} avail=$${availableForEntry.toFixed(2)} SL=${slPrice.toFixed(6)}`;
   logger.info(entryMsg);
   console.log(entryMsg);
 
@@ -575,8 +626,12 @@ async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: strin
     };
     inst.openPositions.push(pos);
     inst.balance -= margin;
-    console.log(`[Razgon:${inst.keyName}] ORDER OK ${symbol} ${side} qty=${qty.toFixed(4)}`);
+    // Clear cooldown on success
+    inst.failedSymbols.delete(symbol);
+    console.log(`[Razgon:${inst.keyName}] ORDER OK ${symbol} ${side} qty=${qty.toFixed(4)} margin=$${margin.toFixed(2)}`);
   } catch (e) {
+    // Set 60s cooldown to prevent spam retries
+    inst.failedSymbols.set(symbol, Date.now());
     const errMsg = `[Razgon:${inst.keyName}] Order FAILED ${symbol}: ${(e as Error).message}`;
     logger.error(errMsg);
     console.error(errMsg);
@@ -762,9 +817,16 @@ async function executeClose(
 }
 
 function recordClose(inst: RazgonInstance, pos: RazgonPosition, exitPrice: number, exitReason: RazgonTrade['exitReason']): void {
+  // Guard against bad data (entryPrice=0 from restore)
+  if (!pos.entryPrice || pos.entryPrice <= 0 || !isFinite(pos.entryPrice)) {
+    logger.warn(`[Razgon:${inst.keyName}] Skipping recordClose for ${pos.symbol}: invalid entryPrice=${pos.entryPrice}`);
+    inst.openPositions = inst.openPositions.filter(p => p.id !== pos.id);
+    return;
+  }
+
   const grossPnl = inst.riskManager.computeGrossPnl(pos.entryPrice, exitPrice, pos.notional, pos.side);
   const fee = inst.riskManager.computeFee(pos.notional);
-  const netPnl = grossPnl - fee;
+  const netPnl = isFinite(grossPnl) ? grossPnl - fee : 0;
 
   const trade: RazgonTrade = {
     id: pos.id,
@@ -784,7 +846,9 @@ function recordClose(inst: RazgonInstance, pos: RazgonPosition, exitPrice: numbe
   inst.tradeHistory.push(trade);
 
   inst.balance += pos.margin + netPnl;
-  if (inst.balance > inst.peakBalance) inst.peakBalance = inst.balance;
+  // Guard against NaN/Infinity balance corruption
+  if (!isFinite(inst.balance) || inst.balance < 0) inst.balance = 0;
+  if (isFinite(inst.balance) && inst.balance > inst.peakBalance) inst.peakBalance = inst.balance;
 
   inst.openPositions = inst.openPositions.filter(p => p.id !== pos.id);
 
