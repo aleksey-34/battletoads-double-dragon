@@ -1000,7 +1000,14 @@ const ClientCabinet: React.FC = () => {
                     >
                       {isSelected ? 'Убрать из портфеля' : 'Добавить в портфель'}
                     </Button>
-                  ) : null}
+                  ) : (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="Хотите подключить индивидуальные стратегии?"
+                      description="Для подключения продукта «Клиент стратегий» обратитесь к администратору."
+                    />
+                  )}
                 </Space>
               );
             })()}
@@ -1361,10 +1368,13 @@ const ClientCabinet: React.FC = () => {
                     <Button danger loading={actionLoading === 'algofund-stop'} onClick={() => { void sendAlgofundRequest('stop'); setSystemDetailModal(null); }}>
                       Запросить отключение
                     </Button>
-                  ) : !isCurrent ? (
-                    <Typography.Text type="secondary">
-                      Для подключения обратитесь к администратору.
-                    </Typography.Text>
+                  ) : !algofundWorkspace?.capabilities?.startStopRequests ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="Хотите подключить Алгофонд?"
+                      description="Для подключения автоматического управления через Алгофонд обратитесь к администратору."
+                    />
                   ) : null}
                 </Space>
               );
