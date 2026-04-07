@@ -9457,7 +9457,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                       <ChartComponent
                                                         data={points.map((value, index) => ({ time: index, equity: value }))}
                                                         type="line"
-                                                        fixedHeight={72}
+                                                        fixedHeight={120}
                                                       />
                                                     ) : (
                                                       <Text type="secondary" style={{ fontSize: 11 }}>no snapshot</Text>

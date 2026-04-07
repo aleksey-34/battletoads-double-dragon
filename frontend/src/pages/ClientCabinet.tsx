@@ -885,6 +885,28 @@ const ClientCabinet: React.FC = () => {
       {strategyWorkspace && strategyWorkspace.offers.length > 0 ? (
         <>
           {/* Витрина офферов */}
+          {strategyWorkspace.capabilities?.settings ? (
+            <Card className="battletoads-card" title="Настройки риска и частоты" size="small">
+              <Row gutter={[16, 16]}>
+                <Col xs={24} md={12}>
+                  <Typography.Text strong>Риск: {formatNumber(strategyRiskInput, 1)}</Typography.Text>
+                  <Slider min={0} max={10} step={0.1} value={strategyRiskInput} onChange={(v) => setStrategyRiskInput(toFinite(v))} />
+                </Col>
+                <Col xs={24} md={12}>
+                  <Typography.Text strong>Частота сделок: {formatNumber(strategyTradeInput, 1)}</Typography.Text>
+                  <Slider min={0} max={10} step={0.1} value={strategyTradeInput} onChange={(v) => setStrategyTradeInput(toFinite(v))} />
+                </Col>
+              </Row>
+              <Space wrap>
+                <Button type="primary" loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>
+                  Сохранить настройки
+                </Button>
+                <Button onClick={() => { setStrategyRiskInput(levelToSliderValue(strategyWorkspace?.profile?.risk_level || 'medium')); setStrategyTradeInput(levelToSliderValue(strategyWorkspace?.profile?.trade_frequency_level || 'medium')); }}>
+                  Дефолт
+                </Button>
+              </Space>
+            </Card>
+          ) : null}
           <Card className="battletoads-card" title="Витрина стратегий" size="small">
             {strategyWorkspace.offers.length === 0 ? (
               <Empty description="Офферов на витрине пока нет" />
@@ -916,7 +938,7 @@ const ClientCabinet: React.FC = () => {
                             {offer.metrics.trades ? <Tag color="cyan" style={{ fontSize: 11 }}>{formatNumber(offer.metrics.trades, 0)} сд.</Tag> : null}
                           </Space>
                           {Array.isArray(offer.equityPoints) && offer.equityPoints.length > 0 ? (
-                            <ChartComponent data={offer.equityPoints.map((v, i) => ({ time: i, value: v }))} type="line" fixedHeight={72} />
+                            <ChartComponent data={offer.equityPoints.map((v, i) => ({ time: i, value: v }))} type="line" fixedHeight={120} />
                           ) : null}
                           <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
                         </Space>
@@ -1005,25 +1027,7 @@ const ClientCabinet: React.FC = () => {
             })()}
           </Modal>
 
-          {/* Настройки риска */}
-          {strategyWorkspace.capabilities?.settings ? (
-            <Card className="battletoads-card" title="Настройки риска и частоты" size="small">
-              <Row gutter={[16, 16]}>
-                <Col xs={24} md={12}>
-                  <Typography.Text strong>Риск: {formatNumber(strategyRiskInput, 1)}</Typography.Text>
-                  <Slider min={0} max={10} step={0.1} value={strategyRiskInput} onChange={(v) => setStrategyRiskInput(toFinite(v))} />
-                </Col>
-                <Col xs={24} md={12}>
-                  <Typography.Text strong>Частота сделок: {formatNumber(strategyTradeInput, 1)}</Typography.Text>
-                  <Slider min={0} max={10} step={0.1} value={strategyTradeInput} onChange={(v) => setStrategyTradeInput(toFinite(v))} />
-                </Col>
-              </Row>
-              <Button type="primary" style={{ marginTop: 8 }} loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>
-                Сохранить настройки
-              </Button>
-            </Card>
-          ) : null}
-
+          {/* Статус торговли */}
           <Card className="battletoads-card" title="Статус торговли" size="small">
             <Space wrap style={{ marginBottom: 8 }}>
               <Tag color="blue">Тариф: {strategyWorkspace.plan?.title || '—'}</Tag>
@@ -1120,43 +1124,6 @@ const ClientCabinet: React.FC = () => {
             </Space>
           </Card>
         </>
-      ) : workspace?.productMode === 'algofund_client' && algofundAvailableSystems.length > 0 ? (
-        <Card className="battletoads-card" title="Торговые системы Алгофонда" size="small">
-          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-            Ваш аккаунт подключён к продукту «Алгофонд». Нажмите «Подробнее» для просмотра бэктеста.
-          </Typography.Text>
-          <Row gutter={[12, 12]}>
-            {algofundAvailableSystems.map((system) => {
-              const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number } | null | undefined;
-              const eqPts = snap?.equityPoints;
-              return (
-                <Col key={system.id} xs={24} sm={12} md={8} xl={6}>
-                  <Card size="small" bordered>
-                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                      <Space direction="vertical" size={0}>
-                        <Typography.Text strong style={{ fontSize: 12 }}>{tsDisplayName(system.name)}</Typography.Text>
-                      </Space>
-                      {snap ? (
-                        <Space size={4} wrap>
-                          {snap.periodDays ? <Tag style={{ fontSize: 11 }}>{Math.round(snap.periodDays)}d</Tag> : null}
-                          <Tag color="green" style={{ fontSize: 11 }}>Ret {formatPercent(snap.ret)}</Tag>
-                          <Tag color="orange" style={{ fontSize: 11 }}>DD {formatPercent(snap.dd)}</Tag>
-                          <Tag color="blue" style={{ fontSize: 11 }}>PF {formatNumber(snap.pf)}</Tag>
-                        </Space>
-                      ) : null}
-                      {Array.isArray(eqPts) && eqPts.length > 1 ? (
-                        <ChartComponent data={equityPointsToSeries(eqPts, snap?.periodDays)} type="line" fixedHeight={72} />
-                      ) : (
-                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
-                      )}
-                      <Button size="small" onClick={() => setSystemDetailModal({ name: system.name, id: system.id })}>Подробнее</Button>
-                    </Space>
-                  </Card>
-                </Col>
-              );
-            })}
-          </Row>
-        </Card>
       ) : workspace?.productMode === 'algofund_client' ? (
         <Card className="battletoads-card" size="small">
           <Empty
@@ -1164,6 +1131,7 @@ const ClientCabinet: React.FC = () => {
               <Space direction="vertical" size={8}>
                 <Typography.Text>Ваш аккаунт подключён к продукту «Алгофонд».</Typography.Text>
                 <Typography.Text type="secondary">Торговые системы доступны на вкладке «Алгофонд».</Typography.Text>
+                <Typography.Text type="secondary">Хотите также индивидуальные стратегии? Обратитесь к администратору.</Typography.Text>
               </Space>
             }
           />
@@ -1245,9 +1213,9 @@ const ClientCabinet: React.FC = () => {
                             </Space>
                             <Space size={4} wrap>
                               {snap?.periodDays ? <Tag style={{ fontSize: 11 }}>{Math.round(snap.periodDays)}d</Tag> : null}
-                              <Tag color="green" style={{ fontSize: 11 }}>Ret {formatPercent(snap?.ret ?? 0)}</Tag>
-                              <Tag color="orange" style={{ fontSize: 11 }}>DD {formatPercent(snap?.dd ?? 0)}</Tag>
-                              <Tag color="blue" style={{ fontSize: 11 }}>PF {formatNumber(snap?.pf ?? 0)}</Tag>
+                              {snap ? <Tag color="green" style={{ fontSize: 11 }}>Ret {formatPercent(snap.ret)}</Tag> : null}
+                              {snap ? <Tag color="orange" style={{ fontSize: 11 }}>DD {formatPercent(snap.dd)}</Tag> : null}
+                              {snap ? <Tag color="blue" style={{ fontSize: 11 }}>PF {formatNumber(snap.pf)}</Tag> : null}
                             </Space>
                             {hasChart ? (
                               <ChartComponent
@@ -1255,7 +1223,7 @@ const ClientCabinet: React.FC = () => {
                                   ? algofundPreviewSeries
                                   : equityPointsToSeries(eqPts || [], snap?.periodDays)}
                                 type="line"
-                                fixedHeight={72}
+                                fixedHeight={120}
                               />
                             ) : (
                               <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
@@ -1330,14 +1298,19 @@ const ClientCabinet: React.FC = () => {
                         step={0.05}
                         value={algofundRiskMultiplier}
                         onChange={(v) => setAlgofundRiskMultiplier(Math.min(toFinite(v), toFinite(algofundWorkspace.plan?.risk_cap_max, 1)))}
-                        onAfterChange={() => void refreshAlgofundState()}
+                        onAfterChange={isCurrent ? (() => void refreshAlgofundState()) : undefined}
                       />
                       <Space wrap>
                         <Button type="primary" size="small" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
                           Сохранить риск
                         </Button>
-                        <Button size="small" loading={actionLoading === 'algofund-refresh'} onClick={() => void refreshAlgofundState()}>
-                          Обновить предпросмотр
+                        {isCurrent ? (
+                          <Button size="small" loading={actionLoading === 'algofund-refresh'} onClick={() => void refreshAlgofundState()}>
+                            Обновить предпросмотр
+                          </Button>
+                        ) : null}
+                        <Button size="small" onClick={() => setAlgofundRiskMultiplier(toFinite(algofundWorkspace?.profile?.risk_multiplier, 1))}>
+                          Дефолт
                         </Button>
                       </Space>
                     </div>
