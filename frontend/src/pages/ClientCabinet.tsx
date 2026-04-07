@@ -898,36 +898,27 @@ const ClientCabinet: React.FC = () => {
                 <Row gutter={[12, 12]}>
                   {strategyWorkspace.offers.map((offer) => (
                     <Col key={offer.offerId} xs={24} sm={12} md={8} xl={6}>
-                      <Card
-                        size="small"
-                        bordered
-                        hoverable
-                        style={{ height: '100%', cursor: 'pointer' }}
-                        onClick={() => setStrategyOfferDetail(offer.offerId)}
-                        extra={
-                          strategyWorkspace.capabilities?.settings
-                            ? <Checkbox checked={strategyOfferIds.includes(offer.offerId)} onChange={(e) => { e.stopPropagation(); setStrategyOfferIds((current) => e.target.checked ? (current.includes(offer.offerId) ? current : [...current, offer.offerId]) : current.filter((id) => id !== offer.offerId)); }} />
-                            : null
-                        }
-                      >
-                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                          <Typography.Text strong style={{ fontSize: 12 }}>{offer.titleRu}</Typography.Text>
-                          <Space size={4} wrap>
-                            <Tag style={{ fontSize: 11 }}>{offer.strategy.mode.toUpperCase()}</Tag>
-                            <Tag style={{ fontSize: 11 }}>{offer.strategy.market}</Tag>
-                            {offer.strategy.type ? <Tag style={{ fontSize: 11 }}>{offer.strategy.type}</Tag> : null}
+                      <Card size="small" bordered>
+                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                          <Space direction="vertical" size={0}>
+                            <Space>
+                              <Typography.Text strong style={{ fontSize: 12 }}>{offer.titleRu}</Typography.Text>
+                              {strategyWorkspace.capabilities?.settings
+                                ? <Checkbox checked={strategyOfferIds.includes(offer.offerId)} onChange={(e) => { e.stopPropagation(); setStrategyOfferIds((current) => e.target.checked ? (current.includes(offer.offerId) ? current : [...current, offer.offerId]) : current.filter((id) => id !== offer.offerId)); }} />
+                                : null}
+                            </Space>
+                            <Typography.Text type="secondary" style={{ fontSize: 11 }}>{offer.strategy.mode.toUpperCase()} • {offer.strategy.market}</Typography.Text>
                           </Space>
                           <Space size={4} wrap>
-                            <Tag color="green">Ret: {formatPercent(offer.metrics.ret)}</Tag>
-                            <Tag color="orange">DD: {formatPercent(offer.metrics.dd)}</Tag>
-                            <Tag color="blue">PF: {formatNumber(offer.metrics.pf)}</Tag>
-                            {offer.metrics.trades ? <Tag color="cyan">Сделки: {formatNumber(offer.metrics.trades, 0)}</Tag> : null}
+                            <Tag color="green" style={{ fontSize: 11 }}>Ret {formatPercent(offer.metrics.ret)}</Tag>
+                            <Tag color="orange" style={{ fontSize: 11 }}>DD {formatPercent(offer.metrics.dd)}</Tag>
+                            <Tag color="blue" style={{ fontSize: 11 }}>PF {formatNumber(offer.metrics.pf)}</Tag>
+                            {offer.metrics.trades ? <Tag color="cyan" style={{ fontSize: 11 }}>{formatNumber(offer.metrics.trades, 0)} сд.</Tag> : null}
                           </Space>
                           {Array.isArray(offer.equityPoints) && offer.equityPoints.length > 0 ? (
-                            <div style={{ height: 60, marginTop: 4 }}>
-                              <ChartComponent data={offer.equityPoints.map((v, i) => ({ time: i, value: v }))} type="line" />
-                            </div>
+                            <ChartComponent data={offer.equityPoints.map((v, i) => ({ time: i, value: v }))} type="line" fixedHeight={72} />
                           ) : null}
+                          <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
                         </Space>
                       </Card>
                     </Col>
@@ -1132,36 +1123,33 @@ const ClientCabinet: React.FC = () => {
       ) : workspace?.productMode === 'algofund_client' && algofundAvailableSystems.length > 0 ? (
         <Card className="battletoads-card" title="Торговые системы Алгофонда" size="small">
           <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
-            Ваш аккаунт подключён к продукту «Алгофонд». Нажмите на карточку для просмотра бэктеста.
+            Ваш аккаунт подключён к продукту «Алгофонд». Нажмите «Подробнее» для просмотра бэктеста.
           </Typography.Text>
           <Row gutter={[12, 12]}>
             {algofundAvailableSystems.map((system) => {
               const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number } | null | undefined;
               const eqPts = snap?.equityPoints;
-              const hasChart = Array.isArray(eqPts) && eqPts.length > 1;
               return (
                 <Col key={system.id} xs={24} sm={12} md={8} xl={6}>
-                  <Card
-                    size="small"
-                    bordered
-                    hoverable
-                    style={{ height: '100%', cursor: 'pointer' }}
-                    onClick={() => setSystemDetailModal({ name: system.name, id: system.id })}
-                  >
-                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                      <Typography.Text strong style={{ fontSize: 12 }}>{tsDisplayName(system.name)}</Typography.Text>
+                  <Card size="small" bordered>
+                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                      <Space direction="vertical" size={0}>
+                        <Typography.Text strong style={{ fontSize: 12 }}>{tsDisplayName(system.name)}</Typography.Text>
+                      </Space>
                       {snap ? (
                         <Space size={4} wrap>
-                          <Tag color="green" style={{ fontSize: 11 }}>Ret: {formatPercent(snap.ret)}</Tag>
-                          <Tag color="orange" style={{ fontSize: 11 }}>DD: {formatPercent(snap.dd)}</Tag>
-                          <Tag color="blue" style={{ fontSize: 11 }}>PF: {formatNumber(snap.pf)}</Tag>
+                          {snap.periodDays ? <Tag style={{ fontSize: 11 }}>{Math.round(snap.periodDays)}d</Tag> : null}
+                          <Tag color="green" style={{ fontSize: 11 }}>Ret {formatPercent(snap.ret)}</Tag>
+                          <Tag color="orange" style={{ fontSize: 11 }}>DD {formatPercent(snap.dd)}</Tag>
+                          <Tag color="blue" style={{ fontSize: 11 }}>PF {formatNumber(snap.pf)}</Tag>
                         </Space>
                       ) : null}
-                      {hasChart ? (
-                        <div style={{ height: 60, marginTop: 4 }}>
-                          <ChartComponent data={equityPointsToSeries(eqPts || [], snap?.periodDays)} type="line" />
-                        </div>
-                      ) : null}
+                      {Array.isArray(eqPts) && eqPts.length > 1 ? (
+                        <ChartComponent data={equityPointsToSeries(eqPts, snap?.periodDays)} type="line" fixedHeight={72} />
+                      ) : (
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
+                      )}
+                      <Button size="small" onClick={() => setSystemDetailModal({ name: system.name, id: system.id })}>Подробнее</Button>
                     </Space>
                   </Card>
                 </Col>
@@ -1239,57 +1227,41 @@ const ClientCabinet: React.FC = () => {
                   {algofundAvailableSystems.map((system) => {
                     const isCurrent = algofundPublishedSystemName.length > 0 && String(system?.name || '').trim() === algofundPublishedSystemName;
                     const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number } | null | undefined;
-                    const previewSummary = isCurrent ? (algofundWorkspace?.preview?.summary || null) : null;
                     const eqPts = snap?.equityPoints;
                     const hasChart = isCurrent ? algofundPreviewSeries.length > 0 : (Array.isArray(eqPts) && eqPts.length > 1);
                     return (
                       <Col xs={24} sm={12} md={8} xl={6} key={String(system?.id || system?.name || Math.random())}>
                         <Card
                           size="small"
-                          className="battletoads-card"
-                          hoverable
-                          onClick={() => setSystemDetailModal({ name: system.name, id: system.id })}
-                          style={isCurrent ? { borderColor: '#52c41a', borderWidth: 2, cursor: 'pointer' } : { cursor: 'pointer' }}
-                          title={
-                            <span>
-                              <Typography.Text strong style={{ fontSize: 12 }}>{tsDisplayName(system.name)}</Typography.Text>
-                              {isCurrent ? <Tag color="gold" style={{ marginLeft: 4, fontSize: 10 }}>Подключена</Tag> : null}
-                            </span>
-                          }
+                          bordered
+                          style={isCurrent ? { borderColor: '#52c41a', borderWidth: 2 } : undefined}
                         >
-                          <Space wrap size={4} style={{ marginBottom: 4 }}>
-                            {snap?.periodDays ? <Tag style={{ fontSize: 11 }}>{Math.round(snap.periodDays)}д</Tag> : null}
-                            {snap?.trades ? <Tag style={{ fontSize: 11 }}>{snap.trades} сд.</Tag> : null}
-                          </Space>
-                          {hasChart ? (
-                            <div style={{ height: 80, marginBottom: 4 }}>
+                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                            <Space direction="vertical" size={0}>
+                              <Space>
+                                <Typography.Text strong style={{ fontSize: 12 }}>{tsDisplayName(system.name)}</Typography.Text>
+                                {isCurrent ? <Tag color="gold" style={{ fontSize: 10 }}>Подключена</Tag> : null}
+                              </Space>
+                            </Space>
+                            <Space size={4} wrap>
+                              {snap?.periodDays ? <Tag style={{ fontSize: 11 }}>{Math.round(snap.periodDays)}d</Tag> : null}
+                              <Tag color="green" style={{ fontSize: 11 }}>Ret {formatPercent(snap?.ret ?? 0)}</Tag>
+                              <Tag color="orange" style={{ fontSize: 11 }}>DD {formatPercent(snap?.dd ?? 0)}</Tag>
+                              <Tag color="blue" style={{ fontSize: 11 }}>PF {formatNumber(snap?.pf ?? 0)}</Tag>
+                            </Space>
+                            {hasChart ? (
                               <ChartComponent
                                 data={isCurrent && algofundPreviewSeries.length > 0
                                   ? algofundPreviewSeries
                                   : equityPointsToSeries(eqPts || [], snap?.periodDays)}
                                 type="line"
+                                fixedHeight={72}
                               />
-                            </div>
-                          ) : (
-                            <div style={{ height: 80, marginBottom: 4, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,255,255,0.03)', borderRadius: 6 }}>
+                            ) : (
                               <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
-                            </div>
-                          )}
-                          {snap ? (
-                            <Row gutter={[4, 0]}>
-                              <Col span={12}><Statistic title="Доход" value={formatPercent(previewSummary?.totalReturnPercent ?? snap.ret)} valueStyle={{ fontSize: 12, color: (previewSummary?.totalReturnPercent ?? snap.ret) >= 0 ? '#52c41a' : '#ff4d4f' }} /></Col>
-                              <Col span={12}><Statistic title="DD" value={formatPercent(previewSummary?.maxDrawdownPercent ?? snap.dd)} valueStyle={{ fontSize: 12, color: '#ff7a45' }} /></Col>
-                              <Col span={12}><Statistic title="PF" value={formatNumber(previewSummary?.profitFactor ?? snap.pf)} valueStyle={{ fontSize: 12 }} /></Col>
-                              <Col span={12}><Statistic title="Сделки" value={formatNumber(previewSummary?.tradesCount ?? snap.trades, 0)} valueStyle={{ fontSize: 12 }} /></Col>
-                            </Row>
-                          ) : previewSummary ? (
-                            <Row gutter={[4, 0]}>
-                              {previewSummary.totalReturnPercent != null ? <Col span={12}><Statistic title="Доход" value={formatPercent(previewSummary.totalReturnPercent)} valueStyle={{ fontSize: 12 }} /></Col> : null}
-                              {previewSummary.maxDrawdownPercent != null ? <Col span={12}><Statistic title="DD" value={formatPercent(previewSummary.maxDrawdownPercent)} valueStyle={{ fontSize: 12 }} /></Col> : null}
-                              {previewSummary.profitFactor != null ? <Col span={12}><Statistic title="PF" value={formatNumber(previewSummary.profitFactor)} valueStyle={{ fontSize: 12 }} /></Col> : null}
-                              {previewSummary.tradesCount != null ? <Col span={12}><Statistic title="Сделки" value={formatNumber(previewSummary.tradesCount, 0)} valueStyle={{ fontSize: 12 }} /></Col> : null}
-                            </Row>
-                          ) : null}
+                            )}
+                            <Button size="small" onClick={() => setSystemDetailModal({ name: system.name, id: system.id })}>Подробнее</Button>
+                          </Space>
                         </Card>
                       </Col>
                     );
