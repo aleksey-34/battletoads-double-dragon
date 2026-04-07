@@ -2181,6 +2181,8 @@ export const executeStrategy = async (
     : inferSyntheticStateFromPair(liveBase, liveQuote);
 
   if (livePairState === 'mixed') {
+    const previousState = state;
+    const previousEntryRatio = entryRatio;
     await closeStrategyExposure(apiKeyName, mergedStrategy);
 
     const updated = await updateStrategy(apiKeyName, strategyId, {
@@ -2188,11 +2190,15 @@ export const executeStrategy = async (
       state: 'flat',
       entry_ratio: null,
       tp_anchor_ratio: null,
-      last_action: 'desync_closed_mixed',
+      last_action: `desync_closed_mixed@${currentRatio}`,
       last_error: null,
     });
 
-    logger.warn(`Detected mixed pair state for strategy ${strategyId}; positions were closed`);
+    if (previousState === 'long' || previousState === 'short') {
+      await recordRuntimeTradeEvent('exit', previousState, currentRatio, 0, undefined, mergedStrategy.base_symbol, previousEntryRatio ?? undefined);
+    }
+
+    logger.warn(`Detected mixed pair state for strategy ${strategyId}; positions were closed (was ${previousState})`);
     return returnWithProcessedBar({
       result: 'Mixed pair positions detected and closed',
       action: 'desync_closed_mixed',
@@ -2205,6 +2211,8 @@ export const executeStrategy = async (
   }
 
   if (state !== 'flat' && livePairState !== 'flat' && state !== livePairState) {
+    const previousState = state;
+    const previousEntryRatio = entryRatio;
     await closeStrategyExposure(apiKeyName, mergedStrategy);
 
     const updated = await updateStrategy(apiKeyName, strategyId, {
@@ -2212,11 +2220,15 @@ export const executeStrategy = async (
       state: 'flat',
       entry_ratio: null,
       tp_anchor_ratio: null,
-      last_action: 'desync_closed_state_mismatch',
+      last_action: `desync_closed_state_mismatch@${currentRatio}`,
       last_error: null,
     });
 
-    logger.warn(`Detected wrong-side live state for strategy ${strategyId}; positions were closed`);
+    if (previousState === 'long' || previousState === 'short') {
+      await recordRuntimeTradeEvent('exit', previousState, currentRatio, 0, undefined, mergedStrategy.base_symbol, previousEntryRatio ?? undefined);
+    }
+
+    logger.warn(`Detected wrong-side live state for strategy ${strategyId}; was ${previousState}, live=${livePairState}; positions were closed`);
     return returnWithProcessedBar({
       result: 'Live pair state mismatched strategy state and was closed',
       action: 'desync_closed_state_mismatch',
@@ -2274,12 +2286,15 @@ export const executeStrategy = async (
   }
 
   if (state !== 'flat' && livePairState === 'flat') {
+    const previousState = state;
+    const previousEntryRatio = entryRatio;
+
     await updateStrategy(apiKeyName, strategyId, {
       ...executionBindingPatch,
       state: 'flat',
       entry_ratio: null,
       tp_anchor_ratio: null,
-      last_action: 'state_resynced_flat',
+      last_action: `state_resynced_flat@${currentRatio}`,
       last_error: null,
     });
 
@@ -2288,6 +2303,11 @@ export const executeStrategy = async (
     mergedStrategy.state = 'flat';
     mergedStrategy.entry_ratio = null;
     mergedStrategy.tp_anchor_ratio = null;
+
+    if (previousState === 'long' || previousState === 'short') {
+      logger.warn(`State resynced to flat for strategy ${strategyId} (${apiKeyName}): was ${previousState}, entry_ratio=${previousEntryRatio}, current_ratio=${currentRatio}`);
+      await recordRuntimeTradeEvent('exit', previousState, currentRatio, 0, undefined, mergedStrategy.base_symbol, previousEntryRatio ?? undefined);
+    }
   }
 
   if (dedupeClosedBar) {
