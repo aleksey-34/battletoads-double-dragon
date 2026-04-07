@@ -41,6 +41,7 @@ interface RazgonInstance {
   candleCache: Map<string, Candle1m[]>;
   knownSymbols: Set<string>;
   failedSymbols: Map<string, number>; // symbol → timestamp of last failure (cooldown)
+  lastBalanceInsufficient: number; // timestamp of last "Balance insufficient" error (global cooldown)
   momentumTimer: ReturnType<typeof setInterval> | null;
   sniperTimer: ReturnType<typeof setInterval> | null;
   fundingTimer: ReturnType<typeof setInterval> | null;
@@ -249,6 +250,7 @@ async function createInstance(
     candleCache: new Map(),
     knownSymbols: new Set(),
     failedSymbols: new Map(),
+    lastBalanceInsufficient: 0,
     momentumTimer: null,
     sniperTimer: null,
     fundingTimer: null,
@@ -478,9 +480,21 @@ async function momentumTick(inst: RazgonInstance): Promise<void> {
     return;
   }
 
+  // GLOBAL cooldown: if last order failed with "Balance insufficient", skip ALL entries for 5 min
+  const BALANCE_COOLDOWN_MS = 5 * 60_000;
+  const now = Date.now();
+  if (inst.lastBalanceInsufficient && (now - inst.lastBalanceInsufficient) < BALANCE_COOLDOWN_MS) {
+    if (inst.tickCount % 60 === 1) {
+      const remaining = Math.ceil((BALANCE_COOLDOWN_MS - (now - inst.lastBalanceInsufficient)) / 1000);
+      const msg = `[Razgon:${inst.keyName}] Global balance cooldown active (${remaining}s remaining), skipping entries`;
+      logger.info(msg);
+      console.log(msg);
+    }
+    return;
+  }
+
   // Skip symbols where we already have ANY position (avoid opposite/duplicate)
   // Also skip symbols on cooldown from recent order failures (60s cooldown)
-  const now = Date.now();
   const FAIL_COOLDOWN_MS = 60_000;
   const candidates = cfg.watchlist.filter(sym => {
     if (inst.openPositions.some(p => p.symbol === sym)) return false;
@@ -632,6 +646,11 @@ async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: strin
   } catch (e) {
     // Set 60s cooldown to prevent spam retries
     inst.failedSymbols.set(symbol, Date.now());
+    // If balance insufficient, set GLOBAL cooldown to stop ALL entries for 5 min
+    const errStr = (e as Error).message.toLowerCase();
+    if (errStr.includes('insufficient') || errStr.includes('balance') || errStr.includes('margin')) {
+      inst.lastBalanceInsufficient = Date.now();
+    }
     const errMsg = `[Razgon:${inst.keyName}] Order FAILED ${symbol}: ${(e as Error).message}`;
     logger.error(errMsg);
     console.error(errMsg);
