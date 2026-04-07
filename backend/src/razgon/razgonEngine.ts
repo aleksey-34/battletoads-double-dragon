@@ -269,21 +269,24 @@ async function createInstance(
       // Normalize side: ccxt uses 'long'/'short', some exchanges use 'Buy'/'Sell'
       const rawSide = String(pos.side ?? '').toLowerCase();
       const side: 'long' | 'short' = (rawSide === 'long' || rawSide === 'buy') ? 'long' : 'short';
-      const entryPrice = Number(pos.entryPrice ?? pos.avgPrice ?? pos.markPrice ?? 0);
-      if (entryPrice <= 0) {
-        logger.warn(`[Razgon:${keyEntry.name}] Skipping restore of ${sym} ${side}: entryPrice=0`);
+      const entryPrice = Number(pos.entryPrice ?? pos.avgPrice ?? pos.markPrice ?? pos.liquidationPrice ?? 0);
+      const markPrice = Number(pos.markPrice ?? pos.entryPrice ?? pos.avgPrice ?? 0);
+      // Use markPrice as fallback entry — never skip real exchange positions
+      const effectiveEntry = entryPrice > 0 ? entryPrice : markPrice;
+      if (effectiveEntry <= 0) {
+        logger.warn(`[Razgon:${keyEntry.name}] Skipping restore of ${sym} ${side}: no price data at all`);
         continue;
       }
-      const notional = Number(pos.positionValue ?? pos.notional ?? 0) || sz * entryPrice;
+      const notional = Number(pos.positionValue ?? pos.notional ?? 0) || sz * effectiveEntry;
       if (notional <= 0) continue;
       const margin = notional / cfg.momentum.leverage;
-      const slPrice = riskManager.computeStopLoss(entryPrice, side, cfg.momentum.stopLossPercent);
+      const slPrice = riskManager.computeStopLoss(effectiveEntry, side, cfg.momentum.stopLossPercent);
       inst.openPositions.push({
-        id: uuid(), subStrategy: 'momentum', symbol: sym, side, entryPrice, notional, margin,
-        leverage: cfg.momentum.leverage, openedAt: Date.now(), tpAnchor: entryPrice, slPrice,
+        id: uuid(), subStrategy: 'momentum', symbol: sym, side, entryPrice: effectiveEntry, notional, margin,
+        leverage: cfg.momentum.leverage, openedAt: Date.now(), tpAnchor: effectiveEntry, slPrice,
         unrealizedPnl: Number(pos.unrealisedPnl ?? pos.unrealizedPnl ?? 0),
       });
-      logger.info(`[Razgon:${keyEntry.name}] Restored ${sym} ${side} entry=${entryPrice} notional=$${notional.toFixed(2)} margin=$${margin.toFixed(2)}`);
+      logger.info(`[Razgon:${keyEntry.name}] Restored ${sym} ${side} entry=${effectiveEntry} notional=$${notional.toFixed(2)} margin=$${margin.toFixed(2)}`);
     }
     if (inst.openPositions.length > 0) {
       logger.info(`[Razgon:${keyEntry.name}] Restored ${inst.openPositions.length} positions: ${inst.openPositions.map(p => `${p.symbol} ${p.side}`).join(', ')}`);
@@ -461,10 +464,18 @@ async function momentumTick(inst: RazgonInstance): Promise<void> {
   try {
     const bals = await getBalances(inst.keyName);
     const usdtBal = bals.find(b => b.coin === 'USDT');
-    availableBalance = usdtBal ? parseFloat(usdtBal.availableBalance) : 0;
-    // Also sync wallet balance for accurate state
-    const walletBal = usdtBal ? parseFloat(usdtBal.walletBalance || usdtBal.availableBalance) : 0;
-    if (walletBal > 0) inst.balance = walletBal;
+    if (usdtBal) {
+      const walletBal = parseFloat(usdtBal.walletBalance || '0');
+      const marginUsed = parseFloat(usdtBal.marginUsed || '0');
+      const reportedAvail = parseFloat(usdtBal.availableBalance || '0');
+      // Use min of reported available and (wallet - margin) to handle exchanges
+      // where 'free' falls back to 'total' (e.g., BingX)
+      availableBalance = marginUsed > 0
+        ? Math.min(reportedAvail, Math.max(0, walletBal - marginUsed))
+        : reportedAvail;
+      // Sync wallet balance for accurate state
+      if (walletBal > 0) inst.balance = walletBal;
+    }
   } catch (e) {
     logger.debug(`[Razgon:${inst.keyName}] Available balance check failed: ${(e as Error).message}`);
     return; // fail-safe: don't trade if we can't check balance
@@ -602,7 +613,14 @@ async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: strin
   try {
     const bals = await getBalances(inst.keyName);
     const usdtBal = bals.find(b => b.coin === 'USDT');
-    availableForEntry = usdtBal ? parseFloat(usdtBal.availableBalance) : 0;
+    if (usdtBal) {
+      const walletBal = parseFloat(usdtBal.walletBalance || '0');
+      const marginUsed = parseFloat(usdtBal.marginUsed || '0');
+      const reportedAvail = parseFloat(usdtBal.availableBalance || '0');
+      availableForEntry = marginUsed > 0
+        ? Math.min(reportedAvail, Math.max(0, walletBal - marginUsed))
+        : reportedAvail;
+    }
   } catch (e) {
     logger.warn(`[Razgon:${inst.keyName}] Cannot fetch available balance for ${symbol}, skipping`);
     return;
