@@ -885,28 +885,6 @@ const ClientCabinet: React.FC = () => {
       {strategyWorkspace && strategyWorkspace.offers.length > 0 ? (
         <>
           {/* Витрина офферов */}
-          {strategyWorkspace.capabilities?.settings ? (
-            <Card className="battletoads-card" title="Настройки риска и частоты" size="small">
-              <Row gutter={[16, 16]}>
-                <Col xs={24} md={12}>
-                  <Typography.Text strong>Риск: {formatNumber(strategyRiskInput, 1)}</Typography.Text>
-                  <Slider min={0} max={10} step={0.1} value={strategyRiskInput} onChange={(v) => setStrategyRiskInput(toFinite(v))} />
-                </Col>
-                <Col xs={24} md={12}>
-                  <Typography.Text strong>Частота сделок: {formatNumber(strategyTradeInput, 1)}</Typography.Text>
-                  <Slider min={0} max={10} step={0.1} value={strategyTradeInput} onChange={(v) => setStrategyTradeInput(toFinite(v))} />
-                </Col>
-              </Row>
-              <Space wrap>
-                <Button type="primary" loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>
-                  Сохранить настройки
-                </Button>
-                <Button onClick={() => { setStrategyRiskInput(levelToSliderValue(strategyWorkspace?.profile?.risk_level || 'medium')); setStrategyTradeInput(levelToSliderValue(strategyWorkspace?.profile?.trade_frequency_level || 'medium')); }}>
-                  Дефолт
-                </Button>
-              </Space>
-            </Card>
-          ) : null}
           <Card className="battletoads-card" title="Витрина стратегий" size="small">
             {strategyWorkspace.offers.length === 0 ? (
               <Empty description="Офферов на витрине пока нет" />
@@ -940,7 +918,25 @@ const ClientCabinet: React.FC = () => {
                           {Array.isArray(offer.equityPoints) && offer.equityPoints.length > 0 ? (
                             <ChartComponent data={offer.equityPoints.map((v, i) => ({ time: i, value: v }))} type="line" fixedHeight={120} />
                           ) : null}
-                          <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
+                          {strategyWorkspace.capabilities?.settings ? (
+                            <>
+                              <div>
+                                <Typography.Text type="secondary" style={{ fontSize: 11 }}>Риск: {sliderValueToLevel(strategyRiskInput)}</Typography.Text>
+                                <Slider size="small" min={0} max={10} step={0.1} value={strategyRiskInput} onChange={(v) => setStrategyRiskInput(toFinite(v))} style={{ margin: '2px 0' }} />
+                              </div>
+                              <div>
+                                <Typography.Text type="secondary" style={{ fontSize: 11 }}>Частота: {sliderValueToLevel(strategyTradeInput)}</Typography.Text>
+                                <Slider size="small" min={0} max={10} step={0.1} value={strategyTradeInput} onChange={(v) => setStrategyTradeInput(toFinite(v))} style={{ margin: '2px 0' }} />
+                              </div>
+                              <Space size={4} wrap>
+                                <Button size="small" type="primary" loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>Сохранить</Button>
+                                <Button size="small" onClick={() => { setStrategyRiskInput(levelToSliderValue(strategyWorkspace?.profile?.risk_level || 'medium')); setStrategyTradeInput(levelToSliderValue(strategyWorkspace?.profile?.trade_frequency_level || 'medium')); }}>Дефолт</Button>
+                                <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
+                              </Space>
+                            </>
+                          ) : (
+                            <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
+                          )}
                         </Space>
                       </Card>
                     </Col>
@@ -1001,19 +997,38 @@ const ClientCabinet: React.FC = () => {
                     {offer.metrics.trades ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(offer.metrics.trades, 0)} /></Col> : null}
                   </Row>
                   {strategyWorkspace?.capabilities?.settings ? (
-                    <Button
-                      type={isSelected ? 'default' : 'primary'}
-                      danger={isSelected}
-                      onClick={() => {
-                        setStrategyOfferIds((current) =>
-                          isSelected
-                            ? current.filter((id) => id !== offer.offerId)
-                            : [...current, offer.offerId]
-                        );
-                      }}
-                    >
-                      {isSelected ? 'Убрать из портфеля' : 'Добавить в портфель'}
-                    </Button>
+                    <>
+                      <Card size="small" title="Настройки риска и частоты" style={{ marginTop: 8 }}>
+                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                          <div>
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>Риск: {sliderValueToLevel(strategyRiskInput)} ({strategyRiskInput.toFixed(1)})</Typography.Text>
+                            <Slider min={0} max={10} step={0.1} value={strategyRiskInput} onChange={(v) => setStrategyRiskInput(toFinite(v))} />
+                          </div>
+                          <div>
+                            <Typography.Text type="secondary" style={{ fontSize: 12 }}>Частота сделок: {sliderValueToLevel(strategyTradeInput)} ({strategyTradeInput.toFixed(1)})</Typography.Text>
+                            <Slider min={0} max={10} step={0.1} value={strategyTradeInput} onChange={(v) => setStrategyTradeInput(toFinite(v))} />
+                          </div>
+                          <Space wrap>
+                            <Button type="primary" loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>Сохранить</Button>
+                            <Button loading={actionLoading === 'strategy-preview'} onClick={() => void runStrategySelectionPreview()}>Пересчитать</Button>
+                            <Button onClick={() => { setStrategyRiskInput(levelToSliderValue(strategyWorkspace?.profile?.risk_level || 'medium')); setStrategyTradeInput(levelToSliderValue(strategyWorkspace?.profile?.trade_frequency_level || 'medium')); }}>Дефолт</Button>
+                          </Space>
+                        </Space>
+                      </Card>
+                      <Button
+                        type={isSelected ? 'default' : 'primary'}
+                        danger={isSelected}
+                        onClick={() => {
+                          setStrategyOfferIds((current) =>
+                            isSelected
+                              ? current.filter((id) => id !== offer.offerId)
+                              : [...current, offer.offerId]
+                          );
+                        }}
+                      >
+                        {isSelected ? 'Убрать из портфеля' : 'Добавить в портфель'}
+                      </Button>
+                    </>
                   ) : (
                     <Alert
                       type="info"
