@@ -2082,6 +2082,9 @@ export const executeStrategy = async (
     const resolvedEntryPrice = tradeType === 'exit' && Number.isFinite(entryPriceOverride) && (entryPriceOverride as number) > 0
       ? entryPriceOverride as number
       : normalizedPrice;
+    if (tradeType === 'exit') {
+      logger.info(`[pnl_debug_record] strategy=${strategyId} entryPriceOverride=${entryPriceOverride}, isFinite=${Number.isFinite(entryPriceOverride)}, >0=${(entryPriceOverride as number) > 0}, resolvedEntryPrice=${resolvedEntryPrice}, normalizedPrice=${normalizedPrice}`);
+    }
     try {
       await recordLiveTradeEvent(strategyId, {
         trade_type: tradeType,
@@ -2156,6 +2159,7 @@ export const executeStrategy = async (
     mergedStrategy.tp_anchor_ratio = null;
 
     if (signalSnapshot === 'long' || signalSnapshot === 'short') {
+      logger.info(`[pnl_debug] strategy=${strategyId} exit ${signalSnapshot}: exitEntryRatio=${exitEntryRatio}, currentRatio=${currentRatio}, mergedEntryRatio=${mergedStrategy.entry_ratio}, diff=${exitEntryRatio != null ? (currentRatio - exitEntryRatio).toFixed(8) : 'null'}`);
       await recordRuntimeTradeEvent('exit', signalSnapshot, currentRatio, 0, undefined, mergedStrategy.base_symbol, exitEntryRatio ?? undefined);
     }
   };
