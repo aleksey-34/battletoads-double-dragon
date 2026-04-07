@@ -922,11 +922,11 @@ const ClientCabinet: React.FC = () => {
                             <>
                               <div>
                                 <Typography.Text type="secondary" style={{ fontSize: 11 }}>Риск: {sliderValueToLevel(strategyRiskInput)}</Typography.Text>
-                                <Slider size="small" min={0} max={10} step={0.1} value={strategyRiskInput} onChange={(v) => setStrategyRiskInput(toFinite(v))} style={{ margin: '2px 0' }} />
+                                <Slider min={0} max={10} step={0.1} value={strategyRiskInput} onChange={(v) => setStrategyRiskInput(toFinite(v))} style={{ margin: '2px 0' }} />
                               </div>
                               <div>
                                 <Typography.Text type="secondary" style={{ fontSize: 11 }}>Частота: {sliderValueToLevel(strategyTradeInput)}</Typography.Text>
-                                <Slider size="small" min={0} max={10} step={0.1} value={strategyTradeInput} onChange={(v) => setStrategyTradeInput(toFinite(v))} style={{ margin: '2px 0' }} />
+                                <Slider min={0} max={10} step={0.1} value={strategyTradeInput} onChange={(v) => setStrategyTradeInput(toFinite(v))} style={{ margin: '2px 0' }} />
                               </div>
                               <Space size={4} wrap>
                                 <Button size="small" type="primary" loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>Сохранить</Button>
