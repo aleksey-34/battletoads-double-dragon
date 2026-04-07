@@ -1139,18 +1139,6 @@ const ClientCabinet: React.FC = () => {
             </Space>
           </Card>
         </>
-      ) : workspace?.productMode === 'algofund_client' ? (
-        <Card className="battletoads-card" size="small">
-          <Empty
-            description={
-              <Space direction="vertical" size={8}>
-                <Typography.Text>Ваш аккаунт подключён к продукту «Алгофонд».</Typography.Text>
-                <Typography.Text type="secondary">Торговые системы доступны на вкладке «Алгофонд».</Typography.Text>
-                <Typography.Text type="secondary">Хотите также индивидуальные стратегии? Обратитесь к администратору.</Typography.Text>
-              </Space>
-            }
-          />
-        </Card>
       ) : (
         <Card className="battletoads-card" size="small">
           <Empty
@@ -1319,11 +1307,9 @@ const ClientCabinet: React.FC = () => {
                         <Button type="primary" size="small" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
                           Сохранить риск
                         </Button>
-                        {isCurrent ? (
-                          <Button size="small" loading={actionLoading === 'algofund-refresh'} onClick={() => void refreshAlgofundState()}>
-                            Обновить предпросмотр
-                          </Button>
-                        ) : null}
+                        <Button size="small" loading={actionLoading === 'algofund-refresh'} onClick={() => void refreshAlgofundState()}>
+                          Обновить предпросмотр
+                        </Button>
                         <Button size="small" onClick={() => setAlgofundRiskMultiplier(toFinite(algofundWorkspace?.profile?.risk_multiplier, 1))}>
                           Дефолт
                         </Button>
