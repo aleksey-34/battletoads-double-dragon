@@ -917,26 +917,10 @@ const ClientCabinet: React.FC = () => {
                           </Space>
                           {Array.isArray(offer.equityPoints) && offer.equityPoints.length > 0 ? (
                             <ChartComponent data={offer.equityPoints.map((v, i) => ({ time: i, value: v }))} type="line" fixedHeight={120} />
-                          ) : null}
-                          {strategyWorkspace.capabilities?.settings ? (
-                            <>
-                              <div>
-                                <Typography.Text type="secondary" style={{ fontSize: 11 }}>Риск: {sliderValueToLevel(strategyRiskInput)}</Typography.Text>
-                                <Slider min={0} max={10} step={0.1} value={strategyRiskInput} onChange={(v) => setStrategyRiskInput(toFinite(v))} style={{ margin: '2px 0' }} />
-                              </div>
-                              <div>
-                                <Typography.Text type="secondary" style={{ fontSize: 11 }}>Частота: {sliderValueToLevel(strategyTradeInput)}</Typography.Text>
-                                <Slider min={0} max={10} step={0.1} value={strategyTradeInput} onChange={(v) => setStrategyTradeInput(toFinite(v))} style={{ margin: '2px 0' }} />
-                              </div>
-                              <Space size={4} wrap>
-                                <Button size="small" type="primary" loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>Сохранить</Button>
-                                <Button size="small" onClick={() => { setStrategyRiskInput(levelToSliderValue(strategyWorkspace?.profile?.risk_level || 'medium')); setStrategyTradeInput(levelToSliderValue(strategyWorkspace?.profile?.trade_frequency_level || 'medium')); }}>Дефолт</Button>
-                                <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
-                              </Space>
-                            </>
                           ) : (
-                            <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
+                            <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
                           )}
+                          <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
                         </Space>
                       </Card>
                     </Col>
@@ -1305,7 +1289,7 @@ const ClientCabinet: React.FC = () => {
                         step={0.05}
                         value={algofundRiskMultiplier}
                         onChange={(v) => setAlgofundRiskMultiplier(Math.min(toFinite(v), toFinite(algofundWorkspace.plan?.risk_cap_max, 1)))}
-                        onAfterChange={isCurrent ? (() => void refreshAlgofundState()) : undefined}
+                        onAfterChange={() => void refreshAlgofundState()}
                       />
                       <Space wrap>
                         <Button type="primary" size="small" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
