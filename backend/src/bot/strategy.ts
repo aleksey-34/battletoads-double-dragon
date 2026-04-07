@@ -1499,6 +1499,27 @@ export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): 
   const { db } = await import('../utils/database');
   const apiKeyId = await getApiKeyId(apiKeyName);
 
+  // --- Path A isolation: 1 pair + 1 API key = max 1 active strategy ---
+  {
+    const baseNorm = normalizeSymbol(String(draft.base_symbol || DEFAULT_STRATEGY.base_symbol));
+    const modeNorm = normalizeMarketMode(draft.market_mode || DEFAULT_STRATEGY.market_mode);
+    const quoteNorm = modeNorm === 'mono'
+      ? normalizeSymbol(String(draft.quote_symbol || ''))
+      : normalizeSymbol(String(draft.quote_symbol || DEFAULT_STRATEGY.quote_symbol));
+
+    const conflict = await db.get(
+      `SELECT id, name FROM strategies
+       WHERE api_key_id = ? AND base_symbol = ? AND quote_symbol = ? AND is_active = 1`,
+      [apiKeyId, baseNorm, quoteNorm]
+    );
+    if (conflict) {
+      throw new Error(
+        `Pair ${baseNorm}/${quoteNorm} already has an active strategy "${(conflict as any).name}" (id=${(conflict as any).id}) on this API key. ` +
+        `Deactivate or delete it first, or use a different API key.`
+      );
+    }
+  }
+
   const strategyType = normalizeStrategyType(draft.strategy_type || DEFAULT_STRATEGY.strategy_type);
   const marketMode = normalizeMarketMode(draft.market_mode || DEFAULT_STRATEGY.market_mode);
   const typeDefaults = getTypeAwareStrategyDefaults(strategyType);
@@ -2164,6 +2185,25 @@ export const executeStrategy = async (
     }
   };
 
+  /**
+   * Atomic close+persist: guarantees persistFlatAfterExit runs even if
+   * closeStrategyExposure throws (exchange timeout, network error).
+   * The position may already be closed on exchange when the error fires,
+   * so we must still record the exit and reset state.
+   */
+  const closeAndRecordExit = async (
+    action: StrategyCloseAction,
+    signalSnapshot: StrategySignal
+  ): Promise<void> => {
+    // Step 1: close on exchange — if this fails, do NOT touch DB state;
+    // the position is still open and next cycle will retry.
+    await closeStrategyExposure(apiKeyName, mergedStrategy);
+    // Step 2: exchange confirmed close — now persist flat + exit event.
+    // If THIS fails, resync will catch the discrepancy on the next cycle
+    // (state=long/short in DB but flat on exchange → state_resynced_flat).
+    await persistFlatAfterExit(action, signalSnapshot);
+  };
+
   const livePositions = await getPositions(apiKeyName);
   const liveBase = livePositions.find((position: any) => {
     return String(position?.symbol || '').toUpperCase() === mergedStrategy.base_symbol.toUpperCase()
@@ -2329,33 +2369,25 @@ export const executeStrategy = async (
     const hasZScore = Number.isFinite(zScore);
 
     if (!closedAction && state === 'long' && hasZScore && Number(zScore) <= -zscoreStop) {
-      await closeStrategyExposure(apiKeyName, mergedStrategy);
-
-      await persistFlatAfterExit('zscore_stop_long', 'long');
+      await closeAndRecordExit('zscore_stop_long', 'long');
       closedAction = 'zscore_stop_long';
       closedResult = `Z-score stop hit for long ${positionLabel} (z=${Number(zScore).toFixed(3)})`;
     }
 
     if (!closedAction && state === 'short' && hasZScore && Number(zScore) >= zscoreStop) {
-      await closeStrategyExposure(apiKeyName, mergedStrategy);
-
-      await persistFlatAfterExit('zscore_stop_short', 'short');
+      await closeAndRecordExit('zscore_stop_short', 'short');
       closedAction = 'zscore_stop_short';
       closedResult = `Z-score stop hit for short ${positionLabel} (z=${Number(zScore).toFixed(3)})`;
     }
 
     if (!closedAction && state === 'long' && hasZScore && Number(zScore) >= -zscoreExit) {
-      await closeStrategyExposure(apiKeyName, mergedStrategy);
-
-      await persistFlatAfterExit('mean_revert_exit_long', 'long');
+      await closeAndRecordExit('mean_revert_exit_long', 'long');
       closedAction = 'mean_revert_exit_long';
       closedResult = `Mean-reversion exit for long ${positionLabel} (z=${Number(zScore).toFixed(3)})`;
     }
 
     if (!closedAction && state === 'short' && hasZScore && Number(zScore) <= zscoreExit) {
-      await closeStrategyExposure(apiKeyName, mergedStrategy);
-
-      await persistFlatAfterExit('mean_revert_exit_short', 'short');
+      await closeAndRecordExit('mean_revert_exit_short', 'short');
       closedAction = 'mean_revert_exit_short';
       closedResult = `Mean-reversion exit for short ${positionLabel} (z=${Number(zScore).toFixed(3)})`;
     }
@@ -2377,9 +2409,7 @@ export const executeStrategy = async (
 
       const trailingStop = trailingAnchor * (1 - takeProfitPercent / 100);
       if (Number.isFinite(trailingStop) && currentRatio <= trailingStop) {
-        await closeStrategyExposure(apiKeyName, mergedStrategy);
-
-        await persistFlatAfterExit('take_profit_long', 'long');
+        await closeAndRecordExit('take_profit_long', 'long');
         closedAction = 'take_profit_long';
         closedResult = `Take-profit hit for long ${positionLabel}`;
 
@@ -2404,9 +2434,7 @@ export const executeStrategy = async (
 
       const trailingStop = trailingAnchor * (1 + takeProfitPercent / 100);
       if (Number.isFinite(trailingStop) && currentRatio >= trailingStop) {
-        await closeStrategyExposure(apiKeyName, mergedStrategy);
-
-        await persistFlatAfterExit('take_profit_short', 'short');
+        await closeAndRecordExit('take_profit_short', 'short');
         closedAction = 'take_profit_short';
         closedResult = `Take-profit hit for short ${positionLabel}`;
 
@@ -2415,9 +2443,7 @@ export const executeStrategy = async (
     }
 
     if (!closedAction && state === 'long' && entryRatio && currentRatio <= donchianCenter) {
-      await closeStrategyExposure(apiKeyName, mergedStrategy);
-
-      await persistFlatAfterExit('stop_loss_long', 'long');
+      await closeAndRecordExit('stop_loss_long', 'long');
       closedAction = 'stop_loss_long';
       closedResult = `Stop-loss (center) hit for long ${positionLabel}`;
 
@@ -2425,9 +2451,7 @@ export const executeStrategy = async (
     }
 
     if (!closedAction && state === 'short' && entryRatio && currentRatio >= donchianCenter) {
-      await closeStrategyExposure(apiKeyName, mergedStrategy);
-
-      await persistFlatAfterExit('stop_loss_short', 'short');
+      await closeAndRecordExit('stop_loss_short', 'short');
       closedAction = 'stop_loss_short';
       closedResult = `Stop-loss (center) hit for short ${positionLabel}`;
 
