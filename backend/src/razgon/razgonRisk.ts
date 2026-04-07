@@ -50,14 +50,16 @@ export class RazgonRiskManager {
     // Because loss = margin * leverage * stopFraction
     const riskBasedMargin = maxRisk / (stopFraction * leverage);
 
-    // Allocation cap
-    const allocationMargin = balance * allocation;
+    // Allocation cap — divide by max concurrent positions for even distribution
+    const maxPositions = this.config.momentum.maxConcurrentPositions || 3;
+    const perPositionAllocation = allocation / maxPositions;
+    const allocationMargin = balance * perPositionAllocation;
 
     // Already-locked margin
     const lockedMargin = openPositions.reduce((sum, p) => sum + p.margin, 0);
-    const availableMargin = Math.max(0, allocationMargin - lockedMargin);
+    const availableMargin = Math.max(0, balance * allocation - lockedMargin);
 
-    const margin = Math.min(riskBasedMargin, availableMargin);
+    const margin = Math.min(riskBasedMargin, allocationMargin, availableMargin);
 
     if (margin < 1) {
       logger.debug('[RazgonRisk] Computed margin < $1, skip trade');

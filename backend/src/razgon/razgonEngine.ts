@@ -566,12 +566,15 @@ async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: strin
   }
 
   // CRITICAL: also check exchange-level positions to prevent opposite positions after restarts
+  // AND to enforce maxConcurrentPositions even if in-memory state is incomplete
+  let exchangePositionCount = 0;
   try {
     const exchPos = await getPositions(inst.keyName);
-    const hasExchangePos = exchPos.some((ep: any) => {
-      const sz = Math.abs(Number(ep.size ?? 0));
+    const openExchPos = exchPos.filter((ep: any) => Math.abs(Number(ep.size ?? 0)) > 0);
+    exchangePositionCount = openExchPos.length;
+    const hasExchangePos = openExchPos.some((ep: any) => {
       const sym = String(ep.symbol ?? '').replace(/[/:]/g, '');
-      return sz > 0 && sym === symbol;
+      return sym === symbol;
     });
     if (hasExchangePos) {
       // Add to cooldown so we don't spam this check every 5s
@@ -584,6 +587,14 @@ async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: strin
   } catch (e) {
     logger.warn(`[Razgon:${inst.keyName}] Exchange position check failed for ${symbol}, skipping entry: ${(e as Error).message}`);
     return; // fail-safe: don't open if we can't verify
+  }
+
+  // Enforce maxConcurrentPositions based on EXCHANGE data (not just in-memory)
+  if (exchangePositionCount >= config.momentum.maxConcurrentPositions) {
+    if (inst.tickCount % 60 === 1) {
+      console.log(`[Razgon:${inst.keyName}] Max positions reached (${exchangePositionCount}/${config.momentum.maxConcurrentPositions} on exchange), skip ${symbol}`);
+    }
+    return;
   }
 
   // Fetch REAL available balance to cap margin
