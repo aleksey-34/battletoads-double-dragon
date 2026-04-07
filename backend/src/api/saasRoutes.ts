@@ -615,7 +615,7 @@ router.post('/admin/strategy-client-batch-connect', async (req, res) => {
     if (offerIds.length === 0) return res.status(400).json({ error: 'offerIds required' });
     if (tenantIds.length === 0) return res.status(400).json({ error: 'tenantIds required' });
     const data = await batchConnectStrategyClientOffer(offerIds, tenantIds);
-    res.json({ success: true, ...data });
+    res.json(data);
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS strategy-client batch connect error: ${err.message}`);
