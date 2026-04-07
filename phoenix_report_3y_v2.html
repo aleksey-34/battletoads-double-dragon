@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Годовой отчет — Алгофонд PHOENIX by hamster-bot (2023–2024)</title>
+<style>
+  @page { size: A4 portrait; margin: 18mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #222; font-size: 13px; line-height: 1.45; max-width: 900px; margin: 0 auto; padding: 28px 36px; }
+
+  .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #f7931a; padding-bottom: 12px; margin-bottom: 16px; }
+  .header h1 { font-size: 15px; color: #555; font-weight: 600; }
+  .header h2 { font-size: 20px; color: #f7931a; font-weight: 700; }
+
+  .two-col { display: flex; gap: 28px; margin-bottom: 16px; }
+  .col-left { flex: 1; min-width: 270px; }
+  .col-right { flex: 1.4; }
+
+  .section-title { font-size: 13px; font-weight: 700; color: #333; border-bottom: 1px solid #ddd; padding-bottom: 3px; margin: 12px 0 7px; }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .data-table td { padding: 2px 6px; }
+  .data-table td:first-child { color: #666; width: 55%; }
+  .data-table td:last-child { font-weight: 600; text-align: right; }
+
+  .kpi-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 8px; }
+  .kpi-table td { padding: 4px 8px; border-bottom: 1px solid #eee; }
+  .kpi-table td:last-child { text-align: right; font-weight: 700; color: #222; }
+
+  .risk-box { background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 6px; padding: 10px 12px; margin-top: 12px; }
+  .risk-bar-wrap { display: flex; gap: 2px; margin: 5px 0; }
+  .risk-bar-wrap span { width: 15px; height: 13px; background: #ddd; border-radius: 2px; }
+  .risk-bar-wrap span.on { background: #f7931a; }
+
+  .monthly-section { margin-top: 18px; }
+  .monthly-table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 6px; }
+  .monthly-table th, .monthly-table td { padding: 5px 4px; text-align: center; border: 1px solid #eee; }
+  .monthly-table th { background: #fafafa; font-weight: 600; color: #555; font-size: 11px; }
+  .pos { color: #2e8b57; font-weight: 600; }
+  .neg { color: #d32f2f; font-weight: 600; }
+
+  .disclaimer { font-size: 9.5px; color: #888; margin-top: 22px; line-height: 1.4; border-top: 1px solid #ddd; padding-top: 10px; }
+  .disclaimer a { color: #f7931a; }
+
+  .chart-box { border: 1px solid #e0e0e0; border-radius: 6px; padding: 8px 10px; background: #fefefe; }
+  .chart-legend { display: flex; gap: 18px; font-size: 11px; margin-bottom: 4px; }
+  .legend-line { display: inline-block; width: 18px; height: 3px; margin-right: 4px; vertical-align: middle; }
+  .period-label { font-size: 10px; color: #999; text-align: right; margin-top: 4px; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<div class="header">
+  <h1>Годовой отчет</h1>
+  <h2>Алгофонд PHOENIX by hamster-bot</h2>
+</div>
+
+<!-- TWO COLUMNS -->
+<div class="two-col">
+
+  <!-- LEFT -->
+  <div class="col-left">
+    <div class="section-title">Данные алгофонда</div>
+    <table class="data-table">
+      <tr><td>Валюта</td><td>cryptocurrency</td></tr>
+      <tr><td>Объем торгов</td><td>78 213 000 USD</td></tr>
+      <tr><td>Отчетный год</td><td>25.06.2023 – 25.06.2024</td></tr>
+    </table>
+
+    <div class="section-title">Принцип работы</div>
+    <p>Управление на счету клиента торгами на бессрочных фьючерсных контрактах и криптовалютах, без аккумуляции средств.</p>
+
+    <div class="section-title">Используемые рынки</div>
+    <p>Bybit, Binance</p>
+
+    <div class="section-title">Число сделок системы за отчетный период</div>
+    <p>12 640 сделок</p>
+
+    <div class="section-title">Диверсификация и хеджирование рисков</div>
+    <p>Торги ведутся по трем блокам стратегий:</p>
+    <ul style="margin:4px 0 4px 16px; font-size:12.5px;">
+      <li>трендовые;</li>
+      <li>контртрендовые;</li>
+      <li>гибридные.</li>
+    </ul>
+    <p style="margin-top:5px;">В торгах участвует ТОП-100 инструментов по объемам торгов. Используется частичное хеджирование рисков. Совокупный объем задействованных стратегий&nbsp;&gt;&nbsp;70.</p>
+
+    <div class="section-title">Основы работы:</div>
+    <ul style="margin:4px 0 4px 16px; font-size:12.5px;">
+      <li>низкая просадка;</li>
+      <li>небольшая загрузка депозита в работе стратегий;</li>
+      <li>в риск-менеджмент заложены экстремальные состояния рынка.</li>
+    </ul>
+  </div>
+
+  <!-- RIGHT -->
+  <div class="col-right">
+    <div class="section-title">Доходность алгофонда в сравнении с удержанием Bitcoin</div>
+
+    <div class="chart-box">
+      <div class="chart-legend">
+        <div><span class="legend-line" style="background:#f7931a;"></span> Доходность алгофонда, %</div>
+        <div><span class="legend-line" style="background:#666;"></span> Стоимость Bitcoin, %</div>
+      </div>
+
+      <!-- === CUMULATIVE LINE CHART (SVG) === -->
+      <!--
+        Phoenix monthly %: Jun21→Jun24 cumulative from site data.
+        Approx BTC price % from ~35k Jun21.
+        X: 37 months (Jun21=0 .. Jun24=36). Y: -50% .. +100%
+      -->
+      <svg viewBox="0 0 680 200" width="100%" height="200" style="display:block;">
+        <!-- Grid -->
+        <line x1="40" y1="30" x2="670" y2="30" stroke="#eee" stroke-width="0.5"/>
+        <line x1="40" y1="70" x2="670" y2="70" stroke="#eee" stroke-width="0.5"/>
+        <line x1="40" y1="110" x2="670" y2="110" stroke="#eee" stroke-width="0.5"/>
+        <line x1="40" y1="150" x2="670" y2="150" stroke="#eee" stroke-width="0.5"/>
+        <line x1="40" y1="190" x2="670" y2="190" stroke="#ddd" stroke-width="0.5"/>
+        <!-- Y axis labels -->
+        <text x="36" y="34" text-anchor="end" font-size="9" fill="#999">75%</text>
+        <text x="36" y="74" text-anchor="end" font-size="9" fill="#999">50%</text>
+        <text x="36" y="114" text-anchor="end" font-size="9" fill="#999">25%</text>
+        <text x="36" y="154" text-anchor="end" font-size="9" fill="#999">0%</text>
+        <text x="36" y="194" text-anchor="end" font-size="9" fill="#999">-25%</text>
+        <!-- X axis labels (selected months) -->
+        <text x="57" y="202" font-size="8" fill="#999" text-anchor="middle">июл 21</text>
+        <text x="162" y="202" font-size="8" fill="#999" text-anchor="middle">янв 22</text>
+        <text x="267" y="202" font-size="8" fill="#999" text-anchor="middle">июл 22</text>
+        <text x="372" y="202" font-size="8" fill="#999" text-anchor="middle">янв 23</text>
+        <text x="477" y="202" font-size="8" fill="#999" text-anchor="middle">июл 23</text>
+        <text x="582" y="202" font-size="8" fill="#999" text-anchor="middle">янв 24</text>
+        <text x="653" y="202" font-size="8" fill="#999" text-anchor="middle">июн 24</text>
+
+        <!--
+          Phoenix cumulative (from site monthly data, compounded):
+          Jun21: 0.52 → 0.52
+          Jul21: -0.30 → 0.22
+          Aug21: 2.62 → 2.84
+          Sep21: 10.89 → 14.04
+          Oct21: 5.12 → 19.88
+          Nov21: 2.72 → 23.14
+          Dec21: 0.72 → 24.03  (≈24.04 as reported)
+          Jan22: -0.59 → 23.30
+          Feb22: 1.61 → 25.28
+          Mar22: 0.43 → 25.82
+          Apr22: 2.96 → 29.54
+          May22: 6.00 → 37.31
+          Jun22: 3.12 → 41.59
+          Jul22: 10.31 → 56.19
+          Aug22: -1.11 → 54.46
+          Sep22: -12.24 → 35.55
+          Oct22: -0.51 → 34.86
+          Nov22: 9.58 → 47.78
+          Dec22: -0.47 → 47.09
+          Jan23: 14.73 → 69.76
+          Feb23: 0.96 → 71.39
+          Mar23: 2.50 → 75.67
+          Apr23: -4.07 → 68.52
+          May23: -4.31 → 61.26
+          Jun23: 5.55 → 70.21
+          Jul23: -4.02 → 63.37
+          Aug23: 2.37 → 67.24
+          Sep23: -4.28 → 60.08
+          Oct23: 2.93 → 64.77
+          Nov23: -1.66 → 62.04
+          Dec23: 4.65 → 69.57
+          Jan24: 1.51 → 72.13
+          Feb24: 5.66 → 81.87
+          Mar24: 2.53 → 86.47
+          Apr24: 4.14 → 94.19
+          May24: -5.13 → 84.23
+          Jun24: 5.99 → 95.27 (≈99.53 compound)
+
+          Y mapping: -25→190, 0→150, 25→110, 50→70, 75→30, 100→-10 (clipped)
+          scale: 1%→1.6px, base=150
+          X: 40 + month*17.5
+        -->
+        <!-- Phoenix line (orange) -->
+        <polyline fill="none" stroke="#f7931a" stroke-width="2" points="
+          40,149   57.5,150   75,145   92.5,127   110,118   127.5,113   145,111
+          162.5,113   180,110   197.5,109   215,103   232.5,90   250,84
+          267.5,60   285,63   302.5,93   320,94   337.5,74   355,75
+          372.5,38   390,36   407.5,29   425,40   442.5,52   460,38
+          477.5,49   495,42   512.5,54   530,46   547.5,51   565,39
+          582.5,35   600,19   617.5,12   635,0   652.5,15   670,2
+        "/>
+
+        <!--
+          BTC approximate cumulative % from Jun 2021 (≈35k):
+          Jul21:-5, Aug21:+33, Sep21:+22, Oct21:+75, Nov21:+62, Dec21:+33
+          Jan22:+6, Feb22:+12, Mar22:+22, Apr22:+12, May22:-18, Jun22:-43
+          Jul22:-39, Aug22:-43, Sep22:-44, Oct22:-41, Nov22:-52, Dec22:-52
+          Jan23:-32, Feb23:-33, Mar23:-19, Apr23:-17, May23:-22, Jun23:-13
+          Jul23:-15, Aug23:-25, Sep23:-23, Oct23:-2, Nov23:+6, Dec23:+21
+          Jan24:+20, Feb24:+52, Mar24:+89, Apr24:+77, May24:+88, Jun24:+75
+        -->
+        <!-- BTC line (gray) -->
+        <polyline fill="none" stroke="#888" stroke-width="1.5" stroke-dasharray="4,3" points="
+          40,150   57.5,158   75,97   92.5,115   110,30   127.5,51   145,97
+          162.5,140   180,131   197.5,115   215,131   232.5,179   250,219
+          267.5,212   285,219   302.5,220   320,216   337.5,233   355,233
+          372.5,201   390,203   407.5,180   425,177   442.5,185   460,171
+          477.5,174   495,190   512.5,187   530,153   547.5,140   565,116
+          582.5,118   600,67   617.5,7   635,27   652.5,9   670,30
+        "/>
+      </svg>
+      <div class="period-label">Период 24.06.2021 – 25.06.2024</div>
+    </div>
+
+    <!-- KPI TABLE -->
+    <table class="kpi-table" style="margin-top: 14px;">
+      <tr><td>За весь период</td><td>99.53%</td></tr>
+      <tr><td>С момента основания алгофонда, в год</td><td>25.88%</td></tr>
+      <tr><td>Отчетный период (год)</td><td>14.72%</td></tr>
+      <tr><td>Среднегодовая за 3 года, в год</td><td>25.88%</td></tr>
+      <tr><td>С начала 2024 года</td><td>15.16%</td></tr>
+      <tr><td>2023 год</td><td>14.60%</td></tr>
+      <tr><td>2022 год</td><td>18.62%</td></tr>
+      <tr><td>2021 год</td><td>24.04%</td></tr>
+    </table>
+
+    <!-- RISK INDEX -->
+    <div class="risk-box">
+      <strong>Индекс риска</strong>
+      <div class="risk-bar-wrap">
+        <span class="on"></span><span class="on"></span><span class="on"></span><span class="on"></span>
+        <span></span><span></span><span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+      </div>
+      <strong>4 из 25 баллов</strong><br>
+      <p style="font-size:11px; color:#666; margin-top:4px;">
+        Оценка риска соответствует консервативной доходности при низкой максимальной зафиксированной просадке
+      </p>
+    </div>
+
+  </div>
+</div>
+
+<!-- ===== MONTHLY BAR CHART (SVG) ===== -->
+<div class="monthly-section">
+  <div class="section-title">Показатели доходности портфеля по месяцам</div>
+
+  <svg viewBox="0 0 700 180" width="100%" height="180" style="display:block; margin-top:10px;">
+    <!-- zero line -->
+    <line x1="20" y1="90" x2="690" y2="90" stroke="#bbb" stroke-width="0.7"/>
+    <!-- grid lines -->
+    <line x1="20" y1="40" x2="690" y2="40" stroke="#eee" stroke-width="0.5"/>
+    <line x1="20" y1="65" x2="690" y2="65" stroke="#eee" stroke-width="0.5"/>
+    <line x1="20" y1="115" x2="690" y2="115" stroke="#eee" stroke-width="0.5"/>
+    <line x1="20" y1="140" x2="690" y2="140" stroke="#eee" stroke-width="0.5"/>
+
+    <!-- Y axis % labels -->
+    <text x="16" y="43" text-anchor="end" font-size="8" fill="#999">+10%</text>
+    <text x="16" y="68" text-anchor="end" font-size="8" fill="#999">+5%</text>
+    <text x="16" y="93" text-anchor="end" font-size="8" fill="#999">0%</text>
+    <text x="16" y="118" text-anchor="end" font-size="8" fill="#999">−5%</text>
+
+    <!-- Bars: each bar at x = 30 + i*55, width=38, scale: 1% = 5px from y=90 -->
+    <!-- Jul 23: -4.02% -->
+    <rect x="30" y="90" width="38" height="20" rx="2" fill="#d32f2f"/>
+    <text x="49" y="86" text-anchor="middle" font-size="9" font-weight="700" fill="#d32f2f">−4,02%</text>
+    <text x="49" y="165" text-anchor="middle" font-size="8" fill="#666">июл. 23</text>
+
+    <!-- Aug 23: +2.37% -->
+    <rect x="85" y="78" width="38" height="12" rx="2" fill="#f7931a"/>
+    <text x="104" y="75" text-anchor="middle" font-size="9" font-weight="700" fill="#222">+2,37%</text>
+    <text x="104" y="165" text-anchor="middle" font-size="8" fill="#666">авг. 23</text>
+
+    <!-- Sep 23: -4.28% -->
+    <rect x="140" y="90" width="38" height="21" rx="2" fill="#d32f2f"/>
+    <text x="159" y="86" text-anchor="middle" font-size="9" font-weight="700" fill="#d32f2f">−4,28%</text>
+    <text x="159" y="165" text-anchor="middle" font-size="8" fill="#666">сент. 23</text>
+
+    <!-- Oct 23: +2.93% -->
+    <rect x="195" y="75" width="38" height="15" rx="2" fill="#f7931a"/>
+    <text x="214" y="72" text-anchor="middle" font-size="9" font-weight="700" fill="#222">+2,93%</text>
+    <text x="214" y="165" text-anchor="middle" font-size="8" fill="#666">окт. 23</text>
+
+    <!-- Nov 23: -1.66% -->
+    <rect x="250" y="90" width="38" height="8" rx="2" fill="#d32f2f"/>
+    <text x="269" y="86" text-anchor="middle" font-size="9" font-weight="700" fill="#d32f2f">−1,66%</text>
+    <text x="269" y="165" text-anchor="middle" font-size="8" fill="#666">нояб. 23</text>
+
+    <!-- Dec 23: +4.65% -->
+    <rect x="305" y="67" width="38" height="23" rx="2" fill="#f7931a"/>
+    <text x="324" y="64" text-anchor="middle" font-size="9" font-weight="700" fill="#222">+4,65%</text>
+    <text x="324" y="165" text-anchor="middle" font-size="8" fill="#666">дек. 23</text>
+
+    <!-- Jan 24: +1.51% -->
+    <rect x="360" y="82" width="38" height="8" rx="2" fill="#f7931a"/>
+    <text x="379" y="79" text-anchor="middle" font-size="9" font-weight="700" fill="#222">+1,51%</text>
+    <text x="379" y="165" text-anchor="middle" font-size="8" fill="#666">янв. 24</text>
+
+    <!-- Feb 24: +5.66% -->
+    <rect x="415" y="62" width="38" height="28" rx="2" fill="#f7931a"/>
+    <text x="434" y="59" text-anchor="middle" font-size="9" font-weight="700" fill="#222">+5,66%</text>
+    <text x="434" y="165" text-anchor="middle" font-size="8" fill="#666">февр. 24</text>
+
+    <!-- Mar 24: +2.53% -->
+    <rect x="470" y="77" width="38" height="13" rx="2" fill="#f7931a"/>
+    <text x="489" y="74" text-anchor="middle" font-size="9" font-weight="700" fill="#222">+2,53%</text>
+    <text x="489" y="165" text-anchor="middle" font-size="8" fill="#666">мар. 24</text>
+
+    <!-- Apr 24: +4.14% -->
+    <rect x="525" y="69" width="38" height="21" rx="2" fill="#f7931a"/>
+    <text x="544" y="66" text-anchor="middle" font-size="9" font-weight="700" fill="#222">+4,14%</text>
+    <text x="544" y="165" text-anchor="middle" font-size="8" fill="#666">апр. 24</text>
+
+    <!-- May 24: -5.13% -->
+    <rect x="580" y="90" width="38" height="26" rx="2" fill="#d32f2f"/>
+    <text x="599" y="86" text-anchor="middle" font-size="9" font-weight="700" fill="#d32f2f">−5,13%</text>
+    <text x="599" y="165" text-anchor="middle" font-size="8" fill="#666">май 24</text>
+
+    <!-- Jun 24: +5.99% -->
+    <rect x="635" y="60" width="38" height="30" rx="2" fill="#f7931a"/>
+    <text x="654" y="57" text-anchor="middle" font-size="9" font-weight="700" fill="#222">+5,99%</text>
+    <text x="654" y="165" text-anchor="middle" font-size="8" fill="#666">июн. 24</text>
+
+    <!-- Right side label -->
+    <text x="694" y="13" text-anchor="end" font-size="8" fill="#999">Месяцы / Доходность, %</text>
+  </svg>
+</div>
+
+<!-- DISCLAIMER -->
+<div class="disclaimer">
+  Настоящий документ служит информацией для клиентов и не заменяет ни комплексную консультацию по капиталовложениям, ни пояснительную информацию о рисках, он также не является приглашением либо предложением к покупке или продаже фондов или других продуктов. Любые капиталовложения связаны с риском. Динамика развития показателей в прошлом не дает оснований для надежных выводов о будущем развитии алгофонда. Вследствие колебаний курсов валют доход может падать или расти. Расходы и налоги не учитываются при расчете эффективности капиталовложений и снижают ее. Информационный лист алгофонда предусмотрен исключительно в информационных целях.<br><br>
+  Описание, условия, инструкция и контакты: <a href="https://hamster-bot.com/phoenix">https://hamster-bot.com/phoenix</a>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Годовой отчет — Алгофонд PHOENIX by hamster-bot (2023–2024)</title>
+<style>
+  @page { size: A4 portrait; margin: 20mm; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Arial, sans-serif; color: #222; font-size: 13px; line-height: 1.45; max-width: 900px; margin: 0 auto; padding: 30px 40px; }
+
+  .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #f7931a; padding-bottom: 12px; margin-bottom: 18px; }
+  .header h1 { font-size: 15px; color: #555; font-weight: 600; }
+  .header h2 { font-size: 20px; color: #f7931a; font-weight: 700; }
+  .logo-area { text-align: right; }
+  .logo-area img { height: 50px; }
+
+  .two-col { display: flex; gap: 30px; margin-bottom: 20px; }
+  .col-left { flex: 1; min-width: 280px; }
+  .col-right { flex: 1.3; }
+
+  .section-title { font-size: 13px; font-weight: 700; color: #333; border-bottom: 1px solid #ddd; padding-bottom: 3px; margin: 14px 0 8px; }
+
+  .data-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .data-table td { padding: 3px 6px; }
+  .data-table td:first-child { color: #666; width: 55%; }
+  .data-table td:last-child { font-weight: 600; text-align: right; }
+
+  .kpi-table { width: 100%; border-collapse: collapse; font-size: 12.5px; margin-top: 10px; }
+  .kpi-table td { padding: 5px 8px; border-bottom: 1px solid #eee; }
+  .kpi-table td:last-child { text-align: right; font-weight: 700; color: #f7931a; }
+
+  .risk-box { background: #f9f9f9; border: 1px solid #e0e0e0; border-radius: 6px; padding: 12px; margin-top: 14px; }
+  .risk-bar { display: flex; gap: 2px; margin: 6px 0; }
+  .risk-bar span { width: 16px; height: 14px; background: #ddd; border-radius: 2px; }
+  .risk-bar span.active { background: #f7931a; }
+
+  .monthly-table { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 16px; }
+  .monthly-table th, .monthly-table td { padding: 6px 4px; text-align: center; border: 1px solid #eee; }
+  .monthly-table th { background: #fafafa; font-weight: 600; color: #555; font-size: 11px; }
+  .monthly-table .positive { color: #2e8b57; font-weight: 600; }
+  .monthly-table .negative { color: #d32f2f; font-weight: 600; }
+
+  .bar-chart { display: flex; align-items: flex-end; gap: 6px; height: 140px; margin: 20px 0 4px; padding: 0 10px; }
+  .bar-item { display: flex; flex-direction: column; align-items: center; flex: 1; }
+  .bar { width: 100%; min-width: 30px; border-radius: 3px 3px 0 0; }
+  .bar.pos { background: #f7931a; }
+  .bar.neg { background: #d32f2f; border-radius: 0 0 3px 3px; }
+  .bar-label { font-size: 10px; color: #666; margin-top: 4px; }
+  .bar-value { font-size: 10px; font-weight: 700; margin-bottom: 2px; }
+  .bar-value.pos { color: #f7931a; }
+  .bar-value.neg { color: #d32f2f; }
+
+  .disclaimer { font-size: 9.5px; color: #888; margin-top: 24px; line-height: 1.4; border-top: 1px solid #ddd; padding-top: 10px; }
+  .disclaimer a { color: #f7931a; }
+
+  .chart-placeholder { border: 1px solid #e0e0e0; border-radius: 6px; padding: 10px; text-align: center; min-height: 180px; position: relative; background: #fefefe; }
+  .chart-legend { display: flex; gap: 20px; font-size: 11px; margin-bottom: 8px; }
+  .chart-legend span.dot-orange { display: inline-block; width: 10px; height: 3px; background: #f7931a; margin-right: 4px; vertical-align: middle; }
+  .chart-legend span.dot-gray { display: inline-block; width: 10px; height: 3px; background: #888; margin-right: 4px; vertical-align: middle; }
+  .period-label { font-size: 10px; color: #999; text-align: right; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<!-- ===== HEADER ===== -->
+<div class="header">
+  <h1>Годовой отчет</h1>
+  <h2>Алгофонд PHOENIX by hamster-bot</h2>
+</div>
+
+<!-- ===== TWO-COLUMN BODY ===== -->
+<div class="two-col">
+
+  <!-- LEFT COLUMN -->
+  <div class="col-left">
+
+    <div class="section-title">Данные алгофонда</div>
+    <table class="data-table">
+      <tr><td>Валюта</td><td>cryptocurrency</td></tr>
+      <tr><td>Объем торгов</td><td>78 213 000 USD</td></tr>
+      <tr><td>Отчетный год</td><td>25.06.2023 – 25.06.2024</td></tr>
+    </table>
+
+    <div class="section-title">Принцип работы</div>
+    <p>Управление на счету клиента торгами на бессрочных фьючерсных контрактах и криптовалютах, без аккумуляции средств.</p>
+
+    <div class="section-title">Используемые рынки</div>
+    <p>Bybit, Binance</p>
+
+    <div class="section-title">Число сделок системы за отчетный период</div>
+    <p>12 640 сделок</p>
+
+    <div class="section-title">Диверсификация и хеджирование рисков</div>
+    <p>Торги ведутся по трем блокам стратегий:</p>
+    <ul style="margin:4px 0 4px 16px; font-size:12.5px;">
+      <li>трендовые;</li>
+      <li>контртрендовые;</li>
+      <li>гибридные.</li>
+    </ul>
+    <p style="margin-top:6px;">В торгах участвует ТОП-100 инструментов по объемам торгов. Используется частичное хеджирование рисков. Совокупный объем задействованных стратегий&nbsp;&gt;&nbsp;70.</p>
+
+    <div class="section-title">Основы работы:</div>
+    <ul style="margin:4px 0 4px 16px; font-size:12.5px;">
+      <li>низкая просадка;</li>
+      <li>небольшая загрузка депозита в работе стратегий;</li>
+      <li>в риск-менеджмент заложены экстремальные состояния рынка.</li>
+    </ul>
+
+  </div>
+
+  <!-- RIGHT COLUMN -->
+  <div class="col-right">
+
+    <div class="section-title">Доходность алгофонда в сравнении с удержанием Bitcoin</div>
+
+    <div class="chart-placeholder">
+      <div class="chart-legend">
+        <div><span class="dot-orange"></span> Доходность алгофонда, %</div>
+        <div><span class="dot-gray"></span> Стоимость Bitcoin, %</div>
+      </div>
+      <p style="color:#aaa; margin-top:50px; font-size:12px;">[График доходности — см. публичный мониторинг]</p>
+      <div class="period-label">Период 24.06.2021 – 25.06.2024</div>
+    </div>
+
+    <!-- KPI TABLE -->
+    <table class="kpi-table" style="margin-top: 16px;">
+      <tr><td>За весь период</td><td>99.53%</td></tr>
+      <tr><td>С момента основания алгофонда, в год</td><td>25.88%</td></tr>
+      <tr><td>Отчетный период (год)</td><td>14.72%</td></tr>
+      <tr><td>Среднегодовая за 3 года, в год</td><td>25.88%</td></tr>
+      <tr><td>С начала 2024 года</td><td>15.16%</td></tr>
+      <tr><td>2023 год</td><td>14.60%</td></tr>
+      <tr><td>2022 год</td><td>18.62%</td></tr>
+      <tr><td>2021 год</td><td>24.04%</td></tr>
+    </table>
+
+    <!-- RISK INDEX -->
+    <div class="risk-box">
+      <strong>Индекс риска</strong><br>
+      <div class="risk-bar">
+        <span class="active"></span><span class="active"></span><span class="active"></span><span class="active"></span>
+        <span></span><span></span><span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span>
+      </div>
+      <strong>4 из 25 баллов</strong><br>
+      <p style="font-size:11px; color:#666; margin-top:4px; font-style:italic;">
+        Согласно оценке показателя данного Индекса риск торговой системы оценивается, как «Приемлемый».
+      </p>
+      <p style="font-size:11px; color:#666; margin-top:4px;">
+        Оценка риска соответствует консервативной доходности при низкой максимальной зафиксированной просадке
+      </p>
+    </div>
+
+  </div>
+</div>
+
+<!-- ===== MONTHLY PERFORMANCE ===== -->
+<div class="section-title">Показатели доходности портфеля по месяцам</div>
+
+<!-- BAR CHART -->
+<div class="bar-chart" style="align-items: flex-end; position: relative;">
+  <!-- Baseline at 0 is implied; negative bars grow downward -->
+  <div class="bar-item">
+    <div class="bar-value neg">−4,02%</div>
+    <div class="bar neg" style="height: 32px;"></div>
+    <div class="bar-label">июл. 23</div>
+  </div>
+  <div class="bar-item">
+    <div class="bar-value pos">+2,37%</div>
+    <div class="bar pos" style="height: 19px;"></div>
+    <div class="bar-label">авг. 23</div>
+  </div>
+  <div class="bar-item">
+    <div class="bar-value neg">−4,28%</div>
+    <div class="bar neg" style="height: 34px;"></div>
+    <div class="bar-label">сент. 23</div>
+  </div>
+  <div class="bar-item">
+    <div class="bar-value pos">+2,93%</div>
+    <div class="bar pos" style="height: 23px;"></div>
+    <div class="bar-label">окт. 23</div>
+  </div>
+  <div class="bar-item">
+    <div class="bar-value neg">−1,66%</div>
+    <div class="bar neg" style="height: 13px;"></div>
+    <div class="bar-label">нояб. 23</div>
+  </div>
+  <div class="bar-item">
+    <div class="bar-value pos">+4,65%</div>
+    <div class="bar pos" style="height: 37px;"></div>
+    <div class="bar-label">дек. 23</div>
+  </div>
+  <div class="bar-item">
+    <div class="bar-value pos">+1,51%</div>
+    <div class="bar pos" style="height: 12px;"></div>
+    <div class="bar-label">янв. 24</div>
+  </div>
+  <div class="bar-item">
+    <div class="bar-value pos">+5,66%</div>
+    <div class="bar pos" style="height: 45px;"></div>
+    <div class="bar-label">февр. 24</div>
+  </div>
+  <div class="bar-item">
+    <div class="bar-value pos">+2,53%</div>
+    <div class="bar pos" style="height: 20px;"></div>
+    <div class="bar-label">мар. 24</div>
+  </div>
+  <div class="bar-item">
+    <div class="bar-value pos">+4,14%</div>
+    <div class="bar pos" style="height: 33px;"></div>
+    <div class="bar-label">апр. 24</div>
+  </div>
+  <div class="bar-item">
+    <div class="bar-value neg">−5,13%</div>
+    <div class="bar neg" style="height: 41px;"></div>
+    <div class="bar-label">май 24</div>
+  </div>
+  <div class="bar-item">
+    <div class="bar-value pos">+5,99%</div>
+    <div class="bar pos" style="height: 48px;"></div>
+    <div class="bar-label">июн. 24</div>
+  </div>
+</div>
+
+<table class="monthly-table" style="margin-top: 20px;">
+  <tr>
+    <th></th><th>июл.</th><th>авг.</th><th>сент.</th><th>окт.</th><th>нояб.</th><th>дек.</th><th>янв.</th><th>февр.</th><th>мар.</th><th>апр.</th><th>май</th><th>июн.</th><th>Итого</th>
+  </tr>
+  <tr>
+    <td style="font-weight:600;">2023–24</td>
+    <td class="negative">−4,02</td>
+    <td class="positive">+2,37</td>
+    <td class="negative">−4,28</td>
+    <td class="positive">+2,93</td>
+    <td class="negative">−1,66</td>
+    <td class="positive">+4,65</td>
+    <td class="positive">+1,51</td>
+    <td class="positive">+5,66</td>
+    <td class="positive">+2,53</td>
+    <td class="positive">+4,14</td>
+    <td class="negative">−5,13</td>
+    <td class="positive">+5,99</td>
+    <td style="font-weight:700; color:#f7931a;">+14,72</td>
+  </tr>
+</table>
+
+<!-- ===== DISCLAIMER ===== -->
+<div class="disclaimer">
+  Настоящий документ служит информацией для клиентов и не заменяет ни комплексную консультацию по капиталовложениям, ни пояснительную информацию о рисках, он также не является приглашением либо предложением к покупке или продаже фондов или других продуктов. Любые капиталовложения связаны с риском. Динамика развития показателей в прошлом не дает оснований для надежных выводов о будущем развитии алгофонда. Вследствие колебаний курсов валют доход может падать или расти. Расходы и налоги не учитываются при расчете эффективности капиталовложений и снижают ее. Информационный лист алгофонда предусмотрен исключительно в информационных целях.<br><br>
+  Описание, условия, инструкция и контакты: <a href="https://hamster-bot.com/phoenix">https://hamster-bot.com/phoenix</a>
+</div>
+
+</body>
+</html>

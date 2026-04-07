@@ -1,0 +1,72 @@
+(node:40344) [DEP0176] DeprecationWarning: fs.F_OK is deprecated, use fs.constants.F_OK instead
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Creating an optimized production build...
+
+Treating warnings as errors because process.env.CI = true.
+Most CI servers set it automatically.
+
+Failed to compile.
+
+[eslint] 
+src\components\ChartComponent.tsx
+  Line 220:6:  React Hook useEffect has a missing dependency: 'fixedHeight'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+
+src\pages\ClientCabinet.tsx
+  Line 437:10:  'strategySelectionPreviewLoading' is assigned a value but never used                                              @typescript-eslint/no-unused-vars
+  Line 454:9:   'strategyPreviewSummary' is assigned a value but never used                                                       @typescript-eslint/no-unused-vars
+  Line 455:9:   'strategyPreviewSeries' is assigned a value but never used                                                        @typescript-eslint/no-unused-vars
+  Line 460:9:   'algofundCurrentSystem' is assigned a value but never used                                                        @typescript-eslint/no-unused-vars
+  Line 506:6:   React Hook useEffect has a missing dependency: 'loadWorkspace'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+  Line 591:9:   'runStrategySelectionPreview' is assigned a value but never used                                                  @typescript-eslint/no-unused-vars
+
+src\pages\Landing.tsx
+  Line 7:3:    'SafetyCertificateOutlined' is defined but never used  @typescript-eslint/no-unused-vars
+  Line 20:9:   'Title' is assigned a value but never used             @typescript-eslint/no-unused-vars
+  Line 20:16:  'Paragraph' is assigned a value but never used         @typescript-eslint/no-unused-vars
+  Line 20:27:  'Text' is assigned a value but never used              @typescript-eslint/no-unused-vars
+
+src\pages\Razgon.tsx
+  Line 4:18:   'Divider' is defined but never used     @typescript-eslint/no-unused-vars
+  Line 4:39:   'Alert' is defined but never used       @typescript-eslint/no-unused-vars
+  Line 4:46:   'Tooltip' is defined but never used     @typescript-eslint/no-unused-vars
+  Line 4:55:   'Progress' is defined but never used    @typescript-eslint/no-unused-vars
+  Line 90:11:  't' is assigned a value but never used  @typescript-eslint/no-unused-vars
+
+src\pages\SaaS.tsx
+  Line 2297:7:   'renderOfferLifecycleTag' is assigned a value but never used                                                                  @typescript-eslint/no-unused-vars
+  Line 2454:28:  'setCopyFollowerTags' is assigned a value but never used                                                                      @typescript-eslint/no-unused-vars
+  Line 2455:28:  'setCopyKeyDraftRole' is assigned a value but never used                                                                      @typescript-eslint/no-unused-vars
+  Line 2457:32:  'setCopyKeyDraftExchange' is assigned a value but never used                                                                  @typescript-eslint/no-unused-vars
+  Line 2461:31:  'setCopyKeyDraftTestnet' is assigned a value but never used                                                                   @typescript-eslint/no-unused-vars
+  Line 2462:28:  'setCopyKeyDraftDemo' is assigned a value but never used                                                                      @typescript-eslint/no-unused-vars
+  Line 2464:10:  'copytradingTenantStatus' is assigned a value but never used                                                                  @typescript-eslint/no-unused-vars
+  Line 2492:28:  'setSynctradeLivePnl' is assigned a value but never used                                                                      @typescript-eslint/no-unused-vars
+  Line 2513:10:  'strategyPreviewLoading' is assigned a value but never used                                                                   @typescript-eslint/no-unused-vars
+  Line 2561:35:  'setApprovalMinProfitFactor' is assigned a value but never used                                                               @typescript-eslint/no-unused-vars
+  Line 3179:9:   'adminDraftTradesPerDay' is assigned a value but never used                                                                   @typescript-eslint/no-unused-vars
+  Line 3185:9:   'adminDraftPeriodLabel' is assigned a value but never used                                                                    @typescript-eslint/no-unused-vars
+  Line 3543:6:   React Hook useMemo has an unnecessary dependency: 'normalizeTsToken'. Either exclude it or remove the dependency array        react-hooks/exhaustive-deps
+  Line 3691:9:   'deleteOfferFromStorefrontDb' is assigned a value but never used                                                              @typescript-eslint/no-unused-vars
+  Line 3754:9:   'updateOfferStoreDefaults' is assigned a value but never used                                                                 @typescript-eslint/no-unused-vars
+  Line 4067:9:   'createCopytradingApiKeyInline' is assigned a value but never used                                                            @typescript-eslint/no-unused-vars
+  Line 4874:6:   React Hook useEffect has a missing dependency: 'loadAlgofundActiveSystems'. Either include it or remove the dependency array  react-hooks/exhaustive-deps
+  Line 4893:6:   React Hook useEffect has a missing dependency: 'loadCopytradingTenant'. Either include it or remove the dependency array      react-hooks/exhaustive-deps
+  Line 4970:9:   'runStrategyPreview' is assigned a value but never used                                                                       @typescript-eslint/no-unused-vars
+  Line 5687:9:   'initiateDeleteStorefrontFromDb' is assigned a value but never used                                                           @typescript-eslint/no-unused-vars
+  Line 6205:11:  'storefrontClientCount' is assigned a value but never used                                                                    @typescript-eslint/no-unused-vars
+  Line 6325:9:   'saveOfferReviewSnapshotFromRow' is assigned a value but never used                                                           @typescript-eslint/no-unused-vars
+  Line 6421:9:   'openSingleOfferBacktestAsTs' is assigned a value but never used                                                              @typescript-eslint/no-unused-vars
+  Line 7557:9:   'strategyPreviewSummary' is assigned a value but never used                                                                   @typescript-eslint/no-unused-vars
+  Line 7561:9:   'strategyPreviewMetrics' is assigned a value but never used                                                                   @typescript-eslint/no-unused-vars
+  Line 7563:9:   'strategySelectionPreviewSummary' is assigned a value but never used                                                          @typescript-eslint/no-unused-vars
+  Line 7564:9:   'strategySelectionPreviewOffers' is assigned a value but never used                                                           @typescript-eslint/no-unused-vars
+  Line 7570:9:   'strategyPreviewDerivedSummary' is assigned a value but never used                                                            @typescript-eslint/no-unused-vars
+  Line 7571:9:   'strategySelectionPreviewDerivedSummary' is assigned a value but never used                                                   @typescript-eslint/no-unused-vars
+  Line 7572:9:   'algofundPreviewDerivedSummary' is assigned a value but never used                                                            @typescript-eslint/no-unused-vars
+  Line 7573:9:   'publishPreviewDerivedSummary' is assigned a value but never used                                                             @typescript-eslint/no-unused-vars
+  Line 7575:9:   'strategyPreviewPeriod' is assigned a value but never used                                                                    @typescript-eslint/no-unused-vars
+  Line 7576:9:   'strategySelectionPreviewPeriod' is assigned a value but never used                                                           @typescript-eslint/no-unused-vars
+  Line 7577:9:   'algofundPreviewPeriod' is assigned a value but never used                                                                    @typescript-eslint/no-unused-vars
+  Line 7578:9:   'publishPreviewPeriod' is assigned a value but never used                                                                     @typescript-eslint/no-unused-vars
+
+

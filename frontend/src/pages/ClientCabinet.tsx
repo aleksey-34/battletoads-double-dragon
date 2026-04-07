@@ -924,7 +924,7 @@ const ClientCabinet: React.FC = () => {
                               <ChartComponent data={offer.equityPoints.map((v, i) => ({ time: i, value: v }))} type="line" />
                             </div>
                           ) : null}
-                          <Typography.Text type="secondary" style={{ fontSize: 10, marginTop: 2, display: 'block' }}>
+                          <Typography.Text style={{ fontSize: 11, marginTop: 2, display: 'block', color: '#52c41a', fontWeight: 500 }}>
                             📊 Нажмите для подробностей
                           </Typography.Text>
                         </Space>
@@ -1128,6 +1128,49 @@ const ClientCabinet: React.FC = () => {
             </Space>
           </Card>
         </>
+      ) : workspace?.productMode === 'algofund_client' && algofundAvailableSystems.length > 0 ? (
+        <Card className="battletoads-card" title="Торговые системы Алгофонда" size="small">
+          <Typography.Text type="secondary" style={{ display: 'block', marginBottom: 12 }}>
+            Ваш аккаунт подключён к продукту «Алгофонд». Нажмите на карточку для просмотра бэктеста.
+          </Typography.Text>
+          <Row gutter={[12, 12]}>
+            {algofundAvailableSystems.map((system) => {
+              const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number } | null | undefined;
+              const eqPts = snap?.equityPoints;
+              const hasChart = Array.isArray(eqPts) && eqPts.length > 1;
+              return (
+                <Col key={system.id} xs={24} sm={12} xl={8}>
+                  <Card
+                    size="small"
+                    bordered
+                    hoverable
+                    style={{ height: '100%', cursor: 'pointer' }}
+                    onClick={() => setSystemDetailModal({ name: system.name, id: system.id })}
+                  >
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Typography.Text strong style={{ fontSize: 13 }}>{tsDisplayName(system.name)}</Typography.Text>
+                      {snap ? (
+                        <Space size={4} wrap>
+                          <Tag color="green">Ret: {formatPercent(snap.ret)}</Tag>
+                          <Tag color="orange">DD: {formatPercent(snap.dd)}</Tag>
+                          <Tag color="blue">PF: {formatNumber(snap.pf)}</Tag>
+                        </Space>
+                      ) : null}
+                      {hasChart ? (
+                        <div style={{ height: 80, marginTop: 4 }}>
+                          <ChartComponent data={equityPointsToSeries(eqPts || [], snap?.periodDays)} type="line" />
+                        </div>
+                      ) : null}
+                      <Typography.Text style={{ fontSize: 11, marginTop: 2, display: 'block', color: '#52c41a', fontWeight: 500 }}>
+                        📊 Нажмите для бэктеста
+                      </Typography.Text>
+                    </Space>
+                  </Card>
+                </Col>
+              );
+            })}
+          </Row>
+        </Card>
       ) : workspace?.productMode === 'algofund_client' ? (
         <Card className="battletoads-card" size="small">
           <Empty
@@ -1135,7 +1178,6 @@ const ClientCabinet: React.FC = () => {
               <Space direction="vertical" size={8}>
                 <Typography.Text>Ваш аккаунт подключён к продукту «Алгофонд».</Typography.Text>
                 <Typography.Text type="secondary">Торговые системы доступны на вкладке «Алгофонд».</Typography.Text>
-                <Typography.Text type="secondary">Хотите также подключить индивидуальные стратегии? Обратитесь к администратору.</Typography.Text>
               </Space>
             }
           />
@@ -1277,7 +1319,7 @@ const ClientCabinet: React.FC = () => {
                               {previewSummary.tradesCount != null ? <Col span={12}><Statistic title="Сделки" value={formatNumber(previewSummary.tradesCount, 0)} valueStyle={{ fontSize: 12 }} /></Col> : null}
                             </Row>
                           ) : null}
-                          <Typography.Text type="secondary" style={{ fontSize: 10, marginTop: 2, display: 'block' }}>
+                          <Typography.Text style={{ fontSize: 11, marginTop: 2, display: 'block', color: '#52c41a', fontWeight: 500 }}>
                             📊 Нажмите для бэктеста
                           </Typography.Text>
                         </Card>
@@ -1314,7 +1356,7 @@ const ClientCabinet: React.FC = () => {
                 ? algofundWorkspace.preview.summary.finalEquity
                 : snap?.finalEquity ?? null;
               const chartKey = isCurrent
-                ? `af-preview-${algofundRiskMultiplier}-${algofundPreviewSeries.length}`
+                ? `af-preview-${algofundRiskMultiplier}-${algofundPreviewSeries.length}-${algofundPreviewSeries[algofundPreviewSeries.length - 1]?.value ?? 0}`
                 : `af-snap-${systemDetailModal?.id}`;
               return (
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
