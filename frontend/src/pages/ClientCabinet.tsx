@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import {
   Alert,
@@ -441,6 +441,7 @@ const ClientCabinet: React.FC = () => {
   const [requestNote, setRequestNote] = useState('');
 
   const [algofundRiskMultiplier, setAlgofundRiskMultiplier] = useState(1);
+  const algofundInitializedRef = useRef(false);
   const [algofundNote, setAlgofundNote] = useState('');
   const [systemDetailModal, setSystemDetailModal] = useState<{ name: string; id: number } | null>(null);
   const [strategyOfferDetail, setStrategyOfferDetail] = useState<string | null>(null);
@@ -522,7 +523,10 @@ const ClientCabinet: React.FC = () => {
       return;
     }
 
-    setAlgofundRiskMultiplier(toFinite(algofundWorkspace.profile.risk_multiplier, 1));
+    if (!algofundInitializedRef.current) {
+      setAlgofundRiskMultiplier(toFinite(algofundWorkspace.profile.risk_multiplier, 1));
+      algofundInitializedRef.current = true;
+    }
     setAlgofundAssignedApiKeyName(String(algofundWorkspace.profile.assigned_api_key_name || '').trim());
   }, [algofundWorkspace]);
 
@@ -893,7 +897,7 @@ const ClientCabinet: React.FC = () => {
                 ) : null}
                 <Row gutter={[12, 12]}>
                   {strategyWorkspace.offers.map((offer) => (
-                    <Col key={offer.offerId} xs={24} sm={12} xl={8}>
+                    <Col key={offer.offerId} xs={24} sm={12} md={8} xl={6}>
                       <Card
                         size="small"
                         bordered
@@ -907,7 +911,7 @@ const ClientCabinet: React.FC = () => {
                         }
                       >
                         <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                          <Typography.Text strong style={{ fontSize: 13 }}>{offer.titleRu}</Typography.Text>
+                          <Typography.Text strong style={{ fontSize: 12 }}>{offer.titleRu}</Typography.Text>
                           <Space size={4} wrap>
                             <Tag style={{ fontSize: 11 }}>{offer.strategy.mode.toUpperCase()}</Tag>
                             <Tag style={{ fontSize: 11 }}>{offer.strategy.market}</Tag>
@@ -920,13 +924,10 @@ const ClientCabinet: React.FC = () => {
                             {offer.metrics.trades ? <Tag color="cyan">Сделки: {formatNumber(offer.metrics.trades, 0)}</Tag> : null}
                           </Space>
                           {Array.isArray(offer.equityPoints) && offer.equityPoints.length > 0 ? (
-                            <div style={{ height: 80, marginTop: 4 }}>
+                            <div style={{ height: 60, marginTop: 4 }}>
                               <ChartComponent data={offer.equityPoints.map((v, i) => ({ time: i, value: v }))} type="line" />
                             </div>
                           ) : null}
-                          <Typography.Text style={{ fontSize: 11, marginTop: 2, display: 'block', color: '#52c41a', fontWeight: 500 }}>
-                            📊 Нажмите для подробностей
-                          </Typography.Text>
                         </Space>
                       </Card>
                     </Col>
@@ -1139,7 +1140,7 @@ const ClientCabinet: React.FC = () => {
               const eqPts = snap?.equityPoints;
               const hasChart = Array.isArray(eqPts) && eqPts.length > 1;
               return (
-                <Col key={system.id} xs={24} sm={12} xl={8}>
+                <Col key={system.id} xs={24} sm={12} md={8} xl={6}>
                   <Card
                     size="small"
                     bordered
@@ -1148,22 +1149,19 @@ const ClientCabinet: React.FC = () => {
                     onClick={() => setSystemDetailModal({ name: system.name, id: system.id })}
                   >
                     <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                      <Typography.Text strong style={{ fontSize: 13 }}>{tsDisplayName(system.name)}</Typography.Text>
+                      <Typography.Text strong style={{ fontSize: 12 }}>{tsDisplayName(system.name)}</Typography.Text>
                       {snap ? (
                         <Space size={4} wrap>
-                          <Tag color="green">Ret: {formatPercent(snap.ret)}</Tag>
-                          <Tag color="orange">DD: {formatPercent(snap.dd)}</Tag>
-                          <Tag color="blue">PF: {formatNumber(snap.pf)}</Tag>
+                          <Tag color="green" style={{ fontSize: 11 }}>Ret: {formatPercent(snap.ret)}</Tag>
+                          <Tag color="orange" style={{ fontSize: 11 }}>DD: {formatPercent(snap.dd)}</Tag>
+                          <Tag color="blue" style={{ fontSize: 11 }}>PF: {formatNumber(snap.pf)}</Tag>
                         </Space>
                       ) : null}
                       {hasChart ? (
-                        <div style={{ height: 80, marginTop: 4 }}>
+                        <div style={{ height: 60, marginTop: 4 }}>
                           <ChartComponent data={equityPointsToSeries(eqPts || [], snap?.periodDays)} type="line" />
                         </div>
                       ) : null}
-                      <Typography.Text style={{ fontSize: 11, marginTop: 2, display: 'block', color: '#52c41a', fontWeight: 500 }}>
-                        📊 Нажмите для бэктеста
-                      </Typography.Text>
                     </Space>
                   </Card>
                 </Col>
@@ -1237,34 +1235,7 @@ const ClientCabinet: React.FC = () => {
               <Empty description="Торговые системы Алгофонда пока не опубликованы" />
             ) : (
               <>
-                {algofundWorkspace.capabilities?.settings ? (
-                  <div style={{ marginBottom: 16, padding: '8px 12px', background: '#fafafa', borderRadius: 6 }}>
-                    <Row align="middle" gutter={16}>
-                      <Col flex="auto">
-                        <Typography.Text strong>Риск × {formatNumber(algofundRiskMultiplier, 2)}</Typography.Text>
-                        <Slider
-                          style={{ margin: '4px 0 0' }}
-                          min={0}
-                          max={toFinite(algofundWorkspace.plan?.risk_cap_max, 1)}
-                          step={0.05}
-                          value={algofundRiskMultiplier}
-                          onChange={(v) => setAlgofundRiskMultiplier(Math.min(toFinite(v), toFinite(algofundWorkspace.plan?.risk_cap_max, 1)))}
-                        />
-                      </Col>
-                      <Col>
-                        <Space>
-                          <Button size="small" type="primary" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
-                            Сохранить
-                          </Button>
-                          <Button size="small" loading={actionLoading === 'algofund-refresh'} onClick={() => void refreshAlgofundState()}>
-                            Обновить
-                          </Button>
-                        </Space>
-                      </Col>
-                    </Row>
-                  </div>
-                ) : null}
-                <Row gutter={[8, 8]}>
+                <Row gutter={[12, 12]}>
                   {algofundAvailableSystems.map((system) => {
                     const isCurrent = algofundPublishedSystemName.length > 0 && String(system?.name || '').trim() === algofundPublishedSystemName;
                     const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number } | null | undefined;
@@ -1319,9 +1290,6 @@ const ClientCabinet: React.FC = () => {
                               {previewSummary.tradesCount != null ? <Col span={12}><Statistic title="Сделки" value={formatNumber(previewSummary.tradesCount, 0)} valueStyle={{ fontSize: 12 }} /></Col> : null}
                             </Row>
                           ) : null}
-                          <Typography.Text style={{ fontSize: 11, marginTop: 2, display: 'block', color: '#52c41a', fontWeight: 500 }}>
-                            📊 Нажмите для бэктеста
-                          </Typography.Text>
                         </Card>
                       </Col>
                     );
