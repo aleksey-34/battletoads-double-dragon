@@ -1139,13 +1139,17 @@ const ClientCabinet: React.FC = () => {
             </Space>
           </Card>
         </>
+      ) : strategyWorkspace && strategyWorkspace.offers.length === 0 ? (
+        <Card className="battletoads-card" size="small">
+          <Empty description="На витрине стратегий пока нет доступных офферов." />
+        </Card>
       ) : (
         <Card className="battletoads-card" size="small">
           <Empty
             description={
               <Space direction="vertical" size={8}>
-                <Typography.Text>Витрина стратегий недоступна для вашего аккаунта.</Typography.Text>
-                <Typography.Text type="secondary">Обратитесь к администратору для подключения к продукту «Клиент стратегий».</Typography.Text>
+                <Typography.Text>Витрина стратегий загружается...</Typography.Text>
+                <Typography.Text type="secondary">Если витрина не появилась — обратитесь к администратору.</Typography.Text>
               </Space>
             }
           />

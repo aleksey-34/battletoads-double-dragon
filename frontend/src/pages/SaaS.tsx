@@ -4832,6 +4832,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const nextAlgofundTenant =
       (summary.tenants || []).find((item) => (
         item.tenant.product_mode === 'algofund_client'
+        && !!item.algofundProfile?.actual_enabled
+        && String(item.algofundProfile?.published_system_name || '').trim().length > 0
+      ))?.tenant.id
+      || (summary.tenants || []).find((item) => (
+        item.tenant.product_mode === 'algofund_client'
+        && !!item.algofundProfile?.actual_enabled
+      ))?.tenant.id
+      || (summary.tenants || []).find((item) => (
+        item.tenant.product_mode === 'algofund_client'
         && String(item.algofundProfile?.published_system_name || '').trim().length > 0
       ))?.tenant.id
       || (summary.tenants || []).find((item) => item.tenant.product_mode === 'algofund_client')?.tenant.id
@@ -4849,6 +4858,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     if (algofundTenantId === null && nextAlgofundTenant !== null) {
       setAlgofundTenantId(nextAlgofundTenant);
+      const selectedItem = (summary.tenants || []).find((t) => t.tenant.id === nextAlgofundTenant);
+      if (selectedItem) {
+        setAlgofundTenantStatus(selectedItem.algofundProfile?.actual_enabled ? 'active' : 'all');
+      }
     }
     if (copytradingTenantId === null && nextCopytradingTenant !== null) {
       setCopytradingTenantId(nextCopytradingTenant);
