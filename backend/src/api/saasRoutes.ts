@@ -67,6 +67,7 @@ import {
   toggleAlgofundSystem,
   removeAlgofundSystemFromProfile,
   deleteTenantById,
+  batchConnectStrategyClientOffer,
 } from '../saas/service';
 
 const router = Router();
@@ -603,6 +604,21 @@ router.post('/admin/algofund-batch-actions', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS algofund batch action error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/strategy-client-batch-connect', async (req, res) => {
+  try {
+    const offerIds = Array.isArray(req.body?.offerIds) ? req.body.offerIds.map((item: unknown) => String(item)) : [];
+    const tenantIds = Array.isArray(req.body?.tenantIds) ? req.body.tenantIds.map((item: unknown) => Number(item)).filter((v: number) => Number.isFinite(v) && v > 0) : [];
+    if (offerIds.length === 0) return res.status(400).json({ error: 'offerIds required' });
+    if (tenantIds.length === 0) return res.status(400).json({ error: 'tenantIds required' });
+    const data = await batchConnectStrategyClientOffer(offerIds, tenantIds);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy-client batch connect error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

@@ -904,7 +904,25 @@ const ClientCabinet: React.FC = () => {
                             <Space>
                               <Typography.Text strong style={{ fontSize: 12 }}>{offer.titleRu}</Typography.Text>
                               {strategyWorkspace.capabilities?.settings
-                                ? <Checkbox checked={strategyOfferIds.includes(offer.offerId)} onChange={(e) => { e.stopPropagation(); setStrategyOfferIds((current) => e.target.checked ? (current.includes(offer.offerId) ? current : [...current, offer.offerId]) : current.filter((id) => id !== offer.offerId)); }} />
+                                ? <Checkbox checked={strategyOfferIds.includes(offer.offerId)} onChange={(e) => {
+                                    e.stopPropagation();
+                                    if (e.target.checked) {
+                                      // Pair conflict check
+                                      const offerMarket = String(offer.strategy?.market || '').toUpperCase().trim();
+                                      if (offerMarket) {
+                                        const conflicting = strategyWorkspace.offers.find(
+                                          (o) => o.offerId !== offer.offerId && strategyOfferIds.includes(o.offerId) && String(o.strategy?.market || '').toUpperCase().trim() === offerMarket
+                                        );
+                                        if (conflicting) {
+                                          messageApi.warning(`Пара ${offerMarket} уже есть в портфеле (${conflicting.titleRu}). Нельзя подключить две стратегии на одну пару.`);
+                                          return;
+                                        }
+                                      }
+                                      setStrategyOfferIds((current) => current.includes(offer.offerId) ? current : [...current, offer.offerId]);
+                                    } else {
+                                      setStrategyOfferIds((current) => current.filter((id) => id !== offer.offerId));
+                                    }
+                                  }} />
                                 : null}
                             </Space>
                             <Typography.Text type="secondary" style={{ fontSize: 11 }}>{offer.strategy.mode.toUpperCase()} • {offer.strategy.market}</Typography.Text>
@@ -1003,6 +1021,18 @@ const ClientCabinet: React.FC = () => {
                         type={isSelected ? 'default' : 'primary'}
                         danger={isSelected}
                         onClick={() => {
+                          if (!isSelected) {
+                            const offerMarket = String(offer.strategy?.market || '').toUpperCase().trim();
+                            if (offerMarket) {
+                              const conflicting = strategyWorkspace?.offers.find(
+                                (o) => o.offerId !== offer.offerId && strategyOfferIds.includes(o.offerId) && String(o.strategy?.market || '').toUpperCase().trim() === offerMarket
+                              );
+                              if (conflicting) {
+                                messageApi.warning(`Пара ${offerMarket} уже есть в портфеле (${conflicting.titleRu}). Нельзя подключить две стратегии на одну пару.`);
+                                return;
+                              }
+                            }
+                          }
                           setStrategyOfferIds((current) =>
                             isSelected
                               ? current.filter((id) => id !== offer.offerId)

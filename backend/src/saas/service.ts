@@ -7022,6 +7022,21 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
     throw new Error(constraints.violations.join(' '));
   }
 
+  // D3: Pair duplicate validation — block selecting two offers with the same market
+  const marketCounts = new Map<string, string[]>();
+  for (const offer of selectedOffers) {
+    const market = String(offer.strategy?.market || '').toUpperCase().trim();
+    if (!market) continue;
+    const list = marketCounts.get(market) || [];
+    list.push(offer.offerId);
+    marketCounts.set(market, list);
+  }
+  const duplicateMarkets = Array.from(marketCounts.entries()).filter(([, ids]) => ids.length > 1);
+  if (duplicateMarkets.length > 0) {
+    const desc = duplicateMarkets.map(([m, ids]) => `${m} (${ids.join(', ')})`).join('; ');
+    throw new Error(`Дублирование пар: выбраны несколько стратегий на одну пару — ${desc}. Уберите дублирующую стратегию.`);
+  }
+
   await db.run(
     `UPDATE strategy_client_profiles
      SET selected_offer_ids_json = ?,
@@ -7060,6 +7075,27 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
   }
 
   return getStrategyClientState(tenantId);
+};
+
+export const batchConnectStrategyClientOffer = async (offerIds: string[], tenantIds: number[]): Promise<{ success: number; errors: string[] }> => {
+  const errors: string[] = [];
+  let success = 0;
+  for (const tenantId of tenantIds) {
+    try {
+      const existing = await getStrategyClientProfile(tenantId);
+      if (!existing) {
+        errors.push(`Tenant ${tenantId}: нет профиля strategy-client`);
+        continue;
+      }
+      const currentOfferIds = safeJsonParse<string[]>(existing.selected_offer_ids_json, []);
+      const merged = Array.from(new Set([...currentOfferIds, ...offerIds]));
+      await updateStrategyClientState(tenantId, { selectedOfferIds: merged });
+      success++;
+    } catch (e) {
+      errors.push(`Tenant ${tenantId}: ${(e as Error).message}`);
+    }
+  }
+  return { success, errors };
 };
 
 export const listStrategyClientSystemProfilesState = async (tenantId: number) => {
