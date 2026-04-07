@@ -1127,6 +1127,9 @@ const filterCatalogByPublishedOfferIds = (catalog: CatalogData | null, published
   if (!catalog) {
     return null;
   }
+  if (publishedIds.size === 0) {
+    return catalog;
+  }
   const mono = (catalog.clientCatalog?.mono || []).filter((item) => publishedIds.has(String(item.offerId)));
   const synth = (catalog.clientCatalog?.synth || []).filter((item) => publishedIds.has(String(item.offerId)));
   return {
