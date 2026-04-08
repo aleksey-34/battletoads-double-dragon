@@ -1093,7 +1093,11 @@ const ClientCabinet: React.FC = () => {
                   <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'pre-line' }}>
                     {getOfferDescription(offer, false)}
                   </Typography.Text>
-                  {hasChart ? (
+                  {strategyPreviewSeries.length > 0 ? (
+                    <div style={{ height: 240 }}>
+                      <ChartComponent key={`strat-preview-${strategyPreviewSeries.length}-${strategyPreviewSeries[strategyPreviewSeries.length-1]?.value ?? 0}`} data={strategyPreviewSeries} type="line" />
+                    </div>
+                  ) : hasChart ? (
                     <div style={{ height: 240 }}>
                       <ChartComponent key={`strat-${offer.offerId}`} data={equityPointsToSeries(eqPts, 365)} type="line" />
                     </div>
@@ -1369,7 +1373,12 @@ const ClientCabinet: React.FC = () => {
                             ) : (
                               <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
                             )}
-                            <Button size="small" onClick={() => setSystemDetailModal({ name: system.name, id: system.id })}>Подробнее</Button>
+                            <Space size={4} wrap>
+                              <Button size="small" onClick={() => setSystemDetailModal({ name: system.name, id: system.id })}>Подробнее</Button>
+                              {!isCurrent && algofundWorkspace?.capabilities?.startStopRequests ? (
+                                <Button size="small" type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start'); }}>Подключить</Button>
+                              ) : null}
+                            </Space>
                           </Space>
                         </Card>
                       </Col>
@@ -1435,7 +1444,7 @@ const ClientCabinet: React.FC = () => {
                       {snap ? <Col xs={12} sm={6}><Statistic title="Сд./день" value={formatNumber(snap.tradesPerDay, 1)} /></Col> : null}
                     </Row>
                   ) : null}
-                  {isCurrent && algofundWorkspace?.capabilities?.settings ? (
+                  {algofundWorkspace?.capabilities?.settings ? (
                     <div style={{ padding: '8px 0' }}>
                       <Typography.Text strong>Мультипликатор риска: × {formatNumber(algofundRiskMultiplier, 2)}</Typography.Text>
                       <Slider

@@ -8121,13 +8121,17 @@ export const getAlgofundState = async (
           const matchIdx = snapshotKeysLower.findIndex((k) => k === shortLower || k.endsWith(`::${shortLower}`) || k.endsWith(`:${shortLower}`));
           if (matchIdx >= 0) snapshot = tsSnapshots[snapshotKeys[matchIdx]];
         }
-        // Fuzzy: strip common prefixes from short name and try partial match
+        // Fuzzy: strip common prefixes from short name and try partial/contains match
         if (!snapshot) {
-          const stripped = shortLower.replace(/^(algofund-master-|btdd-d1-|btdd_d1-)/gi, '');
+          const stripped = shortLower.replace(/^(algofund-master-|btdd-d1-|btdd_d1-)+/gi, '');
           if (stripped.length >= 5) {
             const matchIdx = snapshotKeysLower.findIndex((k) => {
-              const kStripped = k.replace(/.*::/, '').replace(/^(algofund-master-|btdd-d1-|btdd_d1-)/gi, '').toLowerCase();
-              return kStripped === stripped || kStripped.startsWith(stripped.slice(0, 15));
+              const kStripped = k.replace(/.*::/, '').replace(/^(algofund-master-|btdd-d1-|btdd_d1-)+/gi, '').toLowerCase();
+              return kStripped === stripped
+                || kStripped.startsWith(stripped.slice(0, 15))
+                || stripped.startsWith(kStripped.slice(0, 15))
+                || kStripped.includes(stripped.slice(0, 12))
+                || stripped.includes(kStripped.slice(0, 12));
             });
             if (matchIdx >= 0) snapshot = tsSnapshots[snapshotKeys[matchIdx]];
           }
