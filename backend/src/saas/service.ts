@@ -55,6 +55,7 @@ type PlanRow = {
   title: string;
   product_mode: ProductMode;
   price_usdt: number;
+  original_price_usdt: number | null;
   max_deposit_total: number;
   risk_cap_max: number;
   max_strategies_total: number;
@@ -1779,6 +1780,7 @@ const buildRecommendedSets = (catalog: CatalogData | null) => {
 };
 
 export const ensureSaasSeedData = async (): Promise<void> => {
+  await db.run(`ALTER TABLE plans ADD COLUMN original_price_usdt REAL DEFAULT NULL`).catch(() => { /* already exists */ });
   for (const plan of [...strategyClientPlans, ...algofundPlans, ...copytradingPlans, ...synctradePlans, ...combinedPlans]) {
     await upsertPlan(plan);
   }
@@ -3971,6 +3973,7 @@ const ensurePublishedSourceSystem = async (
 
     // Ensure deposit_cap_override column exists (idempotent migration)
     await db.run(`ALTER TABLE tenants ADD COLUMN deposit_cap_override INTEGER DEFAULT NULL`).catch(() => { /* already exists */ });
+    await db.run(`ALTER TABLE plans ADD COLUMN original_price_usdt REAL DEFAULT NULL`).catch(() => { /* already exists */ });
 
     let apiKeyName = asString(payload.assignedApiKeyName, '');
     const inlineApiKeyNameRaw = asString(payload.inlineApiKeyName, '').trim();
@@ -7136,6 +7139,22 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
     logger.info(`[updateStrategyClientState] Tenant ${tenantId} toggled OFF — stopping orders/positions for ${nextAssignedApiKeyName}`);
     try { await cancelAllOrders(nextAssignedApiKeyName); } catch (e) { logger.warn(`cancelAllOrders on toggle-off for ${nextAssignedApiKeyName}: ${(e as Error).message}`); }
     try { await closeAllPositions(nextAssignedApiKeyName); } catch (e) { logger.warn(`closeAllPositions on toggle-off for ${nextAssignedApiKeyName}: ${(e as Error).message}`); }
+  }
+
+  // Per-offer cleanup: when offers are removed while still enabled, cancel orders for those markets
+  if (nextRequestedEnabled && nextAssignedApiKeyName && catalog) {
+    const removedOfferIds = activeOfferIds.filter((id) => !nextOfferIds.includes(id));
+    if (removedOfferIds.length > 0) {
+      const removedOffers = removedOfferIds
+        .map((offerId) => findOfferByIdOrNull(catalog, offerId))
+        .filter((item): item is CatalogOffer => !!item);
+      for (const offer of removedOffers) {
+        const market = String(offer.strategy?.market || '').toUpperCase().trim();
+        if (!market) continue;
+        logger.info(`[updateStrategyClientState] Tenant ${tenantId} removed offer ${offer.offerId} (${market}) — cancelling orders`);
+        try { await cancelAllOrders(nextAssignedApiKeyName, market); } catch (e) { logger.warn(`cancelAllOrders per-market ${market} for ${nextAssignedApiKeyName}: ${(e as Error).message}`); }
+      }
+    }
   }
 
   return getStrategyClientState(tenantId);

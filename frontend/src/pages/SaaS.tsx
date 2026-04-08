@@ -270,6 +270,7 @@ type Plan = {
   title: string;
   product_mode: ProductMode;
   price_usdt: number;
+  original_price_usdt: number | null;
   max_deposit_total: number;
   risk_cap_max: number;
   max_strategies_total: number;
@@ -2736,15 +2737,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const algofundApiKeyEditable = isAdminSurface && Boolean(algofundCapabilities?.apiKeyUpdate ?? true);
   const strategyPlanOptions = useMemo(() => (summary?.plans || [])
     .filter((plan) => plan.product_mode === 'strategy_client')
-    .map((plan) => ({ value: plan.code, label: `${plan.title} · ${formatMoney(plan.price_usdt)}` })),
+    .map((plan) => ({ value: plan.code, label: `${plan.title} · ${plan.original_price_usdt ? formatMoney(plan.original_price_usdt) + ' → ' : ''}${formatMoney(plan.price_usdt)}` })),
   [summary?.plans]);
   const algofundPlanOptions = useMemo(() => (summary?.plans || [])
     .filter((plan) => plan.product_mode === 'algofund_client')
-    .map((plan) => ({ value: plan.code, label: `${plan.title} · ${formatMoney(plan.price_usdt)}` })),
+    .map((plan) => ({ value: plan.code, label: `${plan.title} · ${plan.original_price_usdt ? formatMoney(plan.original_price_usdt) + ' → ' : ''}${formatMoney(plan.price_usdt)}` })),
   [summary?.plans]);
   const copytradingPlanOptions = useMemo(() => (summary?.plans || [])
     .filter((plan) => plan.product_mode === 'copytrading_client')
-    .map((plan) => ({ value: plan.code, label: `${plan.title} · ${formatMoney(plan.price_usdt)}` })),
+    .map((plan) => ({ value: plan.code, label: `${plan.title} · ${plan.original_price_usdt ? formatMoney(plan.original_price_usdt) + ' → ' : ''}${formatMoney(plan.price_usdt)}` })),
   [summary?.plans]);
   const apiKeyOptions = useMemo(() => (summary?.apiKeys || []).map((name) => ({ label: name, value: name })), [summary?.apiKeys]);
   const summaryCatalogOffers = useMemo(() => dedupeOffersById([
@@ -7102,7 +7103,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       title: copy.plan,
       key: 'plan',
       width: 170,
-      render: (_, row) => row.plan ? `${row.plan.title} • ${formatMoney(row.plan.price_usdt)}` : '—',
+      render: (_, row) => row.plan ? `${row.plan.title} • ${row.plan.original_price_usdt ? formatMoney(row.plan.original_price_usdt) + ' → ' : ''}${formatMoney(row.plan.price_usdt)}` : '—',
     },
     {
       title: 'Оплата',
@@ -9636,7 +9637,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         </Space>
                                         <Descriptions column={1} size="small" bordered>
                                           <Descriptions.Item label={copy.displayName}>{strategyState.tenant.display_name || '—'}</Descriptions.Item>
-                                          <Descriptions.Item label={copy.plan}>{strategyState.plan ? `${strategyState.plan.title} • ${formatMoney(strategyState.plan.price_usdt)}` : '—'}</Descriptions.Item>
+                                          <Descriptions.Item label={copy.plan}>{strategyState.plan ? `${strategyState.plan.title} • ${strategyState.plan.original_price_usdt ? formatMoney(strategyState.plan.original_price_usdt) + ' → ' : ''}${formatMoney(strategyState.plan.price_usdt)}` : '—'}</Descriptions.Item>
                                           <Descriptions.Item label={copy.depositCap}>{formatMoney(strategyState.plan?.max_deposit_total)}</Descriptions.Item>
                                           <Descriptions.Item label={copy.strategyLimit}>{formatNumber(strategyState.plan?.max_strategies_total, 0)}</Descriptions.Item>
                                           <Descriptions.Item label={copy.risk}>{String(strategyState.profile?.risk_level || '—')}</Descriptions.Item>
@@ -9799,7 +9800,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               {isAdminSurface ? (
                                 <Select style={{ width: '100%', marginTop: 8 }} value={strategyTenantPlanCode || undefined} onChange={setStrategyTenantPlanCode} options={strategyPlanOptions} />
                               ) : (
-                                <div style={{ marginTop: 8 }}><Text>{strategyState.plan ? `${strategyState.plan.title} • ${formatMoney(strategyState.plan.price_usdt)}` : '—'}</Text></div>
+                                <div style={{ marginTop: 8 }}><Text>{strategyState.plan ? `${strategyState.plan.title} • ${strategyState.plan.original_price_usdt ? formatMoney(strategyState.plan.original_price_usdt) + ' → ' : ''}${formatMoney(strategyState.plan.price_usdt)}` : '—'}</Text></div>
                               )}
                             </Col>
                           </Row>

@@ -76,6 +76,17 @@ function useLandingTexts(lang: UILanguage) {
       exchTitle: 'Биржевые интеграции',
       exchSub: '6 бирж подключено прямо сейчас. Bybit — основной коннектор, остальные через ccxt / native.',
       exchReg: 'Регистрация →',
+      discountTitle: '🔥 СУПЕР СКИДКА — 90%',
+      discountSub: 'Только сейчас: все тарифы платформы со скидкой 90%. Начните торговать алгоритмами почти бесплатно.',
+      discountPlans: [
+        { title: 'Strategy 20', old: '$20', now: '$2' },
+        { title: 'Strategy 50', old: '$50', now: '$5' },
+        { title: 'Strategy 100', old: '$100', now: '$10' },
+        { title: 'Algofund 20', old: '$20', now: '$2' },
+        { title: 'Algofund 50', old: '$50', now: '$5' },
+        { title: 'Algofund 100', old: '$100', now: '$10' },
+      ],
+      discountCta: 'Успейте подключиться',
       ctaTitle: 'Готовы начать?',
       ctaSub: 'Зарегистрируйтесь как клиент, подключите API-ключ биржи и запустите первую стратегию за несколько минут. Или обратитесь для подключения по модели Алгофонда.',
       ctaBtn: 'Зарегистрироваться',
@@ -139,6 +150,17 @@ function useLandingTexts(lang: UILanguage) {
       exchTitle: 'Exchange Integrations',
       exchSub: '6 exchanges connected right now. Bybit — primary connector, others via ccxt / native.',
       exchReg: 'Register →',
+      discountTitle: '🔥 SUPER SALE — 90% OFF',
+      discountSub: 'Limited time: all platform plans at 90% discount. Start algorithmic trading for almost nothing.',
+      discountPlans: [
+        { title: 'Strategy 20', old: '$20', now: '$2' },
+        { title: 'Strategy 50', old: '$50', now: '$5' },
+        { title: 'Strategy 100', old: '$100', now: '$10' },
+        { title: 'Algofund 20', old: '$20', now: '$2' },
+        { title: 'Algofund 50', old: '$50', now: '$5' },
+        { title: 'Algofund 100', old: '$100', now: '$10' },
+      ],
+      discountCta: 'Get started now',
       ctaTitle: 'Ready to Start?',
       ctaSub: 'Register as a client, connect your exchange API key and launch your first strategy in minutes. Or contact us for Algofund-style connection.',
       ctaBtn: 'Register',
@@ -202,6 +224,17 @@ function useLandingTexts(lang: UILanguage) {
       exchTitle: 'Borsa Entegrasyonları',
       exchSub: 'Şu anda 6 borsa bağlı. Bybit — ana bağlayıcı, diğerleri ccxt / native üzerinden.',
       exchReg: 'Kayıt Ol →',
+      discountTitle: '🔥 SÜPER İNDİRİM — %90',
+      discountSub: 'Sınırlı süre: tüm platform tarifelerinde %90 indirim. Algoritmik ticarete neredeyse ücretsiz başlayın.',
+      discountPlans: [
+        { title: 'Strategy 20', old: '$20', now: '$2' },
+        { title: 'Strategy 50', old: '$50', now: '$5' },
+        { title: 'Strategy 100', old: '$100', now: '$10' },
+        { title: 'Algofund 20', old: '$20', now: '$2' },
+        { title: 'Algofund 50', old: '$50', now: '$5' },
+        { title: 'Algofund 100', old: '$100', now: '$10' },
+      ],
+      discountCta: 'Hemen başlayın',
       ctaTitle: 'Başlamaya Hazır mısınız?',
       ctaSub: 'Müşteri olarak kaydolun, borsa API anahtarınızı bağlayın ve ilk stratejinizi dakikalar içinde başlatın. Veya Algofon modeli ile bağlantı için bize ulaşın.',
       ctaBtn: 'Kayıt Ol',
@@ -651,6 +684,61 @@ export default function Landing() {
             </a>
           ))}
         </div>
+      </div>
+
+      {/* ─── SUPER DISCOUNT BANNER ─── */}
+      <div style={{ textAlign: 'center', padding: '80px 24px 60px', background: 'linear-gradient(180deg, rgba(250,173,20,0.08) 0%, rgba(250,84,28,0.06) 100%)' }}>
+        <div style={{
+          display: 'inline-block',
+          background: 'linear-gradient(135deg, #faad14 0%, #fa541c 100%)',
+          color: '#fff',
+          fontSize: 'clamp(28px, 5vw, 52px)',
+          fontWeight: 900,
+          padding: '16px 40px',
+          borderRadius: 16,
+          marginBottom: 24,
+          letterSpacing: 1,
+          boxShadow: '0 8px 32px rgba(250,84,28,0.3)',
+        }}>
+          {tx.discountTitle}
+        </div>
+        <div style={{ color: '#8899aa', fontSize: 18, marginBottom: 40, maxWidth: 600, margin: '0 auto 40px' }}>
+          {tx.discountSub}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 16, flexWrap: 'wrap', maxWidth: 900, margin: '0 auto 36px' }}>
+          {(tx.discountPlans as Array<{ title: string; old: string; now: string }>).map((plan, i) => (
+            <div key={i} style={{
+              background: 'rgba(255,255,255,0.04)',
+              border: '1px solid rgba(250,173,20,0.3)',
+              borderRadius: 12,
+              padding: '20px 24px',
+              minWidth: 130,
+              textAlign: 'center',
+            }}>
+              <div style={{ fontSize: 13, color: '#8899aa', marginBottom: 8, fontWeight: 600 }}>{plan.title}</div>
+              <div style={{ fontSize: 20, color: '#556677', textDecoration: 'line-through', opacity: 0.6 }}>{plan.old}</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: '#faad14' }}>{plan.now}</div>
+              <Tag color="red" style={{ marginTop: 4, fontSize: 11 }}>-90%</Tag>
+            </div>
+          ))}
+        </div>
+        <Button
+          type="primary"
+          size="large"
+          icon={<RocketOutlined />}
+          href="/client/register"
+          style={{
+            height: 52,
+            paddingInline: 36,
+            fontSize: 18,
+            borderRadius: 12,
+            background: 'linear-gradient(135deg, #faad14 0%, #fa541c 100%)',
+            border: 'none',
+            fontWeight: 700,
+          }}
+        >
+          {tx.discountCta}
+        </Button>
       </div>
 
       {/* ─── CTA ─── */}

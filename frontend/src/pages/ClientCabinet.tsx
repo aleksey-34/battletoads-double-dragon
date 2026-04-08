@@ -54,6 +54,7 @@ type Plan = {
   code: string;
   title: string;
   price_usdt: number;
+  original_price_usdt: number | null;
   max_deposit_total: number;
   max_strategies_total: number;
   risk_cap_max: number;
@@ -248,6 +249,7 @@ type TariffPlan = {
   code: string;
   title: string;
   price_usdt: number;
+  original_price_usdt: number | null;
   max_deposit_total: number;
   max_strategies_total: number;
   risk_cap_max: number;
@@ -1783,7 +1785,7 @@ const ClientCabinet: React.FC = () => {
       <Card className="battletoads-card" title="Тариф и лимиты" size="small">
         <Space wrap style={{ marginBottom: 12 }}>
           <Tag color="blue">Тариф: {tariff?.currentPlan?.title || '—'}</Tag>
-          <Tag color="green">Цена: {formatMoney(tariff?.currentPlan?.price_usdt)}/мес</Tag>
+          <Tag color="green">Цена: {tariff?.currentPlan?.original_price_usdt ? <><s style={{ opacity: 0.5 }}>{formatMoney(tariff.currentPlan.original_price_usdt)}</s>{' '}</> : null}{formatMoney(tariff?.currentPlan?.price_usdt)}/мес</Tag>
           <Tag color="cyan">Макс. депозит: {formatMoney(tariff?.currentPlan?.max_deposit_total)}</Tag>
           <Tag color="purple">Риск-кап: {formatNumber(tariff?.currentPlan?.risk_cap_max)}</Tag>
           {tariff?.currentPlan?.allow_ts_start_stop_requests ? <Tag color="success">Старт/Стоп: вкл</Tag> : null}
@@ -1799,7 +1801,7 @@ const ClientCabinet: React.FC = () => {
               onChange={setTargetPlanCode}
               options={(tariff?.availablePlans || []).map((plan) => ({
                 value: plan.code,
-                label: `${plan.title} (${formatMoney(plan.price_usdt)}/мес — до ${formatMoney(plan.max_deposit_total)})`,
+                label: `${plan.title} (${plan.original_price_usdt ? `${formatMoney(plan.original_price_usdt)} → ` : ''}${formatMoney(plan.price_usdt)}/мес — до ${formatMoney(plan.max_deposit_total)})`,
               }))}
             />
           </Col>
