@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useCallback } from 'react';
 import { Button, Space, Tag, Typography, Divider } from 'antd';
 import {
   RocketOutlined,
@@ -385,14 +385,52 @@ const styles: Record<string, React.CSSProperties> = {
   },
 };
 
+type ColorTheme = 'classic' | 'neon' | 'fire';
+const THEME_OPTIONS: { value: ColorTheme; icon: string; label: string }[] = [
+  { value: 'classic', icon: '🔵', label: 'Classic' },
+  { value: 'neon', icon: '🟢', label: 'Neon' },
+  { value: 'fire', icon: '🟠', label: 'Fire' },
+];
+
 export default function Landing() {
   const { language, setLanguage } = useI18n();
   const tx = useLandingTexts(language);
 
+  const [colorTheme, setColorTheme] = useState<ColorTheme>(() => {
+    const saved = localStorage.getItem('btddColorTheme');
+    return (saved === 'classic' || saved === 'neon') ? saved : 'fire';
+  });
+
+  const changeTheme = useCallback((t: ColorTheme) => {
+    setColorTheme(t);
+    localStorage.setItem('btddColorTheme', t);
+    document.body.classList.remove('theme-classic', 'theme-neon', 'theme-fire');
+    document.body.classList.add(`theme-${t}`);
+  }, []);
+
   return (
     <div style={styles.page}>
-      {/* ─── LANG SWITCHER ─── */}
-      <div style={{ position: 'absolute', top: 16, right: 24, zIndex: 10, display: 'flex', gap: 8 }}>
+      {/* ─── LANG + THEME SWITCHER ─── */}
+      <div style={{ position: 'absolute', top: 16, right: 24, zIndex: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
+        {THEME_OPTIONS.map((opt) => (
+          <button
+            key={opt.value}
+            onClick={() => changeTheme(opt.value)}
+            title={opt.label}
+            style={{
+              background: colorTheme === opt.value ? 'var(--btdd-accent-030)' : 'rgba(255,255,255,0.06)',
+              border: colorTheme === opt.value ? '1px solid var(--btdd-accent)' : '1px solid rgba(255,255,255,0.12)',
+              borderRadius: 6,
+              padding: '4px 8px',
+              fontSize: 14,
+              cursor: 'pointer',
+              lineHeight: 1,
+            }}
+          >
+            {opt.icon}
+          </button>
+        ))}
+        <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
         {(['ru', 'en', 'tr'] as UILanguage[]).map((lng) => (
           <button
             key={lng}

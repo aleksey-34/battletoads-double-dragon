@@ -31,8 +31,7 @@ body.theme-classic {
   --btdd-magenta: #eb2f96;
 }
 
-/* ── Neon theme (default — green terminal accent) ── */
-:root,
+/* ── Neon theme (green terminal accent) ── */
 body.theme-neon {
   --btdd-bg-primary: #0d0f14;
   --btdd-bg-surface: #111518;
@@ -61,7 +60,8 @@ body.theme-neon {
   --btdd-magenta: #ea80fc;
 }
 
-/* ── Fire theme (orange blaze accent) ── */
+/* ── Fire theme (default — orange blaze accent) ── */
+:root,
 body.theme-fire {
   --btdd-bg-primary: #110d09;
   --btdd-bg-surface: #1a1410;

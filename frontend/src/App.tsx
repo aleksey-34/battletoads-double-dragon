@@ -38,7 +38,7 @@ function AppShell() {
   const [authCheckLoading, setAuthCheckLoading] = useState(false);
   const [colorTheme, setColorTheme] = useState<ColorTheme>(() => {
     const saved = localStorage.getItem('btddColorTheme');
-    return (saved === 'classic' || saved === 'fire') ? saved : 'neon';
+    return (saved === 'classic' || saved === 'neon') ? saved : 'fire';
   });
   const isClientRoute = location.pathname.startsWith('/client') || location.pathname.startsWith('/cabinet');
   const isClientAuthRoute = location.pathname.startsWith('/client/login') || location.pathname.startsWith('/client/register');
