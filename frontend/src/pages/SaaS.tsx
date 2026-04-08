@@ -4843,22 +4843,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
-    const nextStrategyTenant = (summary.tenants || []).find((item) => item.tenant.product_mode === 'strategy_client')?.tenant.id || null;
+    const nextStrategyTenant = (summary.tenants || []).find((item) => item.tenant.product_mode === 'strategy_client' || item.tenant.product_mode === 'dual')?.tenant.id || null;
     const nextAlgofundTenant =
       (summary.tenants || []).find((item) => (
-        item.tenant.product_mode === 'algofund_client'
+        (item.tenant.product_mode === 'algofund_client' || item.tenant.product_mode === 'dual')
         && !!item.algofundProfile?.actual_enabled
         && String(item.algofundProfile?.published_system_name || '').trim().length > 0
       ))?.tenant.id
       || (summary.tenants || []).find((item) => (
-        item.tenant.product_mode === 'algofund_client'
+        (item.tenant.product_mode === 'algofund_client' || item.tenant.product_mode === 'dual')
         && !!item.algofundProfile?.actual_enabled
       ))?.tenant.id
       || (summary.tenants || []).find((item) => (
-        item.tenant.product_mode === 'algofund_client'
+        (item.tenant.product_mode === 'algofund_client' || item.tenant.product_mode === 'dual')
         && String(item.algofundProfile?.published_system_name || '').trim().length > 0
       ))?.tenant.id
-      || (summary.tenants || []).find((item) => item.tenant.product_mode === 'algofund_client')?.tenant.id
+      || (summary.tenants || []).find((item) => item.tenant.product_mode === 'algofund_client' || item.tenant.product_mode === 'dual')?.tenant.id
       || null;
     const nextCopytradingTenant =
       (summary.tenants || []).find((item) => item.tenant.product_mode === 'copytrading_client')?.tenant.id
@@ -5747,7 +5747,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
-    if (row.tenant.product_mode === 'strategy_client') {
+    if (row.tenant.product_mode === 'strategy_client' || row.tenant.product_mode === 'dual') {
       setStrategyTenantId(tenantId);
       navigateSaasTab('strategy-client');
       return;
@@ -7155,7 +7155,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       key: 'classification',
       width: 300,
       render: (_, row) => {
-        if (row.tenant.product_mode === 'strategy_client') {
+        if (row.tenant.product_mode === 'strategy_client' || row.tenant.product_mode === 'dual') {
           const selected = Array.isArray(row.strategyProfile?.selectedOfferIds)
             ? row.strategyProfile?.selectedOfferIds || []
             : [];
@@ -7199,7 +7199,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       title: 'Action',
       key: 'action',
       width: 280,
-      render: (_, row) => row.tenant.product_mode === 'strategy_client' ? (
+      render: (_, row) => (row.tenant.product_mode === 'strategy_client' || row.tenant.product_mode === 'dual') ? (
         <Space size={4} wrap>
           <Button
             size="small"
@@ -7660,7 +7660,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const monitoringRows = (summary?.tenants || [])
     .filter((row) => monitoringModeFilter === 'all' || row.tenant.product_mode === monitoringModeFilter)
     .map((row) => {
-      const profile = row.tenant.product_mode === 'strategy_client' ? row.strategyProfile : row.algofundProfile;
+      const profile = (row.tenant.product_mode === 'strategy_client' || row.tenant.product_mode === 'dual') ? row.strategyProfile : row.algofundProfile;
       const requestedEnabled = Number(profile?.requested_enabled || 0) === 1;
       const actualEnabled = Number(profile?.actual_enabled || 0) === 1;
       const apiKeyName = String(profile?.assigned_api_key_name || row.tenant.assigned_api_key_name || '').trim();
