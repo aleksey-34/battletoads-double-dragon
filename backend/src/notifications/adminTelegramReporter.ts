@@ -643,10 +643,10 @@ export const notifyAdminNewUser = async (info: {
   const text = [
     `🆕 <b>Новый клиент зарегистрировался!</b>`,
     ``,
-    `📧 Email: <code>${esc(info.email)}</code>`,
-    `👤 Имя: ${esc(info.displayName)}`,
-    `📦 Режим: ${esc(info.productMode)}`,
-    `💰 Тариф: ${esc(info.planCode)}`,
+    `📧 Email: <code>${escapeHtml(info.email)}</code>`,
+    `👤 Имя: ${escapeHtml(info.displayName)}`,
+    `📦 Режим: ${escapeHtml(info.productMode)}`,
+    `💰 Тариф: ${escapeHtml(info.planCode)}`,
     `🕐 ${new Date().toISOString()}`,
   ].join('\n');
   try {
