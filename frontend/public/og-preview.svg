@@ -1,0 +1,88 @@
+<svg width="1200" height="630" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0e1a"/>
+      <stop offset="100%" style="stop-color:#1a1e2e"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#faad14"/>
+      <stop offset="100%" style="stop-color:#fa541c"/>
+    </linearGradient>
+    <linearGradient id="green" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#52c41a"/>
+      <stop offset="100%" style="stop-color:#73d13d"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1200" height="630" fill="url(#bg)"/>
+  
+  <!-- Grid pattern -->
+  <g opacity="0.03">
+    <line x1="0" y1="0" x2="0" y2="630" stroke="#fff" stroke-width="1" transform="translate(60,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" stroke="#fff" stroke-width="1" transform="translate(120,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" stroke="#fff" stroke-width="1" transform="translate(180,0)"/>
+    <line x1="0" y1="0" x2="0" y2="630" stroke="#fff" stroke-width="1" transform="translate(240,0)"/>
+    <line x1="0" y1="0" x2="1200" y2="0" stroke="#fff" stroke-width="1" transform="translate(0,60)"/>
+    <line x1="0" y1="0" x2="1200" y2="0" stroke="#fff" stroke-width="1" transform="translate(0,120)"/>
+    <line x1="0" y1="0" x2="1200" y2="0" stroke="#fff" stroke-width="1" transform="translate(0,180)"/>
+  </g>
+  
+  <!-- Decorative chart line -->
+  <polyline points="0,450 100,430 200,380 300,400 400,350 500,280 600,310 700,250 800,200 900,180 1000,150 1100,120 1200,90" 
+            fill="none" stroke="url(#green)" stroke-width="3" opacity="0.15"/>
+  <polyline points="0,480 100,470 200,440 300,460 400,400 500,350 600,370 700,300 800,260 900,230 1000,200 1100,170 1200,140" 
+            fill="none" stroke="url(#accent)" stroke-width="2" opacity="0.1"/>
+
+  <!-- Glow circle -->
+  <circle cx="900" cy="200" r="200" fill="#faad14" opacity="0.04"/>
+  <circle cx="300" cy="400" r="150" fill="#1677ff" opacity="0.04"/>
+  
+  <!-- Main title -->
+  <text x="80" y="180" font-family="Arial, Helvetica, sans-serif" font-size="72" font-weight="900" fill="#ffffff" letter-spacing="-2">
+    BTDD Platform
+  </text>
+  
+  <!-- Subtitle -->
+  <text x="80" y="240" font-family="Arial, Helvetica, sans-serif" font-size="32" font-weight="400" fill="#8899aa">
+    Алгоритмическая торговля как сервис
+  </text>
+  
+  <!-- Divider -->
+  <rect x="80" y="270" width="120" height="4" rx="2" fill="url(#accent)"/>
+  
+  <!-- Stats row -->
+  <g transform="translate(80, 330)">
+    <text font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="800" fill="#faad14">9 108</text>
+    <text y="30" font-family="Arial, Helvetica, sans-serif" font-size="16" fill="#556677">бектестов</text>
+  </g>
+  <g transform="translate(300, 330)">
+    <text font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="800" fill="#52c41a">+28.7%</text>
+    <text y="30" font-family="Arial, Helvetica, sans-serif" font-size="16" fill="#556677">ср. доходность</text>
+  </g>
+  <g transform="translate(560, 330)">
+    <text font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="800" fill="#1677ff">6</text>
+    <text y="30" font-family="Arial, Helvetica, sans-serif" font-size="16" fill="#556677">бирж подключено</text>
+  </g>
+  <g transform="translate(760, 330)">
+    <text font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="800" fill="#ff4d4f">3</text>
+    <text y="30" font-family="Arial, Helvetica, sans-serif" font-size="16" fill="#556677">типа стратегий</text>
+  </g>
+  
+  <!-- Free badge -->
+  <rect x="80" y="420" width="340" height="56" rx="12" fill="url(#accent)"/>
+  <text x="100" y="457" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800" fill="#fff">🔥 СЕЙЧАС БЕСПЛАТНО</text>
+  
+  <!-- Exchanges -->
+  <text x="80" y="540" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#445566">
+    Bybit · Binance · Bitget · BingX · MEXC · Weex
+  </text>
+  
+  <!-- URL -->
+  <text x="80" y="580" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600" fill="#faad14">
+    battletoads.top
+  </text>
+  
+  <!-- Right side decoration - rocket icon approximation -->
+  <text x="1020" y="520" font-family="Arial, Helvetica, sans-serif" font-size="100" opacity="0.08">🚀</text>
+</svg>

@@ -1838,6 +1838,54 @@ const ClientCabinet: React.FC = () => {
           </>
         ) : null}
       </Card>
+
+      {/* — Поддержка и обращения — */}
+      <Card className="battletoads-card" title="Поддержка" size="small">
+        <Typography.Paragraph style={{ marginBottom: 12 }}>
+          Если у вас есть вопросы, предложения, замечания или вы нашли баг — обращайтесь к нам любым удобным способом:
+        </Typography.Paragraph>
+        <Space wrap size={12}>
+          <Button
+            type="primary"
+            icon={<span style={{ marginRight: 6 }}>💬</span>}
+            href="https://t.me/BT_bot_Dashboard_bot"
+            target="_blank"
+            style={{ borderRadius: 8 }}
+          >
+            Написать в Telegram-бот
+          </Button>
+          <Button
+            href="https://t.me/yakovbyakov"
+            target="_blank"
+            style={{ borderRadius: 8 }}
+          >
+            Связаться с менеджером
+          </Button>
+        </Space>
+        <Divider style={{ margin: '16px 0 12px' }} />
+        <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+          Бот работает 24/7 — ответ обычно в течение нескольких часов. Для срочных вопросов используйте прямой контакт с менеджером.
+        </Typography.Text>
+      </Card>
+
+      {/* — Настройки уведомлений (placeholder) — */}
+      <Card className="battletoads-card" title="Уведомления" size="small">
+        <Typography.Paragraph style={{ marginBottom: 12 }}>
+          Настройте уведомления, которые хотите получать в Telegram:
+        </Typography.Paragraph>
+        <Space direction="vertical" style={{ width: '100%' }}>
+          <Checkbox defaultChecked disabled>Баланс и изменения капитала</Checkbox>
+          <Checkbox defaultChecked disabled>Информация о сделках (открытие/закрытие)</Checkbox>
+          <Checkbox defaultChecked disabled>Напоминания об оплате подписки</Checkbox>
+          <Checkbox disabled>Ежедневный отчёт по позициям</Checkbox>
+        </Space>
+        <div style={{ marginTop: 16 }}>
+          <Tag color="blue">Скоро!</Tag>
+          <Typography.Text type="secondary" style={{ marginLeft: 8, fontSize: 13 }}>
+            Push-уведомления через Telegram-бот будут доступны в ближайшем обновлении.
+          </Typography.Text>
+        </div>
+      </Card>
     </Space>
   );
 

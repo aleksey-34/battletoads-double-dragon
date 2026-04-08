@@ -76,8 +76,10 @@ function useLandingTexts(lang: UILanguage) {
       exchTitle: 'Биржевые интеграции',
       exchSub: '6 бирж подключено прямо сейчас. Bybit — основной коннектор, остальные через ccxt / native.',
       exchReg: 'Регистрация →',
-      discountTitle: '🔥 СУПЕР СКИДКА — 90%',
-      discountSub: 'Только сейчас: все тарифы платформы со скидкой 90%. Начните торговать алгоритмами почти бесплатно.',
+      discountTitle: '� СЕЙЧАС БЕСПЛАТНО',
+      discountSub: 'Обновлённый проект набирает аудиторию — все тарифы платформы доступны бесплатно. Заходите, подключайте API-ключ, тестируйте стратегии и торгуйте без оплаты.',
+      discountBadge: 'Бесплатный доступ',
+      discountNote: 'Платные тарифы будут включены позже — но сейчас всё бесплатно. Скидки 90% для первых пользователей сохранятся.',,
       discountPlans: [
         { title: 'Strategy 20', old: '$20', now: '$2' },
         { title: 'Strategy 50', old: '$50', now: '$5' },
@@ -150,8 +152,10 @@ function useLandingTexts(lang: UILanguage) {
       exchTitle: 'Exchange Integrations',
       exchSub: '6 exchanges connected right now. Bybit — primary connector, others via ccxt / native.',
       exchReg: 'Register →',
-      discountTitle: '🔥 SUPER SALE — 90% OFF',
-      discountSub: 'Limited time: all platform plans at 90% discount. Start algorithmic trading for almost nothing.',
+      discountTitle: '� FREE ACCESS NOW',
+      discountSub: 'The updated platform is growing its audience — all plans are available for free. Connect your API key, test strategies and trade at no cost.',
+      discountBadge: 'Free access',
+      discountNote: 'Paid plans will be enabled later — but right now everything is free. Early users keep 90% discount when pricing kicks in.',,
       discountPlans: [
         { title: 'Strategy 20', old: '$20', now: '$2' },
         { title: 'Strategy 50', old: '$50', now: '$5' },
@@ -224,8 +228,10 @@ function useLandingTexts(lang: UILanguage) {
       exchTitle: 'Borsa Entegrasyonları',
       exchSub: 'Şu anda 6 borsa bağlı. Bybit — ana bağlayıcı, diğerleri ccxt / native üzerinden.',
       exchReg: 'Kayıt Ol →',
-      discountTitle: '🔥 SÜPER İNDİRİM — %90',
-      discountSub: 'Sınırlı süre: tüm platform tarifelerinde %90 indirim. Algoritmik ticarete neredeyse ücretsiz başlayın.',
+      discountTitle: '� ŞU AN ÜCRETSİZ',
+      discountSub: 'Güncellenen platform kitlesini büyütüyor — tüm tarifeler ücretsiz. API anahtarınızı bağlayın, stratejileri test edin ve ücretsiz ticaret yapın.',
+      discountBadge: 'Ücretsiz erişim',
+      discountNote: 'Ücretli tarifeler daha sonra etkinleştirilecek — ama şu anda her şey ücretsiz. Erken kullanıcılar %90 indirimi korur.',,
       discountPlans: [
         { title: 'Strategy 20', old: '$20', now: '$2' },
         { title: 'Strategy 50', old: '$50', now: '$5' },
@@ -686,39 +692,52 @@ export default function Landing() {
         </div>
       </div>
 
-      {/* ─── SUPER DISCOUNT BANNER ─── */}
-      <div style={{ textAlign: 'center', padding: '80px 24px 60px', background: 'linear-gradient(180deg, rgba(250,173,20,0.08) 0%, rgba(250,84,28,0.06) 100%)' }}>
+      {/* ─── FREE ACCESS BANNER ─── */}
+      <div style={{ textAlign: 'center', padding: '80px 24px 60px', background: 'linear-gradient(180deg, rgba(82,196,26,0.08) 0%, rgba(250,173,20,0.06) 100%)' }}>
         <div style={{
           display: 'inline-block',
-          background: 'linear-gradient(135deg, #faad14 0%, #fa541c 100%)',
+          background: 'linear-gradient(135deg, #52c41a 0%, #73d13d 100%)',
           color: '#fff',
           fontSize: 'clamp(28px, 5vw, 52px)',
           fontWeight: 900,
-          padding: '16px 40px',
+          padding: '16px 48px',
           borderRadius: 16,
           marginBottom: 24,
           letterSpacing: 1,
-          boxShadow: '0 8px 32px rgba(250,84,28,0.3)',
+          boxShadow: '0 8px 32px rgba(82,196,26,0.35)',
         }}>
           {tx.discountTitle}
         </div>
-        <div style={{ color: '#8899aa', fontSize: 18, marginBottom: 40, maxWidth: 600, margin: '0 auto 40px' }}>
+        <div style={{ color: '#ccd4dd', fontSize: 20, marginBottom: 20, maxWidth: 650, margin: '0 auto 20px', lineHeight: 1.6 }}>
           {tx.discountSub}
         </div>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 16, flexWrap: 'wrap', maxWidth: 900, margin: '0 auto 36px' }}>
+        <div style={{
+          display: 'inline-block',
+          background: 'rgba(82,196,26,0.12)',
+          border: '1px solid rgba(82,196,26,0.3)',
+          borderRadius: 10,
+          padding: '10px 28px',
+          marginBottom: 24,
+          fontSize: 15,
+          color: '#73d13d',
+          fontWeight: 600,
+        }}>
+          {tx.discountNote}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 16, flexWrap: 'wrap', maxWidth: 900, margin: '24px auto 36px' }}>
           {(tx.discountPlans as Array<{ title: string; old: string; now: string }>).map((plan, i) => (
             <div key={i} style={{
               background: 'rgba(255,255,255,0.04)',
-              border: '1px solid rgba(250,173,20,0.3)',
+              border: '1px solid rgba(82,196,26,0.25)',
               borderRadius: 12,
               padding: '20px 24px',
               minWidth: 130,
               textAlign: 'center',
             }}>
               <div style={{ fontSize: 13, color: '#8899aa', marginBottom: 8, fontWeight: 600 }}>{plan.title}</div>
-              <div style={{ fontSize: 20, color: '#556677', textDecoration: 'line-through', opacity: 0.6 }}>{plan.old}</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: '#faad14' }}>{plan.now}</div>
-              <Tag color="red" style={{ marginTop: 4, fontSize: 11 }}>-90%</Tag>
+              <div style={{ fontSize: 18, color: '#556677', textDecoration: 'line-through', opacity: 0.5 }}>{plan.old}</div>
+              <div style={{ fontSize: 36, fontWeight: 900, color: '#52c41a' }}>$0</div>
+              <Tag color="green" style={{ marginTop: 4, fontSize: 12, fontWeight: 700 }}>{tx.discountBadge}</Tag>
             </div>
           ))}
         </div>
@@ -728,13 +747,14 @@ export default function Landing() {
           icon={<RocketOutlined />}
           href="/client/register"
           style={{
-            height: 52,
-            paddingInline: 36,
-            fontSize: 18,
-            borderRadius: 12,
-            background: 'linear-gradient(135deg, #faad14 0%, #fa541c 100%)',
+            height: 56,
+            paddingInline: 40,
+            fontSize: 20,
+            borderRadius: 14,
+            background: 'linear-gradient(135deg, #52c41a 0%, #73d13d 100%)',
             border: 'none',
-            fontWeight: 700,
+            fontWeight: 800,
+            boxShadow: '0 4px 20px rgba(82,196,26,0.3)',
           }}
         >
           {tx.discountCta}
