@@ -244,26 +244,26 @@ const EXCHANGES = [
 
 const styles: Record<string, React.CSSProperties> = {
   page: {
-    background: '#0a0a0f',
+    background: 'var(--btdd-bg-primary)',
     minHeight: '100vh',
     color: '#fff',
     fontFamily: "'Inter', 'Segoe UI', sans-serif",
     overflowX: 'hidden',
   },
   hero: {
-    background: 'linear-gradient(135deg, #0a0a0f 0%, #0d1a2e 50%, #0a0a0f 100%)',
+    background: 'linear-gradient(135deg, var(--btdd-bg-primary) 0%, var(--btdd-hero-mid) 50%, var(--btdd-bg-primary) 100%)',
     padding: '80px 24px 60px',
     textAlign: 'center',
     position: 'relative',
   },
   heroBadge: {
     display: 'inline-block',
-    background: 'rgba(22,119,255,0.15)',
-    border: '1px solid rgba(22,119,255,0.4)',
+    background: 'var(--btdd-accent-015)',
+    border: '1px solid var(--btdd-accent-040)',
     borderRadius: 20,
     padding: '6px 18px',
     fontSize: 13,
-    color: '#4096ff',
+    color: 'var(--btdd-accent)',
     marginBottom: 24,
     letterSpacing: '0.05em',
   },
@@ -272,7 +272,7 @@ const styles: Record<string, React.CSSProperties> = {
     fontWeight: 800,
     lineHeight: 1.15,
     margin: '0 0 16px',
-    background: 'linear-gradient(135deg, #ffffff 0%, #a0c4ff 100%)',
+    background: 'linear-gradient(135deg, #ffffff 0%, var(--btdd-accent-hover) 100%)',
     WebkitBackgroundClip: 'text',
     WebkitTextFillColor: 'transparent',
     backgroundClip: 'text',
@@ -285,9 +285,9 @@ const styles: Record<string, React.CSSProperties> = {
     lineHeight: 1.6,
   },
   metricsStrip: {
-    background: 'rgba(22,119,255,0.05)',
-    borderTop: '1px solid rgba(22,119,255,0.15)',
-    borderBottom: '1px solid rgba(22,119,255,0.15)',
+    background: 'var(--btdd-accent-005)',
+    borderTop: '1px solid var(--btdd-accent-015)',
+    borderBottom: '1px solid var(--btdd-accent-015)',
     padding: '32px 24px',
     display: 'flex',
     flexWrap: 'wrap' as const,
@@ -302,7 +302,7 @@ const styles: Record<string, React.CSSProperties> = {
   metricValue: {
     fontSize: 'clamp(24px, 4vw, 40px)',
     fontWeight: 800,
-    color: '#4096ff',
+    color: 'var(--btdd-accent)',
     lineHeight: 1.1,
   },
   metricLabel: {
@@ -343,8 +343,8 @@ const styles: Record<string, React.CSSProperties> = {
     transition: 'border-color 0.2s, transform 0.2s',
   },
   cardHighlight: {
-    background: 'rgba(22,119,255,0.07)',
-    border: '1px solid rgba(22,119,255,0.35)',
+    background: 'var(--btdd-accent-007)',
+    border: '1px solid var(--btdd-accent-035)',
     borderRadius: 16,
     padding: '28px 24px',
     flex: '1 1 280px',
@@ -370,13 +370,13 @@ const styles: Record<string, React.CSSProperties> = {
     padding: '64px 24px',
   },
   ctaSection: {
-    background: 'linear-gradient(135deg, #0d1a2e 0%, #0a0a0f 100%)',
+    background: 'linear-gradient(135deg, var(--btdd-hero-mid) 0%, var(--btdd-bg-primary) 100%)',
     padding: '80px 24px',
     textAlign: 'center',
-    borderTop: '1px solid rgba(22,119,255,0.2)',
+    borderTop: '1px solid var(--btdd-accent-020)',
   },
   footer: {
-    background: '#050508',
+    background: 'var(--btdd-bg-primary)',
     borderTop: '1px solid rgba(255,255,255,0.06)',
     padding: '32px 24px',
     textAlign: 'center',
@@ -398,9 +398,9 @@ export default function Landing() {
             key={lng}
             onClick={() => setLanguage(lng)}
             style={{
-              background: language === lng ? 'rgba(22,119,255,0.3)' : 'rgba(255,255,255,0.06)',
-              border: language === lng ? '1px solid #4096ff' : '1px solid rgba(255,255,255,0.12)',
-              color: language === lng ? '#4096ff' : '#778899',
+              background: language === lng ? 'var(--btdd-accent-030)' : 'rgba(255,255,255,0.06)',
+              border: language === lng ? '1px solid var(--btdd-accent)' : '1px solid rgba(255,255,255,0.12)',
+              color: language === lng ? 'var(--btdd-accent)' : '#778899',
               borderRadius: 6,
               padding: '4px 10px',
               fontSize: 12,
@@ -574,12 +574,12 @@ export default function Landing() {
           }}>
             {tx.proofRows.map((row: any) => (
               <div key={row.label} style={{
-                background: 'rgba(22,119,255,0.06)',
-                border: '1px solid rgba(22,119,255,0.2)',
+                background: 'var(--btdd-accent-006)',
+                border: '1px solid var(--btdd-accent-020)',
                 borderRadius: 12,
                 padding: '20px 16px',
               }}>
-                <div style={{ fontSize: 28, fontWeight: 800, color: '#4096ff' }}>{row.value}</div>
+                <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--btdd-accent)' }}>{row.value}</div>
                 <div style={{ fontSize: 13, color: '#ccc', marginTop: 4 }}>{row.label}</div>
                 <div style={{ fontSize: 11, color: '#556677' }}>{row.note}</div>
               </div>
@@ -592,7 +592,7 @@ export default function Landing() {
       {/* ─── EXCHANGES ─── */}
       <div style={{ ...styles.section, textAlign: 'center' }}>
         <div style={styles.sectionTitle}>
-          <GlobalOutlined style={{ marginRight: 10, color: '#1677ff' }} />
+          <GlobalOutlined style={{ marginRight: 10, color: 'var(--btdd-accent)' }} />
           {tx.exchTitle}
         </div>
         <div style={{ ...styles.sectionSub, marginBottom: 36 }}>{tx.exchSub}</div>
