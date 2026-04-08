@@ -2648,11 +2648,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [selectedAdminDraftTsSetKey, setSelectedAdminDraftTsSetKey] = useState('');
 
   const strategyTenants = useMemo(
-    () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client'),
+    () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client' || item.tenant.product_mode === 'dual'),
     [summary?.tenants],
   );
   const algofundTenants = useMemo(
-    () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client'),
+    () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client' || item.tenant.product_mode === 'dual'),
     [summary?.tenants],
   );
   const copytradingTenants = useMemo(
@@ -2664,7 +2664,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     [summary?.tenants],
   );
   const batchEligibleAlgofundTenants = useMemo(
-    () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client'),
+    () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client' || item.tenant.product_mode === 'dual'),
     [summary?.tenants],
   );
   const algofundTenantsWithPublishedTs = useMemo(
@@ -8514,6 +8514,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     { value: 'all', label: 'Все клиенты' },
                                     { value: 'strategy_client', label: 'Strategy Client' },
                                     { value: 'algofund_client', label: 'Algofund' },
+                                    { value: 'dual', label: 'Dual' },
                                   ]}
                                 />
                                 <Select
@@ -8749,6 +8750,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     { value: 'all', label: 'Все режимы' },
                                     { value: 'strategy_client', label: 'Strategy Client' },
                                     { value: 'algofund_client', label: 'Algofund' },
+                                    { value: 'dual', label: 'Dual' },
                                   ]}
                                 />
                                 <Button onClick={() => void loadMonitoringTabData()} loading={monitoringTabLoading}>Обновить список систем</Button>
@@ -9159,6 +9161,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   { value: 'all', label: 'Все режимы' },
                                   { value: 'strategy_client', label: 'Strategy Client' },
                                   { value: 'algofund_client', label: 'Algofund' },
+                                  { value: 'dual', label: 'Dual' },
                                 ]}
                               />
                               <Button onClick={() => void loadMonitoringTabData()} loading={monitoringTabLoading}>Обновить список систем</Button>
