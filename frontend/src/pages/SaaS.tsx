@@ -9485,7 +9485,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                 <Card size="small" bordered>
                                                   <Space direction="vertical" size={6} style={{ width: '100%' }}>
                                                     <Space direction="vertical" size={0}>
-                                                      <Text strong>{row.titleRu}</Text>
+                                                      <Tooltip title={(() => {
+                                                        const type = String(row.type || '').trim();
+                                                        const interval = String(row.interval || '');
+                                                        const hint = getTsStrategyHint(type) || `Стратегия ${type}`;
+                                                        return `${hint}\nТаймфрейм: ${interval} • Пара: ${row.market}`;
+                                                      })()} placement="topLeft">
+                                                        <Text strong style={{ cursor: 'help' }}>{row.titleRu}</Text>
+                                                      </Tooltip>
                                                       <Text type="secondary" style={{ fontSize: 11 }}>{String(row.mode || '').toUpperCase()} • {row.market}</Text>
                                                     </Space>
                                                     <Space size={4} wrap>

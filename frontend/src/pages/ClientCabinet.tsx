@@ -22,6 +22,7 @@ import {
   Statistic,
   Tag,
   Tabs,
+  Tooltip,
   Typography,
   message,
 } from 'antd';
@@ -387,6 +388,51 @@ const equityPointsToSeries = (points: number[], periodDays?: number): LinePoint[
   const startTs = endTs - days * 86400;
   const step = (endTs - startTs) / Math.max(points.length - 1, 1);
   return points.map((v, i) => ({ time: Math.floor(startTs + i * step), value: v }));
+};
+
+const getOfferDescription = (offer: any, detailed: boolean = false): string => {
+  const type = String(offer?.strategy?.type || '').trim();
+  const mode = String(offer?.strategy?.mode || '').toLowerCase();
+  const market = String(offer?.strategy?.market || '');
+  const interval = String(offer?.strategy?.params?.interval || '');
+  const length = Number(offer?.strategy?.params?.length || 0);
+  const tp = Number(offer?.strategy?.params?.takeProfitPercent || 0);
+  const src = String(offer?.strategy?.params?.detectionSource || '');
+  let label = '';
+  if (type.includes('stat_arb') || type.includes('zscore')) {
+    label = 'StatArb Z-Score — возврат к среднему. Открывает позицию при отклонении цены от среднего.';
+  } else if (type.includes('zz_breakout') || type.includes('zigzag')) {
+    label = 'ZigZag Breakout — пробой канала. Лонг/шорт при пробое N-бар максимума/минимума.';
+  } else if (type.includes('DD_BattleToads') || type.includes('dd_battletoads')) {
+    label = 'DoubleDragon Breakout — пробой канала Дончиана с трейлинговым TP.';
+  } else {
+    label = `Стратегия ${type}`;
+  }
+  const summary = `${mode === 'synth' ? 'Синтетическая пара' : 'Моно-пара'} ${market} • Таймфрейм ${interval}`;
+  if (!detailed) return `${label}\n${summary}`;
+  const params = [`Период: ${length}`, tp ? `TP: ${tp}%` : '', src ? `Источник: ${src}` : ''].filter(Boolean).join(' • ');
+  const ze = Number(offer?.strategy?.params?.zscoreEntry || 0);
+  const zx = Number(offer?.strategy?.params?.zscoreExit || 0);
+  const zs = Number(offer?.strategy?.params?.zscoreStop || 0);
+  const zInfo = ze ? `Z-entry: ${ze}, Z-exit: ${zx}, Z-stop: ${zs}` : '';
+  return `${label}\n${summary}\n${params}${zInfo ? '\n' + zInfo : ''}`;
+};
+
+const getTsHint = (systemName: string): string | null => {
+  const upper = String(systemName || '').toUpperCase();
+  if (upper.includes('_SA_') || upper.includes('STAT_ARB') || upper.includes('STATARB') || upper.includes('-SA-')) {
+    return 'StatArb Z-Score — возврат к среднему\nОткрывает позицию когда цена отклоняется на ≥N σ от скользящего среднего пары.';
+  }
+  if (upper.includes('_ZZ_') || upper.includes('ZIGZAG') || upper.includes('-ZZ-') || upper.includes('ZZ_BREAKOUT')) {
+    return 'ZigZag Breakout — пробой канала\nЛонг/шорт при пробое N-бар максимума/минимума по Дончиану.';
+  }
+  if (upper.includes('_DD_') || upper.includes('BTDD') || upper.includes('DD_BATTLETOADS') || upper.includes('-DD-')) {
+    return 'DoubleDragon Breakout — пробой канала Дончиана\nТрейлинговый TP от пика позиции.';
+  }
+  if (upper.includes('MULTISET') || upper.includes('CURATED') || upper.includes('BALANCED')) {
+    return 'Мультистратегия — портфель из нескольких стратегий\nДиверсификация рисков за счёт множества пар и типов.';
+  }
+  return null;
 };
 
 const tsDisplayName = (systemName: string): string => {
@@ -902,7 +948,9 @@ const ClientCabinet: React.FC = () => {
                         <Space direction="vertical" size={6} style={{ width: '100%' }}>
                           <Space direction="vertical" size={0}>
                             <Space>
-                              <Typography.Text strong style={{ fontSize: 12 }}>{offer.titleRu}</Typography.Text>
+                              <Tooltip title={getOfferDescription(offer, false)} placement="topLeft">
+                                <Typography.Text strong style={{ fontSize: 12, cursor: 'help' }}>{offer.titleRu}</Typography.Text>
+                              </Tooltip>
                               {strategyWorkspace.capabilities?.settings
                                 ? <Checkbox checked={strategyOfferIds.includes(offer.offerId)} onChange={(e) => {
                                     e.stopPropagation();
@@ -985,6 +1033,9 @@ const ClientCabinet: React.FC = () => {
                     <Tag>{offer.strategy.market}</Tag>
                     {offer.strategy.type ? <Tag>{offer.strategy.type}</Tag> : null}
                   </Space>
+                  <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'pre-line' }}>
+                    {getOfferDescription(offer, false)}
+                  </Typography.Text>
                   {hasChart ? (
                     <div style={{ height: 240 }}>
                       <ChartComponent key={`strat-${offer.offerId}`} data={equityPointsToSeries(eqPts!, 365)} type="line" />
@@ -1228,7 +1279,9 @@ const ClientCabinet: React.FC = () => {
                           <Space direction="vertical" size={6} style={{ width: '100%' }}>
                             <Space direction="vertical" size={0}>
                               <Space>
-                                <Typography.Text strong style={{ fontSize: 12 }}>{tsDisplayName(system.name)}</Typography.Text>
+                                <Tooltip title={getTsHint(system.name) ?? undefined} placement="topLeft">
+                                  <Typography.Text strong style={{ fontSize: 12, cursor: getTsHint(system.name) ? 'help' : undefined }}>{tsDisplayName(system.name)}</Typography.Text>
+                                </Tooltip>
                                 {isCurrent ? <Tag color="gold" style={{ fontSize: 10 }}>Подключена</Tag> : null}
                               </Space>
                             </Space>
@@ -1294,6 +1347,11 @@ const ClientCabinet: React.FC = () => {
                     {snap?.periodDays ? <Tag>Период: {Math.round(snap.periodDays)}д</Tag> : null}
                     {snap?.trades ? <Tag>{snap.trades} сделок</Tag> : null}
                   </Space>
+                  {getTsHint(system.name) ? (
+                    <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'pre-line' }}>
+                      {getTsHint(system.name)}
+                    </Typography.Text>
+                  ) : null}
                   {chartData.length > 0 ? (
                     <div style={{ height: 240 }}>
                       <ChartComponent key={chartKey} data={chartData} type="line" />
