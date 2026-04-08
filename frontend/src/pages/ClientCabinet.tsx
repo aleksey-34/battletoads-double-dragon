@@ -398,24 +398,49 @@ const getOfferDescription = (offer: any, detailed: boolean = false): string => {
   const length = Number(offer?.strategy?.params?.length || 0);
   const tp = Number(offer?.strategy?.params?.takeProfitPercent || 0);
   const src = String(offer?.strategy?.params?.detectionSource || '');
-  let label = '';
-  if (type.includes('stat_arb') || type.includes('zscore')) {
-    label = 'StatArb Z-Score — возврат к среднему. Открывает позицию при отклонении цены от среднего.';
-  } else if (type.includes('zz_breakout') || type.includes('zigzag')) {
-    label = 'ZigZag Breakout — пробой канала. Лонг/шорт при пробое N-бар максимума/минимума.';
-  } else if (type.includes('DD_BattleToads') || type.includes('dd_battletoads')) {
-    label = 'DoubleDragon Breakout — пробой канала Дончиана с трейлинговым TP.';
-  } else {
-    label = `Стратегия ${type}`;
-  }
-  const summary = `${mode === 'synth' ? 'Синтетическая пара' : 'Моно-пара'} ${market} • Таймфрейм ${interval}`;
-  if (!detailed) return `${label}\n${summary}`;
-  const params = [`Период: ${length}`, tp ? `TP: ${tp}%` : '', src ? `Источник: ${src}` : ''].filter(Boolean).join(' • ');
   const ze = Number(offer?.strategy?.params?.zscoreEntry || 0);
   const zx = Number(offer?.strategy?.params?.zscoreExit || 0);
   const zs = Number(offer?.strategy?.params?.zscoreStop || 0);
-  const zInfo = ze ? `Z-entry: ${ze}, Z-exit: ${zx}, Z-stop: ${zs}` : '';
-  return `${label}\n${summary}\n${params}${zInfo ? '\n' + zInfo : ''}`;
+  const modeLabel = mode === 'synth' ? 'Синтетическая пара' : 'Моно-пара';
+
+  if (!detailed) {
+    // Client-facing: marketing / summary
+    if (type.includes('stat_arb') || type.includes('zscore')) {
+      return `Арбитражная стратегия возврата к среднему\n${modeLabel} ${market} • Таймфрейм ${interval}\nОткрывает сделки при аномальном отклонении цены — зарабатывает на возврате к норме. Лучше всего в боковом рынке.`;
+    }
+    if (type.includes('zz_breakout') || type.includes('zigzag')) {
+      return `Канальная стратегия прорыва\n${modeLabel} ${market} • Таймфрейм ${interval}\nЛовит сильные движения при пробое ценового канала. Частые входы, короткие удержания.`;
+    }
+    if (type.includes('DD_BattleToads') || type.includes('dd_battletoads')) {
+      return `Трендовая стратегия DoubleDragon\n${modeLabel} ${market} • Таймфрейм ${interval}\nВходит при пробое канала Дончиана, фиксирует прибыль трейлинговым тейк-профитом от пика позиции.`;
+    }
+    return `Стратегия ${type}\n${modeLabel} ${market} • Таймфрейм ${interval}`;
+  }
+
+  // Admin-facing: full technical detail
+  let lines: string[] = [];
+  if (type.includes('stat_arb') || type.includes('zscore')) {
+    lines.push('StatArb Z-Score — возврат к среднему');
+    lines.push(`Вход: Z-score ≥ ${ze} (отклонение на ${ze}σ от скользящего среднего)`);
+    lines.push(`Выход: Z-score ≤ ${zx} (возврат к среднему)`);
+    lines.push(`Стоп: Z-score ≥ ${zs} (аварийный стоп-лосс при ${zs}σ)`);
+  } else if (type.includes('zz_breakout') || type.includes('zigzag')) {
+    lines.push('ZigZag Breakout — пробой канала Дончиана (короткий период)');
+    lines.push(`Вход: Лонг при пробое ${length}-бар максимума / Шорт при пробое ${length}-бар минимума`);
+    lines.push(`Выход: Трейлинговый TP ${tp}% от пика позиции`);
+    lines.push(`Источник: ${src || 'close'} • Без фиксированного SL (TP выступает и как SL)`);
+  } else if (type.includes('DD_BattleToads') || type.includes('dd_battletoads')) {
+    lines.push('DoubleDragon Breakout — пробой канала Дончиана');
+    lines.push(`Вход: Лонг при пробое ${length}-бар максимума / Шорт при пробое ${length}-бар минимума`);
+    lines.push(`Выход: Трейлинговый TP ${tp}% от пика позиции`);
+    lines.push(`Источник: ${src || 'close'} • Адаптивный период канала`);
+  } else {
+    lines.push(`Стратегия ${type}`);
+  }
+  lines.push(`${modeLabel} ${market} • Таймфрейм ${interval} • Период канала: ${length}`);
+  if (ze) lines.push(`Z-score: entry=${ze}, exit=${zx}, stop=${zs}`);
+  if (tp) lines.push(`Take-profit: ${tp}%`);
+  return lines.join('\n');
 };
 
 const getTsHint = (systemName: string): string | null => {

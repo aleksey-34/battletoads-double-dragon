@@ -553,6 +553,17 @@ type SaasSummary = {
       titleRu: string;
       mode: 'mono' | 'synth';
       market: string;
+      strategyType?: string;
+      interval?: string;
+      strategyParams?: {
+        interval?: string;
+        length?: number;
+        takeProfitPercent?: number;
+        detectionSource?: string;
+        zscoreEntry?: number;
+        zscoreExit?: number;
+        zscoreStop?: number;
+      } | null;
       strategyId: number;
       score: number;
       ret: number;
@@ -9486,10 +9497,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                   <Space direction="vertical" size={6} style={{ width: '100%' }}>
                                                     <Space direction="vertical" size={0}>
                                                       <Tooltip title={(() => {
-                                                        const type = String(row.type || '').trim();
-                                                        const interval = String(row.interval || '');
-                                                        const hint = getTsStrategyHint(type) || `Стратегия ${type}`;
-                                                        return `${hint}\nТаймфрейм: ${interval} • Пара: ${row.market}`;
+                                                        const sType = String(row.strategyType || '').trim();
+                                                        const hint = getTsStrategyHint(sType) || `Стратегия ${sType || row.titleRu}`;
+                                                        const params = row.strategyParams;
+                                                        const interval = String(params?.interval || row.interval || '');
+                                                        const length = Number(params?.length || 0);
+                                                        const tp = Number(params?.takeProfitPercent || 0);
+                                                        const src = String(params?.detectionSource || '');
+                                                        const ze = Number(params?.zscoreEntry || 0);
+                                                        let detail = `Таймфрейм: ${interval || '?'} • Период: ${length || '?'} • Пара: ${row.market}`;
+                                                        if (tp) detail += `\nTP: ${tp}% • Источник: ${src || '?'}`;
+                                                        if (ze) detail += `\nZ-entry: ${ze}, Z-exit: ${params?.zscoreExit ?? '?'}, Z-stop: ${params?.zscoreStop ?? '?'}`;
+                                                        return `${hint}\n${detail}`;
                                                       })()} placement="topLeft">
                                                         <Text strong style={{ cursor: 'help' }}>{row.titleRu}</Text>
                                                       </Tooltip>
