@@ -8040,49 +8040,8 @@ export const getAlgofundState = async (
 
   const plan = await getPlanForTenant(tenantId);
   const profile = await getAlgofundProfile(tenantId);
-  if (!plan || !profile) {
-    throw new Error('Algofund plan/profile not found');
-  }
 
-  const engine = await getAlgofundEngineState(tenant, profile);
-  const effectiveStorefrontSystemName = asString(profile.published_system_name, '').trim().toUpperCase().startsWith('ALGOFUND_MASTER::')
-    ? asString(profile.published_system_name, '').trim()
-    : (engine?.systemName || profile.published_system_name);
-  const effectiveProfile: AlgofundProfileRow = {
-    ...profile,
-    actual_enabled: engine ? (engine.isActive ? 1 : 0) : profile.actual_enabled,
-    published_system_name: effectiveStorefrontSystemName,
-    assigned_api_key_name: asString(profile.assigned_api_key_name, tenant.assigned_api_key_name),
-    execution_api_key_name: asString(profile.execution_api_key_name, tenant.assigned_api_key_name),
-  };
-
-  if (
-    effectiveProfile.actual_enabled !== profile.actual_enabled
-    || effectiveProfile.published_system_name !== profile.published_system_name
-    || effectiveProfile.assigned_api_key_name !== profile.assigned_api_key_name
-    || effectiveProfile.execution_api_key_name !== profile.execution_api_key_name
-  ) {
-    await db.run(
-      `UPDATE algofund_profiles
-       SET actual_enabled = ?,
-           published_system_name = ?,
-           assigned_api_key_name = ?,
-           execution_api_key_name = ?,
-           updated_at = CURRENT_TIMESTAMP
-       WHERE tenant_id = ?`,
-      [
-        effectiveProfile.actual_enabled,
-        effectiveProfile.published_system_name,
-        effectiveProfile.assigned_api_key_name,
-        effectiveProfile.execution_api_key_name,
-        tenantId,
-      ]
-    );
-  }
-
-  const capabilities = resolvePlanCapabilities(plan);
-  // Fetch ALL published Algofund TS from all API keys, not filtered by tenant's assigned key
-  // This allows clients to see TS published under other API keys without API key binding
+  // Load available systems even without plan/profile (browse-only mode for dual-mode tenants)
   const allApiKeyNames = await getAvailableApiKeyNames().catch(() => []);
   const allAlgofundSystemsMap = new Map<string, any>();
   for (const apiKeyName of allApiKeyNames) {
@@ -8187,6 +8146,61 @@ export const getAlgofundState = async (
         equityPoints: snapshot.equityPoints,
       };
     }
+  }
+
+  // Browse-only mode: no plan or profile — return systems with snapshots but no controls
+  if (!plan || !profile) {
+    return {
+      tenant,
+      plan: null,
+      capabilities: resolvePlanCapabilities(null),
+      profile: null,
+      engine: null,
+      availableSystems,
+      preview: null,
+      portfolioPassport: null,
+      requests: [],
+      catalog: null,
+      browseOnly: true,
+    };
+  }
+
+  const capabilities = resolvePlanCapabilities(plan);
+
+  const engine = await getAlgofundEngineState(tenant, profile);
+  const effectiveStorefrontSystemName = asString(profile.published_system_name, '').trim().toUpperCase().startsWith('ALGOFUND_MASTER::')
+    ? asString(profile.published_system_name, '').trim()
+    : (engine?.systemName || profile.published_system_name);
+  const effectiveProfile: AlgofundProfileRow = {
+    ...profile,
+    actual_enabled: engine ? (engine.isActive ? 1 : 0) : profile.actual_enabled,
+    published_system_name: effectiveStorefrontSystemName,
+    assigned_api_key_name: asString(profile.assigned_api_key_name, tenant.assigned_api_key_name),
+    execution_api_key_name: asString(profile.execution_api_key_name, tenant.assigned_api_key_name),
+  };
+
+  if (
+    effectiveProfile.actual_enabled !== profile.actual_enabled
+    || effectiveProfile.published_system_name !== profile.published_system_name
+    || effectiveProfile.assigned_api_key_name !== profile.assigned_api_key_name
+    || effectiveProfile.execution_api_key_name !== profile.execution_api_key_name
+  ) {
+    await db.run(
+      `UPDATE algofund_profiles
+       SET actual_enabled = ?,
+           published_system_name = ?,
+           assigned_api_key_name = ?,
+           execution_api_key_name = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [
+        effectiveProfile.actual_enabled,
+        effectiveProfile.published_system_name,
+        effectiveProfile.assigned_api_key_name,
+        effectiveProfile.execution_api_key_name,
+        tenantId,
+      ]
+    );
   }
 
   const maxPreviewRiskMultiplier = allowPreviewAbovePlan

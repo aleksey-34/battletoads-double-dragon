@@ -100,9 +100,29 @@ type StrategyOffer = {
     market: string;
     mode: 'mono' | 'synth';
     type: string;
+    params?: {
+      interval?: string;
+      length?: number;
+      takeProfitPercent?: number;
+      detectionSource?: string;
+      zscoreEntry?: number;
+      zscoreExit?: number;
+      zscoreStop?: number;
+    };
   };
   metrics: MetricSet;
   equityPoints?: number[];
+  equity?: {
+    points?: Array<{ time: number; equity: number }>;
+    summary?: {
+      finalEquity?: number;
+      totalReturnPercent?: number;
+      maxDrawdownPercent?: number;
+      winRatePercent?: number;
+      profitFactor?: number;
+      tradesCount?: number;
+    };
+  };
 };
 
 type StrategyState = {
@@ -388,6 +408,15 @@ const equityPointsToSeries = (points: number[], periodDays?: number): LinePoint[
   const startTs = endTs - days * 86400;
   const step = (endTs - startTs) / Math.max(points.length - 1, 1);
   return points.map((v, i) => ({ time: Math.floor(startTs + i * step), value: v }));
+};
+
+/** Extract flat equity number[] from offer (supports both equityPoints and equity.points) */
+const getOfferEquityValues = (offer: StrategyOffer): number[] => {
+  if (Array.isArray(offer.equityPoints) && offer.equityPoints.length > 0) return offer.equityPoints;
+  if (offer.equity?.points && Array.isArray(offer.equity.points) && offer.equity.points.length > 0) {
+    return offer.equity.points.map((p) => p.equity);
+  }
+  return [];
 };
 
 const getOfferDescription = (offer: any, detailed: boolean = false): string => {
@@ -1006,11 +1035,14 @@ const ClientCabinet: React.FC = () => {
                             <Tag color="blue" style={{ fontSize: 11 }}>PF {formatNumber(offer.metrics.pf)}</Tag>
                             {offer.metrics.trades ? <Tag color="cyan" style={{ fontSize: 11 }}>{formatNumber(offer.metrics.trades, 0)} сд.</Tag> : null}
                           </Space>
-                          {Array.isArray(offer.equityPoints) && offer.equityPoints.length > 0 ? (
-                            <ChartComponent data={offer.equityPoints.map((v, i) => ({ time: i, value: v }))} type="line" fixedHeight={120} />
-                          ) : (
-                            <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
-                          )}
+                          {(() => {
+                            const eqVals = getOfferEquityValues(offer);
+                            return eqVals.length > 1 ? (
+                              <ChartComponent data={equityPointsToSeries(eqVals)} type="line" fixedHeight={120} />
+                            ) : (
+                              <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
+                            );
+                          })()}
                           <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
                         </Space>
                       </Card>
@@ -1045,11 +1077,11 @@ const ClientCabinet: React.FC = () => {
             {(() => {
               const offer = strategyWorkspace?.offers.find((x) => x.offerId === strategyOfferDetail);
               if (!offer) return <Empty description="Стратегия не найдена" />;
-              const eqPts = offer.equityPoints;
-              const hasChart = Array.isArray(eqPts) && eqPts.length > 1;
+              const eqPts = getOfferEquityValues(offer);
+              const hasChart = eqPts.length > 1;
               const isSelected = strategyOfferIds.includes(offer.offerId);
-              const startBalance = hasChart ? eqPts![0] : null;
-              const endBalance = hasChart ? eqPts![eqPts!.length - 1] : null;
+              const startBalance = hasChart ? eqPts[0] : null;
+              const endBalance = hasChart ? eqPts[eqPts.length - 1] : null;
               return (
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   <Space wrap>
@@ -1063,7 +1095,7 @@ const ClientCabinet: React.FC = () => {
                   </Typography.Text>
                   {hasChart ? (
                     <div style={{ height: 240 }}>
-                      <ChartComponent key={`strat-${offer.offerId}`} data={equityPointsToSeries(eqPts!, 365)} type="line" />
+                      <ChartComponent key={`strat-${offer.offerId}`} data={equityPointsToSeries(eqPts, 365)} type="line" />
                     </div>
                   ) : null}
                   <Row gutter={[12, 12]}>
@@ -1253,6 +1285,15 @@ const ClientCabinet: React.FC = () => {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {algofundWorkspace ? (
         <>
+          {(algofundWorkspace as any).browseOnly ? (
+            <Alert
+              type="info"
+              showIcon
+              message="Автоматическое управление через Алгофонд"
+              description="Ознакомьтесь с доступными торговыми системами. Для подключения обратитесь к администратору."
+              style={{ marginBottom: 8 }}
+            />
+          ) : (
           <Card className="battletoads-card" title="Статус Алгофонда" size="small">
             <Space wrap style={{ marginBottom: 8 }}>
               <Tag color="blue">Тариф: {algofundWorkspace.plan?.title || '—'}</Tag>
@@ -1282,6 +1323,7 @@ const ClientCabinet: React.FC = () => {
 
             {renderCapabilities(algofundWorkspace.capabilities)}
           </Card>
+          )}
 
           <Card className="battletoads-card" title="Витрина торговых систем Алгофонда" size="small">
             {algofundAvailableSystems.length === 0 ? (
@@ -1393,7 +1435,7 @@ const ClientCabinet: React.FC = () => {
                       {snap ? <Col xs={12} sm={6}><Statistic title="Сд./день" value={formatNumber(snap.tradesPerDay, 1)} /></Col> : null}
                     </Row>
                   ) : null}
-                  {algofundWorkspace?.capabilities?.settings ? (
+                  {isCurrent && algofundWorkspace?.capabilities?.settings ? (
                     <div style={{ padding: '8px 0' }}>
                       <Typography.Text strong>Мультипликатор риска: × {formatNumber(algofundRiskMultiplier, 2)}</Typography.Text>
                       <Slider
@@ -1438,6 +1480,7 @@ const ClientCabinet: React.FC = () => {
             })()}
           </Modal>
 
+          {!(algofundWorkspace as any)?.browseOnly && (
           <Card className="battletoads-card" title="Подключение / отключение" size="small">
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
               <Input.TextArea
@@ -1480,6 +1523,7 @@ const ClientCabinet: React.FC = () => {
               ) : null}
             </Space>
           </Card>
+          )}
         </>
       ) : (
         <Card className="battletoads-card" size="small">
