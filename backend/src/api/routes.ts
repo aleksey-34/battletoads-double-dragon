@@ -1167,6 +1167,27 @@ router.get('/client/tariff', authenticateClient, async (req, res) => {
       [tenantId]
     ) as Record<string, unknown> | undefined;
 
+    let currentStrategyPlan: Record<string, unknown> | undefined;
+    let currentAlgofundPlan: Record<string, unknown> | undefined;
+    if (productMode === 'dual') {
+      currentStrategyPlan = await db.get(
+        `SELECT p.code, p.title, p.product_mode, p.price_usdt, p.max_deposit_total, p.max_strategies_total, p.risk_cap_max,
+                p.allow_ts_start_stop_requests, p.features_json
+         FROM subscriptions s JOIN plans p ON p.id = s.plan_id
+         WHERE s.tenant_id = ? AND p.product_mode = 'strategy_client'
+         ORDER BY s.id DESC LIMIT 1`,
+        [tenantId]
+      ) as Record<string, unknown> | undefined;
+      currentAlgofundPlan = await db.get(
+        `SELECT p.code, p.title, p.product_mode, p.price_usdt, p.max_deposit_total, p.max_strategies_total, p.risk_cap_max,
+                p.allow_ts_start_stop_requests, p.features_json
+         FROM subscriptions s JOIN plans p ON p.id = s.plan_id
+         WHERE s.tenant_id = ? AND p.product_mode = 'algofund_client'
+         ORDER BY s.id DESC LIMIT 1`,
+        [tenantId]
+      ) as Record<string, unknown> | undefined;
+    }
+
     const availablePlans = await db.all(
       productMode === 'dual'
         ? `SELECT code, title, product_mode, price_usdt, max_deposit_total, max_strategies_total, risk_cap_max,
@@ -1195,6 +1216,8 @@ router.get('/client/tariff', authenticateClient, async (req, res) => {
       success: true,
       productMode,
       currentPlan: currentPlan || null,
+      currentStrategyPlan: currentStrategyPlan || null,
+      currentAlgofundPlan: currentAlgofundPlan || null,
       availablePlans: availablePlans || [],
       requests: (requests || []).map((item) => ({
         id: Number(item.id || 0),

@@ -1618,7 +1618,21 @@ const ensureTenant = async (slug: string, displayName: string, productMode: Prod
   return row as TenantRow;
 };
 
-const ensureSubscription = async (tenantId: number, planId: number): Promise<void> => {
+const ensureSubscription = async (tenantId: number, planId: number, planMode?: string): Promise<void> => {
+  if (planMode) {
+    const existing = await db.get(
+      `SELECT s.id FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.tenant_id = ? AND p.product_mode = ? ORDER BY s.id DESC LIMIT 1`,
+      [tenantId, planMode]
+    );
+    if (!existing) {
+      await db.run(
+        `INSERT INTO subscriptions (tenant_id, plan_id, status, started_at, notes, created_at, updated_at)
+         VALUES (?, ?, 'active', CURRENT_TIMESTAMP, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [tenantId, planId]
+      );
+    }
+    return;
+  }
   const row = await db.get('SELECT id FROM subscriptions WHERE tenant_id = ? ORDER BY id DESC LIMIT 1', [tenantId]);
   if (!row) {
     await db.run(
@@ -1629,7 +1643,26 @@ const ensureSubscription = async (tenantId: number, planId: number): Promise<voi
   }
 };
 
-const setTenantSubscriptionPlan = async (tenantId: number, planId: number): Promise<void> => {
+const setTenantSubscriptionPlan = async (tenantId: number, planId: number, planMode?: string): Promise<void> => {
+  if (planMode) {
+    const modeRow = await db.get(
+      `SELECT s.id FROM subscriptions s JOIN plans p ON p.id = s.plan_id WHERE s.tenant_id = ? AND p.product_mode = ? ORDER BY s.id DESC LIMIT 1`,
+      [tenantId, planMode]
+    );
+    if (modeRow) {
+      await db.run(
+        `UPDATE subscriptions SET plan_id = ?, status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [planId, Number((modeRow as { id: number }).id)]
+      );
+      return;
+    }
+    await db.run(
+      `INSERT INTO subscriptions (tenant_id, plan_id, status, started_at, notes, created_at, updated_at)
+       VALUES (?, ?, 'active', CURRENT_TIMESTAMP, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [tenantId, planId]
+    );
+    return;
+  }
   const row = await db.get('SELECT id FROM subscriptions WHERE tenant_id = ? ORDER BY id DESC LIMIT 1', [tenantId]);
   if (!row) {
     await db.run(
@@ -1639,11 +1672,8 @@ const setTenantSubscriptionPlan = async (tenantId: number, planId: number): Prom
     );
     return;
   }
-
   await db.run(
-    `UPDATE subscriptions
-     SET plan_id = ?, status = 'active', updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
+    `UPDATE subscriptions SET plan_id = ?, status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
     [planId, Number((row as { id: number }).id)]
   );
 };
@@ -1779,7 +1809,21 @@ export const ensureSaasSeedData = async (): Promise<void> => {
   await ensureSynctradeProfile(synctradeTenant.id, synctradeApiKey);
 };
 
-const getPlanForTenant = async (tenantId: number): Promise<PlanRow | null> => {
+const getPlanForTenant = async (tenantId: number, planMode?: 'strategy_client' | 'algofund_client'): Promise<PlanRow | null> => {
+  if (planMode) {
+    // Mode-specific: find subscription whose plan matches the requested mode
+    const row = await db.get(
+      `SELECT p.*
+       FROM subscriptions s
+       JOIN plans p ON p.id = s.plan_id
+       WHERE s.tenant_id = ? AND p.product_mode = ?
+       ORDER BY s.id DESC
+       LIMIT 1`,
+      [tenantId, planMode]
+    );
+    if (row) return row as PlanRow;
+  }
+  // Fallback: latest subscription's plan (backward compat)
   const row = await db.get(
     `SELECT p.*
      FROM subscriptions s
@@ -3881,6 +3925,7 @@ const ensurePublishedSourceSystem = async (
     displayName: string;
     productMode: ProductMode;
     planCode: string;
+    algofundPlanCode?: string;
     assignedApiKeyName?: string;
     inlineApiKeyName?: string;
     inlineApiKey?: string;
@@ -3987,7 +4032,12 @@ const ensurePublishedSourceSystem = async (
     const tenant = await db.get('SELECT * FROM tenants WHERE slug = ?', [slug]) as TenantRow;
     if (!tenant) throw new Error('Failed to create tenant');
 
-    await ensureSubscription(tenant.id, plan.id);
+    await ensureSubscription(tenant.id, plan.id, payload.productMode === 'dual' ? plan.product_mode : undefined);
+
+    if (payload.productMode === 'dual' && payload.algofundPlanCode) {
+      const algoPlan = await getPlanByCode(payload.algofundPlanCode);
+      await ensureSubscription(tenant.id, algoPlan.id, algoPlan.product_mode);
+    }
 
     if (payload.productMode === 'strategy_client' || payload.productMode === 'dual') {
       await ensureStrategyClientProfile(tenant.id, [], apiKeyName);
@@ -5701,7 +5751,7 @@ export const syncAllTenantStrategyMaxDeposit = async (): Promise<{ updated: numb
 
   for (const tenant of tenants) {
     try {
-      const plan = await getPlanForTenant(tenant.id);
+      const plan = await getPlanForTenant(tenant.id, 'algofund_client');
       if (!plan || !plan.max_deposit_total || plan.max_deposit_total <= 0) continue;
 
       const planMaxDeposit = Math.max(50, plan.max_deposit_total);
@@ -6793,7 +6843,7 @@ export const updateTenantAdminState = async (tenantId: number, payload: {
     if (plan.product_mode !== tenant.product_mode && tenant.product_mode !== 'dual') {
       throw new Error(`Plan ${payload.planCode} does not belong to tenant mode ${tenant.product_mode}`);
     }
-    await setTenantSubscriptionPlan(tenantId, plan.id);
+    await setTenantSubscriptionPlan(tenantId, plan.id, tenant.product_mode === 'dual' ? plan.product_mode : undefined);
   }
 
   return listTenantSummaries();
@@ -6852,6 +6902,8 @@ const listTenantSummaries = async (options?: {
 
   for (const tenant of (Array.isArray(rows) ? rows : []) as TenantRow[]) {
     const plan = await getPlanForTenant(tenant.id);
+    const strategyPlan = tenant.product_mode === 'dual' ? await getPlanForTenant(tenant.id, 'strategy_client') : null;
+    const algofundPlan = tenant.product_mode === 'dual' ? await getPlanForTenant(tenant.id, 'algofund_client') : null;
     const capabilities = resolvePlanCapabilities(plan);
     const strategyProfile = await getStrategyClientProfile(tenant.id);
     const algofundProfile = await getAlgofundProfile(tenant.id);
@@ -6875,6 +6927,8 @@ const listTenantSummaries = async (options?: {
     out.push({
       tenant,
       plan,
+      strategyPlan,
+      algofundPlan,
       capabilities,
       strategyProfile: strategyProfile ? {
         ...strategyProfile,
@@ -6917,7 +6971,7 @@ const listTenantSummaries = async (options?: {
 export const getStrategyClientState = async (tenantId: number) => {
   await ensureSaasSeedData();
   const tenant = await getTenantById(tenantId);
-  const plan = await getPlanForTenant(tenantId);
+  const plan = await getPlanForTenant(tenantId, 'strategy_client');
   const capabilities = resolvePlanCapabilities(plan);
   const profile = await getStrategyClientProfile(tenantId);
   let systemProfiles = await listStrategyClientSystemProfiles(tenantId);
@@ -6985,7 +7039,7 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
 }) => {
   const tenant = await getTenantById(tenantId);
   const existing = await getStrategyClientProfile(tenantId);
-  const plan = await getPlanForTenant(tenantId);
+  const plan = await getPlanForTenant(tenantId, 'strategy_client');
   if (!existing) {
     throw new Error(`Strategy client profile not found for tenant ${tenant.slug}`);
   }
@@ -7099,7 +7153,7 @@ export const batchConnectStrategyClientOffer = async (offerIds: string[], tenant
       }
       const currentOfferIds = safeJsonParse<string[]>(existing.selected_offer_ids_json, []);
       const merged = Array.from(new Set([...currentOfferIds, ...offerIds]));
-      await updateStrategyClientState(tenantId, { selectedOfferIds: merged });
+      await updateStrategyClientState(tenantId, { selectedOfferIds: merged, requestedEnabled: true });
       success++;
     } catch (e) {
       errors.push(`Tenant ${tenantId}: ${(e as Error).message}`);
@@ -7246,7 +7300,7 @@ export const requestAlgofundBatchAction = async (
       }
 
       if (directExecute) {
-        const plan = await getPlanForTenant(tenantId);
+        const plan = await getPlanForTenant(tenantId, 'algofund_client');
         const profile = await getAlgofundProfile(tenantId);
         if (!plan || !profile) {
           throw new Error('Algofund plan/profile not found');
@@ -8045,7 +8099,7 @@ export const getAlgofundState = async (
   await ensureSaasSeedData();
   const tenant = await getTenantById(tenantId);
 
-  const plan = await getPlanForTenant(tenantId);
+  const plan = await getPlanForTenant(tenantId, 'algofund_client');
   const profile = await getAlgofundProfile(tenantId);
 
   // Load available systems even without plan/profile (browse-only mode for dual-mode tenants)
@@ -8365,7 +8419,7 @@ export const updateAlgofundState = async (
 ) => {
   const tenant = await getTenantById(tenantId);
   const profile = await getAlgofundProfile(tenantId);
-  const plan = await getPlanForTenant(tenantId);
+  const plan = await getPlanForTenant(tenantId, 'algofund_client');
   if (!profile || !plan) {
     throw new Error('Algofund profile or plan not found');
   }
@@ -8422,7 +8476,7 @@ export const requestAlgofundAction = async (
   payload: AlgofundRequestPayload = {}
 ) => {
   const tenant = await getTenantById(tenantId);
-  const plan = await getPlanForTenant(tenantId);
+  const plan = await getPlanForTenant(tenantId, 'algofund_client');
   const profile = await getAlgofundProfile(tenantId);
   if (!profile || !plan) {
     throw new Error(`Algofund profile not found for tenant ${tenant.slug}`);
@@ -8508,7 +8562,7 @@ export const resolveAlgofundRequest = async (requestId: number, status: RequestS
   const row = request as AlgofundRequestRow;
   const requestPayload = parseAlgofundRequestPayload(row.request_payload_json);
   const tenant = await getTenantById(row.tenant_id);
-  const plan = await getPlanForTenant(row.tenant_id);
+  const plan = await getPlanForTenant(row.tenant_id, 'algofund_client');
   const profile = await getAlgofundProfile(row.tenant_id);
   if (!plan || !profile) {
     throw new Error('Algofund plan/profile not found');
@@ -8674,7 +8728,7 @@ const applyApprovedAlgofundAction = async (params: {
 
 export const retryMaterializeAlgofundSystem = async (tenantId: number) => {
   const tenant = await getTenantById(tenantId);
-  const plan = await getPlanForTenant(tenantId);
+  const plan = await getPlanForTenant(tenantId, 'algofund_client');
   const profile = await getAlgofundProfile(tenantId);
   if (!plan || !profile) {
     throw new Error('Algofund plan/profile not found');

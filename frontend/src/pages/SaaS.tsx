@@ -2539,6 +2539,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [createTenantDisplayName, setCreateTenantDisplayName] = useState('');
   const [createTenantProductMode, setCreateTenantProductMode] = useState<ProductMode>('strategy_client');
   const [createTenantPlanCode, setCreateTenantPlanCode] = useState('');
+  const [createTenantAlgofundPlanCode, setCreateTenantAlgofundPlanCode] = useState('');
   const [createTenantApiKey, setCreateTenantApiKey] = useState('');
   const [createTenantInlineApiKeyName, setCreateTenantInlineApiKeyName] = useState('');
   const [createTenantInlineApiKey, setCreateTenantInlineApiKey] = useState('');
@@ -6904,6 +6905,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       messageApi.error('Display name and plan are required');
       return;
     }
+    if (createTenantProductMode === 'dual' && !createTenantAlgofundPlanCode) {
+      messageApi.error('Для dual режима выберите и стратегический, и алгофонд план');
+      return;
+    }
     const inlineApiKey = createTenantInlineApiKey.trim();
     const inlineApiSecret = createTenantInlineApiSecret.trim();
     const inlineApiPassphrase = createTenantInlineApiPassphrase.trim();
@@ -6921,6 +6926,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         displayName: createTenantDisplayName,
         productMode: createTenantProductMode,
         planCode: createTenantPlanCode,
+        algofundPlanCode: createTenantProductMode === 'dual' ? createTenantAlgofundPlanCode : undefined,
         assignedApiKeyName: createTenantApiKey || undefined,
         inlineApiKeyName: createTenantInlineApiKeyName.trim() || undefined,
         inlineApiKey: inlineApiKey || undefined,
@@ -6937,6 +6943,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setCreateTenantDisplayName('');
       setCreateTenantProductMode('strategy_client');
       setCreateTenantPlanCode('');
+      setCreateTenantAlgofundPlanCode('');
       setCreateTenantApiKey('');
       setCreateTenantInlineApiKeyName('');
       setCreateTenantInlineApiKey('');
@@ -9362,9 +9369,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Select style={{ width: '100%', marginTop: 4 }} value={createTenantProductMode} onChange={setCreateTenantProductMode} options={[{ value: 'strategy_client', label: copy.strategyClient }, { value: 'algofund_client', label: copy.algofund }, { value: 'dual', label: 'Dual (стратегии + алгофонд)' }]} />
                             </div>
                             <div>
-                              <Text strong>{copy.plan} *</Text>
-                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantPlanCode || undefined} onChange={(v) => setCreateTenantPlanCode(v || '')} options={(summary?.plans || []).filter((p) => createTenantProductMode === 'dual' || p.product_mode === createTenantProductMode).map((p) => ({ value: p.code, label: p.title }))} />
+                              <Text strong>{createTenantProductMode === 'dual' ? 'План стратегий *' : copy.plan + ' *'}</Text>
+                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantPlanCode || undefined} onChange={(v) => setCreateTenantPlanCode(v || '')} options={(summary?.plans || []).filter((p) => createTenantProductMode === 'dual' ? p.product_mode === 'strategy_client' : p.product_mode === createTenantProductMode).map((p) => ({ value: p.code, label: p.title }))} />
                             </div>
+                            {createTenantProductMode === 'dual' && (
+                            <div>
+                              <Text strong>План алгофонда *</Text>
+                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantAlgofundPlanCode || undefined} onChange={(v) => setCreateTenantAlgofundPlanCode(v || '')} options={(summary?.plans || []).filter((p) => p.product_mode === 'algofund_client').map((p) => ({ value: p.code, label: p.title }))} />
+                            </div>
+                            )}
                             <div>
                               <Text strong>{copy.apiKey}</Text>
                               <Select allowClear style={{ width: '100%', marginTop: 4 }} value={createTenantApiKey || undefined} onChange={(v) => setCreateTenantApiKey(v || '')} options={apiKeyOptions} />
