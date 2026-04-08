@@ -2,7 +2,9 @@
    BTDD Platform — Dark Theme
    ═══════════════════════════════════════════════════ */
 
-:root {
+/* ── Classic theme (default — blue accent) ── */
+:root,
+body.theme-classic {
   --btdd-bg-primary: #0a0a12;
   --btdd-bg-surface: #12121e;
   --btdd-bg-card: #16162a;
@@ -19,6 +21,46 @@
   --btdd-orange: #fa8c16;
   --btdd-red: #ff4d4f;
   --btdd-magenta: #eb2f96;
+}
+
+/* ── Neon theme (green terminal accent) ── */
+body.theme-neon {
+  --btdd-bg-primary: #0d0f14;
+  --btdd-bg-surface: #111518;
+  --btdd-bg-card: #151a1e;
+  --btdd-bg-elevated: #1a2024;
+  --btdd-border: #243028;
+  --btdd-border-strong: #345038;
+  --btdd-text-primary: #e8e4dc;
+  --btdd-text-secondary: #8a9a88;
+  --btdd-text-muted: #556655;
+  --btdd-accent: #00e676;
+  --btdd-accent-hover: #69f0ae;
+  --btdd-teal: #00e676;
+  --btdd-green: #00e676;
+  --btdd-orange: #ffd740;
+  --btdd-red: #ff5252;
+  --btdd-magenta: #ea80fc;
+}
+
+/* ── Fire theme (orange blaze accent) ── */
+body.theme-fire {
+  --btdd-bg-primary: #110d09;
+  --btdd-bg-surface: #1a1410;
+  --btdd-bg-card: #211a14;
+  --btdd-bg-elevated: #2a2018;
+  --btdd-border: #3d2e1e;
+  --btdd-border-strong: #5c4430;
+  --btdd-text-primary: #f0e8e0;
+  --btdd-text-secondary: #aa9580;
+  --btdd-text-muted: #6e5840;
+  --btdd-accent: #ff6d00;
+  --btdd-accent-hover: #ff9100;
+  --btdd-teal: #ffab40;
+  --btdd-green: #66bb6a;
+  --btdd-orange: #ff6d00;
+  --btdd-red: #ff1744;
+  --btdd-magenta: #ff4081;
 }
 
 body {
@@ -48,6 +90,12 @@ code {
   background: linear-gradient(92deg, #0c0c1a 0%, #141430 50%, #0e0e22 100%) !important;
   border-bottom: 1px solid var(--btdd-border);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+body.theme-neon .app-root-layout .ant-layout-header {
+  background: linear-gradient(92deg, #0d0f14 0%, #101a14 50%, #0d1210 100%) !important;
+}
+body.theme-fire .app-root-layout .ant-layout-header {
+  background: linear-gradient(92deg, #110d09 0%, #1e1510 50%, #140e08 100%) !important;
 }
 
 .app-root-layout .ant-layout-content {
@@ -135,10 +183,28 @@ code {
   border-color: var(--btdd-accent);
   box-shadow: 0 4px 12px rgba(64, 150, 255, 0.25);
 }
+body.theme-neon .ant-btn-primary {
+  background: linear-gradient(135deg, #00e676 0%, #00c853 100%);
+  border-color: #00e676;
+  box-shadow: 0 4px 12px rgba(0, 230, 118, 0.25);
+}
+body.theme-fire .ant-btn-primary {
+  background: linear-gradient(135deg, #ff6d00 0%, #e65100 100%);
+  border-color: #ff6d00;
+  box-shadow: 0 4px 12px rgba(255, 109, 0, 0.25);
+}
 
 .ant-btn-primary:hover, .ant-btn-primary:focus {
   background: linear-gradient(135deg, var(--btdd-accent-hover) 0%, #3a8aee 100%);
   border-color: var(--btdd-accent-hover);
+}
+body.theme-neon .ant-btn-primary:hover, body.theme-neon .ant-btn-primary:focus {
+  background: linear-gradient(135deg, #69f0ae 0%, #00e676 100%);
+  border-color: #69f0ae;
+}
+body.theme-fire .ant-btn-primary:hover, body.theme-fire .ant-btn-primary:focus {
+  background: linear-gradient(135deg, #ff9100 0%, #ff6d00 100%);
+  border-color: #ff9100;
 }
 
 .ant-btn-default {

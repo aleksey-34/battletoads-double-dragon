@@ -1020,7 +1020,6 @@ const Dashboard: React.FC = () => {
   const [showArchivedByKey, setShowArchivedByKey] = useState<{ [key: string]: boolean }>({});
   const [runtimeOnlyByKey, setRuntimeOnlyByKey] = useState<{ [key: string]: boolean }>({});
   const [archiveActionLoadingByKey, setArchiveActionLoadingByKey] = useState<{ [key: string]: boolean }>({});
-  const [uiTheme, setUiTheme] = useState<'classic' | 'battletoads'>('classic');
   const requestLocksRef = useRef<Record<string, boolean>>({});
 
   const isApiKeyActive = (keyName: string): boolean => apiKeyToggles[keyName] ?? true;
@@ -1070,18 +1069,8 @@ const Dashboard: React.FC = () => {
       }
     }
 
-    const savedTheme = localStorage.getItem('dashboardTheme');
-    if (savedTheme === 'battletoads') {
-      setUiTheme('battletoads');
-    }
-
     void fetchApiKeys();
   }, []);
-
-  const updateTheme = (theme: 'classic' | 'battletoads') => {
-    setUiTheme(theme);
-    localStorage.setItem('dashboardTheme', theme);
-  };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -3922,21 +3911,9 @@ const Dashboard: React.FC = () => {
   });
 
   return (
-    <div className={`dashboard-page theme-${uiTheme}`}>
+    <div className="dashboard-page">
       <Space style={{ marginBottom: 12 }} wrap>
         <h1 style={{ margin: 0 }}>Trading Bot Dashboard</h1>
-        <Space size={6}>
-          <span style={{ fontSize: 12 }}>Theme:</span>
-          <Select
-            size="small"
-            value={uiTheme}
-            style={{ width: 150 }}
-            onChange={(value) => updateTheme(value as 'classic' | 'battletoads')}
-          >
-            <Option value="classic">Classic</Option>
-            <Option value="battletoads">BattleToads</Option>
-          </Select>
-        </Space>
         <Button
           loading={refreshAllAccountsLoading}
           onClick={() => {

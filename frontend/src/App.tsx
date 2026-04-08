@@ -25,6 +25,7 @@ import './App.css';
 const { Header, Content } = Layout;
 
 type AuthState = 'checking' | 'ok' | 'missing' | 'invalid' | 'error';
+type ColorTheme = 'classic' | 'neon' | 'fire';
 
 const CLIENT_SESSION_STORAGE_KEY = 'clientSessionToken';
 
@@ -35,10 +36,24 @@ function AppShell() {
   const [adminAuthState, setAdminAuthState] = useState<AuthState>('checking');
   const [clientAuthState, setClientAuthState] = useState<AuthState>('checking');
   const [authCheckLoading, setAuthCheckLoading] = useState(false);
+  const [colorTheme, setColorTheme] = useState<ColorTheme>(() => {
+    const saved = localStorage.getItem('btddColorTheme');
+    return (saved === 'neon' || saved === 'fire') ? saved : 'classic';
+  });
   const isClientRoute = location.pathname.startsWith('/client') || location.pathname.startsWith('/cabinet');
   const isClientAuthRoute = location.pathname.startsWith('/client/login') || location.pathname.startsWith('/client/register');
   const isClientCabinetRoute = location.pathname.startsWith('/cabinet');
   const isClientSaasSurface = false;
+
+  useEffect(() => {
+    document.body.classList.remove('theme-classic', 'theme-neon', 'theme-fire');
+    document.body.classList.add(`theme-${colorTheme}`);
+  }, [colorTheme]);
+
+  const handleColorThemeChange = (t: ColorTheme) => {
+    setColorTheme(t);
+    localStorage.setItem('btddColorTheme', t);
+  };
 
   const menuRouteByKey: Record<string, string> = {
     '1': '/dashboard',
@@ -250,6 +265,17 @@ function AppShell() {
             <div style={{ flex: 1 }} />
           )}
           <Space className="app-account-menu" size={8}>
+            <Select
+              value={colorTheme}
+              onChange={handleColorThemeChange}
+              size="small"
+              style={{ width: 100 }}
+              options={[
+                { value: 'classic', label: '🔵 Classic' },
+                { value: 'neon', label: '🟢 Neon' },
+                { value: 'fire', label: '🟠 Fire' },
+              ]}
+            />
             <Select
               value={language}
               onChange={(value) => setLanguage(value as UILanguage)}
