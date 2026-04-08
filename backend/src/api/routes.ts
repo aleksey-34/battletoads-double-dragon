@@ -1233,7 +1233,7 @@ router.post('/client/tariff/request', authenticateClient, async (req, res) => {
     if (!targetPlan?.code) {
       return res.status(404).json({ error: 'Target plan not found' });
     }
-    if (String(targetPlan.product_mode || '') !== productMode) {
+    if (String(targetPlan.product_mode || '') !== productMode && productMode !== 'dual') {
       return res.status(400).json({ error: 'Target plan belongs to another product mode' });
     }
 

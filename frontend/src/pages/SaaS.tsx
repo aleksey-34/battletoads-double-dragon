@@ -39,7 +39,7 @@ import { useI18n } from '../i18n';
 const { Paragraph, Text, Title } = Typography;
 const LEGACY_PRESET_SET_KEYS = new Set(['balancedbot', 'conservativebot', 'monostarter', 'synthstarter', 'momentumbot', 'premiummix']);
 
-type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'synctrade_client';
+type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'synctrade_client' | 'dual';
 type Level3 = 'low' | 'medium' | 'high';
 type RequestStatus = 'pending' | 'approved' | 'rejected';
 type SaasTabKey = 'admin' | 'strategy-client' | 'algofund' | 'copytrading' | 'synctrade';
@@ -2201,6 +2201,9 @@ const parseUnknownJson = (raw: unknown): Record<string, unknown> => {
 const productModeTag = (mode: ProductMode) => {
   if (mode === 'algofund_client') {
     return <Tag color="gold">algofund</Tag>;
+  }
+  if (mode === 'dual') {
+    return <Tag color="purple">dual</Tag>;
   }
   return <Tag color="green">strategy-client</Tag>;
 };
@@ -8725,7 +8728,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     setBatchTenantIds(next);
                                   },
                                   getCheckboxProps: (row) => ({
-                                    disabled: row.tenant.product_mode !== 'algofund_client',
+                                    disabled: row.tenant.product_mode !== 'algofund_client' && row.tenant.product_mode !== 'dual',
                                   }),
                                 }}
                               />
@@ -9353,11 +9356,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </div>
                             <div>
                               <Text strong>{copy.tenantMode} *</Text>
-                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantProductMode} onChange={setCreateTenantProductMode} options={[{ value: 'strategy_client', label: copy.strategyClient }, { value: 'algofund_client', label: copy.algofund }]} />
+                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantProductMode} onChange={setCreateTenantProductMode} options={[{ value: 'strategy_client', label: copy.strategyClient }, { value: 'algofund_client', label: copy.algofund }, { value: 'dual', label: 'Dual (стратегии + алгофонд)' }]} />
                             </div>
                             <div>
                               <Text strong>{copy.plan} *</Text>
-                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantPlanCode || undefined} onChange={(v) => setCreateTenantPlanCode(v || '')} options={(summary?.plans || []).filter((p) => p.product_mode === createTenantProductMode).map((p) => ({ value: p.code, label: p.title }))} />
+                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantPlanCode || undefined} onChange={(v) => setCreateTenantPlanCode(v || '')} options={(summary?.plans || []).filter((p) => createTenantProductMode === 'dual' || p.product_mode === createTenantProductMode).map((p) => ({ value: p.code, label: p.title }))} />
                             </div>
                             <div>
                               <Text strong>{copy.apiKey}</Text>

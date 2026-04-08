@@ -30,7 +30,7 @@ import { useNavigate } from 'react-router-dom';
 import ChartComponent from '../components/ChartComponent';
 import { useI18n } from '../i18n';
 
-type ProductMode = 'strategy_client' | 'algofund_client' | 'synctrade_client';
+type ProductMode = 'strategy_client' | 'algofund_client' | 'synctrade_client' | 'dual';
 type Level3 = 'low' | 'medium' | 'high';
 
 type MetricSet = {
@@ -631,7 +631,7 @@ const ClientCabinet: React.FC = () => {
   }, [algofundWorkspace]);
 
   useEffect(() => {
-    if (workspace?.productMode === 'strategy_client') {
+    if (workspace?.productMode === 'strategy_client' || workspace?.productMode === 'dual') {
       void loadBacktestRequests();
     }
   }, [workspace?.productMode]);

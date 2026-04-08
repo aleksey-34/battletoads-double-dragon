@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { db } from './database';
 
-type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client';
+type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'dual';
 
 type SessionRequestMeta = {
   ip?: string;
@@ -119,6 +119,9 @@ const normalizeEmail = (value: unknown): string => String(value || '').trim().to
 
 const normalizeProductMode = (value: unknown): ProductMode => {
   const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'dual') {
+    return 'dual';
+  }
   if (raw === 'algofund' || raw === 'algofund_client') {
     return 'algofund_client';
   }
@@ -277,15 +280,16 @@ const ensureUniqueTenantSlug = async (baseSlug: string): Promise<string> => {
 };
 
 const ensureRegistrationPlanId = async (productMode: ProductMode): Promise<number> => {
-  const preferredCode = productMode === 'strategy_client'
+  const preferredCode = productMode === 'strategy_client' || productMode === 'dual'
     ? DEFAULT_STRATEGY_PLAN_CODE
     : productMode === 'copytrading_client'
       ? DEFAULT_COPYTRADING_PLAN_CODE
       : DEFAULT_ALGOFUND_PLAN_CODE;
 
+  const planModeQuery = productMode === 'dual' ? 'strategy_client' : productMode;
   let row = await db.get(
     'SELECT id FROM plans WHERE code = ? AND product_mode = ? AND is_active = 1 LIMIT 1',
-    [preferredCode, productMode]
+    [preferredCode, planModeQuery]
   );
 
   if (row?.id) {
@@ -294,14 +298,14 @@ const ensureRegistrationPlanId = async (productMode: ProductMode): Promise<numbe
 
   row = await db.get(
     'SELECT id FROM plans WHERE product_mode = ? AND is_active = 1 ORDER BY price_usdt ASC, id ASC LIMIT 1',
-    [productMode]
+    [planModeQuery]
   );
 
   if (row?.id) {
     return Number(row.id);
   }
 
-  const isStrategy = productMode === 'strategy_client';
+  const isStrategy = productMode === 'strategy_client' || productMode === 'dual';
   const fallbackCode = isStrategy ? 'selfreg_strategy_starter' : 'selfreg_algofund_starter';
   const fallbackTitle = isStrategy ? 'Strategy Client Starter' : 'Algofund Starter';
   const features = isStrategy
@@ -346,6 +350,28 @@ const ensureRegistrationPlanId = async (productMode: ProductMode): Promise<numbe
 };
 
 const ensureTenantProfile = async (tenantId: number, productMode: ProductMode): Promise<void> => {
+  if (productMode === 'dual') {
+    // dual mode: create both strategy and algofund profiles
+    await db.run(
+      `INSERT INTO strategy_client_profiles (
+         tenant_id, selected_offer_ids_json, risk_level, trade_frequency_level,
+         requested_enabled, actual_enabled, assigned_api_key_name, latest_preview_json,
+         created_at, updated_at
+       ) VALUES (?, '[]', 'medium', 'medium', 0, 0, '', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(tenant_id) DO NOTHING`,
+      [tenantId]
+    );
+    await db.run(
+      `INSERT INTO algofund_profiles (
+         tenant_id, risk_multiplier, requested_enabled, actual_enabled,
+         assigned_api_key_name, published_system_name, latest_preview_json,
+         created_at, updated_at
+       ) VALUES (?, 1, 0, 0, '', '', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(tenant_id) DO NOTHING`,
+      [tenantId]
+    );
+    return;
+  }
   if (productMode === 'strategy_client') {
     await db.run(
       `INSERT INTO strategy_client_profiles (

@@ -20,7 +20,7 @@ import { initResearchDb } from '../research/db';
 import { getPreset, listOfferIds } from '../research/presetBuilder';
 import { computeReconciliationMetrics } from '../analytics/liveReconciliation';
 
-export type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'synctrade_client';
+export type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'synctrade_client' | 'dual';
 export type Level3 = 'low' | 'medium' | 'high';
 export type RequestStatus = 'pending' | 'approved' | 'rejected';
 export type AlgofundRequestType = 'start' | 'stop' | 'switch_system';
@@ -3896,14 +3896,14 @@ const ensurePublishedSourceSystem = async (
   }) => {
     const displayName = asString(payload.displayName, '').trim();
     if (!displayName) throw new Error('displayName is required');
-    if (payload.productMode !== 'strategy_client' && payload.productMode !== 'algofund_client' && payload.productMode !== 'copytrading_client' && payload.productMode !== 'synctrade_client') {
-      throw new Error('productMode must be strategy_client, algofund_client, copytrading_client or synctrade_client');
+    if (payload.productMode !== 'strategy_client' && payload.productMode !== 'algofund_client' && payload.productMode !== 'copytrading_client' && payload.productMode !== 'synctrade_client' && payload.productMode !== 'dual') {
+      throw new Error('productMode must be strategy_client, algofund_client, copytrading_client, synctrade_client or dual');
     }
 
     await ensureSaasSeedData();
 
     const plan = await getPlanByCode(payload.planCode);
-    if (plan.product_mode !== payload.productMode) {
+    if (plan.product_mode !== payload.productMode && payload.productMode !== 'dual') {
       throw new Error(`Plan ${payload.planCode} does not belong to mode ${payload.productMode}`);
     }
 
@@ -3989,13 +3989,16 @@ const ensurePublishedSourceSystem = async (
 
     await ensureSubscription(tenant.id, plan.id);
 
-    if (payload.productMode === 'strategy_client') {
+    if (payload.productMode === 'strategy_client' || payload.productMode === 'dual') {
       await ensureStrategyClientProfile(tenant.id, [], apiKeyName);
-    } else if (payload.productMode === 'algofund_client') {
+    }
+    if (payload.productMode === 'algofund_client' || payload.productMode === 'dual') {
       await ensureAlgofundProfile(tenant.id, apiKeyName);
-    } else if (payload.productMode === 'copytrading_client') {
+    }
+    if (payload.productMode === 'copytrading_client') {
       await ensureCopytradingProfile(tenant.id, apiKeyName);
-    } else {
+    }
+    if (payload.productMode === 'synctrade_client') {
       await ensureSynctradeProfile(tenant.id, apiKeyName);
     }
 
@@ -5705,12 +5708,13 @@ export const syncAllTenantStrategyMaxDeposit = async (): Promise<{ updated: numb
 
       // Determine API key name based on product mode
       let apiKeyName = '';
-      if (tenant.product_mode === 'algofund_client') {
+      if (tenant.product_mode === 'algofund_client' || tenant.product_mode === 'dual') {
         const profile = await getAlgofundProfile(tenant.id);
         if (profile) {
           apiKeyName = getAlgofundExecutionApiKeyName(tenant, profile);
         }
-      } else if (tenant.product_mode === 'strategy_client') {
+      }
+      if (!apiKeyName && (tenant.product_mode === 'strategy_client' || tenant.product_mode === 'dual')) {
         apiKeyName = asString(tenant.assigned_api_key_name, '');
       }
 
@@ -6752,14 +6756,23 @@ export const updateTenantAdminState = async (tenantId: number, payload: {
       [nextDisplayName, nextStatus, nextAssignedApiKeyName, nextDepositCapOverride, tenantId]
     );
 
-  if (tenant.product_mode === 'strategy_client') {
+  if (tenant.product_mode === 'strategy_client' || tenant.product_mode === 'dual') {
     await db.run(
       `UPDATE strategy_client_profiles
        SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
        WHERE tenant_id = ?`,
       [nextAssignedApiKeyName, tenantId]
     );
-  } else if (tenant.product_mode === 'copytrading_client') {
+  }
+  if (tenant.product_mode === 'algofund_client' || tenant.product_mode === 'dual') {
+    await db.run(
+      `UPDATE algofund_profiles
+       SET assigned_api_key_name = ?, execution_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [nextAssignedApiKeyName, nextAssignedApiKeyName, tenantId]
+    );
+  }
+  if (tenant.product_mode === 'copytrading_client') {
     await db.run(
       `UPDATE copytrading_profiles
        SET master_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
@@ -6773,18 +6786,11 @@ export const updateTenantAdminState = async (tenantId: number, payload: {
        WHERE tenant_id = ?`,
       [nextAssignedApiKeyName, tenantId]
     );
-  } else {
-    await db.run(
-      `UPDATE algofund_profiles
-       SET assigned_api_key_name = ?, execution_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE tenant_id = ?`,
-      [nextAssignedApiKeyName, nextAssignedApiKeyName, tenantId]
-    );
   }
 
   if (payload.planCode) {
     const plan = await getPlanByCode(payload.planCode);
-    if (plan.product_mode !== tenant.product_mode) {
+    if (plan.product_mode !== tenant.product_mode && tenant.product_mode !== 'dual') {
       throw new Error(`Plan ${payload.planCode} does not belong to tenant mode ${tenant.product_mode}`);
     }
     await setTenantSubscriptionPlan(tenantId, plan.id);
@@ -6852,8 +6858,8 @@ const listTenantSummaries = async (options?: {
     const copytradingProfile = await getCopytradingProfile(tenant.id);
     const synctradeProfile = await getSynctradeProfile(tenant.id);
     const effectiveMonitoringApiKeyName = asString(
-      tenant.product_mode === 'strategy_client'
-        ? strategyProfile?.assigned_api_key_name
+      tenant.product_mode === 'strategy_client' || tenant.product_mode === 'dual'
+        ? (strategyProfile?.assigned_api_key_name || algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name)
         : tenant.product_mode === 'algofund_client'
           ? (algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name)
           : tenant.product_mode === 'synctrade_client'
@@ -7234,7 +7240,7 @@ export const requestAlgofundBatchAction = async (
   for (const tenantId of normalizedTenantIds) {
     try {
       const tenant = await getTenantById(tenantId);
-      if (tenant.product_mode !== 'algofund_client') {
+      if (tenant.product_mode !== 'algofund_client' && tenant.product_mode !== 'dual') {
         throw new Error('Tenant is not algofund client');
       }
 
@@ -7307,7 +7313,7 @@ export const analyzeOfferUnpublishImpact = async (offerIdRaw: string): Promise<O
   }
 
   const affectedTenants = tenants
-    .filter((row) => row.tenant.product_mode === 'strategy_client')
+    .filter((row) => row.tenant.product_mode === 'strategy_client' || row.tenant.product_mode === 'dual')
     .filter((row) => {
       const tenantId = Number(row.tenant.id);
       const active = activeByTenant.get(tenantId);
