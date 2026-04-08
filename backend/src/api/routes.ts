@@ -63,6 +63,7 @@ import {
   registerClientUser,
   revokeClientSession,
 } from '../utils/auth';
+import { notifyAdminNewUser } from '../notifications/adminTelegramReporter';
 import logger from '../utils/logger';
 import { initResearchDb } from '../research/db';
 import { getPreset, listOfferIds } from '../research/presetBuilder';
@@ -384,6 +385,14 @@ router.post('/auth/client/register', async (req, res) => {
     );
 
     res.json({ success: true, ...result });
+
+    // Async notification — don't block response
+    notifyAdminNewUser({
+      email: String(req.body?.email || ''),
+      displayName: String(req.body?.fullName || req.body?.companyName || ''),
+      productMode: String(req.body?.productMode || 'strategy_client'),
+      planCode: 'auto (self-registration)',
+    }).catch(() => {});
   } catch (error) {
     const err = error as Error;
     const statusCode = resolveClientAuthErrorStatus(err.message);

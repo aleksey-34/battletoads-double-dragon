@@ -631,6 +631,32 @@ const isWatchdogEnabledDb = async (): Promise<boolean> => {
 };
 
 /**
+ * Notify admin about a new client registration.
+ */
+export const notifyAdminNewUser = async (info: {
+  email: string;
+  displayName: string;
+  productMode: string;
+  planCode: string;
+}): Promise<void> => {
+  if (!isEnabled()) return;
+  const text = [
+    `🆕 <b>Новый клиент зарегистрировался!</b>`,
+    ``,
+    `📧 Email: <code>${esc(info.email)}</code>`,
+    `👤 Имя: ${esc(info.displayName)}`,
+    `📦 Режим: ${esc(info.productMode)}`,
+    `💰 Тариф: ${esc(info.planCode)}`,
+    `🕐 ${new Date().toISOString()}`,
+  ].join('\n');
+  try {
+    await sendTelegramMessage(text);
+  } catch (e) {
+    logger.warn(`[tg-admin] Failed to send new-user notification: ${(e as Error).message}`);
+  }
+};
+
+/**
  * Checks for recent rate-limit bursts and API/runtime failure spikes.
  * Sends an immediate Telegram alert if thresholds are exceeded.
  * Hard cooldown 10 min to avoid spam.
