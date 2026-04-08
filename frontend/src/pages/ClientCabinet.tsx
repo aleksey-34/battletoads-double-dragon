@@ -683,8 +683,8 @@ const ClientCabinet: React.FC = () => {
         requestedEnabled === undefined
           ? t('client.strategy.saved', 'Preferences saved')
           : requestedEnabled
-            ? 'Запрос на запуск отправлен'
-            : 'Запрос на остановку отправлен'
+            ? 'Торговля включена'
+            : 'Торговля выключена'
       );
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || t('client.strategy.saveFailed', 'Failed to save strategy preferences')));
@@ -1043,7 +1043,24 @@ const ClientCabinet: React.FC = () => {
                               <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
                             );
                           })()}
-                          <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
+                          <Space wrap>
+                            <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
+                            {strategyWorkspace.capabilities?.settings && !strategyOfferIds.includes(offer.offerId) ? (
+                              <Button size="small" type="primary" onClick={() => {
+                                const offerMarket = String(offer.strategy?.market || '').toUpperCase().trim();
+                                if (offerMarket) {
+                                  const conflicting = strategyWorkspace.offers.find(
+                                    (o) => o.offerId !== offer.offerId && strategyOfferIds.includes(o.offerId) && String(o.strategy?.market || '').toUpperCase().trim() === offerMarket
+                                  );
+                                  if (conflicting) {
+                                    messageApi.warning(`Пара ${offerMarket} уже есть в портфеле (${conflicting.titleRu}).`);
+                                    return;
+                                  }
+                                }
+                                setStrategyOfferIds((current) => [...current, offer.offerId]);
+                              }}>Подключить</Button>
+                            ) : null}
+                          </Space>
                         </Space>
                       </Card>
                     </Col>
@@ -1177,9 +1194,6 @@ const ClientCabinet: React.FC = () => {
               <Tag color={strategyWorkspace.profile?.actual_enabled ? 'success' : 'default'}>
                 {strategyWorkspace.profile?.actual_enabled ? 'Торговля активна' : 'Торговля остановлена'}
               </Tag>
-              <Tag color={strategyWorkspace.profile?.requested_enabled ? 'processing' : 'default'}>
-                Запрос: {strategyWorkspace.profile?.requested_enabled ? 'запуск' : 'остановка'}
-              </Tag>
             </Space>
 
             {clientApiKeys.length > 0 ? (
@@ -1201,15 +1215,18 @@ const ClientCabinet: React.FC = () => {
             {renderCapabilities(strategyWorkspace.capabilities)}
           </Card>
 
-          {strategyWorkspace.capabilities?.startStopRequests ? (
-            <Card className="battletoads-card" title="Подключение / отключение" size="small">
+          {strategyWorkspace.capabilities?.settings ? (
+            <Card className="battletoads-card" title="Управление торговлей" size="small">
               <Space wrap>
-                <Button type="primary" loading={actionLoading === 'strategy-start'} onClick={() => void saveStrategyProfile(true)}>
-                  Запросить запуск
-                </Button>
-                <Button danger loading={actionLoading === 'strategy-stop'} onClick={() => void saveStrategyProfile(false)}>
-                  Запросить остановку
-                </Button>
+                {!strategyWorkspace.profile?.actual_enabled ? (
+                  <Button type="primary" loading={actionLoading === 'strategy-start'} onClick={() => void saveStrategyProfile(true)}>
+                    Включить торговлю
+                  </Button>
+                ) : (
+                  <Button danger loading={actionLoading === 'strategy-stop'} onClick={() => void saveStrategyProfile(false)}>
+                    Выключить торговлю
+                  </Button>
+                )}
               </Space>
             </Card>
           ) : null}
@@ -1375,7 +1392,7 @@ const ClientCabinet: React.FC = () => {
                             )}
                             <Space size={4} wrap>
                               <Button size="small" onClick={() => setSystemDetailModal({ name: system.name, id: system.id })}>Подробнее</Button>
-                              {!isCurrent && algofundWorkspace?.capabilities?.startStopRequests ? (
+                              {!isCurrent ? (
                                 <Button size="small" type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start'); }}>Подключить</Button>
                               ) : null}
                             </Space>
@@ -1468,43 +1485,33 @@ const ClientCabinet: React.FC = () => {
                       </Space>
                     </div>
                   ) : null}
-                  {!isCurrent && algofundWorkspace?.capabilities?.startStopRequests ? (
+                  {!isCurrent ? (
                     <Button type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start'); setSystemDetailModal(null); }}>
-                      Запросить подключение этой системы
+                      Подключить эту систему
                     </Button>
-                  ) : isCurrent && algofundWorkspace?.capabilities?.startStopRequests ? (
+                  ) : (
                     <Button danger loading={actionLoading === 'algofund-stop'} onClick={() => { void sendAlgofundRequest('stop'); setSystemDetailModal(null); }}>
-                      Запросить отключение
+                      Отключить
                     </Button>
-                  ) : !algofundWorkspace?.capabilities?.startStopRequests ? (
-                    <Alert
-                      type="info"
-                      showIcon
-                      message="Хотите подключить Алгофонд?"
-                      description="Для подключения автоматического управления через Алгофонд обратитесь к администратору."
-                    />
-                  ) : null}
+                  )}
                 </Space>
               );
             })()}
           </Modal>
 
           {!(algofundWorkspace as any)?.browseOnly && (
-          <Card className="battletoads-card" title="Подключение / отключение" size="small">
+          <Card className="battletoads-card" title="Управление подключением" size="small">
             <Space direction="vertical" size={12} style={{ width: '100%' }}>
-              <Input.TextArea
-                rows={2}
-                value={algofundNote}
-                onChange={(e) => setAlgofundNote(e.target.value)}
-                placeholder="Комментарий к запросу (необязательно)"
-              />
               <Space wrap>
-                <Button type="primary" loading={actionLoading === 'algofund-start'} onClick={() => void sendAlgofundRequest('start')}>
-                  Запросить подключение
-                </Button>
-                <Button danger loading={actionLoading === 'algofund-stop'} onClick={() => void sendAlgofundRequest('stop')}>
-                  Запросить отключение
-                </Button>
+                {!algofundWorkspace.profile?.actual_enabled ? (
+                  <Button type="primary" loading={actionLoading === 'algofund-start'} onClick={() => void sendAlgofundRequest('start')}>
+                    Подключить Алгофонд
+                  </Button>
+                ) : (
+                  <Button danger loading={actionLoading === 'algofund-stop'} onClick={() => void sendAlgofundRequest('stop')}>
+                    Отключить Алгофонд
+                  </Button>
+                )}
               </Space>
 
               {(algofundWorkspace.requests || []).length > 0 ? (

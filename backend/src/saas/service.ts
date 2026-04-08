@@ -7053,10 +7053,11 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
          risk_level = ?,
          trade_frequency_level = ?,
          requested_enabled = ?,
+         actual_enabled = ?,
          assigned_api_key_name = ?,
          updated_at = CURRENT_TIMESTAMP
      WHERE tenant_id = ?`,
-    [JSON.stringify(nextOfferIds), activeSystemProfile?.id || null, nextRiskLevel, nextTradeFrequencyLevel, nextRequestedEnabled ? 1 : 0, nextAssignedApiKeyName, tenantId]
+    [JSON.stringify(nextOfferIds), activeSystemProfile?.id || null, nextRiskLevel, nextTradeFrequencyLevel, nextRequestedEnabled ? 1 : 0, nextRequestedEnabled ? 1 : 0, nextAssignedApiKeyName, tenantId]
   );
 
   if (activeSystemProfile?.id) {
@@ -8428,9 +8429,7 @@ export const requestAlgofundAction = async (
   }
 
   const capabilities = resolvePlanCapabilities(plan);
-  if (!capabilities.startStopRequests) {
-    throw new Error('Start/stop requests are not available for the current plan');
-  }
+  // startStopRequests capability no longer gated — instant connect/disconnect for all clients
 
   const apiKeyName = getAlgofundSystemApiKeyName(tenant, profile);
   const requestPayload: AlgofundRequestPayload = {
@@ -8478,16 +8477,16 @@ export const requestAlgofundAction = async (
 
   await db.run(
     `INSERT INTO algofund_start_stop_requests (tenant_id, request_type, status, note, decision_note, request_payload_json, created_at)
-     VALUES (?, ?, 'pending', ?, '', ?, CURRENT_TIMESTAMP)`,
+     VALUES (?, ?, 'approved', ?, 'auto-approved', ?, CURRENT_TIMESTAMP)`,
     [tenantId, requestType, note, JSON.stringify(requestPayload)]
   );
 
   if (requestType === 'start' || requestType === 'stop') {
     await db.run(
       `UPDATE algofund_profiles
-       SET requested_enabled = ?, updated_at = CURRENT_TIMESTAMP
+       SET requested_enabled = ?, actual_enabled = ?, updated_at = CURRENT_TIMESTAMP
        WHERE tenant_id = ?`,
-      [requestType === 'start' ? 1 : 0, tenantId]
+      [requestType === 'start' ? 1 : 0, requestType === 'start' ? 1 : 0, tenantId]
     );
   }
 
