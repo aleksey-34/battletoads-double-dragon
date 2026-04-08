@@ -79,7 +79,7 @@ function useLandingTexts(lang: UILanguage) {
       discountTitle: '� СЕЙЧАС БЕСПЛАТНО',
       discountSub: 'Обновлённый проект набирает аудиторию — все тарифы платформы доступны бесплатно. Заходите, подключайте API-ключ, тестируйте стратегии и торгуйте без оплаты.',
       discountBadge: 'Бесплатный доступ',
-      discountNote: 'Платные тарифы будут включены позже — но сейчас всё бесплатно. Скидки 90% для первых пользователей сохранятся.',,
+      discountNote: 'Платные тарифы будут включены позже — но сейчас всё бесплатно. Скидки 90% для первых пользователей сохранятся.',
       discountPlans: [
         { title: 'Strategy 20', old: '$20', now: '$2' },
         { title: 'Strategy 50', old: '$50', now: '$5' },
@@ -155,7 +155,7 @@ function useLandingTexts(lang: UILanguage) {
       discountTitle: '� FREE ACCESS NOW',
       discountSub: 'The updated platform is growing its audience — all plans are available for free. Connect your API key, test strategies and trade at no cost.',
       discountBadge: 'Free access',
-      discountNote: 'Paid plans will be enabled later — but right now everything is free. Early users keep 90% discount when pricing kicks in.',,
+      discountNote: 'Paid plans will be enabled later — but right now everything is free. Early users keep 90% discount when pricing kicks in.',
       discountPlans: [
         { title: 'Strategy 20', old: '$20', now: '$2' },
         { title: 'Strategy 50', old: '$50', now: '$5' },
@@ -231,7 +231,7 @@ function useLandingTexts(lang: UILanguage) {
       discountTitle: '� ŞU AN ÜCRETSİZ',
       discountSub: 'Güncellenen platform kitlesini büyütüyor — tüm tarifeler ücretsiz. API anahtarınızı bağlayın, stratejileri test edin ve ücretsiz ticaret yapın.',
       discountBadge: 'Ücretsiz erişim',
-      discountNote: 'Ücretli tarifeler daha sonra etkinleştirilecek — ama şu anda her şey ücretsiz. Erken kullanıcılar %90 indirimi korur.',,
+      discountNote: 'Ücretli tarifeler daha sonra etkinleştirilecek — ama şu anda her şey ücretsiz. Erken kullanıcılar %90 indirimi korur.',
       discountPlans: [
         { title: 'Strategy 20', old: '$20', now: '$2' },
         { title: 'Strategy 50', old: '$50', now: '$5' },
