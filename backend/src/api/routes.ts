@@ -1168,12 +1168,18 @@ router.get('/client/tariff', authenticateClient, async (req, res) => {
     ) as Record<string, unknown> | undefined;
 
     const availablePlans = await db.all(
-      `SELECT code, title, product_mode, price_usdt, max_deposit_total, max_strategies_total, risk_cap_max,
-              allow_ts_start_stop_requests, features_json
-       FROM plans
-       WHERE is_active = 1 AND product_mode = ?
-       ORDER BY price_usdt ASC, id ASC`,
-      [productMode]
+      productMode === 'dual'
+        ? `SELECT code, title, product_mode, price_usdt, max_deposit_total, max_strategies_total, risk_cap_max,
+                  allow_ts_start_stop_requests, features_json
+           FROM plans
+           WHERE is_active = 1 AND product_mode IN ('strategy_client', 'algofund_client')
+           ORDER BY price_usdt ASC, id ASC`
+        : `SELECT code, title, product_mode, price_usdt, max_deposit_total, max_strategies_total, risk_cap_max,
+                  allow_ts_start_stop_requests, features_json
+           FROM plans
+           WHERE is_active = 1 AND product_mode = ?
+           ORDER BY price_usdt ASC, id ASC`,
+      productMode === 'dual' ? [] : [productMode]
     ) as Array<Record<string, unknown>>;
 
     const requests = await db.all(
