@@ -2,8 +2,7 @@
    BTDD Platform — Dark Theme
    ═══════════════════════════════════════════════════ */
 
-/* ── Classic theme (default — blue accent) ── */
-:root,
+/* ── Classic theme (blue accent) ── */
 body.theme-classic {
   --btdd-bg-primary: #0a0a12;
   --btdd-bg-surface: #12121e;
@@ -32,7 +31,8 @@ body.theme-classic {
   --btdd-magenta: #eb2f96;
 }
 
-/* ── Neon theme (green terminal accent) ── */
+/* ── Neon theme (default — green terminal accent) ── */
+:root,
 body.theme-neon {
   --btdd-bg-primary: #0d0f14;
   --btdd-bg-surface: #111518;
