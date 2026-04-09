@@ -559,6 +559,15 @@ const ClientCabinet: React.FC = () => {
   const strategyPreviewSeries = useMemo(() => toLineSeriesData(strategySelectionPreview?.preview?.equity), [strategySelectionPreview]);
   const algofundPreviewSeries = useMemo(() => toLineSeriesData(algofundWorkspace?.preview?.equityCurve), [algofundWorkspace]);
 
+  const strategyPreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!strategyWorkspace) return;
+    if (strategyPreviewTimerRef.current) clearTimeout(strategyPreviewTimerRef.current);
+    strategyPreviewTimerRef.current = setTimeout(() => { void runStrategySelectionPreview(); }, 600);
+    return () => { if (strategyPreviewTimerRef.current) clearTimeout(strategyPreviewTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strategyRiskInput, strategyTradeInput]);
+
   const algofundPreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!algofundWorkspace) return;
@@ -1138,10 +1147,10 @@ const ClientCabinet: React.FC = () => {
                   <Row gutter={[12, 12]}>
                     {startBalance != null ? <Col xs={12} sm={6}><Statistic title="Старт. капитал" value={formatMoney(startBalance)} /></Col> : null}
                     {endBalance != null ? <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(endBalance)} valueStyle={{ color: endBalance >= (startBalance || 0) ? '#f5a623' : '#ff4d4f' }} /></Col> : null}
-                    <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(offer.metrics.ret)} valueStyle={{ color: (offer.metrics.ret ?? 0) >= 0 ? '#f5a623' : '#ff4d4f' }} /></Col>
-                    <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(offer.metrics.dd)} valueStyle={{ color: '#ff7a45' }} /></Col>
-                    <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(offer.metrics.pf)} /></Col>
-                    {offer.metrics.trades ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(offer.metrics.trades, 0)} /></Col> : null}
+                    <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(strategyPreviewSummary?.totalReturnPercent ?? offer.metrics.ret)} valueStyle={{ color: (strategyPreviewSummary?.totalReturnPercent ?? offer.metrics.ret ?? 0) >= 0 ? '#f5a623' : '#ff4d4f' }} /></Col>
+                    <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(strategyPreviewSummary?.maxDrawdownPercent ?? offer.metrics.dd)} valueStyle={{ color: '#ff7a45' }} /></Col>
+                    <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(strategyPreviewSummary?.profitFactor ?? offer.metrics.pf)} /></Col>
+                    {(strategyPreviewSummary?.tradesCount || offer.metrics.trades) ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(strategyPreviewSummary?.tradesCount ?? offer.metrics.trades, 0)} /></Col> : null}
                   </Row>
                   {strategyWorkspace?.capabilities?.settings ? (
                     <>
@@ -1465,17 +1474,25 @@ const ClientCabinet: React.FC = () => {
                       <ChartComponent key={chartKey} data={chartData} type="line" />
                     </div>
                   ) : null}
-                  {(snap || startBalance != null) ? (
+                  {(snap || startBalance != null) ? (() => {
+                    const previewSummary = isCurrent && algofundWorkspace?.preview?.summary ? algofundWorkspace.preview.summary : null;
+                    const displayRet = previewSummary?.totalReturnPercent ?? snap?.ret;
+                    const displayDd = previewSummary?.maxDrawdownPercent ?? snap?.dd;
+                    const displayPf = previewSummary?.profitFactor ?? snap?.pf;
+                    const displayTrades = previewSummary?.tradesCount ?? snap?.trades;
+                    const displayTpd = previewSummary?.tradesCount && snap?.periodDays ? (Number(previewSummary.tradesCount) / snap.periodDays) : snap?.tradesPerDay;
+                    return (
                     <Row gutter={[12, 12]}>
                       {startBalance != null ? <Col xs={12} sm={6}><Statistic title="Старт. капитал" value={formatMoney(startBalance)} /></Col> : null}
                       {endBalance != null ? <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(endBalance)} valueStyle={{ color: endBalance >= (startBalance || 0) ? '#f5a623' : '#ff4d4f' }} /></Col> : null}
-                      {snap ? <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(snap.ret)} valueStyle={{ color: snap.ret >= 0 ? '#f5a623' : '#ff4d4f' }} /></Col> : null}
-                      {snap ? <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(snap.dd)} valueStyle={{ color: '#ff7a45' }} /></Col> : null}
-                      {snap ? <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(snap.pf)} /></Col> : null}
-                      {snap ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(snap.trades, 0)} /></Col> : null}
-                      {snap ? <Col xs={12} sm={6}><Statistic title="Сд./день" value={formatNumber(snap.tradesPerDay, 1)} /></Col> : null}
+                      {displayRet != null ? <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(displayRet)} valueStyle={{ color: Number(displayRet) >= 0 ? '#f5a623' : '#ff4d4f' }} /></Col> : null}
+                      {displayDd != null ? <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(displayDd)} valueStyle={{ color: '#ff7a45' }} /></Col> : null}
+                      {displayPf != null ? <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(displayPf)} /></Col> : null}
+                      {displayTrades != null ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(displayTrades, 0)} /></Col> : null}
+                      {displayTpd != null ? <Col xs={12} sm={6}><Statistic title="Сд./день" value={formatNumber(displayTpd, 1)} /></Col> : null}
                     </Row>
-                  ) : null}
+                    );
+                  })() : null}
                   {algofundWorkspace?.capabilities?.settings ? (
                     <div style={{ padding: '8px 0' }}>
                       <Typography.Text strong>Мультипликатор риска: × {formatNumber(algofundRiskMultiplier, 2)}</Typography.Text>
@@ -1870,6 +1887,19 @@ const ClientCabinet: React.FC = () => {
             style={{ borderRadius: 8 }}
           >
             Связаться с менеджером
+          </Button>
+          <Button
+            href="https://t.me/BTDD_Discuss"
+            target="_blank"
+            style={{ borderRadius: 8 }}
+          >
+            💬 Чат сообщества
+          </Button>
+          <Button
+            href="mailto:aiaetrade17@gmail.com"
+            style={{ borderRadius: 8 }}
+          >
+            📩 Email
           </Button>
         </Space>
         <Divider style={{ margin: '16px 0 12px' }} />
