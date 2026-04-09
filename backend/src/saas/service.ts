@@ -1528,7 +1528,15 @@ const buildFallbackSweepData = (catalog: CatalogData | null): SweepData | null =
   };
 };
 
+let _catalogCache: { catalog: CatalogData | null; sweep: SweepData | null } | null = null;
+let _catalogCacheAt = 0;
+
 export const loadCatalogAndSweepWithFallback = async (): Promise<{ catalog: CatalogData | null; sweep: SweepData | null }> => {
+  const now = Date.now();
+  if (_catalogCache && (now - _catalogCacheAt) < 60_000) {
+    return { catalog: _catalogCache.catalog, sweep: _catalogCache.sweep };
+  }
+
   if (!db) {
     await initDB();
   }
@@ -1557,6 +1565,8 @@ export const loadCatalogAndSweepWithFallback = async (): Promise<{ catalog: Cata
     }
   }
 
+  _catalogCache = { catalog, sweep };
+  _catalogCacheAt = Date.now();
   return { catalog, sweep };
 };
 
@@ -3190,14 +3200,49 @@ const resolveOfferPresetByPreference = (
   const targetDd = (normalizePreferenceScore(riskScore, riskLevel) / 10) * Math.max(sortedByDd.length - 1, 0);
   const targetTrades = (normalizePreferenceScore(tradeFrequencyScore, tradeFrequencyLevel) / 10) * Math.max(sortedByTrades.length - 1, 0);
 
-  return [...candidates].sort((left, right) => {
-    const leftScore = Math.abs((ddRank.get(getCandidateKey(left)) || 0) - targetDd) + Math.abs((tradeRank.get(getCandidateKey(left)) || 0) - targetTrades);
-    const rightScore = Math.abs((ddRank.get(getCandidateKey(right)) || 0) - targetDd) + Math.abs((tradeRank.get(getCandidateKey(right)) || 0) - targetTrades);
-    if (leftScore !== rightScore) {
-      return leftScore - rightScore;
+  const scored = [...candidates].map((item) => {
+    const score = Math.abs((ddRank.get(getCandidateKey(item)) || 0) - targetDd) + Math.abs((tradeRank.get(getCandidateKey(item)) || 0) - targetTrades);
+    return { item, score };
+  }).sort((a, b) => a.score - b.score || asNumber(b.item.score, 0) - asNumber(a.item.score, 0));
+
+  const best = scored[0].item;
+  const second = scored.length > 1 ? scored[1].item : null;
+
+  if (!second || scored[0].score === 0) {
+    return best;
+  }
+
+  const totalDist = scored[0].score + scored[1].score;
+  const t = totalDist > 0 ? scored[0].score / totalDist : 0;
+
+  const lerpNum = (a: number, b: number, frac: number): number => a + (b - a) * frac;
+
+  const interpolated: CatalogPreset = {
+    ...best,
+    metrics: {
+      ret: Number(lerpNum(asNumber(best.metrics.ret, 0), asNumber(second.metrics.ret, 0), t).toFixed(4)),
+      pf: Number(lerpNum(asNumber(best.metrics.pf, 0), asNumber(second.metrics.pf, 0), t).toFixed(4)),
+      dd: Number(lerpNum(asNumber(best.metrics.dd, 0), asNumber(second.metrics.dd, 0), t).toFixed(4)),
+      wr: Number(lerpNum(asNumber(best.metrics.wr, 0), asNumber(second.metrics.wr, 0), t).toFixed(4)),
+      trades: Math.round(lerpNum(asNumber(best.metrics.trades, 0), asNumber(second.metrics.trades, 0), t)),
+    },
+    score: Number(lerpNum(asNumber(best.score, 0), asNumber(second.score, 0), t).toFixed(4)),
+  };
+
+  if (Array.isArray(best.equity_curve) && best.equity_curve.length >= 2 &&
+      Array.isArray(second.equity_curve) && second.equity_curve.length >= 2) {
+    const len = Math.min(best.equity_curve.length, second.equity_curve.length);
+    interpolated.equity_curve = [];
+    for (let i = 0; i < len; i++) {
+      interpolated.equity_curve.push(Number(lerpNum(
+        asNumber(best.equity_curve[i], 0),
+        asNumber(second.equity_curve[i], 0),
+        t
+      ).toFixed(4)));
     }
-    return asNumber(right.score, 0) - asNumber(left.score, 0);
-  })[0];
+  }
+
+  return interpolated;
 };
 
 const buildStrategyDraftFromRecord = (
@@ -6984,6 +7029,42 @@ export const getStrategyClientState = async (tenantId: number) => {
   const catalog = filterCatalogByPublishedOfferIds(sourceCatalog, publishedSet);
   const directOffers = catalog ? getAllOffers(catalog) : [];
   const presetOffers = directOffers.length > 0 ? directOffers : await buildPresetBackedOffers(catalog);
+
+  // Enrich client offers with admin review snapshot data (equityPoints + accurate metrics) when available
+  const reviewSnapshots = await getOfferReviewSnapshots().catch(() => ({} as Record<string, OfferReviewSnapshot>));
+  const enrichedOffers = presetOffers.map((offer) => {
+    const snap = reviewSnapshots[offer.offerId];
+    if (!snap) return offer;
+    const hasSnapshotEquity = Array.isArray(snap.equityPoints) && snap.equityPoints.length > 1;
+    return {
+      ...offer,
+      metrics: {
+        ...offer.metrics,
+        ret: asNumber(snap.ret, offer.metrics.ret),
+        pf: asNumber(snap.pf, offer.metrics.pf),
+        dd: asNumber(snap.dd, offer.metrics.dd),
+        trades: snap.trades > 0 ? snap.trades : offer.metrics.trades,
+      },
+      equityPoints: hasSnapshotEquity ? snap.equityPoints : undefined,
+      equity: hasSnapshotEquity ? {
+        source: 'review_snapshot',
+        generatedAt: snap.updatedAt || new Date().toISOString(),
+        points: snap.equityPoints.map((eq, i) => ({
+          time: Math.floor(Date.now() / 1000) - (snap.periodDays || 365) * 86400 + i * Math.floor((snap.periodDays || 365) * 86400 / Math.max(snap.equityPoints.length - 1, 1)),
+          equity: eq,
+        })),
+        summary: {
+          finalEquity: snap.equityPoints[snap.equityPoints.length - 1],
+          totalReturnPercent: snap.ret,
+          maxDrawdownPercent: snap.dd,
+          winRatePercent: 0,
+          profitFactor: snap.pf,
+          tradesCount: snap.trades,
+        },
+      } : offer.equity,
+    } as CatalogOffer;
+  });
+
   const recommendedSets = buildRecommendedSets(catalog);
   const savedOfferIdsLegacy = profile ? safeJsonParse<string[]>(profile.selected_offer_ids_json, []) : [];
   systemProfiles = await ensureDefaultStrategyClientSystemProfile(tenantId, savedOfferIdsLegacy);
@@ -7026,7 +7107,7 @@ export const getStrategyClientState = async (tenantId: number) => {
     })),
     constraints: buildStrategySelectionConstraints(plan, selectedOffersForConstraints),
     catalog,
-    offers: presetOffers,
+    offers: enrichedOffers,
     recommendedSets,
     offerStoreDefaults: offerStore.defaults,
     sweepPeriod: buildPeriodInfo(sweep),
@@ -7154,7 +7235,38 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
         logger.info(`[updateStrategyClientState] Tenant ${tenantId} removed offer ${offer.offerId} (${market}) — cancelling orders`);
         try { await cancelAllOrders(nextAssignedApiKeyName, market); } catch (e) { logger.warn(`cancelAllOrders per-market ${market} for ${nextAssignedApiKeyName}: ${(e as Error).message}`); }
       }
+      // Dematerialize runtime strategies for removed offers
+      const removedStrategyIds = removedOffers.map((o) => Number(o.strategy?.id || 0)).filter((v) => v > 0);
+      if (removedStrategyIds.length > 0) {
+        const placeholders = removedStrategyIds.map(() => '?').join(',');
+        const dematPattern = `SAAS::${tenant.slug}::%`;
+        await db.run(
+          `UPDATE strategies SET is_active = 0, is_archived = 1, updated_at = CURRENT_TIMESTAMP
+           WHERE is_runtime = 1 AND name LIKE ? AND name LIKE '%::SID' || CAST(? AS TEXT)
+           AND id IN (SELECT id FROM strategies WHERE is_runtime = 1 AND name LIKE ?)`,
+          [dematPattern, 0, dematPattern]
+        ).catch(() => {});
+        // More precise: archive each removed SID individually
+        for (const sid of removedStrategyIds) {
+          await db.run(
+            `UPDATE strategies SET is_active = 0, is_archived = 1, updated_at = CURRENT_TIMESTAMP
+             WHERE is_runtime = 1 AND name LIKE ? AND name LIKE ?`,
+            [dematPattern, `%::SID${sid}`]
+          ).catch((e) => logger.warn(`demat strategy SID${sid} for ${tenant.slug}: ${(e as Error).message}`));
+        }
+        logger.info(`[updateStrategyClientState] Tenant ${tenantId} dematerialized ${removedStrategyIds.length} runtime strategies for removed offers`);
+      }
     }
+  }
+
+  // When toggling OFF: also deactivate all runtime strategies for this tenant
+  if (wasEnabled && !nextRequestedEnabled) {
+    const dematPattern = `SAAS::${tenant.slug}::%`;
+    const dematResult = await db.run(
+      `UPDATE strategies SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE is_runtime = 1 AND name LIKE ?`,
+      [dematPattern]
+    ).catch(() => ({ changes: 0 }));
+    logger.info(`[updateStrategyClientState] Tenant ${tenantId} toggled OFF — deactivated ${(dematResult as any)?.changes || 0} runtime strategies`);
   }
 
   return getStrategyClientState(tenantId);
@@ -8316,9 +8428,49 @@ export const getAlgofundState = async (
 
   const cachedPreview = safeJsonParse<any>(profile.latest_preview_json, null);
   const hasCachedPreview = cachedPreview && typeof cachedPreview === 'object';
-  const shouldRefreshPreview = forceRefreshPreview || requestedRiskMultiplier !== undefined || !hasCachedPreview;
+  // Only run full backtest on initial load or forced refresh; slider changes use fast math scaling
+  const canScaleFromCache = hasCachedPreview && requestedRiskMultiplier !== undefined && !forceRefreshPreview
+    && Array.isArray(cachedPreview?.equityCurve) && cachedPreview.equityCurve.length > 1;
+  const shouldRefreshPreview = forceRefreshPreview || (!hasCachedPreview);
 
-  if (shouldRefreshPreview) {
+  if (canScaleFromCache) {
+    // Fast path: scale cached baseline equity curve mathematically instead of running full backtest
+    const baseline = SAAS_ALGOFUND_BASELINE_INITIAL_BALANCE;
+    const cachedCurve: Array<Record<string, unknown>> = cachedPreview.equityCurve;
+    const startEquity = asNumber(cachedCurve[0]?.equity, baseline);
+    const scaledCurve = cachedCurve.map((point) => ({
+      ...point,
+      equity: Number(scaleEquityByRiskWithReinvest(
+        asNumber(point.equity, startEquity),
+        startEquity,
+        baseline,
+        riskMultiplier / Math.max(0.01, asNumber(cachedPreview.riskMultiplier, 1)),
+        0.5
+      ).toFixed(4)),
+    }));
+    const scaledFinalEquity = scaledCurve.length > 0 ? asNumber(scaledCurve[scaledCurve.length - 1].equity, baseline) : baseline;
+    const cachedSummary = cachedPreview.summary || {};
+    const baseRisk = asNumber(cachedPreview.riskMultiplier, 1);
+    const relativeRisk = riskMultiplier / Math.max(0.01, baseRisk);
+    const scaledRet = asNumber(cachedSummary.totalReturnPercent, 0) * relativeRisk;
+    const scaledDd = Math.min(99, asNumber(cachedSummary.maxDrawdownPercent, 0) * Math.max(0.05, relativeRisk * (0.7 + 0.3)));
+    const scaledPf = Math.max(0.15, asNumber(cachedSummary.profitFactor, 1) / Math.max(0.5, Math.sqrt(relativeRisk)));
+
+    preview = {
+      riskMultiplier,
+      sourceSystem: cachedPreview.sourceSystem || null,
+      summary: {
+        ...cachedSummary,
+        totalReturnPercent: Number(scaledRet.toFixed(3)),
+        maxDrawdownPercent: Number(scaledDd.toFixed(3)),
+        profitFactor: Number(scaledPf.toFixed(3)),
+        finalEquity: scaledFinalEquity,
+      },
+      period: cachedPreview.period || period,
+      equityCurve: scaledCurve,
+      blockedByPlan: false,
+    };
+  } else if (shouldRefreshPreview) {
     try {
       const sourceSystem = await ensurePublishedSourceSystem(tenantId);
       const previewResult = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
@@ -8326,14 +8478,14 @@ export const getAlgofundState = async (
         warmupBars: SAAS_PREVIEW_WARMUP_BARS,
         skipMissingSymbols: true,
         initialBalance: SAAS_ALGOFUND_BASELINE_INITIAL_BALANCE,
-        riskMultiplier,
+        riskMultiplier: 1, // Always cache at baseline risk=1 for fast scaling later
         commissionPercent: 0.1,
         slippagePercent: 0.05,
         fundingRatePercent: 0,
       });
 
       preview = {
-        riskMultiplier,
+        riskMultiplier: 1,
         sourceSystem,
         summary: {
           ...previewResult.summary,

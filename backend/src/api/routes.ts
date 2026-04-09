@@ -1403,7 +1403,9 @@ router.use('/analytics', analyticsRoutes);
 
 // Public routes for Backtest page (require Bearer token from frontend, but NOT the requirePlatformAdmin guard)
 // These endpoints are used by the dashboard's internal Backtest page
-router.get('/api-keys', async (req, res) => {
+// Require password auth for all dashboard-facing routes below
+
+router.get('/api-keys', authenticate, async (req, res) => {
   try {
     const { apiKeys } = await loadSettings();
     // Enrich with tenant info for Dashboard labels
@@ -1427,6 +1429,9 @@ router.get('/api-keys', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Require auth for all backtest routes
+router.use('/backtest', authenticate);
 
 router.get('/backtest/strategies/:apiKeyName', async (req, res) => {
   const { apiKeyName } = req.params;

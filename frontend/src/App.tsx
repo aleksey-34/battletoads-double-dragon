@@ -364,7 +364,7 @@ function AppWithProviders() {
     <ConfigProvider locale={antdLocale} theme={{
       algorithm: theme.darkAlgorithm,
       token: {
-        colorPrimary: '#4096ff',
+        colorPrimary: '#f5a623',
         colorBgBase: '#0a0a12',
         colorBgContainer: '#16162a',
         colorBgElevated: '#1c1c36',

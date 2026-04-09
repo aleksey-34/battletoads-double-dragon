@@ -558,6 +558,16 @@ const ClientCabinet: React.FC = () => {
   const strategyPreviewSummary = strategySelectionPreview?.preview?.summary || {};
   const strategyPreviewSeries = useMemo(() => toLineSeriesData(strategySelectionPreview?.preview?.equity), [strategySelectionPreview]);
   const algofundPreviewSeries = useMemo(() => toLineSeriesData(algofundWorkspace?.preview?.equityCurve), [algofundWorkspace]);
+
+  const algofundPreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!algofundWorkspace) return;
+    if (algofundPreviewTimerRef.current) clearTimeout(algofundPreviewTimerRef.current);
+    algofundPreviewTimerRef.current = setTimeout(() => { void refreshAlgofundState(); }, 600);
+    return () => { if (algofundPreviewTimerRef.current) clearTimeout(algofundPreviewTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [algofundRiskMultiplier]);
+
   const algofundPublishedSystemName = String((algofundWorkspace?.profile as any)?.published_system_name || '').trim();
   const algofundAssignedApiKey = String((algofundWorkspace?.profile as any)?.assigned_api_key_name || '').trim();
   const algofundAvailableSystems = Array.isArray(algofundWorkspace?.availableSystems) ? (algofundWorkspace?.availableSystems || []) : [];
@@ -998,7 +1008,11 @@ const ClientCabinet: React.FC = () => {
                   </Typography.Text>
                 ) : null}
                 <Row gutter={[12, 12]}>
-                  {strategyWorkspace.offers.map((offer) => (
+                  {[...strategyWorkspace.offers].sort((a, b) => {
+                    const aS = strategyOfferIds.includes(a.offerId) ? 0 : 1;
+                    const bS = strategyOfferIds.includes(b.offerId) ? 0 : 1;
+                    return aS - bS;
+                  }).map((offer) => (
                     <Col key={offer.offerId} xs={24} sm={12} md={8} xl={6}>
                       <Card size="small" bordered>
                         <Space direction="vertical" size={6} style={{ width: '100%' }}>
@@ -1032,9 +1046,9 @@ const ClientCabinet: React.FC = () => {
                             <Typography.Text type="secondary" style={{ fontSize: 11 }}>{offer.strategy.mode.toUpperCase()} • {offer.strategy.market}</Typography.Text>
                           </Space>
                           <Space size={4} wrap>
-                            <Tag color="green" style={{ fontSize: 11 }}>Ret {formatPercent(offer.metrics.ret)}</Tag>
-                            <Tag color="orange" style={{ fontSize: 11 }}>DD {formatPercent(offer.metrics.dd)}</Tag>
-                            <Tag color="blue" style={{ fontSize: 11 }}>PF {formatNumber(offer.metrics.pf)}</Tag>
+                            <Tag color="gold" style={{ fontSize: 11 }}>Ret {formatPercent(offer.metrics.ret)}</Tag>
+                            <Tag color="volcano" style={{ fontSize: 11 }}>DD {formatPercent(offer.metrics.dd)}</Tag>
+                            <Tag color="orange" style={{ fontSize: 11 }}>PF {formatNumber(offer.metrics.pf)}</Tag>
                             {offer.metrics.trades ? <Tag color="cyan" style={{ fontSize: 11 }}>{formatNumber(offer.metrics.trades, 0)} сд.</Tag> : null}
                           </Space>
                           {(() => {
@@ -1123,8 +1137,8 @@ const ClientCabinet: React.FC = () => {
                   ) : null}
                   <Row gutter={[12, 12]}>
                     {startBalance != null ? <Col xs={12} sm={6}><Statistic title="Старт. капитал" value={formatMoney(startBalance)} /></Col> : null}
-                    {endBalance != null ? <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(endBalance)} valueStyle={{ color: endBalance >= (startBalance || 0) ? '#52c41a' : '#ff4d4f' }} /></Col> : null}
-                    <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(offer.metrics.ret)} valueStyle={{ color: (offer.metrics.ret ?? 0) >= 0 ? '#52c41a' : '#ff4d4f' }} /></Col>
+                    {endBalance != null ? <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(endBalance)} valueStyle={{ color: endBalance >= (startBalance || 0) ? '#f5a623' : '#ff4d4f' }} /></Col> : null}
+                    <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(offer.metrics.ret)} valueStyle={{ color: (offer.metrics.ret ?? 0) >= 0 ? '#f5a623' : '#ff4d4f' }} /></Col>
                     <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(offer.metrics.dd)} valueStyle={{ color: '#ff7a45' }} /></Col>
                     <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(offer.metrics.pf)} /></Col>
                     {offer.metrics.trades ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(offer.metrics.trades, 0)} /></Col> : null}
@@ -1143,7 +1157,6 @@ const ClientCabinet: React.FC = () => {
                           </div>
                           <Space wrap>
                             <Button type="primary" loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>Сохранить</Button>
-                            <Button loading={actionLoading === 'strategy-preview'} onClick={() => void runStrategySelectionPreview()}>Пересчитать</Button>
                             <Button onClick={() => { setStrategyRiskInput(levelToSliderValue(strategyWorkspace?.profile?.risk_level || 'medium')); setStrategyTradeInput(levelToSliderValue(strategyWorkspace?.profile?.trade_frequency_level || 'medium')); }}>Дефолт</Button>
                           </Space>
                         </Space>
@@ -1364,7 +1377,7 @@ const ClientCabinet: React.FC = () => {
                         <Card
                           size="small"
                           bordered
-                          style={isCurrent ? { borderColor: '#52c41a', borderWidth: 2 } : undefined}
+                          style={isCurrent ? { borderColor: '#f5a623', borderWidth: 2 } : undefined}
                         >
                           <Space direction="vertical" size={6} style={{ width: '100%' }}>
                             <Space direction="vertical" size={0}>
@@ -1455,8 +1468,8 @@ const ClientCabinet: React.FC = () => {
                   {(snap || startBalance != null) ? (
                     <Row gutter={[12, 12]}>
                       {startBalance != null ? <Col xs={12} sm={6}><Statistic title="Старт. капитал" value={formatMoney(startBalance)} /></Col> : null}
-                      {endBalance != null ? <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(endBalance)} valueStyle={{ color: endBalance >= (startBalance || 0) ? '#52c41a' : '#ff4d4f' }} /></Col> : null}
-                      {snap ? <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(snap.ret)} valueStyle={{ color: snap.ret >= 0 ? '#52c41a' : '#ff4d4f' }} /></Col> : null}
+                      {endBalance != null ? <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(endBalance)} valueStyle={{ color: endBalance >= (startBalance || 0) ? '#f5a623' : '#ff4d4f' }} /></Col> : null}
+                      {snap ? <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(snap.ret)} valueStyle={{ color: snap.ret >= 0 ? '#f5a623' : '#ff4d4f' }} /></Col> : null}
                       {snap ? <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(snap.dd)} valueStyle={{ color: '#ff7a45' }} /></Col> : null}
                       {snap ? <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(snap.pf)} /></Col> : null}
                       {snap ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(snap.trades, 0)} /></Col> : null}
@@ -1472,14 +1485,11 @@ const ClientCabinet: React.FC = () => {
                         step={0.05}
                         value={algofundRiskMultiplier}
                         onChange={(v) => setAlgofundRiskMultiplier(Math.min(toFinite(v), toFinite(algofundWorkspace.plan?.risk_cap_max, 1)))}
-                        onAfterChange={() => void refreshAlgofundState()}
+                        onChangeComplete={() => void refreshAlgofundState()}
                       />
                       <Space wrap>
                         <Button type="primary" size="small" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
                           Сохранить риск
-                        </Button>
-                        <Button size="small" loading={actionLoading === 'algofund-refresh'} onClick={() => void refreshAlgofundState()}>
-                          Обновить предпросмотр
                         </Button>
                         <Button size="small" onClick={() => setAlgofundRiskMultiplier(toFinite(algofundWorkspace?.profile?.risk_multiplier, 1))}>
                           Дефолт
