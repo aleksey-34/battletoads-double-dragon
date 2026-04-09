@@ -1,8 +1,8 @@
-# BTDD Platform — Whitepaper v1.0
+# BTDD Platform — Whitepaper v1.1
 
 **Алгоритмическая торговля как сервис для криптовалютных рынков**
 
-*Апрель 2026*
+*Апрель 2026 (Обновлено v1.1)*
 
 ---
 
@@ -389,7 +389,16 @@ $$Drawdown(t) = \frac{Peak(t) - Equity(t)}{Peak(t)} \times 100\%$$
 **Контакты:**
 - **Email:** aiaetrade17@gmail.com
 - **Telegram:** @yakovbyakov
+- **Платформа:** https://btdd.trade
+- **Whitepaper (веб):** https://btdd.trade/whitepaper
+- **Telegram-канал:** https://t.me/BTDD_Live
+- **Telegram-чат:** https://t.me/BTDD_Discuss
+- **Medium:** https://medium.com/@foresterufa
+- **LinkedIn:** https://www.linkedin.com/in/alekseilazarev
+- **Threads:** https://www.threads.com/@foresterufa
 - **GitHub:** Приватный репозиторий (доступен по запросу для due diligence)
+
+**Инвестиционные запросы:** aiaetrade17@gmail.com — Seed-раунд открыт ($150K–$300K)
 
 ---
 
@@ -399,5 +408,5 @@ $$Drawdown(t) = \frac{Peak(t) - Equity(t)}{Peak(t)} \times 100\%$$
 
 ---
 
-*BTDD Platform Whitepaper v1.0 — Апрель 2026*
+*BTDD Platform Whitepaper v1.1 — Апрель 2026*
 *© 2026 BTDD Platform. Все права защищены.*

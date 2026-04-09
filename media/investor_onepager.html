@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTDD — Investor One-Pager</title>
+<style>
+  @media print { body { padding: 0; } .no-print { display: none; } }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #fff; color: #1a1a2e; max-width: 800px; margin: 0 auto; padding: 24px; }
+  .no-print { background: #e3f2fd; border: 1px solid #90caf9; border-radius: 8px; padding: 12px; margin-bottom: 20px; font-size: 13px; }
+  .header { text-align: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 3px solid #0a66c2; }
+  .header h1 { font-size: 28px; color: #0a66c2; margin-bottom: 4px; }
+  .header .tag { font-size: 14px; color: #555; }
+  .header .date { font-size: 11px; color: #999; margin-top: 4px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+  .section { border: 1px solid #e0e0e0; border-radius: 8px; padding: 14px; }
+  .section h2 { font-size: 13px; color: #0a66c2; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; border-bottom: 1px solid #e8f0fe; padding-bottom: 6px; }
+  .section p, .section li { font-size: 12px; line-height: 1.6; color: #333; }
+  .section ul { margin-left: 16px; }
+  .section li { margin-bottom: 3px; }
+  .metrics { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+  .metric { text-align: center; background: #f5f8ff; border-radius: 6px; padding: 8px 4px; }
+  .metric .val { font-size: 20px; font-weight: 700; color: #0a66c2; }
+  .metric .lbl { font-size: 9px; color: #777; text-transform: uppercase; }
+  .metric.green .val { color: #2e7d32; }
+  .metric.orange .val { color: #e65100; }
+  .full { grid-column: 1 / -1; }
+  .footer { text-align: center; margin-top: 16px; padding-top: 12px; border-top: 2px solid #0a66c2; font-size: 12px; color: #555; }
+  .footer a { color: #0a66c2; text-decoration: none; }
+  .highlight { background: #e8f5e9; border-radius: 4px; padding: 2px 6px; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="no-print">
+  ⚡ <strong>Инструкция</strong>: Ctrl+P → Save as PDF → Отправлять инвесторам. Одна страница A4.
+</div>
+
+<div class="header">
+  <h1>BTDD Platform</h1>
+  <div class="tag">Algorithmic Trading SaaS for Crypto Markets</div>
+  <div class="date">Seed Round · April 2026 · btdd.trade</div>
+</div>
+
+<!-- ROW 1: Problem + Solution -->
+<div class="grid">
+  <div class="section">
+    <h2>🔴 Problem</h2>
+    <ul>
+      <li>70-90% of retail crypto traders lose money</li>
+      <li>Trading bots are black boxes with fake backtests</li>
+      <li>No commission/slippage modeling in published results</li>
+      <li>Infrastructure gap: VPS, monitoring, multi-exchange</li>
+      <li>No transparent, validated algo trading for retail</li>
+    </ul>
+  </div>
+  <div class="section">
+    <h2>🟢 Solution</h2>
+    <ul>
+      <li>Transparent SaaS: every metric verifiable</li>
+      <li>9,108 backtests with real costs (0.12% + 0.03%)</li>
+      <li>3 strategy types incl. synthetic pair StatArb</li>
+      <li>Multi-tenant isolation, no fund custody</li>
+      <li>Client keeps funds on their exchange account</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ROW 2: Metrics -->
+<div class="grid">
+  <div class="section full">
+    <h2>📊 Validated Performance (Jan 2025 – Mar 2026, 4H, Bybit)</h2>
+    <div class="metrics">
+      <div class="metric green"><div class="val">+28.7%</div><div class="lbl">Portfolio Return</div></div>
+      <div class="metric"><div class="val">3.28</div><div class="lbl">Profit Factor</div></div>
+      <div class="metric orange"><div class="val">4.4%</div><div class="lbl">Max Drawdown</div></div>
+      <div class="metric"><div class="val">9,108</div><div class="lbl">Backtests</div></div>
+      <div class="metric"><div class="val">3,129</div><div class="lbl">Robust (34%)</div></div>
+      <div class="metric"><div class="val">6</div><div class="lbl">Exchanges Live</div></div>
+    </div>
+    <p style="margin-top:8px; font-size:10px; color:#999; text-align:center;">Past performance does not guarantee future results. Crypto derivatives carry high risk.</p>
+  </div>
+</div>
+
+<!-- ROW 3: Market + Business -->
+<div class="grid">
+  <div class="section">
+    <h2>📈 Market</h2>
+    <ul>
+      <li>Global algo trading: <span class="highlight">$21.6B → $31.8B</span> by 2028</li>
+      <li>Crypto algo sub-segment: >$5B potential ARR</li>
+      <li>Target: retail traders $1K-50K deposits</li>
+      <li>Key markets: CIS, Turkey, SEA</li>
+      <li>Bybit alone: $10B+ daily volume</li>
+    </ul>
+  </div>
+  <div class="section">
+    <h2>💰 Business Model</h2>
+    <ul>
+      <li><strong>SaaS</strong>: $49-499/mo subscriptions</li>
+      <li><strong>Algofund</strong>: 2%/mo mgmt + 20% perf fee</li>
+      <li><strong>Exchange rebates</strong>: API volume commissions</li>
+      <li>90% early adopter discount active</li>
+      <li>12 live offers in strategy catalog</li>
+    </ul>
+  </div>
+</div>
+
+<!-- ROW 4: Traction + Ask -->
+<div class="grid">
+  <div class="section">
+    <h2>✅ Traction</h2>
+    <ul>
+      <li>MVP <strong>live in production</strong></li>
+      <li>6 exchanges integrated (Bybit, MEXC, OKX, Gate.io, Bitget, WEEX)</li>
+      <li>9,108 backtests, 0 failures</li>
+      <li>62 API endpoints, 31 DB tables</li>
+      <li>Frontend: 3 languages (RU/EN/TR)</li>
+      <li>Whitepaper published (3 languages)</li>
+    </ul>
+  </div>
+  <div class="section">
+    <h2>🎯 The Ask</h2>
+    <p><strong>Seed Round: $150K – $300K</strong></p>
+    <ul>
+      <li>Marketing & acquisition — $30K</li>
+      <li>Exchange integrations (Binance+) — $50K</li>
+      <li>Legal & compliance — $20K</li>
+      <li>Infrastructure scaling — $20K/yr</li>
+    </ul>
+    <p style="margin-top:8px; font-size:11px;"><strong>Also seeking:</strong> exchange grants (Bybit Builder, OKX Ventures, Binance Labs)</p>
+  </div>
+</div>
+
+<!-- ROW 5: Competitive + Roadmap -->
+<div class="grid">
+  <div class="section">
+    <h2>⚔️ Competitive Edge</h2>
+    <ul>
+      <li>✅ Transparent backtests (vs black-box competitors)</li>
+      <li>✅ Synthetic pair StatArb (unique)</li>
+      <li>✅ Self-hosted / data sovereignty</li>
+      <li>✅ Algofund mode (vs trade-only platforms)</li>
+      <li>✅ Open research pipeline with sweep UI</li>
+    </ul>
+  </div>
+  <div class="section">
+    <h2>🗓 Roadmap 2026</h2>
+    <ul>
+      <li><strong>Q2:</strong> On-chain payments, walk-forward validation, Binance</li>
+      <li><strong>Q3:</strong> Market regime filter, OKX/Gate.io, TG alerts</li>
+      <li><strong>Q4:</strong> Mobile UI, copy-trading, public API, 50+ clients</li>
+      <li><strong>2027:</strong> $5M AUM, exchange builder programs</li>
+    </ul>
+  </div>
+</div>
+
+<div class="footer">
+  <strong>Aleksei Lazarev</strong> — Founder & Developer<br>
+  📩 <a href="mailto:aiaetrade17@gmail.com">aiaetrade17@gmail.com</a> · 
+  💬 TG: <a href="https://t.me/yakovbyakov">@yakovbyakov</a> · 
+  🌐 <a href="https://btdd.trade">btdd.trade</a> · 
+  📄 <a href="https://btdd.trade/whitepaper">Whitepaper</a>
+</div>
+
+</body>
+</html>

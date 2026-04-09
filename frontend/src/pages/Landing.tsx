@@ -815,6 +815,14 @@ export default function Landing() {
           <a href="/whitepaper" style={{ color: '#556677' }}>Whitepaper</a>
           <a href="/login" style={{ color: '#556677' }}>{tx.footerAdmin}</a>
         </div>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 20, flexWrap: 'wrap', marginTop: 16 }}>
+          <a href="https://t.me/BTDD_Live" target="_blank" rel="noopener noreferrer" style={{ color: '#556677', fontSize: 13 }}>📢 Telegram</a>
+          <a href="https://t.me/BTDD_Discuss" target="_blank" rel="noopener noreferrer" style={{ color: '#556677', fontSize: 13 }}>💬 Chat</a>
+          <a href="https://medium.com/@foresterufa" target="_blank" rel="noopener noreferrer" style={{ color: '#556677', fontSize: 13 }}>📝 Medium</a>
+          <a href="https://www.linkedin.com/in/alekseilazarev" target="_blank" rel="noopener noreferrer" style={{ color: '#556677', fontSize: 13 }}>💼 LinkedIn</a>
+          <a href="https://www.threads.com/@foresterufa" target="_blank" rel="noopener noreferrer" style={{ color: '#556677', fontSize: 13 }}>🧵 Threads</a>
+          <a href="mailto:aiaetrade17@gmail.com" style={{ color: '#556677', fontSize: 13 }}>📩 Email</a>
+        </div>
         <div style={{ marginTop: 16 }}>{tx.footerDisclaimer}</div>
       </footer>
     </div>

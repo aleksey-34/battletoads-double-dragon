@@ -1,8 +1,8 @@
-# BTDD Platform — Whitepaper v1.0
+# BTDD Platform — Whitepaper v1.1
 
 **Algorithmic Trading SaaS for Crypto Markets**
 
-*April 2026*
+*April 2026 (Updated v1.1)*
 
 ---
 
@@ -415,7 +415,16 @@ The robustness filter requires a minimum of 40 trades to ensure statistical sign
 **Contact:**
 - **Email:** aiaetrade17@gmail.com
 - **Telegram:** @yakovbyakov
+- **Platform:** https://btdd.trade
+- **Whitepaper (web):** https://btdd.trade/whitepaper
+- **Telegram Channel:** https://t.me/BTDD_Live
+- **Telegram Chat:** https://t.me/BTDD_Discuss
+- **Medium:** https://medium.com/@foresterufa
+- **LinkedIn:** https://www.linkedin.com/in/alekseilazarev
+- **Threads:** https://www.threads.com/@foresterufa
 - **GitHub:** Private repository (available upon request for due diligence)
+
+**Investment inquiries:** aiaetrade17@gmail.com — Seed round open ($150K–$300K)
 
 ---
 
@@ -425,5 +434,5 @@ Past performance does not guarantee future results. All metrics presented are ba
 
 ---
 
-*BTDD Platform Whitepaper v1.0 — April 2026*
+*BTDD Platform Whitepaper v1.1 — April 2026*
 *© 2026 BTDD Platform. All rights reserved.*

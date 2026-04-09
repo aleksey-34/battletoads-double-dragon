@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>BTDD — Logos for Telegram</title>
+<style>
+  body { font-family: -apple-system, sans-serif; background: #1a1a2e; color: #fff; padding: 40px; text-align: center; }
+  h1 { color: #64b5f6; margin-bottom: 8px; }
+  .subtitle { color: #8899a6; font-size: 13px; margin-bottom: 40px; }
+  .logo-block { display: inline-block; margin: 20px 40px; vertical-align: top; }
+  .logo-block h2 { color: #f5c518; font-size: 14px; margin-bottom: 12px; }
+  .hint { color: #8899a6; font-size: 11px; margin-top: 8px; }
+  .save-hint { background: #253341; border-radius: 8px; padding: 12px 20px; margin: 30px auto; max-width: 500px; font-size: 12px; color: #b0bec5; }
+</style>
+</head>
+<body>
+
+<h1>BTDD Telegram Logos</h1>
+<p class="subtitle">ПКМ на картинке → "Сохранить изображение как..." → загрузить в TG настройки группы/канала</p>
+
+<div class="save-hint">
+  📐 Размер: 640×640px — оптимально для TG аватарок.<br>
+  💡 Канал (BTDD_Live) — синий с графиком, Чат (BTDD_Discuss) — зелёный с пузырём.
+</div>
+
+<!-- ===== CHANNEL LOGO ===== -->
+<div class="logo-block">
+<h2>📢 Канал t.me/BTDD_Live</h2>
+<svg width="640" height="640" viewBox="0 0 640 640" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg-ch" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a1628"/>
+      <stop offset="100%" stop-color="#1a2a4a"/>
+    </linearGradient>
+    <linearGradient id="line-ch" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#2196f3"/>
+      <stop offset="100%" stop-color="#4fc3f7"/>
+    </linearGradient>
+    <linearGradient id="glow" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#4fc3f7" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#4fc3f7" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="320" cy="320" r="320" fill="url(#bg-ch)"/>
+  
+  <!-- Subtle grid -->
+  <line x1="120" y1="200" x2="120" y2="480" stroke="#1a3050" stroke-width="1"/>
+  <line x1="220" y1="200" x2="220" y2="480" stroke="#1a3050" stroke-width="1"/>
+  <line x1="320" y1="200" x2="320" y2="480" stroke="#1a3050" stroke-width="1"/>
+  <line x1="420" y1="200" x2="420" y2="480" stroke="#1a3050" stroke-width="1"/>
+  <line x1="520" y1="200" x2="520" y2="480" stroke="#1a3050" stroke-width="1"/>
+  <line x1="120" y1="280" x2="520" y2="280" stroke="#1a3050" stroke-width="1"/>
+  <line x1="120" y1="360" x2="520" y2="360" stroke="#1a3050" stroke-width="1"/>
+  <line x1="120" y1="440" x2="520" y2="440" stroke="#1a3050" stroke-width="1"/>
+  
+  <!-- Equity curve glow -->
+  <path d="M120,420 L180,410 L220,390 L260,400 L300,350 L340,320 L380,280 L420,260 L460,230 L520,200" 
+        fill="none" stroke="url(#glow)" stroke-width="40" stroke-linecap="round" stroke-linejoin="round" opacity="0.4"/>
+  
+  <!-- Equity curve -->
+  <path d="M120,420 L180,410 L220,390 L260,400 L300,350 L340,320 L380,280 L420,260 L460,230 L520,200" 
+        fill="none" stroke="url(#line-ch)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- Dot at end -->
+  <circle cx="520" cy="200" r="10" fill="#4fc3f7"/>
+  <circle cx="520" cy="200" r="16" fill="none" stroke="#4fc3f7" stroke-width="2" opacity="0.4"/>
+  
+  <!-- Arrow up -->
+  <polygon points="510,170 520,148 530,170" fill="#4caf50" opacity="0.9"/>
+  
+  <!-- BTDD text -->
+  <text x="320" y="540" text-anchor="middle" fill="#fff" font-size="72" font-weight="800" font-family="Arial, sans-serif" letter-spacing="8">BTDD</text>
+  
+  <!-- Subtitle -->
+  <text x="320" y="580" text-anchor="middle" fill="#4fc3f7" font-size="22" font-weight="500" font-family="Arial, sans-serif" letter-spacing="3">ALGO TRADING</text>
+</svg>
+<p class="hint">Синий — канал с новостями и обновлениями</p>
+</div>
+
+<!-- ===== CHAT LOGO ===== -->
+<div class="logo-block">
+<h2>💬 Чат t.me/BTDD_Discuss</h2>
+<svg width="640" height="640" viewBox="0 0 640 640" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg-chat" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0a2818"/>
+      <stop offset="100%" stop-color="#1a3a2a"/>
+    </linearGradient>
+    <linearGradient id="bubble" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#2e7d32"/>
+      <stop offset="100%" stop-color="#4caf50"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="320" cy="320" r="320" fill="url(#bg-chat)"/>
+  
+  <!-- Chat bubble 1 (left, darker) -->
+  <rect x="140" y="180" width="220" height="70" rx="20" fill="#1c3a28" stroke="#2e7d32" stroke-width="2"/>
+  <text x="250" y="222" text-anchor="middle" fill="#66bb6a" font-size="22" font-family="Arial, sans-serif">+28.7% ✓</text>
+  
+  <!-- Chat bubble 2 (right, accent) -->
+  <rect x="280" y="270" width="220" height="70" rx="20" fill="url(#bubble)"/>
+  <polygon points="290,340 280,360 310,340" fill="#4caf50"/>
+  <text x="390" y="312" text-anchor="middle" fill="#fff" font-size="22" font-family="Arial, sans-serif">PF 3.28 📈</text>
+  
+  <!-- Chat bubble 3 (left) -->
+  <rect x="140" y="360" width="250" height="70" rx="20" fill="#1c3a28" stroke="#2e7d32" stroke-width="2"/>
+  <text x="265" y="402" text-anchor="middle" fill="#66bb6a" font-size="22" font-family="Arial, sans-serif">DD 4.4% only 🛡</text>
+  
+  <!-- BTDD text -->
+  <text x="320" y="520" text-anchor="middle" fill="#fff" font-size="72" font-weight="800" font-family="Arial, sans-serif" letter-spacing="8">BTDD</text>
+  
+  <!-- Subtitle -->
+  <text x="320" y="560" text-anchor="middle" fill="#66bb6a" font-size="22" font-weight="500" font-family="Arial, sans-serif" letter-spacing="3">COMMUNITY</text>
+</svg>
+<p class="hint">Зелёный — чат для обсуждений и вопросов</p>
+</div>
+
+</body>
+</html>

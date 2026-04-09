@@ -247,7 +247,7 @@ function AppShell() {
     <Layout style={{ minHeight: '100vh' }} className="app-root-layout">
       <Header style={{ color: 'white', paddingInline: 16 }}>
         <div className="app-header-row">
-          <Space size={10} align="center">
+          <Space size={10} align="center" style={{ cursor: 'pointer' }} onClick={() => navigate('/')}>
             <img src="/favicon.svg" alt="BattleToads icon" style={{ width: 22, height: 22, display: 'block' }} />
             <Typography.Text className="app-brand-title">{t('app.title', 'BattleToads Control')}</Typography.Text>
           </Space>

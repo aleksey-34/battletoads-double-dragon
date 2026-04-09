@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTDD — Threads Posts</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #000; color: #f5f5f5; padding: 20px; max-width: 500px; margin: 0 auto; }
+  h1 { text-align: center; margin-bottom: 8px; font-size: 20px; }
+  .subtitle { text-align: center; color: #777; font-size: 12px; margin-bottom: 20px; }
+  .card { background: #1a1a1a; border-radius: 16px; padding: 16px; margin-bottom: 12px; border: 1px solid #333; }
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .card-num { font-size: 11px; color: #777; }
+  .chars { font-size: 10px; color: #555; }
+  .post-text { white-space: pre-wrap; font-size: 15px; line-height: 1.5; }
+  .copy-btn { display: block; width: 100%; margin-top: 10px; padding: 8px; background: #333; color: #fff; border: 1px solid #444; border-radius: 12px; cursor: pointer; font-size: 13px; }
+  .copy-btn:hover { background: #444; }
+  .copy-btn.copied { background: #1b5e20; border-color: #2e7d32; }
+  .note { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 12px; margin-bottom: 20px; font-size: 12px; color: #999; }
+</style>
+</head>
+<body>
+
+<h1>🧵 BTDD Threads Posts</h1>
+<p class="subtitle">threads.com/@foresterufa — 7 постов. Макс ~500 символов каждый.</p>
+
+<div class="note">
+  <strong>Совет:</strong> Threads — короткие, провокационные тексты. Публикуй 1-2 в день. К 2-3 постам можно прикрепить инфографику (скриншот из telegram_infographics.html).
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">1/7</span><span class="chars">Launch</span></div>
+  <div class="post-text" id="th-1">Built an algo trading platform. Ran 9,108 backtests. 3,129 passed robustness filters.
+
+Most "profitable bots" can't survive a proper backtest with real commissions. Ours can.
+
++28.7% return, 4.4% max drawdown, 15 months of data.
+
+btdd.trade</div>
+  <button class="copy-btn" onclick="cp('th-1',this)">📋 Copy</button>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">2/7</span><span class="chars">Problem</span></div>
+  <div class="post-text" id="th-2">The scariest stat in crypto: 70-90% of retail traders lose money.
+
+Not because markets are random — because humans are emotional.
+
+We panic-sell at the bottom. We revenge-trade after losses. We hold losers and cut winners.
+
+That's why we automate everything. Zero emotion, pure math.</div>
+  <button class="copy-btn" onclick="cp('th-2',this)">📋 Copy</button>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">3/7</span><span class="chars">Hot take</span></div>
+  <div class="post-text" id="th-3">Hot take: if your trading bot doesn't include commission and slippage in backtests, its results are fiction.
+
+We model 0.12% round-trip + 0.03% slippage on every single trade. That's why only 34% of our strategies pass robustness filters.
+
+The other 66%? Garbage in, garbage out.</div>
+  <button class="copy-btn" onclick="cp('th-3',this)">📋 Copy</button>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">4/7</span><span class="chars">StatArb</span></div>
+  <div class="post-text" id="th-4">What if you could pair-trade two crypto assets as one synthetic instrument?
+
+VETUSDT/GRTUSDT → statistical arbitrage → market-neutral returns.
+
+Don't need to predict if Bitcoin goes up or down. Just need two assets to revert to their mean.
+
+That's what hedge funds do. Now we do it too. btdd.trade</div>
+  <button class="copy-btn" onclick="cp('th-4',this)">📋 Copy</button>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">5/7</span><span class="chars">Numbers</span></div>
+  <div class="post-text" id="th-5">Portfolio stats, 15 months, with real costs:
+
++28.7% return
+3.28 profit factor
+4.4% max drawdown
+416 trades
+6 uncorrelated strategies
+
+Every number includes commissions and slippage. No cherry-picking.
+
+Not financial advice. But the math is public. btdd.trade/whitepaper</div>
+  <button class="copy-btn" onclick="cp('th-5',this)">📋 Copy</button>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">6/7</span><span class="chars">CTA</span></div>
+  <div class="post-text" id="th-6">Looking for early adopters. 90% discount for first 100 users.
+
+You keep your money on your exchange account. We just run the algorithms on your behalf. API key with no withdrawal rights.
+
+10 minutes to set up. 6 exchanges supported.
+
+btdd.trade</div>
+  <button class="copy-btn" onclick="cp('th-6',this)">📋 Copy</button>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">7/7</span><span class="chars">Investment</span></div>
+  <div class="post-text" id="th-7">Open for seed investment. Working product, not a pitch deck.
+
+$150-300K round. Global algo trading market hits $31.8B by 2028.
+
+We have: live platform, 9K+ backtests, 6 exchanges, multi-tenant SaaS, 3 languages.
+
+DM or email aiaetrade17@gmail.com</div>
+  <button class="copy-btn" onclick="cp('th-7',this)">📋 Copy</button>
+</div>
+
+<script>
+function cp(id, btn) {
+  navigator.clipboard.writeText(document.getElementById(id).innerText).then(() => {
+    btn.textContent = '✅ Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+</script>
+
+</body>
+</html>

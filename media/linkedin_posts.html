@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTDD — LinkedIn Posts</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f2ef; color: #000; padding: 20px; max-width: 560px; margin: 0 auto; }
+  h1 { text-align: center; margin-bottom: 8px; font-size: 20px; color: #0a66c2; }
+  .subtitle { text-align: center; color: #666; font-size: 12px; margin-bottom: 20px; }
+  .card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.05); }
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .card-num { font-size: 12px; color: #666; font-weight: 600; }
+  .card-tag { font-size: 10px; background: #e8f0fe; color: #0a66c2; padding: 2px 8px; border-radius: 10px; }
+  .post-text { white-space: pre-wrap; font-size: 14px; line-height: 1.5; color: #333; }
+  .copy-btn { display: block; width: 100%; margin-top: 10px; padding: 8px; background: #0a66c2; color: #fff; border: none; border-radius: 20px; cursor: pointer; font-size: 13px; }
+  .copy-btn:hover { background: #004182; }
+  .copy-btn.copied { background: #057642; }
+  .note { background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-bottom: 20px; font-size: 12px; color: #664d03; }
+</style>
+</head>
+<body>
+
+<h1>💼 BTDD LinkedIn Posts</h1>
+<p class="subtitle">linkedin.com/in/alekseilazarev — 5 постов. Копируй → Вставляй в LinkedIn</p>
+
+<div class="note">
+  <strong>Совет:</strong> LinkedIn лучше работает с текстом 1200-1500 знаков. К каждому посту прикрепи инфографику из media/telegram_infographics.html (подходят и для LinkedIn). Публикуй с интервалом 2-3 дня.
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-num">Post 1 — Launch</span>
+    <span class="card-tag">Week 1</span>
+  </div>
+  <div class="post-text" id="li-1">After 6 months of building, I'm launching BTDD Platform — an algorithmic trading SaaS for crypto markets.
+
+The problem we solve: retail traders lose 70-90% of their capital due to emotional trading and lack of validated strategies. Most "bots" on the market are black boxes with cherry-picked results.
+
+What we built:
+🔹 9,108 historical backtests with full transparency (commissions, slippage, no lookahead bias)
+🔹 3 strategy types including synthetic pair statistical arbitrage
+🔹 6 exchanges connected (Bybit, MEXC, OKX, Gate.io, Bitget, WEEX)
+🔹 Multi-tenant SaaS with client isolation
+🔹 Portfolio return: +28.7% at 4.4% max drawdown (15-month backtest)
+
+The platform is live and accepting early adopters with 90% discount.
+
+Full whitepaper: btdd.trade/whitepaper
+
+📊 Past performance does not guarantee future results.
+
+#AlgoTrading #Fintech #SaaS #Crypto #Startup #TradingBot</div>
+  <button class="copy-btn" onclick="copyPost('li-1', this)">📋 Copy</button>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-num">Post 2 — Transparency</span>
+    <span class="card-tag">Week 1</span>
+  </div>
+  <div class="post-text" id="li-2">Why most algo trading platforms are lying to you.
+
+The dirty secret of the trading bot industry: 90%+ of published "profitable" strategies have one or more of these issues:
+
+❌ No commission modeling (0.12% round-trip eats most small gains)
+❌ Lookahead bias in signal generation
+❌ Survivorship bias — only winning strategies shown
+❌ Curve fitting to historical data without out-of-sample validation
+
+At BTDD Platform, every published metric includes:
+✅ 0.12% round-trip commission
+✅ 0.03% slippage modeling
+✅ Sequential bar processing (no future data)
+✅ Full parameter-to-result traceability
+
+That's 9,108 backtests. Zero cherry-picking. 34% pass rate through robustness filters.
+
+If you can't verify the numbers, you can't trust the platform.
+
+btdd.trade/whitepaper
+
+#Transparency #AlgoTrading #CryptoTrading #Fintech</div>
+  <button class="copy-btn" onclick="copyPost('li-2', this)">📋 Copy</button>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-num">Post 3 — Partnerships</span>
+    <span class="card-tag">Week 2</span>
+  </div>
+  <div class="post-text" id="li-3">Looking for crypto exchange partnerships 🤝
+
+BTDD Platform is an algorithmic trading SaaS currently live in production with 6 exchange integrations. We're seeking grants and strategic partnerships:
+
+What we bring:
+✅ Working product with validated strategies
+✅ Transparent methodology (9,108 backtests, full whitepaper published)
+✅ Multi-tenant SaaS ready for B2C scale
+✅ 3 languages (RU/EN/TR)
+
+What we're looking for:
+🔹 Bybit Builder Grant
+🔹 OKX Ventures Integration Grant
+🔹 Binance Labs BUIDL program
+🔹 API volume rebate partnerships
+🔹 Co-marketing for client acquisition
+
+If you're connected to exchange developer programs or partnership teams — I'd love to chat.
+
+📩 aiaetrade17@gmail.com
+💬 Telegram: @yakovbyakov
+
+#CryptoExchange #Partnership #Startup #Bybit #OKX #Binance</div>
+  <button class="copy-btn" onclick="copyPost('li-3', this)">📋 Copy</button>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-num">Post 4 — Technical</span>
+    <span class="card-tag">Week 3</span>
+  </div>
+  <div class="post-text" id="li-4">Building a research pipeline that processes 9,108 parameter combinations in a single sweep.
+
+Here's the engineering behind BTDD Platform's strategy validation:
+
+🔧 Stack: Node.js + TypeScript backend, React + Ant Design frontend
+📊 Grid search across 20+ hyperparameters per strategy type
+🔍 Robustness filters: PF>1.5, DD<10%, WR>30%, min 50 trades
+💾 Checkpoint/resume for long-running sweeps
+🏗 3-circuit architecture: Runtime (live trading) / Research (backtesting) / Client (SaaS dashboard)
+
+The key design decision: complete isolation between circuits. The research engine can run hours-long sweeps without affecting a single live trade. Each has its own SQLite database and process.
+
+Result: 3,129 robust candidates from 9,108 total runs (34% pass rate). These form the candidate pool for live client portfolios.
+
+Full architecture details in our whitepaper → btdd.trade/whitepaper
+
+#Engineering #Backtesting #QuantTrading #TypeScript #SaaS</div>
+  <button class="copy-btn" onclick="copyPost('li-4', this)">📋 Copy</button>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-num">Post 5 — Investment</span>
+    <span class="card-tag">Week 3</span>
+  </div>
+  <div class="post-text" id="li-5">BTDD Platform is open for seed investment.
+
+✅ What's done:
+• MVP in production — live trading active
+• 6 exchange integrations (Bybit, MEXC, OKX, Gate.io, Bitget, WEEX)
+• 9,108 validated backtests with institutional methodology
+• Multi-tenant SaaS architecture (31 DB tables, 62 API endpoints)
+• Client cabinet in 3 languages (RU/EN/TR)
+• 90% early adopter discount driving first users
+
+📊 Market opportunity:
+Global algo trading: $21.6B (2024) → $31.8B (2028), CAGR ~10%
+Crypto algo sub-segment: >$5B potential ARR
+
+🎯 What we're raising:
+Seed round: $150K — $300K
+Use: marketing ($30K), exchange integrations ($50K), compliance ($20K), infrastructure ($20K/yr)
+
+This is a working product, not a presentation. Every metric is published in our whitepaper.
+
+Interested? Let's talk.
+
+📩 aiaetrade17@gmail.com
+💬 @yakovbyakov
+🌐 btdd.trade
+
+#Seed #Investment #Fintech #Crypto #Startup #AngelInvesting</div>
+  <button class="copy-btn" onclick="copyPost('li-5', this)">📋 Copy</button>
+</div>
+
+<script>
+function copyPost(id, btn) {
+  const text = document.getElementById(id).innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✅ Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Copy'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+</script>
+
+</body>
+</html>

@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTDD — Telegram Posts (t.me/BTDD_Live)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0e1621; color: #e4ecf2; padding: 20px; max-width: 600px; margin: 0 auto; }
+  h1 { text-align: center; margin-bottom: 8px; font-size: 22px; color: #64b5f6; }
+  .subtitle { text-align: center; color: #8899a6; margin-bottom: 24px; font-size: 13px; }
+  .nav { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 20px; justify-content: center; }
+  .nav a { background: #1c2733; color: #64b5f6; padding: 4px 8px; border-radius: 6px; text-decoration: none; font-size: 11px; }
+  .nav a:hover { background: #253341; }
+  .card { background: #17212b; border-radius: 12px; padding: 16px; margin-bottom: 16px; position: relative; border-left: 3px solid #64b5f6; }
+  .card.pin { border-left-color: #f5c518; background: #1a2530; }
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .card-num { font-size: 11px; color: #8899a6; font-weight: 600; }
+  .card-tag { font-size: 10px; background: #253341; color: #64b5f6; padding: 2px 8px; border-radius: 10px; }
+  .card.pin .card-tag { background: #3a3000; color: #f5c518; }
+  .post-text { white-space: pre-wrap; font-size: 14px; line-height: 1.6; }
+  .copy-btn { display: block; width: 100%; margin-top: 12px; padding: 8px; background: #253341; color: #64b5f6; border: 1px solid #364759; border-radius: 8px; cursor: pointer; font-size: 13px; transition: all .15s; }
+  .copy-btn:hover { background: #2d4a5e; }
+  .copy-btn.copied { background: #1b5e20; color: #a5d6a7; border-color: #2e7d32; }
+  .section-title { color: #f5c518; font-size: 14px; text-align: center; margin: 24px 0 12px; text-transform: uppercase; letter-spacing: 2px; }
+  .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 20px; }
+  .stat-box { background: #1c2733; border-radius: 8px; padding: 10px; text-align: center; }
+  .stat-val { font-size: 20px; font-weight: 700; color: #64b5f6; }
+  .stat-lbl { font-size: 11px; color: #8899a6; }
+</style>
+</head>
+<body>
+
+<h1>📨 BTDD Telegram Posts</h1>
+<p class="subtitle">t.me/BTDD_Live — 20 постов + закреп. Нажми "Копировать" → вставь в TG</p>
+
+<div class="stats">
+  <div class="stat-box"><div class="stat-val">21</div><div class="stat-lbl">постов готово</div></div>
+  <div class="stat-box"><div class="stat-val">~4 нед</div><div class="stat-lbl">контент-план</div></div>
+</div>
+
+<div class="nav">
+  <a href="#pin">📌 Pin</a>
+  <a href="#p1">1</a><a href="#p2">2</a><a href="#p3">3</a><a href="#p4">4</a><a href="#p5">5</a>
+  <a href="#p6">6</a><a href="#p7">7</a><a href="#p8">8</a><a href="#p9">9</a><a href="#p10">10</a>
+  <a href="#p11">11</a><a href="#p12">12</a><a href="#p13">13</a><a href="#p14">14</a><a href="#p15">15</a>
+  <a href="#p16">16</a><a href="#p17">17</a><a href="#p18">18</a><a href="#p19">19</a><a href="#p20">20</a>
+</div>
+
+<!-- ===== PINNED ===== -->
+<div class="section-title">📌 Закреплённый пост</div>
+
+<div class="card pin" id="pin">
+  <div class="card-header">
+    <span class="card-num">PIN</span>
+    <span class="card-tag">📌 Закрепить</span>
+  </div>
+  <div class="post-text" id="text-pin">📌 BTDD Platform — Algorithmic Trading SaaS
+
+Мы строим платформу алгоритмической торговли для крипто-рынков.
+
+🔹 9 108 проведённых бэктестов
+🔹 3 129 робастных стратегий
+🔹 6 бирж подключено (Bybit, MEXC, WEEX, OKX, Bitget, Gate.io)
+🔹 +28.7% портфельная доходность при 4.4% Max DD
+
+📄 Whitepaper: https://btdd.trade/whitepaper
+💬 Чат: https://t.me/BTDD_Discuss
+🌐 Платформа: https://btdd.trade
+
+#BTDD #AlgoTrading #CryptoSaaS</div>
+  <button class="copy-btn" onclick="copyPost('text-pin', this)">📋 Копировать</button>
+</div>
+
+<!-- ===== WEEK 1 ===== -->
+<div class="section-title">Неделя 1 — Запуск и основы</div>
+
+<div class="card" id="p1">
+  <div class="card-header">
+    <span class="card-num">Пост 1</span>
+    <span class="card-tag">Запуск</span>
+  </div>
+  <div class="post-text" id="text-1">🚀 BTDD Platform запущена!
+
+После 6 месяцев разработки наша платформа алгоритмической торговли криптовалютами работает в production и принимает первых клиентов.
+
+Что уже работает:
+• Торговый движок с 3 типами стратегий
+• Мультитенантная SaaS-архитектура
+• Клиентский кабинет (RU/EN/TR)
+• Подключение к 6 биржам через API
+
+Подробнее в whitepaper → https://btdd.trade/whitepaper
+
+#BTDD #AlgoTrading #Crypto #Launch</div>
+  <button class="copy-btn" onclick="copyPost('text-1', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p2">
+  <div class="card-header">
+    <span class="card-num">Пост 2</span>
+    <span class="card-tag">Проблема</span>
+  </div>
+  <div class="post-text" id="text-2">📊 Почему 90% ретейл-трейдеров теряют деньги?
+
+• Эмоции побеждают логику
+• Нет валидации стратегий
+• Нет дисциплины исполнения
+• Каждая биржа — свои правила и лимиты
+• «Прибыльные боты» из интернета — фикция без учёта комиссий
+
+BTDD решает эти проблемы через автоматизацию: только проверенные стратегии, портфельный подход, автоматическое исполнение на вашем биржевом аккаунте.
+
+Ваши деньги остаются у вас. Мы управляем алгоритмами.
+
+#CryptoTrading #AlgoTrading #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-2', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p3">
+  <div class="card-header">
+    <span class="card-num">Пост 3</span>
+    <span class="card-tag">Research</span>
+  </div>
+  <div class="post-text" id="text-3">🔬 9 108 бэктестов. 0 ошибок. 3 129 робастных кандидатов.
+
+Наша research-платформа проводит параметрический sweep по тысячам комбинаций:
+
+• Комиссии 0.12% (вход + выход) включены в каждый тест
+• Проскальзывание 0.03% смоделировано
+• Нет lookahead bias — каждый бар обрабатывается последовательно
+• Checkpoint/resume при длинных прогонах
+
+Фильтрация на робастность: PF > 1.5, DD < 10%, WR > 30%, минимум 50 сделок.
+
+Только 34% стратегий проходят — остальные отсеиваются. Каждая стратегия в каталоге — проверенная, не подогнанная под историю.
+
+#Backtesting #QuantTrading #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-3', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p4">
+  <div class="card-header">
+    <span class="card-num">Пост 4</span>
+    <span class="card-tag">Стратегии</span>
+  </div>
+  <div class="post-text" id="text-4">🤖 3 типа стратегий в BTDD
+
+1️⃣ DoubleDragon Breakout
+Пробой канала Дончиана с trailing take-profit. Ловит тренды на ранней стадии.
+
+2️⃣ StatArb Z-Score
+Парный трейдинг синтетическими инструментами. Рыночно-нейтральная стратегия — зарабатывает на расхождении двух коррелированных активов.
+
+3️⃣ ZigZag Breakout
+Breakout от экстремумов ZigZag-паттерна. Работает на моно-парах.
+
+Портфель строится из некоррелированных стратегий на разных рынках и таймфреймах — это снижает общую просадку.
+
+#TradingStrategies #StatArb #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-4', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p5">
+  <div class="card-header">
+    <span class="card-num">Пост 5</span>
+    <span class="card-tag">Результаты</span>
+  </div>
+  <div class="post-text" id="text-5">📈 Портфельный бэктест: результаты
+
+Период: Январь 2025 — Март 2026 (15 мес, 4h, Bybit)
+
+• Доходность: +28.7%
+• Profit Factor: 3.28
+• Max Drawdown: 4.4%
+• Сделки: 416
+• Win Rate: 43.75%
+
+Портфель из 6 стратегий, 4 инструмента, низкая корреляция между участниками.
+
+Все метрики — с учётом комиссий и проскальзывания. Никаких скрытых условий.
+
+⚠️ Прошлые результаты не являются гарантией будущей доходности.
+
+#Performance #CryptoPortfolio #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-5', this)">📋 Копировать</button>
+</div>
+
+<!-- ===== WEEK 2 ===== -->
+<div class="section-title">Неделя 2 — Как устроена платформа</div>
+
+<div class="card" id="p6">
+  <div class="card-header">
+    <span class="card-num">Пост 6</span>
+    <span class="card-tag">Архитектура</span>
+  </div>
+  <div class="post-text" id="text-6">🏗 Как устроена BTDD Platform
+
+Три независимых контура:
+
+🔴 Runtime — live торговля в изолированном процессе. Продолжает работать даже при рестарте остальных компонентов.
+
+🔵 Research — backtesting, sweep-оптимизация, фильтрация. Тяжёлые вычисления не мешают торговле.
+
+🟢 Client — кабинет, dashboard, мониторинг, статистика.
+
+Стек: React + TypeScript / Node.js + Express / SQLite / ccxt
+6 бирж, multi-tenant изоляция, Cloudflare защита.
+
+#Architecture #TechStack #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-6', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p7">
+  <div class="card-header">
+    <span class="card-num">Пост 7</span>
+    <span class="card-tag">Клиенты</span>
+  </div>
+  <div class="post-text" id="text-7">👥 3 режима для разных типов клиентов
+
+💼 Алгофонд
+Для пассивного инвестора. Подключаешь API-ключ, мы управляем портфелем. Видишь эквити, статистику, можешь запросить стоп в любой момент.
+
+📊 Стратегии
+Для продвинутого трейдера. Подключаешь свой API-ключ, выбираешь стратегии из каталога, настраиваешь параметры риска самостоятельно.
+
+🏢 Enterprise
+Для управляющих и партнёров. Полный контроль платформы, собственный research, white label.
+
+Каждый клиент работает в изолированной среде — нет пересечений данных между аккаунтами.
+
+#SaaS #CryptoInvesting #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-7', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p8">
+  <div class="card-header">
+    <span class="card-num">Пост 8</span>
+    <span class="card-tag">Безопасность</span>
+  </div>
+  <div class="post-text" id="text-8">🛡 Риск-менеджмент и безопасность
+
+• Изолированные API-ключи (1 ключ = 1 клиент)
+• API-ключи без права на вывод средств
+• Per-client параметры риска
+• Аварийное закрытие позиций при превышении DD
+• Max drawdown лимиты
+• Audit log всех действий
+• AES-256 шифрование ключей
+• Cloudflare protection
+
+Ваши деньги на вашей биржевой учётке. Мы не имеем физического доступа к выводу средств. Никогда.
+
+#Security #RiskManagement #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-8', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p9">
+  <div class="card-header">
+    <span class="card-num">Пост 9</span>
+    <span class="card-tag">Биржи</span>
+  </div>
+  <div class="post-text" id="text-9">🌐 6 бирж подключены к BTDD
+
+✅ Bybit — основная биржа
+✅ MEXC
+✅ WEEX
+✅ OKX
+✅ Bitget
+✅ Gate.io
+
+🔜 На очереди: Binance, KuCoin
+
+Через BTDD управляешь стратегиями на нескольких биржах из одного кабинета. Один интерфейс — все биржи.
+
+Подключение через стандартный API с read/trade правами. Без права на вывод.
+
+#MultiExchange #Bybit #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-9', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p10">
+  <div class="card-header">
+    <span class="card-num">Пост 10</span>
+    <span class="card-tag">Прозрачность</span>
+  </div>
+  <div class="post-text" id="text-10">🔍 Почему мы за прозрачность
+
+Большинство торговых ботов — чёрные ящики:
+❌ Нет информации о параметрах
+❌ Нет бэктестов с комиссиями
+❌ «Красивые» графики без реальной верификации
+
+BTDD публикует:
+✅ Полные параметры каждой стратегии
+✅ Историю бэктеста с комиссиями и проскальзыванием
+✅ Реальная доходность vs бэктест (drift-мониторинг)
+✅ Whitepaper с техническими деталями
+
+Не верьте на слово — проверяйте.
+
+📄 Whitepaper → https://btdd.trade/whitepaper
+
+#Transparency #OpenFinance #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-10', this)">📋 Копировать</button>
+</div>
+
+<!-- ===== WEEK 3 ===== -->
+<div class="section-title">Неделя 3 — Продукт и детали</div>
+
+<div class="card" id="p11">
+  <div class="card-header">
+    <span class="card-num">Пост 11</span>
+    <span class="card-tag">Тарифы</span>
+  </div>
+  <div class="post-text" id="text-11">💎 Тарифные планы BTDD
+
+🟢 Starter — $49/мес
+1 биржа, 3 стратегии, до $5K депозит
+
+🔵 Pro — $149/мес
+3 биржи, 10 стратегий, до $50K депозит
+
+🟣 Enterprise — $499+/мес
+Без лимитов, приоритетная поддержка
+
+💰 Алгофонд: 2%/мес управление + 20% performance fee (high-watermark)
+
+🔥 Сейчас действует скидка 90% для early adopters!
+
+Старт → https://btdd.trade
+
+#Pricing #EarlyAdopter #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-11', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p12">
+  <div class="card-header">
+    <span class="card-num">Пост 12</span>
+    <span class="card-tag">StatArb</span>
+  </div>
+  <div class="post-text" id="text-12">🧪 Синтетические инструменты — как это работает?
+
+Представь: берём два криптоактива (VETUSDT и GRTUSDT) и строим из них один «синтетический» тикер — соотношение их цен.
+
+Когда два актива расходятся — StatArb Z-Score открывает позицию на возврат к среднему. Когда сходятся — фиксирует прибыль.
+
+Преимущество: рыночно-нейтральная позиция. Неважно, растёт рынок или падает — важно, что пара возвращается к среднему.
+
+Это то, чем занимаются хедж-фонды. Теперь доступно через BTDD.
+
+#StatisticalArbitrage #PairTrading #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-12', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p13">
+  <div class="card-header">
+    <span class="card-num">Пост 13</span>
+    <span class="card-tag">FAQ</span>
+  </div>
+  <div class="post-text" id="text-13">❓ Частые вопросы о BTDD
+
+Q: Нужно ли передавать деньги платформе?
+A: Нет. Ваши деньги на вашей биржевой учётке. API-ключ без права на вывод.
+
+Q: Какой минимальный депозит?
+A: $1 000 для алгофонда, $500 для стратегий.
+
+Q: Какие биржи поддерживаются?
+A: Bybit (основная) + MEXC, WEEX, OKX, Bitget, Gate.io.
+
+Q: Могу ли я остановить торговлю в любой момент?
+A: Да. Кнопка «стоп» в кабинете. Все позиции закрываются автоматически.
+
+Q: На каких языках интерфейс?
+A: Русский, English, Türkçe.
+
+Ещё вопросы? → https://t.me/BTDD_Discuss
+
+#FAQ #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-13', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p14">
+  <div class="card-header">
+    <span class="card-num">Пост 14</span>
+    <span class="card-tag">Roadmap</span>
+  </div>
+  <div class="post-text" id="text-14">🗓 Roadmap BTDD Platform
+
+Q2 2026 (сейчас):
+✅ MVP в production
+🔄 Payment gateway (on-chain billing)
+🔄 Walk-forward валидация стратегий
+🔄 Binance интеграция
+
+Q3 2026:
+📋 Market regime filter (ATR/ADX)
+📋 OKX, Gate.io интеграция
+📋 Клиентский конструктор TS
+📋 Telegram-уведомления для клиентов
+
+Q4 2026:
+📋 Mobile-friendly интерфейс
+📋 Copy-trading UX
+📋 Публичный API
+📋 50+ активных клиентов
+
+Следите за обновлениями в канале!
+
+#Roadmap #ProductDevelopment #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-14', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p15">
+  <div class="card-header">
+    <span class="card-num">Пост 15</span>
+    <span class="card-tag">Deep Dive</span>
+  </div>
+  <div class="post-text" id="text-15">⚙️ Под капотом: Sweep Engine
+
+Как мы находим лучшие стратегии из тысяч вариантов?
+
+1. Определяем сетку гиперпараметров (20+ на стратегию)
+2. Grid search + random sampling по всем комбинациям
+3. Каждый прогон — полный бэктест с комиссиями
+4. Checkpoint каждые N итераций (можно продолжить при сбое)
+5. Фильтрация на робастность:
+   • Profit Factor > 1.5
+   • Max Drawdown < 10%
+   • Win Rate > 30%
+   • Минимум 50 сделок
+
+Результат последнего sweep:
+9 108 прогонов → 3 129 прошли фильтры (34%)
+
+Только лучшие попадают в каталог для клиентов.
+
+#QuantResearch #BacktestEngine #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-15', this)">📋 Копировать</button>
+</div>
+
+<!-- ===== WEEK 4 ===== -->
+<div class="section-title">Неделя 4 — CTA и инвестиции</div>
+
+<div class="card" id="p16">
+  <div class="card-header">
+    <span class="card-num">Пост 16</span>
+    <span class="card-tag">Early Adopters</span>
+  </div>
+  <div class="post-text" id="text-16">🎯 Ищем early adopters!
+
+Первые 100 клиентов BTDD Platform получают:
+
+🔥 Скидка 90% на первые 3 месяца
+⚡ Приоритетная поддержка от команды
+🗳 Участие в формировании продукта — ваш фидбэк определяет roadmap
+🎁 Бонусные стратегии из расширенного каталога
+
+Минимальный депозит: $500 (стратегии) / $1000 (алгофонд)
+Подключение: 10 минут
+
+Напиши → https://t.me/BTDD_Discuss
+Или напрямую → @yakovbyakov
+
+#EarlyAdopter #CryptoTrading #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-16', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p17">
+  <div class="card-header">
+    <span class="card-num">Пост 17</span>
+    <span class="card-tag">vs Конкуренты</span>
+  </div>
+  <div class="post-text" id="text-17">⚔️ BTDD vs 3commas vs Cryptohopper vs Mudrex
+
+Прозрачный бэктест:
+✅ BTDD: 9 108 прогонов с комиссиями
+❌ 3commas, Cryptohopper, Pionex
+⚠️ Mudrex: частично
+
+Синтетические пары (StatArb):
+✅ Только BTDD
+
+Алгофонд-режим:
+✅ BTDD, Mudrex
+❌ 3commas, Cryptohopper, Pionex
+
+Self-hosted / контроль данных:
+✅ BTDD
+❌ Все конкуренты
+
+Open Research (sweep UI):
+✅ Только BTDD
+
+Наше ключевое преимущество: прозрачная методология и полный контроль над данными.
+
+#Comparison #AlgoTrading #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-17', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p18">
+  <div class="card-header">
+    <span class="card-num">Пост 18</span>
+    <span class="card-tag">Инвестиции</span>
+  </div>
+  <div class="post-text" id="text-18">💼 BTDD Platform открыта для инвестиций
+
+Мы ищем seed-раунд для масштабирования:
+
+📊 Рынок
+Глобальный алготрейдинг: $21.6B → $31.8B к 2028 (CAGR ~10%)
+Крипто-сегмент: >$5B потенциального ARR
+
+✅ Что уже есть
+• Работающий продукт в production (не презентация, а рабочий сервис)
+• 9 108 проверенных бэктестов
+• 6 бирж подключено
+• Multi-tenant SaaS-архитектура
+
+🎯 Что ищем
+• Seed: $150K — $300K
+• Стратегические партнёрства с биржами
+• Angel-инвесторы из крипто-индустрии
+
+📩 aiaetrade17@gmail.com
+💬 @yakovbyakov
+
+#Investment #Seed #CryptoStartup #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-18', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p19">
+  <div class="card-header">
+    <span class="card-num">Пост 19</span>
+    <span class="card-tag">Дисклеймер</span>
+  </div>
+  <div class="post-text" id="text-19">⚠️ Важный дисклеймер
+
+BTDD Platform предоставляет инструменты алгоритмической торговли. Все опубликованные результаты основаны на исторических бэктестах и не являются гарантией будущей доходности.
+
+Торговля криптовалютами с использованием деривативов (фьючерсов) связана с высоким риском. Вы можете потерять часть или весь инвестированный капитал.
+
+Мы рекомендуем:
+• Инвестировать только то, что можете позволить себе потерять
+• Начинать с минимального депозита
+• Изучить whitepaper перед подключением
+• Задавать вопросы в чате → https://t.me/BTDD_Discuss
+
+Прозрачность — наш принцип. Включая прозрачность рисков.
+
+#Disclaimer #RiskAwareness #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-19', this)">📋 Копировать</button>
+</div>
+
+<div class="card" id="p20">
+  <div class="card-header">
+    <span class="card-num">Пост 20</span>
+    <span class="card-tag">CTA</span>
+  </div>
+  <div class="post-text" id="text-20">🚀 Готов начать алгоритмическую торговлю?
+
+5 шагов:
+1️⃣ Зарегистрируйся → https://btdd.trade
+2️⃣ Создай API-ключ на бирже (без права на вывод)
+3️⃣ Подключи ключ в кабинете
+4️⃣ Выбери стратегию и настрой параметры риска
+5️⃣ Включи автоторговлю
+
+⏱ Весь процесс занимает ~10 минут.
+
+💬 Вопросы? → https://t.me/BTDD_Discuss
+📄 Whitepaper → https://btdd.trade/whitepaper
+🔥 Скидка 90% для первых 100 клиентов!
+
+#GetStarted #CryptoAutomation #BTDD</div>
+  <button class="copy-btn" onclick="copyPost('text-20', this)">📋 Копировать</button>
+</div>
+
+<script>
+function copyPost(id, btn) {
+  const text = document.getElementById(id).innerText;
+  navigator.clipboard.writeText(text).then(() => {
+    btn.textContent = '✅ Скопировано!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Копировать'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+</script>
+
+</body>
+</html>
