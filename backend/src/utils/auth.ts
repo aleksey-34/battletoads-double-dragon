@@ -479,9 +479,16 @@ const writePasswordStateHash = (passwordHash: string): void => {
 };
 
 const ENV_PASSWORD_HASH = String(process.env.PASSWORD_HASH || '').trim();
-let currentPasswordHash = readPasswordStateHash() || (isBcryptHash(ENV_PASSWORD_HASH) ? ENV_PASSWORD_HASH : bcrypt.hashSync('defaultpassword', 10));
+const _storedHash = readPasswordStateHash();
+const _envHash = isBcryptHash(ENV_PASSWORD_HASH) ? ENV_PASSWORD_HASH : '';
+let currentPasswordHash = _storedHash || _envHash;
+if (!currentPasswordHash) {
+  // eslint-disable-next-line no-console
+  console.error('[AUTH] CRITICAL: No password configured. Admin access is BLOCKED. Set password via /api/auth/set-password or PASSWORD_HASH env.');
+}
 
 export const verifyDashboardPassword = (password: string): boolean => {
+  if (!currentPasswordHash) return false;
   return bcrypt.compareSync(password, currentPasswordHash);
 };
 
