@@ -1493,7 +1493,7 @@ const ClientCabinet: React.FC = () => {
                     </Row>
                     );
                   })() : null}
-                  {algofundWorkspace?.capabilities?.settings ? (
+                  {isCurrent && algofundWorkspace?.capabilities?.settings ? (
                     <div style={{ padding: '8px 0' }}>
                       <Typography.Text strong>Мультипликатор риска: × {formatNumber(algofundRiskMultiplier, 2)}</Typography.Text>
                       <Slider
