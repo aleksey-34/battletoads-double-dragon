@@ -546,6 +546,7 @@ const ClientCabinet: React.FC = () => {
   const algofundInitializedRef = useRef(false);
   const [algofundNote, setAlgofundNote] = useState('');
   const [systemDetailModal, setSystemDetailModal] = useState<{ name: string; id: number } | null>(null);
+  const [tsModalRiskMultiplier, setTsModalRiskMultiplier] = useState(1);
   const [strategyOfferDetail, setStrategyOfferDetail] = useState<string | null>(null);
 
   const strategyState = workspace?.strategyState || null;
@@ -1023,13 +1024,14 @@ const ClientCabinet: React.FC = () => {
                     return aS - bS;
                   }).map((offer) => (
                     <Col key={offer.offerId} xs={24} sm={12} md={8} xl={6}>
-                      <Card size="small" bordered>
+                      <Card size="small" bordered style={strategyOfferIds.includes(offer.offerId) ? { borderColor: '#f5a623', borderWidth: 2 } : undefined}>
                         <Space direction="vertical" size={6} style={{ width: '100%' }}>
                           <Space direction="vertical" size={0}>
                             <Space>
                               <Tooltip title={getOfferDescription(offer, false)} placement="topLeft">
                                 <Typography.Text strong style={{ fontSize: 12, cursor: 'help' }}>{offer.titleRu}</Typography.Text>
                               </Tooltip>
+                              {strategyOfferIds.includes(offer.offerId) ? <Tag color="gold" style={{ fontSize: 10 }}>В портфеле</Tag> : null}
                               {strategyWorkspace.capabilities?.settings
                                 ? <Checkbox checked={strategyOfferIds.includes(offer.offerId)} onChange={(e) => {
                                     e.stopPropagation();
@@ -1415,7 +1417,7 @@ const ClientCabinet: React.FC = () => {
                               <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
                             )}
                             <Space size={4} wrap>
-                              <Button size="small" onClick={() => setSystemDetailModal({ name: system.name, id: system.id })}>Подробнее</Button>
+                              <Button size="small" onClick={() => { setTsModalRiskMultiplier(1); setSystemDetailModal({ name: system.name, id: system.id }); }}>Подробнее</Button>
                               {!isCurrent ? (
                                 <Button size="small" type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start'); }}>Подключить</Button>
                               ) : null}
@@ -1445,18 +1447,36 @@ const ClientCabinet: React.FC = () => {
               const isCurrent = algofundPublishedSystemName.length > 0 && String(system.name || '').trim() === algofundPublishedSystemName;
               const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number } | null | undefined;
               const eqPts = snap?.equityPoints;
+              // For connected system: use backend preview; for others: client-side scaling
+              const riskMul = isCurrent ? algofundRiskMultiplier : tsModalRiskMultiplier;
+              const scaledEqPts = !isCurrent && Array.isArray(eqPts) && eqPts.length > 1 && riskMul !== 1
+                ? (() => {
+                    const base = eqPts[0] || 10000;
+                    return eqPts.map((v) => base + (v - base) * riskMul);
+                  })()
+                : eqPts;
               const chartData = isCurrent && algofundPreviewSeries.length > 0
                 ? algofundPreviewSeries
-                : Array.isArray(eqPts) && eqPts.length > 1
-                  ? equityPointsToSeries(eqPts, snap?.periodDays)
+                : Array.isArray(scaledEqPts) && scaledEqPts.length > 1
+                  ? equityPointsToSeries(scaledEqPts, snap?.periodDays)
                   : [];
               const startBalance = Array.isArray(eqPts) && eqPts.length > 0 ? eqPts[0] : null;
+              const scaledFinalEquity = !isCurrent && snap?.finalEquity != null && startBalance != null
+                ? startBalance + (snap.finalEquity - startBalance) * riskMul
+                : snap?.finalEquity ?? null;
               const endBalance = isCurrent && algofundWorkspace?.preview?.summary?.finalEquity != null
                 ? algofundWorkspace.preview.summary.finalEquity
-                : snap?.finalEquity ?? null;
+                : scaledFinalEquity;
               const chartKey = isCurrent
                 ? `af-preview-${algofundRiskMultiplier}-${algofundPreviewSeries.length}-${algofundPreviewSeries[algofundPreviewSeries.length - 1]?.value ?? 0}`
-                : `af-snap-${systemDetailModal?.id}`;
+                : `af-snap-${systemDetailModal?.id}-${riskMul}`;
+              // Compute display metrics: backend preview for connected, client-side scaling for others
+              const previewSummary = isCurrent && algofundWorkspace?.preview?.summary ? algofundWorkspace.preview.summary : null;
+              const displayRet = previewSummary?.totalReturnPercent ?? (snap?.ret != null ? snap.ret * riskMul : undefined);
+              const displayDd = previewSummary?.maxDrawdownPercent ?? (snap?.dd != null ? snap.dd * Math.sqrt(riskMul) : undefined);
+              const displayPf = previewSummary?.profitFactor ?? (snap?.pf != null && riskMul > 0 ? snap.pf / Math.sqrt(riskMul) : snap?.pf);
+              const displayTrades = previewSummary?.tradesCount ?? snap?.trades;
+              const displayTpd = previewSummary?.tradesCount && snap?.periodDays ? (Number(previewSummary.tradesCount) / snap.periodDays) : snap?.tradesPerDay;
               return (
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   <Space wrap>
@@ -1474,14 +1494,7 @@ const ClientCabinet: React.FC = () => {
                       <ChartComponent key={chartKey} data={chartData} type="line" />
                     </div>
                   ) : null}
-                  {(snap || startBalance != null) ? (() => {
-                    const previewSummary = isCurrent && algofundWorkspace?.preview?.summary ? algofundWorkspace.preview.summary : null;
-                    const displayRet = previewSummary?.totalReturnPercent ?? snap?.ret;
-                    const displayDd = previewSummary?.maxDrawdownPercent ?? snap?.dd;
-                    const displayPf = previewSummary?.profitFactor ?? snap?.pf;
-                    const displayTrades = previewSummary?.tradesCount ?? snap?.trades;
-                    const displayTpd = previewSummary?.tradesCount && snap?.periodDays ? (Number(previewSummary.tradesCount) / snap.periodDays) : snap?.tradesPerDay;
-                    return (
+                  {(snap || startBalance != null) ? (
                     <Row gutter={[12, 12]}>
                       {startBalance != null ? <Col xs={12} sm={6}><Statistic title="Старт. капитал" value={formatMoney(startBalance)} /></Col> : null}
                       {endBalance != null ? <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(endBalance)} valueStyle={{ color: endBalance >= (startBalance || 0) ? '#f5a623' : '#ff4d4f' }} /></Col> : null}
@@ -1491,29 +1504,38 @@ const ClientCabinet: React.FC = () => {
                       {displayTrades != null ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(displayTrades, 0)} /></Col> : null}
                       {displayTpd != null ? <Col xs={12} sm={6}><Statistic title="Сд./день" value={formatNumber(displayTpd, 1)} /></Col> : null}
                     </Row>
-                    );
-                  })() : null}
-                  {isCurrent && algofundWorkspace?.capabilities?.settings ? (
-                    <div style={{ padding: '8px 0' }}>
-                      <Typography.Text strong>Мультипликатор риска: × {formatNumber(algofundRiskMultiplier, 2)}</Typography.Text>
-                      <Slider
-                        min={0}
-                        max={toFinite(algofundWorkspace.plan?.risk_cap_max, 1)}
-                        step={0.05}
-                        value={algofundRiskMultiplier}
-                        onChange={(v) => setAlgofundRiskMultiplier(Math.min(toFinite(v), toFinite(algofundWorkspace.plan?.risk_cap_max, 1)))}
-                        onChangeComplete={() => void refreshAlgofundState()}
-                      />
-                      <Space wrap>
-                        <Button type="primary" size="small" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
-                          Сохранить риск
-                        </Button>
-                        <Button size="small" onClick={() => setAlgofundRiskMultiplier(toFinite(algofundWorkspace?.profile?.risk_multiplier, 1))}>
+                  ) : null}
+                  <div style={{ padding: '8px 0' }}>
+                    <Typography.Text strong>Мультипликатор риска: × {formatNumber(riskMul, 2)}</Typography.Text>
+                    <Slider
+                      min={0.1}
+                      max={toFinite(algofundWorkspace?.plan?.risk_cap_max, 2.5)}
+                      step={0.05}
+                      value={riskMul}
+                      onChange={(v) => {
+                        const clamped = Math.min(toFinite(v), toFinite(algofundWorkspace?.plan?.risk_cap_max, 2.5));
+                        if (isCurrent) setAlgofundRiskMultiplier(clamped);
+                        else setTsModalRiskMultiplier(clamped);
+                      }}
+                      onChangeComplete={() => { if (isCurrent) void refreshAlgofundState(); }}
+                    />
+                    <Space wrap>
+                      {isCurrent ? (
+                        <>
+                          <Button type="primary" size="small" loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
+                            Сохранить риск
+                          </Button>
+                          <Button size="small" onClick={() => setAlgofundRiskMultiplier(toFinite(algofundWorkspace?.profile?.risk_multiplier, 1))}>
+                            Дефолт
+                          </Button>
+                        </>
+                      ) : (
+                        <Button size="small" onClick={() => setTsModalRiskMultiplier(1)}>
                           Дефолт
                         </Button>
-                      </Space>
-                    </div>
-                  ) : null}
+                      )}
+                    </Space>
+                  </div>
                   {!isCurrent ? (
                     <Button type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start'); setSystemDetailModal(null); }}>
                       Подключить эту систему
