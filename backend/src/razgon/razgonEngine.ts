@@ -56,6 +56,14 @@ const instanceMap = new Map<string, RazgonInstance>();
 
 const MAX_CANDLE_CACHE = 60;
 
+/** Normalize exchange symbol to watchlist format: 'SUI/USDT:USDT' → 'SUIUSDT' */
+function normalizeSymbol(raw: string): string {
+  let s = raw.replace(/[/:]/g, '');
+  if (s.endsWith('USDTUSDT')) s = s.slice(0, -4);
+  else if (s.endsWith('USDCUSDC')) s = s.slice(0, -4);
+  return s;
+}
+
 // ── Config Persistence ───────────────────────────────────────────────────
 // Save last-used config to disk so it survives API restarts.
 const CONFIG_FILE = path.join(__dirname, '..', '..', 'razgon_config.json');
@@ -107,7 +115,7 @@ export async function refreshRazgonLive(): Promise<RazgonStats> {
       for (const ep of exchPositions) {
         const sz = Math.abs(Number(ep.size ?? 0));
         if (sz <= 0) continue;
-        const sym = String(ep.symbol ?? '').replace(/[/:]/g, '');
+        const sym = normalizeSymbol(String(ep.symbol ?? ''));
         const side: 'long' | 'short' = String(ep.side ?? '').toLowerCase() === 'long' ? 'long' : 'short';
         const entryPrice = Number(ep.entryPrice ?? 0);
         const notional = Number(ep.positionValue ?? 0) || sz * entryPrice;
@@ -264,7 +272,7 @@ async function createInstance(
     for (const pos of exchangePositions) {
       const sz = Math.abs(Number(pos.size ?? pos.contracts ?? 0));
       if (sz <= 0) continue;
-      const sym = String(pos.symbol ?? '').replace(/[/:]/g, '');
+      const sym = normalizeSymbol(String(pos.symbol ?? ''));
       if (!watchSymbols.has(sym)) continue;
       // Normalize side: ccxt uses 'long'/'short', some exchanges use 'Buy'/'Sell'
       const rawSide = String(pos.side ?? '').toLowerCase();
@@ -584,7 +592,7 @@ async function checkMomentumEntryFromCandles(inst: RazgonInstance, symbol: strin
     const openExchPos = exchPos.filter((ep: any) => Math.abs(Number(ep.size ?? 0)) > 0);
     exchangePositionCount = openExchPos.length;
     const hasExchangePos = openExchPos.some((ep: any) => {
-      const sym = String(ep.symbol ?? '').replace(/[/:]/g, '');
+      const sym = normalizeSymbol(String(ep.symbol ?? ''));
       return sym === symbol;
     });
     if (hasExchangePos) {
