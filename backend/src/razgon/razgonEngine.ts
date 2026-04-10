@@ -865,6 +865,8 @@ async function executeClose(
 ): Promise<void> {
   try {
     const closeSide = pos.side === 'long' ? 'Sell' : 'Buy';
+    // currentSide for closePosition = the side of the OPEN position (Buy=long, Sell=short)
+    const currentSide: 'Buy' | 'Sell' = pos.side === 'long' ? 'Buy' : 'Sell';
     // qty = notional / current price (or entry price as fallback)
     const price = exitPrice > 0 ? exitPrice : pos.entryPrice;
     const qty = price > 0 ? pos.notional / price : 0;
@@ -873,7 +875,7 @@ async function executeClose(
       recordClose(inst, pos, exitPrice, exitReason);
       return;
     }
-    await closePosition(inst.keyName, pos.symbol, String(qty), closeSide);
+    await closePosition(inst.keyName, pos.symbol, String(qty), currentSide);
     console.log(`[Razgon:${inst.keyName}] CLOSE ORDER OK ${pos.symbol} ${closeSide} qty=${qty.toFixed(4)}`);
   } catch (e) {
     const errMsg = (e as Error).message;
