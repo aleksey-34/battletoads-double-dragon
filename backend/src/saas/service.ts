@@ -4488,6 +4488,23 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   const existingOfferIds = new Set(combinedRawOffers.map((row) => String(row.offerId || '')));
   const publishedOfferIds = publishedFromFlagNormalized.filter((offerId) => existingOfferIds.has(offerId));
 
+  // Count connected clients per offer
+  const clientCountByOffer = new Map<string, number>();
+  try {
+    const profileRows = await db.all(
+      `SELECT selected_offer_ids_json FROM strategy_client_profiles WHERE actual_enabled = 1`
+    ) as Array<{ selected_offer_ids_json: string }>;
+    for (const row of profileRows) {
+      const ids = safeJsonParse<string[]>(row.selected_offer_ids_json, []);
+      for (const oid of (Array.isArray(ids) ? ids : [])) {
+        const key = String(oid || '').trim();
+        if (key) {
+          clientCountByOffer.set(key, (clientCountByOffer.get(key) || 0) + 1);
+        }
+      }
+    }
+  } catch { /* table may not exist yet */ }
+
   return {
     defaults,
     publishedOfferIds,
@@ -4496,6 +4513,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     tsBacktestSnapshot,
     offers: combinedRawOffers.map((row) => ({
       ...row,
+      connectedClients: clientCountByOffer.get(row.offerId) || 0,
       equityPoints: reviewSnapshots[row.offerId]?.equityPoints || equityByOfferId.get(row.offerId) || [],
       backtestSettings: {
         riskScore: Number(asNumber(reviewSnapshots[row.offerId]?.riskScore, 5).toFixed(2)),
