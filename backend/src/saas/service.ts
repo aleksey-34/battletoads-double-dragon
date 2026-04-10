@@ -4160,6 +4160,9 @@ type AdminTelegramControls = {
   tokenConfigured: boolean;
   chatConfigured: boolean;
   reportIntervalMinutes: number;
+  sectionAccounts: boolean;
+  sectionDrift: boolean;
+  sectionLowlot: boolean;
 };
 
 export type LowLotRecommendation = {
@@ -4227,12 +4230,15 @@ const runWithSqliteBusyRetry = async <T>(fn: () => Promise<T>): Promise<T> => {
 };
 
 export const getAdminTelegramControls = async (): Promise<AdminTelegramControls> => {
-  const [adminEnabledRaw, clientsEnabledRaw, runtimeOnlyRaw, reconciliationCycleRaw, reportIntervalRaw] = await Promise.all([
+  const [adminEnabledRaw, clientsEnabledRaw, runtimeOnlyRaw, reconciliationCycleRaw, reportIntervalRaw, secAccRaw, secDriftRaw, secLowlotRaw] = await Promise.all([
     getRuntimeFlag('telegram.admin.enabled', '1'),
     getRuntimeFlag('telegram.clients.enabled', '0'),
     getRuntimeFlag('telegram.admin.runtimeonly', '0'),
     getRuntimeFlag('runtime.cycle.reconciliation.enabled', '0'),
     getRuntimeFlag('telegram.admin.report_interval_minutes', '60'),
+    getRuntimeFlag('telegram.admin.section.accounts', '1'),
+    getRuntimeFlag('telegram.admin.section.drift', '1'),
+    getRuntimeFlag('telegram.admin.section.lowlot', '1'),
   ]);
 
   return {
@@ -4243,6 +4249,9 @@ export const getAdminTelegramControls = async (): Promise<AdminTelegramControls>
     tokenConfigured: Boolean(String(process.env.TELEGRAM_ADMIN_BOT_TOKEN || '').trim()),
     chatConfigured: Boolean(String(process.env.TELEGRAM_ADMIN_CHAT_ID || '').trim()),
     reportIntervalMinutes: Math.max(5, Math.min(1440, Math.floor(asNumber(reportIntervalRaw, 60)) || 60)),
+    sectionAccounts: secAccRaw !== '0',
+    sectionDrift: secDriftRaw !== '0',
+    sectionLowlot: secLowlotRaw !== '0',
   };
 };
 
@@ -4252,6 +4261,9 @@ export const updateAdminTelegramControls = async (payload: {
   runtimeOnly?: boolean;
   reconciliationCycleEnabled?: boolean;
   reportIntervalMinutes?: number;
+  sectionAccounts?: boolean;
+  sectionDrift?: boolean;
+  sectionLowlot?: boolean;
 }): Promise<AdminTelegramControls> => {
   if (payload.adminEnabled !== undefined) {
     await setRuntimeFlag('telegram.admin.enabled', payload.adminEnabled ? '1' : '0');
@@ -4268,6 +4280,15 @@ export const updateAdminTelegramControls = async (payload: {
   if (payload.reportIntervalMinutes !== undefined) {
     const clamped = Math.max(5, Math.min(1440, Math.floor(asNumber(payload.reportIntervalMinutes, 60)) || 60));
     await setRuntimeFlag('telegram.admin.report_interval_minutes', String(clamped));
+  }
+  if (payload.sectionAccounts !== undefined) {
+    await setRuntimeFlag('telegram.admin.section.accounts', payload.sectionAccounts ? '1' : '0');
+  }
+  if (payload.sectionDrift !== undefined) {
+    await setRuntimeFlag('telegram.admin.section.drift', payload.sectionDrift ? '1' : '0');
+  }
+  if (payload.sectionLowlot !== undefined) {
+    await setRuntimeFlag('telegram.admin.section.lowlot', payload.sectionLowlot ? '1' : '0');
   }
 
   return getAdminTelegramControls();

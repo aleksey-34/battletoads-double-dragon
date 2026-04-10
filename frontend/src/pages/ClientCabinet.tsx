@@ -537,6 +537,8 @@ const ClientCabinet: React.FC = () => {
   const [strategyTradeInput, setStrategyTradeInput] = useState(5);
   const [strategySelectionPreview, setStrategySelectionPreview] = useState<StrategySelectionPreviewResponse | null>(null);
   const [strategySelectionPreviewLoading, setStrategySelectionPreviewLoading] = useState(false);
+  const [singleOfferPreview, setSingleOfferPreview] = useState<any>(null);
+  const [singleOfferPreviewLoading, setSingleOfferPreviewLoading] = useState(false);
   const [backtestRequests, setBacktestRequests] = useState<StrategyBacktestPairRequest[]>([]);
   const [requestMarket, setRequestMarket] = useState('');
   const [requestInterval, setRequestInterval] = useState('1h');
@@ -558,6 +560,8 @@ const ClientCabinet: React.FC = () => {
 
   const strategyPreviewSummary = strategySelectionPreview?.preview?.summary || {};
   const strategyPreviewSeries = useMemo(() => toLineSeriesData(strategySelectionPreview?.preview?.equity), [strategySelectionPreview]);
+  const singleOfferPreviewSummary = singleOfferPreview?.preview?.summary || singleOfferPreview?.preview?.equity?.summary || null;
+  const singleOfferPreviewSeries = useMemo(() => toLineSeriesData(singleOfferPreview?.preview?.equity), [singleOfferPreview]);
   const algofundPreviewSeries = useMemo(() => toLineSeriesData(algofundWorkspace?.preview?.equityCurve), [algofundWorkspace]);
 
   const strategyPreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -568,6 +572,16 @@ const ClientCabinet: React.FC = () => {
     return () => { if (strategyPreviewTimerRef.current) clearTimeout(strategyPreviewTimerRef.current); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [strategyRiskInput, strategyTradeInput]);
+
+  // Per-offer preview: triggers when modal opens or sliders change
+  const singleOfferTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!strategyOfferDetail) { setSingleOfferPreview(null); return; }
+    if (singleOfferTimerRef.current) clearTimeout(singleOfferTimerRef.current);
+    singleOfferTimerRef.current = setTimeout(() => { void runSingleOfferPreview(strategyOfferDetail); }, 400);
+    return () => { if (singleOfferTimerRef.current) clearTimeout(singleOfferTimerRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [strategyOfferDetail, strategyRiskInput, strategyTradeInput]);
 
   const algofundPreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
@@ -733,6 +747,24 @@ const ClientCabinet: React.FC = () => {
       setStrategySelectionPreview(null);
     } finally {
       setStrategySelectionPreviewLoading(false);
+    }
+  };
+
+  const runSingleOfferPreview = async (offerId: string) => {
+    setSingleOfferPreviewLoading(true);
+    try {
+      const response = await axios.post('/api/client/strategy/preview', {
+        offerId,
+        riskLevel: sliderValueToLevel(strategyRiskInput),
+        tradeFrequencyLevel: sliderValueToLevel(strategyTradeInput),
+        riskScore: strategyRiskInput,
+        tradeFrequencyScore: strategyTradeInput,
+      });
+      setSingleOfferPreview(response.data);
+    } catch {
+      setSingleOfferPreview(null);
+    } finally {
+      setSingleOfferPreviewLoading(false);
     }
   };
 
@@ -1124,8 +1156,11 @@ const ClientCabinet: React.FC = () => {
               const eqPts = getOfferEquityValues(offer);
               const hasChart = eqPts.length > 1;
               const isSelected = strategyOfferIds.includes(offer.offerId);
-              const startBalance = hasChart ? eqPts[0] : null;
-              const endBalance = hasChart ? eqPts[eqPts.length - 1] : null;
+              // Per-offer preview from backend (recalculated with sliders)
+              const offerSummary = singleOfferPreviewSummary ?? null;
+              const offerSeries = singleOfferPreviewSeries;
+              const startBalance = offerSummary?.finalEquity != null ? 10000 : (hasChart ? eqPts[0] : null);
+              const endBalance = offerSummary?.finalEquity ?? (hasChart ? eqPts[eqPts.length - 1] : null);
               return (
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   <Space wrap>
@@ -1137,9 +1172,11 @@ const ClientCabinet: React.FC = () => {
                   <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'pre-line' }}>
                     {getOfferDescription(offer, false)}
                   </Typography.Text>
-                  {strategyPreviewSeries.length > 0 ? (
+                  {singleOfferPreviewLoading ? (
+                    <div style={{ height: 240, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Spin /></div>
+                  ) : offerSeries.length > 0 ? (
                     <div style={{ height: 240 }}>
-                      <ChartComponent key={`strat-preview-${strategyPreviewSeries.length}-${strategyPreviewSeries[strategyPreviewSeries.length-1]?.value ?? 0}`} data={strategyPreviewSeries} type="line" />
+                      <ChartComponent key={`strat-offer-${offer.offerId}-${offerSeries.length}-${offerSeries[offerSeries.length-1]?.value ?? 0}`} data={offerSeries} type="line" />
                     </div>
                   ) : hasChart ? (
                     <div style={{ height: 240 }}>
@@ -1149,10 +1186,10 @@ const ClientCabinet: React.FC = () => {
                   <Row gutter={[12, 12]}>
                     {startBalance != null ? <Col xs={12} sm={6}><Statistic title="Старт. капитал" value={formatMoney(startBalance)} /></Col> : null}
                     {endBalance != null ? <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(endBalance)} valueStyle={{ color: endBalance >= (startBalance || 0) ? '#f5a623' : '#ff4d4f' }} /></Col> : null}
-                    <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(strategyPreviewSummary?.totalReturnPercent ?? offer.metrics.ret)} valueStyle={{ color: (strategyPreviewSummary?.totalReturnPercent ?? offer.metrics.ret ?? 0) >= 0 ? '#f5a623' : '#ff4d4f' }} /></Col>
-                    <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(strategyPreviewSummary?.maxDrawdownPercent ?? offer.metrics.dd)} valueStyle={{ color: '#ff7a45' }} /></Col>
-                    <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(strategyPreviewSummary?.profitFactor ?? offer.metrics.pf)} /></Col>
-                    {(strategyPreviewSummary?.tradesCount || offer.metrics.trades) ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(strategyPreviewSummary?.tradesCount ?? offer.metrics.trades, 0)} /></Col> : null}
+                    <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(offerSummary?.totalReturnPercent ?? offer.metrics.ret)} valueStyle={{ color: (offerSummary?.totalReturnPercent ?? offer.metrics.ret ?? 0) >= 0 ? '#f5a623' : '#ff4d4f' }} /></Col>
+                    <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(offerSummary?.maxDrawdownPercent ?? offer.metrics.dd)} valueStyle={{ color: '#ff7a45' }} /></Col>
+                    <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(offerSummary?.profitFactor ?? offer.metrics.pf)} /></Col>
+                    {(offerSummary?.tradesCount || offer.metrics.trades) ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(offerSummary?.tradesCount ?? offer.metrics.trades, 0)} /></Col> : null}
                   </Row>
                   {strategyWorkspace?.capabilities?.settings ? (
                     <>
@@ -1447,12 +1484,17 @@ const ClientCabinet: React.FC = () => {
               const isCurrent = algofundPublishedSystemName.length > 0 && String(system.name || '').trim() === algofundPublishedSystemName;
               const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number } | null | undefined;
               const eqPts = snap?.equityPoints;
-              // For connected system: use backend preview; for others: client-side scaling
+              // For connected system: use backend preview; for others: client-side scaling matching backend formulas
               const riskMul = isCurrent ? algofundRiskMultiplier : tsModalRiskMultiplier;
               const scaledEqPts = !isCurrent && Array.isArray(eqPts) && eqPts.length > 1 && riskMul !== 1
                 ? (() => {
                     const base = eqPts[0] || 10000;
-                    return eqPts.map((v) => base + (v - base) * riskMul);
+                    const reinvest = 0.5;
+                    return eqPts.map((v) => {
+                      const linear = base + (v - base) * riskMul;
+                      const compound = base * Math.pow(Math.max(0.0001, v / Math.max(0.0001, base)), riskMul);
+                      return linear * (1 - reinvest) + compound * reinvest;
+                    });
                   })()
                 : eqPts;
               const chartData = isCurrent && algofundPreviewSeries.length > 0
@@ -1462,7 +1504,11 @@ const ClientCabinet: React.FC = () => {
                   : [];
               const startBalance = Array.isArray(eqPts) && eqPts.length > 0 ? eqPts[0] : null;
               const scaledFinalEquity = !isCurrent && snap?.finalEquity != null && startBalance != null
-                ? startBalance + (snap.finalEquity - startBalance) * riskMul
+                ? (() => {
+                    const linear = startBalance + (snap.finalEquity - startBalance) * riskMul;
+                    const compound = startBalance * Math.pow(Math.max(0.0001, snap.finalEquity / Math.max(0.0001, startBalance)), riskMul);
+                    return linear * 0.5 + compound * 0.5;
+                  })()
                 : snap?.finalEquity ?? null;
               const endBalance = isCurrent && algofundWorkspace?.preview?.summary?.finalEquity != null
                 ? algofundWorkspace.preview.summary.finalEquity
@@ -1470,11 +1516,12 @@ const ClientCabinet: React.FC = () => {
               const chartKey = isCurrent
                 ? `af-preview-${algofundRiskMultiplier}-${algofundPreviewSeries.length}-${algofundPreviewSeries[algofundPreviewSeries.length - 1]?.value ?? 0}`
                 : `af-snap-${systemDetailModal?.id}-${riskMul}`;
-              // Compute display metrics: backend preview for connected, client-side scaling for others
+              // Compute display metrics: backend preview for connected, client-side scaling for others (matching backend formulas)
               const previewSummary = isCurrent && algofundWorkspace?.preview?.summary ? algofundWorkspace.preview.summary : null;
-              const displayRet = previewSummary?.totalReturnPercent ?? (snap?.ret != null ? snap.ret * riskMul : undefined);
-              const displayDd = previewSummary?.maxDrawdownPercent ?? (snap?.dd != null ? snap.dd * Math.sqrt(riskMul) : undefined);
-              const displayPf = previewSummary?.profitFactor ?? (snap?.pf != null && riskMul > 0 ? snap.pf / Math.sqrt(riskMul) : snap?.pf);
+              const relativeRisk = riskMul; // baseline is always 1 for snapshots
+              const displayRet = previewSummary?.totalReturnPercent ?? (snap?.ret != null ? snap.ret * relativeRisk : undefined);
+              const displayDd = previewSummary?.maxDrawdownPercent ?? (snap?.dd != null ? Math.min(99, snap.dd * Math.max(0.05, relativeRisk)) : undefined);
+              const displayPf = previewSummary?.profitFactor ?? (snap?.pf != null && relativeRisk > 0 ? Math.max(0.15, snap.pf / Math.max(0.5, Math.sqrt(relativeRisk))) : snap?.pf);
               const displayTrades = previewSummary?.tradesCount ?? snap?.trades;
               const displayTpd = previewSummary?.tradesCount && snap?.periodDays ? (Number(previewSummary.tradesCount) / snap.periodDays) : snap?.tradesPerDay;
               return (

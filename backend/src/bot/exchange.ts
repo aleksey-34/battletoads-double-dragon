@@ -198,6 +198,9 @@ const ensureCcxtSymbolMap = async (entry: CcxtClientEntry): Promise<Map<string, 
         // Swap takes priority in symbolMap for MEXC
         if (normalizedSymbol) entry.symbolMap.set(normalizedSymbol, symbol);
         if (normalizedId) entry.symbolMap.set(normalizedId, symbol);
+        // Also map short form without trailing quote (e.g. SUIUSDTUSDT → SUIUSDT → SUI/USDT:USDT)
+        const short = normalizedSymbol.replace(/(USDT)USDT$/, '$1').replace(/(USDC)USDC$/, '$1');
+        if (short !== normalizedSymbol && short) entry.symbolMap.set(short, symbol);
       }
     } else {
       if (normalizedSymbol) entry.symbolMap.set(normalizedSymbol, symbol);

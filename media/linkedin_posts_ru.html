@@ -1,0 +1,190 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTDD - LinkedIn Посты (RU)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f3f2ef; color: #000; padding: 20px; max-width: 560px; margin: 0 auto; }
+  h1 { text-align: center; margin-bottom: 8px; font-size: 20px; color: #0a66c2; }
+  .subtitle { text-align: center; color: #666; font-size: 12px; margin-bottom: 20px; }
+  .card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 0 0 1px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.05); }
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+  .card-num { font-size: 12px; color: #666; font-weight: 600; }
+  .card-tag { font-size: 10px; background: #e8f0fe; color: #0a66c2; padding: 2px 8px; border-radius: 10px; }
+  .post-text { white-space: pre-wrap; font-size: 14px; line-height: 1.5; color: #333; }
+  .copy-btn { display: block; width: 100%; margin-top: 10px; padding: 8px; background: #0a66c2; color: #fff; border: none; border-radius: 20px; cursor: pointer; font-size: 13px; }
+  .copy-btn:hover { background: #004182; }
+  .copy-btn.copied { background: #057642; }
+  .note { background: #fff3cd; border: 1px solid #ffc107; border-radius: 8px; padding: 12px; margin-bottom: 20px; font-size: 12px; color: #664d03; }
+</style>
+</head>
+<body>
+
+<h1>💼 BTDD LinkedIn Посты (RU)</h1>
+<p class="subtitle">linkedin.com/in/alekseilazarev - 5 постов. Копируй → Вставляй в LinkedIn</p>
+
+<div class="note">
+  <strong>Совет:</strong> LinkedIn лучше работает с текстом 1200-1500 знаков. К каждому посту прикрепи инфографику из <code>telegram_infographics.html</code> (скриншот Win+Shift+S). Публикуй с интервалом 2-3 дня. RU-посты - для CIS-аудитории, EN-версии - см. <code>linkedin_posts.html</code>.
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-num">Пост 1 - Запуск</span>
+    <span class="card-tag">Неделя 1</span>
+  </div>
+  <div class="post-text" id="li-1">После 6 месяцев разработки запускаю BTDD Platform - SaaS-платформу алгоритмической торговли криптовалютами.
+
+Какую проблему решаем: розничные трейдеры теряют 70-90% капитала из-за эмоциональной торговли и отсутствия проверенных стратегий. Большинство «ботов» на рынке - черные ящики с подобранными результатами.
+
+Что мы построили:
+🔹 9 108 исторических бэктестов с полной прозрачностью (комиссии, проскальзывание, без lookahead bias)
+🔹 3 типа стратегий, включая статарб на синтетических парах
+🔹 6 подключенных бирж (Bybit, Binance, MEXC, OKX, Bitget, WEEX)
+🔹 Мультитенантный SaaS с изоляцией клиентов
+🔹 Доходность портфеля: +28.7% при просадке 4.4% (15 месяцев бэктест)
+
+Платформа работает и принимает первых клиентов со скидкой 90%.
+
+Whitepaper: battletoads.top/whitepaper
+
+📊 Прошлая доходность не гарантирует будущих результатов.
+
+#AlgoTrading #Fintech #SaaS #Crypto #Startup #TradingBot</div>
+  <button class="copy-btn" onclick="copyPost('li-1', this)">📋 Копировать</button>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-num">Пост 2 - Прозрачность</span>
+    <span class="card-tag">Неделя 1</span>
+  </div>
+  <div class="post-text" id="li-2">Почему большинство алготрейдинг-платформ вам врут.
+
+Грязный секрет индустрии торговых ботов: 90%+ опубликованных «прибыльных» стратегий имеют одну или несколько проблем:
+
+❌ Нет моделирования комиссий (0.12% round-trip съедает большинство мелких профитов)
+❌ Lookahead bias в генерации сигналов
+❌ Survivorship bias - показывают только выигравшие стратегии
+❌ Curve fitting к историческим данным без out-of-sample валидации
+
+В BTDD Platform каждая опубликованная метрика включает:
+✅ 0.12% комиссии round-trip
+✅ 0.03% моделирование проскальзывания
+✅ Последовательная обработка баров (без будущих данных)
+✅ Полная прослеживаемость от параметров к результату
+
+Это 9 108 бэктестов. Ноль cherry-picking. 34% проходимость через фильтры устойчивости.
+
+Если вы не можете проверить цифры - вы не можете доверять платформе.
+
+battletoads.top/whitepaper
+
+#Transparency #AlgoTrading #CryptoTrading #Fintech</div>
+  <button class="copy-btn" onclick="copyPost('li-2', this)">📋 Копировать</button>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-num">Пост 3 - Партнерства</span>
+    <span class="card-tag">Неделя 2</span>
+  </div>
+  <div class="post-text" id="li-3">Ищу партнерства с крипто-биржами 🤝
+
+BTDD Platform - алготрейдинг-SaaS, работающий в продакшене с 6 биржевыми интеграциями. Ищем гранты и стратегические партнерства:
+
+Что мы предлагаем:
+✅ Работающий продукт с валидированными стратегиями
+✅ Прозрачная методология (9 108 бэктестов, whitepaper опубликован)
+✅ Мультитенантный SaaS, готовый к масштабированию B2C
+✅ 3 языка (RU/EN/TR)
+
+Что ищем:
+🔹 Bybit Builder Grant
+🔹 OKX Ventures Integration Grant
+🔹 Binance Labs BUIDL program
+🔹 API volume rebate partnerships
+🔹 Совместный маркетинг для привлечения клиентов
+
+Если вы связаны с программами разработчиков или партнерскими командами бирж - буду рад поговорить.
+
+📩 aiaetrade17@gmail.com
+💬 Telegram: @yakovbyakov
+
+#CryptoExchange #Partnership #Startup #Bybit #OKX #Binance</div>
+  <button class="copy-btn" onclick="copyPost('li-3', this)">📋 Копировать</button>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-num">Пост 4 - Технологии</span>
+    <span class="card-tag">Неделя 3</span>
+  </div>
+  <div class="post-text" id="li-4">Как мы построили исследовательский пайплайн, обрабатывающий 9 108 комбинаций параметров за один sweep.
+
+Инженерия за валидацией стратегий BTDD Platform:
+
+🔧 Стек: Node.js + TypeScript бэкенд, React + Ant Design фронтенд
+📊 Grid search по 20+ гиперпараметрам на тип стратегии
+🔍 Фильтры устойчивости: PF>1.5, DD<10%, WR>30%, минимум 50 сделок
+💾 Checkpoint/resume для длительных sweep'ов
+🏗 3-контурная архитектура: Runtime (торговля) / Research (бэктесты) / Client (SaaS-дашборд)
+
+Ключевое архитектурное решение: полная изоляция между контурами. Исследовательский движок может запускать многочасовые sweep'ы, не затрагивая ни одной реальной сделки. У каждого контура своя SQLite и процесс.
+
+Результат: 3 129 устойчивых кандидатов из 9 108 проверенных (34% проходимость). Они формируют пул для клиентских портфелей.
+
+Детали архитектуры в whitepaper → battletoads.top/whitepaper
+
+#Engineering #Backtesting #QuantTrading #TypeScript #SaaS</div>
+  <button class="copy-btn" onclick="copyPost('li-4', this)">📋 Копировать</button>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <span class="card-num">Пост 5 - Инвестиции</span>
+    <span class="card-tag">Неделя 3</span>
+  </div>
+  <div class="post-text" id="li-5">BTDD Platform открыта для seed-инвестиций.
+
+✅ Что сделано:
+• MVP в продакшене - реальная торговля активна
+• 6 биржевых интеграций (Bybit, Binance, MEXC, OKX, Bitget, WEEX)
+• 9 108 валидированных бэктестов с институциональной методологией
+• Мультитенантная SaaS-архитектура (31 таблица БД, 62 API-эндпоинта)
+• Клиентский кабинет на 3 языках (RU/EN/TR)
+• Скидка 90% для ранних пользователей, первые клиенты на борту
+
+📊 Рыночная возможность:
+Глобальный рынок алготрейдинга: $21.6B (2024) → $31.8B (2028), CAGR ~10%
+Крипто-сегмент алготрейдинга: >$5B потенциальный ARR
+
+🎯 Что привлекаем:
+Seed-раунд: $150K - $300K
+Использование: маркетинг ($30K), биржевые интеграции ($50K), compliance ($20K), инфраструктура ($20K/год)
+
+Это работающий продукт, а не презентация. Каждая метрика опубликована в whitepaper.
+
+Интересно? Давайте поговорим.
+
+📩 aiaetrade17@gmail.com
+💬 @yakovbyakov
+🌐 battletoads.top
+
+#Seed #Investment #Fintech #Crypto #Startup #AngelInvesting</div>
+  <button class="copy-btn" onclick="copyPost('li-5', this)">📋 Копировать</button>
+</div>
+
+<script>
+function copyPost(id, btn) {
+  navigator.clipboard.writeText(document.getElementById(id).innerText).then(() => {
+    btn.textContent = '✅ Скопировано!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Копировать'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+</script>
+
+</body>
+</html>

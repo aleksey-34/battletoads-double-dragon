@@ -44,6 +44,14 @@ const isRuntimeOnlyEnabledInDb = async (): Promise<boolean> => {
   return value === '1' || value === 'true' || value === 'yes' || value === 'on';
 };
 
+const isSectionEnabled = async (section: 'accounts' | 'drift' | 'lowlot'): Promise<boolean> => {
+  const key = `telegram.admin.section.${section}`;
+  const row = await db.get('SELECT value FROM app_runtime_flags WHERE key = ?', [key]);
+  const value = String(row?.value || '').trim().toLowerCase();
+  if (!value) return true; // enabled by default
+  return value !== '0' && value !== 'false' && value !== 'no' && value !== 'off';
+};
+
 const escapeHtml = (value: string): string => {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -513,24 +521,31 @@ const trimTelegramText = (value: string, maxLen = 3900): string => {
 };
 
 const sendPeriodicReportShort = async (periodHours: number, runtimeOnly = false): Promise<void> => {
+  const [accountsEnabled, driftEnabled, lowLotEnabled] = await Promise.all([
+    isSectionEnabled('accounts'),
+    isSectionEnabled('drift'),
+    isSectionEnabled('lowlot'),
+  ]);
   const [lines, driftLines, lowLotLines] = await Promise.all([
-    buildAccountLines(periodHours, runtimeOnly),
-    buildDriftAlertLines(periodHours, 5),
-    buildLowLotLines(periodHours, 5),
+    accountsEnabled ? buildAccountLines(periodHours, runtimeOnly) : [],
+    driftEnabled ? buildDriftAlertLines(periodHours, 5) : [],
+    lowLotEnabled ? buildLowLotLines(periodHours, 5) : [],
   ]);
 
   const header = `<b>📊 BTDD: Короткий отчет за ${periodHours}ч</b>`;
   const parts: string[] = [header];
 
-  if (lines.length > 0) {
-    const topLines = lines.slice(0, 5);
-    parts.push('<b>Ключи / аккаунты</b>');
-    parts.push(topLines.join('\n'));
-    if (lines.length > 5) {
-      parts.push(`<i>...+${lines.length - 5} more</i>`);
+  if (accountsEnabled) {
+    if (lines.length > 0) {
+      const topLines = lines.slice(0, 5);
+      parts.push('<b>Ключи / аккаунты</b>');
+      parts.push(topLines.join('\n'));
+      if (lines.length > 5) {
+        parts.push(`<i>...+${lines.length - 5} more</i>`);
+      }
+    } else {
+      parts.push('Активные ключи не найдены');
     }
-  } else {
-    parts.push('Активные ключи не найдены');
   }
 
   const alerts = [...driftLines, ...lowLotLines];
@@ -540,6 +555,10 @@ const sendPeriodicReportShort = async (periodHours: number, runtimeOnly = false)
     parts.push(alerts.slice(0, 4).join('\n'));
   }
 
+  if (!accountsEnabled && !driftEnabled && !lowLotEnabled) {
+    parts.push('Все секции отчета отключены');
+  }
+
   await sendTelegramMessage(trimTelegramText(parts.join('\n')));
 };
 
@@ -547,25 +566,40 @@ const sendPeriodicReport = async (periodHours: number, runtimeOnly = false, form
   if (format === 'short') {
     return sendPeriodicReportShort(periodHours, runtimeOnly);
   }
+  const [accountsEnabled, driftEnabled, lowLotEnabled] = await Promise.all([
+    isSectionEnabled('accounts'),
+    isSectionEnabled('drift'),
+    isSectionEnabled('lowlot'),
+  ]);
   const [lines, driftLines, lowLotLines] = await Promise.all([
-    buildAccountLines(periodHours, runtimeOnly),
-    buildDriftAlertLines(periodHours),
-    buildLowLotLines(periodHours),
+    accountsEnabled ? buildAccountLines(periodHours, runtimeOnly) : [],
+    driftEnabled ? buildDriftAlertLines(periodHours) : [],
+    lowLotEnabled ? buildLowLotLines(periodHours) : [],
   ]);
 
   const header = `<b>BTDD Admin Report (${periodHours}h)</b>`;
   const blocks: string[] = [];
 
-  blocks.push('<b>1) Аккаунты и runtime</b>');
-  blocks.push(lines.length > 0 ? lines.join('\n') : 'Нет данных по аккаунтам');
+  if (accountsEnabled) {
+    blocks.push('<b>1) Аккаунты и runtime</b>');
+    blocks.push(lines.length > 0 ? lines.join('\n') : 'Нет данных по аккаунтам');
+  }
 
-  blocks.push('');
-  blocks.push('<b>2) Drift-алерты</b>');
-  blocks.push(driftLines.length > 0 ? driftLines.join('\n') : 'Drift-алертов за период нет');
+  if (driftEnabled) {
+    blocks.push('');
+    blocks.push('<b>2) Drift-алерты</b>');
+    blocks.push(driftLines.length > 0 ? driftLines.join('\n') : 'Drift-алертов за период нет');
+  }
 
-  blocks.push('');
-  blocks.push('<b>3) Low-lot сигналы</b>');
-  blocks.push(lowLotLines.length > 0 ? lowLotLines.join('\n') : 'Low-lot сигналов за период нет');
+  if (lowLotEnabled) {
+    blocks.push('');
+    blocks.push('<b>3) Low-lot сигналы</b>');
+    blocks.push(lowLotLines.length > 0 ? lowLotLines.join('\n') : 'Low-lot сигналов за период нет');
+  }
+
+  if (blocks.length === 0) {
+    blocks.push('Все секции отчета отключены');
+  }
 
   const body = blocks.join('\n');
   await sendTelegramMessage(trimTelegramText(`${header}\n${body}`));

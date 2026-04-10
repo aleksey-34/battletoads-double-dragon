@@ -336,6 +336,9 @@ type TelegramControls = {
   tokenConfigured: boolean;
   chatConfigured: boolean;
   reportIntervalMinutes: number;
+  sectionAccounts: boolean;
+  sectionDrift: boolean;
+  sectionLowlot: boolean;
 };
 
 type MonitoringPositionsDigest = {
@@ -8876,6 +8879,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 </Tag>
                               </Space>
                               <Divider style={{ margin: '6px 0' }} />
+                              <Space wrap>
+                                <Text type="secondary">Секции отчёта:</Text>
+                                <Tag>Аккаунты <Switch size="small" checked={Boolean(telegramControls?.sectionAccounts)} loading={telegramControlsLoading} onChange={(checked) => { void patchTelegramControls({ sectionAccounts: checked }); }} /></Tag>
+                                <Tag>Drift <Switch size="small" checked={Boolean(telegramControls?.sectionDrift)} loading={telegramControlsLoading} onChange={(checked) => { void patchTelegramControls({ sectionDrift: checked }); }} /></Tag>
+                                <Tag>Low-lot <Switch size="small" checked={Boolean(telegramControls?.sectionLowlot)} loading={telegramControlsLoading} onChange={(checked) => { void patchTelegramControls({ sectionLowlot: checked }); }} /></Tag>
+                              </Space>
                               <Space>
                                 <Text type="secondary">Вкл.</Text>
                                 <Switch

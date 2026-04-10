@@ -203,6 +203,9 @@ router.patch('/admin/telegram-controls', async (req, res) => {
       reportIntervalMinutes: req.body?.reportIntervalMinutes !== undefined
         ? toOptionalNumber(req.body.reportIntervalMinutes)
         : undefined,
+      sectionAccounts: req.body?.sectionAccounts !== undefined ? toBool(req.body.sectionAccounts) : undefined,
+      sectionDrift: req.body?.sectionDrift !== undefined ? toBool(req.body.sectionDrift) : undefined,
+      sectionLowlot: req.body?.sectionLowlot !== undefined ? toBool(req.body.sectionLowlot) : undefined,
     });
     res.json({ success: true, ...data });
   } catch (error) {

@@ -865,9 +865,28 @@ async function executeClose(
 ): Promise<void> {
   try {
     const closeSide = pos.side === 'long' ? 'Sell' : 'Buy';
-    await closePosition(inst.keyName, pos.symbol, closeSide);
+    // qty = notional / current price (or entry price as fallback)
+    const price = exitPrice > 0 ? exitPrice : pos.entryPrice;
+    const qty = price > 0 ? pos.notional / price : 0;
+    if (qty <= 0) {
+      logger.error(`[Razgon:${inst.keyName}] Cannot close ${pos.symbol}: invalid qty=${qty}`);
+      recordClose(inst, pos, exitPrice, exitReason);
+      return;
+    }
+    await closePosition(inst.keyName, pos.symbol, String(qty), closeSide);
+    console.log(`[Razgon:${inst.keyName}] CLOSE ORDER OK ${pos.symbol} ${closeSide} qty=${qty.toFixed(4)}`);
   } catch (e) {
-    logger.error(`[Razgon:${inst.keyName}] Close order failed ${pos.symbol}: ${(e as Error).message}`);
+    const errMsg = (e as Error).message;
+    logger.error(`[Razgon:${inst.keyName}] Close order failed ${pos.symbol}: ${errMsg}`);
+    console.error(`[Razgon:${inst.keyName}] CLOSE ORDER FAILED ${pos.symbol}: ${errMsg}`);
+    // If position doesn't exist on exchange (already closed manually), clean up in-memory
+    if (errMsg.includes('nonexistent') || errMsg.includes('closed') || errMsg.includes('Reduce Only') || errMsg.includes('101290')) {
+      console.log(`[Razgon:${inst.keyName}] Position ${pos.symbol} no longer exists on exchange, cleaning up`);
+      recordClose(inst, pos, exitPrice, exitReason);
+      return;
+    }
+    // Do NOT recordClose if exchange order failed — position still exists on exchange
+    return;
   }
   recordClose(inst, pos, exitPrice, exitReason);
 }

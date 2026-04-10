@@ -1,0 +1,129 @@
+﻿<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTDD - Threads Посты (RU)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #000; color: #f5f5f5; padding: 20px; max-width: 500px; margin: 0 auto; }
+  h1 { text-align: center; margin-bottom: 8px; font-size: 20px; }
+  .subtitle { text-align: center; color: #777; font-size: 12px; margin-bottom: 20px; }
+  .card { background: #1a1a1a; border-radius: 16px; padding: 16px; margin-bottom: 12px; border: 1px solid #333; }
+  .card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .card-num { font-size: 11px; color: #777; }
+  .chars { font-size: 10px; color: #555; }
+  .post-text { white-space: pre-wrap; font-size: 15px; line-height: 1.5; }
+  .copy-btn { display: block; width: 100%; margin-top: 10px; padding: 8px; background: #333; color: #fff; border: 1px solid #444; border-radius: 12px; cursor: pointer; font-size: 13px; }
+  .copy-btn:hover { background: #444; }
+  .copy-btn.copied { background: #1b5e20; border-color: #2e7d32; }
+  .note { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 12px; margin-bottom: 20px; font-size: 12px; color: #999; }
+</style>
+</head>
+<body>
+
+<h1>🧵 BTDD Threads Посты (RU)</h1>
+<p class="subtitle">threads.com/@foresterufa - 7 постов. Макс ~500 символов каждый.</p>
+
+<div class="note">
+  <strong>Совет:</strong> Threads - короткие, провокационные тексты. Публикуй 1-2 в день. К 2-3 постам прикрепи инфографику (скриншот из <code>telegram_infographics.html</code>). EN-версии - см. <code>threads_posts.html</code>.
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">1/7</span><span class="chars">Запуск</span></div>
+  <div class="post-text" id="th-1">Построил платформу алготрейдинга. 9 108 бэктестов. 3 129 прошли фильтры устойчивости.
+
+Большинство «прибыльных ботов» не переживают нормальный бэктест с реальными комиссиями. Наши - переживают.
+
++28.7% доходность, 4.4% макс просадка, 15 месяцев данных.
+
+battletoads.top</div>
+  <button class="copy-btn" onclick="cp('th-1',this)">📋 Копировать</button>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">2/7</span><span class="chars">Проблема</span></div>
+  <div class="post-text" id="th-2">Самая страшная статистика в крипте: 70-90% розничных трейдеров теряют деньги.
+
+Не потому что рынки случайны - потому что люди эмоциональны.
+
+Мы паникуем на дне. Мстим рынку после убытков. Держим убыточные и режем прибыльные.
+
+Поэтому мы автоматизируем все. Ноль эмоций, чистая математика.</div>
+  <button class="copy-btn" onclick="cp('th-2',this)">📋 Копировать</button>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">3/7</span><span class="chars">Жесткий тейк</span></div>
+  <div class="post-text" id="th-3">Жесткий тейк: если ваш торговый бот не учитывает комиссии и проскальзывание в бэктестах - его результаты это фикция.
+
+Мы моделируем 0.12% round-trip + 0.03% проскальзывание на каждой сделке. Поэтому только 34% стратегий проходят фильтры.
+
+Остальные 66%? В помойку.</div>
+  <button class="copy-btn" onclick="cp('th-3',this)">📋 Копировать</button>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">4/7</span><span class="chars">СтатАрб</span></div>
+  <div class="post-text" id="th-4">А что если торговать два крипто-актива как один синтетический инструмент?
+
+VETUSDT/GRTUSDT → статистический арбитраж → рыночно-нейтральная доходность.
+
+Не нужно угадывать, пойдет биткоин вверх или вниз. Достаточно, чтобы спред вернулся к среднему.
+
+Хедж-фонды делают это десятилетиями. Теперь и мы. battletoads.top</div>
+  <button class="copy-btn" onclick="cp('th-4',this)">📋 Копировать</button>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">5/7</span><span class="chars">Цифры</span></div>
+  <div class="post-text" id="th-5">Статистика портфеля, 15 месяцев, с реальными расходами:
+
++28.7% доходность
+3.28 profit factor
+4.4% макс просадка
+416 сделок
+6 некоррелированных стратегий
+
+Каждая цифра включает комиссии и проскальзывание. Ноль cherry-picking.
+
+Не финансовый совет. Но математика публична. battletoads.top/whitepaper</div>
+  <button class="copy-btn" onclick="cp('th-5',this)">📋 Копировать</button>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">6/7</span><span class="chars">Призыв</span></div>
+  <div class="post-text" id="th-6">Ищу ранних пользователей. Скидка 90% для первых 100.
+
+Деньги остаются на вашем биржевом счете. Мы просто запускаем алгоритмы от вашего имени. API-ключ без права вывода.
+
+10 минут на настройку. 6 бирж подключено.
+
+battletoads.top</div>
+  <button class="copy-btn" onclick="cp('th-6',this)">📋 Копировать</button>
+</div>
+
+<div class="card">
+  <div class="card-header"><span class="card-num">7/7</span><span class="chars">Инвестиции</span></div>
+  <div class="post-text" id="th-7">Открыты для seed-инвестиций. Работающий продукт, а не презентация.
+
+Раунд $150-300K. Глобальный рынок алготрейдинга $31.8B к 2028.
+
+У нас есть: живая платформа, 9К+ бэктестов, 6 бирж, мультитенантный SaaS, 3 языка.
+
+Пишите в ЛС или aiaetrade17@gmail.com</div>
+  <button class="copy-btn" onclick="cp('th-7',this)">📋 Копировать</button>
+</div>
+
+<script>
+function cp(id, btn) {
+  navigator.clipboard.writeText(document.getElementById(id).innerText).then(() => {
+    btn.textContent = '✅ Скопировано!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = '📋 Копировать'; btn.classList.remove('copied'); }, 2000);
+  });
+}
+</script>
+
+</body>
+</html>
