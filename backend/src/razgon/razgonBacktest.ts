@@ -218,6 +218,10 @@ function runBacktest(
     // Check entries per symbol
     if (openPositions.length >= maxPos) continue;
 
+    // Time filter: skip dead hours (UTC 21:00 - 01:00) — low liquidity
+    const hour = new Date(ts).getUTCHours();
+    if (hour >= 21 || hour < 1) continue;
+
     for (const [sym, candles] of candlesBySymbol) {
       if (openPositions.length >= maxPos) break;
       if (openPositions.some(p => p.symbol === sym)) continue;
@@ -227,10 +231,16 @@ function runBacktest(
       const ci = symIdx.get(ts);
       if (ci === undefined || ci < 25) continue; // need lookback
 
-      const lookback = candles.slice(0, ci); // closed candles before this one
+      const lookback = candles.slice(Math.max(0, ci - 60), ci); // last 60 closed candles
       if (lookback.length < 25) continue;
 
       const current = candles[ci];
+
+      // Volume filter: skip if recent 10-bar volume is too low
+      const recentVols = lookback.slice(-10);
+      const avgRecentVol = recentVols.reduce((s, c) => s + c.volume, 0) / recentVols.length;
+      if (avgRecentVol < 1) continue; // dead market
+
       const sig = computeMomentumSignal(lookback, current.close, current.volume, 5, volMul, atrMin);
 
       if (sig.signal === 'none') continue;

@@ -3222,14 +3222,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       .filter((point: any) => Number.isFinite(point.time) && Number.isFinite(point.equity));
   };
 
-  const mapSnapshotEquityPoints = (equityPoints?: number[]) => Array.isArray(equityPoints)
-    ? equityPoints
+  const mapSnapshotEquityPoints = (equityPoints?: number[]) => {
+    if (!Array.isArray(equityPoints) || equityPoints.length === 0) return [];
+    const nowSec = Math.floor(Date.now() / 1000);
+    const dayS = 86400;
+    const startSec = nowSec - (equityPoints.length - 1) * dayS;
+    return equityPoints
       .map((equity: number, index: number) => ({
-        time: index,
+        time: startSec + index * dayS,
         equity: Number(equity),
       }))
-      .filter((point: { time: number; equity: number }) => Number.isFinite(point.time) && Number.isFinite(point.equity))
-    : [];
+      .filter((point: { time: number; equity: number }) => Number.isFinite(point.time) && Number.isFinite(point.equity));
+  };
 
   const extractTsSuffixToken = useCallback((systemName: string): string => {
     const parts = String(systemName || '').trim().split('::').filter(Boolean);
@@ -8270,7 +8274,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Descriptions.Item label="Trades/day">{formatNumber(selectedAdminReviewOffer.tradesPerDay, 2)}</Descriptions.Item>
                                 </Descriptions>
                                 {equityPoints.length > 0 ? (
-                                  <ChartComponent data={equityPoints.map((value, index) => ({ time: index, equity: value }))} type="line" />
+                                  <ChartComponent data={(() => { const nowSec = Math.floor(Date.now() / 1000); const dayS = 86400; const startSec = nowSec - (equityPoints.length - 1) * dayS; return equityPoints.map((value, index) => ({ time: startSec + index * dayS, equity: value })); })()} type="line" />
                                 ) : (
                                   <Empty description="Для этой карточки пока нет equity-кривой" />
                                 )}
@@ -9549,11 +9553,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                       <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
                                                       <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
                                                       <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                                      <Tag color={Number(row.connectedClients || 0) > 0 ? 'cyan' : 'default'}>clients {Number(row.connectedClients || 0)}</Tag>
                                                       <Tag color={Boolean(row.published) ? 'success' : 'warning'}>{Boolean(row.published) ? '✓ На витрине' : '⊘ Не на витрине'}</Tag>
                                                     </Space>
                                                     {points.length >= 2 ? (
                                                       <ChartComponent
-                                                        data={points.map((value, index) => ({ time: index, equity: value }))}
+                                                        data={(() => { const nowSec = Math.floor(Date.now() / 1000); const dayS = 86400; const startSec = nowSec - (points.length - 1) * dayS; return points.map((value, index) => ({ time: startSec + index * dayS, equity: value })); })()}
                                                         type="line"
                                                         fixedHeight={120}
                                                       />
@@ -9748,7 +9753,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           {offer.pf !== undefined ? <Tag color={metricColor(Number(offer.pf || 0), 'pf')}>PF {formatNumber(offer.pf)}</Tag> : null}
                                         </Space>
                                         {points.length >= 2 ? (
-                                          <ChartComponent data={points.map((value: number, index: number) => ({ time: index, equity: value }))} type="line" fixedHeight={120} />
+                                          <ChartComponent data={(() => { const nowSec = Math.floor(Date.now() / 1000); const dayS = 86400; const startSec = nowSec - (points.length - 1) * dayS; return points.map((value: number, index: number) => ({ time: startSec + index * dayS, equity: value })); })()} type="line" fixedHeight={120} />
                                         ) : (
                                           <Text type="secondary" style={{ fontSize: 12 }}>График не сохранен</Text>
                                         )}
