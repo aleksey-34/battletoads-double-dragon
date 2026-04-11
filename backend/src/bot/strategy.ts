@@ -2221,6 +2221,32 @@ export const executeStrategy = async (
     : inferSyntheticStateFromPair(liveBase, liveQuote);
 
   if (livePairState === 'mixed') {
+    // Grace period: after opening a new position, Bybit Demo may take up to 2 cycles
+    // (~60s) to propagate both legs via getPositions. Skip the forced close if the
+    // strategy was entered very recently to avoid an open→mixed→close→open loop.
+    const MIXED_GRACE_MS = 90_000;
+    const lastUpdatedMs = mergedStrategy.updated_at
+      ? new Date(String(mergedStrategy.updated_at).replace(' ', 'T') + 'Z').getTime()
+      : 0;
+    const msSinceUpdate = Date.now() - lastUpdatedMs;
+    const justOpened = (state === 'long' || state === 'short') && msSinceUpdate < MIXED_GRACE_MS;
+
+    if (justOpened) {
+      logger.warn(
+        `Mixed pair state for strategy ${strategyId} (state=${state}, ${Math.round(msSinceUpdate / 1000)}s since update) ` +
+        `— skipping close within ${MIXED_GRACE_MS / 1000}s grace period`
+      );
+      return returnWithProcessedBar({
+        result: 'Mixed pair state skipped — within post-open grace period',
+        action: 'mixed_grace_skip',
+        strategy: mergedStrategy,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
+
     const previousState = state;
     const previousEntryRatio = entryRatio;
     await closeStrategyExposure(apiKeyName, mergedStrategy);
