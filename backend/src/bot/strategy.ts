@@ -588,7 +588,7 @@ const normalizeQtyValue = (value: number, decimals: number): number => {
 };
 
 const formatQty = (qty: number, decimals: number): string => {
-  return normalizeQtyValue(qty, decimals).toFixed(Math.max(0, decimals)).replace(/\.?0+$/, '');
+  return normalizeQtyValue(qty, decimals).toFixed(Math.max(0, decimals)).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
 };
 
 const loadQtyRules = async (apiKeyName: string, symbol: string): Promise<QtyRules> => {

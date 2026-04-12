@@ -1555,9 +1555,23 @@ export const getInstrumentInfo = async (apiKeyName: string, symbol: string) => {
       }
 
       const precisionAmount = Number(market?.precision?.amount);
-      const derivedStep = Number.isFinite(precisionAmount)
-        ? Math.pow(10, -Math.max(0, precisionAmount))
-        : NaN;
+      // ccxt precisionMode: 2=DECIMAL_PLACES, 4=TICK_SIZE
+      // In TICK_SIZE mode (Bybit, MEXC, BingX), precision.amount IS the step.
+      // In DECIMAL_PLACES mode, precision.amount is the number of decimals.
+      // Prefer native lotSizeFilter.qtyStep from exchange info when available.
+      const nativeQtyStep = Number(
+        market?.info?.lotSizeFilter?.qtyStep
+        ?? market?.info?.lotSizeFilter?.stepSize
+        ?? market?.info?.contractSize
+        ?? NaN
+      );
+      const derivedStep = Number.isFinite(nativeQtyStep) && nativeQtyStep > 0
+        ? nativeQtyStep
+        : (Number.isFinite(precisionAmount) && precisionAmount > 0
+          ? (entry.client.precisionMode === 2
+            ? Math.pow(10, -Math.max(0, precisionAmount))
+            : precisionAmount)
+          : NaN);
       const minOrderQty = Number(market?.limits?.amount?.min ?? 0);
       const maxOrderQty = Number(market?.limits?.amount?.max ?? 0);
       const maxLeverage = Number(
