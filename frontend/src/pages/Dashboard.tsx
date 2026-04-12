@@ -1305,29 +1305,26 @@ const Dashboard: React.FC = () => {
     }
 
     try {
-      const res = await axios.get(`/api/strategy-trades/${keyName}`, {
+      const res = await axios.get(`/api/trades/${keyName}`, {
         params: {
-          limit: 1000,
-          days: 90,
+          limit: 200,
         },
       });
 
       const raw = Array.isArray(res.data) ? res.data : [];
-      const payload: TradeHistoryRow[] = raw.map((row: any) => ({
-        tradeId: String(row.id || ''),
-        orderId: String(row.strategyId || ''),
-        symbol: String(row.symbol || ''),
-        side: (row.tradeType === 'entry'
-          ? (row.side === 'long' ? 'Buy' : 'Sell')
-          : (row.side === 'long' ? 'Sell' : 'Buy')) as 'Buy' | 'Sell',
-        price: String(row.price || '0'),
-        qty: String(row.qty || '0'),
-        notional: String(Number(row.price || 0) * Number(row.qty || 0)),
-        fee: String(row.fee || '0'),
-        feeCurrency: 'USDT',
-        realizedPnl: '0',
-        isMaker: false,
-        timestamp: String(row.timestamp || '0'),
+      const payload: TradeHistoryRow[] = raw.map((trade: any, index: number) => ({
+        tradeId: String(trade.tradeId || `trade_${index}`),
+        orderId: String(trade.orderId || ''),
+        symbol: String(trade.symbol || ''),
+        side: String(trade.side || 'Buy') as 'Buy' | 'Sell',
+        price: String(trade.price || '0'),
+        qty: String(trade.qty || '0'),
+        notional: String(trade.notional || '0'),
+        fee: String(trade.fee || '0'),
+        feeCurrency: String(trade.feeCurrency || 'USDT'),
+        realizedPnl: String(trade.realizedPnl || '0'),
+        isMaker: Boolean(trade.isMaker),
+        timestamp: String(trade.timestamp || '0'),
       }));
       setTradesByKey((prev) => ({ ...prev, [keyName]: payload }));
     } catch (error) {
