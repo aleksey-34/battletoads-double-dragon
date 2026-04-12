@@ -540,6 +540,44 @@ class WeexRestClient {
       },
     }));
   }
+
+  async setLeverage(leverage: number, symbol?: string, params: any = {}): Promise<any> {
+    const rawSymbol = symbol ? toWeexPrivateSymbol(symbol) : undefined;
+    const body: Record<string, unknown> = {
+      symbol: rawSymbol,
+      productType: 'USDT-FUTURES',
+      marginCoin: 'USDT',
+      leverage: String(Math.max(1, Math.round(leverage))),
+    };
+
+    const holdSide = String(params?.holdSide || '').toLowerCase();
+    if (holdSide === 'long' || holdSide === 'short') {
+      body.holdSide = holdSide;
+    }
+
+    const response = await this.request('POST', '/capi/v2/account/setLeverage', {
+      auth: true,
+      body,
+    });
+
+    return response;
+  }
+
+  async setMarginMode(marginMode: string, symbol?: string): Promise<any> {
+    const rawSymbol = symbol ? toWeexPrivateSymbol(symbol) : undefined;
+    const mode = String(marginMode || '').toLowerCase() === 'isolated' ? 'isolated' : 'crossed';
+    const response = await this.request('POST', '/capi/v2/account/setMarginMode', {
+      auth: true,
+      body: {
+        symbol: rawSymbol,
+        productType: 'USDT-FUTURES',
+        marginCoin: 'USDT',
+        marginMode: mode,
+      },
+    });
+
+    return response;
+  }
 }
 
 export const createWeexClient = (apiKey: ApiKey): any => {
