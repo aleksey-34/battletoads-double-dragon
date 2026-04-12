@@ -2698,6 +2698,34 @@ router.get('/trades/:apiKeyName', async (req, res) => {
 
       const apiKeyInfo = await db.get('SELECT exchange FROM api_keys WHERE name = ?', [apiKeyName]) as { exchange?: string } | undefined;
       const exchange = String(apiKeyInfo?.exchange || '').toLowerCase();
+
+      // Bybit endpoint can return unified execution history without per-symbol fanout.
+      // This avoids partial visibility when some symbol-specific calls fail or are rate-limited.
+      if (exchange.includes('bybit')) {
+        const allTrades = await getRecentTrades(apiKeyName, undefined, Math.min(500, Math.max(limit * 3, 200)));
+        const filtered = (Array.isArray(allTrades) ? allTrades : []).filter((trade: any) => {
+          const tradeSymbol = String(trade?.symbol || '').trim().toUpperCase();
+          return candidateSymbols.includes(tradeSymbol);
+        });
+
+        const deduped = Array.from(new Map(
+          filtered.map((trade: any) => {
+            const tradeId = String(trade?.tradeId || '');
+            const tradeSymbol = String(trade?.symbol || '');
+            const ts = String(trade?.timestamp || trade?.createdTime || '0');
+            return [`${tradeId}|${tradeSymbol}|${ts}`, trade] as const;
+          })
+        ).values());
+
+        deduped.sort((a: any, b: any) => {
+          const ta = Number(a?.timestamp || a?.createdTime || 0);
+          const tb = Number(b?.timestamp || b?.createdTime || 0);
+          return tb - ta;
+        });
+
+        return res.json(deduped.slice(0, limit));
+      }
+
       const symbolFanoutLimit = exchange === 'bingx' ? 8 : 24;
       const perSymbolLimit = Math.min(100, Math.max(10, Math.ceil(limit / Math.min(candidateSymbols.length, 10))));
       const aggregateErrors: string[] = [];
