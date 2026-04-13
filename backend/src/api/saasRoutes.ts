@@ -38,6 +38,7 @@ import {
   getAlgofundClosedPositionsReport,
   getAlgofundChartSnapshot,
   previewAdminSweepBacktest,
+  syncCloudTsFromSweepResult,
   listStrategyClientSystemProfilesState,
   createStrategyClientSystemProfile,
   updateStrategyClientSystemProfile,
@@ -53,15 +54,6 @@ import {
   getCopytradingSessions,
   getCopytradingReport,
   getCopytradingStatus,
-  getSynctradeState,
-  updateSynctradeState,
-  executeSynctradeSession,
-  closeSynctradeSession,
-  getSynctradeSessions,
-  getSynctradeLivePnl,
-  startSyncAutoEngine,
-  stopSyncAutoEngine,
-  getSyncAutoStatus,
   getAlgofundActiveSystems,
   assignAlgofundSystems,
   toggleAlgofundSystem,
@@ -302,10 +294,35 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
       rerunApiKeyName: req.body?.rerunApiKeyName ? String(req.body.rerunApiKeyName) : undefined,
       preferRealBacktest: req.body?.preferRealBacktest !== undefined ? toBool(req.body.preferRealBacktest, false) : undefined,
     });
+    // Auto-sync Cloud TS members from sweep result (fire-and-forget)
+    if (data.kind === 'algofund-ts' && Array.isArray(data.selectedOffers) && data.selectedOffers.length > 0) {
+      syncCloudTsFromSweepResult(data.selectedOffers).catch((err) => {
+        logger.error(`Cloud TS auto-sync failed: ${(err as Error).message}`);
+      });
+    }
     res.json({ success: true, ...data });
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS admin sweep backtest preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Manual Cloud TS sync endpoint
+router.post('/admin/cloud-ts/sync', async (req, res) => {
+  try {
+    const strategyIds = Array.isArray(req.body?.strategyIds)
+      ? req.body.strategyIds.map((id: unknown) => ({ strategyId: Number(id) }))
+      : [];
+    const dryRun = req.body?.dryRun === true;
+    if (strategyIds.length === 0) {
+      return res.status(400).json({ error: 'strategyIds array is required' });
+    }
+    const result = await syncCloudTsFromSweepResult(strategyIds, { dryRun });
+    res.json({ success: true, ...result });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Cloud TS sync error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1211,144 +1228,6 @@ router.delete('/admin/tenants/:tenantId', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS delete tenant error: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── Synctrade routes ────────────────────────────────────────────────────────
-
-router.get('/synctrade/:tenantId', async (req, res) => {
-  const tenantId = Number(req.params.tenantId);
-  if (!Number.isFinite(tenantId) || tenantId <= 0) {
-    return res.status(400).json({ error: 'Invalid tenantId' });
-  }
-  try {
-    const state = await getSynctradeState(tenantId);
-    res.json(state);
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`SaaS synctrade GET error: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.patch('/synctrade/:tenantId', async (req, res) => {
-  const tenantId = Number(req.params.tenantId);
-  if (!Number.isFinite(tenantId) || tenantId <= 0) {
-    return res.status(400).json({ error: 'Invalid tenantId' });
-  }
-  try {
-    const state = await updateSynctradeState(tenantId, req.body || {});
-    res.json(state);
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`SaaS synctrade PATCH error: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.post('/synctrade/:tenantId/execute', async (req, res) => {
-  const tenantId = Number(req.params.tenantId);
-  if (!Number.isFinite(tenantId) || tenantId <= 0) {
-    return res.status(400).json({ error: 'Invalid tenantId' });
-  }
-  try {
-    const result = await executeSynctradeSession(tenantId, req.body || {});
-    res.json(result);
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`SaaS synctrade execute error: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.post('/synctrade/:tenantId/close/:sessionId', async (req, res) => {
-  const tenantId = Number(req.params.tenantId);
-  const sessionId = Number(req.params.sessionId);
-  if (!Number.isFinite(tenantId) || tenantId <= 0 || !Number.isFinite(sessionId) || sessionId <= 0) {
-    return res.status(400).json({ error: 'Invalid tenantId or sessionId' });
-  }
-  try {
-    const result = await closeSynctradeSession(tenantId, sessionId);
-    res.json(result);
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`SaaS synctrade close error: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.get('/synctrade/:tenantId/sessions', async (req, res) => {
-  const tenantId = Number(req.params.tenantId);
-  if (!Number.isFinite(tenantId) || tenantId <= 0) {
-    return res.status(400).json({ error: 'Invalid tenantId' });
-  }
-  try {
-    const sessions = await getSynctradeSessions(tenantId);
-    res.json({ sessions });
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`SaaS synctrade sessions error: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.get('/synctrade/:tenantId/live-pnl/:sessionId', async (req, res) => {
-  const tenantId = Number(req.params.tenantId);
-  const sessionId = Number(req.params.sessionId);
-  if (!Number.isFinite(tenantId) || tenantId <= 0 || !Number.isFinite(sessionId) || sessionId <= 0) {
-    return res.status(400).json({ error: 'Invalid tenantId or sessionId' });
-  }
-  try {
-    const result = await getSynctradeLivePnl(tenantId, sessionId);
-    res.json(result);
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`SaaS synctrade live-pnl error: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// ─── SyncAuto engine routes ──────────────────────────────────────────────────
-
-router.post('/synctrade/:tenantId/auto/start', async (req, res) => {
-  const tenantId = Number(req.params.tenantId);
-  if (!Number.isFinite(tenantId) || tenantId <= 0) {
-    return res.status(400).json({ error: 'Invalid tenantId' });
-  }
-  try {
-    const result = await startSyncAutoEngine(tenantId, req.body || {});
-    res.json(result);
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`SyncAuto start error: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.post('/synctrade/:tenantId/auto/stop', async (req, res) => {
-  const tenantId = Number(req.params.tenantId);
-  if (!Number.isFinite(tenantId) || tenantId <= 0) {
-    return res.status(400).json({ error: 'Invalid tenantId' });
-  }
-  try {
-    const closeAll = Boolean(req.body?.closeAll);
-    const result = await stopSyncAutoEngine(closeAll);
-    res.json(result);
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`SyncAuto stop error: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-router.get('/synctrade/auto/status', async (_req, res) => {
-  try {
-    const status = getSyncAutoStatus();
-    res.json(status);
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`SyncAuto status error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

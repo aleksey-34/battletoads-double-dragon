@@ -2,15 +2,12 @@ import express from 'express';
 import cors from 'cors';
 import routes from './api/routes';
 import researchRoutes from './api/researchRoutes';
-import razgonRoutes from './razgon/razgonRoutes';
-import { startRazgon, getRazgonConfig } from './razgon/razgonEngine';
 import { initDB, getDbFilePath } from './utils/database';
 import logger from './utils/logger';
 import { runAutoStrategiesCycle } from './bot/strategy';
 import { startPreviewWorker } from './workers/previewWorker';
 import { startResearchSchedulerWorker } from './workers/researchSchedulerWorker';
 import { runLiquidityScanCycle, runMonitoringCycle, runReconciliationCycle } from './automation/scheduler';
-import { resumeSyncAutoEngine } from './saas/service';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -19,7 +16,6 @@ app.use(cors());
 app.use(express.json());
 app.use('/api', routes);
 app.use('/api/research', researchRoutes);
-app.use('/api/razgon', razgonRoutes);
 
 import { loadSettings } from './config/settings';
 import { initExchangeClient } from './bot/exchange';
@@ -46,29 +42,6 @@ const startServer = async () => {
   const researchWorkersEnabled = process.env.BTDD_DISABLE_RESEARCH_WORKERS !== '1';
   // Когда BTDD_DISABLE_TRADING=1 — торговые циклы запускаются отдельным btdd-runtime.service
   const tradingEnabled = process.env.BTDD_DISABLE_TRADING !== '1';
-
-  // Resume SyncAuto engine if there are open sessions from before restart
-  try {
-    await resumeSyncAutoEngine();
-  } catch (e) {
-    logger.error(`SyncAuto resume error: ${(e as Error).message}`);
-  }
-
-  // Auto-start Razgon if config was saved from previous run
-  try {
-    const savedRazgonCfg = getRazgonConfig();
-    if (savedRazgonCfg) {
-      logger.info('[Razgon] Found saved config, auto-starting...');
-      const result = await startRazgon(savedRazgonCfg);
-      if (result.ok) {
-        logger.info('[Razgon] Auto-started successfully');
-      } else {
-        logger.warn(`[Razgon] Auto-start failed: ${result.error}`);
-      }
-    }
-  } catch (e) {
-    logger.error(`[Razgon] Auto-start error: ${(e as Error).message}`);
-  }
 
   app.listen(PORT, () => {
     logger.info(`Server running on http://localhost:${PORT}`);

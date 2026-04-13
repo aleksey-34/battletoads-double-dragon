@@ -7,6 +7,7 @@ import {
   getTradingSystem,
   listTradingSystems,
   replaceTradingSystemMembers,
+  replaceTradingSystemMembersSafely,
   runTradingSystemBacktest,
   setTradingSystemActivation,
   updateTradingSystem,
@@ -20,7 +21,7 @@ import { initResearchDb } from '../research/db';
 import { getPreset, listOfferIds } from '../research/presetBuilder';
 import { computeReconciliationMetrics } from '../analytics/liveReconciliation';
 
-export type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'synctrade_client' | 'dual';
+export type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'dual';
 export type Level3 = 'low' | 'medium' | 'high';
 export type RequestStatus = 'pending' | 'approved' | 'rejected';
 export type AlgofundRequestType = 'start' | 'stop' | 'switch_system';
@@ -650,24 +651,6 @@ const copytradingPlans: PlanSeed[] = [
       copyTenantLimit: 5,
       copyAlgorithm: 'vwap_basic',
       copyPrecision: 'standard',
-    },
-  },
-];
-
-const synctradePlans: PlanSeed[] = [
-  {
-    code: 'synctrade_100',
-    title: 'Synctrade 100',
-    productMode: 'synctrade_client',
-    priceUsdt: 100,
-    maxDepositTotal: 10000,
-    riskCapMax: 0,
-    maxStrategiesTotal: 0,
-    allowTsStartStopRequests: false,
-    features: {
-      maxHedgeAccounts: 5,
-      syncIntervalMs: 500,
-      supportedExchange: 'mexc',
     },
   },
 ];
@@ -1791,7 +1774,7 @@ const buildRecommendedSets = (catalog: CatalogData | null) => {
 
 export const ensureSaasSeedData = async (): Promise<void> => {
   await db.run(`ALTER TABLE plans ADD COLUMN original_price_usdt REAL DEFAULT NULL`).catch(() => { /* already exists */ });
-  for (const plan of [...strategyClientPlans, ...algofundPlans, ...copytradingPlans, ...synctradePlans, ...combinedPlans]) {
+  for (const plan of [...strategyClientPlans, ...algofundPlans, ...copytradingPlans, ...combinedPlans]) {
     await upsertPlan(plan);
   }
 };
@@ -3963,8 +3946,8 @@ const ensurePublishedSourceSystem = async (
   }) => {
     const displayName = asString(payload.displayName, '').trim();
     if (!displayName) throw new Error('displayName is required');
-    if (payload.productMode !== 'strategy_client' && payload.productMode !== 'algofund_client' && payload.productMode !== 'copytrading_client' && payload.productMode !== 'synctrade_client' && payload.productMode !== 'dual') {
-      throw new Error('productMode must be strategy_client, algofund_client, copytrading_client, synctrade_client or dual');
+    if (payload.productMode !== 'strategy_client' && payload.productMode !== 'algofund_client' && payload.productMode !== 'copytrading_client' && payload.productMode !== 'dual') {
+      throw new Error('productMode must be strategy_client, algofund_client, copytrading_client or dual');
     }
 
     await ensureSaasSeedData();
@@ -4071,10 +4054,6 @@ const ensurePublishedSourceSystem = async (
     if (payload.productMode === 'copytrading_client') {
       await ensureCopytradingProfile(tenant.id, apiKeyName);
     }
-    if (payload.productMode === 'synctrade_client') {
-      await ensureSynctradeProfile(tenant.id, apiKeyName);
-    }
-
     // Optionally create a client user account if email is provided
     if (payload.email) {
       const email = String(payload.email).trim().toLowerCase();
@@ -4112,8 +4091,6 @@ const ensurePublishedSourceSystem = async (
     await db.run(`DELETE FROM algofund_profiles WHERE tenant_id = ?`, [tenantId]);
     await db.run(`DELETE FROM strategy_client_profiles WHERE tenant_id = ?`, [tenantId]);
     await db.run(`DELETE FROM copytrading_profiles WHERE tenant_id = ?`, [tenantId]).catch(() => { /* table may not exist yet */ });
-    await db.run(`DELETE FROM synctrade_sessions WHERE profile_id IN (SELECT id FROM synctrade_profiles WHERE tenant_id = ?)`, [tenantId]).catch(() => { /* table may not exist yet */ });
-    await db.run(`DELETE FROM synctrade_profiles WHERE tenant_id = ?`, [tenantId]).catch(() => { /* table may not exist yet */ });
     await db.run(`DELETE FROM client_users WHERE tenant_id = ?`, [tenantId]);
 
     // Delete API keys that belong to this tenant
@@ -4275,7 +4252,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
   const allOffers = catalog ? getAllOffers(catalog) : [];
   const offerIds = allOffers.map((item) => String(item.offerId));
-  const [defaultsRaw, publishedRaw, reviewSnapshots, tsBacktestSnapshot, tsBacktestSnapshots, storefrontRows, publishedTenantRows] = await Promise.all([
+  const [defaultsRaw, publishedRaw, reviewSnapshots, tsBacktestSnapshot, tsBacktestSnapshots, storefrontRows, publishedTenantRows, cloudTsRows] = await Promise.all([
     getRuntimeFlag('offer.store.defaults', JSON.stringify(DEFAULT_OFFER_STORE_DEFAULTS)),
     getRuntimeFlag('offer.store.published_ids', ''),
     getOfferReviewSnapshots(),
@@ -4293,6 +4270,11 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
        FROM algofund_profiles
        WHERE TRIM(COALESCE(published_system_name, '')) != ''
        ORDER BY system_name ASC`
+    ) as Promise<Array<{ system_name?: string }>>,
+    db.all(
+      `SELECT name AS system_name FROM trading_systems
+       WHERE UPPER(name) LIKE 'CLOUD%' AND is_active = 1
+       ORDER BY name ASC`
     ) as Promise<Array<{ system_name?: string }>>,
   ]);
   const defaults = normalizeOfferStoreDefaults(safeJsonParse(
@@ -4312,10 +4294,12 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
       .map((row) => asString(row?.system_name, '').trim()),
     ...(Array.isArray(publishedTenantRows) ? publishedTenantRows : [])
       .map((row) => asString(row?.system_name, '').trim()),
+    ...(Array.isArray(cloudTsRows) ? cloudTsRows : [])
+      .map((row) => asString(row?.system_name, '').trim()),
     ...Object.entries(tsBacktestSnapshots || {})
       .filter(([key, snap]) => {
         const name = asString(key, '').trim();
-        if (!name.toUpperCase().startsWith('ALGOFUND_MASTER::')) {
+        if (!name.toUpperCase().startsWith('ALGOFUND_MASTER::') && !name.toUpperCase().startsWith('CLOUD')) {
           return false;
         }
         const eqLen = Array.isArray((snap as any)?.equityPoints) ? (snap as any).equityPoints.length : 0;
@@ -4323,7 +4307,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
       })
       .map(([key]) => asString(key, '').trim()),
   ]
-    .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::'))
+    .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::') || name.toUpperCase().startsWith('CLOUD'))
   ));
   const sweepByStrategyId = new Map<number, SweepRecord>();
   (sweep?.evaluated || []).forEach((item) => {
@@ -4657,22 +4641,48 @@ export const previewAdminSweepBacktest = async (payload?: {
     const payloadOfferIds = Array.isArray(payload?.offerIds)
       ? payload?.offerIds?.map((item) => asString(item, '')).filter(Boolean)
       : [];
+    const isCloudGrouped = /^cloud/i.test(requestedSystemName) && /\(.*\//.test(requestedSystemName);
     if (payloadOfferIds.length > 0) {
       offerIds = Array.from(new Set(payloadOfferIds));
     } else if (requestedSystemName) {
-      const resolvedTargets = await resolveAlgofundSystemTargets({ systemName: requestedSystemName }).catch(() => []);
-      const resolvedTarget = resolvedTargets[0] || null;
-      const runtimeSystem = resolvedTarget
-        ? await getTradingSystem(resolvedTarget.apiKeyName, resolvedTarget.systemId).catch(() => null)
-        : null;
-      const runtimeStrategyIds = Array.isArray(runtimeSystem?.members)
-        ? Array.from(new Set(
-          runtimeSystem.members
-            .filter((member) => member && member.is_enabled !== false)
-            .map((member) => Number(member?.strategy_id || member?.strategy?.id || 0))
-            .filter((value) => Number.isFinite(value) && value > 0)
-        ))
-        : [];
+      // For Cloud grouped cards (e.g. "Cloud_OP2 (Bybit / MEXC / WEEX)"), resolve all Cloud TS members
+      let runtimeStrategyIds: number[] = [];
+
+      if (isCloudGrouped) {
+        const cloudTsRows = await db.all(
+          `SELECT ts.id, ts.name, ak.name as api_key_name
+           FROM trading_systems ts
+           JOIN api_keys ak ON ak.id = ts.api_key_id
+           WHERE UPPER(ts.name) LIKE 'CLOUD%' AND ts.is_active = 1
+           ORDER BY ts.id`
+        ) as Array<{ id: number; name: string; api_key_name: string }>;
+        for (const row of cloudTsRows) {
+          const sys = await getTradingSystem(row.api_key_name, row.id).catch(() => null);
+          if (sys?.members) {
+            for (const m of sys.members) {
+              if (m && m.is_enabled !== false) {
+                const sid = Number(m?.strategy_id || m?.strategy?.id || 0);
+                if (sid > 0) runtimeStrategyIds.push(sid);
+              }
+            }
+          }
+        }
+        runtimeStrategyIds = Array.from(new Set(runtimeStrategyIds));
+      } else {
+        const resolvedTargets = await resolveAlgofundSystemTargets({ systemName: requestedSystemName }).catch(() => []);
+        const resolvedTarget = resolvedTargets[0] || null;
+        const runtimeSystem = resolvedTarget
+          ? await getTradingSystem(resolvedTarget.apiKeyName, resolvedTarget.systemId).catch(() => null)
+          : null;
+        runtimeStrategyIds = Array.isArray(runtimeSystem?.members)
+          ? Array.from(new Set(
+            runtimeSystem.members
+              .filter((member) => member && member.is_enabled !== false)
+              .map((member) => Number(member?.strategy_id || member?.strategy?.id || 0))
+              .filter((value) => Number.isFinite(value) && value > 0)
+          ))
+          : [];
+      }
 
       if (runtimeStrategyIds.length > 0) {
         const offerStore = await getOfferStoreAdminState().catch(() => null);
@@ -4697,6 +4707,12 @@ export const previewAdminSweepBacktest = async (payload?: {
         .filter(Boolean);
     }
     const requestedSetKey = normalizeTsSnapshotMapKey(asString(payload?.setKey, ''));
+    // For Cloud grouped TS with no existing members, use all catalog offers so sweep can pick
+    if (offerIds.length === 0 && isCloudGrouped) {
+      offerIds = getAllOffers(catalog)
+        .map((offer) => String(offer.offerId || ''))
+        .filter(Boolean);
+    }
     if (offerIds.length === 0 && !requestedSetKey) {
       throw new Error('No offerIds resolved for TS sweep backtest preview');
     }
@@ -5807,6 +5823,84 @@ export const previewAdminSweepBacktest = async (payload?: {
       ...(rerunFailureReason ? { error: rerunFailureReason } : {}),
     },
   };
+};
+
+/**
+ * Sync Cloud TS members from sweep backtest results.
+ * For each Cloud TS with auto_sync_members=1, replace members with the strategy_ids
+ * from the given selectedOffers. Each Cloud TS gets the same set of strategies
+ * but keeps its own api_key association.
+ */
+export const syncCloudTsFromSweepResult = async (
+  selectedOffers: Array<{ strategyId: number; offerId?: string; mode?: string; market?: string }>,
+  options?: { dryRun?: boolean },
+): Promise<{ updated: number; skipped: number; details: Array<{ systemId: number; systemName: string; memberCount: number; action: string }> }> => {
+  const dryRun = options?.dryRun === true;
+  const details: Array<{ systemId: number; systemName: string; memberCount: number; action: string }> = [];
+
+  const strategyIds = selectedOffers
+    .map((item) => Number(item.strategyId || 0))
+    .filter((id) => id > 0);
+
+  if (strategyIds.length === 0) {
+    return { updated: 0, skipped: 0, details };
+  }
+
+  // Find all Cloud TS with auto_sync_members enabled
+  const cloudTs = await db.all(
+    `SELECT ts.id, ts.name, ts.api_key_id, ak.name as api_key_name
+     FROM trading_systems ts
+     JOIN api_keys ak ON ak.id = ts.api_key_id
+     WHERE UPPER(ts.name) LIKE 'CLOUD%'
+       AND ts.is_active = 1
+       AND ts.auto_sync_members = 1
+     ORDER BY ts.id`
+  ) as Array<{ id: number; name: string; api_key_id: number; api_key_name: string }>;
+
+  if (cloudTs.length === 0) {
+    return { updated: 0, skipped: 0, details };
+  }
+
+  let updated = 0;
+  let skipped = 0;
+
+  for (const ts of cloudTs) {
+    const memberDrafts = strategyIds.map((strategyId, idx) => ({
+      strategy_id: strategyId,
+      weight: 1.0,
+      member_role: 'member' as const,
+      is_enabled: true,
+      notes: `Cloud auto-sync from sweep at ${new Date().toISOString()}`,
+    }));
+
+    if (dryRun) {
+      details.push({ systemId: ts.id, systemName: ts.name, memberCount: memberDrafts.length, action: 'dry-run' });
+      skipped++;
+      continue;
+    }
+
+    try {
+      const result = await replaceTradingSystemMembersSafely(ts.api_key_name, ts.id, memberDrafts, {
+        cancelRemovedOrders: true,
+        closeRemovedPositions: true,
+        syncMemberActivation: true,
+      });
+      const orch = result.orchestration as any;
+      const closedCount = Number(orch?.closedPositions || 0);
+      const removedCount = (orch?.removedStrategyIds || []).length;
+      const actionMsg = `updated (removed=${removedCount}, closed_positions=${closedCount})`;
+      details.push({ systemId: ts.id, systemName: ts.name, memberCount: memberDrafts.length, action: actionMsg });
+      updated++;
+      logger.info(`[Cloud TS Sync] Updated ${ts.name} (id=${ts.id}) with ${memberDrafts.length} members, closed ${closedCount} positions, removed ${removedCount} strategies`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      details.push({ systemId: ts.id, systemName: ts.name, memberCount: 0, action: `error: ${msg}` });
+      skipped++;
+      logger.error(`[Cloud TS Sync] Failed to update ${ts.name}: ${msg}`);
+    }
+  }
+
+  return { updated, skipped, details };
 };
 
 export const getAdminReportSettings = async (): Promise<AdminReportSettings> => {
@@ -6967,13 +7061,6 @@ export const updateTenantAdminState = async (tenantId: number, payload: {
        WHERE tenant_id = ?`,
       [nextAssignedApiKeyName, tenantId]
     );
-  } else if (tenant.product_mode === 'synctrade_client') {
-    await db.run(
-      `UPDATE synctrade_profiles
-       SET master_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
-       WHERE tenant_id = ?`,
-      [nextAssignedApiKeyName, tenantId]
-    );
   }
 
   if (payload.planCode) {
@@ -7046,15 +7133,12 @@ const listTenantSummaries = async (options?: {
     const strategyProfile = await getStrategyClientProfile(tenant.id);
     const algofundProfile = await getAlgofundProfile(tenant.id);
     const copytradingProfile = await getCopytradingProfile(tenant.id);
-    const synctradeProfile = await getSynctradeProfile(tenant.id);
     const effectiveMonitoringApiKeyName = asString(
       tenant.product_mode === 'strategy_client' || tenant.product_mode === 'dual'
         ? (strategyProfile?.assigned_api_key_name || algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name)
         : tenant.product_mode === 'algofund_client'
           ? (algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name)
-          : tenant.product_mode === 'synctrade_client'
-            ? synctradeProfile?.master_api_key_name
-            : Number(copytradingProfile?.copy_enabled || 0) === 1
+          : Number(copytradingProfile?.copy_enabled || 0) === 1
               ? copytradingProfile?.master_api_key_name
               : '',
       tenant.assigned_api_key_name
@@ -7094,10 +7178,6 @@ const listTenantSummaries = async (options?: {
       copytradingProfile: copytradingProfile ? {
         ...copytradingProfile,
         tenants: safeJsonParse<Array<Record<string, unknown>>>(copytradingProfile.tenants_json, []),
-      } : null,
-      synctradeProfile: synctradeProfile ? {
-        ...synctradeProfile,
-        hedgeAccounts: safeJsonParse<Array<Record<string, unknown>>>(synctradeProfile.hedge_accounts_json, []),
       } : null,
       monitoring,
     });
@@ -8381,7 +8461,7 @@ export const getAlgofundState = async (
       const systemName = asString(item?.name, '').trim();
       const normalizedSystemName = systemName.toUpperCase();
       // Only expose live master storefront cards here; hide archived/client-runtime systems.
-      if (systemName && normalizedSystemName.startsWith('ALGOFUND_MASTER::')) {
+      if (systemName && (normalizedSystemName.startsWith('ALGOFUND_MASTER::') || normalizedSystemName.startsWith('CLOUD'))) {
         const key = `${systemName}`;
         if (!allAlgofundSystemsMap.has(key)) {
           allAlgofundSystemsMap.set(key, item);
@@ -8488,6 +8568,8 @@ export const getAlgofundState = async (
       const systemName = asString(system?.name, '').trim().toUpperCase();
       if (!systemName) return false;
       if (storefrontSystemSet.has(systemName)) return true;
+      // Cloud TS always pass storefront whitelist
+      if (systemName.startsWith('CLOUD')) return true;
       return Boolean(currentPublishedSystemName) && systemName === currentPublishedSystemName;
     });
   }
@@ -8498,6 +8580,8 @@ export const getAlgofundState = async (
     const systemName = asString(system?.name, '').trim().toUpperCase();
     const hasSnapshot = Boolean((system as any).backtestSnapshot);
     if (hasSnapshot) return true;
+    // Cloud TS don't require snapshots to appear on the storefront
+    if (systemName.startsWith('CLOUD')) return true;
     return Boolean(currentPublishedSystemName) && systemName === currentPublishedSystemName;
   });
 
@@ -8505,7 +8589,7 @@ export const getAlgofundState = async (
     const snapshotBacked = Object.entries(tsSnapshots)
       .filter(([key, snapshot]) => {
         const name = asString(key, '').trim().toUpperCase();
-        if (!name.startsWith('ALGOFUND_MASTER::')) return false;
+        if (!name.startsWith('ALGOFUND_MASTER::') && !name.startsWith('CLOUD')) return false;
         const eq = Array.isArray(snapshot?.equityPoints) ? snapshot.equityPoints.length : 0;
         return eq > 1;
       })
@@ -10889,1275 +10973,5 @@ export const getAlgofundChartSnapshot = async (options: {
   };
 };
 
-// ─── Synctrade ───────────────────────────────────────────────────────────────
-
-type SynctradeProfileRow = {
-  id: number;
-  tenant_id: number;
-  master_api_key_name: string;
-  master_display_name: string;
-  symbol: string;
-  hedge_accounts_json: string;
-  mode: string;
-  target_profit_percent: number;
-  target_mode: string;
-  target_value: number;
-  max_accounts: number;
-  interval_ms: number;
-  enabled: number;
-  last_run_at: string | null;
-  last_result_json: string;
-  created_at: string;
-  updated_at: string;
-};
-
-type SynctradeSessionRow = {
-  id: number;
-  profile_id: number;
-  status: string;
-  symbol: string;
-  master_side: string;
-  entry_price: number | null;
-  exit_price: number | null;
-  master_pnl: number;
-  hedge_pnl_json: string;
-  total_pnl: number;
-  duration_ms: number;
-  error: string | null;
-  log_json: string;
-  started_at: string;
-  finished_at: string | null;
-};
-
-const ensureSynctradeProfile = async (tenantId: number, assignedApiKeyName: string): Promise<void> => {
-  // Migrate: add target_mode / target_value columns if missing
-  await db.run(`ALTER TABLE synctrade_profiles ADD COLUMN target_mode TEXT DEFAULT 'percent'`).catch(() => {});
-  await db.run(`ALTER TABLE synctrade_profiles ADD COLUMN target_value REAL DEFAULT 50.0`).catch(() => {});
-  await db.run(`ALTER TABLE synctrade_profiles ADD COLUMN auto_config_json TEXT DEFAULT NULL`).catch(() => {});
-
-  await db.run(
-    `INSERT INTO synctrade_profiles (
-      tenant_id, master_api_key_name, master_display_name, symbol,
-      hedge_accounts_json, mode, target_profit_percent, target_mode, target_value, max_accounts,
-      interval_ms, enabled, created_at, updated_at
-    ) VALUES (?, ?, '', 'BTCUSDT', '[]', 'hedge_pnl', 50, 'percent', 50.0, 5, 500, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    ON CONFLICT(tenant_id) DO UPDATE SET
-      master_api_key_name = CASE WHEN COALESCE(synctrade_profiles.master_api_key_name, '') = '' THEN excluded.master_api_key_name ELSE synctrade_profiles.master_api_key_name END,
-      updated_at = CURRENT_TIMESTAMP`,
-    [tenantId, assignedApiKeyName]
-  );
-};
-
-const getSynctradeProfile = async (tenantId: number): Promise<SynctradeProfileRow | null> => {
-  const row = await db.get('SELECT * FROM synctrade_profiles WHERE tenant_id = ?', [tenantId]);
-  return (row || null) as SynctradeProfileRow | null;
-};
-
-export const getSynctradeState = async (tenantId: number) => {
-  await ensureSaasSeedData();
-  const tenant = await getTenantById(tenantId);
-  if (tenant.product_mode !== 'synctrade_client') {
-    throw new Error('Tenant is not a synctrade client');
-  }
-  const plan = await getPlanForTenant(tenantId);
-  const profile = await getSynctradeProfile(tenantId);
-  if (!profile) {
-    throw new Error('Synctrade profile not found');
-  }
-  const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []).slice(0, 5);
-  const lastResult = safeJsonParse<Record<string, unknown>>(profile.last_result_json, {});
-
-  // Recent sessions
-  const sessions = (await db.all(
-    `SELECT * FROM synctrade_sessions WHERE profile_id = ? ORDER BY started_at DESC LIMIT 50`,
-    [profile.id]
-  ) || []) as SynctradeSessionRow[];
-
-  return {
-    tenant,
-    plan,
-    profile: {
-      ...profile,
-      hedgeAccounts,
-      lastResult,
-    },
-    sessions: sessions.map((s) => ({
-      ...s,
-      hedge_pnl: safeJsonParse<Record<string, number>>(s.hedge_pnl_json, {}),
-      log: safeJsonParse<string[]>(s.log_json, []),
-    })),
-  };
-};
-
-export const updateSynctradeState = async (
-  tenantId: number,
-  payload: {
-    masterApiKeyName?: string;
-    masterDisplayName?: string;
-    symbol?: string;
-    hedgeAccounts?: Array<Record<string, unknown>>;
-    mode?: string;
-    targetProfitPercent?: number;
-    targetMode?: 'percent' | 'usdt';
-    targetValue?: number;
-    intervalMs?: number;
-    enabled?: boolean;
-  }
-) => {
-  const profile = await getSynctradeProfile(tenantId);
-  if (!profile) {
-    throw new Error('Synctrade profile not found');
-  }
-
-  const nextMasterApiKeyName = asString(payload.masterApiKeyName, profile.master_api_key_name);
-  const nextMasterDisplayName = asString(payload.masterDisplayName, profile.master_display_name);
-  const nextSymbol = asString(payload.symbol, profile.symbol);
-  const nextHedgeAccountsJson = payload.hedgeAccounts !== undefined
-    ? JSON.stringify(payload.hedgeAccounts.slice(0, 5))
-    : profile.hedge_accounts_json;
-  const nextMode = asString(payload.mode, profile.mode);
-  const nextTargetProfitPercent = clampNumber(asNumber(payload.targetProfitPercent, asNumber(profile.target_profit_percent, 50)), 1, 500);
-  const nextTargetMode = (payload.targetMode === 'usdt' ? 'usdt' : 'percent') as string;
-  const nextTargetValue = clampNumber(asNumber(payload.targetValue, asNumber(profile.target_value, 50)), 0.01, 1000000);
-  const nextIntervalMs = clampNumber(Math.floor(asNumber(payload.intervalMs, profile.interval_ms)), 100, 10000);
-  const nextEnabled = payload.enabled !== undefined
-    ? (payload.enabled ? 1 : 0)
-    : Number(profile.enabled || 0);
-
-  await db.run(
-    `UPDATE synctrade_profiles
-     SET master_api_key_name = ?, master_display_name = ?, symbol = ?,
-         hedge_accounts_json = ?, mode = ?, target_profit_percent = ?,
-         target_mode = ?, target_value = ?,
-         interval_ms = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE tenant_id = ?`,
-    [nextMasterApiKeyName, nextMasterDisplayName, nextSymbol,
-     nextHedgeAccountsJson, nextMode, nextTargetProfitPercent,
-     nextTargetMode, nextTargetValue,
-     nextIntervalMs, nextEnabled, tenantId]
-  );
-
-  if (payload.masterApiKeyName !== undefined) {
-    await db.run(
-      `UPDATE tenants SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      [nextMasterApiKeyName, tenantId]
-    );
-  }
-
-  return getSynctradeState(tenantId);
-};
-
-export const executeSynctradeSession = async (
-  tenantId: number,
-  payload: {
-    symbol?: string;
-    masterSide?: 'long' | 'short';
-    leverageMaster?: number;
-    leverageHedge?: number;
-    lotPercent?: number;
-    stopLossPercent?: number;   // SL distance from entry as % (e.g. 2 = 2%)
-    takeProfitPercent?: number; // TP distance from entry as % (e.g. 1.5 = 1.5%)
-  }
-) => {
-  const profile = await getSynctradeProfile(tenantId);
-  if (!profile) throw new Error('Synctrade profile not found');
-  if (!Number(profile.enabled)) throw new Error('Synctrade is not enabled for this profile');
-
-  const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
-  if (hedgeAccounts.length === 0) throw new Error('No hedge accounts configured');
-
-  const symbol = asString(payload.symbol, profile.symbol) || 'DOGEUSDT';
-  const masterSide = payload.masterSide === 'short' ? 'short' : 'long';
-  const hedgeSide = masterSide === 'long' ? 'short' : 'long';
-  const leverageMaster = clampNumber(Math.floor(asNumber(payload.leverageMaster, 5)), 1, 50);
-  const leverageHedge = clampNumber(Math.floor(asNumber(payload.leverageHedge, 5)), 1, 50);
-  const lotPercent = clampNumber(asNumber(payload.lotPercent, 10), 1, 100);
-
-  const log: string[] = [];
-  const addLog = (msg: string) => {
-    const ts = new Date().toISOString().slice(11, 23);
-    log.push(`[${ts}] ${msg}`);
-    logger.info(`[Synctrade] ${msg}`);
-  };
-
-  // Create session record
-  const sessionResult = await db.run(
-    `INSERT INTO synctrade_sessions (profile_id, status, symbol, master_side, log_json, started_at)
-     VALUES (?, 'running', ?, ?, '[]', CURRENT_TIMESTAMP)`,
-    [profile.id, symbol, masterSide]
-  );
-  const sessionId = (sessionResult as any)?.lastID;
-  addLog(`Session #${sessionId} created: ${symbol} master=${masterSide} lev=${leverageMaster} lot=${lotPercent}%`);
-
-  const saveLog = async () => {
-    await db.run(`UPDATE synctrade_sessions SET log_json = ? WHERE id = ?`, [JSON.stringify(log), sessionId]);
-  };
-
-  try {
-    // Initialize master account
-    const masterKeyName = asString(profile.master_api_key_name, '');
-    if (!masterKeyName) throw new Error('Master API key not configured');
-
-    await ensureExchangeClientInitialized(masterKeyName);
-    addLog(`Master key initialized: ${masterKeyName}`);
-
-    // Initialize hedge accounts
-    for (const acc of hedgeAccounts) {
-      const keyName = asString(acc.apiKeyName, '');
-      if (keyName) {
-        await ensureExchangeClientInitialized(keyName);
-        addLog(`Hedge key initialized: ${asString(acc.displayName, keyName)}`);
-      }
-    }
-
-    const { getBalances, placeOrder, applySymbolRiskSettings, getInstrumentInfo, placeTriggerOrder } = await import('../bot/exchange');
-
-    // Get instrument info for minLot / qtyStep
-    let minOrderQty = 1;
-    let qtyStep = 1;
-    let contractSize = 1;
-    try {
-      const instInfo = await getInstrumentInfo(masterKeyName, symbol);
-      const lotFilter = (instInfo as any)?.lotSizeFilter;
-      const rawMin = Number(lotFilter?.minOrderQty ?? 0);
-      const rawStep = Number(lotFilter?.qtyStep ?? 0);
-      const rawCS = Number((instInfo as any)?.contractSize ?? 1);
-      if (Number.isFinite(rawMin) && rawMin > 0) minOrderQty = rawMin;
-      if (Number.isFinite(rawStep) && rawStep > 0) qtyStep = rawStep;
-      if (Number.isFinite(rawCS) && rawCS > 0) contractSize = rawCS;
-      addLog(`Instrument: minQty=${minOrderQty} qtyStep=${qtyStep} contractSize=${contractSize}`);
-    } catch (err: any) {
-      addLog(`⚠ Could not get instrument info: ${err.message}`);
-    }
-
-    const roundToStep = (val: number): number => {
-      if (qtyStep <= 0) return val;
-      const result = Math.floor(val / qtyStep) * qtyStep;
-      // round to avoid floating point dust
-      const decimals = String(qtyStep).includes('.') ? String(qtyStep).split('.')[1].length : 0;
-      return Number(result.toFixed(decimals));
-    };
-
-    const enforceMinLot = (val: number): number => {
-      const rounded = roundToStep(val);
-      return rounded < minOrderQty ? minOrderQty : rounded;
-    };
-
-    // Set leverage on master
-    try {
-      await applySymbolRiskSettings(masterKeyName, symbol, 'cross', leverageMaster);
-      addLog(`Master leverage set: ${leverageMaster}x`);
-    } catch (err: any) {
-      addLog(`⚠ Master leverage: ${err.message}`);
-    }
-
-    // Set leverage on hedges
-    for (const acc of hedgeAccounts) {
-      const keyName = asString(acc.apiKeyName, '');
-      const dn = asString(acc.displayName, keyName);
-      if (keyName) {
-        try {
-          await applySymbolRiskSettings(keyName, symbol, 'cross', leverageHedge);
-          addLog(`Hedge ${dn} leverage set: ${leverageHedge}x`);
-        } catch (err: any) {
-          addLog(`⚠ Hedge ${dn} leverage: ${err.message}`);
-        }
-      }
-    }
-
-    // Get master balance to calculate lot
-    const masterBalances = await getBalances(masterKeyName);
-    const usdtBal = (masterBalances || []).find((b: any) => String(b.coin).toUpperCase() === 'USDT');
-    const masterEquity = asNumber(usdtBal?.walletBalance, 0);
-    addLog(`Master USDT balance: ${masterEquity.toFixed(2)}`);
-    if (masterEquity <= 0) throw new Error('Master account has no USDT balance');
-
-    const orderValueUsdt = (masterEquity * lotPercent) / 100;
-
-    // Get current price
-    const marketData = await getMarketData(masterKeyName, symbol, '1m', 1);
-    const price = asNumber((marketData?.[0] as any)?.[4], 0);
-    if (price <= 0) throw new Error('Cannot get current market price');
-    addLog(`Market price ${symbol}: ${price}`);
-
-    const rawQty = (orderValueUsdt * leverageMaster) / (price * contractSize);
-    const qty = enforceMinLot(rawQty);
-    addLog(`Master order: ${masterSide === 'long' ? 'Buy' : 'Sell'} qty=${qty} contracts (raw=${rawQty.toFixed(6)}, value=${orderValueUsdt.toFixed(2)} USDT, csz=${contractSize})`);
-
-    if (qty <= 0) throw new Error('Calculated quantity is too small');
-
-    await saveLog();
-
-    // Place master order (profit side)
-    const masterOrder = await placeOrder(masterKeyName, symbol,
-      masterSide === 'long' ? 'Buy' : 'Sell', String(qty));
-    addLog(`✓ Master order placed`);
-
-    // Place hedge orders (loss side) — simultaneous
-    const hedgePnl: Record<string, number> = {};
-    const hedgePromises = hedgeAccounts.map(async (acc) => {
-      const keyName = asString(acc.apiKeyName, '');
-      const displayName = asString(acc.displayName, keyName);
-      if (!keyName) return;
-
-      try {
-        const hedgeBalances = await getBalances(keyName);
-        const hedgeUsdtBal = (hedgeBalances || []).find((b: any) => String(b.coin).toUpperCase() === 'USDT');
-        const hedgeEquity = asNumber(hedgeUsdtBal?.walletBalance, 0);
-        addLog(`Hedge ${displayName} USDT balance: ${hedgeEquity.toFixed(2)}`);
-
-        // Respect maxSpendUsdt if set
-        const maxSpend = asNumber(acc.maxSpendUsdt, 0);
-        // Respect targetLossUsdt — hedge order value = targetLossUsdt (worst-case 100% loss = targetLossUsdt)
-        const targetLoss = asNumber(acc.targetLossUsdt, 0);
-
-        // Hedge mirrors master qty for perfect balance; cap only if maxSpend/targetLoss limits are tighter
-        let hedgeQty = qty; // start with master qty
-        if (maxSpend > 0 || targetLoss > 0) {
-          const capValue = Math.min(
-            maxSpend > 0 ? maxSpend : Infinity,
-            targetLoss > 0 ? targetLoss : Infinity
-          );
-          const cappedRawQty = (capValue * leverageHedge) / (price * contractSize);
-          const cappedQty = enforceMinLot(cappedRawQty);
-          if (cappedQty < hedgeQty) {
-            hedgeQty = cappedQty;
-            addLog(`Hedge ${displayName}: qty capped to ${hedgeQty} (maxSpend=${maxSpend}, targetLoss=${targetLoss})`);
-          }
-        }
-        addLog(`Hedge ${displayName}: ${hedgeSide === 'long' ? 'Buy' : 'Sell'} qty=${hedgeQty} contracts (mirror master, balance=${hedgeEquity.toFixed(2)} USDT)`);
-
-        if (hedgeQty > 0) {
-          await placeOrder(keyName, symbol,
-            hedgeSide === 'long' ? 'Buy' : 'Sell', String(hedgeQty));
-          addLog(`✓ Hedge ${displayName} order placed`);
-          hedgePnl[displayName] = 0;
-        } else {
-          addLog(`✗ Hedge ${displayName}: qty too small, skipped`);
-        }
-      } catch (err: any) {
-        hedgePnl[displayName] = 0;
-        addLog(`✗ Hedge ${displayName} order FAILED: ${err.message}`);
-      }
-    });
-
-    await Promise.all(hedgePromises);
-
-    // Update session
-    await db.run(
-      `UPDATE synctrade_sessions
-       SET status = 'open', entry_price = ?, hedge_pnl_json = ?, log_json = ?
-       WHERE id = ?`,
-      [price, JSON.stringify(hedgePnl), JSON.stringify(log), sessionId]
-    );
-
-    await db.run(
-      `UPDATE synctrade_profiles SET last_run_at = CURRENT_TIMESTAMP, last_result_json = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?`,
-      [JSON.stringify({ sessionId, symbol, masterSide, entryPrice: price, status: 'open' }), tenantId]
-    );
-
-    addLog(`Session #${sessionId} → open ✓`);
-    await saveLog();
-
-    // ─── Place exchange-level SL/TP trigger orders ───────────────────────────
-    const slPct = asNumber(payload.stopLossPercent, 0);
-    const tpPct = asNumber(payload.takeProfitPercent, 0);
-    if (slPct > 0 || tpPct > 0) {
-      const masterCloseSide: 'Buy' | 'Sell' = masterSide === 'long' ? 'Sell' : 'Buy';
-      const hedgeCloseSide: 'Buy' | 'Sell' = hedgeSide === 'long' ? 'Sell' : 'Buy';
-
-      // Master SL: if long, SL below entry; if short, SL above entry
-      if (slPct > 0) {
-        const masterSLPrice = masterSide === 'long'
-          ? price * (1 - slPct / 100)
-          : price * (1 + slPct / 100);
-        try {
-          await placeTriggerOrder(masterKeyName, symbol, masterCloseSide, String(qty), masterSLPrice, 'master-SL');
-          addLog(`✓ Master SL trigger @ ${masterSLPrice.toFixed(6)}`);
-        } catch (err: any) { addLog(`⚠ Master SL trigger failed: ${err.message}`); }
-
-        // Hedge SL (mirror — hedge profits when master hits SL, so hedge has TP at same price)
-        // But for safety, also set hedge SL at same distance opposite side
-        const hedgeSLPrice = hedgeSide === 'long'
-          ? price * (1 - slPct / 100)
-          : price * (1 + slPct / 100);
-        for (const acc of hedgeAccounts) {
-          const keyName = asString(acc.apiKeyName, '');
-          if (!keyName) continue;
-          try {
-            await placeTriggerOrder(keyName, symbol, hedgeCloseSide, String(qty), hedgeSLPrice, 'hedge-SL');
-            addLog(`✓ Hedge ${asString(acc.displayName, keyName)} SL trigger @ ${hedgeSLPrice.toFixed(6)}`);
-          } catch (err: any) { addLog(`⚠ Hedge SL trigger: ${err.message}`); }
-        }
-      }
-
-      // Master TP: if long, TP above entry; if short, TP below entry
-      if (tpPct > 0) {
-        const masterTPPrice = masterSide === 'long'
-          ? price * (1 + tpPct / 100)
-          : price * (1 - tpPct / 100);
-        try {
-          await placeTriggerOrder(masterKeyName, symbol, masterCloseSide, String(qty), masterTPPrice, 'master-TP');
-          addLog(`✓ Master TP trigger @ ${masterTPPrice.toFixed(6)}`);
-        } catch (err: any) { addLog(`⚠ Master TP trigger failed: ${err.message}`); }
-
-        const hedgeTPPrice = hedgeSide === 'long'
-          ? price * (1 + tpPct / 100)
-          : price * (1 - tpPct / 100);
-        for (const acc of hedgeAccounts) {
-          const keyName = asString(acc.apiKeyName, '');
-          if (!keyName) continue;
-          try {
-            await placeTriggerOrder(keyName, symbol, hedgeCloseSide, String(qty), hedgeTPPrice, 'hedge-TP');
-            addLog(`✓ Hedge ${asString(acc.displayName, keyName)} TP trigger @ ${hedgeTPPrice.toFixed(6)}`);
-          } catch (err: any) { addLog(`⚠ Hedge TP trigger: ${err.message}`); }
-        }
-      }
-      await saveLog();
-    }
-
-    return {
-      sessionId,
-      status: 'open',
-      symbol,
-      masterSide,
-      entryPrice: price,
-      masterOrder,
-      hedgeAccounts: Object.keys(hedgePnl),
-      log,
-    };
-  } catch (err: any) {
-    addLog(`✗ FATAL: ${err.message}`);
-    await db.run(
-      `UPDATE synctrade_sessions SET status = 'error', error = ?, log_json = ?, finished_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      [String(err.message || err).slice(0, 500), JSON.stringify(log), sessionId]
-    );
-    throw err;
-  }
-};
-
-export const closeSynctradeSession = async (tenantId: number, sessionId: number) => {
-  const profile = await getSynctradeProfile(tenantId);
-  if (!profile) throw new Error('Synctrade profile not found');
-
-  const session = await db.get(
-    `SELECT * FROM synctrade_sessions WHERE id = ? AND profile_id = ?`,
-    [sessionId, profile.id]
-  ) as SynctradeSessionRow | null;
-  if (!session) throw new Error('Session not found');
-  if (!['open', 'running', 'error'].includes(session.status)) throw new Error(`Session status "${session.status}" cannot be closed`);
-
-  const symbol = session.symbol;
-  const masterKeyName = asString(profile.master_api_key_name, '');
-  const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
-
-  const log: string[] = safeJsonParse<string[]>(session.log_json, []);
-  const addLog = (msg: string) => {
-    const ts = new Date().toISOString().slice(11, 23);
-    log.push(`[${ts}] ${msg}`);
-    logger.info(`[Synctrade] ${msg}`);
-  };
-
-  addLog(`Closing session #${sessionId}: ${symbol}`);
-
-  const { closePosition, getPositions: getPos, cancelTriggerOrders } = await import('../bot/exchange');
-
-  // Cancel any pending trigger orders first
-  try {
-    await cancelTriggerOrders(masterKeyName, symbol);
-    addLog(`✓ Master trigger orders cancelled`);
-  } catch (err: any) { addLog(`⚠ Cancel master triggers: ${err.message}`); }
-  for (const acc of hedgeAccounts) {
-    const keyName = asString(acc.apiKeyName, '');
-    if (!keyName) continue;
-    try {
-      await cancelTriggerOrders(keyName, symbol);
-      addLog(`✓ Hedge ${asString(acc.displayName, keyName)} triggers cancelled`);
-    } catch (err: any) { addLog(`⚠ Cancel hedge triggers: ${err.message}`); }
-  }
-
-  // Helper to normalize symbol for comparison (strip /, :, etc.)
-  const normSym = (v: string) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const targetKey = normSym(symbol);
-
-  // Close master position
-  let masterPnl = 0;
-  try {
-    const masterPositions = await getPos(masterKeyName, symbol);
-    addLog(`Master positions found: ${(masterPositions || []).length}`);
-    const masterPos = (masterPositions || []).find((p: any) => normSym(p.symbol) === targetKey);
-    if (masterPos) {
-      const posQty = asNumber(masterPos.size, 0);
-      const posSide: 'Buy' | 'Sell' = String(masterPos.side).includes('Buy') || String(masterPos.side).includes('buy') ? 'Buy' : 'Sell';
-      addLog(`Master position: side=${posSide} qty=${posQty} uPnL=${masterPos.unrealisedPnl}`);
-      if (posQty > 0) {
-        await closePosition(masterKeyName, symbol, String(posQty), posSide);
-        addLog(`✓ Master position closed`);
-      }
-      masterPnl = asNumber(masterPos.unrealisedPnl, 0);
-    } else {
-      addLog(`⚠ Master: no open position found for ${symbol}`);
-    }
-  } catch (err: any) {
-    addLog(`✗ Master close failed: ${err.message}`);
-  }
-
-  // Close hedge positions
-  const hedgePnl: Record<string, number> = {};
-  for (const acc of hedgeAccounts) {
-    const keyName = asString(acc.apiKeyName, '');
-    const displayName = asString(acc.displayName, keyName);
-    if (!keyName) continue;
-
-    try {
-      const hedgePositions = await getPos(keyName, symbol);
-      addLog(`Hedge ${displayName} positions found: ${(hedgePositions || []).length}`);
-      const hedgePos = (hedgePositions || []).find((p: any) => normSym(p.symbol) === targetKey);
-      if (hedgePos) {
-        const posQty = asNumber(hedgePos.size, 0);
-        const posSide: 'Buy' | 'Sell' = String(hedgePos.side).includes('Buy') || String(hedgePos.side).includes('buy') ? 'Buy' : 'Sell';
-        addLog(`Hedge ${displayName}: side=${posSide} qty=${posQty} uPnL=${hedgePos.unrealisedPnl}`);
-        if (posQty > 0) {
-          await closePosition(keyName, symbol, String(posQty), posSide);
-          addLog(`✓ Hedge ${displayName} position closed`);
-        }
-        hedgePnl[displayName] = asNumber(hedgePos.unrealisedPnl, 0);
-      } else {
-        addLog(`⚠ Hedge ${displayName}: no open position found for ${symbol}`);
-        hedgePnl[displayName] = 0;
-      }
-    } catch (err: any) {
-      addLog(`✗ Hedge ${displayName} close failed: ${err.message}`);
-      hedgePnl[displayName] = 0;
-    }
-  }
-
-  const totalPnl = masterPnl + Object.values(hedgePnl).reduce((sum, v) => sum + v, 0);
-  const startTime = new Date(session.started_at).getTime();
-  const durationMs = Date.now() - (Number.isFinite(startTime) ? startTime : Date.now());
-
-  // Get exit price
-  const { getMarketData: getMD } = await import('../bot/exchange');
-  let exitPrice = 0;
-  try {
-    const marketData = await getMD(masterKeyName, symbol, '1m', 1);
-    exitPrice = asNumber((marketData?.[0] as any)?.[4], 0);
-  } catch { /* non-critical */ }
-
-  addLog(`Result: masterPnl=${masterPnl.toFixed(4)} hedgePnl=${JSON.stringify(hedgePnl)} totalPnl=${totalPnl.toFixed(4)} duration=${(durationMs / 1000).toFixed(1)}s`);
-
-  await db.run(
-    `UPDATE synctrade_sessions
-     SET status = 'closed', exit_price = ?, master_pnl = ?, hedge_pnl_json = ?,
-         total_pnl = ?, duration_ms = ?, log_json = ?, finished_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
-    [exitPrice, masterPnl, JSON.stringify(hedgePnl), totalPnl, durationMs, JSON.stringify(log), sessionId]
-  );
-
-  await db.run(
-    `UPDATE synctrade_profiles SET last_result_json = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?`,
-    [JSON.stringify({ sessionId, status: 'closed', masterPnl, hedgePnl, totalPnl }), tenantId]
-  );
-
-  addLog(`Session #${sessionId} → closed ✓`);
-
-  return { sessionId, status: 'closed', exitPrice, masterPnl, hedgePnl, totalPnl, durationMs, log };
-};
-
-export const getSynctradeSessions = async (tenantId: number, limit = 50) => {
-  const profile = await getSynctradeProfile(tenantId);
-  if (!profile) throw new Error('Synctrade profile not found');
-
-  const sessions = (await db.all(
-    `SELECT * FROM synctrade_sessions WHERE profile_id = ? ORDER BY started_at DESC LIMIT ?`,
-    [profile.id, Math.min(limit, 200)]
-  ) || []) as SynctradeSessionRow[];
-
-  return sessions.map((s) => ({
-    ...s,
-    hedge_pnl: safeJsonParse<Record<string, number>>(s.hedge_pnl_json, {}),
-    log: safeJsonParse<string[]>(s.log_json, []),
-  }));
-};
-
-// ─── Synctrade auto-close monitor ────────────────────────────────────────────
-// Periodically checks open sessions against target_mode/target_value and auto-closes when target reached.
-
-let synctradeMonitorRunning = false;
-
-const checkSynctradeAutoClose = async () => {
-  if (synctradeMonitorRunning) return;
-  synctradeMonitorRunning = true;
-  try {
-    // Find all open sessions with their profile
-    const openSessions = (await db.all(
-      `SELECT s.*, p.tenant_id, p.master_api_key_name, p.hedge_accounts_json,
-              p.target_mode, p.target_value, p.target_profit_percent
-       FROM synctrade_sessions s
-       JOIN synctrade_profiles p ON s.profile_id = p.id
-       WHERE s.status = 'open'`
-    ) || []) as Array<SynctradeSessionRow & { tenant_id: number; master_api_key_name: string; hedge_accounts_json: string; target_mode: string; target_value: number; target_profit_percent: number }>;
-
-    if (openSessions.length === 0) return;
-
-    const { getPositions: getPos } = await import('../bot/exchange');
-    const normSym = (v: string) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-
-    for (const sess of openSessions) {
-      try {
-        const targetMode = sess.target_mode || 'percent';
-        const targetValue = Number(sess.target_value) || Number(sess.target_profit_percent) || 50;
-        const masterKeyName = sess.master_api_key_name;
-        const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(sess.hedge_accounts_json, []);
-        const targetKey = normSym(sess.symbol);
-
-        // Get master PnL
-        let masterPnl = 0;
-        try {
-          const masterPositions = await getPos(masterKeyName, sess.symbol);
-          const masterPos = (masterPositions || []).find((p: any) => normSym(p.symbol) === targetKey);
-          if (masterPos) masterPnl = asNumber(masterPos.unrealisedPnl, 0);
-        } catch { /* skip */ }
-
-        // Get hedge PnL
-        let totalHedgePnl = 0;
-        for (const acc of hedgeAccounts) {
-          const keyName = asString(acc.apiKeyName, '');
-          if (!keyName) continue;
-          try {
-            const hedgePositions = await getPos(keyName, sess.symbol);
-            const hedgePos = (hedgePositions || []).find((p: any) => normSym(p.symbol) === targetKey);
-            if (hedgePos) totalHedgePnl += asNumber(hedgePos.unrealisedPnl, 0);
-          } catch { /* skip */ }
-        }
-
-        const totalPnl = masterPnl + totalHedgePnl;
-
-        // Check target
-        let shouldClose = false;
-        if (targetMode === 'usdt') {
-          // Target in USDT — close when master profit >= target
-          shouldClose = masterPnl >= targetValue;
-        } else {
-          // Target in % — close when master profit >= target % of entry value
-          const entryPrice = asNumber(sess.entry_price, 0);
-          if (entryPrice > 0 && masterPnl > 0) {
-            // Approximate: profit % relative to entry margin
-            // Since we don't store margin, use a simpler heuristic: masterPnl >= targetValue USDT too
-            // Actually, for meaningful % we need to know the master position margin.
-            // For now, treat target_profit_percent as a PnL threshold in USDT as well, just labeled differently.
-            // The user wants to switch to USDT mode anyway.
-            shouldClose = masterPnl >= targetValue;
-          }
-        }
-
-        if (shouldClose) {
-          logger.info(`[Synctrade Monitor] Auto-closing session #${sess.id}: masterPnl=${masterPnl.toFixed(2)}, target=${targetValue} ${targetMode}`);
-          try {
-            await closeSynctradeSession(sess.tenant_id, sess.id);
-            logger.info(`[Synctrade Monitor] Session #${sess.id} auto-closed successfully`);
-          } catch (err: any) {
-            logger.error(`[Synctrade Monitor] Failed to auto-close session #${sess.id}: ${err.message}`);
-          }
-        }
-      } catch (err: any) {
-        logger.error(`[Synctrade Monitor] Error checking session #${sess.id}: ${err.message}`);
-      }
-    }
-  } catch (err: any) {
-    logger.error(`[Synctrade Monitor] ${err.message}`);
-  } finally {
-    synctradeMonitorRunning = false;
-  }
-};
-
-// Run every 10 seconds
-setInterval(checkSynctradeAutoClose, 10_000);
-
-export const getSynctradeLivePnl = async (tenantId: number, sessionId: number) => {
-  const profile = await getSynctradeProfile(tenantId);
-  if (!profile) throw new Error('Synctrade profile not found');
-
-  const session = await db.get(
-    `SELECT * FROM synctrade_sessions WHERE id = ? AND profile_id = ?`,
-    [sessionId, profile.id]
-  ) as SynctradeSessionRow | null;
-  if (!session) throw new Error('Session not found');
-  if (session.status !== 'open') return { masterPnl: session.master_pnl, hedgePnl: safeJsonParse<Record<string, number>>(session.hedge_pnl_json, {}), totalPnl: session.total_pnl, status: session.status };
-
-  const masterKeyName = asString(profile.master_api_key_name, '');
-  const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
-  const normSym = (v: string) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const targetKey = normSym(session.symbol);
-
-  const { getPositions: getPos } = await import('../bot/exchange');
-
-  let masterPnl = 0;
-  try {
-    const positions = await getPos(masterKeyName, session.symbol);
-    const pos = (positions || []).find((p: any) => normSym(p.symbol) === targetKey);
-    if (pos) masterPnl = asNumber(pos.unrealisedPnl, 0);
-  } catch { /* skip */ }
-
-  const hedgePnl: Record<string, number> = {};
-  for (const acc of hedgeAccounts) {
-    const keyName = asString(acc.apiKeyName, '');
-    const displayName = asString(acc.displayName, keyName);
-    if (!keyName) continue;
-    try {
-      const positions = await getPos(keyName, session.symbol);
-      const pos = (positions || []).find((p: any) => normSym(p.symbol) === targetKey);
-      hedgePnl[displayName] = pos ? asNumber(pos.unrealisedPnl, 0) : 0;
-    } catch {
-      hedgePnl[displayName] = 0;
-    }
-  }
-
-  const totalPnl = masterPnl + Object.values(hedgePnl).reduce((s, v) => s + v, 0);
-  return { masterPnl, hedgePnl, totalPnl, status: 'open', entryPrice: session.entry_price, symbol: session.symbol };
-};
-
-// ─── SyncAuto Engine — automated multi-pair synctrade strategy ───────────────
-// Scans liquid pairs, opens hedged positions across many symbols,
-// manages load to stay ~2-3% from liquidation, auto-adjusts to volatility.
-
-interface SyncAutoConfig {
-  maxPairs: number;           // max simultaneous pairs (default 6)
-  leverageRange: [number, number]; // [min, max] adaptive leverage
-  lotPercent: number;         // base lot % per pair from total equity
-  minVolume24h: number;       // min 24h turnover USDT to consider pair (auto-scaled by deposit)
-  maxSpread: number;          // max 24h change % (avoid pumps/dumps)
-  liquidationBuffer: number;  // target distance to liq as fraction (0.03 = 3%)
-  scanIntervalMs: number;     // how often to scan (default 60s)
-  rebalanceIntervalMs: number; // how often to check load (default 15s)
-  maxContractSizeUsdt: number; // skip pairs with contractSize > X USDT (prefer small ticks)
-  minVolumeMultiplier: number; // min volume must be >= deposit × notional × this (default 50)
-  stopLossUsdt: number;        // max master loss per session before auto-close (default 25)
-  stopLossPercent: number;     // exchange-level SL distance % (e.g. 2 = 2%). 0 = disabled
-  takeProfitPercent: number;   // exchange-level TP distance % (e.g. 1.5). 0 = disabled
-}
-
-const SYNC_AUTO_DEFAULTS: SyncAutoConfig = {
-  maxPairs: 6,
-  leverageRange: [15, 30],
-  lotPercent: 80,
-  minVolume24h: 2_000_000,
-  maxSpread: 15,
-  liquidationBuffer: 0.03,
-  scanIntervalMs: 60_000,
-  rebalanceIntervalMs: 15_000,
-  maxContractSizeUsdt: 5,
-  minVolumeMultiplier: 50,
-  stopLossUsdt: 25,
-  stopLossPercent: 2,
-  takeProfitPercent: 1.5,
-};
-
-interface SyncAutoState {
-  running: boolean;
-  tenantId: number | null;
-  config: SyncAutoConfig;
-  activePairs: Map<string, { sessionId: number; leverage: number; entryPrice: number; openedAt: number }>;
-  lastScanAt: number;
-  lastRebalanceAt: number;
-  scanTimer: ReturnType<typeof setInterval> | null;
-  rebalanceTimer: ReturnType<typeof setInterval> | null;
-  totalCycles: number;
-  totalOpened: number;
-  totalClosed: number;
-  errors: string[];
-}
-
-const syncAutoState: SyncAutoState = {
-  running: false,
-  tenantId: null,
-  config: { ...SYNC_AUTO_DEFAULTS },
-  activePairs: new Map(),
-  lastScanAt: 0,
-  lastRebalanceAt: 0,
-  scanTimer: null,
-  rebalanceTimer: null,
-  totalCycles: 0,
-  totalOpened: 0,
-  totalClosed: 0,
-  errors: [],
-};
-
-const syncAutoLog = (msg: string) => logger.info(`[SyncAuto] ${msg}`);
-const syncAutoErr = (msg: string) => {
-  logger.error(`[SyncAuto] ${msg}`);
-  syncAutoState.errors.push(`[${new Date().toISOString().slice(11, 19)}] ${msg}`);
-  if (syncAutoState.errors.length > 100) syncAutoState.errors.splice(0, 50);
-};
-
-/**
- * Score a pair for suitability.
- * Filters: volume (absolute + relative to notional), volatility, contract size.
- * perPairNotional = per-pair budget × leverage — our expected position size.
- * Volume must be >> notional so we don't move the market.
- * Returns 0 if pair should be skipped.
- */
-const scorePair = (
-  ticker: { symbol: string; turnover24h: number; lastPrice: number; change24hPercent: number },
-  contractSizeUsdt: number,
-  cfg: SyncAutoConfig,
-  perPairNotional: number
-): number => {
-  // Absolute volume floor
-  if (ticker.turnover24h < cfg.minVolume24h) return 0;
-  // Relative volume: our notional should be tiny vs 24h volume
-  const minRelativeVolume = perPairNotional * cfg.minVolumeMultiplier;
-  if (ticker.turnover24h < minRelativeVolume) return 0;
-
-  const absChange = Math.abs(ticker.change24hPercent);
-  if (absChange > cfg.maxSpread) return 0; // skip pumps/dumps
-  if (absChange < 0.5) return 0; // too stable, slow profit
-  if (contractSizeUsdt > cfg.maxContractSizeUsdt) return 0;
-  if (ticker.lastPrice <= 0) return 0;
-
-  // Score: volume × volatility_bonus × size_bonus × liquidity_ratio
-  const volScore = Math.log10(Math.max(1, ticker.turnover24h));
-  const volBonus = absChange >= 1 && absChange <= 8 ? 1.5 : 1;
-  const sizeBonus = contractSizeUsdt < 1 ? 1.3 : 1;
-  // Bonus for pairs where our notional is tiny vs volume (better fills)
-  const liqRatio = Math.min(2, Math.log10(Math.max(1, ticker.turnover24h / Math.max(1, perPairNotional))) / 3);
-  return volScore * volBonus * sizeBonus * (1 + liqRatio);
-};
-
-/**
- * Calculate adaptive leverage based on volatility.
- * Higher volatility → lower leverage to stay far from liquidation.
- * Formula: leverage ≈ (SL% / volatility_factor) clamped to [min, max]
- * Ensures liquidation distance is always >= 2× SL distance.
- */
-const adaptiveLeverage = (absChange24h: number, cfg: SyncAutoConfig): number => {
-  const [minLev, maxLev] = cfg.leverageRange;
-  const slPct = cfg.stopLossPercent > 0 ? cfg.stopLossPercent : 2;
-  // Volatility factor: use 24h change as proxy, minimum 1%
-  const vol = Math.max(1, absChange24h);
-  // Target: liquidation distance = 3× SL distance
-  // Liq distance ≈ 1/leverage, so leverage ≈ 100 / (3 × slPct × vol_scale)
-  const volScale = Math.max(1, vol / 2); // 2% vol → 1x, 10% vol → 5x
-  const targetLev = Math.round(100 / (3 * slPct * volScale));
-  const lev = Math.max(minLev, Math.min(maxLev, targetLev));
-  return lev;
-};
-
-/**
- * Scan market and open new hedged pairs if we have capacity.
- */
-const syncAutoScanAndOpen = async () => {
-  const { tenantId, config: cfg, activePairs } = syncAutoState;
-  if (!tenantId) return;
-
-  const profile = await getSynctradeProfile(tenantId);
-  if (!profile || !Number(profile.enabled)) return;
-
-  const masterKeyName = asString(profile.master_api_key_name, '');
-  const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
-  if (!masterKeyName || hedgeAccounts.length === 0) return;
-
-  const slotsAvailable = cfg.maxPairs - activePairs.size;
-  if (slotsAvailable <= 0) return;
-
-  syncAutoState.totalCycles++;
-
-  try {
-    const { getTickersSnapshot, getBalances, getInstrumentInfo } = await import('../bot/exchange');
-
-    // Get all tickers (cached per CACHE_TTL)
-    const tickers = await getTickersSnapshot(masterKeyName);
-    if (!tickers || tickers.length === 0) return;
-
-    // Get master balance for lot sizing
-    const balances = await getBalances(masterKeyName);
-    const usdtBal = (balances || []).find((b: any) => String(b.coin).toUpperCase() === 'USDT');
-    const equity = asNumber(usdtBal?.walletBalance, 0);
-    if (equity <= 1) {
-      syncAutoLog(`Low balance: ${equity.toFixed(2)} USDT, skipping`);
-      return;
-    }
-
-    // Per-pair budget and estimated notional (for volume filtering)
-    const perPairUsdt = (equity * cfg.lotPercent / 100) / cfg.maxPairs;
-    const midLeverage = (cfg.leverageRange[0] + cfg.leverageRange[1]) / 2;
-    const perPairNotional = perPairUsdt * midLeverage;
-
-    syncAutoLog(`Scan: equity=${equity.toFixed(1)} perPair=${perPairUsdt.toFixed(1)} notional~${perPairNotional.toFixed(0)} slots=${slotsAvailable}`);
-
-    // Score and rank pairs (exclude already active)
-    const activeSymbols = new Set(activePairs.keys());
-    const candidates: Array<{ symbol: string; score: number; ticker: typeof tickers[0]; csUsdt: number }> = [];
-
-    for (const t of tickers) {
-      const sym = String(t.symbol).replace(/[^A-Z0-9]/g, '');
-      if (activeSymbols.has(sym)) continue;
-      if (!sym.endsWith('USDT')) continue;
-      // Rough contract size estimate (refined after selection)
-      const csUsdt = t.lastPrice;
-      const score = scorePair(t, csUsdt, cfg, perPairNotional);
-      if (score > 0) candidates.push({ symbol: sym, score, ticker: t, csUsdt });
-    }
-
-    candidates.sort((a, b) => b.score - a.score);
-    const toOpen = candidates.slice(0, slotsAvailable);
-
-    for (const cand of toOpen) {
-      try {
-        // Get precise instrument info
-        let contractSize = 1;
-        let minOrderQty = 1;
-        let qtyStep = 1;
-        try {
-          const inst = await getInstrumentInfo(masterKeyName, cand.symbol);
-          const lf = (inst as any)?.lotSizeFilter;
-          const cs = Number((inst as any)?.contractSize ?? 1);
-          if (cs > 0) contractSize = cs;
-          if (Number(lf?.minOrderQty) > 0) minOrderQty = Number(lf.minOrderQty);
-          if (Number(lf?.qtyStep) > 0) qtyStep = Number(lf.qtyStep);
-        } catch { /* use defaults */ }
-
-        // Recheck contract size in USDT
-        const csUsdt = contractSize * cand.ticker.lastPrice;
-        if (csUsdt > cfg.maxContractSizeUsdt) continue;
-
-        const absChange = Math.abs(cand.ticker.change24hPercent);
-        const leverage = adaptiveLeverage(absChange, cfg);
-
-        // Master side follows 24h trend — master profits when trend continues
-        const masterSide: 'long' | 'short' = cand.ticker.change24hPercent >= 0 ? 'long' : 'short';
-
-        syncAutoLog(`Opening ${cand.symbol} lev=${leverage}x side=${masterSide} budget=${perPairUsdt.toFixed(1)} USDT SL=${cfg.stopLossPercent}% TP=${cfg.takeProfitPercent}%`);
-
-        const result = await executeSynctradeSession(tenantId, {
-          symbol: cand.symbol,
-          masterSide,
-          leverageMaster: leverage,
-          leverageHedge: leverage,
-          lotPercent: Math.round((perPairUsdt / equity) * 100),
-          stopLossPercent: cfg.stopLossPercent,
-          takeProfitPercent: cfg.takeProfitPercent,
-        });
-
-        if (result?.sessionId) {
-          activePairs.set(cand.symbol, {
-            sessionId: result.sessionId,
-            leverage,
-            entryPrice: result.entryPrice || 0,
-            openedAt: Date.now(),
-          });
-          syncAutoState.totalOpened++;
-          syncAutoLog(`✓ ${cand.symbol} session #${result.sessionId} opened`);
-        }
-      } catch (err: any) {
-        syncAutoErr(`Failed to open ${cand.symbol}: ${err.message}`);
-      }
-    }
-
-    syncAutoState.lastScanAt = Date.now();
-  } catch (err: any) {
-    syncAutoErr(`Scan error: ${err.message}`);
-  }
-};
-
-/**
- * Rebalance — check load, distance to liquidation, close over-leveraged,
- * detect liquidations and emergency-close hedge side.
- */
-const syncAutoRebalance = async () => {
-  const { tenantId, config: cfg, activePairs } = syncAutoState;
-  if (!tenantId || activePairs.size === 0) return;
-
-  const profile = await getSynctradeProfile(tenantId);
-  if (!profile) return;
-
-  const masterKeyName = asString(profile.master_api_key_name, '');
-  const hedgeAccounts = safeJsonParse<Array<Record<string, unknown>>>(profile.hedge_accounts_json, []);
-
-  try {
-    const { getPositions: getPos, closePosition, cancelTriggerOrders } = await import('../bot/exchange');
-    const normSym = (v: string) => String(v || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
-
-    // Fetch all master positions at once
-    const allMasterPos = await getPos(masterKeyName);
-    const masterPosMap = new Map<string, any>();
-    for (const p of (allMasterPos || [])) {
-      masterPosMap.set(normSym(p.symbol), p);
-    }
-
-    // Also fetch hedge positions for trigger-fill detection
-    const hedgeKeyName = hedgeAccounts.length > 0 ? asString(hedgeAccounts[0].apiKeyName, '') : '';
-    let hedgePosMap = new Map<string, any>();
-    if (hedgeKeyName) {
-      try {
-        const allHedgePos = await getPos(hedgeKeyName);
-        for (const p of (allHedgePos || [])) {
-          hedgePosMap.set(normSym(p.symbol), p);
-        }
-      } catch { /* non-critical */ }
-    }
-
-    const toClose: string[] = [];
-
-    for (const [sym, info] of activePairs.entries()) {
-      const masterPos = masterPosMap.get(normSym(sym));
-      const hedgePos = hedgePosMap.get(normSym(sym));
-      const masterGone = !masterPos || asNumber(masterPos.size, 0) === 0;
-      const hedgeGone = !hedgePos || asNumber(hedgePos.size, 0) === 0;
-
-      // CASE 1: One side closed by trigger (SL/TP fired on exchange) — close other side
-      if (masterGone || hedgeGone) {
-        const which = masterGone ? 'master' : 'hedge';
-        syncAutoLog(`⚠ ${sym} ${which} position gone (trigger fired?) — closing session via closeSynctradeSession`);
-        try {
-          // Cancel remaining triggers before closing
-          try { await cancelTriggerOrders(masterKeyName, sym); } catch { /* ok */ }
-          for (const acc of hedgeAccounts) {
-            const kn = asString(acc.apiKeyName, '');
-            if (kn) try { await cancelTriggerOrders(kn, sym); } catch { /* ok */ }
-          }
-          await closeSynctradeSession(tenantId, info.sessionId);
-          syncAutoState.totalClosed++;
-          syncAutoLog(`✓ ${sym} session #${info.sessionId} closed (${which} trigger)`);
-        } catch (err: any) {
-          syncAutoErr(`Trigger-close ${sym}: ${err.message}`);
-        }
-        toClose.push(sym);
-        continue;
-      }
-
-      // CASE 2: Stop-loss — close if master uPnL exceeds threshold
-      const masterUPnl = asNumber(masterPos.unrealisedPnl, 0);
-      if (cfg.stopLossUsdt > 0 && masterUPnl <= -cfg.stopLossUsdt) {
-        syncAutoLog(`⛔ ${sym} SL hit: master uPnL=${masterUPnl.toFixed(2)} <= -${cfg.stopLossUsdt} — closing session`);
-        try {
-          await closeSynctradeSession(tenantId, info.sessionId);
-          syncAutoState.totalClosed++;
-          syncAutoLog(`✓ ${sym} session #${info.sessionId} closed (stop-loss)`);
-        } catch (err: any) {
-          syncAutoErr(`SL close ${sym}: ${err.message}`);
-        }
-        toClose.push(sym);
-        continue;
-      }
-
-      // CASE 3: Check distance to liquidation
-      const entryPrice = asNumber(masterPos.entryPrice, 0);
-      const markPrice = asNumber(masterPos.markPrice, 0);
-      const leverage = asNumber(masterPos.leverage, info.leverage);
-
-      if (entryPrice > 0 && markPrice > 0 && leverage > 0) {
-        // Approximate liquidation distance: 1/leverage - maintenance_margin(~0.5%)
-        const liqDistance = (1 / leverage) - 0.005;
-        const currentDistance = Math.abs(markPrice - entryPrice) / entryPrice;
-        const distanceToLiq = liqDistance - currentDistance;
-
-        if (distanceToLiq < cfg.liquidationBuffer * 0.5) {
-          // Too close to liquidation — close this pair
-          syncAutoLog(`⚠ ${sym} too close to liq (${(distanceToLiq * 100).toFixed(2)}%) — closing`);
-          try {
-            await closeSynctradeSession(tenantId, info.sessionId);
-            syncAutoState.totalClosed++;
-            syncAutoLog(`✓ ${sym} session #${info.sessionId} closed (liq protection)`);
-          } catch (err: any) {
-            syncAutoErr(`Close ${sym} for liq protection: ${err.message}`);
-          }
-          toClose.push(sym);
-        }
-      }
-    }
-
-    // Clean up closed pairs
-    for (const sym of toClose) {
-      activePairs.delete(sym);
-    }
-
-    syncAutoState.lastRebalanceAt = Date.now();
-  } catch (err: any) {
-    syncAutoErr(`Rebalance error: ${err.message}`);
-  }
-};
-
-/**
- * Start the auto-engine for a tenant.
- */
-export const startSyncAutoEngine = async (tenantId: number, config?: Partial<SyncAutoConfig>) => {
-  if (syncAutoState.running) {
-    throw new Error('SyncAuto engine is already running');
-  }
-
-  const profile = await getSynctradeProfile(tenantId);
-  if (!profile || !Number(profile.enabled)) {
-    throw new Error('Synctrade profile not found or not enabled');
-  }
-
-  const cfg = { ...SYNC_AUTO_DEFAULTS, ...config };
-  syncAutoState.running = true;
-  syncAutoState.tenantId = tenantId;
-  syncAutoState.config = cfg;
-  syncAutoState.activePairs = new Map();
-  syncAutoState.totalCycles = 0;
-  syncAutoState.totalOpened = 0;
-  syncAutoState.totalClosed = 0;
-  syncAutoState.errors = [];
-
-  syncAutoLog(`Engine started: tenant=${tenantId} maxPairs=${cfg.maxPairs} lev=${cfg.leverageRange} lot=${cfg.lotPercent}% SL=${cfg.stopLossUsdt}`);
-
-  // Persist config so resume picks it up after restart
-  try {
-    await db.run(
-      `UPDATE synctrade_profiles SET auto_config_json = ? WHERE tenant_id = ?`,
-      [JSON.stringify(cfg), tenantId]
-    );
-  } catch { /* column may not exist yet */ }
-
-  // Initial scan
-  await syncAutoScanAndOpen();
-
-  // Start timers
-  syncAutoState.scanTimer = setInterval(async () => {
-    if (!syncAutoState.running) return;
-    try { await syncAutoScanAndOpen(); } catch (err: any) { syncAutoErr(`Scan tick: ${err.message}`); }
-  }, cfg.scanIntervalMs);
-
-  syncAutoState.rebalanceTimer = setInterval(async () => {
-    if (!syncAutoState.running) return;
-    try { await syncAutoRebalance(); } catch (err: any) { syncAutoErr(`Rebalance tick: ${err.message}`); }
-  }, cfg.rebalanceIntervalMs);
-
-  return { status: 'started', config: cfg };
-};
-
-/**
- * Stop the auto-engine. Close all active pairs if requested.
- */
-export const stopSyncAutoEngine = async (closeAll: boolean = false) => {
-  if (!syncAutoState.running) {
-    return { status: 'not_running' };
-  }
-
-  syncAutoLog(`Stopping engine... closeAll=${closeAll}`);
-
-  if (syncAutoState.scanTimer) clearInterval(syncAutoState.scanTimer);
-  if (syncAutoState.rebalanceTimer) clearInterval(syncAutoState.rebalanceTimer);
-  syncAutoState.scanTimer = null;
-  syncAutoState.rebalanceTimer = null;
-  syncAutoState.running = false;
-
-  if (closeAll && syncAutoState.tenantId) {
-    const pairs = [...syncAutoState.activePairs.entries()];
-    for (const [sym, info] of pairs) {
-      try {
-        await closeSynctradeSession(syncAutoState.tenantId, info.sessionId);
-        syncAutoState.totalClosed++;
-        syncAutoLog(`✓ Closed ${sym} session #${info.sessionId}`);
-      } catch (err: any) {
-        syncAutoErr(`Failed to close ${sym}: ${err.message}`);
-      }
-    }
-    syncAutoState.activePairs.clear();
-  }
-
-  syncAutoLog(`Engine stopped. Opened=${syncAutoState.totalOpened} Closed=${syncAutoState.totalClosed}`);
-  return {
-    status: 'stopped',
-    totalCycles: syncAutoState.totalCycles,
-    totalOpened: syncAutoState.totalOpened,
-    totalClosed: syncAutoState.totalClosed,
-    remainingPairs: syncAutoState.activePairs.size,
-  };
-};
-
-/**
- * Get current auto-engine status.
- */
-export const getSyncAutoStatus = () => {
-  return {
-    running: syncAutoState.running,
-    tenantId: syncAutoState.tenantId,
-    config: syncAutoState.config,
-    activePairs: Object.fromEntries(
-      [...syncAutoState.activePairs.entries()].map(([sym, info]) => [sym, {
-        sessionId: info.sessionId,
-        leverage: info.leverage,
-        entryPrice: info.entryPrice,
-        runningMs: Date.now() - info.openedAt,
-      }])
-    ),
-    totalCycles: syncAutoState.totalCycles,
-    totalOpened: syncAutoState.totalOpened,
-    totalClosed: syncAutoState.totalClosed,
-    lastScanAt: syncAutoState.lastScanAt ? new Date(syncAutoState.lastScanAt).toISOString() : null,
-    lastRebalanceAt: syncAutoState.lastRebalanceAt ? new Date(syncAutoState.lastRebalanceAt).toISOString() : null,
-    recentErrors: syncAutoState.errors.slice(-10),
-  };
-};
-
-/**
- * Resume auto-engine on server restart: reload open sessions from DB, restart timers.
- */
-export const resumeSyncAutoEngine = async () => {
-  if (syncAutoState.running) return;
-
-  // Find profiles with open sessions
-  const openSessions: any[] = await db.all(
-    `SELECT s.id, s.profile_id, s.symbol, s.master_side, s.entry_price, s.started_at,
-            p.tenant_id
-     FROM synctrade_sessions s
-     JOIN synctrade_profiles p ON p.id = s.profile_id
-     WHERE s.status = 'open'`
-  );
-
-  if (!openSessions || openSessions.length === 0) {
-    syncAutoLog('Resume: no open sessions found, skipping');
-    return;
-  }
-
-  const tenantId = openSessions[0].tenant_id;
-  const profile = await getSynctradeProfile(tenantId);
-  if (!profile || !Number(profile.enabled)) {
-    syncAutoLog('Resume: profile not found or not enabled, skipping');
-    return;
-  }
-
-  const cfg = { ...SYNC_AUTO_DEFAULTS };
-
-  // Try to load saved config
-  try {
-    const savedConfig = (profile as any).auto_config_json;
-    if (savedConfig) {
-      const parsed = safeJsonParse<Partial<SyncAutoConfig>>(savedConfig, {});
-      Object.assign(cfg, parsed);
-      syncAutoLog(`Resume: loaded saved config: maxPairs=${cfg.maxPairs} lev=${cfg.leverageRange} SL=${cfg.stopLossUsdt}`);
-    }
-  } catch { /* ignore */ }
-
-  syncAutoState.running = true;
-  syncAutoState.tenantId = tenantId;
-  syncAutoState.config = cfg;
-  syncAutoState.activePairs = new Map();
-  syncAutoState.errors = [];
-
-  for (const sess of openSessions) {
-    syncAutoState.activePairs.set(sess.symbol, {
-      sessionId: sess.id,
-      leverage: cfg.leverageRange[0],
-      entryPrice: Number(sess.entry_price) || 0,
-      openedAt: new Date(sess.started_at).getTime() || Date.now(),
-    });
-  }
-
-  syncAutoLog(`Resume: restored ${openSessions.length} open sessions for tenant=${tenantId}: ${openSessions.map((s: any) => s.symbol).join(', ')}`);
-
-  // Start timers (same as startSyncAutoEngine)
-  syncAutoState.scanTimer = setInterval(async () => {
-    if (!syncAutoState.running) return;
-    try { await syncAutoScanAndOpen(); } catch (err: any) { syncAutoErr(`Scan tick: ${err.message}`); }
-  }, cfg.scanIntervalMs);
-
-  syncAutoState.rebalanceTimer = setInterval(async () => {
-    if (!syncAutoState.running) return;
-    try { await syncAutoRebalance(); } catch (err: any) { syncAutoErr(`Rebalance tick: ${err.message}`); }
-  }, cfg.rebalanceIntervalMs);
-};
+// Legacy block removed.
 
