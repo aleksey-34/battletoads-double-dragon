@@ -2566,6 +2566,59 @@ export const executeStrategy = async (
     });
   }
 
+  // ── Position Limiter (ОП): check if trading system allows more open positions ──
+  {
+    const { db } = await import('../utils/database');
+    const systemRow: any = await db.get(
+      `SELECT ts.id AS system_id, ts.max_open_positions
+       FROM trading_systems ts
+       JOIN trading_system_members tsm ON tsm.system_id = ts.id
+       WHERE tsm.strategy_id = ? AND tsm.is_enabled = 1
+       AND ts.max_open_positions > 0
+       LIMIT 1`,
+      [strategyId]
+    );
+
+    if (systemRow && systemRow.max_open_positions > 0) {
+      const maxOpen = systemRow.max_open_positions;
+      const openCount: any = await db.get(
+        `SELECT COUNT(*) AS cnt FROM strategies s
+         JOIN trading_system_members tsm ON tsm.strategy_id = s.id
+         WHERE tsm.system_id = ? AND tsm.is_enabled = 1
+         AND s.is_active = 1 AND s.state != 'flat'`,
+        [systemRow.system_id]
+      );
+
+      const currentOpen = openCount?.cnt || 0;
+
+      if (currentOpen >= maxOpen) {
+        logger.info(`ОП limit: ${currentOpen}/${maxOpen} positions open in system ${systemRow.system_id}, skipping entry for strategy ${strategyId}`);
+
+        const updated = await updateStrategy(apiKeyName, strategyId, {
+          ...executionBindingPatch,
+          state: 'flat',
+          entry_ratio: null,
+          tp_anchor_ratio: null,
+          last_signal: signal,
+          last_action: closedAction
+            ? `${closedAction}_op_limit_skip@${currentRatio}`
+            : `op_limit_skip@${currentRatio}`,
+          last_error: null,
+        });
+
+        return returnWithProcessedBar({
+          result: `ОП limit reached (${currentOpen}/${maxOpen}), entry skipped`,
+          action: closedAction ? `${closedAction}_op_limit_skip` : 'op_limit_skip',
+          strategy: updated,
+          currentRatio,
+          donchianHigh,
+          donchianLow,
+          donchianCenter,
+        });
+      }
+    }
+  }
+
   const balances = await getBalances(apiKeyName);
   const availableBalance = extractUsdtBalance(balances);
 
@@ -3270,6 +3323,44 @@ export const copyStrategyBlock = async (
 export const runAutoStrategiesCycle = async () => {
   const { db } = await import('../utils/database');
   const { ensureExchangeClientInitialized } = await import('./exchange');
+
+  // ── Overflow guard: close excess positions if more than ОП ──
+  try {
+    const systems: any[] = (await db.all(
+      `SELECT id, max_open_positions FROM trading_systems WHERE max_open_positions > 0`
+    )) || [];
+
+    for (const sys of systems) {
+      const maxOpen = sys.max_open_positions;
+      const openStrategies: any[] = (await db.all(
+        `SELECT s.id AS strategy_id, a.name AS api_key_name, s.updated_at
+         FROM strategies s
+         JOIN trading_system_members tsm ON tsm.strategy_id = s.id
+         JOIN api_keys a ON a.id = s.api_key_id
+         WHERE tsm.system_id = ? AND tsm.is_enabled = 1
+         AND s.is_active = 1 AND s.state != 'flat'
+         ORDER BY s.updated_at ASC`,
+        [sys.id]
+      )) || [];
+
+      if (openStrategies.length > maxOpen) {
+        const excess = openStrategies.slice(maxOpen); // newest entries (oldest stay)
+        logger.warn(`ОП overflow in system ${sys.id}: ${openStrategies.length}/${maxOpen}, closing ${excess.length} excess`);
+        for (const ex of excess) {
+          try {
+            await ensureExchangeClientInitialized(ex.api_key_name);
+            await closeStrategyPositions(ex.api_key_name, ex.strategy_id);
+            logger.info(`ОП overflow: closed strategy ${ex.strategy_id} in system ${sys.id}`);
+          } catch (closeErr) {
+            logger.error(`ОП overflow: failed to close strategy ${ex.strategy_id}: ${formatActionError(closeErr)}`);
+          }
+        }
+      }
+    }
+  } catch (overflowErr) {
+    logger.warn(`ОП overflow check failed: ${formatActionError(overflowErr)}`);
+  }
+
   const rows = await db.all(
     `SELECT a.name AS api_key_name, s.id AS strategy_id, COALESCE(s.name, '') AS strategy_name
      FROM strategies s
