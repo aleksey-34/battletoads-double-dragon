@@ -16,7 +16,6 @@ import Logs from './pages/Logs';
 import Research from './pages/Research';
 import SaaS from './pages/SaaS';
 import AdminDocs from './pages/AdminDocs';
-import Razgon from './pages/Razgon';
 import Landing from './pages/Landing';
 import Whitepaper from './pages/Whitepaper';
 import { I18nProvider, useI18n, UILanguage } from './i18n';
@@ -63,7 +62,6 @@ function AppShell() {
     '7': '/saas',
     '8': '/research',
     '9': '/admin-docs',
-    '10': '/razgon',
   };
 
   const menuItems = isClientSaasSurface || isClientRoute
@@ -76,7 +74,6 @@ function AppShell() {
         { key: '7', label: t('nav.saas', 'SaaS') },
         { key: '8', label: t('nav.research', 'Research') },
         { key: '9', label: t('nav.docs', 'Docs') },
-        { key: '10', label: '⚡ Разгон' },
       ];
 
   const handleMenuClick = ({ key }: { key: string }) => {
@@ -95,7 +92,6 @@ function AppShell() {
     if (location.pathname.startsWith('/saas')) return '7';
     if (location.pathname.startsWith('/research')) return '8';
     if (location.pathname.startsWith('/admin-docs')) return '9';
-    if (location.pathname.startsWith('/razgon')) return '10';
     return '1';
   }, [location.pathname]);
 
@@ -107,7 +103,6 @@ function AppShell() {
     if (location.pathname.startsWith('/saas')) return 'SaaS Admin';
     if (location.pathname.startsWith('/research')) return t('nav.research', 'Research');
     if (location.pathname.startsWith('/admin-docs')) return t('nav.docs', 'Docs');
-    if (location.pathname.startsWith('/razgon')) return 'Разгон';
     if (location.pathname.startsWith('/client/login')) return 'Client Login';
     if (location.pathname.startsWith('/client/register')) return 'Client Register';
     if (location.pathname.startsWith('/cabinet')) return 'Client Cabinet';
@@ -340,10 +335,8 @@ function AppShell() {
           <Route path="/saas/strategy-client" element={<Navigate to="/saas/admin?adminTab=strategy-client" replace />} />
           <Route path="/saas/algofund" element={<Navigate to="/saas/admin?adminTab=algofund" replace />} />
           <Route path="/saas/copytrading" element={<Navigate to="/saas/admin?adminTab=copytrading" replace />} />
-          <Route path="/saas/synctrade" element={<Navigate to="/saas/admin?adminTab=synctrade" replace />} />
           <Route path="/research" element={adminAuthState === 'ok' ? <Research /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
           <Route path="/admin-docs" element={adminAuthState === 'ok' ? <AdminDocs /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
-          <Route path="/razgon" element={adminAuthState === 'ok' ? <Razgon /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
         </Routes>
       </Content>
       <FloatButton.BackTop visibilityHeight={280} />
