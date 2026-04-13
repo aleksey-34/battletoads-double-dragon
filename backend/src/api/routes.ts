@@ -92,6 +92,15 @@ import path from 'path';
 const router = Router();
 let backtestRunInProgress = false;
 
+// Legacy hard-stubs: Razgon and Synctrade APIs were removed.
+router.use('/razgon', (_req, res) => {
+  return res.status(404).json({ error: 'Not Found' });
+});
+
+router.use('/saas/synctrade', (_req, res) => {
+  return res.status(404).json({ error: 'Not Found' });
+});
+
 const STRATEGY_PATCH_ALLOWED_FIELDS = new Set<string>([
   'id',
   'name',
