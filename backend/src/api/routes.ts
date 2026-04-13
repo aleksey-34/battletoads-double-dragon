@@ -263,6 +263,11 @@ const collectAdminMarkdownDocs = (): AdminMarkdownDocRecord[] => {
         continue;
       }
 
+      const lowerName = entry.name.toLowerCase();
+      if (lowerName.includes('razgon') || lowerName.includes('synctrade')) {
+        continue;
+      }
+
       const content = fs.readFileSync(absolutePath, 'utf-8');
       const stat = fs.statSync(absolutePath);
       const normalizedRelativePath = normalizeDocRelativePath(absolutePath);

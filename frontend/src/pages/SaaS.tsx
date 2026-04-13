@@ -7266,7 +7266,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         if (row.tenant.product_mode === 'synctrade_client') {
           return (
             <Space size={2} wrap>
-              {openBtn('Sync', () => { setSynctradeTenantId(row.tenant.id); navigateSaasTab('synctrade'); })}
               {deleteBtn()}
             </Space>
           );
@@ -11265,7 +11264,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 </Space>
               ),
             },
-          ].filter((item) => isAdminSurface || item.key === surfaceMode)}
+          ].filter((item) => item.key !== 'synctrade' && (isAdminSurface || item.key === surfaceMode))}
         />
       </Spin>
 
