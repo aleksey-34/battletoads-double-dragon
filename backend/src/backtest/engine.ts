@@ -69,6 +69,8 @@ export type BacktestSummary = {
   commissionPercent: number;
   slippagePercent: number;
   fundingRatePercent: number;
+  maxOpenPositions: number;
+  skippedByPositionLimit: number;
 };
 
 export type BacktestRunRequest = {
@@ -85,6 +87,7 @@ export type BacktestRunRequest = {
   commissionPercent?: number;
   slippagePercent?: number;
   fundingRatePercent?: number;
+  maxOpenPositions?: number;
 };
 
 export type BacktestRunResult = {
@@ -109,6 +112,7 @@ type NormalizedBacktestRequest = {
   commissionPercent: number;
   slippagePercent: number;
   fundingRatePercent: number;
+  maxOpenPositions: number;
 };
 
 export type BacktestRunListItem = {
@@ -843,6 +847,7 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
   const commissionPercent = clamp(asNumber(raw.commissionPercent, 0.06), 0, 5);
   const slippagePercent = clamp(asNumber(raw.slippagePercent, 0.03), 0, 5);
   const fundingRatePercent = clamp(asNumber(raw.fundingRatePercent, 0), -5, 5);
+  const maxOpenPositions = Math.max(0, Math.floor(asNumber(raw.maxOpenPositions, 0)));
   const dateFromMs = parseTimestampMs(raw.dateFrom);
   const dateToMs = parseTimestampMs(raw.dateTo);
 
@@ -866,6 +871,7 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     commissionPercent,
     slippagePercent,
     fundingRatePercent,
+    maxOpenPositions,
   };
 };
 
@@ -935,6 +941,13 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     slippageRate: request.slippagePercent / 100,
     fundingRate: request.fundingRatePercent / 100,
     trades: [],
+  };
+
+  const maxOpenPositions = request.maxOpenPositions;
+  let skippedByPositionLimit = 0;
+
+  const countOpenPositions = (): number => {
+    return runtimes.filter((rt) => rt.state !== 'flat').length;
   };
 
   const equityCurve: BacktestPoint[] = [];
@@ -1078,6 +1091,13 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       continue;
     }
 
+    // Position Limiter (ОП): skip entry if max open positions reached
+    if (runtime.state === 'flat' && maxOpenPositions > 0 && countOpenPositions() >= maxOpenPositions) {
+      skippedByPositionLimit++;
+      pushEquityPoint(event.timeMs);
+      continue;
+    }
+
     const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
     const availableBalance = Math.max(0, equityNow - computeLockedMargin(runtimes));
     openPosition(ctx, runtime, signalPayload.signal, event.timeMs, signalPayload.current, availableBalance);
@@ -1157,6 +1177,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     commissionPercent: request.commissionPercent,
     slippagePercent: request.slippagePercent,
     fundingRatePercent: request.fundingRatePercent,
+    maxOpenPositions: request.maxOpenPositions,
+    skippedByPositionLimit,
   };
 
   const requestEcho: BacktestRunRequest = {
@@ -1173,6 +1195,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     commissionPercent: request.commissionPercent,
     slippagePercent: request.slippagePercent,
     fundingRatePercent: request.fundingRatePercent,
+    maxOpenPositions: request.maxOpenPositions,
   };
 
   return {
@@ -1437,6 +1460,8 @@ export const getBacktestRun = async (id: number): Promise<BacktestRunResult | nu
     commissionPercent: asNumber(row.commission_percent, 0),
     slippagePercent: asNumber(row.slippage_percent, 0),
     fundingRatePercent: asNumber(row.funding_rate_percent, 0),
+    maxOpenPositions: 0,
+    skippedByPositionLimit: 0,
   });
 
   const equityCurve = parseJsonArray<BacktestPoint>(row.equity_curve_json, []);

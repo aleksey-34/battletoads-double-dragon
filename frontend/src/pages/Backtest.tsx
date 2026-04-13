@@ -88,6 +88,8 @@ type BacktestSummary = {
   commissionPercent: number;
   slippagePercent: number;
   fundingRatePercent: number;
+  maxOpenPositions: number;
+  skippedByPositionLimit: number;
 };
 
 type BacktestRequest = {
@@ -104,6 +106,7 @@ type BacktestRequest = {
   commissionPercent: number;
   slippagePercent: number;
   fundingRatePercent: number;
+  maxOpenPositions?: number;
 };
 
 type BacktestResult = {
@@ -195,6 +198,7 @@ const Backtest: React.FC<BacktestProps> = ({
   const [commissionPercent, setCommissionPercent] = useState<number>(0.06);
   const [slippagePercent, setSlippagePercent] = useState<number>(0.03);
   const [fundingRatePercent, setFundingRatePercent] = useState<number>(0);
+  const [maxOpenPositions, setMaxOpenPositions] = useState<number>(0);
 
   const [loadingApiKeys, setLoadingApiKeys] = useState<boolean>(false);
   const [loadingStrategies, setLoadingStrategies] = useState<boolean>(false);
@@ -377,6 +381,7 @@ const Backtest: React.FC<BacktestProps> = ({
         commissionPercent,
         slippagePercent,
         fundingRatePercent,
+        maxOpenPositions: maxOpenPositions > 0 ? maxOpenPositions : undefined,
       };
 
       if (mode === 'single') {
@@ -658,6 +663,23 @@ const Backtest: React.FC<BacktestProps> = ({
             </Col>
           </Row>
 
+          <Row gutter={[12, 12]}>
+            <Col xs={24} md={8}>
+              <Typography.Text strong>{t('backtest.maxOpenPositions', 'Max Open Positions (ОП)')}</Typography.Text>
+              <InputNumber
+                style={{ width: '100%', marginTop: 6 }}
+                min={0}
+                max={50}
+                step={1}
+                value={maxOpenPositions}
+                onChange={(value) => setMaxOpenPositions(Number(value || 0))}
+              />
+              <Typography.Text type="secondary" style={{ display: 'block', marginTop: 4, fontSize: 12 }}>
+                {t('backtest.maxOpenPositionsHint', '0 = unlimited. Limits how many strategies can hold positions simultaneously.')}
+              </Typography.Text>
+            </Col>
+          </Row>
+
           <Space>
             <Button type="primary" loading={runLoading} onClick={() => { void runBacktest(); }}>
               {t('backtest.run', 'Run Backtest')}
@@ -687,6 +709,12 @@ const Backtest: React.FC<BacktestProps> = ({
             <Col xs={12} md={6}><Statistic title={t('backtest.stat.bars', 'Bars')} value={summary.barsProcessed} /></Col>
             <Col xs={12} md={6}><Statistic title={t('backtest.stat.processedStrategies', 'Processed Strategies')} value={summary.processedStrategies ?? summary.strategyIds.length} /></Col>
             <Col xs={12} md={6}><Statistic title={t('backtest.stat.skippedStrategies', 'Skipped Strategies')} value={summary.skippedStrategies ?? 0} /></Col>
+            {(summary.maxOpenPositions ?? 0) > 0 ? (
+              <>
+                <Col xs={12} md={6}><Statistic title={t('backtest.stat.maxOpenPositions', 'Max Open Pos (ОП)')} value={summary.maxOpenPositions} /></Col>
+                <Col xs={12} md={6}><Statistic title={t('backtest.stat.skippedByPosLimit', 'Skipped by ОП')} value={summary.skippedByPositionLimit ?? 0} /></Col>
+              </>
+            ) : null}
           </Row>
 
           <Space style={{ marginTop: 12 }} wrap>
