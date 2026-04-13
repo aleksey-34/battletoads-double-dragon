@@ -14,6 +14,12 @@ const PORT = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
+app.use('/api/razgon', (_req, res) => {
+  return res.status(404).json({ error: 'Not Found' });
+});
+app.use('/api/saas/synctrade', (_req, res) => {
+  return res.status(404).json({ error: 'Not Found' });
+});
 app.use('/api', routes);
 app.use('/api/research', researchRoutes);
 
