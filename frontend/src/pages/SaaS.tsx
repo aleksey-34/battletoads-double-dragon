@@ -11957,7 +11957,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 </Col>
               )}
               {isAdminSurface && (
-                <Col xs={24} md={6}>
+                <Col xs={24} md={5}>
                   <Card size="small" title="Начальный баланс">
                     <InputNumber
                       min={100}
@@ -11974,7 +11974,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 </Col>
               )}
               {isAdminSurface && (
-                <Col xs={24} md={6}>
+                <Col xs={24} md={5}>
                   <Card size="small" title="Потолок риска, %">
                     <InputNumber
                       min={0}
@@ -11992,12 +11992,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   </Card>
                 </Col>
               )}
-            </Row>
-
-            {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
-              <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
-                <Col xs={24} md={6}>
-                  <Card size="small" title="Макс. открытых позиций (ОП)">
+              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
+                <Col xs={24} md={4}>
+                  <Card size="small" title="Макс. ОП">
                     <InputNumber
                       min={0}
                       max={20}
@@ -12012,11 +12009,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         scheduleBacktestDebounce();
                       }}
                     />
-                    <Text type="secondary">{adminSweepBacktestMaxOpenPositions > 0 ? `Не более ${adminSweepBacktestMaxOpenPositions} одновременных позиций (облако пар с ОП)` : '0 = без ограничения'}</Text>
+                    <Text type="secondary">{adminSweepBacktestMaxOpenPositions > 0 ? `≤${adminSweepBacktestMaxOpenPositions} позиций` : '0 = без огр.'}</Text>
                   </Card>
                 </Col>
-              </Row>
-            )}
+              )}
+            </Row>
 
             {adminSweepBacktestResult ? (
               <Card size="small" title={adminSweepBacktestStale ? <Space><Tag color="orange">⟳ Пересчёт запущен...</Tag><span>Результат sweep backtest</span></Space> : 'Результат sweep backtest'}>
