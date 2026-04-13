@@ -5334,6 +5334,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                   fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
                   dateFrom: requestedDateFrom || asString(sweep?.config?.dateFrom, ''),
                   dateTo: requestedDateTo || asString(sweep?.config?.dateTo, ''),
+                  ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
                 };
 
                 let result;
@@ -5392,6 +5393,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                     tradeFrequencyLevel,
                     riskScaleMaxPercent,
                     reinvestPercent,
+                    maxOpenPositions,
                   },
                   period,
                   sweepApiKeyName: asString(snapshot.apiKeyName, ''),
@@ -5451,6 +5453,18 @@ export const previewAdminSweepBacktest = async (payload?: {
           const relativeTradeMul = tradeMul / Math.max(0.01, snapshotTradeMul);
 
           const adjustedSnapshotMetrics = adjustPreviewMetrics(baselineMetrics, relativeRiskMul, relativeTradeMul);
+          const snapshotSlotRatio = maxOpenPositions > 0
+            ? Math.min(1, maxOpenPositions / Math.max(1, snapshotOfferIds.length))
+            : 1;
+          const snapshotRetFactor = maxOpenPositions > 0 ? (0.6 + 0.4 * snapshotSlotRatio) : 1;
+          const snapshotDdFactor = maxOpenPositions > 0 ? (0.55 + 0.45 * snapshotSlotRatio) : 1;
+          const snapshotTradeFactor = maxOpenPositions > 0 ? snapshotSlotRatio : 1;
+          const adjustedSnapshotMetricsWithOp = {
+            ...adjustedSnapshotMetrics,
+            ret: Number((adjustedSnapshotMetrics.ret * snapshotRetFactor).toFixed(3)),
+            dd: Number((adjustedSnapshotMetrics.dd * snapshotDdFactor).toFixed(3)),
+            trades: Math.max(1, Math.floor(adjustedSnapshotMetrics.trades * snapshotTradeFactor)),
+          };
           const baseEquity = snapshotEquity.length > 1
             ? snapshotEquity
             : [
@@ -5484,7 +5498,7 @@ export const previewAdminSweepBacktest = async (payload?: {
             };
           });
 
-          const targetFinalEquity = Number((initialBalance * (1 + adjustedSnapshotMetrics.ret / 100)).toFixed(4));
+          const targetFinalEquity = Number((initialBalance * (1 + adjustedSnapshotMetricsWithOp.ret / 100)).toFixed(4));
           const currentFinalEquity = asNumber(adjustedSnapshotEquity[adjustedSnapshotEquity.length - 1]?.equity, initialBalance);
           const currentPnl = currentFinalEquity - initialBalance;
           const targetPnl = targetFinalEquity - initialBalance;
@@ -5525,6 +5539,7 @@ export const previewAdminSweepBacktest = async (payload?: {
               tradeFrequencyLevel,
               riskScaleMaxPercent,
               reinvestPercent,
+              maxOpenPositions,
             },
             period,
             sweepApiKeyName: asString(snapshot.apiKeyName, ''),
@@ -5533,11 +5548,11 @@ export const previewAdminSweepBacktest = async (payload?: {
               source: 'admin_saved_ts_snapshot_synthetic',
               summary: {
                 finalEquity: Number(asNumber(adjustedSnapshotEquity[adjustedSnapshotEquity.length - 1]?.equity, initialBalance).toFixed(4)),
-                totalReturnPercent: Number(adjustedSnapshotMetrics.ret.toFixed(3)),
-                maxDrawdownPercent: Number(adjustedSnapshotMetrics.dd.toFixed(3)),
-                profitFactor: Number(adjustedSnapshotMetrics.pf.toFixed(3)),
+                totalReturnPercent: Number(adjustedSnapshotMetricsWithOp.ret.toFixed(3)),
+                maxDrawdownPercent: Number(adjustedSnapshotMetricsWithOp.dd.toFixed(3)),
+                profitFactor: Number(adjustedSnapshotMetricsWithOp.pf.toFixed(3)),
                 winRatePercent: 0,
-                tradesCount: Math.max(0, Math.floor(adjustedSnapshotMetrics.trades)),
+                tradesCount: Math.max(0, Math.floor(adjustedSnapshotMetricsWithOp.trades)),
                 unrealizedPnl: snapshotCurves.finalUnrealizedPnl,
                 marginLoadPercent: snapshotCurves.maxMarginLoadPercent,
               },
