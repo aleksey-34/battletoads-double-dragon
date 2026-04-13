@@ -1794,31 +1794,6 @@ export const ensureSaasSeedData = async (): Promise<void> => {
   for (const plan of [...strategyClientPlans, ...algofundPlans, ...copytradingPlans, ...synctradePlans, ...combinedPlans]) {
     await upsertPlan(plan);
   }
-
-  const catalog = loadLatestClientCatalog();
-  const sets = buildRecommendedSets(catalog);
-  const offerIds = sets.balancedBot.map((item) => item.offerId);
-  const apiKeyNames = await getAvailableApiKeyNames();
-  const sourceApiKeyName = catalog?.apiKeyName || apiKeyNames[0] || '';
-  const clientKeys = apiKeyNames.filter((name) => name !== sourceApiKeyName);
-  const strategyClientApiKey = clientKeys[0] || sourceApiKeyName;
-  const algofundApiKey = clientKeys[1] || clientKeys[0] || sourceApiKeyName;
-  const copytradingApiKey = clientKeys[2] || clientKeys[1] || clientKeys[0] || sourceApiKeyName;
-
-  const strategyTenant = await ensureTenant('client-bot-01', 'Client Bot 01', 'strategy_client', 'ru', strategyClientApiKey);
-  const algofundTenant = await ensureTenant('algofund-01', 'Algofund Client 01', 'algofund_client', 'ru', algofundApiKey);
-  const copytradingTenant = await ensureTenant('copytrading-01', 'Copytrading Client 01', 'copytrading_client', 'ru', copytradingApiKey);
-  const synctradeApiKey = clientKeys[3] || clientKeys[2] || clientKeys[1] || clientKeys[0] || sourceApiKeyName;
-  const synctradeTenant = await ensureTenant('synctrade-client-1', 'Synctrade Client 1', 'synctrade_client', 'ru', synctradeApiKey);
-
-  await ensureSubscription(strategyTenant.id, (await getPlanByCode('strategy_20')).id);
-  await ensureSubscription(algofundTenant.id, (await getPlanByCode('algofund_20')).id);
-  await ensureSubscription(copytradingTenant.id, (await getPlanByCode('copytrading_100')).id);
-  await ensureSubscription(synctradeTenant.id, (await getPlanByCode('synctrade_100')).id);
-  await ensureStrategyClientProfile(strategyTenant.id, offerIds, strategyClientApiKey);
-  await ensureAlgofundProfile(algofundTenant.id, algofundApiKey);
-  await ensureCopytradingProfile(copytradingTenant.id, copytradingApiKey);
-  await ensureSynctradeProfile(synctradeTenant.id, synctradeApiKey);
 };
 
 const getPlanForTenant = async (tenantId: number, planMode?: 'strategy_client' | 'algofund_client'): Promise<PlanRow | null> => {
@@ -4300,7 +4275,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
   const allOffers = catalog ? getAllOffers(catalog) : [];
   const offerIds = allOffers.map((item) => String(item.offerId));
-  const [defaultsRaw, publishedRaw, reviewSnapshots, tsBacktestSnapshot, tsBacktestSnapshots, storefrontRows] = await Promise.all([
+  const [defaultsRaw, publishedRaw, reviewSnapshots, tsBacktestSnapshot, tsBacktestSnapshots, storefrontRows, publishedTenantRows] = await Promise.all([
     getRuntimeFlag('offer.store.defaults', JSON.stringify(DEFAULT_OFFER_STORE_DEFAULTS)),
     getRuntimeFlag('offer.store.published_ids', ''),
     getOfferReviewSnapshots(),
@@ -4311,6 +4286,12 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
        FROM algofund_active_systems
        WHERE COALESCE(is_enabled, 1) = 1
          AND TRIM(COALESCE(system_name, '')) != ''
+       ORDER BY system_name ASC`
+    ) as Promise<Array<{ system_name?: string }>>,
+    db.all(
+      `SELECT DISTINCT COALESCE(published_system_name, '') AS system_name
+       FROM algofund_profiles
+       WHERE TRIM(COALESCE(published_system_name, '')) != ''
        ORDER BY system_name ASC`
     ) as Promise<Array<{ system_name?: string }>>,
   ]);
@@ -4326,10 +4307,23 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   ));
   const publishedSet = new Set(publishedFromFlagNormalized);
   const periodDays = getSweepPeriodDays(sweep, defaults.periodDays);
-  const algofundStorefrontSystemNames = Array.from(new Set(
-    (Array.isArray(storefrontRows) ? storefrontRows : [])
-      .map((row) => asString(row?.system_name, '').trim())
-      .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::'))
+  const algofundStorefrontSystemNames = Array.from(new Set([
+    ...(Array.isArray(storefrontRows) ? storefrontRows : [])
+      .map((row) => asString(row?.system_name, '').trim()),
+    ...(Array.isArray(publishedTenantRows) ? publishedTenantRows : [])
+      .map((row) => asString(row?.system_name, '').trim()),
+    ...Object.entries(tsBacktestSnapshots || {})
+      .filter(([key, snap]) => {
+        const name = asString(key, '').trim();
+        if (!name.toUpperCase().startsWith('ALGOFUND_MASTER::')) {
+          return false;
+        }
+        const eqLen = Array.isArray((snap as any)?.equityPoints) ? (snap as any).equityPoints.length : 0;
+        return eqLen > 1;
+      })
+      .map(([key]) => asString(key, '').trim()),
+  ]
+    .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::'))
   ));
   const sweepByStrategyId = new Map<number, SweepRecord>();
   (sweep?.evaluated || []).forEach((item) => {
@@ -4626,6 +4620,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   initialBalance?: number;
   reinvestPercent?: number;
   riskScaleMaxPercent?: number;
+  maxOpenPositions?: number;
   dateFrom?: string;
   dateTo?: string;
   preferRealBacktest?: boolean;
@@ -5043,6 +5038,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   // Risk multiplier applied post-hoc to real backtest result.
   // Exponential: risk=0 → ~0.18x, risk=5 → 1.0x, risk=10 → ~5.5x.
   const riskScaleMaxPercent = clampNumber(asNumber(payload?.riskScaleMaxPercent, 40), 0, 400);
+  const maxOpenPositions = Math.max(0, Math.floor(asNumber(payload?.maxOpenPositions, 0)));
   const reinvestPercent = clampNumber(asNumber(payload?.reinvestPercent, 100), 0, 100);
   const reinvestShare = reinvestPercent / 100;
   const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
@@ -5085,6 +5081,7 @@ export const previewAdminSweepBacktest = async (payload?: {
           fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
           dateFrom: requestedDateFrom || asString(sweep?.config?.dateFrom, ''),
           dateTo: requestedDateTo || asString(sweep?.config?.dateTo, ''),
+          ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
         });
 
         // Apply risk multiplier to returns/DD/equity (position sizing approximation)
@@ -5592,6 +5589,43 @@ export const previewAdminSweepBacktest = async (payload?: {
     };
   });
 
+  // Sweep-only OP approximation: when portfolio has more members than available slots,
+  // reduce expected activity/return proportionally to slot contention.
+  const opSlots = kind === 'algofund-ts' ? maxOpenPositions : 0;
+  const opMemberCount = kind === 'algofund-ts' ? Math.max(1, adjustedSelectedOffers.length) : 1;
+  const opSlotRatio = opSlots > 0 ? Math.min(1, opSlots / opMemberCount) : 1;
+  const opReturnFactor = opSlots > 0 ? (0.6 + 0.4 * opSlotRatio) : 1;
+  const opDrawdownFactor = opSlots > 0 ? (0.55 + 0.45 * opSlotRatio) : 1;
+  const opTradeFactor = opSlots > 0 ? opSlotRatio : 1;
+
+  const opAdjustedSelectedOffers = adjustedSelectedOffers.map((item) => {
+    if (kind !== 'algofund-ts' || opSlots <= 0 || opSlotRatio >= 1) {
+      return item;
+    }
+
+    const metrics = item.metrics as Record<string, unknown>;
+    const nextMetrics = {
+      ...item.metrics,
+      ret: Number((asNumber(metrics.ret, 0) * opReturnFactor).toFixed(3)),
+      dd: Number((asNumber(metrics.dd, 0) * opDrawdownFactor).toFixed(3)),
+      trades: Math.max(1, Math.floor(asNumber(metrics.trades, 0) * opTradeFactor)),
+    };
+
+    return {
+      ...item,
+      metrics: nextMetrics,
+      tradesPerDay: Number((nextMetrics.trades / Math.max(1, item.periodDays)).toFixed(3)),
+      equityPoints: buildAdjustedPreviewEquity(
+        item.preset,
+        initialBalance,
+        nextMetrics.ret,
+        nextMetrics.dd,
+        item.periodDays,
+        oscillationFactor
+      ).map((point) => Number(asNumber(point.equity, 0).toFixed(4))),
+    };
+  });
+
   const sweepApiKeyName = asString((sweep as Record<string, unknown>)?.apiKeyName || ((sweep as Record<string, unknown>)?.config as Record<string, unknown>)?.apiKeyName, '');
 
   if (kind === 'offer') {
@@ -5607,10 +5641,11 @@ export const previewAdminSweepBacktest = async (payload?: {
         riskLevel,
         tradeFrequencyLevel,
         riskScaleMaxPercent,
+        maxOpenPositions: opSlots,
       },
       period,
       sweepApiKeyName,
-      selectedOffers: adjustedSelectedOffers,
+      selectedOffers: opAdjustedSelectedOffers,
       preview: {
         source: 'admin_sweep_preset',
         summary: {
@@ -5648,7 +5683,7 @@ export const previewAdminSweepBacktest = async (payload?: {
 
   // Build portfolio equity directly from already-oscillated per-offer equityPoints
   // (averaging across all offers preserves the per-risk oscillation pattern)
-  const allOfferEquityArrays = adjustedSelectedOffers
+  const allOfferEquityArrays = opAdjustedSelectedOffers
     .map((item) => ({
       points: Array.isArray(item.equityPoints) ? item.equityPoints as number[] : [],
       weight: kind === 'algofund-ts' ? Math.max(0, asNumber((item as Record<string, unknown>).weight, 0)) : 1,
@@ -5678,7 +5713,7 @@ export const previewAdminSweepBacktest = async (payload?: {
       };
     });
   } else {
-    portfolioEquity = buildPortfolioPreviewEquityFromPresets(adjustedSelectedOffers, initialBalance, periodDays);
+    portfolioEquity = buildPortfolioPreviewEquityFromPresets(opAdjustedSelectedOffers, initialBalance, periodDays);
   }
   const portfolioCurves = buildDerivedPreviewCurves(portfolioEquity, initialBalance, riskScore);
   const getMemberWeight = (item: Record<string, unknown>): number => {
@@ -5691,7 +5726,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   const weightedMetric = (pick: (item: Record<string, unknown>) => number): number => {
     let weighted = 0;
     let total = 0;
-    for (const item of adjustedSelectedOffers as unknown as Array<Record<string, unknown>>) {
+    for (const item of opAdjustedSelectedOffers as unknown as Array<Record<string, unknown>>) {
       const weight = getMemberWeight(item);
       if (weight <= 0) {
         continue;
@@ -5708,14 +5743,14 @@ export const previewAdminSweepBacktest = async (payload?: {
     avgRet: weightedMetric((item) => asNumber((item.metrics as Record<string, unknown>)?.ret, 0)),
     avgPf: weightedMetric((item) => asNumber((item.metrics as Record<string, unknown>)?.pf, 0)),
     // Keep conservative DD semantics (worst member) to match historical TS preview behavior.
-    maxDd: (adjustedSelectedOffers as Array<Record<string, unknown>>).reduce((acc, item) => {
+    maxDd: (opAdjustedSelectedOffers as Array<Record<string, unknown>>).reduce((acc, item) => {
       const value = asNumber((item.metrics as Record<string, unknown>)?.dd, 0);
       return value > acc ? value : acc;
     }, 0),
     avgWr: weightedMetric((item) => asNumber((item.metrics as Record<string, unknown>)?.wr, 0)),
     // Trades count is strategy activity, not capital allocation. Keep sum semantics.
     totalTrades: Math.max(0, Math.floor(
-      (adjustedSelectedOffers as Array<Record<string, unknown>>).reduce((acc, item) => {
+      (opAdjustedSelectedOffers as Array<Record<string, unknown>>).reduce((acc, item) => {
         const trades = Math.max(0, asNumber((item.metrics as Record<string, unknown>)?.trades, 0));
         return acc + trades;
       }, 0)
@@ -5730,10 +5765,11 @@ export const previewAdminSweepBacktest = async (payload?: {
       riskLevel,
       tradeFrequencyLevel,
       riskScaleMaxPercent,
+      maxOpenPositions: opSlots,
     },
     period,
     sweepApiKeyName,
-    selectedOffers: adjustedSelectedOffers,
+    selectedOffers: opAdjustedSelectedOffers,
     preview: {
       source: 'admin_sweep_preset',
       summary: {
@@ -7481,12 +7517,54 @@ export const requestAlgofundBatchAction = async (
           throw new Error('Start/stop requests are not available for the current plan');
         }
 
+        let directPayload: AlgofundRequestPayload = { ...payload };
+        if (requestType === 'switch_system') {
+          const targetSystemId = Math.floor(asNumber(payload.targetSystemId, 0));
+          const targetSystemNameRaw = asString(payload.targetSystemName, '').trim();
+          if ((!targetSystemId || targetSystemId <= 0) && !targetSystemNameRaw) {
+            throw new Error('targetSystemId or targetSystemName is required for switch_system request');
+          }
+
+          const targetById = targetSystemId > 0
+            ? await db.get(
+              `SELECT ts.id AS system_id, ts.name AS system_name, ak.name AS api_key_name
+               FROM trading_systems ts
+               JOIN api_keys ak ON ak.id = ts.api_key_id
+               WHERE ts.id = ?`,
+              [targetSystemId]
+            ) as { system_id?: number; system_name?: string; api_key_name?: string } | undefined
+            : undefined;
+
+          const targetByName = !targetById?.system_id && targetSystemNameRaw
+            ? await db.get(
+              `SELECT ts.id AS system_id, ts.name AS system_name, ak.name AS api_key_name
+               FROM trading_systems ts
+               JOIN api_keys ak ON ak.id = ts.api_key_id
+               WHERE ts.name = ?
+               ORDER BY COALESCE(ts.is_active, 0) DESC, ts.id DESC
+               LIMIT 1`,
+              [targetSystemNameRaw]
+            ) as { system_id?: number; system_name?: string; api_key_name?: string } | undefined
+            : undefined;
+
+          const resolvedTarget = targetById?.system_id ? targetById : targetByName;
+          if (!resolvedTarget?.system_id) {
+            throw new Error(`Target trading system not found: ${targetSystemId || targetSystemNameRaw}`);
+          }
+
+          directPayload = {
+            targetSystemId: Number(resolvedTarget.system_id),
+            targetSystemName: asString(resolvedTarget.system_name, targetSystemNameRaw),
+            targetApiKeyName: asString(resolvedTarget.api_key_name, ''),
+          };
+        }
+
         await applyApprovedAlgofundAction({
           row: {
             tenant_id: tenantId,
             request_type: requestType,
           } as AlgofundRequestRow,
-          requestPayload: payload,
+          requestPayload: directPayload,
           tenant,
           profile,
           plan,
@@ -7496,7 +7574,7 @@ export const requestAlgofundBatchAction = async (
         await db.run(
           `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
            VALUES (?, 'admin', 'direct_algofund_action', ?, CURRENT_TIMESTAMP)`,
-          [tenantId, JSON.stringify({ requestType, note, payload })]
+          [tenantId, JSON.stringify({ requestType, note, payload: directPayload })]
         );
 
         created.push({ tenantId, directAction: requestType, status: 'executed' });
@@ -8271,6 +8349,13 @@ export const getAlgofundState = async (
 
   const plan = await getPlanForTenant(tenantId, 'algofund_client');
   const profile = await getAlgofundProfile(tenantId);
+  const offerStoreState = await getOfferStoreAdminState().catch(() => null);
+  const storefrontSystemSet = new Set(
+    (offerStoreState?.algofundStorefrontSystemNames || [])
+      .map((item) => asString(item, '').trim().toUpperCase())
+      .filter(Boolean)
+  );
+  const currentPublishedSystemName = asString(profile?.published_system_name, '').trim().toUpperCase();
 
   // Load available systems even without plan/profile (browse-only mode for dual-mode tenants)
   const allApiKeyNames = await getAvailableApiKeyNames().catch(() => []);
@@ -8289,7 +8374,7 @@ export const getAlgofundState = async (
       }
     }
   }
-  const availableSystems = Array.from(allAlgofundSystemsMap.values()).map((item: any) => ({
+  let availableSystems = Array.from(allAlgofundSystemsMap.values()).map((item: any) => ({
     id: Number(item?.id || 0),
     apiKeyName: asString(item?.api_key_name || item?.apiKeyName || '', ''),
     name: asString(item?.name, ''),
@@ -8382,6 +8467,60 @@ export const getAlgofundState = async (
     }
   }
 
+  // Canonical storefront whitelist: admin and client must use the same system set.
+  if (storefrontSystemSet.size > 0) {
+    availableSystems = availableSystems.filter((system) => {
+      const systemName = asString(system?.name, '').trim().toUpperCase();
+      if (!systemName) return false;
+      if (storefrontSystemSet.has(systemName)) return true;
+      return Boolean(currentPublishedSystemName) && systemName === currentPublishedSystemName;
+    });
+  }
+
+  // Hide storefront garbage cards: only show systems with backtest snapshots,
+  // but always keep the currently connected system visible for control actions.
+  availableSystems = availableSystems.filter((system) => {
+    const systemName = asString(system?.name, '').trim().toUpperCase();
+    const hasSnapshot = Boolean((system as any).backtestSnapshot);
+    if (hasSnapshot) return true;
+    return Boolean(currentPublishedSystemName) && systemName === currentPublishedSystemName;
+  });
+
+  if (availableSystems.length === 0) {
+    const snapshotBacked = Object.entries(tsSnapshots)
+      .filter(([key, snapshot]) => {
+        const name = asString(key, '').trim().toUpperCase();
+        if (!name.startsWith('ALGOFUND_MASTER::')) return false;
+        const eq = Array.isArray(snapshot?.equityPoints) ? snapshot.equityPoints.length : 0;
+        return eq > 1;
+      })
+      .map(([key, snapshot], index) => ({
+        id: 900000 + index,
+        apiKeyName: asString(snapshot?.apiKeyName, ''),
+        name: asString(key, ''),
+        isActive: false,
+        updatedAt: asString(snapshot?.updatedAt, ''),
+        memberCount: Array.isArray(snapshot?.offerIds) ? snapshot.offerIds.length : 0,
+        memberStrategyIds: [],
+        memberWeightsByStrategyId: {},
+        metrics: null,
+        backtestSnapshot: {
+          ret: snapshot.ret,
+          pf: snapshot.pf,
+          dd: snapshot.dd,
+          trades: snapshot.trades,
+          tradesPerDay: snapshot.tradesPerDay,
+          periodDays: snapshot.periodDays,
+          finalEquity: snapshot.finalEquity,
+          equityPoints: snapshot.equityPoints,
+        },
+      }));
+
+    if (snapshotBacked.length > 0) {
+      availableSystems = snapshotBacked;
+    }
+  }
+
   // Browse-only mode: no plan or profile — return systems with snapshots but no controls
   if (!plan || !profile) {
     return {
@@ -8465,7 +8604,15 @@ export const getAlgofundState = async (
   };
 
   const cachedPreview = safeJsonParse<any>(profile.latest_preview_json, null);
-  const hasCachedPreview = cachedPreview && typeof cachedPreview === 'object';
+  const hasCachedPreviewRaw = cachedPreview && typeof cachedPreview === 'object';
+  // Invalidate cache if the published system changed since the preview was cached
+  const cachedSourceSystemName = asString(cachedPreview?.sourceSystem?.systemName, '').trim();
+  const publishedSystemChanged = hasCachedPreviewRaw && cachedSourceSystemName !== '' && effectiveStorefrontSystemName !== ''
+    && cachedSourceSystemName.toUpperCase() !== effectiveStorefrontSystemName.toUpperCase();
+  const hasCachedPreview = hasCachedPreviewRaw && !publishedSystemChanged;
+  if (publishedSystemChanged) {
+    logger.info(`Algofund preview cache stale for tenant ${tenantId}: cached=${cachedSourceSystemName} published=${effectiveStorefrontSystemName} — will refresh`);
+  }
   // Only run full backtest on initial load or forced refresh; slider changes use fast math scaling
   const canScaleFromCache = hasCachedPreview && requestedRiskMultiplier !== undefined && !forceRefreshPreview
     && Array.isArray(cachedPreview?.equityCurve) && cachedPreview.equityCurve.length > 1;
@@ -8702,14 +8849,17 @@ export const requestAlgofundAction = async (
 
   if (requestType === 'switch_system') {
     const targetSystemId = Math.floor(asNumber(payload.targetSystemId, 0));
-    if (!targetSystemId || targetSystemId <= 0) {
-      throw new Error('targetSystemId is required for switch_system request');
+    const targetSystemNameRaw = asString(payload.targetSystemName, '').trim();
+    if ((!targetSystemId || targetSystemId <= 0) && !targetSystemNameRaw) {
+      throw new Error('targetSystemId or targetSystemName is required for switch_system request');
     }
     let switchApiKeyName = apiKeyName;
     let systems = switchApiKeyName ? await listTradingSystems(switchApiKeyName).catch(() => []) : [];
-    let target = (Array.isArray(systems) ? systems : []).find((item) => Number(item.id) === targetSystemId);
+    let target = targetSystemId > 0
+      ? (Array.isArray(systems) ? systems : []).find((item) => Number(item.id) === targetSystemId)
+      : (Array.isArray(systems) ? systems : []).find((item) => asString(item?.name, '').trim() === targetSystemNameRaw);
 
-    if (!target?.id) {
+    if (!target?.id && targetSystemId > 0) {
       const globalTarget = await db.get(
         `SELECT ts.id AS system_id, ts.name AS system_name, ak.name AS api_key_name
          FROM trading_systems ts
@@ -8729,12 +8879,34 @@ export const requestAlgofundAction = async (
       }
     }
 
+    if (!target?.id && targetSystemNameRaw) {
+      const globalByName = await db.get(
+        `SELECT ts.id AS system_id, ts.name AS system_name, ak.name AS api_key_name
+         FROM trading_systems ts
+         JOIN api_keys ak ON ak.id = ts.api_key_id
+         WHERE ts.name = ?
+         ORDER BY COALESCE(ts.is_active, 0) DESC, ts.id DESC
+         LIMIT 1`,
+        [targetSystemNameRaw]
+      ) as { system_id?: number; system_name?: string; api_key_name?: string } | undefined;
+
+      const globalApiKeyName = asString(globalByName?.api_key_name, '');
+      if (globalByName?.system_id && globalApiKeyName) {
+        switchApiKeyName = globalApiKeyName;
+        systems = await listTradingSystems(switchApiKeyName).catch(() => []);
+        target = (Array.isArray(systems) ? systems : []).find((item) => Number(item.id) === Number(globalByName.system_id)) || {
+          id: Number(globalByName.system_id),
+          name: asString(globalByName.system_name, targetSystemNameRaw),
+        } as any;
+      }
+    }
+
     if (!target?.id) {
-      throw new Error(`Target trading system not found: ${targetSystemId}`);
+      throw new Error(`Target trading system not found: ${targetSystemId || targetSystemNameRaw}`);
     }
 
     requestPayload.targetSystemId = Number(target.id);
-    requestPayload.targetSystemName = asString(target.name, '');
+    requestPayload.targetSystemName = asString(target.name, targetSystemNameRaw);
     requestPayload.targetApiKeyName = asString(switchApiKeyName, '');
   }
 
@@ -8751,6 +8923,22 @@ export const requestAlgofundAction = async (
        WHERE tenant_id = ?`,
       [requestType === 'start' ? 1 : 0, requestType === 'start' ? 1 : 0, tenantId]
     );
+  }
+
+  if (requestType === 'switch_system') {
+    const targetSystemName = asString(requestPayload.targetSystemName, '').trim();
+    if (targetSystemName) {
+      const runtimeApiKeyName = asString(getAlgofundExecutionApiKeyName(tenant, profile), '').trim();
+      await db.run(
+        `UPDATE algofund_profiles
+         SET published_system_name = ?,
+             execution_api_key_name = COALESCE(NULLIF(?, ''), execution_api_key_name),
+             latest_preview_json = NULL,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ?`,
+        [targetSystemName, runtimeApiKeyName, tenantId]
+      );
+    }
   }
 
   await db.run(

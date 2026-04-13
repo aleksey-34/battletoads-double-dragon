@@ -953,6 +953,7 @@ type BacktestCardSettings = {
   tradeFrequencyScore: number;
   initialBalance: number;
   riskScaleMaxPercent: number;
+  maxOpenPositions: number;
 };
 
 const ADMIN_PUBLISH_RESPONSE_STORAGE_KEY = 'saasAdminPublishResponse';
@@ -962,6 +963,7 @@ const DEFAULT_BACKTEST_SETTINGS: BacktestCardSettings = {
   tradeFrequencyScore: 5,
   initialBalance: 10000,
   riskScaleMaxPercent: 40,
+  maxOpenPositions: 0,
 };
 
 const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
@@ -970,11 +972,13 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
   const tradeFrequencyScore = Number(parsed.tradeFrequencyScore);
   const initialBalance = Number(parsed.initialBalance);
   const riskScaleMaxPercent = Number(parsed.riskScaleMaxPercent);
+  const maxOpenPositions = Number(parsed.maxOpenPositions);
   return {
     riskScore: Number.isFinite(riskScore) ? Math.min(10, Math.max(0, riskScore)) : DEFAULT_BACKTEST_SETTINGS.riskScore,
     tradeFrequencyScore: Number.isFinite(tradeFrequencyScore) ? Math.min(10, Math.max(0, tradeFrequencyScore)) : DEFAULT_BACKTEST_SETTINGS.tradeFrequencyScore,
     initialBalance: Number.isFinite(initialBalance) ? Math.max(100, Math.floor(initialBalance)) : DEFAULT_BACKTEST_SETTINGS.initialBalance,
     riskScaleMaxPercent: Number.isFinite(riskScaleMaxPercent) ? Math.min(1000, Math.max(0, riskScaleMaxPercent)) : DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent,
+    maxOpenPositions: Number.isFinite(maxOpenPositions) ? Math.max(0, Math.floor(maxOpenPositions)) : DEFAULT_BACKTEST_SETTINGS.maxOpenPositions,
   };
 };
 
@@ -2209,7 +2213,13 @@ const productModeTag = (mode: ProductMode) => {
   if (mode === 'dual') {
     return <Tag color="purple">dual</Tag>;
   }
-  return <Tag color="green">strategy-client</Tag>;
+  if (mode === 'copytrading_client') {
+    return <Tag color="cyan">copytrading</Tag>;
+  }
+  if (mode === 'synctrade_client') {
+    return <Tag color="volcano">synctrade</Tag>;
+  }
+  return <Tag color="green">strategy</Tag>;
 };
 
 const requestStatusTag = (copy: Copy, status: RequestStatus) => {
@@ -2260,6 +2270,13 @@ const getBacktestRiskMultiplier = (riskScore: number, riskScaleMaxPercent: numbe
   const maxMul = Math.max(1.4, 1 + Number(riskScaleMaxPercent || 40) / 45);
   const logMax = Math.log(maxMul);
   return Math.exp(centered * logMax);
+};
+
+const getBacktestTradeMultiplier = (tradeFrequencyScore: number): number => {
+  const normalized = clampPreviewValue(Number(tradeFrequencyScore || 5), 10) / 10;
+  const maxMul = 2.4;
+  const minMul = 1 / maxMul;
+  return Math.exp(Math.log(minMul) + normalized * (Math.log(maxMul) - Math.log(minMul)));
 };
 
 const levelToSliderValue = (level: Level3): number => {
@@ -2629,6 +2646,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestTradeScore, setAdminSweepBacktestTradeScore] = useState(DEFAULT_BACKTEST_SETTINGS.tradeFrequencyScore);
   const [adminSweepBacktestInitialBalance, setAdminSweepBacktestInitialBalance] = useState(DEFAULT_BACKTEST_SETTINGS.initialBalance);
   const [adminSweepBacktestRiskScaleMaxPercent, setAdminSweepBacktestRiskScaleMaxPercent] = useState(DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent);
+  const [adminSweepBacktestMaxOpenPositions, setAdminSweepBacktestMaxOpenPositions] = useState(DEFAULT_BACKTEST_SETTINGS.maxOpenPositions);
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
   const [adminSweepBacktestResult, setAdminSweepBacktestResult] = useState<AdminSweepBacktestPreviewResponse | null>(null);
   const [adminSweepBacktestRerunApiKey, setAdminSweepBacktestRerunApiKey] = useState('');
@@ -3949,6 +3967,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             riskScore: adminSweepBacktestRiskScore,
             tradeFrequencyScore: adminSweepBacktestTradeScore,
             riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
+            maxOpenPositions: adminSweepBacktestMaxOpenPositions > 0 ? adminSweepBacktestMaxOpenPositions : undefined,
           });
           return [window.key, response.data] as const;
         })
@@ -5820,6 +5839,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAdminSweepBacktestTradeScore(settings.tradeFrequencyScore);
     setAdminSweepBacktestInitialBalance(settings.initialBalance);
     setAdminSweepBacktestRiskScaleMaxPercent(settings.riskScaleMaxPercent);
+    setAdminSweepBacktestMaxOpenPositions(settings.maxOpenPositions ?? 0);
   }, []);
 
   const resolveBacktestSettingsForContext = useCallback((context: SaasBacktestContext): BacktestCardSettings => {
@@ -5929,6 +5949,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const effectiveTradeFrequencyScore = Number(options?.settingsOverride?.tradeFrequencyScore ?? adminSweepBacktestTradeScore);
     const effectiveInitialBalance = Number(options?.settingsOverride?.initialBalance ?? adminSweepBacktestInitialBalance);
     const effectiveRiskScaleMaxPercent = Number(options?.settingsOverride?.riskScaleMaxPercent ?? adminSweepBacktestRiskScaleMaxPercent);
+    const effectiveMaxOpenPositions = Math.max(0, Math.floor(Number(options?.settingsOverride?.maxOpenPositions ?? adminSweepBacktestMaxOpenPositions)));
     try {
       const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
         kind: targetContext.kind,
@@ -5946,6 +5967,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         tradeFrequencyScore: effectiveTradeFrequencyScore,
         initialBalance: effectiveInitialBalance,
         riskScaleMaxPercent: effectiveRiskScaleMaxPercent,
+        maxOpenPositions: effectiveMaxOpenPositions > 0 ? effectiveMaxOpenPositions : undefined,
         preferRealBacktest: options?.preferRealBacktest === true,
         rerunApiKeyName: options?.preferRealBacktest
           ? (adminSweepBacktestRerunApiKey || undefined)
@@ -5965,6 +5987,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         tradeFrequencyScore: effectiveTradeFrequencyScore,
         initialBalance: effectiveInitialBalance,
         riskScaleMaxPercent: effectiveRiskScaleMaxPercent,
+        maxOpenPositions: effectiveMaxOpenPositions,
       });
     } catch (error: any) {
       if (requestSeq !== backtestRequestSeqRef.current) {
@@ -7090,299 +7113,174 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const tenantColumns: ColumnsType<TenantSummary> = [
     {
-      title: 'Tenant',
+      title: 'Клиент',
       key: 'tenant',
-      width: 180,
+      width: 150,
+      fixed: 'left',
       render: (_, row) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{row.tenant.display_name}</Text>
-          <Text type="secondary">{row.tenant.slug}</Text>
-        </Space>
+        <Tooltip title={`ID: ${row.tenant.id} • ${row.tenant.slug}`}>
+          <Text strong style={{ fontSize: 12 }}>{row.tenant.display_name}</Text>
+        </Tooltip>
       ),
     },
     {
-      title: copy.tenantMode,
+      title: 'Тип',
       key: 'mode',
-      width: 140,
+      width: 80,
       render: (_, row) => productModeTag(row.tenant.product_mode),
     },
     {
-      title: copy.plan,
+      title: 'Тариф',
       key: 'plan',
-      width: 170,
-      render: (_, row) => row.plan ? `${row.plan.title} • ${row.plan.original_price_usdt ? formatMoney(row.plan.original_price_usdt) + ' → ' : ''}${formatMoney(row.plan.price_usdt)}` : '—',
-    },
-    {
-      title: 'Оплата',
-      key: 'billing',
-      width: 170,
+      width: 120,
       render: (_, row) => {
+        if (!row.plan) return <Tag color="default">—</Tag>;
         const billing = extractTenantBillingInfo(row);
         return (
-          <Tooltip title={billing.details}>
-            <Tag color={billing.color}>{billing.label}</Tag>
+          <Tooltip title={`${row.plan.title} • ${billing.details}`}>
+            <Space size={2} direction="vertical">
+              <Text style={{ fontSize: 11 }}>{formatMoney(row.plan.price_usdt)}</Text>
+              <Tag color={billing.color} style={{ fontSize: 10 }}>{billing.label}</Tag>
+            </Space>
           </Tooltip>
         );
       },
     },
     {
-      title: copy.apiKey,
+      title: 'API',
       key: 'apiKey',
-      width: 110,
-      render: (_, row) => (
-        <Space wrap>
-          <Text>{row.tenant.product_mode === 'strategy_client'
-            ? row.strategyProfile?.assigned_api_key_name || row.tenant.assigned_api_key_name || '—'
-            : row.tenant.product_mode === 'algofund_client'
-              ? row.algofundProfile?.assigned_api_key_name || row.tenant.assigned_api_key_name || '—'
-              : row.copytradingProfile?.master_api_key_name || row.tenant.assigned_api_key_name || '—'}</Text>
-          {row.capabilities && !row.capabilities.apiKeyUpdate ? <Tag color="default">readonly</Tag> : null}
-        </Space>
-      ),
-    },
-    {
-      title: copy.planCapabilities,
-      key: 'capabilities',
-      width: 240,
-      render: (_, row) => renderCapabilityTags(copy, row.capabilities),
-    },
-    {
-      title: copy.monitoring,
-      key: 'monitoring',
-      width: 280,
-      render: (_, row) => row.capabilities?.monitoring ? (row.monitoring ? (
-        <Space size={4} wrap>
-          <Tag color="blue">Eq {formatMoney(row.monitoring.equity_usd)}</Tag>
-          <Tag color="geekblue">PnL {formatMoney(row.monitoring.unrealized_pnl)}</Tag>
-          <Tag color="orange">DD {formatPercent(row.monitoring.drawdown_percent)}</Tag>
-          <Tag color="purple">ML {formatPercent(row.monitoring.margin_load_percent)}</Tag>
-          {Number.isFinite(row.monitoring.effective_leverage) ? <Tag color="red">Lev {formatNumber(row.monitoring.effective_leverage, 2)}x</Tag> : null}
-          {calcDepositLoadPercent(row) !== null ? <Tag color="cyan">{copy.depositLoad}: {formatPercent(calcDepositLoadPercent(row))}</Tag> : null}
-          {(() => {
-            const liq = calcLiquidationRisk(row);
-            return <Tag color={liq.color}>{copy.liquidationRisk}: {liq.level}{liq.bufferPercent !== null ? ` (${formatPercent(liq.bufferPercent)} buf)` : ''}</Tag>;
-          })()}
-        </Space>
-      ) : <Tag color="default">off</Tag>) : <Tag color="default">off</Tag>,
-    },
-    {
-      title: 'Классификация',
-      key: 'classification',
-      width: 300,
+      width: 100,
       render: (_, row) => {
-        if (row.tenant.product_mode === 'strategy_client' || row.tenant.product_mode === 'dual') {
-          const selected = Array.isArray(row.strategyProfile?.selectedOfferIds)
-            ? row.strategyProfile?.selectedOfferIds || []
-            : [];
-          if (selected.length === 0) {
-            return <Tag color="default">Офер не выбран</Tag>;
-          }
-          return (
-            <Space size={4} wrap>
-              {selected.slice(0, 3).map((offerId) => (
-                <Tag key={`${row.tenant.id}:${offerId}`} color="blue">{offerTitleById[String(offerId)] || String(offerId)}</Tag>
-              ))}
-              {selected.length > 3 ? <Tag color="default">+{selected.length - 3}</Tag> : null}
-            </Space>
-          );
-        }
-
-        const systemName = String(row.algofundProfile?.published_system_name || '').trim();
-        return systemName ? <Tag color="purple">{systemName}</Tag> : <Tag color="default">ТС не выбрана</Tag>;
+        const key = row.tenant.product_mode === 'strategy_client'
+          ? row.strategyProfile?.assigned_api_key_name || row.tenant.assigned_api_key_name || ''
+          : row.tenant.product_mode === 'algofund_client'
+            ? row.algofundProfile?.assigned_api_key_name || row.tenant.assigned_api_key_name || ''
+            : row.copytradingProfile?.master_api_key_name || row.tenant.assigned_api_key_name || '';
+        return key ? <Text style={{ fontSize: 11 }}>{key}</Text> : <Text type="secondary">—</Text>;
       },
     },
     {
-      title: copy.status,
-      key: 'status',
-      width: 220,
+      title: 'Торговля',
+      key: 'trading',
+      width: 90,
       render: (_, row) => {
         const runtime = resolveTenantRuntimeStatus(row);
         return (
           <Tooltip title={runtime.details}>
-            <Space direction="vertical" size={2}>
-              <Tag color={row.tenant.status === 'active' ? 'success' : 'default'}>{row.tenant.status}</Tag>
-              <Space size={4} wrap>
-                <Tag color={runtime.level}>{runtime.stateLabel}</Tag>
-                <Tag color={runtime.requestedEnabled ? 'processing' : 'warning'}>{runtime.requestedEnabled ? 'торговля включена' : 'торговля выключена'}</Tag>
-              </Space>
+            <Space size={2} direction="vertical" align="center">
+              <Switch
+                size="small"
+                checked={runtime.requestedEnabled}
+                loading={actionLoading === `monitor-toggle-${row.tenant.id}`}
+                onChange={(checked) => { void toggleTenantRequestedEnabled(row, checked); }}
+              />
+              <Tag color={runtime.actualEnabled ? 'success' : 'default'} style={{ fontSize: 10 }}>{runtime.actualEnabled ? 'engine' : 'off'}</Tag>
             </Space>
           </Tooltip>
         );
       },
     },
     {
-      title: 'Action',
+      title: 'Мониторинг',
+      key: 'monitoring',
+      width: 200,
+      render: (_, row) => row.monitoring ? (
+        <Space size={2} wrap>
+          <Tag color="blue" style={{ fontSize: 10 }}>Eq {formatMoney(row.monitoring.equity_usd)}</Tag>
+          <Tag color="geekblue" style={{ fontSize: 10 }}>PnL {formatMoney(row.monitoring.unrealized_pnl)}</Tag>
+          <Tag color="orange" style={{ fontSize: 10 }}>DD {formatPercent(row.monitoring.drawdown_percent)}</Tag>
+          {(() => {
+            const liq = calcLiquidationRisk(row);
+            return liq.level !== 'low' ? <Tag color={liq.color} style={{ fontSize: 10 }}>Liq: {liq.level}</Tag> : null;
+          })()}
+        </Space>
+      ) : <Tag color="default" style={{ fontSize: 10 }}>no data</Tag>,
+    },
+    {
+      title: 'ТС / Офер',
+      key: 'classification',
+      width: 180,
+      render: (_, row) => {
+        const selected = Array.isArray(row.strategyProfile?.selectedOfferIds)
+          ? row.strategyProfile?.selectedOfferIds || []
+          : [];
+        const systemName = String(row.algofundProfile?.published_system_name || '').trim();
+        if (selected.length === 0 && !systemName) return <Tag color="default" style={{ fontSize: 10 }}>нет офера</Tag>;
+        return (
+          <Space size={2} wrap>
+            {selected.slice(0, 2).map((offerId) => (
+              <Tag key={`${row.tenant.id}:${offerId}`} color="blue" style={{ fontSize: 10 }}>{offerTitleById[String(offerId)] || String(offerId)}</Tag>
+            ))}
+            {selected.length > 2 ? <Tag color="default" style={{ fontSize: 10 }}>+{selected.length - 2}</Tag> : null}
+            {systemName ? <Tag color="purple" style={{ fontSize: 10 }}>{systemName.split('::').pop()}</Tag> : null}
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Действия',
       key: 'action',
-      width: 280,
-      render: (_, row) => (row.tenant.product_mode === 'strategy_client' || row.tenant.product_mode === 'dual') ? (
-        <Space size={4} wrap>
-          <Button
-            size="small"
-            onClick={() => {
-              setStrategyTenantId(row.tenant.id);
-              navigateSaasTab('strategy-client');
-            }}
-          >
-            {copy.openStrategyClient}
-          </Button>
-          <Button
-            size="small"
-            danger
-            onClick={() => {
-              Modal.confirm({
-                title: `Удалить клиента «${row.tenant.display_name}»?`,
-                content: 'Будут удалены: профиль, API ключ и все связанные данные. Действие необратимо.',
-                okText: 'Удалить',
-                okType: 'danger',
-                cancelText: 'Отмена',
-                onOk: async () => {
-                  try {
-                    await axios.delete(`/api/saas/admin/tenants/${row.tenant.id}`);
-                    messageApi.success(`Клиент «${row.tenant.display_name}» удалён`);
-                    void loadSummary('full');
-                  } catch (err: any) {
-                    messageApi.error(String(err?.response?.data?.error || err.message || 'Ошибка удаления'));
-                  }
-                },
-              });
-            }}
-          >
-            Удалить
-          </Button>
-        </Space>
-      ) : row.tenant.product_mode === 'copytrading_client' ? (
-        <Space size={4} wrap>
-          <Button
-            size="small"
-            onClick={() => {
-              setCopytradingTenantId(row.tenant.id);
-              navigateSaasTab('copytrading');
-            }}
-          >
-            Copytrading
-          </Button>
-          <Button
-            size="small"
-            danger
-            onClick={() => {
-              Modal.confirm({
-                title: `Удалить клиента «${row.tenant.display_name}»?`,
-                content: 'Будут удалены: профиль, API ключ и все связанные данные. Действие необратимо.',
-                okText: 'Удалить',
-                okType: 'danger',
-                cancelText: 'Отмена',
-                onOk: async () => {
-                  try {
-                    await axios.delete(`/api/saas/admin/tenants/${row.tenant.id}`);
-                    messageApi.success(`Клиент «${row.tenant.display_name}» удалён`);
-                    void loadSummary('full');
-                  } catch (err: any) {
-                    messageApi.error(String(err?.response?.data?.error || err.message || 'Ошибка удаления'));
-                  }
-                },
-              });
-            }}
-          >
-            Удалить
-          </Button>
-        </Space>
-      ) : row.tenant.product_mode === 'synctrade_client' ? (
-        <Space size={4} wrap>
-          <Button
-            size="small"
-            onClick={() => {
-              setSynctradeTenantId(row.tenant.id);
-              navigateSaasTab('synctrade');
-            }}
-          >
-            Синхротрейд
-          </Button>
-          <Button
-            size="small"
-            danger
-            onClick={() => {
-              Modal.confirm({
-                title: `Удалить клиента «${row.tenant.display_name}»?`,
-                content: 'Будут удалены: профиль, API ключ и все связанные данные. Действие необратимо.',
-                okText: 'Удалить',
-                okType: 'danger',
-                cancelText: 'Отмена',
-                onOk: async () => {
-                  try {
-                    await axios.delete(`/api/saas/admin/tenants/${row.tenant.id}`);
-                    messageApi.success(`Клиент «${row.tenant.display_name}» удалён`);
-                    void loadSummary('full');
-                  } catch (err: any) {
-                    messageApi.error(String(err?.response?.data?.error || err.message || 'Ошибка удаления'));
-                  }
-                },
-              });
-            }}
-          >
-            Удалить
-          </Button>
-        </Space>
-      ) : (
-        <Space size={4} wrap>
-          <Button
-            size="small"
-            onClick={() => {
-              setAlgofundTenantId(row.tenant.id);
-              navigateSaasTab('algofund');
-            }}
-          >
-            {copy.openAlgofund}
-          </Button>
-          <Button
-            size="small"
-            type="primary"
-            loading={actionLoading === `algofund-single:${row.tenant.id}`}
-            onClick={() => void runSingleAlgofundAction(Number(row.tenant.id), 'start')}
-          >
-            Start
-          </Button>
-          <Button
-            size="small"
-            danger
-            loading={actionLoading === `algofund-single:${row.tenant.id}`}
-            onClick={() => void runSingleAlgofundAction(Number(row.tenant.id), 'stop')}
-          >
-            Stop
-          </Button>
-          <Button
-            size="small"
-            disabled={!preferredClientSwitchTarget?.systemId}
-            loading={actionLoading === `algofund-single:${row.tenant.id}`}
-            onClick={() => void runSingleAlgofundAction(Number(row.tenant.id), 'switch_system', Number(preferredClientSwitchTarget?.systemId || 0))}
-          >
-            Switch TS
-          </Button>
-          <Button
-            size="small"
-            danger
-            onClick={() => {
-              Modal.confirm({
-                title: `Удалить клиента «${row.tenant.display_name}»?`,
-                content: 'Будут удалены: профиль, API ключ и все связанные данные. Действие необратимо.',
-                okText: 'Удалить',
-                okType: 'danger',
-                cancelText: 'Отмена',
-                onOk: async () => {
-                  try {
-                    await axios.delete(`/api/saas/admin/tenants/${row.tenant.id}`);
-                    messageApi.success(`Клиент «${row.tenant.display_name}» удалён`);
-                    void loadSummary('full');
-                  } catch (err: any) {
-                    messageApi.error(String(err?.response?.data?.error || err.message || 'Ошибка удаления'));
-                  }
-                },
-              });
-            }}
-          >
-            Удалить
-          </Button>
-        </Space>
-      ),
+      width: 200,
+      fixed: 'right',
+      render: (_, row) => {
+        const openBtn = (label: string, onClick: () => void) => (
+          <Button size="small" style={{ fontSize: 11, padding: '0 6px' }} onClick={onClick}>{label}</Button>
+        );
+        const deleteBtn = () => (
+          <Button size="small" danger style={{ fontSize: 11, padding: '0 6px' }} onClick={() => {
+            Modal.confirm({
+              title: `Удалить клиента «${row.tenant.display_name}»?`,
+              content: 'Профиль, API ключ и все данные будут удалены.',
+              okText: 'Удалить',
+              okType: 'danger',
+              cancelText: 'Отмена',
+              onOk: async () => {
+                try {
+                  await axios.delete(`/api/saas/admin/tenants/${row.tenant.id}`);
+                  messageApi.success(`Клиент «${row.tenant.display_name}» удалён`);
+                  void loadSummary('full');
+                } catch (err: any) {
+                  messageApi.error(String(err?.response?.data?.error || err.message || 'Ошибка'));
+                }
+              },
+            });
+          }}>Del</Button>
+        );
+
+        if (row.tenant.product_mode === 'strategy_client' || row.tenant.product_mode === 'dual') {
+          return (
+            <Space size={2} wrap>
+              {openBtn('Strategy', () => { setStrategyTenantId(row.tenant.id); navigateSaasTab('strategy-client'); })}
+              {deleteBtn()}
+            </Space>
+          );
+        }
+        if (row.tenant.product_mode === 'copytrading_client') {
+          return (
+            <Space size={2} wrap>
+              {openBtn('Copy', () => { setCopytradingTenantId(row.tenant.id); navigateSaasTab('copytrading'); })}
+              {deleteBtn()}
+            </Space>
+          );
+        }
+        if (row.tenant.product_mode === 'synctrade_client') {
+          return (
+            <Space size={2} wrap>
+              {openBtn('Sync', () => { setSynctradeTenantId(row.tenant.id); navigateSaasTab('synctrade'); })}
+              {deleteBtn()}
+            </Space>
+          );
+        }
+        return (
+          <Space size={2} wrap>
+            {openBtn('AF', () => { setAlgofundTenantId(row.tenant.id); navigateSaasTab('algofund'); })}
+            <Button size="small" type="primary" style={{ fontSize: 11, padding: '0 6px' }} loading={actionLoading === `algofund-single:${row.tenant.id}`} onClick={() => void runSingleAlgofundAction(Number(row.tenant.id), 'start')}>On</Button>
+            <Button size="small" danger style={{ fontSize: 11, padding: '0 6px' }} loading={actionLoading === `algofund-single:${row.tenant.id}`} onClick={() => void runSingleAlgofundAction(Number(row.tenant.id), 'stop')}>Off</Button>
+            <Button size="small" style={{ fontSize: 11, padding: '0 6px' }} disabled={!preferredClientSwitchTarget?.systemId} loading={actionLoading === `algofund-single:${row.tenant.id}`} onClick={() => void runSingleAlgofundAction(Number(row.tenant.id), 'switch_system', Number(preferredClientSwitchTarget?.systemId || 0))}>Sw</Button>
+            {deleteBtn()}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -8500,24 +8398,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       label: 'Клиенты',
                       children: (
                         <Space direction="vertical" size={16} style={{ width: '100%' }}>
-                          <Card className="battletoads-card" title={copy.requestQueue}>
-                            <Space wrap>
-                              <Tag color="processing">pending: {Number(summary?.algofundRequestQueue?.pending || 0)}</Tag>
-                              <Tag color="success">approved: {Number(summary?.algofundRequestQueue?.approved || 0)}</Tag>
-                              <Tag color="default">rejected: {Number(summary?.algofundRequestQueue?.rejected || 0)}</Tag>
-                              <Tag>total: {Number(summary?.algofundRequestQueue?.total || 0)}</Tag>
-                            </Space>
-                            <div style={{ marginTop: 12 }}>
-                              <Table
-                                rowKey="id"
-                                columns={requestColumns}
-                                dataSource={summary?.algofundRequestQueue?.items || []}
-                                pagination={{ pageSize: 8, showSizeChanger: false }}
-                                scroll={{ x: 960 }}
-                              />
-                            </div>
-                          </Card>
-
                           <Card className="battletoads-card" title={copy.connectedTenants} extra={<Button type="primary" onClick={() => navigateToAdminTab('create-user')}>{copy.createClient}</Button>}>
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>{copy.adminCreateHint}</Paragraph>
                             <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -8581,6 +8461,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 >
                                   Сбросить фильтры
                                 </Button>
+                                <Button size="small" onClick={() => void loadMonitoringTabData()} loading={monitoringTabLoading}>Обновить мониторинг</Button>
                               </Space>
                               <Card size="small" className="battletoads-card" title="Algofund batch actions">
                                 <Space direction="vertical" size={10} style={{ width: '100%' }}>
@@ -8737,7 +8618,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 dataSource={filteredClients}
                                 tableLayout="fixed"
                                 pagination={{ pageSize: 10, showSizeChanger: false }}
-                                scroll={{ x: 1700 }}
+                                scroll={{ x: 1200 }}
+                                size="small"
                                 rowSelection={{
                                   selectedRowKeys: batchTenantIds,
                                   onChange: (keys) => {
@@ -8752,36 +8634,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Space>
                           </Card>
 
-                          <Card className="battletoads-card" title="Живые клиенты и торговые движки">
-                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                              <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                                Совмещенный runtime-обзор клиентов: состояние движков, мониторинг, соответствие и сквозной отчёт.
-                              </Paragraph>
-                              <Space wrap>
-                                <Select
-                                  style={{ width: 260 }}
-                                  value={monitoringModeFilter}
-                                  onChange={(value) => setMonitoringModeFilter(value)}
-                                  options={[
-                                    { value: 'all', label: 'Все режимы' },
-                                    { value: 'strategy_client', label: 'Strategy Client' },
-                                    { value: 'algofund_client', label: 'Algofund' },
-                                    { value: 'dual', label: 'Dual' },
-                                  ]}
-                                />
-                                <Button onClick={() => void loadMonitoringTabData()} loading={monitoringTabLoading}>Обновить список систем</Button>
-                              </Space>
-
-                              <Table
-                                rowKey={(row) => row.tenant.id}
-                                columns={monitoringColumns}
-                                dataSource={monitoringRows}
-                                pagination={{ pageSize: 8 }}
-                                scroll={{ x: 1500 }}
-                                loading={monitoringTabLoading && monitoringRows.length === 0}
-                              />
-
-                              <Card size="small" className="battletoads-card" title="Сквозной отчет: карточка • аналитика • клиенты • соответствие • проблемы • предложения">
+                          <Card size="small" className="battletoads-card" title="Сквозной отчёт" style={{ marginTop: 16 }}>
                                 <Table
                                   rowKey="key"
                                   size="small"
@@ -8797,8 +8650,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     { title: 'Предложения', dataIndex: 'suggestions', key: 'suggestions', width: 420 },
                                   ]}
                                 />
-                              </Card>
-                            </Space>
                           </Card>
 
                           <Row gutter={[16, 16]}>
@@ -8810,6 +8661,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'strategy_client')}
                                   pagination={false}
                                   scroll={{ x: 980 }}
+                                  size="small"
                                 />
                               </Card>
                             </Col>
@@ -8821,6 +8673,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   dataSource={(summary?.plans || []).filter((plan) => plan.product_mode === 'algofund_client')}
                                   pagination={false}
                                   scroll={{ x: 980 }}
+                                  size="small"
                                 />
                               </Card>
                             </Col>
@@ -9192,24 +9045,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Space>
 
                             <Row gutter={[16, 16]}>
-                              <Col xs={24} xl={10}>
-                                <Card size="small" className="battletoads-card" title="Pending algofund requests">
-                                  <Space wrap>
-                                    <Tag color="processing">pending: {pendingAlgofundRequests.length}</Tag>
-                                    <Tag>clients: {Object.keys(pendingAlgofundRequestsByTenant).length}</Tag>
-                                  </Space>
-                                  <div style={{ marginTop: 12 }}>
-                                    <Table
-                                      size="small"
-                                      rowKey="id"
-                                      columns={requestColumns}
-                                      dataSource={pendingAlgofundRequests}
-                                      pagination={{ pageSize: 4, showSizeChanger: false }}
-                                      scroll={{ x: 760 }}
-                                    />
-                                  </div>
-                                </Card>
-                              </Col>
                               <Col xs={24} xl={10}>
                                 <Card size="small" className="battletoads-card" title="Telegram controls">
                                   <Space direction="vertical" style={{ width: '100%' }}>
@@ -10771,14 +10606,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Row>
                         </Card>
 
-                        {isAdminSurface ? (
-                          <Card className="battletoads-card" title={copy.requestQueue}>
-                            <Space direction="vertical" size={12} style={{ width: '100%' }}>
-                              <Input.TextArea rows={2} value={algofundDecisionNote} onChange={(event) => setAlgofundDecisionNote(event.target.value)} placeholder={copy.decisionNote} />
-                              <Table rowKey="id" columns={requestColumns} dataSource={algofundState.requests || []} pagination={false} scroll={{ x: 960 }} />
-                            </Space>
-                          </Card>
-                        ) : null}
+
                       </>
                     ) : null}
                   </Spin>
@@ -12164,6 +11992,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               )}
             </Row>
 
+            {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
+              <Row gutter={[12, 12]} style={{ marginTop: 12 }}>
+                <Col xs={24} md={6}>
+                  <Card size="small" title="Макс. открытых позиций (ОП)">
+                    <InputNumber
+                      min={0}
+                      max={20}
+                      step={1}
+                      style={{ width: '100%' }}
+                      value={adminSweepBacktestMaxOpenPositions}
+                      onChange={(value) => {
+                        const next = Math.max(0, Math.floor(Number(value || 0)));
+                        setAdminSweepBacktestMaxOpenPositions(next);
+                        storeCurrentBacktestSettingsForContext(backtestDrawerContext, { maxOpenPositions: next });
+                        setAdminSweepBacktestStale(true);
+                        scheduleBacktestDebounce();
+                      }}
+                    />
+                    <Text type="secondary">{adminSweepBacktestMaxOpenPositions > 0 ? `Не более ${adminSweepBacktestMaxOpenPositions} одновременных позиций (облако пар с ОП)` : '0 = без ограничения'}</Text>
+                  </Card>
+                </Col>
+              </Row>
+            )}
+
             {adminSweepBacktestResult ? (
               <Card size="small" title={adminSweepBacktestStale ? <Space><Tag color="orange">⟳ Пересчёт запущен...</Tag><span>Результат sweep backtest</span></Space> : 'Результат sweep backtest'}>
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
@@ -12188,7 +12040,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     const effectiveDrawdownCurve = drawdownCurve.length > 0 ? drawdownCurve : fallbackCurves.drawdown;
 
                     const finalPnl = Number(summary.unrealizedPnl ?? (effectivePnlCurve.length > 0 ? effectivePnlCurve[effectivePnlCurve.length - 1].value : fallbackCurves.finalPnl) ?? 0);
-                    const tradesCount = Number(summary.tradesCount ?? 0);
+                    const serverTradesCount = Number(summary.tradesCount ?? 0);
+                    const baseTradeScore = Number(adminSweepBacktestResult.controls?.tradeFrequencyScore ?? 5);
+                    const tradesCount = adminSweepBacktestStale && Number.isFinite(serverTradesCount) && serverTradesCount > 0
+                      ? Math.max(
+                        1,
+                        Math.round(
+                          serverTradesCount
+                          * (getBacktestTradeMultiplier(adminSweepBacktestTradeScore)
+                            / Math.max(0.1, getBacktestTradeMultiplier(baseTradeScore)))
+                        )
+                      )
+                      : (Number.isFinite(serverTradesCount) ? serverTradesCount : 0);
                     const maxDd = Number(summary.maxDrawdownPercent ?? (effectiveDrawdownCurve.length > 0 ? Math.max(...effectiveDrawdownCurve.map((point) => point.value)) : 0));
                     const marginLoad = Number(summary.marginLoadPercent ?? 0);
                     const rerunErrorText = String(adminSweepBacktestResult.rerun?.error || '').trim();
@@ -12199,6 +12062,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   {isAdminSurface ? (
                   <Space wrap>
                     <Tag color="blue">offers: {adminSweepBacktestResult.selectedOffers.length}</Tag>
+                    {backtestDrawerContext?.kind === 'algofund-ts' && adminSweepBacktestMaxOpenPositions > 0 && <Tag color="volcano">ОП: {adminSweepBacktestMaxOpenPositions}</Tag>}
                     <Tag color="geekblue">risk: {adminSweepBacktestResult.controls.riskLevel}</Tag>
                     <Tag color="purple">frequency: {adminSweepBacktestResult.controls.tradeFrequencyLevel}</Tag>
                     {adminSweepBacktestResult.rerun?.executed ? (
@@ -12212,7 +12076,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(adminSweepBacktestResult.preview.summary.totalReturnPercent)}</Tag> : null}
                     {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(adminSweepBacktestResult.preview.summary.maxDrawdownPercent)}</Tag> : null}
                     {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.profitFactor || 0), 'pf')}>PF {formatNumber(adminSweepBacktestResult.preview.summary.profitFactor)}</Tag> : null}
-                    {adminSweepBacktestResult.preview?.summary?.tradesCount !== undefined ? <Tag color="cyan">trades {formatNumber(adminSweepBacktestResult.preview.summary.tradesCount, 0)}</Tag> : null}
+                    {Number.isFinite(tradesCount) ? <Tag color="cyan">trades {formatNumber(tradesCount, 0)}</Tag> : null}
                   </Space>
                   ) : (
                   <Space wrap>
@@ -12292,7 +12156,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                   {isAdminSurface && (
                   <Row gutter={[12, 12]}>
-                    <Col xs={12} md={6}><Card size="small"><Statistic title="Сделки" value={Number.isFinite(tradesCount) ? tradesCount : 0} precision={0} /></Card></Col>
+                    <Col xs={12} md={6}>
+                      <Card
+                        size="small"
+                        title={<Space size={6}><span>Сделки</span><Tag color="geekblue" style={{ marginInlineEnd: 0 }}>зависят от частоты</Tag></Space>}
+                      >
+                        <Statistic value={Number.isFinite(tradesCount) ? tradesCount : 0} precision={0} />
+                        <Text type="secondary" style={{ fontSize: 12 }}>Риск меняет P/L и DD, частота меняет число сделок.</Text>
+                      </Card>
+                    </Col>
                     <Col xs={12} md={6}><Card size="small"><Statistic title="P/L" value={finalPnl} precision={2} suffix="USDT" /></Card></Col>
                     <Col xs={12} md={6}><Card size="small"><Statistic title="Max DD" value={maxDd} precision={2} suffix="%" /></Card></Col>
                     <Col xs={12} md={6}><Card size="small"><Statistic title="Margin load" value={marginLoad} precision={2} suffix="%" /></Card></Col>
