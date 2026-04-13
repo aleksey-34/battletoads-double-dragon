@@ -13,7 +13,7 @@ import {
   updateTradingSystem,
 } from '../bot/tradingSystems';
 import { getMonitoringLatest } from '../bot/monitoring';
-import { getPositions, closeAllPositions, cancelAllOrders, ensureExchangeClientInitialized, getMarketData } from '../bot/exchange';
+import { getPositions, closeAllPositions, cancelAllOrders, ensureExchangeClientInitialized, getMarketData, getAllSymbols } from '../bot/exchange';
 import { Strategy, saveApiKey } from '../config/settings';
 import { db, initDB } from '../utils/database';
 import logger from '../utils/logger';
@@ -3272,7 +3272,27 @@ const upsertTenantStrategies = async (
   const desiredNames = new Set<string>();
   const out: StrategyMaterializedRow[] = [];
 
+  // Pre-load available symbols for the client's exchange to skip invalid pairs
+  let availableSymbols: Set<string> | null = null;
+  try {
+    const symbols = await getAllSymbols(apiKeyName);
+    if (Array.isArray(symbols) && symbols.length > 0) {
+      availableSymbols = new Set(symbols.map((s: string) => s.toUpperCase()));
+    }
+  } catch {
+    logger.warn(`[upsertTenantStrategies] Could not load symbols for ${apiKeyName}, skipping pair-validity filter`);
+  }
+
   for (const item of records) {
+    // Skip pairs not available on the client's exchange (Cloud multi-exchange support)
+    if (availableSymbols) {
+      const market = asString(item.record.market, '').toUpperCase();
+      if (market && !availableSymbols.has(market)) {
+        logger.info(`[upsertTenantStrategies] Skipping ${market} for ${apiKeyName}: pair not available on client exchange`);
+        continue;
+      }
+    }
+
     const desiredName = prefixStrategyName(tenant, item.record);
     desiredNames.add(desiredName);
     const draft = buildStrategyDraftFromRecord(item.record, desiredName, perStrategyDeposit, riskLevel, activate);
@@ -4273,7 +4293,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     ) as Promise<Array<{ system_name?: string }>>,
     db.all(
       `SELECT name AS system_name FROM trading_systems
-       WHERE UPPER(name) LIKE 'CLOUD%' AND is_active = 1
+       WHERE (UPPER(name) LIKE 'CLOUD%' OR LOWER(name) LIKE '%::cloud-%') AND is_active = 1
        ORDER BY name ASC`
     ) as Promise<Array<{ system_name?: string }>>,
   ]);
@@ -5846,12 +5866,12 @@ export const syncCloudTsFromSweepResult = async (
     return { updated: 0, skipped: 0, details };
   }
 
-  // Find all Cloud TS with auto_sync_members enabled
+  // Find all Cloud TS with auto_sync_members enabled (both legacy CLOUD% and unified ALGOFUND_MASTER::*::cloud-*)
   const cloudTs = await db.all(
     `SELECT ts.id, ts.name, ts.api_key_id, ak.name as api_key_name
      FROM trading_systems ts
      JOIN api_keys ak ON ak.id = ts.api_key_id
-     WHERE UPPER(ts.name) LIKE 'CLOUD%'
+     WHERE (UPPER(ts.name) LIKE 'CLOUD%' OR LOWER(ts.name) LIKE '%::cloud-%')
        AND ts.is_active = 1
        AND ts.auto_sync_members = 1
      ORDER BY ts.id`

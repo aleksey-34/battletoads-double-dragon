@@ -3278,6 +3278,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (upper.includes('_DD_') || upper.includes('BTDD') || upper.includes('DD_BATTLETOADS') || upper.includes('-DD-')) {
       return 'DoubleDragon Breakout — пробой канала Дончиана\nЛонг/шорт при пробое N-бар максимума/минимума.\nТрейлинговый TP от пика позиции. Работает на моно и синтетических парах.';
     }
+    if (upper.includes('CLOUD')) {
+      return 'Cloud OP2 — облачный мультибиржевой портфель\nАвтоматический подбор пар свипом с проверкой валидности на Bybit/MEXC/WEEX.\nПары, недоступные на вашей бирже, автоматически пропускаются.';
+    }
     return null;
   };
 
