@@ -1022,6 +1022,7 @@ const Dashboard: React.FC = () => {
   const [strategiesByKey, setStrategiesByKey] = useState<{ [key: string]: DDStrategy[] }>({});
   const [strategyRenderLimitByKey, setStrategyRenderLimitByKey] = useState<{ [key: string]: number }>({});
   const [strategiesTotalByKey, setStrategiesTotalByKey] = useState<{ [key: string]: number }>({});
+  const [strategiesRunningByKey, setStrategiesRunningByKey] = useState<{ [key: string]: number }>({});
   const [fullStrategiesLoadedByKey, setFullStrategiesLoadedByKey] = useState<{ [key: string]: boolean }>({});
   const [strategiesLoadingByKey, setStrategiesLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [strategiesErrorByKey, setStrategiesErrorByKey] = useState<{ [key: string]: string }>({});
@@ -1235,6 +1236,21 @@ const Dashboard: React.FC = () => {
         setSelectedApiKey(keys[0].name);
         localStorage.setItem('selectedApiKey', keys[0].name);
       }
+
+      // Prefetch lightweight strategy counts for instant badge display
+      try {
+        const countsRes = await axios.get('/api/strategies/counts');
+        const counts = countsRes.data || {};
+        const totalPatch: Record<string, number> = {};
+        const runningPatch: Record<string, number> = {};
+        for (const [kn, v] of Object.entries(counts)) {
+          const c = v as { total: number; running: number };
+          totalPatch[kn] = c.total;
+          runningPatch[kn] = c.running;
+        }
+        setStrategiesTotalByKey((prev) => ({ ...prev, ...totalPatch }));
+        setStrategiesRunningByKey((prev) => ({ ...prev, ...runningPatch }));
+      } catch { /* counts will be filled by individual fetches */ }
 
       for (const key of keys) {
         const panelOpened = activePanel.includes(String(key.id));
@@ -2493,8 +2509,10 @@ const Dashboard: React.FC = () => {
     const strategyRenderLimit = Math.min(totalStrategies, Math.max(STRATEGY_RENDER_CHUNK, Number(strategyRenderLimitByKey[keyName] || STRATEGY_RENDER_CHUNK)));
     const visibleStrategies = keyStrategies.slice(0, strategyRenderLimit);
     const hasHiddenStrategies = totalStrategies > visibleStrategies.length;
-    const runningStrategies = keyStrategies.filter((strategy) => strategy.is_active).length;
-    const pausedStrategies = Math.max(0, totalStrategies - runningStrategies);
+    const runningStrategies = keyStrategies.length > 0
+      ? keyStrategies.filter((strategy) => strategy.is_active).length
+      : (strategiesRunningByKey[keyName] ?? 0);
+    const pausedStrategies = Math.max(0, keyStrategiesTotal - runningStrategies);
     const errorStrategies = keyStrategies.filter((strategy) => Boolean(String(strategy.last_error || '').trim())).length;
     const strategyDiagnostics = buildStrategyDiagnostics(keyStrategies, keyPositions);
     const desyncCount = strategyDiagnostics.filter((row) => row.status === 'error').length;
