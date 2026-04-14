@@ -61,7 +61,8 @@ body.theme-neon {
 }
 
 /* ── Light theme (indigo accent, white bg) ── */
-body.theme-light {
+body.theme-light,
+:root[data-btdd-theme='light'] {
   --btdd-bg-primary: #f8f9fc;
   --btdd-bg-surface: #ffffff;
   --btdd-bg-card: #ffffff;
@@ -930,73 +931,90 @@ body.theme-fire .ant-btn-primary:hover, body.theme-fire .ant-btn-primary:focus {
 /* ═══════════════════════════════════════════════════
    Light theme overrides
    ═══════════════════════════════════════════════════ */
-body.theme-light .app-root-layout .ant-layout-header {
+body.theme-light .app-root-layout .ant-layout-header,
+:root[data-btdd-theme='light'] .app-root-layout .ant-layout-header {
   background: linear-gradient(92deg, #f8f9fc 0%, #eef2ff 50%, #f8f9fc 100%) !important;
   border-bottom-color: #e2e5f0;
   box-shadow: 0 1px 4px rgba(0,0,0,0.06);
 }
 
 body.theme-light .ant-menu-dark,
-body.theme-light .ant-menu-dark .ant-menu-sub {
+body.theme-light .ant-menu-dark .ant-menu-sub,
+:root[data-btdd-theme='light'] .ant-menu-dark,
+:root[data-btdd-theme='light'] .ant-menu-dark .ant-menu-sub {
   background: transparent !important;
   color: #475569 !important;
 }
 
-body.theme-light .ant-menu-dark .ant-menu-item {
+body.theme-light .ant-menu-dark .ant-menu-item,
+:root[data-btdd-theme='light'] .ant-menu-dark .ant-menu-item {
   color: #475569 !important;
 }
 
 body.theme-light .ant-menu-dark .ant-menu-item-selected,
-body.theme-light .ant-menu-dark .ant-menu-item:hover {
+body.theme-light .ant-menu-dark .ant-menu-item:hover,
+:root[data-btdd-theme='light'] .ant-menu-dark .ant-menu-item-selected,
+:root[data-btdd-theme='light'] .ant-menu-dark .ant-menu-item:hover {
   color: #6366f1 !important;
   background: rgba(99,102,241,0.08) !important;
 }
 
-body.theme-light .ant-btn-primary {
+body.theme-light .ant-btn-primary,
+:root[data-btdd-theme='light'] .ant-btn-primary {
   background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
   border-color: #6366f1;
   box-shadow: 0 2px 8px rgba(99,102,241,0.25);
 }
 
 body.theme-light .ant-btn-primary:hover,
-body.theme-light .ant-btn-primary:focus {
+body.theme-light .ant-btn-primary:focus,
+:root[data-btdd-theme='light'] .ant-btn-primary:hover,
+:root[data-btdd-theme='light'] .ant-btn-primary:focus {
   background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%);
   border-color: #818cf8;
 }
 
-body.theme-light .ant-table-tbody > tr:hover > td {
+body.theme-light .ant-table-tbody > tr:hover > td,
+:root[data-btdd-theme='light'] .ant-table-tbody > tr:hover > td {
   background: rgba(99,102,241,0.04) !important;
 }
 
-body.theme-light .ant-dropdown-menu-item:hover {
+body.theme-light .ant-dropdown-menu-item:hover,
+:root[data-btdd-theme='light'] .ant-dropdown-menu-item:hover {
   background: rgba(99,102,241,0.08) !important;
 }
 
-body.theme-light .ant-select-item-option-active {
+body.theme-light .ant-select-item-option-active,
+:root[data-btdd-theme='light'] .ant-select-item-option-active {
   background: rgba(99,102,241,0.08) !important;
 }
 
-body.theme-light .ant-select-item-option-selected {
+body.theme-light .ant-select-item-option-selected,
+:root[data-btdd-theme='light'] .ant-select-item-option-selected {
   background: rgba(99,102,241,0.14) !important;
 }
 
-body.theme-light .docs-markdown-body pre {
+body.theme-light .docs-markdown-body pre,
+:root[data-btdd-theme='light'] .docs-markdown-body pre {
   background: #f1f3f9;
   color: #1e293b;
   border-color: #e2e5f0;
 }
 
-body.theme-light .docs-markdown-body :not(pre) > code {
+body.theme-light .docs-markdown-body :not(pre) > code,
+:root[data-btdd-theme='light'] .docs-markdown-body :not(pre) > code {
   background: rgba(99,102,241,0.08);
   color: #6366f1;
 }
 
-body.theme-light .docs-blockquote {
+body.theme-light .docs-blockquote,
+:root[data-btdd-theme='light'] .docs-blockquote {
   background: rgba(99,102,241,0.04);
   border-left-color: #6366f1;
   color: #475569;
 }
 
-body.theme-light .app-brand-title {
+body.theme-light .app-brand-title,
+:root[data-btdd-theme='light'] .app-brand-title {
   color: #6366f1 !important;
 }

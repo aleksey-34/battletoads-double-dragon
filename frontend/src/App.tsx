@@ -48,6 +48,8 @@ function AppShell() {
   useEffect(() => {
     document.body.classList.remove('theme-classic', 'theme-neon', 'theme-fire', 'theme-light');
     document.body.classList.add(`theme-${colorTheme}`);
+    document.body.setAttribute('data-btdd-theme', colorTheme);
+    document.documentElement.setAttribute('data-btdd-theme', colorTheme);
   }, [colorTheme]);
 
   useEffect(() => {
