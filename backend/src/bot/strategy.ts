@@ -2224,17 +2224,36 @@ export const executeStrategy = async (
     : inferSyntheticStateFromPair(liveBase, liveQuote);
 
   if (livePairState === 'mixed') {
-    // Grace period: after opening a new position, Bybit Demo may take up to 2 cycles
-    // (~60s) to propagate both legs via getPositions. Skip the forced close if the
-    // strategy was entered very recently to avoid an open→mixed→close→open loop.
-    const MIXED_GRACE_MS = 90_000;
+    // Mixed pair state means only ONE leg is visible on the exchange.
+    // When multiple strategies share symbols on the same API key, one leg may belong
+    // to a different strategy. Force-closing destroys other strategies' positions and
+    // causes an open→mixed→close→open loop that bleeds the account via fees.
+    //
+    // NEW: if this strategy is flat, the visible leg almost certainly belongs to another
+    // strategy — skip entirely. If in-position, use a long grace period (5 min) to
+    // avoid race conditions from propagation delay or rate-limit glitches.
+    if (state === 'flat') {
+      logger.info(
+        `Mixed pair state for strategy ${strategyId} (state=flat) — skipping; visible leg likely belongs to another strategy`
+      );
+      return returnWithProcessedBar({
+        result: 'Mixed pair state skipped — strategy is flat, leg belongs to another strategy',
+        action: 'mixed_skip_flat',
+        strategy: mergedStrategy,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
+
+    const MIXED_GRACE_MS = 300_000; // 5 minutes — enough for exchange API propagation
     const lastUpdatedMs = mergedStrategy.updated_at
       ? new Date(String(mergedStrategy.updated_at).replace(' ', 'T') + 'Z').getTime()
       : 0;
     const msSinceUpdate = Date.now() - lastUpdatedMs;
-    const justOpened = (state === 'long' || state === 'short') && msSinceUpdate < MIXED_GRACE_MS;
 
-    if (justOpened) {
+    if (msSinceUpdate < MIXED_GRACE_MS) {
       logger.warn(
         `Mixed pair state for strategy ${strategyId} (state=${state}, ${Math.round(msSinceUpdate / 1000)}s since update) ` +
         `— skipping close within ${MIXED_GRACE_MS / 1000}s grace period`
@@ -2310,43 +2329,17 @@ export const executeStrategy = async (
   }
 
   if (state === 'flat' && livePairState !== 'flat') {
-    if (signal !== 'none' && signal !== livePairState) {
-      await closeStrategyExposure(apiKeyName, mergedStrategy);
-
-      const updated = await updateStrategy(apiKeyName, strategyId, {
-        ...executionBindingPatch,
-        state: 'flat',
-        entry_ratio: null,
-        tp_anchor_ratio: null,
-        last_action: 'desync_closed_against_signal',
-        last_error: null,
-      });
-
-      logger.warn(`Closed manual/out-of-sync positions against current signal for strategy ${strategyId}`);
-      return returnWithProcessedBar({
-        result: 'Out-of-sync positions against current signal were closed',
-        action: 'desync_closed_against_signal',
-        strategy: updated,
-        currentRatio,
-        donchianHigh,
-        donchianLow,
-        donchianCenter,
-      });
-    }
-
-    const synced = await updateStrategy(apiKeyName, strategyId, {
-      ...executionBindingPatch,
-      state: livePairState,
-      entry_ratio: currentRatio,
-      tp_anchor_ratio: currentRatio,
-      last_action: `state_resynced_${livePairState}`,
-      last_error: null,
-    });
-
+    // When multiple strategies share symbols on the same API key, visible positions
+    // likely belong to other strategies. Do NOT close or adopt them — this strategy
+    // should remain flat and wait for its own entry signal.
+    logger.info(
+      `Strategy ${strategyId} is flat but live pair state is ${livePairState} — ` +
+      `skipping; positions likely belong to another strategy on same API key`
+    );
     return returnWithProcessedBar({
-      result: 'Strategy state resynced from live pair positions',
-      action: `state_resynced_${livePairState}`,
-      strategy: synced,
+      result: `Strategy flat, live=${livePairState} — skipped to avoid cross-strategy interference`,
+      action: 'flat_skip_shared_positions',
+      strategy: mergedStrategy,
       currentRatio,
       donchianHigh,
       donchianLow,
