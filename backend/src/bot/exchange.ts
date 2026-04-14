@@ -17,6 +17,9 @@ type CcxtClientEntry = {
   client: any;
   limiter: Bottleneck;
   symbolMap: Map<string, string>;
+  spotSymbolMap: Map<string, string>;
+  uiSymbolMap: Map<string, string>;
+  symbolMapUpdatedAt: number;
 };
 
 type NormalizedBalance = {
@@ -61,6 +64,7 @@ const bingxOneWayAttempted = new Set<string>();
 // Accounts confirmed to be in one-way mode (keyed by apiKeyName)
 const bingxConfirmedOneWay = new Set<string>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 min
+const SYMBOL_MAP_REFRESH_MS = 15 * 60 * 1000; // 15 min
 
 const normalizeSymbolKey = (value: any): string => {
   return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -165,10 +169,21 @@ const getCcxtClientEntry = (apiKeyName: string): CcxtClientEntry => {
   return entry;
 };
 
+const shouldRefreshSymbolMaps = (entry: CcxtClientEntry): boolean => {
+  if (entry.symbolMap.size === 0) {
+    return true;
+  }
+  return Date.now() - entry.symbolMapUpdatedAt >= SYMBOL_MAP_REFRESH_MS;
+};
+
 const ensureCcxtSymbolMap = async (entry: CcxtClientEntry): Promise<Map<string, string>> => {
-  if (entry.symbolMap.size > 0) {
+  if (!shouldRefreshSymbolMaps(entry)) {
     return entry.symbolMap;
   }
+
+  entry.symbolMap.clear();
+  entry.spotSymbolMap.clear();
+  entry.uiSymbolMap.clear();
 
   const markets = await entry.limiter.schedule(() => entry.client.loadMarkets());
   const values = Object.values(markets || {}) as any[];
@@ -179,37 +194,62 @@ const ensureCcxtSymbolMap = async (entry: CcxtClientEntry): Promise<Map<string, 
   // Default symbolMap gets swap priority for MEXC (since defaultType='swap');
   // spot-only lookup uses swapMap miss → spotMap fallback.
   const isMexcLike = isMexcExchange(entry.exchange);
-  const spotMap = new Map<string, string>();
-
   for (const market of values) {
     const symbol = String(market?.symbol || '');
     const id = String(market?.id || '');
     const isSwap = Boolean(market?.swap || market?.contract);
     const isSpotM = Boolean(market?.spot) && !isSwap;
+    const uiFromSymbol = toUiSymbol(symbol);
+    const uiFromId = toUiSymbol(id);
 
     const normalizedSymbol = normalizeSymbolKey(symbol);
     const normalizedId = normalizeSymbolKey(id);
 
     if (isMexcLike) {
       if (isSpotM) {
-        if (normalizedSymbol) spotMap.set(normalizedSymbol, symbol);
-        if (normalizedId) spotMap.set(normalizedId, symbol);
+        if (normalizedSymbol) {
+          entry.spotSymbolMap.set(normalizedSymbol, symbol);
+          if (uiFromSymbol) entry.uiSymbolMap.set(normalizedSymbol, uiFromSymbol);
+        }
+        if (normalizedId) {
+          entry.spotSymbolMap.set(normalizedId, symbol);
+          if (uiFromId) entry.uiSymbolMap.set(normalizedId, uiFromId);
+        }
       } else if (isSwap) {
         // Swap takes priority in symbolMap for MEXC
-        if (normalizedSymbol) entry.symbolMap.set(normalizedSymbol, symbol);
-        if (normalizedId) entry.symbolMap.set(normalizedId, symbol);
+        if (normalizedSymbol) {
+          entry.symbolMap.set(normalizedSymbol, symbol);
+          if (uiFromSymbol) entry.uiSymbolMap.set(normalizedSymbol, uiFromSymbol);
+        }
+        if (normalizedId) {
+          entry.symbolMap.set(normalizedId, symbol);
+          if (uiFromId) entry.uiSymbolMap.set(normalizedId, uiFromId);
+        }
         // Also map short form without trailing quote (e.g. SUIUSDTUSDT → SUIUSDT → SUI/USDT:USDT)
         const short = normalizedSymbol.replace(/(USDT)USDT$/, '$1').replace(/(USDC)USDC$/, '$1');
-        if (short !== normalizedSymbol && short) entry.symbolMap.set(short, symbol);
+        if (short !== normalizedSymbol && short) {
+          entry.symbolMap.set(short, symbol);
+          if (uiFromSymbol) entry.uiSymbolMap.set(short, uiFromSymbol);
+        }
       }
     } else {
-      if (normalizedSymbol) entry.symbolMap.set(normalizedSymbol, symbol);
-      if (normalizedId) entry.symbolMap.set(normalizedId, symbol);
+      if (normalizedSymbol) {
+        entry.symbolMap.set(normalizedSymbol, symbol);
+        entry.spotSymbolMap.set(normalizedSymbol, symbol);
+        if (uiFromSymbol) entry.uiSymbolMap.set(normalizedSymbol, uiFromSymbol);
+      }
+      if (normalizedId) {
+        entry.symbolMap.set(normalizedId, symbol);
+        entry.spotSymbolMap.set(normalizedId, symbol);
+        if (uiFromId) entry.uiSymbolMap.set(normalizedId, uiFromId);
+      }
     }
   }
 
-  // Attach spotMap to entry for spot-only resolution
-  (entry as any)._spotMap = spotMap;
+  entry.symbolMapUpdatedAt = Date.now();
+  logger.info(
+    `[symbols] Refreshed map for ${entry.exchange}: swap=${entry.symbolMap.size}, spot=${entry.spotSymbolMap.size}, ui=${entry.uiSymbolMap.size}`
+  );
 
   return entry.symbolMap;
 };
@@ -227,8 +267,7 @@ const resolveCcxtSymbol = async (
   const symbolMap = await ensureCcxtSymbolMap(entry);
 
   if (marketType === 'spot') {
-    const spotMap: Map<string, string> = (entry as any)._spotMap || symbolMap;
-    return spotMap.get(normalized) || symbolMap.get(normalized) || symbol;
+    return entry.spotSymbolMap.get(normalized) || symbolMap.get(normalized) || symbol;
   }
 
   return symbolMap.get(normalized) || symbol;
@@ -484,6 +523,9 @@ export const initExchangeClient = (apiKey: ApiKey) => {
       client,
       limiter,
       symbolMap: new Map<string, string>(),
+      spotSymbolMap: new Map<string, string>(),
+      uiSymbolMap: new Map<string, string>(),
+      symbolMapUpdatedAt: 0,
     };
 
     delete clients[apiKey.name];
@@ -1199,6 +1241,7 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
     const entry = getCcxtClientEntry(apiKeyName);
 
     try {
+      await ensureCcxtSymbolMap(entry);
       const resolvedSymbol = symbol ? await resolveCcxtSymbol(entry, symbol) : undefined;
 
       let positions: any[] = [];
@@ -1275,7 +1318,8 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
           }
 
           return {
-            symbol: toUiSymbol(position?.info?.symbol || position?.symbol || resolvedSymbol || symbol),
+            symbol: entry.uiSymbolMap.get(normalizeSymbolKey(position?.info?.symbol || position?.symbol || resolvedSymbol || symbol))
+              || toUiSymbol(position?.info?.symbol || position?.symbol || resolvedSymbol || symbol),
             side,
             size: String(Math.abs(contractsRaw)),
             avgPrice: String(Number.isFinite(entryPrice) ? entryPrice : 0),

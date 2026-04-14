@@ -151,6 +151,51 @@ CREATE TABLE IF NOT EXISTS trading_system_members (
   UNIQUE(system_id, strategy_id)
 );
 
+CREATE TABLE IF NOT EXISTS master_cards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  code TEXT NOT NULL UNIQUE,
+  name TEXT NOT NULL,
+  description TEXT DEFAULT '',
+  source_system_id INTEGER,
+  is_active BOOLEAN DEFAULT 1,
+  metadata_json TEXT DEFAULT '{}',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (source_system_id) REFERENCES trading_systems(id)
+);
+
+CREATE TABLE IF NOT EXISTS master_card_members (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  card_id INTEGER NOT NULL,
+  strategy_id INTEGER NOT NULL,
+  weight REAL DEFAULT 1.0,
+  member_role TEXT DEFAULT 'core',
+  is_enabled BOOLEAN DEFAULT 1,
+  notes TEXT DEFAULT '',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (card_id) REFERENCES master_cards(id),
+  FOREIGN KEY (strategy_id) REFERENCES strategies(id),
+  UNIQUE(card_id, strategy_id)
+);
+
+CREATE TABLE IF NOT EXISTS card_deployments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  card_id INTEGER NOT NULL,
+  tenant_id INTEGER,
+  execution_api_key_name TEXT NOT NULL,
+  status TEXT DEFAULT 'active',
+  materialized_system_id INTEGER,
+  materialized_at TEXT,
+  last_sync_at TEXT,
+  sync_status TEXT DEFAULT 'idle',
+  sync_error TEXT DEFAULT '',
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (card_id) REFERENCES master_cards(id),
+  FOREIGN KEY (tenant_id) REFERENCES tenants(id),
+  FOREIGN KEY (materialized_system_id) REFERENCES trading_systems(id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_monitoring_snapshots_api_time
   ON monitoring_snapshots (api_key_id, recorded_at);
 
@@ -165,6 +210,18 @@ CREATE INDEX IF NOT EXISTS idx_trading_systems_api_key_id
 
 CREATE INDEX IF NOT EXISTS idx_trading_system_members_system_id
   ON trading_system_members (system_id, is_enabled);
+
+CREATE INDEX IF NOT EXISTS idx_master_cards_active
+  ON master_cards (is_active, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_master_card_members_card_id
+  ON master_card_members (card_id, is_enabled);
+
+CREATE INDEX IF NOT EXISTS idx_card_deployments_api_key
+  ON card_deployments (execution_api_key_name, status, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_card_deployments_card_id
+  ON card_deployments (card_id, status, updated_at DESC);
 
 CREATE TABLE IF NOT EXISTS live_trade_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

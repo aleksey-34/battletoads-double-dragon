@@ -87,6 +87,7 @@ type DDStrategy = {
   last_signal?: string | null;
   last_action?: string | null;
   last_error?: string | null;
+  updated_at?: string | null;
   lot_long_usdt?: number | null;
   lot_short_usdt?: number | null;
   lot_balance_usdt?: number | null;
@@ -237,6 +238,28 @@ const formatCompactNumber = (value: number | string, digits: number = 2) => {
     return String(value);
   }
   return numeric.toFixed(digits).replace(/\.?0+$/, '');
+};
+
+const formatStrategyUpdatedAt = (value?: string | null): string => {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '-';
+  }
+
+  const parsed = new Date(raw.includes('T') ? raw : raw.replace(' ', 'T'));
+  if (Number.isNaN(parsed.getTime())) {
+    return raw;
+  }
+
+  return parsed.toLocaleString('ru-RU', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  });
 };
 
 type DiagnosticLiveState = 'flat' | 'long' | 'short' | 'mixed';
@@ -963,6 +986,7 @@ const parseStrategy = (raw: any): DDStrategy => {
     last_signal: raw?.last_signal ?? null,
     last_action: raw?.last_action ?? null,
     last_error: raw?.last_error ?? null,
+    updated_at: raw?.updated_at ?? null,
     lot_long_usdt: raw?.lot_long_usdt !== undefined && raw?.lot_long_usdt !== null ? readNumber(raw?.lot_long_usdt, 0) : null,
     lot_short_usdt: raw?.lot_short_usdt !== undefined && raw?.lot_short_usdt !== null ? readNumber(raw?.lot_short_usdt, 0) : null,
     lot_balance_usdt: raw?.lot_balance_usdt !== undefined && raw?.lot_balance_usdt !== null ? readNumber(raw?.lot_balance_usdt, 0) : null,
@@ -3086,6 +3110,7 @@ const Dashboard: React.FC = () => {
                             : strategy.is_active
                               ? { color: 'green', label: 'active', text: String(strategy.last_action || 'running') }
                               : { color: 'orange', label: 'paused', text: String(strategy.last_action || 'paused') };
+                          const updatedAtText = formatStrategyUpdatedAt(strategy.updated_at);
                           const strategyBadgeStatus: 'error' | 'processing' | 'default' = strategy.last_error
                             ? 'error'
                             : strategy.is_active
@@ -3124,6 +3149,7 @@ const Dashboard: React.FC = () => {
                                 </Tag>
                                 <Tag>{strategy.interval}</Tag>
                                 <span style={{ color: '#6b7280' }}>{strategyStatus.text}</span>
+                                <span style={{ color: '#9ca3af', fontSize: 12 }}>upd: {updatedAtText}</span>
                                 <span style={{ color: '#4b5563', fontSize: 12 }}>{collapsedPairSummary || 'Pair positions: flat'}</span>
                               </Space>
                             ),

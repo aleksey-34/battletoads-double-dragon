@@ -1,5 +1,0 @@
-set -e
-find /opt/battletoads-double-dragon -maxdepth 3 -type f \( -name '*.db' -o -name '*.sqlite' \)
-sqlite3 -header -column /opt/battletoads-double-dragon/research.db "select name from sqlite_master where type='table' and name in ('tenants','algofund_profiles','strategy_runtime_events','live_trade_events','trading_systems','api_keys');"
-sqlite3 -header -column /opt/battletoads-double-dragon/research.db "select t.id,t.display_name,t.product_mode,t.status,t.assigned_api_key_name,coalesce(ap.published_system_name,'') as published_system_name,coalesce(ap.actual_enabled,0) as actual_enabled from tenants t left join algofund_profiles ap on ap.tenant_id=t.id order by t.id;"
-sqlite3 -header -column /opt/battletoads-double-dragon/research.db "select id,name,api_key_id,is_active,updated_at from trading_systems where name like 'ALGOFUND_MASTER::%' order by id desc limit 20;"

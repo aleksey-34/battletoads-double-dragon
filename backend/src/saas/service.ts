@@ -4314,8 +4314,6 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
       .map((row) => asString(row?.system_name, '').trim()),
     ...(Array.isArray(publishedTenantRows) ? publishedTenantRows : [])
       .map((row) => asString(row?.system_name, '').trim()),
-    ...(Array.isArray(cloudTsRows) ? cloudTsRows : [])
-      .map((row) => asString(row?.system_name, '').trim()),
     ...Object.entries(tsBacktestSnapshots || {})
       .filter(([key, snap]) => {
         const name = asString(key, '').trim();
@@ -4638,14 +4636,15 @@ export const previewAdminSweepBacktest = async (payload?: {
   }
 
   const kind: 'offer' | 'algofund-ts' = payload?.kind === 'algofund-ts' ? 'algofund-ts' : 'offer';
-  const period = buildPeriodInfo(sweep);
-  const periodDays = getSweepPeriodDays(sweep, 90);
+  let period = buildPeriodInfo(sweep);
+  let periodDays = getSweepPeriodDays(sweep, 90);
   const initialBalance = Math.max(100, asNumber(payload?.initialBalance, asNumber(sweep?.config?.initialBalance, 10000)));
   const riskScore = normalizePreferenceScore(payload?.riskScore, 'medium');
   const tradeFrequencyScore = normalizePreferenceScore(payload?.tradeFrequencyScore, 'medium');
   const riskLevel = preferenceScoreToLevel(riskScore);
   const tradeFrequencyLevel = preferenceScoreToLevel(tradeFrequencyScore);
   const requestedSystemName = asString(payload?.systemName, '').trim();
+  const isCloudSystem = /::cloud-/i.test(requestedSystemName) || /^cloud/i.test(requestedSystemName);
   const sweepEvaluatedRows: SweepRecord[] = Array.isArray(sweep?.evaluated)
     ? sweep.evaluated.filter((item): item is SweepRecord => Boolean(item && Number(item.strategyId || 0) > 0))
     : [];
@@ -4887,6 +4886,7 @@ export const previewAdminSweepBacktest = async (payload?: {
       );
       const fallbackRiskMul = Math.max(0.2, Math.min(2, 0.25 + (riskScore / 10) * 1.75));
       const fallbackFreqMul = Math.max(0.3, Math.min(2.5, 0.2 + (tradeFrequencyScore / 10) * 2.3));
+      const fallbackInterval = isCloudSystem ? '5m' : asString(sweep?.config?.interval, '');
 
       const fallbackSelected = missingOfferIds
         .map((offerId) => {
@@ -4906,7 +4906,7 @@ export const previewAdminSweepBacktest = async (payload?: {
             market: asString(row.market, ''),
             familyType: '',
             familyMode: row.mode === 'synth' ? 'synthetic' as const : 'mono' as const,
-            familyInterval: asString(sweep?.config?.interval, ''),
+            familyInterval: fallbackInterval,
             strategyId: Number(row.strategyId || parseStrategyIdFromOfferId(offerId) || 0),
             strategyName: asString(row.titleRu, String(row.offerId || offerId)),
             score: Number(asNumber(row.score, 0).toFixed(3)),
@@ -4933,7 +4933,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                 trades,
               },
               params: {
-                interval: asString(sweep?.config?.interval, '4h'),
+                interval: fallbackInterval || asString(sweep?.config?.interval, '4h'),
                 length: 24,
                 takeProfitPercent: 5,
                 detectionSource: 'close',
@@ -5085,6 +5085,25 @@ export const previewAdminSweepBacktest = async (payload?: {
     Math.log(Math.max(0.1, rerunRiskMul)) * 0.8 + Math.log(Math.max(0.1, tradeMul)) * 0.6 + 1.0,
     0.05, 2.5
   );
+  // Override period for Cloud TS: use actual cloud data window (7 days, 5m interval)
+  if (isCloudSystem && kind === 'algofund-ts') {
+    const cloudInterval = '5m';
+    const cloudDays = 7;
+    const now = new Date();
+    const cloudFrom = new Date(now.getTime() - cloudDays * 24 * 3600 * 1000);
+    const fmt = (d: Date) => d.toISOString().slice(0, 10);
+    period = { dateFrom: fmt(cloudFrom), dateTo: fmt(now), interval: cloudInterval };
+    periodDays = cloudDays;
+    // Update periodDays on selected offers
+    for (const offer of selectedOffers) {
+      offer.periodDays = cloudDays;
+      if (offer.preset?.params) {
+        offer.preset.params.interval = cloudInterval;
+      }
+      (offer as Record<string, unknown>).familyInterval = cloudInterval;
+    }
+  }
+
   let rerunFailureReason = '';
 
   if (canTryRealBacktest && strategyIds.length > 0) {
@@ -7337,6 +7356,11 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
   const nextAssignedApiKeyName = asString(payload.assignedApiKeyName, existing.assigned_api_key_name || tenant.assigned_api_key_name);
   const nextRequestedEnabled = payload.requestedEnabled !== undefined ? payload.requestedEnabled : existing.requested_enabled === 1;
 
+  // D0: нельзя сохранять выбор офферов без API-ключа
+  if (Array.isArray(payload.selectedOfferIds) && payload.selectedOfferIds.length > 0 && !nextAssignedApiKeyName) {
+    throw new Error('Сначала добавьте API-ключ биржи, прежде чем выбирать стратегии.');
+  }
+
   // D1+D2: проверка что ключ не занят другим тенантом / другим режимом
   if (payload.assignedApiKeyName && payload.assignedApiKeyName !== (existing.assigned_api_key_name || tenant.assigned_api_key_name)) {
     await validateApiKeyNotAssigned(nextAssignedApiKeyName, tenantId, 'strategy-client');
@@ -7359,20 +7383,7 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
     throw new Error(constraints.violations.join(' '));
   }
 
-  // D3: Pair duplicate validation — block selecting two offers with the same market
-  const marketCounts = new Map<string, string[]>();
-  for (const offer of selectedOffers) {
-    const market = String(offer.strategy?.market || '').toUpperCase().trim();
-    if (!market) continue;
-    const list = marketCounts.get(market) || [];
-    list.push(offer.offerId);
-    marketCounts.set(market, list);
-  }
-  const duplicateMarkets = Array.from(marketCounts.entries()).filter(([, ids]) => ids.length > 1);
-  if (duplicateMarkets.length > 0) {
-    const desc = duplicateMarkets.map(([m, ids]) => `${m} (${ids.join(', ')})`).join('; ');
-    throw new Error(`Дублирование пар: выбраны несколько стратегий на одну пару — ${desc}. Уберите дублирующую стратегию.`);
-  }
+  // D3: Pair duplicate validation — removed, TS unification handles same-pair strategies via position limiter
 
   await db.run(
     `UPDATE strategy_client_profiles
@@ -8588,8 +8599,6 @@ export const getAlgofundState = async (
       const systemName = asString(system?.name, '').trim().toUpperCase();
       if (!systemName) return false;
       if (storefrontSystemSet.has(systemName)) return true;
-      // Cloud TS always pass storefront whitelist
-      if (systemName.startsWith('CLOUD')) return true;
       return Boolean(currentPublishedSystemName) && systemName === currentPublishedSystemName;
     });
   }
@@ -8600,8 +8609,6 @@ export const getAlgofundState = async (
     const systemName = asString(system?.name, '').trim().toUpperCase();
     const hasSnapshot = Boolean((system as any).backtestSnapshot);
     if (hasSnapshot) return true;
-    // Cloud TS don't require snapshots to appear on the storefront
-    if (systemName.startsWith('CLOUD')) return true;
     return Boolean(currentPublishedSystemName) && systemName === currentPublishedSystemName;
   });
 

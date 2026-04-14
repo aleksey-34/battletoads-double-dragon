@@ -1,9 +1,0 @@
-BTDD_MEX_1 (MEXC): total=$2.54 free=$2.54
-  ARB/USDT:USDT long contracts=4874 entry=0.0937 pnl=?
-  SOL/USDT:USDT long contracts=30 entry=79.84 pnl=?
-  ORDI/USDT:USDT long contracts=228 entry=2.454 pnl=?
-HDB_14 (BingX): total=$60.94 free=$36.59
-  ORDI/USDT:USDT long contracts=65.2 entry=2.374 pnl=-2.7497
-  ARB/USDT:USDT long contracts=1674.8 entry=0.0956 pnl=-3.4751
-  SOL/USDT:USDT short contracts=0.81 entry=82.309 pnl=2.4259
-  WIF/USDT:USDT short contracts=575.67 entry=0.1848 pnl=3.3959

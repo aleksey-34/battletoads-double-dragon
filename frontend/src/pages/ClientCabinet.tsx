@@ -30,7 +30,7 @@ import { useNavigate } from 'react-router-dom';
 import ChartComponent from '../components/ChartComponent';
 import { useI18n } from '../i18n';
 
-type ProductMode = 'strategy_client' | 'algofund_client' | 'synctrade_client' | 'dual';
+type ProductMode = 'strategy_client' | 'algofund_client' | 'dual';
 type Level3 = 'low' | 'medium' | 'high';
 
 type MetricSet = {
@@ -611,6 +611,18 @@ const ClientCabinet: React.FC = () => {
     setErrorText('');
 
     try {
+      const loadMonitoringWithRetry = async () => {
+        try {
+          return await axios.get<MonitoringPayload>('/api/client/monitoring');
+        } catch (error: any) {
+          const status = Number(error?.response?.status || 0);
+          if (status === 502 || status === 503 || status === 504) {
+            return axios.get<MonitoringPayload>('/api/client/monitoring');
+          }
+          throw error;
+        }
+      };
+
       const [workspaceResponse, guidesResponse] = await Promise.all([
         axios.get<WorkspacePayload>('/api/client/workspace'),
         axios.get<{ guides?: GuideItem[] }>('/api/client/guides'),
@@ -624,7 +636,7 @@ const ClientCabinet: React.FC = () => {
         axios.get<{ success: boolean; state: AlgofundState }>('/api/client/algofund/state'),
         axios.get<{ success: boolean; keys: ClientApiKeyInfo[] }>('/api/client/api-keys'),
         axios.get<TariffPayload>('/api/client/tariff'),
-        axios.get<MonitoringPayload>('/api/client/monitoring'),
+        loadMonitoringWithRetry(),
       ]);
 
       setStrategyStateExtra(strategyResponse.status === 'fulfilled' ? (strategyResponse.value.data?.state || null) : null);
@@ -848,9 +860,21 @@ const ClientCabinet: React.FC = () => {
     }
   };
 
-  const sendAlgofundRequest = async (requestType: 'start' | 'stop') => {
+  const sendAlgofundRequest = async (
+    requestType: 'start' | 'stop',
+    targetSystem?: { id: number; name: string } | null,
+  ) => {
     setActionLoading(`algofund-${requestType}`);
     try {
+      if (requestType === 'start' && targetSystem && Number(targetSystem.id) > 0) {
+        await axios.post('/api/client/algofund/request', {
+          requestType: 'switch_system',
+          note: algofundNote,
+          targetSystemId: Number(targetSystem.id),
+          targetSystemName: String(targetSystem.name || ''),
+        });
+      }
+
       const response = await axios.post('/api/client/algofund/request', {
         requestType,
         note: algofundNote,
@@ -1038,6 +1062,16 @@ const ClientCabinet: React.FC = () => {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {strategyWorkspace && strategyWorkspace.offers.length > 0 ? (
         <>
+          {/* Предупреждение: нет API ключа */}
+          {clientApiKeys.length === 0 ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="Сначала добавьте API-ключ биржи"
+              description="Для подключения стратегий необходимо добавить API-ключ. Перейдите в раздел «API ключи» выше и добавьте ключ."
+              style={{ marginBottom: 16 }}
+            />
+          ) : null}
           {/* Витрина офферов */}
           <Card className="battletoads-card" title="Витрина стратегий" size="small">
             {strategyWorkspace.offers.length === 0 ? (
@@ -1068,17 +1102,6 @@ const ClientCabinet: React.FC = () => {
                                 ? <Checkbox checked={strategyOfferIds.includes(offer.offerId)} onChange={(e) => {
                                     e.stopPropagation();
                                     if (e.target.checked) {
-                                      // Pair conflict check
-                                      const offerMarket = String(offer.strategy?.market || '').toUpperCase().trim();
-                                      if (offerMarket) {
-                                        const conflicting = strategyWorkspace.offers.find(
-                                          (o) => o.offerId !== offer.offerId && strategyOfferIds.includes(o.offerId) && String(o.strategy?.market || '').toUpperCase().trim() === offerMarket
-                                        );
-                                        if (conflicting) {
-                                          messageApi.warning(`Пара ${offerMarket} уже есть в портфеле (${conflicting.titleRu}). Нельзя подключить две стратегии на одну пару.`);
-                                          return;
-                                        }
-                                      }
                                       setStrategyOfferIds((current) => current.includes(offer.offerId) ? current : [...current, offer.offerId]);
                                     } else {
                                       setStrategyOfferIds((current) => current.filter((id) => id !== offer.offerId));
@@ -1106,16 +1129,6 @@ const ClientCabinet: React.FC = () => {
                             <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
                             {strategyWorkspace.capabilities?.settings && !strategyOfferIds.includes(offer.offerId) ? (
                               <Button size="small" type="primary" onClick={() => {
-                                const offerMarket = String(offer.strategy?.market || '').toUpperCase().trim();
-                                if (offerMarket) {
-                                  const conflicting = strategyWorkspace.offers.find(
-                                    (o) => o.offerId !== offer.offerId && strategyOfferIds.includes(o.offerId) && String(o.strategy?.market || '').toUpperCase().trim() === offerMarket
-                                  );
-                                  if (conflicting) {
-                                    messageApi.warning(`Пара ${offerMarket} уже есть в портфеле (${conflicting.titleRu}).`);
-                                    return;
-                                  }
-                                }
                                 setStrategyOfferIds((current) => [...current, offer.offerId]);
                               }}>Подключить</Button>
                             ) : null}
@@ -1189,7 +1202,7 @@ const ClientCabinet: React.FC = () => {
                     <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(offerSummary?.totalReturnPercent ?? offer.metrics.ret)} valueStyle={{ color: (offerSummary?.totalReturnPercent ?? offer.metrics.ret ?? 0) >= 0 ? '#f5a623' : '#ff4d4f' }} /></Col>
                     <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(offerSummary?.maxDrawdownPercent ?? offer.metrics.dd)} valueStyle={{ color: '#ff7a45' }} /></Col>
                     <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(offerSummary?.profitFactor ?? offer.metrics.pf)} /></Col>
-                    {(offerSummary?.tradesCount || offer.metrics.trades) ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(offerSummary?.tradesCount ?? offer.metrics.trades, 0)} /></Col> : null}
+                    {(offerSummary?.tradesCount ?? offer.metrics.trades) ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(offerSummary?.tradesCount ?? offer.metrics.trades, 0)} /></Col> : null}
                   </Row>
                   {strategyWorkspace?.capabilities?.settings ? (
                     <>
@@ -1213,18 +1226,6 @@ const ClientCabinet: React.FC = () => {
                         type={isSelected ? 'default' : 'primary'}
                         danger={isSelected}
                         onClick={() => {
-                          if (!isSelected) {
-                            const offerMarket = String(offer.strategy?.market || '').toUpperCase().trim();
-                            if (offerMarket) {
-                              const conflicting = strategyWorkspace?.offers.find(
-                                (o) => o.offerId !== offer.offerId && strategyOfferIds.includes(o.offerId) && String(o.strategy?.market || '').toUpperCase().trim() === offerMarket
-                              );
-                              if (conflicting) {
-                                messageApi.warning(`Пара ${offerMarket} уже есть в портфеле (${conflicting.titleRu}). Нельзя подключить две стратегии на одну пару.`);
-                                return;
-                              }
-                            }
-                          }
                           setStrategyOfferIds((current) =>
                             isSelected
                               ? current.filter((id) => id !== offer.offerId)
@@ -1419,7 +1420,7 @@ const ClientCabinet: React.FC = () => {
                     const isCurrent = algofundPublishedSystemName.length > 0 && String(system?.name || '').trim() === algofundPublishedSystemName;
                     const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number } | null | undefined;
                     const eqPts = snap?.equityPoints;
-                    const hasChart = isCurrent ? algofundPreviewSeries.length > 0 : (Array.isArray(eqPts) && eqPts.length > 1);
+                    const hasChart = isCurrent ? (algofundPreviewSeries.length > 0 || (Array.isArray(eqPts) && eqPts.length > 1)) : (Array.isArray(eqPts) && eqPts.length > 1);
                     return (
                       <Col xs={24} sm={12} md={8} xl={6} key={String(system?.id || system?.name || Math.random())}>
                         <Card
@@ -1438,9 +1439,10 @@ const ClientCabinet: React.FC = () => {
                             </Space>
                             <Space size={4} wrap>
                               {snap?.periodDays ? <Tag style={{ fontSize: 11 }}>{Math.round(snap.periodDays)}d</Tag> : null}
-                              {snap ? <Tag color="green" style={{ fontSize: 11 }}>Ret {formatPercent(snap.ret)}</Tag> : null}
-                              {snap ? <Tag color="orange" style={{ fontSize: 11 }}>DD {formatPercent(snap.dd)}</Tag> : null}
-                              {snap ? <Tag color="blue" style={{ fontSize: 11 }}>PF {formatNumber(snap.pf)}</Tag> : null}
+                              {snap ? <Tag color="gold" style={{ fontSize: 11 }}>Ret {formatPercent(snap.ret)}</Tag> : null}
+                              {snap ? <Tag color="volcano" style={{ fontSize: 11 }}>DD {formatPercent(snap.dd)}</Tag> : null}
+                              {snap ? <Tag color="orange" style={{ fontSize: 11 }}>PF {formatNumber(snap.pf)}</Tag> : null}
+                              {snap?.trades ? <Tag color="cyan" style={{ fontSize: 11 }}>{formatNumber(snap.trades, 0)} сд.</Tag> : null}
                             </Space>
                             {hasChart ? (
                               <ChartComponent
@@ -1456,7 +1458,9 @@ const ClientCabinet: React.FC = () => {
                             <Space size={4} wrap>
                               <Button size="small" onClick={() => { setTsModalRiskMultiplier(1); setSystemDetailModal({ name: system.name, id: system.id }); }}>Подробнее</Button>
                               {!isCurrent ? (
-                                <Button size="small" type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start'); }}>Подключить</Button>
+                                <Button size="small" type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start', { id: Number(system.id || 0), name: String(system.name || '') }); }}>
+                                  Подключить
+                                </Button>
                               ) : null}
                             </Space>
                           </Space>
@@ -1584,7 +1588,7 @@ const ClientCabinet: React.FC = () => {
                     </Space>
                   </div>
                   {!isCurrent ? (
-                    <Button type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start'); setSystemDetailModal(null); }}>
+                    <Button type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start', { id: Number(system.id || 0), name: String(system.name || '') }); setSystemDetailModal(null); }}>
                       Подключить эту систему
                     </Button>
                   ) : (
@@ -1612,29 +1616,7 @@ const ClientCabinet: React.FC = () => {
                 )}
               </Space>
 
-              {(algofundWorkspace.requests || []).length > 0 ? (
-                <>
-                  <Typography.Text type="secondary">История запросов:</Typography.Text>
-                  <List
-                    size="small"
-                    dataSource={algofundWorkspace.requests || []}
-                    renderItem={(item) => (
-                      <List.Item>
-                        <Space wrap>
-                          <Tag color="blue">#{item.id}</Tag>
-                          <Tag color={item.request_type === 'start' ? 'success' : 'orange'}>{item.request_type === 'start' ? 'Подключение' : 'Отключение'}</Tag>
-                          <Tag color={item.status === 'approved' ? 'success' : item.status === 'rejected' ? 'error' : 'processing'}>
-                            {item.status === 'approved' ? 'Одобрено' : item.status === 'rejected' ? 'Отклонено' : 'В обработке'}
-                          </Tag>
-                          <Typography.Text type="secondary">{item.created_at}</Typography.Text>
-                          {item.note ? <Typography.Text type="secondary">{item.note}</Typography.Text> : null}
-                          {item.decision_note ? <Typography.Text type="secondary">({item.decision_note})</Typography.Text> : null}
-                        </Space>
-                      </List.Item>
-                    )}
-                  />
-                </>
-              ) : null}
+              {(algofundWorkspace.requests || []).length > 0 ? null : null}
             </Space>
           </Card>
           )}

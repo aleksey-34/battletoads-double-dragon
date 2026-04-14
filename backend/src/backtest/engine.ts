@@ -739,30 +739,40 @@ const loadRuntimeStrategies = async (
     const marketMode = normalizeMarketMode(strategy.market_mode);
 
     if (!candles) {
-      const raw = marketMode === 'mono'
-        ? await getMarketData(
-          request.apiKeyName,
-          strategy.base_symbol,
-          interval,
-          candlesLimit,
-          {
-            startMs: fetchStartMs === null ? undefined : fetchStartMs,
-            endMs: fetchEndMs === null ? undefined : fetchEndMs,
-          }
-        )
-        : await calculateSyntheticOHLC(
-          request.apiKeyName,
-          strategy.base_symbol,
-          strategy.quote_symbol,
-          asNumber(strategy.base_coef, 1),
-          asNumber(strategy.quote_coef, 1),
-          interval,
-          candlesLimit,
-          {
-            startMs: fetchStartMs === null ? undefined : fetchStartMs,
-            endMs: fetchEndMs === null ? undefined : fetchEndMs,
-          }
-        );
+      let raw: unknown;
+      try {
+        raw = marketMode === 'mono'
+          ? await getMarketData(
+            request.apiKeyName,
+            strategy.base_symbol,
+            interval,
+            candlesLimit,
+            {
+              startMs: fetchStartMs === null ? undefined : fetchStartMs,
+              endMs: fetchEndMs === null ? undefined : fetchEndMs,
+            }
+          )
+          : await calculateSyntheticOHLC(
+            request.apiKeyName,
+            strategy.base_symbol,
+            strategy.quote_symbol,
+            asNumber(strategy.base_coef, 1),
+            asNumber(strategy.quote_coef, 1),
+            interval,
+            candlesLimit,
+            {
+              startMs: fetchStartMs === null ? undefined : fetchStartMs,
+              endMs: fetchEndMs === null ? undefined : fetchEndMs,
+            }
+          );
+      } catch (fetchError) {
+        const reason = (fetchError as Error).message || 'candle fetch error';
+        if (request.skipMissingSymbols) {
+          skipped.push({ strategyId: Number(strategy.id), strategyName: strategy.name, reason });
+          continue;
+        }
+        throw fetchError;
+      }
 
       candles = (Array.isArray(raw) ? raw : [])
         .map((item) => parseCandle(item))

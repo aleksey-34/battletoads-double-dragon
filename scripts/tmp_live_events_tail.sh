@@ -1,1 +1,0 @@
-sqlite3 -header -column /opt/battletoads-double-dragon/backend/database.db "select id,strategy_id,trade_type,side,source_symbol,datetime(created_at/1000,'unixepoch') as created_utc from live_trade_events order by id desc limit 60;"

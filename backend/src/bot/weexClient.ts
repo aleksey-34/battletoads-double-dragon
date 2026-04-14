@@ -24,7 +24,11 @@ const firstPositiveNumber = (...values: unknown[]): number | null => {
   return null;
 };
 
-const toWeexPrivateSymbol = (value: unknown): string => normalizeSymbolKey(value).replace(/^CMT/, '');
+const toWeexPrivateSymbol = (value: unknown): string => {
+  const normalized = normalizeSymbolKey(value).replace(/^CMT/, '');
+  // CCXT swap symbols (e.g. SUI/USDT:USDT) normalize to SUIUSDTUSDT; collapse duplicate settle suffix.
+  return normalized.replace(/(USDT|USDC)\1$/, '$1');
+};
 
 const toWeexPublicSymbol = (value: unknown): string => `cmt_${toWeexPrivateSymbol(value).toLowerCase()}`;
 
@@ -510,14 +514,33 @@ class WeexRestClient {
   }
 
   async fetchMyTrades(symbol?: string, since?: number, limit = 100): Promise<any[]> {
-    const response = await this.request('GET', '/capi/v3/userTrades', {
-      auth: true,
-      query: {
-        symbol: symbol ? toWeexPrivateSymbol(symbol) : undefined,
-        startTime: since ? Math.floor(since) : undefined,
-        limit: Math.max(1, Math.min(Number(limit) || 100, 100)),
-      },
-    });
+    const safeLimit = Math.max(1, Math.min(Number(limit) || 100, 100));
+    const privateSymbol = symbol ? toWeexPrivateSymbol(symbol) : undefined;
+
+    let response: any;
+    try {
+      response = await this.request('GET', '/capi/v3/userTrades', {
+        auth: true,
+        query: {
+          symbol: privateSymbol,
+          startTime: since ? Math.floor(since) : undefined,
+          limit: safeLimit,
+        },
+      });
+    } catch (error) {
+      // WEEX may reject certain symbol values (-1142); retry without symbol filter
+      if (privateSymbol && String((error as Error)?.message || '').includes('-1142')) {
+        response = await this.request('GET', '/capi/v3/userTrades', {
+          auth: true,
+          query: {
+            startTime: since ? Math.floor(since) : undefined,
+            limit: safeLimit,
+          },
+        });
+      } else {
+        throw error;
+      }
+    }
 
     const rows = Array.isArray(response) ? response : [];
     return rows.map((item: any) => ({

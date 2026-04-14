@@ -1,830 +1,669 @@
-import React, { useState, useCallback } from 'react';
-import { Button, Space, Tag, Typography, Divider } from 'antd';
-import {
-  RocketOutlined,
-  ThunderboltOutlined,
-  LineChartOutlined,
-  SafetyCertificateOutlined,
-  ApiOutlined,
-  TeamOutlined,
-  TrophyOutlined,
-  ArrowRightOutlined,
-  BarChartOutlined,
-  BulbOutlined,
-  GlobalOutlined,
-  CopyOutlined,
-  FileTextOutlined,
-} from '@ant-design/icons';
+import React, { useState, useCallback, useEffect } from 'react';
 import { useI18n, UILanguage } from '../i18n';
 
-const { Title, Paragraph, Text } = Typography;
+/* ─── Theme definitions ─── */
+type LandingTheme = 'fire' | 'neon' | 'classic' | 'light';
 
-/* ─── Localised content per language ─── */
+const THEMES: Record<LandingTheme, {
+  bg: string; bgAlt: string; bgCard: string; bgGlass: string;
+  text: string; textSec: string; textMuted: string;
+  border: string; accent: string; accentGlow: string;
+  heroGrad: string; ctaBg: string; navBg: string; navBgScroll: string;
+  cardBorder: string; proofBg: string; proofAccent: string;
+  greenAccent: string; greenBg: string; greenText: string;
+  isDark: boolean;
+}> = {
+  fire: {
+    bg: '#0c0a08', bgAlt: '#141210', bgCard: '#1a1614', bgGlass: 'rgba(26,22,20,0.85)',
+    text: '#f0e8e0', textSec: '#aa9580', textMuted: '#6e5840',
+    border: 'rgba(255,109,0,0.15)', accent: '#ff6d00', accentGlow: 'rgba(255,109,0,0.25)',
+    heroGrad: 'radial-gradient(ellipse 80% 60% at 50% 20%, rgba(255,109,0,0.12) 0%, transparent 70%)',
+    ctaBg: 'linear-gradient(135deg, #ff6d00 0%, #ff9100 100%)',
+    navBg: 'transparent', navBgScroll: 'rgba(12,10,8,0.92)',
+    cardBorder: 'rgba(255,109,0,0.12)', proofBg: 'rgba(255,109,0,0.06)', proofAccent: '#ff6d00',
+    greenAccent: '#ff9100', greenBg: 'rgba(255,145,0,0.1)', greenText: '#ffab40',
+    isDark: true,
+  },
+  neon: {
+    bg: '#0a0f0d', bgAlt: '#0e1412', bgCard: '#121a16', bgGlass: 'rgba(18,26,22,0.85)',
+    text: '#e8f0ec', textSec: '#7aa68e', textMuted: '#4a6e5a',
+    border: 'rgba(0,230,118,0.15)', accent: '#00e676', accentGlow: 'rgba(0,230,118,0.2)',
+    heroGrad: 'radial-gradient(ellipse 80% 60% at 50% 20%, rgba(0,230,118,0.1) 0%, transparent 70%)',
+    ctaBg: 'linear-gradient(135deg, #00e676 0%, #69f0ae 100%)',
+    navBg: 'transparent', navBgScroll: 'rgba(10,15,13,0.92)',
+    cardBorder: 'rgba(0,230,118,0.12)', proofBg: 'rgba(0,230,118,0.06)', proofAccent: '#00e676',
+    greenAccent: '#00e676', greenBg: 'rgba(0,230,118,0.1)', greenText: '#69f0ae',
+    isDark: true,
+  },
+  classic: {
+    bg: '#08090e', bgAlt: '#0d0f16', bgCard: '#12141e', bgGlass: 'rgba(18,20,30,0.85)',
+    text: '#e0e4f0', textSec: '#8890aa', textMuted: '#555574',
+    border: 'rgba(64,150,255,0.15)', accent: '#4096ff', accentGlow: 'rgba(64,150,255,0.2)',
+    heroGrad: 'radial-gradient(ellipse 80% 60% at 50% 20%, rgba(64,150,255,0.1) 0%, transparent 70%)',
+    ctaBg: 'linear-gradient(135deg, #4096ff 0%, #5aafff 100%)',
+    navBg: 'transparent', navBgScroll: 'rgba(8,9,14,0.92)',
+    cardBorder: 'rgba(64,150,255,0.12)', proofBg: 'rgba(64,150,255,0.06)', proofAccent: '#4096ff',
+    greenAccent: '#4096ff', greenBg: 'rgba(64,150,255,0.1)', greenText: '#5aafff',
+    isDark: true,
+  },
+  light: {
+    bg: '#ffffff', bgAlt: '#f8fafc', bgCard: '#ffffff', bgGlass: 'rgba(255,255,255,0.92)',
+    text: '#0f172a', textSec: '#64748b', textMuted: '#94a3b8',
+    border: '#e2e8f0', accent: '#6366f1', accentGlow: 'rgba(99,102,241,0.15)',
+    heroGrad: 'linear-gradient(180deg, #eef2ff 0%, #ffffff 100%)',
+    ctaBg: 'linear-gradient(135deg, #6366f1 0%, #818cf8 100%)',
+    navBg: 'transparent', navBgScroll: 'rgba(255,255,255,0.95)',
+    cardBorder: '#e2e8f0', proofBg: '#eef2ff', proofAccent: '#6366f1',
+    greenAccent: '#10b981', greenBg: '#dcfce7', greenText: '#166534',
+    isDark: false,
+  },
+};
+
+const THEME_OPTS: { value: LandingTheme; icon: string; label: string }[] = [
+  { value: 'fire', icon: '🟠', label: 'Fire' },
+  { value: 'neon', icon: '🟢', label: 'Neon' },
+  { value: 'classic', icon: '🔵', label: 'Classic' },
+  { value: 'light', icon: '⚪', label: 'Light' },
+];
+
+/* ─── Localised content ─── */
 function useLandingTexts(lang: UILanguage) {
   const t: Record<UILanguage, Record<string, any>> = {
     ru: {
+      navStrategies: 'Стратегии',
+      navExchanges: 'Биржи',
+      navSecurity: 'Безопасность',
+      navPricing: 'Тарифы',
+      navFaq: 'FAQ',
       heroTitle1: 'Алгоритмическая торговля',
       heroTitle2: 'как сервис',
-      heroSub: 'Полноценная SaaS-платформа для автоматической торговли на криптобиржах. Три типа стратегий, 9 108 бектестов, robustness-фильтрация и мульти-тенантная архитектура. Bybit, Binance, Bitget, BingX, MEXC, Weex — всё подключено.',
-      btnStart: 'Начать работу',
+      heroSub: 'SaaS-платформа для автоматической торговли на криптобиржах. Три типа стратегий, 9 108 бектестов, robustness-фильтрация. Bybit, Binance, Bitget, BingX, MEXC, Weex — всё подключено.',
+      btnStart: 'Начать бесплатно',
       btnLogin: 'Войти',
-      tagExchanges: '6 бирж · All Live',
-      tagTimeframe: 'Мульти таймфрейм',
-      tagClassicArb: 'классика + арбитраж ⓘ',
-      tagClassicArbTip: 'Классика — торговля одним инструментом. Арбитраж — синтетические пары из двух активов для снижения рыночного риска.',
+      betaBadge: 'Бесплатно в бета',
       metrics: [
-        { value: '9 108', label: 'бектестов прогнано', sub: 'исторический sweep' },
-        { value: '3 129', label: 'робастных кандидатов', sub: 'прошли robustness-фильтр' },
-        { value: '+28.7%', label: 'средняя доходность', sub: 'по площадке, 2025–2026' },
-        { value: '3.28', label: 'Profit Factor', sub: 'средний по портфелям' },
-        { value: '4.4%', label: 'макс. просадка', sub: 'портфельная DD' },
-        { value: '6 бирж', label: 'подключено', sub: 'Bybit · Binance · Bitget + ещё' },
+        { value: '9 108', label: 'бектестов' },
+        { value: '3 129', label: 'робастных' },
+        { value: '+28.7%', label: 'доходность' },
+        { value: '3.28', label: 'Profit Factor' },
       ],
       modesTitle: 'Три режима для клиентов',
-      modesSub: 'От пассивного дохода до полного контроля — выберите свой стиль',
+      modesSub: 'От пассивного дохода до полного контроля — выберите свой формат',
       modePopular: 'Популярный',
       modes: [
-        { title: 'Алгофонд', desc: 'Простое безопасное API-подключение — средства всегда остаются на вашей бирже. Никаких переводов. Подключаете ключ, платформа торгует за вас. Пассивный доход без лишней сложности.' },
-        { title: 'Стратег', desc: 'Для тех кто хочет разобраться глубже. Подключите API-ключ, выберите отдельные стратегии из каталога и соберите собственную торговую систему в пару кликов.' },
-        { title: 'Копитрейдинг', desc: '1 API‑ключ — и несколько копируемых аккаунтов. Торгуете своим софтом — поделитесь с друзьями. Без лишней мороки как на биржах.' },
+        { title: 'Алгофонд', desc: 'Простое безопасное API-подключение — средства всегда остаются на вашей бирже. Никаких переводов. Подключаете ключ, платформа торгует за вас.' },
+        { title: 'Стратег', desc: 'Для тех, кто хочет разобраться глубже. Подключите API-ключ, выберите стратегии из каталога и соберите собственную торговую систему.' },
+        { title: 'Копитрейдинг', desc: 'Один API-ключ — несколько копируемых аккаунтов. Торгуете и делитесь с друзьями — без ограничений биржевого копитрейдинга.' },
       ],
       stratTitle: 'Стратегии',
-      stratSub: '3 типа алгоритмов, отобранных из\u00a09108 бектестов с\u00a0robustness-фильтрацией',
+      stratSub: '3 типа алгоритмов из\u00a09 108 бектестов с\u00a0robustness-фильтрацией',
       strats: [
-        { desc: 'Пробой канала Дончиана с трейлинговым TP. Работает на mono и synthetic парах. Ловит направленный импульс и удерживает тренд.', tags: ['классика', 'арбитраж', 'trend-following'] },
-        { desc: 'Возврат к среднему по Z-счёту на синтетическом инструменте. Торгует схождение/расхождение двух связанных активов.', tags: ['арбитраж', 'mean-reversion', 'stat-arb'] },
-        { desc: 'Структурный пробой с Дончианом. Оптимален при смене рыночного режима и резких направленных движениях.', tags: ['классика', 'арбитраж', 'breakout'] },
+        { name: 'DoubleDragon Breakout', desc: 'Пробой канала Дончиана с трейлинговым TP. Ловит направленный импульс и удерживает тренд.', tags: ['классика', 'арбитраж', 'trend'] },
+        { name: 'StatArb Z-Score', desc: 'Возврат к среднему по Z-счёту на синтетическом инструменте. Торгует схождение/расхождение активов.', tags: ['арбитраж', 'mean-reversion'] },
+        { name: 'ZigZag Breakout', desc: 'Структурный пробой с Дончианом. Оптимален при смене рыночного режима и резких движениях.', tags: ['классика', 'breakout'] },
       ],
       archTitle: 'Трёхконтурная архитектура',
       archSub: 'Runtime не зависит от Research. Research не влияет на клиентов. Каждый контур изолирован.',
       circuits: [
-        { desc: 'Изолированный торговый контур. Нулевой даунтайм. Стратегии исполняются в отдельном сервисе — перезапуск API не влияет на торговлю.' },
-        { desc: 'Backtesting, исторический sweep по 9108+ вариантам, cart. product оптимизация, checkpoint/resume при долгих прогонах. Out-of-sample валидация кандидатов.' },
-        { desc: 'SaaS multi-tenant. Изоляция клиентов по api_key. Каталог офферов, тарифные лимиты, планы, мониторинг позиций. 3 режима: Strategy Client / Algofund / Custom.' },
+        { title: 'Runtime', desc: 'Изолированный торговый контур. Нулевой даунтайм. Перезапуск API не влияет на торговлю.' },
+        { title: 'Research', desc: 'Backtesting, sweep по 9 108+ вариантам, оптимизация, out-of-sample валидация кандидатов.' },
+        { title: 'Client', desc: 'SaaS мульти-тенант. Изоляция по API-ключу. Каталог офферов, мониторинг позиций.' },
       ],
       proofTitle: 'Доказанная методология',
-      proofSub: 'Средние показатели по площадке на основе 9 108 бектестов, 2025–2026',
+      proofSub: 'Средние показатели по площадке · 9 108 бектестов · 2025–2026',
       proofRows: [
-        { label: 'Типов стратегий', value: '3', note: 'DD + ZZ + StatArb' },
-        { label: 'Период', value: '15+ мес', note: 'мульти ТФ, 2025–2026' },
-        { label: 'Ср. доходность', value: '+28.7%', note: 'по портфелям площадки' },
-        { label: 'Profit Factor', value: '3.28', note: '>3.0 = превосходно' },
-        { label: 'Max Drawdown', value: '4.4%', note: 'портфельная' },
-        { label: 'Сделок', value: '416', note: 'Win Rate 43.75%' },
+        { label: 'Стратегий', value: '3' },
+        { label: 'Период', value: '15+ мес' },
+        { label: 'Доходность', value: '+28.7%' },
+        { label: 'Profit Factor', value: '3.28' },
+        { label: 'Max DD', value: '4.4%' },
+        { label: 'Сделок', value: '416' },
       ],
-      proofDisclaimer: '* Исторический бэктест на данных Bybit, 4h таймфрейм, с учётом комиссий 0.1% и проскальзывания 0.05%. Прошлые результаты не гарантируют будущую доходность.',
+      proofDisclaimer: '* Бэктест на данных Bybit, 4h, комиссии 0.1%, проскальзывание 0.05%. Прошлые результаты не гарантируют будущую доходность.',
       exchTitle: 'Биржевые интеграции',
-      exchSub: '6 бирж подключено прямо сейчас. Bybit — основной коннектор, остальные через ccxt / native.',
+      exchSub: '6 бирж подключено. Bybit — основной коннектор.',
       exchReg: 'Регистрация →',
-      discountTitle: '� СЕЙЧАС БЕСПЛАТНО',
-      discountSub: 'Обновлённый проект набирает аудиторию — все тарифы платформы доступны бесплатно. Заходите, подключайте API-ключ, тестируйте стратегии и торгуйте без оплаты.',
-      discountBadge: 'Бесплатный доступ',
-      discountNote: 'Платные тарифы будут включены позже — но сейчас всё бесплатно. Скидки 90% для первых пользователей сохранятся.',
-      discountPlans: [
-        { title: 'Strategy 20', old: '$20', now: '$2' },
-        { title: 'Strategy 50', old: '$50', now: '$5' },
-        { title: 'Strategy 100', old: '$100', now: '$10' },
-        { title: 'Algofund 20', old: '$20', now: '$2' },
-        { title: 'Algofund 50', old: '$50', now: '$5' },
-        { title: 'Algofund 100', old: '$100', now: '$10' },
+      securityTitle: 'Безопасность',
+      securitySub: 'Ваши средства никогда не покидают биржу.',
+      securityCards: [
+        { icon: '🔒', title: 'Read-only ключи', desc: 'Мы не запрашиваем права на вывод. Активы остаются на вашей бирже.' },
+        { icon: '🛡️', title: 'AES-256 шифрование', desc: 'API-ключи зашифрованы. Даже наша команда не имеет доступа в открытом виде.' },
+        { icon: '✅', title: 'Нет доступа к средствам', desc: 'Только торговые сигналы. Мы не можем выводить или переводить активы.' },
+        { icon: '⏰', title: '99.9% аптайм', desc: 'Резервная инфраструктура для круглосуточной работы стратегий.' },
       ],
-      discountCta: 'Успейте подключиться',
-      ctaTitle: 'Готовы начать?',
-      ctaSub: 'Зарегистрируйтесь как клиент, подключите API-ключ биржи и запустите первую стратегию за несколько минут. Или обратитесь для подключения по модели Алгофонда.',
+      faqTitle: 'Частые вопросы',
+      faqItems: [
+        { q: 'Это действительно бесплатно?', a: 'Да. В бета-тест все функции бесплатны. Позже будут платные тарифы, но бесплатный останется навсегда.' },
+        { q: 'Могу ли я потерять деньги?', a: 'Любая торговля — это риск. Стратегии бэктестированы, но прошлые результаты не гарантируют будущее. Не торгуйте на средства, которые не можете потерять.' },
+        { q: 'Мой аккаунт в безопасности?', a: 'Мы используем read-only API-ключи с разрешением на торговлю. Нет доступа к выводу средств.' },
+        { q: 'Какие биржи?', a: 'Bybit, Binance, Bitget, BingX, MEXC, Weex. Новые добавляются регулярно.' },
+        { q: 'Нужно программирование?', a: 'Нет. Подключите биржу, выберите стратегию, активируйте — всё через интерфейс.' },
+      ],
+      discountTitle: '🔥 СЕЙЧАС БЕСПЛАТНО',
+      discountSub: 'Все тарифы доступны бесплатно. Подключайте API-ключ и торгуйте.',
+      discountBadge: 'Бесплатно',
+      discountNote: 'Ранние пользователи сохранят скидку 90% при запуске платных тарифов.',
+      discountPlans: [
+        { title: 'Strategy 20', old: '$20' }, { title: 'Strategy 50', old: '$50' }, { title: 'Strategy 100', old: '$100' },
+        { title: 'Algofund 20', old: '$20' }, { title: 'Algofund 50', old: '$50' }, { title: 'Algofund 100', old: '$100' },
+      ],
+      discountCta: 'Начать бесплатно',
+      ctaTitle: 'Готовы торговать умнее?',
+      ctaSub: 'Зарегистрируйтесь, подключите API-ключ и запустите первую стратегию за минуты.',
       ctaBtn: 'Зарегистрироваться',
-      ctaTg: 'Telegram для связи',
-      footerLogin: 'Клиентский вход',
-      footerRegister: 'Регистрация',
-      footerAdmin: 'Администратор',
-      footerDisclaimer: '© 2025–2026 BTDD Platform. Торговля криптовалютой сопряжена с рисками. Исторические результаты не гарантируют будущую доходность.',
+      ctaTg: 'Написать в Telegram',
+      footerLogin: 'Вход', footerRegister: 'Регистрация', footerAdmin: 'Админ',
+      footerDisclaimer: '© 2025–2026 BTDD Platform. Торговля криптовалютой сопряжена с рисками.',
     },
     en: {
-      heroTitle1: 'Algorithmic Trading',
-      heroTitle2: 'as a Service',
-      heroSub: 'Full-featured SaaS platform for automated crypto trading. Three strategy types, 9,108 backtests, robustness filtering and multi-tenant architecture. Bybit, Binance, Bitget, BingX, MEXC, Weex — all connected.',
-      btnStart: 'Get Started',
-      btnLogin: 'Log In',
-      tagExchanges: '6 Exchanges · All Live',
-      tagTimeframe: 'Multi Timeframe',
-      tagClassicArb: 'classic + arbitrage ⓘ',
-      tagClassicArbTip: 'Classic — single-instrument trading. Arbitrage — synthetic pairs of two assets to reduce market risk.',
+      navStrategies: 'Strategies', navExchanges: 'Exchanges', navSecurity: 'Security', navPricing: 'Pricing', navFaq: 'FAQ',
+      heroTitle1: 'Algorithmic Trading', heroTitle2: 'as a Service',
+      heroSub: 'Automated crypto trading with 9,108+ backtested strategies across 6 exchanges. Three algorithm types, robustness filtering. Connect and trade — no coding required.',
+      btnStart: 'Start Free', btnLogin: 'Log In', betaBadge: 'Free During Beta',
       metrics: [
-        { value: '9,108', label: 'backtests run', sub: 'historical sweep' },
-        { value: '3,129', label: 'robust candidates', sub: 'passed robustness filter' },
-        { value: '+28.7%', label: 'avg. return', sub: 'platform-wide, 2025–2026' },
-        { value: '3.28', label: 'Profit Factor', sub: 'avg. across portfolios' },
-        { value: '4.4%', label: 'max drawdown', sub: 'portfolio DD' },
-        { value: '6 exchanges', label: 'connected', sub: 'Bybit · Binance · Bitget + more' },
+        { value: '9,108', label: 'backtests' }, { value: '3,129', label: 'robust' },
+        { value: '+28.7%', label: 'avg return' }, { value: '3.28', label: 'Profit Factor' },
       ],
-      modesTitle: 'Three Client Modes',
-      modesSub: 'From passive income to full control — choose your style',
+      modesTitle: 'Three Client Modes', modesSub: 'From passive income to full control',
       modePopular: 'Popular',
       modes: [
-        { title: 'Algofund', desc: 'Simple secure API connection — funds always stay on your exchange. No transfers. Connect your key, the platform trades for you. Passive income without extra complexity.' },
-        { title: 'Strategist', desc: 'For those who want to dive deeper. Connect an API key, pick individual strategies from the catalog and build your own trading system in a few clicks.' },
-        { title: 'Copy Trading', desc: '1 API key — and multiple copied accounts. Trade with your own setup — share with friends. No extra hassle like on exchanges.' },
+        { title: 'Algofund', desc: 'Secure API connection — funds stay on your exchange. Connect your key, the platform trades for you. Hands-off income.' },
+        { title: 'Strategist', desc: 'Full control. Pick strategies from the catalog, build a custom portfolio in clicks.' },
+        { title: 'Copy Trading', desc: 'One API key — multiple mirrored accounts. Share your setup without exchange restrictions.' },
       ],
-      stratTitle: 'Strategies',
-      stratSub: '3 algorithm types selected from 9,108 backtests with robustness filtering',
+      stratTitle: 'Strategies', stratSub: '3 algorithm types from 9,108 backtests with robustness filtering',
       strats: [
-        { desc: 'Donchian channel breakout with trailing TP. Works on mono and synthetic pairs. Catches directional momentum and rides the trend.', tags: ['classic', 'arbitrage', 'trend-following'] },
-        { desc: 'Mean reversion by Z-score on a synthetic instrument. Trades convergence/divergence of two related assets.', tags: ['arbitrage', 'mean-reversion', 'stat-arb'] },
-        { desc: 'Structural breakout with Donchian. Optimal during regime shifts and sharp directional moves.', tags: ['classic', 'arbitrage', 'breakout'] },
+        { name: 'DoubleDragon Breakout', desc: 'Donchian channel breakout with trailing TP. Captures momentum and rides the trend.', tags: ['classic', 'arbitrage', 'trend'] },
+        { name: 'StatArb Z-Score', desc: 'Mean reversion via Z-score on synthetic instruments. Trades convergence of correlated assets.', tags: ['arbitrage', 'mean-reversion'] },
+        { name: 'ZigZag Breakout', desc: 'Structural breakout using Donchian. Best during regime changes and sharp moves.', tags: ['classic', 'breakout'] },
       ],
-      archTitle: 'Three-Circuit Architecture',
-      archSub: 'Runtime is independent of Research. Research doesn\'t affect clients. Each circuit is isolated.',
+      archTitle: 'Three-Circuit Architecture', archSub: 'Runtime, Research, Client — each fully isolated.',
       circuits: [
-        { desc: 'Isolated trading circuit. Zero downtime. Strategies execute in a separate service — API restarts don\'t affect trading.' },
-        { desc: 'Backtesting, historical sweep across 9,108+ variants, Cartesian product optimization, checkpoint/resume for long runs. Out-of-sample candidate validation.' },
-        { desc: 'SaaS multi-tenant. Client isolation by api_key. Offer catalog, tariff limits, plans, position monitoring. 3 modes: Strategy Client / Algofund / Custom.' },
+        { title: 'Runtime', desc: 'Isolated trading circuit. Zero downtime. API restarts never interrupt live trading.' },
+        { title: 'Research', desc: 'Backtesting engine: 9,108+ parameter sweep, optimization, out-of-sample validation.' },
+        { title: 'Client', desc: 'Multi-tenant SaaS. Client isolation by API key. Offer catalog, position monitoring.' },
       ],
-      proofTitle: 'Proven Methodology',
-      proofSub: 'Platform-wide averages based on 9,108 backtests, 2025–2026',
+      proofTitle: 'Proven Methodology', proofSub: 'Platform averages · 9,108 backtests · 2025–2026',
       proofRows: [
-        { label: 'Strategy types', value: '3', note: 'DD + ZZ + StatArb' },
-        { label: 'Period', value: '15+ mo', note: 'multi TF, 2025–2026' },
-        { label: 'Avg. return', value: '+28.7%', note: 'across platform portfolios' },
-        { label: 'Profit Factor', value: '3.28', note: '>3.0 = excellent' },
-        { label: 'Max Drawdown', value: '4.4%', note: 'portfolio-level' },
-        { label: 'Trades', value: '416', note: 'Win Rate 43.75%' },
+        { label: 'Strategies', value: '3' }, { label: 'Period', value: '15+ mo' },
+        { label: 'Avg Return', value: '+28.7%' }, { label: 'Profit Factor', value: '3.28' },
+        { label: 'Max DD', value: '4.4%' }, { label: 'Trades', value: '416' },
       ],
-      proofDisclaimer: '* Historical backtest on Bybit data, 4h timeframe, accounting for 0.1% fees and 0.05% slippage. Past results do not guarantee future performance.',
-      exchTitle: 'Exchange Integrations',
-      exchSub: '6 exchanges connected right now. Bybit — primary connector, others via ccxt / native.',
-      exchReg: 'Register →',
-      discountTitle: '� FREE ACCESS NOW',
-      discountSub: 'The updated platform is growing its audience — all plans are available for free. Connect your API key, test strategies and trade at no cost.',
-      discountBadge: 'Free access',
-      discountNote: 'Paid plans will be enabled later — but right now everything is free. Early users keep 90% discount when pricing kicks in.',
+      proofDisclaimer: '* Backtest on Bybit 4h data, 0.1% fees, 0.05% slippage. Past performance ≠ future results.',
+      exchTitle: 'Exchange Integrations', exchSub: '6 exchanges live. Bybit primary.', exchReg: 'Sign Up →',
+      securityTitle: 'Security First', securitySub: 'Your funds never leave your exchange.',
+      securityCards: [
+        { icon: '🔒', title: 'Read-Only Keys', desc: 'No withdrawal permissions. Funds stay on your exchange.' },
+        { icon: '🛡️', title: 'AES-256 Encryption', desc: 'All API keys encrypted at rest. Even our team can\'t read them.' },
+        { icon: '✅', title: 'No Fund Access', desc: 'Trade signals only. We can\'t move or withdraw your assets.' },
+        { icon: '⏰', title: '99.9% Uptime', desc: 'Redundant infrastructure for 24/7 strategy execution.' },
+      ],
+      faqTitle: 'FAQ',
+      faqItems: [
+        { q: 'Is it really free?', a: 'Yes. All features are free during beta. Free tier stays forever.' },
+        { q: 'Can I lose money?', a: 'All trading carries risk. Strategies are backtested but past performance ≠ future results.' },
+        { q: 'Is my account safe?', a: 'We use read-only API keys with trade-only permissions. No withdrawal access.' },
+        { q: 'Which exchanges?', a: 'Bybit, Binance, Bitget, BingX, MEXC, Weex. More coming.' },
+        { q: 'Need coding?', a: 'No. Connect exchange, pick strategy, activate. All point-and-click.' },
+      ],
+      discountTitle: '🔥 FREE NOW', discountSub: 'All plans free during beta. Connect your API key and trade.',
+      discountBadge: 'Free', discountNote: 'Early users keep 90% discount when pricing launches.',
       discountPlans: [
-        { title: 'Strategy 20', old: '$20', now: '$2' },
-        { title: 'Strategy 50', old: '$50', now: '$5' },
-        { title: 'Strategy 100', old: '$100', now: '$10' },
-        { title: 'Algofund 20', old: '$20', now: '$2' },
-        { title: 'Algofund 50', old: '$50', now: '$5' },
-        { title: 'Algofund 100', old: '$100', now: '$10' },
+        { title: 'Strategy 20', old: '$20' }, { title: 'Strategy 50', old: '$50' }, { title: 'Strategy 100', old: '$100' },
+        { title: 'Algofund 20', old: '$20' }, { title: 'Algofund 50', old: '$50' }, { title: 'Algofund 100', old: '$100' },
       ],
-      discountCta: 'Get started now',
-      ctaTitle: 'Ready to Start?',
-      ctaSub: 'Register as a client, connect your exchange API key and launch your first strategy in minutes. Or contact us for Algofund-style connection.',
-      ctaBtn: 'Register',
-      ctaTg: 'Telegram Contact',
-      footerLogin: 'Client Login',
-      footerRegister: 'Register',
-      footerAdmin: 'Admin',
-      footerDisclaimer: '© 2025–2026 BTDD Platform. Cryptocurrency trading involves risks. Historical results do not guarantee future performance.',
+      discountCta: 'Start Free',
+      ctaTitle: 'Ready to trade smarter?', ctaSub: 'Sign up, connect API key, launch your first strategy in minutes.',
+      ctaBtn: 'Sign Up Free', ctaTg: 'Telegram',
+      footerLogin: 'Login', footerRegister: 'Sign Up', footerAdmin: 'Admin',
+      footerDisclaimer: '© 2025–2026 BTDD Platform. Crypto trading involves risk.',
     },
     tr: {
-      heroTitle1: 'Algoritmik Ticaret',
-      heroTitle2: 'Hizmet Olarak',
-      heroSub: 'Otomatik kripto ticareti için tam özellikli SaaS platformu. Üç strateji türü, 9.108 geriye dönük test, sağlamlık filtreleme ve çok kiracılı mimari. Bybit, Binance, Bitget, BingX, MEXC, Weex — hepsi bağlı.',
-      btnStart: 'Başlayın',
-      btnLogin: 'Giriş Yap',
-      tagExchanges: '6 Borsa · Hepsi Canlı',
-      tagTimeframe: 'Çoklu Zaman Dilimi',
-      tagClassicArb: 'klasik + arbitraj ⓘ',
-      tagClassicArbTip: 'Klasik — tek enstrüman ticareti. Arbitraj — piyasa riskini azaltmak için iki varlıktan oluşan sentetik çiftler.',
+      navStrategies: 'Stratejiler', navExchanges: 'Borsalar', navSecurity: 'Güvenlik', navPricing: 'Fiyatlar', navFaq: 'SSS',
+      heroTitle1: 'Algoritmik Ticaret', heroTitle2: 'Hizmet Olarak',
+      heroSub: '6 borsada 9.108+ backtest\'li otomatik kripto ticaret platformu. Üç algoritma türü, sağlamlık filtreleme. Kod bilgisi gerekmez.',
+      btnStart: 'Ücretsiz Başla', btnLogin: 'Giriş', betaBadge: 'Betada Ücretsiz',
       metrics: [
-        { value: '9.108', label: 'geriye dönük test', sub: 'tarihsel tarama' },
-        { value: '3.129', label: 'sağlam aday', sub: 'sağlamlık filtresini geçti' },
-        { value: '+%28,7', label: 'ort. getiri', sub: 'platform geneli, 2025–2026' },
-        { value: '3,28', label: 'Kâr Faktörü', sub: 'portföyler arası ort.' },
-        { value: '%4,4', label: 'maks. düşüş', sub: 'portföy DD' },
-        { value: '6 borsa', label: 'bağlı', sub: 'Bybit · Binance · Bitget + diğer' },
+        { value: '9.108', label: 'backtest' }, { value: '3.129', label: 'sağlam' },
+        { value: '+%28,7', label: 'ort getiri' }, { value: '3,28', label: 'Kâr Faktörü' },
       ],
-      modesTitle: 'Üç Müşteri Modu',
-      modesSub: 'Pasif gelirden tam kontrole — tarzınızı seçin',
+      modesTitle: 'Üç Müşteri Modu', modesSub: 'Pasif gelirden tam kontrole',
       modePopular: 'Popüler',
       modes: [
-        { title: 'Algofon', desc: 'Basit ve güvenli API bağlantısı — fonlarınız her zaman borsanızda kalır. Transfer yok. Anahtarınızı bağlayın, platform sizin için işlem yapar. Karmaşıklık olmadan pasif gelir.' },
-        { title: 'Stratejist', desc: 'Daha derine inmek isteyenler için. API anahtarı bağlayın, katalogdan stratejiler seçin ve birkaç tıklamayla kendi ticaret sisteminizi oluşturun.' },
-        { title: 'Kopya Ticaret', desc: '1 API anahtarı — ve birden fazla kopyalanan hesap. Kendi kurulumunuzla işlem yapın — arkadaşlarınızla paylaşın. Borsalardaki gibi ekstra zahmet yok.' },
+        { title: 'Algofon', desc: 'Güvenli API bağlantısı — fonlar borsanızda kalır. Anahtarı bağlayın, platform işlem yapar.' },
+        { title: 'Stratejist', desc: 'Tam kontrol. Katalogdan strateji seçin, özel portföy oluşturun.' },
+        { title: 'Kopya Ticaret', desc: 'Bir API anahtarı — birden fazla hesap. Borsa kısıtlaması olmadan paylaşın.' },
       ],
-      stratTitle: 'Stratejiler',
-      stratSub: 'Sağlamlık filtrelemesiyle 9.108 geriye dönük testten seçilen 3 algoritma türü',
+      stratTitle: 'Stratejiler', stratSub: '9.108 backtest\'ten 3 algoritma türü',
       strats: [
-        { desc: 'Takip eden TP ile Donchian kanal kırılması. Mono ve sentetik çiftlerde çalışır. Yönlü momentumu yakalar ve trendi sürdürür.', tags: ['klasik', 'arbitraj', 'trend-following'] },
-        { desc: 'Sentetik enstrümanda Z-skoru ile ortalamaya dönüş. İki ilişkili varlığın yakınsama/uzaklaşmasını işlem yapar.', tags: ['arbitraj', 'mean-reversion', 'stat-arb'] },
-        { desc: 'Donchian ile yapısal kırılma. Rejim değişikliklerinde ve keskin yönlü hareketlerde optimal.', tags: ['klasik', 'arbitraj', 'breakout'] },
+        { name: 'DoubleDragon Breakout', desc: 'Donchian kanal kırılması. Momentumu yakalar ve trendi sürdürür.', tags: ['klasik', 'arbitraj', 'trend'] },
+        { name: 'StatArb Z-Score', desc: 'Z-skoru ile ortalamaya dönüş. İlişkili varlıkların yakınsamasını işler.', tags: ['arbitraj', 'mean-reversion'] },
+        { name: 'ZigZag Breakout', desc: 'Yapısal kırılma. Rejim değişikliklerinde en iyi performans.', tags: ['klasik', 'breakout'] },
       ],
-      archTitle: 'Üç Devreli Mimari',
-      archSub: 'Runtime, Research\'ten bağımsızdır. Research müşterileri etkilemez. Her devre izoledir.',
+      archTitle: 'Üç Devreli Mimari', archSub: 'Runtime, Research, Client — her biri tamamen izole.',
       circuits: [
-        { desc: 'İzole ticaret devresi. Sıfır kesinti. Stratejiler ayrı bir serviste çalışır — API yeniden başlatmaları ticareti etkilemez.' },
-        { desc: 'Geriye dönük test, 9.108+ varyant üzerinde tarihsel tarama, kartezyen çarpım optimizasyonu, uzun çalışmalar için kontrol noktası/devam. Örneklem dışı aday doğrulama.' },
-        { desc: 'SaaS çok kiracılı. api_key ile müşteri izolasyonu. Teklif katalogu, tarife limitleri, planlar, pozisyon izleme. 3 mod: Strateji Müşterisi / Algofon / Özel.' },
+        { title: 'Runtime', desc: 'İzole ticaret devresi. Sıfır kesinti. API yeniden başlatmaları ticareti etkilemez.' },
+        { title: 'Research', desc: 'Backtest motoru: 9.108+ parametre taraması, optimizasyon, doğrulama.' },
+        { title: 'Client', desc: 'Çok kiracılı SaaS. API anahtarına göre izolasyon. Kota yönetimi.' },
       ],
-      proofTitle: 'Kanıtlanmış Metodoloji',
-      proofSub: '9.108 geriye dönük teste dayalı platform geneli ortalamaları, 2025–2026',
+      proofTitle: 'Kanıtlanmış Metodoloji', proofSub: 'Platform ortalamaları · 9.108 backtest · 2025–2026',
       proofRows: [
-        { label: 'Strateji türü', value: '3', note: 'DD + ZZ + StatArb' },
-        { label: 'Dönem', value: '15+ ay', note: 'çoklu TF, 2025–2026' },
-        { label: 'Ort. getiri', value: '+%28,7', note: 'platform portföyleri genelinde' },
-        { label: 'Kâr Faktörü', value: '3,28', note: '>3,0 = mükemmel' },
-        { label: 'Maks. Düşüş', value: '%4,4', note: 'portföy düzeyinde' },
-        { label: 'İşlemler', value: '416', note: 'Kazanma Oranı %43,75' },
+        { label: 'Strateji', value: '3' }, { label: 'Dönem', value: '15+ ay' },
+        { label: 'Getiri', value: '+%28,7' }, { label: 'Kâr Faktörü', value: '3,28' },
+        { label: 'Maks DD', value: '%4,4' }, { label: 'İşlem', value: '416' },
       ],
-      proofDisclaimer: '* Bybit verilerinde tarihsel geriye dönük test, 4s zaman dilimi, %0,1 komisyon ve %0,05 kayma dahil. Geçmiş sonuçlar gelecekteki performansı garanti etmez.',
-      exchTitle: 'Borsa Entegrasyonları',
-      exchSub: 'Şu anda 6 borsa bağlı. Bybit — ana bağlayıcı, diğerleri ccxt / native üzerinden.',
-      exchReg: 'Kayıt Ol →',
-      discountTitle: '� ŞU AN ÜCRETSİZ',
-      discountSub: 'Güncellenen platform kitlesini büyütüyor — tüm tarifeler ücretsiz. API anahtarınızı bağlayın, stratejileri test edin ve ücretsiz ticaret yapın.',
-      discountBadge: 'Ücretsiz erişim',
-      discountNote: 'Ücretli tarifeler daha sonra etkinleştirilecek — ama şu anda her şey ücretsiz. Erken kullanıcılar %90 indirimi korur.',
+      proofDisclaimer: '* Bybit 4s, %0,1 komisyon, %0,05 kayma. Geçmiş performans ≠ gelecek.',
+      exchTitle: 'Borsa Entegrasyonları', exchSub: '6 borsa bağlı. Bybit ana.', exchReg: 'Kayıt →',
+      securityTitle: 'Güvenlik', securitySub: 'Fonlarınız asla borsanızdan ayrılmaz.',
+      securityCards: [
+        { icon: '🔒', title: 'Salt Okunur Anahtarlar', desc: 'Çekim izni yok. Fonlar borsanızda kalır.' },
+        { icon: '🛡️', title: 'AES-256 Şifreleme', desc: 'Tüm API anahtarları şifreli. Ekibimiz bile okuyamaz.' },
+        { icon: '✅', title: 'Fon Erişimi Yok', desc: 'Sadece sinyal. Varlık taşıma veya çekme yapamayız.' },
+        { icon: '⏰', title: '%99,9 Çalışma', desc: 'Yedekli altyapı ile 7/24 strateji çalışması.' },
+      ],
+      faqTitle: 'SSS',
+      faqItems: [
+        { q: 'Gerçekten ücretsiz mi?', a: 'Evet. Beta döneminde tüm özellikler ücretsiz. Ücretsiz plan kalıcı.' },
+        { q: 'Para kaybedebilir miyim?', a: 'Her ticaret risk taşır. Backtest geçmiş performanstır, gelecek garantisi değil.' },
+        { q: 'Hesabım güvende mi?', a: 'Salt okunur API anahtarları kullanıyoruz. Çekim erişimi yok.' },
+        { q: 'Hangi borsalar?', a: 'Bybit, Binance, Bitget, BingX, MEXC, Weex. Yenileri ekleniyor.' },
+        { q: 'Kod gerekli mi?', a: 'Hayır. Bağla, seç, aktive et. Hepsi arayüzde.' },
+      ],
+      discountTitle: '🔥 ŞU AN ÜCRETSİZ', discountSub: 'Tüm planlar ücretsiz. API anahtarınızı bağlayın.',
+      discountBadge: 'Ücretsiz', discountNote: 'Erken kullanıcılar %90 indirim korur.',
       discountPlans: [
-        { title: 'Strategy 20', old: '$20', now: '$2' },
-        { title: 'Strategy 50', old: '$50', now: '$5' },
-        { title: 'Strategy 100', old: '$100', now: '$10' },
-        { title: 'Algofund 20', old: '$20', now: '$2' },
-        { title: 'Algofund 50', old: '$50', now: '$5' },
-        { title: 'Algofund 100', old: '$100', now: '$10' },
+        { title: 'Strategy 20', old: '$20' }, { title: 'Strategy 50', old: '$50' }, { title: 'Strategy 100', old: '$100' },
+        { title: 'Algofund 20', old: '$20' }, { title: 'Algofund 50', old: '$50' }, { title: 'Algofund 100', old: '$100' },
       ],
-      discountCta: 'Hemen başlayın',
-      ctaTitle: 'Başlamaya Hazır mısınız?',
-      ctaSub: 'Müşteri olarak kaydolun, borsa API anahtarınızı bağlayın ve ilk stratejinizi dakikalar içinde başlatın. Veya Algofon modeli ile bağlantı için bize ulaşın.',
-      ctaBtn: 'Kayıt Ol',
-      ctaTg: 'Telegram İletişim',
-      footerLogin: 'Müşteri Girişi',
-      footerRegister: 'Kayıt Ol',
-      footerAdmin: 'Yönetici',
-      footerDisclaimer: '© 2025–2026 BTDD Platform. Kripto para ticareti risk içerir. Geçmiş sonuçlar gelecekteki performansı garanti etmez.',
+      discountCta: 'Ücretsiz Başla',
+      ctaTitle: 'Hazır mısınız?', ctaSub: 'Kayıt olun, API bağlayın, dakikalar içinde başlayın.',
+      ctaBtn: 'Ücretsiz Kayıt', ctaTg: 'Telegram',
+      footerLogin: 'Giriş', footerRegister: 'Kayıt', footerAdmin: 'Yönetici',
+      footerDisclaimer: '© 2025–2026 BTDD Platform. Kripto ticareti risk içerir.',
     },
   };
   return t[lang] || t.en;
 }
 
-const STRATEGY_META = [
-  { icon: <ThunderboltOutlined style={{ fontSize: 28, color: '#f5a623' }} />, name: 'DoubleDragon Breakout', code: 'DD_BattleToads' },
-  { icon: <LineChartOutlined style={{ fontSize: 28, color: '#52c41a' }} />, name: 'StatArb Z-Score', code: 'stat_arb_zscore' },
-  { icon: <BarChartOutlined style={{ fontSize: 28, color: '#1677ff' }} />, name: 'ZigZag Breakout', code: 'zz_breakout' },
-];
-
-const MODE_META = [
-  { icon: <TeamOutlined style={{ fontSize: 32, color: '#1677ff' }} />, highlight: true },
-  { icon: <RocketOutlined style={{ fontSize: 32, color: '#52c41a' }} />, highlight: false },
-  { icon: <CopyOutlined style={{ fontSize: 32, color: '#f5a623' }} />, highlight: false },
-];
-
-const CIRCUIT_META = [
-  { color: '#ff4d4f', icon: <ThunderboltOutlined />, title: 'Runtime Circuit' },
-  { color: '#1677ff', icon: <BarChartOutlined />, title: 'Research Circuit' },
-  { color: '#52c41a', icon: <TeamOutlined />, title: 'Client Circuit' },
-];
-
 const EXCHANGES = [
-  { name: 'Bybit', status: 'live', note: 'primary', ref: 'https://www.bybit.com/invite?ref=P2GAX' },
-  { name: 'Binance', status: 'live', note: 'ccxt', ref: 'https://www.binance.com/referral/earn-together/refer2earn-usdc/claim?hl=ru&ref=GRO_28502_9VNRB&utm_source=referral_entrance' },
-  { name: 'Bitget', status: 'live', note: 'ccxt', ref: 'https://partner.bitget.com/bg/VJ90ZR' },
-  { name: 'BingX', status: 'live', note: 'ccxt', ref: 'https://bingxdao.com/invite/AD0H6D/' },
-  { name: 'MEXC', status: 'live', note: 'native', ref: 'https://www.mexc.com/acquisition/custom-sign-up?shareCode=mexc-12A4vC' },
-  { name: 'Weex', status: 'live', note: 'native', ref: 'https://www.weex.com/register?ref=BTDD' },
-];
-
-const styles: Record<string, React.CSSProperties> = {
-  page: {
-    background: 'var(--btdd-bg-primary)',
-    minHeight: '100vh',
-    color: '#fff',
-    fontFamily: "'Inter', 'Segoe UI', sans-serif",
-    overflowX: 'hidden',
-  },
-  hero: {
-    background: 'linear-gradient(135deg, var(--btdd-bg-primary) 0%, var(--btdd-hero-mid) 50%, var(--btdd-bg-primary) 100%)',
-    padding: '80px 24px 60px',
-    textAlign: 'center',
-    position: 'relative',
-  },
-  heroBadge: {
-    display: 'inline-block',
-    background: 'var(--btdd-accent-015)',
-    border: '1px solid var(--btdd-accent-040)',
-    borderRadius: 20,
-    padding: '6px 18px',
-    fontSize: 13,
-    color: 'var(--btdd-accent)',
-    marginBottom: 24,
-    letterSpacing: '0.05em',
-  },
-  heroTitle: {
-    fontSize: 'clamp(32px, 6vw, 64px)',
-    fontWeight: 800,
-    lineHeight: 1.15,
-    margin: '0 0 16px',
-    background: 'linear-gradient(135deg, #ffffff 0%, var(--btdd-accent-hover) 100%)',
-    WebkitBackgroundClip: 'text',
-    WebkitTextFillColor: 'transparent',
-    backgroundClip: 'text',
-  },
-  heroSub: {
-    fontSize: 'clamp(16px, 2.5vw, 22px)',
-    color: '#8899aa',
-    maxWidth: 680,
-    margin: '0 auto 36px',
-    lineHeight: 1.6,
-  },
-  metricsStrip: {
-    background: 'var(--btdd-accent-005)',
-    borderTop: '1px solid var(--btdd-accent-015)',
-    borderBottom: '1px solid var(--btdd-accent-015)',
-    padding: '32px 24px',
-    display: 'flex',
-    flexWrap: 'wrap' as const,
-    justifyContent: 'center',
-    gap: 0,
-  },
-  metricItem: {
-    textAlign: 'center',
-    padding: '12px 28px',
-    borderRight: '1px solid rgba(255,255,255,0.06)',
-  },
-  metricValue: {
-    fontSize: 'clamp(24px, 4vw, 40px)',
-    fontWeight: 800,
-    color: 'var(--btdd-accent)',
-    lineHeight: 1.1,
-  },
-  metricLabel: {
-    fontSize: 13,
-    color: '#aab4c0',
-    marginTop: 4,
-    lineHeight: 1.3,
-  },
-  metricSub: {
-    fontSize: 11,
-    color: '#556677',
-    marginTop: 2,
-  },
-  section: {
-    padding: '64px 24px',
-    maxWidth: 1100,
-    margin: '0 auto',
-  },
-  sectionTitle: {
-    fontSize: 'clamp(22px, 3.5vw, 36px)',
-    fontWeight: 700,
-    color: '#fff',
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  sectionSub: {
-    textAlign: 'center',
-    color: '#778899',
-    fontSize: 16,
-    marginBottom: 48,
-  },
-  card: {
-    background: 'rgba(255,255,255,0.03)',
-    border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: 16,
-    padding: '28px 24px',
-    flex: '1 1 280px',
-    transition: 'border-color 0.2s, transform 0.2s',
-  },
-  cardHighlight: {
-    background: 'var(--btdd-accent-007)',
-    border: '1px solid var(--btdd-accent-035)',
-    borderRadius: 16,
-    padding: '28px 24px',
-    flex: '1 1 280px',
-  },
-  stratCard: {
-    background: 'rgba(255,255,255,0.03)',
-    border: '1px solid rgba(255,255,255,0.08)',
-    borderRadius: 16,
-    padding: '28px 24px',
-    flex: '1 1 260px',
-  },
-  circuitCard: {
-    background: 'rgba(255,255,255,0.03)',
-    border: '1px solid rgba(255,255,255,0.07)',
-    borderRadius: 16,
-    padding: '28px 24px',
-    flex: '1 1 260px',
-  },
-  darkBg: {
-    background: 'rgba(0,0,0,0.3)',
-    borderTop: '1px solid rgba(255,255,255,0.05)',
-    borderBottom: '1px solid rgba(255,255,255,0.05)',
-    padding: '64px 24px',
-  },
-  ctaSection: {
-    background: 'linear-gradient(135deg, var(--btdd-hero-mid) 0%, var(--btdd-bg-primary) 100%)',
-    padding: '80px 24px',
-    textAlign: 'center',
-    borderTop: '1px solid var(--btdd-accent-020)',
-  },
-  footer: {
-    background: 'var(--btdd-bg-primary)',
-    borderTop: '1px solid rgba(255,255,255,0.06)',
-    padding: '32px 24px',
-    textAlign: 'center',
-    color: '#445566',
-    fontSize: 13,
-  },
-};
-
-type ColorTheme = 'classic' | 'neon' | 'fire';
-const THEME_OPTIONS: { value: ColorTheme; icon: string; label: string }[] = [
-  { value: 'classic', icon: '🔵', label: 'Classic' },
-  { value: 'neon', icon: '🟢', label: 'Neon' },
-  { value: 'fire', icon: '🟠', label: 'Fire' },
+  { name: 'Bybit', ref: 'https://www.bybit.com/invite?ref=P2GAX' },
+  { name: 'Binance', ref: 'https://www.binance.com/referral/earn-together/refer2earn-usdc/claim?hl=ru&ref=GRO_28502_9VNRB&utm_source=referral_entrance' },
+  { name: 'Bitget', ref: 'https://partner.bitget.com/bg/VJ90ZR' },
+  { name: 'BingX', ref: 'https://bingxdao.com/invite/AD0H6D/' },
+  { name: 'MEXC', ref: 'https://www.mexc.com/acquisition/custom-sign-up?shareCode=mexc-12A4vC' },
+  { name: 'Weex', ref: 'https://www.weex.com/register?ref=BTDD' },
 ];
 
 export default function Landing() {
   const { language, setLanguage } = useI18n();
   const tx = useLandingTexts(language);
-
-  const [colorTheme, setColorTheme] = useState<ColorTheme>(() => {
-    const saved = localStorage.getItem('btddColorTheme');
-    return (saved === 'classic' || saved === 'neon') ? saved : 'fire';
+  const [scrolled, setScrolled] = useState(false);
+  const [theme, setTheme] = useState<LandingTheme>(() => {
+    const s = localStorage.getItem('btddLandingTheme');
+    return (s === 'fire' || s === 'neon' || s === 'classic' || s === 'light') ? s : 'fire';
   });
 
-  const changeTheme = useCallback((t: ColorTheme) => {
-    setColorTheme(t);
-    localStorage.setItem('btddColorTheme', t);
-    document.body.classList.remove('theme-classic', 'theme-neon', 'theme-fire');
-    document.body.classList.add(`theme-${t}`);
+  const T = THEMES[theme];
+
+  const switchTheme = useCallback((t: LandingTheme) => {
+    setTheme(t);
+    localStorage.setItem('btddLandingTheme', t);
   }, []);
 
+  useEffect(() => {
+    const h = () => setScrolled(window.scrollY > 10);
+    window.addEventListener('scroll', h, { passive: true });
+    return () => window.removeEventListener('scroll', h);
+  }, []);
+
+  const btnStyle = (primary?: boolean): React.CSSProperties => primary ? {
+    display: 'inline-block', padding: '12px 28px', borderRadius: 10, fontWeight: 700, fontSize: 15,
+    background: T.ctaBg, color: T.isDark ? '#0a0a0a' : '#fff', textDecoration: 'none',
+    border: 'none', cursor: 'pointer', transition: 'transform 0.15s',
+  } : {
+    display: 'inline-block', padding: '12px 28px', borderRadius: 10, fontWeight: 600, fontSize: 15,
+    border: `1.5px solid ${T.border}`, color: T.textSec, background: 'transparent', textDecoration: 'none',
+    cursor: 'pointer', transition: 'border-color 0.15s',
+  };
+
+  const sectionStyle = (alt?: boolean): React.CSSProperties => ({
+    padding: '80px 24px', background: alt ? T.bgAlt : T.bg,
+  });
+
+  const cardStyle: React.CSSProperties = {
+    background: T.bgCard, border: `1px solid ${T.cardBorder}`, borderRadius: 14, padding: '24px 20px',
+  };
+
+  const headingStyle: React.CSSProperties = {
+    fontSize: 'clamp(22px, 3.5vw, 34px)', fontWeight: 800, textAlign: 'center', marginBottom: 8, color: T.text,
+  };
+
   return (
-    <div style={styles.page}>
-      {/* ─── LANG + THEME SWITCHER ─── */}
-      <div style={{ position: 'absolute', top: 16, right: 24, zIndex: 10, display: 'flex', gap: 8, alignItems: 'center' }}>
-        {THEME_OPTIONS.map((opt) => (
-          <button
-            key={opt.value}
-            onClick={() => changeTheme(opt.value)}
-            title={opt.label}
-            style={{
-              background: colorTheme === opt.value ? 'var(--btdd-accent-030)' : 'rgba(255,255,255,0.06)',
-              border: colorTheme === opt.value ? '1px solid var(--btdd-accent)' : '1px solid rgba(255,255,255,0.12)',
-              borderRadius: 6,
-              padding: '4px 8px',
-              fontSize: 14,
-              cursor: 'pointer',
-              lineHeight: 1,
-            }}
-          >
-            {opt.icon}
-          </button>
-        ))}
-        <div style={{ width: 1, height: 18, background: 'rgba(255,255,255,0.12)', margin: '0 2px' }} />
-        {(['ru', 'en', 'tr'] as UILanguage[]).map((lng) => (
-          <button
-            key={lng}
-            onClick={() => setLanguage(lng)}
-            style={{
-              background: language === lng ? 'var(--btdd-accent-030)' : 'rgba(255,255,255,0.06)',
-              border: language === lng ? '1px solid var(--btdd-accent)' : '1px solid rgba(255,255,255,0.12)',
-              color: language === lng ? 'var(--btdd-accent)' : '#778899',
-              borderRadius: 6,
-              padding: '4px 10px',
-              fontSize: 12,
-              cursor: 'pointer',
-              fontWeight: language === lng ? 700 : 400,
-            }}
-          >
-            {lng.toUpperCase()}
-          </button>
-        ))}
-      </div>
+    <div style={{ background: T.bg, minHeight: '100vh', color: T.text, fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
+
+      {/* ─── NAV ─── */}
+      <nav style={{
+        position: 'fixed', top: 0, width: '100%', zIndex: 100, padding: '12px 0',
+        background: scrolled ? T.navBgScroll : T.navBg,
+        backdropFilter: scrolled ? 'blur(12px)' : 'none',
+        borderBottom: scrolled ? `1px solid ${T.border}` : '1px solid transparent',
+        transition: 'all 0.25s',
+      }}>
+        <div style={{ maxWidth: 1140, margin: '0 auto', padding: '0 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ fontWeight: 900, fontSize: 20, color: T.text, letterSpacing: -0.5 }}>
+            BTDD<span style={{ color: T.accent }}>.</span>
+          </div>
+          <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+            {[['#strategies', tx.navStrategies], ['#exchanges', tx.navExchanges], ['#security', tx.navSecurity], ['#pricing', tx.navPricing], ['#faq', tx.navFaq]].map(([href, label]) => (
+              <a key={href} href={href} style={{ color: T.textSec, fontSize: 13, fontWeight: 500, textDecoration: 'none' }}>{label}</a>
+            ))}
+            <div style={{ width: 1, height: 16, background: T.border, margin: '0 2px' }} />
+            {THEME_OPTS.map(o => (
+              <button key={o.value} onClick={() => switchTheme(o.value)} title={o.label} style={{
+                background: theme === o.value ? T.accentGlow : 'transparent',
+                border: theme === o.value ? `1px solid ${T.accent}` : `1px solid ${T.isDark ? 'rgba(255,255,255,0.1)' : T.border}`,
+                borderRadius: 5, padding: '2px 6px', fontSize: 13, cursor: 'pointer', lineHeight: 1,
+              }}>{o.icon}</button>
+            ))}
+            <div style={{ width: 1, height: 16, background: T.border, margin: '0 2px' }} />
+            {(['ru', 'en', 'tr'] as UILanguage[]).map(lng => (
+              <button key={lng} onClick={() => setLanguage(lng)} style={{
+                background: language === lng ? T.accentGlow : 'transparent',
+                border: language === lng ? `1px solid ${T.accent}` : `1px solid ${T.isDark ? 'rgba(255,255,255,0.1)' : T.border}`,
+                color: language === lng ? T.accent : T.textSec,
+                borderRadius: 5, padding: '2px 7px', fontSize: 11, cursor: 'pointer', fontWeight: language === lng ? 700 : 400,
+              }}>{lng.toUpperCase()}</button>
+            ))}
+            <a href="/client/register" style={{
+              ...btnStyle(true), padding: '7px 18px', fontSize: 13,
+            }}>{tx.btnStart}</a>
+          </div>
+        </div>
+      </nav>
 
       {/* ─── HERO ─── */}
-      <section style={styles.hero}>
-        <div style={styles.heroBadge}>
-          <ApiOutlined style={{ marginRight: 6 }} />
-          Algorithmic Trading SaaS · v2.0 · Alpha
-        </div>
-        <h1 style={styles.heroTitle}>
-          BTDD Platform
-          <br />
-          {tx.heroTitle1}
-          <br />
-          {tx.heroTitle2}
-        </h1>
-        <p style={styles.heroSub}>{tx.heroSub}</p>
-        <Space size={16} wrap style={{ justifyContent: 'center' }}>
-          <Button
-            type="primary"
-            size="large"
-            icon={<RocketOutlined />}
-            href="/client/register"
-            style={{ height: 48, paddingInline: 28, fontSize: 16, borderRadius: 10 }}
-          >
-            {tx.btnStart}
-          </Button>
-          <Button
-            size="large"
-            href="/client/login"
-            style={{
-              height: 48,
-              paddingInline: 28,
-              fontSize: 16,
-              borderRadius: 10,
-              background: 'rgba(255,255,255,0.06)',
-              border: '1px solid rgba(255,255,255,0.15)',
-              color: '#fff',
-            }}
-          >
-            {tx.btnLogin} <ArrowRightOutlined />
-          </Button>
-          <Button
-            size="large"
-            icon={<FileTextOutlined />}
-            href="/whitepaper"
-            style={{
-              height: 48,
-              paddingInline: 28,
-              fontSize: 16,
-              borderRadius: 10,
-              background: 'rgba(255,255,255,0.03)',
-              border: '1px solid rgba(255,255,255,0.1)',
-              color: '#8899aa',
-            }}
-          >
-            Whitepaper
-          </Button>
-        </Space>
-        <div style={{ marginTop: 20 }}>
-          <Tag color="green" style={{ fontSize: 12 }}>{tx.tagExchanges}</Tag>
-          <Tag color="default" style={{ fontSize: 12 }}>{tx.tagTimeframe}</Tag>
-          <Tag color="default" style={{ fontSize: 12, cursor: 'help' }} title={tx.tagClassicArbTip}>{tx.tagClassicArb}</Tag>
-          <Tag color="blue" style={{ fontSize: 12 }}>Multi-tenant SaaS</Tag>
+      <section style={{ paddingTop: 100, paddingBottom: 60, textAlign: 'center', position: 'relative', overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', inset: 0, background: T.heroGrad, pointerEvents: 'none' }} />
+        <div style={{ position: 'relative', zIndex: 1, padding: '0 24px' }}>
+          <span style={{
+            display: 'inline-block', background: T.greenBg, color: T.greenText,
+            fontSize: 12, fontWeight: 700, padding: '5px 16px', borderRadius: 20,
+            marginBottom: 24, letterSpacing: 0.5,
+          }}>
+            {tx.betaBadge}
+          </span>
+          <h1 style={{
+            fontSize: 'clamp(36px, 6vw, 64px)', fontWeight: 900, lineHeight: 1.08,
+            margin: '0 auto 20px', maxWidth: 700,
+          }}>
+            {tx.heroTitle1}<br />
+            <span style={{ color: T.accent }}>{tx.heroTitle2}</span>
+          </h1>
+          <p style={{ fontSize: 'clamp(15px, 2vw, 19px)', color: T.textSec, maxWidth: 580, margin: '0 auto 36px', lineHeight: 1.7 }}>
+            {tx.heroSub}
+          </p>
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginBottom: 52, flexWrap: 'wrap' }}>
+            <a href="/client/register" style={btnStyle(true)}>{tx.btnStart}</a>
+            <a href="/client/login" style={btnStyle()}>{tx.btnLogin}</a>
+            <a href="/whitepaper" style={btnStyle()}>Whitepaper</a>
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: 40, flexWrap: 'wrap' }}>
+            {tx.metrics.map((m: any, i: number) => (
+              <div key={i} style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: 'clamp(28px, 4.5vw, 44px)', fontWeight: 900, color: T.accent, lineHeight: 1.1 }}>{m.value}</div>
+                <div style={{ fontSize: 13, color: T.textSec, marginTop: 4 }}>{m.label}</div>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
-      {/* ─── METRICS STRIP ─── */}
-      <div style={styles.metricsStrip}>
-        {tx.metrics.map((m: any, i: number) => (
-          <div
-            key={i}
-            style={{
-              ...styles.metricItem,
-              borderRight: i < tx.metrics.length - 1 ? '1px solid rgba(255,255,255,0.06)' : 'none',
-            }}
-          >
-            <div style={styles.metricValue}>{m.value}</div>
-            <div style={styles.metricLabel}>{m.label}</div>
-            <div style={styles.metricSub}>{m.sub}</div>
-          </div>
-        ))}
-      </div>
-
-      {/* ─── 3 CLIENT MODES ─── */}
-      <div style={styles.section}>
-        <div style={styles.sectionTitle}>{tx.modesTitle}</div>
-        <div style={styles.sectionSub}>{tx.modesSub}</div>
-        <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-          {MODE_META.map((m, i) => (
-            <div key={i} style={m.highlight ? styles.cardHighlight : styles.card}>
-              <div style={{ marginBottom: 12 }}>{m.icon}</div>
-              <div style={{ fontSize: 18, fontWeight: 700, color: '#fff', marginBottom: 10 }}>
-                {tx.modes[i].title}
-                {m.highlight && (
-                  <Tag color="blue" style={{ marginLeft: 8, fontSize: 11 }}>{tx.modePopular}</Tag>
-                )}
-              </div>
-              <div style={{ color: '#8899aa', fontSize: 14, lineHeight: 1.6 }}>{tx.modes[i].desc}</div>
-            </div>
+      {/* ─── EXCHANGE STRIP ─── */}
+      <div style={{ padding: '28px 0', borderTop: `1px solid ${T.border}`, borderBottom: `1px solid ${T.border}`, textAlign: 'center' }}>
+        <div style={{ display: 'flex', justifyContent: 'center', gap: 32, flexWrap: 'wrap', opacity: 0.5 }}>
+          {EXCHANGES.map(ex => (
+            <a key={ex.name} href={ex.ref} target="_blank" rel="noopener noreferrer"
+              style={{ fontSize: 14, fontWeight: 700, color: T.textSec, textDecoration: 'none', letterSpacing: 0.5 }}>
+              {ex.name}
+            </a>
           ))}
         </div>
       </div>
 
-      {/* ─── 3 STRATEGIES ─── */}
-      <div style={styles.darkBg}>
-        <div style={{ ...styles.section, padding: '0 24px' }}>
-          <div style={styles.sectionTitle}>{tx.stratTitle}</div>
-          <div style={styles.sectionSub}>{tx.stratSub}</div>
-          <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-            {STRATEGY_META.map((s, i) => (
-              <div key={s.code} style={styles.stratCard}>
-                <div style={{ marginBottom: 12 }}>{s.icon}</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: '#fff', marginBottom: 4 }}>{s.name}</div>
-                <code style={{ fontSize: 11, color: '#556677', background: 'rgba(255,255,255,0.05)', padding: '2px 8px', borderRadius: 4 }}>
-                  {s.code}
-                </code>
-                <div style={{ color: '#8899aa', fontSize: 14, lineHeight: 1.6, marginTop: 12 }}>{tx.strats[i].desc}</div>
-                <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                  {tx.strats[i].tags.map((tag: string) => (
-                    <Tag key={tag} style={{ fontSize: 11, background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)', color: '#aab4c0' }}>
-                      {tag}
-                    </Tag>
+      {/* ─── MODES ─── */}
+      <section style={sectionStyle()}>
+        <div style={{ maxWidth: 1140, margin: '0 auto' }}>
+          <h2 style={headingStyle}>{tx.modesTitle}</h2>
+          <p style={{ textAlign: 'center', color: T.textSec, fontSize: 15, marginBottom: 48 }}>{tx.modesSub}</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+            {[0, 1, 2].map(i => {
+              const hl = i === 0;
+              return (
+                <div key={i} style={{
+                  ...cardStyle,
+                  border: hl ? `1.5px solid ${T.accent}` : cardStyle.border,
+                  background: hl ? T.proofBg : cardStyle.background,
+                  position: 'relative',
+                }}>
+                  {hl && <span style={{
+                    position: 'absolute', top: -10, right: 16, background: T.ctaBg, color: T.isDark ? '#0a0a0a' : '#fff',
+                    fontSize: 10, fontWeight: 700, padding: '3px 10px', borderRadius: 10,
+                  }}>{tx.modePopular}</span>}
+                  <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 10, color: T.text }}>{tx.modes[i].title}</div>
+                  <div style={{ color: T.textSec, fontSize: 14, lineHeight: 1.65 }}>{tx.modes[i].desc}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </section>
+
+      {/* ─── STRATEGIES ─── */}
+      <section id="strategies" style={sectionStyle(true)}>
+        <div style={{ maxWidth: 1140, margin: '0 auto' }}>
+          <h2 style={headingStyle}>{tx.stratTitle}</h2>
+          <p style={{ textAlign: 'center', color: T.textSec, fontSize: 15, marginBottom: 48 }}>{tx.stratSub}</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+            {tx.strats.map((s: any, i: number) => (
+              <div key={i} style={cardStyle}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: T.accent, marginBottom: 4 }}>{s.name}</div>
+                <div style={{ color: T.textSec, fontSize: 14, lineHeight: 1.6, marginBottom: 14 }}>{s.desc}</div>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  {s.tags.map((tag: string) => (
+                    <span key={tag} style={{
+                      fontSize: 10, background: T.accentGlow, border: `1px solid ${T.border}`,
+                      color: T.accent, padding: '2px 8px', borderRadius: 4, fontWeight: 600,
+                    }}>{tag}</span>
                   ))}
                 </div>
               </div>
             ))}
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* ─── ARCHITECTURE 3-CIRCUIT ─── */}
-      <div style={styles.section}>
-        <div style={styles.sectionTitle}>
-          <BulbOutlined style={{ marginRight: 10, color: '#f5a623' }} />
-          {tx.archTitle}
-        </div>
-        <div style={styles.sectionSub}>{tx.archSub}</div>
-        <div style={{ display: 'flex', gap: 20, flexWrap: 'wrap' }}>
-          {CIRCUIT_META.map((c, i) => (
-            <div key={c.title} style={{ ...styles.circuitCard, borderTopColor: c.color, borderTopWidth: 3 }}>
-              <div style={{ fontSize: 24, color: c.color, marginBottom: 10 }}>{c.icon}</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#fff', marginBottom: 10 }}>{c.title}</div>
-              <div style={{ color: '#8899aa', fontSize: 14, lineHeight: 1.6 }}>{tx.circuits[i].desc}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* ─── BACKTEST PROOF ─── */}
-      <div style={styles.darkBg}>
-        <div style={{ maxWidth: 900, margin: '0 auto', textAlign: 'center', padding: '0 24px' }}>
-          <div style={styles.sectionTitle}>
-            <TrophyOutlined style={{ marginRight: 10, color: '#f5a623' }} />
-            {tx.proofTitle}
-          </div>
-          <div style={{ ...styles.sectionSub, marginBottom: 36 }}>{tx.proofSub}</div>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
-            gap: 16,
-          }}>
-            {tx.proofRows.map((row: any) => (
-              <div key={row.label} style={{
-                background: 'var(--btdd-accent-006)',
-                border: '1px solid var(--btdd-accent-020)',
-                borderRadius: 12,
-                padding: '20px 16px',
-              }}>
-                <div style={{ fontSize: 28, fontWeight: 800, color: 'var(--btdd-accent)' }}>{row.value}</div>
-                <div style={{ fontSize: 13, color: '#ccc', marginTop: 4 }}>{row.label}</div>
-                <div style={{ fontSize: 11, color: '#556677' }}>{row.note}</div>
+      {/* ─── ARCHITECTURE ─── */}
+      <section style={sectionStyle()}>
+        <div style={{ maxWidth: 1140, margin: '0 auto' }}>
+          <h2 style={headingStyle}>{tx.archTitle}</h2>
+          <p style={{ textAlign: 'center', color: T.textSec, fontSize: 15, marginBottom: 48 }}>{tx.archSub}</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+            {[
+              { color: '#ef4444' }, { color: T.accent }, { color: '#10b981' },
+            ].map((c, i) => (
+              <div key={i} style={{ ...cardStyle, borderTop: `3px solid ${c.color}` }}>
+                <div style={{ fontSize: 16, fontWeight: 700, color: T.text, marginBottom: 8 }}>{tx.circuits[i].title}</div>
+                <div style={{ color: T.textSec, fontSize: 14, lineHeight: 1.6 }}>{tx.circuits[i].desc}</div>
               </div>
             ))}
           </div>
-          <div style={{ marginTop: 24, color: '#445566', fontSize: 12 }}>{tx.proofDisclaimer}</div>
         </div>
-      </div>
+      </section>
+
+      {/* ─── PROOF — 6 cards in 1 row ─── */}
+      <section style={sectionStyle(true)}>
+        <div style={{ maxWidth: 1140, margin: '0 auto', textAlign: 'center' }}>
+          <h2 style={headingStyle}>{tx.proofTitle}</h2>
+          <p style={{ color: T.textSec, fontSize: 15, marginBottom: 36 }}>{tx.proofSub}</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12 }}>
+            {tx.proofRows.map((row: any, i: number) => (
+              <div key={i} style={{
+                background: T.proofBg, border: `1px solid ${T.cardBorder}`, borderRadius: 12, padding: '20px 12px',
+              }}>
+                <div style={{ fontSize: 'clamp(20px, 2.5vw, 30px)', fontWeight: 900, color: T.proofAccent, lineHeight: 1.1 }}>{row.value}</div>
+                <div style={{ fontSize: 12, color: T.textSec, marginTop: 6 }}>{row.label}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 20, color: T.textMuted, fontSize: 11 }}>{tx.proofDisclaimer}</div>
+        </div>
+      </section>
 
       {/* ─── EXCHANGES ─── */}
-      <div style={{ ...styles.section, textAlign: 'center' }}>
-        <div style={styles.sectionTitle}>
-          <GlobalOutlined style={{ marginRight: 10, color: 'var(--btdd-accent)' }} />
-          {tx.exchTitle}
+      <section id="exchanges" style={{ ...sectionStyle(), textAlign: 'center' }}>
+        <div style={{ maxWidth: 1140, margin: '0 auto' }}>
+          <h2 style={headingStyle}>{tx.exchTitle}</h2>
+          <p style={{ color: T.textSec, fontSize: 15, marginBottom: 36 }}>{tx.exchSub}</p>
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', justifyContent: 'center' }}>
+            {EXCHANGES.map(ex => (
+              <a key={ex.name} href={ex.ref} target="_blank" rel="noopener noreferrer" style={{
+                ...cardStyle, padding: '14px 24px', minWidth: 110, textDecoration: 'none', textAlign: 'center',
+              }}>
+                <div style={{ fontSize: 15, fontWeight: 700, color: T.text }}>{ex.name}</div>
+                <div style={{ fontSize: 10, color: T.greenAccent, fontWeight: 700, marginTop: 3 }}>✓ LIVE</div>
+                <div style={{ fontSize: 11, color: T.accent, marginTop: 3 }}>{tx.exchReg}</div>
+              </a>
+            ))}
+          </div>
         </div>
-        <div style={{ ...styles.sectionSub, marginBottom: 36 }}>{tx.exchSub}</div>
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', justifyContent: 'center' }}>
-          {EXCHANGES.map((ex) => (
-            <a key={ex.name} href={ex.ref} target="_blank" rel="noopener noreferrer" style={{
-              background: 'rgba(82,196,26,0.07)',
-              border: '1px solid rgba(82,196,26,0.28)',
-              borderRadius: 12,
-              padding: '16px 24px',
-              minWidth: 110,
-              textDecoration: 'none',
-              transition: 'transform 0.2s',
-            }}>
-              <div style={{ fontSize: 16, fontWeight: 700, color: '#73d13d' }}>{ex.name}</div>
-              <Tag color="green" style={{ marginTop: 6, fontSize: 10 }}>✓ LIVE</Tag>
-              <div style={{ fontSize: 10, color: '#445566', marginTop: 4 }}>{tx.exchReg}</div>
-            </a>
-          ))}
-        </div>
-      </div>
+      </section>
 
-      {/* ─── FREE ACCESS BANNER ─── */}
-      <div style={{ textAlign: 'center', padding: '80px 24px 60px', background: 'linear-gradient(180deg, rgba(82,196,26,0.08) 0%, rgba(250,173,20,0.06) 100%)' }}>
-        <div style={{
-          display: 'inline-block',
-          background: 'linear-gradient(135deg, #52c41a 0%, #73d13d 100%)',
-          color: '#fff',
-          fontSize: 'clamp(28px, 5vw, 52px)',
-          fontWeight: 900,
-          padding: '16px 48px',
-          borderRadius: 16,
-          marginBottom: 24,
-          letterSpacing: 1,
-          boxShadow: '0 8px 32px rgba(82,196,26,0.35)',
-        }}>
-          {tx.discountTitle}
+      {/* ─── SECURITY ─── */}
+      <section id="security" style={sectionStyle(true)}>
+        <div style={{ maxWidth: 1140, margin: '0 auto' }}>
+          <h2 style={headingStyle}>{tx.securityTitle}</h2>
+          <p style={{ textAlign: 'center', color: T.textSec, fontSize: 15, marginBottom: 48 }}>{tx.securitySub}</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+            {tx.securityCards.map((c: any, i: number) => (
+              <div key={i} style={cardStyle}>
+                <div style={{ fontSize: 26, marginBottom: 10 }}>{c.icon}</div>
+                <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6, color: T.text }}>{c.title}</div>
+                <div style={{ color: T.textSec, fontSize: 13, lineHeight: 1.6 }}>{c.desc}</div>
+              </div>
+            ))}
+          </div>
         </div>
-        <div style={{ color: '#ccd4dd', fontSize: 20, marginBottom: 20, maxWidth: 650, margin: '0 auto 20px', lineHeight: 1.6 }}>
-          {tx.discountSub}
+      </section>
+
+      {/* ─── FREE PRICING ─── */}
+      <section id="pricing" style={{ ...sectionStyle(), textAlign: 'center' }}>
+        <div style={{ maxWidth: 1140, margin: '0 auto' }}>
+          <div style={{
+            display: 'inline-block', background: T.ctaBg, color: T.isDark ? '#0a0a0a' : '#fff',
+            fontSize: 'clamp(22px, 4vw, 38px)', fontWeight: 900, padding: '12px 36px', borderRadius: 14, marginBottom: 20,
+          }}>
+            {tx.discountTitle}
+          </div>
+          <p style={{ color: T.textSec, fontSize: 16, maxWidth: 500, margin: '0 auto 12px', lineHeight: 1.6 }}>{tx.discountSub}</p>
+          <div style={{
+            display: 'inline-block', background: T.greenBg, borderRadius: 8, padding: '6px 20px',
+            fontSize: 13, color: T.greenText, fontWeight: 600, marginBottom: 32,
+          }}>{tx.discountNote}</div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, maxWidth: 900, margin: '0 auto 32px' }}>
+            {tx.discountPlans.map((p: any, i: number) => (
+              <div key={i} style={{ ...cardStyle, padding: '16px 12px', textAlign: 'center' }}>
+                <div style={{ fontSize: 11, color: T.textSec, fontWeight: 600, marginBottom: 6 }}>{p.title}</div>
+                <div style={{ fontSize: 14, color: T.textMuted, textDecoration: 'line-through' }}>{p.old}</div>
+                <div style={{ fontSize: 28, fontWeight: 900, color: T.greenAccent }}>$0</div>
+                <span style={{
+                  fontSize: 10, fontWeight: 700, background: T.greenBg, color: T.greenText,
+                  padding: '2px 6px', borderRadius: 8,
+                }}>{tx.discountBadge}</span>
+              </div>
+            ))}
+          </div>
+          <a href="/client/register" style={{ ...btnStyle(true), padding: '14px 40px', fontSize: 17 }}>{tx.discountCta}</a>
         </div>
-        <div style={{
-          display: 'inline-block',
-          background: 'rgba(82,196,26,0.12)',
-          border: '1px solid rgba(82,196,26,0.3)',
-          borderRadius: 10,
-          padding: '10px 28px',
-          marginBottom: 24,
-          fontSize: 15,
-          color: '#73d13d',
-          fontWeight: 600,
-        }}>
-          {tx.discountNote}
+      </section>
+
+      {/* ─── FAQ ─── */}
+      <section id="faq" style={sectionStyle(true)}>
+        <div style={{ maxWidth: 720, margin: '0 auto' }}>
+          <h2 style={headingStyle}>{tx.faqTitle}</h2>
+          <div style={{ marginTop: 32 }}>
+            {tx.faqItems.map((item: any, i: number) => (
+              <FaqItem key={i} question={item.q} answer={item.a} defaultOpen={i === 0} T={T} />
+            ))}
+          </div>
         </div>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 16, flexWrap: 'wrap', maxWidth: 900, margin: '24px auto 36px' }}>
-          {(tx.discountPlans as Array<{ title: string; old: string; now: string }>).map((plan, i) => (
-            <div key={i} style={{
-              background: 'rgba(255,255,255,0.04)',
-              border: '1px solid rgba(82,196,26,0.25)',
-              borderRadius: 12,
-              padding: '20px 24px',
-              minWidth: 130,
-              textAlign: 'center',
-            }}>
-              <div style={{ fontSize: 13, color: '#8899aa', marginBottom: 8, fontWeight: 600 }}>{plan.title}</div>
-              <div style={{ fontSize: 18, color: '#556677', textDecoration: 'line-through', opacity: 0.5 }}>{plan.old}</div>
-              <div style={{ fontSize: 36, fontWeight: 900, color: '#52c41a' }}>$0</div>
-              <Tag color="green" style={{ marginTop: 4, fontSize: 12, fontWeight: 700 }}>{tx.discountBadge}</Tag>
-            </div>
-          ))}
-        </div>
-        <Button
-          type="primary"
-          size="large"
-          icon={<RocketOutlined />}
-          href="/client/register"
-          style={{
-            height: 56,
-            paddingInline: 40,
-            fontSize: 20,
-            borderRadius: 14,
-            background: 'linear-gradient(135deg, #52c41a 0%, #73d13d 100%)',
-            border: 'none',
-            fontWeight: 800,
-            boxShadow: '0 4px 20px rgba(82,196,26,0.3)',
-          }}
-        >
-          {tx.discountCta}
-        </Button>
-      </div>
+      </section>
 
       {/* ─── CTA ─── */}
-      <div style={styles.ctaSection}>
-        <div style={{ maxWidth: 700, margin: '0 auto' }}>
-          <div style={{ fontSize: 'clamp(24px, 4vw, 42px)', fontWeight: 800, color: '#fff', marginBottom: 16 }}>
-            {tx.ctaTitle}
-          </div>
-          <div style={{ color: '#8899aa', fontSize: 16, marginBottom: 36, lineHeight: 1.6 }}>
-            {tx.ctaSub}
-          </div>
-          <Space size={16} wrap style={{ justifyContent: 'center' }}>
-            <Button
-              type="primary"
-              size="large"
-              icon={<RocketOutlined />}
-              href="/client/register"
-              style={{ height: 52, paddingInline: 32, fontSize: 16, borderRadius: 12 }}
-            >
-              {tx.ctaBtn}
-            </Button>
-            <Button
-              size="large"
-              icon={<ArrowRightOutlined />}
-              href="https://t.me/yakovbyakov"
-              target="_blank"
-              style={{
-                height: 52,
-                paddingInline: 32,
-                fontSize: 16,
-                borderRadius: 12,
-                background: 'rgba(255,255,255,0.06)',
-                border: '1px solid rgba(255,255,255,0.15)',
-                color: '#fff',
-              }}
-            >
-              {tx.ctaTg}
-            </Button>
-          </Space>
+      <section style={{ padding: '80px 24px', background: T.isDark ? 'rgba(0,0,0,0.4)' : '#0f172a', textAlign: 'center' }}>
+        <h2 style={{ fontSize: 'clamp(24px, 4vw, 38px)', fontWeight: 900, color: '#fff', marginBottom: 12 }}>{tx.ctaTitle}</h2>
+        <p style={{ color: '#94a3b8', fontSize: 15, marginBottom: 32, lineHeight: 1.6 }}>{tx.ctaSub}</p>
+        <div style={{ display: 'flex', gap: 14, justifyContent: 'center', flexWrap: 'wrap' }}>
+          <a href="/client/register" style={{ ...btnStyle(true), color: '#fff' }}>{tx.ctaBtn}</a>
+          <a href="https://t.me/yakovbyakov" target="_blank" rel="noopener noreferrer" style={{
+            display: 'inline-block', padding: '12px 28px', borderRadius: 10, fontWeight: 600, fontSize: 15,
+            border: '1.5px solid rgba(255,255,255,0.15)', color: '#fff', background: 'transparent', textDecoration: 'none',
+          }}>{tx.ctaTg}</a>
         </div>
-      </div>
+      </section>
 
       {/* ─── FOOTER ─── */}
-      <footer style={styles.footer}>
-        <div>
-          <strong style={{ color: '#aaa' }}>BTDD Platform</strong>
-          &nbsp;·&nbsp;Algorithmic Trading SaaS
-          &nbsp;·&nbsp;Bybit · Binance · Bitget · BingX · MEXC · Weex
+      <footer style={{ padding: '40px 24px', borderTop: `1px solid ${T.border}`, background: T.bg }}>
+        <div style={{ maxWidth: 1140, margin: '0 auto' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 32, marginBottom: 24 }}>
+            <div>
+              <div style={{ fontWeight: 900, fontSize: 18, color: T.text }}>BTDD<span style={{ color: T.accent }}>.</span></div>
+              <p style={{ color: T.textMuted, fontSize: 13, marginTop: 6 }}>Algorithmic trading as a service.</p>
+            </div>
+            <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
+              {[
+                [tx.navStrategies, '#strategies'], [tx.navExchanges, '#exchanges'], [tx.navSecurity, '#security'],
+                [tx.navPricing, '#pricing'], [tx.navFaq, '#faq'], ['Whitepaper', '/whitepaper'],
+              ].map(([l, h]) => (
+                <a key={h} href={h} style={{ color: T.textSec, fontSize: 13, textDecoration: 'none' }}>{l}</a>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+              {[
+                ['Telegram', 'https://t.me/BTDD_Live'], ['Chat', 'https://t.me/BTDD_Discuss'],
+                ['Medium', 'https://medium.com/@foresterufa'], ['LinkedIn', 'https://www.linkedin.com/in/alekseilazarev'],
+              ].map(([l, h]) => (
+                <a key={h} href={h} target="_blank" rel="noopener noreferrer" style={{ color: T.textMuted, fontSize: 12, textDecoration: 'none' }}>{l}</a>
+              ))}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 20, justifyContent: 'center', marginBottom: 16 }}>
+            <a href="/client/login" style={{ color: T.textMuted, fontSize: 12, textDecoration: 'none' }}>{tx.footerLogin}</a>
+            <a href="/client/register" style={{ color: T.textMuted, fontSize: 12, textDecoration: 'none' }}>{tx.footerRegister}</a>
+            <a href="/login" style={{ color: T.textMuted, fontSize: 12, textDecoration: 'none' }}>{tx.footerAdmin}</a>
+          </div>
+          <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 16, textAlign: 'center', color: T.textMuted, fontSize: 12 }}>
+            {tx.footerDisclaimer}
+          </div>
         </div>
-        <Divider style={{ borderColor: 'rgba(255,255,255,0.06)', margin: '16px 0' }} />
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 24, flexWrap: 'wrap' }}>
-          <a href="/client/login" style={{ color: '#556677' }}>{tx.footerLogin}</a>
-          <a href="/client/register" style={{ color: '#556677' }}>{tx.footerRegister}</a>
-          <a href="/whitepaper" style={{ color: '#556677' }}>Whitepaper</a>
-          <a href="/login" style={{ color: '#556677' }}>{tx.footerAdmin}</a>
-        </div>
-        <div style={{ display: 'flex', justifyContent: 'center', gap: 20, flexWrap: 'wrap', marginTop: 16 }}>
-          <a href="https://t.me/BTDD_Live" target="_blank" rel="noopener noreferrer" style={{ color: '#556677', fontSize: 13 }}>📢 Telegram</a>
-          <a href="https://t.me/BTDD_Discuss" target="_blank" rel="noopener noreferrer" style={{ color: '#556677', fontSize: 13 }}>💬 Chat</a>
-          <a href="https://medium.com/@foresterufa" target="_blank" rel="noopener noreferrer" style={{ color: '#556677', fontSize: 13 }}>📝 Medium</a>
-          <a href="https://www.linkedin.com/in/alekseilazarev" target="_blank" rel="noopener noreferrer" style={{ color: '#556677', fontSize: 13 }}>💼 LinkedIn</a>
-          <a href="https://www.threads.com/@foresterufa" target="_blank" rel="noopener noreferrer" style={{ color: '#556677', fontSize: 13 }}>🧵 Threads</a>
-          <a href="mailto:aiaetrade17@gmail.com" style={{ color: '#556677', fontSize: 13 }}>📩 Email</a>
-        </div>
-        <div style={{ marginTop: 16 }}>{tx.footerDisclaimer}</div>
       </footer>
+    </div>
+  );
+}
+
+function FaqItem({ question, answer, defaultOpen = false, T }: {
+  question: string; answer: string; defaultOpen?: boolean; T: typeof THEMES['fire'];
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div style={{ borderBottom: `1px solid ${T.border}`, padding: '16px 0' }}>
+      <div onClick={() => setOpen(!open)} style={{
+        fontWeight: 700, fontSize: 15, cursor: 'pointer', display: 'flex',
+        justifyContent: 'space-between', alignItems: 'center', color: T.text,
+      }}>
+        {question}
+        <span style={{ transition: 'transform 0.2s', transform: open ? 'rotate(180deg)' : 'none', color: T.textMuted, fontSize: 12 }}>▾</span>
+      </div>
+      {open && <div style={{ color: T.textSec, fontSize: 14, marginTop: 10, lineHeight: 1.65 }}>{answer}</div>}
     </div>
   );
 }

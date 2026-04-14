@@ -1323,7 +1323,7 @@ type GetStrategiesOptions = {
 
 export type StrategySummary = Pick<
   Strategy,
-  'id' | 'name' | 'strategy_type' | 'market_mode' | 'is_active' | 'base_symbol' | 'quote_symbol' | 'interval' | 'base_coef' | 'quote_coef' | 'state' | 'last_action' | 'last_error'
+  'id' | 'name' | 'strategy_type' | 'market_mode' | 'is_active' | 'base_symbol' | 'quote_symbol' | 'interval' | 'base_coef' | 'quote_coef' | 'state' | 'last_action' | 'last_error' | 'updated_at'
 > & {
   is_runtime: boolean;
   is_archived: boolean;
@@ -1406,7 +1406,7 @@ export const getStrategySummaries = async (
   const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? Math.floor(offsetRaw) : 0;
 
   const sqlParts = [
-    `SELECT s.id, s.name, s.strategy_type, s.market_mode, s.is_active, s.base_symbol, s.quote_symbol, s.interval, s.base_coef, s.quote_coef, s.state, s.last_action, s.last_error,
+    `SELECT s.id, s.name, s.strategy_type, s.market_mode, s.is_active, s.base_symbol, s.quote_symbol, s.interval, s.base_coef, s.quote_coef, s.state, s.last_action, s.last_error, s.updated_at,
      COALESCE(s.is_runtime, 0) AS is_runtime, COALESCE(s.is_archived, 0) AS is_archived, COALESCE(s.origin, 'manual') AS origin`,
     `FROM strategies s`,
     `JOIN api_keys a ON a.id = s.api_key_id`,
@@ -1449,6 +1449,7 @@ export const getStrategySummaries = async (
       state: String(row.state || 'flat') === 'long' ? 'long' : String(row.state || 'flat') === 'short' ? 'short' : 'flat',
       last_action: row.last_action === undefined ? null : row.last_action,
       last_error: row.last_error === undefined ? null : row.last_error,
+      updated_at: row.updated_at === undefined ? null : row.updated_at,
       is_runtime: safeBoolean(row.is_runtime, false),
       is_archived: safeBoolean(row.is_archived, false),
       origin: String(row.origin || 'manual'),
@@ -2206,12 +2207,12 @@ export const executeStrategy = async (
 
   const livePositions = await getPositions(apiKeyName);
   const liveBase = livePositions.find((position: any) => {
-    return String(position?.symbol || '').toUpperCase() === mergedStrategy.base_symbol.toUpperCase()
+    return normalizeSymbolKey(position?.symbol) === normalizeSymbolKey(mergedStrategy.base_symbol)
       && Number.parseFloat(String(position?.size || '0')) > 0;
   }) || null;
   const liveQuote = !isMono
     ? livePositions.find((position: any) => {
-      return String(position?.symbol || '').toUpperCase() === mergedStrategy.quote_symbol.toUpperCase()
+      return normalizeSymbolKey(position?.symbol) === normalizeSymbolKey(mergedStrategy.quote_symbol)
         && Number.parseFloat(String(position?.size || '0')) > 0;
     }) || null
     : null;
@@ -2615,6 +2616,51 @@ export const executeStrategy = async (
           donchianLow,
           donchianCenter,
         });
+      }
+
+      // ── Pair conflict check: prevent opening if another open strategy uses the same symbol ──
+      const mySymbols = getStrategySymbols(mergedStrategy);
+      if (mySymbols.length > 0 && currentOpen > 0) {
+        const openRows: Array<{ base_symbol: string; quote_symbol: string; market_mode: string; id: number; name: string }> = await db.all(
+          `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode FROM strategies s
+           JOIN trading_system_members tsm ON tsm.strategy_id = s.id
+           WHERE tsm.system_id = ? AND tsm.is_enabled = 1
+           AND s.is_active = 1 AND s.state != 'flat' AND s.id != ?`,
+          [systemRow.system_id, strategyId]
+        );
+
+        const mySymbolSet = new Set(mySymbols.map((s) => String(s).toUpperCase().trim()));
+        const conflicting = openRows.find((row) => {
+          const otherSymbols = getStrategySymbols(row as any);
+          return otherSymbols.some((s) => mySymbolSet.has(String(s).toUpperCase().trim()));
+        });
+
+        if (conflicting) {
+          const conflictSymbols = getStrategySymbols(conflicting as any).filter((s) => mySymbolSet.has(String(s).toUpperCase().trim()));
+          logger.info(`ОП pair conflict: strategy ${strategyId} shares symbol(s) [${conflictSymbols.join(', ')}] with open strategy ${conflicting.id} (${conflicting.name}) in system ${systemRow.system_id}, skipping entry`);
+
+          const updated = await updateStrategy(apiKeyName, strategyId, {
+            ...executionBindingPatch,
+            state: 'flat',
+            entry_ratio: null,
+            tp_anchor_ratio: null,
+            last_signal: signal,
+            last_action: closedAction
+              ? `${closedAction}_op_pair_conflict@${currentRatio}`
+              : `op_pair_conflict@${currentRatio}`,
+            last_error: null,
+          });
+
+          return returnWithProcessedBar({
+            result: `ОП pair conflict with strategy #${conflicting.id} on [${conflictSymbols.join(', ')}], entry skipped`,
+            action: closedAction ? `${closedAction}_op_pair_conflict` : 'op_pair_conflict',
+            strategy: updated,
+            currentRatio,
+            donchianHigh,
+            donchianLow,
+            donchianCenter,
+          });
+        }
       }
     }
   }
@@ -3122,6 +3168,7 @@ type CopyStrategiesOptions = {
   replaceTarget?: boolean;
   preserveActive?: boolean;
   syncSymbols?: boolean;
+  sourceStrategyIds?: number[];
 };
 
 type CopyChartSuggestion = {
@@ -3163,7 +3210,11 @@ export const copyStrategyBlock = async (
     throw new Error('Source and target API key must be different');
   }
 
-  const sourceStrategies = await getStrategies(sourceApiKeyName);
+  let sourceStrategies = await getStrategies(sourceApiKeyName);
+  if (options?.sourceStrategyIds && options.sourceStrategyIds.length > 0) {
+    const allowedIds = new Set(options.sourceStrategyIds);
+    sourceStrategies = sourceStrategies.filter((s: any) => allowedIds.has(Number(s.id)));
+  }
   if (sourceStrategies.length === 0) {
     return {
       copied: 0,
@@ -3197,112 +3248,98 @@ export const copyStrategyBlock = async (
   let disabledStrategies = 0;
   const issues: string[] = [];
   let chartSuggestion: CopyChartSuggestion | null = null;
-  let transactionStarted = false;
 
-  try {
-    await db.exec('BEGIN IMMEDIATE TRANSACTION');
-    transactionStarted = true;
+  if (replaceTarget) {
+    const removeResult: any = await db.run('DELETE FROM strategies WHERE api_key_id = ?', [targetApiKeyId]);
+    deleted = Number(removeResult?.changes || 0);
+  }
 
-    if (replaceTarget) {
-      const removeResult: any = await db.run('DELETE FROM strategies WHERE api_key_id = ?', [targetApiKeyId]);
-      deleted = Number(removeResult?.changes || 0);
+  for (const source of sourceStrategies) {
+    const sourceBase = normalizeSymbol(source.base_symbol);
+    const sourceQuote = normalizeSymbol(source.quote_symbol);
+    const sourceMarketMode = normalizeMarketMode(source.market_mode);
+
+    const mappedBase = symbolValidationEnabled
+      ? mapStrategySymbolForTarget(sourceBase, targetSymbolMap)
+      : sourceBase;
+    const mappedQuote = symbolValidationEnabled
+      ? mapStrategySymbolForTarget(sourceQuote, targetSymbolMap)
+      : sourceQuote;
+
+    const pairValid = sourceMarketMode === 'mono'
+      ? (symbolValidationEnabled ? Boolean(mappedBase) : Boolean(sourceBase))
+      : (symbolValidationEnabled
+        ? Boolean(mappedBase && mappedQuote && mappedBase !== mappedQuote)
+        : Boolean(sourceBase && sourceQuote && sourceBase !== sourceQuote));
+
+    const targetBase = mappedBase || sourceBase;
+    const targetQuote = sourceMarketMode === 'mono' ? '' : (mappedQuote || sourceQuote);
+
+    if (targetBase !== sourceBase || targetQuote !== sourceQuote) {
+      adjustedSymbols += 1;
     }
 
-    for (const source of sourceStrategies) {
-      const sourceBase = normalizeSymbol(source.base_symbol);
-      const sourceQuote = normalizeSymbol(source.quote_symbol);
-      const sourceMarketMode = normalizeMarketMode(source.market_mode);
+    const created = await createStrategy(targetApiKeyName, {
+      name: source.name,
+      strategy_type: source.strategy_type || 'DD_BattleToads',
+      market_mode: source.market_mode,
+      is_active: pairValid ? (preserveActive ? source.is_active : false) : false,
+      display_on_chart: source.display_on_chart,
+      show_settings: source.show_settings,
+      show_chart: source.show_chart,
+      show_indicators: source.show_indicators,
+      show_positions_on_chart: source.show_positions_on_chart,
+      show_trades_on_chart: source.show_trades_on_chart,
+      show_values_each_bar: source.show_values_each_bar,
+      auto_update: source.auto_update,
+      take_profit_percent: source.take_profit_percent,
+      price_channel_length: source.price_channel_length,
+      detection_source: source.detection_source,
+      zscore_entry: source.zscore_entry,
+      zscore_exit: source.zscore_exit,
+      zscore_stop: source.zscore_stop,
+      base_symbol: targetBase,
+      quote_symbol: targetQuote,
+      interval: source.interval,
+      base_coef: source.base_coef,
+      quote_coef: source.quote_coef,
+      long_enabled: source.long_enabled,
+      short_enabled: source.short_enabled,
+      lot_long_percent: source.lot_long_percent,
+      lot_short_percent: source.lot_short_percent,
+      max_deposit: source.max_deposit,
+      margin_type: source.margin_type,
+      leverage: source.leverage,
+      fixed_lot: source.fixed_lot,
+      reinvest_percent: source.reinvest_percent,
+    });
 
-      const mappedBase = symbolValidationEnabled
-        ? mapStrategySymbolForTarget(sourceBase, targetSymbolMap)
-        : sourceBase;
-      const mappedQuote = symbolValidationEnabled
-        ? mapStrategySymbolForTarget(sourceQuote, targetSymbolMap)
-        : sourceQuote;
+    if (!pairValid) {
+      disabledStrategies += 1;
+      const issue = `Strategy ${source.name}: pair ${sourceBase}/${sourceQuote} is not available on ${targetApiKeyName}`;
+      issues.push(issue);
 
-      const pairValid = sourceMarketMode === 'mono'
-        ? (symbolValidationEnabled ? Boolean(mappedBase) : Boolean(sourceBase))
-        : (symbolValidationEnabled
-          ? Boolean(mappedBase && mappedQuote && mappedBase !== mappedQuote)
-          : Boolean(sourceBase && sourceQuote && sourceBase !== sourceQuote));
-
-      const targetBase = mappedBase || sourceBase;
-      const targetQuote = sourceMarketMode === 'mono' ? '' : (mappedQuote || sourceQuote);
-
-      if (targetBase !== sourceBase || targetQuote !== sourceQuote) {
-        adjustedSymbols += 1;
+      if (created.id) {
+        await updateStrategy(targetApiKeyName, Number(created.id), {
+          is_active: false,
+          state: 'flat',
+          entry_ratio: null,
+          tp_anchor_ratio: null,
+          last_action: 'copied_symbol_mismatch',
+          last_error: issue,
+        });
       }
-
-      const created = await createStrategy(targetApiKeyName, {
-        name: source.name,
-        strategy_type: source.strategy_type || 'DD_BattleToads',
-        market_mode: source.market_mode,
-        is_active: pairValid ? (preserveActive ? source.is_active : false) : false,
-        display_on_chart: source.display_on_chart,
-        show_settings: source.show_settings,
-        show_chart: source.show_chart,
-        show_indicators: source.show_indicators,
-        show_positions_on_chart: source.show_positions_on_chart,
-        show_trades_on_chart: source.show_trades_on_chart,
-        show_values_each_bar: source.show_values_each_bar,
-        auto_update: source.auto_update,
-        take_profit_percent: source.take_profit_percent,
-        price_channel_length: source.price_channel_length,
-        detection_source: source.detection_source,
-        zscore_entry: source.zscore_entry,
-        zscore_exit: source.zscore_exit,
-        zscore_stop: source.zscore_stop,
-        base_symbol: targetBase,
-        quote_symbol: targetQuote,
+    } else if (!chartSuggestion) {
+      chartSuggestion = {
+        base: targetBase,
+        quote: targetQuote,
         interval: source.interval,
-        base_coef: source.base_coef,
-        quote_coef: source.quote_coef,
-        long_enabled: source.long_enabled,
-        short_enabled: source.short_enabled,
-        lot_long_percent: source.lot_long_percent,
-        lot_short_percent: source.lot_short_percent,
-        max_deposit: source.max_deposit,
-        margin_type: source.margin_type,
-        leverage: source.leverage,
-        fixed_lot: source.fixed_lot,
-        reinvest_percent: source.reinvest_percent,
-      });
-
-      if (!pairValid) {
-        disabledStrategies += 1;
-        const issue = `Strategy ${source.name}: pair ${sourceBase}/${sourceQuote} is not available on ${targetApiKeyName}`;
-        issues.push(issue);
-
-        if (created.id) {
-          await updateStrategy(targetApiKeyName, Number(created.id), {
-            is_active: false,
-            state: 'flat',
-            entry_ratio: null,
-            tp_anchor_ratio: null,
-            last_action: 'copied_symbol_mismatch',
-            last_error: issue,
-          });
-        }
-      } else if (!chartSuggestion) {
-        chartSuggestion = {
-          base: targetBase,
-          quote: targetQuote,
-          interval: source.interval,
-          baseCoef: source.base_coef,
-          quoteCoef: sourceMarketMode === 'mono' ? 0 : source.quote_coef,
-        };
-      }
-
-      copied += 1;
+        baseCoef: source.base_coef,
+        quoteCoef: sourceMarketMode === 'mono' ? 0 : source.quote_coef,
+      };
     }
 
-    await db.exec('COMMIT');
-    transactionStarted = false;
-  } catch (error) {
-    if (transactionStarted) {
-      await db.exec('ROLLBACK');
-    }
-    throw error;
+    copied += 1;
   }
 
   logger.info(

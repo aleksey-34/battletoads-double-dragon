@@ -2647,6 +2647,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestInitialBalance, setAdminSweepBacktestInitialBalance] = useState(DEFAULT_BACKTEST_SETTINGS.initialBalance);
   const [adminSweepBacktestRiskScaleMaxPercent, setAdminSweepBacktestRiskScaleMaxPercent] = useState(DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent);
   const [adminSweepBacktestMaxOpenPositions, setAdminSweepBacktestMaxOpenPositions] = useState(DEFAULT_BACKTEST_SETTINGS.maxOpenPositions);
+  const [adminSweepBacktestDateFrom, setAdminSweepBacktestDateFrom] = useState('');
+  const [adminSweepBacktestDateTo, setAdminSweepBacktestDateTo] = useState('');
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
   const [adminSweepBacktestResult, setAdminSweepBacktestResult] = useState<AdminSweepBacktestPreviewResponse | null>(null);
   const [adminSweepBacktestRerunApiKey, setAdminSweepBacktestRerunApiKey] = useState('');
@@ -5975,6 +5977,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         rerunApiKeyName: options?.preferRealBacktest
           ? (adminSweepBacktestRerunApiKey || undefined)
           : undefined,
+        dateFrom: adminSweepBacktestDateFrom || undefined,
+        dateTo: adminSweepBacktestDateTo || undefined,
       });
       if (requestSeq !== backtestRequestSeqRef.current) {
         return;
@@ -9585,6 +9589,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                         <Space wrap>
                                           {offer.mode ? <Tag color="blue">{String(offer.mode).toUpperCase()}</Tag> : null}
                                           {offer.market ? <Tag color="default">{offer.market}</Tag> : null}
+                                          {offer.familyInterval ? <Tag color="cyan">{String(offer.familyInterval)}</Tag> : null}
                                           {offer.ret !== undefined ? <Tag color={metricColor(Number(offer.ret || 0), 'return')}>Ret {formatPercent(offer.ret)}</Tag> : null}
                                           {offer.dd !== undefined ? <Tag color={metricColor(Number(offer.dd || 0), 'drawdown')}>DD {formatPercent(offer.dd)}</Tag> : null}
                                           {offer.pf !== undefined ? <Tag color={metricColor(Number(offer.pf || 0), 'pf')}>PF {formatNumber(offer.pf)}</Tag> : null}
@@ -9935,7 +9940,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       )}
                                     >
                                       <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                                        <Text type="secondary">{offer.strategy.mode.toUpperCase()} • {offer.strategy.type} • {offer.strategy.market}</Text>
+                                        <Text type="secondary">{offer.strategy.mode.toUpperCase()} • {offer.strategy.type} • {offer.strategy.market}{(offer.strategy as any).params?.interval ? ` • ${(offer.strategy as any).params.interval}` : ''}</Text>
                                         <Row gutter={[8, 8]}>
                                           <Col span={12}>
                                             <Card size="small" bordered>
@@ -11911,8 +11916,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               )}
             </Space>
 
-            <Row gutter={[12, 12]}>
-              <Col xs={24} md={isAdminSurface ? 6 : 12}>
+            <Row gutter={[8, 8]}>
+              <Col xs={24} md={isAdminSurface ? 5 : 12}>
                 <Card size="small" title={<Space>{adminSweepBacktestStale ? <Tag color="orange">⟳ Обновить</Tag> : null}<span>Риск{isAdminSurface ? ' бэктеста' : ''} (0-10)</span></Space>}>
                   <Slider
                     min={0}
@@ -11937,7 +11942,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 </Card>
               </Col>
               {(isAdminSurface || activeTab === 'strategy-client') && (
-                <Col xs={24} md={isAdminSurface ? 6 : 12}>
+                <Col xs={24} md={isAdminSurface ? 5 : 12}>
                   <Card size="small" title={<Space>{adminSweepBacktestStale ? <Tag color="orange">⟳ Обновить</Tag> : null}<span>Частота сделок (0-10)</span></Space>}>
                     <Slider
                       min={0}
@@ -11958,7 +11963,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               )}
               {isAdminSurface && (
                 <Col xs={24} md={5}>
-                  <Card size="small" title="Начальный баланс">
+                  <Card size="small" title="Нач. баланс">
                     <InputNumber
                       min={100}
                       step={100}
@@ -12010,6 +12015,42 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       }}
                     />
                     <Text type="secondary">{adminSweepBacktestMaxOpenPositions > 0 ? `≤${adminSweepBacktestMaxOpenPositions} позиций` : '0 = без огр.'}</Text>
+                  </Card>
+                </Col>
+              )}
+              {isAdminSurface && (
+                <Col xs={24} md={8}>
+                  <Card size="small" title="Период бэктеста">
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Space wrap>
+                        <Input
+                          placeholder="dateFrom YYYY-MM-DD"
+                          style={{ width: 150 }}
+                          value={adminSweepBacktestDateFrom}
+                          onChange={(e) => { setAdminSweepBacktestDateFrom(e.target.value); setAdminSweepBacktestStale(true); }}
+                        />
+                        <Input
+                          placeholder="dateTo YYYY-MM-DD"
+                          style={{ width: 150 }}
+                          value={adminSweepBacktestDateTo}
+                          onChange={(e) => { setAdminSweepBacktestDateTo(e.target.value); setAdminSweepBacktestStale(true); }}
+                        />
+                        <Button size="small" onClick={() => { setAdminSweepBacktestDateFrom(''); setAdminSweepBacktestDateTo(''); setAdminSweepBacktestStale(true); scheduleBacktestDebounce(); }}>Сбросить</Button>
+                      </Space>
+                      <Space wrap>
+                        {[7, 14, 30, 90].map((days) => (
+                          <Button key={days} size="small" type={adminSweepBacktestDateFrom && Math.abs(Math.round((Date.now() - Date.parse(adminSweepBacktestDateFrom)) / 86400000) - days) < 2 ? 'primary' : 'default'} onClick={() => {
+                            const now = new Date();
+                            const from = new Date(now.getTime() - days * 86400000);
+                            setAdminSweepBacktestDateFrom(from.toISOString().slice(0, 10));
+                            setAdminSweepBacktestDateTo(now.toISOString().slice(0, 10));
+                            setAdminSweepBacktestStale(true);
+                            scheduleBacktestDebounce();
+                          }}>{days}d</Button>
+                        ))}
+                      </Space>
+                      <Text type="secondary">Пусто = период по умолчанию (sweep/cloud)</Text>
+                    </Space>
                   </Card>
                 </Col>
               )}
@@ -12334,7 +12375,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         render: (_, row: any) => (
                           <Space direction="vertical" size={0}>
                             <Text strong>{row.titleRu}</Text>
-                            <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market || '—'}</Text>
+                            <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market || '—'}{row.familyInterval ? ` • ${row.familyInterval}` : ''}</Text>
                             <Text type="secondary">strategy #{Number(row.strategyId || 0)} • {String(row.strategyName || '').trim() || '—'}</Text>
                           </Space>
                         ),

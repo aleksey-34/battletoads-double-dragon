@@ -961,13 +961,18 @@ export const requirePlatformAdmin = (req: any, res: any, next: any) => {
   }
 
   const token = authHeader.slice(7).trim();
-  if (!token || token !== platformToken) {
+  if (!token) {
+    return res.status(403).json({ error: 'Forbidden: platform_admin required' });
+  }
+
+  // Backward compatibility: allow either platform token or dashboard password.
+  if (token !== platformToken && !verifyDashboardPassword(token)) {
     return res.status(403).json({ error: 'Forbidden: platform_admin required' });
   }
 
   req.adminAuth = {
     role: 'platform_admin',
-    authMode: 'platform_token',
+    authMode: token === platformToken ? 'platform_token' : 'dashboard_password',
   };
 
   next();
