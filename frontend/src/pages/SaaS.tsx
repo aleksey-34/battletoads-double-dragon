@@ -12000,6 +12000,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       }}
                     />
                     <Text type="secondary">Ограничивает верхний множитель риска. При score=10 потолок сейчас около {formatNumber(getBacktestRiskMultiplier(10, adminSweepBacktestRiskScaleMaxPercent), 2)}x.</Text>
+                    <br />
+                    <Text type="secondary">Важно: при score=5 множитель всегда ≈1.0x, поэтому смена потолка риска почти не меняет Ret/DD. Поднимите риск выше 5, чтобы увидеть влияние cap.</Text>
                   </Card>
                 </Col>
               )}
