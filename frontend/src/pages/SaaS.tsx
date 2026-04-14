@@ -11988,9 +11988,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       style={{ width: '100%' }}
                       value={adminSweepBacktestRiskScaleMaxPercent}
                       onChange={(value) => {
+                        const prevCap = Number(adminSweepBacktestRiskScaleMaxPercent || 40);
                         const next = Math.max(0, Math.min(1000, Number(value || 40)));
                         setAdminSweepBacktestRiskScaleMaxPercent(next);
                         storeCurrentBacktestSettingsForContext(backtestDrawerContext, { riskScaleMaxPercent: next });
+                        const prevMul = getBacktestRiskMultiplier(adminSweepBacktestRiskScore, prevCap);
+                        const nextMul = getBacktestRiskMultiplier(adminSweepBacktestRiskScore, next);
+                        setAdminSweepPreviewRiskScale(Number((nextMul / Math.max(0.01, prevMul)).toFixed(4)));
+                        setAdminSweepBacktestStale(true);
+                        scheduleBacktestDebounce();
                       }}
                     />
                     <Text type="secondary">Ограничивает верхний множитель риска. При score=10 потолок сейчас около {formatNumber(getBacktestRiskMultiplier(10, adminSweepBacktestRiskScaleMaxPercent), 2)}x.</Text>
