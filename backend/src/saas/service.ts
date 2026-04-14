@@ -8603,12 +8603,13 @@ export const getAlgofundState = async (
     });
   }
 
-  // Hide storefront garbage cards: only show systems with backtest snapshots,
-  // but always keep the currently connected system visible for control actions.
+  // Keep canonical storefront set even when a card has no fresh snapshot.
+  // This preserves strict admin/client atomicity by card list.
   availableSystems = availableSystems.filter((system) => {
     const systemName = asString(system?.name, '').trim().toUpperCase();
     const hasSnapshot = Boolean((system as any).backtestSnapshot);
     if (hasSnapshot) return true;
+    if (storefrontSystemSet.has(systemName)) return true;
     return Boolean(currentPublishedSystemName) && systemName === currentPublishedSystemName;
   });
 
