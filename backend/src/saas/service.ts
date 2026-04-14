@@ -8599,6 +8599,7 @@ export const getAlgofundState = async (
       const systemName = asString(system?.name, '').trim().toUpperCase();
       if (!systemName) return false;
       if (storefrontSystemSet.has(systemName)) return true;
+      if (Boolean((system as any).backtestSnapshot)) return true;
       return Boolean(currentPublishedSystemName) && systemName === currentPublishedSystemName;
     });
   }
