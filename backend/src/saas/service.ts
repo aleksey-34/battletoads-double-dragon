@@ -1,7 +1,7 @@
 ﻿import fs from 'fs';
 import path from 'path';
 import { runBacktest } from '../backtest/engine';
-import { createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
+import { copyStrategyBlock, createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
 import {
   createTradingSystem,
   getTradingSystem,
@@ -9199,11 +9199,12 @@ const applyApprovedAlgofundAction = async (params: {
     }
 
     const globalTarget = await db.get(
-      `SELECT ts.id AS system_id, ts.name AS system_name
+      `SELECT ts.id AS system_id, ts.name AS system_name, ak.name AS source_api_key_name
        FROM trading_systems ts
+       JOIN api_keys ak ON ak.id = ts.api_key_id
        WHERE ts.id = ?`,
       [targetSystemId]
-    ) as { system_id?: number; system_name?: string } | undefined;
+    ) as { system_id?: number; system_name?: string; source_api_key_name?: string } | undefined;
 
     const targetSystemName = asString(
       globalTarget?.system_name || requestPayload.targetSystemName,
@@ -9228,6 +9229,56 @@ const applyApprovedAlgofundAction = async (params: {
     };
 
     await materializeAlgofundSystem(tenant, plan, switchProfile, true);
+
+    // Fallback for card-materialized flows: if switch did not produce active strategies,
+    // materialize the target system members directly and activate them.
+    const activeAfterSwitch = await db.get(
+      `SELECT COUNT(*) AS cnt
+       FROM strategies s
+       JOIN api_keys ak ON ak.id = s.api_key_id
+       WHERE ak.name = ?
+         AND COALESCE(s.is_runtime, 0) = 1
+         AND COALESCE(s.is_active, 0) = 1`,
+      [runtimeApiKeyName]
+    ) as { cnt?: number } | undefined;
+
+    if (Number(activeAfterSwitch?.cnt || 0) === 0 && globalTarget?.source_api_key_name) {
+      const tsMembers = await db.all(
+        `SELECT strategy_id
+         FROM trading_system_members
+         WHERE system_id = ?
+           AND COALESCE(is_enabled, 1) = 1`,
+        [targetSystemId]
+      ) as Array<{ strategy_id?: number }>;
+
+      const sourceStrategyIds = (Array.isArray(tsMembers) ? tsMembers : [])
+        .map((row) => Number(row?.strategy_id || 0))
+        .filter((id) => Number.isFinite(id) && id > 0);
+
+      if (sourceStrategyIds.length > 0) {
+        await copyStrategyBlock(asString(globalTarget.source_api_key_name, ''), runtimeApiKeyName, {
+          replaceTarget: true,
+          preserveActive: true,
+          syncSymbols: false,
+          sourceStrategyIds,
+        });
+
+        await db.run(
+          `UPDATE strategies
+           SET is_runtime = 1,
+               is_archived = 0,
+               is_active = 1,
+               origin = CASE
+                 WHEN COALESCE(origin, '') IN ('', 'manual') THEN 'card_materialized'
+                 ELSE origin
+               END,
+               updated_at = CURRENT_TIMESTAMP
+           WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ?)` ,
+          [runtimeApiKeyName]
+        );
+      }
+    }
+
     await db.run(
       `UPDATE algofund_active_systems
        SET is_enabled = 0,

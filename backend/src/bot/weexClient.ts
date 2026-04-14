@@ -208,7 +208,15 @@ class WeexRestClient {
       const minAmount = firstPositiveNumber(item?.minOrderSize);
       const maxAmount = firstPositiveNumber(item?.marketOpenLimitSize, item?.maxOrderSize, item?.maxPositionSize);
       const pricePrecision = firstPositiveNumber(item?.pricePrecision, item?.pricePlace, 0.1) ?? 0.1;
-      const amountPrecision = firstPositiveNumber(item?.quantityPrecision, item?.baseAssetPrecision, item?.size_increment, minAmount, 0.001) ?? 0.001;
+      // WEEX stepSize may come as explicit field, or as sizeMultiplier, or as
+      // contractSize. quantityPrecision is decimal-places count (0 = integer),
+      // NOT the step itself.  Derive step from explicit fields first.
+      const explicitStep = firstPositiveNumber(item?.stepSize, item?.sizeMultiplier, item?.volumeStep, item?.contractSize);
+      const decimalPlacesStep = (() => {
+        const dp = Number(item?.quantityPrecision ?? item?.baseAssetPrecision);
+        return Number.isFinite(dp) && dp >= 0 ? Math.pow(10, -dp) : null;
+      })();
+      const amountPrecision = explicitStep ?? decimalPlacesStep ?? firstPositiveNumber(item?.size_increment, minAmount) ?? 0.001;
       const maxLeverage = firstPositiveNumber(item?.maxLeverage);
       const minLeverage = firstPositiveNumber(item?.minLeverage);
 
@@ -242,6 +250,11 @@ class WeexRestClient {
           ...item,
           symbol: rawSymbol,
           maxLeverage: maxLeverage ?? undefined,
+          lotSizeFilter: {
+            qtyStep: String(amountPrecision),
+            minOrderQty: String(minAmount ?? 0),
+            maxOrderQty: String(maxAmount ?? 0),
+          },
         },
       };
     }

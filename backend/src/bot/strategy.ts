@@ -461,10 +461,12 @@ const extractUsdtBalance = (balances: any[]): number => {
   if (usdt) {
     const wallet = Number.parseFloat(String(usdt.walletBalance ?? '0'));
     const available = Number.parseFloat(String(usdt.availableBalance ?? '0'));
-    // Use walletBalance (total balance) for lot sizing — consistent with backtester
-    // which uses portfolioEquityNow (total equity). max_deposit caps it per tariff.
-    const fromUsdt = Number.isFinite(wallet) && wallet > 0 ? wallet
-      : Number.isFinite(available) && available > 0 ? available
+    // Use availableBalance (free margin) for lot sizing — walletBalance may
+    // include unrealised PnL / locked margin causing orders larger than the
+    // exchange will accept. Fall back to walletBalance only when available is
+    // missing or zero.
+    const fromUsdt = Number.isFinite(available) && available > 0 ? available
+      : Number.isFinite(wallet) && wallet > 0 ? wallet
       : 0;
     if (Number.isFinite(fromUsdt) && fromUsdt > 0) {
       return fromUsdt;

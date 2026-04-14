@@ -24,9 +24,10 @@ import './App.css';
 const { Header, Content } = Layout;
 
 type AuthState = 'checking' | 'ok' | 'missing' | 'invalid' | 'error';
-type ColorTheme = 'classic' | 'neon' | 'fire';
+type ColorTheme = 'classic' | 'neon' | 'fire' | 'light';
 
 const CLIENT_SESSION_STORAGE_KEY = 'clientSessionToken';
+// Build marker: force fresh asset hash to bypass stale CDN cache.
 
 function AppShell() {
   const { language, setLanguage, t } = useI18n();
@@ -37,7 +38,7 @@ function AppShell() {
   const [authCheckLoading, setAuthCheckLoading] = useState(false);
   const [colorTheme, setColorTheme] = useState<ColorTheme>(() => {
     const saved = localStorage.getItem('btddColorTheme');
-    return (saved === 'classic' || saved === 'neon') ? saved : 'fire';
+    return (saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'fire';
   });
   const isClientRoute = location.pathname.startsWith('/client') || location.pathname.startsWith('/cabinet');
   const isClientAuthRoute = location.pathname.startsWith('/client/login') || location.pathname.startsWith('/client/register');
@@ -45,13 +46,18 @@ function AppShell() {
   const isClientSaasSurface = false;
 
   useEffect(() => {
-    document.body.classList.remove('theme-classic', 'theme-neon', 'theme-fire');
+    document.body.classList.remove('theme-classic', 'theme-neon', 'theme-fire', 'theme-light');
     document.body.classList.add(`theme-${colorTheme}`);
   }, [colorTheme]);
+
+  useEffect(() => {
+    (window as any).__BTDD_BUILD = '2026-04-14-light-fix-1';
+  }, []);
 
   const handleColorThemeChange = (t: ColorTheme) => {
     setColorTheme(t);
     localStorage.setItem('btddColorTheme', t);
+    window.dispatchEvent(new Event('theme-changed'));
   };
 
   const menuRouteByKey: Record<string, string> = {
@@ -269,6 +275,7 @@ function AppShell() {
                 { value: 'classic', label: '🔵 Classic' },
                 { value: 'neon', label: '🟢 Neon' },
                 { value: 'fire', label: '🟠 Fire' },
+                { value: 'light', label: '⚪ Light' },
               ]}
             />
             <Select
@@ -346,6 +353,22 @@ function AppShell() {
 
 function AppWithProviders() {
   const { language } = useI18n();
+  const [currentTheme, setCurrentTheme] = useState<ColorTheme>(() => {
+    const saved = localStorage.getItem('btddColorTheme');
+    return (saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'fire';
+  });
+
+  useEffect(() => {
+    const sync = () => {
+      const saved = localStorage.getItem('btddColorTheme');
+      setCurrentTheme((saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'fire');
+    };
+    window.addEventListener('storage', sync);
+    window.addEventListener('theme-changed', sync);
+    return () => { window.removeEventListener('storage', sync); window.removeEventListener('theme-changed', sync); };
+  }, []);
+
+  const isLight = currentTheme === 'light';
 
   const antdLocale = useMemo(() => {
     if (language === 'ru') return ruRU;
@@ -355,8 +378,18 @@ function AppWithProviders() {
 
   return (
     <ConfigProvider locale={antdLocale} theme={{
-      algorithm: theme.darkAlgorithm,
-      token: {
+      algorithm: isLight ? theme.defaultAlgorithm : theme.darkAlgorithm,
+      token: isLight ? {
+        colorPrimary: '#6366f1',
+        colorBgBase: '#f8f9fc',
+        colorBgContainer: '#ffffff',
+        colorBgElevated: '#f1f3f9',
+        colorBorder: '#e2e5f0',
+        colorText: '#0f172a',
+        colorTextSecondary: '#475569',
+        borderRadius: 10,
+        fontFamily: "'Inter', 'Segoe UI', 'Trebuchet MS', sans-serif",
+      } : {
         colorPrimary: '#f5a623',
         colorBgBase: '#0a0a12',
         colorBgContainer: '#16162a',

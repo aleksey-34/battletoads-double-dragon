@@ -60,6 +60,35 @@ body.theme-neon {
   --btdd-magenta: #ea80fc;
 }
 
+/* ── Light theme (indigo accent, white bg) ── */
+body.theme-light {
+  --btdd-bg-primary: #f8f9fc;
+  --btdd-bg-surface: #ffffff;
+  --btdd-bg-card: #ffffff;
+  --btdd-bg-elevated: #f1f3f9;
+  --btdd-border: #e2e5f0;
+  --btdd-border-strong: #c8cde0;
+  --btdd-text-primary: #0f172a;
+  --btdd-text-secondary: #475569;
+  --btdd-text-muted: #94a3b8;
+  --btdd-accent: #6366f1;
+  --btdd-accent-hover: #818cf8;
+  --btdd-accent-005: rgba(99,102,241,0.05);
+  --btdd-accent-006: rgba(99,102,241,0.06);
+  --btdd-accent-007: rgba(99,102,241,0.07);
+  --btdd-accent-015: rgba(99,102,241,0.15);
+  --btdd-accent-020: rgba(99,102,241,0.2);
+  --btdd-accent-030: rgba(99,102,241,0.3);
+  --btdd-accent-040: rgba(99,102,241,0.4);
+  --btdd-accent-035: rgba(99,102,241,0.35);
+  --btdd-hero-mid: #eef2ff;
+  --btdd-teal: #6366f1;
+  --btdd-green: #10b981;
+  --btdd-orange: #f59e0b;
+  --btdd-red: #ef4444;
+  --btdd-magenta: #ec4899;
+}
+
 /* ── Fire theme (default — orange blaze accent) ── */
 :root,
 body.theme-fire {
@@ -896,4 +925,78 @@ body.theme-fire .ant-btn-primary:hover, body.theme-fire .ant-btn-primary:focus {
   .app-language-select {
     min-width: 92px;
   }
+}
+
+/* ═══════════════════════════════════════════════════
+   Light theme overrides
+   ═══════════════════════════════════════════════════ */
+body.theme-light .app-root-layout .ant-layout-header {
+  background: linear-gradient(92deg, #f8f9fc 0%, #eef2ff 50%, #f8f9fc 100%) !important;
+  border-bottom-color: #e2e5f0;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+}
+
+body.theme-light .ant-menu-dark,
+body.theme-light .ant-menu-dark .ant-menu-sub {
+  background: transparent !important;
+  color: #475569 !important;
+}
+
+body.theme-light .ant-menu-dark .ant-menu-item {
+  color: #475569 !important;
+}
+
+body.theme-light .ant-menu-dark .ant-menu-item-selected,
+body.theme-light .ant-menu-dark .ant-menu-item:hover {
+  color: #6366f1 !important;
+  background: rgba(99,102,241,0.08) !important;
+}
+
+body.theme-light .ant-btn-primary {
+  background: linear-gradient(135deg, #6366f1 0%, #818cf8 100%);
+  border-color: #6366f1;
+  box-shadow: 0 2px 8px rgba(99,102,241,0.25);
+}
+
+body.theme-light .ant-btn-primary:hover,
+body.theme-light .ant-btn-primary:focus {
+  background: linear-gradient(135deg, #818cf8 0%, #6366f1 100%);
+  border-color: #818cf8;
+}
+
+body.theme-light .ant-table-tbody > tr:hover > td {
+  background: rgba(99,102,241,0.04) !important;
+}
+
+body.theme-light .ant-dropdown-menu-item:hover {
+  background: rgba(99,102,241,0.08) !important;
+}
+
+body.theme-light .ant-select-item-option-active {
+  background: rgba(99,102,241,0.08) !important;
+}
+
+body.theme-light .ant-select-item-option-selected {
+  background: rgba(99,102,241,0.14) !important;
+}
+
+body.theme-light .docs-markdown-body pre {
+  background: #f1f3f9;
+  color: #1e293b;
+  border-color: #e2e5f0;
+}
+
+body.theme-light .docs-markdown-body :not(pre) > code {
+  background: rgba(99,102,241,0.08);
+  color: #6366f1;
+}
+
+body.theme-light .docs-blockquote {
+  background: rgba(99,102,241,0.04);
+  border-left-color: #6366f1;
+  color: #475569;
+}
+
+body.theme-light .app-brand-title {
+  color: #6366f1 !important;
 }

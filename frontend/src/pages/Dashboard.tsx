@@ -1247,8 +1247,11 @@ const Dashboard: React.FC = () => {
           void fetchPositionsForKey(key.name);
           void fetchTradesForKey(key.name, { silent: true });
           void fetchSymbols(key.name);
+          // Always fetch at least a lightweight strategy count for dashboard badges
           if (shouldLoadFullStrategies) {
             void fetchStrategies(key.name);
+          } else {
+            void fetchStrategies(key.name, { silent: true });
           }
           if (shouldLoadFullStrategies && keySettings.showMonitoring !== false) {
             void fetchMonitoring(key.name, { capture: true });
