@@ -1488,9 +1488,12 @@ const ClientCabinet: React.FC = () => {
               const isCurrent = algofundPublishedSystemName.length > 0 && String(system.name || '').trim() === algofundPublishedSystemName;
               const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number } | null | undefined;
               const eqPts = snap?.equityPoints;
-              // For connected system: use backend preview; for others: client-side scaling matching backend formulas
+              // For connected system: use backend preview when risk matches saved profile;
+              // otherwise show immediate local scaling so slider feedback is instant.
               const riskMul = isCurrent ? algofundRiskMultiplier : tsModalRiskMultiplier;
-              const scaledEqPts = !isCurrent && Array.isArray(eqPts) && eqPts.length > 1 && riskMul !== 1
+              const baseRiskMul = toFinite(algofundWorkspace?.profile?.risk_multiplier, 1);
+              const usePreviewForCurrent = isCurrent && Math.abs(riskMul - baseRiskMul) < 0.01;
+              const scaledEqPts = Array.isArray(eqPts) && eqPts.length > 1 && riskMul !== 1
                 ? (() => {
                     const base = eqPts[0] || 10000;
                     const reinvest = 0.5;
@@ -1501,7 +1504,7 @@ const ClientCabinet: React.FC = () => {
                     });
                   })()
                 : eqPts;
-              const chartData = isCurrent && algofundPreviewSeries.length > 0
+              const chartData = usePreviewForCurrent && algofundPreviewSeries.length > 0
                 ? algofundPreviewSeries
                 : Array.isArray(scaledEqPts) && scaledEqPts.length > 1
                   ? equityPointsToSeries(scaledEqPts, snap?.periodDays)
@@ -1514,14 +1517,14 @@ const ClientCabinet: React.FC = () => {
                     return linear * 0.5 + compound * 0.5;
                   })()
                 : snap?.finalEquity ?? null;
-              const endBalance = isCurrent && algofundWorkspace?.preview?.summary?.finalEquity != null
+              const endBalance = usePreviewForCurrent && algofundWorkspace?.preview?.summary?.finalEquity != null
                 ? algofundWorkspace.preview.summary.finalEquity
                 : scaledFinalEquity;
               const chartKey = isCurrent
                 ? `af-preview-${algofundRiskMultiplier}-${algofundPreviewSeries.length}-${algofundPreviewSeries[algofundPreviewSeries.length - 1]?.value ?? 0}`
                 : `af-snap-${systemDetailModal?.id}-${riskMul}`;
               // Compute display metrics: backend preview for connected, client-side scaling for others (matching backend formulas)
-              const previewSummary = isCurrent && algofundWorkspace?.preview?.summary ? algofundWorkspace.preview.summary : null;
+              const previewSummary = usePreviewForCurrent && algofundWorkspace?.preview?.summary ? algofundWorkspace.preview.summary : null;
               const relativeRisk = riskMul; // baseline is always 1 for snapshots
               const displayRet = previewSummary?.totalReturnPercent ?? (snap?.ret != null ? snap.ret * relativeRisk : undefined);
               const displayDd = previewSummary?.maxDrawdownPercent ?? (snap?.dd != null ? Math.min(99, snap.dd * Math.max(0.05, relativeRisk)) : undefined);
@@ -1569,6 +1572,7 @@ const ClientCabinet: React.FC = () => {
                         else setTsModalRiskMultiplier(clamped);
                       }}
                       onChangeComplete={() => { if (isCurrent) void refreshAlgofundState(); }}
+                      onAfterChange={() => { if (isCurrent) void refreshAlgofundState(); }}
                     />
                     <Space wrap>
                       {isCurrent ? (

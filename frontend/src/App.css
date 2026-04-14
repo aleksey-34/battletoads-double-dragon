@@ -979,6 +979,43 @@ body.theme-light .ant-table-tbody > tr:hover > td,
   background: rgba(99,102,241,0.04) !important;
 }
 
+body.theme-light .ant-tag,
+:root[data-btdd-theme='light'] .ant-tag {
+  color: #334155;
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+body.theme-light .ant-statistic-content,
+body.theme-light .ant-statistic-content-value,
+body.theme-light .ant-statistic-content-value-int,
+body.theme-light .ant-select-selection-item,
+body.theme-light .ant-select-arrow,
+body.theme-light .ant-typography.ant-typography-secondary,
+:root[data-btdd-theme='light'] .ant-statistic-content,
+:root[data-btdd-theme='light'] .ant-statistic-content-value,
+:root[data-btdd-theme='light'] .ant-statistic-content-value-int,
+:root[data-btdd-theme='light'] .ant-select-selection-item,
+:root[data-btdd-theme='light'] .ant-select-arrow,
+:root[data-btdd-theme='light'] .ant-typography.ant-typography-secondary {
+  color: #334155 !important;
+}
+
+body.theme-light .app-account-menu .ant-select-selector,
+:root[data-btdd-theme='light'] .app-account-menu .ant-select-selector {
+  background: #ffffff !important;
+  border-color: #cbd5e1 !important;
+}
+
+body.theme-fire .ant-typography.ant-typography-secondary,
+body.theme-classic .ant-typography.ant-typography-secondary,
+body.theme-neon .ant-typography.ant-typography-secondary,
+:root[data-btdd-theme='fire'] .ant-typography.ant-typography-secondary,
+:root[data-btdd-theme='classic'] .ant-typography.ant-typography-secondary,
+:root[data-btdd-theme='neon'] .ant-typography.ant-typography-secondary {
+  color: #b8b9cf !important;
+}
+
 body.theme-light .ant-dropdown-menu-item:hover,
 :root[data-btdd-theme='light'] .ant-dropdown-menu-item:hover {
   background: rgba(99,102,241,0.08) !important;

@@ -300,7 +300,7 @@ export default function Landing() {
   const [scrolled, setScrolled] = useState(false);
   const [theme, setTheme] = useState<LandingTheme>(() => {
     const s = localStorage.getItem('btddLandingTheme');
-    return (s === 'fire' || s === 'neon' || s === 'classic' || s === 'light') ? s : 'fire';
+    return (s === 'fire' || s === 'neon' || s === 'classic' || s === 'light') ? s : 'light';
   });
 
   const T = THEMES[theme];
