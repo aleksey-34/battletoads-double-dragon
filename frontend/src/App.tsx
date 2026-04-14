@@ -38,7 +38,7 @@ function AppShell() {
   const [authCheckLoading, setAuthCheckLoading] = useState(false);
   const [colorTheme, setColorTheme] = useState<ColorTheme>(() => {
     const saved = localStorage.getItem('btddColorTheme');
-    return (saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'fire';
+    return (saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'light';
   });
   const isClientRoute = location.pathname.startsWith('/client') || location.pathname.startsWith('/cabinet');
   const isClientAuthRoute = location.pathname.startsWith('/client/login') || location.pathname.startsWith('/client/register');
@@ -355,13 +355,13 @@ function AppWithProviders() {
   const { language } = useI18n();
   const [currentTheme, setCurrentTheme] = useState<ColorTheme>(() => {
     const saved = localStorage.getItem('btddColorTheme');
-    return (saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'fire';
+    return (saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'light';
   });
 
   useEffect(() => {
     const sync = () => {
       const saved = localStorage.getItem('btddColorTheme');
-      setCurrentTheme((saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'fire');
+      setCurrentTheme((saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'light');
     };
     window.addEventListener('storage', sync);
     window.addEventListener('theme-changed', sync);
