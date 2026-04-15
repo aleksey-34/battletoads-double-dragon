@@ -193,6 +193,13 @@ type AlgofundState = {
     published_system_name?: string;
     assigned_api_key_name?: string;
   };
+  activeSystems?: Array<{
+    id: number;
+    systemName: string;
+    weight: number;
+    isEnabled: boolean;
+    assignedBy: 'admin' | 'client';
+  }>;
   preview: {
     riskMultiplier: number;
     summary?: {
@@ -595,9 +602,16 @@ const ClientCabinet: React.FC = () => {
   const algofundPublishedSystemName = String((algofundWorkspace?.profile as any)?.published_system_name || '').trim();
   const algofundAssignedApiKey = String((algofundWorkspace?.profile as any)?.assigned_api_key_name || '').trim();
   const algofundAvailableSystems = Array.isArray(algofundWorkspace?.availableSystems) ? (algofundWorkspace?.availableSystems || []) : [];
-  const algofundCurrentSystem = algofundPublishedSystemName
-    ? (algofundAvailableSystems.find((item) => String(item?.name || '').trim() === algofundPublishedSystemName) || null)
-    : null;
+  const algofundActiveSystems = Array.isArray(algofundWorkspace?.activeSystems) ? (algofundWorkspace?.activeSystems || []) : [];
+  const enabledAlgofundSystemNames = new Set(
+    algofundActiveSystems
+      .filter((item) => item && item.isEnabled)
+      .map((item) => String(item.systemName || '').trim())
+      .filter(Boolean)
+  );
+  if (enabledAlgofundSystemNames.size === 0 && algofundPublishedSystemName) {
+    enabledAlgofundSystemNames.add(algofundPublishedSystemName);
+  }
   const monitoringSeries = useMemo(
     () => toLineSeriesData((monitoring?.points || []).map((point) => ({
       time: point.time ?? point.ts ?? point.recorded_at,
@@ -1417,7 +1431,12 @@ const ClientCabinet: React.FC = () => {
               <>
                 <Row gutter={[12, 12]}>
                   {algofundAvailableSystems.map((system) => {
-                    const isCurrent = algofundPublishedSystemName.length > 0 && String(system?.name || '').trim() === algofundPublishedSystemName;
+                    const systemName = String(system?.name || '').trim();
+                    const matchingActiveSystems = algofundActiveSystems.filter((item) => String(item.systemName || '').trim() === systemName);
+                    const isCurrent = enabledAlgofundSystemNames.has(systemName);
+                    const currentWeights = matchingActiveSystems
+                      .map((item) => Number(item.weight || 0))
+                      .filter((value) => Number.isFinite(value) && value > 0);
                     const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number } | null | undefined;
                     const eqPts = snap?.equityPoints;
                     const hasChart = isCurrent ? (algofundPreviewSeries.length > 0 || (Array.isArray(eqPts) && eqPts.length > 1)) : (Array.isArray(eqPts) && eqPts.length > 1);
@@ -1435,6 +1454,7 @@ const ClientCabinet: React.FC = () => {
                                   <Typography.Text strong style={{ fontSize: 12, cursor: getTsHint(system.name) ? 'help' : undefined }}>{tsDisplayName(system.name)}</Typography.Text>
                                 </Tooltip>
                                 {isCurrent ? <Tag color="gold" style={{ fontSize: 10 }}>Подключена</Tag> : null}
+                                {currentWeights.length > 0 ? <Tag color="blue" style={{ fontSize: 10 }}>Риск {formatNumber(currentWeights[0])}x</Tag> : null}
                               </Space>
                             </Space>
                             <Space size={4} wrap>

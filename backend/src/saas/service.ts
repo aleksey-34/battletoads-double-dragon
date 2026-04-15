@@ -8657,6 +8657,7 @@ export const getAlgofundState = async (
       capabilities: resolvePlanCapabilities(null),
       profile: null,
       engine: null,
+      activeSystems: [],
       availableSystems,
       preview: null,
       portfolioPassport: null,
@@ -8667,6 +8668,7 @@ export const getAlgofundState = async (
   }
 
   const capabilities = resolvePlanCapabilities(plan);
+  const activeSystems = await getAlgofundActiveSystems(profile.id).catch(() => []);
 
   const engine = await getAlgofundEngineState(tenant, profile);
   const effectiveStorefrontSystemName = asString(profile.published_system_name, '').trim().toUpperCase().startsWith('ALGOFUND_MASTER::')
@@ -8889,6 +8891,7 @@ export const getAlgofundState = async (
       latestPreview: safeJsonParse<Record<string, unknown>>(profile.latest_preview_json, {}),
     },
     engine,
+    activeSystems,
     availableSystems,
     preview,
     portfolioPassport: buildAlgofundPortfolioPassport(catalog, sweep, period, preview, riskMultiplier),
