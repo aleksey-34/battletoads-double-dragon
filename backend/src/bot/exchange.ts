@@ -3,7 +3,8 @@ import Bottleneck from 'bottleneck';
 import logger from '../utils/logger';
 import { ApiKey } from '../config/settings';
 import { db } from '../utils/database';
-import { createWeexClient } from './weexClient';
+// weexClient.ts is the legacy custom REST adapter; ccxt ≥4.5.49 has native weex support
+// import { createWeexClient } from './weexClient';
 
 type ExchangeClientEntry = {
   client: RestClientV5;
@@ -482,26 +483,26 @@ export const initExchangeClient = (apiKey: ApiKey) => {
           ? ccxt.mexc
           : exchange === 'bingx'
             ? ccxt.bingx
-            : undefined;
+            : exchange === 'weex'
+              ? ccxt.weex
+              : undefined;
 
-    const client = exchange === 'weex'
-      ? createWeexClient(apiKey)
-      : ExchangeClass
-        ? new ExchangeClass({
-          apiKey: apiKey.api_key,
-          secret: apiKey.secret,
-          password: apiKey.passphrase || undefined,
-          enableRateLimit: true,
+    const client = ExchangeClass
+      ? new ExchangeClass({
+        apiKey: apiKey.api_key,
+        secret: apiKey.secret,
+        password: apiKey.passphrase || undefined,
+        enableRateLimit: true,
+        adjustForTimeDifference: true,
+        recvWindow: 10000,
+        options: {
+          defaultType: 'swap',
           adjustForTimeDifference: true,
           recvWindow: 10000,
-          options: {
-            defaultType: 'swap',
-            adjustForTimeDifference: true,
-            recvWindow: 10000,
-            unavailableContracts: {},
-          },
-        })
-        : undefined;
+          unavailableContracts: {},
+        },
+      })
+      : undefined;
 
     if (!client) {
       throw new Error(`Exchange ${exchange} is not available in ccxt`);

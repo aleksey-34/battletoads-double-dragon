@@ -262,6 +262,7 @@ export const initDB = async () => {
       strategy_id INTEGER NOT NULL,
       trade_type TEXT NOT NULL CHECK(trade_type IN ('entry', 'exit')),
       side TEXT NOT NULL CHECK(side IN ('long', 'short')),
+      event_origin TEXT DEFAULT 'unknown',
       entry_time INTEGER NOT NULL,
       entry_price REAL NOT NULL,
       position_size REAL NOT NULL,
@@ -677,6 +678,7 @@ export const initDB = async () => {
   await ensureColumn('strategies', "origin TEXT DEFAULT 'manual'");  // 'manual'|'sweep_candidate'|'published'
   await ensureColumn('strategies', 'source_profile_id INTEGER');
   await ensureColumn('strategies', 'published_at TEXT');
+  await ensureColumn('live_trade_events', "event_origin TEXT DEFAULT 'unknown'");
   await ensureColumn('live_trade_events', 'source_trade_id TEXT');
   await ensureColumn('live_trade_events', 'source_order_id TEXT');
   await ensureColumn('live_trade_events', 'source_symbol TEXT');

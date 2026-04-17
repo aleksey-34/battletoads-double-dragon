@@ -1,9 +1,10 @@
 import fs from 'fs';
 import { getDbFilePath, db as mainDb } from '../utils/database';
-import { loadCatalogAndSweepWithFallback, refreshOfferStoreSnapshotsFromSweep, syncAllTenantStrategyMaxDeposit } from '../saas/service';
+import { getLatestResearchArtifactsStatus, loadCatalogAndSweepWithFallback, refreshOfferStoreSnapshotsFromSweep, syncAllTenantStrategyMaxDeposit } from '../saas/service';
 import logger from '../utils/logger';
 import { getResearchDb, getResearchDbFilePath } from './db';
 import { importSweepCandidates, registerSweepRun } from './profileService';
+import { startFullHistoricalSweepJob } from './fullHistoricalSweepService';
 
 type SchedulerJobKey = 'daily_incremental_sweep';
 type SchedulerStatus = 'idle' | 'running' | 'done' | 'failed' | 'skipped';
@@ -228,6 +229,31 @@ const buildCandidatesFromCatalog = (catalog: any): Array<{
 
 const runDailyIncrementalSweep = async (): Promise<{ status: SchedulerStatus; details: Record<string, unknown> }> => {
   const researchDb = getResearchDb();
+  const sourceStatus = getLatestResearchArtifactsStatus();
+
+  if (!sourceStatus.catalogFresh || !sourceStatus.sweepFresh) {
+    const refreshJob = await startFullHistoricalSweepJob({
+      mode: 'light',
+      apiKeyName: 'BTDD_D1',
+      strategyPrefix: 'DAILYSWEEP',
+      systemName: 'Daily Sweep Refresh',
+      maxRuns: 96,
+      exhaustiveMode: false,
+      turboMode: true,
+      resumeEnabled: true,
+      maxMembers: 6,
+    });
+
+    return {
+      status: 'done',
+      details: {
+        reason: 'Source artifacts are stale; queued full historical sweep refresh instead of importing stale JSON',
+        sourceStatus,
+        queuedHistoricalSweep: refreshJob,
+      },
+    };
+  }
+
   const { sweep, catalog } = await loadCatalogAndSweepWithFallback();
 
   const sourceTimestamp = String(sweep?.timestamp || toIsoNow());

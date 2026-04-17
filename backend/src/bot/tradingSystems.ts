@@ -36,6 +36,7 @@ export type TradingSystem = {
   discovery_enabled: boolean;
   discovery_interval_hours: number;
   max_members: number;
+  max_open_positions: number;
   created_at?: string;
   updated_at?: string;
   members: TradingSystemMember[];
@@ -64,6 +65,7 @@ export type TradingSystemDraft = {
   discovery_enabled?: boolean;
   discovery_interval_hours?: number;
   max_members?: number;
+  max_open_positions?: number;
   members?: TradingSystemMemberDraft[];
 };
 
@@ -147,6 +149,7 @@ const normalizeSystemRow = (row: any, members: TradingSystemMember[], metrics?: 
     discovery_enabled: safeBoolean(row.discovery_enabled, false),
     discovery_interval_hours: Math.max(1, Math.floor(safeNumber(row.discovery_interval_hours, 24))),
     max_members: Math.max(1, Math.floor(safeNumber(row.max_members, 8))),
+    max_open_positions: Math.max(0, Math.floor(safeNumber(row.max_open_positions, 0))),
     created_at: row.created_at,
     updated_at: row.updated_at,
     members,
@@ -308,6 +311,7 @@ export const createTradingSystem = async (apiKeyName: string, draft: TradingSyst
   const discoveryEnabled = safeBoolean(draft.discovery_enabled, false);
   const discoveryIntervalHours = Math.max(1, Math.floor(safeNumber(draft.discovery_interval_hours, 24)));
   const maxMembers = Math.max(1, Math.floor(safeNumber(draft.max_members, 8)));
+  const maxOpenPositions = Math.max(0, Math.floor(safeNumber(draft.max_open_positions, 0)));
   const members = Array.isArray(draft.members) ? draft.members : [];
 
   await validateMembers(apiKeyName, maxMembers, members);
@@ -322,9 +326,10 @@ export const createTradingSystem = async (apiKeyName: string, draft: TradingSyst
       discovery_enabled,
       discovery_interval_hours,
       max_members,
+      max_open_positions,
       created_at,
       updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
     [
       apiKeyId,
       name,
@@ -334,6 +339,7 @@ export const createTradingSystem = async (apiKeyName: string, draft: TradingSyst
       discoveryEnabled ? 1 : 0,
       discoveryIntervalHours,
       maxMembers,
+      maxOpenPositions,
     ]
   );
 
@@ -389,6 +395,9 @@ export const updateTradingSystem = async (
   }
   if (patch.max_members !== undefined) {
     push('max_members', nextMaxMembers);
+  }
+  if (patch.max_open_positions !== undefined) {
+    push('max_open_positions', Math.max(0, Math.floor(safeNumber(patch.max_open_positions, existing.max_open_positions))));
   }
 
   if (updates.length > 0) {

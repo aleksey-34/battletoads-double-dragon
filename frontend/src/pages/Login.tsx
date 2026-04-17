@@ -39,7 +39,8 @@ const Login: React.FC = () => {
     setErrorText('');
 
     try {
-      await axios.get('/api/api-keys', {
+      await axios.get('/api/saas/admin/summary', {
+        params: { detail: 'light' },
         headers: {
           Authorization: `Bearer ${values.password}`,
         },

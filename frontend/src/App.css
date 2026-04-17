@@ -431,9 +431,33 @@ body.theme-fire .ant-btn-primary:hover, body.theme-fire .ant-btn-primary:focus {
 .ant-popover-inner {
   background: var(--btdd-bg-elevated) !important;
   color: var(--btdd-text-primary) !important;
+  border: 1px solid var(--btdd-border) !important;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18) !important;
 }
 
 .ant-tooltip-inner {
+  background: var(--btdd-bg-elevated) !important;
+  color: var(--btdd-text-primary) !important;
+  border: 1px solid var(--btdd-border) !important;
+  box-shadow: 0 10px 28px rgba(15, 23, 42, 0.18) !important;
+}
+
+.ant-tooltip,
+.ant-popover {
+  --antd-arrow-background-color: var(--btdd-bg-elevated) !important;
+}
+
+.ant-popover-title,
+.ant-popover-inner-content,
+.ant-tooltip .ant-tooltip-inner,
+.ant-slider-tooltip .ant-tooltip-inner {
+  color: var(--btdd-text-primary) !important;
+}
+
+.ant-popover .ant-popover-arrow::before,
+.ant-popover .ant-popover-arrow::after,
+.ant-tooltip .ant-tooltip-arrow::before,
+.ant-tooltip .ant-tooltip-arrow::after {
   background: var(--btdd-bg-elevated) !important;
 }
 

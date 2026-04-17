@@ -11,11 +11,14 @@
 
 import { db } from '../utils/database';
 
+export type LiveTradeEventOrigin = 'strategy_signal' | 'exchange_fill' | 'external';
+
 export type LiveTradeEvent = {
   id: number;
   strategy_id: number;
   trade_type: 'entry' | 'exit';
   side: 'long' | 'short';
+  event_origin?: LiveTradeEventOrigin;
   entry_time: number;
   entry_price: number;
   position_size: number;
@@ -33,6 +36,30 @@ export type LiveTradeEvent = {
   backtest_predicted_price?: number;
   backtest_predicted_time?: number;
   backtest_predicted_fee?: number;
+};
+
+const normalizeEventOrigin = (value: unknown): LiveTradeEventOrigin | null => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (raw === 'strategy_signal' || raw === 'exchange_fill' || raw === 'external') {
+    return raw as LiveTradeEventOrigin;
+  }
+  return null;
+};
+
+export const inferLiveTradeEventOrigin = (event: Partial<LiveTradeEvent> | Record<string, unknown>): LiveTradeEventOrigin => {
+  const explicit = normalizeEventOrigin((event as any)?.event_origin);
+  if (explicit) {
+    return explicit;
+  }
+
+  const sourceTradeId = String((event as any)?.source_trade_id || '').trim();
+  const sourceOrderId = String((event as any)?.source_order_id || '').trim();
+  const actualFee = Number((event as any)?.actual_fee || 0);
+  if (sourceTradeId || sourceOrderId || Math.abs(actualFee) > 0) {
+    return 'exchange_fill';
+  }
+
+  return 'strategy_signal';
 };
 
 export type BacktestTradePrediction = {
@@ -96,16 +123,18 @@ export async function recordLiveTradeEvent(
   strategyId: number,
   event: Omit<LiveTradeEvent, 'id' | 'strategy_id'>
 ): Promise<LiveTradeEvent> {
+  const eventOrigin = inferLiveTradeEventOrigin(event as unknown as Record<string, unknown>);
   const result = await db.run(
     `INSERT INTO live_trade_events (
-      strategy_id, trade_type, side, entry_time, entry_price, 
+      strategy_id, trade_type, side, event_origin, entry_time, entry_price, 
       position_size, actual_price, actual_time, actual_fee, slippage_percent,
       source_trade_id, source_order_id, source_symbol
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       strategyId,
       event.trade_type,
       event.side,
+      eventOrigin,
       event.entry_time,
       event.entry_price,
       event.position_size,
@@ -122,6 +151,7 @@ export async function recordLiveTradeEvent(
   return {
     id: result.lastID as number,
     strategy_id: strategyId,
+    event_origin: eventOrigin,
     ...event,
   };
 }
@@ -178,7 +208,12 @@ export async function computeReconciliationMetrics(
     [strategyId, periodStartMs, periodEndMs]
   );
 
-  if (liveEvents.length === 0) {
+  const normalizedLiveEvents = (Array.isArray(liveEvents) ? liveEvents : []).map((event) => ({
+    ...event,
+    event_origin: inferLiveTradeEventOrigin(event),
+  }));
+
+  if (normalizedLiveEvents.length === 0) {
     return {
       strategy_id: strategyId,
       entry_price_deviation_percent: 0,
@@ -201,19 +236,32 @@ export async function computeReconciliationMetrics(
   }
 
   // Вычисления по live событиям
-  const entryEvents = liveEvents.filter((e) => e.trade_type === 'entry');
-  const exitEvents = liveEvents.filter((e) => e.trade_type === 'exit');
+  const strategyEvents = normalizedLiveEvents.filter((event) => event.event_origin === 'strategy_signal');
+  const executionEvents = normalizedLiveEvents.filter((event) => event.event_origin === 'exchange_fill');
+  const entryEvents = strategyEvents.filter((event) => event.trade_type === 'entry');
+  const exitEvents = strategyEvents.filter((event) => event.trade_type === 'exit');
 
   const entryPriceDeviations: number[] = [];
   const entryTimeLags: number[] = [];
   const exitPriceDeviations: number[] = [];
   let totalSlippage = 0;
   let totalFees = 0;
+  let totalFeePercent = 0;
+  let totalSlippageCost = 0;
+
+  for (const fill of executionEvents) {
+    const price = Math.abs(Number(fill.actual_price || 0));
+    const size = Math.abs(Number(fill.position_size || 0));
+    const notional = price * size;
+    totalSlippage += Number(fill.slippage_percent || 0);
+    totalFees += Number(fill.actual_fee || 0);
+    if (notional > 0) {
+      totalFeePercent += (Number(fill.actual_fee || 0) / notional) * 100;
+      totalSlippageCost += Math.abs(Number(fill.slippage_percent || 0)) / 100 * notional;
+    }
+  }
 
   for (const entry of entryEvents) {
-    totalSlippage += entry.slippage_percent || 0;
-    totalFees += entry.actual_fee || 0;
-
     // Найти соответствующее backtest предсказание
     const pred = predictions.find(
       (p) =>
@@ -228,25 +276,53 @@ export async function computeReconciliationMetrics(
     }
   }
 
+  for (const exit of exitEvents) {
+    const pred = predictions.find(
+      (p) =>
+        p.side === exit.side &&
+        Math.abs(p.predicted_exit_time - exit.actual_time) < 300000
+    );
+
+    if (pred) {
+      const priceDev = Math.abs(exit.actual_price - pred.predicted_exit_price) / Math.max(pred.predicted_exit_price, 1e-9);
+      exitPriceDeviations.push(priceDev);
+    }
+  }
+
   // Win rate вычисления
-  const closedTrades = liveEvents
-    .filter((e) => e.trade_type === 'exit')
-    .map((exit) => {
-      const entry = liveEvents.find(
-        (e) =>
-          e.trade_type === 'entry' &&
-          e.side === exit.side &&
-          e.entry_time < exit.entry_time
-      );
-      if (!entry) return null;
+  const closedTrades: Array<{ pnl: number; entry_price: number; exit_price: number }> = [];
+  const openEntriesBySide = new Map<'long' | 'short', any[]>([
+    ['long', []],
+    ['short', []],
+  ]);
 
-      const pnl = exit.side === 'long' 
-        ? (exit.actual_price - entry.actual_price) * exit.position_size
-        : (entry.actual_price - exit.actual_price) * exit.position_size;
+  for (const event of strategyEvents) {
+    const side = event.side as 'long' | 'short';
+    if (event.trade_type === 'entry') {
+      const queue = openEntriesBySide.get(side) || [];
+      queue.push(event);
+      openEntriesBySide.set(side, queue);
+      continue;
+    }
 
-      return { pnl, entry_price: entry.actual_price, exit_price: exit.actual_price };
-    })
-    .filter(Boolean) as any[];
+    const queue = openEntriesBySide.get(side) || [];
+    const entry = queue.shift();
+    openEntriesBySide.set(side, queue);
+    if (!entry) {
+      continue;
+    }
+
+    const qty = Math.max(Number(event.position_size || 0), Number(entry.position_size || 0));
+    const pnl = side === 'long'
+      ? (Number(event.actual_price || 0) - Number(entry.actual_price || 0)) * qty
+      : (Number(entry.actual_price || 0) - Number(event.actual_price || 0)) * qty;
+
+    closedTrades.push({
+      pnl,
+      entry_price: Number(entry.actual_price || 0),
+      exit_price: Number(event.actual_price || 0),
+    });
+  }
 
   const winRateLive = closedTrades.length > 0
     ? closedTrades.filter((t) => t.pnl > 0).length / closedTrades.length
@@ -257,33 +333,43 @@ export async function computeReconciliationMetrics(
 
   const totalPnL = closedTrades.reduce((sum, t) => sum + t.pnl, 0);
   const totalBacktestPnL = predictions.reduce((sum, p) => sum + p.predicted_pnl, 0);
+  const netLivePnL = totalPnL - totalFees;
+
+  const averageEntryDeviation = entryPriceDeviations.length > 0
+    ? entryPriceDeviations.reduce((sum, value) => sum + value, 0) / entryPriceDeviations.length
+    : 0;
+  const averageEntryLag = entryTimeLags.length > 0
+    ? entryTimeLags.reduce((sum, value) => sum + value, 0) / entryTimeLags.length
+    : 0;
+  const averageExitDeviation = exitPriceDeviations.length > 0
+    ? exitPriceDeviations.reduce((sum, value) => sum + value, 0) / exitPriceDeviations.length
+    : 0;
+  const averageSlippage = executionEvents.length > 0 ? totalSlippage / executionEvents.length : 0;
+  const averageFeePercent = executionEvents.length > 0 ? totalFeePercent / executionEvents.length : 0;
+  const averageBacktestSlippage = predictions.length > 0
+    ? predictions.reduce((sum, item) => sum + Number(item.predicted_slippage_percent || 0), 0) / predictions.length
+    : 0;
 
   return {
     strategy_id: strategyId,
-    entry_price_deviation_percent: entryPriceDeviations.length > 0
-      ? entryPriceDeviations.reduce((a, b) => a + b, 0) / entryPriceDeviations.length
-      : 0,
-    entry_time_lag_seconds: entryTimeLags.length > 0
-      ? entryTimeLags.reduce((a, b) => a + b, 0) / entryTimeLags.length
-      : 0,
-    exit_price_deviation_percent: exitPriceDeviations.length > 0
-      ? exitPriceDeviations.reduce((a, b) => a + b, 0) / exitPriceDeviations.length
-      : 0,
-    actual_avg_slippage_percent: entryEvents.length > 0 ? totalSlippage / entryEvents.length : 0,
-    actual_avg_fee_percent: entryEvents.length > 0 ? totalFees / entryEvents.length : 0,
-    backtest_assumed_slippage_percent: 0.05, // default, можно получать из backtest config
-    backtest_assumed_fee_percent: 0.1,       // default
-    pnl_impact_from_slippage: totalPnL * (entryEvents.length > 0 ? totalSlippage / entryEvents.length : 0),
+    entry_price_deviation_percent: averageEntryDeviation * 100,
+    entry_time_lag_seconds: averageEntryLag,
+    exit_price_deviation_percent: averageExitDeviation * 100,
+    actual_avg_slippage_percent: averageSlippage,
+    actual_avg_fee_percent: averageFeePercent,
+    backtest_assumed_slippage_percent: averageBacktestSlippage,
+    backtest_assumed_fee_percent: 0.1,
+    pnl_impact_from_slippage: totalSlippageCost,
     pnl_impact_from_fees: totalFees,
-    total_execution_cost: totalFees + (totalPnL * (entryEvents.length > 0 ? totalSlippage / entryEvents.length : 0)),
+    total_execution_cost: totalSlippageCost + totalFees,
     realized_vs_predicted_pnl_percent: totalBacktestPnL !== 0
-      ? (totalPnL - totalBacktestPnL) / Math.abs(totalBacktestPnL)
+      ? ((netLivePnL - totalBacktestPnL) / Math.abs(totalBacktestPnL)) * 100
       : 0,
-    win_rate_live: winRateLive,
-    win_rate_backtest: winRateBacktest,
+    win_rate_live: winRateLive * 100,
+    win_rate_backtest: winRateBacktest * 100,
     period_start: periodStartMs,
     period_end: periodEndMs,
-    samples_count: liveEvents.length,
+    samples_count: Math.min(entryEvents.length, predictions.length),
   };
 }
 

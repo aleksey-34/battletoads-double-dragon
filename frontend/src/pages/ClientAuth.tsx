@@ -21,7 +21,7 @@ type RegisterFormValues = {
   email: string;
   password: string;
   confirmPassword: string;
-  productMode: 'strategy_client' | 'algofund_client';
+  productMode: 'strategy_client' | 'algofund_client' | 'dual';
 };
 
 type SetPasswordFormValues = {
@@ -271,6 +271,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                       options={[
                         { value: 'strategy_client', label: t('client.auth.productModeStrategy', 'Strategy Client') },
                         { value: 'algofund_client', label: t('client.auth.productModeAlgofund', 'Algofund Client') },
+                        { value: 'dual', label: t('client.auth.productModeDual', 'Dual: Strategies + Algofund') },
                       ]}
                     />
                   </Form.Item>

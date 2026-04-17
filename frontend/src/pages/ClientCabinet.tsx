@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars, react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
 import {
@@ -419,13 +420,46 @@ const equityPointsToSeries = (points: number[], periodDays?: number): LinePoint[
   return points.map((v, i) => ({ time: Math.floor(startTs + i * step), value: v }));
 };
 
+const normalizeOfferEquityValues = (points: number[], offer?: StrategyOffer | null): number[] => {
+  if (!Array.isArray(points) || points.length < 2) {
+    return Array.isArray(points) ? points : [];
+  }
+
+  const ret = Number(offer?.metrics?.ret || 0);
+  const expectedFinalEquity = 10000 * (1 + ret / 100);
+  const firstDistance = Math.abs(Number(points[0] || 0) - expectedFinalEquity);
+  const lastDistance = Math.abs(Number(points[points.length - 1] || 0) - expectedFinalEquity);
+
+  if (firstDistance + 1e-6 < lastDistance) {
+    return [...points].reverse();
+  }
+
+  return points;
+};
+
 /** Extract flat equity number[] from offer (supports both equityPoints and equity.points) */
 const getOfferEquityValues = (offer: StrategyOffer): number[] => {
-  if (Array.isArray(offer.equityPoints) && offer.equityPoints.length > 0) return offer.equityPoints;
+  if (Array.isArray(offer.equityPoints) && offer.equityPoints.length > 0) return normalizeOfferEquityValues(offer.equityPoints, offer);
   if (offer.equity?.points && Array.isArray(offer.equity.points) && offer.equity.points.length > 0) {
-    return offer.equity.points.map((p) => p.equity);
+    return normalizeOfferEquityValues(offer.equity.points.map((p) => p.equity), offer);
   }
   return [];
+};
+
+const getIntervalSortRank = (intervalRaw?: string): number => {
+  const interval = String(intervalRaw || '').trim().toLowerCase();
+  switch (interval) {
+    case '4h':
+      return 0;
+    case '1h':
+      return 1;
+    case '15m':
+      return 2;
+    case '5m':
+      return 3;
+    default:
+      return 9;
+  }
 };
 
 const getOfferDescription = (offer: any, detailed: boolean = false): string => {
@@ -612,6 +646,10 @@ const ClientCabinet: React.FC = () => {
   if (enabledAlgofundSystemNames.size === 0 && algofundPublishedSystemName) {
     enabledAlgofundSystemNames.add(algofundPublishedSystemName);
   }
+  const isAlgofundSystemEnabled = (systemNameRaw: unknown): boolean => {
+    const systemName = String(systemNameRaw || '').trim();
+    return Boolean(systemName) && enabledAlgofundSystemNames.has(systemName);
+  };
   const monitoringSeries = useMemo(
     () => toLineSeriesData((monitoring?.points || []).map((point) => ({
       time: point.time ?? point.ts ?? point.recorded_at,
@@ -1101,7 +1139,16 @@ const ClientCabinet: React.FC = () => {
                   {[...strategyWorkspace.offers].sort((a, b) => {
                     const aS = strategyOfferIds.includes(a.offerId) ? 0 : 1;
                     const bS = strategyOfferIds.includes(b.offerId) ? 0 : 1;
-                    return aS - bS;
+                    if (aS !== bS) return aS - bS;
+
+                    const aInterval = getIntervalSortRank(a.strategy.params?.interval);
+                    const bInterval = getIntervalSortRank(b.strategy.params?.interval);
+                    if (aInterval !== bInterval) return aInterval - bInterval;
+
+                    const pfDiff = Number(b.metrics.pf || 0) - Number(a.metrics.pf || 0);
+                    if (Math.abs(pfDiff) > 0.0001) return pfDiff;
+
+                    return Number(b.metrics.ret || 0) - Number(a.metrics.ret || 0);
                   }).map((offer) => (
                     <Col key={offer.offerId} xs={24} sm={12} md={8} xl={6}>
                       <Card size="small" bordered style={strategyOfferIds.includes(offer.offerId) ? { borderColor: '#f5a623', borderWidth: 2 } : undefined}>
@@ -1123,9 +1170,10 @@ const ClientCabinet: React.FC = () => {
                                   }} />
                                 : null}
                             </Space>
-                            <Typography.Text type="secondary" style={{ fontSize: 11 }}>{offer.strategy.mode.toUpperCase()} • {offer.strategy.market}</Typography.Text>
+                              <Typography.Text type="secondary" style={{ fontSize: 11 }}>{offer.strategy.mode.toUpperCase()} • {offer.strategy.market}</Typography.Text>
                           </Space>
                           <Space size={4} wrap>
+                              <Tag style={{ fontSize: 11 }}>{String(offer.strategy.params?.interval || '1h')}</Tag>
                             <Tag color="gold" style={{ fontSize: 11 }}>Ret {formatPercent(offer.metrics.ret)}</Tag>
                             <Tag color="volcano" style={{ fontSize: 11 }}>DD {formatPercent(offer.metrics.dd)}</Tag>
                             <Tag color="orange" style={{ fontSize: 11 }}>PF {formatNumber(offer.metrics.pf)}</Tag>
@@ -1134,7 +1182,7 @@ const ClientCabinet: React.FC = () => {
                           {(() => {
                             const eqVals = getOfferEquityValues(offer);
                             return eqVals.length > 1 ? (
-                              <ChartComponent data={equityPointsToSeries(eqVals)} type="line" fixedHeight={120} />
+                              <ChartComponent data={equityPointsToSeries(eqVals)} type="line" fixedHeight={120} compact />
                             ) : (
                               <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
                             );
@@ -1194,6 +1242,7 @@ const ClientCabinet: React.FC = () => {
                     {isSelected ? <Tag color="gold">В вашем портфеле</Tag> : <Tag color="blue">Доступна для подключения</Tag>}
                     <Tag>{offer.strategy.mode.toUpperCase()}</Tag>
                     <Tag>{offer.strategy.market}</Tag>
+                    <Tag>{String(offer.strategy.params?.interval || '1h')}</Tag>
                     {offer.strategy.type ? <Tag>{offer.strategy.type}</Tag> : null}
                   </Space>
                   <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'pre-line' }}>
@@ -1433,7 +1482,7 @@ const ClientCabinet: React.FC = () => {
                   {algofundAvailableSystems.map((system) => {
                     const systemName = String(system?.name || '').trim();
                     const matchingActiveSystems = algofundActiveSystems.filter((item) => String(item.systemName || '').trim() === systemName);
-                    const isCurrent = enabledAlgofundSystemNames.has(systemName);
+                    const isCurrent = isAlgofundSystemEnabled(systemName);
                     const currentWeights = matchingActiveSystems
                       .map((item) => Number(item.weight || 0))
                       .filter((value) => Number.isFinite(value) && value > 0);
@@ -1471,6 +1520,7 @@ const ClientCabinet: React.FC = () => {
                                   : equityPointsToSeries(eqPts || [], snap?.periodDays)}
                                 type="line"
                                 fixedHeight={120}
+                                compact
                               />
                             ) : (
                               <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
@@ -1505,7 +1555,7 @@ const ClientCabinet: React.FC = () => {
               if (!systemDetailModal) return null;
               const system = algofundAvailableSystems.find((s) => s.id === systemDetailModal.id);
               if (!system) return <Empty description="Система не найдена" />;
-              const isCurrent = algofundPublishedSystemName.length > 0 && String(system.name || '').trim() === algofundPublishedSystemName;
+              const isCurrent = isAlgofundSystemEnabled(system.name);
               const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number } | null | undefined;
               const eqPts = snap?.equityPoints;
               // For connected system: use backend preview when risk matches saved profile;
@@ -1677,7 +1727,11 @@ const ClientCabinet: React.FC = () => {
           <Descriptions.Item label="Tenant">{clientUser?.tenantDisplayName || '—'}</Descriptions.Item>
           <Descriptions.Item label="Slug">{clientUser?.tenantSlug || '—'}</Descriptions.Item>
           <Descriptions.Item label="Режим">
-            {workspace?.productMode === 'algofund_client' ? 'Алгофонд-клиент' : 'Клиент стратегий'}
+            {workspace?.productMode === 'dual'
+              ? 'Dual: стратегии + Алгофонд'
+              : workspace?.productMode === 'algofund_client'
+                ? 'Алгофонд-клиент'
+                : 'Клиент стратегий'}
           </Descriptions.Item>
           <Descriptions.Item label="Статус">{clientUser?.tenantStatus || '—'}</Descriptions.Item>
         </Descriptions>
@@ -2035,7 +2089,7 @@ const ClientCabinet: React.FC = () => {
             items={[
               {
                 key: 'strategy',
-                label: 'Клиент стратегий',
+                label: workspace.productMode === 'dual' ? 'Стратегии' : 'Клиент стратегий',
                 children: strategyTabContent,
               },
               {

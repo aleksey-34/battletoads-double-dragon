@@ -2113,6 +2113,7 @@ export const executeStrategy = async (
       await recordLiveTradeEvent(strategyId, {
         trade_type: tradeType,
         side,
+        event_origin: 'strategy_signal',
         entry_time: evaluatedBarTimeMs,
         entry_price: resolvedEntryPrice,
         position_size: normalizedSize,
@@ -2247,7 +2248,7 @@ export const executeStrategy = async (
       });
     }
 
-    const MIXED_GRACE_MS = 300_000; // 5 minutes — enough for exchange API propagation
+    const MIXED_GRACE_MS = 90_000; // 90s — OP pair conflict now active, shorter grace sufficient
     const lastUpdatedMs = mergedStrategy.updated_at
       ? new Date(String(mergedStrategy.updated_at).replace(' ', 'T') + 'Z').getTime()
       : 0;

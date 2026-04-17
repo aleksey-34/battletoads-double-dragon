@@ -42,6 +42,12 @@ type TradeRow = {
   timestamp: string;
 };
 
+type StrategyTradeBinding = {
+  market_mode?: string;
+  base_symbol?: string;
+  quote_symbol?: string;
+};
+
 const toFinite = (value: any, fallback: number = 0): number => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : fallback;
@@ -62,16 +68,34 @@ const getApiKeyId = async (apiKeyName: string): Promise<number> => {
 const syncRecentTradesForStrategy = async (
   apiKeyName: string,
   strategyId: number,
-  symbol: string,
+  binding: StrategyTradeBinding,
   limit: number = 120
 ): Promise<number> => {
-  const trades = (await getRecentTrades(apiKeyName, symbol, limit)) as TradeRow[];
-  if (!Array.isArray(trades) || trades.length === 0) {
+  const baseSymbol = String(binding.base_symbol || '').trim();
+  const quoteSymbol = String(binding.quote_symbol || '').trim();
+  const isSynthetic = String(binding.market_mode || 'synthetic') !== 'mono' && Boolean(quoteSymbol);
+  const symbols = Array.from(new Set([baseSymbol, isSynthetic ? quoteSymbol : ''].filter(Boolean)));
+
+  if (symbols.length === 0) {
+    return 0;
+  }
+
+  const batches = await Promise.all(symbols.map(async (symbol) => {
+    const trades = await getRecentTrades(apiKeyName, symbol, limit) as TradeRow[];
+    return Array.isArray(trades) ? trades.map((trade) => ({ ...trade, symbol: String(trade.symbol || symbol || '').trim() })) : [];
+  }));
+
+  const trades = batches.flat();
+  if (trades.length === 0) {
     return 0;
   }
 
   const tradeIds = trades
-    .map((trade) => String(trade.tradeId || '').trim())
+    .map((trade) => {
+      const tradeId = String(trade.tradeId || '').trim();
+      const tradeSymbol = String(trade.symbol || '').trim().toUpperCase();
+      return tradeId && tradeSymbol ? `${tradeSymbol}:${tradeId}` : '';
+    })
     .filter((id) => id.length > 0);
 
   const eventIds: string[] = [];
@@ -101,11 +125,11 @@ const syncRecentTradesForStrategy = async (
 
   let inserted = 0;
 
-  // Process oldest -> newest so timeline in db stays coherent.
+  // Process oldest -> newest per symbol so each leg keeps a coherent local position state.
   const ordered = [...trades].sort((a, b) => toFinite(a.timestamp) - toFinite(b.timestamp));
 
   const epsilon = 1e-9;
-  let positionSignedQty = 0;
+  const positionSignedQtyBySymbol = new Map<string, number>();
 
   const emitEvent = async (
     sourceTradeId: string,
@@ -127,6 +151,7 @@ const syncRecentTradesForStrategy = async (
     await recordLiveTradeEvent(strategyId, {
       trade_type: tradeType,
       side,
+      event_origin: 'exchange_fill',
       entry_time: timestamp,
       entry_price: price,
       position_size: qty,
@@ -136,7 +161,7 @@ const syncRecentTradesForStrategy = async (
       slippage_percent: 0,
       source_trade_id: sourceTradeId,
       source_order_id: String(trade.orderId || '').trim(),
-      source_symbol: String(trade.symbol || symbol || '').trim(),
+      source_symbol: String(trade.symbol || '').trim(),
     });
 
     inserted += 1;
@@ -149,6 +174,11 @@ const syncRecentTradesForStrategy = async (
       continue;
     }
 
+    const tradeSymbol = String(trade.symbol || '').trim().toUpperCase();
+    if (!tradeSymbol) {
+      continue;
+    }
+
     const timestamp = toFinite(trade.timestamp, Date.now());
     const price = toFinite(trade.price, 0);
     const qty = Math.abs(toFinite(trade.qty, 0));
@@ -157,14 +187,15 @@ const syncRecentTradesForStrategy = async (
       continue;
     }
 
+    const sourceTradeBaseId = `${tradeSymbol}:${tradeId}`;
     const delta = trade.side === 'Buy' ? qty : -qty;
-    const prev = positionSignedQty;
+    const prev = positionSignedQtyBySymbol.get(tradeSymbol) || 0;
     const next = prev + delta;
 
     if (Math.abs(prev) <= epsilon) {
       const side = next >= 0 ? 'long' : 'short';
-      await emitEvent(`${tradeId}:entry`, 'entry', side, timestamp, price, Math.abs(next), fee, trade);
-      positionSignedQty = next;
+      await emitEvent(`${sourceTradeBaseId}:entry`, 'entry', side, timestamp, price, Math.abs(next), fee, trade);
+      positionSignedQtyBySymbol.set(tradeSymbol, next);
       continue;
     }
 
@@ -176,18 +207,18 @@ const syncRecentTradesForStrategy = async (
     // Same direction: either scale in (entry) or scale out (exit)
     if (prevSide === nextSide || Math.abs(next) <= epsilon) {
       if (nextAbs > prevAbs + epsilon) {
-        await emitEvent(`${tradeId}:entry`, 'entry', prevSide, timestamp, price, nextAbs - prevAbs, fee, trade);
+        await emitEvent(`${sourceTradeBaseId}:entry`, 'entry', prevSide, timestamp, price, nextAbs - prevAbs, fee, trade);
       } else if (nextAbs + epsilon < prevAbs) {
-        await emitEvent(`${tradeId}:exit`, 'exit', prevSide, timestamp, price, prevAbs - nextAbs, fee, trade);
+        await emitEvent(`${sourceTradeBaseId}:exit`, 'exit', prevSide, timestamp, price, prevAbs - nextAbs, fee, trade);
       }
-      positionSignedQty = next;
+      positionSignedQtyBySymbol.set(tradeSymbol, next);
       continue;
     }
 
     // Direction flip in one fill: close old side + open new side.
-    await emitEvent(`${tradeId}:exit`, 'exit', prevSide, timestamp, price, prevAbs, fee, trade);
-    await emitEvent(`${tradeId}:entry`, 'entry', nextSide, timestamp, price, nextAbs, fee, trade);
-    positionSignedQty = next;
+    await emitEvent(`${sourceTradeBaseId}:exit`, 'exit', prevSide, timestamp, price, prevAbs, fee, trade);
+    await emitEvent(`${sourceTradeBaseId}:entry`, 'entry', nextSide, timestamp, price, nextAbs, fee, trade);
+    positionSignedQtyBySymbol.set(tradeSymbol, next);
   }
 
   return inserted;
@@ -353,7 +384,11 @@ export const runReconciliationForApiKey = async (
       const syncedEvents = await syncRecentTradesForStrategy(
         apiKeyName,
         strategyId,
-        String(strategy.base_symbol || ''),
+        {
+          market_mode: strategy.market_mode,
+          base_symbol: String(strategy.base_symbol || ''),
+          quote_symbol: String(strategy.quote_symbol || ''),
+        },
         120
       );
 

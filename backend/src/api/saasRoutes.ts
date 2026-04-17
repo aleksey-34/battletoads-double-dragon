@@ -238,6 +238,7 @@ router.patch('/admin/offer-store', async (req, res) => {
     const data = await updateOfferStoreAdminState({
       defaults: req.body?.defaults,
       publishedOfferIds: Array.isArray(req.body?.publishedOfferIds) ? req.body.publishedOfferIds.map(String) : undefined,
+      curatedOfferIds: Array.isArray(req.body?.curatedOfferIds) ? req.body.curatedOfferIds.map(String) : undefined,
       reviewSnapshotPatch: req.body?.reviewSnapshotPatch && typeof req.body.reviewSnapshotPatch === 'object'
         ? req.body.reviewSnapshotPatch
         : undefined,

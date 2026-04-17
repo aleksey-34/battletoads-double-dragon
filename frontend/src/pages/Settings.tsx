@@ -183,7 +183,7 @@ const Settings: React.FC = () => {
 
   const fetchApiKeys = async () => {
     try {
-      const res = await axios.get('http://localhost:3001/api/api-keys');
+      const res = await axios.get('/api/api-keys');
       setApiKeys(res.data);
     } catch (error) {
       console.error(error);
@@ -193,7 +193,7 @@ const Settings: React.FC = () => {
   const fetchUpdateStatus = async (refreshRemote: boolean = true) => {
     setUpdateLoading(true);
     try {
-      const res = await axios.get('http://localhost:3001/api/system/update/status', {
+      const res = await axios.get('/api/system/update/status', {
         params: {
           refresh: refreshRemote ? 1 : 0,
         },
@@ -210,7 +210,7 @@ const Settings: React.FC = () => {
   const fetchUpdateJob = async () => {
     setJobLoading(true);
     try {
-      const res = await axios.get('http://localhost:3001/api/system/update/job');
+      const res = await axios.get('/api/system/update/job');
       setUpdateJob(res.data as UpdateJob);
     } catch (error: any) {
       console.error(error);
@@ -229,7 +229,7 @@ const Settings: React.FC = () => {
     });
 
     try {
-      const res = await axios.post('http://localhost:3001/api/system/update/run');
+      const res = await axios.post('/api/system/update/run');
       const started = Boolean(res?.data?.started);
       const unit = String(res?.data?.unit || 'btdd-git-update');
       const backendMessage = String(res?.data?.message || '').trim();
@@ -301,7 +301,7 @@ const Settings: React.FC = () => {
 
   const deleteApiKey = async (id: number) => {
     try {
-      await axios.delete(`http://localhost:3001/api/api-keys/${id}`);
+      await axios.delete(`/api/api-keys/${id}`);
       message.success(t('settings.msg.apiKeyDeleted', 'API Key deleted'));
       fetchApiKeys();
     } catch (error) {
@@ -343,12 +343,12 @@ const Settings: React.FC = () => {
       };
 
       if (editingKey) {
-        await axios.put(`http://localhost:3001/api/api-keys/${editingKey.id}`, payload);
+        await axios.put(`/api/api-keys/${editingKey.id}`, payload);
         message.success(t('settings.msg.apiKeyUpdated', 'API Key updated'));
         setEditingKey(null);
         form.resetFields();
       } else {
-        await axios.post('http://localhost:3001/api/api-keys', payload);
+        await axios.post('/api/api-keys', payload);
         message.success(t('settings.msg.apiKeyAdded', 'API Key added'));
       }
       fetchApiKeys();

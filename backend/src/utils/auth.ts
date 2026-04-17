@@ -279,17 +279,16 @@ const ensureUniqueTenantSlug = async (baseSlug: string): Promise<string> => {
   }
 };
 
-const ensureRegistrationPlanId = async (productMode: ProductMode): Promise<number> => {
-  const preferredCode = productMode === 'strategy_client' || productMode === 'dual'
+const ensureRegistrationPlanId = async (productMode: Exclude<ProductMode, 'dual'>): Promise<number> => {
+  const preferredCode = productMode === 'strategy_client'
     ? DEFAULT_STRATEGY_PLAN_CODE
     : productMode === 'copytrading_client'
       ? DEFAULT_COPYTRADING_PLAN_CODE
       : DEFAULT_ALGOFUND_PLAN_CODE;
 
-  const planModeQuery = productMode === 'dual' ? 'strategy_client' : productMode;
   let row = await db.get(
     'SELECT id FROM plans WHERE code = ? AND product_mode = ? AND is_active = 1 LIMIT 1',
-    [preferredCode, planModeQuery]
+    [preferredCode, productMode]
   );
 
   if (row?.id) {
@@ -298,19 +297,30 @@ const ensureRegistrationPlanId = async (productMode: ProductMode): Promise<numbe
 
   row = await db.get(
     'SELECT id FROM plans WHERE product_mode = ? AND is_active = 1 ORDER BY price_usdt ASC, id ASC LIMIT 1',
-    [planModeQuery]
+    [productMode]
   );
 
   if (row?.id) {
     return Number(row.id);
   }
 
-  const isStrategy = productMode === 'strategy_client' || productMode === 'dual';
-  const fallbackCode = isStrategy ? 'selfreg_strategy_starter' : 'selfreg_algofund_starter';
-  const fallbackTitle = isStrategy ? 'Strategy Client Starter' : 'Algofund Starter';
-  const features = isStrategy
-    ? { settings: true, apiKeyUpdate: false, monitoring: true, backtest: true, startStopRequests: false }
-    : { settings: true, apiKeyUpdate: false, monitoring: true, backtest: true, startStopRequests: true };
+  const isStrategy = productMode === 'strategy_client';
+  const isCopytrading = productMode === 'copytrading_client';
+  const fallbackCode = isCopytrading
+    ? 'selfreg_copytrading_starter'
+    : isStrategy
+      ? 'selfreg_strategy_starter'
+      : 'selfreg_algofund_starter';
+  const fallbackTitle = isCopytrading
+    ? 'Copytrading Starter'
+    : isStrategy
+      ? 'Strategy Client Starter'
+      : 'Algofund Starter';
+  const features = isCopytrading
+    ? { settings: true, apiKeyUpdate: false, monitoring: true, backtest: false, startStopRequests: false }
+    : isStrategy
+      ? { settings: true, apiKeyUpdate: false, monitoring: true, backtest: true, startStopRequests: false }
+      : { settings: true, apiKeyUpdate: false, monitoring: true, backtest: true, startStopRequests: true };
 
   await db.run(
     `INSERT INTO plans (
@@ -332,8 +342,8 @@ const ensureRegistrationPlanId = async (productMode: ProductMode): Promise<numbe
       fallbackCode,
       fallbackTitle,
       productMode,
-      isStrategy ? 20 : 20,
-      isStrategy ? 1000 : 1000,
+      20,
+      1000,
       isStrategy ? 0 : 1,
       isStrategy ? 3 : 0,
       isStrategy ? 0 : 1,
@@ -549,19 +559,25 @@ export const registerClientUser = async (payload: ClientRegistrationInput, reque
       throw new Error('Unable to create tenant workspace');
     }
 
-    const planId = await ensureRegistrationPlanId(productMode);
-    await db.run(
-      `INSERT INTO subscriptions (
-         tenant_id,
-         plan_id,
-         status,
-         started_at,
-         notes,
-         created_at,
-         updated_at
-       ) VALUES (?, ?, 'active', CURRENT_TIMESTAMP, 'self_registration', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [tenantId, planId]
-    );
+    const subscriptionPlanModes: Array<Exclude<ProductMode, 'dual'>> = productMode === 'dual'
+      ? ['strategy_client', 'algofund_client']
+      : [productMode];
+
+    for (const subscriptionMode of subscriptionPlanModes) {
+      const planId = await ensureRegistrationPlanId(subscriptionMode);
+      await db.run(
+        `INSERT INTO subscriptions (
+           tenant_id,
+           plan_id,
+           status,
+           started_at,
+           notes,
+           created_at,
+           updated_at
+         ) VALUES (?, ?, 'active', CURRENT_TIMESTAMP, 'self_registration', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [tenantId, planId]
+      );
+    }
 
     await ensureTenantProfile(tenantId, productMode);
 

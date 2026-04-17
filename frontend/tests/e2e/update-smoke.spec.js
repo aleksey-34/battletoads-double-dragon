@@ -80,10 +80,9 @@ test('settings update controls and dashboard remain responsive', async ({ page }
     await expect(page.locator('body')).toContainText(/Invalid password|Неверный пароль/i, { timeout: 20000 });
   }
 
-  const themeSelect = page.locator('.ant-select').first();
-  await expect(themeSelect).toBeVisible();
-  await themeSelect.click();
-  await page.keyboard.press('Escape');
+  const lightThemeControl = page.getByTitle(/Light/i);
+  await expect(lightThemeControl).toBeVisible();
+  await lightThemeControl.click();
 
   // Final responsiveness check to catch frozen UI states.
   const ts = await page.evaluate(() => Date.now());
