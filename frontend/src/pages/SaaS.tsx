@@ -988,7 +988,7 @@ const DEFAULT_BACKTEST_SETTINGS: BacktestCardSettings = {
   riskScore: 5,
   tradeFrequencyScore: 5,
   initialBalance: 10000,
-  riskScaleMaxPercent: 40,
+  riskScaleMaxPercent: 100,
   maxOpenPositions: 0,
 };
 
@@ -2293,7 +2293,7 @@ const clampPreviewValue = (value: number, max = 10): number => Math.min(max, Mat
 
 const getBacktestRiskMultiplier = (riskScore: number, riskScaleMaxPercent: number): number => {
   const centered = (clampPreviewValue(Number(riskScore || 5), 10) - 5) / 5;
-  const maxMul = Math.max(1.4, 1 + Number(riskScaleMaxPercent || 40) / 45);
+  const maxMul = Math.max(1.4, 1 + Number(riskScaleMaxPercent || 100) / 45);
   const logMax = Math.log(maxMul);
   return Math.exp(centered * logMax);
 };
@@ -6377,7 +6377,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             riskScore: Number(adminSweepBacktestRiskScore ?? 5),
             tradeFrequencyScore: Number(adminSweepBacktestTradeScore ?? 5),
             initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
-            riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 40),
+            riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 100),
           },
         },
       });
@@ -6523,7 +6523,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               riskScore: Number(adminSweepBacktestRiskScore ?? 5),
               tradeFrequencyScore: Number(adminSweepBacktestTradeScore ?? 5),
               initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
-              riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 40),
+              riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 100),
               maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
             },
           },
@@ -6540,7 +6540,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           riskScore: Number(adminSweepBacktestRiskScore ?? 5),
           tradeFrequencyScore: Number(adminSweepBacktestTradeScore ?? 5),
           initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
-          riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 40),
+          riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 100),
           maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
         }
       );
@@ -6587,7 +6587,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             riskScore: Number(offer?.backtestSettings?.riskScore ?? 5),
             tradeFrequencyScore: Number(offer?.backtestSettings?.tradeFrequencyScore ?? 5),
             initialBalance: Number(offer?.backtestSettings?.initialBalance ?? 10000),
-            riskScaleMaxPercent: Number(offer?.backtestSettings?.riskScaleMaxPercent ?? 40),
+            riskScaleMaxPercent: Number(offer?.backtestSettings?.riskScaleMaxPercent ?? 100),
           },
         },
       });
@@ -12188,8 +12188,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       style={{ width: '100%' }}
                       value={adminSweepBacktestRiskScaleMaxPercent}
                       onChange={(value) => {
-                        const prevCap = Number(adminSweepBacktestRiskScaleMaxPercent || 40);
-                        const next = Math.max(0, Math.min(1000, Number(value || 40)));
+                        const prevCap = Number(adminSweepBacktestRiskScaleMaxPercent || 100);
+                        const next = Math.max(0, Math.min(1000, Number(value || 100)));
                         setAdminSweepBacktestRiskScaleMaxPercent(next);
                         storeCurrentBacktestSettingsForContext(backtestDrawerContext, { riskScaleMaxPercent: next });
                         const prevMul = getBacktestRiskMultiplier(adminSweepBacktestRiskScore, prevCap);

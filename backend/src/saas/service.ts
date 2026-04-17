@@ -1235,7 +1235,7 @@ const normalizeOfferReviewSnapshot = (offerId: string, raw: unknown): OfferRevie
     riskScore: Number(clampNumber(asNumber(parsed.riskScore, 5), 0, 10).toFixed(2)),
     tradeFrequencyScore: Number(clampNumber(asNumber(parsed.tradeFrequencyScore, 5), 0, 10).toFixed(2)),
     initialBalance: Math.max(100, Math.floor(asNumber(parsed.initialBalance, 10000))),
-    riskScaleMaxPercent: Number(clampNumber(asNumber(parsed.riskScaleMaxPercent, 40), 0, 400).toFixed(2)),
+    riskScaleMaxPercent: Number(clampNumber(asNumber(parsed.riskScaleMaxPercent, 100), 0, 400).toFixed(2)),
     updatedAt: asString(parsed.updatedAt, new Date().toISOString()),
   };
 };
@@ -1294,7 +1294,7 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
       riskScore: Number(clampNumber(asNumber(settingsRaw.riskScore, 5), 0, 10).toFixed(2)),
       tradeFrequencyScore: Number(clampNumber(asNumber(settingsRaw.tradeFrequencyScore, 5), 0, 10).toFixed(2)),
       initialBalance: Math.max(100, Math.floor(asNumber(settingsRaw.initialBalance, 10000))),
-      riskScaleMaxPercent: Number(clampNumber(asNumber(settingsRaw.riskScaleMaxPercent, 40), 0, 400).toFixed(2)),
+      riskScaleMaxPercent: Number(clampNumber(asNumber(settingsRaw.riskScaleMaxPercent, 100), 0, 400).toFixed(2)),
       maxOpenPositions: Math.max(0, Math.floor(asNumber(settingsRaw.maxOpenPositions, 0))),
     },
     updatedAt: asString(parsed.updatedAt, new Date().toISOString()),
@@ -4915,7 +4915,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
           riskScore: Number(asNumber(reviewSnapshots[row.offerId]?.riskScore, 5).toFixed(2)),
           tradeFrequencyScore: Number(asNumber(reviewSnapshots[row.offerId]?.tradeFrequencyScore, 5).toFixed(2)),
           initialBalance: Math.max(100, Math.floor(asNumber(reviewSnapshots[row.offerId]?.initialBalance, 10000))),
-          riskScaleMaxPercent: Number(asNumber(reviewSnapshots[row.offerId]?.riskScaleMaxPercent, 40).toFixed(2)),
+          riskScaleMaxPercent: Number(asNumber(reviewSnapshots[row.offerId]?.riskScaleMaxPercent, 100).toFixed(2)),
         },
       };
     }),
@@ -5490,7 +5490,7 @@ export const previewAdminSweepBacktest = async (payload?: {
 
   // Risk multiplier applied post-hoc to real backtest result.
   // Exponential: risk=0 → ~0.18x, risk=5 → 1.0x, risk=10 → ~5.5x.
-  const riskScaleMaxPercent = clampNumber(asNumber(payload?.riskScaleMaxPercent, 40), 0, 400);
+  const riskScaleMaxPercent = clampNumber(asNumber(payload?.riskScaleMaxPercent, 100), 0, 400);
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(payload?.maxOpenPositions, 0)));
   const reinvestPercent = clampNumber(asNumber(payload?.reinvestPercent, 100), 0, 100);
   const reinvestShare = reinvestPercent / 100;
@@ -5997,7 +5997,7 @@ export const previewAdminSweepBacktest = async (payload?: {
             : {};
           const snapshotRiskScore = clampNumber(asNumber(snapshotBacktestSettings.riskScore, 5), 0, 10);
           const snapshotTradeFrequencyScore = clampNumber(asNumber(snapshotBacktestSettings.tradeFrequencyScore, 5), 0, 10);
-          const snapshotRiskScaleMaxPercent = clampNumber(asNumber(snapshotBacktestSettings.riskScaleMaxPercent, 40), 0, 400);
+          const snapshotRiskScaleMaxPercent = clampNumber(asNumber(snapshotBacktestSettings.riskScaleMaxPercent, 100), 0, 400);
           const snapshotRiskMul = getPreviewRiskMultiplier(snapshotRiskScore, snapshotRiskScaleMaxPercent);
           const snapshotTradeMul = getPreviewTradeMultiplier(snapshotTradeFrequencyScore);
           const relativeRiskMul = rerunRiskMul / Math.max(0.01, snapshotRiskMul);
@@ -6716,7 +6716,7 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
           riskScore: Number(existing?.backtestSettings?.riskScore ?? 5),
           tradeFrequencyScore: Number(existing?.backtestSettings?.tradeFrequencyScore ?? 5),
           initialBalance: Number(existing?.backtestSettings?.initialBalance ?? 10000),
-          riskScaleMaxPercent: Number(existing?.backtestSettings?.riskScaleMaxPercent ?? 40),
+          riskScaleMaxPercent: Number(existing?.backtestSettings?.riskScaleMaxPercent ?? 100),
         });
 
         const summary = preview.preview?.summary || {};
@@ -6750,7 +6750,7 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
             riskScore: Number(existing?.backtestSettings?.riskScore ?? 5),
             tradeFrequencyScore: Number(existing?.backtestSettings?.tradeFrequencyScore ?? 5),
             initialBalance: Number(existing?.backtestSettings?.initialBalance ?? 10000),
-            riskScaleMaxPercent: Number(existing?.backtestSettings?.riskScaleMaxPercent ?? 40),
+            riskScaleMaxPercent: Number(existing?.backtestSettings?.riskScaleMaxPercent ?? 100),
           },
           updatedAt: new Date().toISOString(),
         });
