@@ -152,6 +152,7 @@ export type OfferStoreState = {
       tradeFrequencyScore: number;
       initialBalance: number;
       riskScaleMaxPercent: number;
+      maxOpenPositions?: number;
     };
     updatedAt: string;
   }>;
@@ -172,6 +173,7 @@ export type OfferStoreState = {
       tradeFrequencyScore: number;
       initialBalance: number;
       riskScaleMaxPercent: number;
+      maxOpenPositions?: number;
     };
     updatedAt: string;
   } | null;
@@ -277,6 +279,7 @@ type TsBacktestSnapshot = {
     tradeFrequencyScore: number;
     initialBalance: number;
     riskScaleMaxPercent: number;
+    maxOpenPositions?: number;
   };
   updatedAt: string;
 };
@@ -901,6 +904,50 @@ const findLatestFile = (matcher: RegExp): string => {
   return rows[0]?.filePath || '';
 };
 
+const listArtifactFiles = (matcher: RegExp): Array<{ filePath: string; fileName: string; isoStampMs: number; mtimeMs: number }> => {
+  if (!fs.existsSync(resultsDir)) {
+    return [];
+  }
+
+  const extractIsoFromName = (fileName: string): number => {
+    const match = fileName.match(/(\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z)/i);
+    if (!match?.[1]) {
+      return Number.NaN;
+    }
+    const normalized = match[1].replace(/-/g, (token, index) => (index < 10 ? '-' : ':')).replace(/:(\d{3})Z$/i, '.$1Z');
+    const parsed = Date.parse(normalized);
+    return Number.isFinite(parsed) ? parsed : Number.NaN;
+  };
+
+  const isBackupLike = (name: string): boolean => {
+    const lower = name.toLowerCase();
+    return lower.includes('checkpoint')
+      || lower.includes('.bak')
+      || lower.includes('backup')
+      || lower.includes('pre-risk-freq-work');
+  };
+
+  return fs.readdirSync(resultsDir)
+    .filter((name) => matcher.test(name) && !isBackupLike(name))
+    .map((name) => {
+      const filePath = path.join(resultsDir, name);
+      return {
+        filePath,
+        fileName: name,
+        isoStampMs: extractIsoFromName(name),
+        mtimeMs: fs.statSync(filePath).mtimeMs,
+      };
+    })
+    .sort((left, right) => {
+      const leftStamp = Number.isFinite(left.isoStampMs) ? left.isoStampMs : -1;
+      const rightStamp = Number.isFinite(right.isoStampMs) ? right.isoStampMs : -1;
+      if (leftStamp !== rightStamp) {
+        return rightStamp - leftStamp;
+      }
+      return right.mtimeMs - left.mtimeMs;
+    });
+};
+
 const getLatestClientCatalogPath = (): string => findLatestFile(/_client_catalog_\d{4}-\d{2}-\d{2}T.*Z\.json$/i);
 const getLatestSweepPath = (): string => findLatestFile(/_historical_sweep_\d{4}-\d{2}-\d{2}T.*Z\.json$/i);
 const SOURCE_ARTIFACT_MAX_AGE_MS = 36 * 60 * 60 * 1000;
@@ -958,6 +1005,141 @@ export const loadLatestClientCatalog = (): CatalogData | null => {
     return null;
   }
   return safeJsonParse<CatalogData>(fs.readFileSync(filePath, 'utf-8'), null as unknown as CatalogData);
+};
+
+const loadCatalogFromFile = (filePath: string): CatalogData | null => {
+  if (!filePath || !fs.existsSync(filePath)) {
+    return null;
+  }
+  return safeJsonParse<CatalogData>(fs.readFileSync(filePath, 'utf-8'), null as unknown as CatalogData);
+};
+
+const getCatalogIntervalKey = (catalog: CatalogData | null | undefined): string => {
+  if (!catalog) {
+    return '';
+  }
+  const config = (catalog.config || {}) as Record<string, unknown>;
+  const explicitIntervals = Array.isArray(config.intervals)
+    ? config.intervals.map((item) => asString(item, '').trim()).filter(Boolean)
+    : [];
+  if (explicitIntervals.length > 0) {
+    return Array.from(new Set(explicitIntervals)).sort().join(',');
+  }
+  return asString(config.interval, '').trim();
+};
+
+const loadLatestClientCatalogsByApiAndInterval = (): CatalogData[] => {
+  const now = Date.now();
+  const rows = listArtifactFiles(/_client_catalog_\d{4}-\d{2}-\d{2}T.*Z\.json$/i);
+  const selected = new Map<string, CatalogData>();
+
+  for (const row of rows) {
+    const catalog = loadCatalogFromFile(row.filePath);
+    if (!catalog || !catalogHasOffers(catalog)) {
+      continue;
+    }
+    const catalogTimestamp = asString(catalog?.timestamp, '') || asString(catalog?.source?.sweepTimestamp, '');
+    const ageMs = Math.max(0, now - toArtifactTimestampMs(catalogTimestamp, row.filePath));
+    if (ageMs > SOURCE_ARTIFACT_MAX_AGE_MS) {
+      continue;
+    }
+    const apiKeyName = asString(catalog.apiKeyName, '').trim();
+    const intervalKey = getCatalogIntervalKey(catalog);
+    if (!apiKeyName || !intervalKey) {
+      continue;
+    }
+    const dedupeKey = `${apiKeyName}::${intervalKey}`;
+    if (!selected.has(dedupeKey)) {
+      selected.set(dedupeKey, catalog);
+    }
+  }
+
+  return Array.from(selected.values());
+};
+
+const mergeCatalogOffers = (catalogs: CatalogData[]): CatalogOffer[] => {
+  const merged = new Map<string, CatalogOffer>();
+  for (const catalog of catalogs) {
+    for (const offer of getAllOffers(catalog)) {
+      const offerId = asString(offer?.offerId, '').trim();
+      if (!offerId || merged.has(offerId)) {
+        continue;
+      }
+      merged.set(offerId, offer);
+    }
+  }
+  return Array.from(merged.values());
+};
+
+const buildMergedStorefrontCatalog = (catalogs: CatalogData[]): CatalogData | null => {
+  if (catalogs.length === 0) {
+    return null;
+  }
+
+  const sortedCatalogs = [...catalogs].sort((left, right) => {
+    const leftTs = Date.parse(asString(left.timestamp, '') || asString(left.source?.sweepTimestamp, '')) || 0;
+    const rightTs = Date.parse(asString(right.timestamp, '') || asString(right.source?.sweepTimestamp, '')) || 0;
+    return rightTs - leftTs;
+  });
+  const offers = mergeCatalogOffers(sortedCatalogs);
+  const mono = offers.filter((offer) => offer.strategy?.mode === 'mono');
+  const synth = offers.filter((offer) => offer.strategy?.mode !== 'mono');
+  const draftMembersByStrategyId = new Map<number, CatalogData['adminTradingSystemDraft']['members'][number]>();
+  for (const catalog of sortedCatalogs) {
+    for (const member of catalog.adminTradingSystemDraft?.members || []) {
+      const strategyId = Number(member.strategyId || 0);
+      if (strategyId > 0 && !draftMembersByStrategyId.has(strategyId)) {
+        draftMembersByStrategyId.set(strategyId, member);
+      }
+    }
+  }
+  const latest = sortedCatalogs[0];
+  return {
+    timestamp: latest.timestamp,
+    apiKeyName: latest.apiKeyName,
+    source: latest.source,
+    config: {
+      ...(latest.config || {}),
+      intervals: Array.from(new Set(sortedCatalogs.map((catalog) => getCatalogIntervalKey(catalog)).filter(Boolean))).sort(),
+      aggregatedCatalogs: sortedCatalogs.map((catalog) => ({
+        apiKeyName: catalog.apiKeyName,
+        interval: getCatalogIntervalKey(catalog),
+        timestamp: catalog.timestamp,
+        sweepTimestamp: catalog.source?.sweepTimestamp || null,
+      })),
+    },
+    counts: {
+      evaluated: sortedCatalogs.reduce((acc, catalog) => acc + Number(catalog.counts?.evaluated || 0), 0),
+      robust: sortedCatalogs.reduce((acc, catalog) => acc + Number(catalog.counts?.robust || 0), 0),
+      monoCatalog: mono.length,
+      synthCatalog: synth.length,
+      adminTsMembers: draftMembersByStrategyId.size,
+      durationSec: sortedCatalogs.reduce((acc, catalog) => acc + Number(catalog.counts?.durationSec || 0), 0),
+    },
+    clientCatalog: { mono, synth },
+    adminTradingSystemDraft: {
+      name: 'SAAS Admin TS (multi-interval storefront source)',
+      members: Array.from(draftMembersByStrategyId.values()),
+      sourcePortfolioSummary: sortedCatalogs.map((catalog) => ({
+        apiKeyName: catalog.apiKeyName,
+        interval: getCatalogIntervalKey(catalog),
+        timestamp: catalog.timestamp,
+        counts: catalog.counts,
+      })),
+    },
+  };
+};
+
+const loadStorefrontCatalogWithFallback = async (): Promise<CatalogData | null> => {
+  const canonical = buildMergedStorefrontCatalog(loadLatestClientCatalogsByApiAndInterval());
+  if (catalogHasOffers(canonical)) {
+    return canonical;
+  }
+  const latest = loadLatestClientCatalog();
+  if (catalogHasOffers(latest)) {
+    return latest;
+  }
+  return null;
 };
 
 export const loadLatestSweep = (): SweepData | null => {
@@ -1113,6 +1295,7 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
       tradeFrequencyScore: Number(clampNumber(asNumber(settingsRaw.tradeFrequencyScore, 5), 0, 10).toFixed(2)),
       initialBalance: Math.max(100, Math.floor(asNumber(settingsRaw.initialBalance, 10000))),
       riskScaleMaxPercent: Number(clampNumber(asNumber(settingsRaw.riskScaleMaxPercent, 40), 0, 400).toFixed(2)),
+      maxOpenPositions: Math.max(0, Math.floor(asNumber(settingsRaw.maxOpenPositions, 0))),
     },
     updatedAt: asString(parsed.updatedAt, new Date().toISOString()),
   };
@@ -4375,9 +4558,10 @@ export const updateAdminTelegramControls = async (payload: {
 };
 
 export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
+  const storefrontCatalog = await loadStorefrontCatalogWithFallback();
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();
-  const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
+  const catalog = storefrontCatalog || sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
   const allOffers = catalog ? getAllOffers(catalog) : [];
   const offerIds = allOffers.map((item) => String(item.offerId));
   const [defaultsRaw, publishedRaw, curatedRaw, reviewSnapshots, tsBacktestSnapshot, tsBacktestSnapshots, storefrontRows, publishedTenantRows, cloudTsRows] = await Promise.all([
@@ -4630,6 +4814,25 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     .filter((row, index, rows) => rows.findIndex((item) => item.offerId === row.offerId) === index)
     .sort((left, right) => right.score - left.score);
 
+  const combinedStrategyIds = Array.from(new Set(
+    combinedRawOffers
+      .map((row) => Number(row.strategyId || 0))
+      .filter((strategyId) => strategyId > 0)
+  ));
+  const strategyIntervalById = new Map<number, string>();
+  if (combinedStrategyIds.length > 0) {
+    const strategyRows = await db.all(
+      `SELECT id, interval FROM strategies WHERE id IN (${combinedStrategyIds.map(() => '?').join(',')})`,
+      combinedStrategyIds,
+    ) as Array<{ id?: number; interval?: string }>;
+    for (const strategyRow of strategyRows) {
+      const strategyId = Number(strategyRow.id || 0);
+      if (strategyId > 0) {
+        strategyIntervalById.set(strategyId, asString(strategyRow.interval, ''));
+      }
+    }
+  }
+
   // Batch-fetch equity curves from presets (medium risk, medium freq = default client view)
   await initResearchDb();
   const equityByOfferId = new Map<string, number[]>();
@@ -4682,24 +4885,24 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     tsBacktestSnapshots,
     tsBacktestSnapshot,
     offers: combinedRawOffers.map((row) => {
-      const presetMetrics = (presetMetricsByOfferId.get(row.offerId) || null) as Record<string, unknown> | null;
+      const resolvedInterval = asString(
+        (row as Record<string, unknown>).interval,
+        strategyIntervalById.get(Number(row.strategyId || 0)) || '',
+      );
       const reviewEq = reviewSnapshots[row.offerId]?.equityPoints;
       const rawEq = (Array.isArray(reviewEq) && reviewEq.length > 0 ? reviewEq : null) || equityByOfferId.get(row.offerId) || [];
-      const hasPresetMetrics = Boolean(presetMetrics);
-      const presetRet = asNumber(presetMetrics?.['totalReturnPercent'] ?? presetMetrics?.['ret'], 0);
-      const presetPf = asNumber(presetMetrics?.['profitFactor'] ?? presetMetrics?.['pf'], 0);
-      const presetDd = asNumber(presetMetrics?.['maxDrawdownPercent'] ?? presetMetrics?.['dd'], 0);
-      const presetTrades = asNumber(presetMetrics?.['tradesCount'] ?? presetMetrics?.['trades'], 0);
-      const ret = Number((hasPresetMetrics ? presetRet : asNumber(row.ret, 0)).toFixed(3));
-      const pf = Number((hasPresetMetrics ? presetPf : asNumber(row.pf, 0)).toFixed(3));
-      const dd = Number((hasPresetMetrics ? presetDd : asNumber(row.dd, 0)).toFixed(3));
-      const trades = Math.max(0, Math.floor(hasPresetMetrics ? presetTrades : asNumber(row.trades, 0)));
+      const ret = Number(asNumber(row.ret, 0).toFixed(3));
+      const pf = Number(asNumber(row.pf, 0).toFixed(3));
+      const dd = Number(asNumber(row.dd, 0).toFixed(3));
+      const trades = Math.max(0, Math.floor(asNumber(row.trades, 0)));
       const periodDaysRow = Math.max(1, Math.floor(asNumber(row.periodDays, defaults.periodDays)));
       const tradesPerDay = Number(asNumber(row.tradesPerDay, trades / Math.max(1, periodDaysRow)).toFixed(3));
       const normalizedEq = normalizeEquityCurveOrientation(rawEq, ret, 10000 * (1 + asNumber(ret, 0) / 100), 10000);
 
       return {
         ...row,
+        interval: resolvedInterval || null,
+        familyInterval: resolvedInterval || null,
         ret,
         pf,
         dd,
@@ -7720,6 +7923,33 @@ export const getStrategyClientState = async (tenantId: number) => {
     } as CatalogOffer;
   });
 
+  const normalizedClientOffers = enrichedOffers.map((offer) => {
+    const familyInterval = asString(
+      (offer as Record<string, unknown>).familyInterval,
+      asString(
+        (offer as Record<string, unknown>).interval,
+        asString(offer.strategy?.params?.interval, ''),
+      ),
+    );
+    const equityPoints = Array.isArray((offer as Record<string, unknown>).equityPoints)
+      ? ((offer as Record<string, unknown>).equityPoints as unknown[])
+        .map((value) => asNumber(value, Number.NaN))
+        .filter((value) => Number.isFinite(value))
+      : Array.isArray(offer.equity?.points)
+        ? offer.equity.points
+          .map((point) => asNumber(point?.equity, Number.NaN))
+          .filter((value) => Number.isFinite(value))
+        : [];
+
+    return {
+      ...offer,
+      interval: familyInterval || null,
+      familyInterval: familyInterval || null,
+      strategyParams: offer.strategy?.params || null,
+      equityPoints,
+    } as CatalogOffer;
+  });
+
   const recommendedSets = buildRecommendedSets(catalog);
   const savedOfferIdsLegacy = profile ? safeJsonParse<string[]>(profile.selected_offer_ids_json, []) : [];
   systemProfiles = await ensureDefaultStrategyClientSystemProfile(tenantId, savedOfferIdsLegacy);
@@ -7762,7 +7992,7 @@ export const getStrategyClientState = async (tenantId: number) => {
     })),
     constraints: buildStrategySelectionConstraints(plan, selectedOffersForConstraints),
     catalog,
-    offers: enrichedOffers,
+    offers: normalizedClientOffers,
     recommendedSets,
     offerStoreDefaults: offerStore.defaults,
     sweepPeriod: buildPeriodInfo(sweep),
@@ -8981,6 +9211,7 @@ export const getAlgofundState = async (
       marginLoadPercent: asNumber(item.metrics.margin_load_percent, 0),
       effectiveLeverage: asNumber(item.metrics.effective_leverage, 0),
     } : null,
+    maxOpenPositions: Math.max(0, Math.floor(asNumber(item?.max_open_positions, 0))),
   })).filter((item) => item.id > 0);
 
   // Attach cached tsBacktestSnapshots to each available system (lightweight — reads from app_runtime_flags)
@@ -9035,6 +9266,7 @@ export const getAlgofundState = async (
         periodDays: snapshot.periodDays,
         finalEquity: snapshot.finalEquity,
         equityPoints: snapshot.equityPoints,
+        backtestSettings: snapshot.backtestSettings,
       };
     }
   }

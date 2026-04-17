@@ -533,6 +533,7 @@ type SaasSummary = {
         tradeFrequencyScore?: number;
         initialBalance?: number;
         riskScaleMaxPercent?: number;
+        maxOpenPositions?: number;
       };
       updatedAt?: string;
     }>;
@@ -551,6 +552,7 @@ type SaasSummary = {
         tradeFrequencyScore?: number;
         initialBalance?: number;
         riskScaleMaxPercent?: number;
+        maxOpenPositions?: number;
       };
       updatedAt?: string;
     } | null;
@@ -589,6 +591,7 @@ type SaasSummary = {
         tradeFrequencyScore?: number;
         initialBalance?: number;
         riskScaleMaxPercent?: number;
+        maxOpenPositions?: number;
       };
     }>;
   };
@@ -888,6 +891,24 @@ type AlgofundState = {
     updatedAt?: string;
     memberCount?: number;
     memberStrategyIds?: number[];
+    maxOpenPositions?: number;
+    backtestSnapshot?: {
+      ret?: number;
+      pf?: number;
+      dd?: number;
+      trades?: number;
+      tradesPerDay?: number;
+      periodDays?: number;
+      finalEquity?: number;
+      equityPoints?: number[];
+      backtestSettings?: {
+        riskScore?: number;
+        tradeFrequencyScore?: number;
+        initialBalance?: number;
+        riskScaleMaxPercent?: number;
+        maxOpenPositions?: number;
+      };
+    } | null;
     metrics?: {
       equityUsd?: number;
       unrealizedPnl?: number;
@@ -3576,6 +3597,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         tradesCount: Number(snapshotForSystem.trades || 0),
       }
       : null;
+    const maxOpenPositions = Math.max(
+      0,
+      Number(snapshotForSystem?.backtestSettings?.maxOpenPositions || runtimeSystem?.maxOpenPositions || 0),
+    );
     const snapshotCurve = mapSnapshotEquityPoints(downsampleNumericSeries(Array.isArray(snapshotForSystem?.equityPoints) ? (snapshotForSystem?.equityPoints || []) : [], 64));
 
     const activeSetKey = String(selectedAdminDraftTsSetKey || '').trim();
@@ -3621,6 +3646,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       tenantCount: tenants.length,
       activeCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.actual_enabled || 0) === 1).length,
       pendingCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.requested_enabled || 0) === 1 && Number(tenant.algofundProfile?.actual_enabled || 0) !== 1).length,
+      maxOpenPositions,
     };
     }).filter((item) => {
       if (!item.hasMeaningfulState) {
@@ -6498,6 +6524,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               tradeFrequencyScore: Number(adminSweepBacktestTradeScore ?? 5),
               initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
               riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 40),
+              maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
             },
           },
         },
@@ -6514,6 +6541,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           tradeFrequencyScore: Number(adminSweepBacktestTradeScore ?? 5),
           initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
           riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 40),
+          maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
         }
       );
       await loadSummary('full');
@@ -10264,6 +10292,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                             : <Tag color="blue">сделок {formatNumber(item.summary.tradesCount, 0)}</Tag>;
                                                         })()
                                                       : null}
+                                                    {Number(item.maxOpenPositions || 0) > 0 ? <Tag color="volcano">ОП {Number(item.maxOpenPositions || 0)}</Tag> : null}
                                                   </Space>
                                                   {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
                                                     <ChartComponent data={item.equityCurve} type="line" fixedHeight={120} />
