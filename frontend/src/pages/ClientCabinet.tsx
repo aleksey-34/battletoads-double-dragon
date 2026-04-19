@@ -14,6 +14,7 @@ import {
   List,
   Modal,
   Popconfirm,
+  Pagination,
   Row,
   Segmented,
   Select,
@@ -425,12 +426,11 @@ const normalizeOfferEquityValues = (points: number[], offer?: StrategyOffer | nu
     return Array.isArray(points) ? points : [];
   }
 
-  const ret = Number(offer?.metrics?.ret || 0);
-  const expectedFinalEquity = 10000 * (1 + ret / 100);
-  const firstDistance = Math.abs(Number(points[0] || 0) - expectedFinalEquity);
-  const lastDistance = Math.abs(Number(points[points.length - 1] || 0) - expectedFinalEquity);
+  const initialBalance = 10000;
+  const firstDistance = Math.abs(Number(points[0] || 0) - initialBalance);
+  const lastDistance = Math.abs(Number(points[points.length - 1] || 0) - initialBalance);
 
-  if (firstDistance + 1e-6 < lastDistance) {
+  if (lastDistance + 1e-6 < firstDistance) {
     return [...points].reverse();
   }
 
@@ -542,6 +542,8 @@ const tsDisplayName = (systemName: string): string => {
 
 const capabilityTag = (label: string, enabled: boolean) => <Tag color={enabled ? 'success' : 'default'}>{label}: {enabled ? 'on' : 'off'}</Tag>;
 
+const CLIENT_STOREFRONT_PAGE_SIZE = 24;
+
 const ClientCabinet: React.FC = () => {
   const { t } = useI18n();
   const navigate = useNavigate();
@@ -578,6 +580,8 @@ const ClientCabinet: React.FC = () => {
   const [strategyTradeInput, setStrategyTradeInput] = useState(5);
   const [offerFilterInstrument, setOfferFilterInstrument] = useState<string>('all');
   const [offerSortBy, setOfferSortBy] = useState<'ret' | 'dd' | 'pf' | 'trades'>('ret');
+  const [clientStorefrontPage, setClientStorefrontPage] = useState(1);
+  const [algofundStorefrontPageState, setAlgofundStorefrontPageState] = useState(1);
   const [strategySelectionPreview, setStrategySelectionPreview] = useState<StrategySelectionPreviewResponse | null>(null);
   const [strategySelectionPreviewLoading, setStrategySelectionPreviewLoading] = useState(false);
   const [singleOfferPreview, setSingleOfferPreview] = useState<any>(null);
@@ -659,6 +663,51 @@ const ClientCabinet: React.FC = () => {
     }))),
     [monitoring]
   );
+
+  const strategyStorefrontOffers = useMemo(() => {
+    const workspaceOffers = strategyWorkspace?.offers;
+    const offers = Array.isArray(workspaceOffers) ? [...workspaceOffers] : [];
+    return offers
+      .filter((offer) => offerFilterInstrument === 'all' || offer.strategy.market === offerFilterInstrument)
+      .sort((a, b) => {
+        const aSelected = strategyOfferIds.includes(a.offerId) ? 0 : 1;
+        const bSelected = strategyOfferIds.includes(b.offerId) ? 0 : 1;
+        if (aSelected !== bSelected) return aSelected - bSelected;
+
+        if (offerSortBy === 'ret') return Number(b.metrics.ret || 0) - Number(a.metrics.ret || 0);
+        if (offerSortBy === 'dd') return Number(a.metrics.dd || 0) - Number(b.metrics.dd || 0);
+        if (offerSortBy === 'pf') return Number(b.metrics.pf || 0) - Number(a.metrics.pf || 0);
+        if (offerSortBy === 'trades') return Number(b.metrics.trades || 0) - Number(a.metrics.trades || 0);
+
+        return Number(b.metrics.ret || 0) - Number(a.metrics.ret || 0);
+      });
+  }, [strategyWorkspace?.offers, offerFilterInstrument, offerSortBy, strategyOfferIds]);
+
+  const strategyStorefrontPageCount = Math.max(1, Math.ceil(strategyStorefrontOffers.length / CLIENT_STOREFRONT_PAGE_SIZE));
+  const strategyStorefrontPage = Math.min(clientStorefrontPage, strategyStorefrontPageCount);
+  const strategyStorefrontPagedOffers = strategyStorefrontOffers.slice(
+    (strategyStorefrontPage - 1) * CLIENT_STOREFRONT_PAGE_SIZE,
+    strategyStorefrontPage * CLIENT_STOREFRONT_PAGE_SIZE,
+  );
+
+  const algofundStorefrontPageCount = Math.max(1, Math.ceil(algofundAvailableSystems.length / CLIENT_STOREFRONT_PAGE_SIZE));
+  const algofundStorefrontPage = Math.min(algofundStorefrontPageState, algofundStorefrontPageCount);
+  const algofundStorefrontPagedSystems = algofundAvailableSystems.slice(
+    (algofundStorefrontPage - 1) * CLIENT_STOREFRONT_PAGE_SIZE,
+    algofundStorefrontPage * CLIENT_STOREFRONT_PAGE_SIZE,
+  );
+
+  useEffect(() => {
+    if (clientStorefrontPage !== strategyStorefrontPage) {
+      setClientStorefrontPage(strategyStorefrontPage);
+    }
+  }, [clientStorefrontPage, strategyStorefrontPage]);
+
+  useEffect(() => {
+    if (algofundStorefrontPageState !== algofundStorefrontPage) {
+      setAlgofundStorefrontPageState(algofundStorefrontPage);
+    }
+  }, [algofundStorefrontPageState, algofundStorefrontPage]);
 
   const loadWorkspace = async () => {
     setLoading(true);
@@ -1142,7 +1191,10 @@ const ClientCabinet: React.FC = () => {
                     size="small"
                     style={{ width: 180 }}
                     value={offerFilterInstrument}
-                    onChange={setOfferFilterInstrument}
+                    onChange={(value) => {
+                      setOfferFilterInstrument(value);
+                      setClientStorefrontPage(1);
+                    }}
                     options={[
                       { value: 'all', label: `Все инструменты (${strategyWorkspace.offers.length})` },
                       ...Array.from(new Set(strategyWorkspace.offers.map((o) => o.strategy.market).filter(Boolean))).sort().map((m) => ({
@@ -1155,7 +1207,10 @@ const ClientCabinet: React.FC = () => {
                     size="small"
                     style={{ width: 160 }}
                     value={offerSortBy}
-                    onChange={setOfferSortBy}
+                    onChange={(value) => {
+                      setOfferSortBy(value);
+                      setClientStorefrontPage(1);
+                    }}
                     options={[
                       { value: 'ret', label: '↓ По доходности' },
                       { value: 'dd', label: '↑ По просадке' },
@@ -1165,20 +1220,7 @@ const ClientCabinet: React.FC = () => {
                   />
                 </Space>
                 <Row gutter={[12, 12]}>
-                  {[...strategyWorkspace.offers]
-                    .filter((o) => offerFilterInstrument === 'all' || o.strategy.market === offerFilterInstrument)
-                    .sort((a, b) => {
-                    const aS = strategyOfferIds.includes(a.offerId) ? 0 : 1;
-                    const bS = strategyOfferIds.includes(b.offerId) ? 0 : 1;
-                    if (aS !== bS) return aS - bS;
-
-                    if (offerSortBy === 'ret') return Number(b.metrics.ret || 0) - Number(a.metrics.ret || 0);
-                    if (offerSortBy === 'dd') return Number(a.metrics.dd || 0) - Number(b.metrics.dd || 0);
-                    if (offerSortBy === 'pf') return Number(b.metrics.pf || 0) - Number(a.metrics.pf || 0);
-                    if (offerSortBy === 'trades') return Number(b.metrics.trades || 0) - Number(a.metrics.trades || 0);
-
-                    return Number(b.metrics.ret || 0) - Number(a.metrics.ret || 0);
-                  }).map((offer) => (
+                  {strategyStorefrontPagedOffers.map((offer) => (
                     <Col key={offer.offerId} xs={24} sm={12} md={8} xl={6}>
                       <Card size="small" bordered style={strategyOfferIds.includes(offer.offerId) ? { borderColor: '#f5a623', borderWidth: 2 } : undefined}>
                         <Space direction="vertical" size={6} style={{ width: '100%' }}>
@@ -1229,6 +1271,16 @@ const ClientCabinet: React.FC = () => {
                     </Col>
                   ))}
                 </Row>
+                {strategyStorefrontOffers.length > CLIENT_STOREFRONT_PAGE_SIZE ? (
+                  <Pagination
+                    size="small"
+                    current={strategyStorefrontPage}
+                    total={strategyStorefrontOffers.length}
+                    pageSize={CLIENT_STOREFRONT_PAGE_SIZE}
+                    showSizeChanger={false}
+                    onChange={(page) => setClientStorefrontPage(page)}
+                  />
+                ) : null}
                 {strategyWorkspace.capabilities?.settings ? (
                   <Space wrap>
                     <Typography.Text>
@@ -1508,7 +1560,7 @@ const ClientCabinet: React.FC = () => {
             ) : (
               <>
                 <Row gutter={[12, 12]}>
-                  {algofundAvailableSystems.map((system) => {
+                  {algofundStorefrontPagedSystems.map((system) => {
                     const systemName = String(system?.name || '').trim();
                     const matchingActiveSystems = algofundActiveSystems.filter((item) => String(item.systemName || '').trim() === systemName);
                     const isCurrent = isAlgofundSystemEnabled(systemName);
@@ -1568,6 +1620,17 @@ const ClientCabinet: React.FC = () => {
                     );
                   })}
                 </Row>
+                {algofundAvailableSystems.length > CLIENT_STOREFRONT_PAGE_SIZE ? (
+                  <Pagination
+                    size="small"
+                    current={algofundStorefrontPage}
+                    total={algofundAvailableSystems.length}
+                    pageSize={CLIENT_STOREFRONT_PAGE_SIZE}
+                    showSizeChanger={false}
+                    onChange={(page) => setAlgofundStorefrontPageState(page)}
+                    style={{ marginTop: 12 }}
+                  />
+                ) : null}
               </>
             )}
           </Card>

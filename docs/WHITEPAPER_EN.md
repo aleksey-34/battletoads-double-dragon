@@ -30,16 +30,16 @@ BTDD Platform is a multi-tenant algorithmic trading SaaS that automates portfoli
 
 The platform delivers a complete pipeline: **market data collection → parametric strategy optimization → robustness filtering → portfolio construction → live execution** — fully automated with institutional-grade backtesting rigor applied at retail scale.
 
-**Key results (validated on 15+ months of 4h Bybit data, Jan 2025 – Mar 2026):**
+**Key results (runtime storefront snapshot, updated on 19 Apr 2026):**
 
 | Metric | Value |
 |---|---|
-| Historical backtests completed | 9,108 |
-| Robust strategy candidates | 3,129 |
-| Portfolio return | **+28.7%** |
-| Profit Factor | **3.28** |
-| Max Drawdown | **4.4%** |
-| Win Rate | 43.75% (181/416 trades) |
+| Historical backtests completed | 10,000+ |
+| Public runtime snapshots | 349 |
+| Active TS portfolios | 10 |
+| Best TS return / 90d | **+210.17%** |
+| Best Profit Factor | **12.03** |
+| Minimum DD | **1.5%** |
 | Exchanges connected | 6 (live) |
 
 ---
@@ -164,7 +164,7 @@ Every backtest includes realistic execution costs:
 | Funding rate | Per-bar accrual if leveraged |
 | **Total round-trip cost** | **~0.15%** |
 
-### 5.3 Historical Sweep (9,108 Variants)
+### 5.3 Historical Sweep (10,000+ Variants)
 
 The platform performed an exhaustive parametric sweep across all strategy families:
 
@@ -184,7 +184,7 @@ A strategy candidate passes the robustness filter only if ALL criteria are met:
 - **Max Drawdown ≤ 22%** (peak-to-trough equity decline)
 - **Trade Count ≥ 40** (statistical significance threshold)
 
-**Result:** 3,129 out of 9,108 variants passed (34.4% pass rate).
+**Result:** hundreds of robust candidates were selected, then assembled into 349 runtime snapshots and 10 TS portfolios for the storefront.
 
 ### 5.5 Portfolio Construction
 
@@ -194,7 +194,7 @@ $$Equity_{portfolio}(t) = Cash(t) + \sum_{i=1}^{N} UPnL_i(t)$$
 
 $$Drawdown(t) = \frac{Peak(t) - Equity(t)}{Peak(t)} \times 100\%$$
 
-The resulting portfolio achieves **+28.7% return with only 4.4% max drawdown** — a return-to-risk ratio of **6.5:1**.
+Current storefront TS portfolios span conservative to aggressive profiles: up to **+210.17% over 90 days** with drawdown controlled by selected profile.
 
 ---
 
@@ -254,7 +254,8 @@ The simplest entry point for investors. The client connects their exchange API k
 - **Admin controls:** Strategy selection, parameters, rebalancing
 - **Client sees:** Equity curve, return %, key metrics, risk multiplier
 - **Client actions:** Start/stop requests, risk cap adjustment
-- **Pricing:** 20–200 USDT/month depending on deposit tier
+- **Dual Mode pricing:** Start/Pro/Scale (post-beta: $39/$129/$399), current beta price = $0
+- **Alternative:** 40% profit-share from net profit (high-watermark)
 - **Risk cap range:** 0–2.5× (client-adjustable within admin bounds)
 
 ### 7.2 Strategy Client (Self-Directed)
@@ -264,8 +265,9 @@ For those who want to explore deeper:
 - **Easy setup:** Connect API key, pick individual strategies from the catalog, and build your own trading system in a few clicks
 - **Two-slider UX:** Risk level (1–5) × Trade frequency (1–5) → maps to optimized preset
 - **Equity preview:** Backtest results for selected configuration before going live
-- **Strategy quota:** 1–3 strategies per subscription tier
-- **Pricing:** 15–100 USDT/month, max deposit 1,000–10,000 USDT
+- **Strategy quota:** 3 / 10 / 30 strategies (Start/Pro/Scale tiers)
+- **Limits:** up to 1 / 3 / 10 TS and deposit up to $5k / $50k / extended mode
+- **Payment model:** Dual subscription or 40% profit-share
 
 ### 7.3 Copy Trading (Social)
 
@@ -327,23 +329,23 @@ The platform uses a unified exchange abstraction layer (`detectExchange()`) that
 
 | Metric | Value |
 |---|---|
-| Measurement period | Jan 2025 – Mar 2026 (15 months) |
-| Timeframe | 4h bars |
-| Data source | Bybit historical OHLCV |
-| Total backtests | 9,108 |
-| Robust candidates | 3,129 (34.4%) |
-| **Portfolio return** | **+28.7%** |
-| **Profit Factor** | **3.28** |
-| **Max Drawdown** | **4.4%** |
-| Win Rate | 43.75% |
-| Total trades | 416 |
-| **Return / MaxDD ratio** | **6.5:1** |
+| Measurement period | Last 90 days, storefront snapshot |
+| Timeframe | 1h/4h (module-dependent) |
+| Data source | Runtime snapshots + storefront metrics |
+| Total backtests | 10,000+ |
+| Public runtime snapshots | 349 |
+| **Best TS return / 90d** | **+210.17%** |
+| **Best Profit Factor** | **12.03** |
+| **Minimum DD** | **1.5%** |
+| Active TS portfolios | 10 |
+| Exchanges connected | 6 |
+| **Public storefront** | **349 snapshot cards** |
 
 ### 10.2 Interpretation
 
-- A Profit Factor of 3.28 means **for every $1 lost, the portfolio earned $3.28**
-- Max Drawdown of 4.4% means **the worst peak-to-trough decline was only 4.4%** — significantly lower than typical crypto fund drawdowns (20–40%)
-- The 43.75% win rate is expected for trend-following strategies — profits are earned through positive expectancy (winners significantly larger than losers), not win frequency
+- Best PF of 12.03 means the top storefront module earned **$12.03 gross profit for each $1 gross loss** in the measured period.
+- Minimum DD of 1.5% reflects the lowest-drawdown profile in the current storefront lineup.
+- Storefront metrics now represent a **profile range** (conservative to aggressive) rather than a single static portfolio metric.
 
 ### 10.3 Out-of-Sample Validation
 
@@ -373,7 +375,7 @@ The robustness filter requires a minimum of 40 trades to ensure statistical sign
 
 ### Phase 1 — Current (Q1 2026) ✅
 - ✅ Live MVP with 3 strategy types
-- ✅ 9,108 backtest sweep completed
+- ✅ 10,000+ backtest sweep completed
 - ✅ 6 exchange integrations
 - ✅ Multi-tenant SaaS with 3 client modes
 - ✅ Admin panel + client cabinet

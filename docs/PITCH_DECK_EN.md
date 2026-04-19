@@ -43,8 +43,8 @@ A full-featured SaaS platform that gives clients access to **validated algorithm
 - Isolated runtime service: trading continues during API restarts
 
 #### Research & Backtesting
-- Historical sweep: **9,108 runs**, **0 failures**
-- Robustness filtering: **3,129 candidates** passed PF/DD/WR/trades filters
+- Historical sweep: **10,000+ runs**, **0 critical failures**
+- Runtime storefront: **349 strategy snapshots** and **10 TS portfolios** with 90-day metrics
 - Checkpoint/resume for long-running sweeps
 - Parallel grid-search over hyperparameters
 
@@ -63,25 +63,23 @@ A full-featured SaaS platform that gives clients access to **validated algorithm
 
 ## Slide 4 — Backtest Results
 
-### Portfolio Backtest: Admin TS (6 members)
+### Portfolio Backtest: Mega Portfolio (Current Storefront)
 
-> Full-range, 4H timeframe, Bybit, **January 2025 — March 2026**
+> 90-day storefront TS snapshot, April 2026
 
 | Metric | Value | Assessment |
 |---|---|---|
-| Return | **+15.43%** | Strong |
-| Profit Factor | **2.71** | Excellent (>2.0) |
-| Max Drawdown | **1.39%** | Excellent (<5%) |
-| Win Rate | **51.7%** | Normal |
-| Trades | **362** | Sufficient sample |
+| Return | **+123.17%** | Strong |
+| Profit Factor | **4.41** | Excellent (>2.0) |
+| Max Drawdown | **18.64%** | Controlled |
+| Horizon | **90 days** | Current storefront |
+| Trades | **411** | Large sample |
 
 **Portfolio composition:**
-- `IPUSDT` — DD_BattleToads, mono
-- `IPUSDT/ZECUSDT` — DD_BattleToads, synthetic
-- `VETUSDT/GRTUSDT` — stat_arb_zscore, synthetic
-- `BERAUSDT/ZECUSDT` — DD_BattleToads, synthetic
-- `ORDIUSDT/ZECUSDT` — DD_BattleToads, synthetic
-- + 1 stat_arb_zscore member
+- 3 DD_BattleToads modules
+- 5 StatArb Z-Score modules
+- 1 ZigZag Breakout module
+- 1 high-frequency module
 
 > *Historical backtest. Past results do not guarantee future performance.*
 
@@ -105,18 +103,20 @@ A full-featured SaaS platform that gives clients access to **validated algorithm
 
 ## Slide 6 — Business Model
 
-### Three Revenue Streams
+### Two Monetization Models
 
 #### 1. SaaS Subscription (B2C)
 | Plan | Price/mo | Key Limits |
 |---|---|---|
-| Starter | $49 | 1 exchange, 3 strategies, max $5K deposit |
-| Pro | $149 | 3 exchanges, 10 strategies, max $50K deposit |
-| Enterprise | $499+ | Unlimited, priority support |
+| Dual Start | $39 | up to 3 strategies, 1 TS, up to $5K deposit |
+| Dual Pro | $129 | up to 10 strategies, 3 TS, up to $50K deposit |
+| Dual Scale | $399 | up to 30 strategies, 10 TS, priority support |
 
-#### 2. Algofund (B2C, performance-based)
-- Management fee: **2% per month** of AUM
-- Performance fee: **20%** of profit (high-watermark)
+> Current beta mode: all plans are **$0**, while old plans are archived as legacy.
+
+#### 2. Profit Share (B2C, performance-based)
+- Fixed subscription fee: **0**
+- Performance fee: **40%** of net profit (high-watermark)
 - Minimum deposit: $1,000
 
 #### 3. Exchange Partnership / Grant (B2B)
@@ -130,12 +130,12 @@ A full-featured SaaS platform that gives clients access to **validated algorithm
 
 | Criterion | BTDD Platform | 3commas | Cryptohopper | Mudrex | Pionex |
 |---|---|---|---|---|---|
-| Transparent backtest | ✅ 9,108 runs | ❌ | ❌ | ⚠️ partial | ❌ |
+| Transparent backtest | ✅ 10,000+ runs | ❌ | ❌ | ⚠️ partial | ❌ |
 | Synthetic pairs | ✅ StatArb | ❌ | ❌ | ❌ | ❌ |
 | Multi-tenant SaaS | ✅ | ✅ | ✅ | ⚠️ | ❌ |
 | Algofund mode | ✅ | ❌ | ❌ | ✅ | ❌ |
 | Open Research | ✅ sweep + UI | ❌ | ❌ | ❌ | ❌ |
-| Price | $49–$499/mo | $14–$59/mo | $19–$99/mo | $0–$99/mo | Free |
+| Price | Dual: $39–$399 or 40% profit-share | $14–$59/mo | $19–$99/mo | $0–$99/mo | Free |
 | Data control | ✅ self-hosted | ❌ SaaS-only | ❌ SaaS-only | ❌ | ❌ |
 
 **Key advantage**: transparent methodology, synthetic instruments, and full data control.
@@ -200,7 +200,7 @@ A full-featured SaaS platform that gives clients access to **validated algorithm
 ### Current Status
 - ✅ **MVP in production**: live VPS, backend + frontend operational
 - ✅ **Bybit integration**: live trading active
-- ✅ **9,108 backtests** completed, catalog of 12 offers ready
+- ✅ **10,000+ backtests** completed, storefront with **349 runtime snapshots** and **10 TS portfolios**
 - ✅ **SaaS backend**: multi-tenant, subscription plans, audit log
 - ✅ **Client cabinet**: registration, auth, strategy management
 

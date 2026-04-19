@@ -9799,6 +9799,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                       <Tag color={storefrontOfferIds.has(String(row.offerId || '')) ? 'processing' : 'default'}>{storefrontOfferIds.has(String(row.offerId || '')) ? '✓ curated' : '⊘ not curated'}</Tag>
                                                       <Tag color={publishedOfferIds.has(String(row.offerId || '')) ? 'success' : 'default'}>{publishedOfferIds.has(String(row.offerId || '')) ? '✓ published' : '⊘ not published'}</Tag>
                                                     </Space>
+                                                    <Tooltip title="Бэктест учитывает: комиссию 0.1% (вход+выход), проскальзывание 0.05%, направленный слиппедж. Прошлые результаты не гарантируют будущую доходность."><Text type="secondary" style={{ fontSize: 10, cursor: 'help' }}>ⓘ С учётом комиссий и слиппеджа</Text></Tooltip>
                                                     {points.length >= 2 ? (
                                                       <ChartComponent
                                                         data={(() => { const nowSec = Math.floor(Date.now() / 1000); const dayS = 86400; const startSec = nowSec - (points.length - 1) * dayS; return points.map((value, index) => ({ time: startSec + index * dayS, equity: value })); })()}
@@ -10509,6 +10510,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                   ) : (
                                                     <Text type="secondary" style={{ fontSize: 12 }}>График не сохранен</Text>
                                                   )}
+                                                  <Tooltip title="Бэктест учитывает: комиссию 0.1% (вход+выход), проскальзывание 0.05%, направленный слиппедж. Прошлые результаты не гарантируют будущую доходность."><Text type="secondary" style={{ fontSize: 10, cursor: 'help' }}>ⓘ С учётом комиссий и слиппеджа</Text></Tooltip>
                                                   {item.tenants.length > 0
                                                     ? <Text type="secondary" style={{ fontSize: 12 }}>{item.tenants.map((t) => t.tenant.display_name).join(', ')}</Text>
                                                     : <Text type="secondary" style={{ fontSize: 12 }}>Нет подключённых клиентов</Text>}
@@ -12243,7 +12245,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               showIcon
               message={isAdminSurface
                 ? "Sweep backtest: настрой риск и частоту сделок, проверь сделки/PnL/DD/margin и графики, сохрани метрики карточки и реши — отправить на витрину или закрыть."
-                : "Настройте уровень риска и посмотрите, как изменится кривая доходности вашего портфеля."
+                : "Настройте уровень риска и посмотрите, как изменится кривая доходности вашего портфеля. Результаты учитывают комиссию 0.1% и проскальзывание 0.05%."
               }
             />
             {isAdminSurface && backtestDrawerContext.kind === 'algofund-ts' ? (
@@ -12479,7 +12481,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             </Row>
 
             {adminSweepBacktestResult ? (
-              <Card size="small" title={adminSweepBacktestStale ? <Space><Tag color="orange">⟳ Пересчёт запущен...</Tag><span>Результат sweep backtest</span></Space> : 'Результат sweep backtest'}>
+              <Card size="small" title={adminSweepBacktestStale ? <Space><Tag color="orange">⟳ Пересчёт запущен...</Tag><span>Результат sweep backtest</span></Space> : <Tooltip title="Комиссия: 0.1% на сделку (вход + выход) • Проскальзывание: 0.05% • Направленный слиппедж (лонг-вход дороже, шорт-вход дешевле) • Прошлые результаты не гарантируют будущую доходность"><span style={{ cursor: 'help' }}>Результат sweep backtest ⓘ</span></Tooltip>}>
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   {(() => {
                     const rawEquitySeries = toLineSeriesData(adminSweepBacktestResult.preview?.equity || []);

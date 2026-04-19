@@ -866,8 +866,8 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
   const bars = Math.max(120, Math.floor(asNumber(raw.bars, 1200)));
   const warmupBars = Math.max(0, Math.min(5000, Math.floor(asNumber(raw.warmupBars, 0))));
   const initialBalance = Math.max(10, asNumber(raw.initialBalance, 1000));
-  const commissionPercent = clamp(asNumber(raw.commissionPercent, 0.06), 0, 5);
-  const slippagePercent = clamp(asNumber(raw.slippagePercent, 0.03), 0, 5);
+  const commissionPercent = clamp(asNumber(raw.commissionPercent, 0.1), 0, 5);
+  const slippagePercent = clamp(asNumber(raw.slippagePercent, 0.05), 0, 5);
   const fundingRatePercent = clamp(asNumber(raw.fundingRatePercent, 0), -5, 5);
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(raw.maxOpenPositions, 0)));
   const dateFromMs = parseTimestampMs(raw.dateFrom);

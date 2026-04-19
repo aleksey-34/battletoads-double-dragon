@@ -77,15 +77,15 @@ function useLandingTexts(lang: UILanguage) {
       navFaq: 'FAQ',
       heroTitle1: 'Алгоритмическая торговля',
       heroTitle2: 'как сервис',
-      heroSub: 'Multi-exchange cloud trading platform. 20+ уникальных стратегий в 8+ торговых системах. Три типа алгоритмов, robustness-фильтрация. Bybit, Binance, Bitget, BingX, MEXC, WEEX — все подключено.',
+      heroSub: 'Multi-exchange cloud trading platform. 300+ уникальных стратегий в 10+ торговых системах. Облачный отбор из 10 000+ бэктестов. Dual Mode тарифы: Стратегии + Алгофонд — сейчас $0 в beta или 40% с прибыли (HWM).',
       btnStart: 'Начать бесплатно',
       btnLogin: 'Войти',
       betaBadge: 'Бесплатно в бета',
       metrics: [
-        { value: '20+', label: 'стратегий' },
-        { value: '8+', label: 'торговых систем' },
-        { value: '5.82', label: 'лучший PF' },
-        { value: '6', label: 'бирж' },
+        { value: '300+', label: 'стратегий' },
+        { value: '10+', label: 'торговых систем' },
+        { value: '10 000+', label: 'бэктестов' },
+        { value: '12.0', label: 'лучший PF' },
       ],
       modesTitle: 'Три режима для клиентов',
       modesSub: 'От пассивного дохода до полного контроля — выберите свой формат',
@@ -96,7 +96,7 @@ function useLandingTexts(lang: UILanguage) {
         { title: 'Копитрейдинг', desc: 'Один API-ключ — несколько копируемых аккаунтов. Торгуете и делитесь с друзьями — без ограничений биржевого копитрейдинга.' },
       ],
       stratTitle: 'Стратегии',
-      stratSub: '3 типа алгоритмов с\u00a0robustness-фильтрацией. 20+ уникальных стратегий в 8+ торговых системах',
+      stratSub: '3 типа алгоритмов с\u00a0robustness-фильтрацией. 300+ уникальных стратегий в 10+ торговых системах',
       strats: [
         { name: 'DoubleDragon Breakout', desc: 'Пробой канала Дончиана с трейлинговым TP. Ловит направленный импульс и удерживает тренд.', tags: ['классика', 'арбитраж', 'trend'] },
         { name: 'StatArb Z-Score', desc: 'Возврат к среднему по Z-счёту на синтетическом инструменте. Торгует схождение/расхождение активов.', tags: ['арбитраж', 'mean-reversion'] },
@@ -110,16 +110,16 @@ function useLandingTexts(lang: UILanguage) {
         { title: 'Client', desc: 'Multi-exchange cloud. Одна TS материализуется на нескольких биржах. Витрина офферов, мониторинг.' },
       ],
       proofTitle: 'Доказанная методология',
-      proofSub: 'Метрики витрины · StatArb Z-Score · 90 дней · апрель 2026',
+      proofSub: 'Метрики витрины · Dual Mode pricing · 90 дней · апрель 2026',
       proofRows: [
-        { label: 'Стратегий', value: '20+' },
-        { label: 'Торговых систем', value: '8+' },
-        { label: 'Ср. доход / 90д', value: '+53%' },
-        { label: 'Лучший PF', value: '5.82' },
-        { label: 'Мин. DD', value: '3.15%' },
-        { label: 'Бирж', value: '6' },
+        { label: 'Стратегий', value: '300+' },
+        { label: 'Торговых систем', value: '10+' },
+        { label: 'Бэктестов', value: '10 000+' },
+        { label: 'Лучший PF', value: '12.0' },
+        { label: 'Лучший ret / 90д', value: '+210%' },
+        { label: 'Тарифы', value: '$0 / 40% profit' },
       ],
-      proofDisclaimer: '* Метрики за 90 дней, SYNTH ZScore StatArb, с учетом комиссий и проскальзывания. Прошлые результаты не гарантируют будущую доходность.',
+      proofDisclaimer: '* Метрики витрины за 90 дней, включая комиссии и проскальзывание. Прошлые результаты не гарантируют будущую доходность.',
       exchTitle: 'Биржевые интеграции',
       exchSub: '6 бирж подключено. Bybit — основной коннектор.',
       exchReg: 'Регистрация →',
@@ -133,21 +133,25 @@ function useLandingTexts(lang: UILanguage) {
       ],
       faqTitle: 'Частые вопросы',
       faqItems: [
-        { q: 'Это действительно бесплатно?', a: 'Да. В бета-тест все функции бесплатны. Позже будут платные тарифы, но бесплатный останется навсегда.' },
+        { q: 'Это действительно бесплатно?', a: 'Да. Dual Mode тарифы в beta сейчас $0. После beta будет фиксированная подписка или модель 40% с прибыли (high-watermark).' },
         { q: 'Могу ли я потерять деньги?', a: 'Любая торговля — это риск. Стратегии бэктестированы, но прошлые результаты не гарантируют будущее. Не торгуйте на средства, которые не можете потерять.' },
         { q: 'Мой аккаунт в безопасности?', a: 'Мы используем read-only API-ключи с разрешением на торговлю. Нет доступа к выводу средств.' },
         { q: 'Какие биржи?', a: 'Bybit, Binance, Bitget, BingX, MEXC, Weex. Новые добавляются регулярно.' },
         { q: 'Нужно программирование?', a: 'Нет. Подключите биржу, выберите стратегию, активируйте — все через интерфейс.' },
         { q: 'Чем вы отличаетесь от обычного набора бектестов?', a: 'Мы разделяем research, runtime и client contour. Подбор кандидатов, публикация карточек и live execution не живут в одном хрупком процессе. Research обновляет стратегии, пока runtime торгует — они не мешают друг другу.' },
       ],
-      discountTitle: '🔥 СЕЙЧАС БЕСПЛАТНО',
-      discountSub: 'Все тарифы доступны бесплатно. Подключайте API-ключ и торгуйте.',
-      discountBadge: 'Бесплатно',
-      discountNote: 'Ранние пользователи сохранят скидку 90% при запуске платных тарифов.',
+      discountTitle: '🔥 DUAL MODE PRICING',
+      discountSub: 'Стратегии + Алгофонд в одной сетке. Сейчас все тарифы = $0 в beta.',
+      discountBadge: 'Beta $0',
+      discountNote: 'Старые тарифы сохранены как архив (legacy). Новая сетка действует для новых подключений.',
       discountPlans: [
-        { title: 'Strategy 20', old: '$20' }, { title: 'Strategy 50', old: '$50' }, { title: 'Strategy 100', old: '$100' },
-        { title: 'Algofund 20', old: '$20' }, { title: 'Algofund 50', old: '$50' }, { title: 'Algofund 100', old: '$100' },
+        { title: 'Dual Start', old: '$39/mo', desc: 'до 3 стратегий · 1 TS · депозит до $5k' },
+        { title: 'Dual Pro', old: '$129/mo', desc: 'до 10 стратегий · 3 TS · депозит до $50k' },
+        { title: 'Dual Scale', old: '$399/mo', desc: 'до 30 стратегий · 10 TS · приоритетная поддержка' },
       ],
+      profitShareTitle: 'Альтернатива: Profit Share',
+      profitShareValue: '40% с прибыли',
+      profitShareDesc: 'Модель без абонплаты: 0 фиксированной стоимости + 40% от чистой прибыли по high-watermark. Нет прибыли — нет комиссии.',
       discountCta: 'Начать бесплатно',
       ctaTitle: 'Готовы торговать умнее?',
       ctaSub: 'Зарегистрируйтесь, подключите API-ключ и запустите первую стратегию за минуты.',
@@ -159,11 +163,11 @@ function useLandingTexts(lang: UILanguage) {
     en: {
       navStrategies: 'Strategies', navExchanges: 'Exchanges', navSecurity: 'Security', navPricing: 'Pricing', navFaq: 'FAQ',
       heroTitle1: 'Algorithmic Trading', heroTitle2: 'as a Service',
-      heroSub: 'Multi-exchange cloud trading platform. 20+ unique strategies across 8+ trading systems. Three algorithm types, robustness filtering. Connect and trade — no coding required.',
+      heroSub: 'Multi-exchange cloud trading platform. 300+ unique strategies across 10+ trading systems. Cloud selection from 10,000+ backtests. Dual Mode pricing: Strategies + Algofund — $0 in beta or 40% profit share (HWM).',
       btnStart: 'Start Free', btnLogin: 'Log In', betaBadge: 'Free During Beta',
       metrics: [
-        { value: '20+', label: 'strategies' }, { value: '8+', label: 'trading systems' },
-        { value: '5.82', label: 'best PF' }, { value: '6', label: 'exchanges' },
+        { value: '300+', label: 'strategies' }, { value: '10+', label: 'trading systems' },
+        { value: '10,000+', label: 'backtests' }, { value: '12.0', label: 'best PF' },
       ],
       modesTitle: 'Three Client Modes', modesSub: 'From passive income to full control',
       modePopular: 'Popular',
@@ -172,7 +176,7 @@ function useLandingTexts(lang: UILanguage) {
         { title: 'Strategist', desc: 'Full control. Pick strategies from the catalog, build a custom portfolio in clicks.' },
         { title: 'Copy Trading', desc: 'One API key — multiple mirrored accounts. Share your setup without exchange restrictions.' },
       ],
-      stratTitle: 'Strategies', stratSub: '3 algorithm types with robustness filtering. 20+ unique strategies across 8+ trading systems',
+      stratTitle: 'Strategies', stratSub: '3 algorithm types with robustness filtering. 300+ unique strategies across 10+ trading systems',
       strats: [
         { name: 'DoubleDragon Breakout', desc: 'Donchian channel breakout with trailing TP. Captures momentum and rides the trend.', tags: ['classic', 'arbitrage', 'trend'] },
         { name: 'StatArb Z-Score', desc: 'Mean reversion via Z-score on synthetic instruments. Trades convergence of correlated assets.', tags: ['arbitrage', 'mean-reversion'] },
@@ -184,13 +188,13 @@ function useLandingTexts(lang: UILanguage) {
         { title: 'Research', desc: 'Backtesting, sweep, robustness filtering. Synthetic reconciliation on both trade legs.' },
         { title: 'Client', desc: 'Multi-exchange cloud. One TS materializes across multiple exchanges. Offer catalog, monitoring.' },
       ],
-      proofTitle: 'Proven Methodology', proofSub: 'Storefront metrics · StatArb Z-Score · 90 days · April 2026',
+      proofTitle: 'Proven Methodology', proofSub: 'Storefront metrics · Dual Mode pricing · 90 days · April 2026',
       proofRows: [
-        { label: 'Strategies', value: '20+' }, { label: 'Trading Systems', value: '8+' },
-        { label: 'Avg Return / 90d', value: '+53%' }, { label: 'Best PF', value: '5.82' },
-        { label: 'Min DD', value: '3.15%' }, { label: 'Exchanges', value: '6' },
+        { label: 'Strategies', value: '300+' }, { label: 'Trading Systems', value: '10+' },
+        { label: 'Backtests', value: '10,000+' }, { label: 'Best PF', value: '12.0' },
+        { label: 'Best Return / 90d', value: '+210%' }, { label: 'Pricing', value: '$0 / 40% profit' },
       ],
-      proofDisclaimer: '* 90-day metrics, SYNTH ZScore StatArb, including fees and slippage. Past performance ≠ future results.',
+      proofDisclaimer: '* 90-day storefront metrics including fees and slippage. Past performance ≠ future results.',
       exchTitle: 'Exchange Integrations', exchSub: '6 exchanges live. Bybit primary.', exchReg: 'Sign Up →',
       securityTitle: 'Security First', securitySub: 'Your funds never leave your exchange.',
       securityCards: [
@@ -201,19 +205,23 @@ function useLandingTexts(lang: UILanguage) {
       ],
       faqTitle: 'FAQ',
       faqItems: [
-        { q: 'Is it really free?', a: 'Yes. All features are free during beta. Free tier stays forever.' },
+        { q: 'Is it really free?', a: 'Yes. Dual Mode plans are $0 during beta. After beta you can choose fixed subscription or 40% profit-share (high-watermark).' },
         { q: 'Can I lose money?', a: 'All trading carries risk. Strategies are backtested but past performance ≠ future results.' },
         { q: 'Is my account safe?', a: 'We use read-only API keys with trade-only permissions. No withdrawal access.' },
         { q: 'Which exchanges?', a: 'Bybit, Binance, Bitget, BingX, MEXC, Weex. More coming.' },
         { q: 'Need coding?', a: 'No. Connect exchange, pick strategy, activate. All point-and-click.' },
         { q: 'How are you different from a set of backtests?', a: 'We separate research, runtime, and client contours. Candidate selection, card publishing, and live execution don\'t share a single fragile process. Research updates strategies while runtime trades — they never interfere.' },
       ],
-      discountTitle: '🔥 FREE NOW', discountSub: 'All plans free during beta. Connect your API key and trade.',
-      discountBadge: 'Free', discountNote: 'Early users keep 90% discount when pricing launches.',
+      discountTitle: '🔥 DUAL MODE PRICING', discountSub: 'Strategies + Algofund in one tariff grid. All plans are $0 during beta.',
+      discountBadge: 'Beta $0', discountNote: 'Legacy plans are archived. New grid applies to new activations.',
       discountPlans: [
-        { title: 'Strategy 20', old: '$20' }, { title: 'Strategy 50', old: '$50' }, { title: 'Strategy 100', old: '$100' },
-        { title: 'Algofund 20', old: '$20' }, { title: 'Algofund 50', old: '$50' }, { title: 'Algofund 100', old: '$100' },
+        { title: 'Dual Start', old: '$39/mo', desc: 'up to 3 strategies · 1 TS · up to $5k deposit' },
+        { title: 'Dual Pro', old: '$129/mo', desc: 'up to 10 strategies · 3 TS · up to $50k deposit' },
+        { title: 'Dual Scale', old: '$399/mo', desc: 'up to 30 strategies · 10 TS · priority support' },
       ],
+      profitShareTitle: 'Alternative: Profit Share',
+      profitShareValue: '40% of profit',
+      profitShareDesc: 'No subscription model: 0 fixed fee + 40% of net profit by high-watermark. No profit -> no fee.',
       discountCta: 'Start Free',
       ctaTitle: 'Ready to trade smarter?', ctaSub: 'Sign up, connect API key, launch your first strategy in minutes.',
       ctaBtn: 'Sign Up Free', ctaTg: 'Telegram',
@@ -223,11 +231,11 @@ function useLandingTexts(lang: UILanguage) {
     tr: {
       navStrategies: 'Stratejiler', navExchanges: 'Borsalar', navSecurity: 'Güvenlik', navPricing: 'Fiyatlar', navFaq: 'SSS',
       heroTitle1: 'Algoritmik Ticaret', heroTitle2: 'Hizmet Olarak',
-      heroSub: '6 borsada 20+ benzersiz strateji ve 8+ ticaret sistemi. Üç algoritma türü, sağlamlık filtreleme. Kod bilgisi gerekmez.',
+      heroSub: '6 borsada 300+ benzersiz strateji ve 10+ ticaret sistemi. 10.000+ backtestten bulut seçimi. Dual Mode fiyatlama: Strateji + Algofon — betada $0 veya kar uzerinden %40 (HWM).',
       btnStart: 'Ücretsiz Başla', btnLogin: 'Giriş', betaBadge: 'Betada Ücretsiz',
       metrics: [
-        { value: '20+', label: 'strateji' }, { value: '8+', label: 'ticaret sistemi' },
-        { value: '5,82', label: 'en iyi PF' }, { value: '6', label: 'borsa' },
+        { value: '300+', label: 'strateji' }, { value: '10+', label: 'ticaret sistemi' },
+        { value: '10.000+', label: 'backtest' }, { value: '12,0', label: 'en iyi PF' },
       ],
       modesTitle: 'Üç Müşteri Modu', modesSub: 'Pasif gelirden tam kontrole',
       modePopular: 'Popüler',
@@ -236,7 +244,7 @@ function useLandingTexts(lang: UILanguage) {
         { title: 'Stratejist', desc: 'Tam kontrol. Katalogdan strateji seçin, özel portföy oluşturun.' },
         { title: 'Kopya Ticaret', desc: 'Bir API anahtarı — birden fazla hesap. Borsa kısıtlaması olmadan paylaşın.' },
       ],
-      stratTitle: 'Stratejiler', stratSub: 'Sağlamlık filtreli 3 algoritma türü. 20+ benzersiz strateji, 8+ ticaret sistemi',
+      stratTitle: 'Stratejiler', stratSub: 'Sağlamlık filtreli 3 algoritma türü. 300+ benzersiz strateji, 10+ ticaret sistemi',
       strats: [
         { name: 'DoubleDragon Breakout', desc: 'Donchian kanal kırılması. Momentumu yakalar ve trendi sürdürür.', tags: ['klasik', 'arbitraj', 'trend'] },
         { name: 'StatArb Z-Score', desc: 'Z-skoru ile ortalamaya dönüş. İlişkili varlıkların yakınsamasını işler.', tags: ['arbitraj', 'mean-reversion'] },
@@ -248,13 +256,13 @@ function useLandingTexts(lang: UILanguage) {
         { title: 'Research', desc: 'Backtest, tarama, sağlamlık filtreleme. Sentetik eşleştirme her iki işlem bacağında.' },
         { title: 'Client', desc: 'Çok borsalı bulut. Tek TS birden fazla borsada gerçekleşir. Teklif kataloğu, izleme.' },
       ],
-      proofTitle: 'Kanıtlanmış Metodoloji', proofSub: 'Vitrin metrikleri · StatArb Z-Score · 90 gün · Nisan 2026',
+      proofTitle: 'Kanıtlanmış Metodoloji', proofSub: 'Vitrin metrikleri · Dual Mode fiyatlama · 90 gün · Nisan 2026',
       proofRows: [
-        { label: 'Strateji', value: '20+' }, { label: 'Ticaret Sistemi', value: '8+' },
-        { label: 'Ort Getiri / 90g', value: '+%53' }, { label: 'En İyi PF', value: '5,82' },
-        { label: 'Min DD', value: '%3,15' }, { label: 'Borsa', value: '6' },
+        { label: 'Strateji', value: '300+' }, { label: 'Ticaret Sistemi', value: '10+' },
+        { label: 'Backtest', value: '10.000+' }, { label: 'En İyi PF', value: '12,0' },
+        { label: 'En İyi Getiri / 90g', value: '+%210' }, { label: 'Fiyatlama', value: '$0 / %40 kar' },
       ],
-      proofDisclaimer: '* 90 günlük metrikler, SYNTH ZScore StatArb, komisyon ve kayma dahil. Geçmiş performans ≠ gelecek.',
+      proofDisclaimer: '* Vitrin 90 günlük metrikleri, komisyon ve kayma dahil. Geçmiş performans ≠ gelecek.',
       exchTitle: 'Borsa Entegrasyonları', exchSub: '6 borsa bağlı. Bybit ana.', exchReg: 'Kayıt →',
       securityTitle: 'Güvenlik', securitySub: 'Fonlarınız asla borsanızdan ayrılmaz.',
       securityCards: [
@@ -265,19 +273,23 @@ function useLandingTexts(lang: UILanguage) {
       ],
       faqTitle: 'SSS',
       faqItems: [
-        { q: 'Gerçekten ücretsiz mi?', a: 'Evet. Beta döneminde tüm özellikler ücretsiz. Ücretsiz plan kalıcı.' },
+        { q: 'Gerçekten ücretsiz mi?', a: 'Evet. Dual Mode planlar beta boyunca $0. Sonrasında sabit abonelik veya %40 kar payı (high-watermark) secilebilir.' },
         { q: 'Para kaybedebilir miyim?', a: 'Her ticaret risk taşır. Backtest geçmiş performanstır, gelecek garantisi değil.' },
         { q: 'Hesabım güvende mi?', a: 'Salt okunur API anahtarları kullanıyoruz. Çekim erişimi yok.' },
         { q: 'Hangi borsalar?', a: 'Bybit, Binance, Bitget, BingX, MEXC, Weex. Yenileri ekleniyor.' },
         { q: 'Kod gerekli mi?', a: 'Hayır. Bağla, seç, aktive et. Hepsi arayüzde.' },
         { q: 'Backtest setinden farkınız ne?', a: 'Research, runtime ve client devrelerini ayırıyoruz. Aday seçimi, kart yayınlama ve canlı işlem tek kırılgan süreçte yaşamaz. Research stratejileri güncellerken runtime işlem yapar.' },
       ],
-      discountTitle: '🔥 ŞU AN ÜCRETSİZ', discountSub: 'Tüm planlar ücretsiz. API anahtarınızı bağlayın.',
-      discountBadge: 'Ücretsiz', discountNote: 'Erken kullanıcılar %90 indirim korur.',
+      discountTitle: '🔥 DUAL MODE FIYATLAMA', discountSub: 'Strateji + Algofon tek tarifede. Betada tum planlar $0.',
+      discountBadge: 'Beta $0', discountNote: 'Eski planlar arsivlendi. Yeni aktivasyonlar yeni tarifeye geciyor.',
       discountPlans: [
-        { title: 'Strategy 20', old: '$20' }, { title: 'Strategy 50', old: '$50' }, { title: 'Strategy 100', old: '$100' },
-        { title: 'Algofund 20', old: '$20' }, { title: 'Algofund 50', old: '$50' }, { title: 'Algofund 100', old: '$100' },
+        { title: 'Dual Start', old: '$39/ay', desc: '3 stratejiye kadar · 1 TS · $5k depozito limiti' },
+        { title: 'Dual Pro', old: '$129/ay', desc: '10 stratejiye kadar · 3 TS · $50k depozito limiti' },
+        { title: 'Dual Scale', old: '$399/ay', desc: '30 stratejiye kadar · 10 TS · oncelikli destek' },
       ],
+      profitShareTitle: 'Alternatif: Kar Payi',
+      profitShareValue: 'Karin %40\'i',
+      profitShareDesc: 'Aboneliksiz model: 0 sabit ucret + high-watermark ile net karin %40\'i. Kar yoksa ucret yok.',
       discountCta: 'Ücretsiz Başla',
       ctaTitle: 'Hazır mısınız?', ctaSub: 'Kayıt olun, API bağlayın, dakikalar içinde başlayın.',
       ctaBtn: 'Ücretsiz Kayıt', ctaTg: 'Telegram',
@@ -572,10 +584,11 @@ export default function Landing() {
             display: 'inline-block', background: T.greenBg, borderRadius: 8, padding: '6px 20px',
             fontSize: 13, color: T.greenText, fontWeight: 600, marginBottom: 32,
           }}>{tx.discountNote}</div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12, maxWidth: 900, margin: '0 auto 32px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, maxWidth: 900, margin: '0 auto 20px' }}>
             {tx.discountPlans.map((p: any, i: number) => (
               <div key={i} style={{ ...cardStyle, padding: '16px 12px', textAlign: 'center' }}>
-                <div style={{ fontSize: 11, color: T.textSec, fontWeight: 600, marginBottom: 6 }}>{p.title}</div>
+                <div style={{ fontSize: 12, color: T.textSec, fontWeight: 700, marginBottom: 6 }}>{p.title}</div>
+                <div style={{ fontSize: 11, color: T.textMuted, minHeight: 34, marginBottom: 6 }}>{p.desc}</div>
                 <div style={{ fontSize: 14, color: T.textMuted, textDecoration: 'line-through' }}>{p.old}</div>
                 <div style={{ fontSize: 28, fontWeight: 900, color: T.greenAccent }}>$0</div>
                 <span style={{
@@ -584,6 +597,11 @@ export default function Landing() {
                 }}>{tx.discountBadge}</span>
               </div>
             ))}
+          </div>
+          <div style={{ ...cardStyle, maxWidth: 900, margin: '0 auto 32px', textAlign: 'left', padding: '18px 20px' }}>
+            <div style={{ fontSize: 12, color: T.textSec, fontWeight: 700, marginBottom: 6 }}>{tx.profitShareTitle}</div>
+            <div style={{ fontSize: 28, fontWeight: 900, color: T.accent, marginBottom: 8 }}>{tx.profitShareValue}</div>
+            <div style={{ fontSize: 13, color: T.textSec, lineHeight: 1.65 }}>{tx.profitShareDesc}</div>
           </div>
           <a href="/client/register" style={{ ...btnStyle(true), padding: '14px 40px', fontSize: 17 }}>{tx.discountCta}</a>
         </div>

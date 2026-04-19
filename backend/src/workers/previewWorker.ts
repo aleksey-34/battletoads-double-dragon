@@ -52,8 +52,8 @@ const executeJob = async (jobId: number, configJson: string): Promise<void> => {
     dateTo: config.dateTo as string | undefined,
     warmupBars: config.warmupBars != null ? Number(config.warmupBars) : 0,
     initialBalance: config.initialBalance != null ? Number(config.initialBalance) : 1000,
-    commissionPercent: config.commissionPercent != null ? Number(config.commissionPercent) : 0.06,
-    slippagePercent: config.slippagePercent != null ? Number(config.slippagePercent) : 0.03,
+    commissionPercent: config.commissionPercent != null ? Number(config.commissionPercent) : 0.1,
+    slippagePercent: config.slippagePercent != null ? Number(config.slippagePercent) : 0.05,
     skipMissingSymbols: config.skipMissingSymbols === true,
   };
 

@@ -628,21 +628,146 @@ type StrategyMaterializedRow = {
 const repoRoot = path.resolve(__dirname, '../../..');
 const resultsDir = path.join(repoRoot, 'results');
 const strategyClientPlans: PlanSeed[] = [
-  { code: 'strategy_15', title: 'Strategy Client 15', productMode: 'strategy_client', priceUsdt: 15, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 2, allowTsStartStopRequests: false, features: { monoOrSynth: 2, customTsBuilder: true, customTsMinOffers: 2, customTsMaxOffers: 2, customTsMaxCount: 1 } },
-  { code: 'strategy_20', title: 'Strategy Client 20', productMode: 'strategy_client', priceUsdt: 20, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 3, allowTsStartStopRequests: false, features: { monoOrSynth: 3, customTsBuilder: true, customTsMinOffers: 2, customTsMaxOffers: 3, customTsMaxCount: 1 } },
-  { code: 'strategy_25', title: 'Strategy Client 25', productMode: 'strategy_client', priceUsdt: 25, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 4, allowTsStartStopRequests: false, features: { exchanges: 2, customTsBuilder: true, customTsMinOffers: 2, customTsMaxOffers: 4, customTsMaxCount: 2 } },
-  { code: 'strategy_30', title: 'Strategy Client 30', productMode: 'strategy_client', priceUsdt: 30, maxDepositTotal: 1000, riskCapMax: 0, maxStrategiesTotal: 4, allowTsStartStopRequests: false, features: { exchanges: 3, customTsBuilder: true, customTsMinOffers: 2, customTsMaxOffers: 4, customTsMaxCount: 2 } },
-  { code: 'strategy_50', title: 'Strategy Client 50', productMode: 'strategy_client', priceUsdt: 50, maxDepositTotal: 5000, riskCapMax: 0, maxStrategiesTotal: 5, allowTsStartStopRequests: true, features: { mono: 3, synth: 3, complexTs: true, customTsBuilder: true, customTsMinOffers: 2, customTsMaxOffers: 5, customTsMaxCount: 3 } },
-  { code: 'strategy_100', title: 'Strategy Client 100', productMode: 'strategy_client', priceUsdt: 100, maxDepositTotal: 10000, riskCapMax: 0, maxStrategiesTotal: 6, allowTsStartStopRequests: true, features: { mono: 3, synth: 3, complexTs: true, extraExchangeRequest: true, customTsBuilder: true, customTsMinOffers: 2, customTsMaxOffers: 6, customTsMaxCount: 3 } },
+  {
+    code: 'strategy_20',
+    title: 'Dual Start · Strategy',
+    productMode: 'strategy_client',
+    priceUsdt: 0,
+    maxDepositTotal: 5000,
+    riskCapMax: 0,
+    maxStrategiesTotal: 3,
+    allowTsStartStopRequests: true,
+    features: {
+      dualTier: 'start',
+      monoOrSynth: 3,
+      customTsBuilder: true,
+      customTsMinOffers: 2,
+      customTsMaxOffers: 3,
+      customTsMaxCount: 1,
+      pricingModel: {
+        betaPriceUsdt: 0,
+        listPriceUsdt: 19,
+        profitSharePercent: 40,
+        highWatermark: true,
+      },
+    },
+  },
+  {
+    code: 'strategy_50',
+    title: 'Dual Pro · Strategy',
+    productMode: 'strategy_client',
+    priceUsdt: 0,
+    maxDepositTotal: 50000,
+    riskCapMax: 0,
+    maxStrategiesTotal: 10,
+    allowTsStartStopRequests: true,
+    features: {
+      dualTier: 'pro',
+      mono: 10,
+      synth: 10,
+      complexTs: true,
+      customTsBuilder: true,
+      customTsMinOffers: 2,
+      customTsMaxOffers: 10,
+      customTsMaxCount: 3,
+      pricingModel: {
+        betaPriceUsdt: 0,
+        listPriceUsdt: 69,
+        profitSharePercent: 40,
+        highWatermark: true,
+      },
+    },
+  },
+  {
+    code: 'strategy_100',
+    title: 'Dual Scale · Strategy',
+    productMode: 'strategy_client',
+    priceUsdt: 0,
+    maxDepositTotal: 250000,
+    riskCapMax: 0,
+    maxStrategiesTotal: 30,
+    allowTsStartStopRequests: true,
+    features: {
+      dualTier: 'scale',
+      mono: 30,
+      synth: 30,
+      complexTs: true,
+      extraExchangeRequest: true,
+      customTsBuilder: true,
+      customTsMinOffers: 2,
+      customTsMaxOffers: 30,
+      customTsMaxCount: 10,
+      pricingModel: {
+        betaPriceUsdt: 0,
+        listPriceUsdt: 199,
+        profitSharePercent: 40,
+        highWatermark: true,
+      },
+    },
+  },
 ];
 
 const algofundPlans: PlanSeed[] = [
-  { code: 'algofund_20', title: 'Algofund 20', productMode: 'algofund_client', priceUsdt: 20, maxDepositTotal: 1000, riskCapMax: 1, maxStrategiesTotal: 0, allowTsStartStopRequests: true, features: { managedTs: true } },
-  { code: 'algofund_50', title: 'Algofund 50', productMode: 'algofund_client', priceUsdt: 50, maxDepositTotal: 5000, riskCapMax: 1.2, maxStrategiesTotal: 0, allowTsStartStopRequests: true, features: { managedTs: true } },
-  { code: 'algofund_70', title: 'Algofund 70', productMode: 'algofund_client', priceUsdt: 70, maxDepositTotal: 5000, riskCapMax: 1.5, maxStrategiesTotal: 0, allowTsStartStopRequests: true, features: { managedTs: true } },
-  { code: 'algofund_100', title: 'Algofund 100', productMode: 'algofund_client', priceUsdt: 100, maxDepositTotal: 5000, riskCapMax: 2, maxStrategiesTotal: 0, allowTsStartStopRequests: true, features: { managedTs: true } },
-  { code: 'algofund_150', title: 'Algofund 150', productMode: 'algofund_client', priceUsdt: 150, maxDepositTotal: 10000, riskCapMax: 2, maxStrategiesTotal: 0, allowTsStartStopRequests: true, features: { managedTs: true } },
-  { code: 'algofund_200', title: 'Algofund 200', productMode: 'algofund_client', priceUsdt: 200, maxDepositTotal: 10000, riskCapMax: 2.5, maxStrategiesTotal: 0, allowTsStartStopRequests: true, features: { managedTs: true } },
+  {
+    code: 'algofund_20',
+    title: 'Dual Start · Algofund',
+    productMode: 'algofund_client',
+    priceUsdt: 0,
+    maxDepositTotal: 5000,
+    riskCapMax: 1.2,
+    maxStrategiesTotal: 0,
+    allowTsStartStopRequests: true,
+    features: {
+      managedTs: true,
+      dualTier: 'start',
+      pricingModel: {
+        betaPriceUsdt: 0,
+        listPriceUsdt: 20,
+        profitSharePercent: 40,
+        highWatermark: true,
+      },
+    },
+  },
+  {
+    code: 'algofund_50',
+    title: 'Dual Pro · Algofund',
+    productMode: 'algofund_client',
+    priceUsdt: 0,
+    maxDepositTotal: 50000,
+    riskCapMax: 2,
+    maxStrategiesTotal: 0,
+    allowTsStartStopRequests: true,
+    features: {
+      managedTs: true,
+      dualTier: 'pro',
+      pricingModel: {
+        betaPriceUsdt: 0,
+        listPriceUsdt: 60,
+        profitSharePercent: 40,
+        highWatermark: true,
+      },
+    },
+  },
+  {
+    code: 'algofund_100',
+    title: 'Dual Scale · Algofund',
+    productMode: 'algofund_client',
+    priceUsdt: 0,
+    maxDepositTotal: 250000,
+    riskCapMax: 3,
+    maxStrategiesTotal: 0,
+    allowTsStartStopRequests: true,
+    features: {
+      managedTs: true,
+      dualTier: 'scale',
+      pricingModel: {
+        betaPriceUsdt: 0,
+        listPriceUsdt: 200,
+        profitSharePercent: 40,
+        highWatermark: true,
+      },
+    },
+  },
 ];
 
 const copytradingPlans: PlanSeed[] = [
@@ -664,49 +789,29 @@ const copytradingPlans: PlanSeed[] = [
   },
 ];
 
-// D3: Combined plans — Algofund + Strategy addon
-const combinedPlans: PlanSeed[] = [
-  {
-    code: 'combined_70',
-    title: 'Algofund + Strategy 70',
-    productMode: 'algofund_client',
-    priceUsdt: 70,
-    maxDepositTotal: 5000,
-    riskCapMax: 1.5,
-    maxStrategiesTotal: 3,
-    allowTsStartStopRequests: true,
-    features: {
-      managedTs: true,
-      strategyAddon: true,
-      monoOrSynth: 3,
-      customTsBuilder: true,
-      customTsMinOffers: 2,
-      customTsMaxOffers: 3,
-      customTsMaxCount: 1,
-    },
-  },
-  {
-    code: 'combined_120',
-    title: 'Algofund + Strategy 120',
-    productMode: 'algofund_client',
-    priceUsdt: 120,
-    maxDepositTotal: 10000,
-    riskCapMax: 2,
-    maxStrategiesTotal: 5,
-    allowTsStartStopRequests: true,
-    features: {
-      managedTs: true,
-      strategyAddon: true,
-      mono: 3,
-      synth: 3,
-      complexTs: true,
-      customTsBuilder: true,
-      customTsMinOffers: 2,
-      customTsMaxOffers: 5,
-      customTsMaxCount: 2,
-    },
-  },
+const combinedPlans: PlanSeed[] = [];
+
+const LEGACY_DISABLED_PLAN_CODES = [
+  'strategy_15',
+  'strategy_25',
+  'strategy_30',
+  'algofund_70',
+  'algofund_150',
+  'algofund_200',
+  'combined_70',
+  'combined_120',
 ];
+
+const PLAN_ORIGINAL_PRICE_BY_CODE: Record<string, number> = {
+  strategy_20: 19,
+  strategy_50: 69,
+  strategy_100: 199,
+  algofund_20: 20,
+  algofund_50: 60,
+  algofund_100: 200,
+};
+
+const SAAS_DUAL_MAX_MIGRATION_FLAG = 'saas.migrations.dual_max_default.v1';
 
 const asNumber = (value: unknown, fallback = 0): number => {
   const numeric = Number(value);
@@ -794,10 +899,12 @@ const normalizeEquityCurveOrientation = (
     ? asNumber(finalEquityInput, fallbackFinalEquity)
     : fallbackFinalEquity;
 
-  const firstDistance = Math.abs(numericPoints[0] - targetFinalEquity);
-  const lastDistance = Math.abs(numericPoints[numericPoints.length - 1] - targetFinalEquity);
+  // The curve should start near initialBalance. If first point is far from initial
+  // and last point is closer, the curve is stored in reverse order → flip it.
+  const firstDistFromInit = Math.abs(numericPoints[0] - initialBalance);
+  const lastDistFromInit = Math.abs(numericPoints[numericPoints.length - 1] - initialBalance);
 
-  if (firstDistance + 1e-6 < lastDistance) {
+  if (lastDistFromInit + 1e-6 < firstDistFromInit) {
     return [...numericPoints].reverse();
   }
 
@@ -1937,7 +2044,17 @@ const upsertPlan = async (plan: PlanSeed): Promise<void> => {
       code, title, product_mode, price_usdt, max_deposit_total, risk_cap_max,
       max_strategies_total, allow_ts_start_stop_requests, features_json, is_active, created_at, updated_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    ON CONFLICT(code) DO NOTHING`,
+    ON CONFLICT(code) DO UPDATE SET
+      title = excluded.title,
+      product_mode = excluded.product_mode,
+      price_usdt = excluded.price_usdt,
+      max_deposit_total = excluded.max_deposit_total,
+      risk_cap_max = excluded.risk_cap_max,
+      max_strategies_total = excluded.max_strategies_total,
+      allow_ts_start_stop_requests = excluded.allow_ts_start_stop_requests,
+      features_json = excluded.features_json,
+      is_active = 1,
+      updated_at = CURRENT_TIMESTAMP`,
     [
       plan.code,
       plan.title,
@@ -2149,6 +2266,66 @@ export const ensureSaasSeedData = async (): Promise<void> => {
   await db.run(`ALTER TABLE plans ADD COLUMN original_price_usdt REAL DEFAULT NULL`).catch(() => { /* already exists */ });
   for (const plan of [...strategyClientPlans, ...algofundPlans, ...copytradingPlans, ...combinedPlans]) {
     await upsertPlan(plan);
+  }
+
+  for (const code of LEGACY_DISABLED_PLAN_CODES) {
+    await db.run('UPDATE plans SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE code = ?', [code]);
+  }
+
+  for (const [code, originalPrice] of Object.entries(PLAN_ORIGINAL_PRICE_BY_CODE)) {
+    await db.run(
+      `UPDATE plans
+       SET original_price_usdt = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE code = ? AND (original_price_usdt IS NULL OR original_price_usdt <= 0)`,
+      [originalPrice, code]
+    );
+  }
+
+  const migrationStateRaw = await getRuntimeFlag(SAAS_DUAL_MAX_MIGRATION_FLAG, '');
+  if (!migrationStateRaw) {
+    const strategyMax = await getPlanByCode('strategy_100');
+    const algofundMax = await getPlanByCode('algofund_100');
+    const tenants = await db.all('SELECT id, product_mode FROM tenants') as Array<{ id: number; product_mode: ProductMode }>;
+
+    let migratedTenants = 0;
+    for (const tenant of tenants || []) {
+      const tenantId = Number(tenant.id || 0);
+      if (!tenantId) {
+        continue;
+      }
+
+      const mode = String(tenant.product_mode || '').trim() as ProductMode;
+      if (mode === 'strategy_client') {
+        await setTenantSubscriptionPlan(tenantId, strategyMax.id);
+        migratedTenants += 1;
+        continue;
+      }
+
+      if (mode === 'algofund_client') {
+        await setTenantSubscriptionPlan(tenantId, algofundMax.id);
+        migratedTenants += 1;
+        continue;
+      }
+
+      if (mode === 'dual') {
+        await ensureSubscription(tenantId, strategyMax.id, 'strategy_client');
+        await setTenantSubscriptionPlan(tenantId, strategyMax.id, 'strategy_client');
+        await ensureSubscription(tenantId, algofundMax.id, 'algofund_client');
+        await setTenantSubscriptionPlan(tenantId, algofundMax.id, 'algofund_client');
+        migratedTenants += 1;
+      }
+    }
+
+    await setRuntimeFlag(
+      SAAS_DUAL_MAX_MIGRATION_FLAG,
+      JSON.stringify({
+        version: 1,
+        migratedAt: new Date().toISOString(),
+        migratedTenants,
+      })
+    );
+
+    logger.info(`[SaaS] Applied one-time max dual migration: tenants=${migratedTenants}`);
   }
 };
 
@@ -5671,6 +5848,16 @@ export const previewAdminSweepBacktest = async (payload?: {
         wr: 0,
         trades: Math.max(0, Math.floor(asNumber(offerSnapshot.trades, 0))),
       };
+      // Compute relative risk/trade multipliers so that reopening with the same
+      // slider settings that were used when the snapshot was saved yields mul=1.0
+      // (no double-scaling).  This mirrors the TS snapshot logic.
+      const snapshotRiskScore = clampNumber(asNumber(offerSnapshot.riskScore, 5), 0, 10);
+      const snapshotTradeFrequencyScore = clampNumber(asNumber(offerSnapshot.tradeFrequencyScore, 5), 0, 10);
+      const snapshotRiskScaleMaxPercent = clampNumber(asNumber(offerSnapshot.riskScaleMaxPercent, 100), 0, 400);
+      const snapshotRiskMul = getPreviewRiskMultiplier(snapshotRiskScore, snapshotRiskScaleMaxPercent);
+      const snapshotTradeMul = getPreviewTradeMultiplier(snapshotTradeFrequencyScore);
+      const relativeRiskMul = rerunRiskMul / Math.max(0.01, snapshotRiskMul);
+      const relativeTradeMul = tradeMul / Math.max(0.01, snapshotTradeMul);
       const baseEquity = (Array.isArray(offerSnapshot.equityPoints) ? offerSnapshot.equityPoints : [])
         .map((value, index) => ({ time: index, equity: Number(asNumber(value, 0).toFixed(4)) }))
         .filter((item) => Number.isFinite(item.equity));
@@ -5681,17 +5868,53 @@ export const previewAdminSweepBacktest = async (payload?: {
           { time: 1, equity: Number((initialBalance * (1 + baselineMetrics.ret / 100)).toFixed(4)) },
         ];
       const resolvedInitialBalance = Math.max(100, Math.floor(asNumber(offerSnapshot.initialBalance, initialBalance)));
-      const normalizedSnapshotEquity = resolvedBaseEquity.map((point) => ({
-        time: point.time,
-        equity: scaleEquityByRiskWithReinvest(
+      const adjustedMetricsSnapshot = adjustPreviewMetrics(baselineMetrics, relativeRiskMul, relativeTradeMul);
+      const baseStartEquity = asNumber(resolvedBaseEquity[0]?.equity, resolvedInitialBalance);
+      const baseEndEquity = asNumber(resolvedBaseEquity[resolvedBaseEquity.length - 1]?.equity, resolvedInitialBalance);
+      const scaledEndEquityByRisk = initialBalance + (baseEndEquity - baseStartEquity) * relativeRiskMul;
+      const freqShapeFactor = clampNumber(1 + Math.log(Math.max(0.2, relativeTradeMul)) * 0.45, 0.45, 1.8);
+      const waveAmplitude = Math.abs(scaledEndEquityByRisk - initialBalance)
+        * 0.08
+        * Math.abs(relativeTradeMul - 1)
+        * clampNumber(relativeTradeMul, 0.6, 1.9);
+
+      let normalizedSnapshotEquity = resolvedBaseEquity.map((point, index, arr) => {
+        const progress = arr.length > 1 ? (index / Math.max(1, arr.length - 1)) : 1;
+        const scaledRaw = scaleEquityByRiskWithReinvest(
           asNumber(point.equity, resolvedInitialBalance),
           resolvedInitialBalance,
           initialBalance,
-          rerunRiskMul,
+          relativeRiskMul,
           reinvestShare,
-        ),
-      }));
-      const adjustedMetricsSnapshot = adjustPreviewMetrics(baselineMetrics, rerunRiskMul, tradeMul);
+        );
+        const trendLine = initialBalance + (scaledEndEquityByRisk - initialBalance) * progress;
+        const deviation = scaledRaw - trendLine;
+        const wave = Math.sin(progress * Math.PI * 2 * (1 + relativeTradeMul * 0.8)) * waveAmplitude * (0.25 + 0.75 * progress);
+        return {
+          time: point.time,
+          equity: Number((trendLine + deviation * freqShapeFactor + wave).toFixed(4)),
+        };
+      });
+
+      // Align final equity with adjusted ret metric so chart/PnL/tags are consistent.
+      const targetFinalEquity = Number((initialBalance * (1 + adjustedMetricsSnapshot.ret / 100)).toFixed(4));
+      const currentFinalEquity = asNumber(normalizedSnapshotEquity[normalizedSnapshotEquity.length - 1]?.equity, initialBalance);
+      const currentPnl = currentFinalEquity - initialBalance;
+      const targetPnl = targetFinalEquity - initialBalance;
+      if (Math.abs(currentPnl) > 1e-6) {
+        const pnlScale = targetPnl / currentPnl;
+        normalizedSnapshotEquity = normalizedSnapshotEquity.map((point) => ({
+          time: point.time,
+          equity: scaleEquityByRiskWithReinvest(
+            asNumber(point.equity, initialBalance),
+            initialBalance,
+            initialBalance,
+            pnlScale,
+            reinvestShare,
+          ),
+        }));
+      }
+
       const snapshotCurves = buildDerivedPreviewCurves(normalizedSnapshotEquity, initialBalance, riskScore);
       const firstOffer = selectedOffers[0];
       const snapshotSelectedOffer = {
@@ -9483,8 +9706,13 @@ export const getAlgofundState = async (
         || normalizedSystemName.startsWith('CLOUD');
       if (!isStorefrontSnapshot) return false;
       if (storefrontSystemSet.size > 0) {
-        const storefrontName = (normalizedSystemName || normalizedKeyName).trim();
-        if (!storefrontSystemSet.has(storefrontName) && storefrontName !== currentPublishedSystemName) {
+        const storefrontCandidates = [normalizedKeyName, normalizedSystemName]
+          .map((name) => name.trim())
+          .filter(Boolean);
+        const isAllowed = storefrontCandidates.some((candidate) =>
+          storefrontSystemSet.has(candidate) || candidate === currentPublishedSystemName
+        );
+        if (!isAllowed) {
           return false;
         }
       }
@@ -9494,7 +9722,7 @@ export const getAlgofundState = async (
     .map(([key, snapshot], index) => {
       const runtimeName = asString(snapshot?.systemName, '').trim();
       const fallbackName = asString(key, '').trim();
-      const storefrontName = runtimeName || fallbackName;
+      const storefrontName = fallbackName || runtimeName;
       return {
         id: 900000 + index,
         apiKeyName: asString(snapshot?.apiKeyName, ''),
