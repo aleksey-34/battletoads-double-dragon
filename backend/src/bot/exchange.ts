@@ -1256,14 +1256,12 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
         positions = single ? [single] : [];
       }
 
-      // Collect unique symbols that need ticker data for mark price / UPNL
+      // Collect unique symbols that need ticker data for mark price.
       const tickerCache: Record<string, number> = {};
       const needsTicker = (pos: any) => {
         const mp = Number(pos?.markPrice ?? pos?.info?.markPrice ?? pos?.info?.markPx ?? 0);
         const ep = Number(pos?.entryPrice ?? pos?.info?.entryPrice ?? 0);
-        const upnlRaw = pos?.unrealizedPnl ?? pos?.info?.unrealizedPnl ?? pos?.info?.upl;
-        // Need ticker when markPrice is missing/equals entryPrice AND no explicit UPNL
-        return (!mp || mp === ep) && (upnlRaw === undefined || upnlRaw === null || Number(upnlRaw) === 0);
+        return !mp || mp === ep;
       };
       for (const pos of positions) {
         if (Math.abs(Number(pos?.contracts ?? 0)) > 0 && needsTicker(pos)) {
@@ -1298,11 +1296,11 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
           const sideRaw = String(position?.side || position?.info?.holdSide || '').toLowerCase();
           const side = sideRaw.includes('long') || sideRaw === 'buy' ? 'Buy' : 'Sell';
 
-          const entryPrice = Number(position?.entryPrice ?? position?.info?.entryPrice ?? position?.info?.openPrice ?? 0);
+          let entryPrice = Number(position?.entryPrice ?? position?.info?.entryPrice ?? position?.info?.openPrice ?? 0);
           // Use CCXT markPrice, fall back to ticker, then entryPrice
           const posSymbol = position?.symbol || resolvedSymbol || '';
           const rawMark = Number(position?.markPrice ?? position?.info?.markPrice ?? position?.info?.markPx ?? 0);
-          const markPrice = (rawMark && rawMark !== entryPrice) ? rawMark : (tickerCache[posSymbol] || rawMark || entryPrice);
+          let markPrice = (rawMark && rawMark !== entryPrice) ? rawMark : (tickerCache[posSymbol] || rawMark || entryPrice);
 
           const explicitNotional = Number(position?.notional);
           const derivedNotional = sizeInBase * (Number.isFinite(markPrice) ? markPrice : 0);
@@ -1313,6 +1311,16 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
           // Compute UPNL: prefer explicit, else calculate from mark vs entry
           const rawUpnl = Number(position?.unrealizedPnl ?? position?.info?.unrealizedPnl ?? position?.info?.upl ?? 0);
           let upnl = rawUpnl;
+
+          // Some exchanges return mark/entry as 0 while notional and UPNL are present.
+          if ((!markPrice || markPrice <= 0) && Number.isFinite(explicitNotional) && Math.abs(explicitNotional) > 0 && sizeInBase > 0) {
+            markPrice = Math.abs(explicitNotional) / sizeInBase;
+          }
+          if ((!entryPrice || entryPrice <= 0) && Number.isFinite(markPrice) && markPrice > 0 && Number.isFinite(rawUpnl) && sizeInBase > 0) {
+            const dir = side === 'Buy' ? 1 : -1;
+            entryPrice = markPrice - rawUpnl / (dir * sizeInBase);
+          }
+
           if ((!rawUpnl || rawUpnl === 0) && markPrice !== entryPrice && entryPrice > 0) {
             const dir = side === 'Buy' ? 1 : -1;
             upnl = dir * (markPrice - entryPrice) * Math.abs(contractsRaw) * (Number.isFinite(contractSize) && contractSize > 0 ? contractSize : 1);
@@ -1430,7 +1438,51 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
     ).values()
   );
 
-  return deduped;
+  const normalized = deduped
+    .map((position: any) => {
+      const sizeRaw = Math.abs(Number(position?.size ?? position?.positionAmt ?? position?.qty ?? 0));
+      if (!Number.isFinite(sizeRaw) || sizeRaw <= 0) {
+        return null;
+      }
+
+      const sideRaw = String(position?.side || '').toLowerCase();
+      const side = sideRaw.includes('buy') || sideRaw.includes('long') ? 'Buy' : 'Sell';
+      const upnl = Number(position?.unrealisedPnl ?? position?.unrealizedPnl ?? position?.upl ?? 0);
+
+      let entryPrice = Number(position?.avgPrice ?? position?.entryPrice ?? position?.openPrice ?? position?.positionPrice ?? 0);
+      let markPrice = Number(position?.markPrice ?? position?.markPx ?? position?.lastPrice ?? position?.indexPrice ?? 0);
+      const notionalRaw = Math.abs(Number(position?.positionValue ?? position?.positionIM ?? position?.positionBalance ?? 0));
+
+      if ((!Number.isFinite(markPrice) || markPrice <= 0) && Number.isFinite(notionalRaw) && notionalRaw > 0) {
+        markPrice = notionalRaw / sizeRaw;
+      }
+
+      if ((!Number.isFinite(entryPrice) || entryPrice <= 0) && Number.isFinite(markPrice) && markPrice > 0 && Number.isFinite(upnl)) {
+        const direction = side === 'Buy' ? 1 : -1;
+        entryPrice = markPrice - upnl / (direction * sizeRaw);
+      }
+
+      const liqRaw = Number(position?.liqPrice ?? position?.liquidationPrice ?? position?.liqPx ?? 0);
+      const leverageRaw = Number(position?.leverage ?? 1);
+      const positionValue = Number.isFinite(notionalRaw) && notionalRaw > 0
+        ? notionalRaw
+        : (Number.isFinite(markPrice) && markPrice > 0 ? markPrice * sizeRaw : 0);
+
+      return {
+        symbol: toUiSymbol(position?.symbol || symbol),
+        side,
+        size: String(sizeRaw),
+        avgPrice: String(Number.isFinite(entryPrice) && entryPrice > 0 ? entryPrice : 0),
+        markPrice: String(Number.isFinite(markPrice) && markPrice > 0 ? markPrice : 0),
+        liqPrice: Number.isFinite(liqRaw) && liqRaw > 0 ? String(liqRaw) : '',
+        unrealisedPnl: String(Number.isFinite(upnl) ? upnl : 0),
+        leverage: String(Number.isFinite(leverageRaw) && leverageRaw > 0 ? leverageRaw : 1),
+        positionValue: String(Number.isFinite(positionValue) ? positionValue : 0),
+      };
+    })
+    .filter((item): item is any => Boolean(item));
+
+  return normalized;
 };
 
 export const get24hVolume = async (apiKeyName: string, symbol: string) => {

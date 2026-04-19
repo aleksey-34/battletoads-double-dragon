@@ -1256,6 +1256,24 @@ const Dashboard: React.FC = () => {
         const panelOpened = activePanel.includes(String(key.id));
         const shouldLoadFullStrategies = key.name === preferredKeyName || panelOpened;
         const keySettings = chartSettings[key.name] || defaultChartSetting();
+        const isUnboundResearchLike = !key.tenantDisplayName && /RESEARCH|_SOURCE/i.test(String(key.name || ''));
+
+        if (isUnboundResearchLike) {
+          setKeyStatuses((prev) => ({ ...prev, [key.name]: { status: 'warning', message: 'No tenant binding' } }));
+          setBalances((prev) => ({ ...prev, [key.name]: [] }));
+          setBalancesError((prev) => ({ ...prev, [key.name]: '' }));
+          setSymbols((prev) => ({ ...prev, [key.name]: [] }));
+          setSymbolsError((prev) => ({ ...prev, [key.name]: '' }));
+          setHoverOHLCByKey((prev) => ({ ...prev, [key.name]: null }));
+          setSyntheticErrorByKey((prev) => ({ ...prev, [key.name]: '' }));
+          setMonitoringByKey((prev) => ({
+            ...prev,
+            [key.name]: { points: [], latest: null },
+          }));
+          setTradesByKey((prev) => ({ ...prev, [key.name]: [] }));
+          setMonitoringErrorByKey((prev) => ({ ...prev, [key.name]: '' }));
+          continue;
+        }
 
         if (mergedToggles[key.name]) {
           void fetchKeyStatus(key.name);

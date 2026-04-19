@@ -3645,26 +3645,32 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     const mapped = availableSystemNames.map((systemName) => {
     const storefrontLabel = `TS offer #${availableSystemNames.indexOf(systemName) + 1}`;
+    const snapshotForSystem = resolveTsSnapshotForSystem(systemName);
+    const snapshotSystemName = String(snapshotForSystem?.systemName || '').trim();
+    const systemNameAliases = new Set(
+      [systemName, snapshotSystemName]
+        .map((name) => String(name || '').trim())
+        .filter(Boolean)
+    );
     const tenants = batchEligibleAlgofundTenants.filter((tenant) => {
       const tenantSystemName = String(tenant.algofundProfile?.published_system_name || '').trim();
       if (!tenantSystemName) {
         return false;
       }
-      if (tenantSystemName === systemName) {
+      if (systemNameAliases.has(tenantSystemName)) {
         return true;
       }
       // Runtime per-tenant systems (ALGOFUND::<tenant>) should still be attached to
       // the single active master storefront card when one master exists.
       if (
         singleMasterSystemName
-        && systemName === singleMasterSystemName
+        && systemNameAliases.has(singleMasterSystemName)
         && tenantSystemName.toUpperCase().startsWith('ALGOFUND::')
       ) {
         return true;
       }
       return false;
     });
-    const snapshotForSystem = resolveTsSnapshotForSystem(systemName);
     const runtimeSystem = availableSystemByName.get(systemName);
     const runtimeMasterSystem = runtimeMasterSystemByName.get(systemName) || null;
     const snapshotOfferIds = normalizeStorefrontTsOfferIds(snapshotForSystem?.offerIds || []);
@@ -3717,7 +3723,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const safeLatestBacktestSummary = snapshotForSystem ? latestBacktestSummary : null;
     const safeLatestBacktestCurve = snapshotForSystem ? latestBacktestCurve : [];
 
-    const snapshotSystemName = String(snapshotForSystem?.systemName || '').trim();
     const isStorefrontEnabled = publishedSystemSet.has(systemName) || (snapshotSystemName ? publishedSystemSet.has(snapshotSystemName) : false);
     const hasMeaningfulState = canonicalOfferIds.length > 0 || tenants.length > 0 || (isStorefrontEnabled && runtimeSystemId !== null) || Boolean(snapshotForSystem);
 

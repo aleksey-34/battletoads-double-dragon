@@ -1803,17 +1803,23 @@ router.post('/strategies/copy-block', async (req, res) => {
     replaceTarget,
     preserveActive,
     syncSymbols,
+    sourceStrategyIds,
   } = req.body || {};
 
   if (!sourceApiKey || !targetApiKey) {
     return res.status(400).json({ error: 'sourceApiKey and targetApiKey are required' });
   }
 
+  const normalizedSourceStrategyIds = Array.isArray(sourceStrategyIds)
+    ? Array.from(new Set(sourceStrategyIds.map((value: unknown) => Number(value)).filter((id: number) => Number.isFinite(id) && id > 0)))
+    : undefined;
+
   try {
     const result = await copyStrategyBlock(String(sourceApiKey), String(targetApiKey), {
       replaceTarget: replaceTarget !== false,
       preserveActive: preserveActive === true,
       syncSymbols: syncSymbols !== false,
+      sourceStrategyIds: normalizedSourceStrategyIds,
     });
     res.json({ success: true, ...result });
   } catch (error) {

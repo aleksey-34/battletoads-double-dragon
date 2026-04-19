@@ -3760,6 +3760,10 @@ const buildStrategyDraftFromRecord = (
   riskLevel: Level3,
   isActive: boolean
 ): Partial<Strategy> => {
+  const marketRaw = asString(record.market, '').trim().toUpperCase();
+  const marketParts = marketRaw.split('/').map((part) => part.trim()).filter(Boolean);
+  const baseSymbol = asString(marketParts[0] || marketRaw.replace(/\/+$/g, ''), 'BTCUSDT');
+  const quoteSymbol = asString(marketParts[1] || '', '');
   const lotPercent = getRiskLotPercent(riskLevel);
   return {
     name,
@@ -3780,8 +3784,8 @@ const buildStrategyDraftFromRecord = (
     zscore_entry: asNumber(record.zscoreEntry, 2),
     zscore_exit: asNumber(record.zscoreExit, 0.5),
     zscore_stop: asNumber(record.zscoreStop, 3),
-    base_symbol: asString(record.market.split('/')[0] || record.market, 'BTCUSDT'),
-    quote_symbol: record.marketMode === 'mono' ? '' : asString(record.market.split('/')[1], 'ETHUSDT'),
+    base_symbol: baseSymbol,
+    quote_symbol: record.marketMode === 'mono' ? '' : asString(quoteSymbol, 'ETHUSDT'),
     interval: asString(record.interval, '4h'),
     base_coef: 1,
     quote_coef: record.marketMode === 'mono' ? 0 : 1,
@@ -3797,10 +3801,25 @@ const buildStrategyDraftFromRecord = (
   };
 };
 
+const normalizeSweepMarketLabel = (record: SweepRecord): string => {
+  const marketRaw = asString(record.market, '').trim().toUpperCase();
+  const marketParts = marketRaw.split('/').map((part) => part.trim()).filter(Boolean);
+  const base = asString(marketParts[0] || marketRaw.replace(/\/+$/g, ''), '').trim();
+  const quote = asString(marketParts[1] || '', '').trim();
+  if (record.marketMode === 'mono') {
+    return base;
+  }
+  if (!base || !quote) {
+    return marketRaw;
+  }
+  return `${base}/${quote}`;
+};
+
 const prefixStrategyName = (tenant: TenantRow, record: SweepRecord): string => {
   const sourceStrategyId = Number(record.strategyId || 0);
   const strategySuffix = sourceStrategyId > 0 ? `::SID${sourceStrategyId}` : '';
-  return `SAAS::${tenant.slug}::${record.marketMode.toUpperCase()}::${record.strategyType}::${record.market}${strategySuffix}`;
+  const marketLabel = normalizeSweepMarketLabel(record);
+  return `SAAS::${tenant.slug}::${record.marketMode.toUpperCase()}::${record.strategyType}::${marketLabel}${strategySuffix}`;
 };
 
 const getExistingTenantStrategies = async (apiKeyName: string, tenantSlug: string) => {
@@ -3839,6 +3858,20 @@ const upsertTenantStrategies = async (
       const market = asString(item.record.market, '').toUpperCase();
       if (market && !availableSymbols.has(market)) {
         logger.info(`[upsertTenantStrategies] Skipping ${market} for ${apiKeyName}: pair not available on client exchange`);
+        await db.run(
+          `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+           VALUES (?, 'system', 'saas_materialize_pair_unavailable', ?, CURRENT_TIMESTAMP)`,
+          [
+            tenant.id,
+            JSON.stringify({
+              apiKeyName,
+              market,
+              offerId: item.offerId,
+              strategyType: item.record.strategyType,
+              marketMode: item.record.marketMode,
+            }),
+          ]
+        );
         continue;
       }
     }
@@ -3867,20 +3900,62 @@ const upsertTenantStrategies = async (
       continue;
     }
 
-    const created = await createStrategy(apiKeyName, draft);
-    if (created?.id) {
-      await markMaterializedRuntimeOrigin(Number(created.id), 'saas_materialize', 1);
+    try {
+      const created = await createStrategy(apiKeyName, draft);
+      if (created?.id) {
+        await markMaterializedRuntimeOrigin(Number(created.id), 'saas_materialize', 1);
+      }
+      out.push({
+        id: created.id,
+        name: created.name,
+        strategyId: created.id,
+        offerId: item.offerId,
+        mode: item.record.marketMode,
+        market: item.record.market,
+        type: item.record.strategyType,
+        metrics: item.metrics,
+      });
+    } catch (error) {
+      const message = (error as Error)?.message || '';
+      const pairConflict = /already has an active strategy/i.test(message);
+      if (!pairConflict) {
+        throw error;
+      }
+
+      // Legacy malformed market labels (e.g. OPUSDT/) can miss name-match and hit pair conflict.
+      // Reuse the already-active same-pair strategy for this tenant instead of failing the switch.
+      const draftBase = asString((draft as Partial<Strategy>)?.base_symbol, '').trim().toUpperCase();
+      const draftQuote = asString((draft as Partial<Strategy>)?.quote_symbol, '').trim().toUpperCase();
+      const allOnKey = await getStrategies(apiKeyName, { includeLotPreview: false });
+      const fallback = (Array.isArray(allOnKey) ? allOnKey : []).find((row) => {
+        const rowBase = asString((row as any)?.base_symbol, '').trim().toUpperCase();
+        const rowQuote = asString((row as any)?.quote_symbol, '').trim().toUpperCase();
+        const rowName = asString((row as any)?.name, '');
+        const samePair = rowBase === draftBase && rowQuote === draftQuote;
+        const sameTenant = rowName.startsWith(`SAAS::${tenant.slug}::`);
+        return samePair && sameTenant;
+      });
+
+      if (!fallback?.id) {
+        throw error;
+      }
+
+      const reused = await updateStrategy(apiKeyName, Number(fallback.id), draft, {
+        allowBindingUpdate: true,
+        source: 'saas_materialize_reuse_conflict',
+      });
+      await markMaterializedRuntimeOrigin(Number(reused.id), 'saas_materialize', 1);
+      out.push({
+        id: reused.id,
+        name: reused.name,
+        strategyId: reused.id,
+        offerId: item.offerId,
+        mode: item.record.marketMode,
+        market: item.record.market,
+        type: item.record.strategyType,
+        metrics: item.metrics,
+      });
     }
-    out.push({
-      id: created.id,
-      name: created.name,
-      strategyId: created.id,
-      offerId: item.offerId,
-      mode: item.record.marketMode,
-      market: item.record.market,
-      type: item.record.strategyType,
-      metrics: item.metrics,
-    });
   }
 
   for (const row of existing) {
@@ -8742,14 +8817,33 @@ export const requestAlgofundBatchAction = async (
             : undefined;
 
           const resolvedTarget = targetById?.system_id ? targetById : targetByName;
-          if (!resolvedTarget?.system_id) {
+          let virtualTarget: { system_name: string; api_key_name: string } | null = null;
+          if (!resolvedTarget?.system_id && targetSystemNameRaw) {
+            const tsSnapshots = await getTsBacktestSnapshots().catch(() => ({} as Record<string, TsBacktestSnapshot>));
+            const targetNameNormalized = targetSystemNameRaw.toUpperCase();
+            for (const [setKey, snapshot] of Object.entries(tsSnapshots || {})) {
+              const keyNormalized = asString(setKey, '').trim().toUpperCase();
+              const snapshotNameNormalized = asString(snapshot?.systemName, '').trim().toUpperCase();
+              if (keyNormalized === targetNameNormalized || snapshotNameNormalized === targetNameNormalized) {
+                const resolvedName = asString(setKey, targetSystemNameRaw).trim() || targetSystemNameRaw;
+                const resolvedApiKey = asString(snapshot?.apiKeyName, '').trim() || getAlgofundPublishedSourceApiKeyName(resolvedName);
+                virtualTarget = {
+                  system_name: resolvedName,
+                  api_key_name: resolvedApiKey,
+                };
+                break;
+              }
+            }
+          }
+
+          if (!resolvedTarget?.system_id && !virtualTarget) {
             throw new Error(`Target trading system not found: ${targetSystemId || targetSystemNameRaw}`);
           }
 
           directPayload = {
-            targetSystemId: Number(resolvedTarget.system_id),
-            targetSystemName: asString(resolvedTarget.system_name, targetSystemNameRaw),
-            targetApiKeyName: asString(resolvedTarget.api_key_name, ''),
+            targetSystemId: Number(resolvedTarget?.system_id || targetSystemId || 0),
+            targetSystemName: asString(resolvedTarget?.system_name || virtualTarget?.system_name, targetSystemNameRaw),
+            targetApiKeyName: asString(resolvedTarget?.api_key_name || virtualTarget?.api_key_name, ''),
           };
         }
 
@@ -10157,13 +10251,34 @@ export const requestAlgofundAction = async (
       }
     }
 
-    if (!target?.id) {
+    let virtualTarget: { systemName: string; apiKeyName: string } | null = null;
+    if (!target?.id && targetSystemNameRaw) {
+      const tsSnapshots = await getTsBacktestSnapshots().catch(() => ({} as Record<string, TsBacktestSnapshot>));
+      const targetNameNormalized = targetSystemNameRaw.toUpperCase();
+      for (const [setKey, snapshot] of Object.entries(tsSnapshots || {})) {
+        const keyNormalized = asString(setKey, '').trim().toUpperCase();
+        const snapshotNameNormalized = asString(snapshot?.systemName, '').trim().toUpperCase();
+        if (keyNormalized === targetNameNormalized || snapshotNameNormalized === targetNameNormalized) {
+          const resolvedName = asString(setKey, targetSystemNameRaw).trim() || targetSystemNameRaw;
+          virtualTarget = {
+            systemName: resolvedName,
+            apiKeyName: asString(snapshot?.apiKeyName, '').trim() || getAlgofundPublishedSourceApiKeyName(resolvedName),
+          };
+          break;
+        }
+      }
+    }
+
+    if (!target?.id && !virtualTarget) {
       throw new Error(`Target trading system not found: ${targetSystemId || targetSystemNameRaw}`);
     }
 
-    requestPayload.targetSystemId = Number(target.id);
-    requestPayload.targetSystemName = asString(target.name, targetSystemNameRaw);
-    requestPayload.targetApiKeyName = asString(switchApiKeyName, '');
+    requestPayload.targetSystemId = Number(target?.id || targetSystemId || 0);
+    requestPayload.targetSystemName = asString(target?.name || virtualTarget?.systemName, targetSystemNameRaw);
+    requestPayload.targetApiKeyName = asString(
+      target?.id ? switchApiKeyName : (virtualTarget?.apiKeyName || switchApiKeyName),
+      ''
+    );
   }
 
   await db.run(
@@ -10324,24 +10439,23 @@ const applyApprovedAlgofundAction = async (params: {
     logger.info(`[algofund-stop] active_systems update result: changes=${(stopResult as any)?.changes ?? 'unknown'} profile_id=${profile.id}`);
   } else if (row.request_type === 'switch_system') {
     const targetSystemId = Math.floor(asNumber(requestPayload.targetSystemId, 0));
-    if (targetSystemId <= 0) {
-      throw new Error('Switch request payload is missing targetSystemId');
+    let globalTarget: { system_id?: number; system_name?: string; source_api_key_name?: string } | undefined;
+    if (targetSystemId > 0) {
+      globalTarget = await db.get(
+        `SELECT ts.id AS system_id, ts.name AS system_name, ak.name AS source_api_key_name
+         FROM trading_systems ts
+         JOIN api_keys ak ON ak.id = ts.api_key_id
+         WHERE ts.id = ?`,
+        [targetSystemId]
+      ) as { system_id?: number; system_name?: string; source_api_key_name?: string } | undefined;
     }
-
-    const globalTarget = await db.get(
-      `SELECT ts.id AS system_id, ts.name AS system_name, ak.name AS source_api_key_name
-       FROM trading_systems ts
-       JOIN api_keys ak ON ak.id = ts.api_key_id
-       WHERE ts.id = ?`,
-      [targetSystemId]
-    ) as { system_id?: number; system_name?: string; source_api_key_name?: string } | undefined;
 
     const targetSystemName = asString(
       globalTarget?.system_name || requestPayload.targetSystemName,
       ''
     ).trim();
     if (!targetSystemName) {
-      throw new Error(`Target trading system not found: ${targetSystemId}`);
+      throw new Error(`Target trading system not found: ${targetSystemId || asString(requestPayload.targetSystemName, '').trim()}`);
     }
 
     const runtimeApiKeyName = asString(getAlgofundExecutionApiKeyName(tenant, profile), '').trim();
@@ -10372,7 +10486,7 @@ const applyApprovedAlgofundAction = async (params: {
       [runtimeApiKeyName]
     ) as { cnt?: number } | undefined;
 
-    if (Number(activeAfterSwitch?.cnt || 0) === 0 && globalTarget?.source_api_key_name) {
+    if (Number(activeAfterSwitch?.cnt || 0) === 0 && targetSystemId > 0 && globalTarget?.source_api_key_name) {
       const tsMembers = await db.all(
         `SELECT strategy_id
          FROM trading_system_members
