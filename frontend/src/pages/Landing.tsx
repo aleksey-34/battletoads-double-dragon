@@ -143,7 +143,6 @@ function useLandingTexts(lang: UILanguage) {
       discountTitle: '🔥 DUAL MODE PRICING',
       discountSub: 'Стратегии + Алгофонд в одной сетке. Сейчас все тарифы = $0 в beta.',
       discountBadge: 'Beta $0',
-      discountNote: 'Старые тарифы сохранены как архив (legacy). Новая сетка действует для новых подключений.',
       discountPlans: [
         { title: 'Dual Start', old: '$39/mo', desc: 'до 3 стратегий · 1 TS · депозит до $5k' },
         { title: 'Dual Pro', old: '$129/mo', desc: 'до 10 стратегий · 3 TS · депозит до $50k' },
@@ -213,7 +212,7 @@ function useLandingTexts(lang: UILanguage) {
         { q: 'How are you different from a set of backtests?', a: 'We separate research, runtime, and client contours. Candidate selection, card publishing, and live execution don\'t share a single fragile process. Research updates strategies while runtime trades — they never interfere.' },
       ],
       discountTitle: '🔥 DUAL MODE PRICING', discountSub: 'Strategies + Algofund in one tariff grid. All plans are $0 during beta.',
-      discountBadge: 'Beta $0', discountNote: 'Legacy plans are archived. New grid applies to new activations.',
+      discountBadge: 'Beta $0',
       discountPlans: [
         { title: 'Dual Start', old: '$39/mo', desc: 'up to 3 strategies · 1 TS · up to $5k deposit' },
         { title: 'Dual Pro', old: '$129/mo', desc: 'up to 10 strategies · 3 TS · up to $50k deposit' },
@@ -281,7 +280,7 @@ function useLandingTexts(lang: UILanguage) {
         { q: 'Backtest setinden farkınız ne?', a: 'Research, runtime ve client devrelerini ayırıyoruz. Aday seçimi, kart yayınlama ve canlı işlem tek kırılgan süreçte yaşamaz. Research stratejileri güncellerken runtime işlem yapar.' },
       ],
       discountTitle: '🔥 DUAL MODE FIYATLAMA', discountSub: 'Strateji + Algofon tek tarifede. Betada tum planlar $0.',
-      discountBadge: 'Beta $0', discountNote: 'Eski planlar arsivlendi. Yeni aktivasyonlar yeni tarifeye geciyor.',
+      discountBadge: 'Beta $0',
       discountPlans: [
         { title: 'Dual Start', old: '$39/ay', desc: '3 stratejiye kadar · 1 TS · $5k depozito limiti' },
         { title: 'Dual Pro', old: '$129/ay', desc: '10 stratejiye kadar · 3 TS · $50k depozito limiti' },
@@ -580,10 +579,6 @@ export default function Landing() {
             {tx.discountTitle}
           </div>
           <p style={{ color: T.textSec, fontSize: 16, maxWidth: 500, margin: '0 auto 12px', lineHeight: 1.6 }}>{tx.discountSub}</p>
-          <div style={{
-            display: 'inline-block', background: T.greenBg, borderRadius: 8, padding: '6px 20px',
-            fontSize: 13, color: T.greenText, fontWeight: 600, marginBottom: 32,
-          }}>{tx.discountNote}</div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, maxWidth: 900, margin: '0 auto 20px' }}>
             {tx.discountPlans.map((p: any, i: number) => (
               <div key={i} style={{ ...cardStyle, padding: '16px 12px', textAlign: 'center' }}>
