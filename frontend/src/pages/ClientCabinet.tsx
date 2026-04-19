@@ -576,6 +576,8 @@ const ClientCabinet: React.FC = () => {
   const [strategyOfferIds, setStrategyOfferIds] = useState<string[]>([]);
   const [strategyRiskInput, setStrategyRiskInput] = useState(5);
   const [strategyTradeInput, setStrategyTradeInput] = useState(5);
+  const [offerFilterInstrument, setOfferFilterInstrument] = useState<string>('all');
+  const [offerSortBy, setOfferSortBy] = useState<'ret' | 'dd' | 'pf' | 'trades'>('ret');
   const [strategySelectionPreview, setStrategySelectionPreview] = useState<StrategySelectionPreviewResponse | null>(null);
   const [strategySelectionPreviewLoading, setStrategySelectionPreviewLoading] = useState(false);
   const [singleOfferPreview, setSingleOfferPreview] = useState<any>(null);
@@ -1135,18 +1137,45 @@ const ClientCabinet: React.FC = () => {
                     Выберите стратегии для вашего портфеля и нажмите «Сохранить выбор».
                   </Typography.Text>
                 ) : null}
+                <Space wrap size={8}>
+                  <Select
+                    size="small"
+                    style={{ width: 180 }}
+                    value={offerFilterInstrument}
+                    onChange={setOfferFilterInstrument}
+                    options={[
+                      { value: 'all', label: `Все инструменты (${strategyWorkspace.offers.length})` },
+                      ...Array.from(new Set(strategyWorkspace.offers.map((o) => o.strategy.market).filter(Boolean))).sort().map((m) => ({
+                        value: m,
+                        label: `${m} (${strategyWorkspace.offers.filter((o) => o.strategy.market === m).length})`,
+                      })),
+                    ]}
+                  />
+                  <Select
+                    size="small"
+                    style={{ width: 160 }}
+                    value={offerSortBy}
+                    onChange={setOfferSortBy}
+                    options={[
+                      { value: 'ret', label: '↓ По доходности' },
+                      { value: 'dd', label: '↑ По просадке' },
+                      { value: 'pf', label: '↓ По PF' },
+                      { value: 'trades', label: '↓ По сделкам' },
+                    ]}
+                  />
+                </Space>
                 <Row gutter={[12, 12]}>
-                  {[...strategyWorkspace.offers].sort((a, b) => {
+                  {[...strategyWorkspace.offers]
+                    .filter((o) => offerFilterInstrument === 'all' || o.strategy.market === offerFilterInstrument)
+                    .sort((a, b) => {
                     const aS = strategyOfferIds.includes(a.offerId) ? 0 : 1;
                     const bS = strategyOfferIds.includes(b.offerId) ? 0 : 1;
                     if (aS !== bS) return aS - bS;
 
-                    const aInterval = getIntervalSortRank(a.strategy.params?.interval);
-                    const bInterval = getIntervalSortRank(b.strategy.params?.interval);
-                    if (aInterval !== bInterval) return aInterval - bInterval;
-
-                    const pfDiff = Number(b.metrics.pf || 0) - Number(a.metrics.pf || 0);
-                    if (Math.abs(pfDiff) > 0.0001) return pfDiff;
+                    if (offerSortBy === 'ret') return Number(b.metrics.ret || 0) - Number(a.metrics.ret || 0);
+                    if (offerSortBy === 'dd') return Number(a.metrics.dd || 0) - Number(b.metrics.dd || 0);
+                    if (offerSortBy === 'pf') return Number(b.metrics.pf || 0) - Number(a.metrics.pf || 0);
+                    if (offerSortBy === 'trades') return Number(b.metrics.trades || 0) - Number(a.metrics.trades || 0);
 
                     return Number(b.metrics.ret || 0) - Number(a.metrics.ret || 0);
                   }).map((offer) => (

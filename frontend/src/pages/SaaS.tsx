@@ -2714,6 +2714,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [selectedAdminDraftTsOfferIds, setSelectedAdminDraftTsOfferIds] = useState<string[]>([]);
   const [selectedAdminDraftTsSetKey, setSelectedAdminDraftTsSetKey] = useState('');
   const [offerStoreLabelFilter, setOfferStoreLabelFilter] = useState<'all' | OfferStoreLabel>('all');
+  const [adminOfferInstrumentFilter, setAdminOfferInstrumentFilter] = useState<string>('all');
+  const [adminOfferSortBy, setAdminOfferSortBy] = useState<'ret' | 'dd' | 'pf' | 'trades'>('ret');
 
   const strategyTenants = useMemo(
     () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client' || item.tenant.product_mode === 'dual'),
@@ -2989,12 +2991,38 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     [offerStoreOffers, storefrontOfferIds],
   );
   const filteredOfferStoreOffers = useMemo(
-    () => filterOffersByLabel(offerStoreOffers),
-    [filterOffersByLabel, offerStoreOffers],
+    () => {
+      let result = filterOffersByLabel(offerStoreOffers);
+      if (adminOfferInstrumentFilter !== 'all') {
+        result = result.filter((o: any) => String(o.market || '') === adminOfferInstrumentFilter);
+      }
+      const sortKey = adminOfferSortBy;
+      result = [...result].sort((a: any, b: any) => {
+        if (sortKey === 'dd') return Number(a.dd || 0) - Number(b.dd || 0);
+        if (sortKey === 'pf') return Number(b.pf || 0) - Number(a.pf || 0);
+        if (sortKey === 'trades') return Number(b.trades || 0) - Number(a.trades || 0);
+        return Number(b.ret || 0) - Number(a.ret || 0);
+      });
+      return result;
+    },
+    [filterOffersByLabel, offerStoreOffers, adminOfferInstrumentFilter, adminOfferSortBy],
   );
   const filteredCuratedStorefrontOffers = useMemo(
-    () => filterOffersByLabel(curatedStorefrontOffers),
-    [filterOffersByLabel, curatedStorefrontOffers],
+    () => {
+      let result = filterOffersByLabel(curatedStorefrontOffers);
+      if (adminOfferInstrumentFilter !== 'all') {
+        result = result.filter((o: any) => String(o.market || '') === adminOfferInstrumentFilter);
+      }
+      const sortKey = adminOfferSortBy;
+      result = [...result].sort((a: any, b: any) => {
+        if (sortKey === 'dd') return Number(a.dd || 0) - Number(b.dd || 0);
+        if (sortKey === 'pf') return Number(b.pf || 0) - Number(a.pf || 0);
+        if (sortKey === 'trades') return Number(b.trades || 0) - Number(a.trades || 0);
+        return Number(b.ret || 0) - Number(a.ret || 0);
+      });
+      return result;
+    },
+    [filterOffersByLabel, curatedStorefrontOffers, adminOfferInstrumentFilter, adminOfferSortBy],
   );
   const offerStoreOfferByStrategyId = useMemo(() => new Map(
     offerStoreOffers
@@ -8501,6 +8529,31 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   { value: 'fallback_preset', label: 'fallback_preset' },
                                 ]}
                               />
+                              <Select
+                                size="small"
+                                style={{ width: 200 }}
+                                value={adminOfferInstrumentFilter}
+                                onChange={setAdminOfferInstrumentFilter}
+                                options={[
+                                  { value: 'all', label: `Все инструменты (${offerStoreOffers.length})` },
+                                  ...Array.from(new Set(offerStoreOffers.map((o: any) => String(o.market || '')).filter(Boolean))).sort().map((m) => ({
+                                    value: m,
+                                    label: `${m} (${offerStoreOffers.filter((o: any) => String(o.market || '') === m).length})`,
+                                  })),
+                                ]}
+                              />
+                              <Select
+                                size="small"
+                                style={{ width: 180 }}
+                                value={adminOfferSortBy}
+                                onChange={setAdminOfferSortBy}
+                                options={[
+                                  { value: 'ret', label: '↓ По доходности' },
+                                  { value: 'dd', label: '↑ По просадке' },
+                                  { value: 'pf', label: '↓ По PF' },
+                                  { value: 'trades', label: '↓ По сделкам' },
+                                ]}
+                              />
                             </Space>
                             <Space wrap style={{ marginBottom: 16 }}>
                               <Button
@@ -8528,7 +8581,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       size="small"
                                       rowKey="offerId"
                                       dataSource={filteredCuratedStorefrontOffers}
-                                      pagination={{ pageSize: 6, showSizeChanger: false }}
+                                      pagination={{ pageSize: 20, showSizeChanger: true, pageSizeOptions: ['10', '20', '50', '100'] }}
                                       scroll={{ x: 900 }}
                                       columns={[
                                         {
