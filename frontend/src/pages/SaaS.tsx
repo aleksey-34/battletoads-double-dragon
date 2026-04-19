@@ -2716,6 +2716,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [offerStoreLabelFilter, setOfferStoreLabelFilter] = useState<'all' | OfferStoreLabel>('all');
   const [adminOfferInstrumentFilter, setAdminOfferInstrumentFilter] = useState<string>('all');
   const [adminOfferSortBy, setAdminOfferSortBy] = useState<'ret' | 'dd' | 'pf' | 'trades'>('ret');
+  const [storefrontCardInstrumentFilter, setStorefrontCardInstrumentFilter] = useState<string>('all');
+  const [storefrontCardSortBy, setStorefrontCardSortBy] = useState<'ret' | 'dd' | 'pf' | 'trades'>('ret');
+  const [storefrontCardPage, setStorefrontCardPage] = useState(1);
+  const STOREFRONT_PAGE_SIZE = 24;
 
   const strategyTenants = useMemo(
     () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client' || item.tenant.product_mode === 'dual'),
@@ -3715,7 +3719,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     const snapshotSystemName = String(snapshotForSystem?.systemName || '').trim();
     const isStorefrontEnabled = publishedSystemSet.has(systemName) || (snapshotSystemName ? publishedSystemSet.has(snapshotSystemName) : false);
-    const hasMeaningfulState = canonicalOfferIds.length > 0 || tenants.length > 0 || (isStorefrontEnabled && runtimeSystemId !== null);
+    const hasMeaningfulState = canonicalOfferIds.length > 0 || tenants.length > 0 || (isStorefrontEnabled && runtimeSystemId !== null) || Boolean(snapshotForSystem);
 
     return {
       systemName,
@@ -3750,7 +3754,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       }
       // Hide legacy snapshot-only TS cards that have no runtime system and no clients.
       // These stale entries drift from the real storefront composition and create false backtests.
-      if (!item.runtimeSystemId && Number(item.tenantCount || 0) === 0) {
+      // But always show them on admin surface so admin can manage/preview them.
+      if (!isAdminSurface && !item.runtimeSystemId && Number(item.tenantCount || 0) === 0) {
         return false;
       }
       return true;
@@ -9711,9 +9716,50 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       {curatedStorefrontOffers.length === 0 ? (
                                         <Empty description="Curated-витрина оферов пока пуста: сначала добавь карточки в curated в Админ → Оферы и ТС" />
                                       ) : (
+                                        <>
+                                        <Space wrap size={8} style={{ marginBottom: 12 }}>
+                                          <Select
+                                            size="small"
+                                            style={{ width: 200 }}
+                                            value={storefrontCardInstrumentFilter}
+                                            onChange={(v) => { setStorefrontCardInstrumentFilter(v); setStorefrontCardPage(1); }}
+                                            options={[
+                                              { value: 'all', label: `Все инструменты (${curatedStorefrontOffers.length})` },
+                                              ...Array.from(new Set(curatedStorefrontOffers.map((o: any) => String(o.market || '')).filter(Boolean))).sort().map((m) => ({
+                                                value: m,
+                                                label: `${m} (${curatedStorefrontOffers.filter((o: any) => String(o.market || '') === m).length})`,
+                                              })),
+                                            ]}
+                                          />
+                                          <Select
+                                            size="small"
+                                            style={{ width: 180 }}
+                                            value={storefrontCardSortBy}
+                                            onChange={(v) => { setStorefrontCardSortBy(v); setStorefrontCardPage(1); }}
+                                            options={[
+                                              { value: 'ret', label: '↓ По доходности' },
+                                              { value: 'dd', label: '↑ По просадке' },
+                                              { value: 'pf', label: '↓ По PF' },
+                                              { value: 'trades', label: '↓ По сделкам' },
+                                            ]}
+                                          />
+                                          <Tag>{(() => {
+                                            const filtered = curatedStorefrontOffers.filter((o: any) => storefrontCardInstrumentFilter === 'all' || String(o.market || '') === storefrontCardInstrumentFilter);
+                                            return `${filtered.length} карточек`;
+                                          })()}</Tag>
+                                        </Space>
                                         <List
                                           grid={{ gutter: 10, xs: 1, md: 2, xl: 4 }}
-                                          dataSource={curatedStorefrontOffers}
+                                          pagination={{ pageSize: STOREFRONT_PAGE_SIZE, current: storefrontCardPage, onChange: setStorefrontCardPage, showSizeChanger: false, size: 'small' }}
+                                          dataSource={[...curatedStorefrontOffers]
+                                            .filter((o: any) => storefrontCardInstrumentFilter === 'all' || String(o.market || '') === storefrontCardInstrumentFilter)
+                                            .sort((a: any, b: any) => {
+                                              if (storefrontCardSortBy === 'dd') return Number(a.dd || 0) - Number(b.dd || 0);
+                                              if (storefrontCardSortBy === 'pf') return Number(b.pf || 0) - Number(a.pf || 0);
+                                              if (storefrontCardSortBy === 'trades') return Number(b.trades || 0) - Number(a.trades || 0);
+                                              return Number(b.ret || 0) - Number(a.ret || 0);
+                                            })
+                                          }
                                           renderItem={(row: any) => {
                                             const points = downsampleNumericSeries(
                                               (Array.isArray(row.equityPoints) ? row.equityPoints : [])
@@ -9791,6 +9837,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             );
                                           }}
                                         />
+                                        </>
                                       )}
                                     </Space>
                                   ),
@@ -10870,6 +10917,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           )}
                         </Card>
 
+                        {!isAdminSurface && (
                         <Card className="battletoads-card">
                           <Row gutter={[16, 16]} align="middle">
                             <Col xs={24} lg={16}>
@@ -10903,7 +10951,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Row>
                           <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>{copy.previewPlanCapHint}</Paragraph>
                         </Card>
+                        )}
 
+                        {!isAdminSurface && (
                         <Card className="battletoads-card" title={copy.engineStatus}>
                           <Space direction="vertical" size={12} style={{ width: '100%' }}>
                             <Space wrap>
@@ -10953,7 +11003,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             ) : null}
                           </Space>
                         </Card>
+                        )}
 
+                        {!isAdminSurface && (
                         <Card className="battletoads-card" title="Client requests">
                           <Row gutter={[16, 16]}>
                             <Col xs={24} lg={16}>
@@ -10975,6 +11027,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Col>
                           </Row>
                         </Card>
+                        )}
 
 
                       </>
