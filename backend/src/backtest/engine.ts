@@ -88,6 +88,10 @@ export type BacktestRunRequest = {
   slippagePercent?: number;
   fundingRatePercent?: number;
   maxOpenPositions?: number;
+  /** Override max_deposit on all strategies (scales position sizing to match initialBalance). */
+  maxDepositOverride?: number;
+  /** Override lot_long_percent / lot_short_percent on all strategies. */
+  lotPercentOverride?: number;
 };
 
 export type BacktestRunResult = {
@@ -113,6 +117,8 @@ type NormalizedBacktestRequest = {
   slippagePercent: number;
   fundingRatePercent: number;
   maxOpenPositions: number;
+  maxDepositOverride: number;
+  lotPercentOverride: number;
 };
 
 export type BacktestRunListItem = {
@@ -419,6 +425,8 @@ type BacktestContext = {
   slippageRate: number;
   fundingRate: number;
   trades: BacktestTrade[];
+  maxDepositOverride: number;
+  lotPercentOverride: number;
 };
 
 const computeLockedMargin = (runtimes: RuntimeStrategy[]): number => {
@@ -558,9 +566,11 @@ const openPosition = (
 ): boolean => {
   const strategy = runtime.strategy;
 
-  const lotPercent = signal === 'long'
-    ? asNumber(strategy.lot_long_percent, 0)
-    : asNumber(strategy.lot_short_percent, 0);
+  const lotPercent = ctx.lotPercentOverride > 0
+    ? ctx.lotPercentOverride
+    : signal === 'long'
+      ? asNumber(strategy.lot_long_percent, 0)
+      : asNumber(strategy.lot_short_percent, 0);
 
   const lotFraction = Math.max(0, lotPercent) / 100;
   if (lotFraction <= 0) {
@@ -571,7 +581,9 @@ const openPosition = (
     ? 1
     : 1 + Math.max(0, asNumber(strategy.reinvest_percent, 0)) / 100;
 
-  const maxDeposit = asNumber(strategy.max_deposit, 0);
+  const maxDeposit = ctx.maxDepositOverride > 0
+    ? ctx.maxDepositOverride
+    : asNumber(strategy.max_deposit, 0);
   const cappedBalance = maxDeposit > 0
     ? Math.min(portfolioEquityNow, maxDeposit)
     : portfolioEquityNow;
@@ -882,6 +894,8 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     slippagePercent,
     fundingRatePercent,
     maxOpenPositions,
+    maxDepositOverride: Math.max(0, asNumber(raw.maxDepositOverride, 0)),
+    lotPercentOverride: Math.max(0, asNumber(raw.lotPercentOverride, 0)),
   };
 };
 
@@ -951,6 +965,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     slippageRate: request.slippagePercent / 100,
     fundingRate: request.fundingRatePercent / 100,
     trades: [],
+    maxDepositOverride: request.maxDepositOverride,
+    lotPercentOverride: request.lotPercentOverride,
   };
 
   const maxOpenPositions = request.maxOpenPositions;

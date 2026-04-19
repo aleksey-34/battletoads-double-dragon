@@ -62,6 +62,10 @@ import {
   batchConnectStrategyClientOffer,
 } from '../saas/service';
 
+type OfferStoreLabel = 'research_catalog' | 'runtime_snapshot' | 'fallback_preset';
+
+const OFFER_STORE_LABELS = new Set<OfferStoreLabel>(['research_catalog', 'runtime_snapshot', 'fallback_preset']);
+
 const router = Router();
 
 const toBool = (value: unknown, fallback = false): boolean => {
@@ -104,6 +108,7 @@ router.post('/admin/seed', async (_req, res) => {
   try {
     const data = await seedDemoSaasData();
     res.json({ success: true, ...data });
+  type OfferStoreLabel = 'research_catalog' | 'runtime_snapshot' | 'fallback_preset';
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS seed error: ${err.message}`);
@@ -239,6 +244,14 @@ router.patch('/admin/offer-store', async (req, res) => {
       defaults: req.body?.defaults,
       publishedOfferIds: Array.isArray(req.body?.publishedOfferIds) ? req.body.publishedOfferIds.map(String) : undefined,
       curatedOfferIds: Array.isArray(req.body?.curatedOfferIds) ? req.body.curatedOfferIds.map(String) : undefined,
+      labels: req.body?.labels && typeof req.body.labels === 'object'
+        ? Object.fromEntries(
+          Object.entries(req.body.labels)
+            .map(([key, value]) => [String(key), String(value)] as const)
+            .filter(([, value]) => OFFER_STORE_LABELS.has(value as OfferStoreLabel))
+            .map(([key, value]) => [key, value as OfferStoreLabel])
+        )
+        : undefined,
       reviewSnapshotPatch: req.body?.reviewSnapshotPatch && typeof req.body.reviewSnapshotPatch === 'object'
         ? req.body.reviewSnapshotPatch
         : undefined,

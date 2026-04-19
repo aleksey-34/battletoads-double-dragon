@@ -152,6 +152,8 @@ type EquityPoint = {
   value?: number;
 };
 
+type OfferStoreLabel = 'research_catalog' | 'runtime_snapshot' | 'fallback_preset';
+
 type LinePoint = {
   time: number;
   value: number;
@@ -495,6 +497,16 @@ type SaasSummary = {
   tenants: TenantSummary[];
   plans: Plan[];
   apiKeys: string[];
+  sourceArtifactsStatus?: {
+    catalogPath?: string;
+    sweepPath?: string;
+    catalogTimestamp?: string | null;
+    sweepTimestamp?: string | null;
+    catalogAgeMs?: number | null;
+    sweepAgeMs?: number | null;
+    catalogFresh?: boolean;
+    sweepFresh?: boolean;
+  };
   backtestPairRequests?: {
     pending: number;
     total: number;
@@ -514,6 +526,7 @@ type SaasSummary = {
     };
     publishedOfferIds: string[];
     curatedOfferIds?: string[];
+    labels?: Record<string, OfferStoreLabel>;
     algofundStorefrontSystemNames?: string[];
     tsBacktestSnapshots?: Record<string, {
       apiKeyName?: string;
@@ -581,6 +594,7 @@ type SaasSummary = {
       trades: number;
       tradesPerDay: number;
       periodDays: number;
+      label?: OfferStoreLabel;
       curated: boolean;
       publishedExplicitly: boolean;
       snapshotUpdatedAt?: string;
@@ -2699,6 +2713,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   } | null>(null);
   const [selectedAdminDraftTsOfferIds, setSelectedAdminDraftTsOfferIds] = useState<string[]>([]);
   const [selectedAdminDraftTsSetKey, setSelectedAdminDraftTsSetKey] = useState('');
+  const [offerStoreLabelFilter, setOfferStoreLabelFilter] = useState<'all' | OfferStoreLabel>('all');
 
   const strategyTenants = useMemo(
     () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client' || item.tenant.product_mode === 'dual'),
@@ -2813,6 +2828,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }, [])
   ), [summary?.recommendedSets]);
   const offerStoreOffers = useMemo(() => summary?.offerStore?.offers || [], [summary?.offerStore?.offers]);
+  const offerStoreLabels = useMemo<Record<string, OfferStoreLabel>>(() => {
+    const raw = summary?.offerStore?.labels || {};
+    const out: Record<string, OfferStoreLabel> = {};
+    Object.entries(raw).forEach(([offerId, label]) => {
+      const normalizedOfferId = String(offerId || '').trim();
+      if (!normalizedOfferId) {
+        return;
+      }
+      if (label === 'research_catalog' || label === 'runtime_snapshot' || label === 'fallback_preset') {
+        out[normalizedOfferId] = label;
+      }
+    });
+    return out;
+  }, [summary?.offerStore?.labels]);
   const curatedOfferIds = useMemo(
     () => new Set((summary?.offerStore?.curatedOfferIds || []).map((item) => String(item)).filter((item) => item.length > 0)),
     [summary?.offerStore?.curatedOfferIds],
@@ -2821,10 +2850,40 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     () => new Set((summary?.offerStore?.publishedOfferIds || []).map((item) => String(item)).filter((item) => item.length > 0)),
     [summary?.offerStore?.publishedOfferIds],
   );
-  const storefrontOfferIds = useMemo(
-    () => (curatedOfferIds.size > 0 ? curatedOfferIds : publishedOfferIds),
-    [curatedOfferIds, publishedOfferIds],
+  const catalogStorefrontOfferIds = useMemo(
+    () => new Set([
+      ...(((summary?.catalog?.clientCatalog?.mono || []) as any[]).map((item) => String(item?.offerId || '').trim()).filter(Boolean)),
+      ...(((summary?.catalog?.clientCatalog?.synth || []) as any[]).map((item) => String(item?.offerId || '').trim()).filter(Boolean)),
+    ]),
+    [summary?.catalog?.clientCatalog?.mono, summary?.catalog?.clientCatalog?.synth],
   );
+  const storefrontOfferIds = useMemo(
+    () => {
+      if (curatedOfferIds.size > 0) {
+        return curatedOfferIds;
+      }
+      if (publishedOfferIds.size > 0) {
+        return publishedOfferIds;
+      }
+      return catalogStorefrontOfferIds;
+    },
+    [curatedOfferIds, publishedOfferIds, catalogStorefrontOfferIds],
+  );
+  const getOfferLabel = useCallback((offerIdRaw: unknown): OfferStoreLabel => {
+    const offerId = String(offerIdRaw || '').trim();
+    if (offerId && offerStoreLabels[offerId]) {
+      return offerStoreLabels[offerId];
+    }
+    if (storefrontOfferIds.has(offerId)) {
+      return 'runtime_snapshot';
+    }
+    return 'research_catalog';
+  }, [offerStoreLabels, storefrontOfferIds]);
+  const filterOffersByLabel = useCallback((offers: any[]) => (
+    offerStoreLabelFilter === 'all'
+      ? offers
+      : offers.filter((offer) => getOfferLabel(offer?.offerId) === offerStoreLabelFilter)
+  ), [getOfferLabel, offerStoreLabelFilter]);
   const normalizeStorefrontTsOfferIds = useCallback((offerIds?: string[]) => Array.from(new Set(
     (Array.isArray(offerIds) ? offerIds : [])
       .map((item) => String(item || '').trim())
@@ -2928,6 +2987,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const curatedStorefrontOffers = useMemo(
     () => offerStoreOffers.filter((offer) => storefrontOfferIds.has(String(offer.offerId || ''))),
     [offerStoreOffers, storefrontOfferIds],
+  );
+  const filteredOfferStoreOffers = useMemo(
+    () => filterOffersByLabel(offerStoreOffers),
+    [filterOffersByLabel, offerStoreOffers],
+  );
+  const filteredCuratedStorefrontOffers = useMemo(
+    () => filterOffersByLabel(curatedStorefrontOffers),
+    [filterOffersByLabel, curatedStorefrontOffers],
   );
   const offerStoreOfferByStrategyId = useMemo(() => new Map(
     offerStoreOffers
@@ -3539,11 +3606,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     const availableSystemNames = Array.from(new Set([
       ...Array.from(publishedSystemSet),
-      ...snapshotSystemNames.filter((name) => publishedSystemSet.has(String(name || '').trim())),
-      ...snapshotMasterSystemNames.filter((name) => publishedSystemSet.has(String(name || '').trim())),
-      ...(publishedSystemSet.has(String(publishResponse?.sourceSystem?.systemName || '').trim())
-        ? [String(publishResponse?.sourceSystem?.systemName || '').trim()]
-        : []),
+      ...snapshotSystemNames,
+      ...snapshotMasterSystemNames,
+      String(publishResponse?.sourceSystem?.systemName || '').trim(),
     ].filter((name) => isStorefrontSystemName(String(name || '')))));
 
     const mapped = availableSystemNames.map((systemName) => {
@@ -3846,29 +3911,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
-  const toggleOfferCurated = async (offerId: string, curated: boolean) => {
+  const updateOfferLabel = async (offerId: string, label: OfferStoreLabel) => {
+    const normalizedOfferId = String(offerId || '').trim();
     const current = summary?.offerStore;
-    if (!current) {
+    if (!normalizedOfferId || !current) {
       return;
     }
-    const set = new Set((current.curatedOfferIds || []).map((item) => String(item)));
-    if (curated) {
-      set.add(String(offerId));
-    } else {
-      set.delete(String(offerId));
-    }
-    setActionLoading(`offer-store:${offerId}:curated`);
+    const nextLabels: Record<string, OfferStoreLabel> = { ...(current.labels || {}) };
+    nextLabels[normalizedOfferId] = label;
+    setActionLoading(`offer-store:${normalizedOfferId}:label:${label}`);
     try {
       await axios.patch('/api/saas/admin/offer-store', {
-        curatedOfferIds: Array.from(set),
+        labels: nextLabels,
       });
       await loadSummary('full');
-      messageApi.success(curated ? 'Offer added to curated storefront' : 'Offer removed from curated storefront');
+      messageApi.success(`Label updated: ${label}`);
     } catch (error: any) {
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to update curated storefront'));
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to update offer label'));
     } finally {
       setActionLoading('');
     }
+  };
+
+  const toggleOfferCurated = async (offerId: string, curated: boolean) => {
+    await updateOfferLabel(offerId, curated ? 'runtime_snapshot' : 'fallback_preset');
   };
 
   const deleteOfferFromStorefrontDb = async (offerId: string) => {
@@ -6645,10 +6711,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
+    const interval = String(offer.familyInterval || offer.interval || offer.strategyParams?.interval || '').trim();
+    const tfSuffix = interval ? ` • TF ${interval}` : '';
+
     openEmbeddedBacktest({
       kind: 'offer',
-      title: `Бэктест оффера: ${offer.titleRu}`,
-      description: 'Sweep-бэктест карточки из последнего свепа. Регулируй риск и частоту, проверяй метрики/equity и решай: отправить на витрину или закрыть.',
+      title: `Бэктест оффера: ${offer.titleRu}${tfSuffix}`,
+      description: `Sweep-бэктест карточки${interval ? ` (${interval})` : ''}. Проверь метрики, equity и реши, оставлять ли её на витрине.`,
       offerId: String(offer.offerId || ''),
       offerCurated: storefrontOfferIds.has(String(offer.offerId || '')),
     });
@@ -8058,13 +8127,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 <Statistic title={copy.latestCatalog} value={summary?.catalog?.counts?.monoCatalog || 0} suffix={`mono / ${summary?.catalog?.counts?.synthCatalog || 0} synth`} />
                                 <Space direction="vertical" size={2}>
                                   <Text type="secondary">{String(summary?.catalog?.timestamp || '').slice(0, 16).replace('T', ' ') || summary?.sourceFiles?.latestCatalogPath || 'results/*.json not found'}</Text>
+                                  <Text type="secondary">catalog: {summary?.sourceArtifactsStatus?.catalogFresh ? 'fresh' : 'stale'} · age {Math.round(Number(summary?.sourceArtifactsStatus?.catalogAgeMs || 0) / 3600000)}h</Text>
                                 </Space>
                               </Card>
                             </Col>
                             <Col xs={24} md={8}>
                               <Card className="battletoads-card">
                                 <Statistic title={copy.latestSweep} value={summary?.sweepSummary?.counts?.evaluated || 0} suffix={`/ ${summary?.sweepSummary?.counts?.scheduledRuns || 0}`} />
-                                <Text type="secondary">{summary?.sourceFiles?.latestSweepPath || 'results/*.json not found'}</Text>
+                                <Space direction="vertical" size={2}>
+                                  <Text type="secondary">{summary?.sourceFiles?.latestSweepPath || 'results/*.json not found'}</Text>
+                                  <Text type="secondary">sweep: {summary?.sourceArtifactsStatus?.sweepFresh ? 'fresh' : 'stale'} · age {Math.round(Number(summary?.sourceArtifactsStatus?.sweepAgeMs || 0) / 3600000)}h</Text>
+                                </Space>
                               </Card>
                             </Col>
                             <Col xs={24} md={8}>
@@ -8336,17 +8409,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   const offerId = String(selectedAdminReviewOffer.offerId || '');
                                   const isCurated = storefrontOfferIds.has(offerId);
                                   const isPublished = publishedOfferIds.has(offerId);
+                                  const offerLabel = getOfferLabel(offerId);
+                                  const interval = String(selectedAdminReviewOffer.familyInterval || selectedAdminReviewOffer.interval || selectedAdminReviewOffer.strategyParams?.interval || '').trim();
                                   return (
                                     <>
                                 <Space wrap>
-                                  <Tag color={isCurated ? 'processing' : 'default'}>{isCurated ? 'curated' : 'not curated'}</Tag>
-                                  <Tag color={isPublished ? 'success' : 'default'}>{isPublished ? 'published' : 'not published'}</Tag>
+                                  <Tag color={offerLabel === 'runtime_snapshot' ? 'processing' : offerLabel === 'fallback_preset' ? 'default' : 'gold'}>{offerLabel}</Tag>
+                                  <Tag color={isCurated ? 'processing' : 'default'}>{isCurated ? 'legacy curated' : 'legacy curated off'}</Tag>
+                                  <Tag color={isPublished ? 'success' : 'default'}>{isPublished ? 'legacy published' : 'legacy published off'}</Tag>
                                   <Tag color="blue">offer #{selectedAdminReviewOffer.offerId}</Tag>
                                   <Tag>{selectedAdminReviewOffer.mode.toUpperCase()}</Tag>
                                   <Tag>{selectedAdminReviewOffer.market}</Tag>
+                                  {interval ? <Tag color="cyan">TF {interval}</Tag> : null}
                                 </Space>
                                 <Descriptions column={1} size="small" bordered>
                                   <Descriptions.Item label="Карточка">{selectedAdminReviewOffer.titleRu}</Descriptions.Item>
+                                  <Descriptions.Item label="TF">{interval || '—'}</Descriptions.Item>
                                   <Descriptions.Item label="Период">{Number(selectedAdminReviewOffer.periodDays || 0)}d</Descriptions.Item>
                                   <Descriptions.Item label="Return">{formatPercent(selectedAdminReviewOffer.ret)}</Descriptions.Item>
                                   <Descriptions.Item label="Drawdown">{formatPercent(selectedAdminReviewOffer.dd)}</Descriptions.Item>
@@ -8362,22 +8440,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Button
                                     type="primary"
                                     size="small"
-                                    loading={actionLoading === `offer-store:${offerId}:curated`}
-                                    onClick={() => void toggleOfferCurated(offerId, true)}
+                                    loading={actionLoading === `offer-store:${offerId}:label:runtime_snapshot`}
+                                    onClick={() => void updateOfferLabel(offerId, 'runtime_snapshot')}
                                   >
-                                    {isCurated ? 'Обновить curated' : 'В curated'}
+                                    В runtime_snapshot
                                   </Button>
                                   <Button
                                     size="small"
-                                    loading={actionLoading === `offer-store:${offerId}:published`}
-                                    onClick={() => void toggleOfferPublished(offerId, !isPublished)}
+                                    loading={actionLoading === `offer-store:${offerId}:label:research_catalog`}
+                                    onClick={() => void updateOfferLabel(offerId, 'research_catalog')}
                                   >
-                                    {isPublished ? 'Снять published' : 'В published'}
+                                    В research_catalog
+                                  </Button>
+                                  <Button
+                                    size="small"
+                                    loading={actionLoading === `offer-store:${offerId}:label:fallback_preset`}
+                                    onClick={() => void updateOfferLabel(offerId, 'fallback_preset')}
+                                  >
+                                    В fallback_preset
                                   </Button>
                                   <Button size="small" onClick={() => openOfferBacktest(selectedAdminReviewOffer)}>
                                     Открыть бэктест оффера
                                   </Button>
-                                  {isCurated ? <Button size="small" danger onClick={() => void openUnpublishWizard(offerId)}>Убрать из curated</Button> : null}
+                                  {offerLabel === 'runtime_snapshot' ? <Button size="small" danger onClick={() => void openUnpublishWizard(offerId)}>Снять runtime_snapshot</Button> : null}
                                 </Space>
                                     </>
                                   );
@@ -8391,14 +8476,31 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                           <Card className="battletoads-card" title="Оферы и ТС на витринах">
                             <Paragraph type="secondary" style={{ marginTop: 0 }}>
-                              Curated управляет тем, что реально попадает на storefront. Published хранится отдельно как явный вторичный статус.
+                              Основной продуктовый статус теперь задается меткой карточки. Legacy curated/published сохранены только для миграционной совместимости.
                             </Paragraph>
                             <Space wrap style={{ marginBottom: 12 }}>
-                              <Tag color="processing">curated offers: {curatedStorefrontOffers.length}</Tag>
+                              <Tag color="processing">runtime_snapshot: {offerStoreOffers.filter((offer) => getOfferLabel(offer.offerId) === 'runtime_snapshot').length}</Tag>
+                              <Tag color="gold">research_catalog: {offerStoreOffers.filter((offer) => getOfferLabel(offer.offerId) === 'research_catalog').length}</Tag>
+                              <Tag color="default">fallback_preset: {offerStoreOffers.filter((offer) => getOfferLabel(offer.offerId) === 'fallback_preset').length}</Tag>
+                              <Tag color="processing">legacy curated: {curatedStorefrontOffers.length}</Tag>
                               <Tag color="success">published offers: {publishedOfferIds.size}</Tag>
                               <Tag color="gold">waitlist offers: {researchCandidateOffers.length}</Tag>
                               <Tag color="blue">period: {Number(summary?.offerStore?.defaults?.periodDays || 0)}d</Tag>
                               <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
+                            </Space>
+                            <Space wrap style={{ marginBottom: 16 }}>
+                              <Select
+                                size="small"
+                                style={{ width: 240 }}
+                                value={offerStoreLabelFilter}
+                                onChange={(value) => setOfferStoreLabelFilter(value)}
+                                options={[
+                                  { value: 'all', label: 'Все метки' },
+                                  { value: 'runtime_snapshot', label: 'runtime_snapshot' },
+                                  { value: 'research_catalog', label: 'research_catalog' },
+                                  { value: 'fallback_preset', label: 'fallback_preset' },
+                                ]}
+                              />
                             </Space>
                             <Space wrap style={{ marginBottom: 16 }}>
                               <Button
@@ -8419,13 +8521,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <Row gutter={[16, 16]}>
                               <Col xs={24} lg={12}>
                                 <Card className="battletoads-card" size="small" title="Витрина оферов клиентов стратегий">
-                                  {curatedStorefrontOffers.length === 0 ? (
-                                    <Empty description="Пока в curated-витрине нет оферов" />
+                                  {filteredCuratedStorefrontOffers.length === 0 ? (
+                                    <Empty description="По текущему фильтру меток карточек нет" />
                                   ) : (
                                     <Table
                                       size="small"
                                       rowKey="offerId"
-                                      dataSource={curatedStorefrontOffers}
+                                      dataSource={filteredCuratedStorefrontOffers}
                                       pagination={{ pageSize: 6, showSizeChanger: false }}
                                       scroll={{ x: 900 }}
                                       columns={[
@@ -8436,7 +8538,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           render: (_, row: any) => (
                                             <Space direction="vertical" size={0}>
                                               <Text strong>{row.titleRu}</Text>
-                                              <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market}</Text>
+                                              <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market} • TF {String(row.familyInterval || row.interval || row.strategyParams?.interval || '—')}</Text>
                                             </Space>
                                           ),
                                         },
@@ -8445,12 +8547,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           key: 'metrics',
                                           render: (_, row: any) => (
                                             <Space wrap>
+                                              <Tag color={getOfferLabel(row.offerId) === 'runtime_snapshot' ? 'processing' : getOfferLabel(row.offerId) === 'fallback_preset' ? 'default' : 'gold'}>{getOfferLabel(row.offerId)}</Tag>
                                               <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
                                               <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
                                               <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
+                                              <Tag color="cyan">TF {String(row.familyInterval || row.interval || row.strategyParams?.interval || '—')}</Tag>
                                               <Tag color={Number(row.connectedClients || 0) > 0 ? 'cyan' : 'default'}>clients {Number(row.connectedClients || 0)}</Tag>
-                                              <Tag color={storefrontOfferIds.has(String(row.offerId || '')) ? 'processing' : 'default'}>{storefrontOfferIds.has(String(row.offerId || '')) ? '✓ curated' : '⊘ not curated'}</Tag>
-                                              <Tag color={publishedOfferIds.has(String(row.offerId || '')) ? 'success' : 'default'}>{publishedOfferIds.has(String(row.offerId || '')) ? '✓ published' : '⊘ not published'}</Tag>
+                                              <Tag color={storefrontOfferIds.has(String(row.offerId || '')) ? 'processing' : 'default'}>{storefrontOfferIds.has(String(row.offerId || '')) ? 'legacy curated' : 'legacy off'}</Tag>
                                             </Space>
                                           ),
                                         },
@@ -8470,20 +8573,27 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                               </Button>
                                               <Button
                                                 size="small"
-                                                loading={actionLoading === `offer-store:${String(row.offerId || '')}:published`}
-                                                onClick={() => { void toggleOfferPublished(String(row.offerId || ''), !publishedOfferIds.has(String(row.offerId || ''))); }}
+                                                loading={actionLoading === `offer-store:${String(row.offerId || '')}:label:research_catalog`}
+                                                onClick={() => { void updateOfferLabel(String(row.offerId || ''), 'research_catalog'); }}
                                               >
-                                                {publishedOfferIds.has(String(row.offerId || '')) ? 'Снять published' : 'В published'}
+                                                В research_catalog
+                                              </Button>
+                                              <Button
+                                                size="small"
+                                                loading={actionLoading === `offer-store:${String(row.offerId || '')}:label:fallback_preset`}
+                                                onClick={() => { void updateOfferLabel(String(row.offerId || ''), 'fallback_preset'); }}
+                                              >
+                                                В fallback_preset
                                               </Button>
                                               <Button
                                                 size="small"
                                                 danger
-                                                loading={actionLoading === `offer-store:${String(row.offerId || '')}:curated`}
+                                                loading={actionLoading === `offer-store:${String(row.offerId || '')}:label:runtime_snapshot`}
                                                 onClick={() => {
                                                   void openUnpublishWizard(String(row.offerId || ''));
                                                 }}
                                               >
-                                                Убрать из curated
+                                                Снять runtime_snapshot
                                               </Button>
                                             </Space>
                                           ),
@@ -12199,9 +12309,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         scheduleBacktestDebounce();
                       }}
                     />
-                    <Text type="secondary">Ограничивает верхний множитель риска. При score=10 потолок сейчас около {formatNumber(getBacktestRiskMultiplier(10, adminSweepBacktestRiskScaleMaxPercent), 2)}x.</Text>
-                    <br />
-                    <Text type="secondary">Важно: при score=5 множитель всегда ≈1.0x, поэтому смена потолка риска почти не меняет Ret/DD. Поднимите риск выше 5, чтобы увидеть влияние cap.</Text>
+                    <Text type="secondary">Лимит риска: до {formatNumber(getBacktestRiskMultiplier(10, adminSweepBacktestRiskScaleMaxPercent), 2)}x. Эффект виден при score {`>`} 5.</Text>
                   </Card>
                 </Col>
               )}
