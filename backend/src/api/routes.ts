@@ -1961,6 +1961,31 @@ router.post('/cards/materialize/:targetApiKeyName', async (req, res) => {
   }
 });
 
+// Lightweight counts endpoint — returns {total, running} per API key in a single query
+router.get('/strategies/counts', async (_req, res) => {
+  try {
+    const rows: Array<{ api_key_name: string; total: number; running: number }> = await db.all(
+      `SELECT a.name AS api_key_name,
+              COUNT(*) AS total,
+              SUM(CASE WHEN s.is_active = 1 THEN 1 ELSE 0 END) AS running
+       FROM strategies s
+       JOIN api_keys a ON a.id = s.api_key_id
+       WHERE COALESCE(s.is_archived, 0) = 0
+         AND COALESCE(s.is_runtime, 0) = 1
+       GROUP BY a.name`
+    );
+    const result: Record<string, { total: number; running: number }> = {};
+    for (const row of rows) {
+      result[row.api_key_name] = { total: row.total, running: row.running };
+    }
+    res.json(result);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading strategy counts: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/strategies/:apiKeyName', async (req, res) => {
   const { apiKeyName } = req.params;
   try {
@@ -1994,31 +2019,6 @@ router.get('/strategies/:apiKeyName', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Error loading strategies: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Lightweight counts endpoint — returns {total, running} per API key in a single query
-router.get('/strategies/counts', async (_req, res) => {
-  try {
-    const rows: Array<{ api_key_name: string; total: number; running: number }> = await db.all(
-      `SELECT a.name AS api_key_name,
-              COUNT(*) AS total,
-              SUM(CASE WHEN s.is_active = 1 THEN 1 ELSE 0 END) AS running
-       FROM strategies s
-       JOIN api_keys a ON a.id = s.api_key_id
-       WHERE COALESCE(s.is_archived, 0) = 0
-         AND COALESCE(s.is_runtime, 0) = 1
-       GROUP BY a.name`
-    );
-    const result: Record<string, { total: number; running: number }> = {};
-    for (const row of rows) {
-      result[row.api_key_name] = { total: row.total, running: row.running };
-    }
-    res.json(result);
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`Error loading strategy counts: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
