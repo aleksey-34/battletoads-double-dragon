@@ -78,7 +78,7 @@
           <th>Бэктест-система (90d)</th>
           <th>Profit Factor</th>
           <th>Win Rate</th>
-          <th>Sharpe</th>
+          <th>Sharpe* (консервативный proxy)</th>
           <th>Сделок за 90d</th>
           <th>Сделок/день</th>
           <th>Средний % профита на 1 сделку (100k)</th>
@@ -93,7 +93,7 @@
           <td>Safe Yield Cloud</td>
           <td class="good">1.955</td>
           <td class="good">72.37%</td>
-          <td class="accent">7.80</td>
+          <td class="accent">0.30</td>
           <td>68</td>
           <td>0.756</td>
           <td class="good">0.1341%</td>
@@ -106,7 +106,7 @@
           <td>Mega Portfolio Cloud</td>
           <td class="good">4.411</td>
           <td>50.04%</td>
-          <td class="accent">38.62</td>
+          <td class="accent">3.28</td>
           <td>411</td>
           <td>4.567</td>
           <td class="good">0.2997%</td>
@@ -119,7 +119,7 @@
           <td>High Frequency Cloud</td>
           <td class="warn">1.088</td>
           <td>37.21%</td>
-          <td class="accent">18.11</td>
+          <td class="accent">3.86</td>
           <td>1,806</td>
           <td class="bad">20.067</td>
           <td class="good">0.1164%</td>
@@ -130,7 +130,8 @@
       </tbody>
     </table>
     <p class="note">
-      Sharpe посчитан по доходностям из equity points (annualized, sqrt(365)).
+      *Sharpe proxy рассчитан консервативно как (RET/DD) * sqrt(90/365),
+      чтобы не завышать риск-метрику при неоднородной частоте equity points.
       "Средний % профита на сделку" = (прибыль на 100k за период) / число сделок / 100k.
     </p>
   </div>
@@ -146,7 +147,7 @@
           <tr><th>RET / 90d</th><td class="good">+210.17%</td></tr>
           <tr><th>Profit Factor</th><td class="warn">1.088</td></tr>
           <tr><th>Win Rate</th><td>37.21%</td></tr>
-          <tr><th>Sharpe</th><td class="accent">18.11</td></tr>
+          <tr><th>Sharpe* (консервативный proxy)</th><td class="accent">3.86</td></tr>
           <tr><th>Сделок / 90d</th><td class="bad">1,806</td></tr>
           <tr><th>Сделок / день</th><td class="bad">20.067</td></tr>
           <tr><th>Max Drawdown</th><td class="bad">26.967%</td></tr>
@@ -180,7 +181,7 @@
       <tbody>
         <tr><th>Период</th><td>90 дней (из ts_backtest_snapshots на VPS)</td></tr>
         <tr><th>Комиссия</th><td>$100,000 * 25% * 0.12% * trades</td></tr>
-        <tr><th>Sharpe</th><td>по точкам equity: mean(daily_returns) / std(daily_returns) * sqrt(365)</td></tr>
+        <tr><th>Sharpe*</th><td>консервативный proxy: (RET/DD) * sqrt(90/365); не выдаётся за классический Sharpe</td></tr>
         <tr><th>Периоды просадки</th><td>серии баров ниже предыдущего equity-пика</td></tr>
       </tbody>
     </table>
