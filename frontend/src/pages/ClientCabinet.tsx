@@ -200,6 +200,19 @@ type CustomTsDraftPreviewResponse = {
   }>;
 };
 
+type ClientCustomTsSystemItem = {
+  id: number;
+  profileName: string;
+  selectedOfferIds: string[];
+  selectedOffersCount: number;
+  isActive: boolean;
+  status: 'saved' | 'running';
+  canStart: boolean;
+  canStop: boolean;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
+
 type AlgofundRequest = {
   id: number;
   request_type: 'start' | 'stop';
@@ -667,6 +680,7 @@ const ClientCabinet: React.FC = () => {
   const [customTsPreview, setCustomTsPreview] = useState<CustomTsDraftPreviewResponse | null>(null);
   const [customTsPreviewLoading, setCustomTsPreviewLoading] = useState(false);
   const [customTsGuideOpen, setCustomTsGuideOpen] = useState(false);
+  const [customTsSystems, setCustomTsSystems] = useState<ClientCustomTsSystemItem[]>([]);
 
   const strategyState = workspace?.strategyState || null;
   const algofundState = workspace?.algofundState || null;
@@ -890,6 +904,23 @@ const ClientCabinet: React.FC = () => {
     void loadCustomDraft();
   }, [strategyWorkspace?.tenant?.id, strategyWorkspace?.offers]);
 
+  const loadCustomTsSystems = async () => {
+    try {
+      const response = await axios.get<{ items?: ClientCustomTsSystemItem[] }>('/api/client/strategy/custom-ts-systems');
+      setCustomTsSystems(Array.isArray(response.data?.items) ? response.data.items : []);
+    } catch {
+      setCustomTsSystems([]);
+    }
+  };
+
+  useEffect(() => {
+    if (!strategyWorkspace?.tenant?.id) {
+      setCustomTsSystems([]);
+      return;
+    }
+    void loadCustomTsSystems();
+  }, [strategyWorkspace?.tenant?.id]);
+
   const loadWorkspace = async () => {
     setLoading(true);
     setErrorText('');
@@ -1071,6 +1102,75 @@ const ClientCabinet: React.FC = () => {
       messageApi.success('Черновик собственной ТС сохранен в backend.');
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось сохранить черновик собственной ТС'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const saveClientCustomTsSystemFromDraft = async () => {
+    if (isBetaSelectionOverLimit) {
+      messageApi.warning(`Лимит тарифа: можно выбрать до ${strategyMaxAllowed} стратегий. В кастом ТС сейчас ${betaSelectedOfferIds.length}.`);
+      return;
+    }
+
+    if (betaSelectedOfferIds.length === 0) {
+      messageApi.warning('Выберите хотя бы один оффер для сохранения кастом ТС.');
+      return;
+    }
+
+    if (!betaAssignedApiKeyName) {
+      messageApi.warning('Для запуска и сохранения кастом ТС назначьте отдельный API-ключ.');
+      return;
+    }
+
+    setActionLoading('custom-ts-system-save');
+    try {
+      await axios.patch('/api/client/strategy/custom-ts-draft', {
+        selectedOfferIds: betaSelectedOfferIds,
+        op: toFinite(betaOpInput, 1),
+        assignedApiKeyName: betaAssignedApiKeyName,
+      });
+      const response = await axios.post<{ items?: ClientCustomTsSystemItem[] }>('/api/client/strategy/custom-ts-systems/save-from-draft', {});
+      setCustomTsSystems(Array.isArray(response.data?.items) ? response.data.items : []);
+      messageApi.success('Кастом ТС сохранена в список клиента.');
+      await loadWorkspace();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось сохранить кастом ТС из черновика'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const startClientCustomTsSystemById = async (profileId: number) => {
+    if (!betaAssignedApiKeyName) {
+      messageApi.warning('Перед запуском назначьте отдельный API-ключ для кастом ТС.');
+      return;
+    }
+
+    setActionLoading(`custom-ts-system-start-${profileId}`);
+    try {
+      const response = await axios.post<{ items?: ClientCustomTsSystemItem[] }>(`/api/client/strategy/custom-ts-systems/${profileId}/start`, {
+        assignedApiKeyName: betaAssignedApiKeyName,
+      });
+      setCustomTsSystems(Array.isArray(response.data?.items) ? response.data.items : []);
+      messageApi.success('Кастом ТС запущена.');
+      await loadWorkspace();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось запустить кастом ТС'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const stopClientCustomTsSystemById = async (profileId: number) => {
+    setActionLoading(`custom-ts-system-stop-${profileId}`);
+    try {
+      const response = await axios.post<{ items?: ClientCustomTsSystemItem[] }>(`/api/client/strategy/custom-ts-systems/${profileId}/stop`, {});
+      setCustomTsSystems(Array.isArray(response.data?.items) ? response.data.items : []);
+      messageApi.success('Кастом ТС остановлена.');
+      await loadWorkspace();
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось остановить кастом ТС'));
     } finally {
       setActionLoading('');
     }
@@ -1912,8 +2012,8 @@ const ClientCabinet: React.FC = () => {
             </Button>
             <Button
               type="primary"
-              loading={actionLoading === 'custom-ts-draft-save'}
-              onClick={() => void saveClientTsBetaDraft()}
+              loading={actionLoading === 'custom-ts-system-save'}
+              onClick={() => void saveClientCustomTsSystemFromDraft()}
               disabled={isBetaSelectionOverLimit || betaSelectedOfferIds.length === 0}
             >
               Сохранить ТС из черновика
@@ -1935,6 +2035,48 @@ const ClientCabinet: React.FC = () => {
               </Space>
             </Card>
           ) : null}
+
+          <Card size="small" title="Мои кастом ТС" bordered>
+            {customTsSystems.length === 0 ? (
+              <Empty description="Список пока пуст. Сохраните ТС из черновика." />
+            ) : (
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                {customTsSystems.map((item) => (
+                  <Space key={`custom-system-${item.id}`} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+                    <Space direction="vertical" size={2}>
+                      <Typography.Text strong>{item.profileName || `Custom TS ${item.id}`}</Typography.Text>
+                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                        Офферов: {item.selectedOffersCount} • ID: {item.id}
+                      </Typography.Text>
+                    </Space>
+                    <Space wrap>
+                      <Tag color={item.status === 'running' ? 'success' : 'default'}>{item.status === 'running' ? 'running' : 'saved'}</Tag>
+                      {item.canStart ? (
+                        <Button
+                          size="small"
+                          type="primary"
+                          loading={actionLoading === `custom-ts-system-start-${item.id}`}
+                          onClick={() => void startClientCustomTsSystemById(item.id)}
+                        >
+                          Запустить
+                        </Button>
+                      ) : null}
+                      {item.canStop ? (
+                        <Button
+                          size="small"
+                          danger
+                          loading={actionLoading === `custom-ts-system-stop-${item.id}`}
+                          onClick={() => void stopClientCustomTsSystemById(item.id)}
+                        >
+                          Остановить
+                        </Button>
+                      ) : null}
+                    </Space>
+                  </Space>
+                ))}
+              </Space>
+            )}
+          </Card>
         </Space>
       </Card>
 

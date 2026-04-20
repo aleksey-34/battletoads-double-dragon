@@ -76,6 +76,10 @@ import {
 } from '../system/passwordRecovery';
 import {
   getAlgofundState,
+  listClientCustomTsSystemsState,
+  saveClientCustomTsSystemFromDraft,
+  startClientCustomTsSystem,
+  stopClientCustomTsSystem,
   getStrategyClientState,
   getStrategyClientCustomTsDraft,
   previewStrategyClientOffer,
@@ -902,6 +906,82 @@ router.post('/client/strategy/custom-ts-draft/preview', authenticateClient, asyn
   } catch (error) {
     const err = error as Error;
     logger.error(`Client custom TS preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/client/strategy/custom-ts-systems', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const data = await listClientCustomTsSystemsState(Number(session.user.tenantId));
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client custom TS systems list error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/client/strategy/custom-ts-systems/save-from-draft', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const data = await saveClientCustomTsSystemFromDraft(Number(session.user.tenantId), {
+      profileName: req.body?.profileName !== undefined ? String(req.body.profileName || '').trim() : undefined,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client custom TS save-from-draft error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/client/strategy/custom-ts-systems/:profileId/start', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+    const profileId = Math.max(1, Math.floor(Number(req.params.profileId || 0)));
+    if (!Number.isFinite(profileId) || profileId <= 0) {
+      return res.status(400).json({ error: 'Invalid profileId' });
+    }
+
+    const data = await startClientCustomTsSystem(Number(session.user.tenantId), profileId, {
+      assignedApiKeyName: req.body?.assignedApiKeyName !== undefined ? String(req.body.assignedApiKeyName || '').trim() : undefined,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client custom TS start error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/client/strategy/custom-ts-systems/:profileId/stop', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+    const profileId = Math.max(1, Math.floor(Number(req.params.profileId || 0)));
+    if (!Number.isFinite(profileId) || profileId <= 0) {
+      return res.status(400).json({ error: 'Invalid profileId' });
+    }
+
+    const data = await stopClientCustomTsSystem(Number(session.user.tenantId), profileId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client custom TS stop error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

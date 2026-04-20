@@ -9411,6 +9411,172 @@ export const previewStrategyClientCustomTsDraft = async (
   };
 };
 
+export const listClientCustomTsSystemsState = async (tenantId: number) => {
+  const [state, draftState] = await Promise.all([
+    getStrategyClientState(tenantId),
+    getStrategyClientCustomTsDraft(tenantId),
+  ]);
+
+  const runningNow = Boolean(state.profile?.requested_enabled) && Boolean(state.profile?.actual_enabled);
+
+  return {
+    tenantId,
+    draft: draftState.draft,
+    items: (state.systemProfiles || []).map((item) => {
+      const isActive = Boolean(item?.isActive);
+      const selectedOfferIds = Array.isArray(item?.selectedOfferIds) ? item.selectedOfferIds : [];
+      return {
+        id: Number(item?.id || 0),
+        profileName: String(item?.profileName || ''),
+        selectedOfferIds,
+        selectedOffersCount: selectedOfferIds.length,
+        isActive,
+        status: isActive && runningNow ? 'running' : 'saved',
+        canStart: selectedOfferIds.length > 0,
+        canStop: isActive && runningNow,
+        createdAt: item?.createdAt || null,
+        updatedAt: item?.updatedAt || null,
+      };
+    }),
+  };
+};
+
+export const saveClientCustomTsSystemFromDraft = async (
+  tenantId: number,
+  payload?: { profileName?: string }
+) => {
+  const [draftState, currentState] = await Promise.all([
+    getStrategyClientCustomTsDraft(tenantId),
+    getStrategyClientState(tenantId),
+  ]);
+
+  const selectedOfferIds = Array.isArray(draftState.draft.selectedOfferIds)
+    ? Array.from(new Set(draftState.draft.selectedOfferIds.map((item) => String(item || '').trim()).filter(Boolean)))
+    : [];
+  if (selectedOfferIds.length === 0) {
+    throw new Error('Для сохранения кастом ТС выберите хотя бы один оффер.');
+  }
+
+  const defaultName = `Custom TS ${Math.max(1, Number((currentState.systemProfiles || []).length || 0))}`;
+  const profileName = asString(payload?.profileName, defaultName);
+  const maxCustomSystems = Math.max(1, Math.floor(asNumber(currentState.constraints?.limits?.maxCustomSystems, 1)));
+  const existingItems = Array.isArray(currentState.systemProfiles) ? currentState.systemProfiles : [];
+
+  if (existingItems.length >= maxCustomSystems) {
+    const target = existingItems.find((item) => item.isActive) || existingItems[0];
+    if (!target?.id) {
+      throw new Error('Не удалось определить профиль кастом ТС для обновления.');
+    }
+    await updateStrategyClientSystemProfile(tenantId, Number(target.id), {
+      profileName,
+      selectedOfferIds,
+    });
+    await activateStrategyClientSystemProfileById(tenantId, Number(target.id));
+  } else {
+    await createStrategyClientSystemProfile(tenantId, profileName, selectedOfferIds, true);
+  }
+
+  const assignedApiKeyName = asString(draftState.draft.assignedApiKeyName, '').trim();
+  if (assignedApiKeyName) {
+    await updateStrategyClientState(tenantId, {
+      assignedApiKeyName,
+      requestedEnabled: false,
+    });
+  }
+
+  await db.run(
+    `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+     VALUES (?, 'client', 'client_custom_ts_saved_from_draft', ?, CURRENT_TIMESTAMP)`,
+    [
+      tenantId,
+      JSON.stringify({
+        profileName,
+        selectedOffersCount: selectedOfferIds.length,
+        assignedApiKeyName,
+      }),
+    ]
+  );
+
+  return listClientCustomTsSystemsState(tenantId);
+};
+
+export const startClientCustomTsSystem = async (
+  tenantId: number,
+  profileId: number,
+  payload?: { assignedApiKeyName?: string }
+) => {
+  const [state, draftState] = await Promise.all([
+    getStrategyClientState(tenantId),
+    getStrategyClientCustomTsDraft(tenantId),
+  ]);
+  const target = (state.systemProfiles || []).find((item) => Number(item.id || 0) === profileId);
+  if (!target) {
+    throw new Error(`Кастом ТС не найден: ${profileId}`);
+  }
+
+  const selectedOfferIds = Array.isArray(target.selectedOfferIds)
+    ? target.selectedOfferIds.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (selectedOfferIds.length === 0) {
+    throw new Error('Нельзя запустить кастом ТС без выбранных офферов.');
+  }
+
+  const assignedApiKeyName = asString(payload?.assignedApiKeyName, draftState.draft.assignedApiKeyName).trim();
+  if (!assignedApiKeyName) {
+    throw new Error('Для запуска кастом ТС назначьте отдельный API-ключ.');
+  }
+
+  await activateStrategyClientSystemProfileById(tenantId, profileId);
+  await updateStrategyClientState(tenantId, {
+    selectedOfferIds,
+    assignedApiKeyName,
+    requestedEnabled: true,
+  });
+
+  await db.run(
+    `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+     VALUES (?, 'client', 'client_custom_ts_started', ?, CURRENT_TIMESTAMP)`,
+    [
+      tenantId,
+      JSON.stringify({
+        profileId,
+        profileName: target.profileName,
+        selectedOffersCount: selectedOfferIds.length,
+        assignedApiKeyName,
+      }),
+    ]
+  );
+
+  return listClientCustomTsSystemsState(tenantId);
+};
+
+export const stopClientCustomTsSystem = async (tenantId: number, profileId: number) => {
+  const state = await getStrategyClientState(tenantId);
+  const target = (state.systemProfiles || []).find((item) => Number(item.id || 0) === profileId);
+  if (!target) {
+    throw new Error(`Кастом ТС не найден: ${profileId}`);
+  }
+
+  await activateStrategyClientSystemProfileById(tenantId, profileId);
+  await updateStrategyClientState(tenantId, {
+    requestedEnabled: false,
+  });
+
+  await db.run(
+    `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+     VALUES (?, 'client', 'client_custom_ts_stopped', ?, CURRENT_TIMESTAMP)`,
+    [
+      tenantId,
+      JSON.stringify({
+        profileId,
+        profileName: target.profileName,
+      }),
+    ]
+  );
+
+  return listClientCustomTsSystemsState(tenantId);
+};
+
 export const getSaasObservabilityAlerts = async () => {
   const [tenantsRows, strategyRows, algofundRows, customRows, switchRows] = await Promise.all([
     db.all('SELECT id, slug, display_name FROM tenants ORDER BY id ASC'),
