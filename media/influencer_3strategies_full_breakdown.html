@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTDD - Полный расклад по офферам для инфлов</title>
+<style>
+  :root {
+    --bg: #0b1220;
+    --card: #111b2f;
+    --line: #243251;
+    --ink: #eaf1ff;
+    --muted: #96a7cf;
+    --good: #58d68d;
+    --warn: #f5b041;
+    --bad: #ff7b7b;
+    --accent: #6ec1ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 24px;
+    color: var(--ink);
+    background:
+      radial-gradient(circle at 15% -20%, #1d2d50 0, transparent 45%),
+      radial-gradient(circle at 100% 0, #2a1646 0, transparent 40%),
+      var(--bg);
+    font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+  }
+  .wrap { max-width: 1200px; margin: 0 auto; }
+  h1 { margin: 0 0 8px; font-size: 30px; }
+  .sub { margin: 0 0 18px; color: var(--muted); line-height: 1.5; }
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 14px;
+  }
+  .panel h2 { margin: 0 0 10px; font-size: 20px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { border-bottom: 1px solid var(--line); padding: 9px 8px; font-size: 14px; text-align: left; }
+  th { color: #c6d5ff; font-weight: 700; }
+  tr:last-child td { border-bottom: none; }
+  .good { color: var(--good); font-weight: 700; }
+  .warn { color: var(--warn); font-weight: 700; }
+  .bad { color: var(--bad); font-weight: 700; }
+  .accent { color: var(--accent); font-weight: 700; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .tag {
+    display: inline-block;
+    border: 1px solid #3d557f;
+    color: #c7dbff;
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    margin-right: 6px;
+  }
+  .note { color: var(--muted); font-size: 13px; line-height: 1.55; margin-top: 8px; }
+  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Полный расклад по офферам для инфлов</h1>
+  <p class="sub">
+    Ниже не "витринные лозунги", а расчетные метрики по бэктест-снапшотам (90d) из runtime-хранилища VPS
+    + отдельная карточка новой TS на объем. Комиссия для модели: <strong>0.12% round-trip</strong>, депозит: <strong>$100,000</strong>,
+    средняя загрузка капитала: <strong>25%</strong>.
+  </p>
+
+  <div class="panel">
+    <h2>1) Основные офферы (Conservative / Balanced / Aggressive)</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Оффер</th>
+          <th>Бэктест-система (90d)</th>
+          <th>Profit Factor</th>
+          <th>Win Rate</th>
+          <th>Sharpe</th>
+          <th>Сделок за 90d</th>
+          <th>Сделок/день</th>
+          <th>Средний % профита на 1 сделку (100k)</th>
+          <th>Комиссии за период (100k)</th>
+          <th>Max DD</th>
+          <th>Периоды просадки</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Conservative</strong></td>
+          <td>Safe Yield Cloud</td>
+          <td class="good">1.955</td>
+          <td class="good">72.37%</td>
+          <td class="accent">7.80</td>
+          <td>68</td>
+          <td>0.756</td>
+          <td class="good">0.1341%</td>
+          <td class="warn">$2,040</td>
+          <td class="warn">14.83%</td>
+          <td>18 периодов, max 10 баров, avg 2.5</td>
+        </tr>
+        <tr>
+          <td><strong>Balanced</strong></td>
+          <td>Mega Portfolio Cloud</td>
+          <td class="good">4.411</td>
+          <td>50.04%</td>
+          <td class="accent">38.62</td>
+          <td>411</td>
+          <td>4.567</td>
+          <td class="good">0.2997%</td>
+          <td class="warn">$12,330</td>
+          <td class="warn">18.638%</td>
+          <td>2 периода, max 1 бар, avg 1.0</td>
+        </tr>
+        <tr>
+          <td><strong>Aggressive</strong></td>
+          <td>High Frequency Cloud</td>
+          <td class="warn">1.088</td>
+          <td>37.21%</td>
+          <td class="accent">18.11</td>
+          <td>1,806</td>
+          <td class="bad">20.067</td>
+          <td class="good">0.1164%</td>
+          <td class="bad">$54,180</td>
+          <td class="bad">26.967%</td>
+          <td>14 периодов, max 3 бара, avg 1.43</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">
+      Sharpe посчитан по доходностям из equity points (annualized, sqrt(365)).
+      "Средний % профита на сделку" = (прибыль на 100k за период) / число сделок / 100k.
+    </p>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>2) Карточка новой TS на объем</h2>
+      <p><span class="tag">Новая TS</span><span class="tag">Volume</span><span class="tag">После backend hotfix</span></p>
+      <table>
+        <tbody>
+          <tr><th>Название</th><td><strong>Volume Pulse Cloud v1</strong></td></tr>
+          <tr><th>База расчета</th><td>High Frequency Cloud (ALGOFUND_MASTER::BTDD_D1::high-freq)</td></tr>
+          <tr><th>RET / 90d</th><td class="good">+210.17%</td></tr>
+          <tr><th>Profit Factor</th><td class="warn">1.088</td></tr>
+          <tr><th>Win Rate</th><td>37.21%</td></tr>
+          <tr><th>Sharpe</th><td class="accent">18.11</td></tr>
+          <tr><th>Сделок / 90d</th><td class="bad">1,806</td></tr>
+          <tr><th>Сделок / день</th><td class="bad">20.067</td></tr>
+          <tr><th>Max Drawdown</th><td class="bad">26.967%</td></tr>
+          <tr><th>Средний профит / сделка (100k)</th><td class="good">$116.37 (0.1164%)</td></tr>
+          <tr><th>Комиссии за 90d (100k)</th><td class="bad">$54,180</td></tr>
+          <tr><th>Периоды просадки</th><td>14 периодов, max 3 бара, avg 1.43 бара</td></tr>
+        </tbody>
+      </table>
+      <p class="note">
+        Это именно "TS на объем": максимальная частота входов и высокий оборот. Главный лимитер маржи — комиссия и микрослип.
+      </p>
+    </div>
+
+    <div class="panel">
+      <h2>3) Важные выводы для инфл-оффера</h2>
+      <ul>
+        <li>Conservative лучше продавать как low-turnover/стабильный профиль.</li>
+        <li>Balanced сейчас самый сильный по связке PF + частота + средний профит на сделку.</li>
+        <li>Aggressive/Volume даёт высокий оборот, но имеет самый жесткий fee-burden.</li>
+        <li>Для объёмной TS нужно заранее проговаривать, что комиссия за период может "съедать" значимую часть валовой прибыли.</li>
+      </ul>
+      <p class="note">
+        Прод фикс materialization уже в проде: retry-materialize больше не падает на pair-conflict, backend path стабилен.
+      </p>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>4) Методика расчета</h2>
+    <table>
+      <tbody>
+        <tr><th>Период</th><td>90 дней (из ts_backtest_snapshots на VPS)</td></tr>
+        <tr><th>Комиссия</th><td>$100,000 * 25% * 0.12% * trades</td></tr>
+        <tr><th>Sharpe</th><td>по точкам equity: mean(daily_returns) / std(daily_returns) * sqrt(365)</td></tr>
+        <tr><th>Периоды просадки</th><td>серии баров ниже предыдущего equity-пика</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+</body>
+</html>

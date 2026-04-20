@@ -3943,14 +3943,26 @@ const upsertTenantStrategies = async (
       const draftBase = asString((draft as Partial<Strategy>)?.base_symbol, '').trim().toUpperCase();
       const draftQuote = asString((draft as Partial<Strategy>)?.quote_symbol, '').trim().toUpperCase();
       const allOnKey = await getStrategies(apiKeyName, { includeLotPreview: false });
-      const fallback = (Array.isArray(allOnKey) ? allOnKey : []).find((row) => {
-        const rowBase = asString((row as any)?.base_symbol, '').trim().toUpperCase();
-        const rowQuote = asString((row as any)?.quote_symbol, '').trim().toUpperCase();
-        const rowName = asString((row as any)?.name, '');
-        const samePair = rowBase === draftBase && rowQuote === draftQuote;
-        const sameTenant = rowName.startsWith(`SAAS::${tenant.slug}::`);
-        return samePair && sameTenant;
-      });
+      const keyRows = Array.isArray(allOnKey) ? allOnKey : [];
+      const isSamePair = (row: any) => {
+        const rowBase = asString(row?.base_symbol, '').trim().toUpperCase();
+        const rowQuote = asString(row?.quote_symbol, '').trim().toUpperCase();
+        return rowBase === draftBase && rowQuote === draftQuote;
+      };
+
+      // Prefer tenant-prefixed runtime strategies, but if the key already runs
+      // non-SAAS names (legacy/manual engines), safely reuse active same-pair rows.
+      const fallback =
+        keyRows.find((row) => {
+          const rowName = asString((row as any)?.name, '');
+          const sameTenant = rowName.startsWith(`SAAS::${tenant.slug}::`);
+          return isSamePair(row) && sameTenant;
+        })
+        || keyRows.find((row) => {
+          const isActive = Number((row as any)?.is_active ? 1 : 0) === 1;
+          return isSamePair(row) && isActive;
+        })
+        || keyRows.find((row) => isSamePair(row));
 
       if (!fallback?.id) {
         throw error;
