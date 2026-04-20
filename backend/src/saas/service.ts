@@ -832,6 +832,7 @@ const SAAS_PREVIEW_BARS = Math.max(240, Math.floor(asNumber(process.env.SAAS_PRE
 const SAAS_PREVIEW_WARMUP_BARS = Math.max(0, Math.floor(asNumber(process.env.SAAS_PREVIEW_WARMUP_BARS, 0)));
 const SAAS_PREVIEW_INITIAL_BALANCE = Math.max(1, asNumber(process.env.SAAS_PREVIEW_INITIAL_BALANCE, 10000));
 const SAAS_ALGOFUND_BASELINE_INITIAL_BALANCE = Math.max(1, asNumber(process.env.SAAS_ALGOFUND_BASELINE_INITIAL_BALANCE, 1000));
+const SAAS_OBSERVABILITY_HWM_STALE_HOURS = Math.max(1, Math.floor(asNumber(process.env.SAAS_OBSERVABILITY_HWM_STALE_HOURS, 24)));
 
 const asString = (value: unknown, fallback = ''): string => {
   const text = String(value ?? '').trim();
@@ -9411,16 +9412,27 @@ export const previewStrategyClientCustomTsDraft = async (
 };
 
 export const getSaasObservabilityAlerts = async () => {
-  const [tenantsRows, strategyRows, algofundRows, customRows] = await Promise.all([
+  const [tenantsRows, strategyRows, algofundRows, customRows, switchRows] = await Promise.all([
     db.all('SELECT id, slug, display_name FROM tenants ORDER BY id ASC'),
     db.all('SELECT tenant_id, requested_enabled, assigned_api_key_name FROM strategy_client_profiles'),
     db.all('SELECT tenant_id, requested_enabled, assigned_api_key_name FROM algofund_profiles'),
     db.all('SELECT tenant_id, selected_offer_ids_json, assigned_api_key_name, updated_at FROM strategy_client_custom_ts_drafts'),
+    db.all(`SELECT tenant_id, payload_json, created_at
+            FROM saas_audit_log
+            WHERE action = 'client_billing_mode_switch_requested'
+            ORDER BY id DESC`),
   ]);
 
   const strategyByTenant = new Map<number, any>((Array.isArray(strategyRows) ? strategyRows : []).map((row: any) => [Number(row.tenant_id), row]));
   const algofundByTenant = new Map<number, any>((Array.isArray(algofundRows) ? algofundRows : []).map((row: any) => [Number(row.tenant_id), row]));
   const customByTenant = new Map<number, any>((Array.isArray(customRows) ? customRows : []).map((row: any) => [Number(row.tenant_id), row]));
+  const latestSwitchByTenant = new Map<number, any>();
+  for (const row of (Array.isArray(switchRows) ? switchRows : []) as Array<Record<string, unknown>>) {
+    const tenantId = Number(row.tenant_id || 0);
+    if (tenantId > 0 && !latestSwitchByTenant.has(tenantId)) {
+      latestSwitchByTenant.set(tenantId, row);
+    }
+  }
   const alerts: Array<Record<string, unknown>> = [];
 
   for (const tenant of (Array.isArray(tenantsRows) ? tenantsRows : []) as Array<Record<string, unknown>>) {
@@ -9434,6 +9446,16 @@ export const getSaasObservabilityAlerts = async () => {
     const algofundKey = asString(algofund?.assigned_api_key_name, '').trim();
     const customKey = asString(custom?.assigned_api_key_name, '').trim();
     const customSelected = safeJsonParse<string[]>(asString(custom?.selected_offer_ids_json, '[]'), []);
+    const switchRequest = latestSwitchByTenant.get(tenantId);
+    const switchPayload = safeJsonParse<Record<string, unknown>>(asString(switchRequest?.payload_json, '{}'), {});
+    const billingPolicy = safeJsonParse<Record<string, unknown>>(JSON.stringify(switchPayload.billingSwitchPolicy || {}), {});
+    const hwmSnapshot = safeJsonParse<Record<string, unknown>>(JSON.stringify(switchPayload.hwmSnapshot || {}), {});
+    const nextBillingCycleAt = asString(billingPolicy.nextBillingCycleAt, '');
+    const nextBillingCycleMs = Date.parse(nextBillingCycleAt);
+    const currentMode = asString(billingPolicy.currentMode, '').trim();
+    const targetMode = asString(billingPolicy.targetMode, '').trim();
+    const nowMs = Date.now();
+    const pendingSwitch = Number.isFinite(nextBillingCycleMs) && nextBillingCycleMs > nowMs;
 
     if (strategyEnabled && !strategyKey) {
       alerts.push({ severity: 'high', type: 'missing_key_strategy', tenantId, tenantSlug: tenant.slug, tenantName: tenant.display_name });
@@ -9449,6 +9471,47 @@ export const getSaasObservabilityAlerts = async () => {
     }
     if (customSelected.length > 0 && !customKey) {
       alerts.push({ severity: 'medium', type: 'custom_ts_missing_key', tenantId, tenantSlug: tenant.slug, tenantName: tenant.display_name, selectedOffersCount: customSelected.length });
+    }
+
+    if (pendingSwitch) {
+      alerts.push({
+        severity: 'medium',
+        type: 'pending_switch',
+        tenantId,
+        tenantSlug: tenant.slug,
+        tenantName: tenant.display_name,
+        currentMode,
+        targetMode,
+        nextBillingCycleAt,
+        uiTitle: 'Pending billing mode switch',
+        uiDescription: `Switch ${currentMode || 'unknown'} -> ${targetMode || 'unknown'} is queued and will be applied at ${nextBillingCycleAt}.`,
+      });
+
+      const hwmCapturedAt = asString(hwmSnapshot.capturedAt, '').trim();
+      const hwmSource = asString(hwmSnapshot.source, '').trim();
+      const hwmCapturedMs = Date.parse(hwmCapturedAt);
+      const hwmAgeHoursRaw = Number.isFinite(hwmCapturedMs) ? (nowMs - hwmCapturedMs) / 3600000 : Number.POSITIVE_INFINITY;
+      const hwmAgeHours = Number.isFinite(hwmAgeHoursRaw) ? Math.round(hwmAgeHoursRaw * 10) / 10 : null;
+      const staleSnapshot = !hwmCapturedAt || hwmSource === 'none' || hwmAgeHoursRaw > SAAS_OBSERVABILITY_HWM_STALE_HOURS;
+
+      if (staleSnapshot) {
+        const missingSnapshot = !hwmCapturedAt || hwmSource === 'none';
+        alerts.push({
+          severity: missingSnapshot ? 'high' : 'medium',
+          type: 'stale_hwm_snapshot',
+          tenantId,
+          tenantSlug: tenant.slug,
+          tenantName: tenant.display_name,
+          hwmCapturedAt,
+          hwmSource: hwmSource || 'none',
+          hwmAgeHours,
+          staleThresholdHours: SAAS_OBSERVABILITY_HWM_STALE_HOURS,
+          uiTitle: 'Stale HWM snapshot before switch',
+          uiDescription: missingSnapshot
+            ? 'HWM snapshot is missing for a pending billing switch. Re-capture equity snapshot before cycle boundary.'
+            : `HWM snapshot age is ${hwmAgeHours}h (threshold ${SAAS_OBSERVABILITY_HWM_STALE_HOURS}h). Refresh snapshot before cycle boundary.`,
+        });
+      }
     }
   }
 

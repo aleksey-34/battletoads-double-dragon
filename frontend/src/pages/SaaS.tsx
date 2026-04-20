@@ -8183,8 +8183,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                     key={`${String(item.type || 'alert')}-${String(item.tenantId || '')}-${index}`}
                                     type={String(item.severity || '') === 'high' ? 'error' : 'warning'}
                                     showIcon
-                                    message={`${String(item.type || 'alert')} · tenant ${String(item.tenantSlug || item.tenantId || '')}`}
-                                    description={item.apiKeyName ? `API key: ${String(item.apiKeyName)}` : undefined}
+                                    message={String(item.uiTitle || `${String(item.type || 'alert')} · tenant ${String(item.tenantSlug || item.tenantId || '')}`)}
+                                    description={String(
+                                      item.uiDescription
+                                      || (item.apiKeyName ? `API key: ${String(item.apiKeyName)}` : '')
+                                    ) || undefined}
                                   />
                                 ))}
                               </Space>
