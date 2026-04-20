@@ -4,7 +4,7 @@ import logger from '../utils/logger';
 import { ApiKey } from '../config/settings';
 import { db } from '../utils/database';
 // weexClient.ts is the legacy custom REST adapter; ccxt ≥4.5.49 has native weex support
-// import { createWeexClient } from './weexClient';
+import { createWeexClient } from './weexClient';
 
 type ExchangeClientEntry = {
   client: RestClientV5;
@@ -1405,6 +1405,60 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
       return deduped;
     } catch (error) {
       const err = error as Error;
+      if (entry.exchange === 'weex' && isTransientCcxtError(error)) {
+        try {
+          const row = await db.get('SELECT * FROM api_keys WHERE name = ?', [apiKeyName]);
+          if (row) {
+            const weexClient = createWeexClient(row as ApiKey);
+            const fallbackRaw = await entry.limiter.schedule(() => weexClient.fetchPositions(symbol ? [symbol] : undefined));
+            const fallbackPositions = Array.isArray(fallbackRaw) ? fallbackRaw : [];
+            const normalizedFallback = fallbackPositions
+              .map((position: any) => {
+                const contractsRaw = Number(
+                  position?.contracts ??
+                  position?.info?.size ??
+                  position?.info?.positionAmt ??
+                  position?.info?.positionSize ??
+                  0
+                );
+
+                if (!Number.isFinite(contractsRaw) || Math.abs(contractsRaw) <= 0) {
+                  return null;
+                }
+
+                const sideRaw = String(position?.side || position?.info?.holdSide || '').toLowerCase();
+                const side = sideRaw.includes('long') || sideRaw === 'buy' ? 'Buy' : 'Sell';
+
+                const entryPrice = Number(position?.entryPrice ?? position?.info?.entryPrice ?? position?.info?.openPrice ?? 0);
+                const markPrice = Number(position?.markPrice ?? position?.info?.markPrice ?? position?.info?.markPx ?? entryPrice);
+                const explicitNotional = Number(position?.notional);
+                const notional = Number.isFinite(explicitNotional) ? explicitNotional : Math.abs(contractsRaw) * (Number.isFinite(markPrice) ? markPrice : 0);
+                const leverage = Number(position?.leverage ?? position?.info?.leverage ?? 1);
+                const liquidation = Number(position?.liquidationPrice ?? position?.info?.liquidationPrice ?? position?.info?.liqPx ?? 0);
+                const upnl = Number(position?.unrealizedPnl ?? position?.info?.unrealizedPnl ?? position?.info?.upl ?? 0);
+
+                return {
+                  symbol: entry.uiSymbolMap.get(normalizeSymbolKey(position?.info?.symbol || position?.symbol || symbol))
+                    || toUiSymbol(position?.info?.symbol || position?.symbol || symbol),
+                  side,
+                  size: String(Math.abs(contractsRaw)),
+                  avgPrice: String(Number.isFinite(entryPrice) ? entryPrice : 0),
+                  markPrice: String(Number.isFinite(markPrice) ? markPrice : 0),
+                  liqPrice: Number.isFinite(liquidation) && liquidation > 0 ? String(liquidation) : '',
+                  unrealisedPnl: String(Number.isFinite(upnl) ? upnl : 0),
+                  leverage: String(Number.isFinite(leverage) && leverage > 0 ? leverage : 1),
+                  positionValue: String(Number.isFinite(notional) ? Math.abs(notional) : 0),
+                };
+              })
+              .filter((item): item is any => !!item);
+
+            logger.warn(`[positions] WEEX fallback via legacy client for ${apiKeyName}: ${err.message}`);
+            return normalizedFallback;
+          }
+        } catch (fallbackError) {
+          logger.error(`WEEX fallback positions failed for ${apiKeyName}: ${(fallbackError as Error).message}`);
+        }
+      }
       if (isMexcExchange(entry.exchange) && isMexcNoPermissionError(error)) {
         logger.warn(`${apiKeyName}: MEXC contract positions forbidden (700007) — API key lacks Contract Trading permission`);
         return [];

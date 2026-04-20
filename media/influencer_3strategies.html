@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTDD - 3 стратегии для инфла</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0e1a; color: #e0e0e0; padding: 20px; }
+  .container { max-width: 800px; margin: 0 auto; }
+  h1 { text-align: center; font-size: 28px; margin-bottom: 6px; color: #fff; }
+  .sub { text-align: center; color: #666; font-size: 13px; margin-bottom: 30px; }
+  
+  .card { border-radius: 16px; padding: 24px; margin-bottom: 20px; position: relative; overflow: hidden; }
+  .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; }
+  
+  .low { background: #0d1f1a; border: 1px solid #1b5e20; }
+  .low::before { background: linear-gradient(90deg, #2e7d32, #4caf50); }
+  .mid { background: #1a1a0d; border: 1px solid #e65100; }
+  .mid::before { background: linear-gradient(90deg, #ef6c00, #ff9800); }
+  .high { background: #1a0d0d; border: 1px solid #b71c1c; }
+  .high::before { background: linear-gradient(90deg, #c62828, #f44336); }
+  
+  .badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+  .low .badge { background: #1b5e20; color: #a5d6a7; }
+  .mid .badge { background: #e65100; color: #ffcc80; }
+  .high .badge { background: #b71c1c; color: #ef9a9a; }
+  
+  .card h2 { font-size: 22px; color: #fff; margin-bottom: 4px; }
+  .card .desc { color: #999; font-size: 14px; margin-bottom: 16px; }
+  
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .metric { background: rgba(255,255,255,0.04); border-radius: 10px; padding: 12px; text-align: center; }
+  .metric .val { font-size: 20px; font-weight: 700; color: #fff; }
+  .metric .lbl { font-size: 11px; color: #888; margin-top: 2px; }
+  
+  .low .metric .val { color: #66bb6a; }
+  .mid .metric .val { color: #ffa726; }
+  .high .metric .val { color: #ef5350; }
+  
+  .details { font-size: 13px; line-height: 1.7; color: #bbb; }
+  .details strong { color: #e0e0e0; }
+  
+  .section { margin-top: 30px; background: #111827; border-radius: 12px; padding: 20px; border: 1px solid #1f2937; }
+  .section h3 { color: #64b5f6; font-size: 16px; margin-bottom: 10px; }
+  .section p, .section li { font-size: 14px; line-height: 1.7; color: #bbb; }
+  .section ul { margin-left: 20px; margin-top: 8px; }
+  .section li { margin-bottom: 4px; }
+  
+  .disclaimer { text-align: center; color: #555; font-size: 11px; margin-top: 20px; padding-top: 16px; border-top: 1px solid #1f2937; }
+  
+  .copy-btn { display: block; width: 200px; margin: 20px auto; padding: 12px; background: #1a73e8; color: #fff; border: none; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 600; }
+  .copy-btn:hover { background: #1557b0; }
+  .copy-btn.done { background: #2e7d32; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>BTDD Platform - 3 стратегии</h1>
+<p class="sub">Выбери свой уровень риска. Все стратегии проверены на 15+ месяцах реальных данных Bybit.</p>
+
+<!-- ===== LOW RISK ===== -->
+<div class="card low">
+  <span class="badge">Низкий риск</span>
+  <h2>🟢 Conservative Portfolio</h2>
+  <p class="desc">Статистический арбитраж на синтетических парах. Рыночно-нейтральная доходность - прибыль не зависит от направления рынка.</p>
+  <div class="metrics">
+    <div class="metric"><div class="val">~15%</div><div class="lbl">Доход/год</div></div>
+    <div class="metric"><div class="val">1.4%</div><div class="lbl">Макс просадка</div></div>
+    <div class="metric"><div class="val">2.71</div><div class="lbl">Profit Factor</div></div>
+    <div class="metric"><div class="val">51.7%</div><div class="lbl">Win Rate</div></div>
+  </div>
+  <div class="details">
+    <strong>Что внутри:</strong> 6 стратегий StatArb Z-Score на синтетических парах (например ORDI/ZEC, GRT/INJ). Когда два коррелированных актива расходятся - входим, когда сходятся - фиксируем прибыль.<br>
+    <strong>Для кого:</strong> Инвесторы, которые хотят стабильный рост без сильных просадок. Не нужно следить за рынком.<br>
+    <strong>Мин. депозит:</strong> $1 000<br>
+    <strong>Подписка:</strong> от $20/мес (Algofund - полное управление)
+  </div>
+</div>
+
+<!-- ===== MID RISK ===== -->
+<div class="card mid">
+  <span class="badge">Средний риск</span>
+  <h2>🟡 Balanced Portfolio</h2>
+  <p class="desc">Микс трендовых и арбитражных стратегий. Больше доходность, контролируемая просадка.</p>
+  <div class="metrics">
+    <div class="metric"><div class="val">~29%</div><div class="lbl">Доход/год</div></div>
+    <div class="metric"><div class="val">4.4%</div><div class="lbl">Макс просадка</div></div>
+    <div class="metric"><div class="val">3.28</div><div class="lbl">Profit Factor</div></div>
+    <div class="metric"><div class="val">43.8%</div><div class="lbl">Win Rate</div></div>
+  </div>
+  <div class="details">
+    <strong>Что внутри:</strong> 6 стратегий - DoubleDragon Breakout (трендовые) + StatArb Z-Score (арбитраж). Портфель из некоррелированных стратегий на моно- и синтетических парах.<br>
+    <strong>Для кого:</strong> Активные инвесторы, готовые к умеренным просадкам ради хорошей доходности. Баланс между стабильностью и прибылью.<br>
+    <strong>Мин. депозит:</strong> $1 000<br>
+    <strong>Подписка:</strong> от $50/мес (Algofund) или от $25/мес (Strategy Client - самостоятельное управление)
+  </div>
+</div>
+
+<!-- ===== HIGH RISK ===== -->
+<div class="card high">
+  <span class="badge">Высокий риск / Разгон</span>
+  <h2>🔴 Aggressive Portfolio</h2>
+  <p class="desc">Максимальная частота сделок, агрессивные входы. Для тех, кто готов к волатильности ради максимальной доходности.</p>
+  <div class="metrics">
+    <div class="metric"><div class="val">50%+</div><div class="lbl">Целевой доход</div></div>
+    <div class="metric"><div class="val">до 15%</div><div class="lbl">Макс просадка</div></div>
+    <div class="metric"><div class="val">1.5+</div><div class="lbl">Profit Factor</div></div>
+    <div class="metric"><div class="val">7+</div><div class="lbl">Сделок/день</div></div>
+  </div>
+  <div class="details">
+    <strong>Что внутри:</strong> DoubleDragon + ZigZag Breakout на коротких таймфреймах (15м-30м). Высокая частота сделок (~7/день), агрессивные входы на пробоях, плечо 2-3x.<br>
+    <strong>Для кого:</strong> Опытные трейдеры и инвесторы, готовые к серьезным просадкам ради разгона депозита. Не для первого раза.<br>
+    <strong>Мин. депозит:</strong> $500<br>
+    <strong>Подписка:</strong> от $50/мес (Strategy Client с расширенным доступом)
+  </div>
+</div>
+
+<!-- ===== HOW IT WORKS ===== -->
+<div class="section">
+  <h3>Как это работает</h3>
+  <ul>
+    <li><strong>Ваши деньги остаются на вашем счету биржи.</strong> Мы не имеем доступа к выводу средств - API-ключ только на торговлю.</li>
+    <li>Вы подключаете API-ключ биржи → выбираете стратегию → алгоритм торгует 24/7.</li>
+    <li>В личном кабинете видите все сделки, equity-кривую, статистику в реальном времени.</li>
+    <li>Можно остановить в любой момент - все позиции закроются автоматически.</li>
+    <li>Поддерживаемые биржи: Bybit, Binance, MEXC, OKX, Bitget, WEEX.</li>
+  </ul>
+</div>
+
+<!-- ===== SAFETY ===== -->
+<div class="section">
+  <h3>Безопасность</h3>
+  <ul>
+    <li>API-ключ без права вывода - мы физически не можем вывести ваши деньги</li>
+    <li>Шифрование AES-256 - все ключи зашифрованы</li>
+    <li>Аварийное закрытие позиций при превышении лимита просадки</li>
+    <li>Полный лог всех действий - каждая сделка прозрачна</li>
+    <li>Cloudflare защита от DDoS и ботов</li>
+  </ul>
+</div>
+
+<!-- ===== WHY BTDD ===== -->
+<div class="section">
+  <h3>Почему BTDD, а не другие боты</h3>
+  <ul>
+    <li><strong>Все проверено:</strong> 9 108 бэктестов, каждый с комиссиями и проскальзыванием. Не рисованные графики.</li>
+    <li><strong>Прозрачность:</strong> Видите каждую сделку, каждый параметр. Whitepaper опубликован.</li>
+    <li><strong>Не черный ящик:</strong> 3 типа стратегий с понятной логикой (пробой канала, статарбитраж, ZigZag).</li>
+    <li><strong>6 бирж:</strong> Bybit, Binance, MEXC, OKX, Bitget, WEEX.</li>
+    <li><strong>Рыночно-нейтральные стратегии:</strong> StatArb прибылен на падающем рынке.</li>
+  </ul>
+</div>
+
+<!-- ===== GETTING STARTED ===== -->
+<div class="section">
+  <h3>Как начать</h3>
+  <p>1. Заходи на <a href="https://battletoads.top" style="color:#64b5f6">battletoads.top</a><br>
+  2. Регистрация → выбираешь стратегию → подключаешь API-ключ биржи<br>
+  3. Алгоритм начинает торговать. Сиди и смотри на дашборд.<br><br>
+  Сейчас скидка 90% для первых клиентов.<br>
+  Вопросы: Telegram <a href="https://t.me/yakovbyakov" style="color:#64b5f6">@yakovbyakov</a></p>
+</div>
+
+<p class="disclaimer">Прошлая доходность не гарантирует будущих результатов. Торговля крипто-деривативами несет высокий риск потери капитала. Все метрики основаны на бэктестах за янв 2025 - мар 2026 на данных Bybit 4H с учетом комиссий (0.12% RT) и проскальзывания (0.03%).</p>
+
+<button class="copy-btn" onclick="copyAll(this)">📋 Копировать весь текст</button>
+</div>
+
+<script>
+function copyAll(btn) {
+  const range = document.createRange();
+  range.selectNodeContents(document.querySelector('.container'));
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  document.execCommand('copy');
+  sel.removeAllRanges();
+  btn.textContent = '✅ Скопировано!';
+  btn.classList.add('done');
+  setTimeout(() => { btn.textContent = '📋 Копировать весь текст'; btn.classList.remove('done'); }, 2000);
+}
+</script>
+
+</body>
+</html>

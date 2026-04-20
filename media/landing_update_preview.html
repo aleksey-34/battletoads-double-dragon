@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTDD Landing - предложения по обновлению (превью)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0e1a; color: #e0e0e0; padding: 20px; }
+  .container { max-width: 900px; margin: 0 auto; }
+  
+  h1 { font-size: 26px; text-align: center; color: #fff; margin-bottom: 8px; }
+  .doc-note { text-align: center; color: #888; font-size: 13px; margin-bottom: 30px; border-bottom: 1px solid #1f2937; padding-bottom: 20px; }
+
+  .section { margin-bottom: 40px; }
+  .section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 2px; color: #f97316; margin-bottom: 12px; }
+  
+  .old { background: #1a1215; border: 1px solid #7f1d1d; border-radius: 12px; padding: 20px; margin-bottom: 12px; }
+  .old::before { content: 'СЕЙЧАС'; display: block; font-size: 10px; font-weight: 700; color: #ef4444; letter-spacing: 1px; margin-bottom: 8px; }
+  
+  .new { background: #0d1f1a; border: 1px solid #166534; border-radius: 12px; padding: 20px; margin-bottom: 12px; }
+  .new::before { content: 'ПРЕДЛАГАЕТСЯ'; display: block; font-size: 10px; font-weight: 700; color: #22c55e; letter-spacing: 1px; margin-bottom: 8px; }
+  
+  .text-block { font-size: 15px; line-height: 1.7; color: #ccc; }
+  .text-block strong { color: #fff; }
+  .text-block .highlight { color: #60a5fa; font-weight: 600; }
+
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 12px; }
+  .card { background: rgba(255,255,255,0.04); border: 1px solid #1f2937; border-radius: 12px; padding: 16px; }
+  .card h4 { color: #60a5fa; font-size: 14px; margin-bottom: 6px; }
+  .card p { color: #999; font-size: 13px; line-height: 1.5; }
+
+  .metric-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 12px; }
+  .metric { background: rgba(255,255,255,0.04); border-radius: 10px; padding: 14px; text-align: center; }
+  .metric .val { font-size: 22px; font-weight: 700; color: #22c55e; }
+  .metric .lbl { font-size: 11px; color: #888; margin-top: 2px; }
+
+  .faq-item { background: rgba(255,255,255,0.03); border: 1px solid #1f2937; border-radius: 10px; padding: 14px 18px; margin-bottom: 8px; }
+  .faq-item .q { color: #fff; font-weight: 600; font-size: 14px; margin-bottom: 6px; }
+  .faq-item .a { color: #999; font-size: 13px; line-height: 1.6; }
+
+  .note { background: #1a1a2e; border: 1px solid #312e81; border-radius: 10px; padding: 14px; margin-top: 12px; font-size: 13px; color: #a5b4fc; }
+  .note strong { color: #c7d2fe; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>Landing - предложения по обновлению</h1>
+<p class="doc-note">Превью для согласования. Не применяется к коду, пока не утвердим.<br>На основании proposal от 15.04.2026 и реальных метрик стратегий на витрине.</p>
+
+<!-- ===== HERO ===== -->
+<div class="section">
+  <div class="section-label">1. Hero - заголовок и подзаголовок</div>
+  
+  <div class="old">
+    <div class="text-block">
+      <strong>Заголовок:</strong> "Алгоритмическая торговля / как сервис"<br>
+      <strong>Подзаголовок:</strong> SaaS-платформа, 9 108 бектестов, 6 бирж<br>
+      <strong>Метрики:</strong> 9 108 бектестов | 3 129 робастных | +28.7% доходность | 3.28 PF
+    </div>
+  </div>
+  
+  <div class="new">
+    <div class="text-block">
+      <strong>Заголовок:</strong> "Алгоритмическая торговля / как сервис"<br>
+      <strong>Подзаголовок:</strong> <span class="highlight">Multi-exchange cloud trading platform. 20+ уникальных стратегий, 8+ торговых систем. Изолированный runtime для каждой биржи.</span><br>
+      <strong>Метрики:</strong> <span class="highlight">20+ стратегий | 8+ торговых систем | PF до 5.82 | 6 бирж</span>
+    </div>
+    <div class="note"><strong>Обоснование:</strong> старая метрика "9 108 бектестов" про прошлый этап research. Сейчас сильнее показывать масштаб: 20+ уникальных стратегий в 8+ торговых системах. Заголовок не трогаем - он хороший.</div>
+  </div>
+</div>
+
+<!-- ===== PROOF BLOCK ===== -->
+<div class="section">
+  <div class="section-label">2. Proof Block - метрики</div>
+  
+  <div class="old">
+    <div class="text-block"><strong>6 карточек:</strong> Strategies 3 | Period 15+ mo | Return +28.7% | PF 3.28 | Max DD 4.4% | Trades 416</div>
+  </div>
+  
+  <div class="new">
+    <div class="text-block"><strong>Обновленные метрики (реальные данные витрины, 90 дней):</strong></div>
+    <div class="metric-row">
+      <div class="metric"><div class="val">20+</div><div class="lbl">Уникальных стратегий</div></div>
+      <div class="metric"><div class="val">5.37</div><div class="lbl">Средний PF</div></div>
+      <div class="metric"><div class="val">3.15%</div><div class="lbl">Мин. просадка</div></div>
+      <div class="metric"><div class="val">+53%</div><div class="lbl">Ср. доход / 90д</div></div>
+    </div>
+    <div class="note"><strong>Disclaimer:</strong> оставляем. Метрики за 90 дней, SYNTH ZScore StatArb, с учетом комиссий. Прошлая доходность не гарантирует будущую.</div>
+  </div>
+</div>
+
+<!-- ===== NEW PROOF CARDS ===== -->
+<div class="section">
+  <div class="section-label">3. Новые proof cards (добавить после метрик)</div>
+  
+  <div class="new">
+    <div class="text-block"><strong>3 новые карточки (по proposal):</strong></div>
+    <div class="cards">
+      <div class="card">
+        <h4>Runtime isolated</h4>
+        <p>Торговый движок работает отдельно от research и клиентского кабинета. Обновление стратегий не влияет на открытые позиции.</p>
+      </div>
+      <div class="card">
+        <h4>Synthetic reconciliation</h4>
+        <p>Для синтетических пар сверка идет по обеим ногам сделки. Точный учет P&L.</p>
+      </div>
+      <div class="card">
+        <h4>Multi-exchange cloud</h4>
+        <p>Одна торговая система собирается один раз и работает на нескольких биржах. MEXC, WEEX, Bybit и другие.</p>
+      </div>
+    </div>
+    <div class="note"><strong>Где разместить:</strong> между Proof (метрики) и секцией Exchanges. Как отдельный блок "Архитектура платформы".<br><strong>Примечание:</strong> секция Architecture (3 контура) уже есть на лендинге. Можно либо обновить ее контент, либо добавить эти карточки к ней.</div>
+  </div>
+</div>
+
+<!-- ===== FAQ ===== -->
+<div class="section">
+  <div class="section-label">4. FAQ - новый вопрос</div>
+  
+  <div class="old">
+    <div class="text-block"><strong>5 вопросов:</strong> бесплатно?, потери?, безопасность?, биржи?, программирование?</div>
+  </div>
+  
+  <div class="new">
+    <div class="text-block"><strong>Добавить 6-й вопрос:</strong></div>
+    <div class="faq-item">
+      <div class="q">Чем вы отличаетесь от обычного набора бектестов?</div>
+      <div class="a">Мы разделяем research, runtime и client contour. Подбор кандидатов, публикация карточек и live execution не живут в одном хрупком процессе. Research может обновлять стратегии, пока runtime торгует - они не мешают друг другу.</div>
+    </div>
+    <div class="note"><strong>Позиция:</strong> добавить в конец FAQ перед CTA секцией.</div>
+  </div>
+</div>
+
+<!-- ===== EXCHANGE STRIP ===== -->
+<div class="section">
+  <div class="section-label">5. Exchange strip</div>
+  
+  <div class="old">
+    <div class="text-block">Сейчас: Bybit, Binance, Bitget, BingX, MEXC, Weex</div>
+  </div>
+  
+  <div class="new">
+    <div class="text-block"><span class="highlight">Оставляем как есть.</span> Все 6 бирж подключены: Bybit, Binance, Bitget, BingX, MEXC, WEEX.</div>
+    <div class="note"><strong>Мелкая правка:</strong> только капитализация Weex → WEEX если нужно.</div>
+  </div>
+</div>
+
+<!-- ===== WHAT NOT TO CHANGE ===== -->
+<div class="section">
+  <div class="section-label">6. Что НЕ трогаем</div>
+  <div class="note">
+    <strong>Оставляем как есть:</strong><br>
+    - Hero заголовок "Алгоритмическая торговля / как сервис" - хорошо работает<br>
+    - 3 режима клиента (Algofund, Strategist, Copy Trading) - актуально<br>
+    - 3 типа стратегий (DD Breakout, StatArb, ZigZag) - актуально<br>
+    - Security секция - актуально<br>
+    - Pricing секция (FREE NOW) - актуально<br>
+    - Footer - актуально<br><br>
+    <strong>Не добавляем на лендинг (по согласованию):</strong><br>
+    - Dev-лог / блог технических обновлений - непрофессионально для лендинга<br>
+    - Информацию про lower-TF cloud candidates на MEXC/WEEX - пока не доказано live<br>
+    - Обещания 1:1 backtest-runtime совпадение
+  </div>
+</div>
+
+</div>
+</body>
+</html>

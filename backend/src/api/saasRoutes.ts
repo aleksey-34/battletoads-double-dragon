@@ -60,6 +60,10 @@ import {
   removeAlgofundSystemFromProfile,
   deleteTenantById,
   batchConnectStrategyClientOffer,
+  getStrategyClientCustomTsDraft,
+  updateStrategyClientCustomTsDraft,
+  previewStrategyClientCustomTsDraft,
+  getSaasObservabilityAlerts,
 } from '../saas/service';
 
 type OfferStoreLabel = 'research_catalog' | 'runtime_snapshot' | 'fallback_preset';
@@ -804,6 +808,84 @@ router.post('/strategy-clients/:tenantId/materialize', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS strategy client materialize error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/strategy-clients/:tenantId/custom-ts-draft', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const data = await getStrategyClientCustomTsDraft(tenantId);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy custom TS draft read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/strategy-clients/:tenantId/custom-ts-draft', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  try {
+    const data = await updateStrategyClientCustomTsDraft(tenantId, {
+      selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
+      op: toOptionalNumber(req.body?.op),
+      assignedApiKeyName: req.body?.assignedApiKeyName !== undefined ? String(req.body.assignedApiKeyName || '').trim() : undefined,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy custom TS draft save error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/strategy-clients/:tenantId/custom-ts-draft/preview', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+
+  if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+    return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+  }
+  if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+    return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+  }
+
+  try {
+    const data = await previewStrategyClientCustomTsDraft(tenantId, {
+      selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
+      op: toOptionalNumber(req.body?.op),
+      assignedApiKeyName: req.body?.assignedApiKeyName !== undefined ? String(req.body.assignedApiKeyName || '').trim() : undefined,
+      riskLevel: req.body?.riskLevel,
+      tradeFrequencyLevel: req.body?.tradeFrequencyLevel,
+      riskScore: toOptionalNumber(req.body?.riskScore),
+      tradeFrequencyScore: toOptionalNumber(req.body?.tradeFrequencyScore),
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS strategy custom TS preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/observability/alerts', async (_req, res) => {
+  try {
+    const data = await getSaasObservabilityAlerts();
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS observability alerts error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

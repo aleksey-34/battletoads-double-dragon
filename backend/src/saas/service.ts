@@ -372,6 +372,16 @@ type StrategyClientSystemProfileRow = {
   updated_at?: string;
 };
 
+type StrategyClientCustomTsDraftRow = {
+  id: number;
+  tenant_id: number;
+  selected_offer_ids_json: string;
+  op_value: number;
+  assigned_api_key_name: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
 export type OfferUnpublishImpact = {
   offerId: string;
   affectedTenants: Array<{
@@ -2367,6 +2377,11 @@ const getTenantById = async (tenantId: number): Promise<TenantRow> => {
 const getStrategyClientProfile = async (tenantId: number): Promise<StrategyClientProfileRow | null> => {
   const row = await db.get('SELECT * FROM strategy_client_profiles WHERE tenant_id = ?', [tenantId]);
   return (row || null) as StrategyClientProfileRow | null;
+};
+
+const getStrategyClientCustomTsDraftRow = async (tenantId: number): Promise<StrategyClientCustomTsDraftRow | null> => {
+  const row = await db.get('SELECT * FROM strategy_client_custom_ts_drafts WHERE tenant_id = ?', [tenantId]);
+  return (row || null) as StrategyClientCustomTsDraftRow | null;
 };
 
 const listStrategyClientSystemProfiles = async (tenantId: number): Promise<StrategyClientSystemProfileRow[]> => {
@@ -8503,6 +8518,11 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
     throw new Error('Сначала добавьте API-ключ биржи, прежде чем выбирать стратегии.');
   }
 
+  // D0: нельзя включать поток стратегий без отдельного назначенного API-ключа.
+  if (nextRequestedEnabled && !nextAssignedApiKeyName) {
+    throw new Error('Нельзя включить поток стратегий без назначенного API-ключа. Сначала сохраните отдельный ключ для стратегий.');
+  }
+
   // D1+D2: проверка что ключ не занят другим тенантом / другим режимом
   if (payload.assignedApiKeyName && payload.assignedApiKeyName !== (existing.assigned_api_key_name || tenant.assigned_api_key_name)) {
     await validateApiKeyNotAssigned(nextAssignedApiKeyName, tenantId, 'strategy-client');
@@ -9252,6 +9272,190 @@ export const previewStrategyClientSelection = async (
       equity: result.equityCurve,
       trades: result.trades.slice(0, 50),
     },
+  };
+};
+
+export const getStrategyClientCustomTsDraft = async (tenantId: number) => {
+  const state = await getStrategyClientState(tenantId);
+  const row = await getStrategyClientCustomTsDraftRow(tenantId);
+  const selectedOfferIds = Array.isArray(state.profile?.selectedOfferIds)
+    ? state.profile.selectedOfferIds
+    : [];
+  return {
+    tenantId,
+    draft: {
+      selectedOfferIds: row ? safeJsonParse<string[]>(row.selected_offer_ids_json, []) : selectedOfferIds,
+      op: Math.max(1, Math.floor(asNumber(row?.op_value, 1))),
+      assignedApiKeyName: asString(row?.assigned_api_key_name, ''),
+      updatedAt: row?.updated_at || null,
+    },
+  };
+};
+
+export const updateStrategyClientCustomTsDraft = async (
+  tenantId: number,
+  payload: {
+    selectedOfferIds?: string[];
+    op?: number;
+    assignedApiKeyName?: string;
+  }
+) => {
+  const tenant = await getTenantById(tenantId);
+  const state = await getStrategyClientState(tenantId);
+  const existing = await getStrategyClientCustomTsDraftRow(tenantId);
+
+  const selectedOfferIds = Array.from(new Set((Array.isArray(payload.selectedOfferIds) ? payload.selectedOfferIds : safeJsonParse<string[]>(existing?.selected_offer_ids_json || '[]', []))
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)));
+  const op = Math.max(1, Math.floor(asNumber(payload.op, asNumber(existing?.op_value, 1))));
+  const assignedApiKeyName = asString(payload.assignedApiKeyName, existing?.assigned_api_key_name).trim();
+
+  if (assignedApiKeyName) {
+    const strategyAssigned = asString(state.profile?.assigned_api_key_name, '').trim();
+    const algofundAssigned = asString((await getAlgofundProfile(tenantId))?.assigned_api_key_name, '').trim();
+    if (assignedApiKeyName === strategyAssigned || assignedApiKeyName === algofundAssigned) {
+      throw new Error('API-ключ для собственной ТС должен быть отдельным от потоков Стратегий и Алгофонда.');
+    }
+    await validateApiKeyNotAssigned(assignedApiKeyName, tenantId, 'strategy-client-custom-ts');
+  }
+
+  const allowedIds = new Set((state.offers || []).map((item) => String(item.offerId || '').trim()).filter(Boolean));
+  const filteredIds = selectedOfferIds.filter((id) => allowedIds.has(id));
+
+  if (existing?.id) {
+    await db.run(
+      `UPDATE strategy_client_custom_ts_drafts
+       SET selected_offer_ids_json = ?, op_value = ?, assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [JSON.stringify(filteredIds), op, assignedApiKeyName, tenantId]
+    );
+  } else {
+    await db.run(
+      `INSERT INTO strategy_client_custom_ts_drafts (
+         tenant_id, selected_offer_ids_json, op_value, assigned_api_key_name, created_at, updated_at
+       ) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [tenantId, JSON.stringify(filteredIds), op, assignedApiKeyName]
+    );
+  }
+
+  await db.run(
+    `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+     VALUES (?, 'client', 'client_custom_ts_draft_saved', ?, CURRENT_TIMESTAMP)`,
+    [
+      tenantId,
+      JSON.stringify({
+        tenantSlug: tenant.slug,
+        selectedOffersCount: filteredIds.length,
+        op,
+        assignedApiKeyName,
+      }),
+    ]
+  );
+
+  return getStrategyClientCustomTsDraft(tenantId);
+};
+
+export const previewStrategyClientCustomTsDraft = async (
+  tenantId: number,
+  payload?: {
+    selectedOfferIds?: string[];
+    op?: number;
+    assignedApiKeyName?: string;
+    riskLevel?: Level3;
+    tradeFrequencyLevel?: Level3;
+    riskScore?: number;
+    tradeFrequencyScore?: number;
+  }
+) => {
+  const state = await getStrategyClientState(tenantId);
+  const tenant = await getTenantById(tenantId);
+  const currentDraft = await getStrategyClientCustomTsDraft(tenantId);
+  const selectedOfferIds = Array.isArray(payload?.selectedOfferIds)
+    ? payload!.selectedOfferIds!.map((item) => String(item || '').trim()).filter(Boolean)
+    : currentDraft.draft.selectedOfferIds;
+  const op = Math.max(1, Math.floor(asNumber(payload?.op, currentDraft.draft.op)));
+  const assignedApiKeyName = asString(payload?.assignedApiKeyName, currentDraft.draft.assignedApiKeyName).trim();
+
+  const preview = await previewStrategyClientSelection(tenantId, {
+    selectedOfferIds,
+    riskLevel: payload?.riskLevel,
+    tradeFrequencyLevel: payload?.tradeFrequencyLevel,
+    riskScore: payload?.riskScore,
+    tradeFrequencyScore: payload?.tradeFrequencyScore,
+  });
+
+  const { sweep } = await loadCatalogAndSweepWithFallback();
+  const selectedRows = Array.isArray(preview.selectedOffers) ? preview.selectedOffers : [];
+  const materializationPreview = selectedRows.map((item) => {
+    const record = sweep ? findSweepRecordByStrategyId(sweep, Number(item.strategyId || 0)) : null;
+    return {
+      offerId: String(item.offerId || ''),
+      strategyId: Number(item.strategyId || 0),
+      strategyName: String(item.strategyName || ''),
+      runtimeName: record ? prefixStrategyName(tenant, record) : '',
+      market: String(item.market || ''),
+      mode: String(item.mode || ''),
+    };
+  });
+
+  return {
+    tenantId,
+    draft: {
+      selectedOfferIds,
+      op,
+      assignedApiKeyName,
+    },
+    dryRun: preview,
+    materializationPreview,
+  };
+};
+
+export const getSaasObservabilityAlerts = async () => {
+  const [tenantsRows, strategyRows, algofundRows, customRows] = await Promise.all([
+    db.all('SELECT id, slug, display_name FROM tenants ORDER BY id ASC'),
+    db.all('SELECT tenant_id, requested_enabled, assigned_api_key_name FROM strategy_client_profiles'),
+    db.all('SELECT tenant_id, requested_enabled, assigned_api_key_name FROM algofund_profiles'),
+    db.all('SELECT tenant_id, selected_offer_ids_json, assigned_api_key_name, updated_at FROM strategy_client_custom_ts_drafts'),
+  ]);
+
+  const strategyByTenant = new Map<number, any>((Array.isArray(strategyRows) ? strategyRows : []).map((row: any) => [Number(row.tenant_id), row]));
+  const algofundByTenant = new Map<number, any>((Array.isArray(algofundRows) ? algofundRows : []).map((row: any) => [Number(row.tenant_id), row]));
+  const customByTenant = new Map<number, any>((Array.isArray(customRows) ? customRows : []).map((row: any) => [Number(row.tenant_id), row]));
+  const alerts: Array<Record<string, unknown>> = [];
+
+  for (const tenant of (Array.isArray(tenantsRows) ? tenantsRows : []) as Array<Record<string, unknown>>) {
+    const tenantId = Number(tenant.id || 0);
+    const strategy = strategyByTenant.get(tenantId);
+    const algofund = algofundByTenant.get(tenantId);
+    const custom = customByTenant.get(tenantId);
+    const strategyEnabled = Number(strategy?.requested_enabled || 0) === 1;
+    const algofundEnabled = Number(algofund?.requested_enabled || 0) === 1;
+    const strategyKey = asString(strategy?.assigned_api_key_name, '').trim();
+    const algofundKey = asString(algofund?.assigned_api_key_name, '').trim();
+    const customKey = asString(custom?.assigned_api_key_name, '').trim();
+    const customSelected = safeJsonParse<string[]>(asString(custom?.selected_offer_ids_json, '[]'), []);
+
+    if (strategyEnabled && !strategyKey) {
+      alerts.push({ severity: 'high', type: 'missing_key_strategy', tenantId, tenantSlug: tenant.slug, tenantName: tenant.display_name });
+    }
+    if (algofundEnabled && !algofundKey) {
+      alerts.push({ severity: 'high', type: 'missing_key_algofund', tenantId, tenantSlug: tenant.slug, tenantName: tenant.display_name });
+    }
+    if (strategyKey && algofundKey && strategyKey === algofundKey) {
+      alerts.push({ severity: 'high', type: 'key_conflict_strategy_algofund', tenantId, tenantSlug: tenant.slug, tenantName: tenant.display_name, apiKeyName: strategyKey });
+    }
+    if (customKey && (customKey === strategyKey || customKey === algofundKey)) {
+      alerts.push({ severity: 'medium', type: 'key_conflict_custom_ts', tenantId, tenantSlug: tenant.slug, tenantName: tenant.display_name, apiKeyName: customKey });
+    }
+    if (customSelected.length > 0 && !customKey) {
+      alerts.push({ severity: 'medium', type: 'custom_ts_missing_key', tenantId, tenantSlug: tenant.slug, tenantName: tenant.display_name, selectedOffersCount: customSelected.length });
+    }
+  }
+
+  return {
+    generatedAt: new Date().toISOString(),
+    totalAlerts: alerts.length,
+    alerts,
   };
 };
 
@@ -10139,6 +10343,11 @@ export const updateAlgofundState = async (
     ? payload.requestedEnabled
     : Number(profile.requested_enabled || 0) === 1;
 
+  // D0: нельзя включать Алгофонд без отдельного назначенного API-ключа.
+  if (nextRequestedEnabled && !nextApiKeyName) {
+    throw new Error('Нельзя включить Алгофонд без назначенного API-ключа. Сначала сохраните отдельный ключ для Алгофонда.');
+  }
+
   // D1+D2: проверка что ключ не занят другим тенантом / другим режимом
   if (payload.assignedApiKeyName && payload.assignedApiKeyName !== currentExecutionApiKeyName) {
     await validateApiKeyNotAssigned(nextApiKeyName, tenantId, 'algofund');
@@ -10195,6 +10404,10 @@ export const requestAlgofundAction = async (
     targetSystemId: undefined,
     targetSystemName: undefined,
   };
+
+  if ((requestType === 'start' || requestType === 'switch_system') && !apiKeyName) {
+    throw new Error('Сначала назначьте отдельный API-ключ для Алгофонда. Без ключа запуск и переключение системы недоступны.');
+  }
 
   if (requestType === 'switch_system') {
     const targetSystemId = Math.floor(asNumber(payload.targetSystemId, 0));
@@ -11660,7 +11873,7 @@ type PairConflict = {
 export const validateApiKeyNotAssigned = async (
   apiKeyName: string,
   currentTenantId: number,
-  targetMode: 'algofund' | 'strategy-client'
+  targetMode: 'algofund' | 'strategy-client' | 'strategy-client-custom-ts'
 ): Promise<void> => {
   if (!apiKeyName) return;
 

@@ -172,6 +172,34 @@ type StrategySelectionPreviewResponse = {
   };
 };
 
+type CustomTsDraftPayload = {
+  success: boolean;
+  draft: {
+    selectedOfferIds: string[];
+    op: number;
+    assignedApiKeyName: string;
+    updatedAt?: string | null;
+  };
+};
+
+type CustomTsDraftPreviewResponse = {
+  success: boolean;
+  draft: {
+    selectedOfferIds: string[];
+    op: number;
+    assignedApiKeyName: string;
+  };
+  dryRun: StrategySelectionPreviewResponse;
+  materializationPreview: Array<{
+    offerId: string;
+    strategyId: number;
+    strategyName: string;
+    runtimeName: string;
+    market: string;
+    mode: string;
+  }>;
+};
+
 type AlgofundRequest = {
   id: number;
   request_type: 'start' | 'stop';
@@ -273,6 +301,7 @@ type TariffPlan = {
   max_strategies_total: number;
   risk_cap_max: number;
   allow_ts_start_stop_requests: number;
+  features_json?: string;
 };
 
 type TariffRequestItem = {
@@ -354,7 +383,6 @@ type WorkspacePayload = {
 
 const CLIENT_SESSION_STORAGE_KEY = 'clientSessionToken';
 const CLIENT_TS_BETA_FLAG_KEY = 'btddClientTsBetaEnabled';
-const CLIENT_TS_BETA_DRAFT_KEY = 'btddClientTsBetaDraft';
 
 const isClientTsBetaEnabled = (): boolean => {
   try {
@@ -635,6 +663,9 @@ const ClientCabinet: React.FC = () => {
   const [clientTsBetaEnabled] = useState<boolean>(() => isClientTsBetaEnabled());
   const [betaSelectedOfferIds, setBetaSelectedOfferIds] = useState<string[]>([]);
   const [betaOpInput, setBetaOpInput] = useState('');
+  const [betaAssignedApiKeyName, setBetaAssignedApiKeyName] = useState('');
+  const [customTsPreview, setCustomTsPreview] = useState<CustomTsDraftPreviewResponse | null>(null);
+  const [customTsPreviewLoading, setCustomTsPreviewLoading] = useState(false);
 
   const strategyState = workspace?.strategyState || null;
   const algofundState = workspace?.algofundState || null;
@@ -684,6 +715,14 @@ const ClientCabinet: React.FC = () => {
 
   const algofundPublishedSystemName = String((algofundWorkspace?.profile as any)?.published_system_name || '').trim();
   const algofundAssignedApiKey = String((algofundWorkspace?.profile as any)?.assigned_api_key_name || '').trim();
+  const strategyAssignedApiKey = String(strategyAssignedApiKeyName || strategyWorkspace?.profile?.assigned_api_key_name || '').trim();
+  const algofundAssignedApiKeyResolved = String(algofundAssignedApiKeyName || algofundAssignedApiKey || '').trim();
+  const strategyApiKeyOptions = clientApiKeys.filter((item) => !item.usedByAlgofund || item.name === strategyAssignedApiKey);
+  const algofundApiKeyOptions = clientApiKeys.filter((item) => !item.usedByStrategy || item.name === algofundAssignedApiKeyResolved);
+  const betaApiKeyOptions = clientApiKeys.filter((item) => {
+    if (item.name === betaAssignedApiKeyName) return true;
+    return !item.usedByStrategy && !item.usedByAlgofund;
+  });
   const algofundAvailableSystems = Array.isArray(algofundWorkspace?.availableSystems) ? (algofundWorkspace?.availableSystems || []) : [];
   const algofundActiveSystems = Array.isArray(algofundWorkspace?.activeSystems) ? (algofundWorkspace?.activeSystems || []) : [];
   const enabledAlgofundSystemNames = new Set(
@@ -821,27 +860,26 @@ const ClientCabinet: React.FC = () => {
       ? strategyWorkspace.profile?.selectedOfferIds || []
       : [];
 
-    try {
-      const persisted = localStorage.getItem(CLIENT_TS_BETA_DRAFT_KEY);
-      if (persisted) {
-        const parsed = JSON.parse(persisted);
-        const draftIds = Array.isArray(parsed?.selectedOfferIds)
-          ? parsed.selectedOfferIds
-            .map((value: unknown) => String(value || '').trim())
-            .filter(Boolean)
+    const loadCustomDraft = async () => {
+      try {
+        const response = await axios.get<CustomTsDraftPayload>('/api/client/strategy/custom-ts-draft');
+        const draft = response.data?.draft;
+        const draftIds = Array.isArray(draft?.selectedOfferIds)
+          ? draft.selectedOfferIds.map((value) => String(value || '').trim()).filter(Boolean)
           : [];
         const allowedIds = new Set((strategyWorkspace.offers || []).map((offer) => offer.offerId));
-        const safeDraftIds = draftIds.filter((id: string) => allowedIds.has(id));
+        const safeDraftIds = draftIds.filter((id) => allowedIds.has(id));
         setBetaSelectedOfferIds(safeDraftIds.length > 0 ? safeDraftIds : selectedFromProfile);
-        setBetaOpInput(typeof parsed?.opInput === 'string' ? parsed.opInput : '');
-        return;
+        setBetaOpInput(String(draft?.op || ''));
+        setBetaAssignedApiKeyName(String(draft?.assignedApiKeyName || ''));
+      } catch {
+        setBetaSelectedOfferIds(selectedFromProfile);
+        setBetaOpInput('');
+        setBetaAssignedApiKeyName('');
       }
-    } catch {
-      // Ignore malformed local draft and continue with profile defaults.
-    }
+    };
 
-    setBetaSelectedOfferIds(selectedFromProfile);
-    setBetaOpInput('');
+    void loadCustomDraft();
   }, [strategyWorkspace?.tenant?.id, strategyWorkspace?.offers]);
 
   const loadWorkspace = async () => {
@@ -953,6 +991,21 @@ const ClientCabinet: React.FC = () => {
       return;
     }
 
+    if (strategyAssignedApiKey && algofundAssignedApiKeyResolved && strategyAssignedApiKey === algofundAssignedApiKeyResolved) {
+      messageApi.warning('Для потоков Стратегий и Алгофонда нужны разные API-ключи. Выберите отдельный ключ для Стратегий.');
+      return;
+    }
+
+    if (requestedEnabled === true && !strategyAssignedApiKey) {
+      messageApi.warning('Сначала назначьте отдельный API-ключ для потока Стратегий.');
+      return;
+    }
+
+    if (strategyAssignedApiKey && !strategyApiKeyOptions.some((item) => item.name === strategyAssignedApiKey)) {
+      messageApi.warning('Выбранный API-ключ занят Алгофондом. Для Стратегий нужен отдельный ключ.');
+      return;
+    }
+
     setActionLoading(requestedEnabled === undefined ? 'strategy-save' : requestedEnabled ? 'strategy-start' : 'strategy-stop');
     try {
       const response = await axios.patch('/api/client/strategy/profile', {
@@ -984,24 +1037,56 @@ const ClientCabinet: React.FC = () => {
     }
   };
 
-  const saveClientTsBetaDraft = () => {
+  const saveClientTsBetaDraft = async () => {
     if (isBetaSelectionOverLimit) {
       messageApi.warning(`Лимит тарифа: можно выбрать до ${strategyMaxAllowed} стратегий. В beta-черновике сейчас ${betaSelectedOfferIds.length}.`);
       return;
     }
 
+    if (!betaAssignedApiKeyName) {
+      messageApi.warning('Для собственной ТС (beta) укажите отдельный API-ключ.');
+      return;
+    }
+
+    if (!betaApiKeyOptions.some((item) => item.name === betaAssignedApiKeyName)) {
+      messageApi.warning('API-ключ для собственной ТС должен быть отдельным: не использоваться в Стратегиях и Алгофонде.');
+      return;
+    }
+
+    setActionLoading('custom-ts-draft-save');
     try {
-      localStorage.setItem(
-        CLIENT_TS_BETA_DRAFT_KEY,
-        JSON.stringify({
-          selectedOfferIds: betaSelectedOfferIds,
-          opInput: betaOpInput.trim(),
-          updatedAt: new Date().toISOString(),
-        }),
-      );
-      messageApi.success('Beta-черновик сохранён локально. Backend пока не затрагивается.');
-    } catch {
-      messageApi.error('Не удалось сохранить beta-черновик в localStorage');
+      await axios.patch('/api/client/strategy/custom-ts-draft', {
+        selectedOfferIds: betaSelectedOfferIds,
+        op: toFinite(betaOpInput, 1),
+        assignedApiKeyName: betaAssignedApiKeyName,
+      });
+      messageApi.success('Черновик собственной ТС сохранен в backend.');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось сохранить черновик собственной ТС'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const runCustomTsPreview = async () => {
+    setCustomTsPreviewLoading(true);
+    try {
+      const response = await axios.post<CustomTsDraftPreviewResponse>('/api/client/strategy/custom-ts-draft/preview', {
+        selectedOfferIds: betaSelectedOfferIds,
+        op: toFinite(betaOpInput, 1),
+        assignedApiKeyName: betaAssignedApiKeyName,
+        riskLevel: sliderValueToLevel(strategyRiskInput),
+        tradeFrequencyLevel: sliderValueToLevel(strategyTradeInput),
+        riskScore: strategyRiskInput,
+        tradeFrequencyScore: strategyTradeInput,
+      });
+      setCustomTsPreview(response.data);
+      messageApi.success('Dry-run preview собственной ТС готов.');
+    } catch (error: any) {
+      setCustomTsPreview(null);
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось построить preview собственной ТС'));
+    } finally {
+      setCustomTsPreviewLoading(false);
     }
   };
 
@@ -1079,6 +1164,16 @@ const ClientCabinet: React.FC = () => {
   };
 
   const saveAlgofundProfile = async () => {
+    if (strategyAssignedApiKey && algofundAssignedApiKeyResolved && strategyAssignedApiKey === algofundAssignedApiKeyResolved) {
+      messageApi.warning('Для Алгофонда нужен отдельный API-ключ, отличный от ключа потока Стратегий.');
+      return;
+    }
+
+    if (algofundAssignedApiKeyResolved && !algofundApiKeyOptions.some((item) => item.name === algofundAssignedApiKeyResolved)) {
+      messageApi.warning('Выбранный API-ключ занят потоком Стратегий. Для Алгофонда нужен отдельный ключ.');
+      return;
+    }
+
     setActionLoading('algofund-save');
     try {
       const response = await axios.patch('/api/client/algofund/profile', {
@@ -1128,6 +1223,11 @@ const ClientCabinet: React.FC = () => {
     requestType: 'start' | 'stop',
     targetSystem?: { id: number; name: string } | null,
   ) => {
+    if ((requestType === 'start' || requestType === 'stop') && !algofundAssignedApiKeyResolved) {
+      messageApi.warning('Сначала назначьте отдельный API-ключ для Алгофонда.');
+      return;
+    }
+
     setActionLoading(`algofund-${requestType}`);
     try {
       if (requestType === 'start' && targetSystem && Number(targetSystem.id) > 0) {
@@ -1286,11 +1386,15 @@ const ClientCabinet: React.FC = () => {
 
     setActionLoading('tariff-request');
     try {
-      await axios.post('/api/client/tariff/request', {
+      const response = await axios.post('/api/client/tariff/request', {
         targetPlanCode: planCode,
         note: tariffNote,
       });
       messageApi.success(t('client.tariff.requestSent', 'Tariff request sent'));
+      const switchPolicyMessage = String(response?.data?.switchPolicyMessage || '').trim();
+      if (switchPolicyMessage) {
+        messageApi.info(switchPolicyMessage, 8);
+      }
       setTariffNote('');
       await loadWorkspace();
     } catch (error: any) {
@@ -1356,6 +1460,14 @@ const ClientCabinet: React.FC = () => {
                   </Button>
                 </Space>
               )}
+              style={{ marginBottom: 16 }}
+            />
+          ) : !strategyAssignedApiKey ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="Назначьте API-ключ для потока стратегий"
+              description="Ключи добавлены, но поток Стратегий пока не привязан к отдельному API-ключу."
               style={{ marginBottom: 16 }}
             />
           ) : null}
@@ -1485,15 +1597,23 @@ const ClientCabinet: React.FC = () => {
                 <Alert
                   type="info"
                   showIcon
-                  message="Этап 1: UI beta под фичефлагом"
-                  description="Это только интерфейсный каркас: выбор стратегий и OP сохраняются локально в браузере, backend не изменяется."
+                  message="Собственная ТС: backend draft + dry-run preview"
+                  description="Черновик сохраняется в backend, а preview показывает dry-run backtest и предварительную materialization-структуру без запуска runtime."
                 />
                 <Space wrap>
                   <Tag color="blue">Выбрано: {betaSelectedOfferIds.length}</Tag>
                   <Tag color={isBetaSelectionOverLimit ? 'error' : 'success'}>
                     Лимит тарифа: до {strategyMaxAllowed || 0}
                   </Tag>
+                  {betaAssignedApiKeyName ? <Tag color="geekblue">API для собственной ТС: {betaAssignedApiKeyName}</Tag> : <Tag color="warning">API для собственной ТС не назначен</Tag>}
                 </Space>
+                <Select
+                  style={{ width: '100%' }}
+                  value={betaAssignedApiKeyName || undefined}
+                  placeholder="Выберите отдельный API ключ для собственной ТС (beta)"
+                  onChange={(value) => setBetaAssignedApiKeyName(String(value || ''))}
+                  options={betaApiKeyOptions.map((item) => ({ value: item.name, label: `${item.name} (${item.exchange})` }))}
+                />
                 {isBetaSelectionOverLimit ? (
                   <Alert
                     type="warning"
@@ -1527,18 +1647,37 @@ const ClientCabinet: React.FC = () => {
                   placeholder="OP (операционный параметр), например: 250"
                 />
                 <Space wrap>
-                  <Button type="primary" onClick={saveClientTsBetaDraft} disabled={isBetaSelectionOverLimit}>
+                  <Button type="primary" loading={actionLoading === 'custom-ts-draft-save'} onClick={() => void saveClientTsBetaDraft()} disabled={isBetaSelectionOverLimit}>
                     Сохранить beta-черновик
+                  </Button>
+                  <Button loading={customTsPreviewLoading} onClick={() => void runCustomTsPreview()} disabled={isBetaSelectionOverLimit || betaSelectedOfferIds.length === 0}>
+                    Dry-run preview
                   </Button>
                   <Button
                     onClick={() => {
                       setBetaSelectedOfferIds(Array.isArray(strategyWorkspace.profile?.selectedOfferIds) ? (strategyWorkspace.profile?.selectedOfferIds || []) : []);
                       setBetaOpInput('');
+                      setBetaAssignedApiKeyName('');
+                      setCustomTsPreview(null);
                     }}
                   >
                     Сбросить
                   </Button>
                 </Space>
+                {customTsPreview ? (
+                  <Card size="small" title="Materialization preview (без запуска)" bordered>
+                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                      <Typography.Text type="secondary">
+                        Dry-run стратегий: {customTsPreview.dryRun?.selectedOffers?.length || 0}
+                      </Typography.Text>
+                      {(customTsPreview.materializationPreview || []).slice(0, 8).map((item) => (
+                        <Typography.Text key={`${item.offerId}-${item.strategyId}`} style={{ fontSize: 12 }}>
+                          {item.strategyName || item.offerId} -&gt; {item.runtimeName || 'runtime name pending'}
+                        </Typography.Text>
+                      ))}
+                    </Space>
+                  </Card>
+                ) : null}
               </Space>
             </Card>
           ) : null}
@@ -1660,7 +1799,7 @@ const ClientCabinet: React.FC = () => {
                   value={strategyAssignedApiKeyName || undefined}
                   placeholder="Выберите API ключ"
                   onChange={(value) => setStrategyAssignedApiKeyName(String(value || ''))}
-                  options={clientApiKeys.map((item) => ({ value: item.name, label: `${item.name} (${item.exchange})` }))}
+                  options={strategyApiKeyOptions.map((item) => ({ value: item.name, label: `${item.name} (${item.exchange})` }))}
                 />
                 <Button loading={actionLoading === 'strategy-save'} onClick={() => void saveStrategyProfile()}>
                   Сохранить API/настройки
@@ -1762,6 +1901,23 @@ const ClientCabinet: React.FC = () => {
     <Space direction="vertical" size={16} style={{ width: '100%' }}>
       {algofundWorkspace ? (
         <>
+          {clientApiKeys.length === 0 ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="Сначала добавьте API-ключ биржи"
+              description="Для подключения Алгофонда необходимо добавить отдельный API-ключ."
+              style={{ marginBottom: 8 }}
+            />
+          ) : !algofundAssignedApiKeyResolved ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="Назначьте API-ключ для потока Алгофонда"
+              description="Ключи добавлены, но поток Алгофонда пока не привязан к отдельному API-ключу."
+              style={{ marginBottom: 8 }}
+            />
+          ) : null}
           {(algofundWorkspace as any).browseOnly ? (
             <Alert
               type="info"
@@ -1790,7 +1946,7 @@ const ClientCabinet: React.FC = () => {
                   value={algofundAssignedApiKeyName || undefined}
                   placeholder="Выберите API ключ"
                   onChange={(value) => setAlgofundAssignedApiKeyName(String(value || ''))}
-                  options={clientApiKeys.map((item) => ({ value: item.name, label: `${item.name} (${item.exchange})` }))}
+                  options={algofundApiKeyOptions.map((item) => ({ value: item.name, label: `${item.name} (${item.exchange})` }))}
                 />
                 <Button loading={actionLoading === 'algofund-save'} onClick={() => void saveAlgofundProfile()}>
                   Сохранить API/риск-профиль

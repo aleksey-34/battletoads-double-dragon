@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTDD - Офер для инфлов (2 портфеля, апрель 2026)</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0e1a; color: #e0e0e0; padding: 20px; }
+  .container { max-width: 800px; margin: 0 auto; }
+  h1 { text-align: center; font-size: 28px; margin-bottom: 6px; color: #fff; }
+  .sub { text-align: center; color: #666; font-size: 13px; margin-bottom: 30px; }
+  
+  .card { border-radius: 16px; padding: 24px; margin-bottom: 20px; position: relative; overflow: hidden; }
+  .card::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 4px; }
+  
+  .low { background: #0d1f1a; border: 1px solid #1b5e20; }
+  .low::before { background: linear-gradient(90deg, #2e7d32, #4caf50); }
+  .mid { background: #1a1a0d; border: 1px solid #e65100; }
+  .mid::before { background: linear-gradient(90deg, #ef6c00, #ff9800); }
+  .high { background: #1a0d0d; border: 1px solid #b71c1c; }
+  .high::before { background: linear-gradient(90deg, #c62828, #f44336); }
+  
+  .badge { display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+  .low .badge { background: #1b5e20; color: #a5d6a7; }
+  .mid .badge { background: #e65100; color: #ffcc80; }
+  .high .badge { background: #b71c1c; color: #ef9a9a; }
+  
+  .card h2 { font-size: 22px; color: #fff; margin-bottom: 4px; }
+  .card .desc { color: #999; font-size: 14px; margin-bottom: 16px; }
+  
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+  .metric { background: rgba(255,255,255,0.04); border-radius: 10px; padding: 12px; text-align: center; }
+  .metric .val { font-size: 20px; font-weight: 700; color: #fff; }
+  .metric .lbl { font-size: 11px; color: #888; margin-top: 2px; }
+  
+  .low .metric .val { color: #66bb6a; }
+  .mid .metric .val { color: #ffa726; }
+  .high .metric .val { color: #ef5350; }
+  
+  .details { font-size: 13px; line-height: 1.7; color: #bbb; }
+  .details strong { color: #e0e0e0; }
+
+  .pairs { margin: 12px 0; font-size: 12px; color: #999; background: rgba(255,255,255,0.03); border-radius: 8px; padding: 10px 14px; }
+  .pairs .pair-row { display: flex; justify-content: space-between; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,0.04); }
+  .pairs .pair-row:last-child { border-bottom: none; }
+  .pairs .pair-name { color: #ccc; }
+  .pairs .pair-stats { color: #888; }
+  
+  .section { margin-top: 30px; background: #111827; border-radius: 12px; padding: 20px; border: 1px solid #1f2937; }
+  .section h3 { color: #64b5f6; font-size: 16px; margin-bottom: 10px; }
+  .section p, .section li { font-size: 14px; line-height: 1.7; color: #bbb; }
+  .section ul { margin-left: 20px; margin-top: 8px; }
+  .section li { margin-bottom: 4px; }
+  
+  .disclaimer { text-align: center; color: #555; font-size: 11px; margin-top: 20px; padding-top: 16px; border-top: 1px solid #1f2937; }
+  
+  .copy-btn { display: block; width: 200px; margin: 20px auto; padding: 12px; background: #1a73e8; color: #fff; border: none; border-radius: 10px; cursor: pointer; font-size: 14px; font-weight: 600; }
+  .copy-btn:hover { background: #1557b0; }
+  .copy-btn.done { background: #2e7d32; }
+
+  .update-note { text-align: center; background: #1a2332; border: 1px solid #2a4a6b; border-radius: 10px; padding: 12px; margin-bottom: 24px; font-size: 12px; color: #7eb8e0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>BTDD Platform - 2 портфеля для офера</h1>
+<p class="sub">Актуальные метрики по витрине за 90 дней. Без раскрытия пар, только портфельный уровень для коммуникации с аудиторией.</p>
+
+<div class="update-note">Данные обновлены 19 апреля 2026. 300+ стратегий, 10+ торговых систем, 10 000+ бэктестов. Multi-exchange cloud: Bybit, Binance, MEXC, BingX, Bitget, WEEX.</div>
+
+<!-- ===== CONSERVATIVE ===== -->
+<div class="card low">
+  <span class="badge">Консервативный</span>
+  <h2>Conservative Portfolio</h2>
+  <p class="desc">3 внутренних модуля с фокусом на контролируемую просадку и стабильную доходность.</p>
+  <div class="metrics">
+    <div class="metric"><div class="val">+30.7%</div><div class="lbl">Сред. ret / 90д</div></div>
+    <div class="metric"><div class="val">11.4%</div><div class="lbl">Сред. DD</div></div>
+    <div class="metric"><div class="val">3.69</div><div class="lbl">Сред. PF</div></div>
+    <div class="metric"><div class="val">3</div><div class="lbl">Стратегий</div></div>
+  </div>
+  <div class="pairs">
+    <div class="pair-row"><span class="pair-name">Модуль C1</span><span class="pair-stats">ret +9.1% | DD 14.8% | PF 1.96</span></div>
+    <div class="pair-row"><span class="pair-name">Модуль C2</span><span class="pair-stats">ret +35.8% | DD 8.6% | PF 5.01</span></div>
+    <div class="pair-row"><span class="pair-name">Модуль C3</span><span class="pair-stats">ret +47.2% | DD 10.7% | PF 4.12</span></div>
+  </div>
+  <div class="details">
+    <strong>Что внутри:</strong> 3 независимых стратегии из витрины с разной логикой входов и частотой сделок. Подбор сделан через cloud selection и robustness-фильтры.<br>
+    <strong>Для кого:</strong> Для аудитории, которая хочет начать с более ровного профиля риска и прозрачной статистики.<br>
+    <strong>Мин. депозит:</strong> $1 000<br>
+    <strong>Формат:</strong> Algofund / Strategy Client
+  </div>
+</div>
+
+<!-- ===== AGGRESSIVE ===== -->
+<div class="card high">
+  <span class="badge">Агрессивный</span>
+  <h2>Aggressive Portfolio</h2>
+  <p class="desc">3 внутренних модуля с приоритетом на максимальный ретерн и расширенную частоту сигналов.</p>
+  <div class="metrics">
+    <div class="metric"><div class="val">+191.4%</div><div class="lbl">Сред. ret / 90д</div></div>
+    <div class="metric"><div class="val">22.3%</div><div class="lbl">Сред. DD</div></div>
+    <div class="metric"><div class="val">4.24</div><div class="lbl">Сред. PF</div></div>
+    <div class="metric"><div class="val">3</div><div class="lbl">Стратегий</div></div>
+  </div>
+  <div class="pairs">
+    <div class="pair-row"><span class="pair-name">Модуль A1</span><span class="pair-stats">ret +191.3% | DD 18.6% | PF 6.22</span></div>
+    <div class="pair-row"><span class="pair-name">Модуль A2</span><span class="pair-stats">ret +197.3% | DD 24.0% | PF 1.63</span></div>
+    <div class="pair-row"><span class="pair-name">Модуль A3</span><span class="pair-stats">ret +185.6% | DD 24.3% | PF 4.87</span></div>
+  </div>
+  <div class="details">
+    <strong>Что внутри:</strong> 3 модуля из топ-перформеров витрины с акцентом на высокую доходность и ускоренный оборот сигналов.<br>
+    <strong>Для кого:</strong> Для аудитории, которая готова к более высокой волатильности ради максимального потенциала ret/90d.<br>
+    <strong>Мин. депозит:</strong> $1 000<br>
+    <strong>Формат:</strong> Algofund / Strategy Client
+  </div>
+</div>
+
+<!-- ===== HOW IT WORKS ===== -->
+<div class="section">
+  <h3>Как это работает</h3>
+  <ul>
+    <li><strong>Ваши деньги остаются на вашем счету биржи.</strong> Мы не имеем доступа к выводу средств - API-ключ только на торговлю.</li>
+    <li>Вы подключаете API-ключ биржи - выбираете стратегию - алгоритм торгует 24/7.</li>
+    <li>В личном кабинете видите все сделки, equity-кривую, статистику в реальном времени.</li>
+    <li>Можно остановить в любой момент - все позиции закроются автоматически.</li>
+    <li>Поддерживаемые биржи: Bybit, Binance, MEXC, BingX, Bitget, WEEX.</li>
+  </ul>
+</div>
+
+<!-- ===== ARCHITECTURE ===== -->
+<div class="section">
+  <h3>Архитектура платформы</h3>
+  <ul>
+    <li><strong>Изолированный runtime:</strong> торговый движок работает отдельно от research и клиентского кабинета. Обновление стратегий не влияет на открытые позиции.</li>
+    <li><strong>Multi-exchange cloud:</strong> одна торговая система собирается один раз и работает на нескольких биржах одновременно.</li>
+    <li><strong>Synthetic reconciliation:</strong> для синтетических пар сверка идет по обеим ногам сделки, а не только по одной.</li>
+    <li><strong>Витрина стратегий:</strong> 349 runtime-снимков, 300+ стратегий и 10+ торговых систем.</li>
+  </ul>
+</div>
+
+<!-- ===== SAFETY ===== -->
+<div class="section">
+  <h3>Безопасность</h3>
+  <ul>
+    <li>API-ключ без права вывода - мы физически не можем вывести ваши деньги</li>
+    <li>Шифрование AES-256 - все ключи зашифрованы</li>
+    <li>Аварийное закрытие позиций при превышении лимита просадки</li>
+    <li>Полный лог всех действий - каждая сделка прозрачна</li>
+    <li>Cloudflare защита от DDoS</li>
+  </ul>
+</div>
+
+<!-- ===== WHY BTDD ===== -->
+<div class="section">
+  <h3>Почему BTDD, а не другие боты</h3>
+  <ul>
+    <li><strong>Реальные метрики:</strong> 300+ стратегий в 10+ торговых системах, 10 000+ бэктестов, лучший PF 12.0.</li>
+    <li><strong>Прозрачность:</strong> Видите каждую сделку, каждый параметр. Whitepaper опубликован.</li>
+    <li><strong>Изолированная архитектура:</strong> Research, runtime и клиентский кабинет работают независимо.</li>
+    <li><strong>6 бирж:</strong> Bybit, Binance, MEXC, BingX, Bitget, WEEX.</li>
+    <li><strong>Рыночно-нейтральные стратегии:</strong> StatArb прибылен и на падающем рынке.</li>
+  </ul>
+</div>
+
+<!-- ===== GETTING STARTED ===== -->
+<div class="section">
+  <h3>Как начать</h3>
+  <p>1. Заходи на <a href="https://battletoads.top" style="color:#64b5f6">battletoads.top</a><br>
+  2. Регистрация - выбираешь стратегию - подключаешь API-ключ биржи<br>
+  3. Алгоритм начинает торговать. Следи за результатами в кабинете.<br><br>
+  Скидка 90% для ранних клиентов.<br>
+  Вопросы: Telegram <a href="https://t.me/yakovbyakov" style="color:#64b5f6">@yakovbyakov</a></p>
+</div>
+
+<p class="disclaimer">Прошлая доходность не гарантирует будущих результатов. Торговля крипто-деривативами несет высокий риск потери капитала. Метрики витрины за 90 дней на дату 19.04.2026, включая комиссии и проскальзывание.</p>
+
+<button class="copy-btn" onclick="copyAll(this)">Копировать весь текст</button>
+</div>
+
+<script>
+function copyAll(btn) {
+  const range = document.createRange();
+  range.selectNodeContents(document.querySelector('.container'));
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+  document.execCommand('copy');
+  sel.removeAllRanges();
+  btn.textContent = 'Скопировано!';
+  btn.classList.add('done');
+  setTimeout(() => { btn.textContent = 'Копировать весь текст'; btn.classList.remove('done'); }, 2000);
+}
+</script>
+
+</body>
+</html>

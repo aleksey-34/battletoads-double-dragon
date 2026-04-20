@@ -2489,6 +2489,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [summary, setSummary] = useState<SaasSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
   const [summaryError, setSummaryError] = useState('');
+  const [observabilityAlerts, setObservabilityAlerts] = useState<Array<Record<string, any>>>([]);
+  const [observabilityAlertsLoading, setObservabilityAlertsLoading] = useState(false);
   const [reportPeriod, setReportPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [performanceReport, setPerformanceReport] = useState<AdminPerformanceReport | null>(null);
   const [performanceReportLoading, setPerformanceReportLoading] = useState(false);
@@ -3907,6 +3909,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const loadObservabilityAlerts = async () => {
+    setObservabilityAlertsLoading(true);
+    try {
+      const response = await axios.get<{ alerts?: Array<Record<string, any>> }>('/api/saas/observability/alerts');
+      setObservabilityAlerts(Array.isArray(response.data?.alerts) ? response.data.alerts : []);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to load observability alerts'));
+    } finally {
+      setObservabilityAlertsLoading(false);
+    }
+  };
+
   const loadSweepReviewCandidates = async () => {
     setActionLoading('load-sweep-review');
     try {
@@ -4733,6 +4747,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdminSurface, activeTab, adminTab, summary?.offerStore, summary?.sweepSummary, summary?.catalog]);
+
+  useEffect(() => {
+    if (!isAdminSurface || activeTab !== 'admin' || adminTab !== 'offer-ts') {
+      return;
+    }
+    void loadObservabilityAlerts();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAdminSurface, activeTab, adminTab]);
 
   useEffect(() => {
     setClientsClassValue('');
@@ -8151,6 +8173,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           {!summary?.catalog ? <Alert type="warning" showIcon message={copy.noCatalog} /> : null}
                           {!summary?.sweepSummary ? <Alert type="warning" showIcon message={copy.noSweep} /> : null}
                           {summaryPeriod ? <Alert type="info" showIcon message={`${copy.period}: ${formatPeriodLabel(summaryPeriod)}`} /> : null}
+                          <Card className="battletoads-card" size="small" title="Observability: key conflicts and mode alerts" extra={<Button size="small" loading={observabilityAlertsLoading} onClick={() => void loadObservabilityAlerts()}>Refresh</Button>}>
+                            {observabilityAlerts.length === 0 ? (
+                              <Alert type="success" showIcon message="Конфликтов и критических несоответствий не найдено" />
+                            ) : (
+                              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                {observabilityAlerts.slice(0, 20).map((item, index) => (
+                                  <Alert
+                                    key={`${String(item.type || 'alert')}-${String(item.tenantId || '')}-${index}`}
+                                    type={String(item.severity || '') === 'high' ? 'error' : 'warning'}
+                                    showIcon
+                                    message={`${String(item.type || 'alert')} · tenant ${String(item.tenantSlug || item.tenantId || '')}`}
+                                    description={item.apiKeyName ? `API key: ${String(item.apiKeyName)}` : undefined}
+                                  />
+                                ))}
+                              </Space>
+                            )}
+                          </Card>
                           {summary?.catalog?.apiKeyName ? (
                             <Alert
                               type="success"

@@ -469,6 +469,17 @@ export const initDB = async () => {
       FOREIGN KEY (tenant_id) REFERENCES tenants(id)
     );
 
+    CREATE TABLE IF NOT EXISTS strategy_client_custom_ts_drafts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL UNIQUE,
+      selected_offer_ids_json TEXT DEFAULT '[]',
+      op_value INTEGER DEFAULT 1,
+      assigned_api_key_name TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
     CREATE TABLE IF NOT EXISTS algofund_profiles (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL UNIQUE,
@@ -608,6 +619,9 @@ export const initDB = async () => {
 
     CREATE INDEX IF NOT EXISTS idx_strategy_client_system_profiles_tenant
       ON strategy_client_system_profiles (tenant_id, is_active, updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_strategy_client_custom_ts_drafts_tenant
+      ON strategy_client_custom_ts_drafts (tenant_id, updated_at DESC);
 
     CREATE INDEX IF NOT EXISTS idx_saas_audit_tenant
       ON saas_audit_log (tenant_id, created_at DESC);
