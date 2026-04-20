@@ -213,6 +213,19 @@ type ClientCustomTsSystemItem = {
   updatedAt?: string | null;
 };
 
+type ClientCustomTsSystemPreview = {
+  profileId: number;
+  profileName: string;
+  selectedOffersCount: number;
+  summary?: {
+    totalReturnPercent?: number;
+    maxDrawdownPercent?: number;
+    profitFactor?: number;
+    tradesCount?: number;
+  } | null;
+  updatedAt?: string;
+};
+
 type AlgofundRequest = {
   id: number;
   request_type: 'start' | 'stop';
@@ -681,6 +694,7 @@ const ClientCabinet: React.FC = () => {
   const [customTsPreviewLoading, setCustomTsPreviewLoading] = useState(false);
   const [customTsGuideOpen, setCustomTsGuideOpen] = useState(false);
   const [customTsSystems, setCustomTsSystems] = useState<ClientCustomTsSystemItem[]>([]);
+  const [customTsSystemPreviews, setCustomTsSystemPreviews] = useState<Record<number, ClientCustomTsSystemPreview>>({});
 
   const strategyState = workspace?.strategyState || null;
   const algofundState = workspace?.algofundState || null;
@@ -910,6 +924,31 @@ const ClientCabinet: React.FC = () => {
       setCustomTsSystems(Array.isArray(response.data?.items) ? response.data.items : []);
     } catch {
       setCustomTsSystems([]);
+    }
+  };
+
+  const runCustomTsSystemPreview = async (profileId: number) => {
+    setActionLoading(`custom-ts-system-preview-${profileId}`);
+    try {
+      const response = await axios.post<ClientCustomTsSystemPreview>(`/api/client/strategy/custom-ts-systems/${profileId}/preview`, {
+        riskLevel: sliderValueToLevel(strategyRiskInput),
+        tradeFrequencyLevel: sliderValueToLevel(strategyTradeInput),
+        riskScore: strategyRiskInput,
+        tradeFrequencyScore: strategyTradeInput,
+      });
+      const preview: ClientCustomTsSystemPreview = {
+        profileId: Number(response.data?.profileId || profileId),
+        profileName: String(response.data?.profileName || ''),
+        selectedOffersCount: Number(response.data?.selectedOffersCount || 0),
+        summary: response.data?.summary || null,
+        updatedAt: String(response.data?.updatedAt || new Date().toISOString()),
+      };
+      setCustomTsSystemPreviews((current) => ({ ...current, [profileId]: preview }));
+      messageApi.success('Preview кастом ТС пересчитан.');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось пересчитать preview кастом ТС'));
+    } finally {
+      setActionLoading('');
     }
   };
 
@@ -2040,39 +2079,84 @@ const ClientCabinet: React.FC = () => {
             {customTsSystems.length === 0 ? (
               <Empty description="Список пока пуст. Сохраните ТС из черновика." />
             ) : (
-              <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                {customTsSystems.map((item) => (
-                  <Space key={`custom-system-${item.id}`} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
-                    <Space direction="vertical" size={2}>
-                      <Typography.Text strong>{item.profileName || `Custom TS ${item.id}`}</Typography.Text>
-                      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-                        Офферов: {item.selectedOffersCount} • ID: {item.id}
-                      </Typography.Text>
-                    </Space>
-                    <Space wrap>
-                      <Tag color={item.status === 'running' ? 'success' : 'default'}>{item.status === 'running' ? 'running' : 'saved'}</Tag>
-                      {item.canStart ? (
-                        <Button
-                          size="small"
-                          type="primary"
-                          loading={actionLoading === `custom-ts-system-start-${item.id}`}
-                          onClick={() => void startClientCustomTsSystemById(item.id)}
-                        >
-                          Запустить
-                        </Button>
-                      ) : null}
-                      {item.canStop ? (
-                        <Button
-                          size="small"
-                          danger
-                          loading={actionLoading === `custom-ts-system-stop-${item.id}`}
-                          onClick={() => void stopClientCustomTsSystemById(item.id)}
-                        >
-                          Остановить
-                        </Button>
-                      ) : null}
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                <Card size="small" bordered>
+                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                    <Typography.Text strong style={{ fontSize: 12 }}>Параметры пересчета preview</Typography.Text>
+                    <Space wrap style={{ width: '100%' }}>
+                      <div style={{ minWidth: 220 }}>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>Риск: {sliderValueToLevel(strategyRiskInput)} ({strategyRiskInput.toFixed(1)})</Typography.Text>
+                        <Slider min={0} max={10} step={0.1} value={strategyRiskInput} onChange={(v) => setStrategyRiskInput(toFinite(v))} />
+                      </div>
+                      <div style={{ minWidth: 220 }}>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>Частота сделок: {sliderValueToLevel(strategyTradeInput)} ({strategyTradeInput.toFixed(1)})</Typography.Text>
+                        <Slider min={0} max={10} step={0.1} value={strategyTradeInput} onChange={(v) => setStrategyTradeInput(toFinite(v))} />
+                      </div>
                     </Space>
                   </Space>
+                </Card>
+                {customTsSystems.map((item) => (
+                  <Card key={`custom-system-${item.id}`} size="small" bordered style={item.status === 'running' ? { borderColor: '#f5a623', borderWidth: 2 } : undefined}>
+                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                      <Space direction="vertical" size={2}>
+                        <Space wrap>
+                          <Typography.Text strong style={{ fontSize: 12 }}>{item.profileName || `Custom TS ${item.id}`}</Typography.Text>
+                          <Tag color={item.status === 'running' ? 'success' : 'default'}>{item.status === 'running' ? 'running' : 'saved'}</Tag>
+                        </Space>
+                        <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                          Офферов: {item.selectedOffersCount} • ID: {item.id}
+                        </Typography.Text>
+                      </Space>
+
+                      <Space size={4} wrap>
+                        {customTsSystemPreviews[item.id]?.summary?.totalReturnPercent !== undefined ? (
+                          <Tag color="gold" style={{ fontSize: 11 }}>Ret {formatPercent(customTsSystemPreviews[item.id]?.summary?.totalReturnPercent)}</Tag>
+                        ) : null}
+                        {customTsSystemPreviews[item.id]?.summary?.maxDrawdownPercent !== undefined ? (
+                          <Tag color="volcano" style={{ fontSize: 11 }}>DD {formatPercent(customTsSystemPreviews[item.id]?.summary?.maxDrawdownPercent)}</Tag>
+                        ) : null}
+                        {customTsSystemPreviews[item.id]?.summary?.profitFactor !== undefined ? (
+                          <Tag color="orange" style={{ fontSize: 11 }}>PF {formatNumber(customTsSystemPreviews[item.id]?.summary?.profitFactor)}</Tag>
+                        ) : null}
+                        {customTsSystemPreviews[item.id]?.summary?.tradesCount !== undefined ? (
+                          <Tag color="cyan" style={{ fontSize: 11 }}>{formatNumber(customTsSystemPreviews[item.id]?.summary?.tradesCount, 0)} сд.</Tag>
+                        ) : null}
+                        {customTsSystemPreviews[item.id]?.updatedAt ? (
+                          <Tag style={{ fontSize: 11 }}>{String(customTsSystemPreviews[item.id]?.updatedAt || '').slice(0, 16).replace('T', ' ')}</Tag>
+                        ) : null}
+                      </Space>
+
+                      <Space wrap>
+                        <Button
+                          size="small"
+                          loading={actionLoading === `custom-ts-system-preview-${item.id}`}
+                          onClick={() => void runCustomTsSystemPreview(item.id)}
+                        >
+                          Пересчитать preview
+                        </Button>
+                        {item.canStart ? (
+                          <Button
+                            size="small"
+                            type="primary"
+                            loading={actionLoading === `custom-ts-system-start-${item.id}`}
+                            onClick={() => void startClientCustomTsSystemById(item.id)}
+                          >
+                            Запустить
+                          </Button>
+                        ) : null}
+                        {item.canStop ? (
+                          <Button
+                            size="small"
+                            danger
+                            loading={actionLoading === `custom-ts-system-stop-${item.id}`}
+                            onClick={() => void stopClientCustomTsSystemById(item.id)}
+                          >
+                            Остановить
+                          </Button>
+                        ) : null}
+                      </Space>
+                    </Space>
+                  </Card>
                 ))}
               </Space>
             )}

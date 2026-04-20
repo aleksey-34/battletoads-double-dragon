@@ -9577,6 +9577,48 @@ export const stopClientCustomTsSystem = async (tenantId: number, profileId: numb
   return listClientCustomTsSystemsState(tenantId);
 };
 
+export const previewClientCustomTsSystemById = async (
+  tenantId: number,
+  profileId: number,
+  payload?: {
+    riskLevel?: Level3;
+    tradeFrequencyLevel?: Level3;
+    riskScore?: number;
+    tradeFrequencyScore?: number;
+  }
+) => {
+  const state = await getStrategyClientState(tenantId);
+  const target = (state.systemProfiles || []).find((item) => Number(item.id || 0) === profileId);
+  if (!target) {
+    throw new Error(`Кастом ТС не найден: ${profileId}`);
+  }
+
+  const selectedOfferIds = Array.isArray(target.selectedOfferIds)
+    ? target.selectedOfferIds.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  if (selectedOfferIds.length === 0) {
+    throw new Error('У этой кастом ТС нет выбранных офферов для бэктеста.');
+  }
+
+  const preview = await previewStrategyClientSelection(tenantId, {
+    selectedOfferIds,
+    riskLevel: payload?.riskLevel,
+    tradeFrequencyLevel: payload?.tradeFrequencyLevel,
+    riskScore: payload?.riskScore,
+    tradeFrequencyScore: payload?.tradeFrequencyScore,
+  });
+
+  return {
+    tenantId,
+    profileId,
+    profileName: target.profileName,
+    selectedOffersCount: selectedOfferIds.length,
+    summary: preview?.preview?.summary || null,
+    preview: preview?.preview || null,
+    updatedAt: new Date().toISOString(),
+  };
+};
+
 export const getSaasObservabilityAlerts = async () => {
   const [tenantsRows, strategyRows, algofundRows, customRows, switchRows] = await Promise.all([
     db.all('SELECT id, slug, display_name FROM tenants ORDER BY id ASC'),

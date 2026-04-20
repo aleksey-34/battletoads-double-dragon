@@ -77,6 +77,7 @@ import {
 import {
   getAlgofundState,
   listClientCustomTsSystemsState,
+  previewClientCustomTsSystemById,
   saveClientCustomTsSystemFromDraft,
   startClientCustomTsSystem,
   stopClientCustomTsSystem,
@@ -982,6 +983,38 @@ router.post('/client/strategy/custom-ts-systems/:profileId/stop', authenticateCl
   } catch (error) {
     const err = error as Error;
     logger.error(`Client custom TS stop error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/client/strategy/custom-ts-systems/:profileId/preview', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+    const profileId = Math.max(1, Math.floor(Number(req.params.profileId || 0)));
+    if (!Number.isFinite(profileId) || profileId <= 0) {
+      return res.status(400).json({ error: 'Invalid profileId' });
+    }
+
+    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+    }
+    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+    }
+
+    const data = await previewClientCustomTsSystemById(Number(session.user.tenantId), profileId, {
+      riskLevel: req.body?.riskLevel,
+      tradeFrequencyLevel: req.body?.tradeFrequencyLevel,
+      riskScore: toOptionalNumber(req.body?.riskScore),
+      tradeFrequencyScore: toOptionalNumber(req.body?.tradeFrequencyScore),
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client custom TS profile preview error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
