@@ -10591,6 +10591,7 @@ const applyApprovedAlgofundAction = async (params: {
            SET is_runtime = 1,
                is_archived = 0,
                is_active = 1,
+               auto_update = 1,
                origin = CASE
                  WHEN COALESCE(origin, '') IN ('', 'manual') THEN 'card_materialized'
                  ELSE origin

@@ -2044,6 +2044,7 @@ router.post('/cards/materialize/:targetApiKeyName', async (req, res) => {
       `UPDATE strategies
        SET is_runtime = 1,
            is_archived = 0,
+           auto_update = 1,
            origin = CASE
              WHEN COALESCE(origin, '') IN ('', 'manual') THEN 'card_materialized'
              ELSE origin
