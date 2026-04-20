@@ -600,7 +600,7 @@ const tsDisplayName = (systemName: string): string => {
 const capabilityTag = (label: string, enabled: boolean) => <Tag color={enabled ? 'success' : 'default'}>{label}: {enabled ? 'on' : 'off'}</Tag>;
 
 const CLIENT_STOREFRONT_PAGE_SIZE = 24;
-type ClientCabinetTabKey = 'strategy' | 'algofund' | 'settings';
+type ClientCabinetTabKey = 'strategy' | 'algofund' | 'custom-ts' | 'settings';
 
 const ClientCabinet: React.FC = () => {
   const { t } = useI18n();
@@ -666,6 +666,7 @@ const ClientCabinet: React.FC = () => {
   const [betaAssignedApiKeyName, setBetaAssignedApiKeyName] = useState('');
   const [customTsPreview, setCustomTsPreview] = useState<CustomTsDraftPreviewResponse | null>(null);
   const [customTsPreviewLoading, setCustomTsPreviewLoading] = useState(false);
+  const [customTsGuideOpen, setCustomTsGuideOpen] = useState(false);
 
   const strategyState = workspace?.strategyState || null;
   const algofundState = workspace?.algofundState || null;
@@ -811,6 +812,13 @@ const ClientCabinet: React.FC = () => {
     (algofundStorefrontPage - 1) * CLIENT_STOREFRONT_PAGE_SIZE,
     algofundStorefrontPage * CLIENT_STOREFRONT_PAGE_SIZE,
   );
+
+  const customTsSelectedOffers = useMemo(() => {
+    const byId = new Map((strategyWorkspace?.offers || []).map((offer) => [offer.offerId, offer]));
+    return betaSelectedOfferIds
+      .map((offerId) => byId.get(offerId))
+      .filter((offer): offer is StrategyOffer => Boolean(offer));
+  }, [strategyWorkspace?.offers, betaSelectedOfferIds]);
 
   const closeStrategyOfferModal = () => {
     setStrategyOfferDetail(null);
@@ -1592,94 +1600,17 @@ const ClientCabinet: React.FC = () => {
           </Card>
 
           {clientTsBetaEnabled ? (
-            <Card className="battletoads-card" title="Мои ТС (beta)" size="small">
-              <Space direction="vertical" size={10} style={{ width: '100%' }}>
-                <Alert
-                  type="info"
-                  showIcon
-                  message="Собственная ТС: backend draft + dry-run preview"
-                  description="Черновик сохраняется в backend, а preview показывает dry-run backtest и предварительную materialization-структуру без запуска runtime."
-                />
-                <Space wrap>
-                  <Tag color="blue">Выбрано: {betaSelectedOfferIds.length}</Tag>
-                  <Tag color={isBetaSelectionOverLimit ? 'error' : 'success'}>
-                    Лимит тарифа: до {strategyMaxAllowed || 0}
-                  </Tag>
-                  {betaAssignedApiKeyName ? <Tag color="geekblue">API для собственной ТС: {betaAssignedApiKeyName}</Tag> : <Tag color="warning">API для собственной ТС не назначен</Tag>}
+            <Alert
+              type="info"
+              showIcon
+              message="Кастом ТС теперь в отдельной вкладке"
+              description={(
+                <Space>
+                  <Typography.Text>Перейдите во вкладку «Кастом ТС» для бэктеста, сохранения черновика и запуска.</Typography.Text>
+                  <Button size="small" type="link" onClick={() => setActiveTabKey('custom-ts')}>Открыть</Button>
                 </Space>
-                <Select
-                  style={{ width: '100%' }}
-                  value={betaAssignedApiKeyName || undefined}
-                  placeholder="Выберите отдельный API ключ для собственной ТС (beta)"
-                  onChange={(value) => setBetaAssignedApiKeyName(String(value || ''))}
-                  options={betaApiKeyOptions.map((item) => ({ value: item.name, label: `${item.name} (${item.exchange})` }))}
-                />
-                {isBetaSelectionOverLimit ? (
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message={`Превышен лимит тарифа: выбрано ${betaSelectedOfferIds.length}, разрешено ${strategyMaxAllowed}.`}
-                  />
-                ) : null}
-                <Checkbox.Group
-                  style={{ width: '100%' }}
-                  value={betaSelectedOfferIds}
-                  onChange={(values) => setBetaSelectedOfferIds(values.map((value) => String(value)))}
-                >
-                  <Row gutter={[8, 8]}>
-                    {(strategyWorkspace.offers || []).map((offer) => (
-                      <Col key={`beta-${offer.offerId}`} xs={24} sm={12} lg={8}>
-                        <Card size="small" bordered style={betaSelectedOfferIds.includes(offer.offerId) ? { borderColor: '#f5a623', borderWidth: 2 } : undefined}>
-                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                            <Checkbox value={offer.offerId}>{offer.titleRu}</Checkbox>
-                            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-                              {offer.strategy.mode.toUpperCase()} • {offer.strategy.market} • {String(offer.strategy.params?.interval || '1h')}
-                            </Typography.Text>
-                          </Space>
-                        </Card>
-                      </Col>
-                    ))}
-                  </Row>
-                </Checkbox.Group>
-                <Input
-                  value={betaOpInput}
-                  onChange={(event) => setBetaOpInput(event.target.value)}
-                  placeholder="OP (операционный параметр), например: 250"
-                />
-                <Space wrap>
-                  <Button type="primary" loading={actionLoading === 'custom-ts-draft-save'} onClick={() => void saveClientTsBetaDraft()} disabled={isBetaSelectionOverLimit}>
-                    Сохранить beta-черновик
-                  </Button>
-                  <Button loading={customTsPreviewLoading} onClick={() => void runCustomTsPreview()} disabled={isBetaSelectionOverLimit || betaSelectedOfferIds.length === 0}>
-                    Dry-run preview
-                  </Button>
-                  <Button
-                    onClick={() => {
-                      setBetaSelectedOfferIds(Array.isArray(strategyWorkspace.profile?.selectedOfferIds) ? (strategyWorkspace.profile?.selectedOfferIds || []) : []);
-                      setBetaOpInput('');
-                      setBetaAssignedApiKeyName('');
-                      setCustomTsPreview(null);
-                    }}
-                  >
-                    Сбросить
-                  </Button>
-                </Space>
-                {customTsPreview ? (
-                  <Card size="small" title="Materialization preview (без запуска)" bordered>
-                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                      <Typography.Text type="secondary">
-                        Dry-run стратегий: {customTsPreview.dryRun?.selectedOffers?.length || 0}
-                      </Typography.Text>
-                      {(customTsPreview.materializationPreview || []).slice(0, 8).map((item) => (
-                        <Typography.Text key={`${item.offerId}-${item.strategyId}`} style={{ fontSize: 12 }}>
-                          {item.strategyName || item.offerId} -&gt; {item.runtimeName || 'runtime name pending'}
-                        </Typography.Text>
-                      ))}
-                    </Space>
-                  </Card>
-                ) : null}
-              </Space>
-            </Card>
+              )}
+            />
           ) : null}
 
           {/* Strategy offer detail modal */}
@@ -1893,6 +1824,134 @@ const ClientCabinet: React.FC = () => {
           />
         </Card>
       )}
+    </Space>
+  );
+
+  const customTsTabContent = (
+    <Space direction="vertical" size={16} style={{ width: '100%' }}>
+      <Card className="battletoads-card" title="Кастом ТС" size="small">
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="Собственная ТС: шаги Compose → Backtest → Save → Start"
+            description="Показываем только выбранные офферы. Выберите отдельный API-ключ, проведите бэктест, затем сохраните черновик ТС и после этого запускайте торговлю."
+          />
+          <Space wrap>
+            <Tag color="blue">Выбрано: {betaSelectedOfferIds.length}</Tag>
+            <Tag color={isBetaSelectionOverLimit ? 'error' : 'success'}>Лимит тарифа: до {strategyMaxAllowed || 0}</Tag>
+            {betaAssignedApiKeyName
+              ? <Tag color="geekblue">API для кастом ТС: {betaAssignedApiKeyName}</Tag>
+              : <Tag color="warning">Назначьте отдельный API для кастом ТС</Tag>}
+            <Button size="small" onClick={() => setCustomTsGuideOpen(true)}>Квик-гайд</Button>
+          </Space>
+
+          <Select
+            mode="multiple"
+            allowClear
+            style={{ width: '100%' }}
+            value={betaSelectedOfferIds}
+            placeholder="Добавьте офферы в кастом ТС"
+            onChange={(values) => setBetaSelectedOfferIds(values.map((value) => String(value || '')).filter(Boolean))}
+            options={(strategyWorkspace?.offers || []).map((offer) => ({
+              value: offer.offerId,
+              label: `${offer.titleRu} · ${offer.strategy.market} · ${String(offer.strategy.params?.interval || '1h')}`,
+            }))}
+          />
+
+          <Select
+            style={{ width: '100%' }}
+            value={betaAssignedApiKeyName || undefined}
+            placeholder="Выберите отдельный API-ключ для кастом ТС"
+            onChange={(value) => setBetaAssignedApiKeyName(String(value || ''))}
+            options={betaApiKeyOptions.map((item) => ({ value: item.name, label: `${item.name} (${item.exchange})` }))}
+          />
+
+          <Input
+            value={betaOpInput}
+            onChange={(event) => setBetaOpInput(event.target.value)}
+            placeholder="OP (операционный параметр), например: 250"
+          />
+
+          {isBetaSelectionOverLimit ? (
+            <Alert
+              type="warning"
+              showIcon
+              message={`Превышен лимит тарифа: выбрано ${betaSelectedOfferIds.length}, разрешено ${strategyMaxAllowed}.`}
+            />
+          ) : null}
+
+          <Card size="small" title="Выбранные офферы в кастом ТС" bordered>
+            {customTsSelectedOffers.length === 0 ? (
+              <Empty description="Пока ничего не выбрано" />
+            ) : (
+              <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                {customTsSelectedOffers.map((offer) => (
+                  <Space key={`custom-selected-${offer.offerId}`} wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+                    <Typography.Text strong style={{ fontSize: 12 }}>{offer.titleRu}</Typography.Text>
+                    <Space wrap size={4}>
+                      <Tag>{offer.strategy.mode.toUpperCase()} • {offer.strategy.market}</Tag>
+                      <Tag>{String(offer.strategy.params?.interval || '1h')}</Tag>
+                      <Tag color="gold">Ret {formatPercent(offer.metrics.ret)}</Tag>
+                      <Tag color="volcano">DD {formatPercent(offer.metrics.dd)}</Tag>
+                      <Tag color="orange">PF {formatNumber(offer.metrics.pf)}</Tag>
+                    </Space>
+                  </Space>
+                ))}
+              </Space>
+            )}
+          </Card>
+
+          <Space wrap>
+            <Button
+              loading={customTsPreviewLoading}
+              onClick={() => void runCustomTsPreview()}
+              disabled={isBetaSelectionOverLimit || betaSelectedOfferIds.length === 0}
+            >
+              Провести бэктест кастом ТС
+            </Button>
+            <Button
+              type="primary"
+              loading={actionLoading === 'custom-ts-draft-save'}
+              onClick={() => void saveClientTsBetaDraft()}
+              disabled={isBetaSelectionOverLimit || betaSelectedOfferIds.length === 0}
+            >
+              Сохранить ТС из черновика
+            </Button>
+            <Button type="dashed" disabled={!betaAssignedApiKeyName || betaSelectedOfferIds.length === 0} onClick={() => setActiveTabKey('strategy')}>
+              Запустить (перейти в Управление торговлей)
+            </Button>
+          </Space>
+
+          {customTsPreview ? (
+            <Card size="small" title="Результат бэктеста и preview materialization" bordered>
+              <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                <Typography.Text type="secondary">Стратегий в бэктесте: {customTsPreview.dryRun?.selectedOffers?.length || 0}</Typography.Text>
+                {(customTsPreview.materializationPreview || []).slice(0, 8).map((item) => (
+                  <Typography.Text key={`${item.offerId}-${item.strategyId}`} style={{ fontSize: 12 }}>
+                    {item.strategyName || item.offerId} -&gt; {item.runtimeName || 'runtime name pending'}
+                  </Typography.Text>
+                ))}
+              </Space>
+            </Card>
+          ) : null}
+        </Space>
+      </Card>
+
+      <Modal
+        title="Квик-гайд: Кастом ТС"
+        open={customTsGuideOpen}
+        onCancel={() => setCustomTsGuideOpen(false)}
+        footer={<Button type="primary" onClick={() => setCustomTsGuideOpen(false)}>Понятно</Button>}
+      >
+        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+          <Typography.Text>1. Добавьте нужные офферы в состав ТС.</Typography.Text>
+          <Typography.Text>2. Назначьте отдельный API-ключ, не занятый Стратегиями/Алгофондом.</Typography.Text>
+          <Typography.Text>3. Нажмите «Провести бэктест кастом ТС» и проверьте метрики.</Typography.Text>
+          <Typography.Text>4. Сохраните конфигурацию кнопкой «Сохранить ТС из черновика».</Typography.Text>
+          <Typography.Text>5. После сохранения перейдите к запуску торговли.</Typography.Text>
+        </Space>
+      </Modal>
     </Space>
   );
 
@@ -2624,6 +2683,11 @@ const ClientCabinet: React.FC = () => {
                 label: 'Алгофонд',
                 children: algofundTabContent,
               },
+              ...(clientTsBetaEnabled ? [{
+                key: 'custom-ts',
+                label: 'Кастом ТС',
+                children: customTsTabContent,
+              }] : []),
               {
                 key: 'settings',
                 label: 'Настройки и мониторинг',
