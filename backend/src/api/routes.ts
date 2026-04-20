@@ -143,6 +143,7 @@ const STRATEGY_PATCH_ALLOWED_FIELDS = new Set<string>([
 ]);
 
 const CLIENT_GUIDES_ROOT_DIR = path.resolve(__dirname, '../../..', 'docs', 'exchange-guides');
+const CLIENT_GUIDES_IMAGES_DIR = path.join(CLIENT_GUIDES_ROOT_DIR, 'images');
 const REPO_ROOT_DIR = path.resolve(__dirname, '../../..');
 const ADMIN_DOCS_EXCLUDED_DIR_NAMES = new Set([
   '.git',
@@ -532,9 +533,51 @@ router.get('/client/guides', authenticateClient, async (_req, res) => {
     id: guide.id,
     title: guide.title,
     downloadUrl: `/api/client/guides/${guide.id}`,
+    contentUrl: `/api/client/guides/${guide.id}/content`,
   }));
 
   res.json({ success: true, guides });
+});
+
+router.get('/client/guides/assets/:fileName', authenticateClient, async (req, res) => {
+  const fileName = path.basename(String(req.params.fileName || '').trim());
+  const lowerName = fileName.toLowerCase();
+  if (!lowerName || !/\.(svg|png|jpg|jpeg|webp)$/i.test(lowerName)) {
+    return res.status(400).json({ error: 'Invalid guide asset file' });
+  }
+
+  const filePath = path.join(CLIENT_GUIDES_IMAGES_DIR, fileName);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Guide asset not found' });
+  }
+
+  return res.sendFile(filePath);
+});
+
+router.get('/client/guides/:exchangeId/content', authenticateClient, async (req, res) => {
+  const exchangeId = String(req.params.exchangeId || '').trim().toLowerCase();
+  const guide = CLIENT_EXCHANGE_GUIDES[exchangeId];
+
+  if (!guide) {
+    return res.status(404).json({ error: 'Guide not found' });
+  }
+
+  const filePath = path.join(CLIENT_GUIDES_ROOT_DIR, guide.fileName);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).json({ error: 'Guide file not found' });
+  }
+
+  const rawContent = fs.readFileSync(filePath, 'utf-8');
+  const content = rawContent.replace(/\]\(images\/([^\)]+)\)/gi, '](/api/client/guides/assets/$1)');
+
+  return res.json({
+    success: true,
+    guide: {
+      id: guide.id,
+      title: guide.title,
+      content,
+    },
+  });
 });
 
 router.get('/client/guides/:exchangeId', authenticateClient, async (req, res) => {

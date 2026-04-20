@@ -1,6 +1,8 @@
 /* eslint-disable @typescript-eslint/no-unused-vars, react-hooks/exhaustive-deps */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import axios from 'axios';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   Alert,
   Button,
@@ -73,7 +75,14 @@ type Tenant = {
 type GuideItem = {
   id: string;
   title: string;
-  downloadUrl: string;
+  downloadUrl?: string;
+  contentUrl?: string;
+};
+
+type GuideContentPayload = {
+  id: string;
+  title: string;
+  content: string;
 };
 
 type ClientApiKeyDraft = {
@@ -554,6 +563,9 @@ const ClientCabinet: React.FC = () => {
   const [strategyStateExtra, setStrategyStateExtra] = useState<StrategyState | null>(null);
   const [algofundStateExtra, setAlgofundStateExtra] = useState<AlgofundState | null>(null);
   const [guides, setGuides] = useState<GuideItem[]>([]);
+  const [guideModalOpen, setGuideModalOpen] = useState(false);
+  const [guideModalTitle, setGuideModalTitle] = useState('');
+  const [guideModalContent, setGuideModalContent] = useState('');
   const [clientApiKeys, setClientApiKeys] = useState<ClientApiKeyInfo[]>([]);
   const [tariff, setTariff] = useState<TariffPayload | null>(null);
   const [targetPlanCode, setTargetPlanCode] = useState('');
@@ -1034,21 +1046,20 @@ const ClientCabinet: React.FC = () => {
     }
   };
 
-  const downloadGuide = async (guide: GuideItem) => {
+  const openGuideModal = async (guide: GuideItem) => {
     setActionLoading(`guide-${guide.id}`);
     try {
-      const response = await axios.get(guide.downloadUrl, { responseType: 'blob' });
-      const blob = new Blob([response.data], { type: 'text/markdown;charset=utf-8' });
-      const objectUrl = window.URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = objectUrl;
-      anchor.download = `${guide.id}-api-key-quick-guide.md`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.URL.revokeObjectURL(objectUrl);
+      const contentUrl = guide.contentUrl || `/api/client/guides/${guide.id}/content`;
+      const response = await axios.get<{ guide?: GuideContentPayload }>(contentUrl);
+      const payload = response.data?.guide;
+      if (!payload?.content) {
+        throw new Error('Guide content is empty');
+      }
+      setGuideModalTitle(payload.title || guide.title || 'Гайд API-ключа');
+      setGuideModalContent(payload.content);
+      setGuideModalOpen(true);
     } catch (error: any) {
-      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.onboarding.guideDownloadFailed', 'Failed to download guide')));
+      messageApi.error(String(error?.response?.data?.error || error?.message || t('client.onboarding.guideDownloadFailed', 'Failed to open guide')));
     } finally {
       setActionLoading('');
     }
@@ -1970,7 +1981,7 @@ const ClientCabinet: React.FC = () => {
                 </ol>
                 <Space wrap>
                   {guides.length > 0 ? guides.map((guide) => (
-                    <Button key={guide.id} size="small" loading={actionLoading === `guide-${guide.id}`} onClick={() => void downloadGuide(guide)}>
+                    <Button key={guide.id} size="small" loading={actionLoading === `guide-${guide.id}`} onClick={() => void openGuideModal(guide)}>
                       {guide.title}
                     </Button>
                   )) : <Tag>Гайды временно недоступны</Tag>}
@@ -1981,12 +1992,24 @@ const ClientCabinet: React.FC = () => {
         ) : guides.length > 0 ? (
           <Space wrap style={{ marginBottom: 12 }}>
             {guides.map((guide) => (
-              <Button key={guide.id} size="small" loading={actionLoading === `guide-${guide.id}`} onClick={() => void downloadGuide(guide)}>
+              <Button key={guide.id} size="small" loading={actionLoading === `guide-${guide.id}`} onClick={() => void openGuideModal(guide)}>
                 {guide.title}
               </Button>
             ))}
           </Space>
         ) : null}
+
+        <Modal
+          title={guideModalTitle || 'Гайд API-ключа'}
+          open={guideModalOpen}
+          onCancel={() => setGuideModalOpen(false)}
+          footer={null}
+          width={860}
+        >
+          <div className="docs-markdown-body">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{guideModalContent}</ReactMarkdown>
+          </div>
+        </Modal>
 
         <Typography.Text strong>
           {editingApiKeyId ? `Редактировать ключ: ${editingApiKeyName}` : 'Добавить новый ключ'}
