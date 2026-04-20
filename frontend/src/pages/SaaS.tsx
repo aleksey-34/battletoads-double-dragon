@@ -3740,6 +3740,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       hasSnapshotCurve: snapshotCurve.length > 1,
       hasAnyCurve: snapshotCurve.length > 1 || publishEquityCurve.length > 1 || (tenantCurves[0] || safeLatestBacktestCurve).length > 1,
       runtimeSystemId,
+      isPublished: isStorefrontEnabled,
+      isCurated: Boolean(snapshotForSystem),
       summary: snapshotSummary || publishSummary || fallbackSummary || safeLatestBacktestSummary || null,
       equityCurve: snapshotCurve.length > 1
         ? snapshotCurve
@@ -10503,6 +10505,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       ) : (
                                         <Space direction="vertical" size={8} style={{ width: '100%' }}>
                                           <Tag color="success">Опубликованные TS: {algofundStorefrontSystems.length}</Tag>
+                                          <Tag color="default">Неопубликованные TS: {algofundStorefrontSystems.filter((row: any) => !row.isPublished).length}</Tag>
                                           <Text>Витринные TS офферы синхронизированы и доступны в карточках ниже</Text>
                                           <Text type="secondary">Клиентов с привязанной TS: {algofundTenantsWithPublishedTs.length}</Text>
                                         </Space>
@@ -10529,6 +10532,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                               >
                                                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                                                   <Space wrap>
+                                                    {item.isCurated ? <Tag color="blue">✓ curated</Tag> : <Tag color="default">not curated</Tag>}
+                                                    {item.isPublished ? <Tag color="success">✓ published</Tag> : <Tag color="warning">not published</Tag>}
                                                     <Tag color="blue">clients {Number(item.tenantCount || 0)}</Tag>
                                                     <Tag color="green">active {Number(item.activeCount || 0)}</Tag>
                                                     {item.pendingCount > 0 ? <Tag color="gold">pending {item.pendingCount}</Tag> : null}
