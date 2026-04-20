@@ -9986,7 +9986,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <>
                           {/* Клиентская витрина Стратегий */}
                           {curatedStorefrontOffers.length > 0 ? (
-                            <Card className="battletoads-card" title="Витрина стратегий" style={{ marginBottom: 16 }}>
+                            <Card className="battletoads-card" title={<span className="storefront-title-accent">Витрина стратегий</span>} style={{ marginBottom: 16 }}>
                               <List
                                 grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
                                 dataSource={curatedStorefrontOffers}

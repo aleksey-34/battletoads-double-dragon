@@ -35,3 +35,6 @@
 - Экран создания API-ключа.
 - Экран разрешений (`Read/Trade`, без `Withdraw`).
 - Экран whitelist IP.
+
+## Шаблон скриншота
+![Bitget API template](images/bitget-api-key-template.svg)

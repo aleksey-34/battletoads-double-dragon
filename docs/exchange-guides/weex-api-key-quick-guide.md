@@ -34,3 +34,6 @@
 - Создание ключа.
 - Раздел прав доступа.
 - Раздел whitelist IP.
+
+## Шаблон скриншота
+![WEEX API template](images/weex-api-key-template.svg)

@@ -34,3 +34,6 @@
 - Создание API-ключа.
 - Раздел прав доступа.
 - Раздел trusted IPs.
+
+## Шаблон скриншота
+![Binance API template](images/binance-api-key-template.svg)

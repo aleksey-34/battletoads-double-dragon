@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <rect width="1280" height="720" fill="#f8fafc"/>
+  <rect x="40" y="36" width="1200" height="648" rx="16" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="72" y="88" font-size="34" font-family="Segoe UI, Arial" fill="#0f172a">Binance - API Key Setup (Template Screenshot)</text>
+  <rect x="72" y="120" width="520" height="540" rx="12" fill="#fff7ed" stroke="#fed7aa"/>
+  <text x="96" y="166" font-size="24" font-family="Segoe UI, Arial" fill="#9a3412">Required rights</text>
+  <text x="96" y="210" font-size="21" font-family="Segoe UI, Arial" fill="#166534">[x] Enable Reading</text>
+  <text x="96" y="246" font-size="21" font-family="Segoe UI, Arial" fill="#166534">[x] Enable Futures</text>
+  <text x="96" y="282" font-size="21" font-family="Segoe UI, Arial" fill="#b91c1c">[ ] Enable Withdrawals</text>
+  <text x="96" y="340" font-size="24" font-family="Segoe UI, Arial" fill="#9a3412">Trusted IPs</text>
+  <rect x="96" y="360" width="460" height="46" rx="8" fill="#ffffff" stroke="#fdba74"/>
+  <text x="108" y="390" font-size="20" font-family="Consolas, monospace" fill="#7c2d12">YOUR_SERVER_IP</text>
+  <rect x="632" y="120" width="576" height="540" rx="12" fill="#111827"/>
+  <text x="664" y="174" font-size="25" font-family="Segoe UI, Arial" fill="#f3f4f6">Cabinet mapping</text>
+  <text x="664" y="224" font-size="21" font-family="Segoe UI, Arial" fill="#fde68a">Exchange: Binance Futures</text>
+  <text x="664" y="262" font-size="21" font-family="Segoe UI, Arial" fill="#fde68a">API Key + Secret</text>
+  <text x="664" y="300" font-size="21" font-family="Segoe UI, Arial" fill="#fde68a">Passphrase: empty</text>
+  <text x="664" y="360" font-size="20" font-family="Segoe UI, Arial" fill="#d1d5db">Template for internal docs only.</text>
+</svg>

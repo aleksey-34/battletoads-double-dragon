@@ -34,3 +34,6 @@
 - Создание ключа API.
 - Экран прав.
 - Экран whitelist.
+
+## Шаблон скриншота
+![BingX API template](images/bingx-api-key-template.svg)

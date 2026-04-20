@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <rect width="1280" height="720" fill="#eff6ff"/>
+  <rect x="40" y="36" width="1200" height="648" rx="16" fill="#ffffff" stroke="#bfdbfe"/>
+  <text x="72" y="88" font-size="34" font-family="Segoe UI, Arial" fill="#1e3a8a">WEEX - API Key Setup (Template Screenshot)</text>
+  <rect x="72" y="120" width="540" height="540" rx="12" fill="#eef2ff" stroke="#c7d2fe"/>
+  <text x="96" y="166" font-size="24" font-family="Segoe UI, Arial" fill="#3730a3">Credentials</text>
+  <text x="96" y="210" font-size="21" font-family="Segoe UI, Arial" fill="#312e81">API Key: ************</text>
+  <text x="96" y="244" font-size="21" font-family="Segoe UI, Arial" fill="#312e81">Secret: ************</text>
+  <text x="96" y="278" font-size="21" font-family="Segoe UI, Arial" fill="#312e81">Passphrase: ************</text>
+  <text x="96" y="338" font-size="24" font-family="Segoe UI, Arial" fill="#3730a3">Permissions</text>
+  <text x="96" y="378" font-size="21" font-family="Segoe UI, Arial" fill="#166534">[x] Read + Trade</text>
+  <text x="96" y="412" font-size="21" font-family="Segoe UI, Arial" fill="#b91c1c">[ ] Withdraw</text>
+  <rect x="644" y="120" width="564" height="540" rx="12" fill="#0f172a"/>
+  <text x="676" y="174" font-size="25" font-family="Segoe UI, Arial" fill="#e2e8f0">Cabinet mapping</text>
+  <text x="676" y="224" font-size="21" font-family="Segoe UI, Arial" fill="#93c5fd">Exchange: WEEX Futures</text>
+  <text x="676" y="262" font-size="21" font-family="Segoe UI, Arial" fill="#93c5fd">Passphrase: required</text>
+  <text x="676" y="300" font-size="21" font-family="Segoe UI, Arial" fill="#93c5fd">Whitelist: required</text>
+</svg>

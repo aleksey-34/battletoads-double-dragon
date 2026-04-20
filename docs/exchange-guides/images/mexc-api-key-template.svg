@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720">
+  <rect width="1280" height="720" fill="#f0fdf4"/>
+  <rect x="40" y="36" width="1200" height="648" rx="16" fill="#ffffff" stroke="#bbf7d0"/>
+  <text x="72" y="88" font-size="34" font-family="Segoe UI, Arial" fill="#14532d">MEXC - API Key Setup (Template Screenshot)</text>
+  <rect x="72" y="120" width="540" height="540" rx="12" fill="#f7fee7" stroke="#bef264"/>
+  <text x="96" y="166" font-size="24" font-family="Segoe UI, Arial" fill="#3f6212">Permissions</text>
+  <text x="96" y="210" font-size="21" font-family="Segoe UI, Arial" fill="#166534">[x] Read</text>
+  <text x="96" y="244" font-size="21" font-family="Segoe UI, Arial" fill="#166534">[x] Trade</text>
+  <text x="96" y="278" font-size="21" font-family="Segoe UI, Arial" fill="#b91c1c">[ ] Withdraw</text>
+  <text x="96" y="338" font-size="24" font-family="Segoe UI, Arial" fill="#3f6212">Credentials</text>
+  <text x="96" y="378" font-size="21" font-family="Segoe UI, Arial" fill="#365314">API Key + Secret</text>
+  <text x="96" y="412" font-size="21" font-family="Segoe UI, Arial" fill="#365314">Passphrase: optional</text>
+  <rect x="644" y="120" width="564" height="540" rx="12" fill="#111827"/>
+  <text x="676" y="174" font-size="25" font-family="Segoe UI, Arial" fill="#f3f4f6">Cabinet mapping</text>
+  <text x="676" y="224" font-size="21" font-family="Segoe UI, Arial" fill="#86efac">Exchange: MEXC Futures</text>
+  <text x="676" y="262" font-size="21" font-family="Segoe UI, Arial" fill="#86efac">Whitelist: required</text>
+</svg>

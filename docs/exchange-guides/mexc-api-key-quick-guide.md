@@ -34,3 +34,6 @@
 - Создание API-ключа.
 - Настройка прав.
 - Настройка IP whitelist.
+
+## Шаблон скриншота
+![MEXC API template](images/mexc-api-key-template.svg)

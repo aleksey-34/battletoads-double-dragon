@@ -34,3 +34,6 @@
 - Создание ключа.
 - Разрешения API.
 - Настройка IP whitelist.
+
+## Шаблон скриншота
+![Bybit API template](images/bybit-api-key-template.svg)
