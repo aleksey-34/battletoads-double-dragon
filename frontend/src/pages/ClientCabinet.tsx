@@ -266,6 +266,7 @@ type ClientApiKeyInfo = {
 type TariffPlan = {
   code: string;
   title: string;
+  product_mode?: ProductMode;
   price_usdt: number;
   original_price_usdt: number | null;
   max_deposit_total: number;
@@ -288,6 +289,8 @@ type TariffPayload = {
   success: boolean;
   productMode: ProductMode;
   currentPlan: TariffPlan | null;
+  currentStrategyPlan?: TariffPlan | null;
+  currentAlgofundPlan?: TariffPlan | null;
   availablePlans: TariffPlan[];
   requests: TariffRequestItem[];
 };
@@ -350,6 +353,23 @@ type WorkspacePayload = {
 };
 
 const CLIENT_SESSION_STORAGE_KEY = 'clientSessionToken';
+const CLIENT_TS_BETA_FLAG_KEY = 'btddClientTsBetaEnabled';
+const CLIENT_TS_BETA_DRAFT_KEY = 'btddClientTsBetaDraft';
+
+const isClientTsBetaEnabled = (): boolean => {
+  try {
+    const fromQuery = new URLSearchParams(window.location.search).get('tsbeta');
+    if (fromQuery === '1') return true;
+    if (fromQuery === '0') return false;
+
+    const persisted = localStorage.getItem(CLIENT_TS_BETA_FLAG_KEY);
+    if (persisted === '1') return true;
+    if (persisted === '0') return false;
+  } catch {
+    // Keep beta visible by default if browser storage is unavailable.
+  }
+  return true;
+};
 
 const toFinite = (value: unknown, fallback = 0): number => {
   const numeric = Number(value);
@@ -568,6 +588,7 @@ const ClientCabinet: React.FC = () => {
   const [guideModalContent, setGuideModalContent] = useState('');
   const [clientApiKeys, setClientApiKeys] = useState<ClientApiKeyInfo[]>([]);
   const [tariff, setTariff] = useState<TariffPayload | null>(null);
+  const [tariffModeFilter, setTariffModeFilter] = useState<'strategy_client' | 'algofund_client'>('strategy_client');
   const [targetPlanCode, setTargetPlanCode] = useState('');
   const [tariffNote, setTariffNote] = useState('');
   const [monitoring, setMonitoring] = useState<MonitoringPayload | null>(null);
@@ -611,6 +632,9 @@ const ClientCabinet: React.FC = () => {
   const [systemDetailModal, setSystemDetailModal] = useState<{ name: string; id: number } | null>(null);
   const [tsModalRiskMultiplier, setTsModalRiskMultiplier] = useState(1);
   const [strategyOfferDetail, setStrategyOfferDetail] = useState<string | null>(null);
+  const [clientTsBetaEnabled] = useState<boolean>(() => isClientTsBetaEnabled());
+  const [betaSelectedOfferIds, setBetaSelectedOfferIds] = useState<string[]>([]);
+  const [betaOpInput, setBetaOpInput] = useState('');
 
   const strategyState = workspace?.strategyState || null;
   const algofundState = workspace?.algofundState || null;
@@ -704,10 +728,30 @@ const ClientCabinet: React.FC = () => {
 
   const strategyStorefrontPageCount = Math.max(1, Math.ceil(strategyStorefrontOffers.length / CLIENT_STOREFRONT_PAGE_SIZE));
   const strategyStorefrontPage = Math.min(clientStorefrontPage, strategyStorefrontPageCount);
+  const strategyMaxAllowed = Math.max(
+    0,
+    Number(
+      tariff?.currentPlan?.max_strategies_total
+      ?? strategyWorkspace?.plan?.max_strategies_total
+      ?? 0,
+    ),
+  );
+  const isStrategySelectionOverLimit = strategyMaxAllowed > 0 && strategyOfferIds.length > strategyMaxAllowed;
+  const isBetaSelectionOverLimit = strategyMaxAllowed > 0 && betaSelectedOfferIds.length > strategyMaxAllowed;
   const strategyStorefrontPagedOffers = strategyStorefrontOffers.slice(
     (strategyStorefrontPage - 1) * CLIENT_STOREFRONT_PAGE_SIZE,
     strategyStorefrontPage * CLIENT_STOREFRONT_PAGE_SIZE,
   );
+  const isDualTariff = tariff?.productMode === 'dual';
+  const strategyTariffPlan = tariff?.currentStrategyPlan || null;
+  const algofundTariffPlan = tariff?.currentAlgofundPlan || null;
+  const activeTariffPlan = isDualTariff
+    ? (tariffModeFilter === 'algofund_client' ? (algofundTariffPlan || strategyTariffPlan || tariff?.currentPlan || null) : (strategyTariffPlan || algofundTariffPlan || tariff?.currentPlan || null))
+    : (tariff?.currentPlan || null);
+  const selectableTariffPlans = (tariff?.availablePlans || []).filter((plan) => {
+    if (!isDualTariff) return true;
+    return plan.product_mode === tariffModeFilter;
+  });
 
   const algofundSortedSystems = useMemo(() => {
     return [...algofundAvailableSystems].sort((a, b) => {
@@ -754,6 +798,51 @@ const ClientCabinet: React.FC = () => {
       setAlgofundStorefrontPageState(algofundStorefrontPage);
     }
   }, [algofundStorefrontPageState, algofundStorefrontPage]);
+
+  useEffect(() => {
+    if (!tariff || tariff.productMode !== 'dual') {
+      return;
+    }
+
+    if (tariff.currentStrategyPlan?.code) {
+      setTariffModeFilter('strategy_client');
+      return;
+    }
+
+    if (tariff.currentAlgofundPlan?.code) {
+      setTariffModeFilter('algofund_client');
+    }
+  }, [tariff?.productMode, tariff?.currentStrategyPlan?.code, tariff?.currentAlgofundPlan?.code]);
+
+  useEffect(() => {
+    if (!strategyWorkspace) return;
+
+    const selectedFromProfile = Array.isArray(strategyWorkspace.profile?.selectedOfferIds)
+      ? strategyWorkspace.profile?.selectedOfferIds || []
+      : [];
+
+    try {
+      const persisted = localStorage.getItem(CLIENT_TS_BETA_DRAFT_KEY);
+      if (persisted) {
+        const parsed = JSON.parse(persisted);
+        const draftIds = Array.isArray(parsed?.selectedOfferIds)
+          ? parsed.selectedOfferIds
+            .map((value: unknown) => String(value || '').trim())
+            .filter(Boolean)
+          : [];
+        const allowedIds = new Set((strategyWorkspace.offers || []).map((offer) => offer.offerId));
+        const safeDraftIds = draftIds.filter((id: string) => allowedIds.has(id));
+        setBetaSelectedOfferIds(safeDraftIds.length > 0 ? safeDraftIds : selectedFromProfile);
+        setBetaOpInput(typeof parsed?.opInput === 'string' ? parsed.opInput : '');
+        return;
+      }
+    } catch {
+      // Ignore malformed local draft and continue with profile defaults.
+    }
+
+    setBetaSelectedOfferIds(selectedFromProfile);
+    setBetaOpInput('');
+  }, [strategyWorkspace?.tenant?.id, strategyWorkspace?.offers]);
 
   const loadWorkspace = async () => {
     setLoading(true);
@@ -859,6 +948,11 @@ const ClientCabinet: React.FC = () => {
   };
 
   const saveStrategyProfile = async (requestedEnabled?: boolean) => {
+    if (isStrategySelectionOverLimit) {
+      messageApi.warning(`Лимит тарифа: можно выбрать до ${strategyMaxAllowed} стратегий. Сейчас выбрано ${strategyOfferIds.length}.`);
+      return;
+    }
+
     setActionLoading(requestedEnabled === undefined ? 'strategy-save' : requestedEnabled ? 'strategy-start' : 'strategy-stop');
     try {
       const response = await axios.patch('/api/client/strategy/profile', {
@@ -887,6 +981,27 @@ const ClientCabinet: React.FC = () => {
       messageApi.error(String(error?.response?.data?.error || error?.message || t('client.strategy.saveFailed', 'Failed to save strategy preferences')));
     } finally {
       setActionLoading('');
+    }
+  };
+
+  const saveClientTsBetaDraft = () => {
+    if (isBetaSelectionOverLimit) {
+      messageApi.warning(`Лимит тарифа: можно выбрать до ${strategyMaxAllowed} стратегий. В beta-черновике сейчас ${betaSelectedOfferIds.length}.`);
+      return;
+    }
+
+    try {
+      localStorage.setItem(
+        CLIENT_TS_BETA_DRAFT_KEY,
+        JSON.stringify({
+          selectedOfferIds: betaSelectedOfferIds,
+          opInput: betaOpInput.trim(),
+          updatedAt: new Date().toISOString(),
+        }),
+      );
+      messageApi.success('Beta-черновик сохранён локально. Backend пока не затрагивается.');
+    } catch {
+      messageApi.error('Не удалось сохранить beta-черновик в localStorage');
     }
   };
 
@@ -1164,6 +1279,11 @@ const ClientCabinet: React.FC = () => {
       return;
     }
 
+    if (isDualTariff && !selectableTariffPlans.some((plan) => plan.code === planCode)) {
+      messageApi.warning('Выбран тариф не из текущего потока. Переключите поток и выберите корректный тариф.');
+      return;
+    }
+
     setActionLoading('tariff-request');
     try {
       await axios.post('/api/client/tariff/request', {
@@ -1358,6 +1478,70 @@ const ClientCabinet: React.FC = () => {
               </Space>
             )}
           </Card>
+
+          {clientTsBetaEnabled ? (
+            <Card className="battletoads-card" title="Мои ТС (beta)" size="small">
+              <Space direction="vertical" size={10} style={{ width: '100%' }}>
+                <Alert
+                  type="info"
+                  showIcon
+                  message="Этап 1: UI beta под фичефлагом"
+                  description="Это только интерфейсный каркас: выбор стратегий и OP сохраняются локально в браузере, backend не изменяется."
+                />
+                <Space wrap>
+                  <Tag color="blue">Выбрано: {betaSelectedOfferIds.length}</Tag>
+                  <Tag color={isBetaSelectionOverLimit ? 'error' : 'success'}>
+                    Лимит тарифа: до {strategyMaxAllowed || 0}
+                  </Tag>
+                </Space>
+                {isBetaSelectionOverLimit ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message={`Превышен лимит тарифа: выбрано ${betaSelectedOfferIds.length}, разрешено ${strategyMaxAllowed}.`}
+                  />
+                ) : null}
+                <Checkbox.Group
+                  style={{ width: '100%' }}
+                  value={betaSelectedOfferIds}
+                  onChange={(values) => setBetaSelectedOfferIds(values.map((value) => String(value)))}
+                >
+                  <Row gutter={[8, 8]}>
+                    {(strategyWorkspace.offers || []).map((offer) => (
+                      <Col key={`beta-${offer.offerId}`} xs={24} sm={12} lg={8}>
+                        <Card size="small" bordered style={betaSelectedOfferIds.includes(offer.offerId) ? { borderColor: '#f5a623', borderWidth: 2 } : undefined}>
+                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                            <Checkbox value={offer.offerId}>{offer.titleRu}</Checkbox>
+                            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                              {offer.strategy.mode.toUpperCase()} • {offer.strategy.market} • {String(offer.strategy.params?.interval || '1h')}
+                            </Typography.Text>
+                          </Space>
+                        </Card>
+                      </Col>
+                    ))}
+                  </Row>
+                </Checkbox.Group>
+                <Input
+                  value={betaOpInput}
+                  onChange={(event) => setBetaOpInput(event.target.value)}
+                  placeholder="OP (операционный параметр), например: 250"
+                />
+                <Space wrap>
+                  <Button type="primary" onClick={saveClientTsBetaDraft} disabled={isBetaSelectionOverLimit}>
+                    Сохранить beta-черновик
+                  </Button>
+                  <Button
+                    onClick={() => {
+                      setBetaSelectedOfferIds(Array.isArray(strategyWorkspace.profile?.selectedOfferIds) ? (strategyWorkspace.profile?.selectedOfferIds || []) : []);
+                      setBetaOpInput('');
+                    }}
+                  >
+                    Сбросить
+                  </Button>
+                </Space>
+              </Space>
+            </Card>
+          ) : null}
 
           {/* Strategy offer detail modal */}
           <Modal
@@ -2110,12 +2294,28 @@ const ClientCabinet: React.FC = () => {
 
       <Card className="battletoads-card" title="Тариф и лимиты" size="small">
         <Space wrap style={{ marginBottom: 12 }}>
-          <Tag color="blue">Тариф: {tariff?.currentPlan?.title || '—'}</Tag>
-          <Tag color="green">Цена: {tariff?.currentPlan?.original_price_usdt ? <><s style={{ opacity: 0.5 }}>{formatMoney(tariff.currentPlan.original_price_usdt)}</s>{' '}</> : null}{formatMoney(tariff?.currentPlan?.price_usdt)}/мес</Tag>
-          <Tag color="cyan">Макс. депозит: {formatMoney(tariff?.currentPlan?.max_deposit_total)}</Tag>
-          <Tag color="purple">Риск-кап: {formatNumber(tariff?.currentPlan?.risk_cap_max)}</Tag>
-          {tariff?.currentPlan?.allow_ts_start_stop_requests ? <Tag color="success">Старт/Стоп: вкл</Tag> : null}
+          <Tag color="blue">Тариф: {activeTariffPlan?.title || '—'}</Tag>
+          <Tag color="green">Цена: {activeTariffPlan?.original_price_usdt ? <><s style={{ opacity: 0.5 }}>{formatMoney(activeTariffPlan.original_price_usdt)}</s>{' '}</> : null}{formatMoney(activeTariffPlan?.price_usdt)}/мес</Tag>
+          <Tag color="cyan">Макс. депозит: {formatMoney(activeTariffPlan?.max_deposit_total)}</Tag>
+          <Tag color="purple">Риск-кап: {formatNumber(activeTariffPlan?.risk_cap_max)}</Tag>
+          {activeTariffPlan?.allow_ts_start_stop_requests ? <Tag color="success">Старт/Стоп: вкл</Tag> : null}
+          {isDualTariff ? <Tag color="geekblue">Поток: {tariffModeFilter === 'strategy_client' ? 'Стратегии' : 'Алгофонд'}</Tag> : null}
         </Space>
+
+        {isDualTariff ? (
+          <Segmented
+            style={{ marginBottom: 12 }}
+            options={[
+              { label: 'Стратегии', value: 'strategy_client' },
+              { label: 'Алгофонд', value: 'algofund_client' },
+            ]}
+            value={tariffModeFilter}
+            onChange={(value) => {
+              setTariffModeFilter(value as 'strategy_client' | 'algofund_client');
+              setTargetPlanCode('');
+            }}
+          />
+        ) : null}
 
         <Typography.Text strong>Запросить смену тарифа</Typography.Text>
         <Row gutter={[8, 8]} style={{ marginTop: 8 }}>
@@ -2125,7 +2325,7 @@ const ClientCabinet: React.FC = () => {
               placeholder="Выберите тариф"
               value={targetPlanCode || undefined}
               onChange={setTargetPlanCode}
-              options={(tariff?.availablePlans || []).map((plan) => ({
+              options={selectableTariffPlans.map((plan) => ({
                 value: plan.code,
                 label: `${plan.title} (${plan.original_price_usdt ? `${formatMoney(plan.original_price_usdt)} → ` : ''}${formatMoney(plan.price_usdt)}/мес — до ${formatMoney(plan.max_deposit_total)})`,
               }))}
