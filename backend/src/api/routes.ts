@@ -1899,11 +1899,102 @@ router.post('/cards/materialize/:targetApiKeyName', async (req, res) => {
       cardMemberIds = (tsMembers || []).map((m: any) => Number(m.strategy_id));
     }
 
-    const copyResult = await copyStrategyBlock(String(sourceSystem.source_api_key_name), targetName, {
+    cardMemberIds = Array.from(new Set(cardMemberIds.filter((id) => Number.isFinite(id) && id > 0)));
+    if (cardMemberIds.length === 0) {
+      return res.status(400).json({
+        error: `No enabled member strategies found for system ${systemName}`,
+      });
+    }
+
+    const sourceApiKeyName = String(sourceSystem.source_api_key_name);
+    let compatibleMemberIds = cardMemberIds;
+    let skippedIncompatible = 0;
+
+    try {
+      const [targetSymbols, sourceStrategies] = await Promise.all([
+        getAllSymbols(targetName),
+        getStrategies(sourceApiKeyName, { includeLotPreview: false }),
+      ]);
+      const availableSymbols = new Set(
+        (Array.isArray(targetSymbols) ? targetSymbols : [])
+          .map((symbol) => String(symbol || '').trim().toUpperCase())
+          .filter((symbol) => symbol.length > 0)
+      );
+
+      if (availableSymbols.size > 0) {
+        const sourceById = new Map<number, any>();
+        for (const row of (Array.isArray(sourceStrategies) ? sourceStrategies : [])) {
+          const id = Number((row as any)?.id || 0);
+          if (Number.isFinite(id) && id > 0) {
+            sourceById.set(id, row);
+          }
+        }
+
+        const tenantRow = await db.get(
+          `SELECT tenant_id
+           FROM algofund_profiles
+           WHERE execution_api_key_name = ?
+           ORDER BY updated_at DESC
+           LIMIT 1`,
+          [targetName]
+        );
+        const tenantId = Number(tenantRow?.tenant_id || 0);
+
+        const filteredIds: number[] = [];
+        for (const strategyId of cardMemberIds) {
+          const sourceStrategy = sourceById.get(strategyId);
+          if (!sourceStrategy) {
+            filteredIds.push(strategyId);
+            continue;
+          }
+
+          const marketMode = String(sourceStrategy.market_mode || sourceStrategy.marketMode || '').trim().toLowerCase();
+          const base = String(sourceStrategy.base_symbol || sourceStrategy.baseSymbol || '').trim().toUpperCase();
+          const quote = String(sourceStrategy.quote_symbol || sourceStrategy.quoteSymbol || '').trim().toUpperCase();
+          const market = (marketMode === 'mono' || !quote) ? base : `${base}/${quote}`;
+
+          if (market && !availableSymbols.has(market)) {
+            skippedIncompatible += 1;
+            if (tenantId > 0) {
+              await db.run(
+                `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+                 VALUES (?, 'system', 'saas_materialize_pair_unavailable', ?, CURRENT_TIMESTAMP)`,
+                [
+                  tenantId,
+                  JSON.stringify({
+                    apiKeyName: targetName,
+                    market,
+                    strategyId,
+                    reason: 'market_not_supported_on_exchange',
+                    sourceSystem: systemName,
+                  }),
+                ]
+              );
+            }
+            continue;
+          }
+
+          filteredIds.push(strategyId);
+        }
+
+        compatibleMemberIds = filteredIds;
+      }
+    } catch (error) {
+      logger.warn(`Card materialize compatibility filter failed for ${targetName}: ${(error as Error).message}`);
+    }
+
+    if (compatibleMemberIds.length === 0) {
+      return res.status(409).json({
+        error: `No compatible member strategies for ${targetName}`,
+        skippedIncompatible,
+      });
+    }
+
+    const copyResult = await copyStrategyBlock(sourceApiKeyName, targetName, {
       replaceTarget: true,
       preserveActive: false,
       syncSymbols: false,
-      sourceStrategyIds: cardMemberIds.length > 0 ? cardMemberIds : undefined,
+      sourceStrategyIds: compatibleMemberIds,
     });
 
     await db.run(
@@ -1955,9 +2046,12 @@ router.post('/cards/materialize/:targetApiKeyName', async (req, res) => {
     return res.json({
       success: true,
       targetApiKey: targetName,
-      sourceApiKey: String(sourceSystem.source_api_key_name),
+      sourceApiKey: sourceApiKeyName,
       systemName,
       cardCode,
+      sourceMembers: cardMemberIds.length,
+      compatibleMembers: compatibleMemberIds.length,
+      skippedIncompatible,
       ...copyResult,
     });
   } catch (error) {

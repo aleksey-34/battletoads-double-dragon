@@ -66,6 +66,29 @@ const bingxOneWayAttempted = new Set<string>();
 const bingxConfirmedOneWay = new Set<string>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 min
 const SYMBOL_MAP_REFRESH_MS = 15 * 60 * 1000; // 15 min
+const CCXT_REQUEST_TIMEOUT_MS = 20000;
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isTransientCcxtError = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '').toLowerCase();
+  return message.includes('timed out')
+    || message.includes('timeout')
+    || message.includes('fetch failed')
+    || message.includes('network')
+    || message.includes('etimedout')
+    || message.includes('econnreset');
+};
+
+const resetCcxtMarketsCache = (client: any): void => {
+  client.markets = undefined;
+  client.markets_by_id = undefined;
+  client.symbols = undefined;
+  client.ids = undefined;
+  client.currencies = undefined;
+  client.currencies_by_id = undefined;
+  client.marketsLoading = undefined;
+};
 
 const normalizeSymbolKey = (value: any): string => {
   return String(value || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -186,7 +209,30 @@ const ensureCcxtSymbolMap = async (entry: CcxtClientEntry): Promise<Map<string, 
   entry.spotSymbolMap.clear();
   entry.uiSymbolMap.clear();
 
-  const markets = await entry.limiter.schedule(() => entry.client.loadMarkets());
+  let markets: any;
+  let lastError: Error | null = null;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      const reload = attempt > 1;
+      markets = await entry.limiter.schedule(() => entry.client.loadMarkets(reload));
+      lastError = null;
+      break;
+    } catch (error) {
+      lastError = error as Error;
+      if (attempt < 2 && isTransientCcxtError(error)) {
+        resetCcxtMarketsCache(entry.client);
+        logger.warn(`[symbols] loadMarkets retry for ${entry.exchange}: ${(error as Error).message}`);
+        await delay(250);
+        continue;
+      }
+      break;
+    }
+  }
+
+  if (lastError) {
+    throw lastError;
+  }
+
   const values = Object.values(markets || {}) as any[];
 
   // For MEXC: spot and swap share same id (e.g. BTCUSDT). We build two separate maps:
@@ -492,6 +538,7 @@ export const initExchangeClient = (apiKey: ApiKey) => {
         apiKey: apiKey.api_key,
         secret: apiKey.secret,
         password: apiKey.passphrase || undefined,
+        timeout: CCXT_REQUEST_TIMEOUT_MS,
         enableRateLimit: true,
         adjustForTimeDifference: true,
         recvWindow: 10000,
@@ -1906,10 +1953,12 @@ export const getRecentTrades = async (apiKeyName: string, symbol?: string, limit
 
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
+    const exchangeLimit = entry.exchange === 'weex' ? 100 : 500;
+    const ccxtLimit = Math.min(safeLimit, exchangeLimit);
 
     try {
       const resolvedSymbol = symbol ? await resolveCcxtSymbol(entry, symbol) : undefined;
-      const trades = await entry.limiter.schedule(() => entry.client.fetchMyTrades(resolvedSymbol, undefined, safeLimit));
+      const trades = await entry.limiter.schedule(() => entry.client.fetchMyTrades(resolvedSymbol, undefined, ccxtLimit));
       const list = Array.isArray(trades) ? trades : [];
 
       return list
@@ -1950,7 +1999,7 @@ export const getRecentTrades = async (apiKeyName: string, symbol?: string, limit
         })
         .filter((trade) => Boolean(trade.tradeId || trade.orderId || trade.timestamp !== '0'))
         .sort((left, right) => Number(right.timestamp) - Number(left.timestamp))
-        .slice(0, safeLimit);
+        .slice(0, ccxtLimit);
     } catch (error) {
       if (isBingxTradeEndpointDisabledError(error)) {
         logger.warn(`Trade history temporarily unavailable for ${apiKeyName}: ${(error as Error).message}`);

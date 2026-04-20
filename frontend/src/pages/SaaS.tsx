@@ -12350,7 +12350,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     onChange={(value) => {
                       const next = Number(value || 0);
                       setAdminSweepBacktestRiskScore(next);
-                      storeCurrentBacktestSettingsForContext(backtestDrawerContext, { riskScore: next });
                       const prevScore = adminSweepBacktestResult?.controls?.riskScore ?? 5;
                       const scale = getBacktestRiskMultiplier(next, adminSweepBacktestRiskScaleMaxPercent)
                         / Math.max(0.01, getBacktestRiskMultiplier(prevScore, adminSweepBacktestRiskScaleMaxPercent));
@@ -12375,7 +12374,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       onChange={(value) => {
                         const next = Number(value || 0);
                         setAdminSweepBacktestTradeScore(next);
-                        storeCurrentBacktestSettingsForContext(backtestDrawerContext, { tradeFrequencyScore: next });
                         setAdminSweepBacktestStale(true);
                         scheduleBacktestDebounce();
                       }}
@@ -12395,7 +12393,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       onChange={(value) => {
                         const next = Math.max(100, Number(value || 10000));
                         setAdminSweepBacktestInitialBalance(next);
-                        storeCurrentBacktestSettingsForContext(backtestDrawerContext, { initialBalance: next });
                       }}
                     />
                   </Card>
@@ -12414,7 +12411,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         const prevCap = Number(adminSweepBacktestRiskScaleMaxPercent || 100);
                         const next = Math.max(0, Math.min(1000, Number(value || 100)));
                         setAdminSweepBacktestRiskScaleMaxPercent(next);
-                        storeCurrentBacktestSettingsForContext(backtestDrawerContext, { riskScaleMaxPercent: next });
                         const prevMul = getBacktestRiskMultiplier(adminSweepBacktestRiskScore, prevCap);
                         const nextMul = getBacktestRiskMultiplier(adminSweepBacktestRiskScore, next);
                         setAdminSweepPreviewRiskScale(Number((nextMul / Math.max(0.01, prevMul)).toFixed(4)));
@@ -12438,7 +12434,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       onChange={(value) => {
                         const next = Math.max(0, Math.floor(Number(value || 0)));
                         setAdminSweepBacktestMaxOpenPositions(next);
-                        storeCurrentBacktestSettingsForContext(backtestDrawerContext, { maxOpenPositions: next });
                         setAdminSweepBacktestStale(true);
                         scheduleBacktestDebounce();
                       }}

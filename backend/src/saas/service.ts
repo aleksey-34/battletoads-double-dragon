@@ -1552,7 +1552,7 @@ const getStorefrontOfferIds = (offerStore: Pick<OfferStoreState, 'publishedOffer
   const publishedIds = Array.isArray(offerStore.publishedOfferIds)
     ? offerStore.publishedOfferIds.map((item) => String(item || '').trim()).filter(Boolean)
     : [];
-  return new Set((curatedIds.length > 0 ? curatedIds : publishedIds));
+  return new Set((publishedIds.length > 0 ? publishedIds : curatedIds));
 };
 
 const isEligibleStorefrontOffer = (offer: {
@@ -8282,15 +8282,14 @@ export const getStrategyClientState = async (tenantId: number) => {
   const scopedCatalogOfferIds = directOffers
     .map((offer) => String(offer.offerId || '').trim())
     .filter(Boolean);
-  const presetOffers = scopedCatalogOfferIds.length > 0
-    ? scopedCatalogOfferIds
+  const preferredStorefrontOfferIds = storefrontSet.size > 0
+    ? Array.from(storefrontSet)
+    : scopedCatalogOfferIds;
+  const presetOffers = preferredStorefrontOfferIds.length > 0
+    ? preferredStorefrontOfferIds
       .map((offerId) => offerStoreBackedById.get(offerId) || directById.get(offerId) || presetBackedById.get(offerId) || null)
       .filter((offer): offer is CatalogOffer => Boolean(offer))
-    : storefrontSet.size > 0
-      ? Array.from(storefrontSet)
-        .map((offerId) => offerStoreBackedById.get(offerId) || directById.get(offerId) || presetBackedById.get(offerId) || null)
-        .filter((offer): offer is CatalogOffer => Boolean(offer))
-      : (offerStoreBackedOffers.length > 0 ? offerStoreBackedOffers : (directOffers.length > 0 ? directOffers : presetBackedOffers));
+    : (offerStoreBackedOffers.length > 0 ? offerStoreBackedOffers : (directOffers.length > 0 ? directOffers : presetBackedOffers));
 
   // Enrich client offers with admin review snapshot data (equityPoints + accurate metrics) when available
   const reviewSnapshots = await getOfferReviewSnapshots().catch(() => ({} as Record<string, OfferReviewSnapshot>));
@@ -10486,7 +10485,8 @@ const applyApprovedAlgofundAction = async (params: {
       [runtimeApiKeyName]
     ) as { cnt?: number } | undefined;
 
-    if (Number(activeAfterSwitch?.cnt || 0) === 0 && targetSystemId > 0 && globalTarget?.source_api_key_name) {
+    const sourceApiKeyName = asString(globalTarget?.source_api_key_name, '').trim();
+    if (Number(activeAfterSwitch?.cnt || 0) === 0 && targetSystemId > 0 && sourceApiKeyName) {
       const tsMembers = await db.all(
         `SELECT strategy_id
          FROM trading_system_members
@@ -10499,12 +10499,91 @@ const applyApprovedAlgofundAction = async (params: {
         .map((row) => Number(row?.strategy_id || 0))
         .filter((id) => Number.isFinite(id) && id > 0);
 
-      if (sourceStrategyIds.length > 0) {
-        await copyStrategyBlock(asString(globalTarget.source_api_key_name, ''), runtimeApiKeyName, {
+      if (sourceStrategyIds.length === 0) {
+        throw new Error(`Target system has no enabled members: ${targetSystemName}`);
+      }
+
+      let compatibleSourceStrategyIds = sourceStrategyIds;
+      try {
+        const [targetSymbols, sourceRows] = await Promise.all([
+          getAllSymbols(runtimeApiKeyName),
+          getStrategies(sourceApiKeyName, { includeLotPreview: false }),
+        ]);
+        const availableSymbols = new Set(
+          (Array.isArray(targetSymbols) ? targetSymbols : [])
+            .map((symbol) => asString(symbol, '').trim().toUpperCase())
+            .filter((symbol) => symbol.length > 0)
+        );
+
+        if (availableSymbols.size > 0) {
+          const sourceById = new Map<number, any>();
+          for (const row of (Array.isArray(sourceRows) ? sourceRows : [])) {
+            const id = Number((row as { id?: unknown })?.id || 0);
+            if (Number.isFinite(id) && id > 0) {
+              sourceById.set(id, row);
+            }
+          }
+          const skippedPairs: Array<{ strategyId: number; market: string }> = [];
+          const filteredIds: number[] = [];
+
+          for (const strategyId of sourceStrategyIds) {
+            const sourceStrategy = sourceById.get(strategyId) as Record<string, unknown> | undefined;
+            if (!sourceStrategy) {
+              filteredIds.push(strategyId);
+              continue;
+            }
+
+            const marketMode = asString(sourceStrategy.market_mode || sourceStrategy.marketMode, '').trim().toLowerCase();
+            const base = asString(sourceStrategy.base_symbol || sourceStrategy.baseSymbol, '').trim().toUpperCase();
+            const quote = asString(sourceStrategy.quote_symbol || sourceStrategy.quoteSymbol, '').trim().toUpperCase();
+            const market = (marketMode === 'mono' || !quote)
+              ? base
+              : `${base}/${quote}`;
+
+            if (market && !availableSymbols.has(market)) {
+              skippedPairs.push({ strategyId, market });
+              continue;
+            }
+
+            filteredIds.push(strategyId);
+          }
+
+          for (const skipped of skippedPairs) {
+            await db.run(
+              `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+               VALUES (?, 'system', 'saas_materialize_pair_unavailable', ?, CURRENT_TIMESTAMP)`,
+              [
+                tenant.id,
+                JSON.stringify({
+                  apiKeyName: runtimeApiKeyName,
+                  market: skipped.market,
+                  strategyId: skipped.strategyId,
+                  reason: 'market_not_supported_on_exchange',
+                  sourceSystem: targetSystemName,
+                }),
+              ]
+            );
+          }
+
+          compatibleSourceStrategyIds = filteredIds;
+          if (skippedPairs.length > 0) {
+            logger.info(
+              `Algofund switch fallback: skipped ${skippedPairs.length} incompatible strategies for ${runtimeApiKeyName}`
+            );
+          }
+        }
+      } catch (error) {
+        logger.warn(
+          `Algofund switch fallback: compatibility filter unavailable for ${runtimeApiKeyName}: ${(error as Error).message}`
+        );
+      }
+
+      if (compatibleSourceStrategyIds.length > 0) {
+        await copyStrategyBlock(sourceApiKeyName, runtimeApiKeyName, {
           replaceTarget: true,
           preserveActive: true,
           syncSymbols: false,
-          sourceStrategyIds,
+          sourceStrategyIds: compatibleSourceStrategyIds,
         });
 
         await db.run(
@@ -10520,6 +10599,8 @@ const applyApprovedAlgofundAction = async (params: {
            WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ?)` ,
           [runtimeApiKeyName]
         );
+      } else {
+        throw new Error(`No compatible strategies available for ${runtimeApiKeyName} in ${targetSystemName}`);
       }
     }
 
