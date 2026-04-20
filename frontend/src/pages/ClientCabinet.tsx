@@ -695,6 +695,8 @@ const ClientCabinet: React.FC = () => {
   const [customTsGuideOpen, setCustomTsGuideOpen] = useState(false);
   const [customTsSystems, setCustomTsSystems] = useState<ClientCustomTsSystemItem[]>([]);
   const [customTsSystemPreviews, setCustomTsSystemPreviews] = useState<Record<number, ClientCustomTsSystemPreview>>({});
+  const customTsAutoPreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const customTsLastAutoPreviewAtRef = useRef<number>(0);
 
   const strategyState = workspace?.strategyState || null;
   const algofundState = workspace?.algofundState || null;
@@ -951,6 +953,49 @@ const ClientCabinet: React.FC = () => {
       setActionLoading('');
     }
   };
+
+  useEffect(() => {
+    if (activeTabKey !== 'custom-ts') {
+      return;
+    }
+    if (customTsSystems.length === 0) {
+      return;
+    }
+
+    if (customTsAutoPreviewTimerRef.current) {
+      clearTimeout(customTsAutoPreviewTimerRef.current);
+    }
+
+    customTsAutoPreviewTimerRef.current = setTimeout(() => {
+      const now = Date.now();
+      const minIntervalMs = 4000;
+      const elapsed = now - customTsLastAutoPreviewAtRef.current;
+      if (elapsed < minIntervalMs) {
+        return;
+      }
+
+      customTsLastAutoPreviewAtRef.current = now;
+      const targetIds = customTsSystems
+        .slice(0, 4)
+        .map((item) => Number(item.id || 0))
+        .filter((id) => Number.isFinite(id) && id > 0);
+
+      if (targetIds.length === 0) {
+        return;
+      }
+
+      targetIds.forEach((id) => {
+        void runCustomTsSystemPreview(id);
+      });
+    }, 900);
+
+    return () => {
+      if (customTsAutoPreviewTimerRef.current) {
+        clearTimeout(customTsAutoPreviewTimerRef.current);
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTabKey, strategyRiskInput, strategyTradeInput, customTsSystems]);
 
   useEffect(() => {
     if (!strategyWorkspace?.tenant?.id) {
