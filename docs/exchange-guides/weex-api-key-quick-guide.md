@@ -1,9 +1,36 @@
 # WEEX API Key Quick Guide
 
-1. Open `WEEX -> API Management`.
-2. Create a futures API key with `Read` and `Trade` permissions.
-3. Copy `API Key`, `Secret`, and `Passphrase`.
-4. Add the project server IP to the whitelist.
-5. In the project form select `WEEX Futures` and paste all credentials.
+## Где создать ключ
+- Откройте `WEEX -> API Management`.
+- Создайте ключ для фьючерсной торговли.
 
-> `Passphrase` is required for WEEX private API requests.
+## Какие права включить
+- `Read`.
+- `Trade`.
+- Не включайте `Withdraw`.
+
+## Что скопировать
+- `API Key`.
+- `Secret`.
+- `Passphrase`.
+
+## Whitelist
+- Добавьте IP сервера в whitelist.
+- Для нескольких серверов добавьте все IP заранее.
+
+## Что выбрать в ЛК
+- В форме ключа выберите `WEEX Futures`.
+- Вставьте `API Key`, `Secret`, `Passphrase`.
+
+## Быстрый чек
+- Права `Read + Trade` активны.
+- Вывод средств выключен.
+- IP whitelist заполнен.
+
+## Официальная документация
+- https://www.weex.com/api-doc
+
+## Скриншоты (рекомендуется добавить)
+- Создание ключа.
+- Раздел прав доступа.
+- Раздел whitelist IP.

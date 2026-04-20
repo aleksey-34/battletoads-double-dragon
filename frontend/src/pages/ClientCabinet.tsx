@@ -543,12 +543,14 @@ const tsDisplayName = (systemName: string): string => {
 const capabilityTag = (label: string, enabled: boolean) => <Tag color={enabled ? 'success' : 'default'}>{label}: {enabled ? 'on' : 'off'}</Tag>;
 
 const CLIENT_STOREFRONT_PAGE_SIZE = 24;
+type ClientCabinetTabKey = 'strategy' | 'algofund' | 'settings';
 
 const ClientCabinet: React.FC = () => {
   const { t } = useI18n();
   const navigate = useNavigate();
   const [messageApi, contextHolder] = message.useMessage();
   const [workspace, setWorkspace] = useState<WorkspacePayload | null>(null);
+  const [activeTabKey, setActiveTabKey] = useState<ClientCabinetTabKey>('strategy');
   const [strategyStateExtra, setStrategyStateExtra] = useState<StrategyState | null>(null);
   const [algofundStateExtra, setAlgofundStateExtra] = useState<AlgofundState | null>(null);
   const [guides, setGuides] = useState<GuideItem[]>([]);
@@ -604,6 +606,11 @@ const ClientCabinet: React.FC = () => {
   const algofundWorkspace = algofundState || algofundStateExtra;
   const clientUser = workspace?.auth?.user || null;
   const onboardingCompleted = Boolean(clientUser?.onboardingCompletedAt);
+
+  useEffect(() => {
+    if (!workspace) return;
+    setActiveTabKey(workspace.productMode === 'algofund_client' ? 'algofund' : 'strategy');
+  }, [workspace]);
 
   const strategyPreviewSummary = strategySelectionPreview?.preview?.summary || {};
   const strategyPreviewSeries = useMemo(() => toLineSeriesData(strategySelectionPreview?.preview?.equity), [strategySelectionPreview]);
@@ -1198,7 +1205,26 @@ const ClientCabinet: React.FC = () => {
               type="warning"
               showIcon
               message="Сначала добавьте API-ключ биржи"
-              description="Для подключения стратегий необходимо добавить API-ключ. Перейдите в раздел «API ключи» выше и добавьте ключ."
+              description={(
+                <Space direction="vertical" size={4}>
+                  <Typography.Text>
+                    Для подключения стратегий необходимо добавить API-ключ.
+                  </Typography.Text>
+                  <Button
+                    type="link"
+                    style={{ padding: 0, height: 'auto' }}
+                    onClick={() => {
+                      setActiveTabKey('settings');
+                      setTimeout(() => {
+                        const node = document.getElementById('client-api-keys-card');
+                        if (node) node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      }, 60);
+                    }}
+                  >
+                    Перейти в раздел «API ключи»
+                  </Button>
+                </Space>
+              )}
               style={{ marginBottom: 16 }}
             />
           ) : null}
@@ -1928,7 +1954,7 @@ const ClientCabinet: React.FC = () => {
         )}
       </Modal>
 
-      <Card className="battletoads-card" title="API ключи биржи" size="small">
+      <Card id="client-api-keys-card" className="battletoads-card" title="API ключи биржи" size="small">
         {!onboardingCompleted ? (
           <Alert
             type="info"
@@ -2206,7 +2232,8 @@ const ClientCabinet: React.FC = () => {
       <Spin spinning={loading && !workspace}>
         {workspace ? (
           <Tabs
-            defaultActiveKey={workspace.productMode === 'algofund_client' ? 'algofund' : 'strategy'}
+            activeKey={activeTabKey}
+            onChange={(key) => setActiveTabKey((key as ClientCabinetTabKey) || 'strategy')}
             items={[
               {
                 key: 'strategy',
