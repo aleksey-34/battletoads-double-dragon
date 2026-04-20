@@ -690,12 +690,39 @@ const ClientCabinet: React.FC = () => {
     strategyStorefrontPage * CLIENT_STOREFRONT_PAGE_SIZE,
   );
 
-  const algofundStorefrontPageCount = Math.max(1, Math.ceil(algofundAvailableSystems.length / CLIENT_STOREFRONT_PAGE_SIZE));
+  const algofundSortedSystems = useMemo(() => {
+    return [...algofundAvailableSystems].sort((a, b) => {
+      const aCurrent = isAlgofundSystemEnabled(a?.name) ? 0 : 1;
+      const bCurrent = isAlgofundSystemEnabled(b?.name) ? 0 : 1;
+      if (aCurrent !== bCurrent) return aCurrent - bCurrent;
+      const aRet = Number((a as any)?.backtestSnapshot?.ret || 0);
+      const bRet = Number((b as any)?.backtestSnapshot?.ret || 0);
+      if (aRet !== bRet) return bRet - aRet;
+      return String(a?.name || '').localeCompare(String(b?.name || ''));
+    });
+  }, [algofundAvailableSystems, enabledAlgofundSystemNames]);
+
+  const algofundStorefrontPageCount = Math.max(1, Math.ceil(algofundSortedSystems.length / CLIENT_STOREFRONT_PAGE_SIZE));
   const algofundStorefrontPage = Math.min(algofundStorefrontPageState, algofundStorefrontPageCount);
-  const algofundStorefrontPagedSystems = algofundAvailableSystems.slice(
+
+  const algofundStorefrontPagedSystems = algofundSortedSystems.slice(
     (algofundStorefrontPage - 1) * CLIENT_STOREFRONT_PAGE_SIZE,
     algofundStorefrontPage * CLIENT_STOREFRONT_PAGE_SIZE,
   );
+
+  const closeStrategyOfferModal = () => {
+    setStrategyOfferDetail(null);
+    setSingleOfferPreview(null);
+    setSingleOfferPreviewLoading(false);
+    setStrategyRiskInput(levelToSliderValue(strategyWorkspace?.profile?.risk_level || 'medium'));
+    setStrategyTradeInput(levelToSliderValue(strategyWorkspace?.profile?.trade_frequency_level || 'medium'));
+  };
+
+  const closeSystemDetailModal = () => {
+    setSystemDetailModal(null);
+    setTsModalRiskMultiplier(1);
+    setAlgofundRiskMultiplier(toFinite(algofundWorkspace?.profile?.risk_multiplier, 1));
+  };
 
   useEffect(() => {
     if (clientStorefrontPage !== strategyStorefrontPage) {
@@ -1176,7 +1203,7 @@ const ClientCabinet: React.FC = () => {
             />
           ) : null}
           {/* Витрина офферов */}
-          <Card className="battletoads-card" title="Витрина стратегий" size="small">
+          <Card className="battletoads-card" title={<span className="storefront-title-accent">Витрина стратегий</span>} size="small">
             {strategyWorkspace.offers.length === 0 ? (
               <Empty description="Офферов на витрине пока нет" />
             ) : (
@@ -1302,7 +1329,7 @@ const ClientCabinet: React.FC = () => {
               return o ? o.titleRu : '';
             })()}
             open={!!strategyOfferDetail}
-            onCancel={() => setStrategyOfferDetail(null)}
+            onCancel={closeStrategyOfferModal}
             footer={null}
             width={640}
           >
@@ -1554,7 +1581,7 @@ const ClientCabinet: React.FC = () => {
           </Card>
           )}
 
-          <Card className="battletoads-card" title="Витрина торговых систем Алгофонда" size="small">
+          <Card className="battletoads-card" title={<span className="storefront-title-accent">Витрина торговых систем Алгофонда</span>} size="small">
             {algofundAvailableSystems.length === 0 ? (
               <Empty description="Торговые системы Алгофонда пока не опубликованы" />
             ) : (
@@ -1583,7 +1610,7 @@ const ClientCabinet: React.FC = () => {
                                 <Tooltip title={getTsHint(system.name) ?? undefined} placement="topLeft">
                                   <Typography.Text strong style={{ fontSize: 12, cursor: getTsHint(system.name) ? 'help' : undefined }}>{tsDisplayName(system.name)}</Typography.Text>
                                 </Tooltip>
-                                {isCurrent ? <Tag color="gold" style={{ fontSize: 10 }}>Подключена</Tag> : null}
+                                {isCurrent ? <Tag color="success" style={{ fontSize: 10, fontWeight: 700 }}>Подключена</Tag> : null}
                                 {currentWeights.length > 0 ? <Tag color="blue" style={{ fontSize: 10 }}>Риск {formatNumber(currentWeights[0])}x</Tag> : null}
                               </Space>
                             </Space>
@@ -1620,11 +1647,11 @@ const ClientCabinet: React.FC = () => {
                     );
                   })}
                 </Row>
-                {algofundAvailableSystems.length > CLIENT_STOREFRONT_PAGE_SIZE ? (
+                {algofundSortedSystems.length > CLIENT_STOREFRONT_PAGE_SIZE ? (
                   <Pagination
                     size="small"
                     current={algofundStorefrontPage}
-                    total={algofundAvailableSystems.length}
+                    total={algofundSortedSystems.length}
                     pageSize={CLIENT_STOREFRONT_PAGE_SIZE}
                     showSizeChanger={false}
                     onChange={(page) => setAlgofundStorefrontPageState(page)}
@@ -1639,7 +1666,7 @@ const ClientCabinet: React.FC = () => {
           <Modal
             title={systemDetailModal ? tsDisplayName(systemDetailModal.name) : ''}
             open={!!systemDetailModal}
-            onCancel={() => setSystemDetailModal(null)}
+            onCancel={closeSystemDetailModal}
             footer={null}
             width={640}
           >
@@ -1696,8 +1723,10 @@ const ClientCabinet: React.FC = () => {
               return (
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   <Space wrap>
-                    {isCurrent ? <Tag color="gold">Подключена к вашему аккаунту</Tag> : <Tag color="blue">Доступна для подключения</Tag>}
+                    {isCurrent ? <Tag color="success" style={{ fontWeight: 700 }}>Подключена к вашему аккаунту</Tag> : <Tag color="blue">Доступна для подключения</Tag>}
                     {snap?.periodDays ? <Tag>Период: {Math.round(snap.periodDays)}д</Tag> : null}
+                    {displayRet != null ? <Tag color="gold">Ret {formatPercent(displayRet)}</Tag> : null}
+                    {displayDd != null ? <Tag color="volcano">DD {formatPercent(displayDd)}</Tag> : null}
                     {snap?.trades ? <Tag>{snap.trades} сделок</Tag> : null}
                   </Space>
                   {getTsHint(system.name) ? (
@@ -1754,11 +1783,11 @@ const ClientCabinet: React.FC = () => {
                     </Space>
                   </div>
                   {!isCurrent ? (
-                    <Button type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start', { id: Number(system.id || 0), name: String(system.name || '') }); setSystemDetailModal(null); }}>
+                    <Button type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start', { id: Number(system.id || 0), name: String(system.name || '') }); closeSystemDetailModal(); }}>
                       Подключить эту систему
                     </Button>
                   ) : (
-                    <Button danger loading={actionLoading === 'algofund-stop'} onClick={() => { void sendAlgofundRequest('stop'); setSystemDetailModal(null); }}>
+                    <Button danger loading={actionLoading === 'algofund-stop'} onClick={() => { void sendAlgofundRequest('stop'); closeSystemDetailModal(); }}>
                       Отключить
                     </Button>
                   )}

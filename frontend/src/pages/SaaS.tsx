@@ -10441,7 +10441,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Spin spinning={algofundLoading && !algofundState}>
                     {algofundState ? (
                       <>
-                        <Card className="battletoads-card" title={isAdminSurface ? 'Витрина Алгофонд' : copy.tenantWorkspace}>
+                        <Card className="battletoads-card" title={isAdminSurface ? <span className="storefront-title-accent">Витрина Алгофонд</span> : copy.tenantWorkspace}>
                           {isAdminSurface ? (
                             <Tabs
                               destroyOnHidden
@@ -10760,7 +10760,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             <>
                           {/* Клиентская витрина Алгофонда */}
                           {algofundStorefrontSystems.length > 0 ? (
-                            <Card className="battletoads-card" title="Витрина Алгофонда" style={{ marginBottom: 16 }}>
+                            <Card className="battletoads-card" title={<span className="storefront-title-accent">Витрина Алгофонда</span>} style={{ marginBottom: 16 }}>
                               <List
                                 grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
                                 dataSource={algofundStorefrontSystems}

@@ -1079,3 +1079,196 @@ body.theme-light .app-brand-title,
 :root[data-btdd-theme='light'] .app-brand-title {
   color: #6366f1 !important;
 }
+
+/* ─── Light theme: bright KPI chips for admin + client pages ─── */
+body.theme-light .saas-page .ant-tag,
+body.theme-light .client-cabinet-page .ant-tag,
+:root[data-btdd-theme='light'] .saas-page .ant-tag,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag {
+  border-width: 1px;
+  font-weight: 600;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.03);
+}
+
+body.theme-light .saas-page .ant-tag-gold,
+body.theme-light .client-cabinet-page .ant-tag-gold,
+:root[data-btdd-theme='light'] .saas-page .ant-tag-gold,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag-gold {
+  background: #fff7e6;
+  border-color: #ffd591;
+  color: #b45309;
+}
+
+body.theme-light .saas-page .ant-tag-volcano,
+body.theme-light .client-cabinet-page .ant-tag-volcano,
+:root[data-btdd-theme='light'] .saas-page .ant-tag-volcano,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag-volcano {
+  background: #fff2e8;
+  border-color: #ffbb96;
+  color: #c2410c;
+}
+
+body.theme-light .saas-page .ant-tag-orange,
+body.theme-light .client-cabinet-page .ant-tag-orange,
+:root[data-btdd-theme='light'] .saas-page .ant-tag-orange,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag-orange {
+  background: #fff7ed;
+  border-color: #fdba74;
+  color: #c2410c;
+}
+
+body.theme-light .saas-page .ant-tag-cyan,
+body.theme-light .client-cabinet-page .ant-tag-cyan,
+:root[data-btdd-theme='light'] .saas-page .ant-tag-cyan,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag-cyan {
+  background: #ecfeff;
+  border-color: #67e8f9;
+  color: #155e75;
+}
+
+body.theme-light .saas-page .ant-tag-blue,
+body.theme-light .client-cabinet-page .ant-tag-blue,
+body.theme-light .saas-page .ant-tag-processing,
+body.theme-light .client-cabinet-page .ant-tag-processing,
+body.theme-light .saas-page .ant-tag-geekblue,
+body.theme-light .client-cabinet-page .ant-tag-geekblue,
+:root[data-btdd-theme='light'] .saas-page .ant-tag-blue,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag-blue,
+:root[data-btdd-theme='light'] .saas-page .ant-tag-processing,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag-processing,
+:root[data-btdd-theme='light'] .saas-page .ant-tag-geekblue,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag-geekblue {
+  background: #eef2ff;
+  border-color: #a5b4fc;
+  color: #3730a3;
+}
+
+body.theme-light .saas-page .ant-tag-success,
+body.theme-light .client-cabinet-page .ant-tag-success,
+body.theme-light .saas-page .ant-tag-green,
+body.theme-light .client-cabinet-page .ant-tag-green,
+:root[data-btdd-theme='light'] .saas-page .ant-tag-success,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag-success,
+:root[data-btdd-theme='light'] .saas-page .ant-tag-green,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag-green {
+  background: #ecfdf5;
+  border-color: #86efac;
+  color: #166534;
+}
+
+body.theme-light .saas-page .ant-tag-error,
+body.theme-light .client-cabinet-page .ant-tag-error,
+body.theme-light .saas-page .ant-tag-red,
+body.theme-light .client-cabinet-page .ant-tag-red,
+:root[data-btdd-theme='light'] .saas-page .ant-tag-error,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag-error,
+:root[data-btdd-theme='light'] .saas-page .ant-tag-red,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag-red {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #b91c1c;
+}
+
+body.theme-light .saas-page .ant-tag-warning,
+body.theme-light .client-cabinet-page .ant-tag-warning,
+:root[data-btdd-theme='light'] .saas-page .ant-tag-warning,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-tag-warning {
+  background: #fffbeb;
+  border-color: #fcd34d;
+  color: #92400e;
+}
+
+body.theme-light .client-cabinet-page .ant-statistic-content-value,
+body.theme-light .saas-page .ant-statistic-content-value,
+:root[data-btdd-theme='light'] .client-cabinet-page .ant-statistic-content-value,
+:root[data-btdd-theme='light'] .saas-page .ant-statistic-content-value {
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+/* ─── Storefront title accent (serious sales highlight) ─── */
+.storefront-title-accent {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--btdd-accent-020);
+  background: linear-gradient(135deg, var(--btdd-accent-015) 0%, transparent 100%);
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.storefront-title-accent::before {
+  content: 'VITRINE';
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--btdd-accent);
+  opacity: 0.9;
+}
+
+/* ─── Mobile optimization: admin + cabinet density and readability ─── */
+@media (max-width: 768px) {
+  .saas-page .ant-card-body,
+  .client-cabinet-page .ant-card-body {
+    padding: 10px !important;
+  }
+
+  .saas-page .ant-card-head,
+  .client-cabinet-page .ant-card-head {
+    min-height: 38px;
+    padding: 0 10px !important;
+  }
+
+  .saas-page .ant-card-head-title,
+  .client-cabinet-page .ant-card-head-title {
+    font-size: 13px;
+    white-space: normal;
+    line-height: 1.3;
+  }
+
+  .saas-page .ant-statistic-content,
+  .client-cabinet-page .ant-statistic-content {
+    font-size: 18px;
+  }
+
+  .saas-page .ant-statistic-title,
+  .client-cabinet-page .ant-statistic-title {
+    font-size: 11px;
+  }
+
+  .saas-page .ant-tag,
+  .client-cabinet-page .ant-tag {
+    font-size: 10px;
+    line-height: 18px;
+    padding: 0 6px;
+  }
+
+  .saas-page .ant-space,
+  .client-cabinet-page .ant-space {
+    row-gap: 6px !important;
+  }
+
+  .saas-page .ant-list-grid .ant-col,
+  .client-cabinet-page .ant-list-grid .ant-col {
+    max-width: 100%;
+    flex: 0 0 100%;
+  }
+}
+
+@media (max-width: 520px) {
+  .storefront-title-accent {
+    font-size: 12px;
+    padding: 3px 8px;
+  }
+
+  .storefront-title-accent::before {
+    font-size: 9px;
+  }
+
+  .saas-page .ant-btn,
+  .client-cabinet-page .ant-btn {
+    padding-inline: 9px;
+    font-size: 12px;
+  }
+}
