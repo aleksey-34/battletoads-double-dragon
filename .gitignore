@@ -50,3 +50,14 @@ backend/phase*.ts
 backend/phase*.js
 backend/phase*.json
 backend/ab_btdd_d1_results.json
+
+# Local diagnostics / temporary artifacts
+tmp_*
+backend/tmp_*
+frontend/tmp_*
+frontend/test-results/
+frontend/build_*.txt
+frontend/build_upload.zip
+hdb_*_client_catalog_*.json
+mass_backtest_results*.json
+USRF/
