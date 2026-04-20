@@ -77,10 +77,13 @@ import {
 import {
   getAlgofundState,
   getStrategyClientState,
+  getStrategyClientCustomTsDraft,
   previewStrategyClientOffer,
+  previewStrategyClientCustomTsDraft,
   previewStrategyClientSelection,
   requestAlgofundAction,
   updateAlgofundState,
+  updateStrategyClientCustomTsDraft,
   updateStrategyClientState,
   loadCatalogAndSweepWithFallback,
 } from '../saas/service';
@@ -834,6 +837,75 @@ router.post('/client/strategy/selection-preview', authenticateClient, async (req
   }
 });
 
+router.get('/client/strategy/custom-ts-draft', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const state = await getStrategyClientCustomTsDraft(Number(session.user.tenantId));
+    res.json({ success: true, ...state });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client strategy custom TS draft read error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/client/strategy/custom-ts-draft', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    const state = await updateStrategyClientCustomTsDraft(Number(session.user.tenantId), {
+      selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
+      op: toOptionalNumber(req.body?.op),
+      assignedApiKeyName: req.body?.assignedApiKeyName !== undefined ? String(req.body.assignedApiKeyName || '').trim() : undefined,
+    });
+
+    res.json({ success: true, ...state });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client strategy custom TS draft save error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/client/strategy/custom-ts-draft/preview', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+
+    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+    }
+    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+    }
+
+    const preview = await previewStrategyClientCustomTsDraft(Number(session.user.tenantId), {
+      selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
+      op: toOptionalNumber(req.body?.op),
+      assignedApiKeyName: req.body?.assignedApiKeyName !== undefined ? String(req.body.assignedApiKeyName || '').trim() : undefined,
+      riskLevel: req.body?.riskLevel,
+      tradeFrequencyLevel: req.body?.tradeFrequencyLevel,
+      riskScore: toOptionalNumber(req.body?.riskScore),
+      tradeFrequencyScore: toOptionalNumber(req.body?.tradeFrequencyScore),
+    });
+
+    res.json({ success: true, ...preview });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client custom TS preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/client/catalog', authenticateClient, async (_req, res) => {
   try {
     await initResearchDb();
@@ -1332,15 +1404,67 @@ router.post('/client/tariff/request', authenticateClient, async (req, res) => {
       return res.status(400).json({ error: 'Target plan belongs to another product mode' });
     }
 
+    const currentSubscription = await db.get(
+      `SELECT started_at
+       FROM subscriptions
+       WHERE tenant_id = ?
+       ORDER BY id DESC
+       LIMIT 1`,
+      [tenantId]
+    ) as { started_at?: string } | undefined;
+
+    const currentPlan = await db.get(
+      `SELECT p.product_mode
+       FROM subscriptions s
+       JOIN plans p ON p.id = s.plan_id
+       WHERE s.tenant_id = ?
+       ORDER BY s.id DESC
+       LIMIT 1`,
+      [tenantId]
+    ) as { product_mode?: string } | undefined;
+
+    const tenantApiKey = await db.get(
+      'SELECT assigned_api_key_name FROM tenants WHERE id = ? LIMIT 1',
+      [tenantId]
+    ) as { assigned_api_key_name?: string } | undefined;
+
+    const startedAt = currentSubscription?.started_at ? new Date(currentSubscription.started_at) : new Date();
+    const nextBillingCycleAt = new Date(startedAt);
+    nextBillingCycleAt.setMonth(nextBillingCycleAt.getMonth() + 1);
+
+    const latestMonitoring = tenantApiKey?.assigned_api_key_name
+      ? await getMonitoringLatest(String(tenantApiKey.assigned_api_key_name)).catch(() => null)
+      : null;
+    const hwmSnapshot = {
+      capturedAt: new Date().toISOString(),
+      equityUsd: Number((latestMonitoring as any)?.equity_usd || 0),
+      drawdownPct: Number((latestMonitoring as any)?.drawdown_pct || 0),
+      source: latestMonitoring ? 'monitoring_latest' : 'none',
+    };
+
     const payload = {
       targetPlanCode: targetPlan.code,
       targetPlanTitle: String(targetPlan.title || targetPlan.code),
       note,
+      billingSwitchPolicy: {
+        singleActiveModePerBillingPeriod: true,
+        effectiveFromNextBillingCycle: true,
+        nextBillingCycleAt: nextBillingCycleAt.toISOString(),
+        currentMode: String(currentPlan?.product_mode || productMode),
+        targetMode: String(targetPlan.product_mode || productMode),
+      },
+      hwmSnapshot,
     };
 
     const insert = await db.run(
       `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
        VALUES (?, 'client', 'client_tariff_request', ?, CURRENT_TIMESTAMP)`,
+      [tenantId, JSON.stringify(payload)]
+    );
+
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (?, 'client', 'client_billing_mode_switch_requested', ?, CURRENT_TIMESTAMP)`,
       [tenantId, JSON.stringify(payload)]
     );
 
@@ -1350,6 +1474,7 @@ router.post('/client/tariff/request', authenticateClient, async (req, res) => {
         id: Number((insert as any)?.lastID || 0),
         ...payload,
       },
+      switchPolicyMessage: 'Смена режима будет применена с начала следующего billing-cycle. В текущем расчетном периоде активен только один режим. HWM-снимок зафиксирован и событие записано в аудит.',
     });
   } catch (error) {
     const err = error as Error;
