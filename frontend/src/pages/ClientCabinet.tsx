@@ -315,6 +315,7 @@ type ClientApiKeyInfo = {
   isAssigned: boolean;
   usedByStrategy?: boolean;
   usedByAlgofund?: boolean;
+  usedByCustomTs?: boolean;
 };
 
 type TariffPlan = {
@@ -748,8 +749,8 @@ const ClientCabinet: React.FC = () => {
   const algofundAssignedApiKey = String((algofundWorkspace?.profile as any)?.assigned_api_key_name || '').trim();
   const strategyAssignedApiKey = String(strategyAssignedApiKeyName || strategyWorkspace?.profile?.assigned_api_key_name || '').trim();
   const algofundAssignedApiKeyResolved = String(algofundAssignedApiKeyName || algofundAssignedApiKey || '').trim();
-  const strategyApiKeyOptions = clientApiKeys.filter((item) => !item.usedByAlgofund || item.name === strategyAssignedApiKey);
-  const algofundApiKeyOptions = clientApiKeys.filter((item) => !item.usedByStrategy || item.name === algofundAssignedApiKeyResolved);
+  const strategyApiKeyOptions = clientApiKeys.filter((item) => (!item.usedByAlgofund && !item.usedByCustomTs) || item.name === strategyAssignedApiKey);
+  const algofundApiKeyOptions = clientApiKeys.filter((item) => (!item.usedByStrategy && !item.usedByCustomTs) || item.name === algofundAssignedApiKeyResolved);
   const betaApiKeyOptions = clientApiKeys.filter((item) => {
     if (item.name === betaAssignedApiKeyName) return true;
     return !item.usedByStrategy && !item.usedByAlgofund;
@@ -1135,7 +1136,7 @@ const ClientCabinet: React.FC = () => {
         selectedOfferIds: strategyOfferIds,
         riskLevel: sliderValueToLevel(strategyRiskInput),
         tradeFrequencyLevel: sliderValueToLevel(strategyTradeInput),
-        assignedApiKeyName: strategyAssignedApiKeyName || undefined,
+        assignedApiKeyName: strategyAssignedApiKeyName,
         requestedEnabled,
       });
 
@@ -1370,7 +1371,7 @@ const ClientCabinet: React.FC = () => {
     try {
       const response = await axios.patch('/api/client/algofund/profile', {
         riskMultiplier: algofundRiskMultiplier,
-        assignedApiKeyName: algofundAssignedApiKeyName || undefined,
+        assignedApiKeyName: algofundAssignedApiKeyName,
       });
 
       setWorkspace((current) => {
@@ -1520,16 +1521,11 @@ const ClientCabinet: React.FC = () => {
 
       resetApiKeyDraft();
 
-      setWorkspace((current) => {
-        if (!current) return current;
-        return {
-          ...current,
-          strategyState: response.data?.strategyState || current.strategyState,
-          algofundState: response.data?.algofundState || current.algofundState,
-        };
-      });
-
-      messageApi.success(isEditing ? 'API ключ обновлён' : t('client.apiKey.saved', 'API key saved and connected to your workspace'));
+      messageApi.success(
+        isEditing
+          ? 'API ключ обновлён'
+          : 'API ключ сохранён. Теперь выберите его отдельно для потока Стратегий или Алгофонда.'
+      );
       await loadWorkspace();
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || t('client.apiKey.saveFailed', 'Failed to save API key')));
@@ -1910,6 +1906,7 @@ const ClientCabinet: React.FC = () => {
               <Space wrap style={{ marginBottom: 8 }}>
                 <Typography.Text type="secondary">API ключ для потока стратегий:</Typography.Text>
                 <Select
+                  allowClear
                   style={{ minWidth: 240 }}
                   value={strategyAssignedApiKeyName || undefined}
                   placeholder="Выберите API ключ"
@@ -2272,6 +2269,7 @@ const ClientCabinet: React.FC = () => {
               <Space wrap style={{ marginBottom: 8 }}>
                 <Typography.Text type="secondary">API ключ для потока Алгофонда:</Typography.Text>
                 <Select
+                  allowClear
                   style={{ minWidth: 240 }}
                   value={algofundAssignedApiKeyName || undefined}
                   placeholder="Выберите API ключ"
@@ -2769,7 +2767,8 @@ const ClientCabinet: React.FC = () => {
                     {item.demo ? <Tag color="magenta">demo</Tag> : null}
                     {item.usedByStrategy ? <Tag color="blue">поток стратегий</Tag> : null}
                     {item.usedByAlgofund ? <Tag color="purple">поток Алгофонда</Tag> : null}
-                    {!item.usedByStrategy && !item.usedByAlgofund ? <Tag>не назначен</Tag> : null}
+                    {item.usedByCustomTs ? <Tag color="geekblue">кастом ТС</Tag> : null}
+                    {!item.usedByStrategy && !item.usedByAlgofund && !item.usedByCustomTs ? <Tag>не назначен</Tag> : null}
                   </Space>
                 </List.Item>
               )}

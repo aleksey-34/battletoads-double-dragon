@@ -348,6 +348,48 @@ const resolveClientAuthErrorStatus = (message: string): number => {
   return 500;
 };
 
+const resolveClientWorkspaceErrorStatus = (message: string): number => {
+  const normalized = String(message || '').toLowerCase();
+
+  if (normalized.includes('unauthorized client session')) {
+    return 401;
+  }
+  if (normalized.includes('not owned by current tenant')) {
+    return 403;
+  }
+  if (normalized.includes('not found')) {
+    return 404;
+  }
+  if (
+    normalized.includes('already assigned')
+    || normalized.includes('already used')
+    || normalized.includes('already occupied')
+    || normalized.includes('already exists')
+    || normalized.includes('assign another key first')
+    || normalized.includes('one key = one client')
+    || normalized.includes('нельзя использовать один ключ')
+    || normalized.includes('ключ занят')
+    || normalized.includes('already assigned api key')
+    || normalized.includes('currently assigned api key')
+  ) {
+    return 409;
+  }
+  if (
+    normalized.includes('required')
+    || normalized.includes('invalid')
+    || normalized.includes('must be')
+    || normalized.includes('unknown offers')
+    || normalized.includes('сначала')
+    || normalized.includes('нельзя включить')
+    || normalized.includes('должен быть отдельным')
+    || normalized.includes('лимит тарифа')
+  ) {
+    return 400;
+  }
+
+  return 500;
+};
+
 // Public auth-recovery routes (no password required)
 router.get('/auth/recovery/status', (_req, res) => {
   try {
@@ -684,7 +726,7 @@ router.patch('/client/strategy/profile', authenticateClient, async (req, res) =>
   } catch (error) {
     const err = error as Error;
     logger.error(`Client strategy profile save error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(resolveClientWorkspaceErrorStatus(err.message)).json({ error: err.message });
   }
 });
 
@@ -1120,7 +1162,7 @@ router.patch('/client/algofund/profile', authenticateClient, async (req, res) =>
   } catch (error) {
     const err = error as Error;
     logger.error(`Client algofund profile save error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(resolveClientWorkspaceErrorStatus(err.message)).json({ error: err.message });
   }
 });
 
@@ -1195,29 +1237,15 @@ router.post('/client/api-key', authenticateClient, async (req, res) => {
       demo,
     });
 
-    const [strategyResult, algofundResult] = await Promise.allSettled([
-      updateStrategyClientState(tenantId, { assignedApiKeyName: keyName }),
-      updateAlgofundState(tenantId, { assignedApiKeyName: keyName }),
-    ]);
-
-    if (strategyResult.status === 'rejected') {
-      logger.warn(`Client api key save: strategy profile update unavailable for tenant ${tenantId}: ${strategyResult.reason instanceof Error ? strategyResult.reason.message : String(strategyResult.reason)}`);
-    }
-    if (algofundResult.status === 'rejected') {
-      logger.warn(`Client api key save: algofund profile update unavailable for tenant ${tenantId}: ${algofundResult.reason instanceof Error ? algofundResult.reason.message : String(algofundResult.reason)}`);
-    }
-
     return res.json({
       success: true,
       keyName,
       productMode: session.user.productMode,
-      strategyState: strategyResult.status === 'fulfilled' ? strategyResult.value : null,
-      algofundState: algofundResult.status === 'fulfilled' ? algofundResult.value : null,
     });
   } catch (error) {
     const err = error as Error;
     logger.error(`Client api key save error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(resolveClientWorkspaceErrorStatus(err.message)).json({ error: err.message });
   }
 });
 
@@ -1238,27 +1266,35 @@ router.get('/client/api-keys', authenticateClient, async (req, res) => {
       [`${tenantPrefix}%`]
     ) as Array<Record<string, unknown>>;
 
-    const tenant = await db.get(
-      'SELECT assigned_api_key_name FROM tenants WHERE id = ?',
-      [tenantId]
-    ) as { assigned_api_key_name?: string } | undefined;
-    const strategyProfile = await db.get(
-      'SELECT assigned_api_key_name FROM strategy_client_profiles WHERE tenant_id = ?',
-      [tenantId]
-    ) as { assigned_api_key_name?: string } | undefined;
-    const algofundProfile = await db.get(
-      'SELECT assigned_api_key_name, execution_api_key_name FROM algofund_profiles WHERE tenant_id = ?',
-      [tenantId]
-    ) as { assigned_api_key_name?: string; execution_api_key_name?: string } | undefined;
+    const [tenant, strategyProfile, algofundProfile, customDraft] = await Promise.all([
+      db.get(
+        'SELECT assigned_api_key_name FROM tenants WHERE id = ?',
+        [tenantId]
+      ) as Promise<{ assigned_api_key_name?: string } | undefined>,
+      db.get(
+        'SELECT assigned_api_key_name FROM strategy_client_profiles WHERE tenant_id = ?',
+        [tenantId]
+      ) as Promise<{ assigned_api_key_name?: string } | undefined>,
+      db.get(
+        'SELECT assigned_api_key_name, execution_api_key_name FROM algofund_profiles WHERE tenant_id = ?',
+        [tenantId]
+      ) as Promise<{ assigned_api_key_name?: string; execution_api_key_name?: string } | undefined>,
+      db.get(
+        'SELECT assigned_api_key_name FROM strategy_client_custom_ts_drafts WHERE tenant_id = ?',
+        [tenantId]
+      ) as Promise<{ assigned_api_key_name?: string } | undefined>,
+    ]);
     const assignedName = String(tenant?.assigned_api_key_name || '').trim();
     const strategyAssignedName = String(strategyProfile?.assigned_api_key_name || '').trim();
     const algofundAssignedName = String(algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name || '').trim();
+    const customTsAssignedName = String(customDraft?.assigned_api_key_name || '').trim();
 
     res.json({
       success: true,
       assignedApiKeyName: assignedName,
       strategyAssignedApiKeyName: strategyAssignedName,
       algofundAssignedApiKeyName: algofundAssignedName,
+      customTsAssignedApiKeyName: customTsAssignedName,
       keys: (rows || []).map((row) => ({
         id: Number(row.id || 0),
         name: String(row.name || ''),
@@ -1270,6 +1306,7 @@ router.get('/client/api-keys', authenticateClient, async (req, res) => {
         isAssigned: String(row.name || '') === assignedName,
         usedByStrategy: String(row.name || '') === strategyAssignedName,
         usedByAlgofund: String(row.name || '') === algofundAssignedName,
+        usedByCustomTs: String(row.name || '') === customTsAssignedName,
       })),
     });
   } catch (error) {
@@ -1341,7 +1378,7 @@ router.patch('/client/api-keys/:id', authenticateClient, async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Client api key update error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(resolveClientWorkspaceErrorStatus(err.message)).json({ error: err.message });
   }
 });
 
@@ -1372,9 +1409,57 @@ router.delete('/client/api-keys/:id', authenticateClient, async (req, res) => {
       return res.status(403).json({ error: 'API key is not owned by current tenant' });
     }
 
-    const tenant = await db.get('SELECT assigned_api_key_name FROM tenants WHERE id = ?', [tenantId]) as { assigned_api_key_name?: string } | undefined;
-    if (String(tenant?.assigned_api_key_name || '').trim() === keyName) {
-      return res.status(409).json({ error: 'Cannot delete currently assigned API key. Assign another key first.' });
+    const [tenant, strategyProfile, algofundProfile, customDraft] = await Promise.all([
+      db.get('SELECT assigned_api_key_name FROM tenants WHERE id = ?', [tenantId]) as Promise<{ assigned_api_key_name?: string } | undefined>,
+      db.get(
+        'SELECT assigned_api_key_name, requested_enabled, actual_enabled FROM strategy_client_profiles WHERE tenant_id = ?',
+        [tenantId]
+      ) as Promise<{ assigned_api_key_name?: string; requested_enabled?: number; actual_enabled?: number } | undefined>,
+      db.get(
+        'SELECT assigned_api_key_name, execution_api_key_name, requested_enabled, actual_enabled FROM algofund_profiles WHERE tenant_id = ?',
+        [tenantId]
+      ) as Promise<{ assigned_api_key_name?: string; execution_api_key_name?: string; requested_enabled?: number; actual_enabled?: number } | undefined>,
+      db.get(
+        'SELECT assigned_api_key_name, selected_offer_ids_json FROM strategy_client_custom_ts_drafts WHERE tenant_id = ?',
+        [tenantId]
+      ) as Promise<{ assigned_api_key_name?: string; selected_offer_ids_json?: string } | undefined>,
+    ]);
+
+    const tenantAssignedKey = String(tenant?.assigned_api_key_name || '').trim();
+    const strategyAssignedKey = String(strategyProfile?.assigned_api_key_name || '').trim();
+    const strategyEnabled = Number(strategyProfile?.requested_enabled || 0) === 1 || Number(strategyProfile?.actual_enabled || 0) === 1;
+    const algofundAssignedKey = String(algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name || '').trim();
+    const algofundEnabled = Number(algofundProfile?.requested_enabled || 0) === 1 || Number(algofundProfile?.actual_enabled || 0) === 1;
+    const customAssignedKey = String(customDraft?.assigned_api_key_name || '').trim();
+    const customSelectedOffers = JSON.parse(String(customDraft?.selected_offer_ids_json || '[]')) as unknown[];
+
+    if (strategyAssignedKey === keyName && strategyEnabled) {
+      return res.status(409).json({ error: 'API-ключ сейчас используется активным потоком Стратегий. Сначала выключите поток или снимите привязку ключа.' });
+    }
+
+    if (algofundAssignedKey === keyName && algofundEnabled) {
+      return res.status(409).json({ error: 'API-ключ сейчас используется активным потоком Алгофонда. Сначала выключите поток или снимите привязку ключа.' });
+    }
+
+    if (strategyAssignedKey === keyName) {
+      await updateStrategyClientState(tenantId, { assignedApiKeyName: '', requestedEnabled: false });
+    }
+
+    if (algofundAssignedKey === keyName) {
+      await updateAlgofundState(tenantId, { assignedApiKeyName: '', requestedEnabled: false });
+    }
+
+    if (customAssignedKey === keyName) {
+      await updateStrategyClientCustomTsDraft(tenantId, { assignedApiKeyName: '' });
+    }
+
+    if (tenantAssignedKey === keyName && strategyAssignedKey !== keyName && algofundAssignedKey !== keyName) {
+      await db.run(
+        `UPDATE tenants
+         SET assigned_api_key_name = '', updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [tenantId]
+      );
     }
 
     await db.run('DELETE FROM risk_settings WHERE api_key_id = ?', [apiKeyId]);
@@ -1386,14 +1471,14 @@ router.delete('/client/api-keys/:id', authenticateClient, async (req, res) => {
     await db.run(
       `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
        VALUES (?, 'client', 'client_api_key_delete', ?, CURRENT_TIMESTAMP)`,
-      [tenantId, JSON.stringify({ apiKeyId, keyName })]
+      [tenantId, JSON.stringify({ apiKeyId, keyName, detachedFromStrategy: strategyAssignedKey === keyName, detachedFromAlgofund: algofundAssignedKey === keyName, detachedFromCustomTs: customAssignedKey === keyName, customDraftOffersCount: Array.isArray(customSelectedOffers) ? customSelectedOffers.length : 0 })]
     );
 
     res.json({ success: true, id: apiKeyId, name: keyName });
   } catch (error) {
     const err = error as Error;
     logger.error(`Client api key delete error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(resolveClientWorkspaceErrorStatus(err.message)).json({ error: err.message });
   }
 });
 

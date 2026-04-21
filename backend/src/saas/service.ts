@@ -8531,6 +8531,41 @@ export const getStrategyClientState = async (tenantId: number) => {
   };
 };
 
+const hasOwnPayloadField = (value: unknown, field: string): boolean => {
+  return Boolean(value) && Object.prototype.hasOwnProperty.call(value as Record<string, unknown>, field);
+};
+
+const resolveAssignedApiKeyInput = (
+  payload: Record<string, unknown>,
+  field: string,
+  fallback: string,
+): string => {
+  if (hasOwnPayloadField(payload, field)) {
+    return asString(payload[field], '').trim();
+  }
+  return asString(fallback, '').trim();
+};
+
+const syncTenantAssignedApiKeyName = async (tenantId: number): Promise<string> => {
+  const [strategyProfile, algofundProfile] = await Promise.all([
+    getStrategyClientProfile(tenantId),
+    getAlgofundProfile(tenantId),
+  ]);
+
+  const nextAssignedApiKeyName = asString(strategyProfile?.assigned_api_key_name, '').trim()
+    || asString(algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name, '').trim()
+    || '';
+
+  await db.run(
+    `UPDATE tenants
+     SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [nextAssignedApiKeyName, tenantId]
+  );
+
+  return nextAssignedApiKeyName;
+};
+
 export const updateStrategyClientState = async (tenantId: number, payload: {
   selectedOfferIds?: string[];
   riskLevel?: Level3;
@@ -8561,7 +8596,12 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
   const nextOfferIds = Array.isArray(payload.selectedOfferIds)
     ? Array.from(new Set(payload.selectedOfferIds.map((item) => String(item || '').trim()).filter(Boolean)))
     : activeOfferIds;
-  const nextAssignedApiKeyName = asString(payload.assignedApiKeyName, existing.assigned_api_key_name || tenant.assigned_api_key_name);
+  const currentAssignedApiKeyName = asString(existing.assigned_api_key_name || tenant.assigned_api_key_name, '').trim();
+  const nextAssignedApiKeyName = resolveAssignedApiKeyInput(
+    payload as Record<string, unknown>,
+    'assignedApiKeyName',
+    currentAssignedApiKeyName,
+  );
   const nextRequestedEnabled = payload.requestedEnabled !== undefined ? payload.requestedEnabled : existing.requested_enabled === 1;
 
   // D0: нельзя сохранять выбор офферов без API-ключа
@@ -8574,8 +8614,10 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
     throw new Error('Нельзя включить поток стратегий без назначенного API-ключа. Сначала сохраните отдельный ключ для стратегий.');
   }
 
-  // D1+D2: проверка что ключ не занят другим тенантом / другим режимом
-  if (payload.assignedApiKeyName && payload.assignedApiKeyName !== (existing.assigned_api_key_name || tenant.assigned_api_key_name)) {
+  // D1+D2: проверка что ключ не занят другим тенантом / другим режимом.
+  // Проверяем не только при смене ключа, но и при фактическом включении потока,
+  // чтобы не оставлять старые конфликтные назначения незамеченными.
+  if (nextAssignedApiKeyName && (payload.assignedApiKeyName !== undefined || nextRequestedEnabled)) {
     await validateApiKeyNotAssigned(nextAssignedApiKeyName, tenantId, 'strategy-client');
   }
 
@@ -8621,19 +8663,15 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
     );
   }
 
-  await db.run(
-    `UPDATE tenants
-     SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
-    [nextAssignedApiKeyName, tenantId]
-  );
+  await syncTenantAssignedApiKeyName(tenantId);
 
   // When toggling OFF: cancel orders, close positions
   const wasEnabled = Number(existing.requested_enabled || 0) === 1;
-  if (wasEnabled && !nextRequestedEnabled && nextAssignedApiKeyName) {
-    logger.info(`[updateStrategyClientState] Tenant ${tenantId} toggled OFF — stopping orders/positions for ${nextAssignedApiKeyName}`);
-    try { await cancelAllOrders(nextAssignedApiKeyName); } catch (e) { logger.warn(`cancelAllOrders on toggle-off for ${nextAssignedApiKeyName}: ${(e as Error).message}`); }
-    try { await closeAllPositions(nextAssignedApiKeyName); } catch (e) { logger.warn(`closeAllPositions on toggle-off for ${nextAssignedApiKeyName}: ${(e as Error).message}`); }
+  const shutdownApiKeyName = currentAssignedApiKeyName || nextAssignedApiKeyName;
+  if (wasEnabled && !nextRequestedEnabled && shutdownApiKeyName) {
+    logger.info(`[updateStrategyClientState] Tenant ${tenantId} toggled OFF — stopping orders/positions for ${shutdownApiKeyName}`);
+    try { await cancelAllOrders(shutdownApiKeyName); } catch (e) { logger.warn(`cancelAllOrders on toggle-off for ${shutdownApiKeyName}: ${(e as Error).message}`); }
+    try { await closeAllPositions(shutdownApiKeyName); } catch (e) { logger.warn(`closeAllPositions on toggle-off for ${shutdownApiKeyName}: ${(e as Error).message}`); }
   }
 
   // Per-offer cleanup: when offers are removed while still enabled, cancel orders for those markets
@@ -9359,7 +9397,11 @@ export const updateStrategyClientCustomTsDraft = async (
     .map((item) => String(item || '').trim())
     .filter(Boolean)));
   const op = Math.max(1, Math.floor(asNumber(payload.op, asNumber(existing?.op_value, 1))));
-  const assignedApiKeyName = asString(payload.assignedApiKeyName, existing?.assigned_api_key_name).trim();
+  const assignedApiKeyName = resolveAssignedApiKeyInput(
+    payload as Record<string, unknown>,
+    'assignedApiKeyName',
+    asString(existing?.assigned_api_key_name, '').trim(),
+  );
 
   if (assignedApiKeyName) {
     const strategyAssigned = asString(state.profile?.assigned_api_key_name, '').trim();
@@ -10659,7 +10701,11 @@ export const updateAlgofundState = async (
     asNumber(plan.risk_cap_max, 1)
   ));
   const currentExecutionApiKeyName = getAlgofundExecutionApiKeyName(tenant, profile);
-  const nextApiKeyName = asString(payload.assignedApiKeyName, currentExecutionApiKeyName);
+  const nextApiKeyName = resolveAssignedApiKeyInput(
+    payload as Record<string, unknown>,
+    'assignedApiKeyName',
+    currentExecutionApiKeyName,
+  );
   const nextRequestedEnabled = payload.requestedEnabled !== undefined
     ? payload.requestedEnabled
     : Number(profile.requested_enabled || 0) === 1;
@@ -10669,8 +10715,10 @@ export const updateAlgofundState = async (
     throw new Error('Нельзя включить Алгофонд без назначенного API-ключа. Сначала сохраните отдельный ключ для Алгофонда.');
   }
 
-  // D1+D2: проверка что ключ не занят другим тенантом / другим режимом
-  if (payload.assignedApiKeyName && payload.assignedApiKeyName !== currentExecutionApiKeyName) {
+  // D1+D2: проверка что ключ не занят другим тенантом / другим режимом.
+  // Проверяем не только при смене ключа, но и при фактическом включении потока,
+  // чтобы не оставлять старые конфликтные назначения незамеченными.
+  if (nextApiKeyName && (payload.assignedApiKeyName !== undefined || nextRequestedEnabled)) {
     await validateApiKeyNotAssigned(nextApiKeyName, tenantId, 'algofund');
   }
 
@@ -10683,18 +10731,14 @@ export const updateAlgofundState = async (
     [nextRiskMultiplier, nextApiKeyName, nextApiKeyName, nextRequestedEnabled ? 1 : 0, tenantId]
   );
 
-  await db.run(
-    `UPDATE tenants
-     SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`,
-    [nextApiKeyName, tenantId]
-  );
+  await syncTenantAssignedApiKeyName(tenantId);
 
   // When toggling OFF: cancel orders, close positions, mark actual_enabled = 0
-  if (wasEnabled && !nextRequestedEnabled && nextApiKeyName) {
-    logger.info(`[updateAlgofundState] Tenant ${tenantId} toggled OFF — stopping orders/positions for ${nextApiKeyName}`);
-    try { await cancelAllOrders(nextApiKeyName); } catch (e) { logger.warn(`cancelAllOrders on toggle-off for ${nextApiKeyName}: ${(e as Error).message}`); }
-    try { await closeAllPositions(nextApiKeyName); } catch (e) { logger.warn(`closeAllPositions on toggle-off for ${nextApiKeyName}: ${(e as Error).message}`); }
+  const shutdownApiKeyName = currentExecutionApiKeyName || nextApiKeyName;
+  if (wasEnabled && !nextRequestedEnabled && shutdownApiKeyName) {
+    logger.info(`[updateAlgofundState] Tenant ${tenantId} toggled OFF — stopping orders/positions for ${shutdownApiKeyName}`);
+    try { await cancelAllOrders(shutdownApiKeyName); } catch (e) { logger.warn(`cancelAllOrders on toggle-off for ${shutdownApiKeyName}: ${(e as Error).message}`); }
+    try { await closeAllPositions(shutdownApiKeyName); } catch (e) { logger.warn(`closeAllPositions on toggle-off for ${shutdownApiKeyName}: ${(e as Error).message}`); }
     await db.run(
       `UPDATE algofund_profiles SET actual_enabled = 0, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?`,
       [tenantId]
