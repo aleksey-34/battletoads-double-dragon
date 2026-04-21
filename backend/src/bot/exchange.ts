@@ -119,9 +119,11 @@ const isBingxOfflineSymbolError = (exchange: string, message: string): boolean =
   if (ex !== 'bingx') {
     return false;
   }
+  // Match raw JSON form, text-only form (ccxt may strip JSON), and BingX's typo 'validted' vs 'validated'
   return text.includes('code":109418')
     || text.includes('code:109418')
-    || (text.includes('offline currently') && text.includes('validated symbols'));
+    || text.includes('109418')
+    || (text.includes('offline currently') && (text.includes('validated symbols') || text.includes('validted')));
 };
 
 const resetCcxtMarketsCache = (client: any): void => {

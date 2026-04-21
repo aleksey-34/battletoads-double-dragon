@@ -435,6 +435,16 @@ const formatNumber = (value: unknown, digits = 2): string => toFinite(value).toF
 const formatPercent = (value: unknown, digits = 2): string => `${formatNumber(value, digits)}%`;
 const formatMoney = (value: unknown): string => `$${formatNumber(value, 2)}`;
 
+const metricTagColor = (value: number, kind: 'return' | 'drawdown' | 'pf'): string => {
+  if (kind === 'drawdown') {
+    return value <= 2 ? 'success' : value <= 4 ? 'warning' : 'error';
+  }
+  if (kind === 'pf') {
+    return value >= 2 ? 'success' : value >= 1.3 ? 'processing' : 'warning';
+  }
+  return value >= 0 ? 'success' : 'error';
+};
+
 const normalizeTime = (value: unknown): number | null => {
   if (value == null) return null;
   const numeric = Number(value);
@@ -1729,9 +1739,9 @@ const ClientCabinet: React.FC = () => {
                           </Space>
                           <Space size={4} wrap>
                               <Tag style={{ fontSize: 11 }}>{String(offer.strategy.params?.interval || '1h')}</Tag>
-                            <Tag color="gold" style={{ fontSize: 11 }}>Ret {formatPercent(offer.metrics.ret)}</Tag>
-                            <Tag color="volcano" style={{ fontSize: 11 }}>DD {formatPercent(offer.metrics.dd)}</Tag>
-                            <Tag color="orange" style={{ fontSize: 11 }}>PF {formatNumber(offer.metrics.pf)}</Tag>
+                            <Tag color={metricTagColor(Number(offer.metrics.ret || 0), 'return')} style={{ fontSize: 11 }}>Ret {formatPercent(offer.metrics.ret)}</Tag>
+                            <Tag color={metricTagColor(Number(offer.metrics.dd || 0), 'drawdown')} style={{ fontSize: 11 }}>DD {formatPercent(offer.metrics.dd)}</Tag>
+                            <Tag color={metricTagColor(Number(offer.metrics.pf || 0), 'pf')} style={{ fontSize: 11 }}>PF {formatNumber(offer.metrics.pf)}</Tag>
                             {offer.metrics.trades ? <Tag color="cyan" style={{ fontSize: 11 }}>{formatNumber(offer.metrics.trades, 0)} сд.</Tag> : null}
                           </Space>
                           {(() => {
@@ -1841,7 +1851,7 @@ const ClientCabinet: React.FC = () => {
                   <Row gutter={[12, 12]}>
                     {startBalance != null ? <Col xs={12} sm={6}><Statistic title="Старт. капитал" value={formatMoney(startBalance)} /></Col> : null}
                     {endBalance != null ? <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(endBalance)} valueStyle={{ color: endBalance >= (startBalance || 0) ? '#f5a623' : '#ff4d4f' }} /></Col> : null}
-                    <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(offerSummary?.totalReturnPercent ?? offer.metrics.ret)} valueStyle={{ color: (offerSummary?.totalReturnPercent ?? offer.metrics.ret ?? 0) >= 0 ? '#f5a623' : '#ff4d4f' }} /></Col>
+                    <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(offerSummary?.totalReturnPercent ?? offer.metrics.ret)} valueStyle={{ color: (offerSummary?.totalReturnPercent ?? offer.metrics.ret ?? 0) >= 0 ? '#1677ff' : '#ff4d4f' }} /></Col>
                     <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(offerSummary?.maxDrawdownPercent ?? offer.metrics.dd)} valueStyle={{ color: '#ff7a45' }} /></Col>
                     <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(offerSummary?.profitFactor ?? offer.metrics.pf)} /></Col>
                     {(offerSummary?.tradesCount ?? offer.metrics.trades) ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(offerSummary?.tradesCount ?? offer.metrics.trades, 0)} /></Col> : null}
@@ -2073,9 +2083,9 @@ const ClientCabinet: React.FC = () => {
                     <Space wrap size={4}>
                       <Tag>{offer.strategy.mode.toUpperCase()} • {offer.strategy.market}</Tag>
                       <Tag>{String(offer.strategy.params?.interval || '1h')}</Tag>
-                      <Tag color="gold">Ret {formatPercent(offer.metrics.ret)}</Tag>
-                      <Tag color="volcano">DD {formatPercent(offer.metrics.dd)}</Tag>
-                      <Tag color="orange">PF {formatNumber(offer.metrics.pf)}</Tag>
+                      <Tag color={metricTagColor(Number(offer.metrics.ret || 0), 'return')}>Ret {formatPercent(offer.metrics.ret)}</Tag>
+                      <Tag color={metricTagColor(Number(offer.metrics.dd || 0), 'drawdown')}>DD {formatPercent(offer.metrics.dd)}</Tag>
+                      <Tag color={metricTagColor(Number(offer.metrics.pf || 0), 'pf')}>PF {formatNumber(offer.metrics.pf)}</Tag>
                     </Space>
                   </Space>
                 ))}
@@ -2152,13 +2162,13 @@ const ClientCabinet: React.FC = () => {
 
                       <Space size={4} wrap>
                         {customTsSystemPreviews[item.id]?.summary?.totalReturnPercent !== undefined ? (
-                          <Tag color="gold" style={{ fontSize: 11 }}>Ret {formatPercent(customTsSystemPreviews[item.id]?.summary?.totalReturnPercent)}</Tag>
+                          <Tag color={metricTagColor(Number(customTsSystemPreviews[item.id]?.summary?.totalReturnPercent || 0), 'return')} style={{ fontSize: 11 }}>Ret {formatPercent(customTsSystemPreviews[item.id]?.summary?.totalReturnPercent)}</Tag>
                         ) : null}
                         {customTsSystemPreviews[item.id]?.summary?.maxDrawdownPercent !== undefined ? (
-                          <Tag color="volcano" style={{ fontSize: 11 }}>DD {formatPercent(customTsSystemPreviews[item.id]?.summary?.maxDrawdownPercent)}</Tag>
+                          <Tag color={metricTagColor(Number(customTsSystemPreviews[item.id]?.summary?.maxDrawdownPercent || 0), 'drawdown')} style={{ fontSize: 11 }}>DD {formatPercent(customTsSystemPreviews[item.id]?.summary?.maxDrawdownPercent)}</Tag>
                         ) : null}
                         {customTsSystemPreviews[item.id]?.summary?.profitFactor !== undefined ? (
-                          <Tag color="orange" style={{ fontSize: 11 }}>PF {formatNumber(customTsSystemPreviews[item.id]?.summary?.profitFactor)}</Tag>
+                          <Tag color={metricTagColor(Number(customTsSystemPreviews[item.id]?.summary?.profitFactor || 0), 'pf')} style={{ fontSize: 11 }}>PF {formatNumber(customTsSystemPreviews[item.id]?.summary?.profitFactor)}</Tag>
                         ) : null}
                         {customTsSystemPreviews[item.id]?.summary?.tradesCount !== undefined ? (
                           <Tag color="cyan" style={{ fontSize: 11 }}>{formatNumber(customTsSystemPreviews[item.id]?.summary?.tradesCount, 0)} сд.</Tag>
@@ -2321,9 +2331,9 @@ const ClientCabinet: React.FC = () => {
                             </Space>
                             <Space size={4} wrap>
                               {snap?.periodDays ? <Tag style={{ fontSize: 11 }}>{Math.round(snap.periodDays)}d</Tag> : null}
-                              {snap ? <Tag color="gold" style={{ fontSize: 11 }}>Ret {formatPercent(snap.ret)}</Tag> : null}
-                              {snap ? <Tag color="volcano" style={{ fontSize: 11 }}>DD {formatPercent(snap.dd)}</Tag> : null}
-                              {snap ? <Tag color="orange" style={{ fontSize: 11 }}>PF {formatNumber(snap.pf)}</Tag> : null}
+                              {snap ? <Tag color={metricTagColor(Number(snap.ret || 0), 'return')} style={{ fontSize: 11 }}>Ret {formatPercent(snap.ret)}</Tag> : null}
+                              {snap ? <Tag color={metricTagColor(Number(snap.dd || 0), 'drawdown')} style={{ fontSize: 11 }}>DD {formatPercent(snap.dd)}</Tag> : null}
+                              {snap ? <Tag color={metricTagColor(Number(snap.pf || 0), 'pf')} style={{ fontSize: 11 }}>PF {formatNumber(snap.pf)}</Tag> : null}
                               {snap?.trades ? <Tag color="cyan" style={{ fontSize: 11 }}>{formatNumber(snap.trades, 0)} сд.</Tag> : null}
                             </Space>
                             {hasChart ? (
@@ -2430,8 +2440,8 @@ const ClientCabinet: React.FC = () => {
                   <Space wrap>
                     {isCurrent ? <Tag color="success" style={{ fontWeight: 700 }}>Подключена к вашему аккаунту</Tag> : <Tag color="blue">Доступна для подключения</Tag>}
                     {snap?.periodDays ? <Tag>Период: {Math.round(snap.periodDays)}д</Tag> : null}
-                    {displayRet != null ? <Tag color="gold">Ret {formatPercent(displayRet)}</Tag> : null}
-                    {displayDd != null ? <Tag color="volcano">DD {formatPercent(displayDd)}</Tag> : null}
+                    {displayRet != null ? <Tag color={metricTagColor(Number(displayRet || 0), 'return')}>Ret {formatPercent(displayRet)}</Tag> : null}
+                    {displayDd != null ? <Tag color={metricTagColor(Number(displayDd || 0), 'drawdown')}>DD {formatPercent(displayDd)}</Tag> : null}
                     {snap?.trades ? <Tag>{snap.trades} сделок</Tag> : null}
                   </Space>
                   {getTsHint(system.name) ? (
@@ -2448,7 +2458,7 @@ const ClientCabinet: React.FC = () => {
                     <Row gutter={[12, 12]}>
                       {startBalance != null ? <Col xs={12} sm={6}><Statistic title="Старт. капитал" value={formatMoney(startBalance)} /></Col> : null}
                       {endBalance != null ? <Col xs={12} sm={6}><Statistic title="Итог. капитал" value={formatMoney(endBalance)} valueStyle={{ color: endBalance >= (startBalance || 0) ? '#f5a623' : '#ff4d4f' }} /></Col> : null}
-                      {displayRet != null ? <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(displayRet)} valueStyle={{ color: Number(displayRet) >= 0 ? '#f5a623' : '#ff4d4f' }} /></Col> : null}
+                      {displayRet != null ? <Col xs={12} sm={6}><Statistic title="Доход" value={formatPercent(displayRet)} valueStyle={{ color: Number(displayRet) >= 0 ? '#1677ff' : '#ff4d4f' }} /></Col> : null}
                       {displayDd != null ? <Col xs={12} sm={6}><Statistic title="Макс. DD" value={formatPercent(displayDd)} valueStyle={{ color: '#ff7a45' }} /></Col> : null}
                       {displayPf != null ? <Col xs={12} sm={6}><Statistic title="PF" value={formatNumber(displayPf)} /></Col> : null}
                       {displayTrades != null ? <Col xs={12} sm={6}><Statistic title="Сделки" value={formatNumber(displayTrades, 0)} /></Col> : null}
@@ -2784,7 +2794,7 @@ const ClientCabinet: React.FC = () => {
           <Tag color="cyan">Макс. депозит: {formatMoney(activeTariffPlan?.max_deposit_total)}</Tag>
           <Tag color="purple">Риск-кап: {formatNumber(activeTariffPlan?.risk_cap_max)}</Tag>
           {activeTariffPlan?.allow_ts_start_stop_requests ? <Tag color="success">Старт/Стоп: вкл</Tag> : null}
-          {isDualTariff ? <Tag color="geekblue">Поток: {tariffModeFilter === 'strategy_client' ? 'Стратегии' : 'Алгофонд'}</Tag> : null}
+          {isDualTariff ? <Tag color="geekblue">Поток: {tariffModeFilter === 'strategy_client' ? 'Стратегии' : '% с профита'}</Tag> : null}
         </Space>
 
         {isDualTariff ? (
@@ -2792,7 +2802,7 @@ const ClientCabinet: React.FC = () => {
             style={{ marginBottom: 12 }}
             options={[
               { label: 'Стратегии', value: 'strategy_client' },
-              { label: 'Алгофонд', value: 'algofund_client' },
+              { label: '% с профита', value: 'algofund_client' },
             ]}
             value={tariffModeFilter}
             onChange={(value) => {
