@@ -1655,6 +1655,13 @@ export const get24hVolume = async (apiKeyName: string, symbol: string) => {
 
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
+    const marketErrorKey = `${apiKeyName}:${normalizeSymbolKey(symbol)}:24hVolume:${entry.exchange}`;
+
+    if (isOfflineSymbolCached(apiKeyName, symbol)) {
+      cache.set(key, { data: 0, timestamp: Date.now() });
+      return 0;
+    }
+
     const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
 
     try {
@@ -1664,7 +1671,18 @@ export const get24hVolume = async (apiKeyName: string, symbol: string) => {
       return volume;
     } catch (error) {
       const err = error as Error;
-      logger.error(`Error getting 24h volume via ccxt: ${err.message}`);
+      if (isBingxOfflineSymbolError(entry.exchange, err.message)) {
+        markOfflineSymbol(apiKeyName, symbol);
+        if (shouldLogMarketErrorNow(marketErrorKey)) {
+          logger.warn(`24h volume symbol offline for ${apiKeyName}/${symbol} on ${entry.exchange}: ${err.message}`);
+        }
+        cache.set(key, { data: 0, timestamp: Date.now() });
+        return 0;
+      }
+
+      if (shouldLogMarketErrorNow(marketErrorKey)) {
+        logger.error(`Error getting 24h volume via ccxt: ${err.message}`);
+      }
       throw error;
     }
   }

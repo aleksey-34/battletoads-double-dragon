@@ -2749,7 +2749,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     [batchEligibleAlgofundTenants],
   );
   const publishedAlgofundSystems = useMemo(
-    () => (((summary?.offerStore?.algofundPublishedSystemNames || summary?.offerStore?.algofundStorefrontSystemNames || [])
+    () => ((summary?.offerStore?.algofundPublishedSystemNames || summary?.offerStore?.algofundStorefrontSystemNames || [])
       .map((name) => String(name || '').trim())
       .filter(Boolean)),
     [summary?.offerStore?.algofundPublishedSystemNames, summary?.offerStore?.algofundStorefrontSystemNames],
@@ -10583,7 +10583,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       )}
                                       {algofundStorefrontSystems.length > 0 ? (
                                         <List
-                                          grid={{ gutter: 12, xs: 1, md: 2, lg: 3, xl: 3 }}
+                                          grid={{ gutter: 12, xs: 1, sm: 2, md: 3, lg: 3, xl: 3 }}
                                           dataSource={algofundStorefrontSystems}
                                           renderItem={(item) => (
                                             <List.Item key={item.systemName}>

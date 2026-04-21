@@ -20,6 +20,8 @@ import logger from '../utils/logger';
 const CANDLE_CACHE_TTL_MS = 25_000;
 interface CandleCacheEntry { data: any[]; fetchedAt: number; }
 const candleAutoCache = new Map<string, CandleCacheEntry>();
+const OFFLINE_SYMBOL_LOG_COOLDOWN_MS = 5 * 60 * 1000;
+const offlineSymbolLogCooldown = new Map<string, number>();
 
 const getCachedMarketData = async (
   apiKeyName: string, symbol: string, interval: string, limit: number,
@@ -47,6 +49,33 @@ setInterval(() => {
     if (now - v.fetchedAt > CANDLE_CACHE_TTL_MS * 2) candleAutoCache.delete(k);
   }
 }, 60_000);
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, until] of offlineSymbolLogCooldown) {
+    if (until <= now) {
+      offlineSymbolLogCooldown.delete(k);
+    }
+  }
+}, 60_000);
+
+const isOfflineSymbolMarketDataError = (errorText: string): boolean => {
+  const text = String(errorText || '').toLowerCase();
+  return text.includes('market symbol offline on bingx')
+    || text.includes('symbol is offline on bingx')
+    || (text.includes('offline currently') && text.includes('validated symbols'));
+};
+
+const shouldLogOfflineSymbolSkip = (apiKeyName: string, strategyId: number): boolean => {
+  const key = `${apiKeyName}:${strategyId}`;
+  const now = Date.now();
+  const until = Number(offlineSymbolLogCooldown.get(key) || 0);
+  if (until > now) {
+    return false;
+  }
+  offlineSymbolLogCooldown.set(key, now + OFFLINE_SYMBOL_LOG_COOLDOWN_MS);
+  return true;
+};
 
 type StrategySignal = 'long' | 'short' | 'none';
 
@@ -3405,6 +3434,7 @@ export const runAutoStrategiesCycle = async () => {
   const jobs = Array.isArray(rows) ? rows : [];
   let processed = 0;
   let failed = 0;
+  let skippedOffline = 0;
 
   for (const row of jobs) {
     const apiKeyName = String(row?.api_key_name || '');
@@ -3424,8 +3454,27 @@ export const runAutoStrategiesCycle = async () => {
       });
       processed += 1;
     } catch (error) {
-      failed += 1;
       const errorText = formatActionError(error);
+      if (isOfflineSymbolMarketDataError(errorText)) {
+        skippedOffline += 1;
+        if (shouldLogOfflineSymbolSkip(apiKeyName, strategyId)) {
+          logger.warn(`Auto-cycle strategy ${strategyId} (${apiKeyName}) skipped: offline symbol on exchange (${errorText})`);
+        }
+
+        try {
+          await updateStrategy(apiKeyName, strategyId, {
+            last_action: 'auto_cycle_skipped_offline_symbol',
+            last_error: errorText,
+          });
+        } catch (persistError) {
+          logger.warn(
+            `Auto-cycle strategy ${strategyId} (${apiKeyName}) failed to persist offline-skip state: ${formatActionError(persistError)}`
+          );
+        }
+        continue;
+      }
+
+      failed += 1;
       logger.warn(`Auto-cycle strategy ${strategyId} (${apiKeyName}) failed: ${errorText}`);
       const isLowLot = errorText.toLowerCase().includes('order size too small');
 
@@ -3462,5 +3511,6 @@ export const runAutoStrategiesCycle = async () => {
     total: jobs.length,
     processed,
     failed,
+    skippedOffline,
   };
 };
