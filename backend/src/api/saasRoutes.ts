@@ -248,6 +248,9 @@ router.patch('/admin/offer-store', async (req, res) => {
       defaults: req.body?.defaults,
       publishedOfferIds: Array.isArray(req.body?.publishedOfferIds) ? req.body.publishedOfferIds.map(String) : undefined,
       curatedOfferIds: Array.isArray(req.body?.curatedOfferIds) ? req.body.curatedOfferIds.map(String) : undefined,
+      algofundPublishedSystemNames: Array.isArray(req.body?.algofundPublishedSystemNames)
+        ? req.body.algofundPublishedSystemNames.map(String)
+        : undefined,
       labels: req.body?.labels && typeof req.body.labels === 'object'
         ? Object.fromEntries(
           Object.entries(req.body.labels)

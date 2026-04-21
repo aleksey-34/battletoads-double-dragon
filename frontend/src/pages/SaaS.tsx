@@ -528,6 +528,7 @@ type SaasSummary = {
     curatedOfferIds?: string[];
     labels?: Record<string, OfferStoreLabel>;
     algofundStorefrontSystemNames?: string[];
+    algofundPublishedSystemNames?: string[];
     tsBacktestSnapshots?: Record<string, {
       apiKeyName?: string;
       systemName?: string;
@@ -2748,10 +2749,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     [batchEligibleAlgofundTenants],
   );
   const publishedAlgofundSystems = useMemo(
-    () => ((summary?.offerStore?.algofundStorefrontSystemNames || [])
+    () => (((summary?.offerStore?.algofundPublishedSystemNames || summary?.offerStore?.algofundStorefrontSystemNames || [])
       .map((name) => String(name || '').trim())
       .filter(Boolean)),
-    [summary?.offerStore?.algofundStorefrontSystemNames],
+    [summary?.offerStore?.algofundPublishedSystemNames, summary?.offerStore?.algofundStorefrontSystemNames],
   );
   const strategySystemProfiles = strategyState?.systemProfiles || [];
   const activeStrategySystemProfile = strategySystemProfiles.find((item) => item.isActive) || null;
@@ -3960,6 +3961,76 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       messageApi.success(published ? 'Offer added to published set' : 'Offer removed from published set');
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Failed to update offer visibility'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const toggleStorefrontTsPublished = async (systemName: string, published: boolean) => {
+    const safeSystemName = String(systemName || '').trim();
+    if (!safeSystemName) {
+      return;
+    }
+    const currentSet = new Set((publishedAlgofundSystems || []).map((item) => String(item || '').trim()).filter(Boolean));
+    if (published) {
+      currentSet.add(safeSystemName);
+    } else {
+      currentSet.delete(safeSystemName);
+    }
+
+    setActionLoading(`storefront-ts:${safeSystemName}:published`);
+    try {
+      await axios.patch('/api/saas/admin/offer-store', {
+        algofundPublishedSystemNames: Array.from(currentSet),
+      });
+      await loadSummary('full');
+      messageApi.success(published ? 'ТС добавлена в published' : 'ТС снята из published');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось обновить published для ТС'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const removeStorefrontTsCurated = async (systemName: string) => {
+    const safeSystemName = String(systemName || '').trim();
+    if (!safeSystemName) {
+      return;
+    }
+    const snapshotEntries = Object.entries(summary?.offerStore?.tsBacktestSnapshots || {});
+    const keysToRemove = snapshotEntries
+      .filter(([key, snapshot]) => {
+        const mapKey = String(key || '').trim();
+        const snapshotSystemName = String((snapshot as any)?.systemName || '').trim();
+        return mapKey === safeSystemName || snapshotSystemName === safeSystemName;
+      })
+      .map(([key]) => String(key || '').trim())
+      .filter(Boolean);
+
+    if (keysToRemove.length === 0) {
+      messageApi.info('Для этой ТС нет snapshot curated-записи');
+      return;
+    }
+
+    const confirmed = window.confirm('Убрать ТС из curated (snapshot) на витрине?');
+    if (!confirmed) {
+      return;
+    }
+
+    const patch: Record<string, null> = {};
+    keysToRemove.forEach((key) => {
+      patch[key] = null;
+    });
+
+    setActionLoading(`storefront-ts:${safeSystemName}:curated-remove`);
+    try {
+      await axios.patch('/api/saas/admin/offer-store', {
+        tsBacktestSnapshotsPatch: patch,
+      });
+      await loadSummary('full');
+      messageApi.success('ТС убрана из curated');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось убрать ТС из curated'));
     } finally {
       setActionLoading('');
     }
@@ -10512,7 +10583,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       )}
                                       {algofundStorefrontSystems.length > 0 ? (
                                         <List
-                                          grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
+                                          grid={{ gutter: 12, xs: 1, md: 2, lg: 3, xl: 3 }}
                                           dataSource={algofundStorefrontSystems}
                                           renderItem={(item) => (
                                             <List.Item key={item.systemName}>
@@ -10591,11 +10662,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                     </Button>
                                                     <Button
                                                       size="small"
-                                                      danger
-                                                      loading={removeStorefrontTarget === item.systemName}
-                                                      onClick={() => void initiateRemoveStorefront(item.systemName)}
+                                                      loading={actionLoading === `storefront-ts:${item.systemName}:published`}
+                                                      onClick={() => { void toggleStorefrontTsPublished(item.systemName, !Boolean(item.isPublished)); }}
                                                     >
-                                                      Снять с витрины
+                                                      {item.isPublished ? 'Снять published' : 'В published'}
+                                                    </Button>
+                                                    <Button
+                                                      size="small"
+                                                      danger
+                                                      loading={actionLoading === `storefront-ts:${item.systemName}:curated-remove`}
+                                                      onClick={() => { void removeStorefrontTsCurated(item.systemName); }}
+                                                    >
+                                                      Убрать из curated
                                                     </Button>
                                                   </Space>
                                                 </Space>
@@ -10809,7 +10887,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           {algofundStorefrontSystems.length > 0 ? (
                             <Card className="battletoads-card" title={<span className="storefront-title-accent">Витрина Алгофонда</span>} style={{ marginBottom: 16 }}>
                               <List
-                                grid={{ gutter: 12, xs: 1, md: 2, xl: 3 }}
+                                grid={{ gutter: 12, xs: 1, md: 2, lg: 3, xl: 3 }}
                                 dataSource={algofundStorefrontSystems}
                                 renderItem={(item) => (
                                   <List.Item key={item.systemName}>

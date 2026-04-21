@@ -138,6 +138,7 @@ export type OfferStoreState = {
   curatedOfferIds?: string[];
   labels?: Record<string, OfferStoreLabel>;
   algofundStorefrontSystemNames?: string[];
+  algofundPublishedSystemNames?: string[];
   tsBacktestSnapshots?: Record<string, {
     systemName?: string;
     setKey?: string;
@@ -1296,6 +1297,7 @@ const MIN_STOREFRONT_TRADES = 1;
 
 const OFFER_STORE_CURATED_IDS_KEY = 'offer.store.curated_ids';
 const OFFER_STORE_LABELS_KEY = 'offer.store.labels';
+const OFFER_STORE_ALGOFUND_PUBLISHED_SYSTEMS_KEY = 'offer.store.algofund_published_system_names';
 
 const DEFAULT_ADMIN_REPORT_SETTINGS: AdminReportSettings = {
   enabled: true,
@@ -4941,11 +4943,15 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   const catalog = storefrontCatalog || sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
   const allOffers = catalog ? getAllOffers(catalog) : [];
   const offerIds = allOffers.map((item) => String(item.offerId));
-  const [defaultsRaw, publishedRaw, curatedRaw, labelsRaw, reviewSnapshots, tsBacktestSnapshot, tsBacktestSnapshots, storefrontRows, publishedTenantRows, cloudTsRows] = await Promise.all([
+  const [defaultsRaw, publishedRaw, curatedRaw, labelsRaw, algofundPublishedRawRow, reviewSnapshots, tsBacktestSnapshot, tsBacktestSnapshots, storefrontRows, publishedTenantRows, cloudTsRows] = await Promise.all([
     getRuntimeFlag('offer.store.defaults', JSON.stringify(DEFAULT_OFFER_STORE_DEFAULTS)),
     getRuntimeFlag('offer.store.published_ids', ''),
     getRuntimeFlag(OFFER_STORE_CURATED_IDS_KEY, '[]'),
     getRuntimeFlag(OFFER_STORE_LABELS_KEY, '{}'),
+    db.get(
+      `SELECT value FROM app_runtime_flags WHERE key = ? LIMIT 1`,
+      [OFFER_STORE_ALGOFUND_PUBLISHED_SYSTEMS_KEY],
+    ) as Promise<{ value?: string } | undefined>,
     getOfferReviewSnapshots(),
     getTsBacktestSnapshot(),
     getTsBacktestSnapshots(),
@@ -4986,6 +4992,28 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   const labelsFromFlagRaw = safeJsonParse<Record<string, unknown>>(labelsRaw, {});
   const publishedSet = new Set(publishedFromFlagNormalized);
   const periodDays = getSweepPeriodDays(sweep, defaults.periodDays);
+  const derivedPublishedAlgofundSystemNames = Array.from(new Set([
+    ...(Array.isArray(storefrontRows) ? storefrontRows : [])
+      .map((row) => asString(row?.system_name, '').trim()),
+    ...(Array.isArray(publishedTenantRows) ? publishedTenantRows : [])
+      .map((row) => asString(row?.system_name, '').trim()),
+    ...(Array.isArray(cloudTsRows) ? cloudTsRows : [])
+      .map((row) => asString(row?.system_name, '').trim()),
+  ]
+    .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::') || name.toUpperCase().startsWith('CLOUD'))
+  ));
+
+  const parsedPublishedAlgofundFromFlag = safeJsonParse<string[]>(
+    asString(algofundPublishedRawRow?.value, '[]'),
+    [],
+  );
+  const hasExplicitPublishedAlgofundFlag = Boolean(asString(algofundPublishedRawRow?.value, '').trim());
+  const algofundPublishedSystemNames = Array.from(new Set(
+    (hasExplicitPublishedAlgofundFlag ? parsedPublishedAlgofundFromFlag : derivedPublishedAlgofundSystemNames)
+      .map((name) => asString(name, '').trim())
+      .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::') || name.toUpperCase().startsWith('CLOUD'))
+  ));
+
   const algofundStorefrontSystemNames = Array.from(new Set([
     ...(Array.isArray(storefrontRows) ? storefrontRows : [])
       .map((row) => asString(row?.system_name, '').trim()),
@@ -5292,6 +5320,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     curatedOfferIds,
     labels,
     algofundStorefrontSystemNames,
+    algofundPublishedSystemNames,
     tsBacktestSnapshots,
     tsBacktestSnapshot,
     offers: combinedRawOffers.map((row) => {
@@ -5338,6 +5367,7 @@ export const updateOfferStoreAdminState = async (payload: {
   publishedOfferIds?: string[];
   curatedOfferIds?: string[];
   labels?: Record<string, OfferStoreLabel>;
+  algofundPublishedSystemNames?: string[];
   reviewSnapshotPatch?: Record<string, Partial<OfferReviewSnapshot> | null>;
   tsBacktestSnapshotPatch?: Partial<TsBacktestSnapshot> | null;
   tsBacktestSnapshotsPatch?: Record<string, Partial<TsBacktestSnapshot> | null>;
@@ -5361,6 +5391,13 @@ export const updateOfferStoreAdminState = async (payload: {
     publishedOfferIds: nextPublished,
     existingOfferIds: offerIds,
   });
+  const nextAlgofundPublishedSystemNames = Array.isArray(payload.algofundPublishedSystemNames)
+    ? Array.from(new Set(
+      payload.algofundPublishedSystemNames
+        .map((name) => asString(name, '').trim())
+        .filter((name) => name.toUpperCase().startsWith('ALGOFUND_MASTER::') || name.toUpperCase().startsWith('CLOUD'))
+    ))
+    : (current.algofundPublishedSystemNames || []);
 
   const nextReviewSnapshots = await getOfferReviewSnapshots();
   const snapshotPatch = payload.reviewSnapshotPatch || {};
@@ -5428,6 +5465,7 @@ export const updateOfferStoreAdminState = async (payload: {
   await setRuntimeFlag('offer.store.published_ids', JSON.stringify(nextPublished));
   await setRuntimeFlag(OFFER_STORE_CURATED_IDS_KEY, JSON.stringify(nextCurated));
   await setRuntimeFlag(OFFER_STORE_LABELS_KEY, JSON.stringify(nextLabels));
+  await setRuntimeFlag(OFFER_STORE_ALGOFUND_PUBLISHED_SYSTEMS_KEY, JSON.stringify(nextAlgofundPublishedSystemNames));
   await setRuntimeFlag('offer.store.review_snapshots', JSON.stringify(nextReviewSnapshots));
   await setRuntimeFlag('offer.store.ts_backtest_snapshot', JSON.stringify(nextTsBacktestSnapshot));
   await setRuntimeFlag('offer.store.ts_backtest_snapshots', JSON.stringify(nextTsBacktestSnapshots));
@@ -11321,6 +11359,17 @@ export const removeAlgofundStorefrontSystem = async (payload: {
     })
   );
   await setRuntimeFlag('offer.store.ts_backtest_snapshots', JSON.stringify(nextTsSnapshotMap));
+
+  const currentAlgofundPublished = safeJsonParse<string[]>(
+    await getRuntimeFlag(OFFER_STORE_ALGOFUND_PUBLISHED_SYSTEMS_KEY, '[]'),
+    [],
+  );
+  const nextAlgofundPublished = Array.from(new Set(
+    currentAlgofundPublished
+      .map((name) => asString(name, '').trim())
+      .filter((name) => name && name !== systemName)
+  ));
+  await setRuntimeFlag(OFFER_STORE_ALGOFUND_PUBLISHED_SYSTEMS_KEY, JSON.stringify(nextAlgofundPublished));
 
   // Storefront is a visibility flag. Keep TS card in Offer/TS lists, only disable vitrine visibility.
   await db.run(
