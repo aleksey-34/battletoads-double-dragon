@@ -67,6 +67,10 @@ const bingxConfirmedOneWay = new Set<string>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 min
 const SYMBOL_MAP_REFRESH_MS = 15 * 60 * 1000; // 15 min
 const CCXT_REQUEST_TIMEOUT_MS = 20000;
+const OFFLINE_SYMBOL_CACHE_MS = 15 * 60 * 1000; // 15 min
+const MARKET_ERROR_LOG_COOLDOWN_MS = 2 * 60 * 1000; // 2 min
+const offlineSymbolUntil = new Map<string, number>();
+const marketErrorLogUntil = new Map<string, number>();
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -78,6 +82,46 @@ const isTransientCcxtError = (error: unknown): boolean => {
     || message.includes('network')
     || message.includes('etimedout')
     || message.includes('econnreset');
+};
+
+const buildOfflineSymbolKey = (apiKeyName: string, symbol: string): string => {
+  return `${String(apiKeyName || '').trim()}:${normalizeSymbolKey(symbol)}`;
+};
+
+const isOfflineSymbolCached = (apiKeyName: string, symbol: string): boolean => {
+  const key = buildOfflineSymbolKey(apiKeyName, symbol);
+  const until = Number(offlineSymbolUntil.get(key) || 0);
+  if (until <= Date.now()) {
+    offlineSymbolUntil.delete(key);
+    return false;
+  }
+  return true;
+};
+
+const markOfflineSymbol = (apiKeyName: string, symbol: string): void => {
+  const key = buildOfflineSymbolKey(apiKeyName, symbol);
+  offlineSymbolUntil.set(key, Date.now() + OFFLINE_SYMBOL_CACHE_MS);
+};
+
+const shouldLogMarketErrorNow = (key: string): boolean => {
+  const now = Date.now();
+  const until = Number(marketErrorLogUntil.get(key) || 0);
+  if (until > now) {
+    return false;
+  }
+  marketErrorLogUntil.set(key, now + MARKET_ERROR_LOG_COOLDOWN_MS);
+  return true;
+};
+
+const isBingxOfflineSymbolError = (exchange: string, message: string): boolean => {
+  const ex = String(exchange || '').toLowerCase();
+  const text = String(message || '').toLowerCase();
+  if (ex !== 'bingx') {
+    return false;
+  }
+  return text.includes('code":109418')
+    || text.includes('code:109418')
+    || (text.includes('offline currently') && text.includes('validated symbols'));
 };
 
 const resetCcxtMarketsCache = (client: any): void => {
@@ -721,6 +765,12 @@ export const getMarketData = async (
 
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
+    const marketErrorKey = `${apiKeyName}:${normalizeSymbolKey(symbol)}:${interval}:${entry.exchange}`;
+
+    if (isOfflineSymbolCached(apiKeyName, symbol)) {
+      throw new Error(`Symbol ${symbol} is offline on ${entry.exchange} (cached)`);
+    }
+
     const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
     const requestedLimit = Number.isFinite(limit) ? Math.floor(limit) : 100;
     const safeLimit = Math.max(1, Math.min(hasRange ? 50000 : 1000, requestedLimit));
@@ -820,7 +870,17 @@ export const getMarketData = async (
       return normalized;
     } catch (error) {
       const err = error as Error;
-      logger.error(`Error fetching market data for ${symbol} via ccxt: ${err.message}`);
+      if (isBingxOfflineSymbolError(entry.exchange, err.message)) {
+        markOfflineSymbol(apiKeyName, symbol);
+        if (shouldLogMarketErrorNow(marketErrorKey)) {
+          logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on ${entry.exchange}: ${err.message}`);
+        }
+        throw new Error(`Market symbol offline on ${entry.exchange}: ${symbol}`);
+      }
+
+      if (shouldLogMarketErrorNow(marketErrorKey)) {
+        logger.error(`Error fetching market data for ${symbol} via ccxt: ${err.message}`);
+      }
       throw error;
     }
   }
