@@ -3919,7 +3919,7 @@ const upsertTenantStrategies = async (
     }
 
     try {
-      const created = await createStrategy(apiKeyName, draft);
+      const created = await createStrategy(apiKeyName, draft, { allowActivePairConflict: true });
       if (created?.id) {
         await markMaterializedRuntimeOrigin(Number(created.id), 'saas_materialize', 1);
       }
@@ -3934,57 +3934,7 @@ const upsertTenantStrategies = async (
         metrics: item.metrics,
       });
     } catch (error) {
-      const message = (error as Error)?.message || '';
-      const pairConflict = /already has an active strategy/i.test(message);
-      if (!pairConflict) {
-        throw error;
-      }
-
-      // Legacy malformed market labels (e.g. OPUSDT/) can miss name-match and hit pair conflict.
-      // Reuse the already-active same-pair strategy for this tenant instead of failing the switch.
-      const draftBase = asString((draft as Partial<Strategy>)?.base_symbol, '').trim().toUpperCase();
-      const draftQuote = asString((draft as Partial<Strategy>)?.quote_symbol, '').trim().toUpperCase();
-      const allOnKey = await getStrategies(apiKeyName, { includeLotPreview: false });
-      const keyRows = Array.isArray(allOnKey) ? allOnKey : [];
-      const isSamePair = (row: any) => {
-        const rowBase = asString(row?.base_symbol, '').trim().toUpperCase();
-        const rowQuote = asString(row?.quote_symbol, '').trim().toUpperCase();
-        return rowBase === draftBase && rowQuote === draftQuote;
-      };
-
-      // Prefer tenant-prefixed runtime strategies, but if the key already runs
-      // non-SAAS names (legacy/manual engines), safely reuse active same-pair rows.
-      const fallback =
-        keyRows.find((row) => {
-          const rowName = asString((row as any)?.name, '');
-          const sameTenant = rowName.startsWith(`SAAS::${tenant.slug}::`);
-          return isSamePair(row) && sameTenant;
-        })
-        || keyRows.find((row) => {
-          const isActive = Number((row as any)?.is_active ? 1 : 0) === 1;
-          return isSamePair(row) && isActive;
-        })
-        || keyRows.find((row) => isSamePair(row));
-
-      if (!fallback?.id) {
-        throw error;
-      }
-
-      const reused = await updateStrategy(apiKeyName, Number(fallback.id), draft, {
-        allowBindingUpdate: true,
-        source: 'saas_materialize_reuse_conflict',
-      });
-      await markMaterializedRuntimeOrigin(Number(reused.id), 'saas_materialize', 1);
-      out.push({
-        id: reused.id,
-        name: reused.name,
-        strategyId: reused.id,
-        offerId: item.offerId,
-        mode: item.record.marketMode,
-        market: item.record.market,
-        type: item.record.strategyType,
-        metrics: item.metrics,
-      });
+      throw error;
     }
   }
 
@@ -6206,8 +6156,9 @@ export const previewAdminSweepBacktest = async (payload?: {
     }
   }
 
-  if (selectedOffers.length === 0) {
-    if (kind === 'offer') {
+  // For TS previews always prefer saved snapshot when available:
+  // this keeps storefront card and first-open modal metrics aligned.
+  if (kind === 'offer' && selectedOffers.length === 0) {
       const fallbackOfferId = asString(offerIds[0], '').trim();
       if (fallbackOfferId) {
         const offerStore = await getOfferStoreAdminState().catch(() => null);
@@ -6268,7 +6219,7 @@ export const previewAdminSweepBacktest = async (payload?: {
         }
       }
     }
-    if (kind === 'algofund-ts') {
+  if (kind === 'algofund-ts') {
       const snapshotMap = await getTsBacktestSnapshots();
       const requestedSetKey = normalizeTsSnapshotMapKey(asString(payload?.setKey, ''));
       const normalizeOfferIds = (raw: unknown): string[] => Array.from(new Set(
@@ -6639,8 +6590,9 @@ export const previewAdminSweepBacktest = async (payload?: {
           };
         }
       }
+    if (selectedOffers.length === 0) {
+      throw new Error('No offers resolved for sweep backtest preview');
     }
-    throw new Error('No offers resolved for sweep backtest preview');
   }
 
   const adjustedSelectedOffers = selectedOffers.map((item) => {

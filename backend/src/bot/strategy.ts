@@ -1528,12 +1528,16 @@ export const getStrategyById = async (
   }
 };
 
-export const createStrategy = async (apiKeyName: string, draft: StrategyDraft): Promise<Strategy> => {
+export const createStrategy = async (
+  apiKeyName: string,
+  draft: StrategyDraft,
+  options?: { allowActivePairConflict?: boolean }
+): Promise<Strategy> => {
   const { db } = await import('../utils/database');
   const apiKeyId = await getApiKeyId(apiKeyName);
 
-  // --- Path A isolation: 1 pair + 1 API key = max 1 active strategy ---
-  {
+  if (!options?.allowActivePairConflict) {
+    // Legacy protection for manual flows. SaaS materialization can allow multiple active strategies per pair.
     const baseNorm = normalizeSymbol(String(draft.base_symbol || DEFAULT_STRATEGY.base_symbol));
     const modeNorm = normalizeMarketMode(draft.market_mode || DEFAULT_STRATEGY.market_mode);
     const quoteNorm = modeNorm === 'mono'
@@ -2644,50 +2648,8 @@ export const executeStrategy = async (
         });
       }
 
-      // ── Pair conflict check: prevent opening if another open strategy uses the same symbol ──
-      const mySymbols = getStrategySymbols(mergedStrategy);
-      if (mySymbols.length > 0 && currentOpen > 0) {
-        const openRows: Array<{ base_symbol: string; quote_symbol: string; market_mode: string; id: number; name: string }> = await db.all(
-          `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode FROM strategies s
-           JOIN trading_system_members tsm ON tsm.strategy_id = s.id
-           WHERE tsm.system_id = ? AND tsm.is_enabled = 1
-           AND s.is_active = 1 AND s.state != 'flat' AND s.id != ?`,
-          [systemRow.system_id, strategyId]
-        );
-
-        const mySymbolSet = new Set(mySymbols.map((s) => String(s).toUpperCase().trim()));
-        const conflicting = openRows.find((row) => {
-          const otherSymbols = getStrategySymbols(row as any);
-          return otherSymbols.some((s) => mySymbolSet.has(String(s).toUpperCase().trim()));
-        });
-
-        if (conflicting) {
-          const conflictSymbols = getStrategySymbols(conflicting as any).filter((s) => mySymbolSet.has(String(s).toUpperCase().trim()));
-          logger.info(`ОП pair conflict: strategy ${strategyId} shares symbol(s) [${conflictSymbols.join(', ')}] with open strategy ${conflicting.id} (${conflicting.name}) in system ${systemRow.system_id}, skipping entry`);
-
-          const updated = await updateStrategy(apiKeyName, strategyId, {
-            ...executionBindingPatch,
-            state: 'flat',
-            entry_ratio: null,
-            tp_anchor_ratio: null,
-            last_signal: signal,
-            last_action: closedAction
-              ? `${closedAction}_op_pair_conflict@${currentRatio}`
-              : `op_pair_conflict@${currentRatio}`,
-            last_error: null,
-          });
-
-          return returnWithProcessedBar({
-            result: `ОП pair conflict with strategy #${conflicting.id} on [${conflictSymbols.join(', ')}], entry skipped`,
-            action: closedAction ? `${closedAction}_op_pair_conflict` : 'op_pair_conflict',
-            strategy: updated,
-            currentRatio,
-            donchianHigh,
-            donchianLow,
-            donchianCenter,
-          });
-        }
-      }
+      // Same-symbol strategies are allowed to compete for OP slots.
+      // max_open_positions is the only limiter at system level.
     }
   }
 
