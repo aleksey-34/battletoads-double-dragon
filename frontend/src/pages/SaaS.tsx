@@ -1312,7 +1312,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     adminTsDraftHint: 'Служебный черновик портфеля для admin. Нужен для публикации admin trading system и контроля состава.',
     selectedOffersHint: 'Выбирайте офферы как товары. Если выбрано несколько, ниже строится SWEEP compare (4D), а не полный API backtest.',
     selectedOffersEmptyHint: 'Офферы не найдены в preset-базе. Показываю fallback из последнего SWEEP/client catalog, если он доступен.',
-    adminCreateHint: 'Admin создаёт клиентов двух типов: Клиент стратегий и Алгофонд. После создания можно сразу открыть и настроить кабинет.',
+    adminCreateHint: 'Admin создаёт клиентов в режимах: Клиент стратегий, Алгофонд или Dual. Для Dual выбираются два тарифа (Strategy + Algofund) из новой сетки Dual Start / Pro / Scale.',
     engineStatus: 'Статус движка',
     engineSystemId: 'System ID',
     engineRunning: 'Торговый движок запущен',
@@ -1429,7 +1429,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     adminTsDraftHint: 'Internal admin portfolio draft used for publishing admin trading system and composition control.',
     selectedOffersHint: 'Pick offers like products. When several are selected, the panel runs SWEEP compare (4D), not full API backtest.',
     selectedOffersEmptyHint: 'No offers found in preset storage. Fallback from latest SWEEP/client catalog is used when available.',
-    adminCreateHint: 'Admin creates two client types: Strategy Client and Algofund. After creation you can open and configure immediately.',
+    adminCreateHint: 'Admin creates clients in three modes: Strategy Client, Algofund, or Dual. Dual mode requires two plans (Strategy + Algofund) from the new Dual Start / Pro / Scale grid.',
     engineStatus: 'Engine status',
     engineSystemId: 'System ID',
     engineRunning: 'Trading engine is running',
@@ -1546,7 +1546,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     adminTsDraftHint: 'Admin trading system yayinlamasi ve kompozisyon kontrolu icin dahili portfoy taslagi.',
     selectedOffersHint: 'Teklifleri urun gibi secin. Birden fazla secimde panel tam API backtest degil SWEEP compare (4D) calistirir.',
     selectedOffersEmptyHint: 'Preset depoda teklif yok. Mumkunse son SWEEP/client catalog fallback gosterilir.',
-    adminCreateHint: 'Admin iki musteri tipi olusturur: Strateji Musterisi ve Algofund. Olusturduktan sonra hemen acip ayarlayabilirsiniz.',
+    adminCreateHint: 'Admin uc modda musteri olusturur: Strateji Musterisi, Algofund veya Dual. Dual modda yeni Dual Start / Pro / Scale tarifesinden hem Strategy hem de Algofund plani secilir.',
     engineStatus: 'Engine durumu',
     engineSystemId: 'System ID',
     engineRunning: 'Trading engine calisiyor',
@@ -2728,6 +2728,56 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'strategy_client' || item.tenant.product_mode === 'dual'),
     [summary?.tenants],
   );
+  const createTenantStrategyPlanOptions = useMemo(
+    () => (summary?.plans || [])
+      .filter((p) => p.product_mode === 'strategy_client')
+      .sort((a, b) => Number(a.original_price_usdt || a.price_usdt || 0) - Number(b.original_price_usdt || b.price_usdt || 0))
+      .map((p) => ({ value: p.code, label: p.title })),
+    [summary?.plans],
+  );
+  const createTenantAlgofundPlanOptions = useMemo(
+    () => (summary?.plans || [])
+      .filter((p) => p.product_mode === 'algofund_client')
+      .sort((a, b) => Number(a.original_price_usdt || a.price_usdt || 0) - Number(b.original_price_usdt || b.price_usdt || 0))
+      .map((p) => ({ value: p.code, label: p.title })),
+    [summary?.plans],
+  );
+
+  useEffect(() => {
+    const hasPlan = (options: Array<{ value: string }>, value: string): boolean => options.some((item) => item.value === value);
+    const firstStrategyPlan = createTenantStrategyPlanOptions[0]?.value || '';
+    const firstAlgofundPlan = createTenantAlgofundPlanOptions[0]?.value || '';
+
+    if (createTenantProductMode === 'dual') {
+      if ((!createTenantPlanCode || !hasPlan(createTenantStrategyPlanOptions, createTenantPlanCode)) && firstStrategyPlan) {
+        setCreateTenantPlanCode(firstStrategyPlan);
+      }
+      if ((!createTenantAlgofundPlanCode || !hasPlan(createTenantAlgofundPlanOptions, createTenantAlgofundPlanCode)) && firstAlgofundPlan) {
+        setCreateTenantAlgofundPlanCode(firstAlgofundPlan);
+      }
+      return;
+    }
+
+    const soloOptions = createTenantProductMode === 'strategy_client'
+      ? createTenantStrategyPlanOptions
+      : createTenantAlgofundPlanOptions;
+    const firstSoloPlan = soloOptions[0]?.value || '';
+
+    if ((!createTenantPlanCode || !hasPlan(soloOptions, createTenantPlanCode)) && firstSoloPlan) {
+      setCreateTenantPlanCode(firstSoloPlan);
+    }
+
+    if (createTenantAlgofundPlanCode) {
+      setCreateTenantAlgofundPlanCode('');
+    }
+  }, [
+    createTenantProductMode,
+    createTenantPlanCode,
+    createTenantAlgofundPlanCode,
+    createTenantStrategyPlanOptions,
+    createTenantAlgofundPlanOptions,
+  ]);
+
   const algofundTenants = useMemo(
     () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client' || item.tenant.product_mode === 'dual'),
     [summary?.tenants],
@@ -9706,12 +9756,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </div>
                             <div>
                               <Text strong>{createTenantProductMode === 'dual' ? 'План стратегий *' : copy.plan + ' *'}</Text>
-                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantPlanCode || undefined} onChange={(v) => setCreateTenantPlanCode(v || '')} options={(summary?.plans || []).filter((p) => createTenantProductMode === 'dual' ? p.product_mode === 'strategy_client' : p.product_mode === createTenantProductMode).map((p) => ({ value: p.code, label: p.title }))} />
+                              <Select
+                                style={{ width: '100%', marginTop: 4 }}
+                                value={createTenantPlanCode || undefined}
+                                onChange={(v) => setCreateTenantPlanCode(v || '')}
+                                options={createTenantProductMode === 'dual'
+                                  ? createTenantStrategyPlanOptions
+                                  : (createTenantProductMode === 'strategy_client' ? createTenantStrategyPlanOptions : createTenantAlgofundPlanOptions)}
+                              />
                             </div>
                             {createTenantProductMode === 'dual' && (
                             <div>
                               <Text strong>План алгофонда *</Text>
-                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantAlgofundPlanCode || undefined} onChange={(v) => setCreateTenantAlgofundPlanCode(v || '')} options={(summary?.plans || []).filter((p) => p.product_mode === 'algofund_client').map((p) => ({ value: p.code, label: p.title }))} />
+                              <Select
+                                style={{ width: '100%', marginTop: 4 }}
+                                value={createTenantAlgofundPlanCode || undefined}
+                                onChange={(v) => setCreateTenantAlgofundPlanCode(v || '')}
+                                options={createTenantAlgofundPlanOptions}
+                              />
                             </div>
                             )}
                             <div>
@@ -10887,7 +10949,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           {algofundStorefrontSystems.length > 0 ? (
                             <Card className="battletoads-card" title={<span className="storefront-title-accent">Витрина Алгофонда</span>} style={{ marginBottom: 16 }}>
                               <List
-                                grid={{ gutter: 12, xs: 1, md: 2, lg: 3, xl: 3 }}
+                                grid={{ gutter: 12, xs: 1, md: 3, lg: 3, xl: 3 }}
                                 dataSource={algofundStorefrontSystems}
                                 renderItem={(item) => (
                                   <List.Item key={item.systemName}>
