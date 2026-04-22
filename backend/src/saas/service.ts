@@ -9763,7 +9763,8 @@ export const getSaasObservabilityAlerts = async () => {
     if (algofundEnabled && !algofundKey) {
       alerts.push({ severity: 'high', type: 'missing_key_algofund', tenantId, tenantSlug: tenant.slug, tenantName: tenant.display_name });
     }
-    if (strategyKey && algofundKey && strategyKey === algofundKey) {
+    const tenantMode = asString(tenant.product_mode, '').trim();
+    if (strategyKey && algofundKey && strategyKey === algofundKey && tenantMode !== 'dual' && strategyEnabled && algofundEnabled) {
       alerts.push({ severity: 'high', type: 'key_conflict_strategy_algofund', tenantId, tenantSlug: tenant.slug, tenantName: tenant.display_name, apiKeyName: strategyKey });
     }
     if (customKey && (customKey === strategyKey || customKey === algofundKey)) {
@@ -9924,6 +9925,49 @@ const getAlgofundPublishedSourceApiKeyName = (publishedSystemName: string): stri
   return '';
 };
 
+const normalizeAlgofundSystemToken = (value: string): string => {
+  return asString(value, '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-');
+};
+
+const resolvePublishedSystem = <T extends { name?: string }>(
+  systems: T[],
+  sourceSystemName: string,
+): T | null => {
+  const target = asString(sourceSystemName, '').trim();
+  if (!target || !Array.isArray(systems) || systems.length === 0) {
+    return null;
+  }
+
+  const exact = systems.find((item) => asString(item?.name, '').trim() === target);
+  if (exact) {
+    return exact;
+  }
+
+  const targetChunks = target.split('::').map((part) => part.trim()).filter(Boolean);
+  const targetPrefix = targetChunks.slice(0, 2).join('::').toUpperCase();
+  const targetToken = normalizeAlgofundSystemToken(targetChunks[targetChunks.length - 1] || target);
+  if (!targetToken) {
+    return null;
+  }
+
+  return systems.find((item) => {
+    const candidateName = asString(item?.name, '').trim();
+    if (!candidateName) {
+      return false;
+    }
+    const candidateChunks = candidateName.split('::').map((part) => part.trim()).filter(Boolean);
+    const candidatePrefix = candidateChunks.slice(0, 2).join('::').toUpperCase();
+    if (targetPrefix && candidatePrefix && targetPrefix !== candidatePrefix) {
+      return false;
+    }
+    const candidateToken = normalizeAlgofundSystemToken(candidateChunks[candidateChunks.length - 1] || candidateName);
+    return candidateToken.includes(targetToken) || targetToken.includes(candidateToken);
+  }) || null;
+};
+
 const getAlgofundEngineState = async (
   tenant: TenantRow,
   profile: AlgofundProfileRow
@@ -9978,7 +10022,7 @@ const materializeAlgofundSystem = async (
 
   if (sourceSystemApiKeyName && sourceSystemName) {
     const sourceSystems = await listTradingSystems(sourceSystemApiKeyName).catch(() => []);
-    const sourceSystem = (Array.isArray(sourceSystems) ? sourceSystems : []).find((item) => asString(item.name, '') === sourceSystemName);
+    const sourceSystem = resolvePublishedSystem(Array.isArray(sourceSystems) ? sourceSystems : [], sourceSystemName);
     if (sourceSystem?.id) {
       const fullSourceSystem = await getTradingSystem(sourceSystemApiKeyName, Number(sourceSystem.id)).catch(() => null);
       const sourceMembers = Array.isArray((fullSourceSystem as any)?.members)
@@ -10024,7 +10068,7 @@ const materializeAlgofundSystem = async (
 
     if (sourceSystemName) {
       const systems = await listTradingSystems(sourceSystemApiKeyName).catch(() => []);
-      const sourceSystem = (Array.isArray(systems) ? systems : []).find((item) => asString(item.name, '') === sourceSystemName);
+      const sourceSystem = resolvePublishedSystem(Array.isArray(systems) ? systems : [], sourceSystemName);
 
       if (sourceSystem?.id) {
         const fullSystem = await getTradingSystem(sourceSystemApiKeyName, Number(sourceSystem.id)).catch(() => null);
@@ -12284,8 +12328,8 @@ export const validateApiKeyNotAssigned = async (
     const crossConflict = await db.get(
       `SELECT scp.tenant_id, t.slug FROM strategy_client_profiles scp
        JOIN tenants t ON t.id = scp.tenant_id
-       WHERE scp.assigned_api_key_name = ?`,
-      [apiKeyName]
+       WHERE scp.assigned_api_key_name = ? AND scp.tenant_id != ?`,
+      [apiKeyName, currentTenantId]
     );
     if (crossConflict) {
       throw new Error(
@@ -12296,8 +12340,8 @@ export const validateApiKeyNotAssigned = async (
     const crossConflict = await db.get(
       `SELECT ap.tenant_id, t.slug FROM algofund_profiles ap
        JOIN tenants t ON t.id = ap.tenant_id
-       WHERE ap.assigned_api_key_name = ?`,
-      [apiKeyName]
+       WHERE ap.assigned_api_key_name = ? AND ap.tenant_id != ?`,
+      [apiKeyName, currentTenantId]
     );
     if (crossConflict) {
       throw new Error(
