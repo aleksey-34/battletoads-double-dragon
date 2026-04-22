@@ -768,9 +768,23 @@ export const getMarketData = async (
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
     const marketErrorKey = `${apiKeyName}:${normalizeSymbolKey(symbol)}:${interval}:${entry.exchange}`;
+    const normalizedSymbol = normalizeSymbolKey(symbol);
 
     if (isOfflineSymbolCached(apiKeyName, symbol)) {
       throw new Error(`Symbol ${symbol} is offline on ${entry.exchange} (cached)`);
+    }
+
+    // Fast-path for BingX: if symbol is absent in loaded swap markets, treat it as offline
+    // and skip remote fetches to avoid repetitive error spam.
+    if (detectExchange(entry.exchange) === 'bingx' && normalizedSymbol) {
+      const symbolMap = await ensureCcxtSymbolMap(entry);
+      if (!symbolMap.has(normalizedSymbol)) {
+        markOfflineSymbol(apiKeyName, symbol);
+        if (shouldLogMarketErrorNow(marketErrorKey)) {
+          logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on ${entry.exchange}: symbol missing in exchange market map`);
+        }
+        throw new Error(`Market symbol offline on ${entry.exchange}: ${symbol}`);
+      }
     }
 
     const ccxtSymbol = await resolveCcxtSymbol(entry, symbol);
