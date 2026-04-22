@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BTDD - Офер для инфлов (2 портфеля, апрель 2026)</title>
+<title>BTDD - Офер для инфлов (Runtime v2, апрель 2026)</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0e1a; color: #e0e0e0; padding: 20px; }
@@ -65,30 +65,56 @@
 <body>
 <div class="container">
 
-<h1>BTDD Platform - 2 портфеля для офера</h1>
-<p class="sub">Актуальные метрики по витрине за 90 дней. Без раскрытия пар, только портфельный уровень для коммуникации с аудиторией.</p>
+<h1>BTDD Platform - 5 готовых TS под офер</h1>
+<p class="sub">Ниже уже не набор модулей, а 5 отдельных торговых систем, которые соответствуют текущим витринным карточкам Algofund. Метрики даны по витрине за 90 дней.</p>
 
-<div class="update-note">Данные обновлены 19 апреля 2026. 300+ стратегий, 10+ торговых систем, 10 000+ бэктестов. Multi-exchange cloud: Bybit, Binance, MEXC, BingX, Bitget, WEEX.</div>
+<div class="update-note">Runtime v2 обновлен 21 апреля 2026 (VPS). Для офера собраны отдельные TS: Conservative Portfolio Cloud и Aggressive Portfolio Cloud. Быстрые TS High Frequency Cloud и Volume Pulse Cloud уже есть в витрине как самостоятельные карточки.</div>
 
 <!-- ===== CONSERVATIVE ===== -->
 <div class="card low">
-  <span class="badge">Консервативный</span>
-  <h2>Conservative Portfolio</h2>
-  <p class="desc">3 внутренних модуля с фокусом на контролируемую просадку и стабильную доходность.</p>
+  <span class="badge">Core TS</span>
+  <h2>Conservative Portfolio Cloud</h2>
+  <p class="desc">Отдельная TS под офер для более ровного профиля риска. Эта карточка теперь существует отдельно в витрине.</p>
   <div class="metrics">
-    <div class="metric"><div class="val">+30.7%</div><div class="lbl">Сред. ret / 90д</div></div>
-    <div class="metric"><div class="val">11.4%</div><div class="lbl">Сред. DD</div></div>
-    <div class="metric"><div class="val">3.69</div><div class="lbl">Сред. PF</div></div>
-    <div class="metric"><div class="val">3</div><div class="lbl">Стратегий</div></div>
+    <div class="metric"><div class="val">+30.7%</div><div class="lbl">ret / 90д</div></div>
+    <div class="metric"><div class="val">11.4%</div><div class="lbl">DD</div></div>
+    <div class="metric"><div class="val">3.69</div><div class="lbl">PF</div></div>
+    <div class="metric"><div class="val">114</div><div class="lbl">Сделок</div></div>
   </div>
   <div class="pairs">
-    <div class="pair-row"><span class="pair-name">Модуль C1</span><span class="pair-stats">ret +9.1% | DD 14.8% | PF 1.96</span></div>
-    <div class="pair-row"><span class="pair-name">Модуль C2</span><span class="pair-stats">ret +35.8% | DD 8.6% | PF 5.01</span></div>
-    <div class="pair-row"><span class="pair-name">Модуль C3</span><span class="pair-stats">ret +47.2% | DD 10.7% | PF 4.12</span></div>
+    <div class="pair-row"><span class="pair-name">Витринная карточка</span><span class="pair-stats">Conservative Portfolio Cloud / conservative-portfolio</span></div>
+    <div class="pair-row"><span class="pair-name">Собрана из</span><span class="pair-stats">safe-yield + somi-alpha + tru-pack</span></div>
+    <div class="pair-row"><span class="pair-name">Профиль</span><span class="pair-stats">ровнее, ниже оборот, прозрачная статистика</span></div>
   </div>
   <div class="details">
-    <strong>Что внутри:</strong> 3 независимых стратегии из витрины с разной логикой входов и частотой сделок. Подбор сделан через cloud selection и robustness-фильтры.<br>
+    <strong>Что внутри:</strong> отдельная TS-карточка под инфл-оффер, а не просто список модулей. Источник состава: Safe Yield Cloud, SOMI Alpha Cloud, TRU Cloud.<br>
+    <strong>Соответствие витрине:</strong> conservative-portfolio.<br>
     <strong>Для кого:</strong> Для аудитории, которая хочет начать с более ровного профиля риска и прозрачной статистики.<br>
+    <strong>Мин. депозит:</strong> $1 000<br>
+    <strong>Формат:</strong> Algofund / Strategy Client
+  </div>
+</div>
+
+<!-- ===== BALANCED ===== -->
+<div class="card mid">
+  <span class="badge">Core TS</span>
+  <h2>Mega Portfolio Cloud</h2>
+  <p class="desc">Сбалансированная отдельная TS-карточка из витрины. Не пакет модулей, а уже готовая самостоятельная система.</p>
+  <div class="metrics">
+    <div class="metric"><div class="val">+123.2%</div><div class="lbl">ret / 90д</div></div>
+    <div class="metric"><div class="val">18.6%</div><div class="lbl">DD</div></div>
+    <div class="metric"><div class="val">4.41</div><div class="lbl">PF</div></div>
+    <div class="metric"><div class="val">411</div><div class="lbl">Сделок</div></div>
+  </div>
+  <div class="pairs">
+    <div class="pair-row"><span class="pair-name">Витринная карточка</span><span class="pair-stats">Mega Portfolio Cloud / mega-portfolio</span></div>
+    <div class="pair-row"><span class="pair-name">Профиль</span><span class="pair-stats">баланс доходности, PF и частоты</span></div>
+    <div class="pair-row"><span class="pair-name">Назначение</span><span class="pair-stats">основной balanced-офер без перегруза по риску</span></div>
+  </div>
+  <div class="details">
+    <strong>Что внутри:</strong> готовая самостоятельная TS из текущей витрины Algofund.<br>
+    <strong>Соответствие витрине:</strong> mega-portfolio.<br>
+    <strong>Для кого:</strong> Для аудитории, которой нужен сильный mid/high профиль без перехода в максимально агрессивный режим.<br>
     <strong>Мин. депозит:</strong> $1 000<br>
     <strong>Формат:</strong> Algofund / Strategy Client
   </div>
@@ -96,26 +122,55 @@
 
 <!-- ===== AGGRESSIVE ===== -->
 <div class="card high">
-  <span class="badge">Агрессивный</span>
-  <h2>Aggressive Portfolio</h2>
-  <p class="desc">3 внутренних модуля с приоритетом на максимальный ретерн и расширенную частоту сигналов.</p>
+  <span class="badge">Core TS</span>
+  <h2>Aggressive Portfolio Cloud</h2>
+  <p class="desc">Отдельная TS под агрессивный офер. Теперь это самостоятельная карточка витрины, а не просто сборка трёх модулей в описании.</p>
   <div class="metrics">
-    <div class="metric"><div class="val">+191.4%</div><div class="lbl">Сред. ret / 90д</div></div>
-    <div class="metric"><div class="val">22.3%</div><div class="lbl">Сред. DD</div></div>
-    <div class="metric"><div class="val">4.24</div><div class="lbl">Сред. PF</div></div>
-    <div class="metric"><div class="val">3</div><div class="lbl">Стратегий</div></div>
+    <div class="metric"><div class="val">+191.4%</div><div class="lbl">ret / 90д</div></div>
+    <div class="metric"><div class="val">22.3%</div><div class="lbl">DD</div></div>
+    <div class="metric"><div class="val">4.24</div><div class="lbl">PF</div></div>
+    <div class="metric"><div class="val">720</div><div class="lbl">Сделок</div></div>
   </div>
   <div class="pairs">
-    <div class="pair-row"><span class="pair-name">Модуль A1</span><span class="pair-stats">ret +191.3% | DD 18.6% | PF 6.22</span></div>
-    <div class="pair-row"><span class="pair-name">Модуль A2</span><span class="pair-stats">ret +197.3% | DD 24.0% | PF 1.63</span></div>
-    <div class="pair-row"><span class="pair-name">Модуль A3</span><span class="pair-stats">ret +185.6% | DD 24.3% | PF 4.87</span></div>
+    <div class="pair-row"><span class="pair-name">Витринная карточка</span><span class="pair-stats">Aggressive Portfolio Cloud / aggressive-portfolio</span></div>
+    <div class="pair-row"><span class="pair-name">Собрана из</span><span class="pair-stats">ordi-mega + bera-pack + ip-pack</span></div>
+    <div class="pair-row"><span class="pair-name">Профиль</span><span class="pair-stats">максимальный ret при повышенной волатильности</span></div>
   </div>
   <div class="details">
-    <strong>Что внутри:</strong> 3 модуля из топ-перформеров витрины с акцентом на высокую доходность и ускоренный оборот сигналов.<br>
+    <strong>Что внутри:</strong> отдельная TS-карточка под агрессивный инфл-оффер. Источник состава: ORDI Mega Cloud, BERA Pack Cloud, IP Protocol Cloud.<br>
+    <strong>Соответствие витрине:</strong> aggressive-portfolio.<br>
     <strong>Для кого:</strong> Для аудитории, которая готова к более высокой волатильности ради максимального потенциала ret/90d.<br>
     <strong>Мин. депозит:</strong> $1 000<br>
     <strong>Формат:</strong> Algofund / Strategy Client
   </div>
+</div>
+
+<!-- ===== FAST TS ===== -->
+<div class="section">
+  <h3>Fast TS line: уже есть на витрине как отдельные системы</h3>
+  <div class="pairs">
+    <div class="pair-row"><span class="pair-name"><strong>High Frequency Cloud / high-freq</strong></span><span class="pair-stats">ret +232.3% | DD 21.6% | PF 2.69 | 893 сделок</span></div>
+    <div class="pair-row"><span class="pair-name"><strong>Volume Pulse Cloud / volume-pulse-v1</strong></span><span class="pair-stats">ret +215.9% | DD 21.5% | PF 2.59 | 747 сделок</span></div>
+  </div>
+  <p><strong>Важно:</strong> это уже отдельные TS на витрине, не составные оферные пакеты. Их можно показывать как fast-line рядом с core-line из трех основных TS.</p>
+</div>
+
+<!-- ===== RUNTIME V2 ===== -->
+<div class="section">
+  <h3>Боевые runtime-метрики (1d/7d/30d)</h3>
+  <p><strong>Источник:</strong> VPS SQLite `live_trade_events` по активным runtime-стратегиям API-ключей HDB_15, HDB_18, ivan_weex_1. Срез после восстановления members.</p>
+  <p><strong>Важно:</strong> в текущей схеме `exit`-события приходят с `position_size = 0`, поэтому корректный денежный PnL/PF по этим событиям не рассчитывается. Для коммуникации используем боевую активность: entries/exits/symbols.</p>
+  <div class="pairs" style="margin-top:12px;">
+    <div class="pair-row"><span class="pair-name"><strong>HDB_15 (ruslan)</strong></span><span class="pair-stats">1d: 6 events (5 entry / 1 exit), symbols: BERAUSDT, FETUSDT, ORDIUSDT, TRUUSDT</span></div>
+    <div class="pair-row"><span class="pair-name"><strong>HDB_18 (ali)</strong></span><span class="pair-stats">1d: 7 events (5 entry / 2 exit), symbols: BERAUSDT, FETUSDT, ORDIUSDT, TRUUSDT</span></div>
+    <div class="pair-row"><span class="pair-name"><strong>ivan_weex_1</strong></span><span class="pair-stats">1d: 0 events (newly materialized, waiting live cycle)</span></div>
+  </div>
+  <div class="pairs">
+    <div class="pair-row"><span class="pair-name"><strong>Aggregate 1d</strong></span><span class="pair-stats">13 events, 10 entries, 3 exits, 4 active symbols</span></div>
+    <div class="pair-row"><span class="pair-name"><strong>Aggregate 7d</strong></span><span class="pair-stats">13 events, 10 entries, 3 exits, 4 active symbols</span></div>
+    <div class="pair-row"><span class="pair-name"><strong>Aggregate 30d</strong></span><span class="pair-stats">13 events, 10 entries, 3 exits, 4 active symbols</span></div>
+  </div>
+  <p>После hotfix и retry-materialize в каждом tenant-engine теперь корректные SAAS-members и max_open_positions=4. Это убирает проблему пустых систем и синхронизирует materialization с runtime-ограничениями.</p>
 </div>
 
 <!-- ===== HOW IT WORKS ===== -->
@@ -175,7 +230,7 @@
   Вопросы: Telegram <a href="https://t.me/yakovbyakov" style="color:#64b5f6">@yakovbyakov</a></p>
 </div>
 
-<p class="disclaimer">Прошлая доходность не гарантирует будущих результатов. Торговля крипто-деривативами несет высокий риск потери капитала. Метрики витрины за 90 дней на дату 19.04.2026, включая комиссии и проскальзывание.</p>
+<p class="disclaimer">Прошлая доходность не гарантирует будущих результатов. Торговля крипто-деривативами несет высокий риск потери капитала. Витринные метрики даны за 90 дней; runtime-блок использует фактические события 1d/7d/30d на дату 20.04.2026.</p>
 
 <button class="copy-btn" onclick="copyAll(this)">Копировать весь текст</button>
 </div>

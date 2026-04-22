@@ -332,10 +332,13 @@ const runDailyIncrementalSweep = async (): Promise<{ status: SchedulerStatus; de
     ]
   );
 
-  // Auto-refresh backtest snapshots in offer store after successful daily sweep
+  // Always refresh storefront snapshots after successful daily research sync.
+  // Force mode guarantees alignment even if interval/settings would otherwise skip.
   try {
     const snapshotResult = await refreshOfferStoreSnapshotsFromSweep({
+      force: true,
       reason: 'daily_sweep_auto',
+      sweepTimestamp: String(sweep?.timestamp || ''),
     });
     logger.info(`[researchScheduler] Auto snapshot refresh: ok=${snapshotResult.ok}, skipped=${snapshotResult.skipped}, systems=${snapshotResult.systemsUpdated}`);
   } catch (err) {

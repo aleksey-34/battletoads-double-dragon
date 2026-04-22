@@ -65,7 +65,7 @@
   <h1>Полный расклад по офферам для инфлов</h1>
   <p class="sub">
     Ниже не "витринные лозунги", а расчетные метрики по бэктест-снапшотам (90d) из runtime-хранилища VPS
-    + отдельная карточка новой TS на объем. Комиссия для модели: <strong>0.12% round-trip</strong>, депозит: <strong>$100,000</strong>,
+    + отдельный блок по двум быстрым TS (high-freq и volume-pulse-v1). Комиссия для модели: <strong>0.12% round-trip</strong>, депозит: <strong>$100,000</strong>,
     средняя загрузка капитала: <strong>25%</strong>.
   </p>
 
@@ -90,16 +90,16 @@
       <tbody>
         <tr>
           <td><strong>Conservative</strong></td>
-          <td>Safe Yield Cloud</td>
-          <td class="good">1.955</td>
-          <td class="good">72.37%</td>
-          <td class="accent">0.30</td>
-          <td>68</td>
-          <td>0.756</td>
-          <td class="good">0.1341%</td>
-          <td class="warn">$2,040</td>
-          <td class="warn">14.83%</td>
-          <td>18 периодов, max 10 баров, avg 2.5</td>
+          <td>Conservative Portfolio Cloud</td>
+          <td class="good">3.693</td>
+          <td class="good">61.25%</td>
+          <td class="accent">1.34</td>
+          <td>114</td>
+          <td>1.267</td>
+          <td class="good">0.2693%</td>
+          <td class="warn">$3,420</td>
+          <td class="warn">11.40%</td>
+          <td>aggregated из safe-yield + somi-alpha + tru-pack</td>
         </tr>
         <tr>
           <td><strong>Balanced</strong></td>
@@ -116,16 +116,16 @@
         </tr>
         <tr>
           <td><strong>Aggressive</strong></td>
-          <td>High Frequency Cloud</td>
-          <td class="warn">1.088</td>
-          <td>37.21%</td>
-          <td class="accent">3.86</td>
-          <td>1,806</td>
-          <td class="bad">20.067</td>
-          <td class="good">0.1164%</td>
-          <td class="bad">$54,180</td>
-          <td class="bad">26.967%</td>
-          <td>14 периодов, max 3 бара, avg 1.43</td>
+          <td>Aggressive Portfolio Cloud</td>
+          <td class="good">4.238</td>
+          <td>44.79%</td>
+          <td class="accent">4.26</td>
+          <td>720</td>
+          <td class="bad">8.000</td>
+          <td class="good">0.2658%</td>
+          <td class="bad">$21,600</td>
+          <td class="bad">22.29%</td>
+          <td>aggregated из ordi-mega + bera-pack + ip-pack</td>
         </tr>
       </tbody>
     </table>
@@ -133,31 +133,53 @@
       *Sharpe proxy рассчитан консервативно как (RET/DD) * sqrt(90/365),
       чтобы не завышать риск-метрику при неоднородной частоте equity points.
       "Средний % профита на сделку" = (прибыль на 100k за период) / число сделок / 100k.
+      Значение Win Rate = 0.00% для fast TS сейчас приходит из snapshot-поля и требует отдельной валидации against raw trades.
     </p>
   </div>
 
   <div class="grid">
     <div class="panel">
-      <h2>2) Карточка новой TS на объем</h2>
-      <p><span class="tag">Новая TS</span><span class="tag">Volume</span><span class="tag">После backend hotfix</span></p>
+      <h2>2) Две быстрые TS сейчас (вместо одной)</h2>
+      <p><span class="tag">Fast TS #1</span><span class="tag">Fast TS #2</span><span class="tag">Runtime flags updated</span></p>
       <table>
+        <thead>
+          <tr>
+            <th>TS</th>
+            <th>RET / 90d</th>
+            <th>PF</th>
+            <th>Max DD</th>
+            <th>Сделок / 90d</th>
+            <th>Сделок / день</th>
+            <th>Комиссии / 90d (100k)</th>
+            <th>Диверсификация</th>
+          </tr>
+        </thead>
         <tbody>
-          <tr><th>Название</th><td><strong>Volume Pulse Cloud v1</strong></td></tr>
-          <tr><th>База расчета</th><td>High Frequency Cloud (ALGOFUND_MASTER::BTDD_D1::high-freq)</td></tr>
-          <tr><th>RET / 90d</th><td class="good">+210.17%</td></tr>
-          <tr><th>Profit Factor</th><td class="warn">1.088</td></tr>
-          <tr><th>Win Rate</th><td>37.21%</td></tr>
-          <tr><th>Sharpe* (консервативный proxy)</th><td class="accent">3.86</td></tr>
-          <tr><th>Сделок / 90d</th><td class="bad">1,806</td></tr>
-          <tr><th>Сделок / день</th><td class="bad">20.067</td></tr>
-          <tr><th>Max Drawdown</th><td class="bad">26.967%</td></tr>
-          <tr><th>Средний профит / сделка (100k)</th><td class="good">$116.37 (0.1164%)</td></tr>
-          <tr><th>Комиссии за 90d (100k)</th><td class="bad">$54,180</td></tr>
-          <tr><th>Периоды просадки</th><td>14 периодов, max 3 бара, avg 1.43 бара</td></tr>
+          <tr>
+            <td><strong>High Frequency Cloud</strong></td>
+            <td class="good">+232.267%</td>
+            <td class="good">2.693</td>
+            <td class="bad">21.617%</td>
+            <td>893</td>
+            <td class="bad">9.922</td>
+            <td class="bad">$26,790</td>
+            <td>BERA(3), ORDI(3), TRU(2), IP(2)</td>
+          </tr>
+          <tr>
+            <td><strong>Volume Pulse Cloud</strong></td>
+            <td class="good">+215.936%</td>
+            <td class="good">2.586</td>
+            <td class="bad">21.453%</td>
+            <td>747</td>
+            <td class="bad">8.300</td>
+            <td class="bad">$22,410</td>
+            <td>BERA(3), ORDI(2), TRU(2)</td>
+          </tr>
         </tbody>
       </table>
       <p class="note">
-        Это именно "TS на объем": максимальная частота входов и высокий оборот. Главный лимитер маржи — комиссия и микрослип.
+        Обе быстрые TS теперь явно multi-symbol в runtime snapshots (через memberSymbolCounts/composition),
+        а не клон одной карточки. Основной лимитер маржи по-прежнему комиссия при высокой частоте.
       </p>
     </div>
 

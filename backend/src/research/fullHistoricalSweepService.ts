@@ -7,7 +7,7 @@ import { Strategy } from '../config/settings';
 import { initResearchDb, getResearchDb } from './db';
 import { initDB } from '../utils/database';
 import logger from '../utils/logger';
-import { buildClientCatalogFromSweepData, CatalogData, SweepData, SweepRecord } from '../saas/service';
+import { buildClientCatalogFromSweepData, CatalogData, SweepData, SweepRecord, refreshOfferStoreSnapshotsFromSweep } from '../saas/service';
 import { importHistoricalArtifactsToResearch } from './importService';
 
 type SweepMode = 'light' | 'heavy';
@@ -933,6 +933,22 @@ const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: Sw
       description: 'Full historical sweep import',
     });
 
+    let snapshotRefreshResult: Awaited<ReturnType<typeof refreshOfferStoreSnapshotsFromSweep>> | null = null;
+    try {
+      snapshotRefreshResult = await refreshOfferStoreSnapshotsFromSweep({
+        force: true,
+        reason: 'research_full_historical_sweep',
+        sweepTimestamp: String(sweepData.timestamp || ''),
+      });
+      appendLogLine(
+        logFilePath,
+        `Snapshot refresh: ok=${snapshotRefreshResult.ok} skipped=${snapshotRefreshResult.skipped} systems=${snapshotRefreshResult.systemsUpdated} offers=${snapshotRefreshResult.offersUpdated}`,
+      );
+    } catch (snapshotError) {
+      appendLogLine(logFilePath, `Snapshot refresh failed: ${(snapshotError as Error).message}`);
+      logger.error(`[fullHistoricalSweep] snapshot refresh failed: ${(snapshotError as Error).message}`);
+    }
+
     appendLogLine(logFilePath, `Saved: ${sweepFilePath}`);
     appendLogLine(logFilePath, `Saved: ${catalogFilePath}`);
     appendLogLine(logFilePath, `Research import: sweepRunId=${importResult.sweepRunId} imported=${importResult.imported} skipped=${importResult.skipped}`);
@@ -955,6 +971,7 @@ const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: Sw
         sweepFilePath,
         catalogFilePath,
         researchImport: importResult,
+        snapshotRefresh: snapshotRefreshResult,
       },
     });
   } catch (error) {

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>BTDD Influencer 3 Strategies - Metrics Report</title>
+<style>
+  :root {
+    --bg: #f7f8fc;
+    --card: #ffffff;
+    --ink: #0f172a;
+    --muted: #475569;
+    --line: #dbe2ea;
+    --ret: #1d4ed8;
+    --pf: #15803d;
+    --dd: #c2410c;
+    --warn: #9f1239;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+    color: var(--ink);
+    background: radial-gradient(circle at 20% -10%, #dbeafe 0%, transparent 42%),
+      radial-gradient(circle at 100% 0%, #fee2e2 0%, transparent 35%), var(--bg);
+    padding: 20px;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  .hero {
+    background: linear-gradient(130deg, #0f172a, #1e293b);
+    color: #e2e8f0;
+    border-radius: 16px;
+    padding: 22px;
+    border: 1px solid #334155;
+    margin-bottom: 16px;
+  }
+  .hero h1 { margin: 0 0 8px; font-size: 24px; }
+  .hero p { margin: 6px 0; color: #cbd5e1; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+  .chip {
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    border: 1px solid #475569;
+    background: #1f2937;
+    color: #e5e7eb;
+  }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .head { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  .head h2 { margin: 0; font-size: 17px; }
+  .head p { margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 8px 12px; border-bottom: 1px solid #eef2f7; font-size: 13px; vertical-align: top; }
+  th { width: 56%; text-align: left; color: #334155; font-weight: 600; }
+  .ret { color: var(--ret); font-weight: 700; }
+  .pf { color: var(--pf); font-weight: 700; }
+  .dd { color: var(--dd); font-weight: 700; }
+  .warn { color: var(--warn); font-weight: 700; }
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    margin-top: 14px;
+    padding: 14px;
+  }
+  .panel h3 { margin: 0 0 8px; font-size: 16px; }
+  .panel p, .panel li { color: var(--muted); font-size: 14px; line-height: 1.5; }
+  .panel ul { margin: 8px 0 0 20px; }
+  .foot {
+    margin-top: 14px;
+    color: #64748b;
+    font-size: 12px;
+  }
+  @media (max-width: 980px) { .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>Пакет метрик для media/influencer_3strategies.html (WEEX контекст)</h1>
+      <p>Отдельный технический отчет по 3 офферам: Conservative, Balanced, Aggressive.</p>
+      <p>Период коммуникации: Jan 2025 - Mar 2026 (около 15 месяцев). Комиссия: 0.12% round-trip, как в исходном оффере.</p>
+      <div class="chips">
+        <span class="chip">Measured: Balanced взят из sourcePortfolioSummary</span>
+        <span class="chip">Estimated: Conservative/Aggressive расширены по данным оффера + допущениям</span>
+        <span class="chip">Deposit model: 100k USDT, avg utilization 25%</span>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <div class="head">
+          <h2>Conservative Portfolio</h2>
+          <p>Низкий риск, market-neutral StatArb</p>
+        </div>
+        <table>
+          <tr><th>Return (годовой)</th><td class="ret">15.00%</td></tr>
+          <tr><th>Max DD</th><td class="dd">1.40%</td></tr>
+          <tr><th>Profit Factor</th><td class="pf">2.71</td></tr>
+          <tr><th>Win Rate</th><td>51.70%</td></tr>
+          <tr><th>Sharpe proxy (Calmar = Return/DD)</th><td>10.71</td></tr>
+          <tr><th>Sortino proxy</th><td>Высокий (профиль с малым DD, точный расчет требует equity points)</td></tr>
+          <tr><th>Средний return/месяц (geom)</th><td class="ret">1.17%</td></tr>
+          <tr><th>Оценка сделок за год</th><td>220</td></tr>
+          <tr><th>Оценка сделок за 15 мес</th><td>275</td></tr>
+          <tr><th>Средняя прибыль на сделку (100k, до комиссий)</th><td class="ret">$68.18</td></tr>
+          <tr><th>Оценка комиссий за 15 мес (100k, util=25%)</th><td class="warn">$8,250</td></tr>
+          <tr><th>Avg payoff ratio (win/loss) from PF+WR</th><td>2.53</td></tr>
+          <tr><th>Expectancy score from PF+WR</th><td>0.826 R</td></tr>
+          <tr><th>Периоды просадки</th><td>Требуются raw equity points (в текущем оффере отсутствуют)</td></tr>
+        </table>
+      </article>
+
+      <article class="card">
+        <div class="head">
+          <h2>Balanced Portfolio</h2>
+          <p>Смешанный DD + StatArb, подтвержденный summary</p>
+        </div>
+        <table>
+          <tr><th>Return (годовой экв.)</th><td class="ret">28.71%</td></tr>
+          <tr><th>Max DD</th><td class="dd">4.42%</td></tr>
+          <tr><th>Profit Factor</th><td class="pf">3.279</td></tr>
+          <tr><th>Win Rate</th><td>43.75%</td></tr>
+          <tr><th>Trades (summary)</th><td>416</td></tr>
+          <tr><th>Sharpe proxy (Calmar = Return/DD)</th><td>6.50</td></tr>
+          <tr><th>Sortino proxy</th><td>Высокий (точный расчет требует шаговую equity серию)</td></tr>
+          <tr><th>Средний return/месяц (geom)</th><td class="ret">2.13%</td></tr>
+          <tr><th>Оценка сделок за год</th><td>332.8 (из 416 за ~15 мес)</td></tr>
+          <tr><th>Средняя прибыль на сделку (100k, до комиссий)</th><td class="ret">$86.27</td></tr>
+          <tr><th>Оценка комиссий за 15 мес (100k, util=25%)</th><td class="warn">$12,480</td></tr>
+          <tr><th>Avg payoff ratio (win/loss) from PF+WR</th><td>4.216</td></tr>
+          <tr><th>Expectancy score from PF+WR</th><td>1.282 R</td></tr>
+          <tr><th>Периоды просадки</th><td>Требуется помесячная/побарная кривая по run для duration-анализа</td></tr>
+        </table>
+      </article>
+
+      <article class="card">
+        <div class="head">
+          <h2>Aggressive Portfolio</h2>
+          <p>High-frequency режим, целевой разгон</p>
+        </div>
+        <table>
+          <tr><th>Target Return (годовой)</th><td class="ret">50.00%+</td></tr>
+          <tr><th>Max DD (target cap)</th><td class="dd">15.00%</td></tr>
+          <tr><th>Profit Factor</th><td class="pf">1.50+</td></tr>
+          <tr><th>Win Rate</th><td>Н/Д в оффере (для модели принято 40%)</td></tr>
+          <tr><th>Trades/day (из оффера)</th><td>7+</td></tr>
+          <tr><th>Sharpe proxy (Calmar = Return/DD)</th><td>3.33</td></tr>
+          <tr><th>Sortino proxy</th><td>Средний/высокий при частых сделках, но чувствителен к проскальзыванию</td></tr>
+          <tr><th>Средний return/месяц (geom)</th><td class="ret">3.44%</td></tr>
+          <tr><th>Оценка сделок за год</th><td>2,555</td></tr>
+          <tr><th>Оценка сделок за 15 мес</th><td>3,193.75</td></tr>
+          <tr><th>Средняя прибыль на сделку (100k, до комиссий)</th><td class="ret">$19.57</td></tr>
+          <tr><th>Оценка комиссий за 15 мес (100k, util=25%)</th><td class="warn">$95,812.50</td></tr>
+          <tr><th>Avg payoff ratio (win/loss) from PF+WR</th><td>2.25</td></tr>
+          <tr><th>Expectancy score from PF+WR</th><td>0.300 R</td></tr>
+          <tr><th>Периоды просадки</th><td>Требуются raw сделки/equity; риск длинных flat-периодов высокий</td></tr>
+        </table>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h3>Ключевые выводы для оффера</h3>
+      <ul>
+        <li>Balanced сейчас имеет наиболее подтвержденный профиль в репозитории: Ret 28.71%, DD 4.42%, PF 3.279, WR 43.75%, 416 сделок.</li>
+        <li>Conservative сильный по Calmar, но для точного Sharpe/Sortino и drawdown-duration нужны исходные equity points/returns series.</li>
+        <li>Aggressive в high-frequency режиме быстро наращивает оборот, но комиссия и микрослиппедж становятся главным лимитером маржи.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <h3>Формулы расчета</h3>
+      <ul>
+        <li>Monthly geom return: (1 + R_annual)^(1/12) - 1</li>
+        <li>Calmar proxy: R_annual / MaxDD</li>
+        <li>Комиссии за период: Deposit * 0.0012 * AvgUtilization * Trades_period</li>
+        <li>Payoff ratio из PF и WR: (PF * (1 - WR)) / WR</li>
+        <li>Expectancy score (R-units): (1 - WR) * (PF - 1)</li>
+      </ul>
+    </section>
+
+    <div class="foot">
+      Источники: media/influencer_3strategies.html, media/influencer_3strategies.txt, results/btdd_d1_client_catalog_2026-03-28T13-15-00-000Z.json (adminTradingSystemDraft.sourcePortfolioSummary).
+      Отчет предназначен для маркетинговой упаковки и pre-sale квалификации, не является инвестиционной рекомендацией.
+    </div>
+  </div>
+</body>
+</html>

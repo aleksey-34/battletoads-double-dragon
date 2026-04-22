@@ -533,31 +533,67 @@ router.post('/auth/client/set-password', authenticateClient, async (req, res) =>
   }
 });
 
-router.get('/auth/client/me', authenticateClient, async (req, res) => {
+router.post('/client/strategy/preview', authenticateClient, async (req, res) => {
   try {
     const session = (req as any).clientAuth;
-    if (!session) {
+    if (!session?.user) {
       return res.status(401).json({ error: 'Unauthorized client session' });
     }
 
-    res.json({ success: true, ...getClientAuthPayloadFromSession(session) });
+    const offerId = String(req.body?.offerId || '').trim();
+    if (!offerId) {
+      return res.status(400).json({ error: 'offerId is required' });
+    }
+    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+    }
+    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+    }
+
+    const preview = await previewStrategyClientOffer(
+      Number(session.user.tenantId),
+      offerId,
+      req.body?.riskLevel,
+      req.body?.tradeFrequencyLevel,
+      toOptionalNumber(req.body?.riskScore),
+      toOptionalNumber(req.body?.tradeFrequencyScore)
+    );
+
+    res.json({ success: true, ...preview });
   } catch (error) {
     const err = error as Error;
-    logger.error(`Client me error: ${err.message}`);
+    logger.error(`Client strategy preview error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/auth/client/logout', authenticateClient, async (req, res) => {
+router.post('/client/strategy/selection-preview', authenticateClient, async (req, res) => {
   try {
     const session = (req as any).clientAuth;
-    if (session?.token) {
-      await revokeClientSession(session.token);
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
     }
-    res.json({ success: true });
+
+    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
+      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
+    }
+    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
+      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+    }
+
+    const preview = await previewStrategyClientSelection(Number(session.user.tenantId), {
+      selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
+      riskLevel: req.body?.riskLevel,
+      tradeFrequencyLevel: req.body?.tradeFrequencyLevel,
+      riskScore: toOptionalNumber(req.body?.riskScore),
+      tradeFrequencyScore: toOptionalNumber(req.body?.tradeFrequencyScore),
+    });
+
+    res.json({ success: true, ...preview });
   } catch (error) {
     const err = error as Error;
-    logger.error(`Client logout error: ${err.message}`);
+    logger.error(`Client strategy selection preview error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -819,71 +855,74 @@ router.post('/client/strategy/backtest-request', authenticateClient, async (req,
   }
 });
 
-router.post('/client/strategy/preview', authenticateClient, async (req, res) => {
+router.get('/auth/client/me', authenticateClient, async (req, res) => {
   try {
     const session = (req as any).clientAuth;
-    if (!session?.user) {
+    if (!session) {
       return res.status(401).json({ error: 'Unauthorized client session' });
     }
 
-    const offerId = String(req.body?.offerId || '').trim();
-    if (!offerId) {
-      return res.status(400).json({ error: 'offerId is required' });
-    }
-    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
-      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
-    }
-    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
-      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
+    res.json({ success: true, ...getClientAuthPayloadFromSession(session) });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client me error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.patch('/client/profile', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user?.tenantId) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
     }
 
-    const preview = await previewStrategyClientOffer(
-      Number(session.user.tenantId),
-      offerId,
-      req.body?.riskLevel,
-      req.body?.tradeFrequencyLevel,
-      toOptionalNumber(req.body?.riskScore),
-      toOptionalNumber(req.body?.tradeFrequencyScore)
+    const displayNameRaw = String(req.body?.displayName || '').trim();
+    if (!displayNameRaw) {
+      return res.status(400).json({ error: 'displayName is required' });
+    }
+    if (displayNameRaw.length > 80) {
+      return res.status(400).json({ error: 'displayName must be 80 characters or less' });
+    }
+
+    const tenantId = Number(session.user.tenantId);
+
+    const result = await db.run(
+      `UPDATE tenants SET display_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [displayNameRaw, tenantId]
     );
 
-    res.json({ success: true, ...preview });
+    if (!result?.changes) {
+      return res.status(404).json({ error: 'Tenant not found' });
+    }
+
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (?, 'client', 'client_display_name_change', ?, CURRENT_TIMESTAMP)`,
+      [tenantId, JSON.stringify({ displayName: displayNameRaw })]
+    );
+
+    res.json({ success: true, displayName: displayNameRaw });
   } catch (error) {
     const err = error as Error;
-    logger.error(`Client strategy preview error: ${err.message}`);
+    logger.error(`Client profile update error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/client/strategy/selection-preview', authenticateClient, async (req, res) => {
+router.post('/auth/client/logout', authenticateClient, async (req, res) => {
   try {
     const session = (req as any).clientAuth;
-    if (!session?.user) {
-      return res.status(401).json({ error: 'Unauthorized client session' });
+    if (session?.token) {
+      await revokeClientSession(session.token);
     }
-
-    if (req.body?.riskLevel !== undefined && !isLevel3(req.body.riskLevel)) {
-      return res.status(400).json({ error: 'riskLevel must be one of: low | medium | high' });
-    }
-    if (req.body?.tradeFrequencyLevel !== undefined && !isLevel3(req.body.tradeFrequencyLevel)) {
-      return res.status(400).json({ error: 'tradeFrequencyLevel must be one of: low | medium | high' });
-    }
-
-    const preview = await previewStrategyClientSelection(Number(session.user.tenantId), {
-      selectedOfferIds: Array.isArray(req.body?.selectedOfferIds) ? req.body.selectedOfferIds.map(String) : undefined,
-      riskLevel: req.body?.riskLevel,
-      tradeFrequencyLevel: req.body?.tradeFrequencyLevel,
-      riskScore: toOptionalNumber(req.body?.riskScore),
-      tradeFrequencyScore: toOptionalNumber(req.body?.tradeFrequencyScore),
-    });
-
-    res.json({ success: true, ...preview });
+    res.json({ success: true });
   } catch (error) {
     const err = error as Error;
-    logger.error(`Client strategy selection preview error: ${err.message}`);
+    logger.error(`Client logout error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
-
 router.get('/client/strategy/custom-ts-draft', authenticateClient, async (req, res) => {
   try {
     const session = (req as any).clientAuth;
@@ -1909,6 +1948,22 @@ router.delete('/backtest/runs/:id', async (req, res) => {
 });
 
 // Применить platform-admin guard ко всем admin маршрутам
+// Проверка статуса API-ключа для Dashboard (валидность, ошибки)
+router.get('/key-status/:key', authenticate, async (req, res) => {
+  const { key } = req.params;
+  try {
+    await getBalances(key);
+    res.json({ status: 'ok' });
+  } catch (error) {
+    const err = error as Error;
+    if (err.message && err.message.match(/invalid|forbidden|apikey|permission|denied/i)) {
+      res.json({ status: 'critical', message: err.message });
+    } else {
+      res.json({ status: 'warning', message: err.message });
+    }
+  }
+});
+
 router.use(requirePlatformAdmin);
 
 router.get('/admin/docs', async (_req, res) => {
@@ -2094,22 +2149,6 @@ router.delete('/api-keys/:id', async (req, res) => {
     const err = error as Error;
     logger.error(`Error deleting API key ${id}: ${err.message}`);
     res.status(500).json({ error: err.message });
-  }
-});
-
-// Проверка статуса API-ключа (валидность, ошибки)
-router.get('/key-status/:key', async (req, res) => {
-  const { key } = req.params;
-  try {
-    await getBalances(key);
-    res.json({ status: 'ok' });
-  } catch (error) {
-    const err = error as Error;
-    if (err.message && err.message.match(/invalid|forbidden|apikey|permission|denied/i)) {
-      res.json({ status: 'critical', message: err.message });
-    } else {
-      res.json({ status: 'warning', message: err.message });
-    }
   }
 });
 

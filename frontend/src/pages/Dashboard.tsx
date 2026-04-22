@@ -1315,10 +1315,15 @@ const Dashboard: React.FC = () => {
     try {
       const res = await axios.get(`/api/key-status/${keyName}`);
       setKeyStatuses((prev) => ({ ...prev, [keyName]: res.data }));
-    } catch {
+    } catch (error: any) {
+      const message = String(
+        error?.response?.data?.message
+        || error?.response?.data?.error
+        || 'Error fetching status'
+      );
       setKeyStatuses((prev) => ({
         ...prev,
-        [keyName]: { status: 'critical', message: 'Error fetching status' },
+        [keyName]: { status: 'critical', message },
       }));
     }
   };
