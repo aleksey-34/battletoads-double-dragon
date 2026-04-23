@@ -1046,6 +1046,7 @@ router.post('/algofund/:tenantId/request', async (req, res) => {
       {
         targetSystemId: toOptionalNumber(req.body.targetSystemId),
         targetSystemName: req.body.targetSystemName ? String(req.body.targetSystemName) : undefined,
+        executionApiKeyName: req.body.executionApiKeyName ? String(req.body.executionApiKeyName).trim() : undefined,
       }
     );
     res.json({ success: true, ...data });

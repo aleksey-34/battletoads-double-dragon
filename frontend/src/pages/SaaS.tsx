@@ -5935,6 +5935,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         note: algofundNote,
         targetSystemId: payload?.targetSystemId,
         targetSystemName: payload?.targetSystemName,
+        executionApiKeyName: algofundApiKeyName || undefined,
       });
       setAlgofundState(response.data);
       setAlgofundNote('');

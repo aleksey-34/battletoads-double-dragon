@@ -30,6 +30,7 @@ type AlgofundRequestPayload = {
   targetSystemId?: number;
   targetSystemName?: string;
   targetApiKeyName?: string;
+  executionApiKeyName?: string;
 };
 
 type PeriodInfo = {
@@ -2479,9 +2480,13 @@ const parseAlgofundRequestPayload = (raw: unknown): AlgofundRequestPayload => {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     const targetSystemId = Math.floor(asNumber((parsed as any)?.targetSystemId, 0));
     const targetSystemName = asString((parsed as any)?.targetSystemName, '');
+    const targetApiKeyName = asString((parsed as any)?.targetApiKeyName, '');
+    const executionApiKeyName = asString((parsed as any)?.executionApiKeyName, '');
     return {
       targetSystemId: targetSystemId > 0 ? targetSystemId : undefined,
       targetSystemName: targetSystemName || undefined,
+      targetApiKeyName: targetApiKeyName || undefined,
+      executionApiKeyName: executionApiKeyName || undefined,
     };
   } catch {
     return {};
@@ -10760,10 +10765,29 @@ export const requestAlgofundAction = async (
   const capabilities = resolvePlanCapabilities(plan);
   // startStopRequests capability no longer gated — instant connect/disconnect for all clients
 
-  const apiKeyName = getAlgofundSystemApiKeyName(tenant, profile);
+  const requestedExecutionApiKeyName = asString(payload.executionApiKeyName, '').trim();
+  const apiKeyName = requestedExecutionApiKeyName || getAlgofundSystemApiKeyName(tenant, profile);
+  if (requestedExecutionApiKeyName) {
+    const exists = await db.get('SELECT id FROM api_keys WHERE name = ? LIMIT 1', [requestedExecutionApiKeyName]);
+    if (!exists) {
+      throw new Error(`API key not found: ${requestedExecutionApiKeyName}`);
+    }
+
+    await db.run(
+      `UPDATE algofund_profiles
+       SET assigned_api_key_name = ?,
+           execution_api_key_name = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [requestedExecutionApiKeyName, requestedExecutionApiKeyName, tenantId]
+    );
+    await syncTenantAssignedApiKeyName(tenantId);
+  }
+
   const requestPayload: AlgofundRequestPayload = {
     targetSystemId: undefined,
     targetSystemName: undefined,
+    executionApiKeyName: requestedExecutionApiKeyName || undefined,
   };
 
   if ((requestType === 'start' || requestType === 'switch_system') && !apiKeyName) {
@@ -10872,7 +10896,8 @@ export const requestAlgofundAction = async (
   if (requestType === 'switch_system') {
     const targetSystemName = asString(requestPayload.targetSystemName, '').trim();
     if (targetSystemName) {
-      const runtimeApiKeyName = asString(getAlgofundExecutionApiKeyName(tenant, profile), '').trim();
+      const runtimeApiKeyName = requestedExecutionApiKeyName
+        || asString(getAlgofundExecutionApiKeyName(tenant, profile), '').trim();
       await db.run(
         `UPDATE algofund_profiles
          SET published_system_name = ?,

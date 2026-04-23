@@ -1218,14 +1218,20 @@ router.post('/client/algofund/request', authenticateClient, async (req, res) => 
       : requestTypeRaw === 'switch_system'
         ? 'switch_system'
         : 'start';
+    const tenantId = Number(session.user.tenantId);
+    const executionApiKeyName = req.body?.executionApiKeyName ? String(req.body.executionApiKeyName).trim() : '';
+    if (executionApiKeyName && !executionApiKeyName.startsWith(`tenant-${tenantId}-`)) {
+      return res.status(403).json({ error: 'executionApiKeyName is not owned by current tenant' });
+    }
 
     const state = await requestAlgofundAction(
-      Number(session.user.tenantId),
+      tenantId,
       requestType,
       String(req.body?.note || ''),
       {
         targetSystemId: toOptionalNumber(req.body?.targetSystemId),
         targetSystemName: req.body?.targetSystemName ? String(req.body.targetSystemName) : undefined,
+        executionApiKeyName: executionApiKeyName || undefined,
       }
     );
 

@@ -1256,10 +1256,10 @@ const Dashboard: React.FC = () => {
         const panelOpened = activePanel.includes(String(key.id));
         const shouldLoadFullStrategies = key.name === preferredKeyName || panelOpened;
         const keySettings = chartSettings[key.name] || defaultChartSetting();
-        const isUnboundResearchLike = !key.tenantDisplayName && /RESEARCH|_SOURCE/i.test(String(key.name || ''));
+        const isUnboundKey = !String(key.tenantDisplayName || '').trim();
 
-        if (isUnboundResearchLike) {
-          setKeyStatuses((prev) => ({ ...prev, [key.name]: { status: 'warning', message: 'No tenant binding' } }));
+        if (isUnboundKey) {
+          setKeyStatuses((prev) => ({ ...prev, [key.name]: { status: 'warning', message: 'No tenant binding (poll skipped)' } }));
           setBalances((prev) => ({ ...prev, [key.name]: [] }));
           setBalancesError((prev) => ({ ...prev, [key.name]: '' }));
           setSymbols((prev) => ({ ...prev, [key.name]: [] }));
@@ -2136,6 +2136,13 @@ const Dashboard: React.FC = () => {
     try {
       const keySettings = chartSettings[keyName] || defaultChartSetting();
       const keyMeta = apiKeys.find((item) => item.name === keyName);
+      if (!String(keyMeta?.tenantDisplayName || '').trim()) {
+        setKeyStatuses((prev) => ({ ...prev, [keyName]: { status: 'warning', message: 'No tenant binding (poll skipped)' } }));
+        setBalances((prev) => ({ ...prev, [keyName]: [] }));
+        setSymbols((prev) => ({ ...prev, [keyName]: [] }));
+        setTradesByKey((prev) => ({ ...prev, [keyName]: [] }));
+        return;
+      }
       const panelOpened = keyMeta ? activePanel.includes(String(keyMeta.id)) : false;
       const shouldLoadFullStrategies = keyName === selectedApiKey || panelOpened;
 
@@ -2231,6 +2238,13 @@ const Dashboard: React.FC = () => {
     });
 
     if (nextState) {
+      if (!String(key.tenantDisplayName || '').trim()) {
+        setKeyStatuses((prev) => ({ ...prev, [key.name]: { status: 'warning', message: 'No tenant binding (poll skipped)' } }));
+        setBalances((prev) => ({ ...prev, [key.name]: [] }));
+        setSymbols((prev) => ({ ...prev, [key.name]: [] }));
+        setTradesByKey((prev) => ({ ...prev, [key.name]: [] }));
+        return;
+      }
       const keySettings = chartSettings[key.name] || defaultChartSetting();
       void fetchKeyStatus(key.name);
       void fetchBalances(key.name);

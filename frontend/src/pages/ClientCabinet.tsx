@@ -1426,6 +1426,12 @@ const ClientCabinet: React.FC = () => {
     requestType: 'start' | 'stop',
     targetSystem?: { id: number; name: string } | null,
   ) => {
+    const chosenExecutionApiKeyName = String(algofundAssignedApiKeyName || algofundAssignedApiKeyResolved || '').trim();
+    if ((requestType === 'start' || requestType === 'stop') && clientApiKeys.length > 1 && !chosenExecutionApiKeyName) {
+      messageApi.warning('У вас несколько API-ключей. Выберите ключ для подключения карточки Алгофонда.');
+      return;
+    }
+
     if ((requestType === 'start' || requestType === 'stop') && !algofundAssignedApiKeyResolved) {
       messageApi.warning('Сначала назначьте отдельный API-ключ для Алгофонда.');
       return;
@@ -1439,12 +1445,14 @@ const ClientCabinet: React.FC = () => {
           note: algofundNote,
           targetSystemId: Number(targetSystem.id),
           targetSystemName: String(targetSystem.name || ''),
+          executionApiKeyName: chosenExecutionApiKeyName || undefined,
         });
       }
 
       const response = await axios.post('/api/client/algofund/request', {
         requestType,
         note: algofundNote,
+        executionApiKeyName: chosenExecutionApiKeyName || undefined,
       });
 
       setWorkspace((current) => {
