@@ -416,6 +416,15 @@ const getStrategySymbols = (strategy: Pick<Strategy, 'market_mode' | 'base_symbo
   );
 };
 
+const getStrategyPairKey = (strategy: Pick<Strategy, 'market_mode' | 'base_symbol' | 'quote_symbol'>): string => {
+  const mode = normalizeMarketMode(strategy.market_mode);
+  const base = normalizeSymbol(String(strategy.base_symbol || ''));
+  const quote = mode === 'mono'
+    ? ''
+    : normalizeSymbol(String(strategy.quote_symbol || ''));
+  return mode === 'mono' ? `mono:${base}` : `synthetic:${base}/${quote}`;
+};
+
 const loadStrategyCandles = async (
   apiKeyName: string,
   strategy: Pick<Strategy, 'market_mode' | 'base_symbol' | 'quote_symbol' | 'base_coef' | 'quote_coef' | 'interval'>,
@@ -2648,8 +2657,47 @@ export const executeStrategy = async (
         });
       }
 
-      // Same-symbol strategies are allowed to compete for OP slots.
-      // max_open_positions is the only limiter at system level.
+      // Pair-level lifecycle guard:
+      // strategies with identical pair key take turns (one open position per pair at a time),
+      // while different pairs compete only via max_open_positions.
+      const myPairKey = getStrategyPairKey(mergedStrategy);
+      if (myPairKey && currentOpen > 0) {
+        const openRows: Array<{ market_mode: string; base_symbol: string; quote_symbol: string; id: number; name: string }> = await db.all(
+          `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode
+           FROM strategies s
+           JOIN trading_system_members tsm ON tsm.strategy_id = s.id
+           WHERE tsm.system_id = ? AND tsm.is_enabled = 1
+             AND s.is_active = 1 AND s.state != 'flat' AND s.id != ?`,
+          [systemRow.system_id, strategyId]
+        );
+
+        const conflicting = openRows.find((row) => getStrategyPairKey(row as any) === myPairKey);
+        if (conflicting) {
+          logger.info(`ОП pair lock: strategy ${strategyId} waits for pair ${myPairKey}; open by strategy ${conflicting.id} (${conflicting.name}) in system ${systemRow.system_id}`);
+
+          const updated = await updateStrategy(apiKeyName, strategyId, {
+            ...executionBindingPatch,
+            state: 'flat',
+            entry_ratio: null,
+            tp_anchor_ratio: null,
+            last_signal: signal,
+            last_action: closedAction
+              ? `${closedAction}_op_pair_lock@${currentRatio}`
+              : `op_pair_lock@${currentRatio}`,
+            last_error: null,
+          });
+
+          return returnWithProcessedBar({
+            result: `ОП pair lock active for ${myPairKey}, entry deferred`,
+            action: closedAction ? `${closedAction}_op_pair_lock` : 'op_pair_lock',
+            strategy: updated,
+            currentRatio,
+            donchianHigh,
+            donchianLow,
+            donchianCenter,
+          });
+        }
+      }
     }
   }
 
