@@ -850,14 +850,14 @@ export const getMarketData = async (
       throw new Error(`Symbol ${symbol} is offline on ${entry.exchange} (cached)`);
     }
 
-    // Fast-path for BingX: if symbol is absent in loaded swap markets, treat it as offline
-    // and skip remote fetches to avoid repetitive error spam.
-    if (detectExchange(entry.exchange) === 'bingx' && normalizedSymbol) {
+    // Fast-path for all CCXT exchanges: if symbol is absent in loaded swap/futures markets,
+    // treat it as offline and skip remote fetches — we never want spot market routing.
+    if (normalizedSymbol) {
       const symbolMap = await ensureCcxtSymbolMap(entry);
       if (!symbolMap.has(normalizedSymbol)) {
         markOfflineSymbol(apiKeyName, symbol);
         if (shouldLogMarketErrorNow(marketErrorKey)) {
-          logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on ${entry.exchange}: symbol missing in exchange market map`);
+          logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on ${entry.exchange}: symbol missing in swap/futures market map`);
         }
         throw new Error(`Market symbol offline on ${entry.exchange}: ${symbol}`);
       }
@@ -1101,15 +1101,16 @@ export const placeOrder = async (
     const rawCcxtSymbol = await resolveCcxtSymbol(entry, symbol, isSpot ? 'spot' : 'swap');
     const ccxtSymbol = isSpot ? toSpotCcxtSymbol(rawCcxtSymbol) : rawCcxtSymbol;
 
-    // BingX fast-path: if symbol is not in swap map, it would be routed to spot endpoint → treat as offline
-    if (!isSpot && entry.exchange === 'bingx') {
+    // Fast-path for all CCXT exchanges: if symbol is absent in swap/futures map, treat as offline.
+    // This prevents accidental spot-market routing when the symbol has no futures contract.
+    if (!isSpot) {
       const normalizedSymbol = normalizeSymbolKey(symbol);
       if (normalizedSymbol && !isOfflineSymbolCached(apiKeyName, symbol)) {
         const symbolMap = await ensureCcxtSymbolMap(entry);
         if (!symbolMap.has(normalizedSymbol)) {
           markOfflineSymbol(apiKeyName, symbol);
-          logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on BingX: symbol missing in swap market map`);
-          throw new Error(`Market symbol offline on bingx: ${symbol}`);
+          logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on ${entry.exchange}: symbol missing in swap/futures market map`);
+          throw new Error(`Market symbol offline on ${entry.exchange}: ${symbol}`);
         }
       }
     }
@@ -1186,10 +1187,10 @@ export const placeOrder = async (
     } catch (error) {
       const err = error as Error;
       // BingX 100004 = routed to spot endpoint (symbol not found in swap markets) → mark offline
-      if (entry.exchange === 'bingx' && !isSpot && isBingxSpotPermissionError(error)) {
+      if (!isSpot && isBingxSpotPermissionError(error)) {
         markOfflineSymbol(apiKeyName, symbol);
-        logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on BingX: spot permission error (symbol has no swap market), marking offline`);
-        throw new Error(`Market symbol offline on bingx: ${symbol}`);
+        logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on ${entry.exchange}: spot permission error (symbol has no swap market), marking offline`);
+        throw new Error(`Market symbol offline on ${entry.exchange}: ${symbol}`);
       }
       logger.error(`Error placing ccxt order for ${apiKeyName} ${symbol} ${side}: ${err.message}`);
       throw error;

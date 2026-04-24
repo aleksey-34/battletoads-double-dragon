@@ -61,9 +61,10 @@ setInterval(() => {
 
 const isOfflineSymbolMarketDataError = (errorText: string): boolean => {
   const text = String(errorText || '').toLowerCase();
-  // Also handle BingX's typo 'validted' instead of 'validated'
-  return text.includes('market symbol offline on bingx')
-    || text.includes('symbol is offline on bingx')
+  // Matches: 'market symbol offline on <any exchange>: <symbol>'
+  // Also handles BingX cached pattern and legacy BingX typo 'validted'
+  return text.includes('market symbol offline on')
+    || text.includes('symbol is offline on')
     || (text.includes('offline currently') && (text.includes('validated symbols') || text.includes('validted')));
 };
 
