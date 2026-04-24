@@ -515,6 +515,28 @@ function PreviewResultModal({
   );
 }
 
+// ─── BT vs RT Types ──────────────────────────────────────────────────────────
+
+type BtRtSnapshot = {
+  id: number;
+  snapshot_date: string;
+  tenant_id: number;
+  api_key_name: string;
+  system_name: string;
+  rt_equity_usd: number | null;
+  rt_return_pct: number | null;
+  rt_entries: number | null;
+  rt_exits: number | null;
+  rt_drawdown_pct: number | null;
+  bt_total_return_pct: number | null;
+  bt_max_dd_pct: number | null;
+  bt_win_rate: number | null;
+  drift_avg_pct: number | null;
+  drift_flag: string | null;
+  drift_alerts_critical: number | null;
+  drift_alerts_warn: number | null;
+};
+
 // ─── Profile Table ───────────────────────────────────────────────────────────
 
 export default function Research() {
@@ -575,6 +597,41 @@ export default function Research() {
   const [hfGenerateLoading, setHfGenerateLoading] = useState(false);
   const [hfTargetTradesPerDay, setHfTargetTradesPerDay] = useState(10);
   const [hfApiKeyName, setHfApiKeyName] = useState('');
+
+  // BT vs RT state
+  const [btRtRows, setBtRtRows] = useState<BtRtSnapshot[]>([]);
+  const [btRtLoading, setBtRtLoading] = useState(false);
+  const [btRtRunLoading, setBtRtRunLoading] = useState(false);
+  const [btRtDays, setBtRtDays] = useState(30);
+  const [btRtApiKey, setBtRtApiKey] = useState('');
+
+  const fetchBtRtSnapshots = useCallback(async () => {
+    setBtRtLoading(true);
+    try {
+      const params: Record<string, string | number> = { days: btRtDays };
+      if (btRtApiKey) params.apiKeyName = btRtApiKey;
+      const res = await axios.get<{ rows: BtRtSnapshot[] }>('/api/saas/bt-rt-snapshots', { params });
+      setBtRtRows(res.data.rows || []);
+    } catch {
+      void message.error('Ошибка загрузки BT vs RT снапшотов');
+    } finally {
+      setBtRtLoading(false);
+    }
+  }, [btRtDays, btRtApiKey]);
+
+  const runBtRtSweep = useCallback(async () => {
+    setBtRtRunLoading(true);
+    try {
+      const today = new Date().toISOString().slice(0, 10);
+      await axios.post('/api/saas/bt-rt-snapshots/run', { date: today });
+      void message.success('BT vs RT sweep запущен');
+      await fetchBtRtSnapshots();
+    } catch {
+      void message.error('Ошибка запуска BT vs RT sweep');
+    } finally {
+      setBtRtRunLoading(false);
+    }
+  }, [fetchBtRtSnapshots]);
 
   const fetchScheduler = useCallback(async () => {
     setSchedulerLoading(true);
@@ -1738,6 +1795,90 @@ export default function Research() {
           </Text>
         </Space>
       </Modal>
+
+      {/* BT vs RT Daily Snapshots */}
+      <Card
+        title="BT vs RT — Сравнение лайва с бектестом"
+        style={{ marginTop: 24 }}
+        extra={
+          <Space>
+            <InputNumber
+              min={1}
+              max={365}
+              value={btRtDays}
+              onChange={(v) => setBtRtDays(Number(v ?? 30))}
+              addonBefore="дней"
+              style={{ width: 120 }}
+            />
+            <Input
+              placeholder="API key (опционально)"
+              value={btRtApiKey}
+              onChange={(e) => setBtRtApiKey(e.target.value)}
+              style={{ width: 180 }}
+            />
+            <Button onClick={() => void fetchBtRtSnapshots()} loading={btRtLoading}>Обновить</Button>
+            <Button type="primary" onClick={() => void runBtRtSweep()} loading={btRtRunLoading}>Запустить sweep сегодня</Button>
+          </Space>
+        }
+      >
+        <Table<BtRtSnapshot>
+          dataSource={btRtRows}
+          rowKey="id"
+          loading={btRtLoading}
+          size="small"
+          pagination={{ pageSize: 50 }}
+          columns={[
+            { title: 'Дата', dataIndex: 'snapshot_date', width: 110 },
+            { title: 'Клиент', dataIndex: 'api_key_name', width: 160, ellipsis: true },
+            { title: 'Система', dataIndex: 'system_name', ellipsis: true },
+            {
+              title: 'RT доходн.%',
+              dataIndex: 'rt_return_pct',
+              width: 100,
+              render: (v: number | null) => v != null ? (
+                <Tag color={v >= 0 ? 'success' : 'error'}>{v.toFixed(2)}%</Tag>
+              ) : '—',
+            },
+            {
+              title: 'BT доходн.%',
+              dataIndex: 'bt_total_return_pct',
+              width: 100,
+              render: (v: number | null) => v != null ? `${v.toFixed(2)}%` : '—',
+            },
+            {
+              title: 'RT DD%',
+              dataIndex: 'rt_drawdown_pct',
+              width: 80,
+              render: (v: number | null) => v != null ? <Text type={Math.abs(v) > 15 ? 'danger' : 'secondary'}>{v.toFixed(1)}%</Text> : '—',
+            },
+            {
+              title: 'BT max DD%',
+              dataIndex: 'bt_max_dd_pct',
+              width: 90,
+              render: (v: number | null) => v != null ? `${v.toFixed(1)}%` : '—',
+            },
+            {
+              title: 'Входы/Выходы',
+              width: 100,
+              render: (_: unknown, row: BtRtSnapshot) => `${row.rt_entries ?? 0}/${row.rt_exits ?? 0}`,
+            },
+            {
+              title: 'Дрейф',
+              dataIndex: 'drift_flag',
+              width: 100,
+              render: (v: string | null, row: BtRtSnapshot) => {
+                const color = v === 'critical' ? 'red' : v === 'warn' ? 'orange' : 'default';
+                return (
+                  <Tooltip title={`critical: ${row.drift_alerts_critical ?? 0}, warn: ${row.drift_alerts_warn ?? 0}, avg: ${row.drift_avg_pct?.toFixed(1) ?? '?'}%`}>
+                    <Tag color={color}>{v || 'ok'}</Tag>
+                  </Tooltip>
+                );
+              },
+            },
+          ]}
+        />
+      </Card>
+
     </div>
   );
 }
