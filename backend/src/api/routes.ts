@@ -3271,11 +3271,29 @@ router.get('/balances/:apiKeyName', async (req, res) => {
 router.get('/positions/:apiKeyName', async (req, res) => {
   const { apiKeyName } = req.params;
   const { symbol } = req.query;
+
+  const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number): Promise<T> => {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        setTimeout(() => reject(new Error('positions request timeout')), timeoutMs);
+      }),
+    ]);
+  };
+
+  const isSoftPositionsError = (message: string): boolean => {
+    return /client not initialized|not initialized|temporarily unavailable|rate limit|too many|429|timeout|positions fetch timeout|network error|service unavailable/i.test(message);
+  };
+
   try {
-    const positions = await getPositions(apiKeyName, symbol as string);
+    const positions = await withTimeout(getPositions(apiKeyName, symbol as string), 8000);
     res.json(positions);
   } catch (error) {
     const err = error as Error;
+    if (isSoftPositionsError(err.message || '')) {
+      logger.warn(`Positions temporary fallback for ${apiKeyName}: ${err.message}`);
+      return res.json([]);
+    }
     res.status(500).json({ error: err.message });
   }
 });
