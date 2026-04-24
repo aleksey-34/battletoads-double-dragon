@@ -47,27 +47,61 @@ export const runMonitoringCycle = async (): Promise<{ processed: number; failed:
   let processed = 0;
   let failed = 0;
 
-  // Ensure all clients initialized first (lightweight, idempotent)
-  for (const apiKeyName of apiKeys) {
-    try { await ensureExchangeClientInitialized(apiKeyName); } catch { /* skip */ }
+  // Fetch exchange info for rate-limit management
+  const keyToExchange = new Map<string, string>();
+  try {
+    const keyRows = await db.all('SELECT name, exchange FROM api_keys');
+    for (const row of keyRows) {
+      keyToExchange.set(String(row?.name || ''), String(row?.exchange || ''));
+    }
+  } catch (e) {
+    logger.warn(`Failed to load key-exchange map: ${(e as Error)?.message}`);
   }
 
-  // Process in parallel batches of MONITORING_CONCURRENCY
-  for (let i = 0; i < apiKeys.length; i += MONITORING_CONCURRENCY) {
-    const batch = apiKeys.slice(i, i + MONITORING_CONCURRENCY);
-    const results = await Promise.allSettled(
-      batch.map(async (apiKeyName) => {
-        await recordMonitoringSnapshot(apiKeyName);
-        return apiKeyName;
-      }),
-    );
-    for (const r of results) {
-      if (r.status === 'fulfilled') {
-        processed += 1;
-      } else {
-        failed += 1;
-        logger.warn(`Monitoring cycle failed for batch item: ${(r.reason as Error)?.message}`);
+  // Separate WEEX keys (rate-limit sensitive) from others
+  const weexKeys = apiKeys.filter(k => keyToExchange.get(k) === 'weex');
+  const otherKeys = apiKeys.filter(k => keyToExchange.get(k) !== 'weex');
+
+  // Ensure all clients initialized first (lightweight, idempotent)
+  for (const apiKeyName of apiKeys) {
+    try {
+      await ensureExchangeClientInitialized(apiKeyName);
+    } catch (e) {
+      logger.debug(`[monitoring] Could not initialize ${apiKeyName}: ${(e as Error)?.message}`);
+    }
+  }
+
+  // Process non-WEEX keys with normal concurrency
+  if (otherKeys.length > 0) {
+    for (let i = 0; i < otherKeys.length; i += MONITORING_CONCURRENCY) {
+      const batch = otherKeys.slice(i, i + MONITORING_CONCURRENCY);
+      const results = await Promise.allSettled(
+        batch.map(async (apiKeyName) => {
+          await recordMonitoringSnapshot(apiKeyName);
+          return apiKeyName;
+        }),
+      );
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          processed += 1;
+        } else {
+          failed += 1;
+          logger.warn(`Monitoring cycle failed for ${r.reason}: ${(r.reason as Error)?.message}`);
+        }
       }
+    }
+  }
+
+  // Process WEEX keys with reduced concurrency (1 at a time, 2 sec delay between)
+  for (const weexKey of weexKeys) {
+    try {
+      await recordMonitoringSnapshot(weexKey);
+      processed += 1;
+      // Stagger WEEX key requests to avoid rate-limit bursts
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    } catch (e) {
+      failed += 1;
+      logger.warn(`Monitoring cycle failed for WEEX key ${weexKey}: ${(e as Error)?.message}`);
     }
   }
 

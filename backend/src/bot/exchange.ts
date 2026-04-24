@@ -558,7 +558,15 @@ const getClientEntry = (apiKeyName: string): ExchangeClientEntry => {
 
 export const initExchangeClient = (apiKey: ApiKey) => {
   logger.info(`Initializing client for key: ${apiKey.name}`);
-  const speedLimit = Math.max(1, Number(apiKey.speed_limit) || 10);
+  
+  // Determine speed limit with exchange-specific defaults
+  let speedLimit = Number(apiKey.speed_limit);
+  if (!Number.isFinite(speedLimit) || speedLimit <= 0) {
+    // WEEX has strict rate limits (~3-5 req/sec), others typically 10 req/sec
+    speedLimit = apiKey.exchange === 'weex' ? 3 : 10;
+  }
+  speedLimit = Math.max(1, speedLimit);
+  
   const limiter = new Bottleneck({
     minTime: 1000 / speedLimit, // requests per second
   });

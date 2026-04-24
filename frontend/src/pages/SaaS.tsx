@@ -1312,7 +1312,7 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     adminTsDraftHint: 'Служебный черновик портфеля для admin. Нужен для публикации admin trading system и контроля состава.',
     selectedOffersHint: 'Выбирайте офферы как товары. Если выбрано несколько, ниже строится SWEEP compare (4D), а не полный API backtest.',
     selectedOffersEmptyHint: 'Офферы не найдены в preset-базе. Показываю fallback из последнего SWEEP/client catalog, если он доступен.',
-    adminCreateHint: 'Сейчас рабочий контур: Dual + % с профита. Для создания клиента выбирается один тариф и один API key без раздельного выбора Strategy/Algofund тарифа.',
+    adminCreateHint: 'Сейчас рабочий контур: Dual + 40% с профита (HWM). Для создания клиента выбирается один тарифный уровень и один API key.',
     engineStatus: 'Статус движка',
     engineSystemId: 'System ID',
     engineRunning: 'Торговый движок запущен',
@@ -2603,7 +2603,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [algofundTenantPlanCode, setAlgofundTenantPlanCode] = useState('');
   const [adminTab, setAdminTab] = useState<AdminTabKey>('clients');
   const [createTenantDisplayName, setCreateTenantDisplayName] = useState('');
-  const [createTenantProductMode, setCreateTenantProductMode] = useState<ProductMode>('strategy_client');
+  const [createTenantProductMode, setCreateTenantProductMode] = useState<ProductMode>('dual');
   const [createTenantPlanCode, setCreateTenantPlanCode] = useState('');
   const [createTenantAlgofundPlanCode, setCreateTenantAlgofundPlanCode] = useState('');
   const [createTenantApiKey, setCreateTenantApiKey] = useState('');
@@ -2742,6 +2742,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       .map((p) => ({ value: p.code, label: p.title })),
     [summary?.plans],
   );
+
+  const derivePairedAlgofundPlanCode = useCallback((strategyPlanCode: string): string => {
+    const suffix = String(strategyPlanCode || '').trim().replace(/^strategy_/, '');
+    if (!suffix) return '';
+    const candidate = `algofund_${suffix}`;
+    const exists = createTenantAlgofundPlanOptions.some((item) => item.value === candidate);
+    return exists ? candidate : '';
+  }, [createTenantAlgofundPlanOptions]);
 
   useEffect(() => {
     const hasPlan = (options: Array<{ value: string }>, value: string): boolean => options.some((item) => item.value === value);
@@ -7368,10 +7376,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     setActionLoading('createTenant');
     try {
+      const pairedAlgofundPlanCode = derivePairedAlgofundPlanCode(createTenantPlanCode);
       await axios.post('/api/saas/admin/tenants', {
         displayName: createTenantDisplayName,
-        productMode: createTenantProductMode,
+        productMode: 'dual',
         planCode: createTenantPlanCode,
+        algofundPlanCode: pairedAlgofundPlanCode || undefined,
         assignedApiKeyName: createTenantApiKey || undefined,
         inlineApiKeyName: createTenantInlineApiKeyName.trim() || undefined,
         inlineApiKey: inlineApiKey || undefined,
@@ -7386,7 +7396,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       });
       messageApi.success(copy.createClientSuccess);
       setCreateTenantDisplayName('');
-      setCreateTenantProductMode('strategy_client');
+      setCreateTenantProductMode('dual');
       setCreateTenantPlanCode('');
       setCreateTenantAlgofundPlanCode('');
       setCreateTenantApiKey('');
@@ -9736,7 +9746,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </div>
                             <div>
                               <Text strong>{copy.tenantMode} *</Text>
-                              <Select style={{ width: '100%', marginTop: 4 }} value={createTenantProductMode} onChange={setCreateTenantProductMode} options={[{ value: 'strategy_client', label: copy.strategyClient }, { value: 'algofund_client', label: copy.algofund }, { value: 'dual', label: 'Dual (стратегии + алгофонд)' }]} />
+                              <Select
+                                style={{ width: '100%', marginTop: 4 }}
+                                value={createTenantProductMode}
+                                onChange={setCreateTenantProductMode}
+                                options={[{ value: 'dual', label: 'Dual (стратегии + алгофонд)' }]}
+                              />
                             </div>
                             <div>
                               <Text strong>{copy.plan + ' *'}</Text>

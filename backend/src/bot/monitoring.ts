@@ -88,10 +88,32 @@ const getApiKeyRow = async (apiKeyName: string): Promise<{ id: number; exchange:
 
 export const recordMonitoringSnapshot = async (apiKeyName: string) => {
   const key = await getApiKeyRow(apiKeyName);
-  const [balances, positions] = await Promise.all([
-    getBalances(apiKeyName),
-    getPositions(apiKeyName),
-  ]);
+
+  // Fetch balances and positions with error tolerance
+  let balances = [];
+  let positions = [];
+  try {
+    [balances, positions] = await Promise.all([
+      getBalances(apiKeyName).catch(e => {
+        const errMsg = (e as Error)?.message || String(e);
+        // Log only if not "Client not initialized" (uninitialized keys are expected to fail)
+        if (!errMsg.includes('Client not initialized')) {
+          console.warn(`[monitoring] getBalances ${apiKeyName} failed: ${errMsg}`);
+        }
+        return [];
+      }),
+      getPositions(apiKeyName).catch(e => {
+        const errMsg = (e as Error)?.message || String(e);
+        if (!errMsg.includes('Client not initialized')) {
+          console.warn(`[monitoring] getPositions ${apiKeyName} failed: ${errMsg}`);
+        }
+        return [];
+      }),
+    ]);
+  } catch (e) {
+    console.error(`[monitoring] Snapshot collection failed for ${apiKeyName}: ${(e as Error)?.message}`);
+    return null; // Skip recording if both fail
+  }
 
   const metrics = calculateMetrics(balances, positions);
   

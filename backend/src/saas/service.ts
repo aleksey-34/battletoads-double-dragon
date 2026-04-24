@@ -4685,9 +4685,24 @@ const ensurePublishedSourceSystem = async (
 
     await ensureSubscription(tenant.id, plan.id, payload.productMode === 'dual' ? plan.product_mode : undefined);
 
-    if (payload.productMode === 'dual' && payload.algofundPlanCode) {
-      const algoPlan = await getPlanByCode(payload.algofundPlanCode);
-      await ensureSubscription(tenant.id, algoPlan.id, algoPlan.product_mode);
+    if (payload.productMode === 'dual') {
+      let pairedAlgofundPlanCode = asString(payload.algofundPlanCode, '').trim();
+      if (!pairedAlgofundPlanCode) {
+        const planCode = asString(plan.code, '');
+        const suffix = planCode.startsWith('strategy_') ? planCode.replace(/^strategy_/, '') : '';
+        if (suffix) {
+          pairedAlgofundPlanCode = `algofund_${suffix}`;
+        }
+      }
+
+      if (pairedAlgofundPlanCode) {
+        try {
+          const algoPlan = await getPlanByCode(pairedAlgofundPlanCode);
+          await ensureSubscription(tenant.id, algoPlan.id, algoPlan.product_mode);
+        } catch (err: any) {
+          logger.warn(`[SaaS] Could not auto-attach algofund plan ${pairedAlgofundPlanCode} for tenant ${tenant.id}: ${err?.message || err}`);
+        }
+      }
     }
 
     if (payload.productMode === 'strategy_client' || payload.productMode === 'dual') {
@@ -9669,8 +9684,8 @@ export const previewClientCustomTsSystemById = async (
 };
 
 export const getSaasObservabilityAlerts = async () => {
-  const [tenantsRows, strategyRows, algofundRows, customRows, switchRows] = await Promise.all([
-    db.all('SELECT id, slug, display_name FROM tenants ORDER BY id ASC'),
+  const [tenantsRows, strategyRows, algofundRows, customRows, switchRows, subscriptionRows] = await Promise.all([
+    db.all('SELECT id, slug, display_name, product_mode FROM tenants ORDER BY id ASC'),
     db.all('SELECT tenant_id, requested_enabled, assigned_api_key_name FROM strategy_client_profiles'),
     db.all('SELECT tenant_id, requested_enabled, assigned_api_key_name FROM algofund_profiles'),
     db.all('SELECT tenant_id, selected_offer_ids_json, assigned_api_key_name, updated_at FROM strategy_client_custom_ts_drafts'),
@@ -9678,17 +9693,31 @@ export const getSaasObservabilityAlerts = async () => {
             FROM saas_audit_log
             WHERE action = 'client_billing_mode_switch_requested'
             ORDER BY id DESC`),
+    db.all(`SELECT s.tenant_id, p.product_mode
+            FROM subscriptions s
+            JOIN plans p ON p.id = s.plan_id`),
   ]);
 
   const strategyByTenant = new Map<number, any>((Array.isArray(strategyRows) ? strategyRows : []).map((row: any) => [Number(row.tenant_id), row]));
   const algofundByTenant = new Map<number, any>((Array.isArray(algofundRows) ? algofundRows : []).map((row: any) => [Number(row.tenant_id), row]));
   const customByTenant = new Map<number, any>((Array.isArray(customRows) ? customRows : []).map((row: any) => [Number(row.tenant_id), row]));
   const latestSwitchByTenant = new Map<number, any>();
+  const subscriptionModesByTenant = new Map<number, Set<string>>();
   for (const row of (Array.isArray(switchRows) ? switchRows : []) as Array<Record<string, unknown>>) {
     const tenantId = Number(row.tenant_id || 0);
     if (tenantId > 0 && !latestSwitchByTenant.has(tenantId)) {
       latestSwitchByTenant.set(tenantId, row);
     }
+  }
+  for (const row of (Array.isArray(subscriptionRows) ? subscriptionRows : []) as Array<Record<string, unknown>>) {
+    const tenantId = Number(row.tenant_id || 0);
+    if (tenantId <= 0) continue;
+    const mode = asString(row.product_mode, '').trim();
+    if (!mode) continue;
+    if (!subscriptionModesByTenant.has(tenantId)) {
+      subscriptionModesByTenant.set(tenantId, new Set<string>());
+    }
+    subscriptionModesByTenant.get(tenantId)?.add(mode);
   }
   const alerts: Array<Record<string, unknown>> = [];
 
@@ -9721,7 +9750,9 @@ export const getSaasObservabilityAlerts = async () => {
       alerts.push({ severity: 'high', type: 'missing_key_algofund', tenantId, tenantSlug: tenant.slug, tenantName: tenant.display_name });
     }
     const tenantMode = asString(tenant.product_mode, '').trim();
-    if (strategyKey && algofundKey && strategyKey === algofundKey && tenantMode !== 'dual' && strategyEnabled && algofundEnabled) {
+    const subscriptionModes = subscriptionModesByTenant.get(tenantId) || new Set<string>();
+    const effectiveDualMode = tenantMode === 'dual' || (subscriptionModes.has('strategy_client') && subscriptionModes.has('algofund_client'));
+    if (strategyKey && algofundKey && strategyKey === algofundKey && !effectiveDualMode && strategyEnabled && algofundEnabled) {
       alerts.push({ severity: 'high', type: 'key_conflict_strategy_algofund', tenantId, tenantSlug: tenant.slug, tenantName: tenant.display_name, apiKeyName: strategyKey });
     }
     if (customKey && (customKey === strategyKey || customKey === algofundKey)) {
