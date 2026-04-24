@@ -1,12 +1,13 @@
 import fs from 'fs';
 import { getDbFilePath, db as mainDb } from '../utils/database';
 import { getLatestResearchArtifactsStatus, loadCatalogAndSweepWithFallback, refreshOfferStoreSnapshotsFromSweep, syncAllTenantStrategyMaxDeposit } from '../saas/service';
+import { runBtRtDailySweep } from '../analytics/btRtSweep';
 import logger from '../utils/logger';
 import { getResearchDb, getResearchDbFilePath } from './db';
 import { importSweepCandidates, registerSweepRun } from './profileService';
 import { startFullHistoricalSweepJob } from './fullHistoricalSweepService';
 
-type SchedulerJobKey = 'daily_incremental_sweep';
+type SchedulerJobKey = 'daily_incremental_sweep' | 'bt_rt_daily_snapshot';
 type SchedulerStatus = 'idle' | 'running' | 'done' | 'failed' | 'skipped';
 type SweepRunMode = 'light' | 'heavy';
 
@@ -69,6 +70,12 @@ const DEFAULT_JOBS: Array<{ job_key: SchedulerJobKey; title: string; hour_utc: n
     title: 'Daily incremental sweep sync',
     hour_utc: 3,
     minute_utc: 15,
+  },
+  {
+    job_key: 'bt_rt_daily_snapshot',
+    title: 'Daily BT vs RT snapshot',
+    hour_utc: 0,
+    minute_utc: 30,
   },
 ];
 
@@ -881,6 +888,19 @@ export const startDailySweepGapBackfillJob = async (maxDays: number = 30, modeIn
 const runSchedulerJobByKey = async (jobKey: SchedulerJobKey): Promise<{ status: SchedulerStatus; details: Record<string, unknown> }> => {
   if (jobKey === 'daily_incremental_sweep') {
     return runDailyIncrementalSweep();
+  }
+
+  if (jobKey === 'bt_rt_daily_snapshot') {
+    const result = await runBtRtDailySweep();
+    return {
+      status: 'done',
+      details: {
+        date: result.date,
+        processed: result.processed,
+        skipped: result.skipped,
+        errors: result.errors,
+      },
+    };
   }
 
   throw new Error(`Unknown scheduler job key: ${jobKey}`);

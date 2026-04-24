@@ -1332,4 +1332,36 @@ router.delete('/admin/tenants/:tenantId', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// BT vs RT daily snapshots
+// ---------------------------------------------------------------------------
+import { getBtRtSnapshots, runBtRtDailySweep } from '../analytics/btRtSweep';
+
+router.get('/bt-rt-snapshots', async (req, res) => {
+  try {
+    const tenantId = req.query.tenantId ? Number(req.query.tenantId) : undefined;
+    const apiKeyName = req.query.apiKeyName ? String(req.query.apiKeyName) : undefined;
+    const days = req.query.days ? Number(req.query.days) : 30;
+    const limit = req.query.limit ? Number(req.query.limit) : 200;
+    const rows = await getBtRtSnapshots({ tenantId, apiKeyName, days, limit });
+    res.json({ rows, count: rows.length });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`BT-RT snapshots error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/bt-rt-snapshots/run', async (req, res) => {
+  try {
+    const date = req.body?.date ? String(req.body.date).slice(0, 10) : undefined;
+    const result = await runBtRtDailySweep(date);
+    res.json(result);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`BT-RT sweep run error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export default router;

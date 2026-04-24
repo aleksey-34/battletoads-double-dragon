@@ -1096,7 +1096,7 @@ export const placeOrder = async (
 
     } catch (error) {
       const err = error as Error;
-      logger.error(`Error placing ccxt order: ${err.message}`);
+      logger.error(`Error placing ccxt order for ${apiKeyName} ${symbol} ${side}: ${err.message}`);
       throw error;
     }
   }
