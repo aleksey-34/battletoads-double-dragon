@@ -84,6 +84,41 @@ const isTransientCcxtError = (error: unknown): boolean => {
     || message.includes('econnreset');
 };
 
+const isRateLimitError = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '').toLowerCase();
+  const code = Number((error as any)?.code ?? (error as any)?.info?.code ?? (error as any)?.data?.code ?? 0);
+  return message.includes('rate limit')
+    || message.includes('ratelimit')
+    || message.includes('too many requests')
+    || code === 429;
+};
+
+/** Pause execution for `ms` milliseconds */
+const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Run an API call through the Bottleneck limiter with automatic retry on rate-limit (429) errors. */
+const scheduleWithRateLimitRetry = async <T>(
+  limiter: import('bottleneck').default,
+  fn: () => Promise<T>,
+  maxRetries = 3,
+): Promise<T> => {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await limiter.schedule(fn);
+    } catch (err) {
+      attempt++;
+      if (attempt <= maxRetries && isRateLimitError(err)) {
+        const backoff = attempt * 2000; // 2s, 4s, 6s
+        logger.warn(`[rate-limit] 429 hit (attempt ${attempt}/${maxRetries}), retrying after ${backoff}ms`);
+        await delayMs(backoff);
+        continue;
+      }
+      throw err;
+    }
+  }
+};
+
 const buildOfflineSymbolKey = (apiKeyName: string, symbol: string): string => {
   return `${String(apiKeyName || '').trim()}:${normalizeSymbolKey(symbol)}`;
 };
@@ -427,6 +462,13 @@ const isBingxTradeEndpointDisabledError = (error: unknown): boolean => {
     || message.includes('trigger frequency limit rule');
 };
 
+// BingX code 100004 = "Spot Trading permission" — means ccxt routed the order to spot endpoint
+// This happens when the symbol is not found in swap markets and falls back to bare symbol (no :USDT)
+const isBingxSpotPermissionError = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '');
+  return message.includes('100004') || message.includes('Spot Trading permission');
+};
+
 const syncCcxtClock = async (apiKeyName: string, entry: CcxtClientEntry): Promise<void> => {
   try {
     if (typeof entry.client.loadTimeDifference === 'function') {
@@ -571,13 +613,15 @@ export const initExchangeClient = (apiKey: ApiKey) => {
   // Determine speed limit with exchange-specific defaults
   let speedLimit = Number(apiKey.speed_limit);
   if (!Number.isFinite(speedLimit) || speedLimit <= 0) {
-    // WEEX has strict rate limits (~3-5 req/sec), others typically 10 req/sec
-    speedLimit = apiKey.exchange === 'weex' ? 3 : 10;
+    // WEEX has strict rate limits: use 2 req/sec to be safe (official limit ~3-5/sec)
+    speedLimit = apiKey.exchange === 'weex' ? 2 : 10;
   }
   speedLimit = Math.max(1, speedLimit);
-  
+
+  const isWeex = apiKey.exchange === 'weex';
   const limiter = new Bottleneck({
-    minTime: 1000 / speedLimit, // requests per second
+    minTime: 1000 / speedLimit, // min gap between requests
+    maxConcurrent: isWeex ? 1 : undefined, // Weex: strictly one request at a time
   });
 
   const exchange = detectExchange(apiKey.exchange);
@@ -1057,6 +1101,19 @@ export const placeOrder = async (
     const rawCcxtSymbol = await resolveCcxtSymbol(entry, symbol, isSpot ? 'spot' : 'swap');
     const ccxtSymbol = isSpot ? toSpotCcxtSymbol(rawCcxtSymbol) : rawCcxtSymbol;
 
+    // BingX fast-path: if symbol is not in swap map, it would be routed to spot endpoint → treat as offline
+    if (!isSpot && entry.exchange === 'bingx') {
+      const normalizedSymbol = normalizeSymbolKey(symbol);
+      if (normalizedSymbol && !isOfflineSymbolCached(apiKeyName, symbol)) {
+        const symbolMap = await ensureCcxtSymbolMap(entry);
+        if (!symbolMap.has(normalizedSymbol)) {
+          markOfflineSymbol(apiKeyName, symbol);
+          logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on BingX: symbol missing in swap market map`);
+          throw new Error(`Market symbol offline on bingx: ${symbol}`);
+        }
+      }
+    }
+
     try {
       const numericPrice = price ? Number(price) : undefined;
       const orderType = price && numericPrice && Number.isFinite(numericPrice) ? 'limit' : 'market';
@@ -1128,6 +1185,12 @@ export const placeOrder = async (
 
     } catch (error) {
       const err = error as Error;
+      // BingX 100004 = routed to spot endpoint (symbol not found in swap markets) → mark offline
+      if (entry.exchange === 'bingx' && !isSpot && isBingxSpotPermissionError(error)) {
+        markOfflineSymbol(apiKeyName, symbol);
+        logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on BingX: spot permission error (symbol has no swap market), marking offline`);
+        throw new Error(`Market symbol offline on bingx: ${symbol}`);
+      }
       logger.error(`Error placing ccxt order for ${apiKeyName} ${symbol} ${side}: ${err.message}`);
       throw error;
     }
@@ -1402,12 +1465,12 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
 
       let positions: any[] = [];
       if (typeof entry.client.fetchPositions === 'function') {
-        const raw = await entry.limiter.schedule(() =>
+        const raw = await scheduleWithRateLimitRetry(entry.limiter, () =>
           entry.client.fetchPositions(resolvedSymbol ? [resolvedSymbol] : undefined)
         );
         positions = Array.isArray(raw) ? raw : [];
       } else if (resolvedSymbol && typeof entry.client.fetchPosition === 'function') {
-        const single = await entry.limiter.schedule(() => entry.client.fetchPosition(resolvedSymbol));
+        const single = await scheduleWithRateLimitRetry(entry.limiter, () => entry.client.fetchPosition(resolvedSymbol));
         positions = single ? [single] : [];
       }
 
@@ -1423,7 +1486,7 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
           const sym = pos?.symbol || resolvedSymbol;
           if (sym && !tickerCache[sym]) {
             try {
-              const ticker: any = await entry.limiter.schedule(() => entry.client.fetchTicker(sym));
+              const ticker: any = await scheduleWithRateLimitRetry(entry.limiter, () => entry.client.fetchTicker(sym));
               tickerCache[sym] = Number(ticker?.last ?? ticker?.info?.fairPrice ?? ticker?.info?.lastPrice ?? 0);
             } catch { /* skip */ }
           }
@@ -2420,7 +2483,7 @@ export const getOpenOrders = async (apiKeyName: string, symbol?: string) => {
 
     try {
       const resolvedSymbol = symbol ? await resolveCcxtSymbol(entry, symbol) : undefined;
-      const orders = await entry.limiter.schedule(() => entry.client.fetchOpenOrders(resolvedSymbol));
+      const orders = await scheduleWithRateLimitRetry(entry.limiter, () => entry.client.fetchOpenOrders(resolvedSymbol));
       const list = Array.isArray(orders) ? orders : [];
 
       return list.map((order: any) => {
