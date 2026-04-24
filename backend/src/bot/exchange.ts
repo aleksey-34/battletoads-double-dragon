@@ -62,6 +62,25 @@ const clients: { [key: string]: ExchangeClientEntry } = {};
 const ccxtClients: { [key: string]: CcxtClientEntry } = {};
 const cache = new Map<string, { data: any; timestamp: number }>();
 const bingxOneWayAttempted = new Set<string>();
+
+// Per-exchange IP-level parent limiters.
+// Multiple API keys on the same exchange all chain through their exchange's parent,
+// preventing IP-level 429 errors when many clients fire requests simultaneously.
+const exchangeParentLimiters = new Map<string, Bottleneck>();
+
+const getOrCreateExchangeParentLimiter = (exchange: string): Bottleneck => {
+  const key = String(exchange || 'unknown').toLowerCase();
+  if (!exchangeParentLimiters.has(key)) {
+    // Weex has strict IP rate limits; cap to 2 concurrent requests + 500ms minimum gap.
+    // Other exchanges are more lenient; allow 4 concurrent at 100ms minimum gap.
+    const isWeex = key === 'weex';
+    exchangeParentLimiters.set(key, new Bottleneck({
+      maxConcurrent: isWeex ? 2 : 4,
+      minTime: isWeex ? 500 : 100,
+    }));
+  }
+  return exchangeParentLimiters.get(key)!;
+};
 // Accounts confirmed to be in one-way mode (keyed by apiKeyName)
 const bingxConfirmedOneWay = new Set<string>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 min
@@ -619,10 +638,14 @@ export const initExchangeClient = (apiKey: ApiKey) => {
   speedLimit = Math.max(1, speedLimit);
 
   const isWeex = apiKey.exchange === 'weex';
+  // Chain the per-key limiter through the exchange-level parent limiter.
+  // This ensures all keys for the same exchange share a global concurrency/rate cap,
+  // preventing IP-level 429s when many clients fire requests simultaneously.
+  const exchangeParent = getOrCreateExchangeParentLimiter(apiKey.exchange || '');
   const limiter = new Bottleneck({
     minTime: 1000 / speedLimit, // min gap between requests
-    maxConcurrent: isWeex ? 1 : undefined, // Weex: strictly one request at a time
-  });
+    maxConcurrent: isWeex ? 1 : undefined, // Weex: strictly one request at a time per key
+  }).chain(exchangeParent);
 
   const exchange = detectExchange(apiKey.exchange);
 

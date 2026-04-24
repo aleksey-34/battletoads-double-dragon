@@ -10013,7 +10013,71 @@ const materializeAlgofundSystem = async (
   ).trim();
   let draftMembers = catalogDraftMembers;
 
-  if (sourceSystemApiKeyName && sourceSystemName) {
+  // Member resolution priority (each step only runs if the previous gave 0 results):
+  //  1. master_card_members — curated card explicitly pinned to this source system (DB, authoritative)
+  //  2. trading_system_members — members of the source TS stored in the DB (DB, live-synced)
+  //  3. live API fetch of source TS via resolvePublishedSystem (network, fuzzy-name fallback)
+  //  4. catalogDraftMembers — sweep-catalog draft (stale partial last resort)
+
+  const buildDraftMemberFromRow = (m: Record<string, unknown>) => ({
+    strategyId: Number(m['strategy_id'] || 0),
+    strategyName: String(m['strategy_name'] || `strategy-${m['strategy_id']}`),
+    strategyType: String(m['strategy_type'] || ''),
+    marketMode: String(m['market_mode'] || ''),
+    market: String(m['base_symbol'] || ''),
+    score: 0,
+    weight: asNumber(m['weight'], 1),
+  });
+
+  if (sourceSystemName) {
+    // Priority 1: master_card_members (curated card linked to this source system name)
+    const cardCode = `CARD::${sourceSystemName.toUpperCase()}`;
+    const card = await db.get<{ id: number }>('SELECT id FROM master_cards WHERE code = ? AND is_active = 1', [cardCode]).catch(() => null);
+    if (card?.id) {
+      const mcRows = (await db.all(
+        `SELECT mcm.strategy_id, mcm.weight, s.name AS strategy_name,
+                s.strategy_type, s.market_mode, s.base_symbol
+         FROM master_card_members mcm
+         JOIN strategies s ON s.id = mcm.strategy_id
+         WHERE mcm.card_id = ? AND mcm.is_enabled = 1`,
+        [card.id]
+      ).catch(() => [])) as Record<string, unknown>[];
+      const cardMembers = mcRows.map(buildDraftMemberFromRow).filter((m: ReturnType<typeof buildDraftMemberFromRow>) => m.strategyId > 0);
+      if (cardMembers.length > 0) {
+        draftMembers = cardMembers;
+        logger.warn(`Algofund materialize [P1-card]: ${cardMembers.length} members from master_card '${cardCode}' for ${tenant.slug}.`);
+      }
+    }
+
+    // Priority 2: trading_system_members from DB (exact name + api key lookup, no fuzzy match)
+    if (draftMembers === catalogDraftMembers && sourceSystemApiKeyName) {
+      const sourceTs = await db.get<{ id: number }>(
+        `SELECT ts.id FROM trading_systems ts
+         JOIN api_keys a ON a.id = ts.api_key_id
+         WHERE ts.name = ? AND a.name = ?
+         LIMIT 1`,
+        [sourceSystemName, sourceSystemApiKeyName]
+      ).catch(() => null);
+      if (sourceTs?.id) {
+        const tsRows = (await db.all(
+          `SELECT tsm.strategy_id, tsm.weight, s.name AS strategy_name,
+                  s.strategy_type, s.market_mode, s.base_symbol
+           FROM trading_system_members tsm
+           JOIN strategies s ON s.id = tsm.strategy_id
+           WHERE tsm.system_id = ? AND tsm.is_enabled = 1`,
+          [sourceTs.id]
+        ).catch(() => [])) as Record<string, unknown>[];
+        const tsMembers = tsRows.map(buildDraftMemberFromRow).filter((m: ReturnType<typeof buildDraftMemberFromRow>) => m.strategyId > 0);
+        if (tsMembers.length > 0) {
+          draftMembers = tsMembers;
+          logger.warn(`Algofund materialize [P2-db-ts]: ${tsMembers.length} members from trading_system id=${sourceTs.id} ('${sourceSystemName}') for ${tenant.slug}.`);
+        }
+      }
+    }
+  }
+
+  // Priority 3: live API fetch (network) — only if DB gave nothing
+  if (draftMembers === catalogDraftMembers && sourceSystemApiKeyName && sourceSystemName) {
     const sourceSystems = await listTradingSystems(sourceSystemApiKeyName).catch(() => []);
     const sourceSystem = resolvePublishedSystem(Array.isArray(sourceSystems) ? sourceSystems : [], sourceSystemName);
     if (sourceSystem?.id) {
@@ -10034,9 +10098,13 @@ const materializeAlgofundSystem = async (
 
       if (sourceMembers.length > 0) {
         draftMembers = sourceMembers;
-        logger.warn(`Algofund materialize: using published source system members (${sourceMembers.length}) from ${sourceSystemName} instead of latest admin draft.`);
+        logger.warn(`Algofund materialize [P3-live-api]: ${sourceMembers.length} members from live API TS '${sourceSystemName}' for ${tenant.slug}.`);
       }
     }
+  }
+
+  if (draftMembers === catalogDraftMembers && catalogDraftMembers.length > 0) {
+    logger.warn(`Algofund materialize [P4-catalog-draft]: falling back to ${catalogDraftMembers.length} catalog draft members for ${tenant.slug}. DB and live API sources were empty.`);
   }
 
   if (draftMembers.length === 0) {
