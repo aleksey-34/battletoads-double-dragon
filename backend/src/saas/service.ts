@@ -6546,15 +6546,11 @@ export const previewAdminSweepBacktest = async (payload?: {
           const targetPnl = targetFinalEquity - initialBalance;
           if (Math.abs(currentPnl) > 1e-6) {
             const pnlScale = targetPnl / currentPnl;
+            // Use simple linear PnL rescale (not compound) to avoid exponential spike
+            // at the end of the equity curve when pnlScale is applied with reinvest.
             adjustedSnapshotEquity = adjustedSnapshotEquity.map((point) => ({
               time: point.time,
-              equity: scaleEquityByRiskWithReinvest(
-                asNumber(point.equity, initialBalance),
-                initialBalance,
-                initialBalance,
-                pnlScale,
-                reinvestShare,
-              ),
+              equity: Number((initialBalance + (asNumber(point.equity, initialBalance) - initialBalance) * pnlScale).toFixed(4)),
             }));
           }
           // Keep curve shape continuous: avoid hard-forcing only the final point,
