@@ -6475,6 +6475,8 @@ export const previewAdminSweepBacktest = async (payload?: {
           const snapshotBacktestSettings = (snapshot.backtestSettings && typeof snapshot.backtestSettings === 'object')
             ? (snapshot.backtestSettings as Record<string, unknown>)
             : {};
+          const snapshotSavedMaxOpenPositions = Math.max(0, Math.floor(asNumber(snapshotBacktestSettings.maxOpenPositions, 0)));
+          const snapshotHasExplicitOpInSavedMetrics = snapshotSavedMaxOpenPositions > 0;
           const snapshotRiskScore = clampNumber(asNumber(snapshotBacktestSettings.riskScore, 5), 0, 10);
           const snapshotTradeFrequencyScore = clampNumber(asNumber(snapshotBacktestSettings.tradeFrequencyScore, 5), 0, 10);
           const snapshotRiskScaleMaxPercent = clampNumber(asNumber(snapshotBacktestSettings.riskScaleMaxPercent, 100), 0, 400);
@@ -6484,12 +6486,16 @@ export const previewAdminSweepBacktest = async (payload?: {
           const relativeTradeMul = tradeMul / Math.max(0.01, snapshotTradeMul);
 
           const adjustedSnapshotMetrics = adjustPreviewMetrics(baselineMetrics, relativeRiskMul, relativeTradeMul);
-          const snapshotSlotRatio = maxOpenPositions > 0
+          // Legacy snapshots (without explicit maxOpenPositions in saved settings)
+          // may not include OP impact in stored metrics, so we approximate it here.
+          // For snapshots saved with explicit OP, do not re-apply OP factors.
+          const shouldApplyLegacyOpApprox = maxOpenPositions > 0 && !snapshotHasExplicitOpInSavedMetrics;
+          const snapshotSlotRatio = shouldApplyLegacyOpApprox
             ? Math.min(1, maxOpenPositions / Math.max(1, snapshotOfferIds.length))
             : 1;
-          const snapshotRetFactor = maxOpenPositions > 0 ? (0.6 + 0.4 * snapshotSlotRatio) : 1;
-          const snapshotDdFactor = maxOpenPositions > 0 ? (0.55 + 0.45 * snapshotSlotRatio) : 1;
-          const snapshotTradeFactor = maxOpenPositions > 0 ? snapshotSlotRatio : 1;
+          const snapshotRetFactor = shouldApplyLegacyOpApprox ? (0.6 + 0.4 * snapshotSlotRatio) : 1;
+          const snapshotDdFactor = shouldApplyLegacyOpApprox ? (0.55 + 0.45 * snapshotSlotRatio) : 1;
+          const snapshotTradeFactor = shouldApplyLegacyOpApprox ? snapshotSlotRatio : 1;
           const adjustedSnapshotMetricsWithOp = {
             ...adjustedSnapshotMetrics,
             ret: Number((adjustedSnapshotMetrics.ret * snapshotRetFactor).toFixed(3)),
@@ -6546,12 +6552,8 @@ export const previewAdminSweepBacktest = async (payload?: {
               ),
             }));
           }
-          if (adjustedSnapshotEquity.length > 0) {
-            adjustedSnapshotEquity[adjustedSnapshotEquity.length - 1] = {
-              ...adjustedSnapshotEquity[adjustedSnapshotEquity.length - 1],
-              equity: targetFinalEquity,
-            };
-          }
+          // Keep curve shape continuous: avoid hard-forcing only the final point,
+          // which can create a visual vertical spike on the chart.
 
           const snapshotCurves = buildDerivedPreviewCurves(adjustedSnapshotEquity, initialBalance, riskScore);
 
@@ -9411,7 +9413,9 @@ export const updateStrategyClientCustomTsDraft = async (
       JSON.stringify({
         tenantSlug: tenant.slug,
         selectedOffersCount: filteredIds.length,
+        prevOp: Math.max(1, Math.floor(asNumber(existing?.op_value, 1))),
         op,
+        opChanged: Math.max(1, Math.floor(asNumber(existing?.op_value, 1))) !== op,
         assignedApiKeyName,
       }),
     ]
