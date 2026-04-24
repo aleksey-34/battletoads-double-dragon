@@ -3483,12 +3483,25 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const nowSec = Math.floor(Date.now() / 1000);
     const dayS = 86400;
     const startSec = nowSec - (equityPoints.length - 1) * dayS;
-    return equityPoints
+    const mapped = equityPoints
       .map((equity: number, index: number) => ({
         time: startSec + index * dayS,
         equity: Number(equity),
       }))
       .filter((point: { time: number; equity: number }) => Number.isFinite(point.time) && Number.isFinite(point.equity));
+    // Trim trailing spike: if last point jumps > 3x the avg step change, replace it
+    // with a linear extrapolation from the previous two points.
+    if (mapped.length >= 3) {
+      const n = mapped.length;
+      const avgStep = Math.abs(mapped[n - 2].equity - mapped[0].equity) / (n - 2);
+      const lastJump = Math.abs(mapped[n - 1].equity - mapped[n - 2].equity);
+      if (avgStep > 0 && lastJump > avgStep * 3) {
+        const prev2 = mapped[n - 3].equity;
+        const prev1 = mapped[n - 2].equity;
+        mapped[n - 1] = { ...mapped[n - 1], equity: Number((prev1 + (prev1 - prev2)).toFixed(4)) };
+      }
+    }
+    return mapped;
   };
 
   const extractTsSuffixToken = useCallback((systemName: string): string => {
