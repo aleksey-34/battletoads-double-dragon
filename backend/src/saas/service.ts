@@ -6486,16 +6486,19 @@ export const previewAdminSweepBacktest = async (payload?: {
           const relativeTradeMul = tradeMul / Math.max(0.01, snapshotTradeMul);
 
           const adjustedSnapshotMetrics = adjustPreviewMetrics(baselineMetrics, relativeRiskMul, relativeTradeMul);
-          // Legacy snapshots (without explicit maxOpenPositions in saved settings)
-          // may not include OP impact in stored metrics, so we approximate it here.
-          // For snapshots saved with explicit OP, do not re-apply OP factors.
-          const shouldApplyLegacyOpApprox = maxOpenPositions > 0 && !snapshotHasExplicitOpInSavedMetrics;
-          const snapshotSlotRatio = shouldApplyLegacyOpApprox
-            ? Math.min(1, maxOpenPositions / Math.max(1, snapshotOfferIds.length))
+          // Always scale metrics by OP ratio relative to the snapshot's baseline OP.
+          // For legacy snapshots (no explicit OP saved), baseline = total offers (all slots open).
+          // For snapshots saved with explicit OP, baseline = that saved OP value.
+          const snapshotBaseOp = snapshotHasExplicitOpInSavedMetrics
+            ? snapshotSavedMaxOpenPositions
+            : snapshotOfferIds.length;
+          const shouldApplyOpScaling = maxOpenPositions > 0 && maxOpenPositions < snapshotBaseOp;
+          const opSlotRatio = shouldApplyOpScaling
+            ? Math.min(1, maxOpenPositions / Math.max(1, snapshotBaseOp))
             : 1;
-          const snapshotRetFactor = shouldApplyLegacyOpApprox ? (0.6 + 0.4 * snapshotSlotRatio) : 1;
-          const snapshotDdFactor = shouldApplyLegacyOpApprox ? (0.55 + 0.45 * snapshotSlotRatio) : 1;
-          const snapshotTradeFactor = shouldApplyLegacyOpApprox ? snapshotSlotRatio : 1;
+          const snapshotRetFactor = shouldApplyOpScaling ? (0.6 + 0.4 * opSlotRatio) : 1;
+          const snapshotDdFactor = shouldApplyOpScaling ? (0.55 + 0.45 * opSlotRatio) : 1;
+          const snapshotTradeFactor = shouldApplyOpScaling ? opSlotRatio : 1;
           const adjustedSnapshotMetricsWithOp = {
             ...adjustedSnapshotMetrics,
             ret: Number((adjustedSnapshotMetrics.ret * snapshotRetFactor).toFixed(3)),
@@ -6528,7 +6531,9 @@ export const previewAdminSweepBacktest = async (payload?: {
             );
             const trendLine = initialBalance + (scaledEndEquityByRisk - initialBalance) * progress;
             const deviation = scaledRaw - trendLine;
-            const wave = Math.sin(progress * Math.PI * 2 * (1 + relativeTradeMul * 0.8)) * waveAmplitude * (0.25 + 0.75 * progress);
+            // Taper wave to 0 at progress=1 to avoid visual spike at the end of the equity chart
+            const waveTaper = 1 - progress;
+            const wave = Math.sin(progress * Math.PI * 2 * (1 + relativeTradeMul * 0.8)) * waveAmplitude * (0.25 + 0.75 * progress) * waveTaper;
             return {
               time: point.time,
               equity: Number((trendLine + deviation * freqShapeFactor + wave).toFixed(4)),
