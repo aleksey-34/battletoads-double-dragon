@@ -1,6 +1,6 @@
 import logger from '../utils/logger';
 import { db } from '../utils/database';
-import { ensureExchangeClientInitialized } from '../bot/exchange';
+import { ensureExchangeClientInitialized, hasExchangeClient } from '../bot/exchange';
 import { recordMonitoringSnapshot } from '../bot/monitoring';
 import { runReconciliationForApiKey } from './reconciliationEngine';
 import { runLiquidityScanForApiKey } from './liquidityScanner';
@@ -63,18 +63,27 @@ export const runMonitoringCycle = async (): Promise<{ processed: number; failed:
   const otherKeys = apiKeys.filter(k => keyToExchange.get(k) !== 'weex');
 
   // Ensure all clients initialized first (lightweight, idempotent)
+  const readyKeys = new Set<string>();
   for (const apiKeyName of apiKeys) {
     try {
       await ensureExchangeClientInitialized(apiKeyName);
+      if (hasExchangeClient(apiKeyName)) {
+        readyKeys.add(apiKeyName);
+      } else {
+        logger.debug(`[monitoring] Skip ${apiKeyName}: exchange client is not initialized`);
+      }
     } catch (e) {
       logger.debug(`[monitoring] Could not initialize ${apiKeyName}: ${(e as Error)?.message}`);
     }
   }
 
+  const activeOtherKeys = otherKeys.filter((k) => readyKeys.has(k));
+  const activeWeexKeys = weexKeys.filter((k) => readyKeys.has(k));
+
   // Process non-WEEX keys with normal concurrency
-  if (otherKeys.length > 0) {
-    for (let i = 0; i < otherKeys.length; i += MONITORING_CONCURRENCY) {
-      const batch = otherKeys.slice(i, i + MONITORING_CONCURRENCY);
+  if (activeOtherKeys.length > 0) {
+    for (let i = 0; i < activeOtherKeys.length; i += MONITORING_CONCURRENCY) {
+      const batch = activeOtherKeys.slice(i, i + MONITORING_CONCURRENCY);
       const results = await Promise.allSettled(
         batch.map(async (apiKeyName) => {
           await recordMonitoringSnapshot(apiKeyName);
@@ -93,7 +102,7 @@ export const runMonitoringCycle = async (): Promise<{ processed: number; failed:
   }
 
   // Process WEEX keys with reduced concurrency (1 at a time, 2 sec delay between)
-  for (const weexKey of weexKeys) {
+  for (const weexKey of activeWeexKeys) {
     try {
       await recordMonitoringSnapshot(weexKey);
       processed += 1;

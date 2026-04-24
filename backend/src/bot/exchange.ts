@@ -697,6 +697,12 @@ export const removeExchangeClient = (apiKeyName: string) => {
   }
 };
 
+export const hasExchangeClient = (apiKeyName: string): boolean => {
+  const name = String(apiKeyName || '').trim();
+  if (!name) return false;
+  return Boolean(clients[name]?.client || ccxtClients[name]?.client);
+};
+
 // Получить все доступные торговые пары (symbols) с Bybit
 export const getAllSymbols = async (apiKeyName: string) => {
   const cacheKey = `symbols_${apiKeyName}`;
