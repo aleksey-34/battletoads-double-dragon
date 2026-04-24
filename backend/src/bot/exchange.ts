@@ -557,6 +557,15 @@ const getClientEntry = (apiKeyName: string): ExchangeClientEntry => {
 };
 
 export const initExchangeClient = (apiKey: ApiKey) => {
+  // Skip initialization if credentials are missing
+  const apiKeyTrimmed = String(apiKey.api_key || '').trim();
+  const secretTrimmed = String(apiKey.secret || '').trim();
+  
+  if (!apiKeyTrimmed || !secretTrimmed) {
+    logger.debug(`Skipping client initialization for key: ${apiKey.name} (empty credentials)`);
+    return;
+  }
+  
   logger.info(`Initializing client for key: ${apiKey.name}`);
   
   // Determine speed limit with exchange-specific defaults
@@ -633,6 +642,15 @@ export const initExchangeClient = (apiKey: ApiKey) => {
     delete clients[apiKey.name];
 
     logger.info(`Client initialized for key: ${apiKey.name}, exchange=${exchange}`);
+    return;
+  }
+
+  // For Bybit: also check credentials before creating clients
+  const bybitApiKeyTrimmed = String(apiKey.api_key || '').trim();
+  const bybitSecretTrimmed = String(apiKey.secret || '').trim();
+  
+  if (!bybitApiKeyTrimmed || !bybitSecretTrimmed) {
+    logger.debug(`Skipping Bybit client initialization for key: ${apiKey.name} (empty credentials)`);
     return;
   }
 
