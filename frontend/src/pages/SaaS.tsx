@@ -2652,7 +2652,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [applyLowLotWorking, setApplyLowLotWorking] = useState(false);
   const [batchTenantIds, setBatchTenantIds] = useState<number[]>([]);
   const [storefrontConnectTarget, setStorefrontConnectTarget] = useState<null | { systemId: number; systemName: string; tenantIds: number[]; originalTenantIds: number[] }>(null);
-  const [strategyConnectTarget, setStrategyConnectTarget] = useState<null | { offerId: string; offerTitle: string; tenantIds: number[] }>(null);
+  const [strategyConnectTarget, setStrategyConnectTarget] = useState<null | { offerId: string; offerTitle: string; tenantIds: number[]; initialTenantIds: number[] }>(null);
   const [batchAlgofundAction, setBatchAlgofundAction] = useState<'start' | 'stop' | 'switch_system'>('start');
   const [batchTargetSystemId, setBatchTargetSystemId] = useState<number | null>(null);
   const [batchActionNote, setBatchActionNote] = useState('');
@@ -7315,27 +7315,54 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const applyStrategyConnectToClients = async () => {
     if (!strategyConnectTarget) return;
-    const { offerId, tenantIds } = strategyConnectTarget;
-    if (!offerId || tenantIds.length === 0) {
-      messageApi.warning('Выберите хотя бы одного клиента');
+    const { offerId, tenantIds, initialTenantIds } = strategyConnectTarget;
+    const toAdd = tenantIds.filter((id) => !initialTenantIds.includes(id));
+    const toRemove = initialTenantIds.filter((id) => !tenantIds.includes(id));
+    if (toAdd.length === 0 && toRemove.length === 0) {
+      messageApi.info('Изменений нет');
       return;
     }
     setActionLoading('apply-strategy-connect');
     try {
-      const response = await axios.post('/api/saas/admin/strategy-client-batch-connect', {
-        offerIds: [offerId],
-        tenantIds,
-      });
-      const successCount = Number(response.data?.success || 0);
-      const errors = Array.isArray(response.data?.errors) ? response.data.errors : [];
-      messageApi.success(`Оффер подключён: ${successCount} клиент(ов).${errors.length > 0 ? ` Ошибки: ${errors.slice(0, 3).join('; ')}` : ''}`);
-      if (errors.length > 0) {
-        errors.slice(0, 3).forEach((err: string) => messageApi.warning(err));
+      let addedCount = 0;
+      let removedCount = 0;
+      const errors: string[] = [];
+
+      if (toAdd.length > 0) {
+        const response = await axios.post('/api/saas/admin/strategy-client-batch-connect', {
+          offerIds: [offerId],
+          tenantIds: toAdd,
+        });
+        addedCount = Number(response.data?.success || 0);
+        const addErrors = Array.isArray(response.data?.errors) ? response.data.errors : [];
+        errors.push(...addErrors);
       }
+
+      if (toRemove.length > 0) {
+        for (const tenantId of toRemove) {
+          try {
+            const tenant = strategyTenants.find((t: any) => Number(t.tenant.id) === tenantId);
+            const currentOffers: string[] = tenant?.strategyProfile?.selectedOfferIds || [];
+            const nextOffers = currentOffers.filter((id) => id !== offerId);
+            await axios.patch(`/api/saas/strategy-clients/${tenantId}`, {
+              selectedOfferIds: nextOffers,
+            });
+            removedCount++;
+          } catch (e: any) {
+            errors.push(`tenant ${tenantId}: ${String(e?.response?.data?.error || e?.message || 'failed')}`);
+          }
+        }
+      }
+
+      const parts = [];
+      if (addedCount > 0) parts.push(`подключено: ${addedCount}`);
+      if (removedCount > 0) parts.push(`отключено: ${removedCount}`);
+      messageApi.success(`Применено — ${parts.join(', ')}.${errors.length > 0 ? ` Ошибки: ${errors.slice(0, 3).join('; ')}` : ''}`);
+      if (errors.length > 0) errors.slice(0, 3).forEach((err) => messageApi.warning(err));
       setStrategyConnectTarget(null);
       await loadSummary('full');
     } catch (error: any) {
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Batch connect failed'));
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Ошибка применения'));
     } finally {
       setActionLoading('');
     }
@@ -9995,7 +10022,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                       <Button
                                                         size="small"
                                                         type="primary"
-                                                        onClick={() => setStrategyConnectTarget({ offerId: String(row.offerId), offerTitle: String(row.titleRu || row.offerId), tenantIds: [] })}
+                                                        onClick={() => {
+                                                          const alreadyConnected = strategyTenants
+                                                            .filter((t: any) => (t.strategyProfile?.selectedOfferIds || []).includes(String(row.offerId)))
+                                                            .map((t: any) => Number(t.tenant.id));
+                                                          setStrategyConnectTarget({ offerId: String(row.offerId), offerTitle: String(row.titleRu || row.offerId), tenantIds: alreadyConnected, initialTenantIds: alreadyConnected });
+                                                        }}
                                                       >
                                                         Подключить клиентов
                                                       </Button>
@@ -11969,11 +12001,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
       {/* Strategy Client batch connect modal */}
       <Modal
-        title={`Подключить клиентов к оферу: ${strategyConnectTarget?.offerTitle || '—'}`}
+        title={`Управление клиентами оффера: ${strategyConnectTarget?.offerTitle || '—'}`}
         open={Boolean(strategyConnectTarget)}
         onCancel={() => setStrategyConnectTarget(null)}
         onOk={() => void applyStrategyConnectToClients()}
-        okText="Подключить офер"
+        okText="Применить"
         cancelText="Отмена"
         confirmLoading={actionLoading === 'apply-strategy-connect'}
         width={720}
@@ -11982,9 +12014,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           <Alert
             type="info"
             showIcon
-            message="Офер будет добавлен в портфель выбранных клиентов"
-            description="Если у клиента уже есть стратегия с такой же парой — подключение будет отклонено (валидация дублирования пар)."
+            message="Подключение и отключение клиентов от оффера"
+            description="Клиенты отмеченные галочкой будут подключены к офферу. Снятые с галочки — отключены (отменятся ордера по маркету). Уже подключённые отображены предзаполненными."
           />
+          {(() => {
+            const current = strategyConnectTarget;
+            if (!current) return null;
+            const toAdd = current.tenantIds.filter((id) => !current.initialTenantIds.includes(id));
+            const toRemove = current.initialTenantIds.filter((id) => !current.tenantIds.includes(id));
+            if (toAdd.length === 0 && toRemove.length === 0) return null;
+            return (
+              <Space wrap>
+                {toAdd.length > 0 && <Tag color="green">+ подключить: {toAdd.length}</Tag>}
+                {toRemove.length > 0 && <Tag color="red">− отключить: {toRemove.length}</Tag>}
+              </Space>
+            );
+          })()}
           <Select
             mode="multiple"
             style={{ width: '100%' }}
@@ -11994,10 +12039,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               ...current,
               tenantIds: values.map((item: any) => Number(item)).filter((item: number) => Number.isFinite(item) && item > 0),
             } : current))}
-            options={strategyTenants.map((item: any) => ({
-              value: Number(item.tenant.id),
-              label: `${item.tenant.display_name || item.tenant.slug || `tenant-${item.tenant.id}`} (${item.tenant.slug || item.tenant.id})`,
-            }))}
+            options={strategyTenants.map((item: any) => {
+              const isConnected = (strategyConnectTarget?.initialTenantIds || []).includes(Number(item.tenant.id));
+              return {
+                value: Number(item.tenant.id),
+                label: `${item.tenant.display_name || item.tenant.slug || `tenant-${item.tenant.id}`} (${item.tenant.slug || item.tenant.id})${isConnected ? ' ✓' : ''}`,
+              };
+            })}
             optionFilterProp="label"
           />
           <Space wrap>
@@ -12008,17 +12056,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 tenantIds: strategyTenants.map((item: any) => Number(item.tenant.id)).filter((item: number) => item > 0),
               } : current))}
             >
-              Выбрать всех клиентов
+              Выбрать всех
             </Button>
             <Button
               size="small"
+              onClick={() => setStrategyConnectTarget((current) => (current ? { ...current, tenantIds: current.initialTenantIds } : current))}
+            >
+              Сбросить изменения
+            </Button>
+            <Button
+              size="small"
+              danger
               onClick={() => setStrategyConnectTarget((current) => (current ? { ...current, tenantIds: [] } : current))}
             >
-              Очистить выбор
+              Отключить всех
             </Button>
           </Space>
           <Text type="secondary">
-            Выбрано клиентов: {(strategyConnectTarget?.tenantIds || []).length}
+            Выбрано: {(strategyConnectTarget?.tenantIds || []).length} · уже подключено: {(strategyConnectTarget?.initialTenantIds || []).length}
           </Text>
         </Space>
       </Modal>
