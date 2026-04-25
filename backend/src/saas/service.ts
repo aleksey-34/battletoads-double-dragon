@@ -10073,6 +10073,38 @@ const materializeAlgofundSystem = async (
           logger.warn(`Algofund materialize [P2-db-ts]: ${tsMembers.length} members from trading_system id=${sourceTs.id} ('${sourceSystemName}') for ${tenant.slug}.`);
         }
       }
+
+      // Priority 2b: LIKE fallback — sourceSystemName short suffix matches ts.name substring (e.g. "aggressive-portfolio" → "...-aggressive-portf-f59clr")
+      if (draftMembers === catalogDraftMembers && sourceSystemApiKeyName) {
+        const shortToken = (sourceSystemName.split('::').pop() || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
+        if (shortToken.length >= 4) {
+          const sourceTsLike = await db.get<{ id: number }>(
+            `SELECT ts.id FROM trading_systems ts
+             JOIN api_keys a ON a.id = ts.api_key_id
+             LEFT JOIN trading_system_members tsm ON tsm.system_id = ts.id AND tsm.is_enabled = 1
+             WHERE ts.name LIKE ? AND a.name = ?
+             GROUP BY ts.id
+             ORDER BY COUNT(tsm.id) DESC
+             LIMIT 1`,
+            [`%${shortToken}%`, sourceSystemApiKeyName]
+          ).catch(() => null);
+          if (sourceTsLike?.id) {
+            const tsLikeRows = (await db.all(
+              `SELECT tsm.strategy_id, tsm.weight, s.name AS strategy_name,
+                      s.strategy_type, s.market_mode, s.base_symbol
+               FROM trading_system_members tsm
+               JOIN strategies s ON s.id = tsm.strategy_id
+               WHERE tsm.system_id = ? AND tsm.is_enabled = 1`,
+              [sourceTsLike.id]
+            ).catch(() => [])) as Record<string, unknown>[];
+            const tsLikeMembers = tsLikeRows.map(buildDraftMemberFromRow).filter((m: ReturnType<typeof buildDraftMemberFromRow>) => m.strategyId > 0);
+            if (tsLikeMembers.length > 0) {
+              draftMembers = tsLikeMembers;
+              logger.warn(`Algofund materialize [P2b-db-ts-like]: ${tsLikeMembers.length} members from trading_system id=${sourceTsLike.id} (LIKE '%${shortToken}%') for ${tenant.slug}.`);
+            }
+          }
+        }
+      }
     }
   }
 

@@ -90,33 +90,57 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
   const key = await getApiKeyRow(apiKeyName);
 
   // Fetch balances and positions with error tolerance
+  // For WEEX: use sequential calls to avoid hitting the strict rate limit
   let balances = [];
   let positions = [];
   try {
-    [balances, positions] = await Promise.all([
-      getBalances(apiKeyName).catch(e => {
+    const isWeex = key.exchange.toLowerCase().includes('weex');
+    if (isWeex) {
+      balances = await getBalances(apiKeyName).catch(e => {
         const errMsg = (e as Error)?.message || String(e);
-        // Log only if not "Client not initialized" (uninitialized keys are expected to fail)
         if (!errMsg.includes('Client not initialized')) {
           console.warn(`[monitoring] getBalances ${apiKeyName} failed: ${errMsg}`);
         }
         return [];
-      }),
-      getPositions(apiKeyName).catch(e => {
+      });
+      positions = await getPositions(apiKeyName).catch(e => {
         const errMsg = (e as Error)?.message || String(e);
         if (!errMsg.includes('Client not initialized')) {
           console.warn(`[monitoring] getPositions ${apiKeyName} failed: ${errMsg}`);
         }
         return [];
-      }),
-    ]);
+      });
+    } else {
+      [balances, positions] = await Promise.all([
+        getBalances(apiKeyName).catch(e => {
+          const errMsg = (e as Error)?.message || String(e);
+          if (!errMsg.includes('Client not initialized')) {
+            console.warn(`[monitoring] getBalances ${apiKeyName} failed: ${errMsg}`);
+          }
+          return [];
+        }),
+        getPositions(apiKeyName).catch(e => {
+          const errMsg = (e as Error)?.message || String(e);
+          if (!errMsg.includes('Client not initialized')) {
+            console.warn(`[monitoring] getPositions ${apiKeyName} failed: ${errMsg}`);
+          }
+          return [];
+        }),
+      ]);
+    }
   } catch (e) {
     console.error(`[monitoring] Snapshot collection failed for ${apiKeyName}: ${(e as Error)?.message}`);
     return null; // Skip recording if both fail
   }
 
   const metrics = calculateMetrics(balances, positions);
-  
+
+  // Skip recording if balance fetch returned nothing — avoids false zero-equity spike in chart
+  if (metrics.equityUsd === 0 && (balances as unknown[]).length === 0) {
+    console.warn(`[monitoring] Skipping snapshot for ${apiKeyName}: balance empty (fetch may have failed)`);
+    return null;
+  }
+
   // Detect anomalous peaks: filter peaks older than 30 days or unrealistically high (>1.5x current equity)
   // This prevents drawdown from being inflated by initialization bugs or temporary spikes
   const peakRow = await db.get(
