@@ -2084,11 +2084,13 @@ export const closePosition = async (
 
       const submitCloseOrder = async (
         positionSide?: 'BOTH' | 'LONG' | 'SHORT',
-        withClosePosition = true
+        withClosePosition = true,
+        withReduceOnly = true
       ) => {
-        const params: any = {
-          reduceOnly: true,
-        };
+        const params: any = {};
+        if (withReduceOnly) {
+          params.reduceOnly = true;
+        }
         if (withClosePosition) {
           params.closePosition = true;
         }
@@ -2116,20 +2118,27 @@ export const closePosition = async (
         return order;
       }
 
-      const fallbackCandidates: Array<{ side?: 'BOTH' | 'LONG' | 'SHORT'; withClosePosition: boolean }> = [
+      const directionalSide = currentSide === 'Buy' ? 'LONG' : 'SHORT';
+      // BingX One-way mode: reduceOnly works with BOTH or omitted positionSide.
+      // BingX Hedge mode: positionSide must be LONG/SHORT, reduceOnly is forbidden.
+      // We try one-way candidates first, then hedge-mode candidates (no reduceOnly).
+      const fallbackCandidates: Array<{ side?: 'BOTH' | 'LONG' | 'SHORT'; withClosePosition: boolean; withReduceOnly?: boolean }> = [
         { side: 'BOTH', withClosePosition: false },
         { side: 'BOTH', withClosePosition: true },
         { side: undefined, withClosePosition: false },
-        { side: currentSide === 'Buy' ? 'LONG' : 'SHORT', withClosePosition: false },
-        { side: currentSide === 'Buy' ? 'LONG' : 'SHORT', withClosePosition: true },
+        { side: directionalSide, withClosePosition: false },
+        { side: directionalSide, withClosePosition: true },
+        // Hedge-mode candidates: positionSide=LONG/SHORT, NO reduceOnly
+        { side: directionalSide, withClosePosition: true, withReduceOnly: false },
+        { side: directionalSide, withClosePosition: false, withReduceOnly: false },
       ];
 
       let lastError: Error | null = null;
       for (const candidate of fallbackCandidates) {
         try {
-          const order = await submitCloseOrder(candidate.side, candidate.withClosePosition);
+          const order = await submitCloseOrder(candidate.side, candidate.withClosePosition, candidate.withReduceOnly ?? true);
           logger.info(
-            `Closed BingX position via ccxt: ${qty} ${symbol} (positionSide=${candidate.side || 'omitted'}, closePosition=${candidate.withClosePosition})`
+            `Closed BingX position via ccxt: ${qty} ${symbol} (positionSide=${candidate.side || 'omitted'}, closePosition=${candidate.withClosePosition}, reduceOnly=${candidate.withReduceOnly ?? true})`
           );
           return order;
         } catch (error) {

@@ -8877,6 +8877,30 @@ export const requestAlgofundBatchAction = async (
             throw new Error('targetSystemId or targetSystemName is required for switch_system request');
           }
 
+          // Skip re-materialization if already connected to the same system and running
+          const currentSystemName = asString(profile.published_system_name, '').trim();
+          const targetNameNormForCheck = targetSystemNameRaw || '';
+          if (
+            profile.actual_enabled === 1
+            && currentSystemName
+            && targetNameNormForCheck
+            && currentSystemName === targetNameNormForCheck
+          ) {
+            const runtimeKey = asString(getAlgofundExecutionApiKeyName(tenant, profile), '').trim();
+            const activeCount = runtimeKey
+              ? await db.get(
+                `SELECT COUNT(*) AS cnt FROM strategies s
+                 JOIN api_keys ak ON ak.id = s.api_key_id
+                 WHERE ak.name = ? AND COALESCE(s.is_runtime,0)=1 AND COALESCE(s.is_active,0)=1`,
+                [runtimeKey]
+              ).then((r: any) => Number((r as any)?.cnt || 0)).catch(() => 0)
+              : 0;
+            if (activeCount > 0) {
+              created.push({ tenantId, directAction: requestType, status: 'skipped_already_connected', systemName: currentSystemName });
+              continue;
+            }
+          }
+
           const targetById = targetSystemId > 0
             ? await db.get(
               `SELECT ts.id AS system_id, ts.name AS system_name, ak.name AS api_key_name
