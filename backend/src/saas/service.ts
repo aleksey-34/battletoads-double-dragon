@@ -11386,7 +11386,27 @@ export const retryMaterializeAlgofundSystem = async (tenantId: number) => {
     throw new Error(`Retry failed: ${reason}`);
   }
 
-  return getAlgofundState(tenantId);
+  // Return lightweight state — skip live preview/balance fetch to avoid blocking exchange rate limiter.
+  // Full state (with equity curve) is available via GET /algofund/:tenantId.
+  const updatedProfile = await getAlgofundProfile(tenantId);
+  const executionApiKeyName = updatedProfile ? getAlgofundExecutionApiKeyName(tenant, updatedProfile) : null;
+  const engineTs = executionApiKeyName
+    ? await db.get<{ id: number; name: string; is_active: number }>(
+        `SELECT ts.id, ts.name, ts.is_active FROM trading_systems ts
+         JOIN api_keys a ON a.id = ts.api_key_id
+         WHERE a.name = ? AND ts.name LIKE 'ALGOFUND::%'
+         ORDER BY ts.id DESC LIMIT 1`,
+        [executionApiKeyName]
+      ).catch(() => null)
+    : null;
+  return {
+    tenant,
+    plan,
+    profile: updatedProfile,
+    engine: engineTs
+      ? { apiKeyName: executionApiKeyName, systemId: engineTs.id, systemName: engineTs.name, isActive: engineTs.is_active === 1 }
+      : null,
+  };
 };
 
 export const publishAdminTradingSystem = async (payload?: { offerIds?: string[]; setKey?: string }) => {
