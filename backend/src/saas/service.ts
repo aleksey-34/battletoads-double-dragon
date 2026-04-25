@@ -10077,7 +10077,10 @@ const materializeAlgofundSystem = async (
       // Priority 2b: LIKE fallback — sourceSystemName short suffix matches ts.name substring (e.g. "aggressive-portfolio" → "...-aggressive-portf-f59clr")
       if (draftMembers === catalogDraftMembers && sourceSystemApiKeyName) {
         const shortToken = (sourceSystemName.split('::').pop() || '').toLowerCase().replace(/[^a-z0-9]+/g, '-');
-        if (shortToken.length >= 4) {
+        // Slug generation truncates long portfolio names (e.g. "aggressive-portfolio" → "aggressive-portf"),
+        // so use only the first 10 chars of the token for the LIKE to survive truncation.
+        const likeToken = shortToken.substring(0, Math.min(10, shortToken.length));
+        if (likeToken.length >= 4) {
           const sourceTsLike = await db.get<{ id: number }>(
             `SELECT ts.id FROM trading_systems ts
              JOIN api_keys a ON a.id = ts.api_key_id
@@ -10086,7 +10089,7 @@ const materializeAlgofundSystem = async (
              GROUP BY ts.id
              ORDER BY COUNT(tsm.id) DESC
              LIMIT 1`,
-            [`%${shortToken}%`, sourceSystemApiKeyName]
+            [`%${likeToken}%`, sourceSystemApiKeyName]
           ).catch(() => null);
           if (sourceTsLike?.id) {
             const tsLikeRows = (await db.all(
@@ -10100,7 +10103,7 @@ const materializeAlgofundSystem = async (
             const tsLikeMembers = tsLikeRows.map(buildDraftMemberFromRow).filter((m: ReturnType<typeof buildDraftMemberFromRow>) => m.strategyId > 0);
             if (tsLikeMembers.length > 0) {
               draftMembers = tsLikeMembers;
-              logger.warn(`Algofund materialize [P2b-db-ts-like]: ${tsLikeMembers.length} members from trading_system id=${sourceTsLike.id} (LIKE '%${shortToken}%') for ${tenant.slug}.`);
+              logger.warn(`Algofund materialize [P2b-db-ts-like]: ${tsLikeMembers.length} members from trading_system id=${sourceTsLike.id} (LIKE '%${likeToken}%') for ${tenant.slug}.`);
             }
           }
         }
