@@ -9110,13 +9110,29 @@ export const previewStrategyClientOffer = async (
     normalizedRiskScore,
     normalizedTradeFrequencyScore
   );
+  const candidates = collectPresetCandidates(offer);
+  const hasMultiplePresets = candidates.length > 1;
   const baseEquity = offer.equity && offer.strategy.id === preset.strategyId ? offer.equity : null;
 
   if (baseEquity && Array.isArray(baseEquity.points) && baseEquity.points.length > 0) {
+    // When presetMatrix has multiple options, use preset.metrics for summary so sliders affect the numbers.
+    // The equity curve is rebuilt from the scaled return to match.
+    const presetRet = asNumber(preset.metrics.ret, 0);
+    const presetSummary = hasMultiplePresets ? {
+      finalEquity: Number((initialBalance * (1 + presetRet / 100)).toFixed(4)),
+      totalReturnPercent: presetRet,
+      maxDrawdownPercent: asNumber(preset.metrics.dd, 0),
+      winRatePercent: asNumber(preset.metrics.wr, 0),
+      profitFactor: asNumber(preset.metrics.pf, 1),
+      tradesCount: Math.max(0, Math.floor(asNumber(preset.metrics.trades, 0))),
+    } : baseEquity.summary;
+    const equityPoints = hasMultiplePresets
+      ? toPresetOnlyEquity(initialBalance, presetRet)
+      : baseEquity.points;
     const preview = {
-      source: 'catalog_cache',
-      summary: baseEquity.summary,
-      equity: baseEquity,
+      source: hasMultiplePresets ? 'preset_scaled' : 'catalog_cache',
+      summary: presetSummary,
+      equity: { ...baseEquity, points: equityPoints, summary: presetSummary },
     };
 
     const latestPreviewPayload = { offerId, offer, preset, controls, period, preview };

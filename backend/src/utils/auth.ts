@@ -67,6 +67,7 @@ type ClientRegistrationInput = {
   companyName?: string;
   preferredLanguage?: string;
   productMode?: string;
+  planCode?: string;
 };
 
 type ClientLoginInput = {
@@ -279,7 +280,26 @@ const ensureUniqueTenantSlug = async (baseSlug: string): Promise<string> => {
   }
 };
 
-const ensureRegistrationPlanId = async (productMode: Exclude<ProductMode, 'dual'>): Promise<number> => {
+const ensureRegistrationPlanId = async (productMode: Exclude<ProductMode, 'dual'>, requestedPlanCode?: string): Promise<number> => {
+  // If caller specified a plan code and it matches the product_mode, try it first
+  if (requestedPlanCode) {
+    const requestedRow = await db.get(
+      'SELECT id FROM plans WHERE code = ? AND product_mode = ? AND is_active = 1 LIMIT 1',
+      [requestedPlanCode, productMode]
+    );
+    if (requestedRow?.id) {
+      return Number(requestedRow.id);
+    }
+    // Also try without product_mode check for profit_share / special codes
+    const requestedAny = await db.get(
+      'SELECT id FROM plans WHERE code = ? AND is_active = 1 LIMIT 1',
+      [requestedPlanCode]
+    );
+    if (requestedAny?.id) {
+      return Number(requestedAny.id);
+    }
+  }
+
   const preferredCode = productMode === 'strategy_client'
     ? DEFAULT_STRATEGY_PLAN_CODE
     : productMode === 'copytrading_client'
@@ -533,6 +553,7 @@ export const registerClientUser = async (payload: ClientRegistrationInput, reque
 
   const productMode = normalizeProductMode(payload.productMode);
   const language = normalizeLanguage(payload.preferredLanguage);
+  const requestedPlanCode = String(payload.planCode || '').trim();
   const fallbackName = email.split('@')[0] || 'Client';
   const fullName = normalizeDisplayName(payload.fullName, fallbackName);
   const companyName = normalizeDisplayName(payload.companyName, `${fullName} Workspace`);
@@ -564,7 +585,7 @@ export const registerClientUser = async (payload: ClientRegistrationInput, reque
       : [productMode];
 
     for (const subscriptionMode of subscriptionPlanModes) {
-      const planId = await ensureRegistrationPlanId(subscriptionMode);
+      const planId = await ensureRegistrationPlanId(subscriptionMode, requestedPlanCode);
       await db.run(
         `INSERT INTO subscriptions (
            tenant_id,

@@ -22,6 +22,7 @@ type RegisterFormValues = {
   password: string;
   confirmPassword: string;
   productMode: 'strategy_client' | 'algofund_client' | 'dual';
+  planCode: string;
 };
 
 type SetPasswordFormValues = {
@@ -156,6 +157,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
         email: values.email,
         password: values.password,
         productMode: values.productMode,
+        planCode: values.planCode,
         preferredLanguage: language,
       });
 
@@ -235,7 +237,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 <Form<RegisterFormValues>
                   layout="vertical"
                   form={registerForm}
-                  initialValues={{ productMode: 'strategy_client' }}
+                  initialValues={{ productMode: 'dual', planCode: 'dual_beta' }}
                   onFinish={handleRegister}
                 >
                   <Form.Item
@@ -272,6 +274,22 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                         { value: 'strategy_client', label: t('client.auth.productModeStrategy', 'Strategy Client') },
                         { value: 'algofund_client', label: t('client.auth.productModeAlgofund', 'Algofund Client') },
                         { value: 'dual', label: t('client.auth.productModeDual', 'Dual: Strategies + Algofund') },
+                      ]}
+                    />
+                  </Form.Item>
+                  <Form.Item
+                    label={t('client.auth.planCode', 'Тариф')}
+                    name="planCode"
+                    rules={[{ required: true, message: t('client.auth.planCodeRequired', 'Выберите тариф') }]}
+                    extra={t('client.auth.planCodeHint', 'Сейчас все тарифы бесплатны в beta. После beta — фиксированная подписка или 40% с прибыли.')}
+                  >
+                    <Select
+                      options={[
+                        { value: 'dual_beta', label: t('client.auth.planBeta', 'Dual Beta — $0 (сейчас, beta)') },
+                        { value: 'profit_share', label: t('client.auth.planProfitShare', '40% с прибыли (HWM)') },
+                        { value: 'strategy_20', label: t('client.auth.planDualStart', 'Dual Start — $39/мес · до 3 стратегий · депозит до $5k') },
+                        { value: 'strategy_50', label: t('client.auth.planDualPro', 'Dual Pro — $129/мес · до 10 стратегий · до $50k') },
+                        { value: 'strategy_100', label: t('client.auth.planDualScale', 'Dual Scale — $399/мес · до 30 стратегий · до $250k') },
                       ]}
                     />
                   </Form.Item>

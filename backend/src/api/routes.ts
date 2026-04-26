@@ -442,6 +442,7 @@ router.post('/auth/client/register', async (req, res) => {
         companyName: req.body?.companyName,
         preferredLanguage: req.body?.preferredLanguage,
         productMode: req.body?.productMode,
+        planCode: req.body?.planCode,
       },
       {
         ip: String(req.ip || ''),
