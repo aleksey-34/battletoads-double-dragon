@@ -183,6 +183,25 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
     ? Math.max(0, ((peakEquity - metrics.equityUsd) / peakEquity) * 100)
     : 0;
 
+  // PnL tracking: compute net PnL vs initial deposit.
+  // deposit_base_usd = first-ever equity recorded for this account (proxy for starting capital).
+  // pnl_net_usd = current equity − unrealized_pnl − deposit_base_usd
+  //   → represents cumulative realized PnL since account start, excluding open position unrealized gains.
+  // Migration: add columns if not yet present (idempotent, fails silently if already exists).
+  try {
+    await db.exec('ALTER TABLE monitoring_snapshots ADD COLUMN deposit_base_usd REAL DEFAULT NULL');
+  } catch { /* column already exists */ }
+  try {
+    await db.exec('ALTER TABLE monitoring_snapshots ADD COLUMN pnl_net_usd REAL DEFAULT NULL');
+  } catch { /* column already exists */ }
+
+  const firstSnap = await db.get(
+    'SELECT equity_usd FROM monitoring_snapshots WHERE api_key_id = ? ORDER BY id ASC LIMIT 1',
+    [key.id]
+  ) as { equity_usd?: number } | undefined;
+  const depositBase = Number(firstSnap?.equity_usd ?? metrics.equityUsd);
+  const pnlNet = metrics.equityUsd - metrics.unrealizedPnl - depositBase;
+
   const insert: any = await db.run(
     `INSERT INTO monitoring_snapshots (
       api_key_id,
@@ -194,8 +213,10 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
       effective_leverage,
       notional_usd,
       drawdown_percent,
+      deposit_base_usd,
+      pnl_net_usd,
       recorded_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
     [
       key.id,
       key.exchange,
@@ -206,6 +227,8 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
       metrics.effectiveLeverage,
       metrics.notionalUsd,
       drawdownPercent,
+      depositBase,
+      pnlNet,
     ]
   );
 

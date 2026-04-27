@@ -2607,6 +2607,50 @@ export const executeStrategy = async (
     });
   }
 
+  // ── Cold-start guard: skip entry on first N bars after strategy materialization ──
+  // Prevents entering on a stale signal that was already in progress before this
+  // account was activated. Wait for a fresh signal generated after materialization.
+  // COLD_START_BARS env (default 1): number of closed bars to skip before first entry.
+  if (state === 'flat' && !closedAction) {
+    const coldStartBars = Math.max(0, Math.floor(Number(process.env.COLD_START_BARS ?? 1) || 1));
+    if (coldStartBars > 0 && mergedStrategy.created_at) {
+      const createdAtMs = new Date(String(mergedStrategy.created_at).replace(' ', 'T') + 'Z').getTime();
+      if (Number.isFinite(createdAtMs) && createdAtMs > 0) {
+        const barMs = intervalToMs(mergedStrategy.interval);
+        const coldUntilMs = createdAtMs + coldStartBars * barMs;
+        if (evaluatedBarTimeMs < coldUntilMs) {
+          const remainingMs = coldUntilMs - evaluatedBarTimeMs;
+          logger.info(
+            `Cold-start: skipping entry signal ${signal} for strategy ${strategyId} (${apiKeyName}) — ` +
+            `strategy created ${new Date(createdAtMs).toISOString()}, ` +
+            `cold_start_bars=${coldStartBars}, bar_interval=${mergedStrategy.interval}, ` +
+            `entry allowed after ${new Date(coldUntilMs).toISOString()} (${Math.ceil(remainingMs / barMs)} bars remaining)`
+          );
+
+          const updated = await updateStrategy(apiKeyName, strategyId, {
+            ...executionBindingPatch,
+            state: 'flat',
+            entry_ratio: null,
+            tp_anchor_ratio: null,
+            last_signal: signal,
+            last_action: `cold_start_skip@${currentRatio}`,
+            last_error: null,
+          });
+
+          return returnWithProcessedBar({
+            result: `Cold-start: entry skipped, waiting for first signal after materialization (${Math.ceil(remainingMs / barMs)} bars remaining)`,
+            action: 'cold_start_skip',
+            strategy: updated,
+            currentRatio,
+            donchianHigh,
+            donchianLow,
+            donchianCenter,
+          });
+        }
+      }
+    }
+  }
+
   // ── Position Limiter (ОП): check if trading system allows more open positions ──
   {
     const { db } = await import('../utils/database');
@@ -3448,17 +3492,33 @@ export const runAutoStrategiesCycle = async () => {
   let failed = 0;
   let skippedOffline = 0;
 
-  for (const row of jobs) {
+  // ── Phase 1: Initialize all exchange clients sequentially (safe, idempotent) ──
+  const validJobs = jobs.filter((row) => {
     const apiKeyName = String(row?.api_key_name || '');
     const strategyId = Number(row?.strategy_id || 0);
-    const strategyName = String(row?.strategy_name || '');
+    return apiKeyName && Number.isFinite(strategyId) && strategyId > 0;
+  });
 
-    if (!apiKeyName || !Number.isFinite(strategyId) || strategyId <= 0) {
-      continue;
-    }
-
+  for (const row of validJobs) {
+    const apiKeyName = String(row.api_key_name);
     try {
       await ensureExchangeClientInitialized(apiKeyName);
+    } catch (initErr) {
+      logger.warn(`Auto-cycle: failed to init exchange client for ${apiKeyName}: ${formatActionError(initErr)}`);
+    }
+  }
+
+  // ── Phase 2: Execute all strategies in parallel ──
+  // Candle data is shared via candleAutoCache (TTL 25s) — only one fetch per
+  // symbol+interval per cycle regardless of how many strategies share the pair.
+  // Exchange order calls (market orders) are independent per account and can
+  // safely overlap. SQLite writes are serialized by the WAL layer automatically.
+  const executeOne = async (row: any): Promise<void> => {
+    const apiKeyName = String(row.api_key_name);
+    const strategyId = Number(row.strategy_id);
+    const strategyName = String(row?.strategy_name || '');
+
+    try {
       await executeStrategy(apiKeyName, strategyId, {
         source: 'auto',
         closedBarOnly: true,
@@ -3483,7 +3543,7 @@ export const runAutoStrategiesCycle = async () => {
             `Auto-cycle strategy ${strategyId} (${apiKeyName}) failed to persist offline-skip state: ${formatActionError(persistError)}`
           );
         }
-        continue;
+        return;
       }
 
       failed += 1;
@@ -3517,7 +3577,9 @@ export const runAutoStrategiesCycle = async () => {
         }
       }
     }
-  }
+  };
+
+  await Promise.allSettled(validJobs.map((row) => executeOne(row)));
 
   return {
     total: jobs.length,

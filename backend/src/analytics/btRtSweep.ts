@@ -43,6 +43,12 @@ export const ensureBtRtTable = async (): Promise<void> => {
       drift_alerts_warn INTEGER DEFAULT 0,
       drift_avg_pct REAL DEFAULT 0,
       drift_flag TEXT DEFAULT 'ok',
+      -- Extended execution analytics (vs BT assumptions)
+      avg_slippage_pct REAL DEFAULT 0,
+      avg_execution_delay_ms REAL DEFAULT 0,
+      margin_load_rt_pct REAL DEFAULT 0,
+      realized_pnl_usd REAL DEFAULT 0,
+      trade_hour_distribution TEXT DEFAULT '{}',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       UNIQUE(snapshot_date, api_key_name)
     );
@@ -53,6 +59,19 @@ export const ensureBtRtTable = async (): Promise<void> => {
     CREATE INDEX IF NOT EXISTS idx_bt_rt_snapshots_key_date
       ON bt_rt_daily_snapshots (api_key_name, snapshot_date DESC);
   `);
+
+  // Migration: add extended analytics columns to existing tables (idempotent)
+  const migrationCols = [
+    'ALTER TABLE bt_rt_daily_snapshots ADD COLUMN avg_slippage_pct REAL DEFAULT 0',
+    'ALTER TABLE bt_rt_daily_snapshots ADD COLUMN avg_execution_delay_ms REAL DEFAULT 0',
+    'ALTER TABLE bt_rt_daily_snapshots ADD COLUMN margin_load_rt_pct REAL DEFAULT 0',
+    'ALTER TABLE bt_rt_daily_snapshots ADD COLUMN realized_pnl_usd REAL DEFAULT 0',
+    "ALTER TABLE bt_rt_daily_snapshots ADD COLUMN trade_hour_distribution TEXT DEFAULT '{}'",
+  ];
+  for (const sql of migrationCols) {
+    try { await db.exec(sql); } catch { /* column already exists */ }
+  }
+
   tableReady = true;
 };
 
@@ -83,6 +102,12 @@ type BtRtSnapshot = {
   drift_alerts_warn: number;
   drift_avg_pct: number;
   drift_flag: 'ok' | 'warn' | 'alert';
+  // Extended execution analytics
+  avg_slippage_pct: number;
+  avg_execution_delay_ms: number;
+  margin_load_rt_pct: number;
+  realized_pnl_usd: number;
+  trade_hour_distribution: string;
 };
 
 const computeSnapshotForKey = async (
@@ -254,6 +279,59 @@ const computeSnapshotForKey = async (
     driftFlag = 'warn';
   }
 
+  // --- Extended analytics: slippage, execution delay, margin load ---
+  const execRow = await db.get(
+    `SELECT
+       AVG(CASE WHEN lte.slippage_percent IS NOT NULL AND lte.slippage_percent != 0
+           THEN ABS(lte.slippage_percent) ELSE NULL END) AS avg_slip,
+       AVG(CASE WHEN lte.actual_time > lte.entry_time AND lte.actual_time - lte.entry_time < 300000
+           THEN CAST(lte.actual_time AS REAL) - CAST(lte.entry_time AS REAL) ELSE NULL END) AS avg_exec_delay
+     FROM live_trade_events lte
+     JOIN strategies s ON s.id = lte.strategy_id
+     JOIN api_keys ak ON ak.id = s.api_key_id
+     WHERE ak.name = ?
+       AND CAST(lte.created_at AS INTEGER) BETWEEN ? AND ?`,
+    [apiKeyName, startMs, endMs]
+  ) as { avg_slip?: number; avg_exec_delay?: number } | undefined;
+
+  const marginRow = await db.get(
+    `SELECT AVG(margin_load_percent) AS avg_margin_load
+     FROM monitoring_snapshots
+     WHERE api_key_id = ? AND recorded_at BETWEEN ? AND ?`,
+    [apiKeyId, dateStart, dateEnd]
+  ) as { avg_margin_load?: number } | undefined;
+
+  // Realized PnL approximation: equity change excluding unrealized PnL delta.
+  // realizedPnl = (endEquity - startEquity) - (endUnrealized - startUnrealized)
+  const firstSnapUnrealized = await db.get(
+    `SELECT unrealized_pnl FROM monitoring_snapshots
+     WHERE api_key_id = ? AND recorded_at BETWEEN ? AND ?
+     ORDER BY id ASC LIMIT 1`,
+    [apiKeyId, dateStart, dateEnd]
+  ) as { unrealized_pnl?: number } | undefined;
+  const startUnrealized = Number(firstSnapUnrealized?.unrealized_pnl ?? 0);
+  const endUnrealized = Number(latestSnap?.unrealized_pnl ?? 0);
+  const realizedPnl = (rtEquityEnd - rtEquityStart) - (endUnrealized - startUnrealized);
+
+  // Trade-hour distribution (UTC hours → trade count)
+  const tradeHourRows = await db.all(
+    `SELECT CAST(strftime('%H', datetime(CAST(lte.actual_time AS REAL) / 1000, 'unixepoch')) AS INTEGER) AS hr,
+            COUNT(*) AS cnt
+     FROM live_trade_events lte
+     JOIN strategies s ON s.id = lte.strategy_id
+     JOIN api_keys ak ON ak.id = s.api_key_id
+     WHERE ak.name = ?
+       AND CAST(lte.created_at AS INTEGER) BETWEEN ? AND ?
+     GROUP BY hr`,
+    [apiKeyName, startMs, endMs]
+  ) as Array<{ hr?: number; cnt?: number }>;
+
+  const hourDist: Record<number, number> = {};
+  for (const r of tradeHourRows) {
+    const h = Number(r.hr ?? 0);
+    if (h >= 0 && h < 24) hourDist[h] = Number(r.cnt ?? 0);
+  }
+
   return {
     snapshot_date: snapshotDateUtc,
     api_key_name: apiKeyName,
@@ -264,7 +342,7 @@ const computeSnapshotForKey = async (
     rt_return_pct: Math.round(rtReturnPct * 10000) / 10000,
     rt_entries: Number(tradeCountRow?.entries ?? 0),
     rt_exits: Number(tradeCountRow?.exits ?? 0),
-    rt_unrealized_pnl: Number(latestSnap?.unrealized_pnl ?? 0),
+    rt_unrealized_pnl: endUnrealized,
     rt_drawdown_pct: Number(latestSnap?.drawdown_percent ?? 0),
     rt_leverage_avg: Number(latestSnap?.effective_leverage ?? 0),
     rt_strategies_active: Number(activeStratsRow?.cnt ?? 0),
@@ -277,6 +355,11 @@ const computeSnapshotForKey = async (
     drift_alerts_warn: warnCount,
     drift_avg_pct: Math.round(avgDrift * 100) / 100,
     drift_flag: driftFlag,
+    avg_slippage_pct: Math.round(Number(execRow?.avg_slip ?? 0) * 1000000) / 1000000,
+    avg_execution_delay_ms: Math.round(Number(execRow?.avg_exec_delay ?? 0)),
+    margin_load_rt_pct: Math.round(Number(marginRow?.avg_margin_load ?? 0) * 100) / 100,
+    realized_pnl_usd: Math.round(realizedPnl * 10000) / 10000,
+    trade_hour_distribution: JSON.stringify(hourDist),
   };
 };
 
@@ -345,8 +428,9 @@ export const runBtRtDailySweep = async (
             rt_equity_usd, rt_equity_start_usd, rt_return_pct,
             rt_entries, rt_exits, rt_unrealized_pnl, rt_drawdown_pct, rt_leverage_avg, rt_strategies_active,
             bt_total_return_pct, bt_max_dd_pct, bt_win_rate, bt_profit_factor, bt_source_run_id,
-            drift_alerts_critical, drift_alerts_warn, drift_avg_pct, drift_flag)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            drift_alerts_critical, drift_alerts_warn, drift_avg_pct, drift_flag,
+            avg_slippage_pct, avg_execution_delay_ms, margin_load_rt_pct, realized_pnl_usd, trade_hour_distribution)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(snapshot_date, api_key_name) DO UPDATE SET
            system_name = excluded.system_name,
            rt_equity_usd = excluded.rt_equity_usd,
@@ -367,6 +451,11 @@ export const runBtRtDailySweep = async (
            drift_alerts_warn = excluded.drift_alerts_warn,
            drift_avg_pct = excluded.drift_avg_pct,
            drift_flag = excluded.drift_flag,
+           avg_slippage_pct = excluded.avg_slippage_pct,
+           avg_execution_delay_ms = excluded.avg_execution_delay_ms,
+           margin_load_rt_pct = excluded.margin_load_rt_pct,
+           realized_pnl_usd = excluded.realized_pnl_usd,
+           trade_hour_distribution = excluded.trade_hour_distribution,
            created_at = created_at`,
         [
           snap.snapshot_date, snap.api_key_name, snap.tenant_id, snap.system_name,
@@ -374,6 +463,7 @@ export const runBtRtDailySweep = async (
           snap.rt_entries, snap.rt_exits, snap.rt_unrealized_pnl, snap.rt_drawdown_pct, snap.rt_leverage_avg, snap.rt_strategies_active,
           snap.bt_total_return_pct, snap.bt_max_dd_pct, snap.bt_win_rate, snap.bt_profit_factor, snap.bt_source_run_id,
           snap.drift_alerts_critical, snap.drift_alerts_warn, snap.drift_avg_pct, snap.drift_flag,
+          snap.avg_slippage_pct, snap.avg_execution_delay_ms, snap.margin_load_rt_pct, snap.realized_pnl_usd, snap.trade_hour_distribution,
         ]
       );
 
