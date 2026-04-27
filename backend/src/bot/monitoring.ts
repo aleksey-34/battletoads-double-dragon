@@ -141,6 +141,13 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
     return null;
   }
 
+  // Skip recording if equity is zero even though balances were returned —
+  // this catches edge cases where the API returns empty asset list transiently
+  if (metrics.equityUsd <= 0) {
+    console.warn(`[monitoring] Skipping snapshot for ${apiKeyName}: equity_usd=${metrics.equityUsd} (anomalous zero, skip to avoid chart spike)`);
+    return null;
+  }
+
   // Detect anomalous peaks: filter peaks older than 30 days or unrealistically high (>1.5x current equity)
   // This prevents drawdown from being inflated by initialization bugs or temporary spikes
   const peakRow = await db.get(
