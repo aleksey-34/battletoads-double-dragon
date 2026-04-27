@@ -8662,26 +8662,17 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
         logger.info(`[updateStrategyClientState] Tenant ${tenantId} removed offer ${offer.offerId} (${market}) — cancelling orders`);
         try { await cancelAllOrders(nextAssignedApiKeyName, market); } catch (e) { logger.warn(`cancelAllOrders per-market ${market} for ${nextAssignedApiKeyName}: ${(e as Error).message}`); }
       }
-      // Dematerialize runtime strategies for removed offers
+      // Dematerialize runtime strategies for removed offers — DELETE (не архивировать)
       const removedStrategyIds = removedOffers.map((o) => Number(o.strategy?.id || 0)).filter((v) => v > 0);
       if (removedStrategyIds.length > 0) {
-        const placeholders = removedStrategyIds.map(() => '?').join(',');
         const dematPattern = `SAAS::${tenant.slug}::%`;
-        await db.run(
-          `UPDATE strategies SET is_active = 0, is_archived = 1, updated_at = CURRENT_TIMESTAMP
-           WHERE is_runtime = 1 AND name LIKE ? AND name LIKE '%::SID' || CAST(? AS TEXT)
-           AND id IN (SELECT id FROM strategies WHERE is_runtime = 1 AND name LIKE ?)`,
-          [dematPattern, 0, dematPattern]
-        ).catch(() => {});
-        // More precise: archive each removed SID individually
         for (const sid of removedStrategyIds) {
           await db.run(
-            `UPDATE strategies SET is_active = 0, is_archived = 1, updated_at = CURRENT_TIMESTAMP
-             WHERE is_runtime = 1 AND name LIKE ? AND name LIKE ?`,
+            `DELETE FROM strategies WHERE is_runtime = 1 AND name LIKE ? AND name LIKE ?`,
             [dematPattern, `%::SID${sid}`]
-          ).catch((e) => logger.warn(`demat strategy SID${sid} for ${tenant.slug}: ${(e as Error).message}`));
+          ).catch((e) => logger.warn(`demat delete strategy SID${sid} for ${tenant.slug}: ${(e as Error).message}`));
         }
-        logger.info(`[updateStrategyClientState] Tenant ${tenantId} dematerialized ${removedStrategyIds.length} runtime strategies for removed offers`);
+        logger.info(`[updateStrategyClientState] Tenant ${tenantId} deleted ${removedStrategyIds.length} runtime strategies for removed offers`);
       }
     }
   }

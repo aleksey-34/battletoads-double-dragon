@@ -238,6 +238,10 @@ router.post('/profiles/:id/preview', async (req, res) => {
       config = JSON.parse(profile.config_json) as Record<string, unknown>;
     } catch { /* empty */ }
 
+    if (!config.apiKeyName) {
+      return res.status(400).json({ error: 'Profile config_json must include apiKeyName to run a preview backtest' });
+    }
+
     const job = await enqueuePreviewJob(config, { profile_id: id, priority: 5 });
     res.json(job);
   } catch (err) {

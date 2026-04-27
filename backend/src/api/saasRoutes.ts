@@ -766,7 +766,8 @@ router.post('/strategy-clients/:tenantId/preview', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS strategy client preview error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    const statusCode = err.message.toLowerCase().includes('not found') ? 404 : 500;
+    res.status(statusCode).json({ error: err.message });
   }
 });
 
