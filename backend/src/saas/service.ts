@@ -5921,6 +5921,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   const riskScaleMaxPercent = clampNumber(asNumber(payload?.riskScaleMaxPercent, 100), 0, 400);
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(payload?.maxOpenPositions, 0)));
   const partialTpPct = Math.max(0, asNumber(payload?.partialTpPct, 0));
+  const reinvestPercent = clampNumber(asNumber(payload?.reinvestPercent, 100), 0, 100);
   const reinvestShare = reinvestPercent / 100;
   const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
   const tradeMul = getPreviewTradeMultiplier(tradeFrequencyScore);
