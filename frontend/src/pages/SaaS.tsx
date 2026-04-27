@@ -995,6 +995,7 @@ type BacktestCardSettings = {
   initialBalance: number;
   riskScaleMaxPercent: number;
   maxOpenPositions: number;
+  partialTpPct: number;
 };
 
 const ADMIN_PUBLISH_RESPONSE_STORAGE_KEY = 'saasAdminPublishResponse';
@@ -1005,6 +1006,7 @@ const DEFAULT_BACKTEST_SETTINGS: BacktestCardSettings = {
   initialBalance: 10000,
   riskScaleMaxPercent: 100,
   maxOpenPositions: 0,
+  partialTpPct: 0,
 };
 
 const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
@@ -1014,12 +1016,14 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
   const initialBalance = Number(parsed.initialBalance);
   const riskScaleMaxPercent = Number(parsed.riskScaleMaxPercent);
   const maxOpenPositions = Number(parsed.maxOpenPositions);
+  const partialTpPct = Number(parsed.partialTpPct);
   return {
     riskScore: Number.isFinite(riskScore) ? Math.min(10, Math.max(0, riskScore)) : DEFAULT_BACKTEST_SETTINGS.riskScore,
     tradeFrequencyScore: Number.isFinite(tradeFrequencyScore) ? Math.min(10, Math.max(0, tradeFrequencyScore)) : DEFAULT_BACKTEST_SETTINGS.tradeFrequencyScore,
     initialBalance: Number.isFinite(initialBalance) ? Math.max(100, Math.floor(initialBalance)) : DEFAULT_BACKTEST_SETTINGS.initialBalance,
     riskScaleMaxPercent: Number.isFinite(riskScaleMaxPercent) ? Math.min(1000, Math.max(0, riskScaleMaxPercent)) : DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent,
     maxOpenPositions: Number.isFinite(maxOpenPositions) ? Math.max(0, Math.floor(maxOpenPositions)) : DEFAULT_BACKTEST_SETTINGS.maxOpenPositions,
+    partialTpPct: Number.isFinite(partialTpPct) ? Math.max(0, partialTpPct) : DEFAULT_BACKTEST_SETTINGS.partialTpPct,
   };
 };
 
@@ -2692,6 +2696,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestInitialBalance, setAdminSweepBacktestInitialBalance] = useState(DEFAULT_BACKTEST_SETTINGS.initialBalance);
   const [adminSweepBacktestRiskScaleMaxPercent, setAdminSweepBacktestRiskScaleMaxPercent] = useState(DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent);
   const [adminSweepBacktestMaxOpenPositions, setAdminSweepBacktestMaxOpenPositions] = useState(DEFAULT_BACKTEST_SETTINGS.maxOpenPositions);
+  const [adminSweepBacktestPartialTpPct, setAdminSweepBacktestPartialTpPct] = useState(DEFAULT_BACKTEST_SETTINGS.partialTpPct);
   const [adminSweepBacktestDateFrom, setAdminSweepBacktestDateFrom] = useState('');
   const [adminSweepBacktestDateTo, setAdminSweepBacktestDateTo] = useState('');
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
@@ -6271,6 +6276,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAdminSweepBacktestInitialBalance(settings.initialBalance);
     setAdminSweepBacktestRiskScaleMaxPercent(settings.riskScaleMaxPercent);
     setAdminSweepBacktestMaxOpenPositions(settings.maxOpenPositions ?? 0);
+    setAdminSweepBacktestPartialTpPct(settings.partialTpPct ?? 0);
   }, []);
 
   const resolveBacktestSettingsForContext = useCallback((context: SaasBacktestContext): BacktestCardSettings => {
@@ -6381,6 +6387,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const effectiveInitialBalance = Number(options?.settingsOverride?.initialBalance ?? adminSweepBacktestInitialBalance);
     const effectiveRiskScaleMaxPercent = Number(options?.settingsOverride?.riskScaleMaxPercent ?? adminSweepBacktestRiskScaleMaxPercent);
     const effectiveMaxOpenPositions = Math.max(0, Math.floor(Number(options?.settingsOverride?.maxOpenPositions ?? adminSweepBacktestMaxOpenPositions)));
+    const effectivePartialTpPct = Math.max(0, Number(options?.settingsOverride?.partialTpPct ?? adminSweepBacktestPartialTpPct));
     try {
       const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
         kind: targetContext.kind,
@@ -6399,6 +6406,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         initialBalance: effectiveInitialBalance,
         riskScaleMaxPercent: effectiveRiskScaleMaxPercent,
         maxOpenPositions: effectiveMaxOpenPositions > 0 ? effectiveMaxOpenPositions : undefined,
+        partialTpPct: effectivePartialTpPct > 0 ? effectivePartialTpPct : undefined,
         preferRealBacktest: options?.preferRealBacktest === true,
         rerunApiKeyName: options?.preferRealBacktest
           ? (adminSweepBacktestRerunApiKey || undefined)
@@ -6784,6 +6792,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
               riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 100),
               maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
+              partialTpPct: Math.max(0, Number(adminSweepBacktestPartialTpPct ?? 0)),
             },
           },
         },
@@ -6801,6 +6810,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
           riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 100),
           maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
+          partialTpPct: Math.max(0, Number(adminSweepBacktestPartialTpPct ?? 0)),
         }
       );
       await loadSummary('full');
@@ -12680,6 +12690,31 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       }}
                     />
                     <Text type="secondary">{adminSweepBacktestMaxOpenPositions > 0 ? `≤${adminSweepBacktestMaxOpenPositions} позиций` : '0 = без огр.'}</Text>
+                    {adminSweepBacktestMaxOpenPositions === 0 && (backtestDrawerContext?.offerIds?.length ?? 0) >= 3 && (
+                      <div style={{ marginTop: 4 }}>
+                        <Text type="warning" style={{ fontSize: 11 }}>⚠ Установи ОП перед сохранением карточки</Text>
+                      </div>
+                    )}
+                  </Card>
+                </Col>
+              )}
+              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
+                <Col xs={24} md={12} lg={4}>
+                  <Card size="small" title="Partial TP %">
+                    <InputNumber
+                      min={0}
+                      max={100}
+                      step={0.5}
+                      style={{ width: '100%' }}
+                      value={adminSweepBacktestPartialTpPct}
+                      onChange={(value) => {
+                        const next = Math.max(0, Number(value || 0));
+                        setAdminSweepBacktestPartialTpPct(next);
+                        setAdminSweepBacktestStale(true);
+                        scheduleBacktestDebounce();
+                      }}
+                    />
+                    <Text type="secondary">{adminSweepBacktestPartialTpPct > 0 ? `Закрыть 50% при +${adminSweepBacktestPartialTpPct}%` : '0 = выкл.'}</Text>
                   </Card>
                 </Col>
               )}

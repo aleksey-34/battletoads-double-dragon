@@ -5456,6 +5456,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   reinvestPercent?: number;
   riskScaleMaxPercent?: number;
   maxOpenPositions?: number;
+  partialTpPct?: number;
   dateFrom?: string;
   dateTo?: string;
   preferRealBacktest?: boolean;
@@ -5919,7 +5920,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   // Exponential: risk=0 → ~0.18x, risk=5 → 1.0x, risk=10 → ~5.5x.
   const riskScaleMaxPercent = clampNumber(asNumber(payload?.riskScaleMaxPercent, 100), 0, 400);
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(payload?.maxOpenPositions, 0)));
-  const reinvestPercent = clampNumber(asNumber(payload?.reinvestPercent, 100), 0, 100);
+  const partialTpPct = Math.max(0, asNumber(payload?.partialTpPct, 0));
   const reinvestShare = reinvestPercent / 100;
   const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
   const tradeMul = getPreviewTradeMultiplier(tradeFrequencyScore);
@@ -6108,6 +6109,7 @@ export const previewAdminSweepBacktest = async (payload?: {
           dateFrom: requestedDateFrom || (kind === 'offer' ? singleOfferStoreDateFrom : '') || asString(sweep?.config?.dateFrom, ''),
           dateTo: requestedDateTo || (kind === 'offer' ? singleOfferStoreDateTo : '') || asString(sweep?.config?.dateTo, ''),
           ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
+          ...(partialTpPct > 0 ? { partialTpPct } : {}),
           maxDepositOverride: initialBalance,
           lotPercentOverride: 100,
         });

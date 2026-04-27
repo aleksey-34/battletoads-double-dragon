@@ -624,6 +624,52 @@ const TRAILING_RATIO_EPSILON = 1e-12;
 
 const processedClosedBarByStrategy = new Map<string, number>();
 
+// ── Shared signal cache ───────────────────────────────────────────────────────
+// Within one runAutoStrategiesCycle, strategies with identical signal parameters
+// (same exchange key, pair, interval, strategy type, channel length, detection
+// source, zscore entry, long/short enabled flags) reuse the same computed signal.
+// This eliminates redundant indicator calculations and, crucially, guarantees that
+// ALL strategies sharing a signal group evaluate the SAME signal value in the same
+// cycle — preventing desync from independent computations on slightly-different
+// candle slices.
+type CachedSignalEntry = ComputedSignal & { evaluatedBarTimeMs: number };
+let _cycleSignalCache: Map<string, CachedSignalEntry> | null = null;
+let _cycleSignalCacheExpiry = 0;
+const CYCLE_SIGNAL_CACHE_TTL_MS = 60_000; // one full cycle window
+
+const getCycleSignalCache = (): Map<string, CachedSignalEntry> => {
+  const now = Date.now();
+  if (!_cycleSignalCache || now > _cycleSignalCacheExpiry) {
+    _cycleSignalCache = new Map();
+    _cycleSignalCacheExpiry = now + CYCLE_SIGNAL_CACHE_TTL_MS;
+  }
+  return _cycleSignalCache;
+};
+
+const resetCycleSignalCache = (): void => {
+  _cycleSignalCache = new Map();
+  _cycleSignalCacheExpiry = Date.now() + CYCLE_SIGNAL_CACHE_TTL_MS;
+};
+
+const makeSignalGroupKey = (
+  apiKeyName: string,
+  strategy: Pick<Strategy, 'market_mode' | 'base_symbol' | 'quote_symbol' | 'base_coef' | 'quote_coef' | 'interval' | 'strategy_type' | 'price_channel_length' | 'detection_source' | 'zscore_entry' | 'long_enabled' | 'short_enabled'>
+): string => {
+  const mode = normalizeMarketMode(strategy.market_mode);
+  const base = String(strategy.base_symbol || '').toUpperCase();
+  const quote = mode === 'mono' ? '' : String(strategy.quote_symbol || '').toUpperCase();
+  const baseCoef = mode === 'mono' ? '' : String(Number(strategy.base_coef || 1).toFixed(6));
+  const quoteCoef = mode === 'mono' ? '' : String(Number(strategy.quote_coef || 1).toFixed(6));
+  const type = String(strategy.strategy_type || 'DD_BattleToads');
+  const len = Math.max(2, Math.floor(Number(strategy.price_channel_length) || 50));
+  const src = String(strategy.detection_source || 'close');
+  const zEntry = type === 'stat_arb_zscore' ? Number(strategy.zscore_entry || 2).toFixed(4) : '';
+  const longs = strategy.long_enabled ? '1' : '0';
+  const shorts = strategy.short_enabled ? '1' : '0';
+  return `${apiKeyName}|${mode}|${base}|${quote}|${baseCoef}|${quoteCoef}|${strategy.interval}|${type}|${len}|${src}|${zEntry}|${longs}|${shorts}`;
+};
+// ─────────────────────────────────────────────────────────────────────────────
+
 const normalizeQtyValue = (value: number, decimals: number): number => {
   const safeDecimals = Math.max(0, Math.min(12, decimals));
   return Number(value.toFixed(safeDecimals));
@@ -2091,15 +2137,40 @@ export const executeStrategy = async (
     closedBarOnly
   );
 
-  const { signal, currentRatio, donchianHigh, donchianLow, donchianCenter, zScore } = computeSignal(
-    mergedStrategy.strategy_type || 'DD_BattleToads',
-    candleContext.candlesForSignal,
-    signalLength,
-    mergedStrategy.detection_source,
-    mergedStrategy.zscore_entry,
-    mergedStrategy.long_enabled,
-    mergedStrategy.short_enabled
-  );
+  // ── Shared signal cache lookup ──────────────────────────────────────────────
+  // During auto-cycle, strategies with identical signal parameters share the same
+  // pre-computed signal. This guarantees consistency across all accounts trading
+  // the same pair with the same strategy settings in a single cycle.
+  let computedSignalResult: ComputedSignal;
+  const signalGroupKey = makeSignalGroupKey(apiKeyName, mergedStrategy);
+  const signalCache = getCycleSignalCache();
+  const cachedSignal = signalCache.get(signalGroupKey);
+
+  if (cachedSignal && cachedSignal.evaluatedBarTimeMs === candleContext.evaluatedBarTimeMs) {
+    // Re-use cached signal: same bar, same params → same result guaranteed
+    computedSignalResult = {
+      signal: cachedSignal.signal,
+      currentRatio: cachedSignal.currentRatio,
+      donchianHigh: cachedSignal.donchianHigh,
+      donchianLow: cachedSignal.donchianLow,
+      donchianCenter: cachedSignal.donchianCenter,
+      zScore: cachedSignal.zScore,
+    };
+  } else {
+    computedSignalResult = computeSignal(
+      mergedStrategy.strategy_type || 'DD_BattleToads',
+      candleContext.candlesForSignal,
+      signalLength,
+      mergedStrategy.detection_source,
+      mergedStrategy.zscore_entry,
+      mergedStrategy.long_enabled,
+      mergedStrategy.short_enabled
+    );
+    signalCache.set(signalGroupKey, { ...computedSignalResult, evaluatedBarTimeMs: candleContext.evaluatedBarTimeMs });
+  }
+
+  const { signal, currentRatio, donchianHigh, donchianLow, donchianCenter, zScore } = computedSignalResult;
+  // ───────────────────────────────────────────────────────────────────────────
 
   const isStatArb = mergedStrategy.strategy_type === 'stat_arb_zscore';
   const zscoreExit = normalizeZscoreExit(mergedStrategy.zscore_exit, DEFAULT_STRATEGY.zscore_exit, mergedStrategy.zscore_entry);
@@ -3442,6 +3513,10 @@ export const runAutoStrategiesCycle = async () => {
   const { db } = await import('../utils/database');
   const { ensureExchangeClientInitialized } = await import('./exchange');
 
+  // Reset the shared signal cache at the start of each cycle so strategies
+  // always compute a fresh signal from this cycle's candle snapshot.
+  resetCycleSignalCache();
+
   // ── Overflow guard: close excess positions if more than ОП ──
   try {
     const systems: any[] = (await db.all(
@@ -3480,7 +3555,9 @@ export const runAutoStrategiesCycle = async () => {
   }
 
   const rows = await db.all(
-    `SELECT a.name AS api_key_name, s.id AS strategy_id, COALESCE(s.name, '') AS strategy_name
+    `SELECT a.name AS api_key_name, s.id AS strategy_id, COALESCE(s.name, '') AS strategy_name,
+            s.market_mode, s.base_symbol, s.quote_symbol, s.interval, s.strategy_type,
+            s.price_channel_length, s.base_coef, s.quote_coef
      FROM strategies s
      JOIN api_keys a ON a.id = s.api_key_id
      WHERE s.is_active = 1 AND s.auto_update = 1
@@ -3506,6 +3583,65 @@ export const runAutoStrategiesCycle = async () => {
     } catch (initErr) {
       logger.warn(`Auto-cycle: failed to init exchange client for ${apiKeyName}: ${formatActionError(initErr)}`);
     }
+  }
+
+  // ── Phase 1.5: Pre-warm candle cache (Shared Signal) ──
+  // Fetch market data for all unique (apiKey, symbol, interval, lookback) combos BEFORE
+  // parallel execution starts. This guarantees every strategy in this cycle evaluates the
+  // SAME closed bar — eliminating timing desync caused by bar closes mid-cycle.
+  // Strategies with identical signal parameters (same pair/interval/length) are guaranteed
+  // to compute the same signal from the same candle snapshot.
+  const seenCacheKeys = new Set<string>();
+  const warmupJobs: (() => Promise<void>)[] = [];
+
+  for (const row of validJobs) {
+    const apiKeyName = String(row.api_key_name);
+    const strategyType = normalizeStrategyType(row.strategy_type);
+    const signalLength = Math.max(2, Math.floor(Number(row.price_channel_length) || 50));
+    const lookback = strategyType === 'stat_arb_zscore'
+      ? Math.max(signalLength + 90, 220)
+      : Math.max(signalLength + 30, 120);
+
+    const marketMode = normalizeMarketMode(row.market_mode);
+    const baseSymbol = String(row.base_symbol || '').trim().toUpperCase();
+    const quoteSymbol = String(row.quote_symbol || '').trim().toUpperCase();
+    const interval = String(row.interval || '').trim();
+
+    if (!baseSymbol || !interval) {
+      continue;
+    }
+
+    // Build warm-up candidates: base + quote (for synthetic)
+    const symbolsToWarm: { symbol: string; limit: number }[] = [{ symbol: baseSymbol, limit: lookback }];
+    if (marketMode !== 'mono' && quoteSymbol && quoteSymbol !== baseSymbol) {
+      symbolsToWarm.push({ symbol: quoteSymbol, limit: lookback });
+    }
+
+    for (const { symbol, limit } of symbolsToWarm) {
+      const cacheKey = `${apiKeyName}:${symbol}:${interval}:${limit}`;
+      if (seenCacheKeys.has(cacheKey)) {
+        continue;
+      }
+      seenCacheKeys.add(cacheKey);
+
+      // Capture loop variables for closure
+      const capturedApiKey = apiKeyName;
+      const capturedSymbol = symbol;
+      const capturedInterval = interval;
+      const capturedLimit = limit;
+      warmupJobs.push(async () => {
+        try {
+          await getCachedMarketData(capturedApiKey, capturedSymbol, capturedInterval, capturedLimit);
+        } catch {
+          // Non-critical: strategy will handle its own candle fetch error later
+        }
+      });
+    }
+  }
+
+  if (warmupJobs.length > 0) {
+    await Promise.allSettled(warmupJobs.map((fn) => fn()));
+    logger.info(`Auto-cycle: warmed candle cache for ${warmupJobs.length} symbol-key combos (${seenCacheKeys.size} unique)`);
   }
 
   // ── Phase 2: Execute all strategies in parallel ──

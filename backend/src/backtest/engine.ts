@@ -92,6 +92,11 @@ export type BacktestRunRequest = {
   maxDepositOverride?: number;
   /** Override lot_long_percent / lot_short_percent on all strategies. */
   lotPercentOverride?: number;
+  /**
+   * Partial take-profit: when a position reaches this PnL% threshold, close 50%
+   * at market and set break-even anchor on the remainder (0 = disabled).
+   */
+  partialTpPct?: number;
 };
 
 export type BacktestRunResult = {
@@ -119,6 +124,7 @@ type NormalizedBacktestRequest = {
   maxOpenPositions: number;
   maxDepositOverride: number;
   lotPercentOverride: number;
+  partialTpPct: number;
 };
 
 export type BacktestRunListItem = {
@@ -416,6 +422,8 @@ type RuntimeStrategy = {
   openTrade: OpenTradeState | null;
   startIndex: number;
   endIndex: number;
+  /** Has the partial TP (50% close) already fired for the current open position? */
+  partialTpTriggered: boolean;
 };
 
 type BacktestContext = {
@@ -554,6 +562,80 @@ const closePosition = (
   runtime.tpAnchorPrice = null;
   runtime.notional = 0;
   runtime.openTrade = null;
+  runtime.partialTpTriggered = false;
+};
+
+/**
+ * Close a fraction (0..1] of the current position at market price.
+ * Records a proportional trade, reduces notional & locked margin,
+ * and keeps the position open for the remaining fraction.
+ */
+const partialClosePosition = (
+  ctx: BacktestContext,
+  runtime: RuntimeStrategy,
+  strategyId: number,
+  strategyName: string,
+  exitTime: number,
+  marketPrice: number,
+  reason: string,
+  fraction: number, // 0..1, e.g. 0.5 for 50%
+): void => {
+  if (!runtime.openTrade || !runtime.entryPrice || runtime.notional <= 0 || runtime.state === 'flat') {
+    return;
+  }
+
+  const side = runtime.openTrade.side;
+  const exitPrice = executionPrice(marketPrice, side, 'exit', ctx.slippageRate);
+  const entryPrice = runtime.openTrade.entryPrice;
+  const closedNotional = runtime.openTrade.notional * fraction;
+
+  let grossPnl = 0;
+  if (side === 'long') {
+    grossPnl = closedNotional * ((exitPrice / entryPrice) - 1);
+  } else {
+    grossPnl = closedNotional * ((entryPrice / exitPrice) - 1);
+  }
+
+  const exitFee = closedNotional * ctx.commissionRate;
+  const closedEntryFee = runtime.openTrade.entryFee * fraction;
+  const closedFunding = runtime.openTrade.funding * fraction;
+
+  ctx.cashEquity += grossPnl - exitFee;
+  ctx.lockedMargin = Math.max(0, ctx.lockedMargin - closedNotional);
+
+  const netPnl = grossPnl - closedEntryFee - exitFee + closedFunding;
+  const pnlPercent = entryPrice > 0
+    ? (side === 'long'
+      ? ((exitPrice / entryPrice) - 1) * 100
+      : ((entryPrice / exitPrice) - 1) * 100)
+    : 0;
+
+  ctx.trades.push({
+    strategyId,
+    strategyName,
+    side,
+    entryTime: runtime.openTrade.entryTime,
+    exitTime,
+    entryPrice,
+    exitPrice,
+    notional: closedNotional,
+    grossPnl,
+    netPnl,
+    pnlPercent,
+    fees: closedEntryFee + exitFee,
+    funding: closedFunding,
+    reason,
+  });
+
+  // Reduce the open trade to the remaining fraction
+  const remainingFraction = 1 - fraction;
+  runtime.openTrade = {
+    ...runtime.openTrade,
+    notional: runtime.openTrade.notional * remainingFraction,
+    entryFee: runtime.openTrade.entryFee * remainingFraction,
+    funding: runtime.openTrade.funding * remainingFraction,
+  };
+  runtime.notional = runtime.openTrade.notional;
 };
 
 const openPosition = (
@@ -608,6 +690,7 @@ const openPosition = (
   runtime.entryPrice = entryPrice;
   runtime.tpAnchorPrice = marketPrice;
   runtime.notional = notional;
+  runtime.partialTpTriggered = false;
   runtime.openTrade = {
     side: signal,
     entryTime: eventTime,
@@ -852,6 +935,7 @@ const loadRuntimeStrategies = async (
       openTrade: null,
       startIndex,
       endIndex,
+      partialTpTriggered: false,
     });
   }
 
@@ -870,6 +954,7 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
   const slippagePercent = clamp(asNumber(raw.slippagePercent, 0.05), 0, 5);
   const fundingRatePercent = clamp(asNumber(raw.fundingRatePercent, 0), -5, 5);
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(raw.maxOpenPositions, 0)));
+  const partialTpPct = Math.max(0, asNumber(raw.partialTpPct, 0));
   const dateFromMs = parseTimestampMs(raw.dateFrom);
   const dateToMs = parseTimestampMs(raw.dateTo);
 
@@ -896,6 +981,7 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     maxOpenPositions,
     maxDepositOverride: Math.max(0, asNumber(raw.maxDepositOverride, 0)),
     lotPercentOverride: Math.max(0, asNumber(raw.lotPercentOverride, 0)),
+    partialTpPct,
   };
 };
 
@@ -970,6 +1056,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
   };
 
   const maxOpenPositions = request.maxOpenPositions;
+  const partialTpPct = request.partialTpPct;
   let skippedByPositionLimit = 0;
 
   const countOpenPositions = (): number => {
@@ -1055,6 +1142,24 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         closedOnCurrentBar = true;
       }
     } else {
+      // Partial TP: close 50% when position PnL% hits threshold, then set break-even anchor
+      if (!runtime.partialTpTriggered && partialTpPct > 0 && entryPrice && entryPrice > 0) {
+        const currentPnlPct = state === 'long'
+          ? ((signalPayload.current / entryPrice) - 1) * 100
+          : ((entryPrice / signalPayload.current) - 1) * 100;
+
+        if (currentPnlPct >= partialTpPct) {
+          partialClosePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'partial_tp_50pct', 0.5);
+          runtime.partialTpTriggered = true;
+          // Move TP anchor to entry price so trailing stop won't fire below break-even
+          if (state === 'long') {
+            runtime.tpAnchorPrice = Math.max(entryPrice, signalPayload.current);
+          } else {
+            runtime.tpAnchorPrice = Math.min(entryPrice, signalPayload.current);
+          }
+        }
+      }
+
       if (state === 'long' && takeProfitPercent > 0) {
         const existingAnchor = Number(runtime.tpAnchorPrice);
         const anchorBase = Number.isFinite(existingAnchor) && existingAnchor > 0
