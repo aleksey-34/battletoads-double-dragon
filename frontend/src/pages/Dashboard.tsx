@@ -1991,6 +1991,20 @@ const Dashboard: React.FC = () => {
     }
   };
 
+  const bulkDeletePausedRuntime = async (keyName: string) => {
+    setArchiveActionLoadingByKey((prev) => ({ ...prev, [keyName]: true }));
+    try {
+      const res = await axios.delete(`/api/strategies/${keyName}/bulk-delete-runtime`);
+      const data = res.data as { deleted?: number };
+      message.success(`Deleted ${data.deleted ?? 0} paused runtime strategies for ${keyName}`);
+      void fetchStrategies(keyName);
+    } catch (error: any) {
+      message.error(error?.response?.data?.error || 'Bulk delete runtime failed');
+    } finally {
+      setArchiveActionLoadingByKey((prev) => ({ ...prev, [keyName]: false }));
+    }
+  };
+
   const bulkArchiveStrategies = async (keyName: string, dryRun: boolean) => {
     setArchiveActionLoadingByKey((prev) => ({ ...prev, [keyName]: true }));
     try {
@@ -3060,6 +3074,21 @@ const Dashboard: React.FC = () => {
                   >
                     Archive all paused
                   </Button>
+                  <Popconfirm
+                    title="Delete ALL paused runtime strategies for this key? This cannot be undone."
+                    onConfirm={() => void bulkDeletePausedRuntime(keyName)}
+                    okText="Delete"
+                    cancelText="Cancel"
+                    okButtonProps={{ danger: true }}
+                  >
+                    <Button
+                      size="small"
+                      danger
+                      loading={archiveActionLoadingByKey[keyName]}
+                    >
+                      Delete paused runtime
+                    </Button>
+                  </Popconfirm>
 
                   {apiKeys.length > 1 ? (
                     <>

@@ -1665,6 +1665,7 @@ export default function Research() {
       <Divider />
 
       {/* BT vs RT Daily Snapshots */}
+      <Modal
         title="Create Sweep From Pairs"
         open={manualSweepModalOpen}
         onCancel={() => setManualSweepModalOpen(false)}

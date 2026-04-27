@@ -8677,14 +8677,14 @@ export const updateStrategyClientState = async (tenantId: number, payload: {
     }
   }
 
-  // When toggling OFF: also deactivate all runtime strategies for this tenant
+  // When toggling OFF: DELETE all runtime strategies for this tenant (не оставлять мусор в дашборде)
   if (wasEnabled && !nextRequestedEnabled) {
     const dematPattern = `SAAS::${tenant.slug}::%`;
     const dematResult = await db.run(
-      `UPDATE strategies SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE is_runtime = 1 AND name LIKE ?`,
+      `DELETE FROM strategies WHERE is_runtime = 1 AND name LIKE ?`,
       [dematPattern]
     ).catch(() => ({ changes: 0 }));
-    logger.info(`[updateStrategyClientState] Tenant ${tenantId} toggled OFF — deactivated ${(dematResult as any)?.changes || 0} runtime strategies`);
+    logger.info(`[updateStrategyClientState] Tenant ${tenantId} toggled OFF — deleted ${(dematResult as any)?.changes || 0} runtime strategies`);
   }
 
   return getStrategyClientState(tenantId);

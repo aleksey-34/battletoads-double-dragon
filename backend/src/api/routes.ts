@@ -2648,6 +2648,60 @@ router.post('/strategies/:apiKeyName/bulk-archive', async (req, res) => {
   }
 });
 
+// Bulk-delete paused runtime strategies (SAAS dematerialization cleanup)
+router.delete('/strategies/:apiKeyName/bulk-delete-runtime', async (req, res) => {
+  const { apiKeyName } = req.params;
+  try {
+    const apiKeyRow = await db.get('SELECT id FROM api_keys WHERE name = ?', [apiKeyName]);
+    if (!apiKeyRow?.id) {
+      return res.status(404).json({ error: `API key not found: ${apiKeyName}` });
+    }
+    const apiKeyId = Number(apiKeyRow.id);
+
+    const dryRun = String(req.query.dryRun ?? '0').trim() !== '0';
+
+    const candidatesRows = await db.all(
+      `SELECT id, name FROM strategies
+       WHERE api_key_id = ?
+         AND COALESCE(is_runtime, 0) = 1
+         AND COALESCE(is_active, 1) = 0
+         AND COALESCE(is_archived, 0) = 0
+       ORDER BY id ASC`,
+      [apiKeyId]
+    );
+    const candidates = Array.isArray(candidatesRows) ? candidatesRows : [];
+    const count = candidates.length;
+
+    if (dryRun || count === 0) {
+      return res.json({
+        dryRun: true,
+        count,
+        sample: candidates.slice(0, 10).map((r: any) => ({ id: r.id, name: r.name })),
+      });
+    }
+
+    const ids = candidates.map((r: any) => Number(r.id));
+    const BATCH = 500;
+    let deleted = 0;
+    for (let i = 0; i < ids.length; i += BATCH) {
+      const batch = ids.slice(i, i + BATCH);
+      const placeholders = batch.map(() => '?').join(',');
+      const result: any = await db.run(
+        `DELETE FROM strategies WHERE id IN (${placeholders})`,
+        batch
+      );
+      deleted += Number(result?.changes || 0);
+    }
+
+    logger.info(`Bulk-deleted ${deleted} paused runtime strategies for API key ${apiKeyName}`);
+    res.json({ dryRun: false, deleted });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Bulk-delete-runtime error for ${apiKeyName}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/strategies/:apiKeyName/:strategyId', async (req, res) => {
   const { apiKeyName, strategyId } = req.params;
   const strategyIdNum = Number.parseInt(String(strategyId || ''), 10);
