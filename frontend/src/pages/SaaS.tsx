@@ -9800,7 +9800,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 style={{ width: '100%', marginTop: 4 }}
                                 value={createTenantProductMode}
                                 onChange={setCreateTenantProductMode}
-                                options={[{ value: 'dual', label: 'Dual (стратегии + алгофонд)' }]}
+                                options={[
+                                  { value: 'dual', label: 'Dual (стратегии + алгофонд)' },
+                                  { value: 'strategy_client', label: 'Клиент стратегий (подписка)' },
+                                  { value: 'algofund_client', label: 'Клиент Алгофонда' },
+                                ]}
                               />
                             </div>
                             <div>
