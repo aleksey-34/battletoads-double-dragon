@@ -3044,7 +3044,15 @@ const buildPresetBackedOffers = async (catalog: CatalogData | null): Promise<Cat
           source: 'preset_db',
           generatedAt: new Date().toISOString(),
           points: Array.isArray(preset.equity_curve)
-            ? preset.equity_curve.map((value, index) => ({ time: index + 1, equity: asNumber(value, 0) }))
+            ? (() => {
+              const now = Date.now();
+              const spanMs = 365 * 24 * 3600 * 1000;
+              const startMs = now - spanMs;
+              return preset.equity_curve.map((value, index, arr) => ({
+                time: arr.length <= 1 ? now : Math.round(startMs + (index / (arr.length - 1)) * spanMs),
+                equity: asNumber(value, 0),
+              }));
+            })()
             : [],
           summary: legacy?.equity?.summary,
         },
@@ -5971,14 +5979,19 @@ export const previewAdminSweepBacktest = async (payload?: {
       const snapshotTradeMul = getPreviewTradeMultiplier(snapshotTradeFrequencyScore);
       const relativeRiskMul = rerunRiskMul / Math.max(0.01, snapshotRiskMul);
       const relativeTradeMul = tradeMul / Math.max(0.01, snapshotTradeMul);
+      const offerSnapshotSpanMs = Math.max(1, asNumber(offerSnapshot.periodDays, 365)) * 24 * 3600 * 1000;
+      const offerSnapshotStartMs = Date.now() - offerSnapshotSpanMs;
       const baseEquity = (Array.isArray(offerSnapshot.equityPoints) ? offerSnapshot.equityPoints : [])
-        .map((value, index) => ({ time: index, equity: Number(asNumber(value, 0).toFixed(4)) }))
+        .map((value, index, arr) => ({
+          time: arr.length <= 1 ? Date.now() : Math.round(offerSnapshotStartMs + (index / (arr.length - 1)) * offerSnapshotSpanMs),
+          equity: Number(asNumber(value, 0).toFixed(4)),
+        }))
         .filter((item) => Number.isFinite(item.equity));
       const resolvedBaseEquity = baseEquity.length > 1
         ? baseEquity
         : [
-          { time: 0, equity: initialBalance },
-          { time: 1, equity: Number((initialBalance * (1 + baselineMetrics.ret / 100)).toFixed(4)) },
+          { time: Math.round(Date.now() - offerSnapshotSpanMs), equity: initialBalance },
+          { time: Date.now(), equity: Number((initialBalance * (1 + baselineMetrics.ret / 100)).toFixed(4)) },
         ];
       const resolvedInitialBalance = Math.max(100, Math.floor(asNumber(offerSnapshot.initialBalance, initialBalance)));
       const adjustedMetricsSnapshot = adjustPreviewMetrics(baselineMetrics, relativeRiskMul, relativeTradeMul);
@@ -6329,8 +6342,13 @@ export const previewAdminSweepBacktest = async (payload?: {
             };
           });
 
+          const snapshotSpanMs = Math.max(1, asNumber(snapshot.periodDays, 365)) * 24 * 3600 * 1000;
+          const snapshotStartMs = Date.now() - snapshotSpanMs;
           const snapshotEquity = (Array.isArray(snapshot.equityPoints) ? snapshot.equityPoints : [])
-            .map((value, index) => ({ time: index, equity: Number(asNumber(value, 0).toFixed(4)) }))
+            .map((value, index, arr) => ({
+              time: arr.length <= 1 ? Date.now() : Math.round(snapshotStartMs + (index / (arr.length - 1)) * snapshotSpanMs),
+              equity: Number(asNumber(value, 0).toFixed(4)),
+            }))
             .filter((item) => Number.isFinite(item.equity));
           const snapshotStrategyIds = Array.from(new Set(snapshotSelectedOffers
             .map((item) => Number(item.strategyId || 0))
@@ -6515,8 +6533,8 @@ export const previewAdminSweepBacktest = async (payload?: {
           const baseEquity = snapshotEquity.length > 1
             ? snapshotEquity
             : [
-              { time: 0, equity: initialBalance },
-              { time: 1, equity: Number(asNumber(snapshot.finalEquity, initialBalance).toFixed(4)) },
+              { time: Math.round(Date.now() - snapshotSpanMs), equity: initialBalance },
+              { time: Date.now(), equity: Number(asNumber(snapshot.finalEquity, initialBalance).toFixed(4)) },
             ];
           const baseStartEquity = asNumber(baseEquity[0]?.equity, initialBalance);
           const baseEndEquity = asNumber(baseEquity[baseEquity.length - 1]?.equity, initialBalance);
