@@ -2723,12 +2723,16 @@ export const cancelAllOrders = async (apiKeyName: string, symbol?: string) => {
 
 export const closeAllPositions = async (apiKeyName: string) => {
   const positions = await getPositions(apiKeyName);
-  const actionable = positions.filter((position: any) => Number.parseFloat(String(position?.size || '0')) > 0);
+  // WEEX returns `contracts` field instead of `size` — check both
+  const posSize = (p: any) => Number.parseFloat(String(p?.size ?? p?.contracts ?? '0'));
+  const actionable = positions.filter((position: any) => posSize(position) > 0);
 
   for (const position of actionable) {
     const symbol = String(position?.symbol || '').toUpperCase();
-    const qty = String(position?.size || '0');
-    const side = String(position?.side || '') as 'Buy' | 'Sell';
+    const qty = String(posSize(position));
+    const sideRaw = String(position?.side || '');
+    // WEEX returns lowercase 'long'/'short'; normalize to 'Buy'/'Sell'
+    const side = (sideRaw.toLowerCase() === 'long' || sideRaw === 'Buy') ? 'Buy' : 'Sell' as 'Buy' | 'Sell';
 
     if (!symbol || !qty || qty === '0') {
       continue;
