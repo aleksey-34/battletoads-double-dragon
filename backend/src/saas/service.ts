@@ -6496,12 +6496,16 @@ export const previewAdminSweepBacktest = async (payload?: {
             ? snapshotSavedMaxOpenPositions
             : snapshotOfferIds.length;
           const shouldApplyOpScaling = maxOpenPositions > 0 && maxOpenPositions < snapshotBaseOp;
+          // Use naturalConcurrent formula: OP limits concurrent positions, not total trades.
+          // Strategies hold ~22% of bars on average, so natural concurrent = members * 0.22.
+          const snapshotNaturalConcurrent = Math.max(1, snapshotBaseOp * 0.22);
           const opSlotRatio = shouldApplyOpScaling
-            ? Math.min(1, maxOpenPositions / Math.max(1, snapshotBaseOp))
+            ? Math.min(1, maxOpenPositions / snapshotNaturalConcurrent)
             : 1;
-          const snapshotRetFactor = shouldApplyOpScaling ? (0.6 + 0.4 * opSlotRatio) : 1;
-          const snapshotDdFactor = shouldApplyOpScaling ? (0.55 + 0.45 * opSlotRatio) : 1;
-          const snapshotTradeFactor = shouldApplyOpScaling ? opSlotRatio : 1;
+          const snapshotRetFactor = shouldApplyOpScaling ? (0.7 + 0.3 * opSlotRatio) : 1;
+          const snapshotDdFactor = shouldApplyOpScaling ? (0.5 + 0.5 * opSlotRatio) : 1;
+          // Trade count barely reduces: slots rotate → only high-contention bars are skipped
+          const snapshotTradeFactor = shouldApplyOpScaling ? Math.min(1, 0.85 + 0.15 * opSlotRatio) : 1;
           const adjustedSnapshotMetricsWithOp = {
             ...adjustedSnapshotMetrics,
             ret: Number((adjustedSnapshotMetrics.ret * snapshotRetFactor).toFixed(3)),
