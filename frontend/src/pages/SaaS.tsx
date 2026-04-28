@@ -2748,6 +2748,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     [summary?.plans],
   );
 
+  // For a given mode, which plan options to show in the main plan selector
+  const createTenantCurrentPlanOptions = useMemo(() => {
+    if (createTenantProductMode === 'algofund_client') return createTenantAlgofundPlanOptions;
+    return createTenantStrategyPlanOptions;
+  }, [createTenantProductMode, createTenantStrategyPlanOptions, createTenantAlgofundPlanOptions]);
+
   const derivePairedAlgofundPlanCode = useCallback((strategyPlanCode: string): string => {
     const suffix = String(strategyPlanCode || '').trim().replace(/^strategy_/, '');
     if (!suffix) return '';
@@ -2758,25 +2764,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   useEffect(() => {
     const hasPlan = (options: Array<{ value: string }>, value: string): boolean => options.some((item) => item.value === value);
-
-    const soloOptions = createTenantProductMode === 'algofund_client'
-      ? createTenantAlgofundPlanOptions
-      : createTenantStrategyPlanOptions;
-    const firstSoloPlan = soloOptions[0]?.value || '';
-
-    if ((!createTenantPlanCode || !hasPlan(soloOptions, createTenantPlanCode)) && firstSoloPlan) {
-      setCreateTenantPlanCode(firstSoloPlan);
+    const firstPlan = createTenantCurrentPlanOptions[0]?.value || '';
+    if ((!createTenantPlanCode || !hasPlan(createTenantCurrentPlanOptions, createTenantPlanCode)) && firstPlan) {
+      setCreateTenantPlanCode(firstPlan);
     }
-
-    if (createTenantAlgofundPlanCode) {
-      setCreateTenantAlgofundPlanCode('');
-    }
+    // Reset algofund plan when switching modes (will be re-set below if dual)
+    setCreateTenantAlgofundPlanCode('');
   }, [
     createTenantProductMode,
-    createTenantPlanCode,
-    createTenantAlgofundPlanCode,
-    createTenantStrategyPlanOptions,
-    createTenantAlgofundPlanOptions,
+    createTenantCurrentPlanOptions,
   ]);
 
   const algofundTenants = useMemo(
@@ -7426,10 +7422,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     setActionLoading('createTenant');
     try {
-      const pairedAlgofundPlanCode = derivePairedAlgofundPlanCode(createTenantPlanCode);
+      const isDual = createTenantProductMode === 'dual';
+      const pairedAlgofundPlanCode = isDual
+        ? (createTenantAlgofundPlanCode || derivePairedAlgofundPlanCode(createTenantPlanCode))
+        : undefined;
       await axios.post('/api/saas/admin/tenants', {
         displayName: createTenantDisplayName,
-        productMode: 'dual',
+        productMode: createTenantProductMode,
         planCode: createTenantPlanCode,
         algofundPlanCode: pairedAlgofundPlanCode || undefined,
         assignedApiKeyName: createTenantApiKey || undefined,
@@ -9808,14 +9807,27 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               />
                             </div>
                             <div>
-                              <Text strong>{copy.plan + ' *'}</Text>
+                              <Text strong>{createTenantProductMode === 'algofund_client' ? 'Тариф *' : createTenantProductMode === 'dual' ? 'Тариф стратегий *' : 'Тариф *'}</Text>
                               <Select
                                 style={{ width: '100%', marginTop: 4 }}
                                 value={createTenantPlanCode || undefined}
                                 onChange={(v) => setCreateTenantPlanCode(v || '')}
-                                options={createTenantProductMode === 'algofund_client' ? createTenantAlgofundPlanOptions : createTenantStrategyPlanOptions}
+                                options={createTenantCurrentPlanOptions}
                               />
                             </div>
+                            {createTenantProductMode === 'dual' && (
+                              <div>
+                                <Text strong>Тариф Алгофонда (для Dual)</Text>
+                                <Select
+                                  allowClear
+                                  style={{ width: '100%', marginTop: 4 }}
+                                  value={createTenantAlgofundPlanCode || undefined}
+                                  onChange={(v) => setCreateTenantAlgofundPlanCode(v || '')}
+                                  placeholder={`Авто (${derivePairedAlgofundPlanCode(createTenantPlanCode) || 'нет пары'})`}
+                                  options={createTenantAlgofundPlanOptions}
+                                />
+                              </div>
+                            )}
                             <div>
                               <Text strong>{copy.apiKey}</Text>
                               <Select allowClear style={{ width: '100%', marginTop: 4 }} value={createTenantApiKey || undefined} onChange={(v) => setCreateTenantApiKey(v || '')} options={apiKeyOptions} />
