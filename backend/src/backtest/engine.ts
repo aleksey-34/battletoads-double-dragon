@@ -1119,6 +1119,24 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
 
     let closedOnCurrentBar = false;
 
+    // Partial TP: applies to ALL strategy types (before type-specific exits)
+    if (!closedOnCurrentBar && !runtime.partialTpTriggered && partialTpPct > 0 && (state === 'long' || state === 'short') && entryPrice && entryPrice > 0) {
+      const currentPnlPct = state === 'long'
+        ? ((signalPayload.current / entryPrice) - 1) * 100
+        : ((entryPrice / signalPayload.current) - 1) * 100;
+
+      if (currentPnlPct >= partialTpPct) {
+        partialClosePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'partial_tp_50pct', 0.5);
+        runtime.partialTpTriggered = true;
+        // Move TP anchor to entry price (break-even) so trailing stop runs from there
+        if (state === 'long') {
+          runtime.tpAnchorPrice = Math.max(entryPrice, signalPayload.current);
+        } else {
+          runtime.tpAnchorPrice = Math.min(entryPrice, signalPayload.current);
+        }
+      }
+    }
+
     if (isStatArb) {
       const hasZScore = Number.isFinite(signalPayload.zScore);
 
@@ -1142,24 +1160,6 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         closedOnCurrentBar = true;
       }
     } else {
-      // Partial TP: close 50% when position PnL% hits threshold, then set break-even anchor
-      if (!runtime.partialTpTriggered && partialTpPct > 0 && entryPrice && entryPrice > 0) {
-        const currentPnlPct = state === 'long'
-          ? ((signalPayload.current / entryPrice) - 1) * 100
-          : ((entryPrice / signalPayload.current) - 1) * 100;
-
-        if (currentPnlPct >= partialTpPct) {
-          partialClosePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'partial_tp_50pct', 0.5);
-          runtime.partialTpTriggered = true;
-          // Move TP anchor to entry price so trailing stop won't fire below break-even
-          if (state === 'long') {
-            runtime.tpAnchorPrice = Math.max(entryPrice, signalPayload.current);
-          } else {
-            runtime.tpAnchorPrice = Math.min(entryPrice, signalPayload.current);
-          }
-        }
-      }
-
       if (state === 'long' && takeProfitPercent > 0) {
         const existingAnchor = Number(runtime.tpAnchorPrice);
         const anchorBase = Number.isFinite(existingAnchor) && existingAnchor > 0

@@ -310,6 +310,7 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
       initialBalance: toOptionalNumber(req.body?.initialBalance),
       riskScaleMaxPercent: toOptionalNumber(req.body?.riskScaleMaxPercent),
       maxOpenPositions: toOptionalNumber(req.body?.maxOpenPositions),
+      partialTpPct: toOptionalNumber(req.body?.partialTpPct),
       dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
       dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
       rerunApiKeyName: req.body?.rerunApiKeyName ? String(req.body.rerunApiKeyName) : undefined,

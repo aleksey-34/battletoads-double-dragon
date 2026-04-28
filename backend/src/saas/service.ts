@@ -6642,14 +6642,23 @@ export const previewAdminSweepBacktest = async (payload?: {
     };
   });
 
-  // Sweep-only OP approximation: when portfolio has more members than available slots,
-  // reduce expected activity/return proportionally to slot contention.
+  // Sweep-only OP approximation: OP limits *concurrent* open positions, not total trades.
+  // Slots rotate — when one position closes another opens. Trade count is barely affected.
+  // What changes: DD decreases (capped concurrent exposure) and return slightly decreases
+  // (rare missed entries during high-contention bars).
+  // Estimate natural concurrent via utilization (~22% for 4h trend strategies).
   const opSlots = kind === 'algofund-ts' ? maxOpenPositions : 0;
   const opMemberCount = kind === 'algofund-ts' ? Math.max(1, adjustedSelectedOffers.length) : 1;
-  const opSlotRatio = opSlots > 0 ? Math.min(1, opSlots / opMemberCount) : 1;
-  const opReturnFactor = opSlots > 0 ? (0.6 + 0.4 * opSlotRatio) : 1;
-  const opDrawdownFactor = opSlots > 0 ? (0.55 + 0.45 * opSlotRatio) : 1;
-  const opTradeFactor = opSlots > 0 ? opSlotRatio : 1;
+  // naturalConcurrent = how many positions are open on average without any OP limit
+  const estimatedUtilization = 0.22; // empirical: 4h strategies hold ~22% of bars
+  const naturalConcurrent = Math.max(1, opMemberCount * estimatedUtilization);
+  // opSlotRatio: how much concurrent demand is satisfied by available slots
+  const opSlotRatio = opSlots > 0 ? Math.min(1, opSlots / naturalConcurrent) : 1;
+  // Return/DD scale: capping concurrent exposure reduces both proportionally
+  const opReturnFactor = opSlots > 0 ? (0.7 + 0.3 * opSlotRatio) : 1;
+  const opDrawdownFactor = opSlots > 0 ? (0.5 + 0.5 * opSlotRatio) : 1;
+  // Trade count: slots rotate → barely reduced (only high-contention bars are skipped)
+  const opTradeFactor = opSlots > 0 ? Math.min(1, 0.85 + 0.15 * opSlotRatio) : 1;
 
   const opAdjustedSelectedOffers = adjustedSelectedOffers.map((item) => {
     if (kind !== 'algofund-ts' || opSlots <= 0 || opSlotRatio >= 1) {
