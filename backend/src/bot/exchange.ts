@@ -1484,6 +1484,21 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
 
+    // WEEX: CCXT fetchPositions hangs reliably; use legacy REST client directly
+    if (entry.exchange === 'weex') {
+      try {
+        const row = await db.get('SELECT * FROM api_keys WHERE name = ?', [apiKeyName]);
+        if (row) {
+          const weexClient = createWeexClient(row as ApiKey);
+          const rawPositions = await entry.limiter.schedule(() => weexClient.fetchPositions(symbol ? [symbol] : undefined));
+          return Array.isArray(rawPositions) ? rawPositions : [];
+        }
+      } catch (weexErr) {
+        logger.warn(`[positions] WEEX legacy client failed for ${apiKeyName}: ${(weexErr as Error).message}`);
+        return [];
+      }
+    }
+
     try {
       await ensureCcxtSymbolMap(entry);
       const resolvedSymbol = symbol ? await resolveCcxtSymbol(entry, symbol) : undefined;
