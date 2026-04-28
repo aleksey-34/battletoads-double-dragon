@@ -74,8 +74,8 @@ const DEFAULT_JOBS: Array<{ job_key: SchedulerJobKey; title: string; hour_utc: n
   {
     job_key: 'bt_rt_daily_snapshot',
     title: 'Daily BT vs RT snapshot',
-    hour_utc: 0,
-    minute_utc: 30,
+    hour_utc: 23,
+    minute_utc: 0,
   },
 ];
 
