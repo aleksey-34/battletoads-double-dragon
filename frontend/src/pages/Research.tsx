@@ -1012,6 +1012,7 @@ export default function Research() {
   useEffect(() => { void fetchTasks(); }, [fetchTasks]);
   useEffect(() => { void fetchBackfillStatus(); }, [fetchBackfillStatus]);
   useEffect(() => { void fetchFullHistoricalSweepStatus(); }, [fetchFullHistoricalSweepStatus]);
+  useEffect(() => { void fetchBtRtSnapshots(); }, [fetchBtRtSnapshots]);
 
   useEffect(() => {
     if (!backfillJobStatus || backfillJobStatus.status !== 'running') {

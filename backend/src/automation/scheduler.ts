@@ -43,7 +43,8 @@ const loadApiKeysWithDiscoverySystems = async (): Promise<string[]> => {
 };
 
 export const runMonitoringCycle = async (): Promise<{ processed: number; failed: number }> => {
-  const apiKeys = await loadAllApiKeys();
+  // Only monitor keys that have at least one active strategy — avoids spamming logs for orphan/broken keys
+  const apiKeys = await loadApiKeysWithActiveStrategies();
   let processed = 0;
   let failed = 0;
 
