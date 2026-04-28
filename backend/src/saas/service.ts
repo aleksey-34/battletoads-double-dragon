@@ -6659,6 +6659,8 @@ export const previewAdminSweepBacktest = async (payload?: {
   const opDrawdownFactor = opSlots > 0 ? (0.5 + 0.5 * opSlotRatio) : 1;
   // Trade count: slots rotate → barely reduced (only high-contention bars are skipped)
   const opTradeFactor = opSlots > 0 ? Math.min(1, 0.85 + 0.15 * opSlotRatio) : 1;
+  const baseTotalTrades = adjustedSelectedOffers.reduce((acc, item) => acc + Math.max(0, asNumber((item.metrics as Record<string, unknown>)?.trades, 0)), 0);
+  logger.info(`[OP-DEBUG] opSlots=${opSlots} opMemberCount=${opMemberCount} naturalConcurrent=${naturalConcurrent.toFixed(3)} opSlotRatio=${opSlotRatio.toFixed(3)} opTradeFactor=${opTradeFactor.toFixed(3)} baseTotalTrades=${baseTotalTrades} adjustedLen=${adjustedSelectedOffers.length}`);
 
   const opAdjustedSelectedOffers = adjustedSelectedOffers.map((item) => {
     if (kind !== 'algofund-ts' || opSlots <= 0 || opSlotRatio >= 1) {
