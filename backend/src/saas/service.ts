@@ -4258,7 +4258,12 @@ const ensurePublishedSourceSystem = async (
     ? (options?.draftMembersOverride || [])
     : (catalog?.adminTradingSystemDraft?.members || []);
   const systemNameSuffix = asString(options?.systemNameSuffix, '').trim();
-  const inferMaxOpenPositions = (name: string): number => (/cloud-op\d+$/i.test(name) ? 2 : 0);
+  const inferMaxOpenPositions = (name: string): number => {
+    if (/cloud-op\d+$/i.test(name)) return 2;
+    // All ALGOFUND client systems (algofund profiles) enforce OP=2
+    if (/^ALGOFUND::/i.test(name)) return 2;
+    return 0;
+  };
 
   if (tenantId) {
     const [tenant, profile] = await Promise.all([
@@ -10352,6 +10357,7 @@ const materializeAlgofundSystem = async (
       auto_sync_members: false,
       discovery_enabled: false,
       max_members: Math.max(6, members.length),
+      max_open_positions: 2,
     });
     await replaceTradingSystemMembers(executionApiKeyName, Number(existing.id), members);
     systemId = Number(existing.id);
@@ -10362,6 +10368,7 @@ const materializeAlgofundSystem = async (
       auto_sync_members: false,
       discovery_enabled: false,
       max_members: Math.max(6, members.length),
+      max_open_positions: 2,
       members,
     });
     systemId = Number(created.id);
