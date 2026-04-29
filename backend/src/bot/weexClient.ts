@@ -268,7 +268,7 @@ class WeexRestClient {
       return this.tickerCache.data;
     }
 
-    const response = await this.request('GET', '/capi/v2/market/tickers');
+    const response = await this.request('GET', '/capi/v3/market/ticker/24hr');
     const rows = Array.isArray(response) ? response : [];
     const mapped: Record<string, any> = {};
 
@@ -281,10 +281,10 @@ class WeexRestClient {
       const ccxtSymbol = toWeexCcxtSymbol(rawSymbol);
       mapped[ccxtSymbol] = {
         symbol: ccxtSymbol,
-        last: Number(item?.last ?? 0),
-        close: Number(item?.last ?? 0),
-        baseVolume: Number(item?.base_volume ?? 0),
-        quoteVolume: Number(item?.volume_24h ?? 0),
+        last: Number(item?.lastPrice ?? item?.last ?? 0),
+        close: Number(item?.lastPrice ?? item?.last ?? 0),
+        baseVolume: Number(item?.volume ?? item?.base_volume ?? 0),
+        quoteVolume: Number(item?.quoteVolume ?? item?.volume_24h ?? 0),
         percentage: Number(item?.priceChangePercent ?? 0) * 100,
         info: {
           ...item,
@@ -317,10 +317,10 @@ class WeexRestClient {
   }
 
   async fetchOHLCV(symbol: string, timeframe = '1m', _since?: number, limit = 100): Promise<any[]> {
-    const response = await this.request('GET', '/capi/v2/market/candles', {
+    const response = await this.request('GET', '/capi/v3/market/klines', {
       query: {
-        symbol: toWeexPublicSymbol(symbol),
-        granularity: mapWeexTimeframe(timeframe),
+        symbol: toWeexPrivateSymbol(symbol),
+        interval: mapWeexTimeframe(timeframe),
         limit: Math.max(1, Math.min(Number(limit) || 100, 1000)),
       },
     });
@@ -343,17 +343,18 @@ class WeexRestClient {
   }
 
   async fetchBalance(): Promise<any> {
-    const response = await this.request('GET', '/capi/v2/account/assets', { auth: true });
+    const response = await this.request('GET', '/capi/v3/account/assets', { auth: true });
     const rows = Array.isArray(response) ? response : [];
     const total: Record<string, number> = {};
     const free: Record<string, number> = {};
 
     for (const item of rows) {
-      const coin = String(item?.coinName || item?.coin || '').toUpperCase();
+      // v3: { asset, balance, available, frozen }; v2 fallback: { coinName, equity, available }
+      const coin = String(item?.asset || item?.coinName || item?.coin || '').toUpperCase();
       if (!coin) {
         continue;
       }
-      total[coin] = Number(item?.equity ?? 0);
+      total[coin] = Number(item?.balance ?? item?.equity ?? 0);
       free[coin] = Number(item?.available ?? item?.free ?? 0);
     }
 
@@ -365,7 +366,7 @@ class WeexRestClient {
   }
 
   async fetchPositions(symbols?: string[]): Promise<any[]> {
-    const response = await this.request('GET', '/capi/v2/account/position/allPosition', { auth: true });
+    const response = await this.request('GET', '/capi/v3/account/position/allPosition', { auth: true });
     const rows = Array.isArray(response) ? response : [];
     const requestedSymbols = new Set((Array.isArray(symbols) ? symbols : []).map((item) => toWeexPrivateSymbol(item)));
     const tickerMap = await this.getTickerMap().catch(() => ({} as Record<string, any>));
@@ -517,9 +518,9 @@ class WeexRestClient {
   }
 
   async cancelOrder(orderId: string, symbol?: string): Promise<any> {
-    return this.request('POST', '/capi/v2/order/cancel_order', {
+    return this.request('DELETE', '/capi/v3/order', {
       auth: true,
-      body: {
+      query: {
         orderId,
         symbol: symbol ? toWeexPrivateSymbol(symbol) : undefined,
       },
@@ -579,19 +580,20 @@ class WeexRestClient {
 
   async setLeverage(leverage: number, symbol?: string, params: any = {}): Promise<any> {
     const rawSymbol = symbol ? toWeexPrivateSymbol(symbol) : undefined;
-    const body: Record<string, unknown> = {
-      symbol: rawSymbol,
-      productType: 'USDT-FUTURES',
-      marginCoin: 'USDT',
-      leverage: String(Math.max(1, Math.round(leverage))),
-    };
+    const leverageStr = String(Math.max(1, Math.round(leverage)));
+    const marginMode = String(params?.marginMode || params?.holdSide || '').toLowerCase();
+    const body: Record<string, unknown> = { symbol: rawSymbol };
 
-    const holdSide = String(params?.holdSide || '').toLowerCase();
-    if (holdSide === 'long' || holdSide === 'short') {
-      body.holdSide = holdSide;
+    if (marginMode === 'isolated') {
+      body.marginType = 'ISOLATED';
+      body.isolatedLongLeverage = leverageStr;
+      body.isolatedShortLeverage = leverageStr;
+    } else {
+      body.marginType = 'CROSSED';
+      body.crossLeverage = leverageStr;
     }
 
-    const response = await this.request('POST', '/capi/v2/account/setLeverage', {
+    const response = await this.request('POST', '/capi/v3/account/leverage', {
       auth: true,
       body,
     });
@@ -601,14 +603,12 @@ class WeexRestClient {
 
   async setMarginMode(marginMode: string, symbol?: string): Promise<any> {
     const rawSymbol = symbol ? toWeexPrivateSymbol(symbol) : undefined;
-    const mode = String(marginMode || '').toLowerCase() === 'isolated' ? 'isolated' : 'crossed';
-    const response = await this.request('POST', '/capi/v2/account/setMarginMode', {
+    const marginType = String(marginMode || '').toLowerCase() === 'isolated' ? 'ISOLATED' : 'CROSSED';
+    const response = await this.request('POST', '/capi/v3/account/marginType', {
       auth: true,
       body: {
         symbol: rawSymbol,
-        productType: 'USDT-FUTURES',
-        marginCoin: 'USDT',
-        marginMode: mode,
+        marginType,
       },
     });
 
