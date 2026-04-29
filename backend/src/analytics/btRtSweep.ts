@@ -72,7 +72,63 @@ export const ensureBtRtTable = async (): Promise<void> => {
     try { await db.exec(sql); } catch { /* column already exists */ }
   }
 
+  const extraMigrations = [
+    'ALTER TABLE bt_rt_daily_snapshots ADD COLUMN bt_daily_return_pct REAL DEFAULT 0',
+    'ALTER TABLE bt_rt_daily_snapshots ADD COLUMN bt_total_days INTEGER DEFAULT 0',
+  ];
+  for (const sql of extraMigrations) {
+    try { await db.exec(sql); } catch { /* column already exists */ }
+  }
+
   tableReady = true;
+};
+
+// Compute BT daily return for the snapshot day window using the equity curve.
+// Falls back to a proportional estimate from bt_total_return if no curve match.
+const computeBtDailyReturn = (
+  equityCurveJson: string | undefined,
+  btTotalReturnPct: number,
+  dayStartMs: number,
+  dayEndMs: number,
+): { btDailyReturnPct: number | null; btTotalDays: number | null } => {
+  if (!equityCurveJson) {
+    return { btDailyReturnPct: null, btTotalDays: null };
+  }
+  let curve: Array<{ time: number; equity: number }> = [];
+  try {
+    curve = JSON.parse(equityCurveJson);
+  } catch {
+    return { btDailyReturnPct: null, btTotalDays: null };
+  }
+  if (!Array.isArray(curve) || curve.length < 2) {
+    return { btDailyReturnPct: null, btTotalDays: null };
+  }
+
+  const firstTime = curve[0].time;
+  const lastTime = curve[curve.length - 1].time;
+  const totalMs = lastTime - firstTime;
+  const totalDays = Math.round(totalMs / 86400000);
+
+  // Find equity at start of day and end of day within the curve
+  const dayStart = curve.reduce((prev, cur) =>
+    Math.abs(cur.time - dayStartMs) < Math.abs(prev.time - dayStartMs) ? cur : prev
+  );
+  const dayEnd = curve.reduce((prev, cur) =>
+    Math.abs(cur.time - dayEndMs) < Math.abs(prev.time - dayEndMs) ? cur : prev
+  );
+
+  if (dayStart.equity > 0 && dayEnd.equity > 0 && dayStart !== dayEnd) {
+    const dailyReturn = ((dayEnd.equity / dayStart.equity) - 1) * 100;
+    return { btDailyReturnPct: Math.round(dailyReturn * 10000) / 10000, btTotalDays: totalDays };
+  }
+
+  // Equity curve doesn't cover this day — estimate using compound daily rate
+  if (totalDays > 0) {
+    const dailyRate = Math.pow(1 + btTotalReturnPct / 100, 1 / totalDays) - 1;
+    return { btDailyReturnPct: Math.round(dailyRate * 100 * 10000) / 10000, btTotalDays: totalDays };
+  }
+
+  return { btDailyReturnPct: null, btTotalDays: null };
 };
 
 // ---------------------------------------------------------------------------
@@ -98,6 +154,8 @@ type BtRtSnapshot = {
   bt_win_rate: number | null;
   bt_profit_factor: number | null;
   bt_source_run_id: number | null;
+  bt_daily_return_pct: number | null;
+  bt_total_days: number | null;
   drift_alerts_critical: number;
   drift_alerts_warn: number;
   drift_avg_pct: number;
@@ -200,18 +258,20 @@ const computeSnapshotForKey = async (
   let btMaxDD: number | null = null;
   let btWinRate: number | null = null;
   let btProfitFactor: number | null = null;
+  let btDailyReturnPct: number | null = null;
+  let btTotalDays: number | null = null;
 
   if (sourceStratIds.length > 0) {
     // Fetch recent backtest_runs for the source key and pick the one with most overlap
     const btRuns = await db.all(
-      `SELECT id, strategy_ids, total_return_percent, max_drawdown_percent, win_rate_percent, profit_factor
+      `SELECT id, strategy_ids, total_return_percent, max_drawdown_percent, win_rate_percent, profit_factor, equity_curve_json
        FROM backtest_runs
        WHERE api_key_name = ?
          AND created_at <= ?
        ORDER BY id DESC
        LIMIT 50`,
       [sourceKeyName, dateEnd]
-    ) as Array<{ id: number; strategy_ids: string; total_return_percent?: number; max_drawdown_percent?: number; win_rate_percent?: number; profit_factor?: number }>;
+    ) as Array<{ id: number; strategy_ids: string; total_return_percent?: number; max_drawdown_percent?: number; win_rate_percent?: number; profit_factor?: number; equity_curve_json?: string }>;
 
     let bestRun: typeof btRuns[0] | undefined;
     let bestOverlap = 0;
@@ -231,19 +291,20 @@ const computeSnapshotForKey = async (
       btMaxDD = Number(bestRun.max_drawdown_percent ?? 0);
       btWinRate = Number(bestRun.win_rate_percent ?? 0);
       btProfitFactor = Number(bestRun.profit_factor ?? 0);
+      ({ btDailyReturnPct, btTotalDays } = computeBtDailyReturn(bestRun.equity_curve_json, btTotalReturn, startMs, endMs));
     }
   }
 
   if (btRunId === null) {
     // Fallback: latest backtest_run for the source key name
     const btRow = await db.get(
-      `SELECT id, total_return_percent, max_drawdown_percent, win_rate_percent, profit_factor
+      `SELECT id, total_return_percent, max_drawdown_percent, win_rate_percent, profit_factor, equity_curve_json
        FROM backtest_runs
        WHERE api_key_name = ?
          AND created_at <= ?
        ORDER BY id DESC LIMIT 1`,
       [sourceKeyName, dateEnd]
-    ) as { id?: number; total_return_percent?: number; max_drawdown_percent?: number; win_rate_percent?: number; profit_factor?: number } | undefined;
+    ) as { id?: number; total_return_percent?: number; max_drawdown_percent?: number; win_rate_percent?: number; profit_factor?: number; equity_curve_json?: string } | undefined;
 
     if (btRow?.id) {
       btRunId = Number(btRow.id);
@@ -251,6 +312,7 @@ const computeSnapshotForKey = async (
       btMaxDD = Number(btRow.max_drawdown_percent ?? 0);
       btWinRate = Number(btRow.win_rate_percent ?? 0);
       btProfitFactor = Number(btRow.profit_factor ?? 0);
+      ({ btDailyReturnPct, btTotalDays } = computeBtDailyReturn(btRow.equity_curve_json, btTotalReturn, startMs, endMs));
     }
   }
 
@@ -351,6 +413,8 @@ const computeSnapshotForKey = async (
     bt_win_rate: btWinRate,
     bt_profit_factor: btProfitFactor,
     bt_source_run_id: btRunId,
+    bt_daily_return_pct: btDailyReturnPct,
+    bt_total_days: btTotalDays,
     drift_alerts_critical: criticalCount,
     drift_alerts_warn: warnCount,
     drift_avg_pct: Math.round(avgDrift * 100) / 100,
@@ -428,9 +492,10 @@ export const runBtRtDailySweep = async (
             rt_equity_usd, rt_equity_start_usd, rt_return_pct,
             rt_entries, rt_exits, rt_unrealized_pnl, rt_drawdown_pct, rt_leverage_avg, rt_strategies_active,
             bt_total_return_pct, bt_max_dd_pct, bt_win_rate, bt_profit_factor, bt_source_run_id,
+            bt_daily_return_pct, bt_total_days,
             drift_alerts_critical, drift_alerts_warn, drift_avg_pct, drift_flag,
             avg_slippage_pct, avg_execution_delay_ms, margin_load_rt_pct, realized_pnl_usd, trade_hour_distribution)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(snapshot_date, api_key_name) DO UPDATE SET
            system_name = excluded.system_name,
            rt_equity_usd = excluded.rt_equity_usd,
@@ -447,6 +512,8 @@ export const runBtRtDailySweep = async (
            bt_win_rate = excluded.bt_win_rate,
            bt_profit_factor = excluded.bt_profit_factor,
            bt_source_run_id = excluded.bt_source_run_id,
+           bt_daily_return_pct = excluded.bt_daily_return_pct,
+           bt_total_days = excluded.bt_total_days,
            drift_alerts_critical = excluded.drift_alerts_critical,
            drift_alerts_warn = excluded.drift_alerts_warn,
            drift_avg_pct = excluded.drift_avg_pct,
@@ -462,6 +529,7 @@ export const runBtRtDailySweep = async (
           snap.rt_equity_usd, snap.rt_equity_start_usd, snap.rt_return_pct,
           snap.rt_entries, snap.rt_exits, snap.rt_unrealized_pnl, snap.rt_drawdown_pct, snap.rt_leverage_avg, snap.rt_strategies_active,
           snap.bt_total_return_pct, snap.bt_max_dd_pct, snap.bt_win_rate, snap.bt_profit_factor, snap.bt_source_run_id,
+          snap.bt_daily_return_pct, snap.bt_total_days,
           snap.drift_alerts_critical, snap.drift_alerts_warn, snap.drift_avg_pct, snap.drift_flag,
           snap.avg_slippage_pct, snap.avg_execution_delay_ms, snap.margin_load_rt_pct, snap.realized_pnl_usd, snap.trade_hour_distribution,
         ]

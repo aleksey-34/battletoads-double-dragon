@@ -532,6 +532,8 @@ type BtRtSnapshot = {
   bt_total_return_pct: number | null;
   bt_max_dd_pct: number | null;
   bt_win_rate: number | null;
+  bt_daily_return_pct: number | null;
+  bt_total_days: number | null;
   drift_avg_pct: number | null;
   drift_flag: string | null;
   drift_alerts_critical: number | null;
@@ -680,6 +682,7 @@ export default function Research() {
           rt_entries_sum: r.rt_entries ?? 0,
           rt_exits_sum: r.rt_exits ?? 0,
           bt_total_return_pct: r.bt_total_return_pct ?? null,
+          bt_period_return_pct: r.bt_daily_return_pct ?? null,
           bt_max_dd_pct: r.bt_max_dd_pct ?? null,
           avg_slippage_pct: r.avg_slippage_pct ?? null,
           avg_execution_delay_ms: r.avg_execution_delay_ms ?? null,
@@ -696,6 +699,9 @@ export default function Research() {
         existing.rt_entries_sum += r.rt_entries ?? 0;
         existing.rt_exits_sum += r.rt_exits ?? 0;
         existing.realized_pnl_usd = (existing.realized_pnl_usd ?? 0) + (r.realized_pnl_usd ?? 0);
+        if (r.bt_daily_return_pct != null) {
+          existing.bt_period_return_pct = (existing.bt_period_return_pct ?? 0) + r.bt_daily_return_pct;
+        }
         if (r.avg_slippage_pct != null) {
           existing.avg_slippage_pct = existing.avg_slippage_pct != null
             ? (existing.avg_slippage_pct * existing.days_count + r.avg_slippage_pct) / (existing.days_count + 1)
@@ -1862,10 +1868,13 @@ export default function Research() {
               ),
             },
             {
-              title: 'BT доходн.%',
-              dataIndex: 'bt_total_return_pct',
-              width: 100,
-              render: (v: number | null) => v != null ? `${v.toFixed(2)}%` : '—',
+              title: `BT доходн.% (${btRtPeriod}д)`,
+              dataIndex: 'bt_period_return_pct',
+              width: 120,
+              sorter: (a: BtRtAggRow, b: BtRtAggRow) => (a.bt_period_return_pct ?? -999) - (b.bt_period_return_pct ?? -999),
+              render: (v: number | null) => v != null ? (
+                <Text type={v >= 0 ? 'success' : 'danger'}>{v.toFixed(2)}%</Text>
+              ) : '—',
             },
             {
               title: 'RT max DD%',

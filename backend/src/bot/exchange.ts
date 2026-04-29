@@ -1296,6 +1296,41 @@ export const getBalances = async (apiKeyName: string) => {
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
 
+    // WEEX: ccxt.weex calls v2 endpoints which are deprecated; use our custom v3 client
+    if (entry.exchange === 'weex') {
+      try {
+        const row = await db.get('SELECT * FROM api_keys WHERE name = ?', [apiKeyName]);
+        if (!row) throw new Error(`API key not found: ${apiKeyName}`);
+        const weexClient = createWeexClient(row as ApiKey);
+        const weexBalance = await entry.limiter.schedule(() => weexClient.fetchBalance());
+        const total: Record<string, number> = weexBalance?.total || {};
+        const free: Record<string, number> = weexBalance?.free || {};
+        const used: Record<string, number> = weexBalance?.used || {};
+        return Object.keys(total)
+          .map((coin) => {
+            const walletValue = Number(total[coin] ?? 0);
+            const freeValue = Number(free[coin] ?? walletValue);
+            const usedValue = Number(used[coin] ?? 0);
+            if (!Number.isFinite(walletValue) || walletValue <= 0) return null;
+            const stable = ['USDT', 'USDC', 'USD'].includes(coin.toUpperCase());
+            const entry2: NormalizedBalance = {
+              coin: coin.toUpperCase(),
+              walletBalance: String(walletValue),
+              availableBalance: String(Number.isFinite(freeValue) ? freeValue : walletValue),
+              usdValue: stable ? String(walletValue) : '0',
+              accountType: 'swap',
+            };
+            if (Number.isFinite(usedValue) && usedValue > 0) entry2.marginUsed = String(usedValue);
+            return entry2;
+          })
+          .filter((item): item is NormalizedBalance => !!item);
+      } catch (error) {
+        const err = error as Error;
+        logger.error(`Error getting WEEX balances for ${apiKeyName}: ${err.message}`);
+        throw error;
+      }
+    }
+
     try {
       let payload: any;
       try {
@@ -2529,6 +2564,32 @@ export const applySymbolRiskSettings = async (
 export const getOpenOrders = async (apiKeyName: string, symbol?: string) => {
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
+
+    // WEEX: use custom v3 client (ccxt.weex calls v2 endpoints)
+    if (entry.exchange === 'weex') {
+      try {
+        const row = await db.get('SELECT * FROM api_keys WHERE name = ?', [apiKeyName]);
+        if (!row) throw new Error(`API key not found: ${apiKeyName}`);
+        const weexClient = createWeexClient(row as ApiKey);
+        const orders = await entry.limiter.schedule(() => weexClient.fetchOpenOrders(symbol));
+        const list = Array.isArray(orders) ? orders : [];
+        return list.map((order: any) => ({
+          orderId: String(order?.id || ''),
+          symbol: toUiSymbol(order?.info?.symbol || order?.symbol || symbol || ''),
+          side: String(order?.side || '').toLowerCase() === 'buy' ? 'Buy' : 'Sell',
+          orderType: String(order?.type || 'market'),
+          qty: String(order?.amount ?? 0),
+          price: String(order?.price ?? 0),
+          orderStatus: String(order?.status || 'open'),
+          reduceOnly: Boolean(order?.reduceOnly),
+          createdTime: String(order?.timestamp || Date.now()),
+        }));
+      } catch (error) {
+        const err = error as Error;
+        logger.error(`Error loading WEEX open orders for ${apiKeyName}: ${err.message}`);
+        throw error;
+      }
+    }
 
     try {
       const resolvedSymbol = symbol ? await resolveCcxtSymbol(entry, symbol) : undefined;
