@@ -5929,7 +5929,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   // Regular admin/client previews use the pre-saved snapshot to avoid exchange API hammering.
   const uniqueSelectedIntervals = Array.from(new Set(
     selectedOffers
-      .map((item) => asString((item as Record<string, unknown>).familyInterval, '') || asString((item as Record<string, unknown>)?.preset?.params?.interval, ''))
+      .map((item) => asString((item as Record<string, unknown>).familyInterval, '') || asString((item as any)?.preset?.params?.interval, ''))
       .filter(Boolean)
   ));
   const hasMixedIntervals = kind === 'algofund-ts' && uniqueSelectedIntervals.length > 1;
