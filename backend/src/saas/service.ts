@@ -5920,7 +5920,16 @@ export const previewAdminSweepBacktest = async (payload?: {
     return next;
   })();
 
-  const canTryRealBacktest = payload?.preferRealBacktest === true;
+  // Auto-enable real backtest for algofund-ts when strategies have mixed timeframes.
+  // The backtest engine (engine.ts) already supports per-strategy intervals, so
+  // running a real backtest is the only way to correctly cover all TFs.
+  const uniqueSelectedIntervals = Array.from(new Set(
+    selectedOffers
+      .map((item) => asString((item as Record<string, unknown>).familyInterval, '') || asString((item as Record<string, unknown>)?.preset?.params?.interval, ''))
+      .filter(Boolean)
+  ));
+  const hasMixedIntervals = kind === 'algofund-ts' && uniqueSelectedIntervals.length > 1;
+  const canTryRealBacktest = payload?.preferRealBacktest === true || hasMixedIntervals;
   const requestedDateFrom = asString(payload?.dateFrom, '').trim();
   const requestedDateTo = asString(payload?.dateTo, '').trim();
   const strategyIds = Array.from(new Set(
