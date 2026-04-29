@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Badge,
@@ -15,6 +15,7 @@ import {
   Modal,
   Popconfirm,
   Progress,
+  Radio,
   Row,
   Select,
   Space,
@@ -535,6 +536,30 @@ type BtRtSnapshot = {
   drift_flag: string | null;
   drift_alerts_critical: number | null;
   drift_alerts_warn: number | null;
+  avg_slippage_pct: number | null;
+  avg_execution_delay_ms: number | null;
+  realized_pnl_usd: number | null;
+};
+
+// Aggregated row for a group (system+client) over a period
+type BtRtAggRow = {
+  key: string;
+  system_name: string;
+  api_key_name: string;
+  rt_return_sum_pct: number;
+  rt_drawdown_max_pct: number;
+  rt_entries_sum: number;
+  rt_exits_sum: number;
+  bt_total_return_pct: number | null;
+  bt_max_dd_pct: number | null;
+  avg_slippage_pct: number | null;
+  avg_execution_delay_ms: number | null;
+  realized_pnl_usd: number | null;
+  drift_flag: string | null;
+  drift_avg_pct: number | null;
+  drift_alerts_critical: number | null;
+  drift_alerts_warn: number | null;
+  days_count: number;
 };
 
 // ─── Profile Table ───────────────────────────────────────────────────────────
@@ -602,8 +627,9 @@ export default function Research() {
   const [btRtRows, setBtRtRows] = useState<BtRtSnapshot[]>([]);
   const [btRtLoading, setBtRtLoading] = useState(false);
   const [btRtRunLoading, setBtRtRunLoading] = useState(false);
-  const [btRtDays, setBtRtDays] = useState(30);
+  const [btRtDays, setBtRtDays] = useState(90);
   const [btRtApiKey, setBtRtApiKey] = useState('');
+  const [btRtPeriod, setBtRtPeriod] = useState<1 | 3 | 7 | 30 | 90>(7);
 
   const fetchBtRtSnapshots = useCallback(async () => {
     setBtRtLoading(true);
@@ -632,6 +658,66 @@ export default function Research() {
       setBtRtRunLoading(false);
     }
   }, [fetchBtRtSnapshots]);
+
+  // Aggregate btRtRows for selected period
+  const btRtAggRows = useMemo<BtRtAggRow[]>(() => {
+    const cutoff = new Date();
+    cutoff.setUTCDate(cutoff.getUTCDate() - btRtPeriod);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    const filtered = btRtRows.filter((r) => r.snapshot_date >= cutoffStr);
+
+    const map = new Map<string, BtRtAggRow>();
+    for (const r of filtered) {
+      const key = `${r.system_name}|||${r.api_key_name}`;
+      const existing = map.get(key);
+      if (!existing) {
+        map.set(key, {
+          key,
+          system_name: r.system_name,
+          api_key_name: r.api_key_name,
+          rt_return_sum_pct: r.rt_return_pct ?? 0,
+          rt_drawdown_max_pct: Math.abs(r.rt_drawdown_pct ?? 0),
+          rt_entries_sum: r.rt_entries ?? 0,
+          rt_exits_sum: r.rt_exits ?? 0,
+          bt_total_return_pct: r.bt_total_return_pct ?? null,
+          bt_max_dd_pct: r.bt_max_dd_pct ?? null,
+          avg_slippage_pct: r.avg_slippage_pct ?? null,
+          avg_execution_delay_ms: r.avg_execution_delay_ms ?? null,
+          realized_pnl_usd: r.realized_pnl_usd ?? null,
+          drift_flag: r.drift_flag,
+          drift_avg_pct: r.drift_avg_pct ?? null,
+          drift_alerts_critical: r.drift_alerts_critical ?? 0,
+          drift_alerts_warn: r.drift_alerts_warn ?? 0,
+          days_count: 1,
+        });
+      } else {
+        existing.rt_return_sum_pct += r.rt_return_pct ?? 0;
+        existing.rt_drawdown_max_pct = Math.max(existing.rt_drawdown_max_pct, Math.abs(r.rt_drawdown_pct ?? 0));
+        existing.rt_entries_sum += r.rt_entries ?? 0;
+        existing.rt_exits_sum += r.rt_exits ?? 0;
+        existing.realized_pnl_usd = (existing.realized_pnl_usd ?? 0) + (r.realized_pnl_usd ?? 0);
+        if (r.avg_slippage_pct != null) {
+          existing.avg_slippage_pct = existing.avg_slippage_pct != null
+            ? (existing.avg_slippage_pct * existing.days_count + r.avg_slippage_pct) / (existing.days_count + 1)
+            : r.avg_slippage_pct;
+        }
+        if (r.avg_execution_delay_ms != null) {
+          existing.avg_execution_delay_ms = existing.avg_execution_delay_ms != null
+            ? (existing.avg_execution_delay_ms * existing.days_count + r.avg_execution_delay_ms) / (existing.days_count + 1)
+            : r.avg_execution_delay_ms;
+        }
+        // escalate drift flag
+        const flagOrder = ['ok', 'warn', 'alert', 'critical'];
+        const prevIdx = flagOrder.indexOf(existing.drift_flag ?? 'ok');
+        const curIdx = flagOrder.indexOf(r.drift_flag ?? 'ok');
+        if (curIdx > prevIdx) existing.drift_flag = r.drift_flag;
+        existing.days_count += 1;
+      }
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      a.system_name.localeCompare(b.system_name) || a.api_key_name.localeCompare(b.api_key_name)
+    );
+  }, [btRtRows, btRtPeriod]);
 
   const fetchScheduler = useCallback(async () => {
     setSchedulerLoading(true);
@@ -1720,15 +1806,19 @@ export default function Research() {
         title="BT vs RT — Сравнение лайва с бектестом"
         style={{ marginTop: 24 }}
         extra={
-          <Space>
-            <InputNumber
-              min={1}
-              max={365}
-              value={btRtDays}
-              onChange={(v) => setBtRtDays(Number(v ?? 30))}
-              addonBefore="дней"
-              style={{ width: 120 }}
-            />
+          <Space wrap>
+            <Radio.Group
+              value={btRtPeriod}
+              onChange={(e) => setBtRtPeriod(e.target.value as 1 | 3 | 7 | 30 | 90)}
+              buttonStyle="solid"
+              size="small"
+            >
+              <Radio.Button value={1}>1д</Radio.Button>
+              <Radio.Button value={3}>3д</Radio.Button>
+              <Radio.Button value={7}>7д</Radio.Button>
+              <Radio.Button value={30}>30д</Radio.Button>
+              <Radio.Button value={90}>всё</Radio.Button>
+            </Radio.Group>
             <Input
               placeholder="API key (опционально)"
               value={btRtApiKey}
@@ -1740,23 +1830,36 @@ export default function Research() {
           </Space>
         }
       >
-        <Table<BtRtSnapshot>
-          dataSource={btRtRows}
-          rowKey="id"
+        <Table<BtRtAggRow>
+          dataSource={btRtAggRows}
+          rowKey="key"
           loading={btRtLoading}
           size="small"
           pagination={{ pageSize: 50 }}
           columns={[
-            { title: 'Дата', dataIndex: 'snapshot_date', width: 110 },
-            { title: 'Клиент', dataIndex: 'api_key_name', width: 160, ellipsis: true },
-            { title: 'Система', dataIndex: 'system_name', ellipsis: true },
             {
-              title: 'RT доходн.%',
-              dataIndex: 'rt_return_pct',
-              width: 100,
-              render: (v: number | null) => v != null ? (
+              title: 'Клиент',
+              dataIndex: 'api_key_name',
+              width: 160,
+              ellipsis: true,
+            },
+            {
+              title: 'Система',
+              dataIndex: 'system_name',
+              ellipsis: true,
+              render: (v: string) => {
+                const short = String(v || '').split('::').pop() || v;
+                return <Tooltip title={v}>{short}</Tooltip>;
+              },
+            },
+            {
+              title: `RT доходн.% (${btRtPeriod}д)`,
+              dataIndex: 'rt_return_sum_pct',
+              width: 130,
+              sorter: (a, b) => a.rt_return_sum_pct - b.rt_return_sum_pct,
+              render: (v: number) => (
                 <Tag color={v >= 0 ? 'success' : 'error'}>{v.toFixed(2)}%</Tag>
-              ) : '—',
+              ),
             },
             {
               title: 'BT доходн.%',
@@ -1765,28 +1868,58 @@ export default function Research() {
               render: (v: number | null) => v != null ? `${v.toFixed(2)}%` : '—',
             },
             {
-              title: 'RT DD%',
-              dataIndex: 'rt_drawdown_pct',
-              width: 80,
-              render: (v: number | null) => v != null ? <Text type={Math.abs(v) > 15 ? 'danger' : 'secondary'}>{v.toFixed(1)}%</Text> : '—',
+              title: 'RT max DD%',
+              dataIndex: 'rt_drawdown_max_pct',
+              width: 100,
+              sorter: (a, b) => a.rt_drawdown_max_pct - b.rt_drawdown_max_pct,
+              render: (v: number) => <Text type={v > 15 ? 'danger' : 'secondary'}>{v.toFixed(1)}%</Text>,
             },
             {
               title: 'BT max DD%',
               dataIndex: 'bt_max_dd_pct',
-              width: 90,
+              width: 100,
               render: (v: number | null) => v != null ? `${v.toFixed(1)}%` : '—',
             },
             {
               title: 'Входы/Выходы',
-              width: 100,
-              render: (_: unknown, row: BtRtSnapshot) => `${row.rt_entries ?? 0}/${row.rt_exits ?? 0}`,
+              width: 110,
+              render: (_: unknown, row: BtRtAggRow) => `${row.rt_entries_sum}/${row.rt_exits_sum}`,
+            },
+            {
+              title: 'Real PnL $',
+              dataIndex: 'realized_pnl_usd',
+              width: 90,
+              sorter: (a, b) => (a.realized_pnl_usd ?? 0) - (b.realized_pnl_usd ?? 0),
+              render: (v: number | null) => v != null && v !== 0 ? (
+                <Text type={v >= 0 ? 'success' : 'danger'}>{v >= 0 ? '+' : ''}{v.toFixed(2)}</Text>
+              ) : '—',
+            },
+            {
+              title: 'Прос-е%',
+              dataIndex: 'avg_slippage_pct',
+              width: 80,
+              render: (v: number | null) => v != null && v !== 0 ? (
+                <Tooltip title="Среднее проскальзывание %">
+                  <Text type={Math.abs(v) > 0.3 ? 'danger' : 'secondary'}>{v.toFixed(3)}%</Text>
+                </Tooltip>
+              ) : '—',
+            },
+            {
+              title: 'Исполн.мс',
+              dataIndex: 'avg_execution_delay_ms',
+              width: 90,
+              render: (v: number | null) => v != null && v !== 0 ? (
+                <Tooltip title="Среднее время исполнения ордера (мс)">
+                  <Text type={v > 2000 ? 'danger' : v > 500 ? 'warning' : 'secondary'}>{Math.round(v)}</Text>
+                </Tooltip>
+              ) : '—',
             },
             {
               title: 'Дрейф',
               dataIndex: 'drift_flag',
-              width: 100,
-              render: (v: string | null, row: BtRtSnapshot) => {
-                const color = v === 'critical' ? 'red' : v === 'warn' ? 'orange' : 'default';
+              width: 80,
+              render: (v: string | null, row: BtRtAggRow) => {
+                const color = v === 'critical' ? 'red' : v === 'warn' || v === 'alert' ? 'orange' : 'default';
                 return (
                   <Tooltip title={`critical: ${row.drift_alerts_critical ?? 0}, warn: ${row.drift_alerts_warn ?? 0}, avg: ${row.drift_avg_pct?.toFixed(1) ?? '?'}%`}>
                     <Tag color={color}>{v || 'ok'}</Tag>
