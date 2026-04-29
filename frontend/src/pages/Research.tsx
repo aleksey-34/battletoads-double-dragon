@@ -553,6 +553,7 @@ type BtRtAggRow = {
   rt_entries_sum: number;
   rt_exits_sum: number;
   bt_total_return_pct: number | null;
+  bt_period_return_pct: number | null;
   bt_max_dd_pct: number | null;
   avg_slippage_pct: number | null;
   avg_execution_delay_ms: number | null;
