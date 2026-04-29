@@ -6556,23 +6556,36 @@ export const previewAdminSweepBacktest = async (payload?: {
           const relativeTradeMul = tradeMul / Math.max(0.01, snapshotTradeMul);
 
           const adjustedSnapshotMetrics = adjustPreviewMetrics(baselineMetrics, relativeRiskMul, relativeTradeMul);
-          // Always scale metrics by OP ratio relative to the snapshot's baseline OP.
-          // For legacy snapshots (no explicit OP saved), baseline = total offers (all slots open).
-          // For snapshots saved with explicit OP, baseline = that saved OP value.
-          const snapshotBaseOp = snapshotHasExplicitOpInSavedMetrics
+          // Scale metrics by OP relative to the snapshot's baked-in OP setting.
+          // Natural concurrent capacity is always based on full portfolio size (all members),
+          // not the saved OP — this avoids the min(1, x/tiny) = 1 degenerate case.
+          const snapshotSavedOpForScaling = snapshotHasExplicitOpInSavedMetrics
             ? snapshotSavedMaxOpenPositions
-            : snapshotOfferIds.length;
-          const shouldApplyOpScaling = maxOpenPositions > 0 && maxOpenPositions < snapshotBaseOp;
-          // Use naturalConcurrent formula: OP limits concurrent positions, not total trades.
-          // Strategies hold ~22% of bars on average, so natural concurrent = members * 0.22.
-          const snapshotNaturalConcurrent = Math.max(1, snapshotBaseOp * 0.22);
+            : snapshotOfferIds.length; // legacy snapshot: assume unlimited baseline
+          // Natural concurrent = full portfolio * ~22% utilization (4H trend strategy empirical)
+          const snapshotNaturalConcurrent = Math.max(1, snapshotOfferIds.length * 0.22);
+          // When user requests LESS OP than what was baked into the snapshot → reduce metrics.
+          // When user requests MORE OP (or 0 = unlimited) → the snapshot is already the ceiling,
+          // but scale UP proportionally if snapshotSavedOpForScaling < snapshotOfferIds.length.
+          const effectiveUserOp = maxOpenPositions > 0 ? maxOpenPositions : snapshotOfferIds.length;
+          const shouldApplyOpScaling = effectiveUserOp !== snapshotSavedOpForScaling;
+          // opSlotRatio: ratio of requested concurrent slots vs natural capacity.
+          // For reduction: <1 → penalise return/DD/trades.
+          // For expansion above saved OP: >1 → boost up to natural ceiling (capped at 1).
           const opSlotRatio = shouldApplyOpScaling
-            ? Math.min(1, maxOpenPositions / snapshotNaturalConcurrent)
+            ? Math.min(1, effectiveUserOp / snapshotNaturalConcurrent)
+            : Math.min(1, snapshotSavedOpForScaling / snapshotNaturalConcurrent);
+          // Baseline slot ratio (what the snapshot was computed at)
+          const snapshotOpSlotRatio = Math.min(1, snapshotSavedOpForScaling / snapshotNaturalConcurrent);
+          // Relative factors: if opSlotRatio == snapshotOpSlotRatio → factor = 1 (no change).
+          // If opSlotRatio < snapshotOpSlotRatio → reduce. If > → expand (bounded).
+          const relativeOpSlotRatio = snapshotOpSlotRatio > 0
+            ? clampNumber(opSlotRatio / snapshotOpSlotRatio, 0.1, 2.5)
             : 1;
-          const snapshotRetFactor = shouldApplyOpScaling ? (0.7 + 0.3 * opSlotRatio) : 1;
-          const snapshotDdFactor = shouldApplyOpScaling ? (0.5 + 0.5 * opSlotRatio) : 1;
+          const snapshotRetFactor = shouldApplyOpScaling ? clampNumber(0.7 + 0.3 * relativeOpSlotRatio, 0.1, 2.5) : 1;
+          const snapshotDdFactor = shouldApplyOpScaling ? clampNumber(0.5 + 0.5 * relativeOpSlotRatio, 0.1, 2.5) : 1;
           // Trade count barely reduces: slots rotate → only high-contention bars are skipped
-          const snapshotTradeFactor = shouldApplyOpScaling ? Math.min(1, 0.85 + 0.15 * opSlotRatio) : 1;
+          const snapshotTradeFactor = shouldApplyOpScaling ? clampNumber(0.85 + 0.15 * relativeOpSlotRatio, 0.1, 2.0) : 1;
           const adjustedSnapshotMetricsWithOp = {
             ...adjustedSnapshotMetrics,
             ret: Number((adjustedSnapshotMetrics.ret * snapshotRetFactor).toFixed(3)),
@@ -6652,6 +6665,12 @@ export const previewAdminSweepBacktest = async (payload?: {
             period,
             sweepApiKeyName: asString(snapshot.apiKeyName, ''),
             selectedOffers: snapshotSelectedOffers,
+            snapshotMeta: {
+              bakedMaxOpenPositions: snapshotSavedMaxOpenPositions,
+              bakedRiskScore: snapshotRiskScore,
+              bakedTradeFrequencyScore: snapshotTradeFrequencyScore,
+              periodDays: asNumber(snapshot.periodDays, 0),
+            },
             preview: {
               source: 'admin_saved_ts_snapshot_synthetic',
               summary: {

@@ -12828,6 +12828,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     ) : (
                       <Tag color="default">mode: sweep-only</Tag>
                     )}
+                    {(adminSweepBacktestResult as any).snapshotMeta?.bakedMaxOpenPositions > 0 && (
+                      <Tag color="orange">snapshot OP={((adminSweepBacktestResult as any).snapshotMeta.bakedMaxOpenPositions)}</Tag>
+                    )}
                     {adminSweepBacktestResult.period ? <Tag color="default">{formatPeriodLabel(adminSweepBacktestResult.period)}</Tag> : null}
                     {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(adminSweepBacktestResult.preview.summary.totalReturnPercent)}</Tag> : null}
                     {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(adminSweepBacktestResult.preview.summary.maxDrawdownPercent)}</Tag> : null}
