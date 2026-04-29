@@ -1,6 +1,6 @@
 ﻿import { Router } from 'express';
 import logger from '../utils/logger';
-import { createClientMagicLink } from '../utils/auth';
+import { createClientMagicLink, requirePlatformAdmin } from '../utils/auth';
 import { runAdminTelegramReportNow } from '../notifications/adminTelegramReporter';
 import {
   getAlgofundState,
@@ -94,6 +94,9 @@ const toOptionalNumber = (value: unknown): number | undefined => {
 const isLevel3 = (value: unknown): value is 'low' | 'medium' | 'high' => {
   return value === 'low' || value === 'medium' || value === 'high';
 };
+
+// All /admin/* routes require platform admin authentication
+router.use('/admin', requirePlatformAdmin);
 
 router.get('/admin/summary', async (req, res) => {
   try {

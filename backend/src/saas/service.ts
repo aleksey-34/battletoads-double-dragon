@@ -4826,6 +4826,29 @@ const setRuntimeFlag = async (key: string, value: string): Promise<void> => {
   });
 };
 
+// Atomically write multiple runtime flags in a single SQLite transaction
+const setRuntimeFlags = async (entries: Record<string, string>): Promise<void> => {
+  const pairs = Object.entries(entries);
+  if (pairs.length === 0) return;
+  await runWithSqliteBusyRetry(async () => {
+    await db.run('BEGIN IMMEDIATE');
+    try {
+      for (const [key, value] of pairs) {
+        await db.run(
+          `INSERT INTO app_runtime_flags (key, value, updated_at)
+           VALUES (?, ?, CURRENT_TIMESTAMP)
+           ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+          [key, value]
+        );
+      }
+      await db.run('COMMIT');
+    } catch (err) {
+      await db.run('ROLLBACK').catch(() => {});
+      throw err;
+    }
+  });
+};
+
 const SQLITE_BUSY_RETRY_DELAY_MS = 120;
 const SQLITE_BUSY_RETRY_ATTEMPTS = 6;
 
@@ -5227,8 +5250,13 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   await initResearchDb();
   const equityByOfferId = new Map<string, number[]>();
   const presetMetricsByOfferId = new Map<string, Record<string, unknown>>();
-  await Promise.all(
-    combinedRawOffers.map(async (row) => {
+  // Limit concurrency to avoid overwhelming SQLite with too many parallel reads
+  const PRESET_CONCURRENCY = 8;
+  const presetQueue = combinedRawOffers.slice();
+  const runPresetWorker = async () => {
+    while (presetQueue.length > 0) {
+      const row = presetQueue.shift();
+      if (!row) break;
       try {
         const preset = await getPreset(row.offerId, 'medium', 'medium');
         if (preset && Array.isArray(preset.equity_curve) && preset.equity_curve.length > 0) {
@@ -5244,8 +5272,9 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
       } catch {
         // No preset available — equity will be empty
       }
-    })
-  );
+    }
+  };
+  await Promise.all(Array.from({ length: PRESET_CONCURRENCY }, runPresetWorker));
 
   const existingOfferIds = new Set(combinedRawOffers.map((row) => String(row.offerId || '')));
   const labelsFromFlag = deriveOfferStoreLabels({
@@ -5444,14 +5473,16 @@ export const updateOfferStoreAdminState = async (payload: {
     }
   }
 
-  await setRuntimeFlag('offer.store.defaults', JSON.stringify(nextDefaults));
-  await setRuntimeFlag('offer.store.published_ids', JSON.stringify(nextPublished));
-  await setRuntimeFlag(OFFER_STORE_CURATED_IDS_KEY, JSON.stringify(nextCurated));
-  await setRuntimeFlag(OFFER_STORE_LABELS_KEY, JSON.stringify(nextLabels));
-  await setRuntimeFlag(OFFER_STORE_ALGOFUND_PUBLISHED_SYSTEMS_KEY, JSON.stringify(nextAlgofundPublishedSystemNames));
-  await setRuntimeFlag('offer.store.review_snapshots', JSON.stringify(nextReviewSnapshots));
-  await setRuntimeFlag('offer.store.ts_backtest_snapshot', JSON.stringify(nextTsBacktestSnapshot));
-  await setRuntimeFlag('offer.store.ts_backtest_snapshots', JSON.stringify(nextTsBacktestSnapshots));
+  await setRuntimeFlags({
+    'offer.store.defaults': JSON.stringify(nextDefaults),
+    'offer.store.published_ids': JSON.stringify(nextPublished),
+    [OFFER_STORE_CURATED_IDS_KEY]: JSON.stringify(nextCurated),
+    [OFFER_STORE_LABELS_KEY]: JSON.stringify(nextLabels),
+    [OFFER_STORE_ALGOFUND_PUBLISHED_SYSTEMS_KEY]: JSON.stringify(nextAlgofundPublishedSystemNames),
+    'offer.store.review_snapshots': JSON.stringify(nextReviewSnapshots),
+    'offer.store.ts_backtest_snapshot': JSON.stringify(nextTsBacktestSnapshot),
+    'offer.store.ts_backtest_snapshots': JSON.stringify(nextTsBacktestSnapshots),
+  });
 
   return getOfferStoreAdminState();
 };
@@ -7304,8 +7335,10 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
       }
     }
 
-    await setRuntimeFlag('offer.store.review_snapshots', JSON.stringify(nextReviewSnapshots));
-    await setRuntimeFlag('offer.store.ts_backtest_snapshots', JSON.stringify(nextTsSnapshotMap));
+    await setRuntimeFlags({
+      'offer.store.review_snapshots': JSON.stringify(nextReviewSnapshots),
+      'offer.store.ts_backtest_snapshots': JSON.stringify(nextTsSnapshotMap),
+    });
 
     const state: OfferStoreSnapshotRefreshState = {
       lastRunAt: new Date().toISOString(),
