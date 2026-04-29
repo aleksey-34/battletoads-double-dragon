@@ -5474,6 +5474,8 @@ export const previewAdminSweepBacktest = async (payload?: {
   dateTo?: string;
   preferRealBacktest?: boolean;
   rerunApiKeyName?: string;
+  /** Internal flag: set to true only for server-side background snapshot refresh. Never expose to clients. */
+  isBatchRefresh?: boolean;
 }) => {
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();
@@ -5920,16 +5922,18 @@ export const previewAdminSweepBacktest = async (payload?: {
     return next;
   })();
 
-  // Auto-enable real backtest for algofund-ts when strategies have mixed timeframes.
-  // The backtest engine (engine.ts) already supports per-strategy intervals, so
-  // running a real backtest is the only way to correctly cover all TFs.
+  // For mixed-TF algofund-ts systems, real backtest is needed to correctly cover all timeframes.
+  // However, we only allow it in two cases:
+  //   1. Explicit admin request (preferRealBacktest: true) — admin UI button
+  //   2. Background snapshot refresh (isBatchRefresh: true) — server-side only
+  // Regular admin/client previews use the pre-saved snapshot to avoid exchange API hammering.
   const uniqueSelectedIntervals = Array.from(new Set(
     selectedOffers
       .map((item) => asString((item as Record<string, unknown>).familyInterval, '') || asString((item as Record<string, unknown>)?.preset?.params?.interval, ''))
       .filter(Boolean)
   ));
   const hasMixedIntervals = kind === 'algofund-ts' && uniqueSelectedIntervals.length > 1;
-  const canTryRealBacktest = payload?.preferRealBacktest === true || hasMixedIntervals;
+  const canTryRealBacktest = payload?.preferRealBacktest === true || (hasMixedIntervals && payload?.isBatchRefresh === true);
   const requestedDateFrom = asString(payload?.dateFrom, '').trim();
   const requestedDateTo = asString(payload?.dateTo, '').trim();
   const strategyIds = Array.from(new Set(
@@ -7249,6 +7253,8 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
           tradeFrequencyScore: Number(existing?.backtestSettings?.tradeFrequencyScore ?? 5),
           initialBalance: Number(existing?.backtestSettings?.initialBalance ?? 10000),
           riskScaleMaxPercent: Number(existing?.backtestSettings?.riskScaleMaxPercent ?? 100),
+          // Allow real backtest in batch mode so mixed-TF portfolios are computed correctly
+          isBatchRefresh: true,
         });
 
         const summary = preview.preview?.summary || {};
