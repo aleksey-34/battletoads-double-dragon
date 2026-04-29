@@ -1302,7 +1302,7 @@ export const getBalances = async (apiKeyName: string) => {
         const row = await db.get('SELECT * FROM api_keys WHERE name = ?', [apiKeyName]);
         if (!row) throw new Error(`API key not found: ${apiKeyName}`);
         const weexClient = createWeexClient(row as ApiKey);
-        const weexBalance = await entry.limiter.schedule(() => weexClient.fetchBalance());
+        const weexBalance = await entry.limiter.schedule(() => weexClient.fetchBalance()) as any;
         const total: Record<string, number> = weexBalance?.total || {};
         const free: Record<string, number> = weexBalance?.free || {};
         const used: Record<string, number> = weexBalance?.used || {};
