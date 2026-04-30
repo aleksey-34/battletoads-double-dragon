@@ -387,7 +387,27 @@ const buildRunPlans = (config: HistoricalSweepConfig): SweepRunPlan[] => {
 
   config.monoMarkets.forEach((market) => addMarketRuns('mono', market));
   config.synthMarkets.forEach((market) => addMarketRuns('synth', market));
-  return plans;
+
+  // Interleave by market so concurrent workers process DIFFERENT pairs in
+  // parallel (instead of all hammering pair #1 first). This maximises fan-out
+  // across exchanges and avoids per-symbol rate-limit bottlenecks.
+  const byMarket = new Map<string, SweepRunPlan[]>();
+  for (const p of plans) {
+    const k = `${p.marketMode}:${p.market}`;
+    const arr = byMarket.get(k);
+    if (arr) arr.push(p); else byMarket.set(k, [p]);
+  }
+  const queues = Array.from(byMarket.values());
+  const interleaved: SweepRunPlan[] = [];
+  let active = queues.length;
+  while (active > 0) {
+    active = 0;
+    for (const q of queues) {
+      const item = q.shift();
+      if (item) { interleaved.push(item); active++; }
+    }
+  }
+  return interleaved;
 };
 
 const computeScore = (ret: number, pf: number, dd: number, wr: number, trades: number): number => {
