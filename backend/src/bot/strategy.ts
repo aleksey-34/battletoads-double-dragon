@@ -5,6 +5,7 @@ import {
   closePosition,
   getBalances,
   getAllSymbols,
+  getExchangeForApiKey,
   getInstrumentInfo,
   getMarketData,
   getPositions,
@@ -49,6 +50,12 @@ const acquireSystemEntryLock = async (systemId: number): Promise<() => void> => 
   };
 };
 
+// In-flight de-duplication: if multiple strategies on the same exchange request the
+// same (symbol,interval,limit) within the cache TTL window, only ONE actual REST call
+// is made and all callers await the same Promise. This eliminates the WEEX 429 burst
+// pattern caused by 10x duplicated strategies for the same pair across many api-keys.
+const candleAutoInflight = new Map<string, Promise<any[]>>();
+
 const getCachedMarketData = async (
   apiKeyName: string, symbol: string, interval: string, limit: number,
   options?: { startMs?: number; endMs?: number },
@@ -57,15 +64,30 @@ const getCachedMarketData = async (
   if (options?.startMs || options?.endMs) {
     return getMarketData(apiKeyName, symbol, interval, limit, options);
   }
-  const key = `${apiKeyName}:${symbol}:${interval}:${limit}`;
+  // Cache key is exchange-scoped (not api-key-scoped) because public klines are identical
+  // for all api-keys on the same exchange. Falls back to apiKeyName when exchange unknown.
+  const exchange = getExchangeForApiKey(apiKeyName) || `key:${apiKeyName}`;
+  const key = `${exchange}:${symbol}:${interval}:${limit}`;
   const cached = candleAutoCache.get(key);
   if (cached && Date.now() - cached.fetchedAt < CANDLE_CACHE_TTL_MS) {
     return cached.data;
   }
-  const data = await getMarketData(apiKeyName, symbol, interval, limit, options);
-  const arr = Array.isArray(data) ? data : [];
-  candleAutoCache.set(key, { data: arr, fetchedAt: Date.now() });
-  return arr;
+  const inflight = candleAutoInflight.get(key);
+  if (inflight) {
+    return inflight;
+  }
+  const promise = (async () => {
+    try {
+      const data = await getMarketData(apiKeyName, symbol, interval, limit, options);
+      const arr = Array.isArray(data) ? data : [];
+      candleAutoCache.set(key, { data: arr, fetchedAt: Date.now() });
+      return arr;
+    } finally {
+      candleAutoInflight.delete(key);
+    }
+  })();
+  candleAutoInflight.set(key, promise);
+  return promise;
 };
 
 // Periodic cleanup to prevent memory growth

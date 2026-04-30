@@ -771,6 +771,17 @@ export const hasExchangeClient = (apiKeyName: string): boolean => {
   return Boolean(clients[name]?.client || ccxtClients[name]?.client);
 };
 
+// Returns the exchange identifier for an initialized api-key client (lowercase, e.g. 'weex','bybit','bingx').
+// Used by candle-cache layer to share public market data between keys on the same exchange.
+export const getExchangeForApiKey = (apiKeyName: string): string | null => {
+  const name = String(apiKeyName || '').trim();
+  if (!name) return null;
+  const ccxt = ccxtClients[name];
+  if (ccxt?.exchange) return String(ccxt.exchange).toLowerCase();
+  if (clients[name]?.client) return 'bybit';
+  return null;
+};
+
 // Получить все доступные торговые пары (symbols) с Bybit
 export const getAllSymbols = async (apiKeyName: string) => {
   const cacheKey = `symbols_${apiKeyName}`;

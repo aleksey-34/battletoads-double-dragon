@@ -1,0 +1,25 @@
+﻿=== WEEX errors last 1h ===
+
+=== api_keys with weex ===
+ssh : Error: no such column: paused
+строка:1 знак:42
++ ... ps_weex_check.sh -Raw | ssh root@176.57.184.98 "bash -s" 2>&1 | Out-F ...
++                             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Error: no such column: paused:Str 
+   ing) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+
+=== strategies last_error containing weex ===
+172570|SAAS::artursk-1049539016::MONO::DD_BattleToads::TRUUSDT::SID164202|artursk-1049539016-api|weex {"code":-1058,"msg":"No permission for this trading pair."}
+172571|SAAS::artursk-1049539016::MONO::DD_BattleToads::TRUUSDT::SID164204|artursk-1049539016-api|weex {"code":-1058,"msg":"No permission for this trading pair."}
+172591|SAAS::artursk-1316522224::MONO::stat_arb_zscore::OPUSDT::SID172020|artursk-1316522224-api|weex {"code":429,"data":{},"msg":"Rate limit exceeded."}
+172592|SAAS::artursk-1316522224::MONO::stat_arb_zscore::OPUSDT::SID172011|artursk-1316522224-api|weex {"code":429,"data":{},"msg":"Rate limit exceeded."}
+172598|SAAS::artursk-5497016674::MONO::stat_arb_zscore::OPUSDT::SID172020|artursk-5497016674-api|weex {"code":429,"data":{},"msg":"Rate limit exceeded."}
+172599|SAAS::artursk-5497016674::MONO::stat_arb_zscore::OPUSDT::SID172011|artursk-5497016674-api|weex {"code":429,"data":{},"msg":"Rate limit exceeded."}
+172600|SAAS::artursk-5497016674::MONO::stat_arb_zscore::FETUSDT::SID172370|artursk-5497016674-api|weex {"code":429,"data":{},"msg":"Rate limit exceeded."}
+172619|SAAS::artursk-6717415191::MONO::stat_arb_zscore::OPUSDT::SID172020|artursk-6717415191-api|weex {"code":429,"data":{},"msg":"Rate limit exceeded."}
+
+=== Error fetching status count last 1h ===
+0
+bash: line 13: $'\r': command not found

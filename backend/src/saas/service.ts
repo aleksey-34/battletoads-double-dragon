@@ -3947,7 +3947,31 @@ const upsertTenantStrategies = async (
         metrics: item.metrics,
       });
     } catch (error) {
-      throw error;
+      // Per-strategy failure (balance, conflict, exchange validation) must NOT abort the
+      // whole client's materialization — that was the root cause of cross-account desync
+      // (one client got 21/28, another 27/28). Log + audit + continue with next record.
+      const message = (error as Error)?.message || String(error);
+      logger.warn(`[upsertTenantStrategies] createStrategy failed for ${apiKeyName} ${desiredName}: ${message}`);
+      try {
+        await db.run(
+          `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+           VALUES (?, 'system', 'saas_materialize_create_failed', ?, CURRENT_TIMESTAMP)`,
+          [
+            tenant.id,
+            JSON.stringify({
+              apiKeyName,
+              desiredName,
+              offerId: item.offerId,
+              market: item.record.market,
+              strategyType: item.record.strategyType,
+              marketMode: item.record.marketMode,
+              error: message,
+            }),
+          ]
+        );
+      } catch {
+        // best-effort audit
+      }
     }
   }
 
