@@ -5502,6 +5502,9 @@ export const previewAdminSweepBacktest = async (payload?: {
   riskScaleMaxPercent?: number;
   maxOpenPositions?: number;
   partialTpPct?: number;
+  commissionPercent?: number;
+  slippagePercent?: number;
+  fundingRatePercent?: number;
   dateFrom?: string;
   dateTo?: string;
   preferRealBacktest?: boolean;
@@ -5979,6 +5982,16 @@ export const previewAdminSweepBacktest = async (payload?: {
   const riskScaleMaxPercent = clampNumber(asNumber(payload?.riskScaleMaxPercent, 100), 0, 400);
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(payload?.maxOpenPositions, 0)));
   const partialTpPct = Math.max(0, asNumber(payload?.partialTpPct, 0));
+  // Admin overrides for execution-cost assumptions. Defaults align with WEEX
+  // futures (taker 0.06% × 2 legs = ~0.1%, slippage 0.05%, funding 0).
+  // When admin passes a finite >= 0 value it replaces the sweep config default.
+  const toFiniteOrNull = (value: any): number | null => {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+  const commissionPercentOverride = toFiniteOrNull(payload?.commissionPercent);
+  const slippagePercentOverride = toFiniteOrNull(payload?.slippagePercent);
+  const fundingRatePercentOverride = toFiniteOrNull(payload?.fundingRatePercent);
   const reinvestPercent = clampNumber(asNumber(payload?.reinvestPercent, 100), 0, 100);
   const reinvestShare = reinvestPercent / 100;
   const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
@@ -6167,9 +6180,15 @@ export const previewAdminSweepBacktest = async (payload?: {
           warmupBars: asNumber(sweep?.config?.warmupBars, 400),
           skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
           initialBalance,
-          commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
-          slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
-          fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
+          commissionPercent: commissionPercentOverride !== null
+            ? commissionPercentOverride
+            : asNumber(sweep?.config?.commissionPercent, 0.1),
+          slippagePercent: slippagePercentOverride !== null
+            ? slippagePercentOverride
+            : asNumber(sweep?.config?.slippagePercent, 0.05),
+          fundingRatePercent: fundingRatePercentOverride !== null
+            ? fundingRatePercentOverride
+            : asNumber(sweep?.config?.fundingRatePercent, 0),
           dateFrom: requestedDateFrom || (kind === 'offer' ? singleOfferStoreDateFrom : '') || asString(sweep?.config?.dateFrom, ''),
           dateTo: requestedDateTo || (kind === 'offer' ? singleOfferStoreDateTo : '') || asString(sweep?.config?.dateTo, ''),
           ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
@@ -10011,18 +10030,30 @@ export const materializeStrategyClient = async (tenantId: number, activate: bool
     activate || profile.requested_enabled === 1
   );
 
-  await db.run(
-    `UPDATE strategy_client_profiles
-     SET actual_enabled = ?, updated_at = CURRENT_TIMESTAMP
-     WHERE tenant_id = ?`,
-    [activate || profile.requested_enabled === 1 ? 1 : 0, tenantId]
-  );
+  // Atomically commit materialization state + audit log so partial failures
+  // never leave actual_enabled out of sync with the audit trail.
+  await runWithSqliteBusyRetry(async () => {
+    await db.exec('BEGIN IMMEDIATE');
+    try {
+      await db.run(
+        `UPDATE strategy_client_profiles
+         SET actual_enabled = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ?`,
+        [activate || profile.requested_enabled === 1 ? 1 : 0, tenantId]
+      );
 
-  await db.run(
-    `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
-     VALUES (?, 'admin', 'materialize_strategy_client', ?, CURRENT_TIMESTAMP)`,
-    [tenantId, JSON.stringify({ assignedApiKeyName, strategies })]
-  );
+      await db.run(
+        `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+         VALUES (?, 'admin', 'materialize_strategy_client', ?, CURRENT_TIMESTAMP)`,
+        [tenantId, JSON.stringify({ assignedApiKeyName, strategies })]
+      );
+
+      await db.exec('COMMIT');
+    } catch (err) {
+      try { await db.exec('ROLLBACK'); } catch { /* noop */ }
+      throw err;
+    }
+  });
 
   return {
     tenant: state.tenant,

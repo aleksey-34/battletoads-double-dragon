@@ -114,11 +114,27 @@ class WeexRestClient {
       headers['ACCESS-PASSPHRASE'] = this.passphrase;
     }
 
-    const response = await fetch(url, {
-      method,
-      headers,
-      body: hasBody ? bodyString : undefined,
-    });
+    // Hard timeout to prevent monitoring/runtime cycles from hanging if WEEX is unresponsive.
+    const controller = new AbortController();
+    const timeoutMs = 15_000;
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        method,
+        headers,
+        body: hasBody ? bodyString : undefined,
+        signal: controller.signal,
+      });
+    } catch (err) {
+      if ((err as Error)?.name === 'AbortError') {
+        throw new Error(`WEEX ${method} ${requestPath} timed out after ${timeoutMs}ms`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
 
     const responseText = await response.text();
     let payload: any = null;

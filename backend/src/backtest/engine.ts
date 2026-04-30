@@ -445,10 +445,22 @@ const computeLockedMargin = (runtimes: RuntimeStrategy[]): number => {
   }, 0);
 };
 
+// Synthetic strategies execute as TWO real legs on the exchange (long base + short
+// quote, or vice versa). Each leg pays its own commission and incurs its own
+// slippage. To match runtime PnL, we double the effective rates for synthetic.
+const isSyntheticStrategy = (strategy: any): boolean => {
+  return String(strategy?.market_mode || '').trim() === 'synthetic';
+};
+const effectiveCommissionRate = (ctx: BacktestContext, strategy: any): number => {
+  return isSyntheticStrategy(strategy) ? ctx.commissionRate * 2 : ctx.commissionRate;
+};
+const effectiveSlippageRate = (ctx: BacktestContext, strategy: any): number => {
+  return isSyntheticStrategy(strategy) ? ctx.slippageRate * 2 : ctx.slippageRate;
+};
+
 const executionPrice = (price: number, side: 'long' | 'short', phase: 'entry' | 'exit', slippageRate: number): number => {
   if (!Number.isFinite(price) || price <= 0) {
-    return price;
-  }
+    return price;  }
 
   if (phase === 'entry') {
     return side === 'long'
@@ -518,7 +530,7 @@ const closePosition = (
   }
 
   const side = runtime.openTrade.side;
-  const exitPrice = executionPrice(marketPrice, side, 'exit', ctx.slippageRate);
+  const exitPrice = executionPrice(marketPrice, side, 'exit', effectiveSlippageRate(ctx, runtime.strategy));
   const entryPrice = runtime.openTrade.entryPrice;
   const notional = runtime.openTrade.notional;
 
@@ -529,7 +541,7 @@ const closePosition = (
     grossPnl = notional * ((entryPrice / exitPrice) - 1);
   }
 
-  const exitFee = notional * ctx.commissionRate;
+  const exitFee = notional * effectiveCommissionRate(ctx, runtime.strategy);
   ctx.cashEquity += grossPnl - exitFee;
   ctx.lockedMargin = Math.max(0, ctx.lockedMargin - notional);
 
@@ -585,7 +597,7 @@ const partialClosePosition = (
   }
 
   const side = runtime.openTrade.side;
-  const exitPrice = executionPrice(marketPrice, side, 'exit', ctx.slippageRate);
+  const exitPrice = executionPrice(marketPrice, side, 'exit', effectiveSlippageRate(ctx, runtime.strategy));
   const entryPrice = runtime.openTrade.entryPrice;
   const closedNotional = runtime.openTrade.notional * fraction;
 
@@ -596,7 +608,7 @@ const partialClosePosition = (
     grossPnl = closedNotional * ((entryPrice / exitPrice) - 1);
   }
 
-  const exitFee = closedNotional * ctx.commissionRate;
+  const exitFee = closedNotional * effectiveCommissionRate(ctx, runtime.strategy);
   const closedEntryFee = runtime.openTrade.entryFee * fraction;
   const closedFunding = runtime.openTrade.funding * fraction;
 
@@ -681,8 +693,8 @@ const openPosition = (
     return false;
   }
 
-  const entryPrice = executionPrice(marketPrice, signal, 'entry', ctx.slippageRate);
-  const entryFee = notional * ctx.commissionRate;
+  const entryPrice = executionPrice(marketPrice, signal, 'entry', effectiveSlippageRate(ctx, strategy));
+  const entryFee = notional * effectiveCommissionRate(ctx, strategy);
 
   ctx.cashEquity -= entryFee;
 

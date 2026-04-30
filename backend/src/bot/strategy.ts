@@ -23,6 +23,32 @@ const candleAutoCache = new Map<string, CandleCacheEntry>();
 const OFFLINE_SYMBOL_LOG_COOLDOWN_MS = 5 * 60 * 1000;
 const offlineSymbolLogCooldown = new Map<string, number>();
 
+// ── Per-trading-system serialization mutex ──
+// Prevents OP-limit race when several strategies of the same TS receive entry
+// signals in parallel within a single auto-cycle. The mutex is held only for the
+// short critical section: OP-count check → placeOrder → state update. All other
+// strategies (in different systems) run in parallel as before.
+const systemEntryMutex = new Map<number, Promise<void>>();
+const acquireSystemEntryLock = async (systemId: number): Promise<() => void> => {
+  if (!Number.isFinite(systemId) || systemId <= 0) {
+    return () => {};
+  }
+  const previous = systemEntryMutex.get(systemId) || Promise.resolve();
+  let release: () => void = () => {};
+  const tail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chained = previous.then(() => tail);
+  systemEntryMutex.set(systemId, chained);
+  await previous;
+  return () => {
+    release();
+    if (systemEntryMutex.get(systemId) === chained) {
+      systemEntryMutex.delete(systemId);
+    }
+  };
+};
+
 const getCachedMarketData = async (
   apiKeyName: string, symbol: string, interval: string, limit: number,
   options?: { startMs?: number; endMs?: number },
@@ -2087,6 +2113,12 @@ export const executeStrategy = async (
   strategyId: number,
   options?: ExecuteStrategyOptions
 ) => {
+  // Lock holder for the trading-system entry critical section.
+  // Acquired during OP-limit check (only if system is found) and released at
+  // function exit so all post-check ops (placeOrder, state UPDATE) are serialized
+  // against other strategies of the same TS within this process.
+  let releaseSystemLock: (() => void) | null = null;
+  try {
   const existingRow = await getStrategyRow(apiKeyName, strategyId);
   const strategy = normalizeStrategy(existingRow);
 
@@ -2736,6 +2768,13 @@ export const executeStrategy = async (
     );
 
     if (systemRow && systemRow.max_open_positions > 0) {
+      // Acquire per-system entry lock so OP-count check + placeOrder + state
+      // UPDATE for THIS strategy run serially against any other strategy in the
+      // same TS. Without this, parallel auto-cycle execution can briefly exceed
+      // max_open_positions (overflow guard fixes it next cycle, but we lose
+      // capital to fees on the closure).
+      releaseSystemLock = await acquireSystemEntryLock(Number(systemRow.system_id));
+
       const maxOpen = systemRow.max_open_positions;
       const openCount: any = await db.get(
         `SELECT COUNT(*) AS cnt FROM strategies s
@@ -3200,6 +3239,12 @@ export const executeStrategy = async (
     donchianCenter,
     strategy: updated,
   });
+  } finally {
+    if (releaseSystemLock) {
+      try { releaseSystemLock(); } catch { /* noop */ }
+      releaseSystemLock = null;
+    }
+  }
 };
 
 export const pauseStrategy = async (apiKeyName: string, strategyId: number) => {

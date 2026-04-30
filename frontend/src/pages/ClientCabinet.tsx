@@ -709,6 +709,20 @@ const ClientCabinet: React.FC = () => {
   const customTsAutoPreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const customTsLastAutoPreviewAtRef = useRef<number>(0);
 
+  // AbortControllers used to cancel in-flight preview requests when slider/selection
+  // changes rapidly. Without this, late stale responses can overwrite fresh ones.
+  const strategyPreviewAbortRef = useRef<AbortController | null>(null);
+  const singleOfferPreviewAbortRef = useRef<AbortController | null>(null);
+  const customTsPreviewAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      strategyPreviewAbortRef.current?.abort();
+      singleOfferPreviewAbortRef.current?.abort();
+      customTsPreviewAbortRef.current?.abort();
+    };
+  }, []);
+
   const strategyState = workspace?.strategyState || null;
   const algofundState = workspace?.algofundState || null;
   const strategyWorkspace = strategyState || strategyStateExtra;
@@ -1272,6 +1286,9 @@ const ClientCabinet: React.FC = () => {
   };
 
   const runCustomTsPreview = async () => {
+    customTsPreviewAbortRef.current?.abort();
+    const controller = new AbortController();
+    customTsPreviewAbortRef.current = controller;
     setCustomTsPreviewLoading(true);
     try {
       const response = await axios.post<CustomTsDraftPreviewResponse>('/api/client/strategy/custom-ts-draft/preview', {
@@ -1282,18 +1299,27 @@ const ClientCabinet: React.FC = () => {
         tradeFrequencyLevel: sliderValueToLevel(strategyTradeInput),
         riskScore: strategyRiskInput,
         tradeFrequencyScore: strategyTradeInput,
-      });
+      }, { signal: controller.signal });
       setCustomTsPreview(response.data);
       messageApi.success('Dry-run preview собственной ТС готов.');
     } catch (error: any) {
+      if (axios.isCancel?.(error) || error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
+        return;
+      }
       setCustomTsPreview(null);
       messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось построить preview собственной ТС'));
     } finally {
+      if (customTsPreviewAbortRef.current === controller) {
+        customTsPreviewAbortRef.current = null;
+      }
       setCustomTsPreviewLoading(false);
     }
   };
 
   const runStrategySelectionPreview = async () => {
+    strategyPreviewAbortRef.current?.abort();
+    const controller = new AbortController();
+    strategyPreviewAbortRef.current = controller;
     setStrategySelectionPreviewLoading(true);
     try {
       const response = await axios.post<StrategySelectionPreviewResponse>('/api/client/strategy/selection-preview', {
@@ -1302,19 +1328,28 @@ const ClientCabinet: React.FC = () => {
         tradeFrequencyLevel: sliderValueToLevel(strategyTradeInput),
         riskScore: strategyRiskInput,
         tradeFrequencyScore: strategyTradeInput,
-      });
+      }, { signal: controller.signal });
 
       setStrategySelectionPreview(response.data);
       messageApi.success(t('client.strategy.previewReady', 'Preview updated'));
     } catch (error: any) {
+      if (axios.isCancel?.(error) || error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
+        return;
+      }
       messageApi.error(String(error?.response?.data?.error || error?.message || t('client.strategy.previewFailed', 'Failed to build preview')));
       setStrategySelectionPreview(null);
     } finally {
+      if (strategyPreviewAbortRef.current === controller) {
+        strategyPreviewAbortRef.current = null;
+      }
       setStrategySelectionPreviewLoading(false);
     }
   };
 
   const runSingleOfferPreview = async (offerId: string) => {
+    singleOfferPreviewAbortRef.current?.abort();
+    const controller = new AbortController();
+    singleOfferPreviewAbortRef.current = controller;
     setSingleOfferPreviewLoading(true);
     try {
       const response = await axios.post('/api/client/strategy/preview', {
@@ -1323,11 +1358,17 @@ const ClientCabinet: React.FC = () => {
         tradeFrequencyLevel: sliderValueToLevel(strategyTradeInput),
         riskScore: strategyRiskInput,
         tradeFrequencyScore: strategyTradeInput,
-      });
+      }, { signal: controller.signal });
       setSingleOfferPreview(response.data);
-    } catch {
+    } catch (error: any) {
+      if (axios.isCancel?.(error) || error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
+        return;
+      }
       setSingleOfferPreview(null);
     } finally {
+      if (singleOfferPreviewAbortRef.current === controller) {
+        singleOfferPreviewAbortRef.current = null;
+      }
       setSingleOfferPreviewLoading(false);
     }
   };

@@ -996,6 +996,9 @@ type BacktestCardSettings = {
   riskScaleMaxPercent: number;
   maxOpenPositions: number;
   partialTpPct: number;
+  commissionPercent: number;
+  slippagePercent: number;
+  fundingRatePercent: number;
 };
 
 const ADMIN_PUBLISH_RESPONSE_STORAGE_KEY = 'saasAdminPublishResponse';
@@ -1007,6 +1010,9 @@ const DEFAULT_BACKTEST_SETTINGS: BacktestCardSettings = {
   riskScaleMaxPercent: 100,
   maxOpenPositions: 0,
   partialTpPct: 0,
+  commissionPercent: 0.1,
+  slippagePercent: 0.05,
+  fundingRatePercent: 0,
 };
 
 const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
@@ -1017,6 +1023,9 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
   const riskScaleMaxPercent = Number(parsed.riskScaleMaxPercent);
   const maxOpenPositions = Number(parsed.maxOpenPositions);
   const partialTpPct = Number(parsed.partialTpPct);
+  const commissionPercent = Number(parsed.commissionPercent);
+  const slippagePercent = Number(parsed.slippagePercent);
+  const fundingRatePercent = Number(parsed.fundingRatePercent);
   return {
     riskScore: Number.isFinite(riskScore) ? Math.min(10, Math.max(0, riskScore)) : DEFAULT_BACKTEST_SETTINGS.riskScore,
     tradeFrequencyScore: Number.isFinite(tradeFrequencyScore) ? Math.min(10, Math.max(0, tradeFrequencyScore)) : DEFAULT_BACKTEST_SETTINGS.tradeFrequencyScore,
@@ -1024,6 +1033,9 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
     riskScaleMaxPercent: Number.isFinite(riskScaleMaxPercent) ? Math.min(1000, Math.max(0, riskScaleMaxPercent)) : DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent,
     maxOpenPositions: Number.isFinite(maxOpenPositions) ? Math.max(0, Math.floor(maxOpenPositions)) : DEFAULT_BACKTEST_SETTINGS.maxOpenPositions,
     partialTpPct: Number.isFinite(partialTpPct) ? Math.max(0, partialTpPct) : DEFAULT_BACKTEST_SETTINGS.partialTpPct,
+    commissionPercent: Number.isFinite(commissionPercent) ? Math.min(5, Math.max(0, commissionPercent)) : DEFAULT_BACKTEST_SETTINGS.commissionPercent,
+    slippagePercent: Number.isFinite(slippagePercent) ? Math.min(5, Math.max(0, slippagePercent)) : DEFAULT_BACKTEST_SETTINGS.slippagePercent,
+    fundingRatePercent: Number.isFinite(fundingRatePercent) ? Math.min(5, Math.max(0, fundingRatePercent)) : DEFAULT_BACKTEST_SETTINGS.fundingRatePercent,
   };
 };
 
@@ -2697,6 +2709,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestRiskScaleMaxPercent, setAdminSweepBacktestRiskScaleMaxPercent] = useState(DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent);
   const [adminSweepBacktestMaxOpenPositions, setAdminSweepBacktestMaxOpenPositions] = useState(DEFAULT_BACKTEST_SETTINGS.maxOpenPositions);
   const [adminSweepBacktestPartialTpPct, setAdminSweepBacktestPartialTpPct] = useState(DEFAULT_BACKTEST_SETTINGS.partialTpPct);
+  const [adminSweepBacktestCommissionPercent, setAdminSweepBacktestCommissionPercent] = useState(DEFAULT_BACKTEST_SETTINGS.commissionPercent);
+  const [adminSweepBacktestSlippagePercent, setAdminSweepBacktestSlippagePercent] = useState(DEFAULT_BACKTEST_SETTINGS.slippagePercent);
+  const [adminSweepBacktestFundingRatePercent, setAdminSweepBacktestFundingRatePercent] = useState(DEFAULT_BACKTEST_SETTINGS.fundingRatePercent);
   const [adminSweepBacktestDateFrom, setAdminSweepBacktestDateFrom] = useState('');
   const [adminSweepBacktestDateTo, setAdminSweepBacktestDateTo] = useState('');
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
@@ -6273,6 +6288,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAdminSweepBacktestRiskScaleMaxPercent(settings.riskScaleMaxPercent);
     setAdminSweepBacktestMaxOpenPositions(settings.maxOpenPositions ?? 0);
     setAdminSweepBacktestPartialTpPct(settings.partialTpPct ?? 0);
+    setAdminSweepBacktestCommissionPercent(settings.commissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent);
+    setAdminSweepBacktestSlippagePercent(settings.slippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent);
+    setAdminSweepBacktestFundingRatePercent(settings.fundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent);
   }, []);
 
   const resolveBacktestSettingsForContext = useCallback((context: SaasBacktestContext): BacktestCardSettings => {
@@ -6384,6 +6402,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const effectiveRiskScaleMaxPercent = Number(options?.settingsOverride?.riskScaleMaxPercent ?? adminSweepBacktestRiskScaleMaxPercent);
     const effectiveMaxOpenPositions = Math.max(0, Math.floor(Number(options?.settingsOverride?.maxOpenPositions ?? adminSweepBacktestMaxOpenPositions)));
     const effectivePartialTpPct = Math.max(0, Number(options?.settingsOverride?.partialTpPct ?? adminSweepBacktestPartialTpPct));
+    const effectiveCommissionPercent = Math.max(0, Number(options?.settingsOverride?.commissionPercent ?? adminSweepBacktestCommissionPercent));
+    const effectiveSlippagePercent = Math.max(0, Number(options?.settingsOverride?.slippagePercent ?? adminSweepBacktestSlippagePercent));
+    const effectiveFundingRatePercent = Math.max(0, Number(options?.settingsOverride?.fundingRatePercent ?? adminSweepBacktestFundingRatePercent));
     try {
       const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
         kind: targetContext.kind,
@@ -6403,6 +6424,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         riskScaleMaxPercent: effectiveRiskScaleMaxPercent,
         maxOpenPositions: effectiveMaxOpenPositions > 0 ? effectiveMaxOpenPositions : undefined,
         partialTpPct: effectivePartialTpPct > 0 ? effectivePartialTpPct : undefined,
+        commissionPercent: Number.isFinite(effectiveCommissionPercent) ? effectiveCommissionPercent : undefined,
+        slippagePercent: Number.isFinite(effectiveSlippagePercent) ? effectiveSlippagePercent : undefined,
+        fundingRatePercent: Number.isFinite(effectiveFundingRatePercent) ? effectiveFundingRatePercent : undefined,
         preferRealBacktest: options?.preferRealBacktest === true,
         rerunApiKeyName: options?.preferRealBacktest
           ? (adminSweepBacktestRerunApiKey || undefined)
@@ -6789,6 +6813,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 100),
               maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
               partialTpPct: Math.max(0, Number(adminSweepBacktestPartialTpPct ?? 0)),
+              commissionPercent: Math.max(0, Number(adminSweepBacktestCommissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent)),
+              slippagePercent: Math.max(0, Number(adminSweepBacktestSlippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent)),
+              fundingRatePercent: Math.max(0, Number(adminSweepBacktestFundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent)),
             },
           },
         },
@@ -6807,6 +6834,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 100),
           maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
           partialTpPct: Math.max(0, Number(adminSweepBacktestPartialTpPct ?? 0)),
+          commissionPercent: Math.max(0, Number(adminSweepBacktestCommissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent)),
+          slippagePercent: Math.max(0, Number(adminSweepBacktestSlippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent)),
+          fundingRatePercent: Math.max(0, Number(adminSweepBacktestFundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent)),
         }
       );
       await loadSummary('full');
@@ -12731,6 +12761,63 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       }}
                     />
                     <Text type="secondary">{adminSweepBacktestPartialTpPct > 0 ? `Закрыть 50% при +${adminSweepBacktestPartialTpPct}%` : '0 = выкл.'}</Text>
+                  </Card>
+                </Col>
+              )}
+              {isAdminSurface && (
+                <Col xs={24} md={24} lg={6}>
+                  <Card size="small" title="Комиссия / Слиппедж / Funding (admin)">
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      <Space wrap size={4}>
+                        <span style={{ fontSize: 11, minWidth: 60 }}>Комса %</span>
+                        <InputNumber
+                          min={0}
+                          max={5}
+                          step={0.01}
+                          style={{ width: 90 }}
+                          value={adminSweepBacktestCommissionPercent}
+                          onChange={(value) => {
+                            const next = Math.max(0, Number(value || 0));
+                            setAdminSweepBacktestCommissionPercent(next);
+                            setAdminSweepBacktestStale(true);
+                            scheduleBacktestDebounce();
+                          }}
+                        />
+                      </Space>
+                      <Space wrap size={4}>
+                        <span style={{ fontSize: 11, minWidth: 60 }}>Слип %</span>
+                        <InputNumber
+                          min={0}
+                          max={5}
+                          step={0.01}
+                          style={{ width: 90 }}
+                          value={adminSweepBacktestSlippagePercent}
+                          onChange={(value) => {
+                            const next = Math.max(0, Number(value || 0));
+                            setAdminSweepBacktestSlippagePercent(next);
+                            setAdminSweepBacktestStale(true);
+                            scheduleBacktestDebounce();
+                          }}
+                        />
+                      </Space>
+                      <Space wrap size={4}>
+                        <span style={{ fontSize: 11, minWidth: 60 }}>Funding %</span>
+                        <InputNumber
+                          min={0}
+                          max={5}
+                          step={0.001}
+                          style={{ width: 90 }}
+                          value={adminSweepBacktestFundingRatePercent}
+                          onChange={(value) => {
+                            const next = Math.max(0, Number(value || 0));
+                            setAdminSweepBacktestFundingRatePercent(next);
+                            setAdminSweepBacktestStale(true);
+                            scheduleBacktestDebounce();
+                          }}
+                        />
+                      </Space>
+                      <Text type="secondary" style={{ fontSize: 10 }}>WEEX по умолчанию 0.1 / 0.05 / 0. Synthetic-стратегии удваиваются автоматически.</Text>
+                    </Space>
                   </Card>
                 </Col>
               )}
