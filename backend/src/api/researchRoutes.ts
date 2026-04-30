@@ -358,6 +358,8 @@ router.post('/sweeps/full-historical/start', async (req, res) => {
     const result = await startHistoricalSweepJob({
       mode: parseSweepRunMode(req.body?.mode),
       apiKeyName: req.body?.apiKeyName ? String(req.body.apiKeyName) : undefined,
+      fanApiKeyNames: req.body?.fanApiKeyNames,
+      concurrency: req.body?.concurrency != null ? Number(req.body.concurrency) : undefined,
       dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
       dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
       interval: req.body?.interval ? String(req.body.interval) : undefined,

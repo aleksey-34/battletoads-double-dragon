@@ -15,6 +15,8 @@ type JobStatus = 'queued' | 'running' | 'done' | 'failed';
 
 type HistoricalSweepConfig = {
   apiKeyName: string;
+  fanApiKeyNames: string[];
+  concurrency: number;
   dateFrom: string;
   dateTo: string | null;
   interval: string;
@@ -203,6 +205,13 @@ const parseDdSources = (raw: unknown): Array<'close' | 'wick'> => {
 
 const buildDefaultConfig = (input?: Partial<HistoricalSweepConfig> & { mode?: unknown }): HistoricalSweepConfig => {
   const apiKeyName = String(input?.apiKeyName || 'BTDD_D1').trim() || 'BTDD_D1';
+  const fanApiKeyNamesRaw = parseStringList((input as any)?.fanApiKeyNames);
+  const fanApiKeyNames = fanApiKeyNamesRaw.length > 0
+    ? Array.from(new Set([apiKeyName.toUpperCase(), ...fanApiKeyNamesRaw]))
+        .map((name) => name.trim())
+        .filter(Boolean)
+    : [apiKeyName];
+  const concurrency = Math.max(1, Math.min(32, Number((input as any)?.concurrency || 1)));
   const dateFrom = String(input?.dateFrom || '2025-01-01T00:00:00Z').trim() || '2025-01-01T00:00:00Z';
   const dateTo = input?.dateTo ? String(input.dateTo).trim() : null;
   const intervals = parseIntervals(input?.interval || (input as any)?.intervals || '4h');
@@ -219,6 +228,8 @@ const buildDefaultConfig = (input?: Partial<HistoricalSweepConfig> & { mode?: un
 
   return {
     apiKeyName,
+    fanApiKeyNames,
+    concurrency,
     dateFrom,
     dateTo,
     interval,
@@ -803,27 +814,29 @@ const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: Sw
       },
     });
 
-    for (const plan of plans) {
-      if (plan.index > totalRuns) {
-        break;
-      }
+    // ── Concurrency: process plans in parallel batches ──────────────────────
+    // Sweep is mostly CPU-bound (backtest engine) plus initial candle fetch per (pair,interval).
+    // With single api-key and process-local candleAutoCache, the first ~N unique fetches dominate;
+    // afterwards everything runs from RAM cache. We rotate apiKeyName across config.fanApiKeyNames
+    // so candle fetches are distributed across multiple exchanges/keys (each with its own
+    // rate-limit), and we run config.concurrency plans in parallel via async-pool.
+    const fanKeys = (Array.isArray(config.fanApiKeyNames) && config.fanApiKeyNames.length > 0)
+      ? config.fanApiKeyNames
+      : [config.apiKeyName];
+    const concurrency = Math.max(1, Math.min(32, Number(config.concurrency || 1)));
 
-      const currentStatus = await getJobStatusById(jobId);
-      if (currentStatus !== 'running') {
-        appendLogLine(logFilePath, `[RUN LOOP STOP] job=${jobId} status=${String(currentStatus || 'missing')}`);
-        break;
-      }
+    let stopRequested = false;
+    let nextPlanIdx = 0;
+    let inflight = 0;
+    let lastStatusCheckAt = 0;
 
-      if (completedKeys.has(plan.key)) {
-        continue;
-      }
-
+    const runOnePlan = async (plan: SweepRunPlan, fanKey: string): Promise<void> => {
       const processedBefore = evaluated.length + failures.length;
       try {
         const ensured = await ensureStrategyForPlan(config.apiKeyName, strategyMap, config, plan);
         const strategyId = Number(ensured.strategy.id || 0);
         const result = await runBacktest({
-          apiKeyName: config.apiKeyName,
+          apiKeyName: fanKey,
           mode: 'single',
           strategyId,
           bars: config.backtestBars,
@@ -908,7 +921,44 @@ const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: Sw
           failures,
         });
       }
-    }
+    };
+
+    await new Promise<void>((resolveAll) => {
+      const tryLaunch = () => {
+        if (stopRequested) {
+          if (inflight === 0) resolveAll();
+          return;
+        }
+        while (inflight < concurrency && nextPlanIdx < plans.length) {
+          const plan = plans[nextPlanIdx++];
+          if (plan.index > totalRuns || completedKeys.has(plan.key)) {
+            continue;
+          }
+          // Throttled status-check (every 5s) to detect external abort without per-plan DB query
+          const now = Date.now();
+          if (now - lastStatusCheckAt > 5000) {
+            lastStatusCheckAt = now;
+            getJobStatusById(jobId).then((status) => {
+              if (status !== 'running') {
+                stopRequested = true;
+                appendLogLine(logFilePath, `[RUN LOOP STOP] job=${jobId} status=${String(status || 'missing')}`);
+              }
+            }).catch(() => {});
+          }
+          inflight++;
+          // Round-robin over fanKeys to distribute candle fetches across exchanges
+          const fanKey = fanKeys[(plan.index - 1) % fanKeys.length] || config.apiKeyName;
+          runOnePlan(plan, fanKey).finally(() => {
+            inflight--;
+            tryLaunch();
+          });
+        }
+        if (inflight === 0 && nextPlanIdx >= plans.length) {
+          resolveAll();
+        }
+      };
+      tryLaunch();
+    });
 
     const sweepData = await buildSweepArtifact(config, evaluated, failures, startedAtMs);
     sweepData.counts.resumedFromCheckpoint = resumedFromCheckpoint;

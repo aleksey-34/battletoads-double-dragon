@@ -1154,7 +1154,16 @@ export default function Research() {
 
   const fullHistoricalProcessedRuns = Number(fullHistoricalSweepStatus?.details?.processedRuns || fullHistoricalSweepStatus?.processed_days || 0);
   const fullHistoricalTotalRuns = Number(fullHistoricalSweepStatus?.details?.totalRuns || 0);
-  const fullHistoricalStartedAtMs = fullHistoricalSweepStatus?.started_at ? Date.parse(fullHistoricalSweepStatus.started_at) : NaN;
+  // started_at from sqlite CURRENT_TIMESTAMP is "YYYY-MM-DD HH:MM:SS" UTC without timezone marker.
+  // Date.parse() treats such strings as LOCAL time on most browsers, which inflated elapsed by
+  // the user's TZ offset (e.g. MSK +3h). Normalize: replace space with 'T' and append 'Z'.
+  const fullHistoricalStartedAtRaw = fullHistoricalSweepStatus?.started_at;
+  const fullHistoricalStartedAtIso = fullHistoricalStartedAtRaw
+    ? (/[zZ]|[+-]\d{2}:?\d{2}$/.test(String(fullHistoricalStartedAtRaw))
+        ? String(fullHistoricalStartedAtRaw)
+        : `${String(fullHistoricalStartedAtRaw).replace(' ', 'T')}Z`)
+    : '';
+  const fullHistoricalStartedAtMs = fullHistoricalStartedAtIso ? Date.parse(fullHistoricalStartedAtIso) : NaN;
   const fullHistoricalElapsedSec = Number.isFinite(fullHistoricalStartedAtMs)
     ? Math.max(0, Math.floor((Date.now() - fullHistoricalStartedAtMs) / 1000))
     : 0;
