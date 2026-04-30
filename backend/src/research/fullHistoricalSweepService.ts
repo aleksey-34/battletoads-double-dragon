@@ -662,6 +662,79 @@ const appendLogLine = (filePath: string, line: string): void => {
   fs.appendFileSync(filePath, `${line}\n`);
 };
 
+/**
+ * Scan all historical_*.log files in the logs dir and collect keys of
+ * runs already executed in past sweeps (OK / FAIL / SKIP-NO-EXCHANGE).
+ * Used as a fallback when checkpoint file is missing — we don't want to
+ * re-run the same plan keys after a crash/abort. Returns a Set of plan keys
+ * (strategy names, since [RUN N/T] OK/FAIL/SKIP lines log the strategyName).
+ */
+const collectCompletedKeysFromLogs = (logsDir: string, currentLogPath: string): {
+  okByName: Map<string, { ret: number; pf: number; dd: number; wr: number; trades: number; score: number }>;
+  failedNames: Set<string>;
+  skippedNames: Set<string>;
+} => {
+  const okByName = new Map<string, { ret: number; pf: number; dd: number; wr: number; trades: number; score: number }>();
+  const failedNames = new Set<string>();
+  const skippedNames = new Set<string>();
+  if (!fs.existsSync(logsDir)) return { okByName, failedNames, skippedNames };
+  let files: string[] = [];
+  try {
+    files = fs.readdirSync(logsDir).filter((f) => /^historical_.*\.log$/.test(f));
+  } catch { return { okByName, failedNames, skippedNames }; }
+  const okRe = /^\[RUN \d+\/\d+\] OK (\S+) RET=(\S+) PF=(\S+) DD=(\S+) WR=(\S+) TRADES=(\S+) SCORE=(\S+)/;
+  const failRe = /^\[RUN \d+\/\d+\] FAIL (\S+) /;
+  const skipRe = /^\[RUN \d+\/\d+\] SKIP-NO-EXCHANGE (\S+) /;
+  for (const f of files) {
+    const full = path.join(logsDir, f);
+    if (full === currentLogPath) continue;
+    let txt = '';
+    try { txt = fs.readFileSync(full, 'utf-8'); } catch { continue; }
+    const lines = txt.split(/\r?\n/);
+    for (const ln of lines) {
+      const ok = okRe.exec(ln);
+      if (ok) {
+        const name = ok[1];
+        // Keep first OK encountered (most recent runs are at end; we overwrite intentionally)
+        okByName.set(name, {
+          ret: Number(ok[2]) || 0,
+          pf: Number(ok[3]) || 0,
+          dd: Number(ok[4]) || 0,
+          wr: Number(ok[5]) || 0,
+          trades: Number(ok[6]) || 0,
+          score: Number(ok[7]) || 0,
+        });
+        failedNames.delete(name);
+        skippedNames.delete(name);
+        continue;
+      }
+      const fail = failRe.exec(ln);
+      if (fail) {
+        const name = fail[1];
+        if (!okByName.has(name)) failedNames.add(name);
+        continue;
+      }
+      const sk = skipRe.exec(ln);
+      if (sk) {
+        const name = sk[1];
+        if (!okByName.has(name)) skippedNames.add(name);
+      }
+    }
+  }
+  return { okByName, failedNames, skippedNames };
+};
+
+/** Wrap a promise with a timeout that rejects after ms milliseconds. */
+const withTimeout = <T>(p: Promise<T>, ms: number, label: string): Promise<T> => {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`timeout after ${ms}ms: ${label}`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); }
+    );
+  });
+};
+
 const buildTopByType = (rows: SweepRecordInternal[]): Record<string, SweepRecordInternal[]> => {
   const groups = new Map<string, SweepRecordInternal[]>();
   for (const row of rows) {
@@ -804,6 +877,82 @@ const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: Sw
     failuresByKey.set(key, item);
   }
 
+  // Log-based resume: when checkpoint is missing/sparse, scan past
+  // historical_*.log files and pre-populate completedKeys so we don't redo
+  // work. We also restore OK summaries (so the final artifact ranks them).
+  let logRestoredOk = 0;
+  let logRestoredSkipped = 0;
+  if (config.resumeEnabled) {
+    const { okByName, failedNames, skippedNames } = collectCompletedKeysFromLogs(
+      path.join(repoRoot, 'logs'),
+      logFilePath,
+    );
+    const planByName = new Map<string, SweepRunPlan>();
+    for (const p of plans.slice(0, totalRuns)) planByName.set(p.strategyName, p);
+
+    for (const [name, m] of okByName.entries()) {
+      const plan = planByName.get(name);
+      if (!plan || evaluatedByKey.has(name)) continue;
+      const restored: SweepRecordInternal = {
+        strategyId: 0,
+        strategyIdResolved: false,
+        strategyName: name,
+        created: false,
+        strategyType: plan.strategyType,
+        marketMode: plan.marketMode,
+        market: plan.market,
+        interval: plan.interval,
+        length: plan.length,
+        takeProfitPercent: plan.takeProfitPercent,
+        detectionSource: plan.detectionSource,
+        zscoreEntry: plan.zscoreEntry,
+        zscoreExit: plan.zscoreExit,
+        zscoreStop: plan.zscoreStop,
+        finalEquity: 0,
+        totalReturnPercent: m.ret,
+        maxDrawdownPercent: m.dd,
+        winRatePercent: m.wr,
+        profitFactor: m.pf,
+        tradesCount: m.trades,
+        score: m.score,
+        robust: false,
+        runIndex: plan.index,
+        restoredFromLog: true,
+      };
+      restored.robust = isRobust(config, restored);
+      evaluatedByKey.set(name, restored);
+      logRestoredOk++;
+    }
+    for (const name of failedNames) {
+      const plan = planByName.get(name);
+      if (!plan || failuresByKey.has(name) || evaluatedByKey.has(name)) continue;
+      failuresByKey.set(name, {
+        runIndex: plan.index,
+        key: plan.key,
+        strategyName: name,
+        strategyType: plan.strategyType,
+        marketMode: plan.marketMode,
+        market: plan.market,
+        error: 'restored-from-log: previous FAIL',
+      });
+      logRestoredSkipped++;
+    }
+    for (const name of skippedNames) {
+      const plan = planByName.get(name);
+      if (!plan || failuresByKey.has(name) || evaluatedByKey.has(name)) continue;
+      failuresByKey.set(name, {
+        runIndex: plan.index,
+        key: plan.key,
+        strategyName: name,
+        strategyType: plan.strategyType,
+        marketMode: plan.marketMode,
+        market: plan.market,
+        error: 'restored-from-log: previous SKIP-NO-EXCHANGE',
+      });
+      logRestoredSkipped++;
+    }
+  }
+
   const evaluated: SweepRecordInternal[] = Array.from(evaluatedByKey.values());
   const failures: SweepFailure[] = Array.from(failuresByKey.values());
   if (evaluated.length + failures.length > totalRuns) {
@@ -819,13 +968,16 @@ const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: Sw
     ...evaluated.map((item) => String(item.strategyName || item.strategyId)),
     ...failures.map((item) => String(item.key || item.strategyName)),
   ]);
-  const resumedFromCheckpoint = Boolean(checkpoint);
+  const resumedFromCheckpoint = Boolean(checkpoint) || (logRestoredOk + logRestoredSkipped) > 0;
   const skippedFromCheckpoint = completedKeys.size;
 
   if (resumedFromCheckpoint) {
     const droppedCheckpointRows = (checkpointEvaluatedRaw.length + checkpointFailuresRaw.length) - (evaluated.length + failures.length);
     if (droppedCheckpointRows > 0) {
       logger.warn(`[fullHistoricalSweep] dropped ${droppedCheckpointRows} checkpoint rows outside current run plan`);
+    }
+    if (logRestoredOk + logRestoredSkipped > 0) {
+      logger.info(`[fullHistoricalSweep] resumed from log: OK=${logRestoredOk} SKIP=${logRestoredSkipped}`);
     }
   }
 
@@ -925,22 +1077,28 @@ const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: Sw
       try {
         const ensured = await ensureStrategyForPlan(config.apiKeyName, strategyMap, config, plan);
         const strategyId = Number(ensured.strategy.id || 0);
-        const result = await runBacktest({
-          // Strategy lives on the master key; fanKey only routes candle fetch.
-          apiKeyName: config.apiKeyName,
-          dataApiKeyName: fanKey,
-          mode: 'single',
-          strategyId,
-          bars: config.backtestBars,
-          dateFrom: config.dateFrom,
-          dateTo: config.dateTo || undefined,
-          warmupBars: config.warmupBars,
-          skipMissingSymbols: config.skipMissingSymbols,
-          initialBalance: config.initialBalance,
-          commissionPercent: config.commissionPercent,
-          slippagePercent: config.slippagePercent,
-          fundingRatePercent: config.fundingRatePercent,
-        });
+        // Per-plan hard timeout — without this a single hung candle fetch can
+        // freeze the whole sweep (concurrency slot never frees up).
+        const result = await withTimeout(
+          runBacktest({
+            // Strategy lives on the master key; fanKey only routes candle fetch.
+            apiKeyName: config.apiKeyName,
+            dataApiKeyName: fanKey,
+            mode: 'single',
+            strategyId,
+            bars: config.backtestBars,
+            dateFrom: config.dateFrom,
+            dateTo: config.dateTo || undefined,
+            warmupBars: config.warmupBars,
+            skipMissingSymbols: config.skipMissingSymbols,
+            initialBalance: config.initialBalance,
+            commissionPercent: config.commissionPercent,
+            slippagePercent: config.slippagePercent,
+            fundingRatePercent: config.fundingRatePercent,
+          }),
+          180_000,
+          `${plan.strategyName} via ${fanKey}`,
+        );
 
         const summary = result.summary;
         const record: SweepRecordInternal = {
@@ -971,9 +1129,13 @@ const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: Sw
         };
         record.score = computeScore(record.totalReturnPercent, record.profitFactor, record.maxDrawdownPercent, record.winRatePercent, record.tradesCount);
         record.robust = isRobust(config, record);
+        const sumAny = summary as any;
+        record.actualDataStartMs = Number.isFinite(Number(sumAny.actualDataStartMs)) ? Number(sumAny.actualDataStartMs) : null;
+        record.actualDataEndMs = Number.isFinite(Number(sumAny.actualDataEndMs)) ? Number(sumAny.actualDataEndMs) : null;
         evaluated.push(record);
         completedKeys.add(plan.key);
-        appendLogLine(logFilePath, `[RUN ${plan.index}/${totalRuns}] OK ${plan.strategyName} RET=${record.totalReturnPercent} PF=${record.profitFactor} DD=${record.maxDrawdownPercent} WR=${record.winRatePercent} TRADES=${record.tradesCount} SCORE=${record.score}`);
+        const startIso = record.actualDataStartMs ? new Date(record.actualDataStartMs).toISOString().slice(0, 10) : '-';
+        appendLogLine(logFilePath, `[RUN ${plan.index}/${totalRuns}] OK ${plan.strategyName} RET=${record.totalReturnPercent} PF=${record.profitFactor} DD=${record.maxDrawdownPercent} WR=${record.winRatePercent} TRADES=${record.tradesCount} SCORE=${record.score} START=${startIso}`);
       } catch (error) {
         const failure: SweepFailure = {
           runIndex: plan.index,

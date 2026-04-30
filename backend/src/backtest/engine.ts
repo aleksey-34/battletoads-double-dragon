@@ -71,6 +71,10 @@ export type BacktestSummary = {
   fundingRatePercent: number;
   maxOpenPositions: number;
   skippedByPositionLimit: number;
+  /** Earliest candle timestamp actually used across all runtime strategies (ms). */
+  actualDataStartMs: number | null;
+  /** Latest candle timestamp actually used across all runtime strategies (ms). */
+  actualDataEndMs: number | null;
 };
 
 export type BacktestRunRequest = {
@@ -858,18 +862,22 @@ const loadRuntimeStrategies = async (
     const marketMode = normalizeMarketMode(strategy.market_mode);
 
     if (!candles) {
-      let raw: unknown;
-      try {
-        raw = marketMode === 'mono'
+      // Try with the original [fetchStartMs..fetchEndMs] window first; if that
+      // returns nothing or too few candles AND a startMs was specified (typical
+      // for new listings whose history is shorter than the requested window),
+      // retry once without startMs so we get whatever the exchange has.
+      const fetchOnce = async (overrideStartMs: number | null): Promise<unknown> => {
+        const opts = {
+          startMs: overrideStartMs === null ? undefined : overrideStartMs,
+          endMs: fetchEndMs === null ? undefined : fetchEndMs,
+        };
+        return marketMode === 'mono'
           ? await getMarketData(
             request.dataApiKeyName,
             strategy.base_symbol,
             interval,
             candlesLimit,
-            {
-              startMs: fetchStartMs === null ? undefined : fetchStartMs,
-              endMs: fetchEndMs === null ? undefined : fetchEndMs,
-            }
+            opts
           )
           : await calculateSyntheticOHLC(
             request.dataApiKeyName,
@@ -879,25 +887,51 @@ const loadRuntimeStrategies = async (
             asNumber(strategy.quote_coef, 1),
             interval,
             candlesLimit,
-            {
-              startMs: fetchStartMs === null ? undefined : fetchStartMs,
-              endMs: fetchEndMs === null ? undefined : fetchEndMs,
-            }
+            opts
           );
+      };
+
+      let raw: unknown;
+      let firstError: Error | null = null;
+      try {
+        raw = await fetchOnce(fetchStartMs);
       } catch (fetchError) {
-        const reason = (fetchError as Error).message || 'candle fetch error';
-        if (request.skipMissingSymbols) {
-          skipped.push({ strategyId: Number(strategy.id), strategyName: strategy.name, reason });
-          continue;
-        }
-        throw fetchError;
+        firstError = fetchError as Error;
+        raw = [];
       }
 
-      candles = (Array.isArray(raw) ? raw : [])
+      let parsed = (Array.isArray(raw) ? raw : [])
         .map((item) => parseCandle(item))
         .filter((item): item is ParsedCandle => !!item)
         .sort((a, b) => a.timeMs - b.timeMs);
 
+      // Fallback: short-history pair — drop startMs and take whatever exists.
+      if (parsed.length <= length && fetchStartMs !== null) {
+        try {
+          const rawNoStart = await fetchOnce(null);
+          const parsedNoStart = (Array.isArray(rawNoStart) ? rawNoStart : [])
+            .map((item) => parseCandle(item))
+            .filter((item): item is ParsedCandle => !!item)
+            .sort((a, b) => a.timeMs - b.timeMs);
+          if (parsedNoStart.length > parsed.length) {
+            parsed = parsedNoStart;
+            firstError = null;
+          }
+        } catch (fallbackError) {
+          if (!firstError) firstError = fallbackError as Error;
+        }
+      }
+
+      if (parsed.length === 0 && firstError) {
+        const reason = firstError.message || 'candle fetch error';
+        if (request.skipMissingSymbols) {
+          skipped.push({ strategyId: Number(strategy.id), strategyName: strategy.name, reason });
+          continue;
+        }
+        throw firstError;
+      }
+
+      candles = parsed;
       syntheticCandleCache.set(cacheKey, candles);
     }
 
@@ -915,15 +949,11 @@ const loadRuntimeStrategies = async (
     let firstInRangeIndex = 0;
     if (request.dateFromMs !== null) {
       const dateFromMs = request.dateFromMs;
-      firstInRangeIndex = candles.findIndex((item) => item.timeMs >= dateFromMs);
-      if (firstInRangeIndex < 0) {
-        const reason = 'No candles in selected date range';
-        if (request.skipMissingSymbols) {
-          skipped.push({ strategyId: Number(strategy.id), strategyName: strategy.name, reason });
-          continue;
-        }
-        throw new Error(`Strategy ${strategy.name}: ${reason}`);
-      }
+      const idx = candles.findIndex((item) => item.timeMs >= dateFromMs);
+      // Fallback for short-history pairs: if no candle is at-or-after dateFrom,
+      // OR the entire history starts later than dateFrom, just use whatever
+      // is available (record actualDataStartMs in summary so callers know).
+      firstInRangeIndex = idx < 0 ? 0 : idx;
     }
 
     let lastInRangeIndex = candles.length - 1;
@@ -1309,6 +1339,20 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
   const uniqueIntervals = Array.from(new Set(runtimes.map((item) => String(item.strategy.interval || '1h'))));
   const interval = uniqueIntervals.length === 1 ? uniqueIntervals[0] : 'mixed';
 
+  let actualDataStartMs: number | null = null;
+  let actualDataEndMs: number | null = null;
+  for (const rt of runtimes) {
+    if (!rt.candles || rt.candles.length === 0) continue;
+    const first = rt.candles[Math.max(0, rt.startIndex)]?.timeMs;
+    const last = rt.candles[Math.min(rt.candles.length - 1, rt.endIndex)]?.timeMs;
+    if (Number.isFinite(first)) {
+      actualDataStartMs = actualDataStartMs === null ? first : Math.min(actualDataStartMs, first);
+    }
+    if (Number.isFinite(last)) {
+      actualDataEndMs = actualDataEndMs === null ? last : Math.max(actualDataEndMs, last);
+    }
+  }
+
   const summary: BacktestSummary = {
     mode: request.mode,
     apiKeyName: request.apiKeyName,
@@ -1337,6 +1381,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     fundingRatePercent: request.fundingRatePercent,
     maxOpenPositions: request.maxOpenPositions,
     skippedByPositionLimit,
+    actualDataStartMs,
+    actualDataEndMs,
   };
 
   const requestEcho: BacktestRunRequest = {
@@ -1620,6 +1666,8 @@ export const getBacktestRun = async (id: number): Promise<BacktestRunResult | nu
     fundingRatePercent: asNumber(row.funding_rate_percent, 0),
     maxOpenPositions: 0,
     skippedByPositionLimit: 0,
+    actualDataStartMs: null,
+    actualDataEndMs: null,
   });
 
   const equityCurve = parseJsonArray<BacktestPoint>(row.equity_curve_json, []);

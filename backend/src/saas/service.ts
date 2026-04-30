@@ -571,6 +571,10 @@ export type SweepRecord = {
   tradesCount: number;
   score: number;
   robust: boolean;
+  /** Earliest candle timestamp actually used in the backtest (ms). */
+  actualDataStartMs?: number | null;
+  /** Latest candle timestamp actually used in the backtest (ms). */
+  actualDataEndMs?: number | null;
 };
 
 export type SweepData = {
