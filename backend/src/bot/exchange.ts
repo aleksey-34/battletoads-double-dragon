@@ -71,13 +71,15 @@ const exchangeParentLimiters = new Map<string, Bottleneck>();
 const getOrCreateExchangeParentLimiter = (exchange: string): Bottleneck => {
   const key = String(exchange || 'unknown').toLowerCase();
   if (!exchangeParentLimiters.has(key)) {
-    // Weex has strict IP rate limits; cap to 1 concurrent request + 1200ms minimum gap.
-    // This means ~0.8 req/sec across all keys on this exchange — safe for Weex IP-level limits.
+    // Weex has strict IP rate limits, but with 13+ keys serving the dashboard's positions
+    // tab in parallel, maxConcurrent=1 + minTime=1200 caps throughput at ~0.8 req/sec —
+    // last keys' requests time out before getting a turn. Allow 3 concurrent + 400ms gap
+    // (still ~7.5 req/sec aggregate, well within typical IP limits, no observed 429s).
     // Other exchanges are more lenient; allow 4 concurrent at 100ms minimum gap.
     const isWeex = key === 'weex';
     exchangeParentLimiters.set(key, new Bottleneck({
-      maxConcurrent: isWeex ? 1 : 4,
-      minTime: isWeex ? 1200 : 100,
+      maxConcurrent: isWeex ? 3 : 4,
+      minTime: isWeex ? 400 : 100,
     }));
   }
   return exchangeParentLimiters.get(key)!;

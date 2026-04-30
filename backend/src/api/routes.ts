@@ -6,6 +6,7 @@ import {
   getOrderStatus,
   getBalances,
   getPositions,
+  ensureExchangeClientInitialized,
   closePosition,
   closePositionPercent as closePositionPercentExchange,
   initExchangeClient,
@@ -3341,7 +3342,9 @@ router.get('/positions/:apiKeyName', async (req, res) => {
   };
 
   try {
-    const positions = await withTimeout(getPositions(apiKeyName, symbol as string), 8000);
+    // Ensure client is lazy-initialized (e.g. WEEX keys may not be eagerly initialized at boot).
+    try { await ensureExchangeClientInitialized(apiKeyName); } catch { /* tolerate init failure, getPositions will throw a clear error */ }
+    const positions = await withTimeout(getPositions(apiKeyName, symbol as string), 15000);
     res.json(positions);
   } catch (error) {
     const err = error as Error;
