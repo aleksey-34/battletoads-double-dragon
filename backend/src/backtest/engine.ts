@@ -75,6 +75,13 @@ export type BacktestSummary = {
 
 export type BacktestRunRequest = {
   apiKeyName: string;
+  /**
+   * Optional override for which API key is used to fetch candle data.
+   * When unset, falls back to apiKeyName. Used by sweep fan-out so the strategy
+   * can be looked up on the master key while candles come from a different
+   * exchange's key.
+   */
+  dataApiKeyName?: string;
   mode?: BacktestMode;
   strategyId?: number;
   strategyIds?: number[];
@@ -109,6 +116,7 @@ export type BacktestRunResult = {
 
 type NormalizedBacktestRequest = {
   apiKeyName: string;
+  dataApiKeyName: string;
   mode: BacktestMode;
   strategyId: number;
   strategyIds: number[];
@@ -834,7 +842,7 @@ const loadRuntimeStrategies = async (
       // exchange (e.g. BTDD_D1 + BTDD_D1_OP both Bybit) share fetched candles
       // — major speed-up for multi-key sweep fan-out and for sweep restarts
       // where the same data was already fetched in a previous run.
-      getExchangeForApiKey(request.apiKeyName) || `key:${request.apiKeyName}`,
+      getExchangeForApiKey(request.dataApiKeyName) || `key:${request.dataApiKeyName}`,
       normalizeMarketMode(strategy.market_mode),
       normalizeDateCachePart(strategy.base_symbol),
       normalizeDateCachePart(strategy.quote_symbol),
@@ -854,7 +862,7 @@ const loadRuntimeStrategies = async (
       try {
         raw = marketMode === 'mono'
           ? await getMarketData(
-            request.apiKeyName,
+            request.dataApiKeyName,
             strategy.base_symbol,
             interval,
             candlesLimit,
@@ -864,7 +872,7 @@ const loadRuntimeStrategies = async (
             }
           )
           : await calculateSyntheticOHLC(
-            request.apiKeyName,
+            request.dataApiKeyName,
             strategy.base_symbol,
             strategy.quote_symbol,
             asNumber(strategy.base_coef, 1),
@@ -978,8 +986,11 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     throw new Error('dateTo must be later than dateFrom');
   }
 
+  const apiKeyNameNorm = String(raw.apiKeyName || '').trim();
+  const dataApiKeyNameRaw = String(raw.dataApiKeyName || '').trim();
   return {
-    apiKeyName: String(raw.apiKeyName || '').trim(),
+    apiKeyName: apiKeyNameNorm,
+    dataApiKeyName: dataApiKeyNameRaw || apiKeyNameNorm,
     mode,
     strategyId: Number.isFinite(Number(raw.strategyId)) ? Number(raw.strategyId) : 0,
     strategyIds: Array.isArray(raw.strategyIds)

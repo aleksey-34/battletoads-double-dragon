@@ -906,7 +906,9 @@ const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: Sw
         const ensured = await ensureStrategyForPlan(config.apiKeyName, strategyMap, config, plan);
         const strategyId = Number(ensured.strategy.id || 0);
         const result = await runBacktest({
-          apiKeyName: fanKey,
+          // Strategy lives on the master key; fanKey only routes candle fetch.
+          apiKeyName: config.apiKeyName,
+          dataApiKeyName: fanKey,
           mode: 'single',
           strategyId,
           bars: config.backtestBars,
