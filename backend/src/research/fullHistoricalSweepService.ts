@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { runBacktest } from '../backtest/engine';
-import { ensureExchangeClientInitialized } from '../bot/exchange';
+import { ensureExchangeClientInitialized, getExchangeForApiKey, getAllSymbols } from '../bot/exchange';
 import { createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
 import { Strategy } from '../config/settings';
 import { initResearchDb, getResearchDb } from './db';
@@ -825,6 +825,64 @@ const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: Sw
       : [config.apiKeyName];
     const concurrency = Math.max(1, Math.min(32, Number(config.concurrency || 1)));
 
+    // ── Symbol-aware routing ────────────────────────────────────────────────
+    // For each fan-key we discover its exchange and the full symbol set listed
+    // there. Then for every plan we filter fanKeys down to those whose exchange
+    // actually has the required symbol(s) — mono needs baseSymbol, synth needs
+    // both base & quote. This lets a single sweep mix Bybit/MEXC/BingX/WEEX
+    // keys safely: each plan goes only to compatible exchanges, so no more
+    // 100% failure storms when a Bybit-listed pair is routed to a MEXC key.
+    const keyToSymbols = new Map<string, Set<string>>();
+    const keyToExchange = new Map<string, string>();
+    for (const k of fanKeys) {
+      try {
+        await ensureExchangeClientInitialized(k);
+        const ex = getExchangeForApiKey(k) || '';
+        keyToExchange.set(k, ex);
+        try {
+          const syms = await getAllSymbols(k);
+          const set = new Set<string>(
+            (Array.isArray(syms) ? syms : []).map((s: any) =>
+              String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+            ).filter(Boolean)
+          );
+          keyToSymbols.set(k, set);
+          appendLogLine(logFilePath, `[FAN-KEY] ${k} exchange=${ex} symbols=${set.size}`);
+        } catch (e) {
+          appendLogLine(logFilePath, `[FAN-KEY] ${k} symbol-fetch FAILED: ${(e as Error).message} — key will be skipped for routing`);
+          keyToSymbols.set(k, new Set());
+        }
+      } catch (e) {
+        appendLogLine(logFilePath, `[FAN-KEY] ${k} init FAILED: ${(e as Error).message}`);
+        keyToSymbols.set(k, new Set());
+      }
+    }
+
+    const normSym = (s: string): string =>
+      String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+    const pickKeysForPlan = (plan: SweepRunPlan): string[] => {
+      const required: string[] = [];
+      if (plan.marketMode === 'mono') {
+        required.push(normSym(plan.baseSymbol || plan.market));
+      } else {
+        required.push(normSym(plan.baseSymbol));
+        if (plan.quoteSymbol) required.push(normSym(plan.quoteSymbol));
+      }
+      const matches = fanKeys.filter((k) => {
+        const set = keyToSymbols.get(k);
+        if (!set || set.size === 0) return false;
+        return required.every((r) => r && set.has(r));
+      });
+      return matches;
+    };
+
+    // Per-fan-key round-robin counters (so even with symbol filtering we still
+    // distribute load evenly within the eligible subset for each plan).
+    const keyRoundRobinIdx: Record<string, number> = {};
+    for (const k of fanKeys) keyRoundRobinIdx[k] = 0;
+    let globalRR = 0;
+
     let stopRequested = false;
     let nextPlanIdx = 0;
     let inflight = 0;
@@ -946,8 +1004,37 @@ const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: Sw
             }).catch(() => {});
           }
           inflight++;
-          // Round-robin over fanKeys to distribute candle fetches across exchanges
-          const fanKey = fanKeys[(plan.index - 1) % fanKeys.length] || config.apiKeyName;
+          // Symbol-aware routing: pick only fan-keys whose exchange has the
+          // required symbol(s); round-robin within that subset. If no fan-key
+          // can serve this plan we record a clean failure and keep going.
+          const eligible = pickKeysForPlan(plan);
+          if (eligible.length === 0) {
+            const failure: SweepFailure = {
+              runIndex: plan.index,
+              key: plan.key,
+              strategyName: plan.strategyName,
+              strategyType: plan.strategyType,
+              marketMode: plan.marketMode,
+              market: plan.market,
+              error: `no fan-key supports ${plan.marketMode === 'mono' ? plan.baseSymbol || plan.market : `${plan.baseSymbol}/${plan.quoteSymbol}`} (checked ${fanKeys.length} keys)`,
+            };
+            failures.push(failure);
+            completedKeys.add(plan.key);
+            appendLogLine(logFilePath, `[RUN ${plan.index}/${totalRuns}] SKIP-NO-EXCHANGE ${plan.strategyName} ${failure.error}`);
+            const processedRuns = evaluated.length + failures.length;
+            updateJobRow(jobId, {
+              status: 'running',
+              processedRuns,
+              totalRuns,
+              successRuns: evaluated.length,
+              failedRuns: failures.length,
+              currentKey: plan.strategyName,
+              details: { config, logFilePath, resumedFromCheckpoint, skippedFromCheckpoint },
+            }).catch(() => {});
+            inflight--;
+            continue;
+          }
+          const fanKey = eligible[(globalRR++) % eligible.length];
           runOnePlan(plan, fanKey).finally(() => {
             inflight--;
             tryLaunch();

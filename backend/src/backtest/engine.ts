@@ -1,6 +1,6 @@
 import { MarketMode, Strategy, StrategyType } from '../config/settings';
 import { getStrategies } from '../bot/strategy';
-import { getMarketData } from '../bot/exchange';
+import { getMarketData, getExchangeForApiKey } from '../bot/exchange';
 import { calculateSyntheticOHLC } from '../bot/synthetic';
 import { db } from '../utils/database';
 import fs from 'fs';
@@ -830,7 +830,11 @@ const loadRuntimeStrategies = async (
     const fetchEndMs = request.dateToMs;
 
     const cacheKey = [
-      request.apiKeyName,
+      // Cache by EXCHANGE rather than apiKeyName so different keys on the same
+      // exchange (e.g. BTDD_D1 + BTDD_D1_OP both Bybit) share fetched candles
+      // — major speed-up for multi-key sweep fan-out and for sweep restarts
+      // where the same data was already fetched in a previous run.
+      getExchangeForApiKey(request.apiKeyName) || `key:${request.apiKeyName}`,
       normalizeMarketMode(strategy.market_mode),
       normalizeDateCachePart(strategy.base_symbol),
       normalizeDateCachePart(strategy.quote_symbol),
