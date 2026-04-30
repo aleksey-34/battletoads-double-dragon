@@ -343,8 +343,12 @@ class WeexRestClient {
   }
 
   async fetchBalance(): Promise<any> {
-    const response = await this.request('GET', '/capi/v3/account/assets', { auth: true });
-    const rows = Array.isArray(response) ? response : [];
+    // /capi/v3/account/assets was removed by WEEX (returns 404); fall back to v2 which is stable
+    const response = await this.request('GET', '/capi/v2/account/assets', { auth: true });
+    const rows = Array.isArray(response) ? response
+      : Array.isArray(response?.list) ? response.list
+      : Array.isArray(response?.assets) ? response.assets
+      : [];
     const total: Record<string, number> = {};
     const free: Record<string, number> = {};
 
