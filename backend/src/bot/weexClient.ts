@@ -412,6 +412,9 @@ class WeexRestClient {
           item?.openPrice,
           item?.open_avg_price,
           item?.avgOpenPrice,
+          // WEEX v3 uses camelCase openValue / cumOpenValue (not snake_case)
+          Number(item?.openValue ?? 0) / Math.abs(size),
+          Number(item?.cumOpenValue ?? 0) / Math.abs(size),
           Number(item?.open_value ?? 0) / Math.abs(size)
         ) ?? 0;
         const markPrice = firstPositiveNumber(
@@ -423,6 +426,8 @@ class WeexRestClient {
         ) ?? entryPrice;
         const notional = firstPositiveNumber(
           item?.positionValue,
+          item?.openValue,
+          item?.cumOpenValue,
           item?.open_value,
           Math.abs(size) * markPrice
         ) ?? 0;
