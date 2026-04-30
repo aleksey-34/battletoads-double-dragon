@@ -104,16 +104,23 @@ const computeBtDailyReturn = (
     return { btDailyReturnPct: null, btTotalDays: null };
   }
 
-  const firstTime = curve[0].time;
-  const lastTime = curve[curve.length - 1].time;
+  // Normalize timestamps: equity curve may store seconds OR milliseconds
+  const firstRaw = curve[0].time;
+  const timeMultiplier = firstRaw < 1e12 ? 1000 : 1; // seconds → ms if needed
+  const normalizedCurve = timeMultiplier === 1
+    ? curve
+    : curve.map((p) => ({ time: p.time * 1000, equity: p.equity }));
+
+  const firstTime = normalizedCurve[0].time;
+  const lastTime = normalizedCurve[normalizedCurve.length - 1].time;
   const totalMs = lastTime - firstTime;
   const totalDays = Math.round(totalMs / 86400000);
 
   // Find equity at start of day and end of day within the curve
-  const dayStart = curve.reduce((prev, cur) =>
+  const dayStart = normalizedCurve.reduce((prev, cur) =>
     Math.abs(cur.time - dayStartMs) < Math.abs(prev.time - dayStartMs) ? cur : prev
   );
-  const dayEnd = curve.reduce((prev, cur) =>
+  const dayEnd = normalizedCurve.reduce((prev, cur) =>
     Math.abs(cur.time - dayEndMs) < Math.abs(prev.time - dayEndMs) ? cur : prev
   );
 

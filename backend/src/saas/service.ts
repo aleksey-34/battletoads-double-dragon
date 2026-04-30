@@ -4261,7 +4261,8 @@ const ensurePublishedSourceSystem = async (
   const inferMaxOpenPositions = (name: string): number => {
     if (/cloud-op\d+$/i.test(name)) return 2;
     // All ALGOFUND client systems (algofund profiles) enforce OP=2
-    if (/^ALGOFUND::/i.test(name)) return 2;
+    // Matches ALGOFUND:: and ALGOFUND_MASTER:: and any ALGOFUND* prefix
+    if (/^ALGOFUND/i.test(name)) return 2;
     return 0;
   };
 
