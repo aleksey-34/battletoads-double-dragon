@@ -904,6 +904,73 @@ export const getMarketData = async (
     const requestedLimit = Number.isFinite(limit) ? Math.floor(limit) : 100;
     const safeLimit = Math.max(1, Math.min(hasRange ? 50000 : 1000, requestedLimit));
 
+    // WEEX: ccxt.weex hits v2 /market/history/* endpoints which reject our interval format
+    // (returns -1142 "Parameter 'interval' is invalid."). Use our v3 REST client instead.
+    if (entry.exchange === 'weex') {
+      try {
+        const row = await db.get('SELECT * FROM api_keys WHERE name = ?', [apiKeyName]);
+        if (!row) throw new Error(`API key not found: ${apiKeyName}`);
+        const weexClient = createWeexClient(row as ApiKey);
+        const pageLimit = Math.min(safeLimit, 1000);
+
+        if (!hasRange) {
+          const candles = await entry.limiter.schedule(() =>
+            weexClient.fetchOHLCV(symbol, interval, undefined, pageLimit)
+          );
+          const normalized = Array.isArray(candles)
+            ? candles
+              .filter((candle: any) => Array.isArray(candle) && candle.length >= 5)
+              .map((candle: any[]) => [candle[0], candle[1], candle[2], candle[3], candle[4], candle[5] || 0])
+            : [];
+          logger.info(`Fetched market data for ${symbol} via weex-v3, received ${normalized.length} candles`);
+          return normalized;
+        }
+
+        const effectiveEnd = endMs !== undefined ? endMs : Date.now();
+        const effectiveStart = startMs !== undefined
+          ? startMs
+          : Math.max(0, effectiveEnd - intervalMs * safeLimit);
+
+        const byTime = new Map<number, any[]>();
+        const maxPages = Math.max(1, Math.ceil((effectiveEnd - effectiveStart) / Math.max(intervalMs, 1) / pageLimit) + 5);
+        let since = effectiveStart;
+        for (let page = 0; page < maxPages; page += 1) {
+          const candles = await entry.limiter.schedule(() =>
+            weexClient.fetchOHLCV(symbol, interval, since, pageLimit)
+          );
+          const list = Array.isArray(candles) ? candles : [];
+          if (list.length === 0) break;
+          let lastTs = -1;
+          for (const candle of list) {
+            if (!Array.isArray(candle) || candle.length < 5) continue;
+            const ts = Number(candle[0]);
+            if (!Number.isFinite(ts)) continue;
+            lastTs = Math.max(lastTs, ts);
+            if (ts < effectiveStart || ts > effectiveEnd) continue;
+            if (!byTime.has(ts)) {
+              byTime.set(ts, [candle[0], candle[1], candle[2], candle[3], candle[4], candle[5] || 0]);
+            }
+          }
+          if (!Number.isFinite(lastTs) || lastTs < 0) break;
+          const nextSince = lastTs + intervalMs;
+          if (nextSince <= since) break;
+          since = nextSince;
+          if (since > effectiveEnd) break;
+        }
+        const normalized = Array.from(byTime.entries())
+          .sort((left, right) => left[0] - right[0])
+          .map((entryItem) => entryItem[1]);
+        logger.info(`Fetched ranged market data for ${symbol} via weex-v3, received ${normalized.length} candles`);
+        return normalized;
+      } catch (error) {
+        const err = error as Error;
+        if (shouldLogMarketErrorNow(marketErrorKey)) {
+          logger.error(`Error fetching market data for ${symbol} via weex-v3: ${err.message}`);
+        }
+        throw error;
+      }
+    }
+
     try {
       if (!hasRange) {
         const candles = await entry.limiter.schedule(() =>
@@ -1539,7 +1606,51 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
         if (row) {
           const weexClient = createWeexClient(row as ApiKey);
           const rawPositions = await entry.limiter.schedule(() => weexClient.fetchPositions(symbol ? [symbol] : undefined));
-          return Array.isArray(rawPositions) ? rawPositions : [];
+          const list = Array.isArray(rawPositions) ? rawPositions : [];
+          // Normalize WEEX ccxt-style payload to BTDD UI format (size/Buy/Sell/avgPrice/positionValue/etc.)
+          return list
+            .map((position: any) => {
+              const contractsRaw = Number(
+                position?.contracts ??
+                position?.info?.size ??
+                position?.info?.positionAmt ??
+                position?.info?.positionSize ??
+                0
+              );
+              if (!Number.isFinite(contractsRaw) || Math.abs(contractsRaw) <= 0) return null;
+
+              const sideRaw = String(position?.side || position?.info?.holdSide || '').toLowerCase();
+              const side = sideRaw.includes('long') || sideRaw === 'buy' ? 'Buy' : 'Sell';
+
+              const entryPrice = Number(position?.entryPrice ?? position?.info?.entryPrice ?? position?.info?.openPrice ?? 0);
+              const markPrice = Number(position?.markPrice ?? position?.info?.markPrice ?? position?.info?.markPx ?? entryPrice);
+              const explicitNotional = Number(position?.notional);
+              const notional = Number.isFinite(explicitNotional) && explicitNotional > 0
+                ? explicitNotional
+                : Math.abs(contractsRaw) * (Number.isFinite(markPrice) ? markPrice : 0);
+              const leverage = Number(position?.leverage ?? position?.info?.leverage ?? 1);
+              const liquidation = Number(position?.liquidationPrice ?? position?.info?.liquidationPrice ?? position?.info?.liqPx ?? 0);
+              const rawUpnl = Number(position?.unrealizedPnl ?? position?.info?.unrealizedPnl ?? position?.info?.upl ?? 0);
+              let upnl = rawUpnl;
+              if ((!rawUpnl || rawUpnl === 0) && entryPrice > 0 && markPrice > 0 && markPrice !== entryPrice) {
+                const dir = side === 'Buy' ? 1 : -1;
+                upnl = dir * (markPrice - entryPrice) * Math.abs(contractsRaw);
+              }
+
+              return {
+                symbol: entry.uiSymbolMap.get(normalizeSymbolKey(position?.info?.symbol || position?.symbol || symbol))
+                  || toUiSymbol(position?.info?.symbol || position?.symbol || symbol),
+                side,
+                size: String(Math.abs(contractsRaw)),
+                avgPrice: String(Number.isFinite(entryPrice) ? entryPrice : 0),
+                markPrice: String(Number.isFinite(markPrice) ? markPrice : 0),
+                liqPrice: Number.isFinite(liquidation) && liquidation > 0 ? String(liquidation) : '',
+                unrealisedPnl: String(Number.isFinite(upnl) ? upnl : 0),
+                leverage: String(Number.isFinite(leverage) && leverage > 0 ? leverage : 1),
+                positionValue: String(Number.isFinite(notional) ? Math.abs(notional) : 0),
+              };
+            })
+            .filter((item): item is any => !!item);
         }
       } catch (weexErr) {
         logger.warn(`[positions] WEEX legacy client failed for ${apiKeyName}: ${(weexErr as Error).message}`);
@@ -2298,7 +2409,17 @@ export const getRecentTrades = async (apiKeyName: string, symbol?: string, limit
 
     try {
       const resolvedSymbol = symbol ? await resolveCcxtSymbol(entry, symbol) : undefined;
-      const trades = await entry.limiter.schedule(() => entry.client.fetchMyTrades(resolvedSymbol, undefined, ccxtLimit));
+      let trades: any[];
+      if (entry.exchange === 'weex') {
+        // ccxt.weex.fetchMyTrades hits v2 endpoints which reject our normalized symbol
+        // (returns -1142 "Parameter 'symbol' is invalid."). Use our v3 REST client.
+        const row = await db.get('SELECT * FROM api_keys WHERE name = ?', [apiKeyName]);
+        if (!row) throw new Error(`API key not found: ${apiKeyName}`);
+        const weexClient = createWeexClient(row as ApiKey);
+        trades = await entry.limiter.schedule(() => weexClient.fetchMyTrades(symbol, undefined, ccxtLimit));
+      } else {
+        trades = await entry.limiter.schedule(() => entry.client.fetchMyTrades(resolvedSymbol, undefined, ccxtLimit));
+      }
       const list = Array.isArray(trades) ? trades : [];
 
       return list
