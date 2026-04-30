@@ -221,8 +221,8 @@ const buildDefaultConfig = (input?: Partial<HistoricalSweepConfig> & { mode?: un
   const checkpointFile = input?.checkpointFile
     ? String(input.checkpointFile)
     : path.join(resultsDir, `${apiKeyName.toLowerCase()}_historical_sweep_checkpoint.json`);
-  const hasMonoMarkets = Boolean(input && Object.prototype.hasOwnProperty.call(input, 'monoMarkets'));
-  const hasSynthMarkets = Boolean(input && Object.prototype.hasOwnProperty.call(input, 'synthMarkets'));
+  const hasMonoMarkets = Boolean(input && Object.prototype.hasOwnProperty.call(input, 'monoMarkets') && (input as any).monoMarkets !== undefined);
+  const hasSynthMarkets = Boolean(input && Object.prototype.hasOwnProperty.call(input, 'synthMarkets') && (input as any).synthMarkets !== undefined);
   const parsedMonoMarkets = parseStringList((input as any)?.monoMarkets);
   const parsedSynthMarkets = parseStringList((input as any)?.synthMarkets);
 
