@@ -205,10 +205,16 @@ const parseDdSources = (raw: unknown): Array<'close' | 'wick'> => {
 
 const buildDefaultConfig = (input?: Partial<HistoricalSweepConfig> & { mode?: unknown }): HistoricalSweepConfig => {
   const apiKeyName = String(input?.apiKeyName || 'BTDD_D1').trim() || 'BTDD_D1';
-  const fanApiKeyNamesRaw = parseStringList((input as any)?.fanApiKeyNames);
+  // Fan keys must preserve original case — DB stores some api_keys lowercase
+  // (e.g. "mustafa", "ivan_weex_1", "tenant-69182-weex-ghfmsb").
+  const parseFanKeyList = (raw: unknown): string[] => {
+    const arr = Array.isArray(raw) ? raw : String(raw || '').split(/[\s,;|]+/);
+    return Array.from(new Set(arr.map((item) => String(item || '').trim()).filter(Boolean)));
+  };
+  const fanApiKeyNamesRaw = parseFanKeyList((input as any)?.fanApiKeyNames);
   const fanApiKeyNames = fanApiKeyNamesRaw.length > 0
-    ? Array.from(new Set([apiKeyName.toUpperCase(), ...fanApiKeyNamesRaw]))
-        .map((name) => name.trim())
+    ? Array.from(new Set([apiKeyName, ...fanApiKeyNamesRaw]))
+        .map((name) => String(name).trim())
         .filter(Boolean)
     : [apiKeyName];
   const concurrency = Math.max(1, Math.min(32, Number((input as any)?.concurrency || 1)));
@@ -621,7 +627,13 @@ const ensureStrategyForPlan = async (
     return { strategy: existing, created: false };
   }
 
-  const created = await createStrategy(apiKeyName, draft);
+  // Sweep creates many parallel strategy variants per pair (different intervals,
+  // lengths, TPs, z-score grids). The legacy uniqueness check is meant to
+  // prevent UI users from accidentally bind two strategies to the same pair —
+  // it has no meaning for backtest-only sweep, where every plan is distinct
+  // (ZE/ZX/TP/length differ). Allow active-pair conflict so sweep can build
+  // the full grid even when daily/manual strategies already exist on the pair.
+  const created = await createStrategy(apiKeyName, draft, { allowActivePairConflict: true });
   strategyMap.set(plan.strategyName, created);
   return { strategy: created, created: true };
 };
