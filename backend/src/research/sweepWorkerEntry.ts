@@ -62,6 +62,18 @@ const main = async (): Promise<void> => {
   process.on('SIGINT', () => onSignal('SIGINT'));
   process.on('SIGHUP', () => onSignal('SIGHUP'));
 
+  // Survive transient unhandled rejections (e.g. SQLITE_BUSY bubbling out of
+  // a per-plan worker). Crashing the whole sweep over a single locked write
+  // would discard hours of progress; the per-plan loop already records the
+  // failure and moves on, so we just log here and keep going.
+  process.on('unhandledRejection', (reason) => {
+    const msg = reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason);
+    logger.error(`[sweep-worker] job=${jobId} unhandledRejection (kept alive): ${msg}`);
+  });
+  process.on('uncaughtException', (err) => {
+    logger.error(`[sweep-worker] job=${jobId} uncaughtException (kept alive): ${err.stack || err.message}`);
+  });
+
   logger.info(`[sweep-worker] job=${jobId} mode=${mode} starting`);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await processJob(jobId, config as any, mode);

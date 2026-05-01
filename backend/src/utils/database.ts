@@ -16,10 +16,11 @@ export const initDB = async () => {
     driver: sqlite3.Database,
   });
 
-  // Reduce SQLITE_BUSY spikes under concurrent read/write bursts from SaaS pages.
+  // Reduce SQLITE_BUSY spikes under concurrent read/write bursts from SaaS pages
+  // and from the sweep worker (separate process => separate connection).
   await db.exec(`
     PRAGMA journal_mode = WAL;
-    PRAGMA busy_timeout = 5000;
+    PRAGMA busy_timeout = 30000;
   `);
 
   const ensureColumn = async (table: string, columnDefinition: string) => {
