@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { fork, ChildProcess } from 'child_process';
 import { runBacktest } from '../backtest/engine';
 import { ensureExchangeClientInitialized, getExchangeForApiKey, getAllSymbols } from '../bot/exchange';
 import { createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
@@ -838,7 +839,7 @@ const buildSweepArtifact = async (
   };
 };
 
-const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: SweepMode): Promise<void> => {
+export const processJob = async (jobId: number, config: HistoricalSweepConfig, mode: SweepMode): Promise<void> => {
   if (activeJobs.has(jobId)) {
     return;
   }
@@ -1360,14 +1361,63 @@ export const startFullHistoricalSweepJob = async (input?: Partial<HistoricalSwee
     throw new Error('Failed to create full historical sweep job');
   }
 
-  void processJob(jobId, config, mode);
+  spawnSweepWorker(jobId);
   return {
     started: true,
     jobId,
     mode,
     totalRuns: config.maxRuns,
     config,
+    workerSpawned: true,
   };
+};
+
+// Track child workers spawned by this API process. We use detached:true so
+// the worker survives an API restart (log-resume + DB-poll abort keep things
+// safe). Map is best-effort: an orphaned worker from a previous API process
+// will simply not appear here, and abort still works via the existing DB
+// status flip that the worker polls every 5s.
+const sweepWorkers = new Map<number, ChildProcess>();
+
+const spawnSweepWorker = (jobId: number): void => {
+  const workerScript = path.join(__dirname, 'sweepWorkerEntry.js');
+  if (!fs.existsSync(workerScript)) {
+    logger.error(`[fullHistoricalSweep] worker script missing: ${workerScript}; falling back to in-process run`);
+    void (async () => {
+      try {
+        await initResearchDb();
+        const db = getResearchDb();
+        const row = (await db.get(
+          `SELECT mode, details_json FROM research_backfill_jobs WHERE id=? LIMIT 1`,
+          [jobId]
+        )) as { mode?: string; details_json?: string } | undefined;
+        if (!row) return;
+        const parsed = JSON.parse(String(row.details_json || '{}')) as { config?: HistoricalSweepConfig };
+        if (!parsed.config) return;
+        await processJob(jobId, parsed.config, (row.mode === 'light' ? 'light' : 'heavy'));
+      } catch (e) {
+        logger.error(`[fullHistoricalSweep] inline fallback failed: ${(e as Error).message}`);
+      }
+    })();
+    return;
+  }
+
+  const child = fork(workerScript, [String(jobId)], {
+    detached: true,
+    stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+    env: { ...process.env },
+  });
+  sweepWorkers.set(jobId, child);
+  logger.info(`[fullHistoricalSweep] spawned worker pid=${child.pid} for job=${jobId}`);
+  child.on('exit', (code, signal) => {
+    sweepWorkers.delete(jobId);
+    logger.info(`[fullHistoricalSweep] worker pid=${child.pid} job=${jobId} exited code=${code} signal=${signal}`);
+  });
+  child.on('error', (err) => {
+    logger.error(`[fullHistoricalSweep] worker job=${jobId} error: ${err.message}`);
+  });
+  // Allow the API process to exit independently of the worker.
+  child.unref();
 };
 
 export const getFullHistoricalSweepStatus = async (): Promise<Record<string, unknown>> => {
@@ -1403,9 +1453,17 @@ export const abortRunningFullHistoricalSweepJob = async (reason: string = 'abort
     [String(reason || 'aborted by operator'), Number(running.id)]
   );
 
+  // Best-effort: send SIGTERM to in-tree worker (the DB flip is the
+  // canonical signal; the 5s poll inside processJob will pick it up).
+  const child = sweepWorkers.get(Number(running.id));
+  if (child && !child.killed) {
+    try { child.kill('SIGTERM'); } catch { /* noop */ }
+  }
+
   return {
     aborted: true,
     jobId: Number(running.id),
     reason: String(reason || 'aborted by operator'),
+    workerSignaled: Boolean(child && !child.killed),
   };
 };
