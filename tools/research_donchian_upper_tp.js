@@ -49,6 +49,8 @@ const COMMISSION_PCT = parseFloat(arg('commission', '0.1'));
 const SLIPPAGE_PCT = parseFloat(arg('slippage', '0.05'));
 const INITIAL_BALANCE = parseFloat(arg('initial', '10000'));
 const OUT = arg('out', 'research_donchian_upper.csv');
+const FROM_SWEEP_FILE = arg('from-sweep-file', '');
+const TOP_N = parseInt(arg('top', '24'), 10);
 
 const DIST_EXCH = path.resolve(__dirname, '..', 'backend', 'dist', 'bot', 'exchange.js');
 const DIST_DB = path.resolve(__dirname, '..', 'backend', 'dist', 'utils', 'database.js');
@@ -180,55 +182,94 @@ const runOne = (bars, length, tpPct, source, mode) => {
 
 // ── Main ──
 (async () => {
-  console.log(`[research] apikey=${APIKEY} interval=${INTERVAL} bars=${BARS}`);
-  console.log(`[research] symbols=${SYMBOLS.join(',')} lengths=${LENGTHS.join(',')} tps=${TPS.join(',')} sources=${SOURCES.join(',')}`);
-
   await initDB();
   await ensureExchangeClientInitialized(APIKEY);
 
+  // ── Mode A: derive (symbol, interval, length, tp, source) configs from a
+  //          sweep artifact (top-N robust DD_BattleToads strategies).
+  // ── Mode B: cartesian product of CLI args (legacy).
+  let configs = [];
+  if (FROM_SWEEP_FILE) {
+    if (!fs.existsSync(FROM_SWEEP_FILE)) {
+      console.error(`[fatal] sweep file not found: ${FROM_SWEEP_FILE}`);
+      process.exit(1);
+    }
+    const sweep = JSON.parse(fs.readFileSync(FROM_SWEEP_FILE, 'utf-8'));
+    const evaluated = Array.isArray(sweep.evaluated) ? sweep.evaluated : [];
+    const dd = evaluated
+      .filter((r) => r.strategyType === 'DD_BattleToads' && r.marketMode === 'mono' && r.robust === true)
+      .sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
+      .slice(0, TOP_N);
+    if (dd.length === 0) {
+      console.error('[fatal] no robust DD_BattleToads mono entries in sweep file');
+      process.exit(1);
+    }
+    configs = dd.map((r) => ({
+      symbol: String(r.market || r.baseSymbol || '').toUpperCase().replace(/\//g, ''),
+      interval: String(r.interval || '1h'),
+      length: Number(r.length),
+      tp: Number(r.takeProfitPercent),
+      source: String(r.detectionSource || 'close'),
+      // baseline metrics from sweep (full date range, real engine)
+      baselineReturn: Number(r.totalReturnPercent || 0),
+      baselineDD: Number(r.maxDrawdownPercent || 0),
+      baselinePF: Number(r.profitFactor || 0),
+      baselineTrades: Number(r.tradesCount || 0),
+      strategyId: Number(r.strategyId || 0),
+      strategyName: String(r.strategyName || ''),
+    }));
+    console.log(`[research] loaded ${configs.length} top-N robust DD configs from ${FROM_SWEEP_FILE}`);
+  } else {
+    for (const sym of SYMBOLS) for (const length of LENGTHS) for (const tp of TPS) for (const src of SOURCES) {
+      configs.push({ symbol: sym, interval: INTERVAL, length, tp, source: src });
+    }
+    console.log(`[research] cartesian: ${configs.length} configs (${SYMBOLS.length}×${LENGTHS.length}×${TPS.length}×${SOURCES.length})`);
+  }
+  console.log(`[research] apikey=${APIKEY} bars=${BARS}`);
+
   const rows = [];
   rows.push(['symbol', 'interval', 'length', 'tp_pct', 'source', 'mode',
-             'trades', 'win_rate_pct', 'total_return_pct', 'max_dd_pct', 'profit_factor', 'final_equity'].join(','));
+             'trades', 'win_rate_pct', 'total_return_pct', 'max_dd_pct', 'profit_factor', 'final_equity',
+             'strategy_name'].join(','));
 
-  for (const sym of SYMBOLS) {
-    let bars;
+  // Group configs by (symbol, interval) so we fetch each candle series only once.
+  const seriesCache = new Map();
+  const loadSeries = async (sym, interval) => {
+    const k = `${sym}::${interval}`;
+    if (seriesCache.has(k)) return seriesCache.get(k);
     try {
-      const raw = await getMarketData(APIKEY, sym, INTERVAL, BARS);
-      bars = (raw || []).map((b) => {
-        // Bybit array shape: [time, open, high, low, close, volume, turnover]
+      const raw = await getMarketData(APIKEY, sym, interval, BARS);
+      const bars = (raw || []).map((b) => {
         if (Array.isArray(b)) {
-          return {
-            time: parseInt(b[0], 10),
-            open: parseFloat(b[1]), high: parseFloat(b[2]),
-            low: parseFloat(b[3]), close: parseFloat(b[4]),
-          };
+          return { time: parseInt(b[0], 10), open: parseFloat(b[1]), high: parseFloat(b[2]), low: parseFloat(b[3]), close: parseFloat(b[4]) };
         }
-        return {
-          time: parseInt(b.time || b.openTime || b.timestamp || b[0], 10),
-          open: parseFloat(b.open), high: parseFloat(b.high),
-          low: parseFloat(b.low), close: parseFloat(b.close),
-        };
+        return { time: parseInt(b.time || b.openTime || b.timestamp || b[0], 10),
+                 open: parseFloat(b.open), high: parseFloat(b.high), low: parseFloat(b.low), close: parseFloat(b.close) };
       }).filter((b) => Number.isFinite(b.close) && Number.isFinite(b.time))
         .sort((a, b) => a.time - b.time);
-      console.log(`[${sym}] loaded ${bars.length} bars (${new Date(bars[0]?.time || 0).toISOString().slice(0,10)} → ${new Date(bars[bars.length-1]?.time || 0).toISOString().slice(0,10)})`);
+      seriesCache.set(k, bars);
+      return bars;
     } catch (e) {
-      console.error(`[${sym}] fetch failed: ${e.message}`);
+      console.error(`[${sym} ${interval}] fetch failed: ${e.message}`);
+      seriesCache.set(k, []);
+      return [];
+    }
+  };
+
+  for (const cfg of configs) {
+    const bars = await loadSeries(cfg.symbol, cfg.interval);
+    if (bars.length < 100) {
+      console.log(`[skip] ${cfg.symbol} ${cfg.interval} L=${cfg.length} — only ${bars.length} bars`);
       continue;
     }
-
-    for (const length of LENGTHS) {
-      for (const tp of TPS) {
-        for (const src of SOURCES) {
-          for (const mode of ['M0', 'M1', 'M2', 'M3']) {
-            const r = runOne(bars, length, tp, src, mode);
-            rows.push([
-              sym, INTERVAL, length, tp, src, mode,
-              r.trades, fmt(r.winRatePct, 2), fmt(r.totalReturnPct, 2), fmt(r.maxDDPct, 2),
-              fmt(r.profitFactor, 3), fmt(r.finalEquity, 2),
-            ].join(','));
-          }
-        }
-      }
+    for (const mode of ['M0', 'M1', 'M2', 'M3']) {
+      const r = runOne(bars, cfg.length, cfg.tp, cfg.source, mode);
+      rows.push([
+        cfg.symbol, cfg.interval, cfg.length, cfg.tp, cfg.source, mode,
+        r.trades, fmt(r.winRatePct, 2), fmt(r.totalReturnPct, 2), fmt(r.maxDDPct, 2),
+        fmt(r.profitFactor, 3), fmt(r.finalEquity, 2),
+        cfg.strategyName || '',
+      ].join(','));
     }
   }
 
