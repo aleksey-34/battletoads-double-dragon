@@ -51,10 +51,13 @@ const INITIAL_BALANCE = parseFloat(arg('initial', '10000'));
 const OUT = arg('out', 'research_donchian_upper.csv');
 
 const DIST_EXCH = path.resolve(__dirname, '..', 'backend', 'dist', 'bot', 'exchange.js');
-if (!fs.existsSync(DIST_EXCH)) {
-  console.error(`[fatal] ${DIST_EXCH} not found — run 'cd backend && npm run build' first`);
+const DIST_DB = path.resolve(__dirname, '..', 'backend', 'dist', 'utils', 'database.js');
+if (!fs.existsSync(DIST_EXCH) || !fs.existsSync(DIST_DB)) {
+  console.error(`[fatal] backend/dist not built — run 'cd backend && npm run build' first`);
   process.exit(1);
 }
+// eslint-disable-next-line global-require, import/no-dynamic-require
+const { initDB } = require(DIST_DB);
 // eslint-disable-next-line global-require, import/no-dynamic-require
 const { getMarketData, ensureExchangeClientInitialized } = require(DIST_EXCH);
 
@@ -180,6 +183,7 @@ const runOne = (bars, length, tpPct, source, mode) => {
   console.log(`[research] apikey=${APIKEY} interval=${INTERVAL} bars=${BARS}`);
   console.log(`[research] symbols=${SYMBOLS.join(',')} lengths=${LENGTHS.join(',')} tps=${TPS.join(',')} sources=${SOURCES.join(',')}`);
 
+  await initDB();
   await ensureExchangeClientInitialized(APIKEY);
 
   const rows = [];
