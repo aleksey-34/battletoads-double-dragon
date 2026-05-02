@@ -83,6 +83,18 @@ const acquireApiKeyPairEntryLock = async (apiKeyName: string, pairKey: string): 
 // pattern caused by 10x duplicated strategies for the same pair across many api-keys.
 const candleAutoInflight = new Map<string, Promise<any[]>>();
 
+// ── State-resync confirmation tracker ────────────────────────────────────────
+// Bug fix (2026-05): single-cycle `state_resynced_flat` was triggering on
+// transient empty getPositions() responses (rate-limit, propagation glitch),
+// destroying open SAAS positions and leaving them as orphans on exchange.
+// Now we require TWO consecutive flat detections separated by at least
+// RESYNC_CONFIRM_MS, AND verify no sibling active strategy on the same
+// (apiKey, base_symbol) is currently in a non-flat state (since the visible
+// "flat" might be a momentary pre-aggregation race when siblings are open).
+const RESYNC_CONFIRM_MS = 90_000; // 90 s window — covers 1 full auto-cycle (30 s) + slack
+interface PendingFlatEntry { firstDetectedMs: number; lastRatio: number; }
+const resyncPendingFlatByStrategy = new Map<number, PendingFlatEntry>();
+
 const getCachedMarketData = async (
   apiKeyName: string, symbol: string, interval: string, limit: number,
   options?: { startMs?: number; endMs?: number },
@@ -2601,27 +2613,93 @@ export const executeStrategy = async (
   }
 
   if (state !== 'flat' && livePairState === 'flat') {
-    const previousState = state;
-    const previousEntryRatio = entryRatio;
+    // ── Two-stage confirmation guard ──
+    // Bug context: a single transient empty getPositions() response (rate-limit
+    // glitch, propagation race when a sibling SAAS strategy on the same apiKey
+    // just opened/closed) used to immediately write `state_resynced_flat`,
+    // destroying open trades and leaving orphan positions on exchange.
+    //
+    // Defense:
+    //   (a) Sibling guard — if any other ACTIVE strategy on the same (apiKey,
+    //       base_symbol) is currently in non-flat state, the visible "flat"
+    //       may be a stale snapshot taken between sibling open/close calls.
+    //       Skip resync entirely; sibling will keep position correct.
+    //   (b) Two-cycle confirmation — first detection logs warning + remembers
+    //       timestamp; only on a SECOND consecutive flat observation
+    //       at least RESYNC_CONFIRM_MS later do we actually resync state.
+    let siblingActiveCount = 0;
+    try {
+      const { db } = await import('../utils/database');
+      const sibRow: any = await db.get(
+        `SELECT COUNT(*) AS cnt FROM strategies s
+         JOIN api_keys ak ON ak.id = s.api_key_id
+         WHERE ak.name = ?
+           AND s.base_symbol = ?
+           AND s.id <> ?
+           AND s.is_active = 1
+           AND IFNULL(s.is_archived, 0) = 0
+           AND s.state IN ('long','short')`,
+        [apiKeyName, mergedStrategy.base_symbol, strategyId]
+      );
+      siblingActiveCount = Number(sibRow?.cnt || 0);
+    } catch (sibErr) {
+      logger.warn(`Sibling-check query failed for resync guard (strategy ${strategyId}): ${(sibErr as Error)?.message || sibErr}`);
+    }
 
-    await updateStrategy(apiKeyName, strategyId, {
-      ...executionBindingPatch,
-      state: 'flat',
-      entry_ratio: null,
-      tp_anchor_ratio: null,
-      last_action: `state_resynced_flat@${currentRatio}`,
-      last_error: null,
-    });
+    if (siblingActiveCount > 0) {
+      // Sibling holds a position — visible "flat" is almost certainly a
+      // pre-aggregation race; skip and clear any pending confirmation.
+      resyncPendingFlatByStrategy.delete(strategyId);
+      logger.warn(
+        `Skipping state_resynced_flat for strategy ${strategyId} (${apiKeyName}/${mergedStrategy.base_symbol}): ` +
+        `${siblingActiveCount} sibling(s) still in non-flat state — visible 'flat' may be stale snapshot`
+      );
+    } else {
+      const nowMs = Date.now();
+      const pending = resyncPendingFlatByStrategy.get(strategyId);
+      if (!pending) {
+        resyncPendingFlatByStrategy.set(strategyId, { firstDetectedMs: nowMs, lastRatio: currentRatio });
+        logger.warn(
+          `Resync candidate for strategy ${strategyId} (${apiKeyName}/${mergedStrategy.base_symbol}): ` +
+          `state=${state} but exchange flat. Will require ${RESYNC_CONFIRM_MS / 1000}s confirmation before resyncing.`
+        );
+      } else if (nowMs - pending.firstDetectedMs < RESYNC_CONFIRM_MS) {
+        // Still inside the confirmation window — keep waiting.
+        logger.warn(
+          `Resync still pending for strategy ${strategyId}: ` +
+          `${Math.round((nowMs - pending.firstDetectedMs) / 1000)}s of ${RESYNC_CONFIRM_MS / 1000}s`
+        );
+      } else {
+        // Confirmed: TWO consecutive flat detections separated by ≥ RESYNC_CONFIRM_MS, no siblings.
+        resyncPendingFlatByStrategy.delete(strategyId);
+        const previousState = state;
+        const previousEntryRatio = entryRatio;
 
-    state = 'flat';
-    entryRatio = null;
-    mergedStrategy.state = 'flat';
-    mergedStrategy.entry_ratio = null;
-    mergedStrategy.tp_anchor_ratio = null;
+        await updateStrategy(apiKeyName, strategyId, {
+          ...executionBindingPatch,
+          state: 'flat',
+          entry_ratio: null,
+          tp_anchor_ratio: null,
+          last_action: `state_resynced_flat@${currentRatio}`,
+          last_error: null,
+        });
 
-    if (previousState === 'long' || previousState === 'short') {
-      logger.warn(`State resynced to flat for strategy ${strategyId} (${apiKeyName}): was ${previousState}, entry_ratio=${previousEntryRatio}, current_ratio=${currentRatio}`);
-      await recordRuntimeTradeEvent('exit', previousState, currentRatio, 0, undefined, mergedStrategy.base_symbol, previousEntryRatio ?? undefined);
+        state = 'flat';
+        entryRatio = null;
+        mergedStrategy.state = 'flat';
+        mergedStrategy.entry_ratio = null;
+        mergedStrategy.tp_anchor_ratio = null;
+
+        if (previousState === 'long' || previousState === 'short') {
+          logger.warn(`State resynced to flat for strategy ${strategyId} (${apiKeyName}): was ${previousState}, entry_ratio=${previousEntryRatio}, current_ratio=${currentRatio} (CONFIRMED after ${RESYNC_CONFIRM_MS / 1000}s)`);
+          await recordRuntimeTradeEvent('exit', previousState, currentRatio, 0, undefined, mergedStrategy.base_symbol, previousEntryRatio ?? undefined);
+        }
+      }
+    }
+  } else {
+    // Any non-flat live observation clears a pending resync.
+    if (resyncPendingFlatByStrategy.has(strategyId)) {
+      resyncPendingFlatByStrategy.delete(strategyId);
     }
   }
 
