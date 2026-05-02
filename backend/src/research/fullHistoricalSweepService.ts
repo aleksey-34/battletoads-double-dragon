@@ -389,26 +389,55 @@ const buildRunPlans = (config: HistoricalSweepConfig): SweepRunPlan[] => {
   config.monoMarkets.forEach((market) => addMarketRuns('mono', market));
   config.synthMarkets.forEach((market) => addMarketRuns('synth', market));
 
-  // Interleave by market so concurrent workers process DIFFERENT pairs in
-  // parallel (instead of all hammering pair #1 first). This maximises fan-out
-  // across exchanges and avoids per-symbol rate-limit bottlenecks.
-  const byMarket = new Map<string, SweepRunPlan[]>();
+  // ── Per-(strategy_type, market) quota via maxVariantsPerMarketType ──
+  // Without this cap, stat_arb (270 variants/market) drowns DD (72) and ZZ (72)
+  // when maxRuns truncates the queue. Cap each (strategy_type, market) bucket
+  // to maxVariantsPerMarketType variants — distributed evenly via stride
+  // sampling so we keep parameter diversity instead of head-only.
+  const maxPerBucket = Math.max(1, Number(config.maxVariantsPerMarketType || 8));
+  const buckets = new Map<string, SweepRunPlan[]>();
   for (const p of plans) {
-    const k = `${p.marketMode}:${p.market}`;
-    const arr = byMarket.get(k);
-    if (arr) arr.push(p); else byMarket.set(k, [p]);
+    const k = `${p.strategyType}::${p.marketMode}:${p.market}::${p.interval}`;
+    const arr = buckets.get(k);
+    if (arr) arr.push(p); else buckets.set(k, [p]);
   }
-  const queues = Array.from(byMarket.values());
+  const stratified: SweepRunPlan[] = [];
+  for (const [, arr] of buckets) {
+    if (arr.length <= maxPerBucket) {
+      stratified.push(...arr);
+      continue;
+    }
+    // Stride-sample to keep diversity across the parameter grid
+    const stride = arr.length / maxPerBucket;
+    for (let i = 0; i < maxPerBucket; i++) {
+      const idx = Math.min(arr.length - 1, Math.floor(i * stride));
+      stratified.push(arr[idx]);
+    }
+  }
+
+  // ── Round-robin interleave across (strategy_type, marketMode, market, interval) ──
+  // Guarantees that any prefix of the plan list (e.g. when maxRuns truncates)
+  // contains balanced coverage of ALL strategy types, market modes, intervals
+  // and pairs. Previous version round-robin'd by market only, so when stat_arb
+  // dominated bucket sizes, DD_BattleToads could be missed entirely.
+  const queues = new Map<string, SweepRunPlan[]>();
+  for (const p of stratified) {
+    const k = `${p.strategyType}::${p.marketMode}:${p.market}::${p.interval}`;
+    const arr = queues.get(k);
+    if (arr) arr.push(p); else queues.set(k, [p]);
+  }
+  const queueList = Array.from(queues.values());
   const interleaved: SweepRunPlan[] = [];
-  let active = queues.length;
+  let active = queueList.length;
   while (active > 0) {
     active = 0;
-    for (const q of queues) {
+    for (const q of queueList) {
       const item = q.shift();
       if (item) { interleaved.push(item); active++; }
     }
   }
-  return interleaved;
+  // Re-assign sequential indices so worker progress logs reflect interleaved order.
+  return interleaved.map((p, i) => ({ ...p, index: i + 1 }));
 };
 
 const computeScore = (ret: number, pf: number, dd: number, wr: number, trades: number): number => {
