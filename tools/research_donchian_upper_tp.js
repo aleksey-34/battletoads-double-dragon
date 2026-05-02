@@ -194,11 +194,22 @@ const runOne = (bars, length, tpPct, source, mode) => {
     let bars;
     try {
       const raw = await getMarketData(APIKEY, sym, INTERVAL, BARS);
-      bars = (raw || []).map((b) => ({
-        time: b.time || b.openTime || b.timestamp,
-        open: parseFloat(b.open), high: parseFloat(b.high),
-        low: parseFloat(b.low), close: parseFloat(b.close),
-      })).filter((b) => Number.isFinite(b.close)).sort((a, b) => a.time - b.time);
+      bars = (raw || []).map((b) => {
+        // Bybit array shape: [time, open, high, low, close, volume, turnover]
+        if (Array.isArray(b)) {
+          return {
+            time: parseInt(b[0], 10),
+            open: parseFloat(b[1]), high: parseFloat(b[2]),
+            low: parseFloat(b[3]), close: parseFloat(b[4]),
+          };
+        }
+        return {
+          time: parseInt(b.time || b.openTime || b.timestamp || b[0], 10),
+          open: parseFloat(b.open), high: parseFloat(b.high),
+          low: parseFloat(b.low), close: parseFloat(b.close),
+        };
+      }).filter((b) => Number.isFinite(b.close) && Number.isFinite(b.time))
+        .sort((a, b) => a.time - b.time);
       console.log(`[${sym}] loaded ${bars.length} bars (${new Date(bars[0]?.time || 0).toISOString().slice(0,10)} → ${new Date(bars[bars.length-1]?.time || 0).toISOString().slice(0,10)})`);
     } catch (e) {
       console.error(`[${sym}] fetch failed: ${e.message}`);
