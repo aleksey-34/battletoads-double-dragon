@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { fork, ChildProcess } from 'child_process';
 import { runBacktest } from '../backtest/engine';
-import { ensureExchangeClientInitialized, getExchangeForApiKey, getAllSymbols } from '../bot/exchange';
+import { ensureExchangeClientInitialized, getExchangeForApiKey, getAllSymbols, getMarketData } from '../bot/exchange';
 import { createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
 import { Strategy } from '../config/settings';
 import { initResearchDb, getResearchDb } from './db';
@@ -1101,6 +1101,72 @@ export const processJob = async (jobId: number, config: HistoricalSweepConfig, m
     let nextPlanIdx = 0;
     let inflight = 0;
     let lastStatusCheckAt = 0;
+    // [OPT-B] Job-row write throttle state
+    let lastJobRowWriteAt = 0;
+    let lastJobRowWriteAtCount = 0;
+
+    // ── [OPT-D] Prewarm pass: probe each unique (fanKey, symbol, interval) ──
+    // route used by any plan. 30s timeout. Routes that fail prewarm are added
+    // to badRoutes and excluded from pickKeysForPlan, so we don't burn 90s of
+    // sweep time per plan on dead/slow data routes (the dominant cause of the
+    // ~26% failure rate observed on jobs #71/72).
+    const badRoutes = new Set<string>();
+    const probeRoutes = new Map<string, { fanKey: string; symbol: string; interval: string }>();
+    for (const plan of plans) {
+      const required: string[] = [];
+      if (plan.marketMode === 'mono') {
+        required.push(plan.baseSymbol || plan.market);
+      } else {
+        required.push(plan.baseSymbol);
+        if (plan.quoteSymbol) required.push(plan.quoteSymbol);
+      }
+      const eligible = pickKeysForPlan(plan);
+      for (const fanKey of eligible) {
+        for (const sym of required) {
+          if (!sym) continue;
+          const k = `${fanKey}::${sym}::${plan.interval}`;
+          if (!probeRoutes.has(k)) probeRoutes.set(k, { fanKey, symbol: sym, interval: plan.interval });
+        }
+      }
+    }
+    appendLogLine(logFilePath, `[PREWARM] probing ${probeRoutes.size} unique (key,symbol,interval) routes with concurrency=${Math.min(16, concurrency)}`);
+    {
+      const queue = Array.from(probeRoutes.values());
+      let idx = 0; let ok = 0; let bad = 0;
+      const PREWARM_CONCURRENCY = Math.min(16, concurrency);
+      const worker = async (): Promise<void> => {
+        while (idx < queue.length) {
+          const r = queue[idx++];
+          if (!r) break;
+          try {
+            // Probe with 50 candles is enough to verify exchange liveness; full
+            // history will be cached lazily by backtest engine on first real call.
+            await withTimeout(getMarketData(r.fanKey, r.symbol, r.interval, 50), 30_000, `prewarm ${r.fanKey}/${r.symbol}/${r.interval}`);
+            ok++;
+          } catch (probeErr) {
+            badRoutes.add(`${r.fanKey}::${r.symbol}::${r.interval}`);
+            bad++;
+          }
+        }
+      };
+      const workers: Promise<void>[] = [];
+      for (let i = 0; i < PREWARM_CONCURRENCY; i++) workers.push(worker());
+      await Promise.all(workers);
+      appendLogLine(logFilePath, `[PREWARM] done: ok=${ok} bad=${bad} (badRoutes=${badRoutes.size})`);
+    }
+
+    const pickKeysForPlanFiltered = (plan: SweepRunPlan): string[] => {
+      const required: string[] = [];
+      if (plan.marketMode === 'mono') {
+        required.push(plan.baseSymbol || plan.market);
+      } else {
+        required.push(plan.baseSymbol);
+        if (plan.quoteSymbol) required.push(plan.quoteSymbol);
+      }
+      return pickKeysForPlan(plan).filter((k) =>
+        !required.some((r) => r && badRoutes.has(`${k}::${r}::${plan.interval}`))
+      );
+    };
 
     const runOnePlan = async (plan: SweepRunPlan, fanKey: string): Promise<void> => {
       const processedBefore = evaluated.length + failures.length;
@@ -1109,6 +1175,9 @@ export const processJob = async (jobId: number, config: HistoricalSweepConfig, m
         const strategyId = Number(ensured.strategy.id || 0);
         // Per-plan hard timeout — without this a single hung candle fetch can
         // freeze the whole sweep (concurrency slot never frees up).
+        // [OPT-A] Per-plan timeout reduced 180s→90s. WEEX/BingX hung fetches
+        //         used to waste a full concurrency slot for 3 minutes. Combined
+        //         with prewarm (D) most slow routes are skipped before they start.
         const result = await withTimeout(
           runBacktest({
             // Strategy lives on the master key; fanKey only routes candle fetch.
@@ -1126,7 +1195,7 @@ export const processJob = async (jobId: number, config: HistoricalSweepConfig, m
             slippagePercent: config.slippagePercent,
             fundingRatePercent: config.fundingRatePercent,
           }),
-          180_000,
+          90_000,
           `${plan.strategyName} via ${fanKey}`,
         );
 
@@ -1182,20 +1251,32 @@ export const processJob = async (jobId: number, config: HistoricalSweepConfig, m
       }
 
       const processedRuns = evaluated.length + failures.length;
-      await updateJobRow(jobId, {
-        status: 'running',
-        processedRuns,
-        totalRuns,
-        successRuns: evaluated.length,
-        failedRuns: failures.length,
-        currentKey: plan.strategyName,
-        details: {
-          config,
-          logFilePath,
-          resumedFromCheckpoint,
-          skippedFromCheckpoint,
-        },
-      });
+      // [OPT-B] Throttled updateJobRow: full job-row write only every 5s OR
+      //         every 25 plans OR on terminal completion. Per-plan writes were
+      //         causing SQLITE_BUSY contention against the live btdd-api DB.
+      const nowMs = Date.now();
+      const sinceLastWrite = nowMs - lastJobRowWriteAt;
+      const dueByTime = sinceLastWrite >= 5_000;
+      const dueByCount = (processedRuns - lastJobRowWriteAtCount) >= 25;
+      const dueByTerminal = processedRuns === totalRuns;
+      if (dueByTime || dueByCount || dueByTerminal) {
+        lastJobRowWriteAt = nowMs;
+        lastJobRowWriteAtCount = processedRuns;
+        await updateJobRow(jobId, {
+          status: 'running',
+          processedRuns,
+          totalRuns,
+          successRuns: evaluated.length,
+          failedRuns: failures.length,
+          currentKey: plan.strategyName,
+          details: {
+            config,
+            logFilePath,
+            resumedFromCheckpoint,
+            skippedFromCheckpoint,
+          },
+        });
+      }
 
       if (config.resumeEnabled && (processedRuns === totalRuns || processedRuns % config.checkpointEvery === 0 || processedRuns !== processedBefore)) {
         writeCheckpoint(config.checkpointFile, {
@@ -1233,7 +1314,7 @@ export const processJob = async (jobId: number, config: HistoricalSweepConfig, m
           // Symbol-aware routing: pick only fan-keys whose exchange has the
           // required symbol(s); round-robin within that subset. If no fan-key
           // can serve this plan we record a clean failure and keep going.
-          const eligible = pickKeysForPlan(plan);
+          const eligible = pickKeysForPlanFiltered(plan);
           if (eligible.length === 0) {
             const failure: SweepFailure = {
               runIndex: plan.index,
