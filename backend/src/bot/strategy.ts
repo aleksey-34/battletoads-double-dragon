@@ -50,6 +50,33 @@ const acquireSystemEntryLock = async (systemId: number): Promise<() => void> => 
   };
 };
 
+// ── Per-(api_key, pair_key) entry mutex ─────────────────────────────────────
+// Cross-TS serialization so two strategies on the SAME api_key + same pair (but
+// in different trading systems) cannot both pass entry checks at once. Without
+// this lock, multiple strategies pyramid the same exchange position or thrash
+// each other via closeAllForSymbol on the next exit.
+const apiKeyPairEntryMutex = new Map<string, Promise<void>>();
+const acquireApiKeyPairEntryLock = async (apiKeyName: string, pairKey: string): Promise<() => void> => {
+  if (!apiKeyName || !pairKey) {
+    return () => {};
+  }
+  const lockKey = `${apiKeyName}::${pairKey}`;
+  const previous = apiKeyPairEntryMutex.get(lockKey) || Promise.resolve();
+  let release: () => void = () => {};
+  const tail = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const chained = previous.then(() => tail);
+  apiKeyPairEntryMutex.set(lockKey, chained);
+  await previous;
+  return () => {
+    release();
+    if (apiKeyPairEntryMutex.get(lockKey) === chained) {
+      apiKeyPairEntryMutex.delete(lockKey);
+    }
+  };
+};
+
 // In-flight de-duplication: if multiple strategies on the same exchange request the
 // same (symbol,interval,limit) within the cache TTL window, only ONE actual REST call
 // is made and all callers await the same Promise. This eliminates the WEEX 429 burst
@@ -1384,12 +1411,64 @@ const closeAllForSymbol = async (apiKeyName: string, symbol: string): Promise<vo
   }
 };
 
+// Returns true if any OTHER active strategy on the same api_key + base_symbol
+// is currently in long/short. When this is the case, the exchange position is
+// shared and we must NOT call closeAllForSymbol — doing so would clobber every
+// sibling strategy and trigger the cross-strategy churn loop that costs fees
+// without delivering signal-driven trades.
+const hasOpenSiblingsForSymbol = async (
+  apiKeyName: string,
+  symbol: string,
+  strategyId: number,
+): Promise<boolean> => {
+  if (!apiKeyName || !symbol || !Number.isFinite(strategyId)) {
+    return false;
+  }
+  try {
+    const { db } = await import('../utils/database');
+    const apiKeyRow: any = await db.get(`SELECT id FROM api_keys WHERE name = ?`, [apiKeyName]);
+    if (!apiKeyRow?.id) {
+      return false;
+    }
+    const row: any = await db.get(
+      `SELECT COUNT(*) AS cnt FROM strategies
+       WHERE api_key_id = ?
+         AND is_active = 1
+         AND state != 'flat'
+         AND id != ?
+         AND (UPPER(base_symbol) = UPPER(?) OR UPPER(quote_symbol) = UPPER(?))`,
+      [apiKeyRow.id, strategyId, symbol, symbol],
+    );
+    return (row?.cnt || 0) > 0;
+  } catch (err) {
+    logger.warn(`hasOpenSiblingsForSymbol(${apiKeyName}, ${symbol}) failed: ${(err as Error).message}`);
+    return false;
+  }
+};
+
 const closeStrategyExposure = async (
   apiKeyName: string,
-  strategy: Pick<Strategy, 'market_mode' | 'base_symbol' | 'quote_symbol'>
+  strategy: Pick<Strategy, 'id' | 'market_mode' | 'base_symbol' | 'quote_symbol'>
 ): Promise<void> => {
   const symbols = getStrategySymbols(strategy);
   for (const symbol of symbols) {
+    // Cohabitation guard: if any sibling strategy on the same api_key still
+    // owns a position on this symbol, the exchange position is shared and
+    // closing it would nuke the sibling. Skip the exchange close in that case;
+    // the caller will still mark THIS strategy as flat (DB-only release of
+    // the symbol slot), and the actual exchange position is freed only when
+    // the LAST owner exits.
+    const strategyId = Number((strategy as any)?.id);
+    if (Number.isFinite(strategyId) && strategyId > 0) {
+      const siblings = await hasOpenSiblingsForSymbol(apiKeyName, symbol, strategyId);
+      if (siblings) {
+        logger.info(
+          `closeStrategyExposure: skipping exchange close for ${apiKeyName}/${symbol} — `
+          + `sibling strategies still hold the shared position (strategy=${strategyId})`
+        );
+        continue;
+      }
+    }
     await closeAllForSymbol(apiKeyName, symbol);
   }
 };
@@ -2140,6 +2219,10 @@ export const executeStrategy = async (
   // function exit so all post-check ops (placeOrder, state UPDATE) are serialized
   // against other strategies of the same TS within this process.
   let releaseSystemLock: (() => void) | null = null;
+  // Cross-TS pair lock: serializes entry on the same (api_key, pair_key) across
+  // ALL trading systems of one api_key. Without this, two strategies belonging
+  // to different TSs could pyramid the same exchange position.
+  let releasePairLock: (() => void) | null = null;
   try {
   const existingRow = await getStrategyRow(apiKeyName, strategyId);
   const strategy = normalizeStrategy(existingRow);
@@ -2779,6 +2862,64 @@ export const executeStrategy = async (
   // ── Position Limiter (ОП): check if trading system allows more open positions ──
   {
     const { db } = await import('../utils/database');
+
+    // Acquire cross-TS pair lock FIRST (before any OP checks). This serializes
+    // ALL strategies on the same (api_key, pair) regardless of which TS they
+    // belong to. Without this, two strategies in different TSs of one api_key
+    // would race past their per-TS OP checks and end up pyramiding / thrashing
+    // the shared exchange position.
+    const myPairKey = getStrategyPairKey(mergedStrategy);
+    if (myPairKey) {
+      releasePairLock = await acquireApiKeyPairEntryLock(apiKeyName, myPairKey);
+    }
+
+    // Cross-TS pair conflict check: if ANY active strategy on the same api_key
+    // and same pair (in any TS, including this one) is already in long/short,
+    // skip entry. This is the primary defense against the multi-TS-per-api-key
+    // churn pattern where each strategy in turn nukes the shared position via
+    // closeAllForSymbol on its exit.
+    if (myPairKey) {
+      const apiKeyIdRow: any = await db.get(`SELECT id FROM api_keys WHERE name = ?`, [apiKeyName]);
+      const apiKeyId = apiKeyIdRow?.id;
+      if (apiKeyId) {
+        const crossOpenRows: Array<{ id: number; name: string; base_symbol: string; quote_symbol: string; market_mode: string; state: string }> = await db.all(
+          `SELECT s.id, COALESCE(s.name, '') AS name, s.base_symbol, s.quote_symbol, s.market_mode, s.state
+           FROM strategies s
+           WHERE s.api_key_id = ? AND s.is_active = 1 AND s.state != 'flat' AND s.id != ?`,
+          [apiKeyId, strategyId]
+        );
+        const crossConflicting = crossOpenRows.find((row) => getStrategyPairKey(row as any) === myPairKey);
+        if (crossConflicting) {
+          logger.info(
+            `ОП cross-TS pair lock: strategy ${strategyId} waits for pair ${myPairKey} on api_key=${apiKeyName}; `
+            + `held by strategy ${crossConflicting.id} (${crossConflicting.name}, state=${crossConflicting.state})`
+          );
+
+          const updated = await updateStrategy(apiKeyName, strategyId, {
+            ...executionBindingPatch,
+            state: 'flat',
+            entry_ratio: null,
+            tp_anchor_ratio: null,
+            last_signal: signal,
+            last_action: closedAction
+              ? `${closedAction}_op_xpair_lock@${currentRatio}`
+              : `op_xpair_lock@${currentRatio}`,
+            last_error: null,
+          });
+
+          return returnWithProcessedBar({
+            result: `Cross-TS pair lock active for ${myPairKey} on api_key=${apiKeyName}, entry deferred`,
+            action: closedAction ? `${closedAction}_op_xpair_lock` : 'op_xpair_lock',
+            strategy: updated,
+            currentRatio,
+            donchianHigh,
+            donchianLow,
+            donchianCenter,
+          });
+        }
+      }
+    }
+
     const systemRow: any = await db.get(
       `SELECT ts.id AS system_id, ts.max_open_positions
        FROM trading_systems ts
@@ -2834,10 +2975,10 @@ export const executeStrategy = async (
         });
       }
 
-      // Pair-level lifecycle guard:
+      // Pair-level lifecycle guard (intra-TS, kept for completeness; cross-TS
+      // case is already handled above):
       // strategies with identical pair key take turns (one open position per pair at a time),
       // while different pairs compete only via max_open_positions.
-      const myPairKey = getStrategyPairKey(mergedStrategy);
       if (myPairKey && currentOpen > 0) {
         const openRows: Array<{ market_mode: string; base_symbol: string; quote_symbol: string; id: number; name: string }> = await db.all(
           `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode
@@ -3008,10 +3149,95 @@ export const executeStrategy = async (
     logger.warn(`Could not apply risk settings for strategy ${strategyId}: ${formatActionError(error)}`);
   }
 
-  await closeStrategyExposure(apiKeyName, mergedStrategy);
-
+  // ── Pre-entry exchange idempotency ──────────────────────────────────────
+  // When several strategies share an api_key + base_symbol (very common in our
+  // SAAS topology with one cloud key serving 11+ trading systems), the exchange
+  // position is a SHARED resource. Naively placing a new order here would either
+  // pyramid the position (if same side) or flip it (if opposite side, after the
+  // legacy closeStrategyExposure call below), thrashing every other strategy
+  // that thinks it owns the position. The cross-TS pair lock already prevents
+  // concurrent entries; this defensive check handles late-arriving signals and
+  // crash-recovery cases where DB state lags behind the exchange.
   const baseSide: 'Buy' | 'Sell' = signal === 'long' ? 'Buy' : 'Sell';
   const quoteSide: 'Buy' | 'Sell' | null = isMono ? null : (signal === 'long' ? 'Sell' : 'Buy');
+
+  try {
+    const liveBeforeEntry = await getPositions(apiKeyName, mergedStrategy.base_symbol);
+    const livePos = (liveBeforeEntry || []).find((p: any) =>
+      String(p?.symbol || '').toUpperCase() === String(mergedStrategy.base_symbol).toUpperCase()
+      && Number.parseFloat(String(p?.size || '0')) > 0
+    );
+    if (livePos) {
+      const liveSideRaw = String(livePos?.side || '').toLowerCase();
+      const liveSide: 'Buy' | 'Sell' | null = liveSideRaw === 'buy' ? 'Buy' : (liveSideRaw === 'sell' ? 'Sell' : null);
+      if (liveSide === baseSide) {
+        // Already long/short on the exchange in the desired direction — adopt
+        // it as our position without placing a new order.
+        const updated = await updateStrategy(apiKeyName, strategyId, {
+          ...executionBindingPatch,
+          state: signal,
+          entry_ratio: currentRatio,
+          tp_anchor_ratio: currentRatio,
+          last_signal: signal,
+          last_action: closedAction
+            ? `${closedAction}_entry_idem_adopt@${currentRatio}`
+            : `entry_idem_adopt@${currentRatio}`,
+          last_error: null,
+        });
+        await recordRuntimeTradeEvent('entry', signal, currentRatio, 0, undefined, mergedStrategy.base_symbol);
+        logger.info(
+          `Pre-entry idempotency: strategy ${strategyId} (${apiKeyName}) adopted existing ${baseSide} `
+          + `position on ${mergedStrategy.base_symbol} (size=${livePos.size}); no new order placed`
+        );
+        return returnWithProcessedBar({
+          result: 'Adopted existing exchange position (cohabitation idempotency)',
+          action: 'entry_idem_adopt',
+          strategy: updated,
+          currentRatio,
+          donchianHigh,
+          donchianLow,
+          donchianCenter,
+        });
+      } else if (liveSide && liveSide !== baseSide) {
+        // Opposite-side position is on the exchange — most likely owned by a
+        // sibling strategy on the same api_key. Do NOT close it (that would
+        // nuke the sibling). Skip this entry and wait for the sibling to exit.
+        logger.warn(
+          `Pre-entry idempotency: strategy ${strategyId} (${apiKeyName}) sees opposite-side `
+          + `${liveSide} position on ${mergedStrategy.base_symbol} (size=${livePos.size}); deferring entry`
+        );
+        const updated = await updateStrategy(apiKeyName, strategyId, {
+          ...executionBindingPatch,
+          state: 'flat',
+          entry_ratio: null,
+          tp_anchor_ratio: null,
+          last_signal: signal,
+          last_action: closedAction
+            ? `${closedAction}_entry_idem_opposite_skip@${currentRatio}`
+            : `entry_idem_opposite_skip@${currentRatio}`,
+          last_error: null,
+        });
+        return returnWithProcessedBar({
+          result: 'Opposite-side live position present; entry deferred to avoid sibling clobber',
+          action: 'entry_idem_opposite_skip',
+          strategy: updated,
+          currentRatio,
+          donchianHigh,
+          donchianLow,
+          donchianCenter,
+        });
+      }
+    }
+  } catch (idemErr) {
+    logger.warn(`Pre-entry idempotency check failed for strategy ${strategyId}: ${formatActionError(idemErr)} — proceeding with order`);
+  }
+
+  // NOTE: legacy closeStrategyExposure() removed from here. With cross-TS pair
+  // lock + pre-entry idempotency, calling closeAllForSymbol on a SHARED symbol
+  // would nuke positions held by sibling strategies on the same api_key. Any
+  // legitimate "must close before reverse-entry" scenario is already handled
+  // upstream by closeAndRecordExit (which sets state=flat and triggers cooldown
+  // skip on same-side, or proceeds with reverse only after exchange close).
 
   const baseOrder = await placeOrder(apiKeyName, mergedStrategy.base_symbol, baseSide, baseQty);
 
@@ -3265,6 +3491,10 @@ export const executeStrategy = async (
     if (releaseSystemLock) {
       try { releaseSystemLock(); } catch { /* noop */ }
       releaseSystemLock = null;
+    }
+    if (releasePairLock) {
+      try { releasePairLock(); } catch { /* noop */ }
+      releasePairLock = null;
     }
   }
 };
