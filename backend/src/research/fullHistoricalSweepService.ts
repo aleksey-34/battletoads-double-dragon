@@ -1186,7 +1186,11 @@ export const processJob = async (jobId: number, config: HistoricalSweepConfig, m
         // [OPT-A] Per-plan timeout reduced 180s→90s. WEEX/BingX hung fetches
         //         used to waste a full concurrency slot for 3 minutes. Combined
         //         with prewarm (D) most slow routes are skipped before they start.
-        const result = await withTimeout(
+        // [OPT-E] Inner retry for transient SQLITE_BUSY: backtest engine writes
+        //         to multiple tables under high concurrency, occasionally losing
+        //         the SQLite lock race. Without retry, ~90% of plans failed in
+        //         the 4-interval sweep due to "SQLITE_BUSY: database is locked".
+        const callBacktest = () => withTimeout(
           runBacktest({
             // Strategy lives on the master key; fanKey only routes candle fetch.
             apiKeyName: config.apiKeyName,
@@ -1206,6 +1210,27 @@ export const processJob = async (jobId: number, config: HistoricalSweepConfig, m
           90_000,
           `${plan.strategyName} via ${fanKey}`,
         );
+        let result: Awaited<ReturnType<typeof callBacktest>>;
+        let attempt = 0;
+        const MAX_ATTEMPTS = 5;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          attempt++;
+          try {
+            result = await callBacktest();
+            break;
+          } catch (err) {
+            const msg = (err as Error).message || '';
+            const transient = /SQLITE_BUSY|database is locked|SQLITE_LOCKED/i.test(msg);
+            if (!transient || attempt >= MAX_ATTEMPTS) {
+              throw err;
+            }
+            // Exponential backoff with jitter: 200ms, 400ms, 800ms, 1.6s, 3.2s
+            const baseMs = 200 * 2 ** (attempt - 1);
+            const jitterMs = Math.floor(Math.random() * 200);
+            await new Promise((r) => setTimeout(r, baseMs + jitterMs));
+          }
+        }
 
         const summary = result.summary;
         const record: SweepRecordInternal = {
