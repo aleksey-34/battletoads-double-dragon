@@ -221,7 +221,15 @@ const buildDefaultConfig = (input?: Partial<HistoricalSweepConfig> & { mode?: un
   const concurrency = Math.max(1, Math.min(32, Number((input as any)?.concurrency || 1)));
   const dateFrom = String(input?.dateFrom || '2025-01-01T00:00:00Z').trim() || '2025-01-01T00:00:00Z';
   const dateTo = input?.dateTo ? String(input.dateTo).trim() : null;
-  const intervals = parseIntervals(input?.interval || (input as any)?.intervals || '4h');
+  // Prefer multi-interval `intervals` array when present — single `interval`
+  // string is the legacy/fallback. Previous `input.interval || input.intervals`
+  // short-circuited to the single value whenever both fields were sent,
+  // silently shrinking ["1h","2h","4h","1d"] to just ["1h"].
+  const rawIntervals = (input as any)?.intervals;
+  const hasIntervalsArray = Array.isArray(rawIntervals)
+    ? rawIntervals.length > 0
+    : (typeof rawIntervals === 'string' && rawIntervals.trim().length > 0);
+  const intervals = parseIntervals(hasIntervalsArray ? rawIntervals : (input?.interval || '4h'));
   const interval = intervals[0] || '4h';
   const safePrefix = String(input?.strategyPrefix || 'HISTSWEEP').trim() || 'HISTSWEEP';
   const safeSystemName = String(input?.systemName || `${safePrefix} ${apiKeyName} Candidate`).trim() || `${safePrefix} ${apiKeyName} Candidate`;
