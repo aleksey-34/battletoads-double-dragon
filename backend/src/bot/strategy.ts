@@ -2365,15 +2365,31 @@ export const executeStrategy = async (
     positionSize = 0,
     sourceOrderId?: string,
     sourceSymbol?: string,
-    entryPriceOverride?: number
+    entryPriceOverride?: number,
+    actualFillPrice?: number
   ): Promise<void> => {
     const normalizedPrice = Number.isFinite(price) && price > 0 ? price : currentRatio;
     const normalizedSize = Number.isFinite(positionSize) ? Math.max(0, Number(positionSize)) : 0;
+    // For exit, entry_price is the original entry (override) — slippage is meaningless here.
+    // For entry, entry_price IS the signal/expected price (the bar close used by the strategy).
     const resolvedEntryPrice = tradeType === 'exit' && Number.isFinite(entryPriceOverride) && (entryPriceOverride as number) > 0
       ? entryPriceOverride as number
       : normalizedPrice;
+    // Real fill price from the exchange (ccxt order.average / native avgPrice). Falls back to signal price.
+    const resolvedActualPrice = Number.isFinite(actualFillPrice) && (actualFillPrice as number) > 0
+      ? actualFillPrice as number
+      : normalizedPrice;
+    // Slippage% is computed only on entry against the signal/expected price (resolvedEntryPrice == signal price for entry).
+    // Sign convention: positive = adverse fill (buy higher / sell lower than signal), negative = price improvement.
+    let slippagePercent = 0;
+    if (tradeType === 'entry' && Number.isFinite(actualFillPrice) && (actualFillPrice as number) > 0
+        && Number.isFinite(normalizedPrice) && normalizedPrice > 0
+        && Math.abs(resolvedActualPrice - normalizedPrice) / normalizedPrice < 0.05) {
+      const direction = side === 'long' ? 1 : -1;
+      slippagePercent = direction * ((resolvedActualPrice - normalizedPrice) / normalizedPrice) * 100;
+    }
     if (tradeType === 'exit') {
-      logger.info(`[pnl_debug_record] strategy=${strategyId} entryPriceOverride=${entryPriceOverride}, isFinite=${Number.isFinite(entryPriceOverride)}, >0=${(entryPriceOverride as number) > 0}, resolvedEntryPrice=${resolvedEntryPrice}, normalizedPrice=${normalizedPrice}`);
+      logger.info(`[pnl_debug_record] strategy=${strategyId} entryPriceOverride=${entryPriceOverride}, isFinite=${Number.isFinite(entryPriceOverride)}, >0=${(entryPriceOverride as number) > 0}, resolvedEntryPrice=${resolvedEntryPrice}, normalizedPrice=${normalizedPrice}, resolvedActualPrice=${resolvedActualPrice}`);
     }
     try {
       await recordLiveTradeEvent(strategyId, {
@@ -2383,10 +2399,10 @@ export const executeStrategy = async (
         entry_time: evaluatedBarTimeMs,
         entry_price: resolvedEntryPrice,
         position_size: normalizedSize,
-        actual_price: normalizedPrice,
+        actual_price: resolvedActualPrice,
         actual_time: Date.now(),
         actual_fee: 0,
-        slippage_percent: 0,
+        slippage_percent: slippagePercent,
         source_order_id: sourceOrderId,
         source_symbol: sourceSymbol || mergedStrategy.base_symbol,
       });
@@ -3264,7 +3280,10 @@ export const executeStrategy = async (
             : `entry_idem_adopt@${currentRatio}`,
           last_error: null,
         });
-        await recordRuntimeTradeEvent('entry', signal, currentRatio, 0, undefined, mergedStrategy.base_symbol);
+        const livePosFillRaw = (livePos as any)?.avgPrice ?? (livePos as any)?.entryPrice ?? (livePos as any)?.openPrice;
+        const livePosFill = Number(livePosFillRaw);
+        const adoptActualPrice = Number.isFinite(livePosFill) && livePosFill > 0 ? livePosFill : undefined;
+        await recordRuntimeTradeEvent('entry', signal, currentRatio, 0, undefined, mergedStrategy.base_symbol, undefined, adoptActualPrice);
         logger.info(
           `Pre-entry idempotency: strategy ${strategyId} (${apiKeyName}) adopted existing ${baseSide} `
           + `position on ${mergedStrategy.base_symbol} (size=${livePos.size}); no new order placed`
@@ -3467,7 +3486,16 @@ export const executeStrategy = async (
     ? totalNotional / currentRatio
     : 0;
   const baseOrderId = String((baseOrder as any)?.orderId || (baseOrder as any)?.order_id || '').trim() || undefined;
-  await recordRuntimeTradeEvent('entry', signal, currentRatio, openedPositionSize, baseOrderId, mergedStrategy.base_symbol);
+  // Real fill price from exchange — ccxt: order.average / order.price; native Bybit: avgPrice.
+  const baseOrderFillPriceRaw = (baseOrder as any)?.average
+    ?? (baseOrder as any)?.avgPrice
+    ?? (baseOrder as any)?.avg_price
+    ?? (baseOrder as any)?.price;
+  const baseOrderFillPrice = Number(baseOrderFillPriceRaw);
+  const actualEntryPrice = Number.isFinite(baseOrderFillPrice) && baseOrderFillPrice > 0
+    ? baseOrderFillPrice
+    : undefined;
+  await recordRuntimeTradeEvent('entry', signal, currentRatio, openedPositionSize, baseOrderId, mergedStrategy.base_symbol, undefined, actualEntryPrice);
 
   if (singleQtyPlan) {
     logger.info(

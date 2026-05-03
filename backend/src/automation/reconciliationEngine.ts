@@ -158,6 +158,8 @@ const syncRecentTradesForStrategy = async (
       actual_price: price,
       actual_time: timestamp,
       actual_fee: fee,
+      // exchange_fill events don't know the original signal price — slippage is computed
+      // separately (see strategy_signal events) by matching against this fill via source_order_id.
       slippage_percent: 0,
       source_trade_id: sourceTradeId,
       source_order_id: String(trade.orderId || '').trim(),
