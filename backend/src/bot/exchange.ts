@@ -68,19 +68,35 @@ const bingxOneWayAttempted = new Set<string>();
 // preventing IP-level 429 errors when many clients fire requests simultaneously.
 const exchangeParentLimiters = new Map<string, Bottleneck>();
 
+// Per-exchange IP-cap settings.
+// Numbers are conservative — they trade peak throughput for ZERO 429s under fan-out.
+// Tuning history (see error.log analysis 2026-05-03):
+//   WEEX  — was {3, 400ms} → 462×429/24h on /capi/v3/openOrders + market-data fetches.
+//           v3 endpoints throttle hard; drop to {1, 800ms} ≈ 1.25 req/sec aggregate.
+//   bybit — 59×429/24h: tighten to {3, 200ms} ≈ 15 req/sec.
+//   mexc  — 16×429/24h: tighten to {3, 200ms}.
+//   bingx —  9×429/24h: tighten to {3, 200ms}.
+//   binance — 0×429: keep generous {4, 100ms}.
+const EXCHANGE_PARENT_LIMITS: Record<string, { maxConcurrent: number; minTime: number }> = {
+  weex:    { maxConcurrent: 1, minTime: 800 },
+  bybit:   { maxConcurrent: 3, minTime: 200 },
+  mexc:    { maxConcurrent: 3, minTime: 200 },
+  bingx:   { maxConcurrent: 3, minTime: 200 },
+  binance: { maxConcurrent: 4, minTime: 100 },
+  bitget:  { maxConcurrent: 3, minTime: 200 },
+};
+const DEFAULT_EXCHANGE_PARENT_LIMIT = { maxConcurrent: 3, minTime: 200 };
+
 const getOrCreateExchangeParentLimiter = (exchange: string): Bottleneck => {
   const key = String(exchange || 'unknown').toLowerCase();
   if (!exchangeParentLimiters.has(key)) {
-    // Weex has strict IP rate limits, but with 13+ keys serving the dashboard's positions
-    // tab in parallel, maxConcurrent=1 + minTime=1200 caps throughput at ~0.8 req/sec —
-    // last keys' requests time out before getting a turn. Allow 3 concurrent + 400ms gap
-    // (still ~7.5 req/sec aggregate, well within typical IP limits, no observed 429s).
-    // Other exchanges are more lenient; allow 4 concurrent at 100ms minimum gap.
-    const isWeex = key === 'weex';
-    exchangeParentLimiters.set(key, new Bottleneck({
-      maxConcurrent: isWeex ? 3 : 4,
-      minTime: isWeex ? 400 : 100,
-    }));
+    const cfg = EXCHANGE_PARENT_LIMITS[key] || DEFAULT_EXCHANGE_PARENT_LIMIT;
+    const lim = new Bottleneck({
+      maxConcurrent: cfg.maxConcurrent,
+      minTime: cfg.minTime,
+    });
+    attachRateLimitRetry(lim);
+    exchangeParentLimiters.set(key, lim);
   }
   return exchangeParentLimiters.get(key)!;
 };
@@ -118,11 +134,44 @@ const isRateLimitError = (error: unknown): boolean => {
 /** Pause execution for `ms` milliseconds */
 const delayMs = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** Run an API call through the Bottleneck limiter with automatic retry on rate-limit (429) errors. */
+/**
+ * Extract Retry-After hint (seconds or HTTP-date) from a thrown error.
+ * Returns ms to wait, or 0 if not present / not parseable.
+ */
+const extractRetryAfterMs = (err: unknown): number => {
+  const e = err as any;
+  // ccxt sometimes attaches headers / body with retryAfter
+  const candidates: any[] = [
+    e?.retryAfter,
+    e?.response?.headers?.['retry-after'],
+    e?.headers?.['retry-after'],
+    e?.info?.retryAfter,
+    e?.data?.retryAfter,
+  ];
+  for (const v of candidates) {
+    if (v == null) continue;
+    const n = Number(v);
+    if (Number.isFinite(n) && n > 0) {
+      // Heuristic: < 1000 → seconds (HTTP spec); >= 1000 → already ms.
+      return n < 1000 ? Math.round(n * 1000) : Math.round(n);
+    }
+    const ts = Date.parse(String(v));
+    if (Number.isFinite(ts)) {
+      const diff = ts - Date.now();
+      if (diff > 0 && diff < 60_000) return diff;
+    }
+  }
+  return 0;
+};
+
+/**
+ * Run an API call through a Bottleneck limiter with auto-retry on 429 / rate-limit.
+ * Backoff: exponential with jitter, capped at 15s. Honours Retry-After when present.
+ */
 const scheduleWithRateLimitRetry = async <T>(
   limiter: import('bottleneck').default,
   fn: () => Promise<T>,
-  maxRetries = 3,
+  maxRetries = 5,
 ): Promise<T> => {
   let attempt = 0;
   while (true) {
@@ -131,7 +180,11 @@ const scheduleWithRateLimitRetry = async <T>(
     } catch (err) {
       attempt++;
       if (attempt <= maxRetries && isRateLimitError(err)) {
-        const backoff = attempt * 2000; // 2s, 4s, 6s
+        const hinted = extractRetryAfterMs(err);
+        // exp backoff: 500ms, 1s, 2s, 4s, 8s — plus ±25% jitter, cap 15s
+        const base = Math.min(15_000, 500 * Math.pow(2, attempt - 1));
+        const jitter = base * (0.75 + Math.random() * 0.5);
+        const backoff = Math.max(hinted, Math.round(jitter));
         logger.warn(`[rate-limit] 429 hit (attempt ${attempt}/${maxRetries}), retrying after ${backoff}ms`);
         await delayMs(backoff);
         continue;
@@ -139,6 +192,46 @@ const scheduleWithRateLimitRetry = async <T>(
       throw err;
     }
   }
+};
+
+/**
+ * Wrap a Bottleneck limiter so that EVERY `.schedule(fn)` call automatically
+ * retries on rate-limit errors. Mutates the limiter in-place so all existing
+ * `entry.limiter.schedule(...)` call sites pick this up without changes.
+ */
+const attachRateLimitRetry = (limiter: import('bottleneck').default): void => {
+  if ((limiter as any).__btddRateLimitRetryAttached) return;
+  (limiter as any).__btddRateLimitRetryAttached = true;
+  const originalSchedule = limiter.schedule.bind(limiter) as <R>(fn: () => Promise<R>) => Promise<R>;
+  (limiter as any).__btddOriginalSchedule = originalSchedule;
+  (limiter as any).schedule = async <R,>(fnOrOpts: any, maybeFn?: any): Promise<R> => {
+    // Bottleneck supports schedule(opts, fn) and schedule(fn). We only auto-retry
+    // the simple schedule(fn) signature; complex calls bypass retry.
+    if (typeof fnOrOpts === 'function' && maybeFn === undefined) {
+      const fn = fnOrOpts as () => Promise<R>;
+      let attempt = 0;
+      const maxRetries = 5;
+      while (true) {
+        try {
+          return await originalSchedule(fn);
+        } catch (err) {
+          attempt++;
+          if (attempt <= maxRetries && isRateLimitError(err)) {
+            const hinted = extractRetryAfterMs(err);
+            const base = Math.min(15_000, 500 * Math.pow(2, attempt - 1));
+            const jitter = base * (0.75 + Math.random() * 0.5);
+            const backoff = Math.max(hinted, Math.round(jitter));
+            logger.warn(`[rate-limit] 429 hit (attempt ${attempt}/${maxRetries}), retrying after ${backoff}ms`);
+            await delayMs(backoff);
+            continue;
+          }
+          throw err;
+        }
+      }
+    }
+    // Fallback for schedule(opts, fn) — no retry, preserve original semantics.
+    return (originalSchedule as any)(fnOrOpts, maybeFn);
+  };
 };
 
 const buildOfflineSymbolKey = (apiKeyName: string, symbol: string): string => {
@@ -649,6 +742,7 @@ export const initExchangeClient = (apiKey: ApiKey) => {
     minTime: 1000 / speedLimit, // min gap between requests
     maxConcurrent: isWeex ? 1 : undefined, // Weex: strictly one request at a time per key
   }).chain(exchangeParent);
+  attachRateLimitRetry(limiter);
 
   const exchange = detectExchange(apiKey.exchange);
 
