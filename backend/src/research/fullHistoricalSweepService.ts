@@ -1212,7 +1212,7 @@ export const processJob = async (jobId: number, config: HistoricalSweepConfig, m
         );
         let result: Awaited<ReturnType<typeof callBacktest>>;
         let attempt = 0;
-        const MAX_ATTEMPTS = 5;
+        const MAX_ATTEMPTS = 12;
         // eslint-disable-next-line no-constant-condition
         while (true) {
           attempt++;
@@ -1225,9 +1225,12 @@ export const processJob = async (jobId: number, config: HistoricalSweepConfig, m
             if (!transient || attempt >= MAX_ATTEMPTS) {
               throw err;
             }
-            // Exponential backoff with jitter: 200ms, 400ms, 800ms, 1.6s, 3.2s
-            const baseMs = 200 * 2 ** (attempt - 1);
-            const jitterMs = Math.floor(Math.random() * 200);
+            // Exponential backoff capped at 8s with jitter.
+            // 12 attempts: 0.5s, 1s, 2s, 4s, 8s, 8s, 8s, 8s, 8s, 8s, 8s, 8s ~ 75s total.
+            // Combined with PRAGMA busy_timeout=120s this should virtually
+            // eliminate transient failures even under 24-worker load.
+            const baseMs = Math.min(8000, 500 * 2 ** (attempt - 1));
+            const jitterMs = Math.floor(Math.random() * 500);
             await new Promise((r) => setTimeout(r, baseMs + jitterMs));
           }
         }

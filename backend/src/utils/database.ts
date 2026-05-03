@@ -18,9 +18,13 @@ export const initDB = async () => {
 
   // Reduce SQLITE_BUSY spikes under concurrent read/write bursts from SaaS pages
   // and from the sweep worker (separate process => separate connection).
+  // [OPT-F] busy_timeout bumped 30s -> 120s: under 24-worker sweep load the
+  //         old value still produced ~14000 SQLITE_BUSY in a single 4TF run.
   await db.exec(`
     PRAGMA journal_mode = WAL;
-    PRAGMA busy_timeout = 30000;
+    PRAGMA busy_timeout = 120000;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA wal_autocheckpoint = 1000;
   `);
 
   const ensureColumn = async (table: string, columnDefinition: string) => {

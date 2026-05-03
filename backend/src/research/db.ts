@@ -42,10 +42,11 @@ export const initResearchDb = async (): Promise<void> => {
 
   await _db.exec('PRAGMA journal_mode = WAL;');
   await _db.exec('PRAGMA foreign_keys = ON;');
-  // 30s busy timeout: with the sweep worker forked into its own process,
-  // SQLite serializes writes via OS file locks; bump the timeout so an API
-  // writer (or a slow checkpoint) cannot crash the worker with SQLITE_BUSY.
-  await _db.exec('PRAGMA busy_timeout = 30000;');
+  // [OPT-F] 120s busy timeout (was 30s): under 24-worker sweep load the old
+  // value still allowed thousands of SQLITE_BUSY failures, because each
+  // runBacktest writes via the API's main DB connection too.
+  await _db.exec('PRAGMA busy_timeout = 120000;');
+  await _db.exec('PRAGMA synchronous = NORMAL;');
 
   await applySchema(_db);
   logger.info('Research DB initialized');
