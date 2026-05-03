@@ -1458,7 +1458,7 @@ const hasOpenSiblingsForSymbol = async (
   }
 };
 
-const closeStrategyExposure = async (
+export const closeStrategyExposure = async (
   apiKeyName: string,
   strategy: Pick<Strategy, 'id' | 'market_mode' | 'base_symbol' | 'quote_symbol'>
 ): Promise<void> => {
@@ -1494,6 +1494,8 @@ const cancelStrategyWorkingOrders = async (
     await cancelAllOrders(apiKeyName, symbol);
   }
 };
+
+export { cancelStrategyWorkingOrders };
 
 const inferMonoStateFromPosition = (
   position: any | null

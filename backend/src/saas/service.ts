@@ -1,7 +1,7 @@
 ﻿import fs from 'fs';
 import path from 'path';
 import { runBacktest } from '../backtest/engine';
-import { copyStrategyBlock, createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
+import { closeStrategyExposure, cancelStrategyWorkingOrders, copyStrategyBlock, createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
 import {
   createTradingSystem,
   getTradingSystem,
@@ -3543,6 +3543,64 @@ const markMaterializedRuntimeOrigin = async (
   }
 };
 
+// Full SaaS archive: close exchange exposure (sibling-aware), cancel working
+// orders, then mark the DB row as state=flat, is_archived=1, is_active=0,
+// is_runtime=0, origin='saas_archived'. Prevents zombie strategies that keep
+// state='long'/'short' after the storefront removes them — the bug behind
+// the BERAUSDT/OPUSDT cross-account divergence on 2026-05-03.
+const saasArchiveStrategy = async (
+  apiKeyName: string,
+  row: { id: number; base_symbol?: string | null; quote_symbol?: string | null; market_mode?: string | null; name?: string | null }
+): Promise<void> => {
+  const strategyId = Number(row.id);
+  if (!Number.isFinite(strategyId) || strategyId <= 0) return;
+  const symbolsHint = row.base_symbol || row.quote_symbol || 'unknown';
+  const strategyShape = {
+    id: strategyId,
+    market_mode: (row.market_mode as any) || 'mono',
+    base_symbol: String(row.base_symbol || ''),
+    quote_symbol: String(row.quote_symbol || ''),
+  };
+  try {
+    await cancelStrategyWorkingOrders(apiKeyName, strategyShape);
+  } catch (err) {
+    logger.warn(`saasArchiveStrategy: cancelStrategyWorkingOrders failed for #${strategyId} (${apiKeyName}/${symbolsHint}): ${(err as Error).message}`);
+  }
+  try {
+    await closeStrategyExposure(apiKeyName, strategyShape);
+  } catch (err) {
+    logger.warn(`saasArchiveStrategy: closeStrategyExposure failed for #${strategyId} (${apiKeyName}/${symbolsHint}): ${(err as Error).message}`);
+  }
+  try {
+    await updateStrategy(apiKeyName, strategyId, { is_active: false }, { source: 'saas_archive' });
+  } catch (err) {
+    logger.warn(`saasArchiveStrategy: updateStrategy is_active=false failed for #${strategyId}: ${(err as Error).message}`);
+  }
+  try {
+    await db.run(
+      `UPDATE strategies
+       SET state = 'flat',
+           is_archived = 1,
+           is_runtime = 0,
+           origin = 'saas_archived',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [strategyId]
+    );
+  } catch (err) {
+    logger.warn(`saasArchiveStrategy: final state/is_archived UPDATE failed for #${strategyId}: ${(err as Error).message}`);
+  }
+  try {
+    await db.run(
+      `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+       VALUES (NULL, 'system', 'saas_archive_strategy', ?, CURRENT_TIMESTAMP)`,
+      [JSON.stringify({ strategyId, apiKeyName, name: row.name || null, symbol: symbolsHint })]
+    );
+  } catch {
+    // best-effort audit
+  }
+};
+
 const collectPresetCandidates = (offer: CatalogOffer): CatalogPreset[] => {
   const values = [
     ...(offer.presetMatrix
@@ -3983,8 +4041,13 @@ const upsertTenantStrategies = async (
     if (!row.id || desiredNames.has(asString(row.name))) {
       continue;
     }
-    await updateStrategy(apiKeyName, Number(row.id), { is_active: false }, { source: 'saas_disable_stale' });
-    await markMaterializedRuntimeOrigin(Number(row.id), 'saas_archived', 0);
+    await saasArchiveStrategy(apiKeyName, {
+      id: Number(row.id),
+      base_symbol: (row as any).base_symbol ?? null,
+      quote_symbol: (row as any).quote_symbol ?? null,
+      market_mode: (row as any).market_mode ?? null,
+      name: asString(row.name),
+    });
   }
 
   return out;
