@@ -139,6 +139,13 @@ type NormalizedBacktestRequest = {
   maxDepositOverride: number;
   lotPercentOverride: number;
   partialTpPct: number;
+  /**
+   * If true, mirror runtime pair-lock semantics in the backtest engine
+   * (only one strategy can hold a position on a given pair at a time).
+   * Default: false — выключено, чтобы не ломать исторические снапшоты витрины.
+   * Требует дополнительной валидации результатов перед включением по умолчанию.
+   */
+  enablePairLock: boolean;
 };
 
 export type BacktestRunListItem = {
@@ -1058,6 +1065,7 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     maxDepositOverride: Math.max(0, asNumber(raw.maxDepositOverride, 0)),
     lotPercentOverride: Math.max(0, asNumber(raw.lotPercentOverride, 0)),
     partialTpPct,
+    enablePairLock: (raw as unknown as { enablePairLock?: boolean })?.enablePairLock === true,
   };
 };
 
@@ -1320,9 +1328,11 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       continue;
     }
 
-    // Pair-lock (mirrors runtime): skip entry if another strategy holds the same pair.
-    // One position per pair at a time across the whole portfolio, regardless of OP.
-    if (runtime.state === 'flat') {
+    // Pair-lock (mirrors runtime) — OPT-IN: skip entry if another strategy holds the same pair.
+    // Выключено по умолчанию (request.enablePairLock=false). Портфельные бэктесты с сотнями
+    // стратегий на пересекающихся парах могут резко менять результат из-за эффекта first-wins при
+    // детерминированном порядке событий (в рантайме блокировка по API ключу и асинхронная).
+    if (request.enablePairLock && runtime.state === 'flat') {
       const pairKey = pairKeyByRuntimeIndex[event.strategyIndex];
       if (isPairLocked(event.strategyIndex, pairKey)) {
         skippedByPairLock++;
