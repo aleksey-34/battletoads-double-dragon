@@ -321,6 +321,8 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
       dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
       rerunApiKeyName: req.body?.rerunApiKeyName ? String(req.body.rerunApiKeyName) : undefined,
       preferRealBacktest: req.body?.preferRealBacktest !== undefined ? toBool(req.body.preferRealBacktest, false) : undefined,
+      enablePairLock: req.body?.enablePairLock !== undefined ? toBool(req.body.enablePairLock, true) : undefined,
+      pairLockSeed: toOptionalNumber(req.body?.pairLockSeed),
     });
     // Auto-sync Cloud TS members from sweep result (fire-and-forget)
     if (data.kind === 'algofund-ts' && Array.isArray(data.selectedOffers) && data.selectedOffers.length > 0) {

@@ -5619,6 +5619,10 @@ export const previewAdminSweepBacktest = async (payload?: {
   dateTo?: string;
   preferRealBacktest?: boolean;
   rerunApiKeyName?: string;
+  /** Optional pair-lock toggle (Etap B comparison). Defaults to engine default (true). */
+  enablePairLock?: boolean;
+  /** Optional pair-lock RNG seed for tie-break. Defaults to engine default. */
+  pairLockSeed?: number;
   /** Internal flag: set to true only for server-side background snapshot refresh. Never expose to clients. */
   isBatchRefresh?: boolean;
 }) => {
@@ -6303,6 +6307,8 @@ export const previewAdminSweepBacktest = async (payload?: {
           dateTo: requestedDateTo || (kind === 'offer' ? singleOfferStoreDateTo : '') || asString(sweep?.config?.dateTo, ''),
           ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
           ...(partialTpPct > 0 ? { partialTpPct } : {}),
+          ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
+          ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
           maxDepositOverride: initialBalance,
           lotPercentOverride: 100,
         });
