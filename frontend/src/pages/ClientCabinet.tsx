@@ -2374,7 +2374,7 @@ const ClientCabinet: React.FC = () => {
                             <Space direction="vertical" size={0}>
                               <Space>
                                 <Tooltip title={getTsHint(system.name) ?? undefined} placement="topLeft">
-                                  <Typography.Text strong style={{ fontSize: 12, cursor: getTsHint(system.name) ? 'help' : undefined }}>{tsDisplayName(system.name)}</Typography.Text>
+                                  <Typography.Text strong style={{ fontSize: 12, cursor: getTsHint(system.name) ? 'help' : undefined }}>{((system as any).displayLabel as string | undefined)?.trim() || tsDisplayName(system.name)}</Typography.Text>
                                 </Tooltip>
                                 {isCurrent ? <Tag color="success" style={{ fontSize: 10, fontWeight: 700 }}>Подключена</Tag> : null}
                                 {currentWeights.length > 0 ? <Tag color="blue" style={{ fontSize: 10 }}>Риск {formatNumber(currentWeights[0])}x</Tag> : null}
@@ -2432,7 +2432,7 @@ const ClientCabinet: React.FC = () => {
 
           {/* Detail modal for a selected system card */}
           <Modal
-            title={systemDetailModal ? tsDisplayName(systemDetailModal.name) : ''}
+            title={systemDetailModal ? (((algofundAvailableSystems.find((s) => s.id === systemDetailModal.id) as any)?.displayLabel as string | undefined)?.trim() || tsDisplayName(systemDetailModal.name)) : ''}
             open={!!systemDetailModal}
             onCancel={closeSystemDetailModal}
             footer={null}

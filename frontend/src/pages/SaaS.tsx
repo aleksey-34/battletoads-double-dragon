@@ -533,6 +533,7 @@ type SaasSummary = {
       apiKeyName?: string;
       systemName?: string;
       setKey?: string;
+      displayLabel?: string;
       ret: number;
       pf: number;
       dd: number;
@@ -3808,6 +3809,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     return {
       systemName,
+      displayLabel: (String((snapshotForSystem as any)?.displayLabel || '').trim() || tsDisplayName(systemName)),
       offerIds: canonicalOfferIds,
       offerCount: canonicalOfferIds.length,
       storefrontLabel,
@@ -8953,7 +8955,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           <List.Item.Meta
                                             title={
                                               <Space wrap>
-                                                <Tooltip title={getTsStrategyHint(item.systemName) ?? undefined} placement="topLeft"><Text strong style={{ cursor: getTsStrategyHint(item.systemName) ? 'help' : undefined }}>{tsDisplayName(item.systemName)}</Text></Tooltip>
+                                                <Tooltip title={getTsStrategyHint(item.systemName) ?? undefined} placement="topLeft"><Text strong style={{ cursor: getTsStrategyHint(item.systemName) ? 'help' : undefined }}>{item.displayLabel}</Text></Tooltip>
                                                 {item.runtimeSystemId ? <Tag color="geekblue">system #{item.runtimeSystemId}</Tag> : null}
                                                 <Tag color="processing">clients {item.tenantCount}</Tag>
                                                 <Tag color="success">active {item.activeCount}</Tag>
@@ -10743,7 +10745,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                 bordered
                                                 title={
                                                   <Space>
-                                                    <Tooltip title={getTsStrategyHint(item.systemName) ?? undefined} placement="topLeft"><Text strong style={{ cursor: getTsStrategyHint(item.systemName) ? 'help' : undefined }}>{tsDisplayName(item.systemName)}</Text></Tooltip>
+                                                    <Tooltip title={getTsStrategyHint(item.systemName) ?? undefined} placement="topLeft"><Text strong style={{ cursor: getTsStrategyHint(item.systemName) ? 'help' : undefined }}>{item.displayLabel}</Text></Tooltip>
                                                     {item.activeCount > 0
                                                       ? <Badge status="success" text="active" />
                                                       : item.pendingCount > 0
@@ -11042,7 +11044,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 dataSource={algofundStorefrontSystems}
                                 renderItem={(item) => (
                                   <List.Item key={item.systemName}>
-                                    <Card size="small" bordered title={<Text strong>{tsDisplayName(item.systemName)}</Text>}>
+                                    <Card size="small" bordered title={<Text strong>{item.displayLabel}</Text>}>
                                       <Space direction="vertical" size={8} style={{ width: '100%' }}>
                                         <Space wrap>
                                           {item.summary?.totalReturnPercent !== undefined
