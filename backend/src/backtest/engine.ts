@@ -71,6 +71,8 @@ export type BacktestSummary = {
   fundingRatePercent: number;
   maxOpenPositions: number;
   skippedByPositionLimit: number;
+  /** Number of entries skipped because another strategy holds the same pair (mirrors runtime pair-lock). */
+  skippedByPairLock: number;
   /** Earliest candle timestamp actually used across all runtime strategies (ms). */
   actualDataStartMs: number | null;
   /** Latest candle timestamp actually used across all runtime strategies (ms). */
@@ -752,6 +754,23 @@ const normalizeMarketMode = (value: any): MarketMode => {
   return String(value || '').trim() === 'mono' ? 'mono' : 'synthetic';
 };
 
+/**
+ * Pair key matching runtime `getStrategyPairKey` in bot/strategy.ts.
+ * Two strategies sharing the same key cannot be open simultaneously
+ * (one position per pair at a time, even if OP allows more total positions).
+ * NOTE: mono `BTCUSDT` and synthetic `BTCUSDT/ETHUSDT` produce DIFFERENT keys
+ * — same as runtime, mono and synth on overlapping base symbols are NOT mutually locked.
+ */
+const getBacktestPairKey = (strategy: { market_mode?: any; base_symbol?: any; quote_symbol?: any }): string => {
+  const mode = normalizeMarketMode(strategy.market_mode);
+  const base = String(strategy.base_symbol || '').trim().toUpperCase();
+  if (!base) return '';
+  if (mode === 'mono') return `mono:${base}`;
+  const quote = String(strategy.quote_symbol || '').trim().toUpperCase();
+  if (!quote) return '';
+  return `synthetic:${base}/${quote}`;
+};
+
 const normalizeZscoreEntry = (value: any): number => {
   return Math.max(0.1, asNumber(value, 2.0));
 };
@@ -1115,9 +1134,24 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
   const maxOpenPositions = request.maxOpenPositions;
   const partialTpPct = request.partialTpPct;
   let skippedByPositionLimit = 0;
+  let skippedByPairLock = 0;
+
+  // Precompute pair keys per runtime so we can do O(N) pair-lock check per signal.
+  // Mirrors runtime `getStrategyPairKey` in bot/strategy.ts so backtest matches live behavior.
+  const pairKeyByRuntimeIndex: string[] = runtimes.map((rt) => getBacktestPairKey(rt.strategy));
 
   const countOpenPositions = (): number => {
     return runtimes.filter((rt) => rt.state !== 'flat').length;
+  };
+
+  const isPairLocked = (selfIndex: number, pairKey: string): boolean => {
+    if (!pairKey) return false;
+    for (let i = 0; i < runtimes.length; i++) {
+      if (i === selfIndex) continue;
+      if (runtimes[i].state === 'flat') continue;
+      if (pairKeyByRuntimeIndex[i] === pairKey) return true;
+    }
+    return false;
   };
 
   const equityCurve: BacktestPoint[] = [];
@@ -1286,6 +1320,17 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       continue;
     }
 
+    // Pair-lock (mirrors runtime): skip entry if another strategy holds the same pair.
+    // One position per pair at a time across the whole portfolio, regardless of OP.
+    if (runtime.state === 'flat') {
+      const pairKey = pairKeyByRuntimeIndex[event.strategyIndex];
+      if (isPairLocked(event.strategyIndex, pairKey)) {
+        skippedByPairLock++;
+        pushEquityPoint(event.timeMs);
+        continue;
+      }
+    }
+
     const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
     const availableBalance = Math.max(0, equityNow - computeLockedMargin(runtimes));
     openPosition(ctx, runtime, signalPayload.signal, event.timeMs, signalPayload.current, availableBalance);
@@ -1381,6 +1426,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     fundingRatePercent: request.fundingRatePercent,
     maxOpenPositions: request.maxOpenPositions,
     skippedByPositionLimit,
+    skippedByPairLock,
     actualDataStartMs,
     actualDataEndMs,
   };
@@ -1666,6 +1712,7 @@ export const getBacktestRun = async (id: number): Promise<BacktestRunResult | nu
     fundingRatePercent: asNumber(row.funding_rate_percent, 0),
     maxOpenPositions: 0,
     skippedByPositionLimit: 0,
+    skippedByPairLock: 0,
     actualDataStartMs: null,
     actualDataEndMs: null,
   });
