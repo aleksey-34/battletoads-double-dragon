@@ -7390,17 +7390,10 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
       ...tsSnapshotMap,
     };
     const candidateSystemNames = new Set<string>();
-    Object.entries(nextTsSnapshotMap).forEach(([key, snapshot]) => {
+    Object.values(nextTsSnapshotMap).forEach((snapshot) => {
       const name = String(snapshot?.systemName || '').trim();
       if (name.toUpperCase().startsWith('ALGOFUND_MASTER::')) {
         candidateSystemNames.add(name);
-      }
-      // Also include the snapshot map key itself when it looks like an ALGOFUND_MASTER set key.
-      // This covers cards whose stored systemName is a human display label
-      // (e.g. "Mega Stable 365d") rather than the underlying TS name.
-      const setKeyCandidate = String(snapshot?.setKey || key || '').trim();
-      if (setKeyCandidate.toUpperCase().startsWith('ALGOFUND_MASTER::')) {
-        candidateSystemNames.add(setKeyCandidate);
       }
     });
     const legacySystemName = String(legacySnapshot?.systemName || '').trim();
@@ -7421,22 +7414,12 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
     });
 
     for (const systemName of Array.from(candidateSystemNames)) {
-      const existingKey = resolveTsSnapshotKeyBySystemName(nextTsSnapshotMap, systemName)
-        || (nextTsSnapshotMap[systemName] ? systemName : null)
-        || systemName;
+      const existingKey = resolveTsSnapshotKeyBySystemName(nextTsSnapshotMap, systemName) || systemName;
       const existing = nextTsSnapshotMap[existingKey] || null;
-      // Reuse the snapshot's frozen offer set when systemName resolution would otherwise fail
-      // (e.g. setKey-only cards like mega-stable-365d whose snapshot.systemName is a display label).
-      const existingOfferIds = Array.isArray(existing?.offerIds)
-        ? (existing?.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)
-        : [];
-      const existingSetKey = String(existing?.setKey || '').trim();
       try {
         const preview = await previewAdminSweepBacktest({
           kind: 'algofund-ts',
           systemName,
-          setKey: existingSetKey || undefined,
-          offerIds: existingOfferIds.length > 0 ? existingOfferIds : undefined,
           riskScore: Number(existing?.backtestSettings?.riskScore ?? 5),
           tradeFrequencyScore: Number(existing?.backtestSettings?.tradeFrequencyScore ?? 5),
           initialBalance: Number(existing?.backtestSettings?.initialBalance ?? 10000),
@@ -7458,9 +7441,7 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
         const normalized = normalizeTsBacktestSnapshot({
           ...(existing || {}),
           apiKeyName: asString(preview.sweepApiKeyName, existing?.apiKeyName || ''),
-          // Preserve the snapshot's display systemName (e.g. "Mega Stable 365d");
-          // only fall back to the resolution key when no original systemName exists.
-          systemName: asString(existing?.systemName, systemName),
+          systemName,
           setKey: asString(existing?.setKey, systemName),
           ret: Number(summary.totalReturnPercent || 0),
           pf: Number(summary.profitFactor || 0),
