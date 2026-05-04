@@ -300,6 +300,8 @@ type AlgofundState = {
       periodDays: number;
       finalEquity: number;
       equityPoints: number[];
+      sharpe?: number;
+      membersCount?: number;
     } | null;
   }>;
 };
@@ -2358,7 +2360,7 @@ const ClientCabinet: React.FC = () => {
                     const currentWeights = matchingActiveSystems
                       .map((item) => Number(item.weight || 0))
                       .filter((value) => Number.isFinite(value) && value > 0);
-                    const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number } | null | undefined;
+                    const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number; sharpe?: number; membersCount?: number } | null | undefined;
                     const eqPts = snap?.equityPoints;
                     const hasChart = isCurrent ? (algofundPreviewSeries.length > 0 || (Array.isArray(eqPts) && eqPts.length > 1)) : (Array.isArray(eqPts) && eqPts.length > 1);
                     return (
@@ -2380,8 +2382,10 @@ const ClientCabinet: React.FC = () => {
                             </Space>
                             <Space size={4} wrap>
                               {snap?.periodDays ? <Tag style={{ fontSize: 11 }}>{Math.round(snap.periodDays)}d</Tag> : null}
+                              {snap?.membersCount ? <Tag color="geekblue" style={{ fontSize: 11 }}>{snap.membersCount} стратегий</Tag> : null}
                               {snap ? <Tag color={metricTagColor(Number(snap.ret || 0), 'return')} style={{ fontSize: 11 }}>Ret {formatPercent(snap.ret)}</Tag> : null}
                               {snap ? <Tag color={metricTagColor(Number(snap.dd || 0), 'drawdown')} style={{ fontSize: 11 }}>DD {formatPercent(snap.dd)}</Tag> : null}
+                              {snap?.sharpe != null ? <Tag color="purple" style={{ fontSize: 11 }}>Sharpe {formatNumber(snap.sharpe)}</Tag> : null}
                               {snap ? <Tag color={metricTagColor(Number(snap.pf || 0), 'pf')} style={{ fontSize: 11 }}>PF {formatNumber(snap.pf)}</Tag> : null}
                               {snap?.trades ? <Tag color="cyan" style={{ fontSize: 11 }}>{formatNumber(snap.trades, 0)} сд.</Tag> : null}
                             </Space>
@@ -2439,7 +2443,7 @@ const ClientCabinet: React.FC = () => {
               const system = algofundAvailableSystems.find((s) => s.id === systemDetailModal.id);
               if (!system) return <Empty description="Система не найдена" />;
               const isCurrent = isAlgofundSystemEnabled(system.name);
-              const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number } | null | undefined;
+              const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number; sharpe?: number; membersCount?: number } | null | undefined;
               const eqPts = snap?.equityPoints;
               // For connected system: use backend preview when risk matches saved profile;
               // otherwise show immediate local scaling so slider feedback is instant.
@@ -2489,8 +2493,10 @@ const ClientCabinet: React.FC = () => {
                   <Space wrap>
                     {isCurrent ? <Tag color="success" style={{ fontWeight: 700 }}>Подключена к вашему аккаунту</Tag> : <Tag color="blue">Доступна для подключения</Tag>}
                     {snap?.periodDays ? <Tag>Период: {Math.round(snap.periodDays)}д</Tag> : null}
+                    {snap?.membersCount ? <Tag color="geekblue">{snap.membersCount} стратегий</Tag> : null}
                     {displayRet != null ? <Tag color={metricTagColor(Number(displayRet || 0), 'return')}>Ret {formatPercent(displayRet)}</Tag> : null}
                     {displayDd != null ? <Tag color={metricTagColor(Number(displayDd || 0), 'drawdown')}>DD {formatPercent(displayDd)}</Tag> : null}
+                    {snap?.sharpe != null ? <Tag color="purple">Sharpe {formatNumber(snap.sharpe)}</Tag> : null}
                     {snap?.trades ? <Tag>{snap.trades} сделок</Tag> : null}
                   </Space>
                   {getTsHint(system.name) ? (

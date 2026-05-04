@@ -280,6 +280,10 @@ type TsBacktestSnapshot = {
   finalEquity: number;
   equityPoints: number[];
   offerIds: string[];
+  /** Sharpe ratio of the underlying portfolio backtest (optional, may be absent for legacy snapshots). */
+  sharpe?: number;
+  /** Number of strategies (members) in the underlying TS / master_card (optional). */
+  membersCount?: number;
   backtestSettings: {
     riskScore: number;
     tradeFrequencyScore: number;
@@ -1424,6 +1428,12 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
     finalEquity: Number(asNumber(parsed.finalEquity, 0).toFixed(4)),
     equityPoints: sampledEquity,
     offerIds,
+    ...(parsed.sharpe !== undefined && Number.isFinite(Number(parsed.sharpe))
+      ? { sharpe: Number(asNumber(parsed.sharpe, 0).toFixed(3)) }
+      : {}),
+    ...(parsed.membersCount !== undefined && Number.isFinite(Number(parsed.membersCount))
+      ? { membersCount: Math.max(0, Math.floor(asNumber(parsed.membersCount, 0))) }
+      : {}),
     backtestSettings: {
       riskScore: Number(clampNumber(asNumber(settingsRaw.riskScore, 5), 0, 10).toFixed(2)),
       tradeFrequencyScore: Number(clampNumber(asNumber(settingsRaw.tradeFrequencyScore, 5), 0, 10).toFixed(2)),
@@ -10728,6 +10738,8 @@ export const getAlgofundState = async (
         finalEquity: snapshot.finalEquity,
         equityPoints: snapshot.equityPoints,
         backtestSettings: snapshot.backtestSettings,
+        ...(snapshot.sharpe !== undefined ? { sharpe: snapshot.sharpe } : {}),
+        ...(snapshot.membersCount !== undefined ? { membersCount: snapshot.membersCount } : {}),
       };
     }
   }
@@ -10804,6 +10816,8 @@ export const getAlgofundState = async (
           periodDays: snapshot.periodDays,
           finalEquity: snapshot.finalEquity,
           equityPoints: snapshot.equityPoints,
+          ...(snapshot.sharpe !== undefined ? { sharpe: snapshot.sharpe } : {}),
+          ...(snapshot.membersCount !== undefined ? { membersCount: snapshot.membersCount } : {}),
         },
       };
     });

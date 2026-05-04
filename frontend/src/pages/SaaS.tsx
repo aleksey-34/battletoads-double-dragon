@@ -542,6 +542,8 @@ type SaasSummary = {
       finalEquity: number;
       equityPoints?: number[];
       offerIds?: string[];
+      sharpe?: number;
+      membersCount?: number;
       backtestSettings?: {
         riskScore?: number;
         tradeFrequencyScore?: number;
