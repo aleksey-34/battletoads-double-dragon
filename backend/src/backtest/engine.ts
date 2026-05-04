@@ -140,12 +140,17 @@ type NormalizedBacktestRequest = {
   lotPercentOverride: number;
   partialTpPct: number;
   /**
-   * If true, mirror runtime pair-lock semantics in the backtest engine
-   * (only one strategy can hold a position on a given pair at a time).
-   * Default: false — выключено, чтобы не ломать исторические снапшоты витрины.
-   * Требует дополнительной валидации результатов перед включением по умолчанию.
+   * If true (default), mirror runtime pair-lock semantics in the backtest engine.
+   * Only one strategy can hold a position on a given pair at a time.
+   * Within a single bar, the strategy that gets to enter is chosen via
+   * a seeded random tie-break (see `pairLockSeed`).
    */
   enablePairLock: boolean;
+  /**
+   * Seed for the deterministic RNG used to break ties when multiple strategies
+   * fire on the same timestamp. Same seed → reproducible result.
+   */
+  pairLockSeed: number;
 };
 
 export type BacktestRunListItem = {
@@ -762,6 +767,24 @@ const normalizeMarketMode = (value: any): MarketMode => {
 };
 
 /**
+ * Deterministic PRNG (mulberry32). Same seed → identical sequence.
+ * Used to break ties between strategies firing on the same bar so that
+ * the pair-lock winner is fair across the whole backtest, not always
+ * `strategyIndex === 0`.
+ */
+const createSeededRng = (seed: number): (() => number) => {
+  let state = seed >>> 0;
+  if (state === 0) state = 1;
+  return () => {
+    state = (state + 0x6D2B79F5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+/**
  * Pair key matching runtime `getStrategyPairKey` in bot/strategy.ts.
  * Two strategies sharing the same key cannot be open simultaneously
  * (one position per pair at a time, even if OP allows more total positions).
@@ -814,7 +837,10 @@ const stddev = (values: number[]): number => {
 
 const syntheticCandleCache = new Map<string, ParsedCandle[]>();
 
-const buildEvents = (runtimes: RuntimeStrategy[]): StrategyEvent[] => {
+const buildEvents = (
+  runtimes: RuntimeStrategy[],
+  options?: { tieBreakRng?: () => number },
+): StrategyEvent[] => {
   const events: StrategyEvent[] = [];
 
   runtimes.forEach((runtime, strategyIndex) => {
@@ -829,6 +855,21 @@ const buildEvents = (runtimes: RuntimeStrategy[]): StrategyEvent[] => {
       });
     }
   });
+
+  if (options?.tieBreakRng) {
+    // Stable randomized tie-break: assign each event a deterministic-random key,
+    // then sort by (timeMs, randomKey). This prevents "strategyIndex 0 always
+    // enters first" bias on bars where multiple strategies share a pair.
+    const rng = options.tieBreakRng;
+    const keyed = events.map((event) => ({ event, key: rng() }));
+    keyed.sort((left, right) => {
+      if (left.event.timeMs === right.event.timeMs) {
+        return left.key - right.key;
+      }
+      return left.event.timeMs - right.event.timeMs;
+    });
+    return keyed.map((entry) => entry.event);
+  }
 
   events.sort((left, right) => {
     if (left.timeMs === right.timeMs) {
@@ -1065,7 +1106,11 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     maxDepositOverride: Math.max(0, asNumber(raw.maxDepositOverride, 0)),
     lotPercentOverride: Math.max(0, asNumber(raw.lotPercentOverride, 0)),
     partialTpPct,
-    enablePairLock: (raw as unknown as { enablePairLock?: boolean })?.enablePairLock === true,
+    enablePairLock: (raw as unknown as { enablePairLock?: boolean })?.enablePairLock !== false,
+    pairLockSeed: Math.max(
+      1,
+      Math.floor(asNumber((raw as unknown as { pairLockSeed?: number })?.pairLockSeed, 1759827600)),
+    ),
   };
 };
 
@@ -1122,7 +1167,12 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     throw new Error('No runnable strategies for backtest');
   }
 
-  const events = buildEvents(runtimes);
+  const events = buildEvents(
+    runtimes,
+    request.enablePairLock
+      ? { tieBreakRng: createSeededRng(request.pairLockSeed) }
+      : undefined,
+  );
 
   if (events.length === 0) {
     throw new Error('No strategy events available for backtest');
