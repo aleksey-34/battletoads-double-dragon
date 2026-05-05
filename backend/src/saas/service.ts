@@ -290,6 +290,10 @@ type TsBacktestSnapshot = {
   sharpe?: number;
   /** Number of strategies (members) in the underlying TS / master_card (optional). */
   membersCount?: number;
+  /** Number of distinct markets covered by the portfolio (optional). */
+  marketCount?: number;
+  /** Maximum strategies allocated per single market (optional, diversification cap). */
+  maxPerMarket?: number;
   backtestSettings: {
     riskScore: number;
     tradeFrequencyScore: number;
@@ -1442,6 +1446,12 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
       : {}),
     ...(parsed.membersCount !== undefined && Number.isFinite(Number(parsed.membersCount))
       ? { membersCount: Math.max(0, Math.floor(asNumber(parsed.membersCount, 0))) }
+      : {}),
+    ...(parsed.marketCount !== undefined && Number.isFinite(Number(parsed.marketCount))
+      ? { marketCount: Math.max(0, Math.floor(asNumber(parsed.marketCount, 0))) }
+      : {}),
+    ...(parsed.maxPerMarket !== undefined && Number.isFinite(Number(parsed.maxPerMarket))
+      ? { maxPerMarket: Math.max(0, Math.floor(asNumber(parsed.maxPerMarket, 0))) }
       : {}),
     backtestSettings: {
       riskScore: Number(clampNumber(asNumber(settingsRaw.riskScore, 5), 0, 10).toFixed(2)),
@@ -10760,6 +10770,8 @@ export const getAlgofundState = async (
         backtestSettings: snapshot.backtestSettings,
         ...(snapshot.sharpe !== undefined ? { sharpe: snapshot.sharpe } : {}),
         ...(snapshot.membersCount !== undefined ? { membersCount: snapshot.membersCount } : {}),
+        ...(snapshot.marketCount !== undefined ? { marketCount: snapshot.marketCount } : {}),
+        ...(snapshot.maxPerMarket !== undefined ? { maxPerMarket: snapshot.maxPerMarket } : {}),
       };
     }
   }
@@ -10839,6 +10851,8 @@ export const getAlgofundState = async (
           equityPoints: snapshot.equityPoints,
           ...(snapshot.sharpe !== undefined ? { sharpe: snapshot.sharpe } : {}),
           ...(snapshot.membersCount !== undefined ? { membersCount: snapshot.membersCount } : {}),
+          ...(snapshot.marketCount !== undefined ? { marketCount: snapshot.marketCount } : {}),
+          ...(snapshot.maxPerMarket !== undefined ? { maxPerMarket: snapshot.maxPerMarket } : {}),
         },
       };
     });

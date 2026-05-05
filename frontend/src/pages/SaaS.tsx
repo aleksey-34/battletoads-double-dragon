@@ -545,6 +545,8 @@ type SaasSummary = {
       offerIds?: string[];
       sharpe?: number;
       membersCount?: number;
+      marketCount?: number;
+      maxPerMarket?: number;
       backtestSettings?: {
         riskScore?: number;
         tradeFrequencyScore?: number;
