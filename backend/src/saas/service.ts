@@ -2723,7 +2723,7 @@ const buildSweepPresetFromRecord = (record: SweepRecord, riskLevel: Level3): Cat
   };
 };
 
-const buildOfferFromSweepRecord = (record: SweepRecord, familyRows: SweepRecord[] = [record]): CatalogOffer => {
+export const buildOfferFromSweepRecord = (record: SweepRecord, familyRows: SweepRecord[] = [record]): CatalogOffer => {
   const rawMode = asString(record.marketMode, 'mono');
   const mode = rawMode === 'synthetic' || rawMode === 'synth' ? 'synth' : 'mono';
   const tradeRows = pickFamilyTradePresetRows(record, familyRows);
