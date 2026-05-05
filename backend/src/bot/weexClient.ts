@@ -40,10 +40,53 @@ const toWeexCcxtSymbol = (value: unknown): string => {
   return raw;
 };
 
+// WEEX v3 only natively accepts: 1m, 5m, 15m, 30m, 1h, 4h, 12h, 1d, 1w.
+// Unsupported intervals (2h, 3m, 6h, 8h, 3d) get an aggregation source so
+// fetchOHLCV can still build them locally from a smaller bucket.
+const WEEX_NATIVE_INTERVALS = new Set(['1m', '5m', '15m', '30m', '1h', '4h', '12h', '1d', '1w']);
+const WEEX_AGGREGATION_MAP: Record<string, { source: string; factor: number }> = {
+  '2h': { source: '1h', factor: 2 },
+  '6h': { source: '1h', factor: 6 },
+  '8h': { source: '1h', factor: 8 },
+  '3d': { source: '1d', factor: 3 },
+  '3m': { source: '1m', factor: 3 },
+};
 const mapWeexTimeframe = (timeframe: string): string => {
   const normalized = String(timeframe || '').trim();
-  const supported = new Set(['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '1w']);
-  return supported.has(normalized) ? normalized : '1m';
+  if (WEEX_NATIVE_INTERVALS.has(normalized)) return normalized;
+  if (WEEX_AGGREGATION_MAP[normalized]) return WEEX_AGGREGATION_MAP[normalized].source;
+  return '1m';
+};
+const aggregateOhlcv = (rows: number[][], factor: number): number[][] => {
+  if (factor <= 1 || !Array.isArray(rows) || rows.length === 0) return rows;
+  const sorted = [...rows].sort((a, b) => Number(a[0]) - Number(b[0]));
+  const bucketMs = (Number(sorted[1]?.[0] ?? sorted[0][0]) - Number(sorted[0][0])) * factor;
+  if (!Number.isFinite(bucketMs) || bucketMs <= 0) return sorted;
+  const out: number[][] = [];
+  let bucketStart: number | null = null;
+  let o = 0, h = 0, l = 0, c = 0, v = 0;
+  for (const row of sorted) {
+    const ts = Number(row[0]);
+    if (!Number.isFinite(ts)) continue;
+    const aligned = ts - (ts % bucketMs);
+    if (bucketStart === null) {
+      bucketStart = aligned;
+      o = Number(row[1]); h = Number(row[2]); l = Number(row[3]); c = Number(row[4]); v = Number(row[5] ?? 0);
+      continue;
+    }
+    if (aligned !== bucketStart) {
+      out.push([bucketStart, o, h, l, c, v]);
+      bucketStart = aligned;
+      o = Number(row[1]); h = Number(row[2]); l = Number(row[3]); c = Number(row[4]); v = Number(row[5] ?? 0);
+    } else {
+      h = Math.max(h, Number(row[2]));
+      l = Math.min(l, Number(row[3]));
+      c = Number(row[4]);
+      v += Number(row[5] ?? 0);
+    }
+  }
+  if (bucketStart !== null) out.push([bucketStart, o, h, l, c, v]);
+  return out;
 };
 
 const buildQueryString = (query?: Record<string, WeexQueryValue>): string => {
@@ -333,17 +376,24 @@ class WeexRestClient {
   }
 
   async fetchOHLCV(symbol: string, timeframe = '1m', _since?: number, limit = 100): Promise<any[]> {
+    const requestedTf = String(timeframe || '').trim();
+    const aggregation = WEEX_AGGREGATION_MAP[requestedTf];
+    const fetchInterval = mapWeexTimeframe(requestedTf);
+    const fetchLimit = Math.max(1, Math.min(Number(limit) || 100, 1000));
+    const adjustedLimit = aggregation
+      ? Math.max(1, Math.min(fetchLimit * aggregation.factor, 1000))
+      : fetchLimit;
     const response = await this.request('GET', '/capi/v3/market/klines', {
       query: {
         symbol: toWeexPrivateSymbol(symbol),
-        interval: mapWeexTimeframe(timeframe),
-        limit: Math.max(1, Math.min(Number(limit) || 100, 1000)),
+        interval: fetchInterval,
+        limit: adjustedLimit,
       },
     });
 
     const rows = Array.isArray(response) ? response : [];
 
-    return rows
+    const parsed = rows
       .map((item: any) => Array.isArray(item?.value) ? item.value : item)
       .filter((item: any) => Array.isArray(item) && item.length >= 6)
       .map((item: any[]) => [
@@ -356,6 +406,8 @@ class WeexRestClient {
       ])
       .filter((item: number[]) => Number.isFinite(item[0]))
       .sort((left: number[], right: number[]) => left[0] - right[0]);
+
+    return aggregation ? aggregateOhlcv(parsed, aggregation.factor) : parsed;
   }
 
   async fetchBalance(): Promise<any> {
