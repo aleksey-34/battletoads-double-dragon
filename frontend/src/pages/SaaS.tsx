@@ -2717,6 +2717,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestCommissionPercent, setAdminSweepBacktestCommissionPercent] = useState(DEFAULT_BACKTEST_SETTINGS.commissionPercent);
   const [adminSweepBacktestSlippagePercent, setAdminSweepBacktestSlippagePercent] = useState(DEFAULT_BACKTEST_SETTINGS.slippagePercent);
   const [adminSweepBacktestFundingRatePercent, setAdminSweepBacktestFundingRatePercent] = useState(DEFAULT_BACKTEST_SETTINGS.fundingRatePercent);
+  const [adminSweepBacktestReinvestPercent, setAdminSweepBacktestReinvestPercent] = useState<number>(100);
   const [adminSweepBacktestDateFrom, setAdminSweepBacktestDateFrom] = useState('');
   const [adminSweepBacktestDateTo, setAdminSweepBacktestDateTo] = useState('');
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
@@ -4393,6 +4394,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             riskScore: adminSweepBacktestRiskScore,
             tradeFrequencyScore: adminSweepBacktestTradeScore,
             riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
+            reinvestPercent: adminSweepBacktestReinvestPercent,
             maxOpenPositions: adminSweepBacktestMaxOpenPositions > 0 ? adminSweepBacktestMaxOpenPositions : undefined,
           });
           return [window.key, response.data] as const;
@@ -6428,6 +6430,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         tradeFrequencyScore: effectiveTradeFrequencyScore,
         initialBalance: effectiveInitialBalance,
         riskScaleMaxPercent: effectiveRiskScaleMaxPercent,
+        reinvestPercent: adminSweepBacktestReinvestPercent,
         maxOpenPositions: effectiveMaxOpenPositions > 0 ? effectiveMaxOpenPositions : undefined,
         partialTpPct: effectivePartialTpPct > 0 ? effectivePartialTpPct : undefined,
         commissionPercent: Number.isFinite(effectiveCommissionPercent) ? effectiveCommissionPercent : undefined,
@@ -12722,6 +12725,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       }}
                     />
                     <Text type="secondary">Лимит риска: до {formatNumber(getBacktestRiskMultiplier(10, adminSweepBacktestRiskScaleMaxPercent), 2)}x. Эффект виден при score {`>`} 5.</Text>
+                  </Card>
+                </Col>
+              )}
+              {isAdminSurface && (
+                <Col xs={24} md={12} lg={4}>
+                  <Card size="small" title="Реинвест прибыли, %">
+                    <Select
+                      style={{ width: '100%' }}
+                      value={adminSweepBacktestReinvestPercent}
+                      onChange={(value) => {
+                        const next = Math.max(0, Math.min(100, Number(value)));
+                        setAdminSweepBacktestReinvestPercent(next);
+                        setAdminSweepBacktestStale(true);
+                        scheduleBacktestDebounce();
+                      }}
+                      options={[
+                        { value: 0, label: '0% — снимаю всё (флэт)' },
+                        { value: 30, label: '30% — частично реинвест' },
+                        { value: 50, label: '50% — половина' },
+                        { value: 70, label: '70% — большая часть' },
+                        { value: 100, label: '100% — всё в дело (compound)' },
+                      ]}
+                    />
+                    <Text type="secondary">Влияет на накопление по эквити в превью.</Text>
                   </Card>
                 </Col>
               )}
