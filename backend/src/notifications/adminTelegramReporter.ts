@@ -549,13 +549,14 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
        COALESCE(ms.margin_load_percent,0)   AS margin,
        COALESCE(ms.drawdown_percent,0)      AS dd,
        ms.recorded_at                        AS recorded_at,
-       -- period-DD: считаем по «реализованной equity» = equity_usd − unrealized_pnl,
-       -- чтобы не ловить ложные просадки от unrealized PnL spikes (плечо/быстрые свечи)
-       -- и не реагировать на одиночные выбросы котировок.
+       -- period-DD: пик берём только из снепшотов с небольшой unrealized-компонентой
+       -- (|unrealized_pnl| < 20% equity), чтобы мимолётный котировочный спайк не завышал peak.
+       -- Текущее значение — equity_usd как есть, т.к. большой открытый убыток = реальный риск
+       -- (margin_load 99% → ликвидация, даже если баланс ещё цел).
        CASE
-         WHEN COALESCE(peak.peak_realized,0) > 0
-              AND (COALESCE(ms.equity_usd,0) - COALESCE(ms.unrealized_pnl,0)) < peak.peak_realized
-           THEN ROUND((peak.peak_realized - (COALESCE(ms.equity_usd,0) - COALESCE(ms.unrealized_pnl,0))) / peak.peak_realized * 100, 2)
+         WHEN COALESCE(peak.peak_equity,0) > 0
+              AND COALESCE(ms.equity_usd,0) < peak.peak_equity
+           THEN ROUND((peak.peak_equity - COALESCE(ms.equity_usd,0)) / peak.peak_equity * 100, 2)
          ELSE 0
        END AS period_dd,
        (SELECT COUNT(*) FROM monitoring_snapshots ms2 WHERE ms2.api_key_id = a.id AND datetime(ms2.recorded_at) >= datetime('now', ?)) AS snap_count,
@@ -571,9 +572,10 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
          ON j.api_key_id = m1.api_key_id AND datetime(m1.recorded_at) = j.mx
      ) ms ON ms.api_key_id = a.id
      LEFT JOIN (
-       SELECT api_key_id, MAX(equity_usd - COALESCE(unrealized_pnl,0)) AS peak_realized
+       SELECT api_key_id, MAX(equity_usd) AS peak_equity
        FROM monitoring_snapshots
        WHERE datetime(recorded_at) >= datetime('now', ?)
+         AND ABS(COALESCE(unrealized_pnl, 0)) < equity_usd * 0.20
        GROUP BY api_key_id
      ) peak ON peak.api_key_id = a.id
      WHERE COALESCE(ap.requested_enabled,0) = 1 AND COALESCE(ap.actual_enabled,0) = 1
@@ -588,10 +590,9 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
     equity: toFinite(r.equity, 0),
     upnl: toFinite(r.upnl, 0),
     margin: toFinite(r.margin, 0),
-    // Используем ТОЛЬКО period_dd (по реализованной equity = equity - unrealized_pnl).
-    // r.dd = drawdown_percent из снепшота — биржевой расчёт, учитывающий unrealized позиции;
-    // при leverage-спайке он ложно поднимается до 30%+ хотя реально ничего не потеряно.
-    dd: toFinite(r.period_dd, 0),
+    // Используем ТОЛЬКО period_dd (по equity_usd, пик = только «чистые» снепшоты без котировочных спайков).
+    // Биржевой r.dd (drawdown_percent) тоже equity-based но без фильтрации пика — оставляем ему быть fallback.
+    dd: Math.max(toFinite(r.period_dd, 0), toFinite(r.dd, 0)),
     recorded_at: r.recorded_at,
     snap_count: Math.max(0, Math.floor(toFinite(r.snap_count, 0))),
     trades_period: Math.max(0, Math.floor(toFinite(r.trades_period, 0))),
