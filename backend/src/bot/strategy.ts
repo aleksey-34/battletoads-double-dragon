@@ -755,6 +755,11 @@ const makeSignalGroupKey = (
   const shorts = strategy.short_enabled ? '1' : '0';
   return `${apiKeyName}|${mode}|${base}|${quote}|${baseCoef}|${quoteCoef}|${strategy.interval}|${type}|${len}|${src}|${zEntry}|${longs}|${shorts}`;
 };
+
+const extractSourceSid = (strategyName: string): string => {
+  const m = String(strategyName || '').match(/::SID(\d+)$/);
+  return m?.[1] ? m[1] : '';
+};
 // ─────────────────────────────────────────────────────────────────────────────
 
 const normalizeQtyValue = (value: number, decimals: number): number => {
@@ -3970,12 +3975,50 @@ export const runAutoStrategiesCycle = async () => {
   );
 
   const jobs = Array.isArray(rows) ? rows : [];
+  const sidDedupedJobs: any[] = [];
+  const sidWinnerByApiKeySid = new Map<string, any>();
+  for (const row of jobs) {
+    const apiKeyName = String(row?.api_key_name || '');
+    const strategyName = String(row?.strategy_name || '');
+    const strategyId = Number(row?.strategy_id || 0);
+    const sid = extractSourceSid(strategyName);
+    if (!apiKeyName || !sid || !Number.isFinite(strategyId) || strategyId <= 0) {
+      sidDedupedJobs.push(row);
+      continue;
+    }
+    const key = `${apiKeyName}::SID${sid}`;
+    const prev = sidWinnerByApiKeySid.get(key);
+    if (!prev || Number(prev.strategy_id || 0) < strategyId) {
+      sidWinnerByApiKeySid.set(key, row);
+    }
+  }
+  const hasSid = (row: any): boolean => !!extractSourceSid(String(row?.strategy_name || ''));
+  const sidWinners = new Set<string>();
+  for (const key of sidWinnerByApiKeySid.keys()) sidWinners.add(key);
+  const sidWinnerIds = new Set<number>();
+  for (const winner of sidWinnerByApiKeySid.values()) {
+    const id = Number(winner?.strategy_id || 0);
+    if (id > 0) sidWinnerIds.add(id);
+  }
+  for (const row of jobs) {
+    if (!hasSid(row)) continue;
+    const id = Number(row?.strategy_id || 0);
+    if (sidWinnerIds.has(id)) {
+      sidDedupedJobs.push(row);
+    }
+  }
+
+  const dedupedJobs = sidDedupedJobs.length > 0 ? sidDedupedJobs : jobs;
+  const skippedDuplicateSid = Math.max(0, jobs.length - dedupedJobs.length);
+  if (skippedDuplicateSid > 0) {
+    logger.warn(`Auto-cycle SID dedupe: skipped ${skippedDuplicateSid} duplicate strategy jobs in this cycle`);
+  }
   let processed = 0;
   let failed = 0;
   let skippedOffline = 0;
 
   // ── Phase 1: Initialize all exchange clients sequentially (safe, idempotent) ──
-  const validJobs = jobs.filter((row) => {
+  const validJobs = dedupedJobs.filter((row) => {
     const apiKeyName = String(row?.api_key_name || '');
     const strategyId = Number(row?.strategy_id || 0);
     return apiKeyName && Number.isFinite(strategyId) && strategyId > 0;

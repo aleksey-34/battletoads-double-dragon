@@ -3963,7 +3963,55 @@ const upsertTenantStrategies = async (
   riskLevel: Level3,
   activate: boolean
 ): Promise<StrategyMaterializedRow[]> => {
-  const existing = await getExistingTenantStrategies(apiKeyName, tenant.slug);
+  let existing = await getExistingTenantStrategies(apiKeyName, tenant.slug);
+
+  // Hard guard at materialization stage: if legacy/zombie duplicates exist for the
+  // same SID (or exact same strategy name), archive all but the newest row before
+  // proceeding. This prevents double execution after switch_system retries.
+  const sidGroups = new Map<string, Strategy[]>();
+  const nameGroups = new Map<string, Strategy[]>();
+  for (const row of existing) {
+    const name = asString(row.name, '');
+    if (!name) continue;
+    const sidMatch = name.match(/::SID(\d+)$/);
+    if (sidMatch?.[1]) {
+      const sid = sidMatch[1];
+      if (!sidGroups.has(sid)) sidGroups.set(sid, []);
+      sidGroups.get(sid)!.push(row);
+    }
+    if (!nameGroups.has(name)) nameGroups.set(name, []);
+    nameGroups.get(name)!.push(row);
+  }
+
+  const duplicateArchiveIds = new Set<number>();
+  const collectArchiveCandidates = (group: Strategy[]) => {
+    if (!Array.isArray(group) || group.length <= 1) return;
+    const sorted = [...group].sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
+    for (let i = 1; i < sorted.length; i += 1) {
+      const id = Number(sorted[i]?.id || 0);
+      if (id > 0) duplicateArchiveIds.add(id);
+    }
+  };
+
+  for (const group of sidGroups.values()) collectArchiveCandidates(group);
+  for (const group of nameGroups.values()) collectArchiveCandidates(group);
+
+  if (duplicateArchiveIds.size > 0) {
+    for (const id of duplicateArchiveIds) {
+      const row = existing.find((item) => Number(item.id || 0) === id);
+      if (!row) continue;
+      await saasArchiveStrategy(apiKeyName, {
+        id,
+        base_symbol: (row as any).base_symbol ?? null,
+        quote_symbol: (row as any).quote_symbol ?? null,
+        market_mode: (row as any).market_mode ?? null,
+        name: asString(row.name),
+      });
+    }
+    logger.warn(`[upsertTenantStrategies] archived duplicate tenant strategies for ${tenant.slug}/${apiKeyName}: ${duplicateArchiveIds.size}`);
+    existing = await getExistingTenantStrategies(apiKeyName, tenant.slug);
+  }
+
   const existingByName = new Map(existing.map((item) => [asString(item.name), item]));
   const perStrategyDeposit = Math.max(50, maxDepositTotal);
   const desiredNames = new Set<string>();
