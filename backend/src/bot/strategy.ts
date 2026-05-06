@@ -761,6 +761,10 @@ const extractSourceSid = (strategyName: string): string => {
   return m?.[1] ? m[1] : '';
 };
 
+const TS_SYNC_EXCLUDED_API_KEYS = new Set<string>([
+  'artursk-9542210407-api',
+]);
+
 const loadExpectedAlgofundSidMap = async (): Promise<Map<string, Set<string>>> => {
   const { db } = await import('../utils/database');
   const profiles: Array<{ execution_api_key_name: string; published_system_name: string }> = await db.all(
@@ -779,6 +783,7 @@ const loadExpectedAlgofundSidMap = async (): Promise<Map<string, Set<string>>> =
     const apiKeyName = String(profile.execution_api_key_name || '').trim();
     const publishedSystemName = String(profile.published_system_name || '').trim();
     if (!apiKeyName || !publishedSystemName) continue;
+    if (TS_SYNC_EXCLUDED_API_KEYS.has(apiKeyName)) continue;
 
     const systemRow: any = await db.get(
       `SELECT id
