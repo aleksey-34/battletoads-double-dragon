@@ -760,6 +760,60 @@ const extractSourceSid = (strategyName: string): string => {
   const m = String(strategyName || '').match(/::SID(\d+)$/);
   return m?.[1] ? m[1] : '';
 };
+
+const loadExpectedAlgofundSidMap = async (): Promise<Map<string, Set<string>>> => {
+  const { db } = await import('../utils/database');
+  const profiles: Array<{ execution_api_key_name: string; published_system_name: string }> = await db.all(
+    `SELECT
+       TRIM(COALESCE(execution_api_key_name, '')) AS execution_api_key_name,
+       TRIM(COALESCE(published_system_name, '')) AS published_system_name
+     FROM algofund_profiles
+     WHERE COALESCE(requested_enabled, 0) = 1
+       AND COALESCE(actual_enabled, 0) = 1
+       AND TRIM(COALESCE(execution_api_key_name, '')) != ''
+       AND TRIM(COALESCE(published_system_name, '')) != ''`
+  ) || [];
+
+  const out = new Map<string, Set<string>>();
+  for (const profile of profiles) {
+    const apiKeyName = String(profile.execution_api_key_name || '').trim();
+    const publishedSystemName = String(profile.published_system_name || '').trim();
+    if (!apiKeyName || !publishedSystemName) continue;
+
+    const systemRow: any = await db.get(
+      `SELECT id
+       FROM trading_systems
+       WHERE name = ? OR name LIKE ?
+       ORDER BY CASE WHEN name = ? THEN 1 ELSE 0 END DESC, id DESC
+       LIMIT 1`,
+      [publishedSystemName, `${publishedSystemName}::%`, publishedSystemName],
+    );
+
+    const systemId = Number(systemRow?.id || 0);
+    if (!Number.isFinite(systemId) || systemId <= 0) {
+      continue;
+    }
+
+    const members: Array<{ strategy_id: number }> = await db.all(
+      `SELECT strategy_id
+       FROM trading_system_members
+       WHERE system_id = ?
+         AND COALESCE(is_enabled, 1) = 1`,
+      [systemId],
+    ) || [];
+
+    const expected = new Set<string>();
+    for (const row of members) {
+      const sid = String(Number(row?.strategy_id || 0));
+      if (sid !== '0') expected.add(sid);
+    }
+    if (expected.size > 0) {
+      out.set(apiKeyName, expected);
+    }
+  }
+
+  return out;
+};
 // ─────────────────────────────────────────────────────────────────────────────
 
 const normalizeQtyValue = (value: number, decimals: number): number => {
@@ -3975,9 +4029,49 @@ export const runAutoStrategiesCycle = async () => {
   );
 
   const jobs = Array.isArray(rows) ? rows : [];
+  const expectedSidByApiKey = await loadExpectedAlgofundSidMap().catch(() => new Map<string, Set<string>>());
+  const syncMismatchRows: any[] = [];
+
+  const syncFilteredJobs = jobs.filter((row) => {
+    const apiKeyName = String(row?.api_key_name || '');
+    const expected = expectedSidByApiKey.get(apiKeyName);
+    if (!expected || expected.size === 0) {
+      return true;
+    }
+    const sid = extractSourceSid(String(row?.strategy_name || ''));
+    const ok = !!sid && expected.has(sid);
+    if (!ok) {
+      syncMismatchRows.push(row);
+    }
+    return ok;
+  });
+
+  if (syncMismatchRows.length > 0) {
+    for (const row of syncMismatchRows) {
+      const strategyId = Number(row?.strategy_id || 0);
+      const apiKeyName = String(row?.api_key_name || '');
+      if (!Number.isFinite(strategyId) || strategyId <= 0 || !apiKeyName) continue;
+      try {
+        await db.run(
+          `UPDATE strategies
+           SET is_active = 0,
+               is_archived = 1,
+               auto_update = 0,
+               last_action = 'ts_sync_mismatch_archived',
+               last_error = 'strict TS-sync: strategy SID not present in published system members',
+               updated_at = CURRENT_TIMESTAMP
+           WHERE id = ?`,
+          [strategyId],
+        );
+      } catch (e) {
+        logger.warn(`TS-sync archive failed for strategy ${strategyId} (${apiKeyName}): ${(e as Error).message}`);
+      }
+    }
+    logger.warn(`Auto-cycle TS-sync: archived ${syncMismatchRows.length} strategies not in published TS members`);
+  }
   const sidDedupedJobs: any[] = [];
   const sidWinnerByApiKeySid = new Map<string, any>();
-  for (const row of jobs) {
+  for (const row of syncFilteredJobs) {
     const apiKeyName = String(row?.api_key_name || '');
     const strategyName = String(row?.strategy_name || '');
     const strategyId = Number(row?.strategy_id || 0);
@@ -4000,7 +4094,7 @@ export const runAutoStrategiesCycle = async () => {
     const id = Number(winner?.strategy_id || 0);
     if (id > 0) sidWinnerIds.add(id);
   }
-  for (const row of jobs) {
+  for (const row of syncFilteredJobs) {
     if (!hasSid(row)) continue;
     const id = Number(row?.strategy_id || 0);
     if (sidWinnerIds.has(id)) {
@@ -4008,8 +4102,8 @@ export const runAutoStrategiesCycle = async () => {
     }
   }
 
-  const dedupedJobs = sidDedupedJobs.length > 0 ? sidDedupedJobs : jobs;
-  const skippedDuplicateSid = Math.max(0, jobs.length - dedupedJobs.length);
+  const dedupedJobs = sidDedupedJobs.length > 0 ? sidDedupedJobs : syncFilteredJobs;
+  const skippedDuplicateSid = Math.max(0, syncFilteredJobs.length - dedupedJobs.length);
   if (skippedDuplicateSid > 0) {
     logger.warn(`Auto-cycle SID dedupe: skipped ${skippedDuplicateSid} duplicate strategy jobs in this cycle`);
   }
@@ -4166,7 +4260,7 @@ export const runAutoStrategiesCycle = async () => {
   await Promise.allSettled(validJobs.map((row) => executeOne(row)));
 
   return {
-    total: jobs.length,
+    total: syncFilteredJobs.length,
     processed,
     failed,
     skippedOffline,
