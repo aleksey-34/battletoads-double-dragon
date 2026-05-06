@@ -180,6 +180,15 @@ const clamp = (value: number, min: number, max: number): number => {
   return Math.min(max, Math.max(min, value));
 };
 
+// Reinvest share: 0 (no compounding) .. 1 (full compounding). Values >100% in
+// reinvest_percent are clamped to 1 (full compound) — historically reinvest_percent
+// was a multiplicative size hack (200% = 2x lot) but no live strategy uses that
+// semantic (all rows are 0). Treat reinvest_percent strictly as a 0..100% knob.
+const clampReinvestShare = (reinvestPercent: number): number => {
+  const safe = Number.isFinite(reinvestPercent) ? reinvestPercent : 0;
+  return Math.min(1, Math.max(0, safe / 100));
+};
+
 const parseTimestampMs = (value: any): number | null => {
   if (value === undefined || value === null || value === '') {
     return null;
@@ -461,6 +470,7 @@ type BacktestContext = {
   trades: BacktestTrade[];
   maxDepositOverride: number;
   lotPercentOverride: number;
+  initialBalance: number;
 };
 
 const computeLockedMargin = (runtimes: RuntimeStrategy[]): number => {
@@ -697,24 +707,31 @@ const openPosition = (
     return false;
   }
 
-  const reinvestFactor = strategy.fixed_lot
-    ? 1
-    : 1 + Math.max(0, asNumber(strategy.reinvest_percent, 0)) / 100;
-
   const maxDeposit = ctx.maxDepositOverride > 0
     ? ctx.maxDepositOverride
     : asNumber(strategy.max_deposit, 0);
-  const cappedBalance = maxDeposit > 0
-    ? Math.min(portfolioEquityNow, maxDeposit)
-    : portfolioEquityNow;
 
-  const baseCapital = strategy.fixed_lot
-    ? (maxDeposit > 0 ? maxDeposit : portfolioEquityNow)
-    : cappedBalance;
+  // Reinvest semantics (matches user-facing setting on the storefront/admin panel):
+  //   0%   → no compounding: lot is sized off `initialBalance` (or maxDeposit if set)
+  //   100% → full compounding: lot is sized off current `portfolioEquityNow`
+  //   x%   → partial compounding: base = initialBalance + pnl × (x/100)
+  // Previously this code unconditionally used `portfolioEquityNow` as base AND
+  // multiplied by `1 + reinvest/100` on top — so reinvest_percent had no effect
+  // when 0 (already compounded) and double-inflated lots when >0 (compound + bonus).
+  // Result: every backtest showed compounded growth regardless of the setting.
+  const reinvestShare = strategy.fixed_lot
+    ? 0
+    : clampReinvestShare(asNumber(strategy.reinvest_percent, 0));
+  const equityBaseRaw = strategy.fixed_lot
+    ? (maxDeposit > 0 ? maxDeposit : ctx.initialBalance)
+    : ctx.initialBalance + Math.max(0, portfolioEquityNow - ctx.initialBalance) * reinvestShare;
+  const baseCapital = maxDeposit > 0
+    ? Math.min(equityBaseRaw, maxDeposit)
+    : equityBaseRaw;
 
   // Notional = capital × lot_fraction. Leverage is an exchange margin setting only,
   // NOT a position-size multiplier (consistent with live trading).
-  const notional = baseCapital * lotFraction * reinvestFactor;
+  const notional = baseCapital * lotFraction;
   if (!Number.isFinite(notional) || notional <= 0) {
     return false;
   }
@@ -1187,6 +1204,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     trades: [],
     maxDepositOverride: request.maxDepositOverride,
     lotPercentOverride: request.lotPercentOverride,
+    initialBalance: request.initialBalance,
   };
 
   const maxOpenPositions = request.maxOpenPositions;

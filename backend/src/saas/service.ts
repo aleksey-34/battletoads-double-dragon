@@ -4999,15 +4999,12 @@ const runWithSqliteBusyRetry = async <T>(fn: () => Promise<T>): Promise<T> => {
 };
 
 export const getAdminTelegramControls = async (): Promise<AdminTelegramControls> => {
-  const [adminEnabledRaw, clientsEnabledRaw, runtimeOnlyRaw, reconciliationCycleRaw, reportIntervalRaw, secAccRaw, secDriftRaw, secLowlotRaw] = await Promise.all([
+  const [adminEnabledRaw, clientsEnabledRaw, runtimeOnlyRaw, reconciliationCycleRaw, reportIntervalRaw] = await Promise.all([
     getRuntimeFlag('telegram.admin.enabled', '1'),
     getRuntimeFlag('telegram.clients.enabled', '0'),
     getRuntimeFlag('telegram.admin.runtimeonly', '0'),
     getRuntimeFlag('runtime.cycle.reconciliation.enabled', '0'),
-    getRuntimeFlag('telegram.admin.report_interval_minutes', '60'),
-    getRuntimeFlag('telegram.admin.section.accounts', '1'),
-    getRuntimeFlag('telegram.admin.section.drift', '1'),
-    getRuntimeFlag('telegram.admin.section.lowlot', '1'),
+    getRuntimeFlag('telegram.admin.report_interval_minutes', '1440'),
   ]);
 
   return {
@@ -5017,10 +5014,10 @@ export const getAdminTelegramControls = async (): Promise<AdminTelegramControls>
     reconciliationCycleEnabled: reconciliationCycleRaw !== '0',
     tokenConfigured: Boolean(String(process.env.TELEGRAM_ADMIN_BOT_TOKEN || '').trim()),
     chatConfigured: Boolean(String(process.env.TELEGRAM_ADMIN_CHAT_ID || '').trim()),
-    reportIntervalMinutes: Math.max(5, Math.min(1440, Math.floor(asNumber(reportIntervalRaw, 60)) || 60)),
-    sectionAccounts: secAccRaw !== '0',
-    sectionDrift: secDriftRaw !== '0',
-    sectionLowlot: secLowlotRaw !== '0',
+    reportIntervalMinutes: Math.max(5, Math.min(1440, Math.floor(asNumber(reportIntervalRaw, 1440)) || 1440)),
+    sectionAccounts: true,
+    sectionDrift: true,
+    sectionLowlot: true,
   };
 };
 
@@ -5047,18 +5044,10 @@ export const updateAdminTelegramControls = async (payload: {
     await setRuntimeFlag('runtime.cycle.reconciliation.enabled', payload.reconciliationCycleEnabled ? '1' : '0');
   }
   if (payload.reportIntervalMinutes !== undefined) {
-    const clamped = Math.max(5, Math.min(1440, Math.floor(asNumber(payload.reportIntervalMinutes, 60)) || 60));
+    const clamped = Math.max(5, Math.min(1440, Math.floor(asNumber(payload.reportIntervalMinutes, 1440)) || 1440));
     await setRuntimeFlag('telegram.admin.report_interval_minutes', String(clamped));
   }
-  if (payload.sectionAccounts !== undefined) {
-    await setRuntimeFlag('telegram.admin.section.accounts', payload.sectionAccounts ? '1' : '0');
-  }
-  if (payload.sectionDrift !== undefined) {
-    await setRuntimeFlag('telegram.admin.section.drift', payload.sectionDrift ? '1' : '0');
-  }
-  if (payload.sectionLowlot !== undefined) {
-    await setRuntimeFlag('telegram.admin.section.lowlot', payload.sectionLowlot ? '1' : '0');
-  }
+  // sectionAccounts/Drift/Lowlot больше не влияют на новый health-summary и игнорируются.
 
   return getAdminTelegramControls();
 };
@@ -10578,6 +10567,36 @@ const materializeAlgofundSystem = async (
     is_enabled: true,
     notes: `algofund ${tenant.slug}`,
   }));
+
+  // ARCHIVE-ORPHANS: strategies on executionApiKeyName that were materialized
+  // by a PREVIOUS published_system_name (different members) keep is_active=1 and
+  // continue trading after a switch_system. They produce zombie positions that
+  // bleed equity in parallel to the newly active TS (root cause of the
+  // 2026-05-04 BERAUSDT/JUPUSDT/INJUSDT zombie outbreak — see
+  // /memories/repo/2026-05-04-zombie-archive.md). Close exposure (cohabitation
+  // guard preserves shared positions) and mark archived BEFORE replacing TS
+  // members.
+  try {
+    const newMemberIdSet = new Set<number>(members.map((m) => Number(m.strategy_id)).filter((id) => Number.isFinite(id) && id > 0));
+    const orphanRows = (await db.all(
+      `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode
+       FROM strategies s
+       JOIN api_keys a ON a.id = s.api_key_id
+       WHERE a.name = ?
+         AND s.is_active = 1
+         AND s.is_archived = 0`,
+      [executionApiKeyName]
+    ).catch(() => [])) as Array<{ id: number; name: string; base_symbol: string | null; quote_symbol: string | null; market_mode: string | null }>;
+    const orphans = orphanRows.filter((r) => !newMemberIdSet.has(Number(r.id)));
+    if (orphans.length > 0) {
+      logger.warn(`Algofund materialize [archive-orphans]: archiving ${orphans.length} stale strategies on ${executionApiKeyName} not in new TS '${getAlgofundClientSystemName(tenant)}' (${members.length} members)`);
+      for (const orphan of orphans) {
+        await saasArchiveStrategy(executionApiKeyName, orphan);
+      }
+    }
+  } catch (err) {
+    logger.warn(`Algofund materialize [archive-orphans] failed for ${executionApiKeyName}: ${(err as Error).message}`);
+  }
 
   let systemId = 0;
   if (existing?.id) {
