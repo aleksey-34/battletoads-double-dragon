@@ -3970,7 +3970,7 @@ export const runAutoStrategiesCycle = async () => {
             s.price_channel_length, s.base_coef, s.quote_coef
      FROM strategies s
      JOIN api_keys a ON a.id = s.api_key_id
-     WHERE s.is_active = 1 AND s.auto_update = 1
+      WHERE s.is_active = 1 AND s.auto_update = 1 AND COALESCE(s.is_archived, 0) = 0
      ORDER BY s.id ASC`
   );
 
