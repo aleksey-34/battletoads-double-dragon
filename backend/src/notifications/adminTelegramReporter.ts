@@ -530,6 +530,37 @@ type HealthRow = {
   trades_period: number;
 };
 
+const fetchDuplicateSidGroupsByApiKey = async (apiKeyNames: string[]): Promise<Map<string, number>> => {
+  const names = Array.from(new Set(apiKeyNames.map((v) => String(v || '').trim()).filter(Boolean)));
+  if (names.length === 0) {
+    return new Map<string, number>();
+  }
+  const placeholders = names.map(() => '?').join(',');
+  const rows = await db.all(
+    `SELECT api_key_name, COUNT(*) AS dup_groups
+     FROM (
+       SELECT
+         a.name AS api_key_name,
+         substr(s.name, instr(s.name, '::SID') + 5) AS source_sid,
+         COUNT(*) AS cnt
+       FROM strategies s
+       JOIN api_keys a ON a.id = s.api_key_id
+       WHERE s.is_active = 1
+         AND instr(s.name, '::SID') > 0
+         AND a.name IN (${placeholders})
+       GROUP BY a.name, source_sid
+       HAVING cnt > 1
+     ) d
+     GROUP BY api_key_name`,
+    names,
+  ) as Array<{ api_key_name: string; dup_groups: number }>;
+  const out = new Map<string, number>();
+  for (const row of rows || []) {
+    out.set(String(row.api_key_name || ''), Math.max(0, Math.floor(toFinite(row.dup_groups, 0))));
+  }
+  return out;
+};
+
 const parseSqliteUtc = (value: string | null): number | null => {
   const raw = String(value || '').trim();
   if (!raw) return null;
@@ -603,12 +634,14 @@ const HEALTH_THRESHOLDS = {
   staleSnapshotMin: 30,   // снепшот старше 30 минут — алерт
   highMarginPct: 70,      // загрузка маржи
   highDdPct: 25,          // приближение к лимиту просадки
+  duplicateSidGroups: 1,  // дубли source SID среди активных стратегий
   desyncMaxRatio: 0.2,    // у клиента <20% сделок от медианы по той же TS
   desyncMinMaster: 5,     // алерт включается, только если на TS медиана ≥ 5 сделок
 };
 
 const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; text: string }> => {
   const rows = await fetchHealthRows(periodHours);
+  const duplicateSidByApiKey = await fetchDuplicateSidGroupsByApiKey(rows.map((r) => r.api_key_name || ''));
   const total = rows.length;
   if (total === 0) {
     return { ok: true, text: `<b>📊 BTDD health (${periodHours}h)</b>\nАктивных algofund-клиентов нет.` };
@@ -651,7 +684,18 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
     }
   }
 
-  // 4. DESYNC: для каждой TS считаем медиану trades_period; кто <20% от медианы — алерт.
+  // 4. DUPLICATE STRATEGY SID GROUPS (zombie clones after switch_system)
+  for (const r of rows) {
+    const dupGroups = duplicateSidByApiKey.get(String(r.api_key_name || '')) || 0;
+    if (dupGroups >= HEALTH_THRESHOLDS.duplicateSidGroups) {
+      const label = r.display_name || r.tenant_slug || r.api_key_name || 'client';
+      alerts.push(
+        `🧬 <b>${escapeHtml(label)}</b>: найдено дублей SID-групп: ${dupGroups} (двойные стратегии могут удваивать входы и нагрузку маржи)`
+      );
+    }
+  }
+
+  // 5. DESYNC: для каждой TS считаем медиану trades_period; кто <20% от медианы — алерт.
   const byTs = new Map<string, HealthRow[]>();
   for (const r of rows) {
     const ts = (r.system_name || '').trim();
