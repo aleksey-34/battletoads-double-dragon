@@ -588,7 +588,10 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
     equity: toFinite(r.equity, 0),
     upnl: toFinite(r.upnl, 0),
     margin: toFinite(r.margin, 0),
-    dd: Math.max(toFinite(r.dd, 0), toFinite(r.period_dd, 0)), // worst of exchange DD and period DD
+    // Используем ТОЛЬКО period_dd (по реализованной equity = equity - unrealized_pnl).
+    // r.dd = drawdown_percent из снепшота — биржевой расчёт, учитывающий unrealized позиции;
+    // при leverage-спайке он ложно поднимается до 30%+ хотя реально ничего не потеряно.
+    dd: toFinite(r.period_dd, 0),
     recorded_at: r.recorded_at,
     snap_count: Math.max(0, Math.floor(toFinite(r.snap_count, 0))),
     trades_period: Math.max(0, Math.floor(toFinite(r.trades_period, 0))),
