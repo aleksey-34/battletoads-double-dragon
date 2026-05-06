@@ -13,6 +13,8 @@ export interface OverlayLine {
   id: string;
   color: string;
   lineWidth?: number;
+  /** Use 'left' to render the overlay on a separate left price scale (e.g. percent series next to USD series). */
+  priceScaleId?: 'left' | 'right';
   data: Array<{
     time: number;
     value: number;
@@ -193,7 +195,8 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
         borderVisible: false,
       },
       leftPriceScale: {
-        visible: false,
+        visible: !compact && overlayLines.some((line) => line && line.priceScaleId === 'left'),
+        borderVisible: false,
       },
       timeScale: {
         visible: !compact,
@@ -572,8 +575,12 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
           lineWidth: (line.lineWidth || 2) as any,
           priceLineVisible: false,
           lastValueVisible: false,
+          priceScaleId: line.priceScaleId === 'left' ? 'left' : 'right',
         });
         overlaySeriesRef.current.set(line.id, series);
+        if (line.priceScaleId === 'left') {
+          chart.applyOptions({ leftPriceScale: { visible: !compact, borderVisible: false } });
+        }
       }
 
       series.applyOptions({

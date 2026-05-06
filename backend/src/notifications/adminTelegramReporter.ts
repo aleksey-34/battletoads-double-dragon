@@ -10,7 +10,7 @@ type ReportNowOptions = {
   periodHours?: number;
   includeLoginAlerts?: boolean;
   runtimeOnly?: boolean;
-  format?: 'short' | 'full';
+  format?: 'short' | 'full' | 'verbose';
 };
 
 const toFinite = (value: unknown, fallback = 0): number => {
@@ -35,7 +35,7 @@ const getReportIntervalMinutesFromDb = async (): Promise<number> => {
   const row = await db.get('SELECT value FROM app_runtime_flags WHERE key = ?', ['telegram.admin.report_interval_minutes']);
   const raw = String(row?.value || '').trim();
   const parsed = parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed >= 5 ? Math.min(1440, parsed) : 60;
+  return Number.isFinite(parsed) && parsed >= 5 ? Math.min(1440, parsed) : 1440;
 };
 
 const isRuntimeOnlyEnabledInDb = async (): Promise<boolean> => {
@@ -256,9 +256,6 @@ const buildRuntimeClientLines = async (periodHours: number): Promise<string[]> =
     if (dd >= 35) {
       warnings.push('HIGH_DD');
     }
-    if (trades === 0) {
-      warnings.push('NO_TRADES');
-    }
 
     const scopePart = systemName
       ? ` | ts=${escapeHtml(shorten(systemName, 54))}`
@@ -367,9 +364,6 @@ const buildAccountLines = async (periodHours: number, runtimeOnly = false): Prom
     }
     if (dd >= 35) {
       warnings.push('HIGH_DD');
-    }
-    if (trades === 0) {
-      warnings.push('NO_TRADES');
     }
 
     out.push(
@@ -520,6 +514,186 @@ const trimTelegramText = (value: string, maxLen = 3900): string => {
   return `${text.slice(0, Math.max(0, maxLen - 21))}\n...message truncated`;
 };
 
+// ── Health summary (default periodic report) ────────────────────────────────
+
+type HealthRow = {
+  display_name: string | null;
+  tenant_slug: string | null;
+  api_key_name: string | null;
+  system_name: string | null;
+  equity: number;
+  upnl: number;
+  margin: number;
+  dd: number;
+  recorded_at: string | null;
+  snap_count: number;
+  trades_period: number;
+};
+
+const parseSqliteUtc = (value: string | null): number | null => {
+  const raw = String(value || '').trim();
+  if (!raw) return null;
+  const ms = Date.parse(raw.includes('T') ? raw : raw.replace(' ', 'T') + 'Z');
+  return Number.isFinite(ms) ? ms : null;
+};
+
+const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
+  const rows = await db.all(
+    `SELECT
+       t.display_name,
+       t.slug AS tenant_slug,
+       COALESCE(NULLIF(ap.execution_api_key_name,''), NULLIF(t.assigned_api_key_name,''), NULLIF(ap.assigned_api_key_name,'')) AS api_key_name,
+       COALESCE(ap.published_system_name,'') AS system_name,
+       COALESCE(ms.equity_usd,0)            AS equity,
+       COALESCE(ms.unrealized_pnl,0)        AS upnl,
+       COALESCE(ms.margin_load_percent,0)   AS margin,
+       COALESCE(ms.drawdown_percent,0)      AS dd,
+       ms.recorded_at                        AS recorded_at,
+       -- period-DD: считаем по «реализованной equity» = equity_usd − unrealized_pnl,
+       -- чтобы не ловить ложные просадки от unrealized PnL spikes (плечо/быстрые свечи)
+       -- и не реагировать на одиночные выбросы котировок.
+       CASE
+         WHEN COALESCE(peak.peak_realized,0) > 0
+              AND (COALESCE(ms.equity_usd,0) - COALESCE(ms.unrealized_pnl,0)) < peak.peak_realized
+           THEN ROUND((peak.peak_realized - (COALESCE(ms.equity_usd,0) - COALESCE(ms.unrealized_pnl,0))) / peak.peak_realized * 100, 2)
+         ELSE 0
+       END AS period_dd,
+       (SELECT COUNT(*) FROM monitoring_snapshots ms2 WHERE ms2.api_key_id = a.id AND datetime(ms2.recorded_at) >= datetime('now', ?)) AS snap_count,
+       (SELECT COUNT(*) FROM live_trade_events lte JOIN strategies s ON s.id=lte.strategy_id
+         WHERE s.api_key_id = a.id AND lte.actual_time >= (strftime('%s','now', ?) * 1000)) AS trades_period
+     FROM algofund_profiles ap
+     JOIN tenants t ON t.id = ap.tenant_id
+     LEFT JOIN api_keys a ON a.name = COALESCE(NULLIF(ap.execution_api_key_name,''), NULLIF(t.assigned_api_key_name,''), NULLIF(ap.assigned_api_key_name,''))
+     LEFT JOIN (
+       SELECT m1.api_key_id, m1.equity_usd, m1.unrealized_pnl, m1.margin_load_percent, m1.drawdown_percent, m1.recorded_at
+       FROM monitoring_snapshots m1
+       JOIN (SELECT api_key_id, MAX(datetime(recorded_at)) AS mx FROM monitoring_snapshots GROUP BY api_key_id) j
+         ON j.api_key_id = m1.api_key_id AND datetime(m1.recorded_at) = j.mx
+     ) ms ON ms.api_key_id = a.id
+     LEFT JOIN (
+       SELECT api_key_id, MAX(equity_usd - COALESCE(unrealized_pnl,0)) AS peak_realized
+       FROM monitoring_snapshots
+       WHERE datetime(recorded_at) >= datetime('now', ?)
+       GROUP BY api_key_id
+     ) peak ON peak.api_key_id = a.id
+     WHERE COALESCE(ap.requested_enabled,0) = 1 AND COALESCE(ap.actual_enabled,0) = 1
+     ORDER BY t.display_name ASC`,
+    [`-${periodHours} hours`, `-${periodHours} hours`, `-${periodHours} hours`]
+  ) as any[];
+  return (rows || []).map((r) => ({
+    display_name: r.display_name,
+    tenant_slug: r.tenant_slug,
+    api_key_name: r.api_key_name,
+    system_name: r.system_name,
+    equity: toFinite(r.equity, 0),
+    upnl: toFinite(r.upnl, 0),
+    margin: toFinite(r.margin, 0),
+    dd: Math.max(toFinite(r.dd, 0), toFinite(r.period_dd, 0)), // worst of exchange DD and period DD
+    recorded_at: r.recorded_at,
+    snap_count: Math.max(0, Math.floor(toFinite(r.snap_count, 0))),
+    trades_period: Math.max(0, Math.floor(toFinite(r.trades_period, 0))),
+  }));
+};
+
+const HEALTH_THRESHOLDS = {
+  staleSnapshotMin: 30,   // снепшот старше 30 минут — алерт
+  highMarginPct: 70,      // загрузка маржи
+  highDdPct: 25,          // приближение к лимиту просадки
+  desyncMaxRatio: 0.2,    // у клиента <20% сделок от медианы по той же TS
+  desyncMinMaster: 5,     // алерт включается, только если на TS медиана ≥ 5 сделок
+};
+
+const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; text: string }> => {
+  const rows = await fetchHealthRows(periodHours);
+  const total = rows.length;
+  if (total === 0) {
+    return { ok: true, text: `<b>📊 BTDD health (${periodHours}h)</b>\nАктивных algofund-клиентов нет.` };
+  }
+
+  const nowMs = Date.now();
+  const sumEquity = rows.reduce((s, r) => s + r.equity, 0);
+  const sumUpnl = rows.reduce((s, r) => s + r.upnl, 0);
+  const sumTrades = rows.reduce((s, r) => s + r.trades_period, 0);
+
+  const alerts: string[] = [];
+
+  // 1. STALE / NO snapshot
+  for (const r of rows) {
+    const tsMs = parseSqliteUtc(r.recorded_at);
+    const label = r.display_name || r.tenant_slug || r.api_key_name || 'client';
+    if (!tsMs) {
+      alerts.push(`🔌 <b>${escapeHtml(label)}</b>: нет ни одного snapshot — ключ не отвечает (${escapeHtml(r.api_key_name || '-')})`);
+      continue;
+    }
+    const ageMin = (nowMs - tsMs) / 60000;
+    if (ageMin > HEALTH_THRESHOLDS.staleSnapshotMin) {
+      alerts.push(`⏱ <b>${escapeHtml(label)}</b>: snapshot устарел ${ageMin.toFixed(0)} мин назад`);
+    }
+  }
+
+  // 2. HIGH MARGIN
+  for (const r of rows) {
+    if (r.margin >= HEALTH_THRESHOLDS.highMarginPct) {
+      const label = r.display_name || r.tenant_slug || r.api_key_name || 'client';
+      alerts.push(`⚠️ <b>${escapeHtml(label)}</b>: загрузка маржи ${r.margin.toFixed(1)}% (порог ${HEALTH_THRESHOLDS.highMarginPct}%)`);
+    }
+  }
+
+  // 3. HIGH DD
+  for (const r of rows) {
+    if (r.dd >= HEALTH_THRESHOLDS.highDdPct) {
+      const label = r.display_name || r.tenant_slug || r.api_key_name || 'client';
+      alerts.push(`📉 <b>${escapeHtml(label)}</b>: просадка ${r.dd.toFixed(1)}% (порог ${HEALTH_THRESHOLDS.highDdPct}%)`);
+    }
+  }
+
+  // 4. DESYNC: для каждой TS считаем медиану trades_period; кто <20% от медианы — алерт.
+  const byTs = new Map<string, HealthRow[]>();
+  for (const r of rows) {
+    const ts = (r.system_name || '').trim();
+    if (!ts) continue;
+    if (!byTs.has(ts)) byTs.set(ts, []);
+    byTs.get(ts)!.push(r);
+  }
+  for (const [ts, group] of byTs) {
+    if (group.length < 2) continue;
+    const sorted = [...group].map((r) => r.trades_period).sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    const median = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+    if (median < HEALTH_THRESHOLDS.desyncMinMaster) continue;
+    const cutoff = Math.max(1, Math.floor(median * HEALTH_THRESHOLDS.desyncMaxRatio));
+    const lagging = group.filter((r) => r.trades_period < cutoff);
+    for (const r of lagging) {
+      const label = r.display_name || r.tenant_slug || r.api_key_name || 'client';
+      alerts.push(`🔀 <b>${escapeHtml(label)}</b>: desync — ${r.trades_period} сделок vs медиана ${median} по TS ${escapeHtml(shorten(ts, 40))}`);
+    }
+  }
+
+  const headerOk = `✅ <b>BTDD: всё OK</b> (${periodHours}ч)`;
+  const headerBad = `🚨 <b>BTDD: алерты ${alerts.length}/${total}</b> (${periodHours}ч)`;
+
+  const worstDd = rows.reduce((w, r) => r.dd > w.dd ? r : w, rows[0]);
+  const worstUpnl = rows.reduce((w, r) => r.upnl < w.upnl ? r : w, rows[0]);
+  const upnlSign = sumUpnl >= 0 ? '+' : '';
+  const stats = [
+    `Клиентов: ${total} · equity: $${sumEquity.toFixed(0)} · uPnL: ${upnlSign}${sumUpnl.toFixed(2)}`,
+    `Сделок за ${periodHours}ч: ${sumTrades} · worst DD: ${worstDd.dd.toFixed(1)}% (${escapeHtml(worstDd.display_name || worstDd.api_key_name || '')})`,
+  ].join('\n');
+
+  if (alerts.length === 0) {
+    return { ok: true, text: `${headerOk}\n${stats}` };
+  }
+  // limit to 25 alerts to fit Telegram
+  const shown = alerts.slice(0, 25);
+  const more = alerts.length > shown.length ? `\n<i>...+${alerts.length - shown.length} ещё</i>` : '';
+  return { ok: false, text: `${headerBad}\n${stats}\n\n${shown.join('\n')}${more}` };
+};
+
+const sendHealthSummary = async (periodHours: number): Promise<void> => {
+  const { text } = await buildHealthSummary(periodHours);
+  await sendTelegramMessage(trimTelegramText(text));
+};
+
 const sendPeriodicReportShort = async (periodHours: number, runtimeOnly = false): Promise<void> => {
   const [accountsEnabled, driftEnabled, lowLotEnabled] = await Promise.all([
     isSectionEnabled('accounts'),
@@ -562,9 +736,16 @@ const sendPeriodicReportShort = async (periodHours: number, runtimeOnly = false)
   await sendTelegramMessage(trimTelegramText(parts.join('\n')));
 };
 
-const sendPeriodicReport = async (periodHours: number, runtimeOnly = false, format: 'short' | 'full' = 'full'): Promise<void> => {
-  if (format === 'short') {
-    return sendPeriodicReportShort(periodHours, runtimeOnly);
+const sendPeriodicReport = async (periodHours: number, runtimeOnly = false, format: 'short' | 'full' | 'verbose' = 'full'): Promise<void> => {
+  // Default behaviour ('short' / 'full') is the lightweight health summary:
+  // ✅ "all OK" or only the list of problem accounts.
+  // The verbose per-client dump is kept under format === 'verbose' for diagnostics.
+  if (format === 'verbose') {
+    // fallthrough to legacy verbose builder below
+  } else if (format === 'short') {
+    return sendHealthSummary(periodHours);
+  } else {
+    return sendHealthSummary(periodHours);
   }
   const [accountsEnabled, driftEnabled, lowLotEnabled] = await Promise.all([
     isSectionEnabled('accounts'),
@@ -812,6 +993,18 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
     lastLoginAtIso: await getLatestLoginAtIso(),
   };
 
+  // Anti-spam for alert summary: store last sent alert-set hash + ts.
+  const alertState: { lastHash: string; lastSentMs: number } = { lastHash: '', lastSentMs: 0 };
+  const ALERT_REPEAT_MS = 60 * 60_000; // повторяем тот же набор алертов не чаще раза в час
+
+  const hashAlertText = (text: string): string => {
+    let h = 0;
+    for (let i = 0; i < text.length; i += 1) {
+      h = (h * 31 + text.charCodeAt(i)) | 0;
+    }
+    return String(h);
+  };
+
   const runTick = async () => {
     try {
       await sendNewLoginAlerts(state);
@@ -819,13 +1012,30 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
       const nowMs = Date.now();
       const intervalMinutes = await getReportIntervalMinutesFromDb();
       const intervalMs = intervalMinutes * 60_000;
-      if (state.lastReportAtMs === 0 || nowMs - state.lastReportAtMs >= intervalMs) {
-        const runtimeOnly = await isRuntimeOnlyEnabledInDb();
-        await sendPeriodicReport(reportHours, runtimeOnly, 'full');
+      const heartbeatDue = state.lastReportAtMs === 0 || nowMs - state.lastReportAtMs >= intervalMs;
+
+      // Считаем health summary каждый тик.
+      const summary = await buildHealthSummary(reportHours);
+
+      if (!summary.ok) {
+        // Алерт: шлём моментально. Дедуп: тот же набор не чаще ALERT_REPEAT_MS.
+        const hash = hashAlertText(summary.text);
+        const sameAsLast = hash === alertState.lastHash;
+        const cooledDown = nowMs - alertState.lastSentMs >= ALERT_REPEAT_MS;
+        if (!sameAsLast || cooledDown) {
+          await sendTelegramMessage(trimTelegramText(summary.text));
+          alertState.lastHash = hash;
+          alertState.lastSentMs = nowMs;
+          state.lastReportAtMs = nowMs; // алерт заменяет ближайший heartbeat
+        }
+      } else if (heartbeatDue) {
+        // Всё ОК — короткий heartbeat по расписанию.
+        await sendTelegramMessage(trimTelegramText(summary.text));
         state.lastReportAtMs = nowMs;
+        alertState.lastHash = '';
       }
 
-      // Watchdog: instant alert for rate-limit burst / low-lot spike
+      // Watchdog: rate-limit / low-lot / failed cycles (отдельный канал, свой cooldown).
       await sendWatchdogAlertIfNeeded();
     } catch (error) {
       logger.warn(`[tg-admin] tick failed: ${(error as Error).message}`);
@@ -837,5 +1047,5 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
     void runTick();
   }, pollMinutes * 60_000);
 
-  logger.info(`[tg-admin] Started: report=${reportHours}h, poll=${pollMinutes}m, interval=DB`);
+  logger.info(`[tg-admin] Started: heartbeat=DB-flag (default 24h), poll=${pollMinutes}m, alerts=immediate (cooldown 60m)`);
 };

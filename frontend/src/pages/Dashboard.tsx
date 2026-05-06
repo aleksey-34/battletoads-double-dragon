@@ -502,6 +502,8 @@ type MonitoringSnapshot = {
   effective_leverage: number;
   notional_usd: number;
   drawdown_percent: number;
+  deposit_base_usd?: number | null;
+  pnl_net_usd?: number | null;
   recorded_at: string;
 };
 
@@ -799,6 +801,8 @@ const parseMonitoringSnapshot = (raw: any): MonitoringSnapshot => {
     effective_leverage: asNumber(raw?.effective_leverage),
     notional_usd: asNumber(raw?.notional_usd),
     drawdown_percent: asNumber(raw?.drawdown_percent),
+    deposit_base_usd: raw?.deposit_base_usd === null || raw?.deposit_base_usd === undefined ? null : asNumber(raw?.deposit_base_usd),
+    pnl_net_usd: raw?.pnl_net_usd === null || raw?.pnl_net_usd === undefined ? null : asNumber(raw?.pnl_net_usd),
     recorded_at: String(raw?.recorded_at || ''),
   };
 };
@@ -825,6 +829,22 @@ const toLineSeriesData = (
       };
     })
     .filter((point): point is { time: number; open: number; high: number; low: number; close: number } => !!point);
+};
+
+const toOverlayLineData = (
+  points: MonitoringSnapshot[],
+  pickValue: (point: MonitoringSnapshot) => number
+): Array<{ time: number; value: number }> => {
+  return points
+    .map((point) => {
+      const value = Number(pickValue(point));
+      const timeMs = Date.parse(point.recorded_at);
+      if (!Number.isFinite(value) || !Number.isFinite(timeMs)) {
+        return null;
+      }
+      return { time: Math.floor(timeMs / 1000), value };
+    })
+    .filter((p): p is { time: number; value: number } => !!p);
 };
 
 const isSameHoverOHLC = (left: HoverOHLC | null | undefined, right: HoverOHLC | null | undefined): boolean => {
@@ -3976,31 +3996,37 @@ const Dashboard: React.FC = () => {
                           ) : null}
 
                           <Row gutter={[12, 12]}>
-                            <Col xs={24} md={12}>
-                              <Card size="small" title="Wallet (USDT)">
+                            <Col xs={24} md={16}>
+                              <Card size="small" title="Капитал · PnL · Просадка %">
                                 <ChartComponent
                                   data={toLineSeriesData(monitoringPoints, (point) => point.equity_usd)}
                                   type="line"
+                                  overlayLines={[
+                                    {
+                                      id: 'pnl-net',
+                                      color: '#16a34a',
+                                      lineWidth: 2,
+                                      data: toOverlayLineData(monitoringPoints, (p) => Number(p.pnl_net_usd ?? (p.equity_usd - p.unrealized_pnl - (p.deposit_base_usd || 0)))),
+                                    },
+                                    {
+                                      id: 'drawdown-pct',
+                                      color: '#d97706',
+                                      lineWidth: 1,
+                                      priceScaleId: 'left',
+                                      data: toOverlayLineData(monitoringPoints, (p) => p.drawdown_percent),
+                                    },
+                                  ]}
                                 />
+                                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+                                  <span style={{ color: '#1677ff' }}>━ Капитал ($)</span>
+                                  {' · '}
+                                  <span style={{ color: '#16a34a' }}>━ PnL net ($)</span>
+                                  {' · '}
+                                  <span style={{ color: '#d97706' }}>━ Просадка % (левая шкала)</span>
+                                </div>
                               </Card>
                             </Col>
-                            <Col xs={24} md={12}>
-                              <Card size="small" title="Unrealized PnL">
-                                <ChartComponent
-                                  data={toLineSeriesData(monitoringPoints, (point) => point.unrealized_pnl)}
-                                  type="line"
-                                />
-                              </Card>
-                            </Col>
-                            <Col xs={24} md={12}>
-                              <Card size="small" title="Drawdown %">
-                                <ChartComponent
-                                  data={toLineSeriesData(monitoringPoints, (point) => point.drawdown_percent)}
-                                  type="line"
-                                />
-                              </Card>
-                            </Col>
-                            <Col xs={24} md={12}>
+                            <Col xs={24} md={8}>
                               <Card size="small" title="Margin Load %">
                                 <ChartComponent
                                   data={toLineSeriesData(monitoringPoints, (point) => point.margin_load_percent)}

@@ -21,6 +21,12 @@ import { initResearchDb } from '../research/db';
 import { getPreset, listOfferIds } from '../research/presetBuilder';
 import { computeReconciliationMetrics } from '../analytics/liveReconciliation';
 
+// При нормализации карточек на initialBalance lotPercentOverride=100% даёт notional=baseCapital.
+// Если ставить maxDepositOverride=initialBalance, то baseCapital всегда упирается в initialBalance
+// и реинвест не работает (compound efect маскируется). Поэтому даём "практически бесконечный"
+// потолок, чтобы reinvest_percent давал настоящий compound на equity > initialBalance.
+const CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X = 1000;
+
 export type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'dual';
 export type Level3 = 'low' | 'medium' | 'high';
 export type RequestStatus = 'pending' | 'approved' | 'rejected';
@@ -6308,7 +6314,7 @@ export const previewAdminSweepBacktest = async (payload?: {
           ...(partialTpPct > 0 ? { partialTpPct } : {}),
           ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
           ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
-          maxDepositOverride: initialBalance,
+          maxDepositOverride: initialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
           lotPercentOverride: 100,
         });
 
@@ -6569,7 +6575,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                   dateFrom: requestedDateFrom || asString(sweep?.config?.dateFrom, ''),
                   dateTo: requestedDateTo || asString(sweep?.config?.dateTo, ''),
                   ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
-                  maxDepositOverride: initialBalance,
+                  maxDepositOverride: initialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
                   lotPercentOverride: 100,
                 };
 
@@ -9436,7 +9442,7 @@ export const previewStrategyClientOffer = async (
     commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
     slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
     fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
-    maxDepositOverride: singleInitBal,
+    maxDepositOverride: singleInitBal * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
     lotPercentOverride: 100,
   });
 
@@ -9589,7 +9595,7 @@ export const previewStrategyClientSelection = async (
     commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
     slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
     fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
-    maxDepositOverride: previewInitialBalance,
+    maxDepositOverride: previewInitialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
     lotPercentOverride: 100,
   });
 

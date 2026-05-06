@@ -17,6 +17,7 @@ import {
   Tabs,
   Spin,
   Empty,
+  Checkbox,
 } from 'antd';
 import axios from 'axios';
 import { useI18n } from '../i18n';
@@ -88,9 +89,12 @@ type LinePoint = { time: number; value: number };
 type MonitoringSnapshot = {
   recorded_at?: string;
   equity_usd?: number;
+  unrealized_pnl?: number;
   margin_load_percent?: number;
   effective_leverage?: number;
   drawdown_percent?: number;
+  deposit_base_usd?: number | null;
+  pnl_net_usd?: number | null;
 };
 
 type ManualAmountMode = 'coin' | 'usdt';
@@ -156,6 +160,9 @@ const Positions: React.FC = () => {
   const [monChartLoading, setMonChartLoading] = useState(false);
   const [monChartPoints, setMonChartPoints] = useState<LinePoint[]>([]);
   const [monChartLatest, setMonChartLatest] = useState<MonitoringSnapshot | null>(null);
+  const [monChartRaw, setMonChartRaw] = useState<MonitoringSnapshot[]>([]);
+  const [monShowPnl, setMonShowPnl] = useState(true);
+  const [monShowDd, setMonShowDd] = useState(false);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(false);
   const [manualOrderDraftByKey, setManualOrderDraftByKey] = useState<{ [key: string]: ManualOrderDraft }>({});
   const apiKeysRef = useRef<ApiKey[]>([]);
@@ -719,13 +726,14 @@ const Positions: React.FC = () => {
         `/api/monitoring/${encodeURIComponent(key)}`, { params }
       );
       const rows = Array.isArray(res.data?.points) ? res.data.points : [];
+      setMonChartRaw(rows);
       setMonChartPoints(rows.map(r => {
         const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
         const v = Number(r.equity_usd);
         return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
       }).filter((x): x is LinePoint => x !== null));
       setMonChartLatest(res.data?.latest || null);
-    } catch { setMonChartPoints([]); setMonChartLatest(null); } finally { setMonChartLoading(false); }
+    } catch { setMonChartRaw([]); setMonChartPoints([]); setMonChartLatest(null); } finally { setMonChartLoading(false); }
   };
 
   const openMonChart = (key: string) => {
@@ -780,7 +788,10 @@ const Positions: React.FC = () => {
             {keys.map((key) => {
               const positions = positionsByKey[key.name] || [];
               const totalPnl = positions.reduce((s, p) => s + Number(p.unrealisedPnl || 0), 0);
-              const totalValue = positions.reduce((s, p) => s + Number(p.positionValueUsdt || p.positionValue || 0), 0);
+              const totalValue = positions.reduce((s, p) => {
+                const v = Number(p.positionValueUsdt || p.positionValue || 0);
+                return s + (Number.isFinite(v) ? v : 0);
+              }, 0);
               return positions.length > 0 ? (
                 <div key={key.name} style={{ marginBottom: 8 }}>
                   <Tag color="blue">{key.name}</Tag>
@@ -1112,21 +1123,66 @@ const Positions: React.FC = () => {
                 {monChartLatest ? <Tag color="purple">ML {fmtNum(monChartLatest.margin_load_percent)}%</Tag> : null}
                 {monChartLatest ? <Tag color="red">Lev {fmtNum(monChartLatest.effective_leverage)}x</Tag> : null}
                 {monChartLatest ? <Tag color="orange">DD {fmtNum(monChartLatest.drawdown_percent)}%</Tag> : null}
+                {monChartLatest && monChartLatest.pnl_net_usd != null
+                  ? <Tag color={Number(monChartLatest.pnl_net_usd) >= 0 ? 'green' : 'red'}>PnL ${fmtNum(monChartLatest.pnl_net_usd)}</Tag>
+                  : null}
               </Space>
-              <Segmented
-                options={[
-                  { label: '1д', value: 1 },
-                  { label: '7д', value: 7 },
-                  { label: '30д', value: 30 },
-                  { label: '60д', value: 60 },
-                  { label: '90д', value: 90 },
-                ]}
-                value={monChartDays}
-                onChange={(v) => setMonChartDays(Number(v))}
-              />
+              <Space wrap>
+                <Checkbox checked={monShowPnl} onChange={(e) => setMonShowPnl(e.target.checked)}>PnL</Checkbox>
+                <Checkbox checked={monShowDd} onChange={(e) => setMonShowDd(e.target.checked)}>DD %</Checkbox>
+                <Segmented
+                  options={[
+                    { label: '1д', value: 1 },
+                    { label: '7д', value: 7 },
+                    { label: '30д', value: 30 },
+                    { label: '60д', value: 60 },
+                    { label: '90д', value: 90 },
+                  ]}
+                  value={monChartDays}
+                  onChange={(v) => setMonChartDays(Number(v))}
+                />
+              </Space>
             </Space>
             {monChartPoints.length > 0 ? (
-              <ChartComponent data={monChartPoints} type="line" />
+              <ChartComponent
+                data={monChartPoints}
+                type="line"
+                overlayLines={[
+                  ...(monShowPnl
+                    ? [{
+                        id: 'pnl-net',
+                        color: '#16a34a',
+                        lineWidth: 2,
+                        data: monChartRaw
+                          .map((r) => {
+                            const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
+                            const v = Number(
+                              r.pnl_net_usd != null
+                                ? r.pnl_net_usd
+                                : Number(r.equity_usd || 0) - Number(r.unrealized_pnl || 0) - Number(r.deposit_base_usd || 0)
+                            );
+                            return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
+                          })
+                          .filter((p): p is { time: number; value: number } => !!p),
+                      }]
+                    : []),
+                  ...(monShowDd
+                    ? [{
+                        id: 'drawdown-pct',
+                        color: '#d97706',
+                        lineWidth: 1,
+                        priceScaleId: 'left' as const,
+                        data: monChartRaw
+                          .map((r) => {
+                            const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
+                            const v = Number(r.drawdown_percent);
+                            return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
+                          })
+                          .filter((p): p is { time: number; value: number } => !!p),
+                      }]
+                    : []),
+                ]}
+              />
             ) : (
               <Empty description="Нет данных мониторинга" />
             )}
