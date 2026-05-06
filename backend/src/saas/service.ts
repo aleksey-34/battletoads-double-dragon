@@ -6316,6 +6316,7 @@ export const previewAdminSweepBacktest = async (payload?: {
           ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
           maxDepositOverride: initialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
           lotPercentOverride: 100,
+          reinvestPercentOverride: reinvestPercent,
         });
 
         // Apply risk multiplier to returns/DD/equity (position sizing approximation)
@@ -6577,6 +6578,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                   ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
                   maxDepositOverride: initialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
                   lotPercentOverride: 100,
+                  reinvestPercentOverride: reinvestPercent,
                 };
 
                 let result;

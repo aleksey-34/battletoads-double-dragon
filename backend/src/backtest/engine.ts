@@ -105,6 +105,8 @@ export type BacktestRunRequest = {
   maxDepositOverride?: number;
   /** Override lot_long_percent / lot_short_percent on all strategies. */
   lotPercentOverride?: number;
+  /** Override reinvest_percent on all strategies (0..100). Use -1 / undefined to keep per-strategy DB value. */
+  reinvestPercentOverride?: number;
   /**
    * Partial take-profit: when a position reaches this PnL% threshold, close 50%
    * at market and set break-even anchor on the remainder (0 = disabled).
@@ -138,6 +140,7 @@ type NormalizedBacktestRequest = {
   maxOpenPositions: number;
   maxDepositOverride: number;
   lotPercentOverride: number;
+  reinvestPercentOverride: number;
   partialTpPct: number;
   /**
    * If true (default), mirror runtime pair-lock semantics in the backtest engine.
@@ -470,6 +473,7 @@ type BacktestContext = {
   trades: BacktestTrade[];
   maxDepositOverride: number;
   lotPercentOverride: number;
+  reinvestPercentOverride: number;
   initialBalance: number;
 };
 
@@ -721,7 +725,11 @@ const openPosition = (
   // Result: every backtest showed compounded growth regardless of the setting.
   const reinvestShare = strategy.fixed_lot
     ? 0
-    : clampReinvestShare(asNumber(strategy.reinvest_percent, 0));
+    : clampReinvestShare(
+        ctx.reinvestPercentOverride >= 0
+          ? ctx.reinvestPercentOverride
+          : asNumber(strategy.reinvest_percent, 0),
+      );
   const equityBaseRaw = strategy.fixed_lot
     ? (maxDeposit > 0 ? maxDeposit : ctx.initialBalance)
     : ctx.initialBalance + Math.max(0, portfolioEquityNow - ctx.initialBalance) * reinvestShare;
@@ -1122,6 +1130,12 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     maxOpenPositions,
     maxDepositOverride: Math.max(0, asNumber(raw.maxDepositOverride, 0)),
     lotPercentOverride: Math.max(0, asNumber(raw.lotPercentOverride, 0)),
+    reinvestPercentOverride: (() => {
+      const v = (raw as { reinvestPercentOverride?: unknown })?.reinvestPercentOverride;
+      if (v === undefined || v === null || v === '') return -1;
+      const n = Number(v);
+      return Number.isFinite(n) && n >= 0 ? Math.min(100, n) : -1;
+    })(),
     partialTpPct,
     enablePairLock: (raw as unknown as { enablePairLock?: boolean })?.enablePairLock !== false,
     pairLockSeed: Math.max(
@@ -1204,6 +1218,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     trades: [],
     maxDepositOverride: request.maxDepositOverride,
     lotPercentOverride: request.lotPercentOverride,
+    reinvestPercentOverride: request.reinvestPercentOverride,
     initialBalance: request.initialBalance,
   };
 
