@@ -6594,6 +6594,10 @@ export const previewAdminSweepBacktest = async (payload?: {
             .filter((value) => Number.isFinite(value) && value > 0)));
 
           let snapshotRerunFailureReason = '';
+          if (canTryRealBacktest && snapshotStrategyIds.length === 0) {
+            snapshotRerunFailureReason = 'Real rerun пропущен: для офферов снапшота не нашлись strategy_id (TS-снапшот без привязки к стратегиям). Откройте sweep заново и пересохраните карточку.';
+            logger.warn(`Snapshot TS rerun skipped: ${snapshotRerunFailureReason}`);
+          }
           if (canTryRealBacktest && snapshotStrategyIds.length > 0) {
             const sweepConfigAny = (sweep?.config || {}) as Record<string, unknown>;
             const resolvedByStrategiesApiKey = await resolveApiKeyNameForStrategyIds(snapshotStrategyIds, '', { strict: false });
@@ -6605,6 +6609,10 @@ export const previewAdminSweepBacktest = async (payload?: {
               || asString(catalog?.apiKeyName, '')
               || asString((await getAvailableApiKeyNames())[0], '');
 
+            if (!preferredApiKey) {
+              snapshotRerunFailureReason = 'Real rerun пропущен: не нашёлся API key для запуска бэктеста. Выберите ключ в селекте "API key для real rerun".';
+              logger.warn(`Snapshot TS rerun skipped: ${snapshotRerunFailureReason}`);
+            }
             if (preferredApiKey) {
               try {
                 // Ensure the exchange client is initialized so getMarketData can fetch candles from the exchange
@@ -6618,12 +6626,21 @@ export const previewAdminSweepBacktest = async (payload?: {
                   warmupBars: asNumber(sweep?.config?.warmupBars, 400),
                   skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
                   initialBalance,
-                  commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
-                  slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
-                  fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
+                  // Admin overrides win over sweep config defaults so sliders
+                  // for Комса/Слиппедж/Funding actually affect the snapshot rerun.
+                  commissionPercent: commissionPercentOverride !== null
+                    ? commissionPercentOverride
+                    : asNumber(sweep?.config?.commissionPercent, 0.1),
+                  slippagePercent: slippagePercentOverride !== null
+                    ? slippagePercentOverride
+                    : asNumber(sweep?.config?.slippagePercent, 0.05),
+                  fundingRatePercent: fundingRatePercentOverride !== null
+                    ? fundingRatePercentOverride
+                    : asNumber(sweep?.config?.fundingRatePercent, 0),
                   dateFrom: requestedDateFrom || asString(sweep?.config?.dateFrom, ''),
                   dateTo: requestedDateTo || asString(sweep?.config?.dateTo, ''),
                   ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
+                  ...(partialTpPct > 0 ? { partialTpPct } : {}),
                   maxDepositOverride: initialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
                   lotPercentOverride: 100,
                   reinvestPercentOverride: reinvestPercent,
