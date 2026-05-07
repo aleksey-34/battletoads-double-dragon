@@ -12,6 +12,11 @@ import { getTradingSystem } from '../bot/tradingSystems';
 import { getStrategies, updateStrategy } from '../bot/strategy';
 import logger from '../utils/logger';
 
+const RECONCILIATION_EXCLUDED_API_KEYS = new Set<string>([
+  'artursk-9542210407-api',
+  'artursk-6659194994-api',
+]);
+
 type ReconciliationRunOptions = {
   periodHours?: number;
   backtestBars?: number;
@@ -362,6 +367,17 @@ export const runReconciliationForApiKey = async (
   failed: number;
   reports: StrategyReconciliationResult[];
 }> => {
+  if (RECONCILIATION_EXCLUDED_API_KEYS.has(apiKeyName)) {
+    logger.warn(`Reconciliation skipped for excluded api key ${apiKeyName}`);
+    return {
+      apiKeyName,
+      periodHours: Math.max(1, Math.floor(toFinite(options?.periodHours, 24))),
+      processed: 0,
+      failed: 0,
+      reports: [],
+    };
+  }
+
   const apiKeyId = await getApiKeyId(apiKeyName);
   const periodHours = Math.max(1, Math.floor(toFinite(options?.periodHours, 24)));
   const backtestBars = Math.max(120, Math.floor(toFinite(options?.backtestBars, 336)));

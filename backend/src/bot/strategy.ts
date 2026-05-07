@@ -765,6 +765,11 @@ const TS_SYNC_EXCLUDED_API_KEYS = new Set<string>([
   'artursk-9542210407-api',
 ]);
 
+const POSITION_ALIGNMENT_EXCLUDED_API_KEYS = new Set<string>([
+  'artursk-9542210407-api',
+  'artursk-6659194994-api',
+]);
+
 const loadExpectedAlgofundSidMap = async (): Promise<Map<string, Set<string>>> => {
   const { db } = await import('../utils/database');
   const profiles: Array<{ execution_api_key_name: string; published_system_name: string }> = await db.all(
@@ -2319,6 +2324,7 @@ export const executeStrategy = async (
   const mergedStrategy: Strategy = {
     ...strategy,
   };
+  const isPositionAlignmentExcluded = POSITION_ALIGNMENT_EXCLUDED_API_KEYS.has(apiKeyName);
   const marketMode = normalizeMarketMode(mergedStrategy.market_mode);
   const isMono = marketMode === 'mono';
   const positionLabel = isMono ? 'position' : 'synthetic position';
@@ -2616,6 +2622,21 @@ export const executeStrategy = async (
       });
     }
 
+    if (isPositionAlignmentExcluded) {
+      logger.warn(
+        `Mixed pair state for strategy ${strategyId} (${apiKeyName}) is excluded from auto-alignment close`
+      );
+      return returnWithProcessedBar({
+        result: 'Mixed pair state skipped — api key excluded from position alignment',
+        action: 'mixed_skip_alignment_excluded',
+        strategy: mergedStrategy,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
+
     const previousState = state;
     const previousEntryRatio = entryRatio;
     await closeStrategyExposure(apiKeyName, mergedStrategy);
@@ -2646,6 +2667,21 @@ export const executeStrategy = async (
   }
 
   if (state !== 'flat' && livePairState !== 'flat' && state !== livePairState) {
+    if (isPositionAlignmentExcluded) {
+      logger.warn(
+        `State mismatch for strategy ${strategyId} (${apiKeyName}) is excluded from auto-alignment close`
+      );
+      return returnWithProcessedBar({
+        result: 'Live/strategy mismatch skipped — api key excluded from position alignment',
+        action: 'state_mismatch_skip_alignment_excluded',
+        strategy: mergedStrategy,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
+
     const previousState = state;
     const previousEntryRatio = entryRatio;
     await closeStrategyExposure(apiKeyName, mergedStrategy);
@@ -2737,6 +2773,12 @@ export const executeStrategy = async (
         `${siblingActiveCount} sibling(s) still in non-flat state — visible 'flat' may be stale snapshot`
       );
     } else {
+      if (isPositionAlignmentExcluded) {
+        resyncPendingFlatByStrategy.delete(strategyId);
+        logger.warn(
+          `Skipping state_resynced_flat for strategy ${strategyId} (${apiKeyName}): api key excluded from position alignment`
+        );
+      } else {
       const nowMs = Date.now();
       const pending = resyncPendingFlatByStrategy.get(strategyId);
       if (!pending) {
@@ -2776,6 +2818,7 @@ export const executeStrategy = async (
           logger.warn(`State resynced to flat for strategy ${strategyId} (${apiKeyName}): was ${previousState}, entry_ratio=${previousEntryRatio}, current_ratio=${currentRatio} (CONFIRMED after ${RESYNC_CONFIRM_MS / 1000}s)`);
           await recordRuntimeTradeEvent('exit', previousState, currentRatio, 0, undefined, mergedStrategy.base_symbol, previousEntryRatio ?? undefined);
         }
+      }
       }
     }
   } else {
