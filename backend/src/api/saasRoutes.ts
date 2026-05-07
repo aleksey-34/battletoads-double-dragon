@@ -321,12 +321,10 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
       dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
       dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
       rerunApiKeyName: req.body?.rerunApiKeyName ? String(req.body.rerunApiKeyName) : undefined,
-      // Admin endpoint always defaults to real backtest so slider overrides
-      // (partialTpPct, commission/slippage/funding, maxOpenPositions) actually
-      // re-run runBacktest and affect metrics. Without this, an old/cached
-      // frontend bundle that doesn't send preferRealBacktest=true silently
-      // falls into the synthetic snapshot path where overrides are ignored.
-      preferRealBacktest: req.body?.preferRealBacktest === false ? false : true,
+      // Admin endpoint: ВСЕГДА реальный бэктест, чтобы слайдеры (partialTpPct,
+      // commission/slippage/funding, reinvest, maxOP) реально попадали в runBacktest.
+      // Старый/кэшированный фронт может слать preferRealBacktest=false — игнорируем.
+      preferRealBacktest: true,
       enablePairLock: req.body?.enablePairLock !== undefined ? toBool(req.body.enablePairLock, true) : undefined,
       pairLockSeed: toOptionalNumber(req.body?.pairLockSeed),
     });
