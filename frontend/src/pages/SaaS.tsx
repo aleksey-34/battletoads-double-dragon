@@ -6384,7 +6384,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
   }, [persistBacktestSettingsByCard]);
 
-  // Debounce helper: triggers auto-recalculate after slider changes with 700ms delay
+  // Debounce helper: triggers auto-recalculate after slider changes with 700ms delay.
+  // В админ-режиме форсим preferRealBacktest=true, иначе бэкенд идёт по snapshot-пути,
+  // который масштабирует только risk/freq, и крутилки partialTpPct / maxOpenPositions /
+  // commission / slippage / funding ни на что не влияют.
   const scheduleBacktestDebounce = useCallback(() => {
     if (backtestDebounceRef.current !== null) {
       clearTimeout(backtestDebounceRef.current);
@@ -6456,14 +6459,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       if (response.data.sweepApiKeyName && !adminSweepBacktestRerunApiKey) {
         setAdminSweepBacktestRerunApiKey(response.data.sweepApiKeyName);
       }
-      // Auto-store current settings for this context card
-      storeCurrentBacktestSettingsForContext(targetContext, {
-        riskScore: effectiveRiskScore,
-        tradeFrequencyScore: effectiveTradeFrequencyScore,
-        initialBalance: effectiveInitialBalance,
-        riskScaleMaxPercent: effectiveRiskScaleMaxPercent,
-        maxOpenPositions: effectiveMaxOpenPositions,
-      });
+      // NOTE: НЕ автосохраняем настройки в localStorage — только по кнопке «Сохранить».
+      // Это исключает ситуацию, когда подвинутые ползунки фиксируются как сохранённый стейт карточки
+      // без явного действия администратора.
     } catch (error: any) {
       if (requestSeq !== backtestRequestSeqRef.current) {
         return;
@@ -6562,8 +6560,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     adminSweepBacktestResult,
     adminSweepBacktestRerunApiKey,
   ]);
-  // Keep ref always pointing to the latest function so debounce never uses a stale closure
-  runAdminSweepBacktestPreviewRef.current = () => runAdminSweepBacktestPreview();
+  // Keep ref always pointing to the latest function so debounce never uses a stale closure.
+  // В админ-режиме форсим preferRealBacktest=true: без него бэкенд берёт snapshot-путь и
+  // partialTpPct / maxOpenPositions / commission / slippage / funding не применяются вовсе.
+  runAdminSweepBacktestPreviewRef.current = () => runAdminSweepBacktestPreview(
+    undefined,
+    isAdminSurface ? { preferRealBacktest: true } : undefined,
+  );
 
   const updateBacktestTsComposition = (
     nextOfferIdsRaw: string[],
@@ -12631,7 +12634,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 size="small"
                 loading={adminSweepBacktestLoading}
                 onClick={() => {
-                  void runAdminSweepBacktestPreview();
+                  void runAdminSweepBacktestPreview(
+                    undefined,
+                    isAdminSurface ? { preferRealBacktest: true } : undefined,
+                  );
                 }}
               >
                 {isAdminSurface ? 'Пересчитать sweep backtest' : 'Пересчитать'}
