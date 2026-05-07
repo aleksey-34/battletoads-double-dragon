@@ -13061,14 +13061,35 @@ export const removeAlgofundSystemFromProfile = async (payload: {
         ) as { cnt: number } | undefined;
 
         if (Number(remainingEnabled?.cnt || 0) === 0) {
-          // No systems left — deactivate all runtime strategies on this api key
-          const deactivated = await db.run(
-            `UPDATE strategies SET is_active = 0, auto_update = 0, updated_at = CURRENT_TIMESTAMP
+          // No systems left — fully demote runtime strategies (archive them so the
+          // dashboard "sets" counter goes to 0 and the connect-modal stops listing
+          // this tenant as connected to that TS). Positions on the exchange are NOT
+          // touched here — that decision is controlled by shouldClosePositions below.
+          const archived = await db.run(
+            `UPDATE strategies
+             SET is_active = 0,
+                 is_runtime = 0,
+                 is_archived = 1,
+                 auto_update = 0,
+                 updated_at = CURRENT_TIMESTAMP
              WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ? LIMIT 1)
-               AND is_runtime = 1 AND is_active = 1`,
+               AND is_runtime = 1`,
             [apiKeyName]
           ).catch(() => ({ changes: 0 }));
-          logger.info(`[removeAlgofundSystemFromProfile] No systems remain for ${apiKeyName}: deactivated ${(deactivated as any)?.changes || 0} runtime strategies`);
+          logger.info(`[removeAlgofundSystemFromProfile] No systems remain for ${apiKeyName}: archived ${(archived as any)?.changes || 0} runtime strategies`);
+
+          // Clear published_system_name so this tenant disappears from the
+          // connect-clients modal that lists tenants currently bound to the TS.
+          try {
+            await db.run(
+              `UPDATE algofund_profiles
+               SET published_system_name = '', updated_at = CURRENT_TIMESTAMP
+               WHERE id = ?`,
+              [profileId]
+            );
+          } catch (e) {
+            logger.warn(`[removeAlgofundSystem] clear published_system_name for profile ${profileId}: ${(e as Error).message}`);
+          }
 
           // Mark card_deployments inactive so the card UI doesn't keep showing it as live
           try {
