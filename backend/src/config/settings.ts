@@ -86,24 +86,24 @@ export const loadSettings = async () => {
   return { apiKeys, riskSettings, strategies };
 };
 
-export const saveApiKey = async (key: ApiKey) => {
-  // Normalize exchange to canonical lowercase name regardless of how it was submitted
-  const normalizeExchange = (raw: string): string => {
-    const s = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (s.startsWith('bybit')) return 'bybit';
-    if (s.startsWith('bitget')) return 'bitget';
-    if (s.startsWith('bingx')) return 'bingx';
-    if (s.startsWith('binance')) return 'binance';
-    if (s.startsWith('weex')) return 'weex';
-    if (s.startsWith('mexc') || s.startsWith('mxc')) return 'mexc';
-    return String(raw || '').trim().toLowerCase();
-  };
+// Normalize exchange to canonical lowercase name regardless of how it was submitted
+export const normalizeExchangeName = (raw: string): string => {
+  const s = String(raw || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (s.startsWith('bybit')) return 'bybit';
+  if (s.startsWith('bitget')) return 'bitget';
+  if (s.startsWith('bingx')) return 'bingx';
+  if (s.startsWith('binance')) return 'binance';
+  if (s.startsWith('weex')) return 'weex';
+  if (s.startsWith('mexc') || s.startsWith('mxc')) return 'mexc';
+  return String(raw || '').trim().toLowerCase();
+};
 
+export const saveApiKey = async (key: ApiKey) => {
   await db.run(
     'INSERT OR REPLACE INTO api_keys (name, exchange, api_key, secret, passphrase, speed_limit, testnet, demo) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
     [
       key.name,
-      normalizeExchange(key.exchange),
+      normalizeExchangeName(key.exchange),
       key.api_key,
       key.secret,
       key.passphrase || '',

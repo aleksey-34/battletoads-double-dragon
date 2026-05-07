@@ -1317,8 +1317,23 @@ router.delete('/algofund/:tenantId/active-systems/:systemName', async (req, res)
   if (!Number.isFinite(profileId) || !systemName) {
     return res.status(400).json({ error: 'Invalid tenantId or systemName' });
   }
+  // Read flags from query OR body (DELETE bodies are awkward in some clients)
+  const parseFlag = (raw: unknown): boolean | undefined => {
+    if (raw === undefined || raw === null || raw === '') return undefined;
+    const s = String(raw).trim().toLowerCase();
+    if (s === 'false' || s === '0' || s === 'no') return false;
+    if (s === 'true' || s === '1' || s === 'yes') return true;
+    return undefined;
+  };
+  const closePositions = parseFlag(req.query.closePositions ?? req.body?.closePositions);
+  const cancelOrders = parseFlag(req.query.cancelOrders ?? req.body?.cancelOrders);
   try {
-    const data = await removeAlgofundSystemFromProfile({ profileId, systemName });
+    const data = await removeAlgofundSystemFromProfile({
+      profileId,
+      systemName,
+      closePositions,
+      cancelOrders,
+    });
     res.json({ success: true, systems: data });
   } catch (error) {
     const err = error as Error;

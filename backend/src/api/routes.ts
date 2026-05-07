@@ -51,7 +51,7 @@ import {
 } from '../bot/tradingSystems';
 import { getMonitoringLatest, getMonitoringSnapshots, recordMonitoringSnapshot } from '../bot/monitoring';
 import { deleteBacktestRun, getBacktestRun, listBacktestRuns, runBacktest, saveBacktestRun } from '../backtest/engine';
-import { loadSettings, saveApiKey, saveRiskSettings, ApiKey, RiskSettings, Strategy } from '../config/settings';
+import { loadSettings, saveApiKey, saveRiskSettings, normalizeExchangeName, ApiKey, RiskSettings, Strategy } from '../config/settings';
 import { db } from '../utils/database';
 import {
   authenticate,
@@ -1857,20 +1857,49 @@ router.get('/api-keys', requirePlatformAdmin, async (req, res) => {
   }
 });
 
-// Require auth for all backtest routes
-router.use('/backtest', requirePlatformAdmin);
-
-router.get('/backtest/strategies/:apiKeyName', async (req, res) => {
-  const { apiKeyName } = req.params;
+// Per-exchange universe summary: how many active strategies + unique symbols per exchange
+// Used by Dashboard to explain why positions differ across exchanges
+router.get('/exchanges/universe', requirePlatformAdmin, async (_req, res) => {
   try {
-    const strategies = await getStrategies(apiKeyName);
-    res.json(strategies);
+    const rows = await db.all(
+      `SELECT COALESCE(LOWER(k.exchange), '') AS exchange,
+              COUNT(DISTINCT s.id)            AS active_strategies,
+              COUNT(DISTINCT s.base_symbol)   AS unique_symbols,
+              GROUP_CONCAT(DISTINCT s.base_symbol) AS symbols_csv,
+              COUNT(DISTINCT k.id)            AS api_keys_count
+       FROM api_keys k
+       LEFT JOIN strategies s ON s.api_key_id = k.id
+         AND COALESCE(s.is_active, 0) = 1
+         AND COALESCE(s.is_archived, 0) = 0
+         AND COALESCE(s.is_runtime, 0) = 1
+       GROUP BY LOWER(k.exchange)
+       ORDER BY exchange`
+    ) as Array<{ exchange: string; active_strategies: number; unique_symbols: number; symbols_csv: string | null; api_keys_count: number }>;
+
+    const result = rows.map((row) => {
+      const symbols = String(row.symbols_csv || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0)
+        .sort();
+      return {
+        exchange: row.exchange,
+        apiKeysCount: Number(row.api_keys_count || 0),
+        activeStrategies: Number(row.active_strategies || 0),
+        uniqueSymbols: Number(row.unique_symbols || 0),
+        symbols,
+      };
+    });
+    res.json(result);
   } catch (error) {
     const err = error as Error;
-    logger.error(`Error loading backtest strategies: ${err.message}`);
+    logger.error(`Error loading exchanges/universe: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
+
+// Require auth for all backtest routes
+router.use('/backtest', requirePlatformAdmin);
 
 router.post('/backtest/run', async (req, res) => {
   if (backtestRunInProgress) {
@@ -2109,7 +2138,7 @@ router.put('/api-keys/:id', async (req, res) => {
       'UPDATE api_keys SET name = ?, exchange = ?, api_key = ?, secret = ?, passphrase = ?, speed_limit = ?, testnet = ?, demo = ? WHERE id = ?',
       [
         key.name,
-        key.exchange,
+        normalizeExchangeName(String(key.exchange || '')),
         key.api_key,
         key.secret,
         key.passphrase || '',

@@ -2740,6 +2740,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     tenants: Array<{ id: number; display_name: string }>;
     positionsByApiKey: Array<{ apiKeyName: string; openPositions: number; symbols: string[] }>;
   } | null>(null);
+  // Per-row dematerialize confirmation modal (algofund active-systems "Убрать")
+  const [dematSystemConfirm, setDematSystemConfirm] = useState<{ systemName: string } | null>(null);
+  const [dematClosePositions, setDematClosePositions] = useState(false);
+  const [dematCancelOrders, setDematCancelOrders] = useState(false);
+  const [dematSubmitting, setDematSubmitting] = useState(false);
   const [selectedAdminDraftTsOfferIds, setSelectedAdminDraftTsOfferIds] = useState<string[]>([]);
   const [selectedAdminDraftTsSetKey, setSelectedAdminDraftTsSetKey] = useState('');
   const [offerStoreLabelFilter, setOfferStoreLabelFilter] = useState<'all' | OfferStoreLabel>('all');
@@ -9186,16 +9191,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           <Button
                                             size="small"
                                             danger
-                                            onClick={async () => {
-                                              setAlgofundActiveSystemsLoading(true);
-                                              try {
-                                                await axios.delete(`/api/saas/algofund/${algofundTenantId}/active-systems/${encodeURIComponent(sys.systemName)}`);
-                                                await loadAlgofundActiveSystems(algofundTenantId);
-                                              } catch (err: any) {
-                                                messageApi.error(String(err?.response?.data?.error || err.message || 'Error'));
-                                              } finally {
-                                                setAlgofundActiveSystemsLoading(false);
-                                              }
+                                            onClick={() => {
+                                              // open confirmation modal — user picks whether to keep positions/orders
+                                              setDematClosePositions(false);
+                                              setDematCancelOrders(false);
+                                              setDematSystemConfirm({ systemName: sys.systemName });
                                             }}
                                           >Убрать</Button>
                                         </Space>
@@ -9326,22 +9326,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   Отправить сейчас
                                 </Button>
                                 <Divider type="vertical" />
-                                <Text>Интервал отчёта (мин)</Text>
+                                <Text>Heartbeat (часы)</Text>
                                 <InputNumber
                                   size="small"
-                                  min={5}
-                                  max={1440}
-                                  step={5}
-                                  value={telegramControls?.reportIntervalMinutes ?? 60}
+                                  min={1}
+                                  max={24}
+                                  step={1}
+                                  value={Math.max(1, Math.round(((telegramControls?.reportIntervalMinutes ?? 1440) / 60)))}
                                   disabled={telegramControlsLoading}
                                   onBlur={(e) => {
-                                    const val = parseInt(e.target.value, 10);
-                                    if (Number.isFinite(val) && val >= 5) {
-                                      void patchTelegramControls({ reportIntervalMinutes: val });
+                                    const valHours = parseInt(e.target.value, 10);
+                                    if (Number.isFinite(valHours) && valHours >= 1) {
+                                      void patchTelegramControls({ reportIntervalMinutes: Math.min(1440, valHours * 60) });
                                     }
                                   }}
-                                  style={{ width: 80 }}
+                                  style={{ width: 70 }}
                                 />
+                                <Text type="secondary">Алерты — мгновенно (cooldown 60 мин)</Text>
                                 <Divider type="vertical" />
                                 <Text>Reconciliation cycle</Text>
                                 <Switch
@@ -9353,13 +9354,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                 <Tag color={telegramControls?.reconciliationCycleEnabled ? 'success' : 'default'}>
                                   runtime {telegramControls?.reconciliationCycleEnabled ? 'on' : 'off'}
                                 </Tag>
-                              </Space>
-                              <Divider style={{ margin: '6px 0' }} />
-                              <Space wrap>
-                                <Text type="secondary">Секции отчёта:</Text>
-                                <Tag>Аккаунты <Switch size="small" checked={Boolean(telegramControls?.sectionAccounts)} loading={telegramControlsLoading} onChange={(checked) => { void patchTelegramControls({ sectionAccounts: checked }); }} /></Tag>
-                                <Tag>Drift <Switch size="small" checked={Boolean(telegramControls?.sectionDrift)} loading={telegramControlsLoading} onChange={(checked) => { void patchTelegramControls({ sectionDrift: checked }); }} /></Tag>
-                                <Tag>Low-lot <Switch size="small" checked={Boolean(telegramControls?.sectionLowlot)} loading={telegramControlsLoading} onChange={(checked) => { void patchTelegramControls({ sectionLowlot: checked }); }} /></Tag>
                               </Space>
                               <Space>
                                 <Text type="secondary">Вкл.</Text>
@@ -12191,6 +12185,64 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 ))}
               </ul>
             </div>
+          ) : null}
+        </Space>
+      </Modal>
+
+      <Modal
+        title={`Снять с карточки: ${dematSystemConfirm?.systemName || '—'}`}
+        open={dematSystemConfirm !== null}
+        onCancel={() => setDematSystemConfirm(null)}
+        okText="Дематериализовать"
+        cancelText="Отмена"
+        okButtonProps={{ danger: true, loading: dematSubmitting }}
+        onOk={async () => {
+          if (!dematSystemConfirm || !algofundTenantId) return;
+          setDematSubmitting(true);
+          setAlgofundActiveSystemsLoading(true);
+          try {
+            const params = new URLSearchParams();
+            params.set('closePositions', String(dematClosePositions));
+            params.set('cancelOrders', String(dematCancelOrders));
+            await axios.delete(
+              `/api/saas/algofund/${algofundTenantId}/active-systems/${encodeURIComponent(dematSystemConfirm.systemName)}?${params.toString()}`
+            );
+            await loadAlgofundActiveSystems(algofundTenantId);
+            messageApi.success(
+              dematClosePositions || dematCancelOrders
+                ? `TS "${dematSystemConfirm.systemName}" снята${dematCancelOrders ? ' + отмена ордеров' : ''}${dematClosePositions ? ' + закрытие позиций' : ''}`
+                : `TS "${dematSystemConfirm.systemName}" снята с карточки. Позиции и ордера на бирже не тронуты.`
+            );
+            setDematSystemConfirm(null);
+          } catch (err: any) {
+            messageApi.error(String(err?.response?.data?.error || err.message || 'Error'));
+          } finally {
+            setDematSubmitting(false);
+            setAlgofundActiveSystemsLoading(false);
+          }
+        }}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="Стратегии будут деактивированы (auto_update=0, is_active=0). Карточка перестанет быть «active» для этого ключа."
+            description="Открытые позиции и активные ордера на бирже по умолчанию НЕ трогаются — клиент или внешний трейдер продолжит ими управлять. Включите свитчи ниже, если нужно зачистить."
+          />
+          <Space>
+            <Switch checked={dematClosePositions} onChange={setDematClosePositions} />
+            <Text>Закрыть открытые позиции на бирже (close-all)</Text>
+          </Space>
+          <Space>
+            <Switch checked={dematCancelOrders} onChange={setDematCancelOrders} />
+            <Text>Отменить активные ордера на бирже (cancel-all)</Text>
+          </Space>
+          {(dematClosePositions || dematCancelOrders) ? (
+            <Alert
+              type="warning"
+              showIcon
+              message="Внимание: операции на бирже необратимы. Убедитесь что хотите снять именно эти позиции/ордера."
+            />
           ) : null}
         </Space>
       </Modal>

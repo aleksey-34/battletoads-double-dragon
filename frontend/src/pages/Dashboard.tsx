@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Card, Button, Switch, Row, Col, Form, Input, Select, Collapse, Spin, Alert, Space, InputNumber, Tag, Popconfirm, message, Divider, Badge } from 'antd';
+import { Card, Button, Switch, Row, Col, Form, Input, Select, Collapse, Spin, Alert, Space, InputNumber, Tag, Tooltip, Popconfirm, message, Divider, Badge } from 'antd';
 import axios from 'axios';
 import ChartComponent, { HoverOHLC, OverlayLine, ChartMarker } from '../components/ChartComponent';
 import StatusIndicator from '../components/StatusIndicator';
@@ -1065,6 +1065,13 @@ const Dashboard: React.FC = () => {
   const [showArchivedByKey, setShowArchivedByKey] = useState<{ [key: string]: boolean }>({});
   const [runtimeOnlyByKey, setRuntimeOnlyByKey] = useState<{ [key: string]: boolean }>({});
   const [archiveActionLoadingByKey, setArchiveActionLoadingByKey] = useState<{ [key: string]: boolean }>({});
+  const [exchangeUniverse, setExchangeUniverse] = useState<Array<{
+    exchange: string;
+    apiKeysCount: number;
+    activeStrategies: number;
+    uniqueSymbols: number;
+    symbols: string[];
+  }>>([]);
   const requestLocksRef = useRef<Record<string, boolean>>({});
 
   const isApiKeyActive = (keyName: string): boolean => apiKeyToggles[keyName] ?? true;
@@ -1115,6 +1122,14 @@ const Dashboard: React.FC = () => {
     }
 
     void fetchApiKeys();
+    void (async () => {
+      try {
+        const res = await axios.get('/api/exchanges/universe');
+        if (Array.isArray(res.data)) setExchangeUniverse(res.data);
+      } catch {
+        // non-critical: dashboard universe summary
+      }
+    })();
   }, []);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -4095,6 +4110,37 @@ const Dashboard: React.FC = () => {
           </Button>
         </Popconfirm>
       </Space>
+      {exchangeUniverse.length > 0 ? (
+        <Card
+          size="small"
+          title="Universe TS per exchange"
+          style={{ marginBottom: 12 }}
+          extra={
+            <Tooltip title="Сколько активных runtime-стратегий и сколько уникальных пар торгуется на каждой бирже. Разный универс пар на разных биржах — это нормально и объясняет разницу позиций между ними.">
+              <span style={{ cursor: 'help', color: '#888' }}>?</span>
+            </Tooltip>
+          }
+        >
+          <Space wrap size={[12, 8]}>
+            {exchangeUniverse.map((row) => (
+              <Tooltip
+                key={row.exchange || 'unknown'}
+                title={row.symbols.length > 0 ? `Пары: ${row.symbols.join(', ')}` : 'Нет активных стратегий'}
+              >
+                <Tag color="blue" style={{ padding: '4px 8px' }}>
+                  <strong>{row.exchange || '—'}</strong>
+                  {' · '}
+                  {row.uniqueSymbols} пар
+                  {' · '}
+                  {row.activeStrategies} strats
+                  {' · '}
+                  {row.apiKeysCount} keys
+                </Tag>
+              </Tooltip>
+            ))}
+          </Space>
+        </Card>
+      ) : null}
       <Collapse activeKey={activePanel} onChange={handlePanelChange} items={collapseItems} />
     </div>
   );

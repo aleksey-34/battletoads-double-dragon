@@ -13026,9 +13026,14 @@ export const toggleAlgofundSystem = async (payload: {
 export const removeAlgofundSystemFromProfile = async (payload: {
   profileId: number;
   systemName: string;
+  closePositions?: boolean;
+  cancelOrders?: boolean;
 }): Promise<AlgofundActiveSystem[]> => {
   const profileId = await resolveAlgofundProfileId(payload.profileId);
   const systemName = asString(payload.systemName, '').trim();
+  // Defaults: keep current behavior (close + cancel) unless caller opts out
+  const shouldClosePositions = payload.closePositions !== false;
+  const shouldCancelOrders = payload.cancelOrders !== false;
 
   await db.run(
     `DELETE FROM algofund_active_systems WHERE profile_id = ? AND system_name = ?`,
@@ -13065,9 +13070,38 @@ export const removeAlgofundSystemFromProfile = async (payload: {
           ).catch(() => ({ changes: 0 }));
           logger.info(`[removeAlgofundSystemFromProfile] No systems remain for ${apiKeyName}: deactivated ${(deactivated as any)?.changes || 0} runtime strategies`);
 
-          await ensureExchangeClientInitialized(apiKeyName).catch(() => {});
-          try { await cancelAllOrders(apiKeyName); } catch (e) { logger.warn(`[removeAlgofundSystem] cancelAllOrders for ${apiKeyName}: ${(e as Error).message}`); }
-          try { await closeAllPositions(apiKeyName); } catch (e) { logger.warn(`[removeAlgofundSystem] closeAllPositions for ${apiKeyName}: ${(e as Error).message}`); }
+          // Mark card_deployments inactive so the card UI doesn't keep showing it as live
+          try {
+            await db.run(
+              `UPDATE card_deployments
+               SET status = 'inactive',
+                   sync_status = ?,
+                   sync_error = ?,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE execution_api_key_name = ?`,
+              [
+                shouldClosePositions ? 'admin_dematerialized_closed' : 'admin_dematerialized_kept_positions',
+                shouldClosePositions ? '' : 'Dematerialized without closing positions',
+                apiKeyName,
+              ]
+            );
+          } catch (e) {
+            logger.warn(`[removeAlgofundSystem] card_deployments update for ${apiKeyName}: ${(e as Error).message}`);
+          }
+
+          if (shouldCancelOrders || shouldClosePositions) {
+            await ensureExchangeClientInitialized(apiKeyName).catch(() => {});
+          }
+          if (shouldCancelOrders) {
+            try { await cancelAllOrders(apiKeyName); } catch (e) { logger.warn(`[removeAlgofundSystem] cancelAllOrders for ${apiKeyName}: ${(e as Error).message}`); }
+          } else {
+            logger.info(`[removeAlgofundSystem] cancelOrders skipped by request for ${apiKeyName}`);
+          }
+          if (shouldClosePositions) {
+            try { await closeAllPositions(apiKeyName); } catch (e) { logger.warn(`[removeAlgofundSystem] closeAllPositions for ${apiKeyName}: ${(e as Error).message}`); }
+          } else {
+            logger.info(`[removeAlgofundSystem] closePositions skipped by request for ${apiKeyName}`);
+          }
         }
       }
     } catch (e) {

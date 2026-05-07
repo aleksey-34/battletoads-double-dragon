@@ -631,6 +631,23 @@ const computeSignalTotalNotional = (
   // NOT a position-size multiplier. Position weight is controlled via lot_percent/max_deposit.
   const totalNotional = baseCapital * lotFraction * reinvestFactor;
 
+  // Safety telemetry: notional must not exceed real equity unless fixed_lot is explicitly on
+  // (fixed_lot is the opt-in "treat max_deposit as virtual capital" mode for risk experiments).
+  // For default (fixed_lot=0) configs this should never trigger because baseCapital = min(equity, max_deposit).
+  if (
+    Number.isFinite(totalNotional) &&
+    totalNotional > 0 &&
+    safeAvailable > 0 &&
+    totalNotional > safeAvailable * 1.001 &&
+    !strategy.fixed_lot
+  ) {
+    logger.warn(
+      `[sizing-guard] computed notional=${totalNotional.toFixed(2)} exceeds available equity=${safeAvailable.toFixed(2)} ` +
+      `(max_deposit=${strategy.max_deposit}, lot=${(lotFraction * 100).toFixed(2)}%, reinvest=${strategy.reinvest_percent}%, fixed_lot=false). ` +
+      `This indicates a sizing-formula regression — please investigate.`
+    );
+  }
+
   return Number.isFinite(totalNotional) && totalNotional > 0 ? totalNotional : 0;
 };
 
