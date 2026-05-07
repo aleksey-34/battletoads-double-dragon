@@ -610,6 +610,18 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
        GROUP BY api_key_id
      ) peak ON peak.api_key_id = a.id
      WHERE COALESCE(ap.requested_enabled,0) = 1 AND COALESCE(ap.actual_enabled,0) = 1
+       -- Skip dematerialized profiles: no active TS published AND no live runtime strategies on the key.
+       -- This silences margin/drawdown/desync alerts for keys we no longer manage in runtime
+       -- (e.g. profiles that were dematerialized but where positions were intentionally kept on the exchange).
+       AND (
+         COALESCE(ap.published_system_name, '') != ''
+         OR EXISTS (
+           SELECT 1 FROM strategies s
+           WHERE s.api_key_id = a.id
+             AND COALESCE(s.is_runtime, 0) = 1
+             AND COALESCE(s.is_archived, 0) = 0
+         )
+       )
      ORDER BY t.display_name ASC`,
     [`-${periodHours} hours`, `-${periodHours} hours`, `-${periodHours} hours`]
   ) as any[];
