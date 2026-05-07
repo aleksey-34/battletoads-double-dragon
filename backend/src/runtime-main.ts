@@ -102,6 +102,13 @@ const startRuntime = async () => {
     `reconciliation=${reconciliationMin}min(${reconciliationCycleEnabled ? 'on' : 'off'}), ` +
     `liquidityScan=${liquidityScanMin}min(${liquidityScanCycleEnabled ? 'on' : 'off'})`
   );
+  logger.info(
+    `[runtime] Hard-stop config: enabled=${process.env.HARD_STOP_MARGIN_ENABLED ?? '1'}, `
+    + `threshold=${process.env.HARD_STOP_MARGIN_THRESHOLD ?? '92'}%, `
+    + `consecutive=${process.env.HARD_STOP_MARGIN_CONSECUTIVE ?? '3'}, `
+    + `minEquity=${process.env.HARD_STOP_MARGIN_MIN_EQUITY_USD ?? '50'}, `
+    + `excludedKeys=${process.env.HARD_STOP_MARGIN_EXCLUDED_KEYS ?? 'artursk-9542210407-api,954'}`
+  );
 
   let autoCycleRunning = false;
   let monitoringCycleRunning = false;

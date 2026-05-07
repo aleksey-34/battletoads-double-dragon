@@ -4023,6 +4023,25 @@ export const runAutoStrategiesCycle = async () => {
     logger.warn(`ОП overflow check failed: ${formatActionError(overflowErr)}`);
   }
 
+  // ── Hygiene guard: non-active/archived strategies must never remain non-flat ──
+  // This cleans up historical state drift where DB strategy state was left long/short
+  // after archival/deactivation. Runtime uses this to avoid repeated mismatch loops.
+  try {
+    const fixRes: any = await db.run(
+      `UPDATE strategies
+       SET state = 'flat',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE state != 'flat'
+         AND (is_active = 0 OR COALESCE(is_archived, 0) = 1)`
+    );
+    const fixed = Number(fixRes?.changes || 0);
+    if (fixed > 0) {
+      logger.warn(`Auto-cycle hygiene: reset ${fixed} orphan strategy states to flat`);
+    }
+  } catch (e) {
+    logger.warn(`Auto-cycle hygiene failed: ${(e as Error).message}`);
+  }
+
   const rows = await db.all(
     `SELECT a.name AS api_key_name, s.id AS strategy_id, COALESCE(s.name, '') AS strategy_name,
             s.market_mode, s.base_symbol, s.quote_symbol, s.interval, s.strategy_type,
@@ -4210,6 +4229,48 @@ export const runAutoStrategiesCycle = async () => {
       processed += 1;
     } catch (error) {
       const errorText = formatActionError(error);
+      const lower = errorText.toLowerCase();
+      const isPairPermissionDenied = lower.includes('no permission for this trading pair');
+      const pairMatch = errorText.match(/\b([A-Z]{2,}USDT)\b/);
+      const deniedPair = String(pairMatch?.[1] || '').toUpperCase();
+
+      if (isPairPermissionDenied) {
+        failed += 1;
+        logger.error(`Auto-cycle strategy ${strategyId} (${apiKeyName}) blocked by pair permission: ${deniedPair || '-'} (${errorText})`);
+        try {
+          await updateStrategy(apiKeyName, strategyId, {
+            is_active: false,
+            auto_update: false,
+            state: 'flat',
+            last_action: 'auto_disabled_pair_permission_denied',
+            last_error: errorText,
+          });
+        } catch (persistError) {
+          logger.warn(
+            `Auto-cycle strategy ${strategyId} (${apiKeyName}) failed to persist pair-permission disable: ${formatActionError(persistError)}`
+          );
+        }
+
+        try {
+          await db.run(
+            `INSERT INTO strategy_runtime_events
+               (api_key_name, strategy_id, strategy_name, event_type, message, details_json, resolved_at, created_at)
+             VALUES (?, ?, ?, 'pair_permission_block', ?, ?, 0, ?)`,
+            [
+              apiKeyName,
+              strategyId,
+              strategyName,
+              errorText,
+              JSON.stringify({ pair: deniedPair || null, policy: 'auto_disable_strategy' }),
+              Date.now(),
+            ]
+          );
+        } catch {
+          // Non-critical
+        }
+        return;
+      }
+
       if (isOfflineSymbolMarketDataError(errorText)) {
         skippedOffline += 1;
         if (shouldLogOfflineSymbolSkip(apiKeyName, strategyId)) {
