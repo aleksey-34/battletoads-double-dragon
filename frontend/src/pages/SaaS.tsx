@@ -6304,6 +6304,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAdminSweepBacktestCommissionPercent(settings.commissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent);
     setAdminSweepBacktestSlippagePercent(settings.slippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent);
     setAdminSweepBacktestFundingRatePercent(settings.fundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent);
+    // Сбрасываем реинвест к 100% (compound) при любом открытии модалки — этот параметр
+    // не хранится в backtestSettings снапшота, поэтому без явного ресета он "залипал" от прошлых движений ползунка.
+    setAdminSweepBacktestReinvestPercent(100);
   }, []);
 
   const resolveBacktestSettingsForContext = useCallback((context: SaasBacktestContext): BacktestCardSettings => {
@@ -6350,7 +6353,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const contextKey = getBacktestContextKey(context);
     const saved = contextKey ? adminBacktestSettingsByCard[contextKey] : null;
     if (saved) {
-      return normalizeBacktestCardSettings(saved);
+      // NOTE: локальный fallback из localStorage отключён — он ресурректил старые
+      // несохранённые движения ползунков при переоткрытии модалки. Источник истины — только
+      // backend snapshot.backtestSettings (он пишется только по буквальному «Сохранить»).
+      // Оставлено поле saved в state для обратной совместимости (миграция).
+      void saved;
     }
 
     return { ...DEFAULT_BACKTEST_SETTINGS };
@@ -6917,20 +6924,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const settings = resolveBacktestSettingsForContext(context);
     applyBacktestSettings(settings);
 
-    // Persist resolved settings to localStorage under the context key so that
-    // re-opening the same card (even after server-side snapshot refresh) retains
-    // the last-known settings rather than falling through to defaults.
-    const contextKey = getBacktestContextKey(context);
-    if (contextKey) {
-      setAdminBacktestSettingsByCard((current) => {
-        if (current[contextKey]) {
-          return current; // already has explicit user settings — do not overwrite
-        }
-        const next = { ...current, [contextKey]: settings };
-        persistBacktestSettingsByCard(next);
-        return next;
-      });
-    }
+    // NOTE: Раньше здесь писали settings в localStorage «про запас» — это создавало
+    // иллюзию «сохранённых» настроек без нажатия кнопки. Убрали — источник истины
+    // только backend snapshot, в который пишет только кнопка «Сохранить» / «Сохранить и отправить».
     if (context.kind === 'algofund-ts') {
       const offerIds = Array.from(new Set((context.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
       setBacktestTsWeightsByOfferId((prev) => {
