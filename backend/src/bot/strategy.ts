@@ -778,14 +778,16 @@ const extractSourceSid = (strategyName: string): string => {
   return m?.[1] ? m[1] : '';
 };
 
-const TS_SYNC_EXCLUDED_API_KEYS = new Set<string>([
-  'artursk-9542210407-api',
-]);
+// All algofund clients now follow the standard reconciliation/alignment
+// pipeline. Previously two keys (artursk-9542210407, artursk-6659194994)
+// were quarantined here while we debugged broken position state — see
+// memory: cross-strategy-reconciliation. After publish edit-in-place was
+// fixed, divergence root cause is gone, so the lists are intentionally
+// empty. Re-add a key here only as a temporary surgical workaround
+// and document the reason next to it.
+const TS_SYNC_EXCLUDED_API_KEYS = new Set<string>([]);
 
-const POSITION_ALIGNMENT_EXCLUDED_API_KEYS = new Set<string>([
-  'artursk-9542210407-api',
-  'artursk-6659194994-api',
-]);
+const POSITION_ALIGNMENT_EXCLUDED_API_KEYS = new Set<string>([]);
 
 const loadExpectedAlgofundSidMap = async (): Promise<Map<string, Set<string>>> => {
   const { db } = await import('../utils/database');
@@ -2279,7 +2281,7 @@ export const updateStrategy = async (
       transactionStarted = false;
     } catch (error) {
       if (transactionStarted) {
-        await db.exec('ROLLBACK');
+        await db.exec('ROLLBACK').catch(() => {});
       }
       throw error;
     }
@@ -3850,6 +3852,12 @@ type CopyStrategiesOptions = {
   preserveActive?: boolean;
   syncSymbols?: boolean;
   sourceStrategyIds?: number[];
+  /**
+   * If true, runtime strategies on the target key whose origin is
+   * 'saas_overlay_legacy' are NOT deleted during replaceTarget. They keep
+   * managing their already-open positions until they go flat.
+   */
+  preserveLegacyOverlay?: boolean;
 };
 
 type CopyChartSuggestion = {
@@ -3931,7 +3939,15 @@ export const copyStrategyBlock = async (
   let chartSuggestion: CopyChartSuggestion | null = null;
 
   if (replaceTarget) {
-    const removeResult: any = await db.run('DELETE FROM strategies WHERE api_key_id = ?', [targetApiKeyId]);
+    const preserveLegacyOverlay = options?.preserveLegacyOverlay === true;
+    const removeResult: any = preserveLegacyOverlay
+      ? await db.run(
+          `DELETE FROM strategies
+             WHERE api_key_id = ?
+               AND COALESCE(origin, '') <> 'saas_overlay_legacy'`,
+          [targetApiKeyId]
+        )
+      : await db.run('DELETE FROM strategies WHERE api_key_id = ?', [targetApiKeyId]);
     deleted = Number(removeResult?.changes || 0);
   }
 

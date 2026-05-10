@@ -12,10 +12,10 @@ import { getTradingSystem } from '../bot/tradingSystems';
 import { getStrategies, updateStrategy } from '../bot/strategy';
 import logger from '../utils/logger';
 
-const RECONCILIATION_EXCLUDED_API_KEYS = new Set<string>([
-  'artursk-9542210407-api',
-  'artursk-6659194994-api',
-]);
+// Standard reconciliation now runs for every algofund client. See
+// strategy.ts for the matching POSITION_ALIGNMENT_EXCLUDED_API_KEYS
+// note. Add keys here only as a temporary, documented workaround.
+const RECONCILIATION_EXCLUDED_API_KEYS = new Set<string>([]);
 
 type ReconciliationRunOptions = {
   periodHours?: number;
