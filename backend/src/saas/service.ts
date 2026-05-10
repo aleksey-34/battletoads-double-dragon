@@ -27,6 +27,41 @@ import { computeReconciliationMetrics } from '../analytics/liveReconciliation';
 // потолок, чтобы reinvest_percent давал настоящий compound на equity > initialBalance.
 const CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X = 1000;
 
+/**
+ * Lookup master_cards.metadata_json by system name and return per-card overrides.
+ * Returns zeros if card not found / metadata empty — caller decides fallback.
+ * Card code convention: `CARD::<UPPER(systemName)>`.
+ */
+export const getCardConfigBySystemName = async (
+  systemName: string,
+): Promise<{ maxOpenPositions: number; lotPercent: number }> => {
+  const name = String(systemName || '').trim();
+  if (!name) return { maxOpenPositions: 0, lotPercent: 0 };
+  const code = `CARD::${name.toUpperCase()}`;
+  let mop = 0;
+  let lot = 0;
+  try {
+    const row = await db.get<{ metadata_json?: string }>(
+      'SELECT metadata_json FROM master_cards WHERE code = ? AND is_active = 1',
+      [code],
+    );
+    if (row?.metadata_json) {
+      const meta = JSON.parse(row.metadata_json) as Record<string, unknown>;
+      const mopRaw = Number((meta as { maxOpenPositions?: unknown })?.maxOpenPositions);
+      if (Number.isFinite(mopRaw) && mopRaw >= 0) {
+        mop = Math.floor(mopRaw);
+      }
+      const lotRaw = Number((meta as { lotPercentOverride?: unknown })?.lotPercentOverride);
+      if (Number.isFinite(lotRaw) && lotRaw > 0) {
+        lot = lotRaw;
+      }
+    }
+  } catch {
+    // Swallow: missing/invalid metadata simply means no override.
+  }
+  return { maxOpenPositions: mop, lotPercent: lot };
+};
+
 export type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'dual';
 export type Level3 = 'low' | 'medium' | 'high';
 export type RequestStatus = 'pending' | 'approved' | 'rejected';
@@ -306,6 +341,9 @@ type TsBacktestSnapshot = {
     initialBalance: number;
     riskScaleMaxPercent: number;
     maxOpenPositions?: number;
+    lotPercentOverride?: number;
+    dateFrom?: string;
+    dateTo?: string;
   };
   updatedAt: string;
 };
@@ -1465,6 +1503,13 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
       initialBalance: Math.max(100, Math.floor(asNumber(settingsRaw.initialBalance, 10000))),
       riskScaleMaxPercent: Number(clampNumber(asNumber(settingsRaw.riskScaleMaxPercent, 100), 0, 400).toFixed(2)),
       maxOpenPositions: Math.max(0, Math.floor(asNumber(settingsRaw.maxOpenPositions, 0))),
+      lotPercentOverride: Math.max(0, Math.floor(asNumber(settingsRaw.lotPercentOverride, 0))),
+      ...(typeof settingsRaw.dateFrom === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(settingsRaw.dateFrom)
+        ? { dateFrom: settingsRaw.dateFrom }
+        : {}),
+      ...(typeof settingsRaw.dateTo === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(settingsRaw.dateTo)
+        ? { dateTo: settingsRaw.dateTo }
+        : {}),
     },
     updatedAt: asString(parsed.updatedAt, new Date().toISOString()),
   };
@@ -4439,6 +4484,13 @@ const ensurePublishedSourceSystem = async (
     if (/^ALGOFUND/i.test(name)) return 2;
     return 0;
   };
+  // Prefer per-card override stored in master_cards.metadata_json,
+  // fall back to the legacy name-based heuristic above.
+  const resolveMaxOpenPositions = async (name: string): Promise<number> => {
+    const cfg = await getCardConfigBySystemName(name);
+    if (cfg.maxOpenPositions > 0) return cfg.maxOpenPositions;
+    return inferMaxOpenPositions(name);
+  };
 
   if (tenantId) {
     const [tenant, profile] = await Promise.all([
@@ -4508,7 +4560,7 @@ const ensurePublishedSourceSystem = async (
     throw new Error('Cannot resolve api key for draft TS members and no fallback trading system found.');
   }
   const systemName = `ALGOFUND_MASTER::${apiKeyName}${systemNameSuffix ? `::${systemNameSuffix}` : ''}`;
-  const systemMaxOpenPositions = inferMaxOpenPositions(systemName);
+  const systemMaxOpenPositions = await resolveMaxOpenPositions(systemName);
   const systems = await listTradingSystems(apiKeyName);
   const existing = systems.find((item) => asString(item.name) === systemName);
   const membersRaw = (draftMembers || []).map((item, index) => ({
@@ -4600,7 +4652,7 @@ const ensurePublishedSourceSystem = async (
           auto_sync_members: false,
           discovery_enabled: false,
           max_members: Math.max(6, runtimeMembers.length),
-          max_open_positions: inferMaxOpenPositions(runtimeSystemName),
+          max_open_positions: await resolveMaxOpenPositions(runtimeSystemName),
         } as any;
         await updateTradingSystem(runtimeApiKeyName, Number(runtimeExisting.id), runtimeUpdateDraft);
         await replaceTradingSystemMembers(runtimeApiKeyName, Number(runtimeExisting.id), runtimeMembers);
@@ -4614,7 +4666,7 @@ const ensurePublishedSourceSystem = async (
         auto_sync_members: false,
         discovery_enabled: false,
         max_members: Math.max(6, runtimeMembers.length),
-        max_open_positions: inferMaxOpenPositions(runtimeSystemName),
+        max_open_positions: await resolveMaxOpenPositions(runtimeSystemName),
         members: runtimeMembers,
       } as any;
       const runtimeCreated = await createTradingSystem(runtimeApiKeyName, runtimeCreateDraft);
@@ -4687,7 +4739,7 @@ const ensurePublishedSourceSystem = async (
               auto_sync_members: false,
               discovery_enabled: false,
               max_members: Math.max(6, materializedMembers.length),
-              max_open_positions: inferMaxOpenPositions(materializedSystemName),
+              max_open_positions: await resolveMaxOpenPositions(materializedSystemName),
             } as any;
             await updateTradingSystem(materializeApiKeyName, Number(materializedExisting.id), materializedUpdateDraft);
             await replaceTradingSystemMembers(materializeApiKeyName, Number(materializedExisting.id), materializedMembers);
@@ -4705,7 +4757,7 @@ const ensurePublishedSourceSystem = async (
             auto_sync_members: false,
             discovery_enabled: false,
             max_members: Math.max(6, materializedMembers.length),
-            max_open_positions: inferMaxOpenPositions(materializedSystemName),
+            max_open_positions: await resolveMaxOpenPositions(materializedSystemName),
             members: materializedMembers,
           } as any;
           const materializedCreated = await createTradingSystem(materializeApiKeyName, materializedCreateDraft);
@@ -5664,6 +5716,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   reinvestPercent?: number;
   riskScaleMaxPercent?: number;
   maxOpenPositions?: number;
+  lotPercentOverride?: number;
   partialTpPct?: number;
   commissionPercent?: number;
   slippagePercent?: number;
@@ -6148,6 +6201,12 @@ export const previewAdminSweepBacktest = async (payload?: {
   // Exponential: risk=0 → ~0.18x, risk=5 → 1.0x, risk=10 → ~5.5x.
   const riskScaleMaxPercent = clampNumber(asNumber(payload?.riskScaleMaxPercent, 100), 0, 400);
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(payload?.maxOpenPositions, 0)));
+  const lotPercentRequested = Math.max(0, asNumber(payload?.lotPercentOverride, 0));
+  // Lot resolution priority: explicit payload → master_cards.metadata_json → 100% (legacy default).
+  const cardLotConfig = await getCardConfigBySystemName(asString(payload?.systemName, '').trim());
+  const lotPercentEffective = lotPercentRequested > 0
+    ? lotPercentRequested
+    : (cardLotConfig.lotPercent > 0 ? cardLotConfig.lotPercent : 100);
   const partialTpPct = Math.max(0, asNumber(payload?.partialTpPct, 0));
   // Admin overrides for execution-cost assumptions. Defaults align with WEEX
   // futures (taker 0.06% × 2 legs = ~0.1%, slippage 0.05%, funding 0).
@@ -6363,7 +6422,7 @@ export const previewAdminSweepBacktest = async (payload?: {
           ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
           ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
           maxDepositOverride: initialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
-          lotPercentOverride: 100,
+          lotPercentOverride: lotPercentEffective,
           reinvestPercentOverride: reinvestPercent,
         });
 
@@ -6642,7 +6701,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                   ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
                   ...(partialTpPct > 0 ? { partialTpPct } : {}),
                   maxDepositOverride: initialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
-                  lotPercentOverride: 100,
+                  lotPercentOverride: lotPercentEffective,
                   reinvestPercentOverride: reinvestPercent,
                 };
 
@@ -10652,17 +10711,17 @@ const materializeAlgofundSystem = async (
   try {
     const newMemberIdSet = new Set<number>(members.map((m) => Number(m.strategy_id)).filter((id) => Number.isFinite(id) && id > 0));
     const orphanRows = (await db.all(
-      `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode
+      `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode, s.state
        FROM strategies s
        JOIN api_keys a ON a.id = s.api_key_id
        WHERE a.name = ?
          AND s.is_active = 1
          AND s.is_archived = 0`,
       [executionApiKeyName]
-    ).catch(() => [])) as Array<{ id: number; name: string; base_symbol: string | null; quote_symbol: string | null; market_mode: string | null }>;
+    ).catch(() => [])) as Array<{ id: number; name: string; base_symbol: string | null; quote_symbol: string | null; market_mode: string | null; state: string | null }>;
     const orphans = orphanRows.filter((r) => !newMemberIdSet.has(Number(r.id)));
     if (orphans.length > 0) {
-      logger.warn(`Algofund materialize [archive-orphans]: archiving ${orphans.length} stale strategies on ${executionApiKeyName} not in new TS '${getAlgofundClientSystemName(tenant)}' (${members.length} members)`);
+      logger.warn(`Algofund materialize [archive-orphans]: archiving ${orphans.length} stale strategies on ${executionApiKeyName} not in new TS '${getAlgofundClientSystemName(tenant)}' (${members.length} new members)`);
       for (const orphan of orphans) {
         await saasArchiveStrategy(executionApiKeyName, orphan);
       }
@@ -10860,11 +10919,15 @@ export const getAlgofundState = async (
         finalEquity: snapshot.finalEquity,
         equityPoints: snapshot.equityPoints,
         backtestSettings: snapshot.backtestSettings,
+        ...(snapshot.displayLabel !== undefined ? { displayLabel: snapshot.displayLabel } : {}),
         ...(snapshot.sharpe !== undefined ? { sharpe: snapshot.sharpe } : {}),
         ...(snapshot.membersCount !== undefined ? { membersCount: snapshot.membersCount } : {}),
         ...(snapshot.marketCount !== undefined ? { marketCount: snapshot.marketCount } : {}),
         ...(snapshot.maxPerMarket !== undefined ? { maxPerMarket: snapshot.maxPerMarket } : {}),
       };
+      if (asString(snapshot.displayLabel, '').trim() && !asString((system as any).displayLabel, '').trim()) {
+        (system as any).displayLabel = asString(snapshot.displayLabel, '').trim();
+      }
     }
   }
 
@@ -10941,6 +11004,7 @@ export const getAlgofundState = async (
           periodDays: snapshot.periodDays,
           finalEquity: snapshot.finalEquity,
           equityPoints: snapshot.equityPoints,
+          ...(snapshot.displayLabel !== undefined ? { displayLabel: snapshot.displayLabel } : {}),
           ...(snapshot.sharpe !== undefined ? { sharpe: snapshot.sharpe } : {}),
           ...(snapshot.membersCount !== undefined ? { membersCount: snapshot.membersCount } : {}),
           ...(snapshot.marketCount !== undefined ? { marketCount: snapshot.marketCount } : {}),
@@ -11785,6 +11849,12 @@ export const retryMaterializeAlgofundSystem = async (tenantId: number) => {
     throw new Error('Materialization retry only available when start has been requested');
   }
 
+  // Defensive: if a previous run leaked a transaction (e.g. a failed ROLLBACK
+  // left the shared sqlite connection inside an open BEGIN), clear it before
+  // we start. Materialization opens its own transactions internally and will
+  // otherwise fail with "cannot start a transaction within a transaction".
+  await db.exec('ROLLBACK').catch(() => {});
+
   try {
     await materializeAlgofundSystem(tenant, plan, { ...profile, requested_enabled: 1 }, true);
     await db.run('UPDATE algofund_profiles SET actual_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?', [tenantId]);
@@ -11818,15 +11888,275 @@ export const retryMaterializeAlgofundSystem = async (tenantId: number) => {
   };
 };
 
-export const publishAdminTradingSystem = async (payload?: { offerIds?: string[]; setKey?: string }) => {
+/**
+ * Resolve an existing published source TS for a given setKey by looking up
+ * `master_cards.code = CARD::ALGOFUND_MASTER::<api_key>::<SLUG>`.
+ *
+ * This is the inverse of the suffix-based "always-create-new" path used by
+ * the auto-publish flow. It lets the publish endpoint detect "edit-in-place"
+ * intent and reuse an already-deployed master TS instead of producing
+ * orphaned `*-<hash>` duplicates.
+ */
+const resolveExistingPublishedTsForSetKey = async (setKey: string): Promise<{
+  systemId: number;
+  systemName: string;
+  apiKeyName: string;
+  cardId: number;
+  cardCode: string;
+  cardMetadata: Record<string, unknown>;
+  membersCount: number;
+  connectedClientCount: number;
+} | null> => {
+  const slug = buildSetSlug(setKey);
+  if (!slug) {
+    return null;
+  }
+  const slugUpper = slug.toUpperCase();
+  const card = await db.get<{
+    id: number;
+    code: string;
+    source_system_id: number;
+    metadata_json: string;
+  }>(
+    `SELECT id, code, source_system_id, metadata_json FROM master_cards
+     WHERE code LIKE ? AND is_active = 1
+     ORDER BY id DESC LIMIT 1`,
+    [`CARD::ALGOFUND_MASTER::%::${slugUpper}`]
+  ).catch(() => null);
+  if (!card || !card.source_system_id) {
+    return null;
+  }
+  const tsRow = await db.get<{ id: number; name: string; api_key_name: string }>(
+    `SELECT ts.id, ts.name, a.name AS api_key_name
+     FROM trading_systems ts JOIN api_keys a ON a.id = ts.api_key_id
+     WHERE ts.id = ?`,
+    [Number(card.source_system_id)]
+  ).catch(() => null);
+  if (!tsRow) {
+    return null;
+  }
+  const membersCount = Number((await db.get<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM trading_system_members WHERE system_id = ?`,
+    [tsRow.id]
+  ).catch(() => null))?.c || 0);
+  const connectedClientCount = Number((await db.get<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM algofund_profiles WHERE published_system_name = ? AND requested_enabled = 1`,
+    [tsRow.name]
+  ).catch(() => null))?.c || 0);
+  let cardMetadata: Record<string, unknown> = {};
+  try {
+    cardMetadata = card.metadata_json ? (JSON.parse(String(card.metadata_json)) as Record<string, unknown>) : {};
+  } catch {
+    cardMetadata = {};
+  }
+  return {
+    systemId: Number(tsRow.id),
+    systemName: String(tsRow.name),
+    apiKeyName: String(tsRow.api_key_name),
+    cardId: Number(card.id),
+    cardCode: String(card.code),
+    cardMetadata,
+    membersCount,
+    connectedClientCount,
+  };
+};
+
+/**
+ * GET /admin/publish/preview helper — returns whether a publish for this
+ * setKey would hit an existing card (edit-in-place) and how many live
+ * clients are attached. Frontend uses this to render an explicit
+ * "затронет N клиентов" confirmation dialog before POST /admin/publish.
+ */
+export const previewPublishImpact = async (setKey: string): Promise<{
+  setKey: string;
+  slug: string;
+  cardExists: boolean;
+  systemName: string | null;
+  systemId: number | null;
+  apiKeyName: string | null;
+  membersCount: number;
+  connectedClientCount: number;
+  cardMetadata: Record<string, unknown>;
+}> => {
+  const trimmed = asString(setKey, '').trim();
+  const slug = buildSetSlug(trimmed);
+  const existing = trimmed ? await resolveExistingPublishedTsForSetKey(trimmed) : null;
+  return {
+    setKey: trimmed,
+    slug,
+    cardExists: Boolean(existing),
+    systemName: existing?.systemName || null,
+    systemId: existing?.systemId || null,
+    apiKeyName: existing?.apiKeyName || null,
+    membersCount: existing?.membersCount || 0,
+    connectedClientCount: existing?.connectedClientCount || 0,
+    cardMetadata: existing?.cardMetadata || {},
+  };
+};
+
+/**
+ * Apply card-level overrides (lotPercentOverride, maxOpenPositions) into
+ * `master_cards.metadata_json`. Re-materialization picks these up via the
+ * existing routes.ts/applyCardLotOverride path.
+ */
+const applyCardMetadataOverrides = async (
+  cardId: number,
+  currentMetadata: Record<string, unknown>,
+  overrides?: { lotPercentOverride?: number; maxOpenPositions?: number }
+): Promise<{ changed: boolean; metadata: Record<string, unknown> }> => {
+  if (!overrides) {
+    return { changed: false, metadata: currentMetadata };
+  }
+  const next: Record<string, unknown> = { ...currentMetadata };
+  let changed = false;
+  if (overrides.lotPercentOverride !== undefined) {
+    const lot = Number(overrides.lotPercentOverride);
+    if (Number.isFinite(lot) && lot >= 0) {
+      if (Number(next.lotPercentOverride) !== lot) {
+        next.lotPercentOverride = lot;
+        changed = true;
+      }
+    }
+  }
+  if (overrides.maxOpenPositions !== undefined) {
+    const mop = Number(overrides.maxOpenPositions);
+    if (Number.isFinite(mop) && mop >= 0) {
+      const mopInt = Math.floor(mop);
+      if (Number(next.maxOpenPositions) !== mopInt) {
+        next.maxOpenPositions = mopInt;
+        changed = true;
+      }
+    }
+  }
+  if (changed) {
+    await db.run(
+      `UPDATE master_cards SET metadata_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+      [JSON.stringify(next), cardId]
+    );
+  }
+  return { changed, metadata: next };
+};
+
+/**
+ * Re-materialize an existing published master TS to all algofund clients
+ * currently attached to it. Used after edit-in-place publish to push
+ * updated card metadata (lot %, max open positions, …) to live clients.
+ *
+ * Errors per tenant are collected and returned — we never abort the loop
+ * because partial propagation is far better than total failure when one
+ * tenant has a bad exchange key or stale balances.
+ */
+const propagatePublishToClients = async (systemName: string): Promise<{
+  systemName: string;
+  attempted: number;
+  succeeded: number;
+  failed: Array<{ tenantId: number; slug: string; error: string }>;
+}> => {
+  const rows = await db.all<Array<{ tenant_id: number }>>(
+    `SELECT tenant_id FROM algofund_profiles
+     WHERE published_system_name = ? AND requested_enabled = 1
+     ORDER BY tenant_id`,
+    [systemName]
+  ).catch(() => []);
+  const failed: Array<{ tenantId: number; slug: string; error: string }> = [];
+  let succeeded = 0;
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const tenantId = Number(row.tenant_id);
+    if (!Number.isFinite(tenantId) || tenantId <= 0) continue;
+    let slug = '';
+    try {
+      const tenant = await getTenantById(tenantId);
+      slug = tenant?.slug || String(tenantId);
+      const plan = await getPlanForTenant(tenantId, 'algofund_client');
+      const profile = await getAlgofundProfile(tenantId);
+      if (!plan || !profile) {
+        throw new Error('plan/profile not found');
+      }
+      // Defensive cleanup against any leaked transaction from a prior failure
+      // on the shared sqlite connection.
+      await db.exec('ROLLBACK').catch(() => {});
+      await materializeAlgofundSystem(tenant, plan, { ...profile, requested_enabled: 1 }, true);
+      await db.run(
+        `UPDATE algofund_profiles SET actual_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?`,
+        [tenantId]
+      );
+      succeeded += 1;
+    } catch (error) {
+      const msg = (error as Error)?.message || String(error);
+      logger.warn(`[propagatePublishToClients] tenant=${tenantId} slug=${slug} failed: ${msg}`);
+      failed.push({ tenantId, slug, error: msg });
+    }
+  }
+  return {
+    systemName,
+    attempted: Array.isArray(rows) ? rows.length : 0,
+    succeeded,
+    failed,
+  };
+};
+
+export const publishAdminTradingSystem = async (payload?: {
+  offerIds?: string[];
+  setKey?: string;
+  /**
+   * When true, reuse an existing master TS for this setKey (looked up via
+   * `master_cards.code` slug match) instead of producing a new
+   * `*-<hash>` system. Required for "Сохранить и отправить ТС на витрину"
+   * on a card that is already on the storefront.
+   */
+  editInPlace?: boolean;
+  /**
+   * When true (only honored together with editInPlace) — after the card
+   * metadata is updated, re-materialize the source TS to every connected
+   * algofund client.
+   */
+  propagateToClients?: boolean;
+  /**
+   * Card-level overrides from the backtest controls. Persisted to
+   * `master_cards.metadata_json` so that `routes.ts` materialize path
+   * picks them up for every client.
+   */
+  cardOverrides?: { lotPercentOverride?: number; maxOpenPositions?: number };
+}) => {
   const catalog = loadLatestClientCatalog();
   const offerIds = normalizePublishOfferIds(payload?.offerIds);
   const setKey = asString(payload?.setKey, '').trim();
-  const members = await resolvePublishDraftMembers(catalog, offerIds, setKey);
-  const sourceSystem = await ensurePublishedSourceSystem(undefined, {
-    draftMembersOverride: members,
-    systemNameSuffix: buildPublishSystemSuffix(setKey, offerIds),
-  });
+  const editInPlace = payload?.editInPlace === true;
+  const propagateToClients = payload?.propagateToClients === true;
+
+  const existing = editInPlace ? await resolveExistingPublishedTsForSetKey(setKey) : null;
+
+  let sourceSystem: { apiKeyName: string; systemId: number; systemName: string };
+  let membersCount = 0;
+  let cardUpdate: { changed: boolean; metadata: Record<string, unknown> } | null = null;
+
+  if (existing) {
+    // Edit-in-place path: do NOT generate a hash suffix and do NOT touch
+    // members. The admin only edits "krutilki" (lot %, maxOpenPositions,
+    // riskMul, …); membership changes are out of scope for this round and
+    // require an explicit different flag to avoid accidentally yanking
+    // open positions on dropped strategies.
+    sourceSystem = {
+      apiKeyName: existing.apiKeyName,
+      systemId: existing.systemId,
+      systemName: existing.systemName,
+    };
+    membersCount = existing.membersCount;
+    cardUpdate = await applyCardMetadataOverrides(
+      existing.cardId,
+      existing.cardMetadata,
+      payload?.cardOverrides
+    );
+  } else {
+    // Legacy / new-card path: resolve members + suffix as before.
+    const members = await resolvePublishDraftMembers(catalog, offerIds, setKey);
+    sourceSystem = await ensurePublishedSourceSystem(undefined, {
+      draftMembersOverride: members,
+      systemNameSuffix: buildPublishSystemSuffix(setKey, offerIds),
+    });
+    membersCount = members.length;
+  }
+
   const period = buildPeriodInfo(loadLatestSweep());
   const preview = await runTradingSystemBacktest(sourceSystem.apiKeyName, sourceSystem.systemId, {
     bars: SAAS_PREVIEW_BARS,
@@ -11838,13 +12168,22 @@ export const publishAdminTradingSystem = async (payload?: { offerIds?: string[];
     fundingRatePercent: 0,
   });
 
+  let propagation: Awaited<ReturnType<typeof propagatePublishToClients>> | null = null;
+  if (existing && propagateToClients) {
+    propagation = await propagatePublishToClients(sourceSystem.systemName);
+  }
+
   return {
     sourceSystem,
     publishMeta: {
       offerIds,
       setKey,
-      membersCount: members.length,
+      membersCount,
       systemName: sourceSystem.systemName,
+      editInPlace: Boolean(existing),
+      cardMetadataChanged: cardUpdate?.changed || false,
+      cardMetadata: cardUpdate?.metadata || existing?.cardMetadata || {},
+      propagation,
     },
     preview: {
       ...preview,

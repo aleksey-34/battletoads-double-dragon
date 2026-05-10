@@ -992,6 +992,21 @@ type AdminPublishResponse = {
 type AdminPublishPayload = {
   offerIds?: string[];
   setKey?: string;
+  editInPlace?: boolean;
+  propagateToClients?: boolean;
+  cardOverrides?: { lotPercentOverride?: number; maxOpenPositions?: number };
+};
+
+type AdminPublishPreview = {
+  setKey: string;
+  slug: string;
+  cardExists: boolean;
+  systemName: string | null;
+  systemId: number | null;
+  apiKeyName: string | null;
+  membersCount: number;
+  connectedClientCount: number;
+  cardMetadata: Record<string, unknown>;
 };
 
 type BacktestCardSettings = {
@@ -1000,10 +1015,13 @@ type BacktestCardSettings = {
   initialBalance: number;
   riskScaleMaxPercent: number;
   maxOpenPositions: number;
+  lotPercentOverride: number;
   partialTpPct: number;
   commissionPercent: number;
   slippagePercent: number;
   fundingRatePercent: number;
+  dateFrom?: string;
+  dateTo?: string;
 };
 
 const ADMIN_PUBLISH_RESPONSE_STORAGE_KEY = 'saasAdminPublishResponse';
@@ -1014,10 +1032,13 @@ const DEFAULT_BACKTEST_SETTINGS: BacktestCardSettings = {
   initialBalance: 10000,
   riskScaleMaxPercent: 100,
   maxOpenPositions: 0,
+  lotPercentOverride: 0,
   partialTpPct: 0,
   commissionPercent: 0.1,
   slippagePercent: 0.05,
   fundingRatePercent: 0,
+  dateFrom: '',
+  dateTo: '',
 };
 
 const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
@@ -1027,20 +1048,27 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
   const initialBalance = Number(parsed.initialBalance);
   const riskScaleMaxPercent = Number(parsed.riskScaleMaxPercent);
   const maxOpenPositions = Number(parsed.maxOpenPositions);
+  const lotPercentOverride = Number(parsed.lotPercentOverride);
   const partialTpPct = Number(parsed.partialTpPct);
   const commissionPercent = Number(parsed.commissionPercent);
   const slippagePercent = Number(parsed.slippagePercent);
   const fundingRatePercent = Number(parsed.fundingRatePercent);
+  const isYmd = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+  const dateFromRaw = parsed.dateFrom;
+  const dateToRaw = parsed.dateTo;
   return {
     riskScore: Number.isFinite(riskScore) ? Math.min(10, Math.max(0, riskScore)) : DEFAULT_BACKTEST_SETTINGS.riskScore,
     tradeFrequencyScore: Number.isFinite(tradeFrequencyScore) ? Math.min(10, Math.max(0, tradeFrequencyScore)) : DEFAULT_BACKTEST_SETTINGS.tradeFrequencyScore,
     initialBalance: Number.isFinite(initialBalance) ? Math.max(100, Math.floor(initialBalance)) : DEFAULT_BACKTEST_SETTINGS.initialBalance,
     riskScaleMaxPercent: Number.isFinite(riskScaleMaxPercent) ? Math.min(1000, Math.max(0, riskScaleMaxPercent)) : DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent,
     maxOpenPositions: Number.isFinite(maxOpenPositions) ? Math.max(0, Math.floor(maxOpenPositions)) : DEFAULT_BACKTEST_SETTINGS.maxOpenPositions,
+    lotPercentOverride: Number.isFinite(lotPercentOverride) ? Math.min(500, Math.max(0, lotPercentOverride)) : DEFAULT_BACKTEST_SETTINGS.lotPercentOverride,
     partialTpPct: Number.isFinite(partialTpPct) ? Math.max(0, partialTpPct) : DEFAULT_BACKTEST_SETTINGS.partialTpPct,
     commissionPercent: Number.isFinite(commissionPercent) ? Math.min(5, Math.max(0, commissionPercent)) : DEFAULT_BACKTEST_SETTINGS.commissionPercent,
     slippagePercent: Number.isFinite(slippagePercent) ? Math.min(5, Math.max(0, slippagePercent)) : DEFAULT_BACKTEST_SETTINGS.slippagePercent,
     fundingRatePercent: Number.isFinite(fundingRatePercent) ? Math.min(5, Math.max(0, fundingRatePercent)) : DEFAULT_BACKTEST_SETTINGS.fundingRatePercent,
+    dateFrom: isYmd(dateFromRaw) ? dateFromRaw : '',
+    dateTo: isYmd(dateToRaw) ? dateToRaw : '',
   };
 };
 
@@ -2713,6 +2741,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestInitialBalance, setAdminSweepBacktestInitialBalance] = useState(DEFAULT_BACKTEST_SETTINGS.initialBalance);
   const [adminSweepBacktestRiskScaleMaxPercent, setAdminSweepBacktestRiskScaleMaxPercent] = useState(DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent);
   const [adminSweepBacktestMaxOpenPositions, setAdminSweepBacktestMaxOpenPositions] = useState(DEFAULT_BACKTEST_SETTINGS.maxOpenPositions);
+  const [adminSweepBacktestLotPercentOverride, setAdminSweepBacktestLotPercentOverride] = useState(DEFAULT_BACKTEST_SETTINGS.lotPercentOverride);
   const [adminSweepBacktestPartialTpPct, setAdminSweepBacktestPartialTpPct] = useState(DEFAULT_BACKTEST_SETTINGS.partialTpPct);
   const [adminSweepBacktestCommissionPercent, setAdminSweepBacktestCommissionPercent] = useState(DEFAULT_BACKTEST_SETTINGS.commissionPercent);
   const [adminSweepBacktestSlippagePercent, setAdminSweepBacktestSlippagePercent] = useState(DEFAULT_BACKTEST_SETTINGS.slippagePercent);
@@ -3505,14 +3534,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       .filter((point: any) => Number.isFinite(point.time) && Number.isFinite(point.equity));
   };
 
-  const mapSnapshotEquityPoints = (equityPoints?: number[]) => {
+  const mapSnapshotEquityPoints = (equityPoints?: number[], periodDays?: number) => {
     if (!Array.isArray(equityPoints) || equityPoints.length === 0) return [];
     const nowSec = Math.floor(Date.now() / 1000);
     const dayS = 86400;
-    const startSec = nowSec - (equityPoints.length - 1) * dayS;
+    const days = Number(periodDays) > 0 ? Number(periodDays) : equityPoints.length - 1;
+    const totalSpan = Math.max(days, 1) * dayS;
+    const startSec = nowSec - totalSpan;
+    const step = totalSpan / Math.max(equityPoints.length - 1, 1);
     const mapped = equityPoints
       .map((equity: number, index: number) => ({
-        time: startSec + index * dayS,
+        time: Math.floor(startSec + index * step),
         equity: Number(equity),
       }))
       .filter((point: { time: number; equity: number }) => Number.isFinite(point.time) && Number.isFinite(point.equity));
@@ -3793,7 +3825,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       0,
       Number(snapshotForSystem?.backtestSettings?.maxOpenPositions || runtimeSystem?.maxOpenPositions || 0),
     );
-    const snapshotCurve = mapSnapshotEquityPoints(downsampleNumericSeries(Array.isArray(snapshotForSystem?.equityPoints) ? (snapshotForSystem?.equityPoints || []) : [], 64));
+    const snapshotCurve = mapSnapshotEquityPoints(downsampleNumericSeries(Array.isArray(snapshotForSystem?.equityPoints) ? (snapshotForSystem?.equityPoints || []) : [], 64), Number(snapshotForSystem?.periodDays || 0));
 
     const activeSetKey = String(selectedAdminDraftTsSetKey || '').trim();
     const latestBacktestMatchesSystem = activeSetKey
@@ -4401,6 +4433,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
             reinvestPercent: adminSweepBacktestReinvestPercent,
             maxOpenPositions: adminSweepBacktestMaxOpenPositions > 0 ? adminSweepBacktestMaxOpenPositions : undefined,
+            lotPercentOverride: adminSweepBacktestLotPercentOverride > 0 ? adminSweepBacktestLotPercentOverride : undefined,
           });
           return [window.key, response.data] as const;
         })
@@ -6138,9 +6171,46 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     setActionLoading('publish');
     try {
+      // Detect edit-in-place: if a card with this slug exists and has live
+      // clients, surface the same warning the backtest-context publish flow
+      // shows. Otherwise behaviour is unchanged (creates a new card).
+      let editInPlace = false;
+      let connectedClients = 0;
+      try {
+        const previewRes = await axios.get<{ success: boolean } & AdminPublishPreview>(
+          '/api/saas/admin/publish/preview',
+          { params: { setKey } }
+        );
+        editInPlace = Boolean(previewRes.data?.cardExists);
+        connectedClients = Number(previewRes.data?.connectedClientCount || 0);
+      } catch (previewErr) {
+        console.warn('publish preview fetch failed', previewErr);
+      }
+
+      if (editInPlace && connectedClients > 0) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            Modal.confirm({
+              title: 'Карточка подключена к клиентам',
+              content: `К карточке «${setKey}» подключено ${connectedClients} клиентов. Изменения будут применены ко всем подключённым клиентам. Продолжить?`,
+              okText: `Обновить (${connectedClients} клиентов)`,
+              cancelText: 'Отмена',
+              onOk: () => resolve(),
+              onCancel: () => reject(new Error('cancelled')),
+            });
+          });
+        } catch {
+          messageApi.info('Публикация отменена');
+          setActionLoading('');
+          return;
+        }
+      }
+
       const response = await axios.post<AdminPublishResponse>('/api/saas/admin/publish', {
         offerIds,
         setKey: setKey || undefined,
+        editInPlace,
+        propagateToClients: editInPlace,
       });
       setPublishResponse(response.data);
       messageApi.success(copy.publishReady);
@@ -6300,10 +6370,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAdminSweepBacktestInitialBalance(settings.initialBalance);
     setAdminSweepBacktestRiskScaleMaxPercent(settings.riskScaleMaxPercent);
     setAdminSweepBacktestMaxOpenPositions(settings.maxOpenPositions ?? 0);
+    setAdminSweepBacktestLotPercentOverride(settings.lotPercentOverride ?? 0);
     setAdminSweepBacktestPartialTpPct(settings.partialTpPct ?? 0);
     setAdminSweepBacktestCommissionPercent(settings.commissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent);
     setAdminSweepBacktestSlippagePercent(settings.slippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent);
     setAdminSweepBacktestFundingRatePercent(settings.fundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent);
+    // Подтягиваем дата-окно из сохранённого снапшота, чтобы модалка сразу пересчитывала
+    // на той же длине истории, что и опубликованная карточка (а не на дефолтных ~70д).
+    setAdminSweepBacktestDateFrom(typeof settings.dateFrom === 'string' ? settings.dateFrom : '');
+    setAdminSweepBacktestDateTo(typeof settings.dateTo === 'string' ? settings.dateTo : '');
     // Сбрасываем реинвест к 100% (compound) при любом открытии модалки — этот параметр
     // не хранится в backtestSettings снапшота, поэтому без явного ресета он "залипал" от прошлых движений ползунка.
     setAdminSweepBacktestReinvestPercent(100);
@@ -6424,17 +6499,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const effectiveInitialBalance = Number(options?.settingsOverride?.initialBalance ?? adminSweepBacktestInitialBalance);
     const effectiveRiskScaleMaxPercent = Number(options?.settingsOverride?.riskScaleMaxPercent ?? adminSweepBacktestRiskScaleMaxPercent);
     const effectiveMaxOpenPositions = Math.max(0, Math.floor(Number(options?.settingsOverride?.maxOpenPositions ?? adminSweepBacktestMaxOpenPositions)));
+    const effectiveLotPercentOverride = Math.max(0, Number(options?.settingsOverride?.lotPercentOverride ?? adminSweepBacktestLotPercentOverride));
     const effectivePartialTpPct = Math.max(0, Number(options?.settingsOverride?.partialTpPct ?? adminSweepBacktestPartialTpPct));
     const effectiveCommissionPercent = Math.max(0, Number(options?.settingsOverride?.commissionPercent ?? adminSweepBacktestCommissionPercent));
     const effectiveSlippagePercent = Math.max(0, Number(options?.settingsOverride?.slippagePercent ?? adminSweepBacktestSlippagePercent));
     const effectiveFundingRatePercent = Math.max(0, Number(options?.settingsOverride?.fundingRatePercent ?? adminSweepBacktestFundingRatePercent));
+    // Date window may come via override (when modal just opened — state setters from applyBacktestSettings
+    // haven't flushed yet), otherwise fall back to current state.
+    const overrideDateFromRaw = options?.settingsOverride?.dateFrom;
+    const overrideDateToRaw = options?.settingsOverride?.dateTo;
+    const effectiveDateFrom = (typeof overrideDateFromRaw === 'string' ? overrideDateFromRaw : adminSweepBacktestDateFrom) || undefined;
+    const effectiveDateTo = (typeof overrideDateToRaw === 'string' ? overrideDateToRaw : adminSweepBacktestDateTo) || undefined;
     try {
       const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
         kind: targetContext.kind,
         setKey: targetContext.setKey,
         systemName: targetContext.systemName,
         offerId: targetContext.offerId,
-        offerIds: targetContext.offerIds,
+        // Когда есть systemName (algofund-ts), бэкенд резолвит состав из trading_system_members (DB).
+        // Явный offerIds перебивает этот путь и даёт только те офферы, у которых есть запись в offer-store,
+        // что меньше полного состава ТС. Поэтому offerIds передаём только когда нет systemName.
+        offerIds: (targetContext.kind === 'algofund-ts' && targetContext.systemName)
+          ? undefined
+          : targetContext.offerIds,
         offerWeightsById: targetContext.kind === 'algofund-ts'
           ? normalizeBacktestTsWeights(
             Array.from(new Set((targetContext.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean))),
@@ -6447,6 +6534,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         riskScaleMaxPercent: effectiveRiskScaleMaxPercent,
         reinvestPercent: adminSweepBacktestReinvestPercent,
         maxOpenPositions: effectiveMaxOpenPositions > 0 ? effectiveMaxOpenPositions : undefined,
+        lotPercentOverride: effectiveLotPercentOverride > 0 ? effectiveLotPercentOverride : undefined,
         partialTpPct: effectivePartialTpPct > 0 ? effectivePartialTpPct : undefined,
         commissionPercent: Number.isFinite(effectiveCommissionPercent) ? effectiveCommissionPercent : undefined,
         slippagePercent: Number.isFinite(effectiveSlippagePercent) ? effectiveSlippagePercent : undefined,
@@ -6455,8 +6543,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         rerunApiKeyName: options?.preferRealBacktest
           ? (adminSweepBacktestRerunApiKey || undefined)
           : undefined,
-        dateFrom: adminSweepBacktestDateFrom || undefined,
-        dateTo: adminSweepBacktestDateTo || undefined,
+        dateFrom: effectiveDateFrom,
+        dateTo: effectiveDateTo,
       });
       if (requestSeq !== backtestRequestSeqRef.current) {
         return;
@@ -6771,19 +6859,49 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     // New name entered → user explicitly named a new card (prompt text says so) → auto-publish as new storefront entry
     const isNewCardName = snapshotKey !== defaultSnapshotKey && !snapshotKeyOnStorefront;
     const shouldPublishAfterSave = options?.publishAfterSave === true || sameNameStorefrontUpdate || isNewCardName;
-    const storefrontClientCountBySnapshotKey = snapshotKeyOnStorefront
-      ? algofundTenantsWithPublishedTs.filter((t) => String(t.algofundProfile?.published_system_name || '').trim() === snapshotKey).length
-      : 0;
-    const willAffectStorefront = shouldPublishAfterSave && snapshotKeyOnStorefront && storefrontClientCountBySnapshotKey > 0;
+
+    // Authoritative source of truth for "will this publish hit a card with
+    // live clients" is the backend (matches by master_cards.code slug). The
+    // legacy heuristic above relied on snapshotKey being equal to the full
+    // systemName, which is never true for human-entered slugs like
+    // "balanced-portfolio-v2" — hence the missing warning the admin saw.
+    let publishPreview: AdminPublishPreview | null = null;
+    if (shouldPublishAfterSave && snapshotKey) {
+      try {
+        const previewRes = await axios.get<{ success: boolean } & AdminPublishPreview>(
+          '/api/saas/admin/publish/preview',
+          { params: { setKey: snapshotKey } }
+        );
+        publishPreview = previewRes.data || null;
+      } catch (previewErr) {
+        console.warn('publish preview fetch failed', previewErr);
+      }
+    }
+    const willAffectStorefront = shouldPublishAfterSave && Boolean(publishPreview?.cardExists) && Number(publishPreview?.connectedClientCount || 0) > 0;
 
     // If saving/publishing will touch storefront card, ask explicit confirmation.
     if (willAffectStorefront) {
+      const previewClientCount = Number(publishPreview?.connectedClientCount || 0);
+      const previewMembersCount = Number(publishPreview?.membersCount || 0);
       try {
         await new Promise<void>((resolve, reject) => {
           Modal.confirm({
-            title: 'Карточка уже на витрине',
-            content: `Настройки риска и частоты сделок одни — сохранение обновит их${storefrontClientCountBySnapshotKey > 0 ? ` для ${storefrontClientCountBySnapshotKey} клиентов` : ''} в торговле. Продолжить?`,
-            okText: 'Сохранить и обновить витрину',
+            title: 'Карточка подключена к клиентам',
+            width: 520,
+            content: (
+              <div>
+                <p style={{ marginBottom: 8 }}>
+                  К торговой системе <b>«{snapshotKey}»</b> подключено <b>{previewClientCount}</b> клиентов ({previewMembersCount} стратегий).
+                </p>
+                <p style={{ marginBottom: 8 }}>
+                  Новые настройки (lot %, max open positions, riskMul и т.п.) будут сразу применены ко всем подключённым клиентам.
+                </p>
+                <p style={{ marginBottom: 0, color: '#999' }}>
+                  Состав СТРАТЕГИЙ в ТС не изменится. Для смены состава — введи НОВОЕ имя карточки при сохранении.
+                </p>
+              </div>
+            ),
+            okText: `Обновить (${previewClientCount} клиентов)`,
             cancelText: 'Отмена',
             onOk: () => resolve(),
             onCancel: () => reject(new Error('cancelled')),
@@ -6802,17 +6920,38 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       let resolvedSystemName = String(adminSweepBacktestResult?.publishMeta?.systemName || '').trim();
 
       if (shouldPublishAfterSave) {
+        const editInPlace = Boolean(publishPreview?.cardExists);
+        const cardOverrides = editInPlace
+          ? {
+              lotPercentOverride: Math.max(0, Number(adminSweepBacktestLotPercentOverride ?? 0)),
+              maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
+            }
+          : undefined;
         const publishRes = await axios.post('/api/saas/admin/publish', {
           offerIds,
           setKey: snapshotKey || undefined,
+          editInPlace,
+          propagateToClients: editInPlace,
+          cardOverrides,
         });
         const publishedSystemName = String(publishRes.data?.sourceSystem?.systemName || '').trim();
         if (publishedSystemName) {
           resolvedSystemName = publishedSystemName;
         }
-        messageApi.success(isNewCardName
-          ? `Новая карточка ТС «${snapshotKey}» создана на витрине`
-          : 'Метрики ТС сохранены и витрина обновлена');
+        const propagation = publishRes.data?.publishMeta?.propagation;
+        if (editInPlace && propagation) {
+          const okN = Number(propagation.succeeded || 0);
+          const failN = Number((propagation.failed || []).length || 0);
+          if (failN > 0) {
+            messageApi.warning(`Обновлено у ${okN} клиентов, ошибок: ${failN}`);
+          } else {
+            messageApi.success(`Витрина обновлена, применено ко всем ${okN} подключённым клиентам`);
+          }
+        } else {
+          messageApi.success(isNewCardName
+            ? `Новая карточка ТС «${snapshotKey}» создана на витрине`
+            : 'Метрики ТС сохранены и витрина обновлена');
+        }
       }
 
       await axios.patch('/api/saas/admin/offer-store', {
@@ -6836,6 +6975,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
               riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 100),
               maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
+              lotPercentOverride: Math.max(0, Number(adminSweepBacktestLotPercentOverride ?? 0)),
               partialTpPct: Math.max(0, Number(adminSweepBacktestPartialTpPct ?? 0)),
               commissionPercent: Math.max(0, Number(adminSweepBacktestCommissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent)),
               slippagePercent: Math.max(0, Number(adminSweepBacktestSlippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent)),
@@ -6857,6 +6997,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           initialBalance: Number(adminSweepBacktestInitialBalance ?? 10000),
           riskScaleMaxPercent: Number(adminSweepBacktestRiskScaleMaxPercent ?? 100),
           maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
+          lotPercentOverride: Math.max(0, Number(adminSweepBacktestLotPercentOverride ?? 0)),
           partialTpPct: Math.max(0, Number(adminSweepBacktestPartialTpPct ?? 0)),
           commissionPercent: Math.max(0, Number(adminSweepBacktestCommissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent)),
           slippagePercent: Math.max(0, Number(adminSweepBacktestSlippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent)),
@@ -7133,7 +7274,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const setKey = snapshotSetKey || (snapshot ? normalizedSystemName : '');
     const snapshotOfferIds = normalizeStorefrontTsOfferIds(snapshot?.offerIds || []);
     const runtimeOfferIds = normalizeStorefrontTsOfferIds(runtimeSystem?.offerIds || []);
-    const offerIds = runtimeOfferIds.length > 0 ? runtimeOfferIds : snapshotOfferIds;
+    // Источник истины — снапшот (под него посчитаны опубликованные метрики на карточке).
+    // runtimeOfferIds может быть короче, потому что часть стратегий-членов ТС не имеет
+    // соответствующих карточек в storefront pool (нет single-bt / нет offer.store записи).
+    // Если снапшот пуст — fallback на runtime.
+    const offerIds = snapshotOfferIds.length > 0 ? snapshotOfferIds : runtimeOfferIds;
 
     if (offerIds.length === 0) {
       messageApi.warning('Для этой ТС нет подтвержденного состава в текущей витрине стратегий. Пересоберите или перепубликуйте ТС.');
@@ -8721,7 +8866,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   <Descriptions.Item label="Trades/day">{formatNumber(selectedAdminReviewOffer.tradesPerDay, 2)}</Descriptions.Item>
                                 </Descriptions>
                                 {equityPoints.length > 0 ? (
-                                  <ChartComponent data={(() => { const nowSec = Math.floor(Date.now() / 1000); const dayS = 86400; const startSec = nowSec - (equityPoints.length - 1) * dayS; return equityPoints.map((value, index) => ({ time: startSec + index * dayS, equity: value })); })()} type="line" />
+                                  <ChartComponent data={(() => { const nowSec = Math.floor(Date.now() / 1000); const dayS = 86400; const periodDays = Number(selectedAdminReviewOffer.periodDays || 0) > 0 ? Number(selectedAdminReviewOffer.periodDays || 0) : (equityPoints.length - 1); const totalSpan = Math.max(periodDays, 1) * dayS; const startSec = nowSec - totalSpan; const step = totalSpan / Math.max(equityPoints.length - 1, 1); return equityPoints.map((value, index) => ({ time: Math.floor(startSec + index * step), equity: value })); })()} type="line" />
                                 ) : (
                                   <Empty description="Для этой карточки пока нет equity-кривой" />
                                 )}
@@ -10068,7 +10213,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                     <Tooltip title="Бэктест учитывает: комиссию 0.1% (вход+выход), проскальзывание 0.05%, направленный слиппедж. Прошлые результаты не гарантируют будущую доходность."><Text type="secondary" style={{ fontSize: 10, cursor: 'help' }}>ⓘ С учётом комиссий и слиппеджа</Text></Tooltip>
                                                     {points.length >= 2 ? (
                                                       <ChartComponent
-                                                        data={(() => { const nowSec = Math.floor(Date.now() / 1000); const dayS = 86400; const startSec = nowSec - (points.length - 1) * dayS; return points.map((value, index) => ({ time: startSec + index * dayS, equity: value })); })()}
+                                                        data={(() => { const nowSec = Math.floor(Date.now() / 1000); const dayS = 86400; const periodDays = Number(row.periodDays || 0) > 0 ? Number(row.periodDays || 0) : (points.length - 1); const totalSpan = Math.max(periodDays, 1) * dayS; const startSec = nowSec - totalSpan; const step = totalSpan / Math.max(points.length - 1, 1); return points.map((value, index) => ({ time: Math.floor(startSec + index * step), equity: value })); })()}
                                                         type="line"
                                                         fixedHeight={120}
                                                       />
@@ -10276,7 +10421,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           {offer.pf !== undefined ? <Tag color={metricColor(Number(offer.pf || 0), 'pf')}>PF {formatNumber(offer.pf)}</Tag> : null}
                                         </Space>
                                         {points.length >= 2 ? (
-                                          <ChartComponent data={(() => { const nowSec = Math.floor(Date.now() / 1000); const dayS = 86400; const startSec = nowSec - (points.length - 1) * dayS; return points.map((value: number, index: number) => ({ time: startSec + index * dayS, equity: value })); })()} type="line" fixedHeight={120} />
+                                          <ChartComponent data={(() => { const nowSec = Math.floor(Date.now() / 1000); const dayS = 86400; const periodDays = Number((offer as any)?.periodDays || 0) > 0 ? Number((offer as any).periodDays || 0) : (points.length - 1); const totalSpan = Math.max(periodDays, 1) * dayS; const startSec = nowSec - totalSpan; const step = totalSpan / Math.max(points.length - 1, 1); return points.map((value: number, index: number) => ({ time: Math.floor(startSec + index * step), equity: value })); })()} type="line" fixedHeight={120} />
                                         ) : (
                                           <Text type="secondary" style={{ fontSize: 12 }}>График не сохранен</Text>
                                         )}
@@ -12833,6 +12978,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               )}
               {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
                 <Col xs={24} md={12} lg={4}>
+                  <Card size="small" title="Лот, %">
+                    <InputNumber
+                      min={0}
+                      max={500}
+                      step={1}
+                      style={{ width: '100%' }}
+                      value={adminSweepBacktestLotPercentOverride}
+                      onChange={(value) => {
+                        const next = Math.max(0, Number(value || 0));
+                        setAdminSweepBacktestLotPercentOverride(next);
+                        setAdminSweepBacktestStale(true);
+                        scheduleBacktestDebounce();
+                      }}
+                    />
+                    <Text type="secondary">{adminSweepBacktestLotPercentOverride > 0 ? `${adminSweepBacktestLotPercentOverride}% от баланса` : '0 = 100% (legacy)'}</Text>
+                  </Card>
+                </Col>
+              )}
+              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
+                <Col xs={24} md={12} lg={4}>
                   <Card size="small" title="Partial TP %">
                     <InputNumber
                       min={0}
@@ -13027,22 +13192,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     const effectiveBalance = balance * Math.max(0.01, riskMul);
                     const perStrategy = effectiveBalance / offersCount;
                     const synthOffers = adminSweepBacktestResult.selectedOffers.filter((o) => o.mode === 'synth');
+                    // For current V2 cards all members are on Bybit linear.
+                    // Bybit minNotionalValue is typically ~5 USDT per order; use a small safety buffer above exchange hard minimum.
+                    const minOrderNotionalUsdt = 5;
+                    const minRecommendedPerStrategy = minOrderNotionalUsdt * 2;
                     const warnings: string[] = [];
-                    if (perStrategy < 150) {
+                    if (perStrategy < minRecommendedPerStrategy) {
                       warnings.push(
-                        `На стратегию приходится ~${perStrategy.toFixed(0)} USDT — ниже минимального лота большинства пар (~150 USDT). `
+                        `На стратегию приходится ~${perStrategy.toFixed(0)} USDT — ниже биржевого минимума по notional для Bybit (~${minOrderNotionalUsdt} USDT на ордер). `
                         + `Увеличьте начальный баланс или снизьте количество стратегий.`
                       );
-                    } else if (perStrategy < 300) {
+                    } else if (perStrategy < 50) {
                       warnings.push(
-                        `На стратегию приходится ~${perStrategy.toFixed(0)} USDT — депозит около минимального порога. `
+                        `На стратегию приходится ~${perStrategy.toFixed(0)} USDT — депозит близко к рабочему минимуму. `
                         + `Синтетические пары могут работать в режиме min-lot.`
                       );
                     }
-                    if (synthOffers.length > 0 && perStrategy < 400) {
+                    if (synthOffers.length > 0 && perStrategy < 80) {
                       warnings.push(
                         `${synthOffers.length} синт. ${synthOffers.length === 1 ? 'стратегия требует' : 'стратегии требуют'} балансировки двух ног: `
-                        + `рекомендуется ≥ 400 USDT на синт. пару. Сейчас ~${perStrategy.toFixed(0)} USDT.`
+                        + `рекомендуется ≥ 80 USDT на синт. пару. Сейчас ~${perStrategy.toFixed(0)} USDT.`
                       );
                     }
                     if (warnings.length === 0) {

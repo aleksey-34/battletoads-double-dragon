@@ -9,6 +9,7 @@ import {
   materializeStrategyClient,
   previewStrategyClientSelection,
   previewStrategyClientOffer,
+  previewPublishImpact,
   publishAdminTradingSystem,
   requestAlgofundAction,
   resolveAlgofundRequest,
@@ -314,6 +315,7 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
       initialBalance: toOptionalNumber(req.body?.initialBalance),
       riskScaleMaxPercent: toOptionalNumber(req.body?.riskScaleMaxPercent),
       maxOpenPositions: toOptionalNumber(req.body?.maxOpenPositions),
+      lotPercentOverride: toOptionalNumber(req.body?.lotPercentOverride),
       partialTpPct: toOptionalNumber(req.body?.partialTpPct),
       commissionPercent: toOptionalNumber(req.body?.commissionPercent),
       slippagePercent: toOptionalNumber(req.body?.slippagePercent),
@@ -535,11 +537,39 @@ router.post('/admin/reports/send-telegram', async (req, res) => {
   }
 });
 
+router.get('/admin/publish/preview', async (req, res) => {
+  try {
+    const setKey = String(req.query?.setKey || '').trim();
+    const data = await previewPublishImpact(setKey);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS publish preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/admin/publish', async (req, res) => {
   try {
+    const cardOverridesRaw = (req.body?.cardOverrides && typeof req.body.cardOverrides === 'object')
+      ? req.body.cardOverrides as Record<string, unknown>
+      : null;
+    const cardOverrides = cardOverridesRaw
+      ? {
+          ...(cardOverridesRaw.lotPercentOverride !== undefined
+            ? { lotPercentOverride: Number(cardOverridesRaw.lotPercentOverride) }
+            : {}),
+          ...(cardOverridesRaw.maxOpenPositions !== undefined
+            ? { maxOpenPositions: Number(cardOverridesRaw.maxOpenPositions) }
+            : {}),
+        }
+      : undefined;
     const data = await publishAdminTradingSystem({
       offerIds: Array.isArray(req.body?.offerIds) ? req.body.offerIds.map((item: unknown) => String(item || '')) : undefined,
       setKey: req.body?.setKey ? String(req.body.setKey || '') : undefined,
+      editInPlace: req.body?.editInPlace === true,
+      propagateToClients: req.body?.propagateToClients === true,
+      cardOverrides,
     });
     res.json({ success: true, ...data });
   } catch (error) {
