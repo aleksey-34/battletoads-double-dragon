@@ -2274,6 +2274,8 @@ router.post('/strategies/copy-block', async (req, res) => {
 router.post('/cards/materialize/:targetApiKeyName', async (req, res) => {
   const { targetApiKeyName } = req.params;
   const explicitSystemName = String(req.body?.systemName || '').trim();
+  const gracefulMigration = req.body?.gracefulMigration === true
+    || String(req.body?.gracefulMigration || '').toLowerCase() === 'true';
 
   try {
     const targetName = String(targetApiKeyName || '').trim();
@@ -2322,7 +2324,7 @@ router.post('/cards/materialize/:targetApiKeyName', async (req, res) => {
     // First try master_card_members (curated card), then fall back to trading_system_members.
     let cardMemberIds: number[] = [];
     const existingCard = await db.get(
-      `SELECT id FROM master_cards WHERE code = ?`,
+      `SELECT id, metadata_json FROM master_cards WHERE code = ?`,
       [`CARD::${String(systemName).toUpperCase()}`]
     );
     if (existingCard?.id) {
@@ -2432,11 +2434,71 @@ router.post('/cards/materialize/:targetApiKeyName', async (req, res) => {
       });
     }
 
+    // ── Graceful migration: convert currently-open runtime strategies to
+    //    "saas_overlay_legacy" so the bot manages them to flat without opening
+    //    new positions. They will be preserved through replaceTarget below.
+    let overlayCount = 0;
+    let overlayPairs: string[] = [];
+    if (gracefulMigration) {
+      const openRows = await db.all(
+        `SELECT s.id, s.base_symbol, s.quote_symbol, s.interval, s.strategy_type
+         FROM strategies s
+         WHERE s.api_key_id = ?
+           AND s.is_active = 1
+           AND COALESCE(s.state, 'flat') <> 'flat'`,
+        [targetKey.id]
+      );
+      if (Array.isArray(openRows) && openRows.length > 0) {
+        const ids = openRows.map((r: any) => Number(r.id)).filter((n: number) => Number.isFinite(n) && n > 0);
+        if (ids.length > 0) {
+          const placeholders = ids.map(() => '?').join(',');
+          await db.run(
+            `UPDATE strategies
+             SET origin = 'saas_overlay_legacy',
+                 long_enabled = 0,
+                 short_enabled = 0,
+                 last_action = 'migrated_to_overlay_legacy',
+                 updated_at = CURRENT_TIMESTAMP
+             WHERE id IN (${placeholders})`,
+            ids
+          );
+          overlayCount = ids.length;
+          overlayPairs = Array.from(new Set(openRows.map((r: any) => String(r.base_symbol || '').toUpperCase()).filter(Boolean)));
+          // Audit
+          const tenantRow = await db.get(
+            `SELECT tenant_id FROM algofund_profiles
+             WHERE execution_api_key_name = ? ORDER BY updated_at DESC LIMIT 1`,
+            [targetName]
+          );
+          const tenantId = Number(tenantRow?.tenant_id || 0);
+          if (tenantId > 0) {
+            await db.run(
+              `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+               VALUES (?, 'system', 'saas_materialize_overlay_legacy', ?, CURRENT_TIMESTAMP)`,
+              [
+                tenantId,
+                JSON.stringify({
+                  apiKeyName: targetName,
+                  newSystem: systemName,
+                  overlayStrategyIds: ids,
+                  overlayPairs,
+                }),
+              ]
+            );
+          }
+          logger.info(
+            `Graceful migration for ${targetName}: ${ids.length} runtime strategies marked as saas_overlay_legacy on pairs ${overlayPairs.join(',')}`
+          );
+        }
+      }
+    }
+
     const copyResult = await copyStrategyBlock(sourceApiKeyName, targetName, {
       replaceTarget: true,
       preserveActive: false,
       syncSymbols: false,
       sourceStrategyIds: compatibleMemberIds,
+      preserveLegacyOverlay: gracefulMigration,
     });
 
     await db.run(
@@ -2452,6 +2514,26 @@ router.post('/cards/materialize/:targetApiKeyName', async (req, res) => {
        WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ?)`,
       [targetName]
     );
+
+    // Apply per-card lot override (master_cards.metadata_json.lotPercentOverride)
+    // to the just-materialized runtime strategies for this tenant's API key.
+    try {
+      const meta = existingCard?.metadata_json
+        ? JSON.parse(String(existingCard.metadata_json)) as Record<string, unknown>
+        : {};
+      const lotRaw = Number((meta as { lotPercentOverride?: unknown })?.lotPercentOverride);
+      if (Number.isFinite(lotRaw) && lotRaw > 0) {
+        await db.run(
+          `UPDATE strategies
+           SET lot_long_percent = ?, lot_short_percent = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ?)
+             AND COALESCE(origin, '') <> 'saas_overlay_legacy'`,
+          [lotRaw, lotRaw, targetName]
+        );
+      }
+    } catch (lotErr) {
+      logger.warn(`Card lot override apply failed for ${targetName}: ${(lotErr as Error).message}`);
+    }
 
     const cardCode = `CARD::${String(systemName).toUpperCase()}`;
     await db.run(
@@ -2495,6 +2577,9 @@ router.post('/cards/materialize/:targetApiKeyName', async (req, res) => {
       sourceMembers: cardMemberIds.length,
       compatibleMembers: compatibleMemberIds.length,
       skippedIncompatible,
+      gracefulMigration,
+      overlayLegacyCount: overlayCount,
+      overlayLegacyPairs: overlayPairs,
       ...copyResult,
     });
   } catch (error) {
@@ -2537,11 +2622,14 @@ router.get('/strategies/:apiKeyName', async (req, res) => {
     const offsetRaw = Number.parseInt(String(req.query.offset || '0'), 10);
     const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 2000) : undefined;
     const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? offsetRaw : 0;
+    const marketTypeRaw = String(req.query.marketType || 'all').trim();
+    const marketType = (marketTypeRaw === 'spot' || marketTypeRaw === 'futures') ? marketTypeRaw : 'all';
 
     const strategies = await getStrategies(apiKeyName, {
       includeLotPreview,
       limit,
       offset,
+      marketType,
     });
 
     if (limit !== undefined) {
@@ -2849,7 +2937,9 @@ router.delete('/backtest/runs/:id', async (req, res) => {
 router.get('/trading-systems/:apiKeyName', async (req, res) => {
   const { apiKeyName } = req.params;
   try {
-    const systems = await listTradingSystems(apiKeyName);
+    const marketTypeRaw = String(req.query.marketType || 'all').trim();
+    const marketType = (marketTypeRaw === 'spot' || marketTypeRaw === 'futures') ? marketTypeRaw : 'all';
+    const systems = await listTradingSystems(apiKeyName, { marketType });
     res.json(systems);
   } catch (error) {
     const err = error as Error;
@@ -3163,6 +3253,198 @@ router.post('/strategies/:apiKeyName/:strategyId/close-positions', async (req, r
   } catch (error) {
     const err = error as Error;
     logger.error(`Error closing strategy positions: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/strategies/:apiKeyName/periodic-buy', async (req, res) => {
+  const { apiKeyName } = req.params;
+  try {
+    const body = req.body || {};
+    const baseSymbol = String(body.base_symbol || '').trim().toUpperCase();
+    const quoteSymbol = String(body.quote_symbol || 'USDT').trim().toUpperCase();
+    if (!baseSymbol) {
+      return res.status(400).json({ error: 'base_symbol is required' });
+    }
+
+    const name = String(body.name || `Periodic Buy ${baseSymbol}`).trim();
+    const intervalHours = Math.max(1, Number(body.pb_interval_hours || 24));
+    const amountMode = String(body.pb_amount_mode || 'percent') === 'fixed_usdt' ? 'fixed_usdt' : 'percent';
+    const amountValue = Math.max(0.01, Number(body.pb_amount_value || 5));
+    const orderType = String(body.pb_order_type || 'market') === 'maker' ? 'maker' : 'market';
+    const maxTotalInvested = Math.max(0, Number(body.pb_max_total_invested_usdt || 0));
+    const sellOnTp = String(body.pb_sell_on_tp || '0') !== '0' && body.pb_sell_on_tp !== false;
+    const tpPercent = Math.max(0.1, Number(body.pb_tp_percent || 15));
+
+    const draft = {
+      name,
+      strategy_type: 'periodic_buy',
+      market_mode: 'mono',
+      market_type: 'spot',
+      base_symbol: baseSymbol,
+      quote_symbol: quoteSymbol,
+      is_active: true,
+      auto_update: true,
+      long_enabled: true,
+      short_enabled: false,
+    };
+
+    const created = await createStrategy(apiKeyName, draft as any, { allowActivePairConflict: true });
+    if (!created.id) {
+      return res.status(500).json({ error: 'Strategy created but id missing' });
+    }
+
+    // Save pb_* fields with a direct UPDATE (createStrategy doesn't handle them)
+    await db.run(
+      `UPDATE strategies
+       SET pb_interval_hours = ?,
+           pb_amount_mode = ?,
+           pb_amount_value = ?,
+           pb_order_type = ?,
+           pb_max_total_invested_usdt = ?,
+           pb_sell_on_tp = ?,
+           pb_tp_percent = ?,
+           market_type = 'spot',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [intervalHours, amountMode, amountValue, orderType, maxTotalInvested, sellOnTp ? 1 : 0, tpPercent, created.id]
+    );
+
+    res.json({ ...created, pb_interval_hours: intervalHours, pb_amount_mode: amountMode, pb_amount_value: amountValue, pb_order_type: orderType, pb_max_total_invested_usdt: maxTotalInvested, pb_sell_on_tp: sellOnTp, pb_tp_percent: tpPercent, market_type: 'spot' });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error creating periodic-buy strategy: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/strategies/:apiKeyName/dca', async (req, res) => {
+  const { apiKeyName } = req.params;
+  try {
+    const body = req.body || {};
+    const baseSymbol = String(body.base_symbol || '').trim().toUpperCase();
+    const quoteSymbol = String(body.quote_symbol || 'USDT').trim().toUpperCase();
+    if (!baseSymbol) return res.status(400).json({ error: 'base_symbol is required' });
+
+    const name = String(body.name || `DCA ${baseSymbol}`).trim();
+    const marketType = String(body.market_type || 'spot') === 'futures' ? 'futures' : 'spot';
+    const baseAmountUsdt = Math.max(1, Number(body.dca_base_amount_usdt || 10));
+    const stepPercent = Math.max(0.1, Number(body.dca_step_percent || 2));
+    const maxOrders = Math.max(0, Math.floor(Number(body.dca_max_orders || 5)));
+    const orderMultiplier = Math.max(1, Number(body.dca_order_multiplier || 1));
+    const tpPercent = Math.max(0.1, Number(body.dca_tp_percent || 3));
+    const slPercent = Math.max(0, Number(body.dca_sl_percent || 0));
+    const orderType = String(body.dca_order_type || 'market') === 'maker' ? 'maker' : 'market';
+
+    const draft = {
+      name,
+      strategy_type: 'dca',
+      market_mode: 'mono',
+      market_type: marketType,
+      base_symbol: baseSymbol,
+      quote_symbol: quoteSymbol,
+      is_active: true,
+      auto_update: true,
+      long_enabled: true,
+      short_enabled: false,
+    };
+
+    const created = await createStrategy(apiKeyName, draft as any, { allowActivePairConflict: true });
+    if (!created.id) return res.status(500).json({ error: 'Strategy created but id missing' });
+
+    await db.run(
+      `UPDATE strategies
+       SET dca_base_amount_usdt = ?,
+           dca_step_percent = ?,
+           dca_max_orders = ?,
+           dca_order_multiplier = ?,
+           dca_tp_percent = ?,
+           dca_sl_percent = ?,
+           dca_order_type = ?,
+           dca_state = 'idle',
+           market_type = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [baseAmountUsdt, stepPercent, maxOrders, orderMultiplier, tpPercent, slPercent, orderType, marketType, created.id]
+    );
+
+    res.json({ ...created, dca_base_amount_usdt: baseAmountUsdt, dca_step_percent: stepPercent, dca_max_orders: maxOrders, dca_order_multiplier: orderMultiplier, dca_tp_percent: tpPercent, dca_sl_percent: slPercent, dca_order_type: orderType, market_type: marketType });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error creating DCA strategy: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/strategies/:apiKeyName/dca-futures', async (req, res) => {
+  const { apiKeyName } = req.params;
+  try {
+    const body = req.body || {};
+    const baseSymbol = String(body.base_symbol || '').trim().toUpperCase();
+    const quoteSymbol = String(body.quote_symbol || 'USDT').trim().toUpperCase();
+    if (!baseSymbol) return res.status(400).json({ error: 'base_symbol is required' });
+
+    const name = String(body.name || `DCA-F ${baseSymbol}`).trim();
+    const baseAmountUsdt = Math.max(1, Number(body.dcaf_base_amount_usdt ?? 10));
+    const stepPercent = Math.max(0.1, Number(body.dcaf_step_percent ?? 2));
+    const maxOrders = Math.max(0, Math.floor(Number(body.dcaf_max_orders ?? 3)));
+    const orderMultiplier = Math.max(1, Number(body.dcaf_order_multiplier ?? 1.5));
+    const tpPercent = Math.max(0.1, Number(body.dcaf_tp_percent ?? 2.5));
+    const slPercent = Math.max(0, Number(body.dcaf_sl_percent ?? 0));
+    const orderType = String(body.dcaf_order_type ?? 'market') === 'maker' ? 'maker' : 'market';
+    const autoOpen = body.dcaf_auto_open ? 1 : 0;
+    const leverage = Math.max(1, Math.floor(Number(body.dcaf_leverage ?? 1)));
+
+    const draft = {
+      name,
+      strategy_type: 'dca_futures',
+      market_mode: 'mono',
+      market_type: 'futures',
+      base_symbol: baseSymbol,
+      quote_symbol: quoteSymbol,
+      is_active: true,
+      auto_update: true,
+      long_enabled: true,
+      short_enabled: true,
+    };
+
+    const created = await createStrategy(apiKeyName, draft as any, { allowActivePairConflict: true });
+    if (!created.id) return res.status(500).json({ error: 'Strategy created but id missing' });
+
+    await db.run(
+      `UPDATE strategies
+       SET dcaf_base_amount_usdt = ?,
+           dcaf_step_percent = ?,
+           dcaf_max_orders = ?,
+           dcaf_order_multiplier = ?,
+           dcaf_tp_percent = ?,
+           dcaf_sl_percent = ?,
+           dcaf_order_type = ?,
+           dcaf_auto_open = ?,
+           dcaf_leverage = ?,
+           dcaf_state = 'idle',
+           market_type = 'futures',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [baseAmountUsdt, stepPercent, maxOrders, orderMultiplier, tpPercent, slPercent, orderType, autoOpen, leverage, created.id],
+    );
+
+    res.json({
+      ...created,
+      dcaf_base_amount_usdt: baseAmountUsdt,
+      dcaf_step_percent: stepPercent,
+      dcaf_max_orders: maxOrders,
+      dcaf_order_multiplier: orderMultiplier,
+      dcaf_tp_percent: tpPercent,
+      dcaf_sl_percent: slPercent,
+      dcaf_order_type: orderType,
+      dcaf_auto_open: autoOpen,
+      dcaf_leverage: leverage,
+      market_type: 'futures',
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error creating DCA-Futures strategy: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

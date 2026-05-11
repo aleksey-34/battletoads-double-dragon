@@ -168,6 +168,7 @@ export const initDB = async () => {
       discovery_enabled BOOLEAN DEFAULT 0,
       discovery_interval_hours INTEGER DEFAULT 24,
       max_members INTEGER DEFAULT 8,
+      market_type TEXT DEFAULT 'futures',
       created_at TEXT DEFAULT CURRENT_TIMESTAMP,
       updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (api_key_id) REFERENCES api_keys(id)
@@ -695,6 +696,48 @@ export const initDB = async () => {
   await ensureColumn('strategies', 'is_runtime BOOLEAN DEFAULT 0');
   await ensureColumn('strategies', 'is_archived BOOLEAN DEFAULT 0');
   await ensureColumn('strategies', "origin TEXT DEFAULT 'manual'");  // 'manual'|'sweep_candidate'|'published'
+  await ensureColumn('strategies', "market_type TEXT DEFAULT 'futures'");  // 'futures'|'spot'
+  await ensureColumn('trading_systems', "market_type TEXT DEFAULT 'futures'");  // 'futures'|'spot'
+  // Periodic Buy (spot DCA) fields
+  await ensureColumn('strategies', "pb_interval_hours REAL DEFAULT 24");
+  await ensureColumn('strategies', "pb_amount_mode TEXT DEFAULT 'percent'");
+  await ensureColumn('strategies', "pb_amount_value REAL DEFAULT 5");
+  await ensureColumn('strategies', "pb_order_type TEXT DEFAULT 'market'");
+  await ensureColumn('strategies', "pb_max_total_invested_usdt REAL DEFAULT 0");
+  await ensureColumn('strategies', "pb_sell_on_tp BOOLEAN DEFAULT 0");
+  await ensureColumn('strategies', "pb_tp_percent REAL DEFAULT 15");
+  await ensureColumn('strategies', "pb_total_invested_usdt REAL DEFAULT 0");
+  await ensureColumn('strategies', "pb_total_qty REAL DEFAULT 0");
+  await ensureColumn('strategies', "pb_last_buy_at TEXT");
+  // DCA strategy fields
+  await ensureColumn('strategies', "dca_base_amount_usdt REAL DEFAULT 10");
+  await ensureColumn('strategies', "dca_step_percent REAL DEFAULT 2");
+  await ensureColumn('strategies', "dca_max_orders INTEGER DEFAULT 5");
+  await ensureColumn('strategies', "dca_order_multiplier REAL DEFAULT 1");
+  await ensureColumn('strategies', "dca_tp_percent REAL DEFAULT 3");
+  await ensureColumn('strategies', "dca_sl_percent REAL DEFAULT 0");
+  await ensureColumn('strategies', "dca_order_type TEXT DEFAULT 'market'");
+  await ensureColumn('strategies', "dca_orders_count INTEGER DEFAULT 0");
+  await ensureColumn('strategies', "dca_total_invested_usdt REAL DEFAULT 0");
+  await ensureColumn('strategies', "dca_total_qty REAL DEFAULT 0");
+  await ensureColumn('strategies', "dca_last_buy_price REAL DEFAULT 0");
+  await ensureColumn('strategies', "dca_state TEXT DEFAULT 'idle'");
+  // DCA-Futures strategy fields (futures-only, long+short, reduceOnly close)
+  await ensureColumn('strategies', "dcaf_base_amount_usdt REAL DEFAULT 10");
+  await ensureColumn('strategies', "dcaf_step_percent REAL DEFAULT 2");
+  await ensureColumn('strategies', "dcaf_max_orders INTEGER DEFAULT 3");
+  await ensureColumn('strategies', "dcaf_order_multiplier REAL DEFAULT 1.5");
+  await ensureColumn('strategies', "dcaf_tp_percent REAL DEFAULT 2.5");
+  await ensureColumn('strategies', "dcaf_sl_percent REAL DEFAULT 0");
+  await ensureColumn('strategies', "dcaf_order_type TEXT DEFAULT 'market'");
+  await ensureColumn('strategies', "dcaf_orders_count INTEGER DEFAULT 0");
+  await ensureColumn('strategies', "dcaf_total_invested_usdt REAL DEFAULT 0");
+  await ensureColumn('strategies', "dcaf_total_qty REAL DEFAULT 0");
+  await ensureColumn('strategies', "dcaf_last_price REAL DEFAULT 0");
+  await ensureColumn('strategies', "dcaf_state TEXT DEFAULT 'idle'");
+  await ensureColumn('strategies', "dcaf_direction TEXT");
+  await ensureColumn('strategies', "dcaf_auto_open INTEGER DEFAULT 0");
+  await ensureColumn('strategies', "dcaf_leverage INTEGER DEFAULT 1");
   await ensureColumn('strategies', 'source_profile_id INTEGER');
   await ensureColumn('strategies', 'published_at TEXT');
   await ensureColumn('live_trade_events', "event_origin TEXT DEFAULT 'unknown'");

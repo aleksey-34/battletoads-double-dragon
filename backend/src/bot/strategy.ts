@@ -190,8 +190,8 @@ type ExecuteStrategyOptions = {
 
 const normalizeStrategyType = (value: any): StrategyType => {
   const normalized = String(value || '').trim();
-  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout') {
-    return normalized;
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'periodic_buy' || normalized === 'dca') {
+    return normalized as StrategyType;
   }
   return 'DD_BattleToads';
 };
@@ -391,6 +391,7 @@ const normalizeStrategy = (row: any): Strategy => {
     api_key_id: Number(row.api_key_id),
     strategy_type: strategyType,
     market_mode: marketMode,
+    market_type: (String(row.market_type || 'futures') === 'spot' ? 'spot' : 'futures') as 'futures' | 'spot',
     is_active: safeBoolean(row.is_active, true),
     display_on_chart: safeBoolean(row.display_on_chart, true),
     show_settings: safeBoolean(row.show_settings, true),
@@ -1497,7 +1498,7 @@ const computeSignal = (
   );
 };
 
-const closeAllForSymbol = async (apiKeyName: string, symbol: string): Promise<void> => {
+const closeAllForSymbol = async (apiKeyName: string, symbol: string, options?: { marketType?: 'spot' | 'swap' }): Promise<void> => {
   const positions = await getPositions(apiKeyName, symbol);
   const relevant = positions.filter((position: any) => {
     return (
@@ -1507,7 +1508,7 @@ const closeAllForSymbol = async (apiKeyName: string, symbol: string): Promise<vo
   });
 
   for (const position of relevant) {
-    await closePosition(apiKeyName, symbol, String(position.size), position.side as 'Buy' | 'Sell');
+    await closePosition(apiKeyName, symbol, String(position.size), position.side as 'Buy' | 'Sell', options);
   }
 };
 
@@ -1548,9 +1549,10 @@ const hasOpenSiblingsForSymbol = async (
 
 export const closeStrategyExposure = async (
   apiKeyName: string,
-  strategy: Pick<Strategy, 'id' | 'market_mode' | 'base_symbol' | 'quote_symbol'>
+  strategy: Pick<Strategy, 'id' | 'market_mode' | 'base_symbol' | 'quote_symbol' | 'market_type'>
 ): Promise<void> => {
   const symbols = getStrategySymbols(strategy);
+  const exchangeMarketType: 'spot' | 'swap' | undefined = strategy.market_type === 'spot' ? 'spot' : undefined;
   for (const symbol of symbols) {
     // Cohabitation guard: if any sibling strategy on the same api_key still
     // owns a position on this symbol, the exchange position is shared and
@@ -1569,7 +1571,7 @@ export const closeStrategyExposure = async (
         continue;
       }
     }
-    await closeAllForSymbol(apiKeyName, symbol);
+    await closeAllForSymbol(apiKeyName, symbol, exchangeMarketType ? { marketType: exchangeMarketType } : undefined);
   }
 };
 
@@ -1636,6 +1638,7 @@ type GetStrategiesOptions = {
   includeLotPreview?: boolean;
   limit?: number;
   offset?: number;
+  marketType?: 'futures' | 'spot' | 'all';
 };
 
 export type StrategySummary = Pick<
@@ -1660,9 +1663,16 @@ export const getStrategies = async (apiKeyName: string, options?: GetStrategiesO
     `FROM strategies s`,
     `JOIN api_keys a ON a.id = s.api_key_id`,
     `WHERE a.name = ?`,
-    `ORDER BY s.id DESC`,
   ];
   const params: any[] = [apiKeyName];
+
+  const marketType = options?.marketType;
+  if (marketType && marketType !== 'all') {
+    sqlParts.push(`AND COALESCE(s.market_type, 'futures') = ?`);
+    params.push(marketType);
+  }
+
+  sqlParts.push(`ORDER BY s.id DESC`);
 
   if (hasLimit) {
     sqlParts.push('LIMIT ? OFFSET ?');
@@ -3464,11 +3474,25 @@ export const executeStrategy = async (
   // upstream by closeAndRecordExit (which sets state=flat and triggers cooldown
   // skip on same-side, or proceeds with reverse only after exchange close).
 
-  const baseOrder = await placeOrder(apiKeyName, mergedStrategy.base_symbol, baseSide, baseQty);
+  const baseOrder = await placeOrder(
+    apiKeyName,
+    mergedStrategy.base_symbol,
+    baseSide,
+    baseQty,
+    undefined,
+    mergedStrategy.market_type === 'spot' ? { marketType: 'spot' } : undefined,
+  );
 
   if (!isMono && quoteSide && quoteQty) {
     try {
-      await placeOrder(apiKeyName, mergedStrategy.quote_symbol, quoteSide, quoteQty);
+      await placeOrder(
+        apiKeyName,
+        mergedStrategy.quote_symbol!,
+        quoteSide,
+        quoteQty,
+        undefined,
+        mergedStrategy.market_type === 'spot' ? { marketType: 'spot' } : undefined,
+      );
     } catch (error) {
       try {
         await closePosition(apiKeyName, mergedStrategy.base_symbol, baseQty, baseSide);
@@ -4239,6 +4263,8 @@ export const runAutoStrategiesCycle = async () => {
   for (const row of validJobs) {
     const apiKeyName = String(row.api_key_name);
     const strategyType = normalizeStrategyType(row.strategy_type);
+    // periodic_buy doesn't need candle pre-warm — it fetches 1m candle on its own
+    if ((row.strategy_type as string) === 'periodic_buy' || (row.strategy_type as string) === 'dca' || (row.strategy_type as string) === 'dca_futures') continue;
     const signalLength = Math.max(2, Math.floor(Number(row.price_channel_length) || 50));
     const lookback = strategyType === 'stat_arb_zscore'
       ? Math.max(signalLength + 90, 220)
@@ -4295,8 +4321,27 @@ export const runAutoStrategiesCycle = async () => {
     const apiKeyName = String(row.api_key_name);
     const strategyId = Number(row.strategy_id);
     const strategyName = String(row?.strategy_name || '');
+    const strategyType = String(row.strategy_type || '');
 
     try {
+      if (strategyType === 'periodic_buy') {
+        const { executePeriodicBuy } = await import('./periodicBuy');
+        await executePeriodicBuy(apiKeyName, strategyId);
+        processed += 1;
+        return;
+      }
+      if (strategyType === 'dca') {
+        const { executeDca } = await import('./dca');
+        await executeDca(apiKeyName, strategyId);
+        processed += 1;
+        return;
+      }
+      if (strategyType === 'dca_futures') {
+        const { executeDcaFutures } = await import('./dca-futures');
+        await executeDcaFutures(apiKeyName, strategyId);
+        processed += 1;
+        return;
+      }
       await executeStrategy(apiKeyName, strategyId, {
         source: 'auto',
         closedBarOnly: true,
