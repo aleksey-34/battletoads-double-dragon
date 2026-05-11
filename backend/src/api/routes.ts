@@ -2996,6 +2996,101 @@ router.put('/trading-systems/:apiKeyName/:systemId', async (req, res) => {
   }
 });
 
+router.post('/trading-systems/:apiKeyName/:systemId/dca-futures-member', async (req, res) => {
+  const { apiKeyName, systemId } = req.params;
+  const parsedSystemId = Number.parseInt(systemId, 10);
+  if (!Number.isFinite(parsedSystemId) || parsedSystemId <= 0) {
+    return res.status(400).json({ error: 'Invalid trading system id' });
+  }
+  try {
+    const body = req.body || {};
+    const baseSymbol = String(body.base_symbol || '').trim().toUpperCase();
+    if (!baseSymbol) return res.status(400).json({ error: 'base_symbol is required' });
+
+    const name = String(body.name || `DCA-F ${baseSymbol} [TS${parsedSystemId}]`).trim();
+    const baseAmountUsdt = Math.max(1, Number(body.dcaf_base_amount_usdt ?? 10));
+    const stepPercent = Math.max(0.1, Number(body.dcaf_step_percent ?? 2));
+    const maxOrders = Math.max(0, Math.floor(Number(body.dcaf_max_orders ?? 3)));
+    const orderMultiplier = Math.max(1, Number(body.dcaf_order_multiplier ?? 1.5));
+    const tpPercent = Math.max(0.1, Number(body.dcaf_tp_percent ?? 2.5));
+    const slPercent = Math.max(0, Number(body.dcaf_sl_percent ?? 0));
+    const orderType = String(body.dcaf_order_type ?? 'market') === 'maker' ? 'maker' : 'market';
+    const autoOpen = body.dcaf_auto_open !== false ? 1 : 0; // default true for TS member
+    const leverage = Math.max(1, Math.floor(Number(body.dcaf_leverage ?? 1)));
+
+    // Check TS exists and belongs to this apiKey
+    const ts = await db.get<{ id: number }>(
+      `SELECT ts.id FROM trading_systems ts
+       JOIN api_keys ak ON ak.id = ts.api_key_id
+       WHERE ts.id = ? AND ak.name = ?`,
+      [parsedSystemId, apiKeyName],
+    );
+    if (!ts) return res.status(404).json({ error: 'Trading system not found' });
+
+    const draft = {
+      name,
+      strategy_type: 'dca_futures',
+      market_mode: 'mono',
+      market_type: 'futures',
+      base_symbol: baseSymbol,
+      quote_symbol: 'USDT',
+      is_active: true,
+      auto_update: true,
+      long_enabled: true,
+      short_enabled: true,
+    };
+
+    const created = await createStrategy(apiKeyName, draft as any, { allowActivePairConflict: true });
+    if (!created.id) return res.status(500).json({ error: 'Strategy created but id missing' });
+
+    await db.run(
+      `UPDATE strategies
+       SET dcaf_base_amount_usdt = ?,
+           dcaf_step_percent = ?,
+           dcaf_max_orders = ?,
+           dcaf_order_multiplier = ?,
+           dcaf_tp_percent = ?,
+           dcaf_sl_percent = ?,
+           dcaf_order_type = ?,
+           dcaf_auto_open = ?,
+           dcaf_leverage = ?,
+           dcaf_state = 'idle',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [baseAmountUsdt, stepPercent, maxOrders, orderMultiplier, tpPercent, slPercent, orderType, autoOpen, leverage, created.id],
+    );
+
+    // Add as TS member
+    const maxPos = (await db.get<{ m: number }>(
+      `SELECT COALESCE(MAX(position), 0) AS m FROM trading_system_members WHERE system_id = ?`,
+      [parsedSystemId],
+    ))?.m || 0;
+    await db.run(
+      `INSERT INTO trading_system_members (system_id, strategy_id, position, is_active)
+       VALUES (?, ?, ?, 1)`,
+      [parsedSystemId, created.id, maxPos + 1],
+    );
+
+    logger.info(`[dca-futures-member] created strategy id=${created.id} name=${name} and added to TS${parsedSystemId}`);
+    res.json({
+      strategyId: created.id,
+      name,
+      systemId: parsedSystemId,
+      dcaf_auto_open: autoOpen,
+      dcaf_base_amount_usdt: baseAmountUsdt,
+      dcaf_step_percent: stepPercent,
+      dcaf_max_orders: maxOrders,
+      dcaf_tp_percent: tpPercent,
+      dcaf_sl_percent: slPercent,
+      dcaf_leverage: leverage,
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error adding dca-futures member: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.put('/trading-systems/:apiKeyName/:systemId/members', async (req, res) => {
   const { apiKeyName, systemId } = req.params;
   const parsedSystemId = Number.parseInt(systemId, 10);

@@ -12177,7 +12177,10 @@ export const publishAdminTradingSystem = async (payload?: {
 
   let propagation: Awaited<ReturnType<typeof propagatePublishToClients>> | null = null;
   if (existing && propagateToClients) {
-    propagation = await propagatePublishToClients(sourceSystem.systemName);
+    propagation = await propagatePublishToClients(sourceSystem.systemName, {
+      apiKeyName: sourceSystem.apiKeyName,
+      systemId: sourceSystem.systemId,
+    });
   }
 
   return {
