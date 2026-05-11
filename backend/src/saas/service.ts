@@ -12053,7 +12053,83 @@ const applyCardMetadataOverrides = async (
  * because partial propagation is far better than total failure when one
  * tenant has a bad exchange key or stale balances.
  */
-const propagatePublishToClients = async (systemName: string): Promise<{
+/**
+ * Copies all dca_futures master strategies that are members of `systemId`
+ * from `masterApiKeyName` to `clientApiKeyName`.
+ */
+const materializeDcaFuturesToClient = async (
+  masterApiKeyName: string,
+  clientApiKeyName: string,
+  systemId: number,
+): Promise<void> => {
+  const masters = await db.all<Array<{
+    id: number; name: string; base_symbol: string; quote_symbol: string;
+    dcaf_base_amount_usdt: number; dcaf_step_percent: number; dcaf_max_orders: number;
+    dcaf_order_multiplier: number; dcaf_tp_percent: number; dcaf_sl_percent: number;
+    dcaf_order_type: string; dcaf_auto_open: number; dcaf_leverage: number;
+  }>>(
+    `SELECT s.id, s.name, s.base_symbol, s.quote_symbol,
+       s.dcaf_base_amount_usdt, s.dcaf_step_percent, s.dcaf_max_orders,
+       s.dcaf_order_multiplier, s.dcaf_tp_percent, s.dcaf_sl_percent,
+       s.dcaf_order_type, s.dcaf_auto_open, s.dcaf_leverage
+     FROM trading_system_members tsm
+     JOIN strategies s ON s.id = tsm.strategy_id
+     JOIN api_keys ak ON ak.id = s.api_key_id
+     WHERE tsm.system_id = ? AND s.strategy_type = 'dca_futures'
+       AND ak.name = ? AND s.is_archived = 0`,
+    [systemId, masterApiKeyName],
+  ).catch(() => []);
+  if (!Array.isArray(masters) || masters.length === 0) return;
+
+  const clientAkRow = await db.get<{ id: number }>(
+    `SELECT id FROM api_keys WHERE name = ?`, [clientApiKeyName],
+  ).catch(() => null);
+  if (!clientAkRow) return;
+  const clientAkId = Number(clientAkRow.id);
+
+  for (const master of masters) {
+    const clientName = master.name.replace(masterApiKeyName, clientApiKeyName);
+    const existing = await db.get<{ id: number }>(
+      `SELECT id FROM strategies WHERE api_key_id = ? AND name = ? AND is_archived = 0`,
+      [clientAkId, clientName],
+    ).catch(() => null);
+
+    if (existing?.id) {
+      await db.run(
+        `UPDATE strategies SET dcaf_base_amount_usdt=?, dcaf_step_percent=?, dcaf_max_orders=?,
+           dcaf_order_multiplier=?, dcaf_tp_percent=?, dcaf_sl_percent=?,
+           dcaf_order_type=?, dcaf_auto_open=?, dcaf_leverage=?,
+           is_active=1, updated_at=CURRENT_TIMESTAMP WHERE id=?`,
+        [master.dcaf_base_amount_usdt, master.dcaf_step_percent, master.dcaf_max_orders,
+         master.dcaf_order_multiplier, master.dcaf_tp_percent, master.dcaf_sl_percent,
+         master.dcaf_order_type, master.dcaf_auto_open, master.dcaf_leverage, existing.id],
+      );
+    } else {
+      await db.run(
+        `INSERT INTO strategies
+           (api_key_id, name, strategy_type, market_mode, market_type,
+            base_symbol, quote_symbol, is_active, is_runtime, is_archived, origin,
+            auto_update, long_enabled, short_enabled,
+            dcaf_base_amount_usdt, dcaf_step_percent, dcaf_max_orders,
+            dcaf_order_multiplier, dcaf_tp_percent, dcaf_sl_percent,
+            dcaf_order_type, dcaf_auto_open, dcaf_leverage,
+            dcaf_state, created_at, updated_at)
+         VALUES (?,?,'dca_futures','mono','futures',?,?,1,1,0,'saas_materialize',1,1,1,
+                 ?,?,?,?,?,?,?,?,?,'idle',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`,
+        [clientAkId, clientName, master.base_symbol, master.quote_symbol,
+         master.dcaf_base_amount_usdt, master.dcaf_step_percent, master.dcaf_max_orders,
+         master.dcaf_order_multiplier, master.dcaf_tp_percent, master.dcaf_sl_percent,
+         master.dcaf_order_type, master.dcaf_auto_open, master.dcaf_leverage],
+      );
+    }
+    logger.info(`[materializeDcaFutures] ${existing?.id ? 'updated' : 'created'} ${clientName} on ${clientApiKeyName}`);
+  }
+};
+
+const propagatePublishToClients = async (systemName: string, masterSystem?: {
+  apiKeyName: string;
+  systemId: number;
+}): Promise<{
   systemName: string;
   attempted: number;
   succeeded: number;
@@ -12083,6 +12159,17 @@ const propagatePublishToClients = async (systemName: string): Promise<{
       // on the shared sqlite connection.
       await db.exec('ROLLBACK').catch(() => {});
       await materializeAlgofundSystem(tenant, plan, { ...profile, requested_enabled: 1 }, true);
+      // Also copy dca_futures members from master TS to this client
+      if (masterSystem?.apiKeyName && masterSystem?.systemId) {
+        const clientApiKeyName = asString(
+          (profile as any).execution_api_key_name || (profile as any).assigned_api_key_name || '',
+        );
+        if (clientApiKeyName) {
+          await materializeDcaFuturesToClient(
+            masterSystem.apiKeyName, clientApiKeyName, masterSystem.systemId,
+          ).catch((e) => logger.warn(`[propagatePublishToClients] dca_futures copy failed for ${slug}: ${(e as Error)?.message}`));
+        }
+      }
       await db.run(
         `UPDATE algofund_profiles SET actual_enabled = 1, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = ?`,
         [tenantId]
