@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Card, Button, Switch, Row, Col, Form, Input, Select, Collapse, Spin, Alert, Space, InputNumber, Tag, Tooltip, Popconfirm, message, Divider, Badge } from 'antd';
+import { Card, Button, Switch, Row, Col, Form, Input, Select, Collapse, Spin, Alert, Space, InputNumber, Tag, Tooltip, Popconfirm, message, Divider, Badge, Checkbox } from 'antd';
 import axios from 'axios';
 import ChartComponent, { HoverOHLC, OverlayLine, ChartMarker } from '../components/ChartComponent';
 import StatusIndicator from '../components/StatusIndicator';
@@ -1058,6 +1058,8 @@ const Dashboard: React.FC = () => {
   const [monitoringByKey, setMonitoringByKey] = useState<{ [key: string]: MonitoringPayload }>({});
   const [monitoringLoadingByKey, setMonitoringLoadingByKey] = useState<{ [key: string]: boolean }>({});
   const [monitoringErrorByKey, setMonitoringErrorByKey] = useState<{ [key: string]: string }>({});
+  const [monitoringShowPnl, setMonitoringShowPnl] = useState<boolean>(true);
+  const [monitoringShowDd, setMonitoringShowDd] = useState<boolean>(true);
   const [keyActionLoading, setKeyActionLoading] = useState<{ [key: string]: boolean }>({});
   const [globalActionLoading, setGlobalActionLoading] = useState<{ [key: string]: boolean }>({});
   const [copySourceByTargetKey, setCopySourceByTargetKey] = useState<{ [key: string]: string }>({});
@@ -4012,32 +4014,53 @@ const Dashboard: React.FC = () => {
 
                           <Row gutter={[12, 12]}>
                             <Col xs={24} md={16}>
-                              <Card size="small" title="Капитал · PnL · Просадка %">
+                              <Card
+                                size="small"
+                                title="Капитал · PnL · Просадка %"
+                                extra={(
+                                  <Space size={8}>
+                                    <Checkbox
+                                      checked={monitoringShowPnl}
+                                      onChange={(e) => setMonitoringShowPnl(e.target.checked)}
+                                    >
+                                      PnL
+                                    </Checkbox>
+                                    <Checkbox
+                                      checked={monitoringShowDd}
+                                      onChange={(e) => setMonitoringShowDd(e.target.checked)}
+                                    >
+                                      DD %
+                                    </Checkbox>
+                                  </Space>
+                                )}
+                              >
                                 <ChartComponent
                                   data={toLineSeriesData(monitoringPoints, (point) => point.equity_usd)}
                                   type="line"
                                   overlayLines={[
-                                    {
-                                      id: 'pnl-net',
-                                      color: '#16a34a',
-                                      lineWidth: 2,
-                                      data: toOverlayLineData(monitoringPoints, (p) => Number(p.pnl_net_usd ?? (p.equity_usd - p.unrealized_pnl - (p.deposit_base_usd || 0)))),
-                                    },
-                                    {
-                                      id: 'drawdown-pct',
-                                      color: '#d97706',
-                                      lineWidth: 1,
-                                      priceScaleId: 'left',
-                                      data: toOverlayLineData(monitoringPoints, (p) => p.drawdown_percent),
-                                    },
+                                    ...(monitoringShowPnl
+                                      ? [{
+                                          id: 'pnl-net',
+                                          color: '#16a34a',
+                                          lineWidth: 2,
+                                          data: toOverlayLineData(monitoringPoints, (p) => Number(p.pnl_net_usd ?? (p.equity_usd - p.unrealized_pnl - (p.deposit_base_usd || 0)))),
+                                        }]
+                                      : []),
+                                    ...(monitoringShowDd
+                                      ? [{
+                                          id: 'drawdown-pct',
+                                          color: '#d97706',
+                                          lineWidth: 1,
+                                          priceScaleId: 'left' as const,
+                                          data: toOverlayLineData(monitoringPoints, (p) => p.drawdown_percent),
+                                        }]
+                                      : []),
                                   ]}
                                 />
                                 <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
                                   <span style={{ color: '#1677ff' }}>━ Капитал ($)</span>
-                                  {' · '}
-                                  <span style={{ color: '#16a34a' }}>━ PnL net ($)</span>
-                                  {' · '}
-                                  <span style={{ color: '#d97706' }}>━ Просадка % (левая шкала)</span>
+                                  {monitoringShowPnl ? (<>{' · '}<span style={{ color: '#16a34a' }}>━ PnL net ($)</span></>) : null}
+                                  {monitoringShowDd ? (<>{' · '}<span style={{ color: '#d97706' }}>━ Просадка % (левая шкала)</span></>) : null}
                                 </div>
                               </Card>
                             </Col>

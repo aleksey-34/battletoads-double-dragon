@@ -10,6 +10,7 @@ import {
   InputNumber,
   Popconfirm,
   Row,
+  Segmented,
   Select,
   Slider,
   Space,
@@ -78,6 +79,7 @@ type TradingSystem = {
   discovery_enabled: boolean;
   discovery_interval_hours: number;
   max_members: number;
+  market_type?: 'futures' | 'spot';
   members: TradingSystemMember[];
   metrics?: TradingSystemMetrics;
 };
@@ -382,6 +384,7 @@ const TradingSystems: React.FC = () => {
   const [tenantRows, setTenantRows] = useState<Array<{ id: number; name: string; slug: string; apiKeyName: string }>>([]);
   const [selectedTenantId, setSelectedTenantId] = useState<number | null>(null);
   const [tenantSystemsByApiKey, setTenantSystemsByApiKey] = useState<Record<string, TradingSystem[]>>({});
+  const [marketType, setMarketType] = useState<'futures' | 'spot'>('futures');
   const [backtestTuning, setBacktestTuning] = useState<BacktestTuning>({
     riskMultiplier: 1,
     targetTrades: 160,
@@ -413,7 +416,7 @@ const TradingSystems: React.FC = () => {
     void loadSuggestions(apiKeyName);
     void loadMonitoring(apiKeyName);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiKeyName]);
+  }, [apiKeyName, marketType]);
 
   useEffect(() => {
     if (!apiKeyName || !selectedSystemId) {
@@ -509,7 +512,9 @@ const TradingSystems: React.FC = () => {
   const loadSystems = useCallback(async (nextApiKeyName: string) => {
     setSystemsLoading(true);
     try {
-      const response = await axios.get<TradingSystem[]>(`/api/trading-systems/${encodeURIComponent(nextApiKeyName)}`);
+      const response = await axios.get<TradingSystem[]>(`/api/trading-systems/${encodeURIComponent(nextApiKeyName)}`, {
+        params: { marketType },
+      });
       const rows = Array.isArray(response.data) ? response.data : [];
       setSystems(rows);
       setSelectedSystemId((current) => {
@@ -978,7 +983,21 @@ const TradingSystems: React.FC = () => {
 
       <Row gutter={[16, 16]} style={{ marginTop: 0 }}>
         <Col xs={24} xl={10}>
-          <Card className="battletoads-card" title={copy.systems}>
+          <Card className="battletoads-card" title={copy.systems} extra={
+            <Segmented
+              value={marketType}
+              onChange={(val) => {
+                setMarketType(val as 'futures' | 'spot');
+                setSystems([]);
+                setSelectedSystemId(null);
+                setSelectedSystem(null);
+              }}
+              options={[
+                { label: '📈 Фьючерсы', value: 'futures' },
+                { label: '🪙 Спот', value: 'spot' },
+              ]}
+            />
+          }>
             <Table<TradingSystem>
               size="small"
               rowKey={(row) => String(row.id)}

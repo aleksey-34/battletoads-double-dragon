@@ -190,7 +190,7 @@ type ExecuteStrategyOptions = {
 
 const normalizeStrategyType = (value: any): StrategyType => {
   const normalized = String(value || '').trim();
-  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'periodic_buy' || normalized === 'dca') {
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'periodic_buy' || normalized === 'dca' || normalized === 'hideep') {
     return normalized as StrategyType;
   }
   return 'DD_BattleToads';

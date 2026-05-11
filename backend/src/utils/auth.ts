@@ -631,7 +631,7 @@ export const registerClientUser = async (payload: ClientRegistrationInput, reque
 
     return createClientSession(createdUser, requestMeta);
   } catch (error) {
-    await db.exec('ROLLBACK');
+    await db.exec('ROLLBACK').catch(() => {});
     throw error;
   }
 };

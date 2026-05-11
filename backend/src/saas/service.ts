@@ -228,6 +228,7 @@ export type OfferStoreState = {
     titleRu: string;
     mode: 'mono' | 'synth';
     market: string;
+    market_type: 'futures' | 'spot';
     strategyId: number;
     score: number;
     ret: number;
@@ -5276,6 +5277,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
         titleRu: asString(offer.titleRu, offer.offerId),
         mode: (offer.strategy?.mode === 'synth' ? 'synth' : 'mono') as 'mono' | 'synth',
         market: asString(offer.strategy?.market, ''),
+        market_type: 'futures' as 'futures' | 'spot',  // catalog offers are always futures (spot added via dca/periodic_buy)
         strategyType: asString(offer.strategy?.type, ''),
         interval: asString(offer.strategy?.params?.interval, ''),
         strategyParams: offer.strategy?.params || null,
@@ -5406,6 +5408,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
         titleRu: `${mode.toUpperCase()} • ${strategyType} • ${market || asString(row.base_symbol, '')}`,
         mode,
         market,
+        market_type: 'futures' as 'futures' | 'spot',
         strategyId,
         score: 0,
         ret: Number(asNumber(snapshot?.ret, 0).toFixed(3)),
@@ -5425,6 +5428,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
       titleRu: string;
       mode: 'mono' | 'synth';
       market: string;
+      market_type: 'futures' | 'spot';
       strategyId: number;
       score: number;
       ret: number;
@@ -5449,15 +5453,17 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
       .filter((strategyId) => strategyId > 0)
   ));
   const strategyIntervalById = new Map<number, string>();
+  const strategyMarketTypeById = new Map<number, 'futures' | 'spot'>();
   if (combinedStrategyIds.length > 0) {
     const strategyRows = await db.all(
-      `SELECT id, interval FROM strategies WHERE id IN (${combinedStrategyIds.map(() => '?').join(',')})`,
+      `SELECT id, interval, COALESCE(market_type, 'futures') AS market_type FROM strategies WHERE id IN (${combinedStrategyIds.map(() => '?').join(',')})`,
       combinedStrategyIds,
-    ) as Array<{ id?: number; interval?: string }>;
+    ) as Array<{ id?: number; interval?: string; market_type?: string }>;
     for (const strategyRow of strategyRows) {
       const strategyId = Number(strategyRow.id || 0);
       if (strategyId > 0) {
         strategyIntervalById.set(strategyId, asString(strategyRow.interval, ''));
+        strategyMarketTypeById.set(strategyId, String(strategyRow.market_type || 'futures') === 'spot' ? 'spot' : 'futures');
       }
     }
   }
@@ -5570,6 +5576,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
         ...row,
         interval: resolvedInterval || null,
         familyInterval: resolvedInterval || null,
+        market_type: strategyMarketTypeById.get(Number(row.strategyId || 0)) || 'futures',
         ret,
         pf,
         dd,

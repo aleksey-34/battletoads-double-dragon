@@ -45,7 +45,7 @@ type HistoricalSweepConfig = {
     maxDrawdownPercent: number;
     minTrades: number;
   };
-  strategyTypes: Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout'>;
+  strategyTypes: Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'hideep'>;
   monoMarkets: string[];
   synthMarkets: string[];
   ddLengths: number[];
@@ -55,14 +55,19 @@ type HistoricalSweepConfig = {
   statEntry: number[];
   statExit: number[];
   statStop: number[];
+  hidDeepMac1: number[];
+  hidDeepRsiPeriod: number[];
+  hidDeepTakeProfits: number[];
   systemName: string;
   strategyPrefix: string;
+  longOnly: boolean;
+  spotMode: boolean;
 };
 
 type SweepRunPlan = {
   key: string;
   index: number;
-  strategyType: 'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout';
+  strategyType: 'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'hideep';
   marketMode: 'mono' | 'synth';
   market: string;
   baseSymbol: string;
@@ -179,9 +184,9 @@ const parseNumberList = (raw: unknown): number[] => {
   return Array.from(new Set(normalized));
 };
 
-const parseStrategyTypes = (raw: unknown): Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout'> => {
+const parseStrategyTypes = (raw: unknown): Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'hideep'> => {
   const values = parseStringList(raw);
-  const allowed = new Set(['DD_BATTLETOADS', 'STAT_ARB_ZSCORE', 'ZZ_BREAKOUT']);
+  const allowed = new Set(['DD_BATTLETOADS', 'STAT_ARB_ZSCORE', 'ZZ_BREAKOUT', 'HIDEEP']);
   const parsed = values
     .filter((value) => allowed.has(value))
     .map((value) => {
@@ -190,6 +195,9 @@ const parseStrategyTypes = (raw: unknown): Array<'DD_BattleToads' | 'stat_arb_zs
       }
       if (value === 'ZZ_BREAKOUT') {
         return 'zz_breakout';
+      }
+      if (value === 'HIDEEP') {
+        return 'hideep';
       }
       return 'stat_arb_zscore';
     });
@@ -272,6 +280,8 @@ const buildDefaultConfig = (input?: Partial<HistoricalSweepConfig> & { mode?: un
       maxDrawdownPercent: Number(input?.robust?.maxDrawdownPercent ?? 22),
       minTrades: Math.max(1, Number(input?.robust?.minTrades || 40)),
     },
+    longOnly: (input as any)?.longOnly === true,
+    spotMode: (input as any)?.spotMode === true,
     strategyTypes: parseStrategyTypes(input?.strategyTypes).length > 0
       ? parseStrategyTypes(input?.strategyTypes)
       : ['DD_BattleToads', 'stat_arb_zscore', 'zz_breakout'],
@@ -302,6 +312,15 @@ const buildDefaultConfig = (input?: Partial<HistoricalSweepConfig> & { mode?: un
     statStop: parseNumberList((input as any)?.statStop).length > 0
       ? parseNumberList((input as any)?.statStop)
       : defaultStatStop,
+    hidDeepMac1: parseNumberList((input as any)?.hidDeepMac1).length > 0
+      ? parseNumberList((input as any)?.hidDeepMac1)
+      : [8, 10, 14],
+    hidDeepRsiPeriod: parseNumberList((input as any)?.hidDeepRsiPeriod).length > 0
+      ? parseNumberList((input as any)?.hidDeepRsiPeriod)
+      : [2, 3],
+    hidDeepTakeProfits: parseNumberList((input as any)?.hidDeepTakeProfits).length > 0
+      ? parseNumberList((input as any)?.hidDeepTakeProfits)
+      : [3, 5, 7.5],
     systemName: safeSystemName,
     strategyPrefix: safePrefix,
   };
@@ -312,6 +331,9 @@ const buildStrategyName = (config: HistoricalSweepConfig, plan: SweepRunPlan): s
   const marketToken = plan.market.replace(/\//g, '_');
   if (plan.strategyType === 'stat_arb_zscore') {
     return `${config.strategyPrefix}_SZ_${modeToken}_${marketToken}_${plan.interval}_L${plan.length}_ZE${formatMetricToken(plan.zscoreEntry)}_ZX${formatMetricToken(plan.zscoreExit)}_ZS${formatMetricToken(plan.zscoreStop)}`;
+  }
+  if (plan.strategyType === 'hideep') {
+    return `${config.strategyPrefix}_HD_${modeToken}_${marketToken}_${plan.interval}_M${plan.length}_R${formatMetricToken(plan.zscoreEntry)}_TP${formatMetricToken(plan.takeProfitPercent)}`;
   }
   const typeToken = plan.strategyType === 'zz_breakout' ? 'ZZ' : 'DD';
   return `${config.strategyPrefix}_${typeToken}_${modeToken}_${marketToken}_${plan.interval}_L${plan.length}_TP${formatMetricToken(plan.takeProfitPercent)}_SRC${plan.detectionSource}`;
@@ -364,6 +386,30 @@ const buildRunPlans = (config: HistoricalSweepConfig): SweepRunPlan[] => {
                   zscoreStop,
                 });
               }
+            }
+          }
+        }
+        continue;
+      }
+
+      if (strategyType === 'hideep') {
+        for (const mac1 of config.hidDeepMac1) {
+          for (const rsiPeriod of config.hidDeepRsiPeriod) {
+            for (const takeProfitPercent of config.hidDeepTakeProfits) {
+              addPlan({
+                strategyType,
+                marketMode,
+                market,
+                baseSymbol,
+                quoteSymbol,
+                interval,
+                length: mac1,           // price_channel_length = mac1
+                takeProfitPercent,
+                detectionSource: 'close',
+                zscoreEntry: rsiPeriod, // zscore_entry = rsiPeriod (up1)
+                zscoreExit: 90,         // exit when fastRSI > 90
+                zscoreStop: 100,        // sma1 period
+              });
             }
           }
         }
@@ -629,7 +675,7 @@ const getJobStatusById = async (jobId: number): Promise<JobStatus | null> => {
   return null;
 };
 
-const buildStrategyDraft = (plan: SweepRunPlan): Partial<Strategy> => ({
+const buildStrategyDraft = (plan: SweepRunPlan, config: HistoricalSweepConfig): Partial<Strategy> => ({
   name: plan.strategyName,
   strategy_type: plan.strategyType,
   market_mode: plan.marketMode === 'mono' ? 'mono' : 'synthetic',
@@ -654,14 +700,15 @@ const buildStrategyDraft = (plan: SweepRunPlan): Partial<Strategy> => ({
   base_coef: 1,
   quote_coef: plan.marketMode === 'mono' ? 0 : 1,
   long_enabled: true,
-  short_enabled: true,
+  short_enabled: !config.longOnly,
   lot_long_percent: 10,
   lot_short_percent: 10,
   max_deposit: 1000,
   margin_type: 'cross',
-  leverage: 20,
+  leverage: config.spotMode ? 1 : 20,
   fixed_lot: false,
   reinvest_percent: 0,
+  market_type: config.spotMode ? 'spot' : 'futures',
 });
 
 const ensureStrategyForPlan = async (
@@ -671,7 +718,7 @@ const ensureStrategyForPlan = async (
   plan: SweepRunPlan
 ): Promise<{ strategy: Strategy; created: boolean }> => {
   const existing = strategyMap.get(plan.strategyName);
-  const draft = buildStrategyDraft(plan);
+  const draft = buildStrategyDraft(plan, config);
 
   if (existing?.id) {
     if (config.updateExistingStrategies) {

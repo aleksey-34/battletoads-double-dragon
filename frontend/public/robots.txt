@@ -1,0 +1,18 @@
+User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /admin-docs
+Disallow: /api/
+Disallow: /cabinet
+Disallow: /dashboard
+Disallow: /logs
+Disallow: /positions
+Disallow: /research
+Disallow: /saas
+Disallow: /settings
+Disallow: /trading-systems-workbench
+Disallow: /login
+Disallow: /client/login
+Disallow: /client/register
+
+Sitemap: https://battletoads.top/sitemap.xml

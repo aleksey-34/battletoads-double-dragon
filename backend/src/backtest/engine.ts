@@ -105,6 +105,13 @@ export type BacktestRunRequest = {
   maxDepositOverride?: number;
   /** Override lot_long_percent / lot_short_percent on all strategies. */
   lotPercentOverride?: number;
+  /**
+   * Per-strategy multiplier applied to lot_long_percent / lot_short_percent
+   * (or to lotPercentOverride when set). Used by trading-system backtests to
+   * apply per-member weights from the storefront card. Missing entries default
+   * to 1.0 (no change). Values are clamped to [0, 10].
+   */
+  lotPercentMultiplierByStrategyId?: Record<string | number, number>;
   /** Override reinvest_percent on all strategies (0..100). Use -1 / undefined to keep per-strategy DB value. */
   reinvestPercentOverride?: number;
   /**
@@ -140,6 +147,7 @@ type NormalizedBacktestRequest = {
   maxOpenPositions: number;
   maxDepositOverride: number;
   lotPercentOverride: number;
+  lotPercentMultiplierByStrategyId: Map<number, number>;
   reinvestPercentOverride: number;
   partialTpPct: number;
   /**
@@ -423,6 +431,92 @@ const computeStatArbSignalAtIndex = (
   };
 };
 
+/**
+ * HiDeep oscillator signal:
+ * - mac1 = price_channel_length (SMA period for center, default 10)
+ * - up1/dn1 = zscore_entry (fast RSI period, default 2)
+ * - sma1 = zscore_stop (deviation SMA period, default 100)
+ *
+ * fastRSI = RSI(close, up1)
+ * MAC1 = SMA(close, mac1)
+ * len1 = |close - MAC1|
+ * SMA1 = SMA(len1, sma1)
+ *
+ * LONG entry:  close < open  AND  len1 > SMA1  AND  fastRSI < 10
+ * SHORT entry: close > open  AND  len1 > SMA1  AND  fastRSI > 90
+ *
+ * donchianCenter = MAC1 (used for trail/center-cross exit)
+ * zScore = fastRSI (used for exit logic: >90 for long exit, <10 for short exit)
+ */
+const computeHiDeepSignalAtIndex = (
+  candles: ParsedCandle[],
+  index: number,
+  mac1: number,       // price_channel_length
+  rsiPeriod: number,  // zscore_entry (up1/dn1)
+  longEnabled: boolean,
+  shortEnabled: boolean
+): BacktestSignalPayload => {
+  // Need enough candles for SMA1 (sma1=100 default), but we use a simpler
+  // fallback: require mac1 + rsiPeriod bars minimum. sma1 period is fixed 100.
+  const sma1Period = 100;
+  const needed = Math.max(mac1, sma1Period, rsiPeriod + 1);
+  if (index < needed || index >= candles.length) {
+    throw new Error(`HiDeep: not enough candles at index ${index}, need ${needed}`);
+  }
+
+  const current = candles[index];
+
+  // MAC1 = SMA(close, mac1)
+  const mac1Window = candles.slice(index - mac1, index + 1).map((c) => c.close);
+  const mac1Val = mac1Window.reduce((s, v) => s + v, 0) / mac1Window.length;
+
+  // len1 = |current.close - MAC1|
+  const len1 = Math.abs(current.close - mac1Val);
+
+  // SMA1 = SMA(len1_series, sma1Period) — compute over last sma1Period bars
+  const deviations: number[] = [];
+  const macWindow2 = candles.slice(index - mac1 - sma1Period + 1, index + 1);
+  for (let i = mac1 - 1; i < macWindow2.length; i++) {
+    const slice = macWindow2.slice(i - mac1 + 1, i + 1);
+    const sliceMac = slice.reduce((s, c) => s + c.close, 0) / slice.length;
+    deviations.push(Math.abs(macWindow2[i].close - sliceMac));
+  }
+  const sma1Val = deviations.length > 0
+    ? deviations.reduce((s, v) => s + v, 0) / deviations.length
+    : 0;
+
+  // Fast RSI (Wilder's RSI) with period rsiPeriod
+  const rsiWindow = candles.slice(index - rsiPeriod - 1, index + 1);
+  let avgGain = 0;
+  let avgLoss = 0;
+  for (let i = 1; i < rsiWindow.length; i++) {
+    const diff = rsiWindow[i].close - rsiWindow[i - 1].close;
+    if (diff > 0) avgGain += diff;
+    else avgLoss += Math.abs(diff);
+  }
+  const n = Math.max(1, rsiWindow.length - 1);
+  avgGain /= n;
+  avgLoss /= n;
+  const rs = avgLoss === 0 ? 100 : avgGain / avgLoss;
+  const fastRsi = 100 - 100 / (1 + rs);
+
+  const isOversold = fastRsi < 10;
+  const isOverbought = fastRsi > 90;
+  const hasMomentum = len1 > sma1Val && sma1Val > 0;
+  const isBearCandle = current.close < current.open;
+  const isBullCandle = current.close > current.open;
+
+  if (longEnabled && isBearCandle && hasMomentum && isOversold) {
+    return { signal: 'long', current: current.close, donchianCenter: mac1Val, zScore: fastRsi };
+  }
+
+  if (shortEnabled && isBullCandle && hasMomentum && isOverbought) {
+    return { signal: 'short', current: current.close, donchianCenter: mac1Val, zScore: fastRsi };
+  }
+
+  return { signal: 'none', current: current.close, donchianCenter: mac1Val, zScore: fastRsi };
+};
+
 const computeSignalAtIndex = (
   strategyType: StrategyType,
   candles: ParsedCandle[],
@@ -435,6 +529,10 @@ const computeSignalAtIndex = (
 ): BacktestSignalPayload => {
   if (strategyType === 'stat_arb_zscore') {
     return computeStatArbSignalAtIndex(candles, index, length, zscoreEntry, longEnabled, shortEnabled);
+  }
+
+  if (strategyType === 'hideep') {
+    return computeHiDeepSignalAtIndex(candles, index, length, zscoreEntry, longEnabled, shortEnabled);
   }
 
   return computeDonchianSignalAtIndex(candles, index, length, source, longEnabled, shortEnabled);
@@ -473,6 +571,7 @@ type BacktestContext = {
   trades: BacktestTrade[];
   maxDepositOverride: number;
   lotPercentOverride: number;
+  lotPercentMultiplierByStrategyId: Map<number, number>;
   reinvestPercentOverride: number;
   initialBalance: number;
 };
@@ -700,11 +799,18 @@ const openPosition = (
 ): boolean => {
   const strategy = runtime.strategy;
 
-  const lotPercent = ctx.lotPercentOverride > 0
+  const baseLotPercent = ctx.lotPercentOverride > 0
     ? ctx.lotPercentOverride
     : signal === 'long'
       ? asNumber(strategy.lot_long_percent, 0)
       : asNumber(strategy.lot_short_percent, 0);
+
+  // Per-strategy multiplier (e.g. trading-system member weight from storefront).
+  const strategyId = Number((strategy as { id?: number | string })?.id);
+  const multiplier = Number.isFinite(strategyId) && ctx.lotPercentMultiplierByStrategyId.has(strategyId)
+    ? ctx.lotPercentMultiplierByStrategyId.get(strategyId) as number
+    : 1;
+  const lotPercent = baseLotPercent * multiplier;
 
   const lotFraction = Math.max(0, lotPercent) / 100;
   if (lotFraction <= 0) {
@@ -781,7 +887,7 @@ type RuntimeLoadResult = {
 
 const normalizeStrategyType = (value: any): StrategyType => {
   const normalized = String(value || '').trim();
-  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout') {
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'hideep') {
     return normalized;
   }
   return 'DD_BattleToads';
@@ -919,6 +1025,9 @@ const loadRuntimeStrategies = async (
     await maybeYieldByCounter(strategyCounter, 3);
 
     const length = Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 50)));
+    const strategyTypeForLength = normalizeStrategyType(strategy.strategy_type);
+    // HiDeep needs mac1 + sma1Period(100) bars minimum — so effective warmup length is mac1+105
+    const effectiveLength = strategyTypeForLength === 'hideep' ? Math.max(length + 105, 115) : length;
     const interval = String(strategy.interval || '1h');
     const intervalMs = intervalToMs(interval);
     const warmupBars = Math.max(0, Math.floor(request.warmupBars));
@@ -927,9 +1036,9 @@ const loadRuntimeStrategies = async (
       ? Math.max(1, Math.ceil((request.dateToMs - request.dateFromMs) / Math.max(intervalMs, 1)) + 1)
       : request.bars;
 
-    const candlesLimit = Math.max(length + warmupBars + 40, rangeBars + warmupBars + 20, request.bars);
+    const candlesLimit = Math.max(effectiveLength + warmupBars + 40, rangeBars + warmupBars + 20, request.bars);
     const fetchStartMs = request.dateFromMs !== null
-      ? Math.max(0, request.dateFromMs - (warmupBars + length) * intervalMs)
+      ? Math.max(0, request.dateFromMs - (warmupBars + effectiveLength) * intervalMs)
       : null;
     const fetchEndMs = request.dateToMs;
 
@@ -1058,7 +1167,7 @@ const loadRuntimeStrategies = async (
       }
     }
 
-    const startIndex = Math.max(length, firstInRangeIndex + warmupBars);
+    const startIndex = Math.max(effectiveLength, firstInRangeIndex + warmupBars);
     const endIndex = Math.min(candles.length - 1, lastInRangeIndex);
 
     if (endIndex <= startIndex) {
@@ -1130,6 +1239,20 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     maxOpenPositions,
     maxDepositOverride: Math.max(0, asNumber(raw.maxDepositOverride, 0)),
     lotPercentOverride: Math.max(0, asNumber(raw.lotPercentOverride, 0)),
+    lotPercentMultiplierByStrategyId: (() => {
+      const map = new Map<number, number>();
+      const src = (raw as { lotPercentMultiplierByStrategyId?: Record<string | number, unknown> })?.lotPercentMultiplierByStrategyId;
+      if (src && typeof src === 'object') {
+        for (const [key, value] of Object.entries(src)) {
+          const sid = Number(key);
+          const mul = Number(value);
+          if (Number.isFinite(sid) && sid > 0 && Number.isFinite(mul)) {
+            map.set(sid, Math.max(0, Math.min(10, mul)));
+          }
+        }
+      }
+      return map;
+    })(),
     reinvestPercentOverride: (() => {
       const v = (raw as { reinvestPercentOverride?: unknown })?.reinvestPercentOverride;
       if (v === undefined || v === null || v === '') return -1;
@@ -1218,6 +1341,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     trades: [],
     maxDepositOverride: request.maxDepositOverride,
     lotPercentOverride: request.lotPercentOverride,
+    lotPercentMultiplierByStrategyId: request.lotPercentMultiplierByStrategyId,
     reinvestPercentOverride: request.reinvestPercentOverride,
     initialBalance: request.initialBalance,
   };
@@ -1342,7 +1466,20 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         closedOnCurrentBar = true;
       }
     } else {
-      if (state === 'long' && takeProfitPercent > 0) {
+      // HiDeep RSI-based exit: fastRSI (stored in zScore) crosses overbought/oversold
+      if (strategyType === 'hideep' && Number.isFinite(signalPayload.zScore)) {
+        const fastRsi = Number(signalPayload.zScore);
+        if (!closedOnCurrentBar && state === 'long' && fastRsi > 90) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'hideep_rsi_exit_long');
+          closedOnCurrentBar = true;
+        }
+        if (!closedOnCurrentBar && state === 'short' && fastRsi < 10) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'hideep_rsi_exit_short');
+          closedOnCurrentBar = true;
+        }
+      }
+
+      if (!closedOnCurrentBar && state === 'long' && takeProfitPercent > 0) {
         const existingAnchor = Number(runtime.tpAnchorPrice);
         const anchorBase = Number.isFinite(existingAnchor) && existingAnchor > 0
           ? existingAnchor

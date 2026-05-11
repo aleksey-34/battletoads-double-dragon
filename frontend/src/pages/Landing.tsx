@@ -77,13 +77,13 @@ function useLandingTexts(lang: UILanguage) {
       navFaq: 'FAQ',
       heroTitle1: 'Алгоритмическая торговля',
       heroTitle2: 'как сервис',
-      heroSub: 'Multi-exchange cloud trading platform. 300+ уникальных стратегий в 10+ торговых системах. Облачный отбор из 10 000+ бэктестов. Dual Mode тарифы: Стратегии + Алгофонд — сейчас $0 в beta или 40% с прибыли (HWM).',
+      heroSub: 'Multi-exchange cloud trading platform. 473 активных runtime-стратегии в 18 торговых системах. 58 робастных профилей из 10 000+ бэктестов. 16 живых SaaS-клиентов. Dual Mode тарифы: Стратегии + Алгофонд — сейчас $0 в beta или 40% с прибыли (HWM).',
       btnStart: 'Начать бесплатно',
       btnLogin: 'Войти',
       betaBadge: 'Бесплатно в бета',
       metrics: [
-        { value: '300+', label: 'стратегий' },
-        { value: '10+', label: 'торговых систем' },
+        { value: '473', label: 'активных стратегий' },
+        { value: '18', label: 'торговых систем' },
         { value: '10 000+', label: 'бэктестов' },
         { value: '12.0', label: 'лучший PF' },
       ],
@@ -96,7 +96,7 @@ function useLandingTexts(lang: UILanguage) {
         { title: 'Копитрейдинг', desc: 'Один API-ключ — несколько копируемых аккаунтов. Торгуете и делитесь с друзьями — без ограничений биржевого копитрейдинга.' },
       ],
       stratTitle: 'Стратегии',
-      stratSub: '3 типа алгоритмов с\u00a0robustness-фильтрацией. 300+ уникальных стратегий в 10+ торговых системах',
+      stratSub: '3 типа алгоритмов с\u00a0robustness-фильтрацией. 473 активные стратегии в 18 торговых системах · 58 робастных профилей',
       strats: [
         { name: 'DoubleDragon Breakout', desc: 'Пробой канала Дончиана с трейлинговым TP. Ловит направленный импульс и удерживает тренд.', tags: ['классика', 'арбитраж', 'trend'] },
         { name: 'StatArb Z-Score', desc: 'Возврат к среднему по Z-счёту на синтетическом инструменте. Торгует схождение/расхождение активов.', tags: ['арбитраж', 'mean-reversion'] },
@@ -110,16 +110,27 @@ function useLandingTexts(lang: UILanguage) {
         { title: 'Client', desc: 'Multi-exchange cloud. Одна TS материализуется на нескольких биржах. Витрина офферов, мониторинг.' },
       ],
       proofTitle: 'Доказанная методология',
-      proofSub: 'Метрики витрины · Dual Mode pricing · 90 дней · апрель 2026',
+      proofSub: 'Метрики витрины · Dual Mode pricing · 90 дней · май 2026',
       proofRows: [
-        { label: 'Стратегий', value: '300+' },
-        { label: 'Торговых систем', value: '10+' },
+        { label: 'Активных стратегий', value: '473' },
+        { label: 'Торговых систем', value: '18' },
+        { label: 'Робастных профилей', value: '58' },
         { label: 'Бэктестов', value: '10 000+' },
+        { label: 'SaaS-клиентов', value: '16' },
         { label: 'Лучший PF', value: '12.0' },
         { label: 'Лучший ret / 90д', value: '+210%' },
         { label: 'Тарифы', value: '$0 / 40% profit' },
       ],
       proofDisclaimer: '* Метрики витрины за 90 дней, включая комиссии и проскальзывание. Прошлые результаты не гарантируют будущую доходность.',
+      whatsNewBadge: 'v1.1 · Май 2026',
+      whatsNewTitle: 'Что нового в v1.1',
+      whatsNewSub: 'Платформа стала надёжнее, прозрачнее и быстрее реагирует на дрейф стратегий.',
+      whatsNewItems: [
+        { icon: '📸', title: 'Snapshot-first исполнение', desc: 'Каждое решение по сделке сохраняет снимок состояния. Полный аудит «почему открылись» — без чёрных ящиков.' },
+        { icon: '🌅', title: 'Daily Sweep', desc: 'Ежедневный пересчёт робастных профилей по новым данным. Каталог стратегий не устаревает.' },
+        { icon: '🛰️', title: 'Drift Detection', desc: 'Автоматический мониторинг расхождения live-торговли с бэктестом. Уведомление до того, как просадка станет проблемой.' },
+        { icon: '✈️', title: 'Telegram Reporter', desc: 'Ежедневный отчёт администратора и алерты по нештатным событиям прямо в Telegram.' },
+      ],
       exchTitle: 'Биржевые интеграции',
       exchSub: '6 бирж подключено. Bybit — основной коннектор.',
       exchReg: 'Регистрация →',
@@ -162,10 +173,10 @@ function useLandingTexts(lang: UILanguage) {
     en: {
       navStrategies: 'Strategies', navExchanges: 'Exchanges', navSecurity: 'Security', navPricing: 'Pricing', navFaq: 'FAQ',
       heroTitle1: 'Algorithmic Trading', heroTitle2: 'as a Service',
-      heroSub: 'Multi-exchange cloud trading platform. 300+ unique strategies across 10+ trading systems. Cloud selection from 10,000+ backtests. Dual Mode pricing: Strategies + Algofund — $0 in beta or 40% profit share (HWM).',
+      heroSub: 'Multi-exchange cloud trading platform. 473 active runtime strategies across 18 trading systems. 58 robust profiles selected from 10,000+ backtests. 16 live SaaS clients. Dual Mode pricing: Strategies + Algofund — $0 in beta or 40% profit share (HWM).',
       btnStart: 'Start Free', btnLogin: 'Log In', betaBadge: 'Free During Beta',
       metrics: [
-        { value: '300+', label: 'strategies' }, { value: '10+', label: 'trading systems' },
+        { value: '473', label: 'active strategies' }, { value: '18', label: 'trading systems' },
         { value: '10,000+', label: 'backtests' }, { value: '12.0', label: 'best PF' },
       ],
       modesTitle: 'Three Client Modes', modesSub: 'From passive income to full control',
@@ -175,7 +186,7 @@ function useLandingTexts(lang: UILanguage) {
         { title: 'Strategist', desc: 'Full control. Pick strategies from the catalog, build a custom portfolio in clicks.' },
         { title: 'Copy Trading', desc: 'One API key — multiple mirrored accounts. Share your setup without exchange restrictions.' },
       ],
-      stratTitle: 'Strategies', stratSub: '3 algorithm types with robustness filtering. 300+ unique strategies across 10+ trading systems',
+      stratTitle: 'Strategies', stratSub: '3 algorithm types with robustness filtering. 473 active strategies across 18 trading systems · 58 robust profiles',
       strats: [
         { name: 'DoubleDragon Breakout', desc: 'Donchian channel breakout with trailing TP. Captures momentum and rides the trend.', tags: ['classic', 'arbitrage', 'trend'] },
         { name: 'StatArb Z-Score', desc: 'Mean reversion via Z-score on synthetic instruments. Trades convergence of correlated assets.', tags: ['arbitrage', 'mean-reversion'] },
@@ -187,13 +198,23 @@ function useLandingTexts(lang: UILanguage) {
         { title: 'Research', desc: 'Backtesting, sweep, robustness filtering. Synthetic reconciliation on both trade legs.' },
         { title: 'Client', desc: 'Multi-exchange cloud. One TS materializes across multiple exchanges. Offer catalog, monitoring.' },
       ],
-      proofTitle: 'Proven Methodology', proofSub: 'Storefront metrics · Dual Mode pricing · 90 days · April 2026',
+      proofTitle: 'Proven Methodology', proofSub: 'Storefront metrics · Dual Mode pricing · 90 days · May 2026',
       proofRows: [
-        { label: 'Strategies', value: '300+' }, { label: 'Trading Systems', value: '10+' },
-        { label: 'Backtests', value: '10,000+' }, { label: 'Best PF', value: '12.0' },
+        { label: 'Active Strategies', value: '473' }, { label: 'Trading Systems', value: '18' },
+        { label: 'Robust Profiles', value: '58' }, { label: 'Backtests', value: '10,000+' },
+        { label: 'SaaS Clients', value: '16' }, { label: 'Best PF', value: '12.0' },
         { label: 'Best Return / 90d', value: '+210%' }, { label: 'Pricing', value: '$0 / 40% profit' },
       ],
       proofDisclaimer: '* 90-day storefront metrics including fees and slippage. Past performance ≠ future results.',
+      whatsNewBadge: 'v1.1 · May 2026',
+      whatsNewTitle: "What's new in v1.1",
+      whatsNewSub: 'The platform got more reliable, more transparent and faster at reacting to strategy drift.',
+      whatsNewItems: [
+        { icon: '📸', title: 'Snapshot-first execution', desc: 'Every trade decision saves a state snapshot. Full audit trail of why a position opened — no black boxes.' },
+        { icon: '🌅', title: 'Daily Sweep', desc: 'Robust profiles get re-evaluated daily on fresh data. The strategy catalog never goes stale.' },
+        { icon: '🛰️', title: 'Drift Detection', desc: 'Live execution is continuously compared with the backtest. You get notified before drawdown becomes a problem.' },
+        { icon: '✈️', title: 'Telegram Reporter', desc: 'Daily admin digest and incident alerts delivered straight to Telegram.' },
+      ],
       exchTitle: 'Exchange Integrations', exchSub: '6 exchanges live. Bybit primary.', exchReg: 'Sign Up →',
       securityTitle: 'Security First', securitySub: 'Your funds never leave your exchange.',
       securityCards: [
@@ -230,10 +251,10 @@ function useLandingTexts(lang: UILanguage) {
     tr: {
       navStrategies: 'Stratejiler', navExchanges: 'Borsalar', navSecurity: 'Güvenlik', navPricing: 'Fiyatlar', navFaq: 'SSS',
       heroTitle1: 'Algoritmik Ticaret', heroTitle2: 'Hizmet Olarak',
-      heroSub: '6 borsada 300+ benzersiz strateji ve 10+ ticaret sistemi. 10.000+ backtestten bulut seçimi. Dual Mode fiyatlama: Strateji + Algofon — betada $0 veya kar uzerinden %40 (HWM).',
+      heroSub: '6 borsada 473 aktif runtime stratejisi ve 18 ticaret sistemi. 10.000+ backtestten seçilmiş 58 sağlam profil. 16 canlı SaaS müşterisi. Dual Mode fiyatlama: Strateji + Algofon — betada $0 veya kar uzerinden %40 (HWM).',
       btnStart: 'Ücretsiz Başla', btnLogin: 'Giriş', betaBadge: 'Betada Ücretsiz',
       metrics: [
-        { value: '300+', label: 'strateji' }, { value: '10+', label: 'ticaret sistemi' },
+        { value: '473', label: 'aktif strateji' }, { value: '18', label: 'ticaret sistemi' },
         { value: '10.000+', label: 'backtest' }, { value: '12,0', label: 'en iyi PF' },
       ],
       modesTitle: 'Üç Müşteri Modu', modesSub: 'Pasif gelirden tam kontrole',
@@ -243,7 +264,7 @@ function useLandingTexts(lang: UILanguage) {
         { title: 'Stratejist', desc: 'Tam kontrol. Katalogdan strateji seçin, özel portföy oluşturun.' },
         { title: 'Kopya Ticaret', desc: 'Bir API anahtarı — birden fazla hesap. Borsa kısıtlaması olmadan paylaşın.' },
       ],
-      stratTitle: 'Stratejiler', stratSub: 'Sağlamlık filtreli 3 algoritma türü. 300+ benzersiz strateji, 10+ ticaret sistemi',
+      stratTitle: 'Stratejiler', stratSub: 'Sağlamlık filtreli 3 algoritma türü. 18 ticaret sisteminde 473 aktif strateji · 58 sağlam profil',
       strats: [
         { name: 'DoubleDragon Breakout', desc: 'Donchian kanal kırılması. Momentumu yakalar ve trendi sürdürür.', tags: ['klasik', 'arbitraj', 'trend'] },
         { name: 'StatArb Z-Score', desc: 'Z-skoru ile ortalamaya dönüş. İlişkili varlıkların yakınsamasını işler.', tags: ['arbitraj', 'mean-reversion'] },
@@ -255,13 +276,23 @@ function useLandingTexts(lang: UILanguage) {
         { title: 'Research', desc: 'Backtest, tarama, sağlamlık filtreleme. Sentetik eşleştirme her iki işlem bacağında.' },
         { title: 'Client', desc: 'Çok borsalı bulut. Tek TS birden fazla borsada gerçekleşir. Teklif kataloğu, izleme.' },
       ],
-      proofTitle: 'Kanıtlanmış Metodoloji', proofSub: 'Vitrin metrikleri · Dual Mode fiyatlama · 90 gün · Nisan 2026',
+      proofTitle: 'Kanıtlanmış Metodoloji', proofSub: 'Vitrin metrikleri · Dual Mode fiyatlama · 90 gün · Mayıs 2026',
       proofRows: [
-        { label: 'Strateji', value: '300+' }, { label: 'Ticaret Sistemi', value: '10+' },
-        { label: 'Backtest', value: '10.000+' }, { label: 'En İyi PF', value: '12,0' },
+        { label: 'Aktif Strateji', value: '473' }, { label: 'Ticaret Sistemi', value: '18' },
+        { label: 'Sağlam Profil', value: '58' }, { label: 'Backtest', value: '10.000+' },
+        { label: 'SaaS Müşteri', value: '16' }, { label: 'En İyi PF', value: '12,0' },
         { label: 'En İyi Getiri / 90g', value: '+%210' }, { label: 'Fiyatlama', value: '$0 / %40 kar' },
       ],
       proofDisclaimer: '* Vitrin 90 günlük metrikleri, komisyon ve kayma dahil. Geçmiş performans ≠ gelecek.',
+      whatsNewBadge: 'v1.1 · Mayıs 2026',
+      whatsNewTitle: 'v1.1 ile yenilikler',
+      whatsNewSub: 'Platform daha güvenilir, daha şeffaf ve strateji sapmasına daha hızlı tepki veriyor.',
+      whatsNewItems: [
+        { icon: '📸', title: 'Snapshot-first yürütme', desc: 'Her işlem kararı durum anlık görüntüsünü kaydeder. Pozisyonun neden açıldığına dair tam denetim — kara kutu yok.' },
+        { icon: '🌅', title: 'Günlük Sweep', desc: 'Robust profiller her gün yeni verilerle yeniden değerlendirilir. Strateji kataloğu hiç eskimiyor.' },
+        { icon: '🛰️', title: 'Drift Tespiti', desc: 'Canlı yürütme sürekli olarak geriye dönük testle karşılaştırılır. Düşüş sorun olmadan önce bildirim alırsınız.' },
+        { icon: '✈️', title: 'Telegram Raporlayıcı', desc: 'Günlük yönetici özeti ve olay uyarıları doğrudan Telegram\'a iletilir.' },
+      ],
       exchTitle: 'Borsa Entegrasyonları', exchSub: '6 borsa bağlı. Bybit ana.', exchReg: 'Kayıt →',
       securityTitle: 'Güvenlik', securitySub: 'Fonlarınız asla borsanızdan ayrılmaz.',
       securityCards: [
@@ -312,6 +343,7 @@ export default function Landing() {
   const { language, setLanguage } = useI18n();
   const tx = useLandingTexts(language);
   const [scrolled, setScrolled] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [theme, setTheme] = useState<LandingTheme>(() => {
     const s = localStorage.getItem('btddLandingTheme');
     return (s === 'fire' || s === 'neon' || s === 'classic' || s === 'light') ? s : 'light';
@@ -329,6 +361,12 @@ export default function Landing() {
     window.addEventListener('scroll', h, { passive: true });
     return () => window.removeEventListener('scroll', h);
   }, []);
+
+  // Lock body scroll when mobile menu is open
+  useEffect(() => {
+    document.body.style.overflow = menuOpen ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [menuOpen]);
 
   const btnStyle = (primary?: boolean): React.CSSProperties => primary ? {
     display: 'inline-block', padding: '12px 28px', borderRadius: 10, fontWeight: 700, fontSize: 15,
@@ -354,6 +392,20 @@ export default function Landing() {
 
   return (
     <div style={{ background: T.bg, minHeight: '100vh', color: T.text, fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" }}>
+      {/* Mobile-first responsive overrides */}
+      <style dangerouslySetInnerHTML={{ __html: `
+        html, body { overflow-x: hidden; }
+        .btdd-burger { display: none; }
+        @media (max-width: 860px) {
+          .btdd-nav-desktop { display: none !important; }
+          .btdd-burger { display: inline-flex !important; }
+          .btdd-nav-cta { display: none !important; }
+        }
+        .btdd-mobile-menu a, .btdd-mobile-menu button {
+          min-height: 44px;
+        }
+        .btdd-touch { min-height: 36px; min-width: 36px; }
+      ` }} />
 
       {/* ─── NAV ─── */}
       <nav style={{
@@ -367,33 +419,113 @@ export default function Landing() {
           <div style={{ fontWeight: 900, fontSize: 20, color: T.text, letterSpacing: -0.5 }}>
             BTDD<span style={{ color: T.accent }}>.</span>
           </div>
-          <div style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* Desktop nav */}
+          <div className="btdd-nav-desktop" style={{ display: 'flex', gap: 20, alignItems: 'center', flexWrap: 'wrap' }}>
             {[['#strategies', tx.navStrategies], ['#exchanges', tx.navExchanges], ['#security', tx.navSecurity], ['#pricing', tx.navPricing], ['#faq', tx.navFaq]].map(([href, label]) => (
               <a key={href} href={href} style={{ color: T.textSec, fontSize: 13, fontWeight: 500, textDecoration: 'none' }}>{label}</a>
             ))}
             <div style={{ width: 1, height: 16, background: T.border, margin: '0 2px' }} />
             {THEME_OPTS.map(o => (
-              <button key={o.value} onClick={() => switchTheme(o.value)} title={o.label} style={{
+              <button key={o.value} onClick={() => switchTheme(o.value)} title={o.label} className="btdd-touch" style={{
                 background: theme === o.value ? T.accentGlow : 'transparent',
                 border: theme === o.value ? `1px solid ${T.accent}` : `1px solid ${T.isDark ? 'rgba(255,255,255,0.1)' : T.border}`,
-                borderRadius: 5, padding: '2px 6px', fontSize: 13, cursor: 'pointer', lineHeight: 1,
+                borderRadius: 6, padding: '6px 10px', fontSize: 14, cursor: 'pointer', lineHeight: 1,
               }}>{o.icon}</button>
             ))}
             <div style={{ width: 1, height: 16, background: T.border, margin: '0 2px' }} />
             {(['ru', 'en', 'tr'] as UILanguage[]).map(lng => (
-              <button key={lng} onClick={() => setLanguage(lng)} style={{
+              <button key={lng} onClick={() => setLanguage(lng)} className="btdd-touch" style={{
                 background: language === lng ? T.accentGlow : 'transparent',
                 border: language === lng ? `1px solid ${T.accent}` : `1px solid ${T.isDark ? 'rgba(255,255,255,0.1)' : T.border}`,
                 color: language === lng ? T.accent : T.textSec,
-                borderRadius: 5, padding: '2px 7px', fontSize: 11, cursor: 'pointer', fontWeight: language === lng ? 700 : 400,
+                borderRadius: 6, padding: '6px 10px', fontSize: 12, cursor: 'pointer', fontWeight: language === lng ? 700 : 500,
               }}>{lng.toUpperCase()}</button>
             ))}
-            <a href="/client/register" style={{
-              ...btnStyle(true), padding: '7px 18px', fontSize: 13,
+            <a href="/client/register" className="btdd-nav-cta" style={{
+              ...btnStyle(true), padding: '8px 18px', fontSize: 13,
             }}>{tx.btnStart}</a>
           </div>
+
+          {/* Mobile burger button */}
+          <button
+            className="btdd-burger"
+            onClick={() => setMenuOpen(true)}
+            aria-label="Open menu"
+            style={{
+              display: 'none', alignItems: 'center', justifyContent: 'center',
+              width: 44, height: 44, background: 'transparent',
+              border: `1px solid ${T.border}`, borderRadius: 10, cursor: 'pointer',
+              color: T.text, fontSize: 22, padding: 0,
+            }}>
+            ☰
+          </button>
         </div>
       </nav>
+
+      {/* Mobile menu overlay */}
+      {menuOpen && (
+        <div className="btdd-mobile-menu" style={{
+          position: 'fixed', inset: 0, zIndex: 200, background: T.bg,
+          padding: '20px 24px', overflowY: 'auto',
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28 }}>
+            <div style={{ fontWeight: 900, fontSize: 22, color: T.text, letterSpacing: -0.5 }}>
+              BTDD<span style={{ color: T.accent }}>.</span>
+            </div>
+            <button
+              onClick={() => setMenuOpen(false)}
+              aria-label="Close menu"
+              style={{
+                width: 44, height: 44, background: 'transparent',
+                border: `1px solid ${T.border}`, borderRadius: 10, cursor: 'pointer',
+                color: T.text, fontSize: 22, padding: 0,
+              }}>
+              ✕
+            </button>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 24 }}>
+            {[['#strategies', tx.navStrategies], ['#exchanges', tx.navExchanges], ['#security', tx.navSecurity], ['#pricing', tx.navPricing], ['#faq', tx.navFaq], ['/whitepaper', 'Whitepaper']].map(([href, label]) => (
+              <a key={href} href={href} onClick={() => setMenuOpen(false)} style={{
+                color: T.text, fontSize: 17, fontWeight: 600, textDecoration: 'none',
+                padding: '14px 4px', borderBottom: `1px solid ${T.border}`,
+              }}>{label}</a>
+            ))}
+          </div>
+          <div style={{ marginBottom: 20 }}>
+            <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 10, fontWeight: 600, letterSpacing: 0.5 }}>THEME</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {THEME_OPTS.map(o => (
+                <button key={o.value} onClick={() => switchTheme(o.value)} style={{
+                  background: theme === o.value ? T.accentGlow : 'transparent',
+                  border: theme === o.value ? `1px solid ${T.accent}` : `1px solid ${T.border}`,
+                  borderRadius: 10, padding: '10px 16px', fontSize: 16, cursor: 'pointer',
+                  minHeight: 44, color: T.text,
+                }}>{o.icon} {o.label}</button>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginBottom: 28 }}>
+            <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 10, fontWeight: 600, letterSpacing: 0.5 }}>LANGUAGE</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              {(['ru', 'en', 'tr'] as UILanguage[]).map(lng => (
+                <button key={lng} onClick={() => setLanguage(lng)} style={{
+                  flex: 1, background: language === lng ? T.accentGlow : 'transparent',
+                  border: language === lng ? `1px solid ${T.accent}` : `1px solid ${T.border}`,
+                  color: language === lng ? T.accent : T.textSec,
+                  borderRadius: 10, padding: '12px 0', fontSize: 14, cursor: 'pointer',
+                  fontWeight: language === lng ? 800 : 600, minHeight: 44,
+                }}>{lng.toUpperCase()}</button>
+              ))}
+            </div>
+          </div>
+          <a href="/client/register" onClick={() => setMenuOpen(false)} style={{
+            ...btnStyle(true), display: 'block', textAlign: 'center', padding: '16px', fontSize: 16,
+          }}>{tx.btnStart}</a>
+          <a href="/client/login" onClick={() => setMenuOpen(false)} style={{
+            ...btnStyle(), display: 'block', textAlign: 'center', padding: '14px', fontSize: 15, marginTop: 12,
+          }}>{tx.btnLogin}</a>
+        </div>
+      )}
 
       {/* ─── HERO ─── */}
       <section style={{ paddingTop: 100, paddingBottom: 60, textAlign: 'center', position: 'relative', overflow: 'hidden' }}>
@@ -449,7 +581,7 @@ export default function Landing() {
         <div style={{ maxWidth: 1140, margin: '0 auto' }}>
           <h2 style={headingStyle}>{tx.modesTitle}</h2>
           <p style={{ textAlign: 'center', color: T.textSec, fontSize: 15, marginBottom: 48 }}>{tx.modesSub}</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 20 }}>
             {[0, 1, 2].map(i => {
               const hl = i === 0;
               return (
@@ -477,7 +609,7 @@ export default function Landing() {
         <div style={{ maxWidth: 1140, margin: '0 auto' }}>
           <h2 style={headingStyle}>{tx.stratTitle}</h2>
           <p style={{ textAlign: 'center', color: T.textSec, fontSize: 15, marginBottom: 48 }}>{tx.stratSub}</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 20 }}>
             {tx.strats.map((s: any, i: number) => (
               <div key={i} style={cardStyle}>
                 <div style={{ fontSize: 16, fontWeight: 700, color: T.accent, marginBottom: 4 }}>{s.name}</div>
@@ -501,7 +633,7 @@ export default function Landing() {
         <div style={{ maxWidth: 1140, margin: '0 auto' }}>
           <h2 style={headingStyle}>{tx.archTitle}</h2>
           <p style={{ textAlign: 'center', color: T.textSec, fontSize: 15, marginBottom: 48 }}>{tx.archSub}</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 20 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))', gap: 20 }}>
             {[
               { color: '#ef4444' }, { color: T.accent }, { color: '#10b981' },
             ].map((c, i) => (
@@ -519,7 +651,7 @@ export default function Landing() {
         <div style={{ maxWidth: 1140, margin: '0 auto', textAlign: 'center' }}>
           <h2 style={headingStyle}>{tx.proofTitle}</h2>
           <p style={{ color: T.textSec, fontSize: 15, marginBottom: 36 }}>{tx.proofSub}</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(6, 1fr)', gap: 12 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
             {tx.proofRows.map((row: any, i: number) => (
               <div key={i} style={{
                 background: T.proofBg, border: `1px solid ${T.cardBorder}`, borderRadius: 12, padding: '20px 12px',
@@ -530,6 +662,32 @@ export default function Landing() {
             ))}
           </div>
           <div style={{ marginTop: 20, color: T.textMuted, fontSize: 11 }}>{tx.proofDisclaimer}</div>
+        </div>
+      </section>
+
+      {/* ─── WHAT'S NEW v1.1 ─── */}
+      <section style={sectionStyle()}>
+        <div style={{ maxWidth: 1140, margin: '0 auto', textAlign: 'center' }}>
+          <span style={{
+            display: 'inline-block', background: T.accentGlow, color: T.accent,
+            border: `1px solid ${T.accent}`, borderRadius: 999,
+            padding: '4px 14px', fontSize: 12, fontWeight: 700, letterSpacing: 0.5,
+            marginBottom: 14,
+          }}>{tx.whatsNewBadge}</span>
+          <h2 style={headingStyle}>{tx.whatsNewTitle}</h2>
+          <p style={{ color: T.textSec, fontSize: 15, marginBottom: 36, maxWidth: 640, marginLeft: 'auto', marginRight: 'auto' }}>{tx.whatsNewSub}</p>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16, textAlign: 'left' }}>
+            {tx.whatsNewItems.map((it: any, i: number) => (
+              <div key={i} style={{
+                ...cardStyle, position: 'relative',
+                borderLeft: `3px solid ${T.accent}`,
+              }}>
+                <div style={{ fontSize: 26, marginBottom: 10 }}>{it.icon}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6, color: T.text }}>{it.title}</div>
+                <div style={{ color: T.textSec, fontSize: 13, lineHeight: 1.6 }}>{it.desc}</div>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -557,7 +715,7 @@ export default function Landing() {
         <div style={{ maxWidth: 1140, margin: '0 auto' }}>
           <h2 style={headingStyle}>{tx.securityTitle}</h2>
           <p style={{ textAlign: 'center', color: T.textSec, fontSize: 15, marginBottom: 48 }}>{tx.securitySub}</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 16 }}>
             {tx.securityCards.map((c: any, i: number) => (
               <div key={i} style={cardStyle}>
                 <div style={{ fontSize: 26, marginBottom: 10 }}>{c.icon}</div>
@@ -579,7 +737,7 @@ export default function Landing() {
             {tx.discountTitle}
           </div>
           <p style={{ color: T.textSec, fontSize: 16, maxWidth: 500, margin: '0 auto 12px', lineHeight: 1.6 }}>{tx.discountSub}</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, maxWidth: 900, margin: '0 auto 20px' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: 12, maxWidth: 900, margin: '0 auto 20px' }}>
             {tx.discountPlans.map((p: any, i: number) => (
               <div key={i} style={{ ...cardStyle, padding: '16px 12px', textAlign: 'center' }}>
                 <div style={{ fontSize: 12, color: T.textSec, fontWeight: 700, marginBottom: 6 }}>{p.title}</div>

@@ -1,6 +1,6 @@
-<h1>BTDD Platform — Teknik Rapor v1.0</h1>
+<h1>BTDD Platform — Teknik Rapor v1.1</h1>
 <p><strong>Kripto Piyasaları için Hizmet Olarak Algoritmik Ticaret</strong></p>
-<p><em>Nisan 2026</em></p>
+<p><em>Mayıs 2026</em></p>
 <hr>
 <h2>İçindekiler</h2>
 <ol>
@@ -17,12 +17,14 @@
 <li><a href="#11-teknoloji-y%C4%B1%C4%9F%C4%B1n%C4%B1">Teknoloji Yığını</a></li>
 <li><a href="#12-yol-haritas%C4%B1">Yol Haritası</a></li>
 <li><a href="#13-ekip-ve-ileti%C5%9Fim">Ekip ve İletişim</a></li>
+<li><a href="#14-son-m%C3%BChendislik">Son Mühendislik İyileştirmeleri (Nis–May 2026)</a></li>
+<li><a href="#15-i%C5%9F-modeli-tract%C4%B1on-token">İş Modeli, Tracktion ve Token Yol Haritası</a></li>
 </ol>
 <hr>
 <h2>1. Yönetici Özeti</h2>
 <p>BTDD Platform, bireysel yatırımcılar, fon yöneticileri ve kopya tüccarları için portföy düzeyinde kripto para ticaretini otomatikleştiren çok kiracılı algoritmik ticaret SaaS platformudur.</p>
 <p>Platform eksiksiz bir boru hattı sunar: <strong>piyasa verisi toplama → parametrik strateji optimizasyonu → sağlamlık filtreleme → portföy oluşturma → canlı yürütme</strong> — kurumsal düzeyde geriye dönük test titizliğiyle tamamen otomatikleştirilmiş.</p>
-<p><strong>Temel sonuçlar (15+ aylık Bybit 4s verilerinde doğrulanmış, Oca 2025 – Mar 2026):</strong></p>
+<p><strong>Canlı durum (7 Mayıs 2026):</strong></p>
 <table>
 <thead>
 <tr>
@@ -31,32 +33,44 @@
 </tr>
 </thead>
 <tbody><tr>
-<td>Tamamlanan geriye dönük testler</td>
-<td>9.108</td>
+<td>Tamamlanan tarihsel geriye dönük testler (kümülatif)</td>
+<td>10.000+</td>
 </tr>
 <tr>
-<td>Sağlam strateji adayları</td>
-<td>3.129</td>
+<td>Katalogdaki sağlam strateji profilleri</td>
+<td>58</td>
 </tr>
 <tr>
-<td>Portföy getirisi</td>
-<td><strong>+%28,7</strong></td>
+<td>Aktif runtime ticaret sistemleri (TS)</td>
+<td>18</td>
 </tr>
 <tr>
-<td>Kâr Faktörü</td>
-<td><strong>3,28</strong></td>
+<td>Aktif canlı runtime stratejileri</td>
+<td>473</td>
 </tr>
 <tr>
-<td>Maks. Düşüş</td>
-<td><strong>%4,4</strong></td>
+<td>Aktif SaaS müşteri hesapları</td>
+<td>16</td>
 </tr>
 <tr>
-<td>Kazanma Oranı</td>
-<td>%43,75 (181/416 işlem)</td>
+<td>En iyi portföy getirisi / 90g</td>
+<td><strong>+%210,17</strong></td>
+</tr>
+<tr>
+<td>En iyi Kâr Faktörü</td>
+<td><strong>12,03</strong></td>
+</tr>
+<tr>
+<td>Minimum portföy düşüşü</td>
+<td><strong>%1,5</strong></td>
 </tr>
 <tr>
 <td>Bağlı borsalar</td>
 <td>6 (canlı)</td>
+</tr>
+<tr>
+<td>Platforma katılan kripto inflüenser ve borsa tarafı ortaklar</td>
+<td>Birden fazla (canlı)</td>
 </tr>
 </tbody></table>
 <hr>
@@ -201,22 +215,30 @@
 <hr>
 <h2>6. Platform Mimarisi</h2>
 <h3>6.1 Üç Devreli İzolasyon</h3>
-<pre><code>┌─────────────────────────────────────────────────────┐
-│                    BTDD Platform                     │
-│                                                      │
-│  ┌──────────┐  ┌───────────┐  ┌──────────────────┐  │
-│  │ RUNTIME  │  │ RESEARCH  │  │  PRODUCTION/SaaS │  │
-│  │ Devre    │  │ Devre     │  │     Devre         │  │
-│  │          │  │           │  │                   │  │
-│  │runtime.db│  │research.db│  │     main.db       │  │
-│  │          │  │           │  │                   │  │
-│  │• Yürütme │  │• G.D.Test │  │• Kiracı yönet.  │  │
-│  │• İzleme  │  │• Tarama   │  │• Abonelikler    │  │
-│  │• Risk    │  │• Optimiz. │  │• Müşteri katalog│  │
-│  │• Ticaret │  │• Yayınla  │  │• RBAC &amp; kimlik  │  │
-│  └──────────┘  └───────────┘  └──────────────────┘  │
-└─────────────────────────────────────────────────────┘
-</code></pre>
+<div class="arch-diagram">
+  <div class="arch-title">BTDD Platform</div>
+  <div class="arch-row arch-row-3">
+    <div class="arch-card">
+      <h4>RUNTIME Devre</h4>
+      <div class="arch-db">runtime.db</div>
+      <ul><li>Yürütme</li><li>İzleme</li><li>Risk</li><li>Ticaret</li></ul>
+    </div>
+    <div class="arch-card">
+      <h4>RESEARCH Devre</h4>
+      <div class="arch-db">research.db</div>
+      <ul><li>Geriye dönük test</li><li>Tarama</li><li>Optimizasyon</li><li>Yayınla</li></ul>
+    </div>
+    <div class="arch-card">
+      <h4>PRODUCTION / SaaS Devre</h4>
+      <div class="arch-db">main.db</div>
+      <ul><li>Kiracı yönetimi</li><li>Abonelikler</li><li>Müşteri kataloğu</li><li>RBAC &amp; kimlik</li></ul>
+    </div>
+  </div>
+  <div class="arch-api">
+    <h4>API Gateway (Express)</h4>
+    <code>/api/admin/*&nbsp;&nbsp;·&nbsp;&nbsp;/api/research/*&nbsp;&nbsp;·&nbsp;&nbsp;/api/client/*</code>
+  </div>
+</div>
 <p><strong>Runtime Devre</strong> sıfır kesinti garantisiyle canlı ticaret yürütmesini yönetir. İzole bir systemd servisi olarak çalışır.</p>
 <p><strong>Research Devre</strong> geriye dönük testi, parametrik taramaları ve strateji optimizasyonunu yönetir.</p>
 <p><strong>Production Devre</strong> çok kiracılı SaaS katmanına hizmet eder — kiracı yönetimi, abonelik faturalandırma, müşteri katalogları ve rol tabanlı erişim kontrolü.</p>
@@ -226,7 +248,7 @@
 <p>Yatırımcılar için en basit giriş noktası. Müşteri borsa API anahtarını bağlar (sadece ticaret, <strong>çekim izni yok</strong>) — fonlar her zaman müşterinin kendi borsa hesabında kalır. Platform otomatik olarak işlem yapar, pasif gelir üretir.</p>
 <ul>
 <li><strong>Temel ilke:</strong> Paranız asla borsanızdan ayrılmaz. Basit, güvenli API bağlantısı.</li>
-<li><strong>Tarifeler:</strong> Depozito katmanına bağlı olarak 20–200 USDT/ay</li>
+<li><strong>Tarifeler:</strong> Beta dönemi boyunca <strong>%100 indirim — Ücretsiz</strong> (Beta sonrası: depozito katmanına bağlı 20–200 USDT/ay)</li>
 <li><strong>Risk aralığı:</strong> 0–2,5× (müşteri tarafından ayarlanabilir)</li>
 </ul>
 <h3>7.2 Stratejist (Kendi Kendini Yöneten)</h3>
@@ -235,7 +257,7 @@
 <li><strong>Kolay kurulum:</strong> API anahtarı bağlayın, katalogdan stratejiler seçin ve birkaç tıklamayla kendi ticaret sisteminizi oluşturun</li>
 <li><strong>İki kaydırıcı:</strong> Risk seviyesi (1–5) × İşlem frekansı (1–5) → optimize edilmiş ön ayara haritalanır</li>
 <li><strong>Eşitlik önizleme:</strong> Canlıya geçmeden önce seçilen yapılandırma için geriye dönük test sonuçları</li>
-<li><strong>Tarifeler:</strong> 15–100 USDT/ay, maks. depozito 1.000–10.000 USDT</li>
+<li><strong>Tarifeler:</strong> Beta dönemi boyunca <strong>%100 indirim — Ücretsiz</strong> (Beta sonrası: 15–100 USDT/ay, maks. depozito 1.000–10.000 USDT)</li>
 </ul>
 <h3>7.3 Kopya Ticaret (Sosyal)</h3>
 <p>1 API anahtarı — ve birden fazla kopyalanan hesap. Kendi kurulumunuzla işlem yapın — arkadaşlarınızla paylaşın. Borsalardaki gibi ekstra zahmet yok.</p>
@@ -330,6 +352,7 @@
 </tbody></table>
 <hr>
 <h2>10. Performans Metrikleri</h2>
+<h3>10.1 Canlı Vitrin Anlık Görüntüsü (7 Mayıs 2026)</h3>
 <table>
 <thead>
 <tr>
@@ -339,49 +362,59 @@
 </thead>
 <tbody><tr>
 <td>Ölçüm dönemi</td>
-<td>Oca 2025 – Mar 2026 (15 ay)</td>
+<td>Oca 2025 – May 2026 (rolling)</td>
 </tr>
 <tr>
 <td>Zaman dilimi</td>
-<td>4s barlar</td>
+<td>1s / 4s barlar</td>
 </tr>
 <tr>
 <td>Veri kaynağı</td>
-<td>Bybit tarihsel OHLCV</td>
+<td>Runtime anlık görüntüleri + vitrin kataloğu</td>
 </tr>
 <tr>
-<td>Toplam geriye dönük testler</td>
-<td>9.108</td>
+<td>Toplam geriye dönük testler (kümülatif)</td>
+<td>10.000+</td>
 </tr>
 <tr>
-<td>Sağlam adaylar</td>
-<td>3.129 (%34,4)</td>
+<td>Sağlam strateji profilleri</td>
+<td>58</td>
 </tr>
 <tr>
-<td><strong>Portföy getirisi</strong></td>
-<td><strong>+%28,7</strong></td>
+<td>Aktif runtime ticaret sistemleri</td>
+<td>18</td>
 </tr>
 <tr>
-<td><strong>Kâr Faktörü</strong></td>
-<td><strong>3,28</strong></td>
+<td>Aktif runtime stratejileri</td>
+<td>473</td>
 </tr>
 <tr>
-<td><strong>Maks. Düşüş</strong></td>
-<td><strong>%4,4</strong></td>
+<td><strong>En iyi TS getirisi / 90g</strong></td>
+<td><strong>+%210,17</strong></td>
 </tr>
 <tr>
-<td>Kazanma Oranı</td>
-<td>%43,75</td>
+<td><strong>En iyi Kâr Faktörü</strong></td>
+<td><strong>12,03</strong></td>
 </tr>
 <tr>
-<td>Toplam işlemler</td>
-<td>416</td>
+<td><strong>Min. portföy düşüşü</strong></td>
+<td><strong>%1,5</strong></td>
 </tr>
 <tr>
-<td><strong>Getiri / MaksDüşüş oranı</strong></td>
-<td><strong>6,5:1</strong></td>
+<td>Aktif SaaS müşterileri</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Canlı borsalar</td>
+<td>6</td>
 </tr>
 </tbody></table>
+<h3>10.2 Yorumlama</h3>
+<ul>
+<li>Katalog <strong>muhafazakârdan agresife profilleri</strong> kapsar: minimum düşüş %1,5, 90 günlük zirve getirisi +%210'a kadar — müşteri risk tercihine göre seçilir</li>
+<li>En iyi TS'de 12,03 Kâr Faktörü, kapanmış işlemlerde <strong>kaybedilen her 1$ için 12$ kazanıldığı</strong> anlamına gelir</li>
+<li>Stratejiler günlük otomatik tarama ile sürekli yenilenir — vitrin asla bayatlamaz</li>
+</ul>
 <hr>
 <h2>11. Teknoloji Yığını</h2>
 <table>
@@ -438,13 +471,18 @@
 <li>✅ 3 müşteri moduyla çok kiracılı SaaS</li>
 <li>✅ Yönetici paneli + müşteri kabini</li>
 </ul>
-<h3>Faz 2 — Büyüme (Q2 2026)</h3>
+<h3>Faz 2 — Büyüme (Q2 2026) 🟢 devam ediyor</h3>
 <ul>
-<li>Walk-forward örneklem dışı doğrulama</li>
-<li>İşlem ve uyarılar için Telegram bot bildirimleri</li>
-<li>Otomatik KYC-light ile onboarding hunisi</li>
-<li>OKX borsa entegrasyonu</li>
-<li>Kripto ödeme entegrasyonu</li>
+<li>✅ Telegram tabanlı yönetici bildirimleri ve operasyon raporu</li>
+<li>✅ Kısmi Kâr Alma (%50) yürütme katmanı</li>
+<li>✅ Snapshot-first deterministik yürütme</li>
+<li>✅ Günlük Otomatik Tarama — katalog her gece yenilenir</li>
+<li>✅ Runtime ile borsa arasında Sürüklenme Tespiti ve Mutabakat</li>
+<li>✅ Platforma kripto inflüenser ve borsa tarafı ortaklıklar dahil oldu</li>
+<li>🟡 Walk-forward örneklem dışı doğrulama</li>
+<li>🟡 KYC-light ile müşteri onboarding hunisi</li>
+<li>🟡 OKX borsa entegrasyonu</li>
+<li>🟡 Kripto ödeme ve müşteri tavsiye programı</li>
 </ul>
 <h3>Faz 3 — Ölçeklendirme (Q3–Q4 2026)</h3>
 <ul>
@@ -452,12 +490,15 @@
 <li>Ayrı yürütme ve araştırma VPS örnekleri</li>
 <li>Mobil duyarlı müşteri panosu</li>
 <li>Kurumsal API erişim katmanı</li>
+<li>Uyumluluk denetimi ve güvenlik penetrasyon testi</li>
 </ul>
-<h3>Faz 4 — Ekosistem (2027)</h3>
+<h3>Faz 4 — Ekosistem ve Token (2027)</h3>
 <ul>
-<li>Stratejist müşteriler TS&#39;lerini kopya ticarete yayınlayabilir (pazaryeri)</li>
+<li>BTDD platform tokeni (TBD model) — 2027 için perspektif inisiyatifi</li>
 <li>DEX entegrasyonu (on-chain yürütme)</li>
+<li>Strateji pazaryeri (üçüncü taraf strateji gönderimi)</li>
 <li>Sosyal ticaret lider tablosu</li>
+<li>Komisyon parametreleri için opsiyonel DAO yönetişimi</li>
 </ul>
 <hr>
 <h2>13. Ekip ve İletişim</h2>
@@ -474,8 +515,72 @@
 <li><strong>GitHub:</strong> Özel depo (due diligence için talep üzerine erişilebilir)</li>
 </ul>
 <hr>
+<h2 id="14-son-m%C3%BChendislik">14. Son Mühendislik İyileştirmeleri (Nis–May 2026)</h2>
+<p>Nisan ve Mayıs 2026 arasında platform büyük bir güvenilirlik ve yürütme kalitesi dalgası yayınladı. Bu iyileştirmeler doğrudan gerçekleşen PnL'yi artırır ve operasyonel riski azaltır.</p>
+<h3>14.1 Kısmi Kâr Alma (%50)</h3>
+<p>Uzun süredir açık olan her pozisyon, yapılandırılmış ara hedefte boyutun %50'sini otomatik olarak kilitlerken kalan %50'yi takip eden stop ile tutar. Bu, <strong>gerçekleşen PnL'yi</strong> önemli ölçüde iyileştirir ve dönüşlerde <em>geri verme</em>yi azaltır — saf trailing-stop sistemlerinin yaygın bir zayıflığı.</p>
+<h3>14.2 Snapshot-First Deterministik Yürütme</h3>
+<p>Runtime artık her tikte strateji durumunu yeniden hesaplamak yerine <strong>imzalı runtime anlık görüntülerinden</strong> yürütür. Bu, kullanıcının geriye dönük test önizlemesinde gördüğünün runtime'ın yürüteceği şeyle bit bit aynı olduğunu garanti eder ve her işlem için tam denetim izi (snapshot ID → fills → PnL) sağlar.</p>
+<h3>14.3 Günlük Otomatik Tarama</h3>
+<p>Programlanmış bir gece işi en son piyasa verileri üzerinde parametre taramasını yeniden çalıştırır, sağlamlık filtresini yeniden uygular ve vitrin kataloğunu yeniler. Platform kataloğu bu sayede <strong>asla bayatlamaz</strong> — değişen piyasa rejimlerine manuel müdahale olmaksızın uyum sağlar.</p>
+<h3>14.4 Sürüklenme Tespiti ve Mutabakat</h3>
+<p>Her zaman açık bir mutabakat döngüsü, runtime'ın pozisyon defterini her izleme döngüsünde borsanın gerçek pozisyonlarıyla karşılaştırır. Herhangi bir sürüklenme (eksik fill, kısmi fill, manuel müdahale) saniyeler içinde tespit edilir ve otomatik olarak çözülür veya Telegram aracılığıyla yöneticiye iletilir. Bu, otomatik ticaretin en tehlikeli arıza modunu — sessiz durum uyumsuzluğunu — ortadan kaldırır.</p>
+<h3>14.5 Yönetici Telegram Raportörü</h3>
+<p>Operasyonel olaylar — yeni müşteri etkinleştirme, sürüklenme uyarıları, acil duruşlar, günlük P&amp;L özetleri, tarama tamamlamaları — özel bir yönetici Telegram kanalına akıtılır. Bu, operasyon ekibine paneli açmadan gerçek zamanlı durumsal farkındalık sağlar.</p>
+<hr>
+<h2 id="15-i%C5%9F-modeli-tract%C4%B1on-token">15. İş Modeli, Tracktion ve Token Yol Haritası</h2>
+<h3>15.1 Mevcut Tracktion</h3>
+<table>
+<thead>
+<tr>
+<th>Gösterge</th>
+<th>Değer</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Aktif SaaS müşteri hesapları</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Aktif runtime ticaret sistemleri</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Aktif runtime stratejileri</td>
+<td>473</td>
+</tr>
+<tr>
+<td>Canlı borsa entegrasyonları</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Platforma katılan kripto inflüenser ve borsa tarafı ortaklar</td>
+<td>Birden fazla (canlı)</td>
+</tr>
+<tr>
+<td>Beta dönemi fiyatlandırma</td>
+<td><strong>Ücretsiz</strong> (%100 indirim) — tüm müşteriler için</td>
+</tr>
+</tbody></table>
+<p>Platformda halihazırda birkaç kripto inflüenser ve borsa tarafı ortak yer almaktadır; bunlar perakende kripto ticaret kitlesine dağıtım erişimi ve borsa düzeyinde entegrasyon kanalları sağlamaktadır. Belirli ortak isimleri bu aşamada kamuya açıklanmamaktadır.</p>
+<h3>15.2 Para Kazanma (Beta Sonrası)</h3>
+<ul>
+<li><strong>Abonelik katmanları:</strong> Start / Pro / Scale (39$ / 129$ / 399$ aylık eşdeğer) — beta dönemi sona erdikten sonra</li>
+<li><strong>Kâr paylaşımı alternatifi:</strong> Yüksek su işareti ile net kârın %40'ı — performansa dayalı fiyatlandırmayı tercih eden müşteriler için</li>
+<li><strong>White-label / B2B:</strong> kopya ticaret masaları, danışmanlar ve borsa ortaklıklarıyla gelir paylaşımı</li>
+<li><strong>İnflüenser gelir paylaşımı:</strong> izlenebilir tavsiye atıbusyonu + ortak kaynaklı kayıtlar için tekrarlayan pay</li>
+</ul>
+<h3>15.3 Neden Şimdi</h3>
+<ul>
+<li>Perakende kripto algo-ticaret araçları (3Commas, Cryptohopper, Pionex) <strong>kara kutu</strong> olmaya devam ediyor — BTDD'nin farklılaştırıcısı tamamen şeffaf geriye dönük testler, yayınlanan parametreler ve tekrarlanabilir runtime metrikleridir</li>
+<li>Uygulamalı AI altyapısı, araştırma kalitesinde kantitatif boru hatlarının perakende fiyatlı VPS donanımında maliyet etkin çalışabileceği noktaya olgunlaştı</li>
+<li>Kriptoda inflüenser destekli dağıtım, ücretli kazanımdan önemli ölçüde daha verimlidir — erken ortaklıklar bu kanalı zaten doğruluyor</li>
+</ul>
+<h3>15.4 Token Yol Haritası (Perspektif, 2027)</h3>
+<p>Yerel BTDD tokeni 2027 perspektif inisiyatifi olarak planlanmaktadır. Token kullanım amacı, mekaniği ve dağıtımı bu aşamada bilinçli olarak <strong>kesinleştirilmemiştir</strong> — platform ölçeği ve düzenleyici netliğe paralel olarak tasarlanacaktır. Token, 2027'ye kadar mevcut yatırım teklifinin veya ürün yol haritasının parçası değildir.</p>
+<hr>
 <h2>Sorumluluk Reddi</h2>
 <p>Geçmiş performans gelecekteki sonuçları garanti etmez. Sunulan tüm metrikler simüle edilmiş yürütme maliyetleriyle tarihsel geriye dönük teste dayanmaktadır. Canlı ticaret ek riskler içerir: borsa kesintisi, API oran limitleri, likidite boşlukları, düzenleyici değişiklikler ve siyah kuğu olayları. Yalnızca kaybetmeyi göze alabileceğiniz sermayeyle yatırım yapın. BTDD Platform finansal tavsiye sağlamaz.</p>
 <hr>
-<p><em>BTDD Platform Teknik Rapor v1.0 — Nisan 2026</em>
+<p><em>BTDD Platform Teknik Rapor v1.1 — Mayıs 2026</em>
 <em>© 2026 BTDD Platform. Tüm hakları saklıdır.</em></p>

@@ -395,6 +395,8 @@ router.post('/sweeps/full-historical/start', async (req, res) => {
       systemName: req.body?.systemName ? String(req.body.systemName) : undefined,
       strategyPrefix: req.body?.strategyPrefix ? String(req.body.strategyPrefix) : undefined,
       checkpointEvery: req.body?.checkpointEvery ? Number(req.body.checkpointEvery) : undefined,
+      longOnly: req.body?.longOnly === true || req.body?.longOnly === 'true',
+      spotMode: req.body?.spotMode === true || req.body?.spotMode === 'true',
     });
     res.json({ success: true, ...result });
   } catch (err) {

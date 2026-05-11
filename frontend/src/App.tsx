@@ -1,25 +1,27 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, lazy, Suspense } from 'react';
 import axios from 'axios';
 import { BrowserRouter as Router, Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { Layout, Menu, FloatButton, Tag, Button, Space, Select, Typography, ConfigProvider, theme } from 'antd';
+import { Layout, Menu, FloatButton, Tag, Button, Space, Select, Typography, ConfigProvider, theme, Spin } from 'antd';
 import enUS from 'antd/locale/en_US';
 import ruRU from 'antd/locale/ru_RU';
 import trTR from 'antd/locale/tr_TR';
-import Dashboard from './pages/Dashboard';
-import Settings from './pages/Settings';
-import TradingSystems from './pages/TradingSystems';
-import Positions from './pages/Positions';
 import Login from './pages/Login';
 import ClientAuth from './pages/ClientAuth';
-import ClientCabinet from './pages/ClientCabinet';
-import Logs from './pages/Logs';
-import Research from './pages/Research';
-import SaaS from './pages/SaaS';
-import AdminDocs from './pages/AdminDocs';
 import Landing from './pages/Landing';
-import Whitepaper from './pages/Whitepaper';
 import { I18nProvider, useI18n, UILanguage } from './i18n';
 import './App.css';
+
+// Heavy admin/client surfaces are code-split to keep the public bundle small.
+const Whitepaper = lazy(() => import('./pages/Whitepaper'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
+const Settings = lazy(() => import('./pages/Settings'));
+const TradingSystems = lazy(() => import('./pages/TradingSystems'));
+const Positions = lazy(() => import('./pages/Positions'));
+const ClientCabinet = lazy(() => import('./pages/ClientCabinet'));
+const Logs = lazy(() => import('./pages/Logs'));
+const Research = lazy(() => import('./pages/Research'));
+const SaaS = lazy(() => import('./pages/SaaS'));
+const AdminDocs = lazy(() => import('./pages/AdminDocs'));
 
 const { Header, Content } = Layout;
 
@@ -322,6 +324,7 @@ function AppShell() {
         </div>
       </Header>
       <Content style={{ padding: '20px' }}>
+        <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', padding: 80 }}><Spin size="large" /></div>}>
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/client/login" element={<ClientAuth initialMode="login" />} />
@@ -349,6 +352,7 @@ function AppShell() {
           <Route path="/research" element={adminAuthState === 'ok' ? <Research /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
           <Route path="/admin-docs" element={adminAuthState === 'ok' ? <AdminDocs /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
         </Routes>
+        </Suspense>
       </Content>
       <FloatButton.BackTop visibilityHeight={280} />
     </Layout>

@@ -1283,6 +1283,15 @@ const dictionaries: Record<UILanguage, Dictionary> = {
 const fallbackLanguage: UILanguage = 'en';
 
 const detectInitialLanguage = (): UILanguage => {
+  // 1) URL ?lang= takes precedence (used by hreflang alternates / shared links)
+  try {
+    const urlLang = String(new URLSearchParams(window.location.search).get('lang') || '').toLowerCase();
+    if (urlLang === 'ru' || urlLang === 'en' || urlLang === 'tr') {
+      try { localStorage.setItem(STORAGE_KEY, urlLang); } catch {}
+      return urlLang;
+    }
+  } catch {}
+
   const saved = String(localStorage.getItem(STORAGE_KEY) || '').toLowerCase();
   if (saved === 'ru' || saved === 'en' || saved === 'tr') {
     return saved;

@@ -580,6 +580,7 @@ type SaasSummary = {
       titleRu: string;
       mode: 'mono' | 'synth';
       market: string;
+      market_type?: 'futures' | 'spot';
       familyInterval?: string | null;
       strategyType?: string;
       interval?: string;
@@ -2777,6 +2778,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [selectedAdminDraftTsOfferIds, setSelectedAdminDraftTsOfferIds] = useState<string[]>([]);
   const [selectedAdminDraftTsSetKey, setSelectedAdminDraftTsSetKey] = useState('');
   const [offerStoreLabelFilter, setOfferStoreLabelFilter] = useState<'all' | OfferStoreLabel>('all');
+  const [adminOfferMarketFilter, setAdminOfferMarketFilter] = useState<'all' | 'futures' | 'spot'>('all');
   const [adminOfferInstrumentFilter, setAdminOfferInstrumentFilter] = useState<string>('all');
   const [adminOfferSortBy, setAdminOfferSortBy] = useState<'ret' | 'dd' | 'pf' | 'trades'>('ret');
   const [storefrontCardInstrumentFilter, setStorefrontCardInstrumentFilter] = useState<string>('all');
@@ -3102,6 +3104,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const filteredOfferStoreOffers = useMemo(
     () => {
       let result = filterOffersByLabel(offerStoreOffers);
+      if (adminOfferMarketFilter !== 'all') {
+        result = result.filter((o: any) => String(o.market_type || 'futures') === adminOfferMarketFilter);
+      }
       if (adminOfferInstrumentFilter !== 'all') {
         result = result.filter((o: any) => String(o.market || '') === adminOfferInstrumentFilter);
       }
@@ -3114,11 +3119,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       });
       return result;
     },
-    [filterOffersByLabel, offerStoreOffers, adminOfferInstrumentFilter, adminOfferSortBy],
+    [filterOffersByLabel, offerStoreOffers, adminOfferMarketFilter, adminOfferInstrumentFilter, adminOfferSortBy],
   );
   const filteredCuratedStorefrontOffers = useMemo(
     () => {
       let result = filterOffersByLabel(curatedStorefrontOffers);
+      if (adminOfferMarketFilter !== 'all') {
+        result = result.filter((o: any) => String(o.market_type || 'futures') === adminOfferMarketFilter);
+      }
       if (adminOfferInstrumentFilter !== 'all') {
         result = result.filter((o: any) => String(o.market || '') === adminOfferInstrumentFilter);
       }
@@ -3131,7 +3139,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       });
       return result;
     },
-    [filterOffersByLabel, curatedStorefrontOffers, adminOfferInstrumentFilter, adminOfferSortBy],
+    [filterOffersByLabel, curatedStorefrontOffers, adminOfferMarketFilter, adminOfferInstrumentFilter, adminOfferSortBy],
   );
   const offerStoreOfferByStrategyId = useMemo(() => new Map(
     offerStoreOffers
@@ -8923,6 +8931,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               <Tag color="geekblue">target: {Number(summary?.offerStore?.defaults?.targetTradesPerDay || 0)}/day</Tag>
                             </Space>
                             <Space wrap style={{ marginBottom: 16 }}>
+                              <Segmented
+                                value={adminOfferMarketFilter}
+                                onChange={(val) => setAdminOfferMarketFilter(val as 'all' | 'futures' | 'spot')}
+                                options={[
+                                  { label: 'Все рынки', value: 'all' },
+                                  { label: '📈 Фьючерсы', value: 'futures' },
+                                  { label: '🪙 Спот', value: 'spot' },
+                                ]}
+                              />
                               <Select
                                 size="small"
                                 style={{ width: 240 }}

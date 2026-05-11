@@ -26,8 +26,9 @@ export interface RiskSettings {
   reinvest_percent: number;
 }
 
-export type StrategyType = 'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout';
+export type StrategyType = 'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'periodic_buy' | 'dca' | 'hideep';
 export type MarketMode = 'synthetic' | 'mono';
+export type MarketType = 'futures' | 'spot';
 
 export interface Strategy {
   id?: number;
@@ -35,6 +36,7 @@ export interface Strategy {
   api_key_id: number;
   strategy_type?: StrategyType;
   market_mode: MarketMode;
+  market_type?: MarketType;
   is_active: boolean;
   display_on_chart: boolean;
   show_settings: boolean;

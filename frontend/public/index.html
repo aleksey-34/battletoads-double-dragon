@@ -8,31 +8,73 @@
 		<meta name="apple-mobile-web-app-capable" content="yes" />
 		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 		<meta name="apple-mobile-web-app-title" content="BTDD Platform" />
+
+		<!-- Performance: preconnect to self-hosted assets origin -->
+		<link rel="preconnect" href="https://battletoads.top" crossorigin />
+		<link rel="dns-prefetch" href="https://battletoads.top" />
+
+		<!-- Canonical & i18n -->
+		<link rel="canonical" href="https://battletoads.top/" />
+		<link rel="alternate" hreflang="ru" href="https://battletoads.top/?lang=ru" />
+		<link rel="alternate" hreflang="en" href="https://battletoads.top/?lang=en" />
+		<link rel="alternate" hreflang="tr" href="https://battletoads.top/?lang=tr" />
+		<link rel="alternate" hreflang="x-default" href="https://battletoads.top/" />
+
+		<meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
+		<meta name="author" content="BTDD Platform" />
 		<meta
 			name="description"
-			content="BTDD Platform — алгоритмическая торговля как сервис. 6 бирж, 9108 бектестов, 3 типа стратегий. Сейчас бесплатно!"
+			content="BTDD Platform — алгоритмическая торговля как сервис. 6 бирж, 473 активных стратегии в 18 TS, 58 робастных профилей, 10 000+ бэктестов, 16 живых SaaS-клиентов. Бесплатно в бете!"
 		/>
 
 		<!-- Open Graph -->
 		<meta property="og:type" content="website" />
 		<meta property="og:url" content="https://battletoads.top/" />
 		<meta property="og:title" content="BTDD Platform — Алгоритмическая торговля как сервис" />
-		<meta property="og:description" content="Автоматическая торговля на криптобиржах. 3 типа стратегий, 9108 бектестов, robustness-фильтрация. Bybit, Binance, Bitget, BingX, MEXC, Weex. Сейчас бесплатно!" />
+		<meta property="og:description" content="Автоматическая торговля на криптобиржах. 473 активных стратегии в 18 TS, 58 робастных профилей из 10 000+ бэктестов. Bybit, Binance, Bitget, BingX, MEXC, Weex. Сейчас бесплатно!" />
 		<meta property="og:image" content="https://battletoads.top/og-preview.png" />
 		<meta property="og:image:width" content="1200" />
 		<meta property="og:image:height" content="630" />
 		<meta property="og:locale" content="ru_RU" />
+		<meta property="og:locale:alternate" content="en_US" />
+		<meta property="og:locale:alternate" content="tr_TR" />
 		<meta property="og:site_name" content="BTDD Platform" />
 
 		<!-- Twitter Card -->
 		<meta name="twitter:card" content="summary_large_image" />
 		<meta name="twitter:title" content="BTDD Platform — Алгоритмическая торговля как сервис" />
-		<meta name="twitter:description" content="Автоматическая торговля на криптобиржах. 3 типа стратегий, 9108 бектестов. Сейчас бесплатно!" />
+		<meta name="twitter:description" content="Автоматическая торговля на криптобиржах. 473 активных стратегии, 10 000+ бэктестов. Сейчас бесплатно!" />
 		<meta name="twitter:image" content="https://battletoads.top/og-preview.png" />
 
 		<link rel="apple-touch-icon" href="%PUBLIC_URL%/favicon.svg" />
 		<link rel="manifest" href="%PUBLIC_URL%/manifest.json" />
 		<title>BTDD Platform — Алгоритмическая торговля как сервис</title>
+
+		<!-- Structured data: SoftwareApplication / Organization -->
+		<script type="application/ld+json">
+		{
+			"@context": "https://schema.org",
+			"@type": "SoftwareApplication",
+			"name": "BTDD Platform",
+			"alternateName": "Battletoads × Double Dragon Platform",
+			"url": "https://battletoads.top/",
+			"description": "Multi-exchange algorithmic trading SaaS. 473 active strategies, 18 trading systems, 58 robust profiles from 10 000+ backtests across 6 exchanges.",
+			"applicationCategory": "FinanceApplication",
+			"operatingSystem": "Web",
+			"inLanguage": ["ru", "en", "tr"],
+			"offers": {
+				"@type": "Offer",
+				"price": "0",
+				"priceCurrency": "USD",
+				"description": "Free during beta. Post-beta: subscription or 40% profit share (high-watermark)."
+			},
+			"publisher": {
+				"@type": "Organization",
+				"name": "BTDD Platform",
+				"url": "https://battletoads.top/"
+			}
+		}
+		</script>
 	</head>
 	<body>
 		<noscript>You need to enable JavaScript to run this app.</noscript>

@@ -37,6 +37,7 @@ export type TradingSystem = {
   discovery_interval_hours: number;
   max_members: number;
   max_open_positions: number;
+  market_type: 'futures' | 'spot';
   created_at?: string;
   updated_at?: string;
   members: TradingSystemMember[];
@@ -66,6 +67,7 @@ export type TradingSystemDraft = {
   discovery_interval_hours?: number;
   max_members?: number;
   max_open_positions?: number;
+  market_type?: 'futures' | 'spot';
   members?: TradingSystemMemberDraft[];
 };
 
@@ -150,6 +152,7 @@ const normalizeSystemRow = (row: any, members: TradingSystemMember[], metrics?: 
     discovery_interval_hours: Math.max(1, Math.floor(safeNumber(row.discovery_interval_hours, 24))),
     max_members: Math.max(1, Math.floor(safeNumber(row.max_members, 8))),
     max_open_positions: Math.max(0, Math.floor(safeNumber(row.max_open_positions, 0))),
+    market_type: (String(row.market_type || 'futures') === 'spot' ? 'spot' : 'futures') as 'futures' | 'spot',
     created_at: row.created_at,
     updated_at: row.updated_at,
     members,
@@ -272,14 +275,23 @@ const validateMembers = async (
   }
 };
 
-export const listTradingSystems = async (apiKeyName: string): Promise<TradingSystem[]> => {
+export const listTradingSystems = async (
+  apiKeyName: string,
+  options?: { marketType?: 'futures' | 'spot' | 'all' }
+): Promise<TradingSystem[]> => {
   const apiKeyId = await getApiKeyId(apiKeyName);
+  const params: any[] = [apiKeyId];
+  let whereExtra = '';
+  if (options?.marketType && options.marketType !== 'all') {
+    whereExtra = `AND COALESCE(market_type, 'futures') = ?`;
+    params.push(options.marketType);
+  }
   const rows = await db.all(
     `SELECT *
      FROM trading_systems
-     WHERE api_key_id = ?
+     WHERE api_key_id = ? ${whereExtra}
      ORDER BY id DESC`,
-    [apiKeyId]
+    params
   );
 
   return loadTradingSystemsWithMembers(apiKeyName, rows);
@@ -421,7 +433,7 @@ export const deleteTradingSystem = async (apiKeyName: string, systemId: number):
     await db.run('DELETE FROM trading_systems WHERE id = ? AND api_key_id = ?', [systemId, existing.api_key_id]);
     await db.exec('COMMIT');
   } catch (error) {
-    await db.exec('ROLLBACK');
+    await db.exec('ROLLBACK').catch(() => {});
     throw error;
   }
 };
@@ -464,7 +476,7 @@ export const replaceTradingSystemMembers = async (
 
     await db.exec('COMMIT');
   } catch (error) {
-    await db.exec('ROLLBACK');
+    await db.exec('ROLLBACK').catch(() => {});
     throw error;
   }
 
@@ -699,6 +711,23 @@ export const runTradingSystemBacktest = async (
     ? requestPatch.skipMissingSymbols === true
     : true;
 
+  // Build per-strategy lot multipliers from member weights.
+  // Card weight semantics: weight 1.0 == baseline; weight 2.0 == 2x lot.
+  // Risk multiplier scales every member uniformly on top of weights so the
+  // backtest reflects what the runtime would actually open (changes trade count,
+  // PnL distribution, drawdowns — not just a post-hoc equity rescale).
+  const lotPercentMultiplierByStrategyId: Record<string, number> = {};
+  for (const member of system.members) {
+    const sid = Number(member.strategy_id);
+    if (!Number.isFinite(sid) || sid <= 0) continue;
+    const weightOverride = memberWeightsPatch[String(sid)];
+    const baseWeight = Number.isFinite(weightOverride)
+      ? Number(weightOverride)
+      : Number(member.weight ?? 1);
+    const safeWeight = Number.isFinite(baseWeight) ? Math.max(0, baseWeight) : 1;
+    lotPercentMultiplierByStrategyId[String(sid)] = Math.max(0, Math.min(10, safeWeight * riskMultiplier));
+  }
+
   const baseResult = await runBacktest({
     ...(requestPatch || {}),
     apiKeyName,
@@ -707,73 +736,11 @@ export const runTradingSystemBacktest = async (
     skipMissingSymbols,
     initialBalance,
     strategyId: undefined,
+    lotPercentMultiplierByStrategyId,
   });
 
-  if (Math.abs(riskMultiplier - 1) < 1e-9 || !Array.isArray(baseResult.equityCurve) || baseResult.equityCurve.length === 0) {
-    return baseResult;
-  }
-
-  const initial = Number(baseResult.summary.initialBalance);
-  const sortedBaseCurve = [...baseResult.equityCurve].sort((left, right) => Number(left.time) - Number(right.time));
-  const recomposedEquityCurve: typeof sortedBaseCurve = [];
-  let prevRiskEquity = Number.isFinite(initial) && initial > 0 ? initial : Number(sortedBaseCurve[0]?.equity || 1000);
-
-  for (let index = 0; index < sortedBaseCurve.length; index += 1) {
-    const point = sortedBaseCurve[index];
-    if (index === 0) {
-      const seeded = {
-        ...point,
-        equity: Number(prevRiskEquity.toFixed(6)),
-      };
-      recomposedEquityCurve.push(seeded);
-      continue;
-    }
-
-    const prevBase = Number(sortedBaseCurve[index - 1]?.equity ?? sortedBaseCurve[0]?.equity ?? prevRiskEquity);
-    const currBase = Number(point.equity);
-    const baseReturn = Number.isFinite(prevBase) && Math.abs(prevBase) > 1e-9
-      ? (currBase / prevBase) - 1
-      : 0;
-    const adjustedReturn = Math.max(-0.99, baseReturn * riskMultiplier);
-    prevRiskEquity = prevRiskEquity * (1 + adjustedReturn);
-
-    recomposedEquityCurve.push({
-      ...point,
-      equity: Number(prevRiskEquity.toFixed(6)),
-    });
-  }
-
-  let peak = initial;
-  let maxDrawdownAbsolute = 0;
-  let maxDrawdownPercent = 0;
-
-  for (const point of recomposedEquityCurve) {
-    const equity = Number(point.equity);
-    if (equity > peak) {
-      peak = equity;
-    }
-    const drawdownAbs = peak - equity;
-    const drawdownPct = peak > 0 ? (drawdownAbs / peak) * 100 : 0;
-    if (drawdownAbs > maxDrawdownAbsolute) {
-      maxDrawdownAbsolute = drawdownAbs;
-    }
-    if (drawdownPct > maxDrawdownPercent) {
-      maxDrawdownPercent = drawdownPct;
-    }
-  }
-
-  const finalEquity = Number(recomposedEquityCurve[recomposedEquityCurve.length - 1]?.equity ?? initial);
-  const totalReturnPercent = initial > 0 ? ((finalEquity / initial) - 1) * 100 : 0;
-
-  return {
-    ...baseResult,
-    equityCurve: recomposedEquityCurve,
-    summary: {
-      ...baseResult.summary,
-      finalEquity: Number(finalEquity.toFixed(6)),
-      totalReturnPercent: Number(totalReturnPercent.toFixed(6)),
-      maxDrawdownAbsolute: Number(maxDrawdownAbsolute.toFixed(6)),
-      maxDrawdownPercent: Number(maxDrawdownPercent.toFixed(6)),
-    },
-  };
+  // Risk multiplier and member weights now flow into lot sizing inside the
+  // engine, so the returned result already reflects them. The legacy post-hoc
+  // equity-curve rescaling below is intentionally removed.
+  return baseResult;
 };

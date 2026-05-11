@@ -19,6 +19,7 @@ import {
   Row,
   Select,
   Space,
+  Switch,
   Table,
   Tag,
   Tooltip,
@@ -625,6 +626,134 @@ export default function Research() {
   const [hfGenerateLoading, setHfGenerateLoading] = useState(false);
   const [hfTargetTradesPerDay, setHfTargetTradesPerDay] = useState(10);
   const [hfApiKeyName, setHfApiKeyName] = useState('');
+
+  // Periodic Buy (spot DCA)
+  const [pbModalOpen, setPbModalOpen] = useState(false);
+  const [pbLoading, setPbLoading] = useState(false);
+  const [pbApiKeyName, setPbApiKeyName] = useState('');
+  const [pbBaseSymbol, setPbBaseSymbol] = useState('BTC');
+  const [pbQuoteSymbol, setPbQuoteSymbol] = useState('USDT');
+  const [pbIntervalHours, setPbIntervalHours] = useState(24);
+  const [pbAmountMode, setPbAmountMode] = useState<'percent' | 'fixed_usdt'>('percent');
+  const [pbAmountValue, setPbAmountValue] = useState(5);
+  const [pbOrderType, setPbOrderType] = useState<'market' | 'maker'>('market');
+  const [pbMaxTotal, setPbMaxTotal] = useState(0);
+  const [pbSellOnTp, setPbSellOnTp] = useState(false);
+  const [pbTpPercent, setPbTpPercent] = useState(15);
+
+  // DCA strategy state
+  const [dcaModalOpen, setDcaModalOpen] = useState(false);
+  const [dcaLoading, setDcaLoading] = useState(false);
+  const [dcaApiKeyName, setDcaApiKeyName] = useState('');
+  const [dcaBaseSymbol, setDcaBaseSymbol] = useState('BTC');
+  const [dcaQuoteSymbol, setDcaQuoteSymbol] = useState('USDT');
+  const [dcaMarketType, setDcaMarketType] = useState<'spot' | 'futures'>('spot');
+  const [dcaBaseAmount, setDcaBaseAmount] = useState(10);
+  const [dcaStepPercent, setDcaStepPercent] = useState(2);
+  const [dcaMaxOrders, setDcaMaxOrders] = useState(5);
+  const [dcaMultiplier, setDcaMultiplier] = useState(1);
+  const [dcaTpPercent, setDcaTpPercent] = useState(3);
+  const [dcaSlPercent, setDcaSlPercent] = useState(0);
+  const [dcaOrderType, setDcaOrderType] = useState<'market' | 'maker'>('market');
+
+  // Spot Sweep (long-only)
+  const [spotSweepModalOpen, setSpotSweepModalOpen] = useState(false);
+  const [spotSweepLoading, setSpotSweepLoading] = useState(false);
+  const [spotSweepApiKey, setSpotSweepApiKey] = useState('');
+  const [spotSweepDateFrom, setSpotSweepDateFrom] = useState('2024-01-01');
+  const [spotSweepDateTo, setSpotSweepDateTo] = useState('');
+  const [spotSweepIntervals, setSpotSweepIntervals] = useState('4h,1d');
+  const [spotSweepMonoMarkets, setSpotSweepMonoMarkets] = useState('BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,ADAUSDT,AVAXUSDT,DOTUSDT,LINKUSDT');
+  const [spotSweepSystemName, setSpotSweepSystemName] = useState('SPOT_LONGONLY');
+  const [spotSweepStrategyPrefix, setSpotSweepStrategyPrefix] = useState('SPOTSWP');
+  const [spotSweepStrategyTypes, setSpotSweepStrategyTypes] = useState<string[]>(['DD_BattleToads', 'hideep']);
+
+  const startSpotSweep = async () => {
+    setSpotSweepLoading(true);
+    try {
+      const res = await axios.post<{ started?: boolean; reason?: string; jobId?: number; totalRuns?: number }>(
+        '/api/research/sweeps/full-historical/start',
+        {
+          mode: 'heavy',
+          apiKeyName: spotSweepApiKey || (apiKeys[0]?.name || ''),
+          dateFrom: spotSweepDateFrom || undefined,
+          dateTo: spotSweepDateTo || undefined,
+          intervals: spotSweepIntervals,
+          monoMarkets: spotSweepMonoMarkets,
+          synthMarkets: '',
+          strategyTypes: spotSweepStrategyTypes,
+          longOnly: true,
+          spotMode: true,
+          systemName: spotSweepSystemName,
+          strategyPrefix: spotSweepStrategyPrefix,
+        }
+      );
+      if (res.data?.started === false) {
+        void message.info(String(res.data?.reason || 'Sweep уже запущен'));
+      } else {
+        void message.success(`Spot sweep запущен: job #${res.data?.jobId || 'n/a'}, runs=${res.data?.totalRuns || 0}`);
+      }
+      setSpotSweepModalOpen(false);
+    } catch (e: any) {
+      void message.error(e?.response?.data?.error || 'Не удалось запустить spot sweep');
+    } finally {
+      setSpotSweepLoading(false);
+    }
+  };
+
+  const createDca = async () => {
+    if (!dcaApiKeyName || !dcaBaseSymbol) {
+      void message.warning('Укажите API-ключ и монету');
+      return;
+    }
+    setDcaLoading(true);
+    try {
+      await axios.post(`/api/strategies/${encodeURIComponent(dcaApiKeyName)}/dca`, {
+        base_symbol: dcaBaseSymbol.toUpperCase(),
+        quote_symbol: dcaQuoteSymbol.toUpperCase(),
+        market_type: dcaMarketType,
+        dca_base_amount_usdt: dcaBaseAmount,
+        dca_step_percent: dcaStepPercent,
+        dca_max_orders: dcaMaxOrders,
+        dca_order_multiplier: dcaMultiplier,
+        dca_tp_percent: dcaTpPercent,
+        dca_sl_percent: dcaSlPercent,
+        dca_order_type: dcaOrderType,
+      });
+      void message.success(`DCA стратегия создана: ${dcaBaseSymbol}/${dcaQuoteSymbol}`);
+      setDcaModalOpen(false);
+    } catch (e: any) {
+      void message.error(e?.response?.data?.error || 'Ошибка создания DCA стратегии');
+    } finally {
+      setDcaLoading(false);
+    }
+  };
+
+  const createPeriodicBuy = async () => {    if (!pbApiKeyName || !pbBaseSymbol) {
+      void message.warning('Укажите API-ключ и монету');
+      return;
+    }
+    setPbLoading(true);
+    try {
+      await axios.post(`/api/strategies/${encodeURIComponent(pbApiKeyName)}/periodic-buy`, {
+        base_symbol: pbBaseSymbol.toUpperCase(),
+        quote_symbol: pbQuoteSymbol.toUpperCase(),
+        pb_interval_hours: pbIntervalHours,
+        pb_amount_mode: pbAmountMode,
+        pb_amount_value: pbAmountValue,
+        pb_order_type: pbOrderType,
+        pb_max_total_invested_usdt: pbMaxTotal,
+        pb_sell_on_tp: pbSellOnTp,
+        pb_tp_percent: pbTpPercent,
+      });
+      void message.success(`Periodic Buy стратегия создана: ${pbBaseSymbol}/${pbQuoteSymbol}`);
+      setPbModalOpen(false);
+    } catch (e: any) {
+      void message.error(e?.response?.data?.error || 'Ошибка создания стратегии');
+    } finally {
+      setPbLoading(false);
+    }
+  };
 
   // BT vs RT state
   const [btRtRows, setBtRtRows] = useState<BtRtSnapshot[]>([]);
@@ -1375,6 +1504,251 @@ export default function Research() {
       <Paragraph type="secondary">
         Здесь управляются профили стратегий, собранные из sweep-прогонов. Это база кандидатов и пресетов для офферов, а ручные торговые системы настраиваются отдельно в разделе торговых систем.
       </Paragraph>
+
+      {/* ── Спотовые инструменты ── */}
+      <Card title="🪙 Spot-стратегии" style={{ marginBottom: 16 }}>
+        <Space wrap>
+          <Button type="primary" onClick={() => { setPbApiKeyName(apiKeys[0]?.name || ''); setPbModalOpen(true); }}>
+            + Periodic Buy (алго-DCA на споте)
+          </Button>
+          <Button onClick={() => { setDcaApiKeyName(apiKeys[0]?.name || ''); setDcaModalOpen(true); }}>
+            + DCA (усреднение)
+          </Button>
+          <Button
+            type="dashed"
+            onClick={() => { setSpotSweepApiKey(apiKeys[0]?.name || ''); setSpotSweepModalOpen(true); }}
+          >
+            🔍 Spot Sweep (long-only)
+          </Button>
+          <Text type="secondary">Создать стратегию автоматической покупки монеты с заданным интервалом</Text>
+        </Space>
+      </Card>
+
+      <Modal
+        title="🔍 Spot Sweep (long-only)"
+        open={spotSweepModalOpen}
+        onCancel={() => setSpotSweepModalOpen(false)}
+        onOk={() => void startSpotSweep()}
+        okText="Запустить sweep"
+        confirmLoading={spotSweepLoading}
+        width={520}
+      >
+        <Space direction="vertical" style={{ width: '100%' }} size="small">
+          <div>
+            <Text strong>API-ключ</Text>
+            <Select style={{ width: '100%', marginTop: 4 }} value={spotSweepApiKey} onChange={setSpotSweepApiKey}>
+              {apiKeys.map((k) => <Select.Option key={k.name} value={k.name}>{k.name}</Select.Option>)}
+            </Select>
+          </div>
+          <div>
+            <Text strong>Дата с</Text>
+            <Input style={{ marginTop: 4 }} value={spotSweepDateFrom} onChange={(e) => setSpotSweepDateFrom(e.target.value)} placeholder="2024-01-01" />
+          </div>
+          <div>
+            <Text strong>Дата по (необяз.)</Text>
+            <Input style={{ marginTop: 4 }} value={spotSweepDateTo} onChange={(e) => setSpotSweepDateTo(e.target.value)} placeholder="2025-12-31 или пусто" />
+          </div>
+          <div>
+            <Text strong>Интервалы (через запятую)</Text>
+            <Input style={{ marginTop: 4 }} value={spotSweepIntervals} onChange={(e) => setSpotSweepIntervals(e.target.value)} placeholder="4h,1d" />
+          </div>
+          <div>
+            <Text strong>Монеты (через запятую)</Text>
+            <Input.TextArea rows={2} style={{ marginTop: 4 }} value={spotSweepMonoMarkets} onChange={(e) => setSpotSweepMonoMarkets(e.target.value)} />
+          </div>
+          <div>
+            <Text strong>Название системы</Text>
+            <Input style={{ marginTop: 4 }} value={spotSweepSystemName} onChange={(e) => setSpotSweepSystemName(e.target.value)} />
+          </div>
+          <div>
+            <Text strong>Префикс стратегий</Text>
+            <Input style={{ marginTop: 4 }} value={spotSweepStrategyPrefix} onChange={(e) => setSpotSweepStrategyPrefix(e.target.value)} />
+          </div>
+          <div>
+            <Text strong>Типы стратегий</Text>
+            <Select
+              mode="multiple"
+              style={{ width: '100%', marginTop: 4 }}
+              value={spotSweepStrategyTypes}
+              onChange={setSpotSweepStrategyTypes}
+              options={[
+                { label: 'DD_BattleToads (Donchian)', value: 'DD_BattleToads' },
+                { label: 'HiDeep (RSI oversold)', value: 'hideep' },
+                { label: 'ZZ Breakout', value: 'zz_breakout' },
+              ]}
+            />
+          </div>
+          <Text type="secondary" style={{ fontSize: 12 }}>Sweep запустит выбранные стратегии, только лонг, market_type=spot на выбранных монетах</Text>
+        </Space>
+      </Modal>
+
+      <Modal
+        title="Создать Periodic Buy стратегию"
+        open={pbModalOpen}
+        onCancel={() => setPbModalOpen(false)}
+        onOk={() => void createPeriodicBuy()}
+        okText="Создать"
+        cancelText="Отмена"
+        confirmLoading={pbLoading}
+        width={560}
+      >
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col xs={24}>
+            <Text strong>API-ключ</Text>
+            <Select
+              style={{ width: '100%', marginTop: 4 }}
+              value={pbApiKeyName || undefined}
+              onChange={setPbApiKeyName}
+              options={apiKeys.map((k) => ({ value: k.name, label: `${k.name} (${k.exchange})` }))}
+              placeholder="Выберите API-ключ"
+            />
+          </Col>
+          <Col xs={12}>
+            <Text strong>Монета (base)</Text>
+            <Input style={{ marginTop: 4 }} value={pbBaseSymbol} onChange={(e) => setPbBaseSymbol(e.target.value.toUpperCase())} placeholder="BTC" />
+          </Col>
+          <Col xs={12}>
+            <Text strong>Котировка (quote)</Text>
+            <Input style={{ marginTop: 4 }} value={pbQuoteSymbol} onChange={(e) => setPbQuoteSymbol(e.target.value.toUpperCase())} placeholder="USDT" />
+          </Col>
+          <Col xs={12}>
+            <Text strong>Интервал покупки (часов)</Text>
+            <InputNumber style={{ width: '100%', marginTop: 4 }} min={1} max={8760} value={pbIntervalHours} onChange={(v) => setPbIntervalHours(Number(v ?? 24))} />
+          </Col>
+          <Col xs={12}>
+            <Text strong>Тип ордера</Text>
+            <Select
+              style={{ width: '100%', marginTop: 4 }}
+              value={pbOrderType}
+              onChange={setPbOrderType}
+              options={[
+                { value: 'market', label: 'Market (моментальный)' },
+                { value: 'maker', label: 'Maker (лимитка -0.1%, ребейт)' },
+              ]}
+            />
+          </Col>
+          <Col xs={12}>
+            <Text strong>Режим суммы</Text>
+            <Select
+              style={{ width: '100%', marginTop: 4 }}
+              value={pbAmountMode}
+              onChange={setPbAmountMode}
+              options={[
+                { value: 'percent', label: '% от баланса USDT' },
+                { value: 'fixed_usdt', label: 'Фиксированная сумма USDT' },
+              ]}
+            />
+          </Col>
+          <Col xs={12}>
+            <Text strong>{pbAmountMode === 'percent' ? 'Процент (%)' : 'Сумма (USDT)'}</Text>
+            <InputNumber style={{ width: '100%', marginTop: 4 }} min={0.01} value={pbAmountValue} onChange={(v) => setPbAmountValue(Number(v ?? 5))} />
+          </Col>
+          <Col xs={24}>
+            <Text strong>Макс. суммарные инвестиции (USDT, 0 = без лимита)</Text>
+            <InputNumber style={{ width: '100%', marginTop: 4 }} min={0} value={pbMaxTotal} onChange={(v) => setPbMaxTotal(Number(v ?? 0))} />
+          </Col>
+          <Col xs={12}>
+            <Space>
+              <Switch checked={pbSellOnTp} onChange={setPbSellOnTp} />
+              <Text>Продавать на Take Profit</Text>
+            </Space>
+          </Col>
+          {pbSellOnTp && (
+            <Col xs={12}>
+              <Text strong>TP % от средней цены</Text>
+              <InputNumber style={{ width: '100%', marginTop: 4 }} min={0.1} value={pbTpPercent} onChange={(v) => setPbTpPercent(Number(v ?? 15))} />
+            </Col>
+          )}
+          <Col xs={24}>
+            <Alert
+              type="info"
+              showIcon
+              message="Стратегия создаётся на споте. Interval = интервал между покупками. Maker-ордер ставит лимитку -0.1% от цены (ребейт), ждёт 5 мин и fallback на маркет."
+            />
+          </Col>
+        </Row>
+      </Modal>
+
+      <Modal
+        title="Создать DCA стратегию (усреднение при просадке)"
+        open={dcaModalOpen}
+        onCancel={() => setDcaModalOpen(false)}
+        onOk={() => void createDca()}
+        okText="Создать"
+        cancelText="Отмена"
+        confirmLoading={dcaLoading}
+        width={600}
+      >
+        <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+          <Col xs={24}>
+            <Text strong>API-ключ</Text>
+            <Select
+              style={{ width: '100%', marginTop: 4 }}
+              value={dcaApiKeyName || undefined}
+              onChange={setDcaApiKeyName}
+              options={apiKeys.map((k) => ({ value: k.name, label: `${k.name} (${k.exchange})` }))}
+              placeholder="Выберите API-ключ"
+            />
+          </Col>
+          <Col xs={8}>
+            <Text strong>Монета (base)</Text>
+            <Input style={{ marginTop: 4 }} value={dcaBaseSymbol} onChange={(e) => setDcaBaseSymbol(e.target.value.toUpperCase())} placeholder="BTC" />
+          </Col>
+          <Col xs={8}>
+            <Text strong>Котировка (quote)</Text>
+            <Input style={{ marginTop: 4 }} value={dcaQuoteSymbol} onChange={(e) => setDcaQuoteSymbol(e.target.value.toUpperCase())} placeholder="USDT" />
+          </Col>
+          <Col xs={8}>
+            <Text strong>Рынок</Text>
+            <Select
+              style={{ width: '100%', marginTop: 4 }}
+              value={dcaMarketType}
+              onChange={setDcaMarketType}
+              options={[{ value: 'spot', label: '🪙 Спот' }, { value: 'futures', label: '📈 Фьючерсы' }]}
+            />
+          </Col>
+          <Col xs={12}>
+            <Text strong>Базовый ордер (USDT)</Text>
+            <InputNumber style={{ width: '100%', marginTop: 4 }} min={1} value={dcaBaseAmount} onChange={(v) => setDcaBaseAmount(Number(v ?? 10))} />
+          </Col>
+          <Col xs={12}>
+            <Text strong>Тип ордера</Text>
+            <Select
+              style={{ width: '100%', marginTop: 4 }}
+              value={dcaOrderType}
+              onChange={setDcaOrderType}
+              options={[{ value: 'market', label: 'Market' }, { value: 'maker', label: 'Maker (лимитка -0.1%)' }]}
+            />
+          </Col>
+          <Col xs={12}>
+            <Text strong>Шаг усреднения (%)</Text>
+            <InputNumber style={{ width: '100%', marginTop: 4 }} min={0.1} step={0.5} value={dcaStepPercent} onChange={(v) => setDcaStepPercent(Number(v ?? 2))} addonAfter="%" />
+          </Col>
+          <Col xs={12}>
+            <Text strong>Макс. safety orders</Text>
+            <InputNumber style={{ width: '100%', marginTop: 4 }} min={0} max={20} value={dcaMaxOrders} onChange={(v) => setDcaMaxOrders(Number(v ?? 5))} />
+          </Col>
+          <Col xs={12}>
+            <Text strong>Множитель размера ордера</Text>
+            <InputNumber style={{ width: '100%', marginTop: 4 }} min={1} step={0.1} value={dcaMultiplier} onChange={(v) => setDcaMultiplier(Number(v ?? 1))} />
+          </Col>
+          <Col xs={12}>
+            <Text strong>Take Profit (%)</Text>
+            <InputNumber style={{ width: '100%', marginTop: 4 }} min={0.1} step={0.5} value={dcaTpPercent} onChange={(v) => setDcaTpPercent(Number(v ?? 3))} addonAfter="%" />
+          </Col>
+          <Col xs={12}>
+            <Text strong>Stop Loss (0 = выключен, %)</Text>
+            <InputNumber style={{ width: '100%', marginTop: 4 }} min={0} step={0.5} value={dcaSlPercent} onChange={(v) => setDcaSlPercent(Number(v ?? 0))} addonAfter="%" />
+          </Col>
+          <Col xs={24}>
+            <Alert
+              type="info"
+              showIcon
+              message="Первая покупка — базовый ордер. При падении цены на Шаг% от последней покупки — safety order. Множитель увеличивает размер каждого следующего ордера. TP/SL считаются от средней цены покупки."
+            />
+          </Col>
+        </Row>
+      </Modal>
 
       <Card
         title="Планировщик Research (ежедневный incremental sweep)"

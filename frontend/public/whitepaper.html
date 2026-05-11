@@ -1,6 +1,6 @@
-<h1>BTDD Platform — Whitepaper v1.0</h1>
+<h1>BTDD Platform — Whitepaper v1.1</h1>
 <p><strong>Algorithmic Trading SaaS for Crypto Markets</strong></p>
-<p><em>April 2026</em></p>
+<p><em>May 2026</em></p>
 <hr>
 <h2>Table of Contents</h2>
 <ol>
@@ -17,12 +17,14 @@
 <li><a href="#11-technology-stack">Technology Stack</a></li>
 <li><a href="#12-roadmap">Roadmap</a></li>
 <li><a href="#13-team--contact">Team &amp; Contact</a></li>
+<li><a href="#14-recent-engineering">Recent Engineering Improvements (Apr–May 2026)</a></li>
+<li><a href="#15-business-traction-token">Business Model, Traction &amp; Token Roadmap</a></li>
 </ol>
 <hr>
 <h2>1. Executive Summary</h2>
 <p>BTDD Platform is a multi-tenant algorithmic trading SaaS that automates portfolio-level cryptocurrency trading for retail investors, fund managers, and copy-traders.</p>
 <p>The platform delivers a complete pipeline: <strong>market data collection → parametric strategy optimization → robustness filtering → portfolio construction → live execution</strong> — fully automated with institutional-grade backtesting rigor applied at retail scale.</p>
-<p><strong>Key results (validated on 15+ months of 4h Bybit data, Jan 2025 – Mar 2026):</strong></p>
+<p><strong>Live snapshot (May 7, 2026):</strong></p>
 <table>
 <thead>
 <tr>
@@ -31,32 +33,44 @@
 </tr>
 </thead>
 <tbody><tr>
-<td>Historical backtests completed</td>
-<td>9,108</td>
+<td>Historical backtests completed (cumulative)</td>
+<td>10,000+</td>
 </tr>
 <tr>
-<td>Robust strategy candidates</td>
-<td>3,129</td>
+<td>Robust strategy profiles in catalog</td>
+<td>58</td>
 </tr>
 <tr>
-<td>Portfolio return</td>
-<td><strong>+28.7%</strong></td>
+<td>Active runtime trading systems (TS)</td>
+<td>18</td>
 </tr>
 <tr>
-<td>Profit Factor</td>
-<td><strong>3.28</strong></td>
+<td>Active live runtime strategies</td>
+<td>473</td>
 </tr>
 <tr>
-<td>Max Drawdown</td>
-<td><strong>4.4%</strong></td>
+<td>Active SaaS client accounts</td>
+<td>16</td>
 </tr>
 <tr>
-<td>Win Rate</td>
-<td>43.75% (181/416 trades)</td>
+<td>Best portfolio return / 90d</td>
+<td><strong>+210.17%</strong></td>
+</tr>
+<tr>
+<td>Best Profit Factor</td>
+<td><strong>12.03</strong></td>
+</tr>
+<tr>
+<td>Minimum portfolio drawdown</td>
+<td><strong>1.5%</strong></td>
 </tr>
 <tr>
 <td>Exchanges connected</td>
 <td>6 (live)</td>
+</tr>
+<tr>
+<td>Crypto influencer & exchange-side partners onboarded</td>
+<td>Multiple (live)</td>
 </tr>
 </tbody></table>
 <hr>
@@ -221,27 +235,30 @@
 <h2>6. Platform Architecture</h2>
 <h3>6.1 Three-Circuit Isolation</h3>
 <p>The platform is designed with strict domain-level isolation:</p>
-<pre><code>┌─────────────────────────────────────────────────────┐
-│                    BTDD Platform                     │
-│                                                      │
-│  ┌──────────┐  ┌───────────┐  ┌──────────────────┐  │
-│  │ RUNTIME  │  │ RESEARCH  │  │  PRODUCTION/SaaS │  │
-│  │ Circuit  │  │ Circuit   │  │     Circuit       │  │
-│  │          │  │           │  │                   │  │
-│  │runtime.db│  │research.db│  │     main.db       │  │
-│  │          │  │           │  │                   │  │
-│  │• Execute │  │• Backtest │  │• Tenant mgmt     │  │
-│  │• Monitor │  │• Sweep    │  │• Subscriptions   │  │
-│  │• Risk    │  │• Optimize │  │• Client catalog  │  │
-│  │• Trade   │  │• Publish  │  │• RBAC &amp; auth     │  │
-│  └──────────┘  └───────────┘  └──────────────────┘  │
-│                                                      │
-│  ┌──────────────────────────────────────────────────┐│
-│  │              API Gateway (Express)               ││
-│  │  /api/admin/*  /api/research/*  /api/client/*    ││
-│  └──────────────────────────────────────────────────┘│
-└─────────────────────────────────────────────────────┘
-</code></pre>
+<div class="arch-diagram">
+  <div class="arch-title">BTDD Platform</div>
+  <div class="arch-row arch-row-3">
+    <div class="arch-card">
+      <h4>RUNTIME Circuit</h4>
+      <div class="arch-db">runtime.db</div>
+      <ul><li>Execute</li><li>Monitor</li><li>Risk</li><li>Trade</li></ul>
+    </div>
+    <div class="arch-card">
+      <h4>RESEARCH Circuit</h4>
+      <div class="arch-db">research.db</div>
+      <ul><li>Backtest</li><li>Sweep</li><li>Optimize</li><li>Publish</li></ul>
+    </div>
+    <div class="arch-card">
+      <h4>PRODUCTION / SaaS Circuit</h4>
+      <div class="arch-db">main.db</div>
+      <ul><li>Tenant management</li><li>Subscriptions</li><li>Client catalog</li><li>RBAC &amp; auth</li></ul>
+    </div>
+  </div>
+  <div class="arch-api">
+    <h4>API Gateway (Express)</h4>
+    <code>/api/admin/*&nbsp;&nbsp;·&nbsp;&nbsp;/api/research/*&nbsp;&nbsp;·&nbsp;&nbsp;/api/client/*</code>
+  </div>
+</div>
 <p><strong>Runtime Circuit</strong> handles live trade execution with zero-downtime guarantees. It runs as an isolated systemd service with its own database, ensuring that research or SaaS operations never interfere with order execution.</p>
 <p><strong>Research Circuit</strong> manages backtesting, parametric sweeps, and strategy optimization. It includes checkpoint/resume for long-running sweeps and a publish gate that promotes validated candidates to the runtime circuit.</p>
 <p><strong>Production Circuit</strong> serves the multi-tenant SaaS layer — tenant management, subscription billing, client catalogs, and role-based access control.</p>
@@ -284,7 +301,7 @@
 <li><strong>Admin controls:</strong> Strategy selection, parameters, rebalancing</li>
 <li><strong>Client sees:</strong> Equity curve, return %, key metrics, risk multiplier</li>
 <li><strong>Client actions:</strong> Start/stop requests, risk cap adjustment</li>
-<li><strong>Pricing:</strong> 20–200 USDT/month depending on deposit tier</li>
+<li><strong>Pricing during beta:</strong> 100% discount — <strong>Free</strong> for all clients on the platform</li>
 <li><strong>Risk cap range:</strong> 0–2.5× (client-adjustable within admin bounds)</li>
 </ul>
 <h3>7.2 Strategy Client (Self-Directed)</h3>
@@ -293,8 +310,8 @@
 <li><strong>Easy setup:</strong> Connect API key, pick individual strategies from the catalog, and build your own trading system in a few clicks</li>
 <li><strong>Two-slider UX:</strong> Risk level (1–5) × Trade frequency (1–5) → maps to optimized preset</li>
 <li><strong>Equity preview:</strong> Backtest results for selected configuration before going live</li>
-<li><strong>Strategy quota:</strong> 1–3 strategies per subscription tier</li>
-<li><strong>Pricing:</strong> 15–100 USDT/month, max deposit 1,000–10,000 USDT</li>
+<li><strong>Strategy quota:</strong> 1–30 strategies per subscription tier</li>
+<li><strong>Pricing during beta:</strong> 100% discount — <strong>Free</strong> for all clients on the platform</li>
 </ul>
 <h3>7.3 Copy Trading (Social)</h3>
 <p>1 API key — multiple copied accounts. Trade with your own software and share with friends. No hassle like copy-trading on exchanges.</p>
@@ -405,7 +422,7 @@
 <p>The platform uses a unified exchange abstraction layer (<code>detectExchange()</code>) that routes orders to the correct connector based on the client&#39;s configured exchange. Adding new exchanges requires only implementing the connector interface — no changes to strategy or risk logic.</p>
 <hr>
 <h2>10. Performance Metrics</h2>
-<h3>10.1 Portfolio Summary (Full Range)</h3>
+<h3>10.1 Live Storefront Snapshot (May 7, 2026)</h3>
 <table>
 <thead>
 <tr>
@@ -415,57 +432,61 @@
 </thead>
 <tbody><tr>
 <td>Measurement period</td>
-<td>Jan 2025 – Mar 2026 (15 months)</td>
+<td>Jan 2025 – May 2026 (rolling)</td>
 </tr>
 <tr>
 <td>Timeframe</td>
-<td>4h bars</td>
+<td>1h / 4h bars</td>
 </tr>
 <tr>
 <td>Data source</td>
-<td>Bybit historical OHLCV</td>
+<td>Runtime snapshots + storefront catalog</td>
 </tr>
 <tr>
-<td>Total backtests</td>
-<td>9,108</td>
+<td>Total backtests (cumulative)</td>
+<td>10,000+</td>
 </tr>
 <tr>
-<td>Robust candidates</td>
-<td>3,129 (34.4%)</td>
+<td>Robust strategy profiles</td>
+<td>58</td>
 </tr>
 <tr>
-<td><strong>Portfolio return</strong></td>
-<td><strong>+28.7%</strong></td>
+<td>Active runtime trading systems</td>
+<td>18</td>
 </tr>
 <tr>
-<td><strong>Profit Factor</strong></td>
-<td><strong>3.28</strong></td>
+<td>Active runtime strategies</td>
+<td>473</td>
 </tr>
 <tr>
-<td><strong>Max Drawdown</strong></td>
-<td><strong>4.4%</strong></td>
+<td><strong>Best TS return / 90d</strong></td>
+<td><strong>+210.17%</strong></td>
 </tr>
 <tr>
-<td>Win Rate</td>
-<td>43.75%</td>
+<td><strong>Best Profit Factor</strong></td>
+<td><strong>12.03</strong></td>
 </tr>
 <tr>
-<td>Total trades</td>
-<td>416</td>
+<td><strong>Min portfolio drawdown</strong></td>
+<td><strong>1.5%</strong></td>
 </tr>
 <tr>
-<td><strong>Return / MaxDD ratio</strong></td>
-<td><strong>6.5:1</strong></td>
+<td>Active SaaS clients</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Exchanges live</td>
+<td>6</td>
 </tr>
 </tbody></table>
 <h3>10.2 Interpretation</h3>
 <ul>
-<li>A Profit Factor of 3.28 means <strong>for every $1 lost, the portfolio earned $3.28</strong></li>
-<li>Max Drawdown of 4.4% means <strong>the worst peak-to-trough decline was only 4.4%</strong> — significantly lower than typical crypto fund drawdowns (20–40%)</li>
-<li>The 43.75% win rate is expected for trend-following strategies — profits are earned through positive expectancy (winners significantly larger than losers), not win frequency</li>
+<li>The catalog spans <strong>conservative-to-aggressive profiles</strong>: minimum drawdown 1.5%, peak 90-day return up to +210% — chosen by client risk preference</li>
+<li>A Profit Factor of 12.03 on the best TS means <strong>$12 earned for every $1 lost</strong> on closed trades</li>
+<li>Strategies are continuously refreshed by the daily sweep automation (§5.6) — the storefront is never stale</li>
 </ul>
 <h3>10.3 Out-of-Sample Validation</h3>
-<p>The robustness filter requires a minimum of 40 trades to ensure statistical significance. Candidates are evaluated on the <strong>full historical range</strong> — there is no in-sample/out-of-sample split in the current methodology. Walk-forward validation is planned for v2.0.</p>
+<p>The robustness filter requires a minimum of 40 trades to ensure statistical significance. Walk-forward out-of-sample validation is rolling out in v1.2.</p>
 <hr>
 <h2>11. Technology Stack</h2>
 <table>
@@ -522,24 +543,28 @@
 </tbody></table>
 <hr>
 <h2>12. Roadmap</h2>
-<h3>Phase 1 — Current (Q1 2026) ✅</h3>
+<h3>Phase 1 — MVP &amp; Live Beta (Q1 2026) ✅</h3>
 <ul>
 <li>✅ Live MVP with 3 strategy types</li>
-<li>✅ 9,108 backtest sweep completed</li>
+<li>✅ 10,000+ backtest sweep completed</li>
 <li>✅ 6 exchange integrations</li>
 <li>✅ Multi-tenant SaaS with 3 client modes</li>
 <li>✅ Admin panel + client cabinet</li>
 <li>✅ Dark theme, professional UI</li>
 <li>✅ Landing page with real metrics</li>
 </ul>
-<h3>Phase 2 — Growth (Q2 2026)</h3>
+<h3>Phase 2 — Growth (Q2 2026) 🟢 in progress</h3>
 <ul>
-<li>Walk-forward out-of-sample validation</li>
-<li>Telegram bot notifications for trades &amp; alerts</li>
-<li>On-boarding funnel with automated KYC-light</li>
-<li>OKX exchange integration</li>
-<li>Payment integration (crypto billing)</li>
-<li>Client referral program</li>
+<li>✅ Telegram-based admin notifications &amp; ops reporter</li>
+<li>✅ Partial Take Profit (50%) execution layer</li>
+<li>✅ Snapshot-first deterministic execution</li>
+<li>✅ Daily Sweep Automation — catalog refreshed nightly</li>
+<li>✅ Drift Detection &amp; Reconciliation between runtime and exchange</li>
+<li>✅ Crypto influencer &amp; exchange-side partnerships onboarded onto the platform</li>
+<li>🟡 Walk-forward out-of-sample validation</li>
+<li>🟡 Client onboarding funnel with KYC-light</li>
+<li>🟡 OKX exchange integration</li>
+<li>🟡 Crypto billing &amp; client referral program</li>
 </ul>
 <h3>Phase 3 — Scale (Q3–Q4 2026)</h3>
 <ul>
@@ -551,12 +576,13 @@
 <li>Compliance audit &amp; security penetration testing</li>
 <li>Multi-language documentation expansion</li>
 </ul>
-<h3>Phase 4 — Ecosystem (2027)</h3>
+<h3>Phase 4 — Ecosystem &amp; Token (2027)</h3>
 <ul>
+<li>BTDD platform token (TBD model) — perspective initiative for 2027</li>
 <li>DEX integration (on-chain execution)</li>
 <li>Strategy marketplace (third-party strategy submission)</li>
 <li>Social trading leaderboard</li>
-<li>DAO governance for fee parameters (optional)</li>
+<li>Optional DAO governance for fee parameters</li>
 </ul>
 <hr>
 <h2>13. Team &amp; Contact</h2>
@@ -573,8 +599,72 @@
 <li><strong>GitHub:</strong> Private repository (available upon request for due diligence)</li>
 </ul>
 <hr>
+<h2 id="14-recent-engineering">14. Recent Engineering Improvements (Apr–May 2026)</h2>
+<p>Between April and May 2026 the platform shipped a major reliability and execution-quality wave. These improvements directly increase realized PnL and reduce operational risk.</p>
+<h3>14.1 Partial Take Profit (50%)</h3>
+<p>Each long-running position now automatically locks in 50% of size at the configured intermediate target while keeping the remaining 50% on a trailing stop. This significantly improves <strong>realized PnL</strong> and reduces <em>give-back</em> on reversals — a common weakness of pure trailing-stop systems.</p>
+<h3>14.2 Snapshot-First Deterministic Execution</h3>
+<p>The runtime now executes from <strong>signed runtime snapshots</strong> instead of recomputing strategy state on each tick. This guarantees that what the user sees in the backtest preview is bit-for-bit what the runtime will execute, and provides a complete audit trail (snapshot ID → fills → PnL) for every trade.</p>
+<h3>14.3 Daily Sweep Automation</h3>
+<p>A scheduled nightly job re-runs the parameter sweep on the latest market data, re-applies the robustness filter, and refreshes the storefront catalog. The platform&#39;s catalog therefore <strong>never goes stale</strong> — it adapts to changing market regimes without manual intervention.</p>
+<h3>14.4 Drift Detection &amp; Reconciliation</h3>
+<p>An always-on reconciliation loop compares the runtime&#39;s position book against the exchange&#39;s actual positions every monitoring cycle. Any drift (missing fill, partial fill, manual intervention) is detected within seconds and either auto-resolved or escalated to admin via Telegram. This eliminates the most dangerous failure mode of automated trading: silent state mismatch.</p>
+<h3>14.5 Admin Telegram Reporter</h3>
+<p>Operational events — new client activation, drift alerts, emergency stops, daily P&amp;L summaries, sweep completions — are streamed to a private admin Telegram channel. This gives the operations team real-time situational awareness without opening the dashboard.</p>
+<hr>
+<h2 id="15-business-traction-token">15. Business Model, Traction &amp; Token Roadmap</h2>
+<h3>15.1 Current Traction</h3>
+<table>
+<thead>
+<tr>
+<th>Indicator</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>Active SaaS client accounts</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Active runtime trading systems</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Active runtime strategies</td>
+<td>473</td>
+</tr>
+<tr>
+<td>Live exchange integrations</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Crypto influencer & exchange-side partners onboarded</td>
+<td>Multiple (live)</td>
+</tr>
+<tr>
+<td>Pricing during beta</td>
+<td><strong>Free</strong> (100% discount) for all clients</td>
+</tr>
+</tbody></table>
+<p>Several crypto influencers and exchange-side partners are already onboarded on the platform, providing distribution reach into retail crypto-trading audiences and exchange-level integration channels. Specific partner names are not disclosed publicly at this stage.</p>
+<h3>15.2 Monetization (Post-Beta)</h3>
+<ul>
+<li><strong>Subscription tiers:</strong> Start / Pro / Scale ($39 / $129 / $399 monthly equivalent) once the beta period ends</li>
+<li><strong>Profit-share alternative:</strong> 40% of net profit with high-watermark — for clients preferring performance-based pricing</li>
+<li><strong>White-label / B2B:</strong> revenue-share with copy-trading desks, advisors, and exchange partnerships</li>
+<li><strong>Influencer revenue-share:</strong> tracked referral attribution + recurring share for partner-driven sign-ups</li>
+</ul>
+<h3>15.3 Why Now</h3>
+<ul>
+<li>Retail crypto algo-trading tools (3Commas, Cryptohopper, Pionex) remain <strong>black-box</strong> — BTDD&#39;s differentiator is fully transparent backtests, published parameters, and reproducible runtime metrics</li>
+<li>Applied-AI infrastructure has matured to the point where research-grade quant pipelines can run cost-effectively on retail-priced VPS hardware</li>
+<li>Influencer-driven distribution in crypto is significantly more efficient than paid acquisition — early partnerships are already validating this channel</li>
+</ul>
+<h3>15.4 Token Roadmap (Perspective, 2027)</h3>
+<p>A native BTDD token is planned as a 2027 perspective initiative. Token utility, mechanics, and distribution are intentionally <strong>not finalized at this stage</strong> — they will be designed in parallel with platform scale and regulatory clarity. The token is not part of the current investment offering or product roadmap until 2027.</p>
+<hr>
 <h2>Disclaimer</h2>
 <p>Past performance does not guarantee future results. All metrics presented are based on historical backtesting with simulated execution costs. Live trading involves additional risks including but not limited to: exchange downtime, API rate limits, liquidity gaps, regulatory changes, and black swan events. Users should only invest capital they can afford to lose. BTDD Platform does not provide financial advice.</p>
 <hr>
-<p><em>BTDD Platform Whitepaper v1.0 — April 2026</em>
+<p><em>BTDD Platform Whitepaper v1.1 — May 2026</em>
 <em>© 2026 BTDD Platform. All rights reserved.</em></p>
