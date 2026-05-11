@@ -3420,6 +3420,15 @@ export const executeStrategy = async (
         const livePosFill = Number(livePosFillRaw);
         const adoptActualPrice = Number.isFinite(livePosFill) && livePosFill > 0 ? livePosFill : undefined;
         await recordRuntimeTradeEvent('entry', signal, currentRatio, 0, undefined, mergedStrategy.base_symbol, undefined, adoptActualPrice);
+        // Trigger DCA-Futures overlay on adopted entry
+        if ((signal === 'long' || signal === 'short') && mergedStrategy.base_symbol) {
+          try {
+            const { triggerDcaFutures } = await import('./dca-futures');
+            await triggerDcaFutures(apiKeyName, mergedStrategy.base_symbol, signal as 'long' | 'short');
+          } catch (dcaErr) {
+            logger.warn(`[dca-futures] trigger failed after adopt-entry for ${apiKeyName} ${mergedStrategy.base_symbol}: ${(dcaErr as Error).message}`);
+          }
+        }
         logger.info(
           `Pre-entry idempotency: strategy ${strategyId} (${apiKeyName}) adopted existing ${baseSide} `
           + `position on ${mergedStrategy.base_symbol} (size=${livePos.size}); no new order placed`
@@ -3646,6 +3655,16 @@ export const executeStrategy = async (
     ? baseOrderFillPrice
     : undefined;
   await recordRuntimeTradeEvent('entry', signal, currentRatio, openedPositionSize, baseOrderId, mergedStrategy.base_symbol, undefined, actualEntryPrice);
+
+  // Trigger DCA-Futures overlay on same symbol if any idle dca_futures strategy exists
+  if ((signal === 'long' || signal === 'short') && mergedStrategy.base_symbol) {
+    try {
+      const { triggerDcaFutures } = await import('./dca-futures');
+      await triggerDcaFutures(apiKeyName, mergedStrategy.base_symbol, signal as 'long' | 'short');
+    } catch (dcaErr) {
+      logger.warn(`[dca-futures] trigger failed after entry for ${apiKeyName} ${mergedStrategy.base_symbol}: ${(dcaErr as Error).message}`);
+    }
+  }
 
   if (singleQtyPlan) {
     logger.info(
