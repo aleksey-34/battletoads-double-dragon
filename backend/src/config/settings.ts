@@ -71,6 +71,7 @@ export interface Strategy {
   tp_anchor_ratio?: number | null;
   last_signal?: string | null;
   last_action?: string | null;
+  partial_tp_pct?: number;
   last_error?: string | null;
   lot_long_usdt?: number | null;
   lot_short_usdt?: number | null;
