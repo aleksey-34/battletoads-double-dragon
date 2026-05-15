@@ -251,6 +251,7 @@ const DEFAULT_STRATEGY: Omit<Strategy, 'api_key_id' | 'id'> = {
   tp_anchor_ratio: null,
   last_signal: null,
   last_action: null,
+  partial_tp_pct: 0,
   last_error: null,
 };
 
@@ -428,6 +429,7 @@ const normalizeStrategy = (row: any): Strategy => {
     tp_anchor_ratio: row.tp_anchor_ratio === null || row.tp_anchor_ratio === undefined ? null : safeNumber(row.tp_anchor_ratio, 0),
     last_signal: row.last_signal === undefined ? null : row.last_signal,
     last_action: row.last_action === undefined ? null : row.last_action,
+    partial_tp_pct: safeNumber(row.partial_tp_pct, DEFAULT_STRATEGY.partial_tp_pct),
     last_error: row.last_error === undefined ? null : row.last_error,
     created_at: row.created_at,
     updated_at: row.updated_at,
@@ -612,9 +614,11 @@ const extractUsdtBalance = (balances: any[]): number => {
 const computeSignalTotalNotional = (
   strategy: Pick<Strategy, 'max_deposit' | 'fixed_lot' | 'reinvest_percent' | 'lot_long_percent' | 'lot_short_percent' | 'leverage'>,
   availableBalance: number,
-  signal: 'long' | 'short'
+  signal: 'long' | 'short',
+  riskMultiplier = 1.0,
 ): number => {
   const safeAvailable = Number.isFinite(availableBalance) && availableBalance > 0 ? availableBalance : 0;
+  const safeRiskMultiplier = Number.isFinite(riskMultiplier) && riskMultiplier > 0 ? riskMultiplier : 1.0;
 
   const cappedBalance = strategy.max_deposit > 0
     ? Math.min(safeAvailable, strategy.max_deposit)
@@ -628,9 +632,9 @@ const computeSignalTotalNotional = (
     ? (strategy.max_deposit > 0 ? strategy.max_deposit : cappedBalance)
     : cappedBalance;
 
-  // Notional = capital × lot_fraction. Leverage is an exchange margin setting only,
+  // Notional = capital × lot_fraction × risk_multiplier. Leverage is an exchange margin setting only,
   // NOT a position-size multiplier. Position weight is controlled via lot_percent/max_deposit.
-  const totalNotional = baseCapital * lotFraction * reinvestFactor;
+  const totalNotional = baseCapital * lotFraction * reinvestFactor * safeRiskMultiplier;
 
   // Safety telemetry: notional must not exceed real equity unless fixed_lot is explicitly on
   // (fixed_lot is the opt-in "treat max_deposit as virtual capital" mode for risk experiments).
@@ -729,6 +733,9 @@ const TRAILING_RATIO_EPSILON = 1e-12;
 
 const processedClosedBarByStrategy = new Map<string, number>();
 
+// Tracks partial TP (50% close) per strategy to prevent double-fire.
+const partialTpTriggeredByStrategy = new Map<number, boolean>();
+
 // ── Shared signal cache ───────────────────────────────────────────────────────
 // Within one runAutoStrategiesCycle, strategies with identical signal parameters
 // (same exchange key, pair, interval, strategy type, channel length, detection
@@ -768,7 +775,7 @@ const makeSignalGroupKey = (
   const type = String(strategy.strategy_type || 'DD_BattleToads');
   const len = Math.max(2, Math.floor(Number(strategy.price_channel_length) || 50));
   const src = String(strategy.detection_source || 'close');
-  const zEntry = type === 'stat_arb_zscore' ? Number(strategy.zscore_entry || 2).toFixed(4) : '';
+  const zEntry = type === 'stat_arb_zscore' ? Number(strategy.zscore_entry || 2.5).toFixed(4) : '';
   const longs = strategy.long_enabled ? '1' : '0';
   const shorts = strategy.short_enabled ? '1' : '0';
   return `${apiKeyName}|${mode}|${base}|${quote}|${baseCoef}|${quoteCoef}|${strategy.interval}|${type}|${len}|${src}|${zEntry}|${longs}|${shorts}`;
@@ -2547,6 +2554,7 @@ export const executeStrategy = async (
     action: StrategyCloseAction,
     signalSnapshot: StrategySignal
   ): Promise<void> => {
+    partialTpTriggeredByStrategy.delete(strategyId);
     const exitEntryRatio = entryRatio;
     await updateStrategy(apiKeyName, strategyId, {
       ...executionBindingPatch,
@@ -2949,6 +2957,26 @@ export const executeStrategy = async (
       }
     }
 
+    // Partial TP (50% close) when partial_tp_pct > 0 and not yet triggered
+    const partialTpPct = mergedStrategy.partial_tp_pct ?? 0;
+    if (!closedAction && partialTpPct > 0 && !partialTpTriggeredByStrategy.get(strategyId)) {
+      const partialPnlPct = state === 'long'
+        ? ((currentRatio / (entryRatio ?? currentRatio)) - 1) * 100
+        : (((entryRatio ?? currentRatio) / currentRatio) - 1) * 100;
+      if (Number.isFinite(partialPnlPct) && partialPnlPct >= partialTpPct) {
+        try {
+          for (const sym of getStrategySymbols(mergedStrategy)) {
+            await closePositionPercent(apiKeyName, strategyId, sym, 50);
+          }
+          partialTpTriggeredByStrategy.set(strategyId, true);
+          if (entryRatio && entryRatio > 0) await persistTpAnchorRatio(entryRatio);
+          logger.info(`Partial TP (50%) for strategy ${strategyId}: PnL=${partialPnlPct.toFixed(2)}%`);
+        } catch (err) {
+          logger.warn(`Partial TP failed for ${strategyId}: ${(err as Error)?.message}`);
+        }
+      }
+    }
+
     if (!closedAction && state === 'long' && entryRatio && currentRatio <= donchianCenter) {
       await closeAndRecordExit('stop_loss_long', 'long');
       closedAction = 'stop_loss_long';
@@ -3280,7 +3308,22 @@ export const executeStrategy = async (
     throw new Error('No available balance for strategy execution');
   }
 
-  const totalNotional = computeSignalTotalNotional(mergedStrategy, availableBalance, signal);
+  let riskMultiplier = 1.0;
+  try {
+    const { db } = await import('../utils/database');
+    const profile = await db.get(
+      `SELECT ap.risk_multiplier FROM algofund_profiles ap
+       JOIN api_keys ak ON ak.name = COALESCE(ap.execution_api_key_name, ap.assigned_api_key_name)
+       WHERE ak.name = ? LIMIT 1`,
+      [apiKeyName]
+    );
+    if (profile?.risk_multiplier) {
+      const val = Number(profile.risk_multiplier);
+      if (Number.isFinite(val) && val > 0) riskMultiplier = val;
+    }
+  } catch { /* non-critical: fallback to 1.0 */ }
+
+  const totalNotional = computeSignalTotalNotional(mergedStrategy, availableBalance, signal, riskMultiplier);
 
   if (!Number.isFinite(totalNotional) || totalNotional <= 0) {
     if (closedAction) {
