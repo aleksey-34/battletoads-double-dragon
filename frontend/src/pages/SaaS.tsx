@@ -3851,6 +3851,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       : [];
     const safeLatestBacktestSummary = snapshotForSystem ? latestBacktestSummary : null;
     const safeLatestBacktestCurve = snapshotForSystem ? latestBacktestCurve : [];
+    const previewCurve = safeLatestBacktestCurve.length > 1 ? safeLatestBacktestCurve.slice(-64) : [];
+    const cardSummary = safeLatestBacktestSummary || snapshotSummary || publishSummary || fallbackSummary || null;
+    const cardCurve = previewCurve.length > 1
+      ? previewCurve
+      : (snapshotCurve.length > 1
+        ? snapshotCurve
+        : (publishEquityCurve.length > 1
+          ? publishEquityCurve.slice(-64)
+          : ((tenantCurves[0] || safeLatestBacktestCurve).slice(-64))));
 
     const isStorefrontEnabled = publishedSystemSet.has(systemName) || (snapshotSystemName ? publishedSystemSet.has(snapshotSystemName) : false);
     const hasMeaningfulState = canonicalOfferIds.length > 0 || tenants.length > 0 || (isStorefrontEnabled && runtimeSystemId !== null) || Boolean(snapshotForSystem);
@@ -3870,12 +3879,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       runtimeSystemId,
       isPublished: isStorefrontEnabled,
       isCurated: Boolean(snapshotForSystem),
-      summary: snapshotSummary || publishSummary || fallbackSummary || safeLatestBacktestSummary || null,
-      equityCurve: snapshotCurve.length > 1
-        ? snapshotCurve
-        : (publishEquityCurve.length > 1
-          ? publishEquityCurve.slice(-64)
-          : ((tenantCurves[0] || safeLatestBacktestCurve).slice(-64))),
+      summary: cardSummary,
+      equityCurve: cardCurve,
       tenants,
       tenantCount: tenants.length,
       activeCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.actual_enabled || 0) === 1).length,

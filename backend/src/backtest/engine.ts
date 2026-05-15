@@ -966,7 +966,35 @@ const stddev = (values: number[]): number => {
   return Math.sqrt(Math.max(0, variance));
 };
 
-const syntheticCandleCache = new Map<string, ParsedCandle[]>();
+const SYNTHETIC_CANDLE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+const SYNTHETIC_CANDLE_CACHE_MAX_ENTRIES = 200;
+
+type SyntheticCandleCacheEntry = {
+  candles: ParsedCandle[];
+  timestamp: number;
+};
+
+const syntheticCandleCache = new Map<string, SyntheticCandleCacheEntry>();
+
+const pruneSyntheticCandleCache = (): void => {
+  const now = Date.now();
+  for (const [key, entry] of syntheticCandleCache.entries()) {
+    if (now - entry.timestamp > SYNTHETIC_CANDLE_CACHE_TTL_MS) {
+      syntheticCandleCache.delete(key);
+    }
+  }
+
+  if (syntheticCandleCache.size <= SYNTHETIC_CANDLE_CACHE_MAX_ENTRIES) {
+    return;
+  }
+
+  const sortedByAge = Array.from(syntheticCandleCache.entries())
+    .sort((left, right) => left[1].timestamp - right[1].timestamp);
+  const excess = syntheticCandleCache.size - SYNTHETIC_CANDLE_CACHE_MAX_ENTRIES;
+  for (let i = 0; i < excess; i += 1) {
+    syntheticCandleCache.delete(sortedByAge[i][0]);
+  }
+};
 
 const buildEvents = (
   runtimes: RuntimeStrategy[],
@@ -1059,7 +1087,12 @@ const loadRuntimeStrategies = async (
       fetchEndMs ?? '',
     ].join('|');
 
-    let candles = syntheticCandleCache.get(cacheKey);
+    let cacheEntry = syntheticCandleCache.get(cacheKey);
+    if (cacheEntry && Date.now() - cacheEntry.timestamp >= SYNTHETIC_CANDLE_CACHE_TTL_MS) {
+      syntheticCandleCache.delete(cacheKey);
+      cacheEntry = undefined;
+    }
+    let candles = cacheEntry?.candles;
     const marketMode = normalizeMarketMode(strategy.market_mode);
 
     if (!candles) {
@@ -1133,7 +1166,8 @@ const loadRuntimeStrategies = async (
       }
 
       candles = parsed;
-      syntheticCandleCache.set(cacheKey, candles);
+      syntheticCandleCache.set(cacheKey, { candles, timestamp: Date.now() });
+      pruneSyntheticCandleCache();
     }
 
     if (!candles || candles.length <= length) {

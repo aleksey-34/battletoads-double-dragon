@@ -60,8 +60,52 @@ type NormalizedTrade = {
 
 const clients: { [key: string]: ExchangeClientEntry } = {};
 const ccxtClients: { [key: string]: CcxtClientEntry } = {};
-const cache = new Map<string, { data: any; timestamp: number }>();
+const EXCHANGE_CACHE_MAX_ENTRIES = 500;
+
+type ExchangeCacheEntry = {
+  data: any;
+  timestamp: number;
+};
+
+const cache = new Map<string, ExchangeCacheEntry>();
 const bingxOneWayAttempted = new Set<string>();
+
+const pruneExchangeCache = (): void => {
+  const now = Date.now();
+  for (const [key, entry] of cache.entries()) {
+    if (now - entry.timestamp > CACHE_TTL) {
+      cache.delete(key);
+    }
+  }
+
+  if (cache.size <= EXCHANGE_CACHE_MAX_ENTRIES) {
+    return;
+  }
+
+  const oldestEntries = Array.from(cache.entries())
+    .sort((left, right) => left[1].timestamp - right[1].timestamp);
+  const removeCount = cache.size - EXCHANGE_CACHE_MAX_ENTRIES;
+  for (let i = 0; i < removeCount; i += 1) {
+    cache.delete(oldestEntries[i][0]);
+  }
+};
+
+const getCachedExchangeData = (key: string): any | null => {
+  const cached = cache.get(key);
+  if (!cached) {
+    return null;
+  }
+  if (Date.now() - cached.timestamp >= CACHE_TTL) {
+    cache.delete(key);
+    return null;
+  }
+  return cached.data;
+};
+
+const setCachedExchangeData = (key: string, data: any): void => {
+  pruneExchangeCache();
+  cache.set(key, { data, timestamp: Date.now() });
+};
 
 // Per-exchange IP-level parent limiters.
 // Multiple API keys on the same exchange all chain through their exchange's parent,
@@ -881,9 +925,9 @@ export const getExchangeForApiKey = (apiKeyName: string): string | null => {
 // Получить все доступные торговые пары (symbols) с Bybit
 export const getAllSymbols = async (apiKeyName: string) => {
   const cacheKey = `symbols_${apiKeyName}`;
-  const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return cached.data;
+  const cached = getCachedExchangeData(cacheKey);
+  if (cached !== null) {
+    return cached;
   }
 
   if (ccxtClients[apiKeyName]) {
@@ -903,7 +947,7 @@ export const getAllSymbols = async (apiKeyName: string) => {
         .filter((symbol) => Boolean(symbol));
 
       const sorted = Array.from(new Set(symbols)).sort();
-      cache.set(cacheKey, { data: sorted, timestamp: Date.now() });
+      setCachedExchangeData(cacheKey, sorted);
       return sorted;
     } catch (error) {
       const err = error as Error;
@@ -946,7 +990,7 @@ export const getAllSymbols = async (apiKeyName: string) => {
     }
 
     const sorted = Array.from(symbols).sort();
-    cache.set(cacheKey, { data: sorted, timestamp: Date.now() });
+    setCachedExchangeData(cacheKey, sorted);
     return sorted;
   } catch (error) {
     const err = error as Error;
@@ -2052,9 +2096,9 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
 
 export const get24hVolume = async (apiKeyName: string, symbol: string) => {
   const key = `volume_${apiKeyName}_${symbol}`;
-  const cached = cache.get(key);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return cached.data;
+  const cached = getCachedExchangeData(key);
+  if (cached !== null) {
+    return cached;
   }
 
   if (ccxtClients[apiKeyName]) {
@@ -2062,7 +2106,7 @@ export const get24hVolume = async (apiKeyName: string, symbol: string) => {
     const marketErrorKey = `${apiKeyName}:${normalizeSymbolKey(symbol)}:24hVolume:${entry.exchange}`;
 
     if (isOfflineSymbolCached(apiKeyName, symbol)) {
-      cache.set(key, { data: 0, timestamp: Date.now() });
+      setCachedExchangeData(key, 0);
       return 0;
     }
 
@@ -2071,7 +2115,7 @@ export const get24hVolume = async (apiKeyName: string, symbol: string) => {
     try {
       const ticker: any = await entry.limiter.schedule(() => entry.client.fetchTicker(ccxtSymbol));
       const volume = ticker?.quoteVolume ?? ticker?.baseVolume ?? 0;
-      cache.set(key, { data: volume, timestamp: Date.now() });
+      setCachedExchangeData(key, volume);
       return volume;
     } catch (error) {
       const err = error as Error;
@@ -2080,7 +2124,7 @@ export const get24hVolume = async (apiKeyName: string, symbol: string) => {
         if (shouldLogMarketErrorNow(marketErrorKey)) {
           logger.warn(`24h volume symbol offline for ${apiKeyName}/${symbol} on ${entry.exchange}: ${err.message}`);
         }
-        cache.set(key, { data: 0, timestamp: Date.now() });
+        setCachedExchangeData(key, 0);
         return 0;
       }
 
@@ -2105,7 +2149,7 @@ export const get24hVolume = async (apiKeyName: string, symbol: string) => {
     }
 
     const volume = data.result.list[0]?.volume24h;
-    cache.set(key, { data: volume, timestamp: Date.now() });
+    setCachedExchangeData(key, volume);
     return volume;
   } catch (error) {
     const err = error as Error;
@@ -2124,9 +2168,9 @@ export const getTickersSnapshot = async (apiKeyName: string) => {
   };
 
   const cacheKey = `tickers_snapshot_${apiKeyName}`;
-  const cached = cache.get(cacheKey);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return cached.data;
+  const cached = getCachedExchangeData(cacheKey);
+  if (cached !== null) {
+    return cached;
   }
 
   if (ccxtClients[apiKeyName]) {
@@ -2159,7 +2203,7 @@ export const getTickersSnapshot = async (apiKeyName: string) => {
       const result = mapped
         .filter((item): item is TickerSnapshotItem => item !== null);
 
-      cache.set(cacheKey, { data: result, timestamp: Date.now() });
+      setCachedExchangeData(cacheKey, result);
       return result;
     } catch (error) {
       const err = error as Error;
@@ -2206,7 +2250,7 @@ export const getTickersSnapshot = async (apiKeyName: string) => {
     const result = mapped
       .filter((item): item is TickerSnapshotItem => item !== null);
 
-    cache.set(cacheKey, { data: result, timestamp: Date.now() });
+    setCachedExchangeData(cacheKey, result);
     return result;
   } catch (error) {
     const err = error as Error;
@@ -2217,9 +2261,9 @@ export const getTickersSnapshot = async (apiKeyName: string) => {
 
 export const getInstrumentInfo = async (apiKeyName: string, symbol: string) => {
   const key = `info_${apiKeyName}_${symbol}`;
-  const cached = cache.get(key);
-  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-    return cached.data;
+  const cached = getCachedExchangeData(key);
+  if (cached !== null) {
+    return cached;
   }
 
   if (ccxtClients[apiKeyName]) {
@@ -2280,7 +2324,7 @@ export const getInstrumentInfo = async (apiKeyName: string, symbol: string) => {
         },
       };
 
-      cache.set(key, { data: info, timestamp: Date.now() });
+      setCachedExchangeData(key, info);
       return info;
     } catch (error) {
       const err = error as Error;
@@ -2303,7 +2347,7 @@ export const getInstrumentInfo = async (apiKeyName: string, symbol: string) => {
     }
 
     const info = data.result.list[0];
-    cache.set(key, { data: info, timestamp: Date.now() });
+    setCachedExchangeData(key, info);
     return info;
   } catch (error) {
     const err = error as Error;
