@@ -429,7 +429,7 @@ const normalizeStrategy = (row: any): Strategy => {
     tp_anchor_ratio: row.tp_anchor_ratio === null || row.tp_anchor_ratio === undefined ? null : safeNumber(row.tp_anchor_ratio, 0),
     last_signal: row.last_signal === undefined ? null : row.last_signal,
     last_action: row.last_action === undefined ? null : row.last_action,
-    partial_tp_pct: safeNumber(row.partial_tp_pct, DEFAULT_STRATEGY.partial_tp_pct),
+    partial_tp_pct: safeNumber(row.partial_tp_pct, DEFAULT_STRATEGY.partial_tp_pct ?? 0),
     last_error: row.last_error === undefined ? null : row.last_error,
     created_at: row.created_at,
     updated_at: row.updated_at,
