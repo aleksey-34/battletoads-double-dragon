@@ -1,7 +1,7 @@
 # BTDD Platform — Pitch Deck
-**Дата:** Апрель 2026  
-**Версия:** 1.0  
-**Статус:** Готово к рассылке партнёрам и биржевым грантовым программам
+**Дата:** Май 2026  
+**Версия:** 2.0  
+**Статус:** Production — 19 активных клиентов, 4 биржи в реальной торговле
 
 ---
 
@@ -40,7 +40,15 @@
 - 3 типа стратегий: **DoubleDragon Breakout**, **StatArb Z-Score**, **ZigZag Breakout**
 - Моно и синтетические инструменты (2 актива → один ticker цены)
 - Trailing TP, Donchian Channel, Z-score с lookahead-free реализацией
+- **Risk multiplier** из профиля клиента (индивидуальный контроль риска)
+- **Partial take profit**: 50% позиции закрывается при достижении порога
 - Изолированный runtime-сервис: торговля продолжается при рестарте API
+
+#### Биржи
+- ✅ **Bybit** — основная, unified account + contract
+- ✅ **MEXC** — contract trading
+- ✅ **WEEX** — contract trading
+- ✅ **BingX** — contract trading
 
 #### Research & Backtesting
 - Исторический sweep: **10 000+ прогонов**, **0 критических ошибок**
@@ -50,8 +58,9 @@
 
 #### SaaS-архитектура
 - Multi-tenant изоляция по api_key
+- **19 активных клиентов**, каждый со своим набором стратегий
 - Тарифные планы с лимитами
-- Каталог офферов (TS) независим от runtime
+- **One-click materialization**: публикация мастер-портфеля сразу всем клиентам
 - Audit log для критических действий
 
 #### Frontend
@@ -81,6 +90,11 @@
 - 1 модуль ZigZag Breakout
 - 1 high-frequency модуль
 
+**Balanced Portfolio v2** (оптимизированный, текущий production):
+- 38 стратегий с MOP=16 и risk-аппетитом 0.5%
+- Risk Multiplier для индивидуальной настройки клиента
+- Partial TP для защиты профита
+
 > *Исторический бэктест. Прошлые результаты не являются гарантией будущей доходности.*
 
 ---
@@ -103,7 +117,7 @@
 
 ## Слайд 6 — Бизнес-модель
 
-### Два источника монетизации
+### Три источника монетизации
 
 #### 1. Подписка SaaS (B2C)
 | Тариф | Цена/мес | Ключевые лимиты |
@@ -112,7 +126,7 @@
 | Dual Pro | $129 | до 10 стратегий, 3 TS, депозит до $50K |
 | Dual Scale | $399 | до 30 стратегий, 10 TS, приоритетная поддержка |
 
-> Текущий beta-режим: все тарифы = **$0**, старые планы переведены в архив (legacy).
+> Текущий onboarding: trial / promo pricing с бесплатным стартом.
 
 #### 2. Profit Share (B2C, performance-based)
 - Фиксированная абонплата: **0**
@@ -120,7 +134,7 @@
 - Минимальный депозит: $1 000
 
 #### 3. Exchange Partnership / Grant (B2B)
-- API Volume Rebate с бирж (Bybit, OKX, Gate.io)
+- API Volume Rebate с бирж (Bybit, MEXC, WEEX, BingX)
 - Co-marketing с биржами для привлечения новых клиентов
 - Грантовая поддержка для интеграции новых бирж
 
@@ -135,17 +149,22 @@
 | Multi-tenant SaaS | ✅ | ✅ | ✅ | ⚠️ | ❌ |
 | Алгофонд-режим | ✅ | ❌ | ❌ | ✅ | ❌ |
 | Open Research | ✅ sweep + sweep UI | ❌ | ❌ | ❌ | ❌ |
-| Цена | Dual: $39–$399 или 40% profit-share | $14–$59/мес | $19–$99/мес | $0–$99/мес | Бесплатно |
-| Контроль данных | ✅ self-hosted | ❌ SaaS-only | ❌ SaaS-only | ❌ | ❌ |
+| 4+ биржи | ✅ Bybit, MEXC, WEEX, BingX | ✅ | ✅ | ⚠️ | ⚠️ |
+| Partial TP + Risk Multiplier | ✅ | ❌ | ❌ | ❌ | ❌ |
+| One-click materialize | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Цена | $39–$399 или 40% profit-share | $14–$59/мес | $19–$99/мес | $0–$99/мес | Бесплатно |
+| Контроль данных | ✅ self-hosted опция | ❌ SaaS-only | ❌ SaaS-only | ❌ | ❌ |
 
-**Ключевое преимущество**: прозрачная methodology, синтетические инструменты, и полный контроль над данными.
+**Ключевые преимущества**: прозрачная methodology, синтетические инструменты, 4 биржи в production, персональный риск-менеджмент.
 
 ---
 
 ## Слайд 8 — Дорожная карта
 
 ### Q2 2026
-- [ ] Проверенная схема онбординга: Algofund клиент за < 10 минут
+- [x] Онбординг клиента за < 10 минут (19 активных клиентов)
+- [x] Partial Take Profit + Risk Multiplier (production)
+- [x] Multi-exchange: MEXC, WEEX, BingX (production)
 - [ ] Payment gateway (Aptos/USDT on-chain billing)
 - [ ] Walk-forward валидация стратегий (out-of-sample score)
 - [ ] Binance API интеграция
@@ -180,6 +199,8 @@
 | **Binance** | Binance Labs BUIDL | API Integration Grant + developer support |
 | **Gate.io** | API Partner | Rebate от объёма + joint promotion |
 | **KuCoin** | KuCoin Labs | Grant $15K + ecosystem support |
+| **MEXC** | MEXC Partner | Rebate + co-marketing (уже в production) |
+| **WEEX** | WEEX Partner | Rebate + co-marketing (уже в production) |
 
 #### От инфраструктурных провайдеров:
 | Провайдер | Программа | Размер |
@@ -197,10 +218,13 @@
 
 ## Слайд 10 — Команда и статус
 
-### Текущий статус
-- ✅ **MVP в production**: VPS 176.57.184.98, backend + frontend работают
-- ✅ **Bybit integration**: live trading активен
-- ✅ **10 000+ бэктестов** завершены, витрина из **349 runtime-снапшотов** и **10 TS-портфелей**
+### Текущий статус (Май 2026)
+- ✅ **Production-ready**: VPS 176.57.184.98, backend + frontend работают 24/7
+- ✅ **4 биржи в production**: Bybit + MEXC + WEEX + BingX
+- ✅ **10 000+ бэктестов** завершены
+- ✅ **19 активных клиентов** на balanced-portfolio-v2
+- ✅ **One-click materialization**: мастер-портфель → все клиенты
+- ✅ **Частичный тейк-профит** и **персональный risk multiplier** для каждого клиента
 - ✅ **SaaS backend**: multi-tenant, тарифные планы, аудит-лог
 - ✅ **Client cabinet**: регистрация, авторизация, управление стратегиями
 

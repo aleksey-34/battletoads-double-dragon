@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTDD Platform — Pitch Deck</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 2rem; line-height: 1.6; color: #1a1a2e; background: #f9f9fb; }
+  h1 { border-bottom: 3px solid #6c63ff; padding-bottom: 0.5rem; }
+  h2 { color: #2d3436; margin-top: 2rem; }
+  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+  th { background: #6c63ff; color: white; }
+  tr:nth-child(even) { background: #f2f2f2; }
+  strong { color: #e84393; }
+  blockquote { border-left: 4px solid #6c63ff; padding-left: 1rem; color: #555; margin: 1rem 0; }
+  hr { border: none; border-top: 1px solid #eee; margin: 2rem 0; }
+  ul, ol { margin: 0.5rem 0; }
+  @media print { body { background: white; } }
+</style>
+</head>
+<body>
+<h1>BTDD Platform — Pitch Deck</h1>
+<p><strong>Дата:</strong> Май 2026<br />
+<strong>Версия:</strong> 2.0<br />
+<strong>Статус:</strong> Production — 19 активных клиентов, 4 биржи в реальной торговле</p>
+<hr />
+<h2>Слайд 1 — Проблема</h2>
+<h3>Алгоритмическая торговля недоступна большинству</h3>
+<ul>
+<li><strong>Высокий порог входа</strong>: разработка торгового робота требует знаний в программировании, математике, работе с биржевым API. 95% ретейл-трейдеров не имеют этих навыков.</li>
+<li><strong>Нет валидации</strong>: большинство готовых «ботов» на рынке не имеют прозрачной методологии бэктестирования и публикуют только «удобные» результаты.</li>
+<li><strong>Нет инфраструктуры</strong>: даже если стратегия найдена — нужны VPS, мониторинг, аварийное закрытие позиций, управление ключами. Это операционная нагрузка, которая убивает трейдера.</li>
+<li><strong>Закрытые экосистемы</strong>: существующие решения (3commas, Cryptohopper) — дорогие, непрозрачные, без возможности кастомизации.</li>
+</ul>
+<hr />
+<h2>Слайд 2 — Решение</h2>
+<h3>BTDD Platform — Algorithmic Trading as a Service</h3>
+<p>Полноценная SaaS-платформа, которая даёт клиенту доступ к <strong>проверенным алгоритмическим стратегиям</strong> без необходимости разбираться в торговых деталях.</p>
+<p><strong>Три режима для разных клиентов:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Режим</th>
+<th>Для кого</th>
+<th>Что получает</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Алгофонд</strong></td>
+<td>Пассивный инвестор</td>
+<td>Отдаёт депозит под управление. Видит эквити, статистику, запрашивает старт/стоп</td>
+</tr>
+<tr>
+<td><strong>Клиент стратегий</strong></td>
+<td>Продвинутый трейдер</td>
+<td>Подключает свой API-ключ, выбирает стратегии, настраивает риск</td>
+</tr>
+<tr>
+<td><strong>Администратор</strong></td>
+<td>Управляющий / партнёр</td>
+<td>Полный контроль платформы, sweep, publishing, клиенты, биллинг</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>Слайд 3 — Продукт</h2>
+<h3>Что уже построено (v2.0)</h3>
+<h4>Торговый движок</h4>
+<ul>
+<li>3 типа стратегий: <strong>DoubleDragon Breakout</strong>, <strong>StatArb Z-Score</strong>, <strong>ZigZag Breakout</strong></li>
+<li>Моно и синтетические инструменты (2 актива → один ticker цены)</li>
+<li>Trailing TP, Donchian Channel, Z-score с lookahead-free реализацией</li>
+<li><strong>Risk multiplier</strong> из профиля клиента (индивидуальный контроль риска)</li>
+<li><strong>Partial take profit</strong>: 50% позиции закрывается при достижении порога</li>
+<li>Изолированный runtime-сервис: торговля продолжается при рестарте API</li>
+</ul>
+<h4>Биржи</h4>
+<ul>
+<li>✅ <strong>Bybit</strong> — основная, unified account + contract</li>
+<li>✅ <strong>MEXC</strong> — contract trading</li>
+<li>✅ <strong>WEEX</strong> — contract trading</li>
+<li>✅ <strong>BingX</strong> — contract trading</li>
+</ul>
+<h4>Research &amp; Backtesting</h4>
+<ul>
+<li>Исторический sweep: <strong>10 000+ прогонов</strong>, <strong>0 критических ошибок</strong></li>
+<li>Runtime-витрина: <strong>349 снапшотов стратегий</strong> и <strong>10 TS-портфелей</strong> с метриками за 90 дней</li>
+<li>Checkpoint/resume при длинных прогонах</li>
+<li>Параллельный grid-search по гиперпараметрам</li>
+</ul>
+<h4>SaaS-архитектура</h4>
+<ul>
+<li>Multi-tenant изоляция по api_key</li>
+<li><strong>19 активных клиентов</strong>, каждый со своим набором стратегий</li>
+<li>Тарифные планы с лимитами</li>
+<li><strong>One-click materialization</strong>: публикация мастер-портфеля сразу всем клиентам</li>
+<li>Audit log для критических действий</li>
+</ul>
+<h4>Frontend</h4>
+<ul>
+<li>React + Ant Design SPA</li>
+<li>Dashboard, Research, SaaS Admin, Client Cabinet</li>
+<li>Поддержка RU / EN / TR</li>
+</ul>
+<hr />
+<h2>Слайд 4 — Результаты бэктеста</h2>
+<h3>Портфельный бэктест: Mega Portfolio (текущая витрина)</h3>
+<blockquote>
+<p>Срез за 90 дней, storefront TS snapshot, апрель 2026</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>Метрика</th>
+<th>Значение</th>
+<th>Оценка</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Доходность</td>
+<td><strong>+123.17%</strong></td>
+<td>Сильно</td>
+</tr>
+<tr>
+<td>Profit Factor</td>
+<td><strong>4.41</strong></td>
+<td>Отлично (&gt;2.0)</td>
+</tr>
+<tr>
+<td>Max Drawdown</td>
+<td><strong>18.64%</strong></td>
+<td>Контролируемо</td>
+</tr>
+<tr>
+<td>Горизонт</td>
+<td><strong>90 дней</strong></td>
+<td>Актуальная витрина</td>
+</tr>
+<tr>
+<td>Сделки</td>
+<td><strong>411</strong></td>
+<td>Высокая статистика</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Состав портфеля:</strong>
+- 3 модуля DD_BattleToads
+- 5 модулей StatArb Z-Score
+- 1 модуль ZigZag Breakout
+- 1 high-frequency модуль</p>
+<p><strong>Balanced Portfolio v2</strong> (оптимизированный, текущий production):
+- 38 стратегий с MOP=16 и risk-аппетитом 0.5%
+- Risk Multiplier для индивидуальной настройки клиента
+- Partial TP для защиты профита</p>
+<blockquote>
+<p><em>Исторический бэктест. Прошлые результаты не являются гарантией будущей доходности.</em></p>
+</blockquote>
+<hr />
+<h2>Слайд 5 — Рынок</h2>
+<h3>Объём рынка</h3>
+<ul>
+<li>Глобальный рынок алготрейдинга: <strong>$21.6B в 2024</strong> → <strong>$31.8B к 2028</strong> (CAGR ~10%)</li>
+<li>Крипто-алготрейдинг растёт быстрее: оценочно <strong>&gt;$5B ARR</strong> потенциальный рынок для B2C/B2B SaaS</li>
+<li>Только на Bybit ежедневный объём торгов превышает <strong>$10B</strong>. При 0.3% fee rebate от $1M объёма клиентов — $3K/день.</li>
+</ul>
+<h3>Целевой сегмент</h3>
+<ol>
+<li><strong>Ретейл-трейдеры</strong> с депозитом $1K–$50K, которые хотят автоматизированную стратегию</li>
+<li><strong>Небольшие управляющие</strong> (private fund managers) с клиентским капиталом $100K–$2M</li>
+<li><strong>Криптоэнтузиасты</strong> из СНГ, Турции, ЮВА — ключевые рынки по активности на Bybit</li>
+</ol>
+<hr />
+<h2>Слайд 6 — Бизнес-модель</h2>
+<h3>Три источника монетизации</h3>
+<h4>1. Подписка SaaS (B2C)</h4>
+<table>
+<thead>
+<tr>
+<th>Тариф</th>
+<th>Цена/мес</th>
+<th>Ключевые лимиты</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dual Start</td>
+<td>$39</td>
+<td>до 3 стратегий, 1 TS, депозит до $5K</td>
+</tr>
+<tr>
+<td>Dual Pro</td>
+<td>$129</td>
+<td>до 10 стратегий, 3 TS, депозит до $50K</td>
+</tr>
+<tr>
+<td>Dual Scale</td>
+<td>$399</td>
+<td>до 30 стратегий, 10 TS, приоритетная поддержка</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Текущий onboarding: trial / promo pricing с бесплатным стартом.</p>
+</blockquote>
+<h4>2. Profit Share (B2C, performance-based)</h4>
+<ul>
+<li>Фиксированная абонплата: <strong>0</strong></li>
+<li>Performance fee: <strong>40%</strong> от чистой прибыли (high-watermark)</li>
+<li>Минимальный депозит: $1 000</li>
+</ul>
+<h4>3. Exchange Partnership / Grant (B2B)</h4>
+<ul>
+<li>API Volume Rebate с бирж (Bybit, MEXC, WEEX, BingX)</li>
+<li>Co-marketing с биржами для привлечения новых клиентов</li>
+<li>Грантовая поддержка для интеграции новых бирж</li>
+</ul>
+<hr />
+<h2>Слайд 7 — Конкурентный анализ</h2>
+<table>
+<thead>
+<tr>
+<th>Критерий</th>
+<th>BTDD Platform</th>
+<th>3commas</th>
+<th>Cryptohopper</th>
+<th>Mudrex</th>
+<th>Pionex</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Прозрачный бэктест</td>
+<td>✅ 10 000+ прогонов</td>
+<td>❌</td>
+<td>❌</td>
+<td>⚠️ частично</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>Синтетические пары</td>
+<td>✅ StatArb</td>
+<td>❌</td>
+<td>❌</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>Multi-tenant SaaS</td>
+<td>✅</td>
+<td>✅</td>
+<td>✅</td>
+<td>⚠️</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>Алгофонд-режим</td>
+<td>✅</td>
+<td>❌</td>
+<td>❌</td>
+<td>✅</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>Open Research</td>
+<td>✅ sweep + sweep UI</td>
+<td>❌</td>
+<td>❌</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>4+ биржи</td>
+<td>✅ Bybit, MEXC, WEEX, BingX</td>
+<td>✅</td>
+<td>✅</td>
+<td>⚠️</td>
+<td>⚠️</td>
+</tr>
+<tr>
+<td>Partial TP + Risk Multiplier</td>
+<td>✅</td>
+<td>❌</td>
+<td>❌</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>One-click materialize</td>
+<td>✅</td>
+<td>❌</td>
+<td>❌</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+<tr>
+<td>Цена</td>
+<td>$39–$399 или 40% profit-share</td>
+<td>$14–$59/мес</td>
+<td>$19–$99/мес</td>
+<td>$0–$99/мес</td>
+<td>Бесплатно</td>
+</tr>
+<tr>
+<td>Контроль данных</td>
+<td>✅ self-hosted опция</td>
+<td>❌ SaaS-only</td>
+<td>❌ SaaS-only</td>
+<td>❌</td>
+<td>❌</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Ключевые преимущества</strong>: прозрачная methodology, синтетические инструменты, 4 биржи в production, персональный риск-менеджмент.</p>
+<hr />
+<h2>Слайд 8 — Дорожная карта</h2>
+<h3>Q2 2026</h3>
+<ul>
+<li>[x] Онбординг клиента за &lt; 10 минут (19 активных клиентов)</li>
+<li>[x] Partial Take Profit + Risk Multiplier (production)</li>
+<li>[x] Multi-exchange: MEXC, WEEX, BingX (production)</li>
+<li>[ ] Payment gateway (Aptos/USDT on-chain billing)</li>
+<li>[ ] Walk-forward валидация стратегий (out-of-sample score)</li>
+<li>[ ] Binance API интеграция</li>
+</ul>
+<h3>Q3 2026</h3>
+<ul>
+<li>[ ] Режим market regime filter (ATR/ADX адаптация)</li>
+<li>[ ] OKX, Gate.io интеграция</li>
+<li>[ ] Клиентский конструктор TS (Strategy Client TS Builder)</li>
+<li>[ ] Telegram-уведомления для клиентов (стоп/старт, алерты)</li>
+</ul>
+<h3>Q4 2026</h3>
+<ul>
+<li>[ ] Mobile-friendly интерфейс</li>
+<li>[ ] Copy-trading style offer UX</li>
+<li>[ ] Публичный API для партнёров</li>
+<li>[ ] 50+ активных клиентов</li>
+</ul>
+<h3>2027</h3>
+<ul>
+<li>[ ] Expansion: $5M AUM под управлением</li>
+<li>[ ] Листинг на Exchange Builder программах (Bybit Builders, OKX Venture)</li>
+</ul>
+<hr />
+<h2>Слайд 9 — Запрос грантов / партнёрства</h2>
+<h3>Что мы ищем</h3>
+<h4>От криптобирж:</h4>
+<table>
+<thead>
+<tr>
+<th>Биржа</th>
+<th>Программа</th>
+<th>Что просим</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Bybit</strong></td>
+<td>Bybit Builder Grant</td>
+<td>$10K–$50K грант + API rebate + co-marketing</td>
+</tr>
+<tr>
+<td><strong>OKX</strong></td>
+<td>OKX Ventures</td>
+<td>$25K грант на интеграцию OKX API</td>
+</tr>
+<tr>
+<td><strong>Binance</strong></td>
+<td>Binance Labs BUIDL</td>
+<td>API Integration Grant + developer support</td>
+</tr>
+<tr>
+<td><strong>Gate.io</strong></td>
+<td>API Partner</td>
+<td>Rebate от объёма + joint promotion</td>
+</tr>
+<tr>
+<td><strong>KuCoin</strong></td>
+<td>KuCoin Labs</td>
+<td>Grant $15K + ecosystem support</td>
+</tr>
+<tr>
+<td><strong>MEXC</strong></td>
+<td>MEXC Partner</td>
+<td>Rebate + co-marketing (уже в production)</td>
+</tr>
+<tr>
+<td><strong>WEEX</strong></td>
+<td>WEEX Partner</td>
+<td>Rebate + co-marketing (уже в production)</td>
+</tr>
+</tbody>
+</table>
+<h4>От инфраструктурных провайдеров:</h4>
+<table>
+<thead>
+<tr>
+<th>Провайдер</th>
+<th>Программа</th>
+<th>Размер</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>AWS Activate</strong></td>
+<td>Startup credits</td>
+<td>$10K–$100K</td>
+</tr>
+<tr>
+<td><strong>Google for Startups</strong></td>
+<td>Cloud credits</td>
+<td>до $200K</td>
+</tr>
+<tr>
+<td><strong>Microsoft for Startups</strong></td>
+<td>Azure credits</td>
+<td>до $150K</td>
+</tr>
+</tbody>
+</table>
+<h4>Итого запрашиваемая поддержка:</h4>
+<ul>
+<li><strong>$150K–$300K</strong> суммарно грантов/кредитов</li>
+<li><strong>API partner status</strong> на 3+ биржах (для volume rebate)</li>
+<li><strong>Co-marketing</strong> → привлечение 200+ клиентов в первые 6 мес</li>
+</ul>
+<hr />
+<h2>Слайд 10 — Команда и статус</h2>
+<h3>Текущий статус (Май 2026)</h3>
+<ul>
+<li>✅ <strong>Production-ready</strong>: VPS 176.57.184.98, backend + frontend работают 24/7</li>
+<li>✅ <strong>4 биржи в production</strong>: Bybit + MEXC + WEEX + BingX</li>
+<li>✅ <strong>10 000+ бэктестов</strong> завершены</li>
+<li>✅ <strong>19 активных клиентов</strong> на balanced-portfolio-v2</li>
+<li>✅ <strong>One-click materialization</strong>: мастер-портфель → все клиенты</li>
+<li>✅ <strong>Частичный тейк-профит</strong> и <strong>персональный risk multiplier</strong> для каждого клиента</li>
+<li>✅ <strong>SaaS backend</strong>: multi-tenant, тарифные планы, аудит-лог</li>
+<li>✅ <strong>Client cabinet</strong>: регистрация, авторизация, управление стратегиями</li>
+</ul>
+<h3>Что нужно для масштабирования</h3>
+<ul>
+<li>Серьёзная маркетинговая кампания (контент + paid) → <strong>$30K</strong></li>
+<li>Дополнительные биржевые интеграции → <strong>$50K dev</strong></li>
+<li>Compliance / legal для работы с клиентскими депозитами → <strong>$20K</strong></li>
+<li>Инфраструктура при росте до 100+ клиентов → <strong>$20K/год</strong></li>
+</ul>
+<hr />
+<h2>Контакты</h2>
+<p><strong>Платформа</strong>: BTDD Platform — Algorithmic Trading SaaS<br />
+<strong>Основатель</strong>: Алексей Лазарев / Aleksei Lazarev<br />
+<strong>Telegram</strong>: @yakovbyakov<br />
+<strong>Email</strong>: aiaetrade17@gmail.com<br />
+<strong>Demo</strong>: https://btdd.vercel.app<br />
+<strong>GitHub</strong>: (приватный, по запросу)</p>
+<hr />
+<p><em>Документ подготовлен для рассылки в программы грантов и партнёрства криптобирж.</em><br />
+<em>Версия 1.0, Апрель 2026.</em></p>
+</body>
+</html>
