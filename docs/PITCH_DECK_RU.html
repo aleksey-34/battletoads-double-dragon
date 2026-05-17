@@ -3,20 +3,23 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>BTDD Platform — Pitch Deck</title>
+<title>BTDD — Pitch Deck</title>
 <style>
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; max-width: 900px; margin: 0 auto; padding: 2rem; line-height: 1.6; color: #1a1a2e; background: #f9f9fb; }
-  h1 { border-bottom: 3px solid #6c63ff; padding-bottom: 0.5rem; }
-  h2 { color: #2d3436; margin-top: 2rem; }
-  table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
-  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
-  th { background: #6c63ff; color: white; }
-  tr:nth-child(even) { background: #f2f2f2; }
-  strong { color: #e84393; }
-  blockquote { border-left: 4px solid #6c63ff; padding-left: 1rem; color: #555; margin: 1rem 0; }
-  hr { border: none; border-top: 1px solid #eee; margin: 2rem 0; }
-  ul, ol { margin: 0.5rem 0; }
-  @media print { body { background: white; } }
+  body {{ font-family: 'Inter', -apple-system, sans-serif; max-width: 860px; margin: 0 auto; padding: 3rem 2rem; line-height: 1.7; color: #1a1a2e; background: #fafbfc; }}
+  h1 {{ font-size: 2rem; font-weight: 700; color: #0f0f23; border-bottom: 3px solid #2563eb; padding-bottom: 0.75rem; margin-bottom: 1.5rem; }}
+  h2 {{ font-size: 1.35rem; font-weight: 600; color: #1e293b; margin-top: 2.5rem; margin-bottom: 1rem; padding-bottom: 0.4rem; border-bottom: 1px solid #e2e8f0; }}
+  h3 {{ font-size: 1.1rem; font-weight: 600; color: #334155; margin-top: 1.5rem; }}
+  p {{ margin: 0.75rem 0; color: #334155; }}
+  strong {{ color: #2563eb; font-weight: 600; }}
+  table {{ border-collapse: collapse; width: 100%; margin: 1.25rem 0; font-size: 0.9rem; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }}
+  th, td {{ border: 1px solid #e2e8f0; padding: 10px 14px; text-align: left; }}
+  th {{ background: #2563eb; color: #fff; font-weight: 600; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.5px; }}
+  tr:nth-child(even) td {{ background: #f8fafc; }}
+  blockquote {{ border-left: 4px solid #2563eb; padding: 0.75rem 1.25rem; margin: 1.25rem 0; background: #f0f4ff; border-radius: 0 8px 8px 0; color: #1e40af; font-style: italic; }}
+  hr {{ border: none; border-top: 1px solid #e2e8f0; margin: 2.5rem 0; }}
+  ul, ol {{ margin: 0.75rem 0 0.75rem 1.5rem; color: #334155; }}
+  li {{ margin: 0.35rem 0; }}
+  @media print {{ body {{ background: #fff; }} table {{ box-shadow: none; }} th {{ background: #e2e8f0; color: #000; }} }}
 </style>
 </head>
 <body>
@@ -78,10 +81,11 @@
 </ul>
 <h4>Биржи</h4>
 <ul>
-<li>✅ <strong>Bybit</strong> — основная, unified account + contract</li>
-<li>✅ <strong>MEXC</strong> — contract trading</li>
-<li>✅ <strong>WEEX</strong> — contract trading</li>
-<li>✅ <strong>BingX</strong> — contract trading</li>
+<li>✅ <strong>Bybit</strong> — Unified Account + Contract</li>
+<li>✅ <strong>Binance</strong> — Contract trading</li>
+<li>✅ <strong>MEXC</strong> — Contract trading</li>
+<li>✅ <strong>WEEX</strong> — Contract trading</li>
+<li>✅ <strong>BingX</strong> — Contract trading</li>
 </ul>
 <h4>Research &amp; Backtesting</h4>
 <ul>
@@ -345,94 +349,132 @@
 <li>[ ] Листинг на Exchange Builder программах (Bybit Builders, OKX Venture)</li>
 </ul>
 <hr />
-<h2>Слайд 9 — Запрос грантов / партнёрства</h2>
-<h3>Что мы ищем</h3>
-<h4>От криптобирж:</h4>
+<h2>Слайд 9 — Предложение партнёрам и инвесторам</h2>
+<h3>Инвестиционное предложение</h3>
+<p><strong>Инвестор получает долю от операционного дохода платформы</strong>, который включает:
+- Ежемесячные подписки (SaaS)
+- Profit share от клиентских прибылей (40% high-watermark)
+- Exchange rebates и referral-бонусы (Bybit, Binance, MEXC, WEEX, BingX)</p>
+<h3>Условия</h3>
 <table>
 <thead>
 <tr>
-<th>Биржа</th>
-<th>Программа</th>
-<th>Что просим</th>
+<th>Параметр</th>
+<th>Значение</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><strong>Bybit</strong></td>
-<td>Bybit Builder Grant</td>
-<td>$10K–$50K грант + API rebate + co-marketing</td>
+<td><strong>Доля инвестора</strong></td>
+<td>30% от ежемесячного чистого дохода</td>
 </tr>
 <tr>
-<td><strong>OKX</strong></td>
-<td>OKX Ventures</td>
-<td>$25K грант на интеграцию OKX API</td>
+<td><strong>Срок</strong></td>
+<td>Бессрочно (опцион buyout через 24 мес)</td>
 </tr>
 <tr>
-<td><strong>Binance</strong></td>
-<td>Binance Labs BUIDL</td>
-<td>API Integration Grant + developer support</td>
+<td><strong>Минимальный чек</strong></td>
+<td>$50K за 5% дохода (пропорционально)</td>
 </tr>
 <tr>
-<td><strong>Gate.io</strong></td>
-<td>API Partner</td>
-<td>Rebate от объёма + joint promotion</td>
+<td><strong>Прозрачность</strong></td>
+<td>Ежемесячный dashboard со всеми метриками платформы</td>
 </tr>
 <tr>
-<td><strong>KuCoin</strong></td>
-<td>KuCoin Labs</td>
-<td>Grant $15K + ecosystem support</td>
-</tr>
-<tr>
-<td><strong>MEXC</strong></td>
-<td>MEXC Partner</td>
-<td>Rebate + co-marketing (уже в production)</td>
-</tr>
-<tr>
-<td><strong>WEEX</strong></td>
-<td>WEEX Partner</td>
-<td>Rebate + co-marketing (уже в production)</td>
+<td><strong>Выход</strong></td>
+<td>Buyout-опцион с мультипликатором x3 от среднегодового дохода</td>
 </tr>
 </tbody>
 </table>
-<h4>От инфраструктурных провайдеров:</h4>
-<table>
-<thead>
-<tr>
-<th>Провайдер</th>
-<th>Программа</th>
-<th>Размер</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>AWS Activate</strong></td>
-<td>Startup credits</td>
-<td>$10K–$100K</td>
-</tr>
-<tr>
-<td><strong>Google for Startups</strong></td>
-<td>Cloud credits</td>
-<td>до $200K</td>
-</tr>
-<tr>
-<td><strong>Microsoft for Startups</strong></td>
-<td>Azure credits</td>
-<td>до $150K</td>
-</tr>
-</tbody>
-</table>
-<h4>Итого запрашиваемая поддержка:</h4>
+<h3>Почему доход, а не equity?</h3>
 <ul>
-<li><strong>$150K–$300K</strong> суммарно грантов/кредитов</li>
-<li><strong>API partner status</strong> на 3+ биржах (для volume rebate)</li>
-<li><strong>Co-marketing</strong> → привлечение 200+ клиентов в первые 6 мес</li>
+<li>✅ Платформа уже генерирует выручку — инвестор видит результат с первого месяца</li>
+<li>✅ Не размываем контроль основателя над продуктом</li>
+<li>✅ Все метрики верифицируемы через API бирж</li>
+<li>✅ Низкий риск: платформа диверсифицирована по клиентам и биржам</li>
 </ul>
-<hr />
+<h3>Финансовый прогноз (12 мес)</h3>
+<table>
+<thead>
+<tr>
+<th>Месяц</th>
+<th>Клиенты</th>
+<th>MRR (подписки)</th>
+<th>Profit Share</th>
+<th>Rebates</th>
+<th><strong>Total Monthly</strong></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1–3</td>
+<td>19→30</td>
+<td>$1.5K</td>
+<td>$0.8K</td>
+<td>$0.5K</td>
+<td><strong>$2.8K</strong></td>
+</tr>
+<tr>
+<td>4–6</td>
+<td>30→50</td>
+<td>$3.5K</td>
+<td>$2.0K</td>
+<td>$1.2K</td>
+<td><strong>$6.7K</strong></td>
+</tr>
+<tr>
+<td>7–12</td>
+<td>50→100</td>
+<td>$7.0K</td>
+<td>$4.5K</td>
+<td>$3.0K</td>
+<td><strong>$14.5K</strong></td>
+</tr>
+</tbody>
+</table>
+<h3>Возврат инвестиций (при $300K за 30%)</h3>
+<table>
+<thead>
+<tr>
+<th>Год</th>
+<th>Месячный доход</th>
+<th>Годовой доход</th>
+<th>Доход инвестора (30%)</th>
+<th>ROI</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>$2.8K → $14.5K</td>
+<td>~$104K</td>
+<td><strong>$31K</strong></td>
+<td>10%</td>
+</tr>
+<tr>
+<td>2</td>
+<td>$15K → $50K</td>
+<td>~$390K</td>
+<td><strong>$117K</strong></td>
+<td>39%</td>
+</tr>
+<tr>
+<td>3</td>
+<td>$50K → $100K</td>
+<td>~$900K</td>
+<td><strong>$270K</strong></td>
+<td>90%</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>Цель: полный возврат инвестиций в течение 24–30 месяцев, далее — пассивный доход.</p>
+</blockquote>
 <h2>Слайд 10 — Команда и статус</h2>
 <h3>Текущий статус (Май 2026)</h3>
 <ul>
-<li>✅ <strong>Production-ready</strong>: VPS 176.57.184.98, backend + frontend работают 24/7</li>
-<li>✅ <strong>4 биржи в production</strong>: Bybit + MEXC + WEEX + BingX</li>
+<li>✅ <strong>Production-ready</strong>: backend + frontend работают 24/7 на выделенном сервере</li>
+<li>✅ <strong>5 бирж в production</strong>: Bybit + Binance + MEXC + WEEX + BingX</li>
 <li>✅ <strong>10 000+ бэктестов</strong> завершены</li>
 <li>✅ <strong>19 активных клиентов</strong> на balanced-portfolio-v2</li>
 <li>✅ <strong>One-click materialization</strong>: мастер-портфель → все клиенты</li>
@@ -452,11 +494,9 @@
 <p><strong>Платформа</strong>: BTDD Platform — Algorithmic Trading SaaS<br />
 <strong>Основатель</strong>: Алексей Лазарев / Aleksei Lazarev<br />
 <strong>Telegram</strong>: @yakovbyakov<br />
-<strong>Email</strong>: aiaetrade17@gmail.com<br />
-<strong>Demo</strong>: https://btdd.vercel.app<br />
-<strong>GitHub</strong>: (приватный, по запросу)</p>
+<strong>Email</strong>: aiaetrade17@gmail.com  </p>
 <hr />
-<p><em>Документ подготовлен для рассылки в программы грантов и партнёрства криптобирж.</em><br />
-<em>Версия 1.0, Апрель 2026.</em></p>
+<p><em>Документ подготовлен для квалифицированных инвесторов и стратегических партнёров.</em><br />
+<em>Версия 2.0, Май 2026.</em></p>
 </body>
 </html>
