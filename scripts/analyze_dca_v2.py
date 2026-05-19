@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
-import requests, json, sys
+import requests, json, sys, os
 
 API = "http://localhost:3001"
+TOKEN = os.environ.get("BTDD_ADMIN_TOKEN", "BattleToads2026!Ax")
+HEADERS = {
+    "Authorization": f"Bearer {TOKEN}",
+    "Content-Type": "application/json",
+}
 
 def backtest(overrides, label):
     url = f"{API}/api/research/backtest"
@@ -13,7 +18,7 @@ def backtest(overrides, label):
         "profile": {"start_capital": 10000}
     }
     try:
-        r = requests.post(url, json=payload, timeout=180)
+        r = requests.post(url, json=payload, headers=HEADERS, timeout=180)
         print(f"{label}: HTTP {r.status_code}")
         if r.status_code == 200:
             data = r.json()
