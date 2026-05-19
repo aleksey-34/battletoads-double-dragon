@@ -136,4 +136,4 @@ export function computeTakeProfit(
   }
   return null;
 }
-"
+

@@ -13,4 +13,4 @@ export {
   computeStopLoss,
   computeTakeProfit,
 } from './sizing';
-"
+

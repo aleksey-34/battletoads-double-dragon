@@ -117,4 +117,4 @@ export async function archiveStrategy(id: number): Promise<void> {
 export async function deleteStrategy(id: number): Promise<void> {
   await db.run('DELETE FROM strategies WHERE id = ?', [id]);
 }
-"
+
