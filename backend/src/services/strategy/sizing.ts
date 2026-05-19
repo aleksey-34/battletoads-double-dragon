@@ -2,7 +2,7 @@
 // Handles notional calculation, partial TP, stop-loss, take-profit, and leg sizing.
 
 import logger from '../../utils/logger';
-import { safeNumber } from '../../utils/safeNumber';
+import { safeNumber } from '../../bot/safeNumber';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
