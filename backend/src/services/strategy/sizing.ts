@@ -1,4 +1,4 @@
-"// Sizing & Risk Management — extracted from bot/strategy.ts
+// Sizing & Risk Management — extracted from bot/strategy.ts
 // Handles notional calculation, partial TP, stop-loss, take-profit, and leg sizing.
 
 import logger from '../../utils/logger';

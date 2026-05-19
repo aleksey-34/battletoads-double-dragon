@@ -1,4 +1,4 @@
-"// Strategy CRUD Operations — extracted from bot/strategy.ts
+// Strategy CRUD Operations — extracted from bot/strategy.ts
 // Handles create, update, archive, delete for strategies.
 
 import db from '../../db';

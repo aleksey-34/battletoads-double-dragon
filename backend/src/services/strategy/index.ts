@@ -1,4 +1,4 @@
-"// Strategy Services — unified exports
+// Strategy Services — unified exports
 
 export { createStrategy, updateStrategy, archiveStrategy, deleteStrategy } from './crud';
 export type { StrategyRow } from './crud';
