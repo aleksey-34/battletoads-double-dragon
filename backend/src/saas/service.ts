@@ -10707,6 +10707,12 @@ const materializeAlgofundSystem = async (
     notes: `algofund ${tenant.slug}`,
   }));
 
+  // Resolve maxOpenPositions from master_cards metadata (card override).
+  // cardSystemName = published_system_name || local systemName. Fallback: 2
+  const cardSystemName = asString(profile.published_system_name, '').trim() || systemName;
+  const _cardCfg = await getCardConfigBySystemName(cardSystemName);
+  const resolvedMaxOpenPositions = _cardCfg.maxOpenPositions > 0 ? _cardCfg.maxOpenPositions : 2;
+
   // ARCHIVE-ORPHANS: strategies on executionApiKeyName that were materialized
   // by a PREVIOUS published_system_name (different members) keep is_active=1 and
   // continue trading after a switch_system. They produce zombie positions that
@@ -10745,7 +10751,7 @@ const materializeAlgofundSystem = async (
       auto_sync_members: false,
       discovery_enabled: false,
       max_members: Math.max(6, members.length),
-      max_open_positions: 2,
+      max_open_positions: resolvedMaxOpenPositions,
     });
     await replaceTradingSystemMembers(executionApiKeyName, Number(existing.id), members);
     systemId = Number(existing.id);
@@ -10756,7 +10762,7 @@ const materializeAlgofundSystem = async (
       auto_sync_members: false,
       discovery_enabled: false,
       max_members: Math.max(6, members.length),
-      max_open_positions: 2,
+      max_open_positions: resolvedMaxOpenPositions,
       members,
     });
     systemId = Number(created.id);
@@ -10766,10 +10772,6 @@ const materializeAlgofundSystem = async (
   if (shouldActivate) {
     await setTradingSystemActivation(executionApiKeyName, systemId, true, true);
   }
-
-  const storefrontSystemName = asString(profile.published_system_name, '').trim().toUpperCase().startsWith('ALGOFUND_MASTER::')
-    ? asString(profile.published_system_name, '').trim()
-    : systemName;
 
   await db.run(
     `UPDATE algofund_profiles
@@ -10783,7 +10785,7 @@ const materializeAlgofundSystem = async (
     [
       executionApiKeyName,
       executionApiKeyName,
-      storefrontSystemName,
+      cardSystemName,
       shouldActivate ? 1 : Number(profile.requested_enabled || 0),
       shouldActivate ? 1 : Number(profile.actual_enabled || 0),
       tenant.id,
