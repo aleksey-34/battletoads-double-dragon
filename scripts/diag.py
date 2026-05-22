@@ -24,9 +24,9 @@ def banner(msg):
     print("=" * 60)
 
 banner("1. ARTHUR API KEYS")
-q = "SELECT id, name, exchange, active FROM api_keys WHERE name LIKE '%artur%' OR name LIKE '%arthur%' ORDER BY id"
+q = "SELECT id, name, exchange FROM api_keys WHERE name LIKE '%artur%' OR name LIKE '%arthur%' ORDER BY id"
 rows = cur.execute(q).fetchall()
-show(rows, ["id", "name", "exchange", "active"])
+show(rows, ["id", "name", "exchange"])
 
 for k in rows:
     ts = cur.execute(
@@ -49,10 +49,26 @@ for k in rows:
             ))
 
 banner("2. CLIENT 5374535192")
-prows = cur.execute(
-    "SELECT * FROM algofund_profiles WHERE telegram_id LIKE '%5374535192%' ORDER BY id DESC"
-).fetchall()
-show(prows)
+# Ищем через api_key_name + JOIN с tenants
+q2 = """
+SELECT af.id, af.tenant_id, t.display_name, t.slug, t.status AS tenant_status,
+       af.risk_multiplier, af.requested_enabled, af.actual_enabled,
+       af.assigned_api_key_name, af.execution_api_key_name, af.published_system_name
+FROM algofund_profiles af
+JOIN tenants t ON t.id=af.tenant_id
+WHERE af.assigned_api_key_name LIKE '%5374535192%'
+   OR af.execution_api_key_name LIKE '%5374535192%'
+   OR t.display_name LIKE '%5374535192%'
+   OR t.slug LIKE '%5374535192%'
+ORDER BY af.id DESC
+"""
+prows = cur.execute(q2).fetchall()
+if prows:
+    show(prows)
+else:
+    print("  NOT FOUND via api_key/tenant name — dumping all algofund_profiles...")
+    all_af = cur.execute("SELECT af.*, t.display_name, t.slug FROM algofund_profiles af JOIN tenants t ON t.id=af.tenant_id ORDER BY af.id DESC LIMIT 30").fetchall()
+    show(all_af)
 
 banner("3. DCA STRATEGIES")
 dca = cur.execute(
