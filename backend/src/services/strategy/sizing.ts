@@ -2,7 +2,7 @@
 // Handles notional calculation, partial TP, stop-loss, take-profit, and leg sizing.
 
 import logger from '../../utils/logger';
-import { safeNumber } from '../../bot/safeNumber';
+const safeNumber = (value: any, fallback: number): number => { const n = Number(value); return Number.isFinite(n) ? n : fallback; };
 
 // ── Constants ────────────────────────────────────────────────────────────────
 

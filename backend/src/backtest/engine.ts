@@ -547,6 +547,27 @@ type OpenTradeState = {
   funding: number;
 };
 
+const extractDcaConfigFromStrategy = (s: any): {
+  enabled: boolean; baseAmountUsdt: number; stepPercent: number; maxOrders: number;
+  orderMultiplier: number; tpPercent: number; slPercent: number;
+  ordersCount: number; totalInvested: number; totalQty: number; lastBuyPrice: number;
+} | null => {
+  const t = String(s.strategy_type || '').trim().toLowerCase();
+  if (t !== 'dca') return null;
+  const ba = Number(s.dca_base_amount_usdt || 10);
+  if (!Number.isFinite(ba) || ba <= 0) return null;
+  return {
+    enabled: true,
+    baseAmountUsdt: Math.max(1, ba),
+    stepPercent: Math.max(0.1, Number(s.dca_step_percent || 2)),
+    maxOrders: Math.max(0, Math.floor(Number(s.dca_max_orders || 5))),
+    orderMultiplier: Math.max(1, Number(s.dca_order_multiplier || 1)),
+    tpPercent: Math.max(0.1, Number(s.dca_tp_percent || 3)),
+    slPercent: Math.max(0, Number(s.dca_sl_percent || 0)),
+    ordersCount: 0, totalInvested: 0, totalQty: 0, lastBuyPrice: 0,
+  };
+};
+
 type RuntimeStrategy = {
   strategy: Strategy;
   candles: ParsedCandle[];
@@ -560,6 +581,7 @@ type RuntimeStrategy = {
   endIndex: number;
   /** Has the partial TP (50% close) already fired for the current open position? */
   partialTpTriggered: boolean;
+  dcaState: ReturnType<typeof extractDcaConfigFromStrategy>;
 };
 
 type BacktestContext = {
@@ -798,6 +820,25 @@ const openPosition = (
   portfolioEquityNow: number
 ): boolean => {
   const strategy = runtime.strategy;
+
+  // DCA strategies: use baseAmountUsdt instead of lot percent
+  if (runtime.dcaState?.enabled) {
+    const dcaSize = runtime.dcaState.baseAmountUsdt;
+    if (dcaSize <= 0) return false;
+    const entryPrice = executionPrice(marketPrice, signal, 'entry', effectiveSlippageRate(ctx, strategy));
+    const entryFee = dcaSize * effectiveCommissionRate(ctx, strategy);
+    ctx.cashEquity -= entryFee;
+    runtime.state = signal;
+    runtime.entryPrice = entryPrice;
+    runtime.tpAnchorPrice = marketPrice;
+    runtime.notional = dcaSize;
+    runtime.partialTpTriggered = false;
+    runtime.openTrade = { side: signal, entryTime: eventTime, entryPrice, notional: dcaSize, entryFee, funding: 0 };
+    ctx.lockedMargin += dcaSize;
+    const qty = dcaSize / entryPrice;
+    runtime.dcaState = { ...runtime.dcaState, ordersCount: 0, totalInvested: dcaSize, totalQty: qty, lastBuyPrice: entryPrice };
+    return true;
+  }
 
   const baseLotPercent = ctx.lotPercentOverride > 0
     ? ctx.lotPercentOverride
@@ -1225,6 +1266,7 @@ const loadRuntimeStrategies = async (
       startIndex,
       endIndex,
       partialTpTriggered: false,
+        dcaState: extractDcaConfigFromStrategy(strategy),
     });
   }
 
@@ -1459,6 +1501,27 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
 
     let closedOnCurrentBar = false;
 
+    // DCA TP/SL check (from average entry price)
+    if (runtime.dcaState && runtime.state !== 'flat' && runtime.entryPrice && runtime.notional > 0) {
+      const dc = runtime.dcaState;
+      if (dc.totalQty > 0 && dc.totalInvested > 0) {
+        const avgBuy = dc.totalInvested / dc.totalQty;
+        const tpPrice = avgBuy * (1 + dc.tpPercent / 100);
+        const slPrice = dc.slPercent > 0 ? avgBuy * (1 - dc.slPercent / 100) : 0;
+        if (candle.close >= tpPrice) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, candle.close, 'dca_tp');
+          runtime.dcaState.ordersCount = 0; runtime.dcaState.totalInvested = 0;
+          runtime.dcaState.totalQty = 0; runtime.dcaState.lastBuyPrice = 0;
+          closedOnCurrentBar = true;
+        } else if (slPrice > 0 && candle.close <= slPrice) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, candle.close, 'dca_sl');
+          runtime.dcaState.ordersCount = 0; runtime.dcaState.totalInvested = 0;
+          runtime.dcaState.totalQty = 0; runtime.dcaState.lastBuyPrice = 0;
+          closedOnCurrentBar = true;
+        }
+      }
+    }
+
     // Partial TP: applies to ALL strategy types (before type-specific exits)
     if (!closedOnCurrentBar && !runtime.partialTpTriggered && partialTpPct > 0 && (state === 'long' || state === 'short') && entryPrice && entryPrice > 0) {
       const currentPnlPct = state === 'long'
@@ -1553,6 +1616,34 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       if (!closedOnCurrentBar && state === 'short' && entryPrice && signalPayload.current >= signalPayload.donchianCenter) {
         closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'stop_loss_short_center');
         closedOnCurrentBar = true;
+      }
+    }
+
+
+    // DCA safety order
+    if (!closedOnCurrentBar && runtime.dcaState && runtime.state !== 'flat' &&
+        runtime.dcaState.lastBuyPrice > 0 && runtime.dcaState.ordersCount < runtime.dcaState.maxOrders) {
+      const dc = runtime.dcaState;
+      const stepTrigger = dc.lastBuyPrice * (1 - dc.stepPercent / 100);
+      if (candle.close <= stepTrigger) {
+        const safetySize = dc.baseAmountUsdt * Math.pow(dc.orderMultiplier, dc.ordersCount);
+        const safetyQty = safetySize / candle.close;
+        const prevNotional = runtime.notional;
+        const prevEntry = runtime.entryPrice!;
+        const newNotional = prevNotional + safetySize;
+        const newAvgEntry = (prevNotional * prevEntry + safetySize * candle.close) / newNotional;
+        const entryFee = safetySize * effectiveCommissionRate(ctx, runtime.strategy);
+        ctx.cashEquity -= entryFee;
+        runtime.entryPrice = newAvgEntry;
+        runtime.notional = newNotional;
+        runtime.openTrade!.entryPrice = newAvgEntry;
+        runtime.openTrade!.notional = newNotional;
+        runtime.openTrade!.entryFee += entryFee;
+        ctx.lockedMargin = Math.max(0, ctx.lockedMargin - prevNotional) + newNotional;
+        dc.ordersCount += 1;
+        dc.totalInvested += safetySize;
+        dc.totalQty += safetyQty;
+        dc.lastBuyPrice = candle.close;
       }
     }
 

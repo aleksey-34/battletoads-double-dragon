@@ -1,8 +1,8 @@
 // Strategy CRUD Operations — extracted from bot/strategy.ts
 // Handles create, update, archive, delete for strategies.
 
-import db from '../../db/db';
-import { safeNumber } from '../../bot/safeNumber';
+import { db } from '../../utils/database';
+const safeNumber = (value: any, fallback: number): number => { const n = Number(value); return Number.isFinite(n) ? n : fallback; };
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
