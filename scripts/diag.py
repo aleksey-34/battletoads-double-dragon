@@ -89,11 +89,45 @@ if mems:
     print("\n  TS members with DCA:")
     show(mems, ["id", "ts_name", "strategy_id", "base_symbol", "dca_base_amount_usdt", "weight", "is_enabled"])
 
-banner("4. RECENT SNAPSHOTS")
-snaps = cur.execute(
-    "SELECT id, snapshot_key, created_at FROM ts_backtest_snapshots ORDER BY id DESC LIMIT 15"
-).fetchall()
-show(snaps, ["id", "snapshot_key", "created_at"])
+banner("4. SNAPSHOTS (app_runtime_flags)")
+# ts_backtest_snapshots — JSON-ключ в app_runtime_flags
+snap_flag = cur.execute(
+    "SELECT value FROM app_runtime_flags WHERE key='offer.store.ts_backtest_snapshots'"
+).fetchone()
+if snap_flag:
+    try:
+        snap_map = json.loads(snap_flag["value"])
+    except Exception as e:
+        print(f"  JSON parse error: {e}")
+        snap_map = {}
+    print(f"  Total snapshot keys: {len(snap_map)}")
+    # Показать все ключи + основные метрики
+    for i, (k, v) in enumerate(snap_map.items()):
+        if isinstance(v, dict):
+            ret = v.get("ret") or v.get("totalReturnPercent") or v.get("total_return_percent")
+            dd = v.get("dd") or v.get("maxDrawdownPercent") or v.get("max_drawdown_percent")
+            trades = v.get("trades") or v.get("tradesCount") or v.get("trades_count")
+            pf = v.get("pf") or v.get("profitFactor") or v.get("profit_factor")
+            print(f"  [{i}] key={k}")
+            print(f"      ret={ret} dd={dd} trades={trades} pf={pf}")
+        else:
+            print(f"  [{i}] key={k} value={str(v)[:100]}")
+        if i >= 20:
+            print(f"  ... and {len(snap_map)-20} more keys")
+            break
+else:
+    print("  NO snapshots flag found!")
+
+# Также одиночный снепшот
+snap_one = cur.execute(
+    "SELECT value FROM app_runtime_flags WHERE key='offer.store.ts_backtest_snapshot'"
+).fetchone()
+if snap_one and snap_one["value"] and snap_one["value"] != "null":
+    print("\n  SINGLE snapshot (offer.store.ts_backtest_snapshot):")
+    try:
+        print(f"    {snap_one['value'][:500]}")
+    except:
+        print("    (binary/unparseable)")
 
 banner("5. ENABLED MISMATCHES (artur keys)")
 mm = cur.execute(
