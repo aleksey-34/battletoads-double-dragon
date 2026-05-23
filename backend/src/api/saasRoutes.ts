@@ -313,6 +313,7 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
       riskScore: toOptionalNumber(req.body?.riskScore),
       tradeFrequencyScore: toOptionalNumber(req.body?.tradeFrequencyScore),
       initialBalance: toOptionalNumber(req.body?.initialBalance),
+      reinvestPercent: toOptionalNumber(req.body?.reinvestPercent),
       riskScaleMaxPercent: toOptionalNumber(req.body?.riskScaleMaxPercent),
       maxOpenPositions: toOptionalNumber(req.body?.maxOpenPositions),
       lotPercentOverride: toOptionalNumber(req.body?.lotPercentOverride),
