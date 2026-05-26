@@ -6655,6 +6655,16 @@ export const previewAdminSweepBacktest = async (payload?: {
               equity: Number(asNumber(value, 0).toFixed(4)),
             }))
             .filter((item) => Number.isFinite(item.equity));
+          const snapshotPeriodDaysForDates = Math.max(1, Math.floor(asNumber(snapshot.periodDays, periodDays)));
+          const snapshotNowForDates = new Date();
+          const snapshotDateToResolved = requestedDateTo || snapshotNowForDates.toISOString().slice(0, 10);
+          const snapshotDateFromResolved = requestedDateFrom
+            || new Date(snapshotNowForDates.getTime() - snapshotPeriodDaysForDates * 24 * 3600 * 1000).toISOString().slice(0, 10);
+          const snapshotPeriodInfo: PeriodInfo = {
+            dateFrom: snapshotDateFromResolved,
+            dateTo: snapshotDateToResolved,
+            interval: asString(period?.interval, asString(sweep?.config?.interval, '4h')),
+          };
           const snapshotStrategyIds = Array.from(new Set(snapshotSelectedOffers
             .map((item) => Number(item.strategyId || 0))
             .filter((value) => Number.isFinite(value) && value > 0)));
@@ -6703,8 +6713,8 @@ export const previewAdminSweepBacktest = async (payload?: {
                   fundingRatePercent: fundingRatePercentOverride !== null
                     ? fundingRatePercentOverride
                     : asNumber(sweep?.config?.fundingRatePercent, 0),
-                  dateFrom: requestedDateFrom || asString(sweep?.config?.dateFrom, ''),
-                  dateTo: requestedDateTo || asString(sweep?.config?.dateTo, ''),
+                  dateFrom: requestedDateFrom || snapshotDateFromResolved || asString(sweep?.config?.dateFrom, ''),
+                  dateTo: requestedDateTo || snapshotDateToResolved || asString(sweep?.config?.dateTo, ''),
                   ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
                   ...(partialTpPct > 0 ? { partialTpPct } : {}),
                   maxDepositOverride: initialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
@@ -6770,7 +6780,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                     reinvestPercent,
                     maxOpenPositions,
                   },
-                  period,
+                  period: snapshotPeriodInfo,
                   sweepApiKeyName: asString(snapshot.apiKeyName, ''),
                   selectedOffers: snapshotSelectedOffers,
                   preview: {
@@ -6936,7 +6946,7 @@ export const previewAdminSweepBacktest = async (payload?: {
               reinvestPercent,
               maxOpenPositions,
             },
-            period,
+            period: snapshotPeriodInfo,
             sweepApiKeyName: asString(snapshot.apiKeyName, ''),
             selectedOffers: snapshotSelectedOffers,
             snapshotMeta: {
@@ -7570,9 +7580,19 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
       const existingKey = resolveTsSnapshotKeyBySystemName(nextTsSnapshotMap, systemName) || systemName;
       const existing = nextTsSnapshotMap[existingKey] || null;
       try {
+        const refreshPeriodDays = Math.max(1, Math.floor(asNumber(existing?.periodDays, offerStore.defaults.periodDays || 90)));
+        const refreshNow = new Date();
+        const refreshDateTo = refreshNow.toISOString().slice(0, 10);
+        const refreshDateFrom = new Date(refreshNow.getTime() - refreshPeriodDays * 24 * 3600 * 1000).toISOString().slice(0, 10);
         const preview = await previewAdminSweepBacktest({
           kind: 'algofund-ts',
           systemName,
+          setKey: asString(existing?.setKey, existingKey),
+          offerIds: Array.isArray(existing?.offerIds)
+            ? existing.offerIds.map((item) => asString(item, '').trim()).filter(Boolean)
+            : undefined,
+          dateFrom: refreshDateFrom,
+          dateTo: refreshDateTo,
           riskScore: Number(existing?.backtestSettings?.riskScore ?? 5),
           tradeFrequencyScore: Number(existing?.backtestSettings?.tradeFrequencyScore ?? 5),
           initialBalance: Number(existing?.backtestSettings?.initialBalance ?? 10000),

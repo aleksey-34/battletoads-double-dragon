@@ -1073,6 +1073,82 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
   };
 };
 
+
+type TsSnapshotBacktestDatesSource = {
+  periodDays?: number;
+  backtestSettings?: Record<string, unknown>;
+  setKey?: string;
+  offerIds?: string[];
+  systemName?: string;
+};
+
+const computeBacktestDatesFromPeriodDays = (periodDaysRaw: unknown): { dateFrom: string; dateTo: string } => {
+  const periodDays = Math.max(1, Math.floor(Number(periodDaysRaw ?? 90)));
+  const dateTo = new Date().toISOString().slice(0, 10);
+  const dateFrom = new Date(Date.now() - periodDays * 86400000).toISOString().slice(0, 10);
+  return { dateFrom, dateTo };
+};
+
+const enrichBacktestSettingsFromTsSnapshot = (
+  settings: BacktestCardSettings,
+  snapshot: TsSnapshotBacktestDatesSource | null,
+): BacktestCardSettings => {
+  const rawFrom = String(settings.dateFrom || snapshot?.backtestSettings?.dateFrom || '').trim();
+  const rawTo = String(settings.dateTo || snapshot?.backtestSettings?.dateTo || '').trim();
+  const fallback = computeBacktestDatesFromPeriodDays(snapshot?.periodDays ?? 90);
+  return {
+    ...settings,
+    dateFrom: rawFrom || fallback.dateFrom,
+    dateTo: rawTo || fallback.dateTo,
+  };
+};
+
+const findTsSnapshotForBacktestContext = (
+  snapshots: Record<string, TsSnapshotBacktestDatesSource>,
+  context: { setKey?: string; offerIds?: string[]; systemName?: string },
+): TsSnapshotBacktestDatesSource | null => {
+  const snapshotsList = Object.values(snapshots || {});
+  const contextSetKey = String(context.setKey || '').trim();
+  const contextOfferIds = Array.from(new Set((context.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean))).sort();
+
+  if (contextSetKey) {
+    const byKey = snapshots[contextSetKey];
+    if (byKey) {
+      return byKey;
+    }
+    const bySetKey = snapshotsList.find((snapshot) => String(snapshot?.setKey || '').trim() === contextSetKey);
+    if (bySetKey) {
+      return bySetKey;
+    }
+  }
+
+  if (contextOfferIds.length > 0) {
+    const byOfferIds = snapshotsList.find((snapshot) => {
+      const snapshotOfferIds = Array.from(new Set((snapshot.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean))).sort();
+      if (snapshotOfferIds.length !== contextOfferIds.length) {
+        return false;
+      }
+      return snapshotOfferIds.every((id, index) => id === contextOfferIds[index]);
+    });
+    if (byOfferIds) {
+      return byOfferIds;
+    }
+  }
+
+  const systemName = String(context.systemName || '').trim();
+  if (systemName) {
+    const bySystemName = snapshotsList.find((snapshot) => String(snapshot?.systemName || '').trim() === systemName);
+    if (bySystemName) {
+      return bySystemName;
+    }
+    if (snapshots[systemName]) {
+      return snapshots[systemName];
+    }
+  }
+
+  return null;
+};
+
 const parseAdminBacktestSettingsByCard = (raw?: string | null): Record<string, BacktestCardSettings> => {
   if (!raw) {
     return {};
@@ -6427,7 +6503,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       }
 
       if (matchingSnapshot?.backtestSettings) {
-        return normalizeBacktestCardSettings(matchingSnapshot.backtestSettings);
+        return enrichBacktestSettingsFromTsSnapshot(
+          normalizeBacktestCardSettings(matchingSnapshot.backtestSettings),
+          matchingSnapshot,
+        );
       }
     }
 
@@ -6521,8 +6600,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     // haven't flushed yet), otherwise fall back to current state.
     const overrideDateFromRaw = options?.settingsOverride?.dateFrom;
     const overrideDateToRaw = options?.settingsOverride?.dateTo;
-    const effectiveDateFrom = (typeof overrideDateFromRaw === 'string' ? overrideDateFromRaw : adminSweepBacktestDateFrom) || undefined;
-    const effectiveDateTo = (typeof overrideDateToRaw === 'string' ? overrideDateToRaw : adminSweepBacktestDateTo) || undefined;
+    let effectiveDateFrom = (typeof overrideDateFromRaw === 'string' ? overrideDateFromRaw : adminSweepBacktestDateFrom) || undefined;
+    let effectiveDateTo = (typeof overrideDateToRaw === 'string' ? overrideDateToRaw : adminSweepBacktestDateTo) || undefined;
+    if (targetContext.kind === 'algofund-ts' && (!effectiveDateFrom || !effectiveDateTo)) {
+      const snapshots = (summary?.offerStore?.tsBacktestSnapshots || {}) as Record<string, TsSnapshotBacktestDatesSource>;
+      let snapshotForDates = findTsSnapshotForBacktestContext(snapshots, targetContext);
+      if (!snapshotForDates && targetContext.systemName) {
+        snapshotForDates = resolveTsSnapshotForSystem(String(targetContext.systemName || '').trim());
+      }
+      if (snapshotForDates) {
+        const fallbackDates = computeBacktestDatesFromPeriodDays(snapshotForDates.periodDays);
+        effectiveDateFrom = effectiveDateFrom || fallbackDates.dateFrom;
+        effectiveDateTo = effectiveDateTo || fallbackDates.dateTo;
+      }
+    }
     try {
       const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
         kind: targetContext.kind,
