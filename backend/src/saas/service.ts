@@ -5528,8 +5528,8 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
   const runtimeSnapshotOfferIds = Object.entries(labels)
     .filter(([, label]) => label === 'runtime_snapshot')
     .map(([offerId]) => offerId);
-  const publishedOfferIds = runtimeSnapshotOfferIds;
-  const curatedOfferIds = runtimeSnapshotOfferIds;
+  const publishedOfferIds = Array.from(new Set([...runtimeSnapshotOfferIds, ...publishedFromFlagNormalized]));
+  const curatedOfferIds = Array.from(new Set([...runtimeSnapshotOfferIds, ...curatedFromFlagNormalized]));
 
   // Count connected clients per offer
   const clientCountByOffer = new Map<string, number>();

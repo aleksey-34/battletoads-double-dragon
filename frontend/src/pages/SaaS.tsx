@@ -7274,6 +7274,93 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     openDraftTsBacktest();
   };
 
+  // Build synthetic AdminSweepBacktestPreviewResponse from snapshot + offerStoreOffers
+  // so the modal shows saved snapshot data without triggering a live sweep.
+  const buildSyntheticBacktestResultFromSnapshot = (
+    snapshot: any,
+    setKey: string,
+    offerIds: string[],
+    systemName: string,
+  ): AdminSweepBacktestPreviewResponse | null => {
+    if (!snapshot) return null;
+    const settings = snapshot.backtestSettings || {};
+    const riskScore = Number(settings.riskScore ?? 5);
+    const tradeFrequencyScore = Number(settings.tradeFrequencyScore ?? 5);
+    const initialBalance = Number(settings.initialBalance ?? 10000);
+    const riskScaleMaxPercent = Number(settings.riskScaleMaxPercent ?? 100);
+    const dateFrom = String(settings.dateFrom || '').trim() || undefined;
+    const dateTo = String(settings.dateTo || '').trim() || undefined;
+    const offerStoreById = new Map(
+      (summary?.offerStore?.offers || []).map((offer: any) => [String(offer.offerId), offer])
+    );
+    const selectedOffers = offerIds.map((offerId) => {
+      const row = offerStoreById.get(offerId) || {};
+      const strategyId = Number(row?.strategyId || 0);
+      const ret = Number(snapshot.ret ?? 0);
+      const pf = Number(snapshot.pf ?? 1);
+      const dd = Number(snapshot.dd ?? 0);
+      const trades = Math.max(0, Math.floor(Number(snapshot.trades ?? 0)));
+      const wr = Number(snapshot.winRate ?? 0);
+      const periodDaysFromSnapshot = Math.max(1, Math.floor(Number(snapshot.periodDays ?? 90)));
+      const tradesPerDay = Number((trades / Math.max(1, periodDaysFromSnapshot)).toFixed(3));
+      return {
+        offerId,
+        titleRu: String(row?.titleRu || offerId),
+        weight: 1,
+        mode: String(row?.mode || 'mono') === 'synth' ? 'synth' as const : 'mono' as const,
+        market: String(row?.market || ''),
+        strategyId,
+        strategyName: String(row?.titleRu || 'Strategy #' + strategyId),
+        score: Number(row?.score ?? 0),
+        metricsSource: 'snapshot_only' as const,
+        metrics: {
+          ret: Number(ret.toFixed(3)),
+          pf: Number(pf.toFixed(3)),
+          dd: Number(dd.toFixed(3)),
+          wr: Number(wr.toFixed(3)),
+          trades,
+        },
+        tradesPerDay,
+        periodDays: periodDaysFromSnapshot,
+        equityPoints: (Array.isArray(snapshot.equityPoints) ? snapshot.equityPoints : []) as number[],
+      };
+    });
+    const syntheticResult: AdminSweepBacktestPreviewResponse = {
+      kind: 'algofund-ts',
+      publishMeta: {
+        offerIds,
+        setKey,
+        membersCount: offerIds.length,
+        systemName,
+      },
+      controls: {
+        riskScore,
+        tradeFrequencyScore,
+        riskLevel: sliderValueToLevel(riskScore),
+        tradeFrequencyLevel: sliderValueToLevel(tradeFrequencyScore),
+        initialBalance,
+        riskScaleMaxPercent,
+      },
+      period: dateFrom && dateTo ? { dateFrom, dateTo, interval: null } : null,
+      selectedOffers,
+      preview: {
+        source: 'storefront_snapshot',
+        summary: {
+          totalReturnPercent: Number(snapshot.ret ?? 0),
+          maxDrawdownPercent: Number(snapshot.dd ?? 0),
+          profitFactor: Number(snapshot.pf ?? 1),
+          winRatePercent: Number(snapshot.winRate ?? 0),
+          tradesCount: Math.max(0, Math.floor(Number(snapshot.trades ?? 0))),
+          finalEquity: Number(snapshot.finalEquity ?? 0),
+        },
+        equity: (Array.isArray(snapshot.equityPoints)
+          ? snapshot.equityPoints.map((value: number, idx: number) => ({ time: idx, value: Number(value) }))
+          : []) as EquityPoint[],
+      },
+    };
+    return syntheticResult;
+  };
+
   const openBacktestDrawerForStorefrontTs = (systemName: string) => {
     const normalizedSystemName = String(systemName || '').trim();
     if (!normalizedSystemName) {
@@ -7298,6 +7385,50 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
+    // --- SNAPSHOT PATH: display saved snapshot directly without live sweep ---
+    if (snapshot && setKey && offerIds.length > 0) {
+      const syntheticResult = buildSyntheticBacktestResultFromSnapshot(
+        snapshot,
+        setKey,
+        offerIds,
+        normalizedSystemName,
+      );
+      if (syntheticResult) {
+        const settings: any = snapshot.backtestSettings || {};
+        applyBacktestSettings({
+          riskScore: Number(settings.riskScore ?? 5),
+          tradeFrequencyScore: Number(settings.tradeFrequencyScore ?? 5),
+          initialBalance: Number(settings.initialBalance ?? 10000),
+          riskScaleMaxPercent: Number(settings.riskScaleMaxPercent ?? 100),
+          maxOpenPositions: Math.max(0, Math.floor(Number(settings.maxOpenPositions ?? 0))),
+          lotPercentOverride: Math.max(0, Math.floor(Number(settings.lotPercentOverride ?? 0))),
+          partialTpPct: Math.max(0, Number(settings.partialTpPct ?? 0)),
+          commissionPercent: Math.max(0, Number(settings.commissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent)),
+          slippagePercent: Math.max(0, Number(settings.slippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent)),
+          fundingRatePercent: Math.max(0, Number(settings.fundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent)),
+          dateFrom: String(settings.dateFrom || '').trim() || undefined,
+          dateTo: String(settings.dateTo || '').trim() || undefined,
+        });
+        setSelectedAdminDraftTsSetKey(setKey);
+        setBacktestTsWeightsByOfferId(normalizeBacktestTsWeights(offerIds, runtimeSystem?.offerWeightsById || {}));
+        setBacktestDrawerContext({
+          kind: 'algofund-ts',
+          title: `Бэктест ТС: ${normalizedSystemName}`,
+          description: 'Снапшот витрины. Изменение параметров запустит пересчёт.',
+          offerIds,
+          offerWeightsById: runtimeSystem?.offerWeightsById,
+          setKey,
+          systemName: normalizedSystemName,
+        });
+        setAdminSweepBacktestResult(syntheticResult);
+        setAdminSweepBacktestStale(false);
+        setAdminSweepBacktestRerunApiKey('');
+        setBacktestDrawerVisible(true);
+        return;
+      }
+    }
+
+    // --- FALLBACK: live sweep path (no snapshot or snapshot failed to build) ---
     if (setKey) {
       setSelectedAdminDraftTsSetKey(setKey);
     }
