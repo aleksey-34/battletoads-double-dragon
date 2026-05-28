@@ -1080,6 +1080,7 @@ type TsSnapshotBacktestDatesSource = {
   setKey?: string;
   offerIds?: string[];
   systemName?: string;
+  updatedAt?: string;
 };
 
 const computeBacktestDatesFromPeriodDays = (periodDaysRaw: unknown): { dateFrom: string; dateTo: string } => {
@@ -1089,13 +1090,27 @@ const computeBacktestDatesFromPeriodDays = (periodDaysRaw: unknown): { dateFrom:
   return { dateFrom, dateTo };
 };
 
+const computeBacktestDatesFromSnapshot = (snapshot: TsSnapshotBacktestDatesSource | null): { dateFrom: string; dateTo: string } => {
+  const settingsFrom = String(snapshot?.backtestSettings?.dateFrom || '').trim();
+  const settingsTo = String(snapshot?.backtestSettings?.dateTo || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(settingsFrom) && /^\d{4}-\d{2}-\d{2}$/.test(settingsTo)) {
+    return { dateFrom: settingsFrom, dateTo: settingsTo };
+  }
+  const periodDays = Math.max(1, Math.floor(Number(snapshot?.periodDays ?? 90)));
+  const anchorMs = snapshot?.updatedAt ? Date.parse(snapshot.updatedAt) : Number.NaN;
+  const anchorDate = Number.isFinite(anchorMs) ? new Date(anchorMs) : new Date();
+  const dateTo = anchorDate.toISOString().slice(0, 10);
+  const dateFrom = new Date(anchorDate.getTime() - periodDays * 86400000).toISOString().slice(0, 10);
+  return { dateFrom, dateTo };
+};
+
 const enrichBacktestSettingsFromTsSnapshot = (
   settings: BacktestCardSettings,
   snapshot: TsSnapshotBacktestDatesSource | null,
 ): BacktestCardSettings => {
   const rawFrom = String(settings.dateFrom || snapshot?.backtestSettings?.dateFrom || '').trim();
   const rawTo = String(settings.dateTo || snapshot?.backtestSettings?.dateTo || '').trim();
-  const fallback = computeBacktestDatesFromPeriodDays(snapshot?.periodDays ?? 90);
+  const fallback = computeBacktestDatesFromSnapshot(snapshot);
   return {
     ...settings,
     dateFrom: rawFrom || fallback.dateFrom,
@@ -2611,6 +2626,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const copytradingRequestSeqRef = useRef(0);
   const backtestRequestSeqRef = useRef(0);
   const backtestDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const backtestDatesUserModifiedRef = useRef(false);
   const runAdminSweepBacktestPreviewRef = useRef<() => Promise<void>>(async () => {});
   const monitoringAbortRef = useRef<AbortController | null>(null);
   const [summary, setSummary] = useState<SaasSummary | null>(null);
@@ -2826,6 +2842,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestReinvestPercent, setAdminSweepBacktestReinvestPercent] = useState<number>(100);
   const [adminSweepBacktestDateFrom, setAdminSweepBacktestDateFrom] = useState('');
   const [adminSweepBacktestDateTo, setAdminSweepBacktestDateTo] = useState('');
+  const [tsDcaPickLoading, setTsDcaPickLoading] = useState(false);
+  const [tsDcaPickResult, setTsDcaPickResult] = useState<{
+    picked?: Array<{ baseSymbol: string; market: string; strategyId: number; offerId: string; metrics?: { ret?: number; dd?: number; pf?: number; trades?: number } }>;
+    combinedPreview?: { summary?: Record<string, unknown> };
+    tsMarkets?: string[];
+    period?: { dateFrom?: string; dateTo?: string };
+  } | null>(null);
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
   const [adminSweepBacktestResult, setAdminSweepBacktestResult] = useState<AdminSweepBacktestPreviewResponse | null>(null);
   const [adminSweepBacktestRerunApiKey, setAdminSweepBacktestRerunApiKey] = useState('');
@@ -6558,10 +6581,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
   }, [persistBacktestSettingsByCard]);
 
+  const resolveCardBacktestDatesForContext = useCallback((context: SaasBacktestContext | null | undefined): { dateFrom: string; dateTo: string } => {
+    if (!context || context.kind !== 'algofund-ts') {
+      return { dateFrom: '', dateTo: '' };
+    }
+    const snapshots = (summary?.offerStore?.tsBacktestSnapshots || {}) as Record<string, TsSnapshotBacktestDatesSource>;
+    let snapshotForDates = findTsSnapshotForBacktestContext(snapshots, context);
+    if (!snapshotForDates && context.systemName) {
+      snapshotForDates = resolveTsSnapshotForSystem(String(context.systemName || '').trim());
+    }
+    if (!snapshotForDates) {
+      return computeBacktestDatesFromPeriodDays(90);
+    }
+    return computeBacktestDatesFromSnapshot(snapshotForDates);
+  }, [summary?.offerStore?.tsBacktestSnapshots, resolveTsSnapshotForSystem]);
+
   const buildAdminBacktestSettingsOverride = useCallback((): Partial<BacktestCardSettings> => {
     let dateFrom = adminSweepBacktestDateFrom;
     let dateTo = adminSweepBacktestDateTo;
-    if (backtestDrawerContext?.kind === 'algofund-ts' && (!dateFrom || !dateTo)) {
+    if (backtestDrawerContext?.kind === 'algofund-ts' && !backtestDatesUserModifiedRef.current) {
+      const cardDates = resolveCardBacktestDatesForContext(backtestDrawerContext);
+      dateFrom = cardDates.dateFrom;
+      dateTo = cardDates.dateTo;
+    } else if (backtestDrawerContext?.kind === 'algofund-ts' && (!dateFrom || !dateTo)) {
       const snapshots = (summary?.offerStore?.tsBacktestSnapshots || {}) as Record<string, TsSnapshotBacktestDatesSource>;
       let snapshotForDates = backtestDrawerContext
         ? findTsSnapshotForBacktestContext(snapshots, backtestDrawerContext)
@@ -6570,7 +6612,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         snapshotForDates = resolveTsSnapshotForSystem(String(backtestDrawerContext.systemName || '').trim());
       }
       if (snapshotForDates) {
-        const fallbackDates = computeBacktestDatesFromPeriodDays(snapshotForDates.periodDays);
+        const fallbackDates = computeBacktestDatesFromSnapshot(snapshotForDates);
         dateFrom = dateFrom || fallbackDates.dateFrom;
         dateTo = dateTo || fallbackDates.dateTo;
       }
@@ -6605,6 +6647,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     backtestDrawerContext,
     summary?.offerStore?.tsBacktestSnapshots,
     resolveTsSnapshotForSystem,
+    resolveCardBacktestDatesForContext,
   ]);
 
   // Debounce helper: triggers auto-recalculate after slider changes with 700ms delay.
@@ -6651,14 +6694,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const overrideDateToRaw = options?.settingsOverride?.dateTo;
     let effectiveDateFrom = (typeof overrideDateFromRaw === 'string' ? overrideDateFromRaw : adminSweepBacktestDateFrom) || undefined;
     let effectiveDateTo = (typeof overrideDateToRaw === 'string' ? overrideDateToRaw : adminSweepBacktestDateTo) || undefined;
-    if (targetContext.kind === 'algofund-ts' && (!effectiveDateFrom || !effectiveDateTo)) {
+    if (targetContext.kind === 'algofund-ts' && !backtestDatesUserModifiedRef.current) {
+      const cardDates = resolveCardBacktestDatesForContext(targetContext);
+      effectiveDateFrom = cardDates.dateFrom || effectiveDateFrom;
+      effectiveDateTo = cardDates.dateTo || effectiveDateTo;
+    } else if (targetContext.kind === 'algofund-ts' && (!effectiveDateFrom || !effectiveDateTo)) {
       const snapshots = (summary?.offerStore?.tsBacktestSnapshots || {}) as Record<string, TsSnapshotBacktestDatesSource>;
       let snapshotForDates = findTsSnapshotForBacktestContext(snapshots, targetContext);
       if (!snapshotForDates && targetContext.systemName) {
         snapshotForDates = resolveTsSnapshotForSystem(String(targetContext.systemName || '').trim());
       }
       if (snapshotForDates) {
-        const fallbackDates = computeBacktestDatesFromPeriodDays(snapshotForDates.periodDays);
+        const fallbackDates = computeBacktestDatesFromSnapshot(snapshotForDates);
         effectiveDateFrom = effectiveDateFrom || fallbackDates.dateFrom;
         effectiveDateTo = effectiveDateTo || fallbackDates.dateTo;
       }
@@ -6705,10 +6752,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setAdminSweepBacktestResult(response.data);
       const responsePeriodFrom = String(response.data?.period?.dateFrom || '').trim().slice(0, 10);
       const responsePeriodTo = String(response.data?.period?.dateTo || '').trim().slice(0, 10);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodFrom)) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodFrom) && !backtestDatesUserModifiedRef.current) {
         setAdminSweepBacktestDateFrom(responsePeriodFrom);
       }
-      if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodTo)) {
+      if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodTo) && !backtestDatesUserModifiedRef.current) {
         setAdminSweepBacktestDateTo(responsePeriodTo);
       }
       // Auto-set rerun key to sweep's key when none has been chosen yet
@@ -7225,6 +7272,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const openEmbeddedBacktest = (context: SaasBacktestContext) => {
     backtestRequestSeqRef.current += 1;
+    backtestDatesUserModifiedRef.current = false;
+    setTsDcaPickResult(null);
     const settings = resolveBacktestSettingsForContext(context);
     applyBacktestSettings(settings);
 
@@ -7249,6 +7298,34 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     window.setTimeout(() => {
       void runAdminSweepBacktestPreview(context, { settingsOverride: settings });
     }, 0);
+  };
+
+  const runTsDcaPairPick = async () => {
+    if (!backtestDrawerContext || backtestDrawerContext.kind !== 'algofund-ts') {
+      return;
+    }
+    setTsDcaPickLoading(true);
+    try {
+      const cardDates = backtestDatesUserModifiedRef.current
+        ? { dateFrom: adminSweepBacktestDateFrom, dateTo: adminSweepBacktestDateTo }
+        : resolveCardBacktestDatesForContext(backtestDrawerContext);
+      const response = await axios.post('/api/saas/admin/ts-dca-pair-pick', {
+        systemName: backtestDrawerContext.systemName,
+        setKey: backtestDrawerContext.setKey,
+        apiKeyName: adminSweepBacktestRerunApiKey || undefined,
+        dateFrom: cardDates.dateFrom || undefined,
+        dateTo: cardDates.dateTo || undefined,
+        initialBalance: adminSweepBacktestInitialBalance,
+        maxCandidates: 5,
+      });
+      setTsDcaPickResult(response.data);
+      messageApi.success(`DCA пара подобрана: ${response.data?.picked?.[0]?.baseSymbol || '—'}USDT`);
+    } catch (error: any) {
+      setTsDcaPickResult(null);
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось подобрать DCA пару'));
+    } finally {
+      setTsDcaPickLoading(false);
+    }
   };
 
   const openOfferBacktest = (offer?: typeof adminReviewOfferPool[number] | null) => {
@@ -13118,6 +13195,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     </Button>
                   ) : null}
                   {backtestDrawerContext.kind === 'algofund-ts' ? (
+                    <>
                     <Button
                       size="small"
                       loading={actionLoading === 'ts-review-snapshot'}
@@ -13127,6 +13205,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     >
                       Сохранить
                     </Button>
+                    <Button
+                      size="small"
+                      loading={tsDcaPickLoading}
+                      onClick={() => { void runTsDcaPairPick(); }}
+                    >
+                      Подобрать DCA
+                    </Button>
+                    </>
                   ) : null}
                   <Button
                     type="primary"
@@ -13385,19 +13471,27 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           placeholder="dateFrom YYYY-MM-DD"
                           style={{ width: 150 }}
                           value={adminSweepBacktestDateFrom}
-                          onChange={(e) => { setAdminSweepBacktestDateFrom(e.target.value); setAdminSweepBacktestStale(true); }}
+                          onChange={(e) => { backtestDatesUserModifiedRef.current = true; setAdminSweepBacktestDateFrom(e.target.value); setAdminSweepBacktestStale(true); }}
                         />
                         <Input
                           placeholder="dateTo YYYY-MM-DD"
                           style={{ width: 150 }}
                           value={adminSweepBacktestDateTo}
-                          onChange={(e) => { setAdminSweepBacktestDateTo(e.target.value); setAdminSweepBacktestStale(true); }}
+                          onChange={(e) => { backtestDatesUserModifiedRef.current = true; setAdminSweepBacktestDateTo(e.target.value); setAdminSweepBacktestStale(true); }}
                         />
-                        <Button size="small" onClick={() => { setAdminSweepBacktestDateFrom(''); setAdminSweepBacktestDateTo(''); setAdminSweepBacktestStale(true); scheduleBacktestDebounce(); }}>Сбросить</Button>
+                        <Button size="small" onClick={() => {
+                          backtestDatesUserModifiedRef.current = false;
+                          const cardDates = resolveCardBacktestDatesForContext(backtestDrawerContext);
+                          setAdminSweepBacktestDateFrom(cardDates.dateFrom);
+                          setAdminSweepBacktestDateTo(cardDates.dateTo);
+                          setAdminSweepBacktestStale(true);
+                          scheduleBacktestDebounce();
+                        }}>К датам карточки</Button>
                       </Space>
                       <Space wrap>
                         {[7, 14, 30, 90].map((days) => (
                           <Button key={days} size="small" type={adminSweepBacktestDateFrom && Math.abs(Math.round((Date.now() - Date.parse(adminSweepBacktestDateFrom)) / 86400000) - days) < 2 ? 'primary' : 'default'} onClick={() => {
+                            backtestDatesUserModifiedRef.current = true;
                             const now = new Date();
                             const from = new Date(now.getTime() - days * 86400000);
                             setAdminSweepBacktestDateFrom(from.toISOString().slice(0, 10));
@@ -13407,13 +13501,25 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           }}>{days}d</Button>
                         ))}
                       </Space>
-                      <Text type="secondary">Пусто = период по умолчанию (sweep/cloud)</Text>
+                      <Text type="secondary">По умолчанию — даты карточки (снапшот). Меняй вручную только для сравнения.</Text>
                     </Space>
                   </Card>
                 </Col>
               )}
             </Row>
 
+            {tsDcaPickResult?.picked?.[0] ? (
+              <Alert
+                type="success"
+                showIcon
+                message={`DCA: ${tsDcaPickResult.picked[0].baseSymbol}USDT (не пересекается с ${tsDcaPickResult.tsMarkets?.length || 0} парами ТС)`}
+                description={(() => {
+                  const dca = tsDcaPickResult.picked?.[0]?.metrics || {};
+                  const combined = tsDcaPickResult.combinedPreview?.summary || {};
+                  return `DCA ret ${Number(dca.ret || 0).toFixed(2)}% • TS+DCA ret ${Number((combined as any).totalReturnPercent || 0).toFixed(2)}% • trades ${Number((combined as any).tradesCount || 0)} • ${tsDcaPickResult.period?.dateFrom || '—'} → ${tsDcaPickResult.period?.dateTo || '—'}`;
+                })()}
+              />
+            ) : null}
             {adminSweepBacktestResult ? (
               <Card size="small" title={adminSweepBacktestStale ? <Space><Tag color="orange">⟳ Пересчёт запущен...</Tag><span>Результат sweep backtest</span></Space> : <Tooltip title="Комиссия: 0.1% на сделку (вход + выход) • Проскальзывание: 0.05% • Направленный слиппедж (лонг-вход дороже, шорт-вход дешевле) • Прошлые результаты не гарантируют будущую доходность"><span style={{ cursor: 'help' }}>Результат sweep backtest ⓘ</span></Tooltip>}>
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>

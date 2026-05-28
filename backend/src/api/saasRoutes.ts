@@ -39,6 +39,7 @@ import {
   getAlgofundClosedPositionsReport,
   getAlgofundChartSnapshot,
   previewAdminSweepBacktest,
+  pickDcaForTsPortfolio,
   syncCloudTsFromSweepResult,
   listStrategyClientSystemProfilesState,
   createStrategyClientSystemProfile,
@@ -344,6 +345,25 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS admin sweep backtest preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ts-dca-pair-pick', async (req, res) => {
+  try {
+    const data = await pickDcaForTsPortfolio({
+      systemName: req.body?.systemName ? String(req.body.systemName) : undefined,
+      setKey: req.body?.setKey ? String(req.body.setKey) : undefined,
+      apiKeyName: req.body?.apiKeyName ? String(req.body.apiKeyName) : undefined,
+      dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
+      dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
+      maxCandidates: toOptionalNumber(req.body?.maxCandidates),
+      initialBalance: toOptionalNumber(req.body?.initialBalance),
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS admin ts-dca-pair-pick error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

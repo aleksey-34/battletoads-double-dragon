@@ -1,6 +1,6 @@
 ﻿import fs from 'fs';
 import path from 'path';
-import { runBacktest } from '../backtest/engine';
+import { runBacktest, type BacktestRunRequest } from '../backtest/engine';
 import { closeStrategyExposure, cancelStrategyWorkingOrders, copyStrategyBlock, createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
 import {
   createTradingSystem,
@@ -345,6 +345,7 @@ type TsBacktestSnapshot = {
     lotPercentOverride?: number;
     dateFrom?: string;
     dateTo?: string;
+    interval?: string;
   };
   updatedAt: string;
 };
@@ -5780,6 +5781,112 @@ const buildPreviewDatesFromPeriodDays = (periodDaysRaw: unknown, requestedFrom: 
   return { dateFrom, dateTo };
 };
 
+const normalizePairMarketKey = (raw: unknown): string => String(raw || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+const resolveSnapshotPreviewDates = (
+  snapshot: { periodDays?: number; backtestSettings?: Record<string, unknown>; updatedAt?: string } | null,
+  sweep: { config?: Record<string, unknown> } | null | undefined,
+  requestedFrom: string,
+  requestedTo: string,
+): { dateFrom: string; dateTo: string } => {
+  if (requestedFrom && requestedTo) {
+    return { dateFrom: requestedFrom, dateTo: requestedTo };
+  }
+  const settings = snapshot?.backtestSettings && typeof snapshot.backtestSettings === 'object'
+    ? snapshot.backtestSettings
+    : {};
+  const settingsFrom = asString(settings.dateFrom, '').trim();
+  const settingsTo = asString(settings.dateTo, '').trim();
+  if (settingsFrom && settingsTo) {
+    return { dateFrom: requestedFrom || settingsFrom, dateTo: requestedTo || settingsTo };
+  }
+  const sweepFrom = asString(sweep?.config?.dateFrom, '').trim();
+  const sweepTo = asString(sweep?.config?.dateTo, '').trim();
+  if (sweepFrom && sweepTo) {
+    return { dateFrom: requestedFrom || sweepFrom, dateTo: requestedTo || sweepTo };
+  }
+  const periodDays = Math.max(1, Math.floor(asNumber(snapshot?.periodDays, 90)));
+  const anchorMs = snapshot?.updatedAt ? Date.parse(snapshot.updatedAt) : Number.NaN;
+  const anchorDate = Number.isFinite(anchorMs) ? new Date(anchorMs) : new Date();
+  const dateTo = requestedTo || anchorDate.toISOString().slice(0, 10);
+  const dateFrom = requestedFrom || new Date(anchorDate.getTime() - periodDays * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  return { dateFrom, dateTo };
+};
+
+const collectTsOccupiedMarkets = (
+  offerIds: string[],
+  catalog: CatalogData | null,
+  offerStoreById: Map<string, Record<string, unknown>>,
+): Set<string> => {
+  const occupied = new Set<string>();
+  offerIds.forEach((offerId) => {
+    const storeRow = offerStoreById.get(offerId);
+    const storeMarket = normalizePairMarketKey(asString(storeRow?.market, ''));
+    if (storeMarket) {
+      occupied.add(storeMarket);
+    }
+    const catalogOffer = findOfferByIdOrNull(catalog, offerId);
+    if (!catalogOffer) {
+      return;
+    }
+    const market = normalizePairMarketKey(asString(catalogOffer.strategy?.market, ''));
+    if (market) {
+      occupied.add(market);
+    }
+    const params = catalogOffer.strategy?.params as Record<string, unknown> | undefined;
+    const base = normalizePairMarketKey(asString(params?.base_symbol, ''));
+    const quote = normalizePairMarketKey(asString(params?.quote_symbol, 'USDT'));
+    if (base) {
+      occupied.add(base + quote);
+      if (quote) {
+        occupied.add(`${base}/${quote}`);
+      }
+    }
+  });
+  return occupied;
+};
+
+const createDcaStrategyRecord = async (apiKeyName: string, baseSymbol: string, quoteSymbol = 'USDT') => {
+  const base = baseSymbol.trim().toUpperCase();
+  const quote = quoteSymbol.trim().toUpperCase() || 'USDT';
+  if (!base) {
+    throw new Error('baseSymbol is required for DCA strategy');
+  }
+  const name = `DCA ${base}`;
+  const draft = {
+    name,
+    strategy_type: 'dca',
+    market_mode: 'mono',
+    market_type: 'spot',
+    base_symbol: base,
+    quote_symbol: quote,
+    is_active: true,
+    auto_update: true,
+    long_enabled: true,
+    short_enabled: false,
+  };
+  const created = await createStrategy(apiKeyName, draft as Strategy, { allowActivePairConflict: true });
+  if (!created.id) {
+    throw new Error('DCA strategy created but id missing');
+  }
+  await db.run(
+    `UPDATE strategies
+     SET dca_base_amount_usdt = ?,
+         dca_step_percent = ?,
+         dca_max_orders = ?,
+         dca_order_multiplier = ?,
+         dca_tp_percent = ?,
+         dca_sl_percent = ?,
+         dca_order_type = ?,
+         dca_state = 'idle',
+         market_type = 'spot',
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [10, 2, 5, 1, 3, 0, 'market', created.id],
+  );
+  return { ...created, strategyId: Number(created.id) };
+};
+
 export const previewAdminSweepBacktest = async (payload?: {
   kind?: 'offer' | 'algofund-ts';
   setKey?: string;
@@ -5915,6 +6022,25 @@ export const previewAdminSweepBacktest = async (payload?: {
     }
     if (offerIds.length === 0 && !requestedSetKey) {
       throw new Error('No offerIds resolved for TS sweep backtest preview');
+    }
+  }
+
+  let tsSavedSnapshotForPreview: TsBacktestSnapshot | null = null;
+  if (kind === 'algofund-ts') {
+    tsSavedSnapshotForPreview = await resolveAlgofundTsBacktestSnapshotForPreview({
+      setKey: asString(payload?.setKey, ''),
+      systemName: requestedSystemName,
+      offerIds,
+    });
+    if (tsSavedSnapshotForPreview) {
+      const snapshotOfferIds = Array.from(new Set(
+        (Array.isArray(tsSavedSnapshotForPreview.offerIds) ? tsSavedSnapshotForPreview.offerIds : [])
+          .map((item) => asString(item, '').trim())
+          .filter(Boolean),
+      ));
+      if (snapshotOfferIds.length > 0) {
+        offerIds = snapshotOfferIds;
+      }
     }
   }
 
@@ -6457,14 +6583,6 @@ export const previewAdminSweepBacktest = async (payload?: {
   }
 
   let rerunFailureReason = '';
-  const tsSavedSnapshotForPreview = kind === 'algofund-ts'
-    ? await resolveAlgofundTsBacktestSnapshotForPreview({
-      setKey: asString(payload?.setKey, ''),
-      systemName: asString(payload?.systemName, ''),
-      offerIds,
-    })
-    : null;
-
   if (canTryRealBacktest && strategyIds.length > 0 && !tsSavedSnapshotForPreview) {
     const sweepConfigAny = (sweep?.config || {}) as Record<string, unknown>;
     const resolvedByStrategiesApiKey = await resolveApiKeyNameForStrategyIds(strategyIds, '', { strict: false });
@@ -6501,11 +6619,15 @@ export const previewAdminSweepBacktest = async (payload?: {
             : asNumber(sweep?.config?.fundingRatePercent, 0),
           dateFrom: requestedDateFrom
             || (kind === 'offer' ? singleOfferStoreDateFrom : '')
-            || (kind === 'algofund-ts' ? buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateFrom : '')
+            || (kind === 'algofund-ts' && tsSavedSnapshotForPreview
+              ? resolveSnapshotPreviewDates(tsSavedSnapshotForPreview, sweep, requestedDateFrom, requestedDateTo).dateFrom
+              : buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateFrom)
             || asString(sweep?.config?.dateFrom, ''),
           dateTo: requestedDateTo
             || (kind === 'offer' ? singleOfferStoreDateTo : '')
-            || (kind === 'algofund-ts' ? buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateTo : '')
+            || (kind === 'algofund-ts' && tsSavedSnapshotForPreview
+              ? resolveSnapshotPreviewDates(tsSavedSnapshotForPreview, sweep, requestedDateFrom, requestedDateTo).dateTo
+              : buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateTo)
             || asString(sweep?.config?.dateTo, ''),
           ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
           ...(partialTpPct > 0 ? { partialTpPct } : {}),
@@ -6753,18 +6875,29 @@ export const previewAdminSweepBacktest = async (payload?: {
             }))
             .filter((item) => Number.isFinite(item.equity));
           const snapshotPeriodDaysForDates = Math.max(1, Math.floor(asNumber(snapshot.periodDays, periodDays)));
-          const snapshotNowForDates = new Date();
-          const snapshotDateToResolved = requestedDateTo || snapshotNowForDates.toISOString().slice(0, 10);
-          const snapshotDateFromResolved = requestedDateFrom
-            || new Date(snapshotNowForDates.getTime() - snapshotPeriodDaysForDates * 24 * 3600 * 1000).toISOString().slice(0, 10);
+          const snapshotPreviewDates = resolveSnapshotPreviewDates(snapshot, sweep, requestedDateFrom, requestedDateTo);
+          const snapshotDateFromResolved = snapshotPreviewDates.dateFrom;
+          const snapshotDateToResolved = snapshotPreviewDates.dateTo;
           const snapshotPeriodInfo: PeriodInfo = {
             dateFrom: snapshotDateFromResolved,
             dateTo: snapshotDateToResolved,
             interval: asString(period?.interval, asString(sweep?.config?.interval, '4h')),
           };
-          const snapshotStrategyIds = Array.from(new Set(snapshotSelectedOffers
-            .map((item) => Number(item.strategyId || 0))
-            .filter((value) => Number.isFinite(value) && value > 0)));
+
+          const selectedByOfferId = new Map(
+            selectedOffers.map((item) => [String(item.offerId || '').trim(), item] as const),
+          );
+          const snapshotRerunOffers = snapshotOfferIds
+            .map((offerId) => selectedByOfferId.get(offerId) || null)
+            .filter((item): item is typeof selectedOffers[number] => Boolean(item));
+          const snapshotStrategyIds = Array.from(new Set(
+            (snapshotRerunOffers.length > 0 ? snapshotRerunOffers : snapshotSelectedOffers)
+              .map((item) => Number(item.strategyId || 0))
+              .filter((value) => Number.isFinite(value) && value > 0),
+          ));
+          const snapshotOffersForResponse = snapshotRerunOffers.length > 0
+            ? snapshotRerunOffers
+            : snapshotSelectedOffers;
 
           let snapshotRerunFailureReason = '';
           if (canTryRealBacktest && snapshotStrategyIds.length === 0) {
@@ -6810,10 +6943,12 @@ export const previewAdminSweepBacktest = async (payload?: {
                   fundingRatePercent: fundingRatePercentOverride !== null
                     ? fundingRatePercentOverride
                     : asNumber(sweep?.config?.fundingRatePercent, 0),
-                  dateFrom: requestedDateFrom || snapshotDateFromResolved || asString(sweep?.config?.dateFrom, ''),
-                  dateTo: requestedDateTo || snapshotDateToResolved || asString(sweep?.config?.dateTo, ''),
+                  dateFrom: snapshotDateFromResolved || asString(sweep?.config?.dateFrom, ''),
+                  dateTo: snapshotDateToResolved || asString(sweep?.config?.dateTo, ''),
                   ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
                   ...(partialTpPct > 0 ? { partialTpPct } : {}),
+                  ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
+                  ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
                   maxDepositOverride: initialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
                   lotPercentOverride: lotPercentEffective,
                   reinvestPercentOverride: reinvestPercent,
@@ -6878,7 +7013,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                   },
                   period: snapshotPeriodInfo,
                   sweepApiKeyName: asString(snapshot.apiKeyName, ''),
-                  selectedOffers: snapshotSelectedOffers,
+                  selectedOffers: snapshotOffersForResponse,
                   preview: {
                     source: 'admin_saved_ts_snapshot_rerun',
                     summary: scaledSummary,
@@ -7326,6 +7461,220 @@ export const previewAdminSweepBacktest = async (payload?: {
   };
 };
 
+const DCA_CANDIDATE_SYMBOLS = [
+  'XRPUSDT', 'LTCUSDT', 'ADAUSDT', 'DOTUSDT', 'LINKUSDT', 'MATICUSDT',
+  'ATOMUSDT', 'NEARUSDT', 'FILUSDT', 'APTUSDT', 'ARBUSDT', 'OPUSDT',
+  'SUIUSDT', 'SEIUSDT', 'TIAUSDT', 'WLDUSDT', 'PEPEUSDT', 'DOGEUSDT',
+];
+
+export const pickDcaForTsPortfolio = async (payload?: {
+  systemName?: string;
+  setKey?: string;
+  apiKeyName?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  maxCandidates?: number;
+  initialBalance?: number;
+}) => {
+  const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
+  const apiKeys = await getAvailableApiKeyNames();
+  const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
+  if (!catalog) {
+    throw new Error('Catalog is unavailable for DCA pair pick');
+  }
+
+  const snapshot = await resolveAlgofundTsBacktestSnapshotForPreview({
+    setKey: asString(payload?.setKey, ''),
+    systemName: asString(payload?.systemName, ''),
+  });
+  if (!snapshot) {
+    throw new Error('TS snapshot not found for DCA pair pick');
+  }
+
+  const offerIds = Array.from(new Set(
+    (Array.isArray(snapshot.offerIds) ? snapshot.offerIds : [])
+      .map((item) => asString(item, '').trim())
+      .filter(Boolean),
+  ));
+  if (offerIds.length === 0) {
+    throw new Error('TS snapshot has no offerIds');
+  }
+
+  const offerStore = await getOfferStoreAdminState().catch(() => null);
+  const offerStoreById = new Map(
+    ((offerStore?.offers || []) as Array<Record<string, unknown>>)
+      .map((row) => [asString(row?.offerId, '').trim(), row] as const)
+      .filter(([offerId]) => Boolean(offerId)),
+  );
+  const occupiedMarkets = collectTsOccupiedMarkets(offerIds, catalog, offerStoreById);
+  const requestedDateFrom = asString(payload?.dateFrom, '').trim();
+  const requestedDateTo = asString(payload?.dateTo, '').trim();
+  const previewDates = resolveSnapshotPreviewDates(snapshot, sweep, requestedDateFrom, requestedDateTo);
+  const initialBalance = Math.max(100, asNumber(payload?.initialBalance, asNumber(snapshot.backtestSettings?.initialBalance, 10000)));
+
+  const tsPreview = await previewAdminSweepBacktest({
+    kind: 'algofund-ts',
+    offerIds,
+    setKey: asString(snapshot.setKey, ''),
+    dateFrom: previewDates.dateFrom,
+    dateTo: previewDates.dateTo,
+    preferRealBacktest: true,
+    rerunApiKeyName: asString(payload?.apiKeyName, ''),
+    enablePairLock: true,
+    initialBalance,
+    riskScore: Number(snapshot.backtestSettings?.riskScore ?? 5),
+    tradeFrequencyScore: Number(snapshot.backtestSettings?.tradeFrequencyScore ?? 5),
+  });
+  const tsStrategyIds = Array.from(new Set(
+    (Array.isArray((tsPreview as Record<string, unknown>).rerun)
+      && Array.isArray((tsPreview.rerun as Record<string, unknown>).strategyIds)
+      ? (tsPreview.rerun as { strategyIds: number[] }).strategyIds
+      : (tsPreview.selectedOffers || []).map((item) => Number((item as Record<string, unknown>).strategyId || 0)))
+      .filter((value) => Number.isFinite(value) && value > 0),
+  ));
+  if (tsStrategyIds.length === 0) {
+    throw new Error('Could not resolve TS strategy ids for DCA pair pick');
+  }
+
+  const preferredApiKey = asString(payload?.apiKeyName, '')
+    || asString(snapshot.apiKeyName, '')
+    || await resolveApiKeyNameForStrategyIds(tsStrategyIds, '', { strict: false })
+    || asString(catalog?.apiKeyName, '')
+    || asString(apiKeys[0], '');
+  if (!preferredApiKey) {
+    throw new Error('API key is required for DCA pair pick');
+  }
+  await ensureExchangeClientInitialized(preferredApiKey);
+
+  const catalogMarkets = getAllOffers(catalog)
+    .filter((offer) => offer.strategy?.mode !== 'synth')
+    .map((offer) => normalizePairMarketKey(asString(offer.strategy?.market, '')))
+    .filter(Boolean);
+
+  let exchangeMarkets: string[] = [];
+  try {
+    exchangeMarkets = (await getAllSymbols(preferredApiKey))
+      .map((symbol: string) => normalizePairMarketKey(symbol))
+      .filter(Boolean);
+  } catch {
+    exchangeMarkets = [];
+  }
+
+  const candidatePool = Array.from(new Set([
+    ...DCA_CANDIDATE_SYMBOLS.map((item) => normalizePairMarketKey(item)),
+    ...catalogMarkets,
+    ...exchangeMarkets,
+  ])).filter((market) => market.endsWith('USDT') && !occupiedMarkets.has(market));
+
+  const maxTry = Math.max(1, Math.min(8, Math.floor(asNumber(payload?.maxCandidates, 5))));
+  const scored: Array<{
+    baseSymbol: string;
+    market: string;
+    strategyId: number;
+    ret: number;
+    dd: number;
+    pf: number;
+    trades: number;
+    score: number;
+  }> = [];
+
+  for (const market of candidatePool) {
+    if (scored.length >= maxTry) {
+      break;
+    }
+    const baseSymbol = market.replace(/USDT$/, '');
+    if (!baseSymbol) {
+      continue;
+    }
+    try {
+      const dca = await createDcaStrategyRecord(preferredApiKey, baseSymbol, 'USDT');
+      const result = await runBacktest({
+        apiKeyName: preferredApiKey,
+        mode: 'single',
+        strategyId: dca.strategyId,
+        bars: asNumber(sweep?.config?.backtestBars, 6000),
+        warmupBars: asNumber(sweep?.config?.warmupBars, 400),
+        skipMissingSymbols: true,
+        initialBalance,
+        commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
+        slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
+        fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
+        dateFrom: previewDates.dateFrom,
+        dateTo: previewDates.dateTo,
+        enablePairLock: true,
+      } as BacktestRunRequest & { enablePairLock?: boolean });
+      const ret = Number(result.summary.totalReturnPercent || 0);
+      const dd = Number(result.summary.maxDrawdownPercent || 0);
+      const pf = Number(result.summary.profitFactor || 0);
+      const trades = Number(result.summary.tradesCount || 0);
+      const score = ret - dd * 0.35 + Math.min(2, pf) * 5;
+      scored.push({
+        baseSymbol,
+        market,
+        strategyId: dca.strategyId,
+        ret,
+        dd,
+        pf,
+        trades,
+        score,
+      });
+    } catch (error) {
+      logger.warn(`[pickDcaForTsPortfolio] skip ${market}: ${asString((error as Error).message, 'unknown')}`);
+    }
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  const best = scored[0] || null;
+  if (!best) {
+    throw new Error('No suitable non-overlapping DCA pair found');
+  }
+
+  const combinedResult = await runBacktest({
+    apiKeyName: preferredApiKey,
+    mode: 'portfolio',
+    strategyIds: [...tsStrategyIds, best.strategyId],
+    bars: asNumber(sweep?.config?.backtestBars, 6000),
+    warmupBars: asNumber(sweep?.config?.warmupBars, 400),
+    skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
+    initialBalance,
+    commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
+    slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
+    fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
+    dateFrom: previewDates.dateFrom,
+    dateTo: previewDates.dateTo,
+    enablePairLock: true,
+  } as BacktestRunRequest & { enablePairLock?: boolean });
+
+  const offerId = `offer_mono_dca_${best.baseSymbol.toLowerCase()}_${best.strategyId}`;
+  return {
+    tsMarkets: Array.from(occupiedMarkets).sort(),
+    period: {
+      dateFrom: previewDates.dateFrom,
+      dateTo: previewDates.dateTo,
+      interval: asString(sweep?.config?.interval, '4h'),
+    },
+    picked: [{
+      baseSymbol: best.baseSymbol,
+      market: best.market,
+      strategyId: best.strategyId,
+      offerId,
+      metrics: {
+        ret: Number(best.ret.toFixed(3)),
+        dd: Number(best.dd.toFixed(3)),
+        pf: Number(best.pf.toFixed(3)),
+        trades: best.trades,
+      },
+      score: Number(best.score.toFixed(3)),
+    }],
+    candidatesTried: scored.length,
+    combinedPreview: {
+      summary: combinedResult.summary,
+      strategyIds: [...tsStrategyIds, best.strategyId],
+      tradesCount: combinedResult.summary.tradesCount,
+    },
+  };
+};
+
 /**
  * Sync Cloud TS members from sweep backtest results.
  * For each Cloud TS with auto_sync_members=1, replace members with the strategy_ids
@@ -7734,6 +8083,9 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
             tradeFrequencyScore: Number(existing?.backtestSettings?.tradeFrequencyScore ?? 5),
             initialBalance: Number(existing?.backtestSettings?.initialBalance ?? 10000),
             riskScaleMaxPercent: Number(existing?.backtestSettings?.riskScaleMaxPercent ?? 100),
+            dateFrom: asString((preview.period as Record<string, unknown> | undefined)?.dateFrom, refreshDateFrom),
+            dateTo: asString((preview.period as Record<string, unknown> | undefined)?.dateTo, refreshDateTo),
+            interval: asString((preview.period as Record<string, unknown> | undefined)?.interval, asString(existing?.backtestSettings?.interval, '4h')),
           },
           updatedAt: new Date().toISOString(),
         });
