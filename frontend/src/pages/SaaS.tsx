@@ -6558,6 +6558,55 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
   }, [persistBacktestSettingsByCard]);
 
+  const buildAdminBacktestSettingsOverride = useCallback((): Partial<BacktestCardSettings> => {
+    let dateFrom = adminSweepBacktestDateFrom;
+    let dateTo = adminSweepBacktestDateTo;
+    if (backtestDrawerContext?.kind === 'algofund-ts' && (!dateFrom || !dateTo)) {
+      const snapshots = (summary?.offerStore?.tsBacktestSnapshots || {}) as Record<string, TsSnapshotBacktestDatesSource>;
+      let snapshotForDates = backtestDrawerContext
+        ? findTsSnapshotForBacktestContext(snapshots, backtestDrawerContext)
+        : null;
+      if (!snapshotForDates && backtestDrawerContext?.systemName) {
+        snapshotForDates = resolveTsSnapshotForSystem(String(backtestDrawerContext.systemName || '').trim());
+      }
+      if (snapshotForDates) {
+        const fallbackDates = computeBacktestDatesFromPeriodDays(snapshotForDates.periodDays);
+        dateFrom = dateFrom || fallbackDates.dateFrom;
+        dateTo = dateTo || fallbackDates.dateTo;
+      }
+    }
+    return {
+      riskScore: adminSweepBacktestRiskScore,
+      tradeFrequencyScore: adminSweepBacktestTradeScore,
+      initialBalance: adminSweepBacktestInitialBalance,
+      riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
+      maxOpenPositions: adminSweepBacktestMaxOpenPositions,
+      lotPercentOverride: adminSweepBacktestLotPercentOverride,
+      partialTpPct: adminSweepBacktestPartialTpPct,
+      commissionPercent: adminSweepBacktestCommissionPercent,
+      slippagePercent: adminSweepBacktestSlippagePercent,
+      fundingRatePercent: adminSweepBacktestFundingRatePercent,
+      dateFrom,
+      dateTo,
+    };
+  }, [
+    adminSweepBacktestRiskScore,
+    adminSweepBacktestTradeScore,
+    adminSweepBacktestInitialBalance,
+    adminSweepBacktestRiskScaleMaxPercent,
+    adminSweepBacktestMaxOpenPositions,
+    adminSweepBacktestLotPercentOverride,
+    adminSweepBacktestPartialTpPct,
+    adminSweepBacktestCommissionPercent,
+    adminSweepBacktestSlippagePercent,
+    adminSweepBacktestFundingRatePercent,
+    adminSweepBacktestDateFrom,
+    adminSweepBacktestDateTo,
+    backtestDrawerContext,
+    summary?.offerStore?.tsBacktestSnapshots,
+    resolveTsSnapshotForSystem,
+  ]);
+
   // Debounce helper: triggers auto-recalculate after slider changes with 700ms delay.
   // В админ-режиме форсим preferRealBacktest=true, иначе бэкенд идёт по snapshot-пути,
   // который масштабирует только risk/freq, и крутилки partialTpPct / maxOpenPositions /
@@ -6654,6 +6703,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         return;
       }
       setAdminSweepBacktestResult(response.data);
+      const responsePeriodFrom = String(response.data?.period?.dateFrom || '').trim().slice(0, 10);
+      const responsePeriodTo = String(response.data?.period?.dateTo || '').trim().slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodFrom)) {
+        setAdminSweepBacktestDateFrom(responsePeriodFrom);
+      }
+      if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodTo)) {
+        setAdminSweepBacktestDateTo(responsePeriodTo);
+      }
       // Auto-set rerun key to sweep's key when none has been chosen yet
       if (response.data.sweepApiKeyName && !adminSweepBacktestRerunApiKey) {
         setAdminSweepBacktestRerunApiKey(response.data.sweepApiKeyName);
@@ -6764,7 +6821,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   // partialTpPct / maxOpenPositions / commission / slippage / funding не применяются вовсе.
   runAdminSweepBacktestPreviewRef.current = () => runAdminSweepBacktestPreview(
     undefined,
-    isAdminSurface ? { preferRealBacktest: true } : undefined,
+    isAdminSurface
+      ? { preferRealBacktest: true, settingsOverride: buildAdminBacktestSettingsOverride() }
+      : undefined,
   );
 
   const updateBacktestTsComposition = (

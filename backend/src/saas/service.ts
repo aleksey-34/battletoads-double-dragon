@@ -5710,6 +5710,76 @@ export const updateOfferStoreAdminState = async (payload: {
   return getOfferStoreAdminState();
 };
 
+
+const resolveAlgofundTsBacktestSnapshotForPreview = async (params: {
+  setKey?: string;
+  systemName?: string;
+  offerIds?: string[];
+}): Promise<TsBacktestSnapshot | null> => {
+  const snapshotMap = await getTsBacktestSnapshots();
+  const requestedSetKey = normalizeTsSnapshotMapKey(asString(params.setKey, ''));
+  const normalizeOfferIds = (raw: unknown): string[] => Array.from(new Set(
+    (Array.isArray(raw) ? raw : [])
+      .map((item) => asString(item, '').trim())
+      .filter(Boolean)
+  ));
+  const requestedOfferIds = normalizeOfferIds(params.offerIds || []);
+
+  let snapshot = requestedSetKey ? (snapshotMap[requestedSetKey] || null) : null;
+  if (!snapshot && !requestedSetKey && requestedOfferIds.length > 0) {
+    const requestedSorted = Array.from(new Set(requestedOfferIds)).sort();
+    snapshot = Object.values(snapshotMap).find((item) => {
+      const snapshotOfferIds = normalizeOfferIds(item.offerIds).sort();
+      if (snapshotOfferIds.length === 0 || snapshotOfferIds.length !== requestedSorted.length) {
+        return false;
+      }
+      return requestedSorted.every((offerId, index) => snapshotOfferIds[index] === offerId);
+    }) || null;
+  }
+
+  const requestedSystemName = asString(params.systemName, '').trim();
+  if (!snapshot && requestedSystemName) {
+    snapshot = Object.values(snapshotMap).find((item) => String(item?.systemName || '').trim() === requestedSystemName) || null;
+    if (!snapshot) {
+      snapshot = snapshotMap[requestedSystemName] || null;
+    }
+  }
+
+  if (!snapshot) {
+    const legacySnapshot = await getTsBacktestSnapshot();
+    if (legacySnapshot) {
+      const legacySetKey = normalizeTsSnapshotMapKey(asString(legacySnapshot.setKey, ''));
+      const legacyOfferIds = normalizeOfferIds(legacySnapshot.offerIds).sort();
+      const requestedSorted = Array.from(new Set(requestedOfferIds)).sort();
+      if (
+        (requestedSetKey && legacySetKey === requestedSetKey)
+        || (requestedSystemName && String(legacySnapshot.systemName || '').trim() === requestedSystemName)
+        || (
+          !requestedSetKey
+          && requestedSorted.length > 0
+          && legacyOfferIds.length === requestedSorted.length
+          && requestedSorted.every((offerId, index) => legacyOfferIds[index] === offerId)
+        )
+      ) {
+        snapshot = legacySnapshot;
+      }
+    }
+  }
+
+  if (!snapshot) {
+    return null;
+  }
+  return normalizeOfferIds(snapshot.offerIds).length > 0 ? snapshot : null;
+};
+
+const buildPreviewDatesFromPeriodDays = (periodDaysRaw: unknown, requestedFrom: string, requestedTo: string): { dateFrom: string; dateTo: string } => {
+  const periodDays = Math.max(1, Math.floor(asNumber(periodDaysRaw, 90)));
+  const now = new Date();
+  const dateTo = requestedTo || now.toISOString().slice(0, 10);
+  const dateFrom = requestedFrom || new Date(now.getTime() - periodDays * 24 * 3600 * 1000).toISOString().slice(0, 10);
+  return { dateFrom, dateTo };
+};
+
 export const previewAdminSweepBacktest = async (payload?: {
   kind?: 'offer' | 'algofund-ts';
   setKey?: string;
@@ -6387,8 +6457,15 @@ export const previewAdminSweepBacktest = async (payload?: {
   }
 
   let rerunFailureReason = '';
+  const tsSavedSnapshotForPreview = kind === 'algofund-ts'
+    ? await resolveAlgofundTsBacktestSnapshotForPreview({
+      setKey: asString(payload?.setKey, ''),
+      systemName: asString(payload?.systemName, ''),
+      offerIds,
+    })
+    : null;
 
-  if (canTryRealBacktest && strategyIds.length > 0) {
+  if (canTryRealBacktest && strategyIds.length > 0 && !tsSavedSnapshotForPreview) {
     const sweepConfigAny = (sweep?.config || {}) as Record<string, unknown>;
     const resolvedByStrategiesApiKey = await resolveApiKeyNameForStrategyIds(strategyIds, '', { strict: false });
     const preferredApiKey = asString(payload?.rerunApiKeyName, '')
@@ -6422,8 +6499,14 @@ export const previewAdminSweepBacktest = async (payload?: {
           fundingRatePercent: fundingRatePercentOverride !== null
             ? fundingRatePercentOverride
             : asNumber(sweep?.config?.fundingRatePercent, 0),
-          dateFrom: requestedDateFrom || (kind === 'offer' ? singleOfferStoreDateFrom : '') || asString(sweep?.config?.dateFrom, ''),
-          dateTo: requestedDateTo || (kind === 'offer' ? singleOfferStoreDateTo : '') || asString(sweep?.config?.dateTo, ''),
+          dateFrom: requestedDateFrom
+            || (kind === 'offer' ? singleOfferStoreDateFrom : '')
+            || (kind === 'algofund-ts' ? buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateFrom : '')
+            || asString(sweep?.config?.dateFrom, ''),
+          dateTo: requestedDateTo
+            || (kind === 'offer' ? singleOfferStoreDateTo : '')
+            || (kind === 'algofund-ts' ? buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateTo : '')
+            || asString(sweep?.config?.dateTo, ''),
           ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
           ...(partialTpPct > 0 ? { partialTpPct } : {}),
           ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
@@ -6453,6 +6536,20 @@ export const previewAdminSweepBacktest = async (payload?: {
           ),
         }));
 
+        const rerunDateFrom = requestedDateFrom
+          || (kind === 'offer' ? singleOfferStoreDateFrom : '')
+          || (kind === 'algofund-ts' ? buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateFrom : '')
+          || asString(sweep?.config?.dateFrom, '');
+        const rerunDateTo = requestedDateTo
+          || (kind === 'offer' ? singleOfferStoreDateTo : '')
+          || (kind === 'algofund-ts' ? buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateTo : '')
+          || asString(sweep?.config?.dateTo, '');
+        const rerunPeriodInfo: PeriodInfo = {
+          dateFrom: rerunDateFrom || null,
+          dateTo: rerunDateTo || null,
+          interval: asString(period?.interval, asString(sweep?.config?.interval, '4h')),
+        };
+
         return {
           kind,
           controls: {
@@ -6463,7 +6560,7 @@ export const previewAdminSweepBacktest = async (payload?: {
             riskScaleMaxPercent,
             reinvestPercent,
           },
-          period,
+          period: rerunPeriodInfo,
           sweepApiKeyName: asString((sweep as Record<string, unknown>)?.apiKeyName || ((sweep as Record<string, unknown>)?.config as Record<string, unknown>)?.apiKeyName, ''),
           selectedOffers,
           preview: {
@@ -6570,7 +6667,7 @@ export const previewAdminSweepBacktest = async (payload?: {
       ));
       const requestedOfferIds = normalizeOfferIds(offerIds);
 
-      let snapshot = requestedSetKey ? (snapshotMap[requestedSetKey] || null) : null;
+      let snapshot = tsSavedSnapshotForPreview || (requestedSetKey ? (snapshotMap[requestedSetKey] || null) : null);
       if (!snapshot && !requestedSetKey && requestedOfferIds.length > 0) {
         const requestedSorted = Array.from(new Set(requestedOfferIds)).sort();
         snapshot = Object.values(snapshotMap).find((item) => {
@@ -6735,10 +6832,9 @@ export const previewAdminSweepBacktest = async (payload?: {
 
                   result = await runBacktest({
                     ...primaryRequest,
-                    // Snapshot can come from historical ranges that no longer overlap latest sweep window.
-                    // Retry without strict range to find executable candles for selected strategies.
-                    dateFrom: '',
-                    dateTo: '',
+                    // Keep snapshot card window; relax only warmup if candles are sparse.
+                    dateFrom: primaryRequest.dateFrom,
+                    dateTo: primaryRequest.dateTo,
                     warmupBars: Math.max(50, Math.min(180, asNumber(sweep?.config?.warmupBars, 400))),
                   });
                   rerunRelaxedDateRange = true;
