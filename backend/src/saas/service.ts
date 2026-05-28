@@ -7512,61 +7512,52 @@ export const pickDcaForTsPortfolio = async (payload?: {
   const previewDates = resolveSnapshotPreviewDates(snapshot, sweep, requestedDateFrom, requestedDateTo);
   const initialBalance = Math.max(100, asNumber(payload?.initialBalance, asNumber(snapshot.backtestSettings?.initialBalance, 10000)));
 
+  const preferredApiKey = asString(payload?.apiKeyName, '')
+    || asString(snapshot.apiKeyName, '')
+    || asString(catalog?.apiKeyName, '')
+    || asString(apiKeys[0], '');
+  if (!preferredApiKey) {
+    throw new Error('API key is required for DCA pair pick');
+  }
+
   const tsPreview = await previewAdminSweepBacktest({
     kind: 'algofund-ts',
     offerIds,
     setKey: asString(snapshot.setKey, ''),
     dateFrom: previewDates.dateFrom,
     dateTo: previewDates.dateTo,
-    preferRealBacktest: true,
-    rerunApiKeyName: asString(payload?.apiKeyName, ''),
-    enablePairLock: true,
+    preferRealBacktest: false,
+    rerunApiKeyName: preferredApiKey,
     initialBalance,
     riskScore: Number(snapshot.backtestSettings?.riskScore ?? 5),
     tradeFrequencyScore: Number(snapshot.backtestSettings?.tradeFrequencyScore ?? 5),
   });
   const tsStrategyIds = Array.from(new Set(
-    (Array.isArray((tsPreview as Record<string, unknown>).rerun)
-      && Array.isArray((tsPreview.rerun as Record<string, unknown>).strategyIds)
-      ? (tsPreview.rerun as { strategyIds: number[] }).strategyIds
-      : (tsPreview.selectedOffers || []).map((item) => Number((item as Record<string, unknown>).strategyId || 0)))
+    (tsPreview.selectedOffers || [])
+      .map((item) => Number((item as Record<string, unknown>).strategyId || 0))
       .filter((value) => Number.isFinite(value) && value > 0),
   ));
   if (tsStrategyIds.length === 0) {
     throw new Error('Could not resolve TS strategy ids for DCA pair pick');
   }
 
-  const preferredApiKey = asString(payload?.apiKeyName, '')
-    || asString(snapshot.apiKeyName, '')
-    || await resolveApiKeyNameForStrategyIds(tsStrategyIds, '', { strict: false })
-    || asString(catalog?.apiKeyName, '')
-    || asString(apiKeys[0], '');
-  if (!preferredApiKey) {
-    throw new Error('API key is required for DCA pair pick');
-  }
   await ensureExchangeClientInitialized(preferredApiKey);
 
-  const catalogMarkets = getAllOffers(catalog)
-    .filter((offer) => offer.strategy?.mode !== 'synth')
-    .map((offer) => normalizePairMarketKey(asString(offer.strategy?.market, '')))
-    .filter(Boolean);
+  const candidatePool = DCA_CANDIDATE_SYMBOLS
+    .map((item) => normalizePairMarketKey(item))
+    .filter((market) => market.endsWith('USDT') && !occupiedMarkets.has(market));
 
-  let exchangeMarkets: string[] = [];
-  try {
-    exchangeMarkets = (await getAllSymbols(preferredApiKey))
-      .map((symbol: string) => normalizePairMarketKey(symbol))
-      .filter(Boolean);
-  } catch {
-    exchangeMarkets = [];
-  }
-
-  const candidatePool = Array.from(new Set([
-    ...DCA_CANDIDATE_SYMBOLS.map((item) => normalizePairMarketKey(item)),
-    ...catalogMarkets,
-    ...exchangeMarkets,
-  ])).filter((market) => market.endsWith('USDT') && !occupiedMarkets.has(market));
-
-  const maxTry = Math.max(1, Math.min(8, Math.floor(asNumber(payload?.maxCandidates, 5))));
+  const maxTry = Math.max(1, Math.min(3, Math.floor(asNumber(payload?.maxCandidates, 2))));
+  const existingDcaRows = await db.all(
+    `SELECT s.id, s.base_symbol, s.quote_symbol
+     FROM strategies s
+     JOIN api_keys ak ON ak.id = s.api_key_id
+     WHERE ak.name = ? AND lower(s.strategy_type) = 'dca' AND COALESCE(s.is_archived, 0) = 0`,
+    [preferredApiKey],
+  ) as Array<{ id: number; base_symbol: string; quote_symbol: string }>;
+  const existingDcaByBase = new Map(
+    existingDcaRows.map((row) => [normalizePairMarketKey(`${row.base_symbol}${row.quote_symbol || 'USDT'}`), Number(row.id)] as const),
+  );
   const scored: Array<{
     baseSymbol: string;
     market: string;
@@ -7583,17 +7574,20 @@ export const pickDcaForTsPortfolio = async (payload?: {
       break;
     }
     const baseSymbol = market.replace(/USDT$/, '');
-    if (!baseSymbol) {
+    if (!baseSymbol || baseSymbol.length < 2) {
       continue;
     }
     try {
-      const dca = await createDcaStrategyRecord(preferredApiKey, baseSymbol, 'USDT');
+      const existingStrategyId = existingDcaByBase.get(market) || 0;
+      const dcaStrategyId = existingStrategyId > 0
+        ? existingStrategyId
+        : (await createDcaStrategyRecord(preferredApiKey, baseSymbol, 'USDT')).strategyId;
       const result = await runBacktest({
         apiKeyName: preferredApiKey,
         mode: 'single',
-        strategyId: dca.strategyId,
-        bars: asNumber(sweep?.config?.backtestBars, 6000),
-        warmupBars: asNumber(sweep?.config?.warmupBars, 400),
+        strategyId: dcaStrategyId,
+        bars: 2500,
+        warmupBars: 120,
         skipMissingSymbols: true,
         initialBalance,
         commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
@@ -7611,7 +7605,7 @@ export const pickDcaForTsPortfolio = async (payload?: {
       scored.push({
         baseSymbol,
         market,
-        strategyId: dca.strategyId,
+        strategyId: dcaStrategyId,
         ret,
         dd,
         pf,
@@ -7633,9 +7627,9 @@ export const pickDcaForTsPortfolio = async (payload?: {
     apiKeyName: preferredApiKey,
     mode: 'portfolio',
     strategyIds: [...tsStrategyIds, best.strategyId],
-    bars: asNumber(sweep?.config?.backtestBars, 6000),
-    warmupBars: asNumber(sweep?.config?.warmupBars, 400),
-    skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
+    bars: 2500,
+    warmupBars: 120,
+    skipMissingSymbols: true,
     initialBalance,
     commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
     slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),

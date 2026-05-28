@@ -6581,6 +6581,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
   }, [persistBacktestSettingsByCard]);
 
+  const hasTsSavedSnapshotForContext = useCallback((context: SaasBacktestContext | null | undefined): boolean => {
+    if (!context || context.kind !== 'algofund-ts') {
+      return false;
+    }
+    const snapshots = (summary?.offerStore?.tsBacktestSnapshots || {}) as Record<string, TsSnapshotBacktestDatesSource>;
+    return Boolean(
+      findTsSnapshotForBacktestContext(snapshots, context)
+      || (context.systemName ? resolveTsSnapshotForSystem(String(context.systemName || '').trim()) : null),
+    );
+  }, [summary?.offerStore?.tsBacktestSnapshots, resolveTsSnapshotForSystem]);
+
   const resolveCardBacktestDatesForContext = useCallback((context: SaasBacktestContext | null | undefined): { dateFrom: string; dateTo: string } => {
     if (!context || context.kind !== 'algofund-ts') {
       return { dateFrom: '', dateTo: '' };
@@ -6863,15 +6874,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     adminSweepBacktestResult,
     adminSweepBacktestRerunApiKey,
   ]);
-  // Keep ref always pointing to the latest function so debounce never uses a stale closure.
-  // В админ-режиме форсим preferRealBacktest=true: без него бэкенд берёт snapshot-путь и
-  // partialTpPct / maxOpenPositions / commission / slippage / funding не применяются вовсе.
-  runAdminSweepBacktestPreviewRef.current = () => runAdminSweepBacktestPreview(
-    undefined,
-    isAdminSurface
-      ? { preferRealBacktest: true, settingsOverride: buildAdminBacktestSettingsOverride() }
-      : undefined,
-  );
+  // Debounce on TS snapshot cards: synthetic scaling from saved snapshot (card-fair metrics).
+  // Real engine rerun only via explicit "API rerun (реальный)" button.
+  runAdminSweepBacktestPreviewRef.current = async () => {
+    const ctx = backtestDrawerContext;
+    const hasTsSavedSnapshot = hasTsSavedSnapshotForContext(ctx);
+    await runAdminSweepBacktestPreview(
+      undefined,
+      isAdminSurface
+        ? {
+          preferRealBacktest: !hasTsSavedSnapshot,
+          settingsOverride: buildAdminBacktestSettingsOverride(),
+        }
+        : undefined,
+    );
+  };
 
   const updateBacktestTsComposition = (
     nextOfferIdsRaw: string[],
@@ -7316,7 +7333,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         dateFrom: cardDates.dateFrom || undefined,
         dateTo: cardDates.dateTo || undefined,
         initialBalance: adminSweepBacktestInitialBalance,
-        maxCandidates: 5,
+        maxCandidates: 2,
       });
       setTsDcaPickResult(response.data);
       messageApi.success(`DCA пара подобрана: ${response.data?.picked?.[0]?.baseSymbol || '—'}USDT`);
@@ -13135,6 +13152,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 : "Настройте уровень риска и посмотрите, как изменится кривая доходности вашего портфеля. Результаты учитывают комиссию 0.1% и проскальзывание 0.05%."
               }
             />
+            {isAdminSurface && backtestDrawerContext.kind === 'algofund-ts' && hasTsSavedSnapshotForContext(backtestDrawerContext) ? (
+              <Alert
+                type="warning"
+                showIcon
+                message="Слайдеры масштабируют метрики снапшота карточки (даты те же). Real rerun — только «API rerun (реальный)»."
+              />
+            ) : null}
             {isAdminSurface && backtestDrawerContext.kind === 'algofund-ts' ? (
               <Space wrap>
                 <Tag color="geekblue">Тестируемая ТС: {(() => {
@@ -13155,9 +13179,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 size="small"
                 loading={adminSweepBacktestLoading}
                 onClick={() => {
+                  const hasTsSavedSnapshot = hasTsSavedSnapshotForContext(backtestDrawerContext);
                   void runAdminSweepBacktestPreview(
                     undefined,
-                    isAdminSurface ? { preferRealBacktest: true } : undefined,
+                    isAdminSurface ? { preferRealBacktest: !hasTsSavedSnapshot } : undefined,
                   );
                 }}
               >
