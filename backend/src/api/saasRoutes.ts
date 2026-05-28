@@ -325,8 +325,7 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
       dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
       dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
       rerunApiKeyName: req.body?.rerunApiKeyName ? String(req.body.rerunApiKeyName) : undefined,
-      // TS cards with saved snapshot: sliders use synthetic scaling (preferRealBacktest=false).
-      // Explicit "API rerun" button sends preferRealBacktest=true.
+      // Admin sliders: real rerun when explicitly requested.
       preferRealBacktest: req.body?.preferRealBacktest === true,
       enablePairLock: req.body?.enablePairLock !== undefined ? toBool(req.body.enablePairLock, true) : undefined,
       pairLockSeed: toOptionalNumber(req.body?.pairLockSeed),

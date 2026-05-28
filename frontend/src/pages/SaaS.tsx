@@ -6608,27 +6608,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   }, [summary?.offerStore?.tsBacktestSnapshots, resolveTsSnapshotForSystem]);
 
   const buildAdminBacktestSettingsOverride = useCallback((): Partial<BacktestCardSettings> => {
-    let dateFrom = adminSweepBacktestDateFrom;
-    let dateTo = adminSweepBacktestDateTo;
-    if (backtestDrawerContext?.kind === 'algofund-ts' && !backtestDatesUserModifiedRef.current) {
-      const cardDates = resolveCardBacktestDatesForContext(backtestDrawerContext);
-      dateFrom = cardDates.dateFrom;
-      dateTo = cardDates.dateTo;
-    } else if (backtestDrawerContext?.kind === 'algofund-ts' && (!dateFrom || !dateTo)) {
-      const snapshots = (summary?.offerStore?.tsBacktestSnapshots || {}) as Record<string, TsSnapshotBacktestDatesSource>;
-      let snapshotForDates = backtestDrawerContext
-        ? findTsSnapshotForBacktestContext(snapshots, backtestDrawerContext)
-        : null;
-      if (!snapshotForDates && backtestDrawerContext?.systemName) {
-        snapshotForDates = resolveTsSnapshotForSystem(String(backtestDrawerContext.systemName || '').trim());
-      }
-      if (snapshotForDates) {
-        const fallbackDates = computeBacktestDatesFromSnapshot(snapshotForDates);
-        dateFrom = dateFrom || fallbackDates.dateFrom;
-        dateTo = dateTo || fallbackDates.dateTo;
-      }
-    }
-    return {
+    const base = {
       riskScore: adminSweepBacktestRiskScore,
       tradeFrequencyScore: adminSweepBacktestTradeScore,
       initialBalance: adminSweepBacktestInitialBalance,
@@ -6639,8 +6619,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       commissionPercent: adminSweepBacktestCommissionPercent,
       slippagePercent: adminSweepBacktestSlippagePercent,
       fundingRatePercent: adminSweepBacktestFundingRatePercent,
-      dateFrom,
-      dateTo,
+    };
+    if (!backtestDatesUserModifiedRef.current) {
+      return base;
+    }
+    return {
+      ...base,
+      dateFrom: adminSweepBacktestDateFrom,
+      dateTo: adminSweepBacktestDateTo,
     };
   }, [
     adminSweepBacktestRiskScore,
@@ -6653,12 +6639,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     adminSweepBacktestCommissionPercent,
     adminSweepBacktestSlippagePercent,
     adminSweepBacktestFundingRatePercent,
-    adminSweepBacktestDateFrom,
-    adminSweepBacktestDateTo,
     backtestDrawerContext,
-    summary?.offerStore?.tsBacktestSnapshots,
-    resolveTsSnapshotForSystem,
-    resolveCardBacktestDatesForContext,
   ]);
 
   // Debounce helper: triggers auto-recalculate after slider changes with 700ms delay.
@@ -6706,9 +6687,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     let effectiveDateFrom = (typeof overrideDateFromRaw === 'string' ? overrideDateFromRaw : adminSweepBacktestDateFrom) || undefined;
     let effectiveDateTo = (typeof overrideDateToRaw === 'string' ? overrideDateToRaw : adminSweepBacktestDateTo) || undefined;
     if (targetContext.kind === 'algofund-ts' && !backtestDatesUserModifiedRef.current) {
-      const cardDates = resolveCardBacktestDatesForContext(targetContext);
-      effectiveDateFrom = cardDates.dateFrom || effectiveDateFrom;
-      effectiveDateTo = cardDates.dateTo || effectiveDateTo;
+      effectiveDateFrom = undefined;
+      effectiveDateTo = undefined;
     } else if (targetContext.kind === 'algofund-ts' && (!effectiveDateFrom || !effectiveDateTo)) {
       const snapshots = (summary?.offerStore?.tsBacktestSnapshots || {}) as Record<string, TsSnapshotBacktestDatesSource>;
       let snapshotForDates = findTsSnapshotForBacktestContext(snapshots, targetContext);
@@ -6874,18 +6854,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     adminSweepBacktestResult,
     adminSweepBacktestRerunApiKey,
   ]);
-  // Debounce on TS snapshot cards: synthetic scaling from saved snapshot (card-fair metrics).
-  // Real engine rerun only via explicit "API rerun (реальный)" button.
+  // Debounce: real rerun on sliders. Without explicit user dates → backend uses full sweep depth.
   runAdminSweepBacktestPreviewRef.current = async () => {
-    const ctx = backtestDrawerContext;
-    const hasTsSavedSnapshot = hasTsSavedSnapshotForContext(ctx);
     await runAdminSweepBacktestPreview(
       undefined,
       isAdminSurface
-        ? {
-          preferRealBacktest: !hasTsSavedSnapshot,
-          settingsOverride: buildAdminBacktestSettingsOverride(),
-        }
+        ? { preferRealBacktest: true, settingsOverride: buildAdminBacktestSettingsOverride() }
         : undefined,
     );
   };
@@ -7325,7 +7299,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     try {
       const cardDates = backtestDatesUserModifiedRef.current
         ? { dateFrom: adminSweepBacktestDateFrom, dateTo: adminSweepBacktestDateTo }
-        : resolveCardBacktestDatesForContext(backtestDrawerContext);
+        : { dateFrom: undefined, dateTo: undefined };
       const response = await axios.post('/api/saas/admin/ts-dca-pair-pick', {
         systemName: backtestDrawerContext.systemName,
         setKey: backtestDrawerContext.setKey,
@@ -13154,9 +13128,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             />
             {isAdminSurface && backtestDrawerContext.kind === 'algofund-ts' && hasTsSavedSnapshotForContext(backtestDrawerContext) ? (
               <Alert
-                type="warning"
+                type="info"
                 showIcon
-                message="Слайдеры масштабируют метрики снапшота карточки (даты те же). Real rerun — только «API rerun (реальный)»."
+                message="Слайдеры → real rerun на полной глубине sweep (как при historical sweep). Окно 90d на карточке — только подпись; кастомные даты — если меняешь поля dateFrom/dateTo или кнопки 7d/14d/30d/90d."
               />
             ) : null}
             {isAdminSurface && backtestDrawerContext.kind === 'algofund-ts' ? (
@@ -13179,10 +13153,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 size="small"
                 loading={adminSweepBacktestLoading}
                 onClick={() => {
-                  const hasTsSavedSnapshot = hasTsSavedSnapshotForContext(backtestDrawerContext);
                   void runAdminSweepBacktestPreview(
                     undefined,
-                    isAdminSurface ? { preferRealBacktest: !hasTsSavedSnapshot } : undefined,
+                    isAdminSurface ? { preferRealBacktest: true } : undefined,
                   );
                 }}
               >
@@ -13511,7 +13484,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           setAdminSweepBacktestDateTo(cardDates.dateTo);
                           setAdminSweepBacktestStale(true);
                           scheduleBacktestDebounce();
-                        }}>К датам карточки</Button>
+                        }}>Подпись карточки (90d)</Button>
+                        <Button size="small" onClick={() => {
+                          backtestDatesUserModifiedRef.current = false;
+                          setAdminSweepBacktestDateFrom('');
+                          setAdminSweepBacktestDateTo('');
+                          setAdminSweepBacktestStale(true);
+                          scheduleBacktestDebounce();
+                        }}>Полная глубина sweep</Button>
                       </Space>
                       <Space wrap>
                         {[7, 14, 30, 90].map((days) => (
@@ -13526,7 +13506,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           }}>{days}d</Button>
                         ))}
                       </Space>
-                      <Text type="secondary">По умолчанию — даты карточки (снапшот). Меняй вручную только для сравнения.</Text>
+                      <Text type="secondary">Пусто + без ручного ввода → полная глубина sweep. Поля/кнопки 7–90d → свой диапазон.</Text>
                     </Space>
                   </Card>
                 </Col>
@@ -13601,6 +13581,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     ) : (
                       <Tag color="default">mode: sweep-only</Tag>
                     )}
+                    {(adminSweepBacktestResult.rerun as { fullSweepDepth?: boolean } | undefined)?.fullSweepDepth ? (
+                      <Tag color="gold">full sweep depth</Tag>
+                    ) : null}
                     {(adminSweepBacktestResult as any).snapshotMeta?.bakedMaxOpenPositions > 0 && (
                       <Tag color="orange">snapshot OP={((adminSweepBacktestResult as any).snapshotMeta.bakedMaxOpenPositions)}</Tag>
                     )}

@@ -5813,6 +5813,42 @@ const resolveSnapshotPreviewDates = (
   return { dateFrom, dateTo };
 };
 
+/** Real rerun: full historical sweep window unless admin explicitly set dateFrom/dateTo. */
+const resolveSnapshotRerunDates = (
+  snapshot: { periodDays?: number; backtestSettings?: Record<string, unknown>; updatedAt?: string } | null,
+  sweep: { config?: Record<string, unknown> } | null | undefined,
+  requestedFrom: string,
+  requestedTo: string,
+): { dateFrom: string; dateTo: string; usedFullSweepDepth: boolean } => {
+  if (requestedFrom && requestedTo) {
+    return { dateFrom: requestedFrom, dateTo: requestedTo, usedFullSweepDepth: false };
+  }
+  const sweepFromRaw = asString(sweep?.config?.dateFrom, '').trim();
+  const sweepToRaw = asString(sweep?.config?.dateTo, '').trim();
+  const sweepFrom = sweepFromRaw.length >= 10 ? sweepFromRaw.slice(0, 10) : sweepFromRaw;
+  const sweepTo = sweepToRaw.length >= 10 ? sweepToRaw.slice(0, 10) : sweepToRaw;
+  const nowYmd = new Date().toISOString().slice(0, 10);
+  if (sweepFrom) {
+    return {
+      dateFrom: sweepFrom,
+      dateTo: sweepTo || nowYmd,
+      usedFullSweepDepth: true,
+    };
+  }
+  const fallback = resolveSnapshotPreviewDates(snapshot, sweep, requestedFrom, requestedTo);
+  return { ...fallback, usedFullSweepDepth: false };
+};
+
+const buildPeriodInfoFromDates = (
+  dateFrom: string,
+  dateTo: string,
+  interval: string,
+): PeriodInfo => ({
+  dateFrom,
+  dateTo,
+  interval,
+});
+
 const collectTsOccupiedMarkets = (
   offerIds: string[],
   catalog: CatalogData | null,
@@ -6620,13 +6656,13 @@ export const previewAdminSweepBacktest = async (payload?: {
           dateFrom: requestedDateFrom
             || (kind === 'offer' ? singleOfferStoreDateFrom : '')
             || (kind === 'algofund-ts' && tsSavedSnapshotForPreview
-              ? resolveSnapshotPreviewDates(tsSavedSnapshotForPreview, sweep, requestedDateFrom, requestedDateTo).dateFrom
+              ? resolveSnapshotRerunDates(tsSavedSnapshotForPreview, sweep, requestedDateFrom, requestedDateTo).dateFrom
               : buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateFrom)
             || asString(sweep?.config?.dateFrom, ''),
           dateTo: requestedDateTo
             || (kind === 'offer' ? singleOfferStoreDateTo : '')
             || (kind === 'algofund-ts' && tsSavedSnapshotForPreview
-              ? resolveSnapshotPreviewDates(tsSavedSnapshotForPreview, sweep, requestedDateFrom, requestedDateTo).dateTo
+              ? resolveSnapshotRerunDates(tsSavedSnapshotForPreview, sweep, requestedDateFrom, requestedDateTo).dateTo
               : buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateTo)
             || asString(sweep?.config?.dateTo, ''),
           ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
@@ -6875,14 +6911,14 @@ export const previewAdminSweepBacktest = async (payload?: {
             }))
             .filter((item) => Number.isFinite(item.equity));
           const snapshotPeriodDaysForDates = Math.max(1, Math.floor(asNumber(snapshot.periodDays, periodDays)));
-          const snapshotPreviewDates = resolveSnapshotPreviewDates(snapshot, sweep, requestedDateFrom, requestedDateTo);
-          const snapshotDateFromResolved = snapshotPreviewDates.dateFrom;
-          const snapshotDateToResolved = snapshotPreviewDates.dateTo;
-          const snapshotPeriodInfo: PeriodInfo = {
-            dateFrom: snapshotDateFromResolved,
-            dateTo: snapshotDateToResolved,
-            interval: asString(period?.interval, asString(sweep?.config?.interval, '4h')),
-          };
+          const snapshotRerunDates = resolveSnapshotRerunDates(snapshot, sweep, requestedDateFrom, requestedDateTo);
+          const snapshotDateFromResolved = snapshotRerunDates.dateFrom;
+          const snapshotDateToResolved = snapshotRerunDates.dateTo;
+          const snapshotPeriodInfo: PeriodInfo = buildPeriodInfoFromDates(
+            snapshotDateFromResolved,
+            snapshotDateToResolved,
+            asString(period?.interval, asString(sweep?.config?.interval, '4h')),
+          );
 
           const selectedByOfferId = new Map(
             selectedOffers.map((item) => [String(item.offerId || '').trim(), item] as const),
@@ -7036,6 +7072,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                     riskMul: rerunRiskMul,
                     riskScaleMaxPercent,
                     freqLevel: tradeFrequencyLevel,
+                    ...(snapshotRerunDates.usedFullSweepDepth ? { fullSweepDepth: true } : {}),
                     ...(rerunRelaxedDateRange ? { note: 'date_range_relaxed_for_snapshot_rerun' } : {}),
                   },
                 };
@@ -7509,7 +7546,9 @@ export const pickDcaForTsPortfolio = async (payload?: {
   const occupiedMarkets = collectTsOccupiedMarkets(offerIds, catalog, offerStoreById);
   const requestedDateFrom = asString(payload?.dateFrom, '').trim();
   const requestedDateTo = asString(payload?.dateTo, '').trim();
-  const previewDates = resolveSnapshotPreviewDates(snapshot, sweep, requestedDateFrom, requestedDateTo);
+  const previewDates = requestedDateFrom && requestedDateTo
+    ? { dateFrom: requestedDateFrom, dateTo: requestedDateTo }
+    : resolveSnapshotRerunDates(snapshot, sweep, '', '');
   const initialBalance = Math.max(100, asNumber(payload?.initialBalance, asNumber(snapshot.backtestSettings?.initialBalance, 10000)));
 
   const preferredApiKey = asString(payload?.apiKeyName, '')
