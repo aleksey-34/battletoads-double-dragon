@@ -2086,6 +2086,7 @@ const buildFallbackSweepData = (catalog: CatalogData | null): SweepData | null =
       commissionPercent: 0.1,
       slippagePercent: 0.05,
       fundingRatePercent: 0,
+      dateFrom: '2024-06-01',
     },
   };
 };
@@ -2105,13 +2106,26 @@ export const loadCatalogAndSweepWithFallback = async (): Promise<{ catalog: Cata
 
   const sourceStatus = getLatestResearchArtifactsStatus();
   const sourceCatalog = sourceStatus.catalogFresh ? loadLatestClientCatalog() : null;
-  const sourceSweep = sourceStatus.sweepFresh ? loadLatestSweep() : null;
+  const diskSweep = loadLatestSweep();
+  const sourceSweep = sourceStatus.sweepFresh ? diskSweep : null;
   const fallbackCatalog = await buildFallbackCatalogFromPresets(sourceCatalog, []);
   const sourceCatalogHasOffers = catalogHasOffers(sourceCatalog);
   const catalog = sourceCatalogHasOffers
     ? sourceCatalog
     : (catalogHasOffers(fallbackCatalog) ? fallbackCatalog : sourceCatalog || fallbackCatalog);
-  const sweep = sourceSweep || buildFallbackSweepData(catalog);
+  let sweep = sourceSweep || buildFallbackSweepData(catalog);
+  // Even when evaluated sweep rows are stale, keep the historical window + bars from the latest on-disk sweep.
+  if (diskSweep?.config && sweep) {
+    const mergedConfig = {
+      ...(sweep.config || {}),
+      ...(diskSweep.config || {}),
+      dateFrom: asString(diskSweep.config?.dateFrom, asString(sweep.config?.dateFrom, '')),
+      dateTo: asString(diskSweep.config?.dateTo, asString(sweep.config?.dateTo, '')),
+      backtestBars: asNumber(diskSweep.config?.backtestBars, asNumber(sweep.config?.backtestBars, 6000)),
+      warmupBars: asNumber(diskSweep.config?.warmupBars, asNumber(sweep.config?.warmupBars, 400)),
+    };
+    sweep = { ...sweep, config: mergedConfig };
+  }
 
   if (catalog) {
     const extraRaw = await getRuntimeFlag('admin.catalog.extra_draft_members', '[]');

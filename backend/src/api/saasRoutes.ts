@@ -289,7 +289,7 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
     const source = String(req.body?.source || '').trim().toLowerCase();
     const hasSystemName = String(req.body?.systemName || '').trim().length > 0;
     const requestedKind = String(req.body?.kind || '').trim().toLowerCase();
-    logger.info(`[sweep-backtest-preview] kind=${requestedKind || 'auto'} system="${String(req.body?.systemName||'').slice(0,80)}" partialTpPct=${req.body?.partialTpPct} reinvest=${req.body?.reinvestPercent} maxOP=${req.body?.maxOpenPositions} preferReal=${req.body?.preferRealBacktest}`);
+    logger.info(`[sweep-backtest-preview] kind=${requestedKind || 'auto'} system="${String(req.body?.systemName||'').slice(0,80)}" partialTpPct=${req.body?.partialTpPct} reinvest=${req.body?.reinvestPercent} maxOP=${req.body?.maxOpenPositions} preferReal=${req.body?.preferRealBacktest} dateFrom=${String(req.body?.dateFrom||'').slice(0,10)||'-'} dateTo=${String(req.body?.dateTo||'').slice(0,10)||'-'}`);
     const inferredKind = requestedKind === 'offer' || requestedKind === 'algofund-ts'
       ? requestedKind as 'offer' | 'algofund-ts'
       : (
@@ -338,7 +338,7 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
     }
     const rerunInfo = (data as any)?.rerun || {};
     const summaryInfo = (data as any)?.preview?.summary || {};
-    logger.info(`[sweep-backtest-preview] done source=${(data as any)?.preview?.source} rerun.executed=${rerunInfo.executed} rerun.requested=${rerunInfo.requested} rerun.error="${String(rerunInfo.error||'').slice(0,120)}" ret=${summaryInfo.totalReturnPercent} trades=${summaryInfo.tradesCount}`);
+    logger.info(`[sweep-backtest-preview] done source=${(data as any)?.preview?.source} rerun.executed=${rerunInfo.executed} rerun.requested=${rerunInfo.requested} rerun.error="${String(rerunInfo.error||'').slice(0,120)}" ret=${summaryInfo.totalReturnPercent} trades=${summaryInfo.tradesCount} period=${String((data as any)?.period?.dateFrom||'').slice(0,10)}..${String((data as any)?.period?.dateTo||'').slice(0,10)} fullSweep=${Boolean((rerunInfo as any)?.fullSweepDepth)}`);
     res.json({ success: true, ...data });
   } catch (error) {
     const err = error as Error;

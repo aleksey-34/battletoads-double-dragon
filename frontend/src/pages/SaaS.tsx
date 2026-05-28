@@ -6684,22 +6684,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     // haven't flushed yet), otherwise fall back to current state.
     const overrideDateFromRaw = options?.settingsOverride?.dateFrom;
     const overrideDateToRaw = options?.settingsOverride?.dateTo;
-    let effectiveDateFrom = (typeof overrideDateFromRaw === 'string' ? overrideDateFromRaw : adminSweepBacktestDateFrom) || undefined;
-    let effectiveDateTo = (typeof overrideDateToRaw === 'string' ? overrideDateToRaw : adminSweepBacktestDateTo) || undefined;
+    let effectiveDateFrom: string | undefined;
+    let effectiveDateTo: string | undefined;
     if (targetContext.kind === 'algofund-ts' && !backtestDatesUserModifiedRef.current) {
+      // Full sweep depth on backend — do not send card label dates (90d window).
       effectiveDateFrom = undefined;
       effectiveDateTo = undefined;
-    } else if (targetContext.kind === 'algofund-ts' && (!effectiveDateFrom || !effectiveDateTo)) {
-      const snapshots = (summary?.offerStore?.tsBacktestSnapshots || {}) as Record<string, TsSnapshotBacktestDatesSource>;
-      let snapshotForDates = findTsSnapshotForBacktestContext(snapshots, targetContext);
-      if (!snapshotForDates && targetContext.systemName) {
-        snapshotForDates = resolveTsSnapshotForSystem(String(targetContext.systemName || '').trim());
-      }
-      if (snapshotForDates) {
-        const fallbackDates = computeBacktestDatesFromSnapshot(snapshotForDates);
-        effectiveDateFrom = effectiveDateFrom || fallbackDates.dateFrom;
-        effectiveDateTo = effectiveDateTo || fallbackDates.dateTo;
-      }
+    } else {
+      effectiveDateFrom = (typeof overrideDateFromRaw === 'string' ? overrideDateFromRaw : adminSweepBacktestDateFrom) || undefined;
+      effectiveDateTo = (typeof overrideDateToRaw === 'string' ? overrideDateToRaw : adminSweepBacktestDateTo) || undefined;
     }
     try {
       const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
@@ -7287,7 +7280,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAdminSweepBacktestResult(null);
     setAdminSweepBacktestRerunApiKey('');
     window.setTimeout(() => {
-      void runAdminSweepBacktestPreview(context, { settingsOverride: settings });
+      const settingsForPreview = context.kind === 'algofund-ts'
+        ? { ...settings, dateFrom: undefined, dateTo: undefined }
+        : settings;
+      void runAdminSweepBacktestPreview(context, { settingsOverride: settingsForPreview });
     }, 0);
   };
 
