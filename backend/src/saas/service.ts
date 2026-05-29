@@ -5827,8 +5827,14 @@ const clampRequestedBacktestDates = (
     notes.push('dateTo не задан — взяли сегодня');
   }
   if (to && !from) {
-    from = new Date(Date.parse(`${to}T00:00:00Z`) - 90 * 86400000).toISOString().slice(0, 10);
-    notes.push('dateFrom не задан — 90d до dateTo');
+    const sweepFromRaw = asString(sweep?.config?.dateFrom, '').trim().slice(0, 10);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(sweepFromRaw) && sweepFromRaw <= to) {
+      from = sweepFromRaw;
+      notes.push('dateFrom не задан — взяли начало sweep');
+    } else {
+      from = new Date(Date.parse(`${to}T00:00:00Z`) - 365 * 86400000).toISOString().slice(0, 10);
+      notes.push('dateFrom не задан — 365d до dateTo');
+    }
   }
   if (!from || !to) {
     return {
@@ -5923,8 +5929,15 @@ const resolveSnapshotRerunDates = (
       usedFullSweepDepth: true,
     };
   }
-  const fallback = resolveSnapshotPreviewDates(snapshot, sweep, requestedFrom, requestedTo);
-  return { ...fallback, usedFullSweepDepth: false };
+  const settings = snapshot?.backtestSettings && typeof snapshot.backtestSettings === 'object'
+    ? snapshot.backtestSettings
+    : {};
+  const settingsFrom = asString(settings.dateFrom, '').trim().slice(0, 10);
+  const settingsTo = asString(settings.dateTo, '').trim().slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(settingsFrom) && /^\d{4}-\d{2}-\d{2}$/.test(settingsTo)) {
+    return { dateFrom: settingsFrom, dateTo: settingsTo, usedFullSweepDepth: false };
+  }
+  return { dateFrom: nowYmd, dateTo: nowYmd, usedFullSweepDepth: false };
 };
 
 const buildPeriodInfoFromDates = (
@@ -9430,10 +9443,6 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
       const existingKey = resolveTsSnapshotKeyBySystemName(nextTsSnapshotMap, systemName) || systemName;
       const existing = nextTsSnapshotMap[existingKey] || null;
       try {
-        const refreshPeriodDays = Math.max(1, Math.floor(asNumber(existing?.periodDays, offerStore.defaults.periodDays || 90)));
-        const refreshNow = new Date();
-        const refreshDateTo = refreshNow.toISOString().slice(0, 10);
-        const refreshDateFrom = new Date(refreshNow.getTime() - refreshPeriodDays * 24 * 3600 * 1000).toISOString().slice(0, 10);
         const preview = await previewAdminSweepBacktest({
           kind: 'algofund-ts',
           systemName,
@@ -9441,13 +9450,10 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
           offerIds: Array.isArray(existing?.offerIds)
             ? existing.offerIds.map((item) => asString(item, '').trim()).filter(Boolean)
             : undefined,
-          dateFrom: refreshDateFrom,
-          dateTo: refreshDateTo,
           riskScore: Number(existing?.backtestSettings?.riskScore ?? 5),
           tradeFrequencyScore: Number(existing?.backtestSettings?.tradeFrequencyScore ?? 5),
           initialBalance: Number(existing?.backtestSettings?.initialBalance ?? 10000),
           riskScaleMaxPercent: Number(existing?.backtestSettings?.riskScaleMaxPercent ?? 100),
-          // Allow real backtest in batch mode so mixed-TF portfolios are computed correctly
           isBatchRefresh: true,
         });
 
@@ -9459,7 +9465,16 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
           : [];
         const selectedOffers = Array.isArray(preview.selectedOffers) ? preview.selectedOffers : [];
         const offerIds = Array.from(new Set(selectedOffers.map((item) => String((item as any)?.offerId || '').trim()).filter(Boolean)));
-        const periodDays = Math.max(1, Math.floor(Number(existing?.periodDays || offerStore.defaults.periodDays || 90)));
+        const previewPeriodFrom = asString((preview.period as Record<string, unknown> | undefined)?.dateFrom, '').slice(0, 10);
+        const previewPeriodTo = asString((preview.period as Record<string, unknown> | undefined)?.dateTo, '').slice(0, 10);
+        let periodDays = Math.max(1, Math.floor(getSweepPeriodDays(loadLatestSweep(), 365)));
+        if (/^\d{4}-\d{2}-\d{2}$/.test(previewPeriodFrom) && /^\d{4}-\d{2}-\d{2}$/.test(previewPeriodTo)) {
+          const fromMs = Date.parse(previewPeriodFrom);
+          const toMs = Date.parse(previewPeriodTo);
+          if (Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs > fromMs) {
+            periodDays = Math.max(1, Math.floor((toMs - fromMs) / 86400000));
+          }
+        }
 
         const normalized = normalizeTsBacktestSnapshot({
           ...(existing || {}),
@@ -9488,8 +9503,8 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
             tradeFrequencyScore: Number(existing?.backtestSettings?.tradeFrequencyScore ?? 5),
             initialBalance: Number(existing?.backtestSettings?.initialBalance ?? 10000),
             riskScaleMaxPercent: Number(existing?.backtestSettings?.riskScaleMaxPercent ?? 100),
-            dateFrom: asString((preview.period as Record<string, unknown> | undefined)?.dateFrom, refreshDateFrom),
-            dateTo: asString((preview.period as Record<string, unknown> | undefined)?.dateTo, refreshDateTo),
+            dateFrom: asString((preview.period as Record<string, unknown> | undefined)?.dateFrom, previewPeriodFrom),
+            dateTo: asString((preview.period as Record<string, unknown> | undefined)?.dateTo, previewPeriodTo),
             interval: asString((preview.period as Record<string, unknown> | undefined)?.interval, asString(existing?.backtestSettings?.interval, '4h')),
           },
           updatedAt: new Date().toISOString(),

@@ -1084,38 +1084,16 @@ type TsSnapshotBacktestDatesSource = {
   updatedAt?: string;
 };
 
-const computeBacktestDatesFromPeriodDays = (periodDaysRaw: unknown): { dateFrom: string; dateTo: string } => {
-  const periodDays = Math.max(1, Math.floor(Number(periodDaysRaw ?? 90)));
-  const dateTo = new Date().toISOString().slice(0, 10);
-  const dateFrom = new Date(Date.now() - periodDays * 86400000).toISOString().slice(0, 10);
-  return { dateFrom, dateTo };
-};
-
-const computeBacktestDatesFromSnapshot = (snapshot: TsSnapshotBacktestDatesSource | null): { dateFrom: string; dateTo: string } => {
-  const settingsFrom = String(snapshot?.backtestSettings?.dateFrom || '').trim();
-  const settingsTo = String(snapshot?.backtestSettings?.dateTo || '').trim();
-  if (/^\d{4}-\d{2}-\d{2}$/.test(settingsFrom) && /^\d{4}-\d{2}-\d{2}$/.test(settingsTo)) {
-    return { dateFrom: settingsFrom, dateTo: settingsTo };
-  }
-  const periodDays = Math.max(1, Math.floor(Number(snapshot?.periodDays ?? 90)));
-  const anchorMs = snapshot?.updatedAt ? Date.parse(snapshot.updatedAt) : Number.NaN;
-  const anchorDate = Number.isFinite(anchorMs) ? new Date(anchorMs) : new Date();
-  const dateTo = anchorDate.toISOString().slice(0, 10);
-  const dateFrom = new Date(anchorDate.getTime() - periodDays * 86400000).toISOString().slice(0, 10);
-  return { dateFrom, dateTo };
-};
-
 const enrichBacktestSettingsFromTsSnapshot = (
   settings: BacktestCardSettings,
   snapshot: TsSnapshotBacktestDatesSource | null,
 ): BacktestCardSettings => {
   const rawFrom = String(settings.dateFrom || snapshot?.backtestSettings?.dateFrom || '').trim();
   const rawTo = String(settings.dateTo || snapshot?.backtestSettings?.dateTo || '').trim();
-  const fallback = computeBacktestDatesFromSnapshot(snapshot);
   return {
     ...settings,
-    dateFrom: rawFrom || fallback.dateFrom,
-    dateTo: rawTo || fallback.dateTo,
+    dateFrom: /^\d{4}-\d{2}-\d{2}$/.test(rawFrom) ? rawFrom : '',
+    dateTo: /^\d{4}-\d{2}-\d{2}$/.test(rawTo) ? rawTo : '',
   };
 };
 
@@ -6543,8 +6521,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAdminSweepBacktestCommissionPercent(settings.commissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent);
     setAdminSweepBacktestSlippagePercent(settings.slippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent);
     setAdminSweepBacktestFundingRatePercent(settings.fundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent);
-    // Подтягиваем дата-окно из сохранённого снапшота, чтобы модалка сразу пересчитывала
-    // на той же длине истории, что и опубликованная карточка (а не на дефолтных ~70д).
+    // Даты — только если явно сохранены в backtestSettings; иначе пусто → full sweep depth на бэкенде.
     setAdminSweepBacktestDateFrom(typeof settings.dateFrom === 'string' ? settings.dateFrom : '');
     setAdminSweepBacktestDateTo(typeof settings.dateTo === 'string' ? settings.dateTo : '');
     // Сбрасываем реинвест к 100% (compound) при любом открытии модалки — этот параметр
@@ -6648,20 +6625,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     );
   }, [summary?.offerStore?.tsBacktestSnapshots, resolveTsSnapshotForSystem]);
 
-  const resolveCardBacktestDatesForContext = useCallback((context: SaasBacktestContext | null | undefined): { dateFrom: string; dateTo: string } => {
-    if (!context || context.kind !== 'algofund-ts') {
-      return { dateFrom: '', dateTo: '' };
-    }
-    const snapshots = (summary?.offerStore?.tsBacktestSnapshots || {}) as Record<string, TsSnapshotBacktestDatesSource>;
-    let snapshotForDates = findTsSnapshotForBacktestContext(snapshots, context);
-    if (!snapshotForDates && context.systemName) {
-      snapshotForDates = resolveTsSnapshotForSystem(String(context.systemName || '').trim());
-    }
-    if (!snapshotForDates) {
-      return computeBacktestDatesFromPeriodDays(90);
-    }
-    return computeBacktestDatesFromSnapshot(snapshotForDates);
-  }, [summary?.offerStore?.tsBacktestSnapshots, resolveTsSnapshotForSystem]);
+  const hasCustomBacktestDates = Boolean(
+    String(adminSweepBacktestDateFrom || '').trim()
+    && String(adminSweepBacktestDateTo || '').trim(),
+  );
 
   const buildAdminBacktestSettingsOverride = useCallback((): Partial<BacktestCardSettings> => {
     const base = {
@@ -6807,13 +6774,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         }
         if (clampNotes.length > 0) {
           messageApi.warning(`Период скорректирован: ${clampNotes.join('; ')}`);
-        }
-      } else {
-        if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodFrom) && !backtestDatesUserModifiedRef.current) {
-          setAdminSweepBacktestDateFrom(responsePeriodFrom);
-        }
-        if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodTo) && !backtestDatesUserModifiedRef.current) {
-          setAdminSweepBacktestDateTo(responsePeriodTo);
         }
       }
       // Auto-set rerun key to sweep's key when none has been chosen yet
@@ -7338,13 +7298,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const openEmbeddedBacktest = (context: SaasBacktestContext) => {
     backtestRequestSeqRef.current += 1;
-    backtestDatesUserModifiedRef.current = false;
     setTsDcaResearchResult(null);
     setTsDcaApplyResult(null);
     setTsDcaCombinedPreview(null);
     setTsDcaEnabled(false);
     setTsDcaSelectedMarkets([]);
     const settings = resolveBacktestSettingsForContext(context);
+    const hasSavedCustomDates = Boolean(
+      /^\d{4}-\d{2}-\d{2}$/.test(String(settings.dateFrom || '').trim())
+      && /^\d{4}-\d{2}-\d{2}$/.test(String(settings.dateTo || '').trim()),
+    );
+    backtestDatesUserModifiedRef.current = hasSavedCustomDates;
     applyBacktestSettings(settings);
 
     // NOTE: Раньше здесь писали settings в localStorage «про запас» — это создавало
@@ -7366,10 +7330,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAdminSweepBacktestResult(null);
     setAdminSweepBacktestRerunApiKey('');
     window.setTimeout(() => {
-      const settingsForPreview = context.kind === 'algofund-ts'
+      const settingsForPreview = context.kind === 'algofund-ts' && !hasSavedCustomDates
         ? { ...settings, dateFrom: undefined, dateTo: undefined }
         : settings;
-      void runAdminSweepBacktestPreview(context, { settingsOverride: settingsForPreview });
+      void runAdminSweepBacktestPreview(context, {
+        preferRealBacktest: isAdminSurface,
+        settingsOverride: settingsForPreview,
+      });
     }, 0);
   };
 
@@ -14133,36 +14100,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         />
                         <Button size="small" onClick={() => {
                           backtestDatesUserModifiedRef.current = false;
-                          const cardDates = resolveCardBacktestDatesForContext(backtestDrawerContext);
-                          setAdminSweepBacktestDateFrom(cardDates.dateFrom);
-                          setAdminSweepBacktestDateTo(cardDates.dateTo);
-                          setAdminSweepBacktestStale(true);
-                          scheduleBacktestDebounce();
-                        }}>Подпись карточки (90d)</Button>
-                        <Button size="small" onClick={() => {
-                          backtestDatesUserModifiedRef.current = false;
                           setAdminSweepBacktestDateFrom('');
                           setAdminSweepBacktestDateTo('');
                           setAdminSweepBacktestStale(true);
                           scheduleBacktestDebounce();
                         }}>Полная глубина sweep</Button>
                       </Space>
-                      <Space wrap>
-                        {[7, 14, 30, 90].map((days) => (
-                          <Button key={days} size="small" type={adminSweepBacktestDateFrom && Math.abs(Math.round((Date.now() - Date.parse(adminSweepBacktestDateFrom)) / 86400000) - days) < 2 ? 'primary' : 'default'} onClick={() => {
-                            backtestDatesUserModifiedRef.current = true;
-                            const now = new Date();
-                            const from = new Date(now.getTime() - days * 86400000);
-                            const nextFrom = from.toISOString().slice(0, 10);
-                            const nextTo = now.toISOString().slice(0, 10);
-                            setAdminSweepBacktestDateFrom(nextFrom);
-                            setAdminSweepBacktestDateTo(nextTo);
-                            setAdminSweepBacktestStale(true);
-                            scheduleBacktestDebounce({ dateFrom: nextFrom, dateTo: nextTo });
-                          }}>{days}d</Button>
-                        ))}
-                      </Space>
-                      <Text type="secondary">Пусто + «Полная глубина» → full sweep. Меняешь dateFrom — dateTo = сегодня, если был некорректен. Конец периода не дальше сегодня и конца sweep-данных.</Text>
+                      <Text type="secondary">Пустые даты → real rerun по полному диапазону sweep/карточки. Заполните обе даты — свой период админа.</Text>
                     </Space>
                   </Card>
                 </Col>
@@ -14222,7 +14166,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       if (tsDcaResearchResult?.period) {
                         return mergeActualRange(tsDcaResearchResult.period);
                       }
-                      if (String(adminSweepBacktestDateFrom || '').trim() && String(adminSweepBacktestDateTo || '').trim()) {
+                      if (backtestDatesUserModifiedRef.current && hasCustomBacktestDates) {
                         return mergeActualRange({
                           dateFrom: adminSweepBacktestDateFrom,
                           dateTo: adminSweepBacktestDateTo,

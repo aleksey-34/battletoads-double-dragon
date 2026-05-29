@@ -28,6 +28,9 @@ import {
 } from 'antd';
 import axios from 'axios';
 
+/** BT vs RT comparison panel — temporarily disabled in UI. */
+const BT_VS_RT_UI_ENABLED = false;
+
 const { Title, Text, Paragraph } = Typography;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -1234,7 +1237,12 @@ export default function Research() {
   useEffect(() => { void fetchTasks(); }, [fetchTasks]);
   useEffect(() => { void fetchBackfillStatus(); }, [fetchBackfillStatus]);
   useEffect(() => { void fetchFullHistoricalSweepStatus(); }, [fetchFullHistoricalSweepStatus]);
-  useEffect(() => { void fetchBtRtSnapshots(); }, [fetchBtRtSnapshots]);
+  useEffect(() => {
+    if (!BT_VS_RT_UI_ENABLED) {
+      return;
+    }
+    void fetchBtRtSnapshots();
+  }, [fetchBtRtSnapshots]);
 
   useEffect(() => {
     if (!backfillJobStatus || backfillJobStatus.status !== 'running') {
@@ -2192,6 +2200,7 @@ export default function Research() {
       </Modal>
 
       {/* BT vs RT Daily Snapshots */}
+      {BT_VS_RT_UI_ENABLED ? (
       <Card
         title="BT vs RT — Сравнение лайва с бектестом"
         style={{ marginTop: 24 }}
@@ -2323,6 +2332,16 @@ export default function Research() {
           ]}
         />
       </Card>
+      ) : (
+      <Card title="BT vs RT — Сравнение лайва с бектестом" style={{ marginTop: 24 }}>
+        <Alert
+          type="info"
+          showIcon
+          message="Раздел временно отключён"
+          description="Сравнение live vs backtest скрыто, чтобы не мешало основной работе с sweep и бэктестом ТС."
+        />
+      </Card>
+      )}
 
     </div>
   );
