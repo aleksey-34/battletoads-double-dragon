@@ -8,6 +8,7 @@ import {
   Card,
   Checkbox,
   Col,
+  Collapse,
   Descriptions,
   Divider,
   Drawer,
@@ -2860,9 +2861,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [tsDcaCombinedPreview, setTsDcaCombinedPreview] = useState<{
     tsOnly?: { summary?: Record<string, unknown>; equity?: Array<{ time: number; equity: number }> };
     combined?: { summary?: Record<string, unknown>; equity?: Array<{ time: number; equity: number }> };
+    dcaOnly?: { summary?: Record<string, unknown> };
     delta?: { ret?: number; dd?: number; trades?: number };
+    dcaLayer?: { ret?: number; dd?: number; trades?: number };
     period?: { dateFrom?: string; dateTo?: string };
   } | null>(null);
+  const [tsDcaResearchScanFingerprint, setTsDcaResearchScanFingerprint] = useState<string | null>(null);
   const [tsDcaBaseMode, setTsDcaBaseMode] = useState<'fixed' | 'percent'>('fixed');
   const [tsDcaBasePercent, setTsDcaBasePercent] = useState(1);
   const [tsDcaStepPercent, setTsDcaStepPercent] = useState(2);
@@ -7301,6 +7305,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setTsDcaResearchResult(null);
     setTsDcaApplyResult(null);
     setTsDcaCombinedPreview(null);
+    setTsDcaResearchScanFingerprint(null);
     setTsDcaEnabled(false);
     setTsDcaSelectedMarkets([]);
     const settings = resolveBacktestSettingsForContext(context);
@@ -7353,6 +7358,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       dateFrom: cardDates.dateFrom || undefined,
       dateTo: cardDates.dateTo || undefined,
       initialBalance: adminSweepBacktestInitialBalance,
+      riskScore: adminSweepBacktestRiskScore,
+      tradeFrequencyScore: adminSweepBacktestTradeScore,
       dcaBaseAmountUsdt: tsDcaBaseMode === 'fixed' ? tsDcaBaseAmountUsdt : undefined,
       dcaBaseAmountMode: tsDcaBaseMode,
       dcaBaseAmountPercent: tsDcaBaseMode === 'percent' ? tsDcaBasePercent : undefined,
@@ -7368,6 +7375,70 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       dcaInterval: tsDcaInterval,
       dcaDetectionSource: tsDcaDetectionSource,
     };
+  };
+
+  const buildTsDcaScanFingerprint = () => {
+    const hasAdminDates = Boolean(String(adminSweepBacktestDateFrom || '').trim() && String(adminSweepBacktestDateTo || '').trim());
+    const cardDates = backtestDatesUserModifiedRef.current && hasAdminDates
+      ? { dateFrom: adminSweepBacktestDateFrom, dateTo: adminSweepBacktestDateTo }
+      : { dateFrom: '', dateTo: '' };
+    return JSON.stringify({
+      dates: cardDates,
+      riskScore: adminSweepBacktestRiskScore,
+      tradeFrequencyScore: adminSweepBacktestTradeScore,
+      initialBalance: adminSweepBacktestInitialBalance,
+      apiKeyName: adminSweepBacktestRerunApiKey || '',
+      dcaBaseMode: tsDcaBaseMode,
+      dcaBaseAmountUsdt: tsDcaBaseAmountUsdt,
+      dcaBasePercent: tsDcaBasePercent,
+      dcaStepPercent: tsDcaStepPercent,
+      dcaMaxOrders: tsDcaMaxOrders,
+      dcaTpPercent: tsDcaTpPercent,
+      dcaSlPercent: tsDcaSlPercent,
+      dcaEntryFilter: tsDcaEntryFilter,
+      dcaReentryBars: tsDcaReentryBars,
+      dcaRsiMax: tsDcaRsiMax,
+      dcaPerLegSl: tsDcaPerLegSl,
+      dcaAutotune: tsDcaAutotune,
+      dcaInterval: tsDcaInterval,
+      dcaDetectionSource: tsDcaDetectionSource,
+    });
+  };
+
+  const isTsDcaScanStale = Boolean(
+    tsDcaResearchResult
+    && tsDcaResearchScanFingerprint
+    && tsDcaResearchScanFingerprint !== buildTsDcaScanFingerprint(),
+  );
+
+  const applyTsDcaAggressivePreset = () => {
+    setTsDcaBaseMode('percent');
+    setTsDcaBasePercent(1);
+    setTsDcaInterval('1h');
+    setTsDcaStepPercent(0.8);
+    setTsDcaMaxOrders(12);
+    setTsDcaTpPercent(1.2);
+    setTsDcaSlPercent(0);
+    setTsDcaEntryFilter('always');
+    setTsDcaReentryBars(0);
+    setTsDcaPerLegSl(false);
+    setTsDcaAutotune(true);
+    messageApi.info('Агрессивный DCA пресет применён — нажми «Сканировать DCA» после завершения TS rerun');
+  };
+
+  const applyTsDcaModeratePreset = () => {
+    setTsDcaBaseMode('percent');
+    setTsDcaBasePercent(0.5);
+    setTsDcaInterval('4h');
+    setTsDcaStepPercent(1);
+    setTsDcaMaxOrders(8);
+    setTsDcaTpPercent(1.5);
+    setTsDcaSlPercent(0);
+    setTsDcaEntryFilter('always');
+    setTsDcaReentryBars(0);
+    setTsDcaPerLegSl(false);
+    setTsDcaAutotune(true);
+    messageApi.info('Умеренный DCA пресет применён — нажми «Сканировать DCA»');
   };
 
   const buildTsDcaMarketTuning = () => {
@@ -7411,7 +7482,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const requestPayload = {
       ...buildTsDcaRequestPayload(),
       markets: tsDcaSelectedMarkets,
-      marketTuning: buildTsDcaMarketTuning(),
+      marketTuning: isTsDcaScanStale ? undefined : buildTsDcaMarketTuning(),
       enabled: true,
       maxOpenPositions: adminSweepBacktestMaxOpenPositions > 0 ? adminSweepBacktestMaxOpenPositions : undefined,
     };
@@ -7459,6 +7530,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const applyDcaResearchPayload = (payload: Record<string, unknown>, options?: { notify?: boolean }) => {
     setTsDcaResearchResult(payload);
+    setTsDcaResearchScanFingerprint(buildTsDcaScanFingerprint());
     const viable = Number(payload?.viableCount || 0);
     const preselect = (Array.isArray(payload?.candidates) ? payload.candidates : [])
       .filter((item: { status?: string; trades?: number }) => item.status === 'ok' && Number(item.trades || 0) > 0)
@@ -7505,6 +7577,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const runTsDcaResearch = async () => {
     if (!backtestDrawerContext || backtestDrawerContext.kind !== 'algofund-ts') {
+      return;
+    }
+    if (adminSweepBacktestLoading) {
+      messageApi.warning('Дождитесь завершения sweep / API rerun, затем запусти DCA scan');
       return;
     }
     if (tsDcaResearchServerRunning) {
@@ -7632,6 +7708,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setTsDcaCombinedPreview(null);
       return;
     }
+    if (adminSweepBacktestLoading || tsDcaPickLoading || tsDcaResearchServerRunning) {
+      return;
+    }
     const timer = window.setTimeout(() => {
       void runTsDcaCombinedPreview();
     }, 600);
@@ -7651,10 +7730,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     tsDcaEntryFilter,
     tsDcaReentryBars,
     tsDcaRsiMax,
+    tsDcaPerLegSl,
+    tsDcaAutotune,
     tsDcaInterval,
     tsDcaDetectionSource,
+    tsDcaResearchScanFingerprint,
+    isTsDcaScanStale,
+    adminSweepBacktestLoading,
+    tsDcaPickLoading,
+    tsDcaResearchServerRunning,
     adminSweepBacktestMaxOpenPositions,
     adminSweepBacktestInitialBalance,
+    adminSweepBacktestRiskScore,
+    adminSweepBacktestTradeScore,
+    adminSweepBacktestRerunApiKey,
     adminSweepBacktestDateFrom,
     adminSweepBacktestDateTo,
     adminSweepAutoLotByChannel,
@@ -13584,6 +13673,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     <Button
                       size="small"
                       loading={tsDcaPickLoading}
+                      disabled={adminSweepBacktestLoading}
                       onClick={() => { void runTsDcaResearch(); }}
                     >
                       Сканировать DCA
@@ -13635,7 +13725,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             : null}
                         </Space>
                       )}
-                      description="По умолчанию — полная глубина карточки / sweep (как real rerun TS). Свой диапазон только если вручную задал даты «от/до» или кнопки 7–90d. Autotune top-3 перебирает step×TP (4h/1h) для большего числа сделок."
+                      description="По умолчанию — полная глубина карточки / sweep (как real rerun TS). Свой диапазон — только если вручную задал даты «от/до». Autotune top-3 перебирает step×TP (4h/1h)."
+                    />
+                  ) : null}
+                  {isTsDcaScanStale ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="DCA scan устарел"
+                      description="Настройки или период изменились после последнего scan. Пересканируй для autotune per-pair; combined preview сейчас считает выбранные пары с глобальными параметрами."
                     />
                   ) : null}
                   <Space wrap align="center">
@@ -13651,8 +13749,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     />
                     <Text>DCA в ТС (влияет на equity и метрики ниже)</Text>
                     {tsDcaCombinedPreview?.delta ? (
-                      <Tag color={Number(tsDcaCombinedPreview.delta.ret || 0) >= 0 ? 'green' : 'red'}>
-                        Δ ret {Number(tsDcaCombinedPreview.delta.ret || 0).toFixed(2)}% • Δ trades {Number(tsDcaCombinedPreview.delta.trades || 0)}
+                      <Tooltip title="Δ = combined portfolio − TS-only (не сумма trades из таблицы scan)">
+                        <Tag color={Number(tsDcaCombinedPreview.delta.ret || 0) >= 0 ? 'green' : 'red'}>
+                          Δ vs TS-only: ret {Number(tsDcaCombinedPreview.delta.ret || 0).toFixed(2)}% • trades {Number(tsDcaCombinedPreview.delta.trades || 0)}
+                        </Tag>
+                      </Tooltip>
+                    ) : null}
+                    {tsDcaCombinedPreview?.dcaLayer ? (
+                      <Tag color="purple">
+                        DCA layer: ret {Number(tsDcaCombinedPreview.dcaLayer.ret || 0).toFixed(2)}% • trades {Number(tsDcaCombinedPreview.dcaLayer.trades || 0)}
                       </Tag>
                     ) : null}
                   </Space>
@@ -13667,9 +13772,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       <Text>Per-leg SL</Text>
                     </Tooltip>
                   </Space>
+                  <Space wrap align="center">
+                    <Button size="small" onClick={applyTsDcaModeratePreset}>Пресет: умеренный</Button>
+                    <Button size="small" type="primary" ghost onClick={applyTsDcaAggressivePreset}>Пресет: агрессивный</Button>
+                  </Space>
                   <Row gutter={[8, 8]}>
                     <Col xs={24} md={8}>
-                      <Text type="secondary">Base size</Text>
+                      <Tooltip title="Fixed USDT — абсолютный размер 1-й ноги. % депозита — доля от initial balance (10k → 1% = 100 USDT). Для видимого Ret% в scan нужен ≥0.5–1% или fixed ≥50 USDT.">
+                        <Text type="secondary">Base size ⓘ</Text>
+                      </Tooltip>
                       <Segmented
                         block
                         size="small"
@@ -13687,7 +13798,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       )}
                     </Col>
                     <Col xs={12} md={4}>
-                      <Text type="secondary">TF</Text>
+                      <Tooltip title="1h — больше циклов flat→TP за период. 4h — стабильнее, меньше сделок. Autotune при scan может переключить пару на 1h.">
+                        <Text type="secondary">TF ⓘ</Text>
+                      </Tooltip>
                       <Select style={{ width: '100%' }} value={tsDcaInterval} onChange={(v) => setTsDcaInterval(String(v || '4h'))} options={[{ value: '1h', label: '1h' }, { value: '4h', label: '4h' }, { value: '1d', label: '1d' }]} />
                     </Col>
                     <Col xs={12} md={4}>
@@ -13695,15 +13808,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       <Select style={{ width: '100%' }} value={tsDcaDetectionSource} onChange={(v) => setTsDcaDetectionSource(String(v || 'close'))} options={[{ value: 'close', label: 'close (свеча)' }]} />
                     </Col>
                     <Col xs={12} md={4}>
-                      <Text type="secondary">Step %</Text>
+                      <Tooltip title="Шаг между safety-ордерами вниз. Меньше step (0.6–0.8%) — чаще доборы в просадке, больше ног сетки, выше частота round-trip.">
+                        <Text type="secondary">Step % ⓘ</Text>
+                      </Tooltip>
                       <InputNumber min={0.1} step={0.1} style={{ width: '100%' }} value={tsDcaStepPercent} onChange={(v) => setTsDcaStepPercent(Number(v || 2))} />
                     </Col>
                     <Col xs={12} md={4}>
-                      <Text type="secondary">Max orders</Text>
+                      <Tooltip title="Макс. число DCA-ног (safety orders) в одном цикле, не считая первый вход. Умеренно: 6–8. Агрессивно: 10–15 — глубже сетка, больше капитала в просадке, чаще закрытия по TP при отскоке. 0 = без лимита (осторожно с маржой).">
+                        <Text type="secondary">Max orders ⓘ</Text>
+                      </Tooltip>
                       <InputNumber min={0} step={1} style={{ width: '100%' }} value={tsDcaMaxOrders} onChange={(v) => setTsDcaMaxOrders(Number(v || 5))} />
                     </Col>
                     <Col xs={12} md={4}>
-                      <Text type="secondary">TP %</Text>
+                      <Tooltip title="Take-profit от средней цены входа. 1.0–1.2% — агрессивно (чаще TP, меньше прибыль с цикла). 1.5–2% — умеренно. Слишком высокий TP режет число сделок.">
+                        <Text type="secondary">TP % ⓘ</Text>
+                      </Tooltip>
                       <InputNumber min={0.1} step={0.1} style={{ width: '100%' }} value={tsDcaTpPercent} onChange={(v) => setTsDcaTpPercent(Number(v || 3))} />
                     </Col>
                     <Col xs={12} md={4}>
@@ -13736,6 +13855,46 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       </Col>
                     ) : null}
                   </Row>
+                  <Collapse
+                    size="small"
+                    items={[{
+                      key: 'dca-presets',
+                      label: 'Пресеты и расклад настроек (умеренный vs агрессивный)',
+                      children: (
+                        <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                          <Descriptions size="small" bordered column={1}>
+                            <Descriptions.Item label="Base size">
+                              Умеренный: 0.5% депозита или fixed 25–50 USDT. Агрессивный: 1–2% или fixed 50–100 USDT.
+                            </Descriptions.Item>
+                            <Descriptions.Item label="TF">
+                              Умеренный: 4h. Агрессивный: 1h (+ autotune top-3 включён).
+                            </Descriptions.Item>
+                            <Descriptions.Item label="Step %">
+                              Умеренный: 1.0. Агрессивный: 0.6–0.8 (чаще доборы).
+                            </Descriptions.Item>
+                            <Descriptions.Item label="Max orders">
+                              Умеренный: 6–8 ног. Агрессивный: 10–15 ног — больше глубина сетки и шанс закрыть цикл по TP после отката; следи за маржой.
+                            </Descriptions.Item>
+                            <Descriptions.Item label="TP %">
+                              Умеренный: 1.5–2.0. Агрессивный: 1.0–1.2 (чаще, но меньше с цикла).
+                            </Descriptions.Item>
+                            <Descriptions.Item label="SL / Per-leg SL">
+                              Оба off для макс. числа сделок. Per-leg SL on — режет ноги, освобождает слот, меняет профиль риска.
+                            </Descriptions.Item>
+                            <Descriptions.Item label="Entry filter">
+                              always — максимум циклов. rsi_dip — реже входы. cooldown — пауза после TP (меньше trades).
+                            </Descriptions.Item>
+                            <Descriptions.Item label="Порядок действий">
+                              API rerun TS → Сканировать DCA → выбрать 1–2 пары → включить DCA toggle → проверить DCA layer trades.
+                            </Descriptions.Item>
+                          </Descriptions>
+                          <Text type="secondary">
+                            Scan-сделки по паре ≠ Δ trades в toggle: scan — single-pair backtest, Δ — прирост портфеля TS+DCA vs TS-only.
+                          </Text>
+                        </Space>
+                      ),
+                    }]}
+                  />
                 </Space>
               </Card>
             ) : null}

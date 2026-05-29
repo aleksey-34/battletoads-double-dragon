@@ -5998,6 +5998,65 @@ const collectTsOccupiedMarkets = (
   return occupied;
 };
 
+/** Same freq-aware strategy IDs as admin sweep rerun (preset matrix + sweep family rows). */
+const buildTsStrategyIdsForOfferIds = (
+  offerIds: string[],
+  catalog: CatalogData | null,
+  sweep: SweepData | null,
+  options: { riskScore?: number; tradeFrequencyScore?: number },
+): number[] => {
+  const riskScore = normalizePreferenceScore(options.riskScore, 'medium');
+  const tradeFrequencyScore = normalizePreferenceScore(options.tradeFrequencyScore, 'medium');
+  const riskLevel = preferenceScoreToLevel(riskScore);
+  const tradeFrequencyLevel = preferenceScoreToLevel(tradeFrequencyScore);
+  const sweepEvaluatedRows: SweepRecord[] = Array.isArray(sweep?.evaluated)
+    ? sweep.evaluated.filter((item): item is SweepRecord => Boolean(item && Number(item.strategyId || 0) > 0))
+    : [];
+
+  const strategyIds = offerIds.map((offerId) => {
+    const offer = findOfferByIdOrNull(catalog, offerId);
+    if (!offer) {
+      return Number(parseStrategyIdFromOfferId(offerId) || 0);
+    }
+    const matrixPreset = offer.presetMatrix?.[riskLevel]?.[tradeFrequencyLevel] || null;
+    const preset = matrixPreset || resolveOfferPresetByPreference(
+      offer,
+      riskLevel,
+      tradeFrequencyLevel,
+      riskScore,
+      tradeFrequencyScore,
+    );
+
+    let familyVariant: SweepRecord | null = null;
+    if (sweepEvaluatedRows.length > 0) {
+      const modeToken = offer.strategy?.mode === 'synth' ? 'synthetic' : 'mono';
+      const intervalToken = asString(preset.params?.interval || offer.strategy?.params?.interval, '');
+      const familyRows = sweepEvaluatedRows.filter((row) => {
+        const rowMode = asString(row.marketMode, '');
+        const modeMatched = modeToken === 'synthetic'
+          ? (rowMode === 'synthetic' || rowMode === 'synth')
+          : rowMode === 'mono';
+        if (!modeMatched) {
+          return false;
+        }
+        return asString(row.strategyType, '') === asString(offer.strategy?.type, '')
+          && asString(row.market, '') === asString(offer.strategy?.market, '')
+          && (!intervalToken || asString(row.interval, '') === intervalToken);
+      });
+      if (familyRows.length > 0) {
+        const anchor = familyRows.find((row) => Number(row.strategyId || 0) === Number(preset.strategyId || 0))
+          || familyRows[Math.floor(familyRows.length / 2)];
+        const familyPresetRows = pickFamilyTradePresetRows(anchor, familyRows);
+        familyVariant = familyPresetRows[tradeFrequencyLevel] || null;
+      }
+    }
+
+    return Number(familyVariant?.strategyId || preset.strategyId || offer.strategy?.id || 0);
+  }).filter((value) => Number.isFinite(value) && value > 0);
+
+  return Array.from(new Set(strategyIds));
+};
+
 type DcaStrategySettings = {
   baseAmountUsdt?: number;
   baseAmountMode?: 'fixed' | 'percent';
@@ -6040,7 +6099,7 @@ const DEFAULT_DCA_SETTINGS: Omit<NormalizedDcaSettings, 'baseAmountMode' | 'base
   perLegSl: false,
 };
 
-const DCA_AUTOTUNE_VERSION = 5;
+const DCA_AUTOTUNE_VERSION = 6;
 
 const buildDcaAutotuneVariants = (): Array<Partial<DcaStrategySettings>> => {
   const variants: Array<Partial<DcaStrategySettings>> = [];
@@ -7925,6 +7984,8 @@ const resolveDcaTsPickContext = async (payload?: {
   dateFrom?: string;
   dateTo?: string;
   initialBalance?: number;
+  riskScore?: number;
+  tradeFrequencyScore?: number;
   dcaSettings?: DcaStrategySettings;
 }): Promise<DcaTsPickContext> => {
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
@@ -7986,11 +8047,10 @@ const resolveDcaTsPickContext = async (payload?: {
     throw new Error('API key is required for DCA pair pick');
   }
 
-  const tsStrategyIds = Array.from(new Set(
-    offerIds
-      .map((offerId) => Number(offerStoreById.get(offerId)?.strategyId || parseStrategyIdFromOfferId(offerId)))
-      .filter((value) => Number.isFinite(value) && value > 0),
-  ));
+  const tsStrategyIds = buildTsStrategyIdsForOfferIds(offerIds, catalog, sweep, {
+    riskScore: payload?.riskScore,
+    tradeFrequencyScore: payload?.tradeFrequencyScore,
+  });
   if (tsStrategyIds.length === 0) {
     throw new Error('Could not resolve TS strategy ids for DCA pair pick');
   }
@@ -8263,6 +8323,7 @@ const saveDcaResearchRunCache = async (
 const buildDcaBacktestRequestBase = (
   apiKeyName: string,
   ctx: Pick<DcaTsPickContext, 'previewDates' | 'initialBalance' | 'sweep'>,
+  options?: { enablePairLock?: boolean },
 ) => ({
   apiKeyName,
   bars: asNumber(ctx.sweep?.config?.backtestBars, 6000),
@@ -8274,7 +8335,7 @@ const buildDcaBacktestRequestBase = (
   fundingRatePercent: asNumber(ctx.sweep?.config?.fundingRatePercent, 0),
   dateFrom: ctx.previewDates.dateFrom,
   dateTo: ctx.previewDates.dateTo,
-  enablePairLock: true,
+  ...(options?.enablePairLock === true ? { enablePairLock: true } : {}),
 });
 
 const scoreDcaCandidate = async (params: {
@@ -8331,7 +8392,7 @@ const scoreDcaCandidate = async (params: {
       ...base,
       mode: 'single',
       strategyId: params.scratchStrategyId,
-    } as BacktestRunRequest & { enablePairLock?: boolean });
+    });
     const ret = Number(result.summary.totalReturnPercent || 0);
     const dd = Number(result.summary.maxDrawdownPercent || 0);
     const pf = Number(result.summary.profitFactor || 0);
@@ -8448,6 +8509,8 @@ const executeDcaResearchCore = async (payload?: {
   maxCandidates?: number;
   dcaSettings?: DcaStrategySettings;
   autotune?: boolean;
+  riskScore?: number;
+  tradeFrequencyScore?: number;
 }): Promise<DcaResearchResult> => {
   const ctx = await resolveDcaTsPickContext(payload);
   const scratchStrategyId = await getOrCreateDcaResearchScratchId(ctx.preferredApiKey, ctx.dcaSettings);
@@ -8656,6 +8719,8 @@ export const startDcaResearchJob = async (payload?: {
   maxCandidates?: number;
   dcaSettings?: DcaStrategySettings;
   autotune?: boolean;
+  riskScore?: number;
+  tradeFrequencyScore?: number;
 }) => {
   if (dcaResearchJob.running) {
     const stale = dcaResearchJob.startedAt > 0 && Date.now() - dcaResearchJob.startedAt > DCA_RESEARCH_STALE_MS;
@@ -8851,7 +8916,7 @@ export const applyDcaToTsPortfolio = async (payload?: {
   }
 
   const combinedResult = await runBacktest({
-    ...buildDcaBacktestRequestBase(ctx.preferredApiKey, ctx),
+    ...buildDcaBacktestRequestBase(ctx.preferredApiKey, ctx, { enablePairLock: true }),
     mode: 'portfolio',
     strategyIds: appliedStrategyIds,
   } as BacktestRunRequest & { enablePairLock?: boolean });
@@ -8908,6 +8973,8 @@ export const previewDcaCombinedWithTs = async (payload?: {
   enabled?: boolean;
   dcaSettings?: DcaStrategySettings;
   marketTuning?: Record<string, Partial<DcaStrategySettings>>;
+  riskScore?: number;
+  tradeFrequencyScore?: number;
 }) => {
   if (payload?.enabled === false) {
     return { enabled: false as const };
@@ -8946,7 +9013,7 @@ export const previewDcaCombinedWithTs = async (payload?: {
     ));
   }
 
-  const backtestBase = buildDcaBacktestRequestBase(ctx.preferredApiKey, ctx);
+  const backtestBase = buildDcaBacktestRequestBase(ctx.preferredApiKey, ctx, { enablePairLock: true });
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(payload?.maxOpenPositions, 0)));
   const portfolioExtras = maxOpenPositions > 0 ? { maxOpenPositions } : {};
 
@@ -8955,13 +9022,19 @@ export const previewDcaCombinedWithTs = async (payload?: {
     mode: 'portfolio',
     strategyIds: ctx.tsStrategyIds,
     ...portfolioExtras,
-  } as BacktestRunRequest & { enablePairLock?: boolean });
+  });
+  const dcaOnly = await runBacktest({
+    ...backtestBase,
+    mode: 'portfolio',
+    strategyIds: dcaStrategyIds,
+    ...portfolioExtras,
+  });
   const combined = await runBacktest({
     ...backtestBase,
     mode: 'portfolio',
     strategyIds: [...ctx.tsStrategyIds, ...dcaStrategyIds],
     ...portfolioExtras,
-  } as BacktestRunRequest & { enablePairLock?: boolean });
+  });
 
   return {
     enabled: true as const,
@@ -8973,10 +9046,15 @@ export const previewDcaCombinedWithTs = async (payload?: {
     },
     markets,
     dcaStrategyIds,
+    tsStrategyIds: ctx.tsStrategyIds,
     dcaSettings: ctx.dcaSettings,
     tsOnly: {
       summary: tsOnly.summary,
       equity: tsOnly.equityCurve,
+    },
+    dcaOnly: {
+      summary: dcaOnly.summary,
+      equity: dcaOnly.equityCurve,
     },
     combined: {
       summary: combined.summary,
@@ -8986,6 +9064,11 @@ export const previewDcaCombinedWithTs = async (payload?: {
       ret: Number((combined.summary.totalReturnPercent - tsOnly.summary.totalReturnPercent).toFixed(3)),
       dd: Number((combined.summary.maxDrawdownPercent - tsOnly.summary.maxDrawdownPercent).toFixed(3)),
       trades: Number(combined.summary.tradesCount || 0) - Number(tsOnly.summary.tradesCount || 0),
+    },
+    dcaLayer: {
+      ret: Number(dcaOnly.summary.totalReturnPercent || 0),
+      dd: Number(dcaOnly.summary.maxDrawdownPercent || 0),
+      trades: Number(dcaOnly.summary.tradesCount || 0),
     },
   };
 };

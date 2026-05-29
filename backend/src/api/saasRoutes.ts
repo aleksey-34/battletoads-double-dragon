@@ -395,6 +395,11 @@ const parseDcaSettingsBody = (body: Record<string, unknown> | undefined) => {
   return Object.keys(out).length > 0 ? out : undefined;
 };
 
+const parseDcaJobContextBody = (body: Record<string, unknown> | undefined) => ({
+  riskScore: toOptionalNumber(body?.riskScore),
+  tradeFrequencyScore: toOptionalNumber(body?.tradeFrequencyScore),
+});
+
 router.get('/admin/ts-dca-research-status', async (_req, res) => {
   try {
     res.json({ success: true, ...getDcaResearchJobStatus() });
@@ -433,6 +438,7 @@ router.post('/admin/ts-dca-combined-preview', async (req, res) => {
       maxOpenPositions: toOptionalNumber(req.body?.maxOpenPositions),
       enabled: req.body?.enabled !== false,
       dcaSettings: parseDcaSettingsBody(req.body),
+      ...parseDcaJobContextBody(req.body),
       marketTuning: marketTuning
         ? Object.fromEntries(
           Object.entries(marketTuning).map(([market, tuning]) => [
@@ -479,6 +485,7 @@ router.post('/admin/ts-dca-combined-preview-sync', async (req, res) => {
       maxOpenPositions: toOptionalNumber(req.body?.maxOpenPositions),
       enabled: req.body?.enabled !== false,
       dcaSettings: parseDcaSettingsBody(req.body),
+      ...parseDcaJobContextBody(req.body),
       marketTuning: marketTuning
         ? Object.fromEntries(
           Object.entries(marketTuning).map(([market, tuning]) => [
@@ -508,6 +515,7 @@ router.post('/admin/ts-dca-pair-research', async (req, res) => {
       initialBalance: toOptionalNumber(req.body?.initialBalance),
       dcaSettings: parseDcaSettingsBody(req.body),
       autotune: req.body?.dcaAutotune !== false,
+      ...parseDcaJobContextBody(req.body),
     });
     res.status(202).json({ success: true, accepted: true, ...status });
   } catch (error) {
@@ -535,6 +543,7 @@ router.post('/admin/ts-dca-pair-apply', async (req, res) => {
       markets,
       maxApply: toOptionalNumber(req.body?.maxApply),
       dcaSettings: parseDcaSettingsBody(req.body),
+      ...parseDcaJobContextBody(req.body),
       marketTuning: marketTuning
         ? Object.fromEntries(
           Object.entries(marketTuning).map(([market, tuning]) => [
