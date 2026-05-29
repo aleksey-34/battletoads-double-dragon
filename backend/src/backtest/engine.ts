@@ -1654,8 +1654,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     });
 
     peak = Math.max(peak, value);
-    const drawdownAbs = peak - value;
-    const drawdownPct = peak > 0 ? (drawdownAbs / peak) * 100 : 0;
+    const drawdownAbs = peak - Math.max(0, value);
+    const drawdownPct = peak > 0 ? Math.min(100, (drawdownAbs / peak) * 100) : 0;
 
     maxDrawdownAbsolute = Math.max(maxDrawdownAbsolute, drawdownAbs);
     maxDrawdownPercent = Math.max(maxDrawdownPercent, drawdownPct);

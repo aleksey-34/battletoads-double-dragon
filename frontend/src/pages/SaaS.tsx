@@ -2074,7 +2074,7 @@ const summarizeLineSeries = (points: LinePoint[]) => {
     }
 
     if (peak > 0) {
-      const drawdown = ((peak - point.value) / peak) * 100;
+      const drawdown = Math.min(100, ((peak - point.value) / peak) * 100);
       if (Number.isFinite(drawdown) && drawdown > maxDrawdownPercent) {
         maxDrawdownPercent = drawdown;
       }
@@ -14450,6 +14450,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       showIcon
                       message="Метрики карточки (sweep est.) ≠ real engine в модалке"
                       description="Теги Ret/DD/trades и график — из real TS+DCA backtest. Цифры на опубликованной карточке — sweep-оценка, их нельзя сравнивать напрямую."
+                    />
+                  ) : null}
+                  {!tsDcaEnabled && adminSweepBacktestResult.rerun?.executed ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="Real rerun — метрики из движка, не sweep-карточки"
+                      description={`Портфель ${adminSweepBacktestResult.selectedOffers.length} страт., reinvest ${adminSweepBacktestReinvestPercent}% уже в engine. Ret/DD/P/L и график — одна equity-curve (DD capped ≤100%). Sweep на карточке — другая модель; для меньшей просадки попробуй Reinvest 0%.`}
                     />
                   ) : null}
                   {isAdminSurface ? (

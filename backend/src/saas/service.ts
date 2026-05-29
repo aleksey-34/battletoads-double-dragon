@@ -3521,7 +3521,7 @@ const buildDerivedPreviewCurves = (
     if (equity > peak) {
       peak = equity;
     }
-    const dd = peak > 0 ? ((peak - equity) / peak) * 100 : 0;
+    const dd = peak > 0 ? Math.min(100, ((peak - equity) / peak) * 100) : 0;
     return {
       time: asNumber(point.time, Date.now()),
       value: Number(dd.toFixed(4)),
@@ -3541,6 +3541,49 @@ const buildDerivedPreviewCurves = (
     marginLoadPercent,
     finalUnrealizedPnl: Number(finalUnrealizedPnl.toFixed(4)),
     maxMarginLoadPercent: 0,
+  };
+};
+
+/** Real rerun already applies reinvest in engine — only linear risk scaling for admin slider. */
+const scaleRealRerunEquityCurve = (
+  equityCurve: Array<{ time: number; equity: number }>,
+  initialBalance: number,
+  rerunRiskMul: number,
+): Array<{ time: number; equity: number }> => (
+  equityCurve.map((point) => ({
+    time: point.time,
+    equity: Number((
+      initialBalance + (asNumber(point.equity, initialBalance) - initialBalance) * rerunRiskMul
+    ).toFixed(4)),
+  }))
+);
+
+const summarizeRealRerunEquityCurve = (
+  equityCurve: Array<{ time: number; equity: number }>,
+  initialBalance: number,
+) => {
+  if (!Array.isArray(equityCurve) || equityCurve.length === 0) {
+    return {
+      finalEquity: initialBalance,
+      totalReturnPercent: 0,
+      maxDrawdownPercent: 0,
+      unrealizedPnl: 0,
+      curves: buildDerivedPreviewCurves([], initialBalance, 5),
+    };
+  }
+  const curves = buildDerivedPreviewCurves(equityCurve, initialBalance, 5);
+  const startEquity = Math.max(0.0001, asNumber(equityCurve[0]?.equity, initialBalance));
+  const finalEquity = asNumber(equityCurve[equityCurve.length - 1]?.equity, initialBalance);
+  const totalReturnPercent = ((finalEquity - startEquity) / startEquity) * 100;
+  const maxDrawdownPercent = curves.drawdownPercent.length > 0
+    ? Math.min(100, Math.max(...curves.drawdownPercent.map((point) => asNumber(point.value, 0))))
+    : 0;
+  return {
+    finalEquity: Number(finalEquity.toFixed(4)),
+    totalReturnPercent: Number(totalReturnPercent.toFixed(3)),
+    maxDrawdownPercent: Number(maxDrawdownPercent.toFixed(3)),
+    unrealizedPnl: curves.finalUnrealizedPnl,
+    curves,
   };
 };
 
@@ -7151,25 +7194,21 @@ export const previewAdminSweepBacktest = async (payload?: {
           reinvestPercentOverride: reinvestPercent,
         });
 
-        // Apply risk multiplier to returns/DD/equity (position sizing approximation)
         const summaryAny = result.summary as Record<string, unknown>;
+        // Engine already applied reinvestPercentOverride — do not compound again in post-scale.
+        const scaledEquity = scaleRealRerunEquityCurve(result.equityCurve, initialBalance, rerunRiskMul);
+        const rerunMetrics = summarizeRealRerunEquityCurve(scaledEquity, initialBalance);
         const scaledSummary = {
           ...result.summary,
-          totalReturnPercent: result.summary.totalReturnPercent * rerunRiskMul,
-          maxDrawdownPercent: result.summary.maxDrawdownPercent * rerunRiskMul,
-          ...(summaryAny.netProfit != null ? { netProfit: Number(summaryAny.netProfit) * rerunRiskMul } : {}),
+          finalEquity: rerunMetrics.finalEquity,
+          totalReturnPercent: rerunMetrics.totalReturnPercent,
+          maxDrawdownPercent: rerunMetrics.maxDrawdownPercent,
+          ...(summaryAny.netProfit != null
+            ? { netProfit: Number((rerunMetrics.finalEquity - initialBalance).toFixed(4)) }
+            : {}),
           marginLoadPercent: 0,
+          unrealizedPnl: rerunMetrics.unrealizedPnl,
         };
-        const scaledEquity = result.equityCurve.map((point) => ({
-          ...point,
-          equity: scaleEquityByRiskWithReinvest(
-            asNumber(point.equity, initialBalance),
-            initialBalance,
-            initialBalance,
-            rerunRiskMul,
-            reinvestShare,
-          ),
-        }));
 
         const rerunDateFrom = requestedDateFrom
           || (kind === 'offer' ? singleOfferStoreDateFrom : '')
@@ -7216,13 +7255,14 @@ export const previewAdminSweepBacktest = async (payload?: {
             summary: scaledSummary,
             equity: scaledEquity,
             curves: {
-              pnl: scaledEquity.map((point) => ({ time: point.time, value: point.equity - initialBalance })),
-              drawdownPercent: [],
-              marginLoadPercent: [],
+              pnl: rerunMetrics.curves.pnl,
+              drawdownPercent: rerunMetrics.curves.drawdownPercent,
+              marginLoadPercent: rerunMetrics.curves.marginLoadPercent,
             },
             trades: result.trades,
             strictPresetMode: false,
             riskApproximated: rerunRiskMul !== 1,
+            reinvestAppliedInEngine: reinvestPercent > 0,
           },
           rerun: {
             requested: true,
@@ -7520,24 +7560,20 @@ export const previewAdminSweepBacktest = async (payload?: {
                 const adjustedTradesCount = freqVariantsApplied
                   ? Number(result.summary.tradesCount || 0)
                   : Math.max(1, Math.round(Number(result.summary.tradesCount || 0) * relativeTradeMul));
+                const scaledEquity = scaleRealRerunEquityCurve(result.equityCurve, initialBalance, rerunRiskMul);
+                const rerunMetrics = summarizeRealRerunEquityCurve(scaledEquity, initialBalance);
                 const scaledSummary = {
                   ...result.summary,
-                  totalReturnPercent: result.summary.totalReturnPercent * rerunRiskMul,
-                  maxDrawdownPercent: result.summary.maxDrawdownPercent * rerunRiskMul,
+                  finalEquity: rerunMetrics.finalEquity,
+                  totalReturnPercent: rerunMetrics.totalReturnPercent,
+                  maxDrawdownPercent: rerunMetrics.maxDrawdownPercent,
                   tradesCount: adjustedTradesCount,
-                  ...(summaryAny.netProfit != null ? { netProfit: Number(summaryAny.netProfit) * rerunRiskMul } : {}),
+                  ...(summaryAny.netProfit != null
+                    ? { netProfit: Number((rerunMetrics.finalEquity - initialBalance).toFixed(4)) }
+                    : {}),
                   marginLoadPercent: 0,
+                  unrealizedPnl: rerunMetrics.unrealizedPnl,
                 };
-                const scaledEquity = result.equityCurve.map((point) => ({
-                  ...point,
-                  equity: scaleEquityByRiskWithReinvest(
-                    asNumber(point.equity, initialBalance),
-                    initialBalance,
-                    initialBalance,
-                    rerunRiskMul,
-                    reinvestShare,
-                  ),
-                }));
 
                 const snapshotRunSummaryAny = result.summary as Record<string, unknown>;
                 const enrichedSnapshotPeriod = {
@@ -7574,13 +7610,14 @@ export const previewAdminSweepBacktest = async (payload?: {
                     summary: scaledSummary,
                     equity: scaledEquity,
                     curves: {
-                      pnl: scaledEquity.map((point) => ({ time: point.time, value: point.equity - initialBalance })),
-                      drawdownPercent: [],
-                      marginLoadPercent: [],
+                      pnl: rerunMetrics.curves.pnl,
+                      drawdownPercent: rerunMetrics.curves.drawdownPercent,
+                      marginLoadPercent: rerunMetrics.curves.marginLoadPercent,
                     },
                     trades: result.trades,
                     strictPresetMode: false,
                     riskApproximated: rerunRiskMul !== 1,
+                    reinvestAppliedInEngine: reinvestPercent > 0,
                   },
                   rerun: {
                     requested: true,
