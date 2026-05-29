@@ -6099,7 +6099,7 @@ const DEFAULT_DCA_SETTINGS: Omit<NormalizedDcaSettings, 'baseAmountMode' | 'base
   perLegSl: false,
 };
 
-const DCA_AUTOTUNE_VERSION = 6;
+const DCA_AUTOTUNE_VERSION = 7;
 
 const buildDcaAutotuneVariants = (): Array<Partial<DcaStrategySettings>> => {
   const variants: Array<Partial<DcaStrategySettings>> = [];
@@ -6157,6 +6157,62 @@ const buildDcaAutotuneVariants = (): Array<Partial<DcaStrategySettings>> => {
 
 const DCA_AUTOTUNE_VARIANTS: Array<Partial<DcaStrategySettings>> = buildDcaAutotuneVariants();
 
+/** Autotune grid centered on user baseline — not a fixed step/tp table that ignores UI. */
+const buildAutotuneVariantsForBaseline = (
+  baseline: NormalizedDcaSettings,
+): Array<Partial<DcaStrategySettings>> => {
+  const seen = new Set<string>();
+  const out: Array<Partial<DcaStrategySettings>> = [];
+  const push = (variant: Partial<DcaStrategySettings>) => {
+    const key = JSON.stringify(variant);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    out.push(variant);
+  };
+
+  const intervals = Array.from(new Set([
+    baseline.interval,
+    baseline.interval === '1h' ? '4h' : '1h',
+  ]));
+  const stepsAround = Array.from(new Set([
+    Math.max(0.1, Number((baseline.stepPercent * 0.75).toFixed(2))),
+    baseline.stepPercent,
+    Math.max(0.1, Number((baseline.stepPercent * 1.15).toFixed(2))),
+  ]));
+  const tpsAround = Array.from(new Set([
+    Math.max(0.1, Number((baseline.tpPercent * 0.85).toFixed(2))),
+    baseline.tpPercent,
+    Math.max(0.1, Number((baseline.tpPercent * 1.15).toFixed(2))),
+  ]));
+
+  for (const interval of intervals) {
+    for (const stepPercent of stepsAround) {
+      for (const tpPercent of tpsAround) {
+        if (tpPercent + 0.01 < stepPercent * 0.5) {
+          continue;
+        }
+        push({
+          interval,
+          stepPercent,
+          tpPercent,
+          slPercent: baseline.slPercent,
+          entryFilter: baseline.entryFilter,
+          reentryBars: baseline.reentryBars,
+          perLegSl: baseline.perLegSl,
+        });
+      }
+    }
+  }
+
+  for (const variant of DCA_AUTOTUNE_VARIANTS) {
+    push(variant);
+  }
+
+  return out.slice(0, 24);
+};
+
 const computeDcaCandidateScore = (
   ret: number,
   dd: number,
@@ -6199,6 +6255,11 @@ const normalizeDcaSettings = (
   baseAmountMode: settings?.baseAmountMode === 'percent' ? 'percent' : 'fixed',
   baseAmountPercent: Math.max(0.1, asNumber(settings?.baseAmountPercent, 1)),
   baseAmountUsdt: resolveEffectiveDcaBaseAmount(settings, initialBalance),
+  stepPercent: Math.max(0.1, asNumber(settings?.stepPercent, DEFAULT_DCA_SETTINGS.stepPercent)),
+  maxOrders: Math.max(0, Math.floor(asNumber(settings?.maxOrders, DEFAULT_DCA_SETTINGS.maxOrders))),
+  orderMultiplier: Math.max(1, asNumber(settings?.orderMultiplier, DEFAULT_DCA_SETTINGS.orderMultiplier)),
+  tpPercent: Math.max(0.1, asNumber(settings?.tpPercent, DEFAULT_DCA_SETTINGS.tpPercent)),
+  slPercent: Math.max(0, asNumber(settings?.slPercent, DEFAULT_DCA_SETTINGS.slPercent)),
   interval: asString(settings?.interval, DEFAULT_DCA_SETTINGS.interval) || '4h',
   detectionSource: asString(settings?.detectionSource, DEFAULT_DCA_SETTINGS.detectionSource) || 'close',
   entryFilter: normalizeDcaEntryFilter(settings?.entryFilter),
@@ -8113,6 +8174,25 @@ const dcaSettingsCachePayload = (settings: NormalizedDcaSettings) => ({
   perLegSl: settings.perLegSl,
 });
 
+const buildDcaScanFingerprint = (params: {
+  previewDates: { dateFrom: string; dateTo: string };
+  initialBalance: number;
+  dcaSettings: NormalizedDcaSettings;
+  autotune: boolean;
+  riskScore?: number;
+  tradeFrequencyScore?: number;
+}): string => hashDcaCachePayload({
+  kind: 'dca_scan_fingerprint',
+  scoringVersion: DCA_AUTOTUNE_VERSION,
+  dateFrom: params.previewDates.dateFrom,
+  dateTo: params.previewDates.dateTo,
+  initialBalance: params.initialBalance,
+  dcaSettings: dcaSettingsCachePayload(params.dcaSettings),
+  autotune: params.autotune,
+  riskScore: params.riskScore ?? null,
+  tradeFrequencyScore: params.tradeFrequencyScore ?? null,
+});
+
 const hashDcaCachePayload = (payload: unknown): string => (
   crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 40)
 );
@@ -8255,6 +8335,8 @@ type DcaResearchResult = {
   tsMarkets: string[];
   period: { dateFrom: string; dateTo: string; interval: string; fullDepth?: boolean };
   dcaSettings: NormalizedDcaSettings;
+  scanFingerprint?: string;
+  autotune?: boolean;
   candidatePoolSize: number;
   candidates: DcaResearchCandidateRow[];
   viableCount: number;
@@ -8347,6 +8429,7 @@ const scoreDcaCandidate = async (params: {
   initialBalance: number;
   sweep: DcaTsPickContext['sweep'];
   scoringMode?: 'scan' | 'autotune';
+  skipCache?: boolean;
 }): Promise<{
   market: string;
   ret: number;
@@ -8372,9 +8455,11 @@ const scoreDcaCandidate = async (params: {
     dcaSettings: params.dcaSettings,
     sweep: params.sweep,
   });
-  const cached = await loadDcaPairScoreCache(cacheKey);
-  if (cached) {
-    return { ...cached, market };
+  if (!params.skipCache) {
+    const cached = await loadDcaPairScoreCache(cacheKey);
+    if (cached) {
+      return { ...cached, market };
+    }
   }
   try {
     await configureDcaScratchForSymbol(
@@ -8509,6 +8594,7 @@ const executeDcaResearchCore = async (payload?: {
   maxCandidates?: number;
   dcaSettings?: DcaStrategySettings;
   autotune?: boolean;
+  forceRefresh?: boolean;
   riskScore?: number;
   tradeFrequencyScore?: number;
 }): Promise<DcaResearchResult> => {
@@ -8522,8 +8608,18 @@ const executeDcaResearchCore = async (payload?: {
   );
 
   const autotuneTop = payload?.autotune !== false;
+  const autotuneVariants = autotuneTop ? buildAutotuneVariantsForBaseline(ctx.dcaSettings) : [];
+  const skipCache = payload?.forceRefresh === true;
+  const scanFingerprint = buildDcaScanFingerprint({
+    previewDates: ctx.previewDates,
+    initialBalance: ctx.initialBalance,
+    dcaSettings: ctx.dcaSettings,
+    autotune: autotuneTop,
+    riskScore: payload?.riskScore,
+    tradeFrequencyScore: payload?.tradeFrequencyScore,
+  });
   const autotuneMarketsCap = 3;
-  const autotuneVariantsCount = autotuneTop ? DCA_AUTOTUNE_VARIANTS.length : 0;
+  const autotuneVariantsCount = autotuneTop ? autotuneVariants.length : 0;
   const autotuneMarketsEstimate = autotuneTop ? Math.min(autotuneMarketsCap, candidatePool.length) : 0;
   const totalSteps = candidatePool.length + autotuneMarketsEstimate * autotuneVariantsCount;
   let completedSteps = 0;
@@ -8541,14 +8637,17 @@ const executeDcaResearchCore = async (payload?: {
     autotune: autotuneTop,
     candidatePool,
   });
-  const cachedRun = await loadDcaResearchRunCache(runCacheKey);
-  if (cachedRun) {
-    setDcaResearchProgress(totalSteps, totalSteps, 'cache', 'Loaded from DCA sweep cache', '');
-    return {
-      ...cachedRun,
-      fromCache: true,
-      note: `${asString(cachedRun.note, 'Classic DCA backtest')} • loaded from DCA sweep cache`,
-    };
+  if (!skipCache) {
+    const cachedRun = await loadDcaResearchRunCache(runCacheKey);
+    if (cachedRun) {
+      setDcaResearchProgress(totalSteps, totalSteps, 'cache', 'Loaded from DCA sweep cache', '');
+      return {
+        ...cachedRun,
+        scanFingerprint,
+        fromCache: true,
+        note: `${asString(cachedRun.note, 'Classic DCA backtest')} • loaded from DCA sweep cache`,
+      };
+    }
   }
 
   const candidates: DcaResearchCandidateRow[] = [];
@@ -8574,6 +8673,7 @@ const executeDcaResearchCore = async (payload?: {
       previewDates: ctx.previewDates,
       initialBalance: ctx.initialBalance,
       sweep: ctx.sweep,
+      skipCache,
     });
     candidates.push({
       ...scored,
@@ -8604,7 +8704,7 @@ const executeDcaResearchCore = async (payload?: {
       const baselineStep = best.stepPercent;
       const baselineTp = best.tpPercent;
       const baselineInterval = best.interval;
-      for (const variant of DCA_AUTOTUNE_VARIANTS) {
+      for (const variant of autotuneVariants) {
         if (shouldAbortDcaResearch()) {
           throw new Error('DCA scan aborted by user');
         }
@@ -8625,6 +8725,7 @@ const executeDcaResearchCore = async (payload?: {
           initialBalance: ctx.initialBalance,
           sweep: ctx.sweep,
           scoringMode: 'autotune',
+          skipCache,
         });
         const bestScore = best
           ? computeDcaCandidateScore(best.ret, best.dd, best.pf, best.trades, 'autotune')
@@ -8665,12 +8766,14 @@ const executeDcaResearchCore = async (payload?: {
       fullDepth: ctx.previewDates.usedFullSweepDepth === true,
     },
     dcaSettings: ctx.dcaSettings,
+    scanFingerprint,
+    autotune: autotuneTop,
     candidatePoolSize: candidatePool.length,
     candidates,
     viableCount: viable.length,
     top: viable.slice(0, 5),
     fromCache: false,
-    note: `Classic DCA backtest (not Donchian). Period ${ctx.previewDates.dateFrom} → ${ctx.previewDates.dateTo}${ctx.previewDates.usedFullSweepDepth ? ' (full card / sweep depth)' : ''}. Autotune top-3: step×TP grid (4h/1h).`,
+    note: `Classic DCA backtest (not Donchian). Period ${ctx.previewDates.dateFrom} → ${ctx.previewDates.dateTo}${ctx.previewDates.usedFullSweepDepth ? ' (full card / sweep depth)' : ''}. Scan: TF ${ctx.dcaSettings.interval} step ${ctx.dcaSettings.stepPercent}% TP ${ctx.dcaSettings.tpPercent}% max ${ctx.dcaSettings.maxOrders} base ${ctx.dcaSettings.baseAmountUsdt} USDT${autotuneTop ? ' • autotune around baseline' : ''}.`,
   };
   await saveDcaResearchRunCache(runCacheKey, {
     systemName,
@@ -8719,6 +8822,7 @@ export const startDcaResearchJob = async (payload?: {
   maxCandidates?: number;
   dcaSettings?: DcaStrategySettings;
   autotune?: boolean;
+  forceRefresh?: boolean;
   riskScore?: number;
   tradeFrequencyScore?: number;
 }) => {

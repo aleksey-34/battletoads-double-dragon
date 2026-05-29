@@ -2884,6 +2884,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const tsDcaPollTimerRef = useRef<number | null>(null);
   const tsDcaCombinedPollTimerRef = useRef<number | null>(null);
   const tsDcaResultNotifiedRef = useRef(false);
+  const tsDcaScanAwaitResultRef = useRef(false);
   const [adminSweepAutoLotByChannel, setAdminSweepAutoLotByChannel] = useState(false);
   const [tsDcaBaseAmountUsdt, setTsDcaBaseAmountUsdt] = useState(10);
   const [tsDcaInterval, setTsDcaInterval] = useState('4h');
@@ -7405,10 +7406,29 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
   };
 
+  const resultMatchesCurrentDcaSettings = (payload: Record<string, unknown>) => {
+    const settings = payload?.dcaSettings as Record<string, unknown> | undefined;
+    if (!settings) {
+      return false;
+    }
+    const expectedBase = tsDcaBaseMode === 'fixed'
+      ? tsDcaBaseAmountUsdt
+      : Math.max(1, (adminSweepBacktestInitialBalance * tsDcaBasePercent) / 100);
+    const resultAutotune = payload?.autotune !== false;
+    return Math.abs(Number(settings.baseAmountUsdt || 0) - expectedBase) < 0.05
+      && Number(settings.stepPercent) === tsDcaStepPercent
+      && Number(settings.maxOrders) === tsDcaMaxOrders
+      && Number(settings.tpPercent) === tsDcaTpPercent
+      && Number(settings.slPercent || 0) === tsDcaSlPercent
+      && String(settings.interval || '') === tsDcaInterval
+      && String(settings.entryFilter || 'always') === tsDcaEntryFilter
+      && Boolean(settings.perLegSl) === tsDcaPerLegSl
+      && resultAutotune === tsDcaAutotune;
+  };
+
   const isTsDcaScanStale = Boolean(
     tsDcaResearchResult
-    && tsDcaResearchScanFingerprint
-    && tsDcaResearchScanFingerprint !== buildTsDcaScanFingerprint(),
+    && !resultMatchesCurrentDcaSettings(tsDcaResearchResult as Record<string, unknown>),
   );
 
   const applyTsDcaAggressivePreset = () => {
@@ -7530,7 +7550,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const applyDcaResearchPayload = (payload: Record<string, unknown>, options?: { notify?: boolean }) => {
     setTsDcaResearchResult(payload);
-    setTsDcaResearchScanFingerprint(buildTsDcaScanFingerprint());
+    const serverFingerprint = String(payload?.scanFingerprint || '').trim();
+    setTsDcaResearchScanFingerprint(serverFingerprint || buildTsDcaScanFingerprint());
     const viable = Number(payload?.viableCount || 0);
     const preselect = (Array.isArray(payload?.candidates) ? payload.candidates : [])
       .filter((item: { status?: string; trades?: number }) => item.status === 'ok' && Number(item.trades || 0) > 0)
@@ -7562,10 +7583,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     setTsDcaPickLoading(false);
     if (data.result && typeof data.result === 'object') {
-      const shouldNotify = !tsDcaResultNotifiedRef.current;
-      applyDcaResearchPayload(data.result as Record<string, unknown>, { notify: shouldNotify });
-      if (shouldNotify) {
-        tsDcaResultNotifiedRef.current = true;
+      const payload = data.result as Record<string, unknown>;
+      const shouldApply = tsDcaScanAwaitResultRef.current
+        || resultMatchesCurrentDcaSettings(payload)
+        || String(payload?.scanFingerprint || '') === String(tsDcaResearchScanFingerprint || '');
+      if (shouldApply) {
+        const shouldNotify = !tsDcaResultNotifiedRef.current;
+        applyDcaResearchPayload(payload, { notify: shouldNotify });
+        tsDcaScanAwaitResultRef.current = false;
+        if (shouldNotify) {
+          tsDcaResultNotifiedRef.current = true;
+        }
       }
     } else if (data.error) {
       setTsDcaResearchResult(null);
@@ -7593,13 +7621,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     setTsDcaPickLoading(true);
     setTsDcaApplyResult(null);
+    setTsDcaResearchResult(null);
+    setTsDcaSelectedMarkets([]);
+    setTsDcaResearchScanFingerprint(null);
     setTsDcaProgressPercent(0);
     setTsDcaProgressMessage('Starting…');
     tsDcaResultNotifiedRef.current = false;
+    tsDcaScanAwaitResultRef.current = true;
     try {
       await axios.post('/api/saas/admin/ts-dca-pair-research', {
         ...buildTsDcaRequestPayload(),
         maxCandidates: 12,
+        dcaForceRefresh: true,
       }, { timeout: 60000 });
       setTsDcaResearchServerRunning(true);
       const tick = async () => {
@@ -13906,10 +13939,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Space wrap>
                     <span>{`DCA scan: ${tsDcaResearchResult.viableCount || 0} viable / ${tsDcaResearchResult.candidatePoolSize || 0} checked`}</span>
                     {(tsDcaResearchResult as { fromCache?: boolean }).fromCache ? <Tag color="gold">из кэша</Tag> : null}
+                    {isTsDcaScanStale ? <Tag color="orange">настройки изменились</Tag> : null}
                     {tsDcaResearchResult.period ? <Tag>{formatPeriodLabel(tsDcaResearchResult.period)}</Tag> : null}
                   </Space>
                 )}
               >
+                {(tsDcaResearchResult as { dcaSettings?: Record<string, unknown> }).dcaSettings ? (
+                  <Alert
+                    type="success"
+                    showIcon
+                    style={{ marginBottom: 8 }}
+                    message="Параметры этого scan (с сервера)"
+                    description={(() => {
+                      const s = (tsDcaResearchResult as { dcaSettings?: Record<string, unknown> }).dcaSettings || {};
+                      return `TF ${String(s.interval || '—')} • step ${Number(s.stepPercent || 0)}% • TP ${Number(s.tpPercent || 0)}% • max orders ${Number(s.maxOrders || 0)} • base ${Number(s.baseAmountUsdt || 0)} USDT • filter ${String(s.entryFilter || 'always')}`;
+                    })()}
+                  />
+                ) : null}
                 <Table
                   size="small"
                   rowKey="market"

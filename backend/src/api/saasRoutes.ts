@@ -515,6 +515,7 @@ router.post('/admin/ts-dca-pair-research', async (req, res) => {
       initialBalance: toOptionalNumber(req.body?.initialBalance),
       dcaSettings: parseDcaSettingsBody(req.body),
       autotune: req.body?.dcaAutotune !== false,
+      forceRefresh: req.body?.dcaForceRefresh === true,
       ...parseDcaJobContextBody(req.body),
     });
     res.status(202).json({ success: true, accepted: true, ...status });
