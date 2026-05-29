@@ -28,6 +28,23 @@ import { computeReconciliationMetrics } from '../analytics/liveReconciliation';
 // потолок, чтобы reinvest_percent давал настоящий compound на equity > initialBalance.
 const CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X = 1000;
 
+/** Admin/card preview: reinvest 0 → fixed deposit (как на витрине); >0 → ограниченный compound. */
+const resolveAdminPreviewMaxDepositOverride = (
+  reinvestPercent: number,
+  initialBalance: number,
+): number => {
+  const safeBalance = Math.max(100, asNumber(initialBalance, 10000));
+  const reinvest = clampNumber(asNumber(reinvestPercent, 0), 0, 100);
+  if (reinvest <= 0) {
+    return safeBalance;
+  }
+  const growthCap = Math.min(
+    CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
+    1 + (reinvest / 100) * (CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X - 1),
+  );
+  return safeBalance * growthCap;
+};
+
 /**
  * Lookup master_cards.metadata_json by system name and return per-card overrides.
  * Returns zeros if card not found / metadata empty — caller decides fallback.
@@ -347,6 +364,7 @@ type TsBacktestSnapshot = {
     dateFrom?: string;
     dateTo?: string;
     interval?: string;
+    reinvestPercent?: number;
     autoLotByChannelWidth?: boolean;
     dcaPerLegSl?: boolean;
   };
@@ -1509,6 +1527,9 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
       riskScaleMaxPercent: Number(clampNumber(asNumber(settingsRaw.riskScaleMaxPercent, 100), 0, 400).toFixed(2)),
       maxOpenPositions: Math.max(0, Math.floor(asNumber(settingsRaw.maxOpenPositions, 0))),
       lotPercentOverride: Math.max(0, Math.floor(asNumber(settingsRaw.lotPercentOverride, 0))),
+      ...(Number.isFinite(Number(settingsRaw.reinvestPercent))
+        ? { reinvestPercent: Number(clampNumber(asNumber(settingsRaw.reinvestPercent, 0), 0, 100).toFixed(2)) }
+        : {}),
       ...(typeof settingsRaw.dateFrom === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(settingsRaw.dateFrom)
         ? { dateFrom: settingsRaw.dateFrom }
         : {}),
@@ -6977,7 +6998,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   const commissionPercentOverride = toFiniteOrNull(payload?.commissionPercent);
   const slippagePercentOverride = toFiniteOrNull(payload?.slippagePercent);
   const fundingRatePercentOverride = toFiniteOrNull(payload?.fundingRatePercent);
-  const reinvestPercent = clampNumber(asNumber(payload?.reinvestPercent, 100), 0, 100);
+  const reinvestPercent = clampNumber(asNumber(payload?.reinvestPercent, 0), 0, 100);
   const reinvestShare = reinvestPercent / 100;
   const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
   const tradeMul = getPreviewTradeMultiplier(tradeFrequencyScore);
@@ -7189,7 +7210,7 @@ export const previewAdminSweepBacktest = async (payload?: {
           ...(partialTpPct > 0 ? { partialTpPct } : {}),
           ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
           ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
-          maxDepositOverride: initialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
+          maxDepositOverride: resolveAdminPreviewMaxDepositOverride(reinvestPercent, initialBalance),
           lotPercentOverride: lotPercentEffective,
           reinvestPercentOverride: reinvestPercent,
         });
@@ -7529,7 +7550,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                   ...(partialTpPct > 0 ? { partialTpPct } : {}),
                   ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
                   ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
-                  maxDepositOverride: initialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
+                  maxDepositOverride: resolveAdminPreviewMaxDepositOverride(reinvestPercent, initialBalance),
                   lotPercentOverride: lotPercentEffective * relativeTradeMul,
                   reinvestPercentOverride: reinvestPercent,
                   ...(payload?.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),

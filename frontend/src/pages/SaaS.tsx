@@ -1023,6 +1023,7 @@ type BacktestCardSettings = {
   commissionPercent: number;
   slippagePercent: number;
   fundingRatePercent: number;
+  reinvestPercent?: number;
   dateFrom?: string;
   dateTo?: string;
 };
@@ -1040,6 +1041,7 @@ const DEFAULT_BACKTEST_SETTINGS: BacktestCardSettings = {
   commissionPercent: 0.1,
   slippagePercent: 0.05,
   fundingRatePercent: 0,
+  reinvestPercent: 0,
   dateFrom: '',
   dateTo: '',
 };
@@ -1056,6 +1058,7 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
   const commissionPercent = Number(parsed.commissionPercent);
   const slippagePercent = Number(parsed.slippagePercent);
   const fundingRatePercent = Number(parsed.fundingRatePercent);
+  const reinvestPercent = Number(parsed.reinvestPercent);
   const isYmd = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
   const dateFromRaw = parsed.dateFrom;
   const dateToRaw = parsed.dateTo;
@@ -1070,6 +1073,7 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
     commissionPercent: Number.isFinite(commissionPercent) ? Math.min(5, Math.max(0, commissionPercent)) : DEFAULT_BACKTEST_SETTINGS.commissionPercent,
     slippagePercent: Number.isFinite(slippagePercent) ? Math.min(5, Math.max(0, slippagePercent)) : DEFAULT_BACKTEST_SETTINGS.slippagePercent,
     fundingRatePercent: Number.isFinite(fundingRatePercent) ? Math.min(5, Math.max(0, fundingRatePercent)) : DEFAULT_BACKTEST_SETTINGS.fundingRatePercent,
+    reinvestPercent: Number.isFinite(reinvestPercent) ? Math.min(100, Math.max(0, reinvestPercent)) : DEFAULT_BACKTEST_SETTINGS.reinvestPercent,
     dateFrom: isYmd(dateFromRaw) ? dateFromRaw : '',
     dateTo: isYmd(dateToRaw) ? dateToRaw : '',
   };
@@ -2836,7 +2840,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestCommissionPercent, setAdminSweepBacktestCommissionPercent] = useState(DEFAULT_BACKTEST_SETTINGS.commissionPercent);
   const [adminSweepBacktestSlippagePercent, setAdminSweepBacktestSlippagePercent] = useState(DEFAULT_BACKTEST_SETTINGS.slippagePercent);
   const [adminSweepBacktestFundingRatePercent, setAdminSweepBacktestFundingRatePercent] = useState(DEFAULT_BACKTEST_SETTINGS.fundingRatePercent);
-  const [adminSweepBacktestReinvestPercent, setAdminSweepBacktestReinvestPercent] = useState<number>(100);
+  const [adminSweepBacktestReinvestPercent, setAdminSweepBacktestReinvestPercent] = useState<number>(0);
   const [adminSweepBacktestDateFrom, setAdminSweepBacktestDateFrom] = useState('');
   const [adminSweepBacktestDateTo, setAdminSweepBacktestDateTo] = useState('');
   const [tsDcaPickLoading, setTsDcaPickLoading] = useState(false);
@@ -3793,6 +3797,32 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
     return tokenMatch?.snapshot || null;
   }, [summary?.offerStore?.tsBacktestSnapshots, matchesTsSnapshotToken, extractTsSuffixToken]);
+
+  const backtestDrawerCardSnapshot = useMemo(() => {
+    if (!backtestDrawerContext || backtestDrawerContext.kind !== 'algofund-ts') {
+      return null;
+    }
+    const systemName = String(backtestDrawerContext.systemName || '').trim();
+    const setKey = String(backtestDrawerContext.setKey || selectedAdminDraftTsSetKey || '').trim();
+    if (systemName) {
+      const bySystem = resolveTsSnapshotForSystem(systemName);
+      if (bySystem) {
+        return bySystem;
+      }
+    }
+    if (setKey) {
+      const byKey = summary?.offerStore?.tsBacktestSnapshots?.[setKey];
+      if (byKey) {
+        return byKey;
+      }
+    }
+    return null;
+  }, [
+    backtestDrawerContext,
+    selectedAdminDraftTsSetKey,
+    resolveTsSnapshotForSystem,
+    summary?.offerStore?.tsBacktestSnapshots,
+  ]);
 
   const masterSnapshotForReportSystem = useMemo(() => {
     const systemName = String(resolvedReportSystemName || '').trim();
@@ -6529,9 +6559,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     // Даты — только если явно сохранены в backtestSettings; иначе пусто → full sweep depth на бэкенде.
     setAdminSweepBacktestDateFrom(typeof settings.dateFrom === 'string' ? settings.dateFrom : '');
     setAdminSweepBacktestDateTo(typeof settings.dateTo === 'string' ? settings.dateTo : '');
-    // Сбрасываем реинвест к 100% (compound) при любом открытии модалки — этот параметр
-    // не хранится в backtestSettings снапшота, поэтому без явного ресета он "залипал" от прошлых движений ползунка.
-    setAdminSweepBacktestReinvestPercent(100);
+    setAdminSweepBacktestReinvestPercent(
+      Number.isFinite(Number(settings.reinvestPercent))
+        ? Math.min(100, Math.max(0, Number(settings.reinvestPercent)))
+        : DEFAULT_BACKTEST_SETTINGS.reinvestPercent ?? 0,
+    );
   }, []);
 
   const resolveBacktestSettingsForContext = useCallback((context: SaasBacktestContext): BacktestCardSettings => {
@@ -7219,6 +7251,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               commissionPercent: Math.max(0, Number(adminSweepBacktestCommissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent)),
               slippagePercent: Math.max(0, Number(adminSweepBacktestSlippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent)),
               fundingRatePercent: Math.max(0, Number(adminSweepBacktestFundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent)),
+              reinvestPercent: Math.max(0, Math.min(100, Number(adminSweepBacktestReinvestPercent ?? 0))),
               autoLotByChannelWidth: adminSweepAutoLotByChannel,
               dcaPerLegSl: tsDcaPerLegSl,
             },
@@ -7243,6 +7276,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           commissionPercent: Math.max(0, Number(adminSweepBacktestCommissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent)),
           slippagePercent: Math.max(0, Number(adminSweepBacktestSlippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent)),
           fundingRatePercent: Math.max(0, Number(adminSweepBacktestFundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent)),
+          reinvestPercent: Math.max(0, Math.min(100, Number(adminSweepBacktestReinvestPercent ?? 0))),
         }
       );
       await loadSummary('full');
@@ -14456,8 +14490,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     <Alert
                       type="info"
                       showIcon
-                      message="Real rerun — метрики из движка, не sweep-карточки"
-                      description={`Портфель ${adminSweepBacktestResult.selectedOffers.length} страт., reinvest ${adminSweepBacktestReinvestPercent}% уже в engine. Ret/DD/P/L и график — одна equity-curve (DD capped ≤100%). Sweep на карточке — другая модель; для меньшей просадки попробуй Reinvest 0%.`}
+                      message="Real rerun — те же параметры, что пойдут на карточку при «Сохранить»"
+                      description={`Reinvest ${adminSweepBacktestReinvestPercent}% (0% = как витрина, без runaway compound). Max deposit в engine: ${adminSweepBacktestReinvestPercent <= 0 ? 'фикс. initial balance' : 'растёт с reinvest'}.${backtestDrawerCardSnapshot ? ` На карточке сейчас: Ret ${Number(backtestDrawerCardSnapshot.ret || 0).toFixed(2)}% • DD ${Number(backtestDrawerCardSnapshot.dd || 0).toFixed(2)}% — обновится после сохранения с текущими настройками.` : ''}`}
                     />
                   ) : null}
                   {isAdminSurface ? (
@@ -14473,6 +14507,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     ) : (
                       <Tag color="default">{tsDcaEnabled ? 'TS: sweep est.' : 'mode: sweep-only'}</Tag>
                     )}
+                    {backtestDrawerCardSnapshot && adminSweepBacktestResult.rerun?.executed ? (
+                      <Tag color="gold">
+                        {`карточка: Ret ${Number(backtestDrawerCardSnapshot.ret || 0).toFixed(2)}% • DD ${Number(backtestDrawerCardSnapshot.dd || 0).toFixed(2)}% • ${Number(backtestDrawerCardSnapshot.trades || 0)} tr`}
+                      </Tag>
+                    ) : null}
                     {(adminSweepBacktestResult.rerun as { fullSweepDepth?: boolean } | undefined)?.fullSweepDepth ? (
                       <Tag color="gold">full sweep depth</Tag>
                     ) : null}
