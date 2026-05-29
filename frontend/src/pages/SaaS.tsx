@@ -14188,14 +14188,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       Number(adminSweepBacktestResult.controls?.riskScore || adminSweepBacktestRiskScore || 5),
                     );
 
-                    const pnlCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.pnl || []);
-                    const drawdownCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.drawdownPercent || []);
-                    const effectivePnlCurve = pnlCurve.length > 0 ? pnlCurve : fallbackCurves.pnl;
-                    const effectiveDrawdownCurve = drawdownCurve.length > 0 ? drawdownCurve : fallbackCurves.drawdown;
+                    const sweepPnlCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.pnl || []);
+                    const sweepDrawdownCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.drawdownPercent || []);
+                    const effectivePnlCurve = usingRealTsDcaEngine
+                      ? fallbackCurves.pnl
+                      : (sweepPnlCurve.length > 0 ? sweepPnlCurve : fallbackCurves.pnl);
+                    const effectiveDrawdownCurve = usingRealTsDcaEngine
+                      ? fallbackCurves.drawdown
+                      : (sweepDrawdownCurve.length > 0 ? sweepDrawdownCurve : fallbackCurves.drawdown);
 
-                    const finalPnl = summary
-                      ? Number(summary.unrealizedPnl ?? (effectivePnlCurve.length > 0 ? effectivePnlCurve[effectivePnlCurve.length - 1].value : fallbackCurves.finalPnl) ?? 0)
-                      : 0;
+                    const summaryFinalEquity = summary ? Number(summary.finalEquity ?? NaN) : NaN;
+                    const summaryNetPnl = Number.isFinite(summaryFinalEquity)
+                      ? Number((summaryFinalEquity - balance).toFixed(4))
+                      : NaN;
+                    const finalPnl = usingRealTsDcaEngine && Number.isFinite(summaryNetPnl)
+                      ? summaryNetPnl
+                      : summary
+                        ? Number(summary.unrealizedPnl ?? (effectivePnlCurve.length > 0 ? effectivePnlCurve[effectivePnlCurve.length - 1].value : fallbackCurves.finalPnl) ?? 0)
+                        : 0;
                     const serverTradesCount = summary ? Number(summary.tradesCount ?? 0) : 0;
                     const baseTradeScore = Number(adminSweepBacktestResult.controls?.tradeFrequencyScore ?? 5);
                     const tradesCount = usingRealTsDcaEngine
@@ -14210,9 +14220,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         )
                       )
                       : (Number.isFinite(serverTradesCount) ? serverTradesCount : 0);
-                    const maxDd = summary
+                    const maxDd = usingRealTsDcaEngine && summary
                       ? Number(summary.maxDrawdownPercent ?? (effectiveDrawdownCurve.length > 0 ? Math.max(...effectiveDrawdownCurve.map((point) => point.value)) : 0))
-                      : 0;
+                      : summary
+                        ? Number(summary.maxDrawdownPercent ?? (effectiveDrawdownCurve.length > 0 ? Math.max(...effectiveDrawdownCurve.map((point) => point.value)) : 0))
+                        : 0;
                     const marginLoad = summary ? Number(summary.marginLoadPercent ?? 0) : 0;
                     const rerunErrorText = String(adminSweepBacktestResult.rerun?.error || '').trim();
                     const rerunNeedsHistoricalSweep = /Исторические свечи не найдены|No executable candles|No runnable strategies|No candles in selected date range/i.test(rerunErrorText);
@@ -14231,7 +14243,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     <Alert
                       type="warning"
                       showIcon
-                      message="TS sweep-only — синтетическая оценка; метрики карточек — real engine TS+DCA"
+                      message="Метрики карточки (sweep est.) ≠ real engine в модалке"
+                      description="Теги Ret/DD/trades и график — из real TS+DCA backtest. Цифры на опубликованной карточке — sweep-оценка, их нельзя сравнивать напрямую."
                     />
                   ) : null}
                   {isAdminSurface ? (
