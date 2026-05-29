@@ -40,6 +40,14 @@ import {
   getAlgofundChartSnapshot,
   previewAdminSweepBacktest,
   pickDcaForTsPortfolio,
+  researchDcaForTsPortfolio,
+  startDcaResearchJob,
+  getDcaResearchJobStatus,
+  resetDcaResearchJobLock,
+  startDcaCombinedPreviewJob,
+  getDcaCombinedPreviewJobStatus,
+  applyDcaToTsPortfolio,
+  previewDcaCombinedWithTs,
   syncCloudTsFromSweepResult,
   listStrategyClientSystemProfilesState,
   createStrategyClientSystemProfile,
@@ -329,6 +337,7 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
       preferRealBacktest: req.body?.preferRealBacktest === true,
       enablePairLock: req.body?.enablePairLock !== undefined ? toBool(req.body.enablePairLock, true) : undefined,
       pairLockSeed: toOptionalNumber(req.body?.pairLockSeed),
+      autoLotByChannelWidth: req.body?.autoLotByChannelWidth === true,
     });
     // Auto-sync Cloud TS members from sweep result (fire-and-forget)
     if (data.kind === 'algofund-ts' && Array.isArray(data.selectedOffers) && data.selectedOffers.length > 0) {
@@ -347,6 +356,202 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
   }
 });
 
+const parseDcaSettingsBody = (body: Record<string, unknown> | undefined) => {
+  const out: Record<string, number | string | boolean> = {};
+  const baseAmountUsdt = toOptionalNumber(body?.dcaBaseAmountUsdt);
+  const baseAmountPercent = toOptionalNumber(body?.dcaBaseAmountPercent);
+  const stepPercent = toOptionalNumber(body?.dcaStepPercent);
+  const maxOrders = toOptionalNumber(body?.dcaMaxOrders);
+  const orderMultiplier = toOptionalNumber(body?.dcaOrderMultiplier);
+  const tpPercent = toOptionalNumber(body?.dcaTpPercent);
+  const slPercent = toOptionalNumber(body?.dcaSlPercent);
+  const reentryBars = toOptionalNumber(body?.dcaReentryBars);
+  const rsiPeriod = toOptionalNumber(body?.dcaRsiPeriod);
+  const rsiMax = toOptionalNumber(body?.dcaRsiMax);
+  if (baseAmountUsdt !== undefined) out.baseAmountUsdt = baseAmountUsdt;
+  if (baseAmountPercent !== undefined) out.baseAmountPercent = baseAmountPercent;
+  if (stepPercent !== undefined) out.stepPercent = stepPercent;
+  if (maxOrders !== undefined) out.maxOrders = maxOrders;
+  if (orderMultiplier !== undefined) out.orderMultiplier = orderMultiplier;
+  if (tpPercent !== undefined) out.tpPercent = tpPercent;
+  if (slPercent !== undefined) out.slPercent = slPercent;
+  if (reentryBars !== undefined) out.reentryBars = reentryBars;
+  if (rsiPeriod !== undefined) out.rsiPeriod = rsiPeriod;
+  if (rsiMax !== undefined) out.rsiMax = rsiMax;
+  const baseAmountMode = String(body?.dcaBaseAmountMode || '').trim();
+  if (baseAmountMode === 'fixed' || baseAmountMode === 'percent') {
+    out.baseAmountMode = baseAmountMode;
+  }
+  const interval = String(body?.dcaInterval || '').trim();
+  if (interval) out.interval = interval;
+  const detectionSource = String(body?.dcaDetectionSource || '').trim();
+  if (detectionSource) out.detectionSource = detectionSource;
+  const entryFilter = String(body?.dcaEntryFilter || '').trim().toLowerCase();
+  if (entryFilter === 'always' || entryFilter === 'rsi_dip' || entryFilter === 'cooldown') {
+    out.entryFilter = entryFilter;
+  }
+  if (body?.dcaPerLegSl === true) out.perLegSl = true;
+  if (body?.dcaPerLegSl === false) out.perLegSl = false;
+  return Object.keys(out).length > 0 ? out : undefined;
+};
+
+router.get('/admin/ts-dca-research-status', async (_req, res) => {
+  try {
+    res.json({ success: true, ...getDcaResearchJobStatus() });
+  } catch (error) {
+    const err = error as Error;
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ts-dca-research-reset', async (_req, res) => {
+  try {
+    const reset = resetDcaResearchJobLock();
+    res.json({ success: true, ...reset, ...getDcaResearchJobStatus() });
+  } catch (error) {
+    const err = error as Error;
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ts-dca-combined-preview', async (req, res) => {
+  try {
+    const markets = Array.isArray(req.body?.markets)
+      ? req.body.markets.map((item: unknown) => String(item || '').trim()).filter(Boolean)
+      : undefined;
+    const marketTuning = req.body?.marketTuning && typeof req.body.marketTuning === 'object'
+      ? req.body.marketTuning as Record<string, Record<string, unknown>>
+      : undefined;
+    const payload = {
+      systemName: req.body?.systemName ? String(req.body.systemName) : undefined,
+      setKey: req.body?.setKey ? String(req.body.setKey) : undefined,
+      apiKeyName: req.body?.apiKeyName ? String(req.body.apiKeyName) : undefined,
+      dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
+      dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
+      initialBalance: toOptionalNumber(req.body?.initialBalance),
+      markets,
+      maxOpenPositions: toOptionalNumber(req.body?.maxOpenPositions),
+      enabled: req.body?.enabled !== false,
+      dcaSettings: parseDcaSettingsBody(req.body),
+      marketTuning: marketTuning
+        ? Object.fromEntries(
+          Object.entries(marketTuning).map(([market, tuning]) => [
+            market,
+            parseDcaSettingsBody(tuning as Record<string, unknown>) || {},
+          ]),
+        )
+        : undefined,
+    };
+    const status = await startDcaCombinedPreviewJob(payload);
+    res.status(202).json({ success: true, accepted: true, ...status });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS admin ts-dca-combined-preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/ts-dca-combined-preview-status', async (_req, res) => {
+  try {
+    res.json({ success: true, ...getDcaCombinedPreviewJobStatus() });
+  } catch (error) {
+    const err = error as Error;
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ts-dca-combined-preview-sync', async (req, res) => {
+  try {
+    const markets = Array.isArray(req.body?.markets)
+      ? req.body.markets.map((item: unknown) => String(item || '').trim()).filter(Boolean)
+      : undefined;
+    const marketTuning = req.body?.marketTuning && typeof req.body.marketTuning === 'object'
+      ? req.body.marketTuning as Record<string, Record<string, unknown>>
+      : undefined;
+    const data = await previewDcaCombinedWithTs({
+      systemName: req.body?.systemName ? String(req.body.systemName) : undefined,
+      setKey: req.body?.setKey ? String(req.body.setKey) : undefined,
+      apiKeyName: req.body?.apiKeyName ? String(req.body.apiKeyName) : undefined,
+      dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
+      dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
+      initialBalance: toOptionalNumber(req.body?.initialBalance),
+      markets,
+      maxOpenPositions: toOptionalNumber(req.body?.maxOpenPositions),
+      enabled: req.body?.enabled !== false,
+      dcaSettings: parseDcaSettingsBody(req.body),
+      marketTuning: marketTuning
+        ? Object.fromEntries(
+          Object.entries(marketTuning).map(([market, tuning]) => [
+            market,
+            parseDcaSettingsBody(tuning as Record<string, unknown>) || {},
+          ]),
+        )
+        : undefined,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS admin ts-dca-combined-preview-sync error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ts-dca-pair-research', async (req, res) => {
+  try {
+    const status = await startDcaResearchJob({
+      systemName: req.body?.systemName ? String(req.body.systemName) : undefined,
+      setKey: req.body?.setKey ? String(req.body.setKey) : undefined,
+      apiKeyName: req.body?.apiKeyName ? String(req.body.apiKeyName) : undefined,
+      dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
+      dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
+      maxCandidates: toOptionalNumber(req.body?.maxCandidates),
+      initialBalance: toOptionalNumber(req.body?.initialBalance),
+      dcaSettings: parseDcaSettingsBody(req.body),
+      autotune: req.body?.dcaAutotune !== false,
+    });
+    res.status(202).json({ success: true, accepted: true, ...status });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS admin ts-dca-pair-research error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/admin/ts-dca-pair-apply', async (req, res) => {
+  try {
+    const markets = Array.isArray(req.body?.markets)
+      ? req.body.markets.map((item: unknown) => String(item || '').trim()).filter(Boolean)
+      : undefined;
+    const marketTuning = req.body?.marketTuning && typeof req.body.marketTuning === 'object'
+      ? req.body.marketTuning as Record<string, Record<string, unknown>>
+      : undefined;
+    const data = await applyDcaToTsPortfolio({
+      systemName: req.body?.systemName ? String(req.body.systemName) : undefined,
+      setKey: req.body?.setKey ? String(req.body.setKey) : undefined,
+      apiKeyName: req.body?.apiKeyName ? String(req.body.apiKeyName) : undefined,
+      dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
+      dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
+      initialBalance: toOptionalNumber(req.body?.initialBalance),
+      markets,
+      maxApply: toOptionalNumber(req.body?.maxApply),
+      dcaSettings: parseDcaSettingsBody(req.body),
+      marketTuning: marketTuning
+        ? Object.fromEntries(
+          Object.entries(marketTuning).map(([market, tuning]) => [
+            market,
+            parseDcaSettingsBody(tuning as Record<string, unknown>) || {},
+          ]),
+        )
+        : undefined,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS admin ts-dca-pair-apply error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.post('/admin/ts-dca-pair-pick', async (req, res) => {
   try {
     const data = await pickDcaForTsPortfolio({
@@ -357,6 +562,7 @@ router.post('/admin/ts-dca-pair-pick', async (req, res) => {
       dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
       maxCandidates: toOptionalNumber(req.body?.maxCandidates),
       initialBalance: toOptionalNumber(req.body?.initialBalance),
+      dcaSettings: parseDcaSettingsBody(req.body),
     });
     res.json({ success: true, ...data });
   } catch (error) {

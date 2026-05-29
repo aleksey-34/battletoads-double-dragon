@@ -15,6 +15,7 @@ import {
 import { calculateSyntheticOHLC } from './synthetic';
 import { recordLiveTradeEvent } from '../analytics/liveReconciliation';
 import logger from '../utils/logger';
+import { computeChannelWidthLotMultiplier } from '../services/strategy/sizing';
 
 // ── Market data cache for auto-strategy cycle ────────────────────────────────
 // Avoids re-fetching the same symbol+interval when multiple strategies share them.
@@ -3324,7 +3325,10 @@ export const executeStrategy = async (
     }
   } catch { /* non-critical: fallback to 1.0 */ }
 
-  const totalNotional = computeSignalTotalNotional(mergedStrategy, availableBalance, signal, riskMultiplier);
+  const channelLotMult = Number((mergedStrategy as any).auto_lot_by_channel_width || 0) === 1
+    ? computeChannelWidthLotMultiplier(donchianHigh, donchianLow, donchianCenter, mergedStrategy as any)
+    : 1;
+  const totalNotional = computeSignalTotalNotional(mergedStrategy, availableBalance, signal, riskMultiplier) * channelLotMult;
 
   if (!Number.isFinite(totalNotional) || totalNotional <= 0) {
     if (closedAction) {

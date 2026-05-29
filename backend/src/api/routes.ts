@@ -2531,6 +2531,24 @@ router.post('/cards/materialize/:targetApiKeyName', async (req, res) => {
           [lotRaw, lotRaw, targetName]
         );
       }
+      const autoLot = (meta as { autoLotByChannelWidth?: unknown }).autoLotByChannelWidth === true ? 1 : 0;
+      await db.run(
+        `UPDATE strategies
+         SET auto_lot_by_channel_width = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ?)
+           AND COALESCE(strategy_type, '') NOT IN ('dca', 'dca_futures')
+           AND COALESCE(origin, '') <> 'saas_overlay_legacy'`,
+        [autoLot, targetName]
+      );
+      const dcaPerLegSl = (meta as { dcaPerLegSl?: unknown }).dcaPerLegSl === true ? 1 : 0;
+      await db.run(
+        `UPDATE strategies
+         SET dca_per_leg_sl = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ?)
+           AND strategy_type = 'dca'
+           AND COALESCE(origin, '') <> 'saas_overlay_legacy'`,
+        [dcaPerLegSl, targetName]
+      );
     } catch (lotErr) {
       logger.warn(`Card lot override apply failed for ${targetName}: ${(lotErr as Error).message}`);
     }

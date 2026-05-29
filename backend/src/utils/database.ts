@@ -559,6 +559,39 @@ export const initDB = async () => {
       FOREIGN KEY (tenant_id) REFERENCES tenants(id)
     );
 
+    CREATE TABLE IF NOT EXISTS dca_pair_score_cache (
+      cache_key TEXT PRIMARY KEY,
+      api_key_name TEXT NOT NULL,
+      market TEXT NOT NULL,
+      date_from TEXT NOT NULL,
+      date_to TEXT NOT NULL,
+      dca_settings_json TEXT NOT NULL,
+      ret REAL DEFAULT 0,
+      dd REAL DEFAULT 0,
+      pf REAL DEFAULT 0,
+      trades INTEGER DEFAULT 0,
+      score REAL DEFAULT 0,
+      result_json TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS dca_research_run_cache (
+      cache_key TEXT PRIMARY KEY,
+      system_name TEXT DEFAULT '',
+      api_key_name TEXT NOT NULL,
+      date_from TEXT NOT NULL,
+      date_to TEXT NOT NULL,
+      initial_balance REAL DEFAULT 10000,
+      dca_settings_json TEXT NOT NULL,
+      autotune INTEGER DEFAULT 1,
+      candidate_pool_json TEXT NOT NULL,
+      result_json TEXT NOT NULL,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_dca_pair_score_cache_lookup
+      ON dca_pair_score_cache (api_key_name, market, date_from, date_to);
+
     CREATE TABLE IF NOT EXISTS saas_audit_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER,
@@ -722,6 +755,16 @@ export const initDB = async () => {
   await ensureColumn('strategies', "dca_total_qty REAL DEFAULT 0");
   await ensureColumn('strategies', "dca_last_buy_price REAL DEFAULT 0");
   await ensureColumn('strategies', "dca_state TEXT DEFAULT 'idle'");
+  await ensureColumn('strategies', "dca_entry_filter TEXT DEFAULT 'always'");
+  await ensureColumn('strategies', "dca_reentry_bars INTEGER DEFAULT 0");
+  await ensureColumn('strategies', "dca_rsi_period INTEGER DEFAULT 14");
+  await ensureColumn('strategies', "dca_rsi_max REAL DEFAULT 45");
+  await ensureColumn('strategies', "dca_per_leg_sl INTEGER DEFAULT 0");
+  await ensureColumn('strategies', "dca_legs_json TEXT DEFAULT '[]'");
+  await ensureColumn('strategies', 'auto_lot_by_channel_width INTEGER DEFAULT 0');
+  await ensureColumn('strategies', 'auto_lot_channel_ref_width REAL DEFAULT 5');
+  await ensureColumn('strategies', 'auto_lot_channel_mult_min REAL DEFAULT 0.5');
+  await ensureColumn('strategies', 'auto_lot_channel_mult_max REAL DEFAULT 2');
   // DCA-Futures strategy fields (futures-only, long+short, reduceOnly close)
   await ensureColumn('strategies', "dcaf_base_amount_usdt REAL DEFAULT 10");
   await ensureColumn('strategies', "dcaf_step_percent REAL DEFAULT 2");

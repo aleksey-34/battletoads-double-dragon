@@ -6,6 +6,7 @@ import { db } from '../utils/database';
 import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger';
+import { computeChannelWidthLotMultiplier } from '../services/strategy/sizing';
 
 export type BacktestMode = 'single' | 'portfolio';
 
@@ -119,6 +120,8 @@ export type BacktestRunRequest = {
    * at market and set break-even anchor on the remainder (0 = disabled).
    */
   partialTpPct?: number;
+  /** When true, scale trend lot by inverse Donchian channel width at entry. */
+  autoLotByChannelWidth?: boolean;
 };
 
 export type BacktestRunResult = {
@@ -150,6 +153,7 @@ type NormalizedBacktestRequest = {
   lotPercentMultiplierByStrategyId: Map<number, number>;
   reinvestPercentOverride: number;
   partialTpPct: number;
+  autoLotByChannelWidth: boolean;
   /**
    * If true (default), mirror runtime pair-lock semantics in the backtest engine.
    * Only one strategy can hold a position on a given pair at a time.
@@ -547,15 +551,45 @@ type OpenTradeState = {
   funding: number;
 };
 
+const computeRsiAtIndex = (candles: ParsedCandle[], index: number, period: number): number => {
+  const rsiPeriod = Math.max(2, Math.floor(period));
+  if (index < rsiPeriod) {
+    return 50;
+  }
+  const rsiWindow = candles.slice(index - rsiPeriod, index + 1);
+  let gains = 0;
+  let losses = 0;
+  for (let i = 1; i < rsiWindow.length; i++) {
+    const diff = rsiWindow[i].close - rsiWindow[i - 1].close;
+    if (diff >= 0) gains += diff;
+    else losses -= diff;
+  }
+  const n = Math.max(1, rsiWindow.length - 1);
+  const avgGain = gains / n;
+  const avgLoss = losses / n;
+  if (avgLoss <= 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+};
+
 const extractDcaConfigFromStrategy = (s: any): {
   enabled: boolean; baseAmountUsdt: number; stepPercent: number; maxOrders: number;
   orderMultiplier: number; tpPercent: number; slPercent: number;
+  perLegSl: boolean;
+  entryFilter: 'always' | 'rsi_dip' | 'cooldown';
+  reentryCooldownBars: number;
+  rsiPeriod: number;
+  rsiMax: number;
+  barsSinceFlat: number;
+  legs: Array<{ price: number; qty: number; invested: number; isBase: boolean }>;
   ordersCount: number; totalInvested: number; totalQty: number; lastBuyPrice: number;
 } | null => {
   const t = String(s.strategy_type || '').trim().toLowerCase();
   if (t !== 'dca') return null;
   const ba = Number(s.dca_base_amount_usdt || 10);
   if (!Number.isFinite(ba) || ba <= 0) return null;
+  const rawFilter = String(s.dca_entry_filter || 'always').trim().toLowerCase();
+  const entryFilter = rawFilter === 'rsi_dip' || rawFilter === 'cooldown' ? rawFilter : 'always';
   return {
     enabled: true,
     baseAmountUsdt: Math.max(1, ba),
@@ -564,8 +598,145 @@ const extractDcaConfigFromStrategy = (s: any): {
     orderMultiplier: Math.max(1, Number(s.dca_order_multiplier || 1)),
     tpPercent: Math.max(0.1, Number(s.dca_tp_percent || 3)),
     slPercent: Math.max(0, Number(s.dca_sl_percent || 0)),
+    perLegSl: Number(s.dca_per_leg_sl || 0) === 1,
+    entryFilter,
+    reentryCooldownBars: Math.max(0, Math.floor(Number(s.dca_reentry_bars || 0))),
+    rsiPeriod: Math.max(2, Math.floor(Number(s.dca_rsi_period || 14))),
+    rsiMax: Math.max(5, Math.min(95, Number(s.dca_rsi_max || 45))),
+    barsSinceFlat: 0,
+    legs: [],
     ordersCount: 0, totalInvested: 0, totalQty: 0, lastBuyPrice: 0,
   };
+};
+
+const passesClassicDcaEntryFilter = (
+  dc: NonNullable<ReturnType<typeof extractDcaConfigFromStrategy>>,
+  candles: ParsedCandle[],
+  index: number,
+): boolean => {
+  if (dc.entryFilter === 'cooldown') {
+    return dc.barsSinceFlat >= dc.reentryCooldownBars;
+  }
+  if (dc.entryFilter === 'rsi_dip') {
+    return computeRsiAtIndex(candles, index, dc.rsiPeriod) <= dc.rsiMax;
+  }
+  return true;
+};
+
+type DcaLegState = { price: number; qty: number; invested: number; isBase: boolean };
+
+const syncDcaRuntimeFromLegs = (
+  ctx: BacktestContext,
+  runtime: RuntimeStrategy,
+  dc: NonNullable<RuntimeStrategy['dcaState']>,
+): void => {
+  const legs = dc.legs;
+  if (legs.length === 0) {
+    runtime.state = 'flat';
+    runtime.entryPrice = null;
+    runtime.tpAnchorPrice = null;
+    runtime.notional = 0;
+    runtime.openTrade = null;
+    runtime.partialTpTriggered = false;
+    dc.ordersCount = 0;
+    dc.totalInvested = 0;
+    dc.totalQty = 0;
+    dc.lastBuyPrice = 0;
+    return;
+  }
+  dc.totalInvested = legs.reduce((sum, leg) => sum + leg.invested, 0);
+  dc.totalQty = legs.reduce((sum, leg) => sum + leg.qty, 0);
+  dc.ordersCount = legs.filter((leg) => !leg.isBase).length;
+  dc.lastBuyPrice = legs[legs.length - 1].price;
+  const avgEntry = dc.totalQty > 0 ? dc.totalInvested / dc.totalQty : 0;
+  runtime.entryPrice = avgEntry;
+  runtime.notional = dc.totalInvested;
+  if (runtime.openTrade) {
+    runtime.openTrade.entryPrice = avgEntry;
+    runtime.openTrade.notional = dc.totalInvested;
+  }
+  ctx.lockedMargin = Math.max(0, ctx.lockedMargin);
+};
+
+const closeDcaLeg = (
+  ctx: BacktestContext,
+  runtime: RuntimeStrategy,
+  strategyId: number,
+  strategyName: string,
+  exitTime: number,
+  marketPrice: number,
+  leg: DcaLegState,
+  reason: string,
+): void => {
+  if (!runtime.openTrade || runtime.notional <= 0 || leg.invested <= 0) {
+    return;
+  }
+  const side = runtime.openTrade.side;
+  const exitPrice = executionPrice(marketPrice, side, 'exit', effectiveSlippageRate(ctx, runtime.strategy));
+  const grossPnl = leg.invested * ((exitPrice / leg.price) - 1);
+  const exitFee = leg.invested * effectiveCommissionRate(ctx, runtime.strategy);
+  const entryFeeShare = runtime.openTrade.entryFee * (leg.invested / runtime.notional);
+  const fundingShare = runtime.openTrade.funding * (leg.invested / runtime.notional);
+  ctx.cashEquity += grossPnl - exitFee;
+  ctx.lockedMargin = Math.max(0, ctx.lockedMargin - leg.invested);
+  const netPnl = grossPnl - entryFeeShare - exitFee + fundingShare;
+  const pnlPercent = leg.price > 0 ? ((exitPrice / leg.price) - 1) * 100 : 0;
+  ctx.trades.push({
+    strategyId,
+    strategyName,
+    side,
+    entryTime: runtime.openTrade.entryTime,
+    exitTime,
+    entryPrice: leg.price,
+    exitPrice,
+    notional: leg.invested,
+    grossPnl,
+    netPnl,
+    pnlPercent,
+    fees: entryFeeShare + exitFee,
+    funding: fundingShare,
+    reason,
+  });
+  runtime.openTrade = {
+    ...runtime.openTrade,
+    notional: runtime.openTrade.notional - leg.invested,
+    entryFee: runtime.openTrade.entryFee - entryFeeShare,
+    funding: runtime.openTrade.funding - fundingShare,
+  };
+  runtime.notional = runtime.openTrade.notional;
+};
+
+const resolveAutoLotChannelWidthMult = (
+  runtime: RuntimeStrategy,
+  candleIndex: number,
+  strategy: Strategy,
+  ctx: BacktestContext,
+  signalPayload: BacktestSignalPayload,
+): number => {
+  const enabled = ctx.autoLotByChannelWidth || Number((strategy as any).auto_lot_by_channel_width || 0) === 1;
+  if (!enabled) {
+    return 1;
+  }
+  const high = signalPayload.donchianCenter > 0
+    ? signalPayload.donchianCenter + (signalPayload.current - signalPayload.donchianCenter)
+    : signalPayload.current;
+  // Reconstruct approximate channel bounds from center when only center is in payload
+  const length = Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 50)));
+  if (candleIndex >= length && candleIndex < runtime.candles.length) {
+    const window = runtime.candles.slice(candleIndex - length, candleIndex);
+    const source = String(strategy.detection_source || 'close').trim() === 'close' ? 'close' : 'hl';
+    const highs = source === 'close' ? window.map((bar) => bar.close) : window.map((bar) => bar.high);
+    const lows = source === 'close' ? window.map((bar) => bar.close) : window.map((bar) => bar.low);
+    const donchianHigh = Math.max(...highs);
+    const donchianLow = Math.min(...lows);
+    return computeChannelWidthLotMultiplier(
+      donchianHigh,
+      donchianLow,
+      signalPayload.donchianCenter,
+      strategy as any,
+    );
+  }
+  return computeChannelWidthLotMultiplier(high, high, signalPayload.donchianCenter, strategy as any);
 };
 
 type RuntimeStrategy = {
@@ -596,6 +767,7 @@ type BacktestContext = {
   lotPercentMultiplierByStrategyId: Map<number, number>;
   reinvestPercentOverride: number;
   initialBalance: number;
+  autoLotByChannelWidth: boolean;
 };
 
 const computeLockedMargin = (runtimes: RuntimeStrategy[]): number => {
@@ -817,7 +989,8 @@ const openPosition = (
   signal: 'long' | 'short',
   eventTime: number,
   marketPrice: number,
-  portfolioEquityNow: number
+  portfolioEquityNow: number,
+  lotChannelWidthMult = 1,
 ): boolean => {
   const strategy = runtime.strategy;
 
@@ -836,10 +1009,18 @@ const openPosition = (
     runtime.openTrade = { side: signal, entryTime: eventTime, entryPrice, notional: dcaSize, entryFee, funding: 0 };
     ctx.lockedMargin += dcaSize;
     const qty = dcaSize / entryPrice;
-    runtime.dcaState = { ...runtime.dcaState, ordersCount: 0, totalInvested: dcaSize, totalQty: qty, lastBuyPrice: entryPrice };
+    runtime.dcaState = {
+      ...runtime.dcaState,
+      ordersCount: 0,
+      totalInvested: dcaSize,
+      totalQty: qty,
+      lastBuyPrice: entryPrice,
+      legs: [{ price: entryPrice, qty, invested: dcaSize, isBase: true }],
+    };
     return true;
   }
 
+  const safeChannelMult = Number.isFinite(lotChannelWidthMult) && lotChannelWidthMult > 0 ? lotChannelWidthMult : 1;
   const baseLotPercent = ctx.lotPercentOverride > 0
     ? ctx.lotPercentOverride
     : signal === 'long'
@@ -851,7 +1032,7 @@ const openPosition = (
   const multiplier = Number.isFinite(strategyId) && ctx.lotPercentMultiplierByStrategyId.has(strategyId)
     ? ctx.lotPercentMultiplierByStrategyId.get(strategyId) as number
     : 1;
-  const lotPercent = baseLotPercent * multiplier;
+  const lotPercent = baseLotPercent * multiplier * safeChannelMult;
 
   const lotFraction = Math.max(0, lotPercent) / 100;
   if (lotFraction <= 0) {
@@ -1336,6 +1517,7 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
       return Number.isFinite(n) && n >= 0 ? Math.min(100, n) : -1;
     })(),
     partialTpPct,
+    autoLotByChannelWidth: raw.autoLotByChannelWidth === true,
     enablePairLock: (raw as unknown as { enablePairLock?: boolean })?.enablePairLock !== false,
     pairLockSeed: Math.max(
       1,
@@ -1420,6 +1602,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     lotPercentMultiplierByStrategyId: request.lotPercentMultiplierByStrategyId,
     reinvestPercentOverride: request.reinvestPercentOverride,
     initialBalance: request.initialBalance,
+    autoLotByChannelWidth: request.autoLotByChannelWidth,
   };
 
   const maxOpenPositions = request.maxOpenPositions;
@@ -1474,6 +1657,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     const runtime = runtimes[event.strategyIndex];
     const strategy = runtime.strategy;
     const strategyType = normalizeStrategyType(strategy.strategy_type);
+    const isClassicDca = Boolean(runtime.dcaState?.enabled);
     const candle = runtime.candles[event.candleIndex];
     runtime.currentPrice = candle.close;
 
@@ -1501,29 +1685,69 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
 
     let closedOnCurrentBar = false;
 
-    // DCA TP/SL check (from average entry price)
+    // DCA TP / per-leg SL / aggregate SL
     if (runtime.dcaState && runtime.state !== 'flat' && runtime.entryPrice && runtime.notional > 0) {
       const dc = runtime.dcaState;
-      if (dc.totalQty > 0 && dc.totalInvested > 0) {
+      if (dc.perLegSl && dc.slPercent > 0 && dc.legs.length > 0) {
+        let legClosed = false;
+        for (let legIndex = 0; legIndex < dc.legs.length; ) {
+          const leg = dc.legs[legIndex];
+          const legSlPrice = leg.price * (1 - dc.slPercent / 100);
+          if (candle.close <= legSlPrice) {
+            closeDcaLeg(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, candle.close, leg, 'dca_leg_sl');
+            dc.legs.splice(legIndex, 1);
+            legClosed = true;
+          } else {
+            legIndex += 1;
+          }
+        }
+        if (legClosed) {
+          if (dc.legs.length === 0) {
+            runtime.state = 'flat';
+            runtime.entryPrice = null;
+            runtime.tpAnchorPrice = null;
+            runtime.notional = 0;
+            runtime.openTrade = null;
+            runtime.partialTpTriggered = false;
+            dc.ordersCount = 0;
+            dc.totalInvested = 0;
+            dc.totalQty = 0;
+            dc.lastBuyPrice = 0;
+            dc.barsSinceFlat = 0;
+            closedOnCurrentBar = true;
+          } else {
+            syncDcaRuntimeFromLegs(ctx, runtime, dc);
+          }
+        }
+      }
+      if (!closedOnCurrentBar && dc.totalQty > 0 && dc.totalInvested > 0) {
         const avgBuy = dc.totalInvested / dc.totalQty;
         const tpPrice = avgBuy * (1 + dc.tpPercent / 100);
-        const slPrice = dc.slPercent > 0 ? avgBuy * (1 - dc.slPercent / 100) : 0;
+        const slPrice = !dc.perLegSl && dc.slPercent > 0 ? avgBuy * (1 - dc.slPercent / 100) : 0;
         if (candle.close >= tpPrice) {
           closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, candle.close, 'dca_tp');
-          runtime.dcaState.ordersCount = 0; runtime.dcaState.totalInvested = 0;
-          runtime.dcaState.totalQty = 0; runtime.dcaState.lastBuyPrice = 0;
+          runtime.dcaState.ordersCount = 0;
+          runtime.dcaState.totalInvested = 0;
+          runtime.dcaState.totalQty = 0;
+          runtime.dcaState.lastBuyPrice = 0;
+          runtime.dcaState.legs = [];
+          runtime.dcaState.barsSinceFlat = 0;
           closedOnCurrentBar = true;
         } else if (slPrice > 0 && candle.close <= slPrice) {
           closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, candle.close, 'dca_sl');
-          runtime.dcaState.ordersCount = 0; runtime.dcaState.totalInvested = 0;
-          runtime.dcaState.totalQty = 0; runtime.dcaState.lastBuyPrice = 0;
+          runtime.dcaState.ordersCount = 0;
+          runtime.dcaState.totalInvested = 0;
+          runtime.dcaState.totalQty = 0;
+          runtime.dcaState.lastBuyPrice = 0;
+          runtime.dcaState.legs = [];
+          runtime.dcaState.barsSinceFlat = 0;
           closedOnCurrentBar = true;
         }
       }
     }
 
-    // Partial TP: applies to ALL strategy types (before type-specific exits)
-    if (!closedOnCurrentBar && !runtime.partialTpTriggered && partialTpPct > 0 && (state === 'long' || state === 'short') && entryPrice && entryPrice > 0) {
+    // Partial TP: applies to non-DCA strategy types
+    if (!isClassicDca && !closedOnCurrentBar && !runtime.partialTpTriggered && partialTpPct > 0 && (state === 'long' || state === 'short') && entryPrice && entryPrice > 0) {
       const currentPnlPct = state === 'long'
         ? ((signalPayload.current / entryPrice) - 1) * 100
         : ((entryPrice / signalPayload.current) - 1) * 100;
@@ -1540,7 +1764,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       }
     }
 
-    if (isStatArb) {
+    if (!isClassicDca && isStatArb) {
       const hasZScore = Number.isFinite(signalPayload.zScore);
 
       if (state === 'long' && hasZScore && Number(signalPayload.zScore) <= -zscoreStop) {
@@ -1562,7 +1786,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'mean_revert_exit_short');
         closedOnCurrentBar = true;
       }
-    } else {
+    } else if (!isClassicDca) {
       // HiDeep RSI-based exit: fastRSI (stored in zScore) crosses overbought/oversold
       if (strategyType === 'hideep' && Number.isFinite(signalPayload.zScore)) {
         const fastRsi = Number(signalPayload.zScore);
@@ -1628,23 +1852,40 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       if (candle.close <= stepTrigger) {
         const safetySize = dc.baseAmountUsdt * Math.pow(dc.orderMultiplier, dc.ordersCount);
         const safetyQty = safetySize / candle.close;
-        const prevNotional = runtime.notional;
-        const prevEntry = runtime.entryPrice!;
-        const newNotional = prevNotional + safetySize;
-        const newAvgEntry = (prevNotional * prevEntry + safetySize * candle.close) / newNotional;
         const entryFee = safetySize * effectiveCommissionRate(ctx, runtime.strategy);
         ctx.cashEquity -= entryFee;
-        runtime.entryPrice = newAvgEntry;
-        runtime.notional = newNotional;
-        runtime.openTrade!.entryPrice = newAvgEntry;
-        runtime.openTrade!.notional = newNotional;
+        ctx.lockedMargin += safetySize;
         runtime.openTrade!.entryFee += entryFee;
-        ctx.lockedMargin = Math.max(0, ctx.lockedMargin - prevNotional) + newNotional;
-        dc.ordersCount += 1;
-        dc.totalInvested += safetySize;
-        dc.totalQty += safetyQty;
-        dc.lastBuyPrice = candle.close;
+        dc.legs.push({ price: candle.close, qty: safetyQty, invested: safetySize, isBase: false });
+        syncDcaRuntimeFromLegs(ctx, runtime, dc);
       }
+    }
+
+    // Classic DCA: long-only grid entry on bar close; no Donchian signals
+    if (isClassicDca) {
+      if (runtime.state === 'flat' && runtime.dcaState) {
+        runtime.dcaState.barsSinceFlat += 1;
+        if (!closedOnCurrentBar && passesClassicDcaEntryFilter(runtime.dcaState, runtime.candles, event.candleIndex)) {
+          if (maxOpenPositions > 0 && countOpenPositions() >= maxOpenPositions) {
+            skippedByPositionLimit++;
+          } else if (request.enablePairLock) {
+            const pairKey = pairKeyByRuntimeIndex[event.strategyIndex];
+            if (isPairLocked(event.strategyIndex, pairKey)) {
+              skippedByPairLock++;
+            } else {
+              const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
+              const availableBalance = Math.max(0, equityNow - computeLockedMargin(runtimes));
+              openPosition(ctx, runtime, 'long', event.timeMs, candle.close, availableBalance);
+            }
+          } else {
+            const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
+            const availableBalance = Math.max(0, equityNow - computeLockedMargin(runtimes));
+            openPosition(ctx, runtime, 'long', event.timeMs, candle.close, availableBalance);
+          }
+        }
+      }
+      pushEquityPoint(event.timeMs);
+      continue;
     }
 
     if (signalPayload.signal === 'none') {
@@ -1688,7 +1929,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
 
     const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
     const availableBalance = Math.max(0, equityNow - computeLockedMargin(runtimes));
-    openPosition(ctx, runtime, signalPayload.signal, event.timeMs, signalPayload.current, availableBalance);
+    const lotChannelMult = resolveAutoLotChannelWidthMult(runtime, event.candleIndex, strategy, ctx, signalPayload);
+    openPosition(ctx, runtime, signalPayload.signal, event.timeMs, signalPayload.current, availableBalance, lotChannelMult);
     pushEquityPoint(event.timeMs);
   }
 

@@ -6,31 +6,21 @@
  *
  * Логика:
  *  1. Открываем первую позицию (базовый ордер) при старте
- *  2. При падении цены на dca_step_percent от цены последней покупки — добавляем
- *     safety-ордер (усредняем)
- *  3. dca_max_orders — максимальное кол-во safety ордеров
- *  4. При достижении TP (средняя цена * (1 + dca_tp_percent/100)) — закрываем всё
- *  5. При достижении SL (средняя цена * (1 - dca_sl_percent/100)) — закрываем всё
- *  6. dca_order_multiplier — каждый следующий safety-ордер в X раз больше предыдущего
- *
- * Поля в DB (стратегия):
- *  dca_base_amount_usdt    — первый ордер, в USDT
- *  dca_step_percent        — % падения для следующего safety order
- *  dca_max_orders          — макс кол-во safety orders (не считая базовый)
- *  dca_order_multiplier    — множитель размера каждого следующего ордера (1.0 = равный)
- *  dca_tp_percent          — TakeProfit от средней цены (%)
- *  dca_sl_percent          — StopLoss от средней цены (0 = выключен)
- *  dca_order_type          — 'market' | 'maker'
- *  dca_orders_count        — текущее кол-во исполненных safety orders
- *  dca_total_invested_usdt — суммарно вложено
- *  dca_total_qty           — суммарно куплено (базовый актив)
- *  dca_last_buy_price      — цена последней покупки
- *  dca_state               — 'idle' | 'open' | 'closed'
+ *  2. При падении цены на dca_step_percent — safety-ордер
+ *  3. TP от средней цены закрывает всё
+ *  4. SL: aggregate (от средней) или per-leg (dca_per_leg_sl=1) — закрывает одну ногу и освобождает слот
  */
 
 import logger from '../utils/logger';
 import { db } from '../utils/database';
 import { getMarketData, placeOrder, getBalances } from './exchange';
+
+export type DcaLeg = {
+  price: number;
+  qty: number;
+  invested: number;
+  isBase: boolean;
+};
 
 export type DcaConfig = {
   strategyId: number;
@@ -44,10 +34,39 @@ export type DcaConfig = {
   orderMultiplier: number;
   tpPercent: number;
   slPercent: number;
+  perLegSl: boolean;
   orderType: 'market' | 'maker';
 };
 
 const MAKER_OFFSET = 0.001;
+
+const parseDcaLegs = (raw: unknown): DcaLeg[] => {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((item) => ({
+        price: Number(item?.price || 0),
+        qty: Number(item?.qty || 0),
+        invested: Number(item?.invested || 0),
+        isBase: Boolean(item?.isBase),
+      }))
+      .filter((leg) => leg.price > 0 && leg.qty > 0 && leg.invested > 0);
+  } catch {
+    return [];
+  }
+};
+
+const serializeLegs = (legs: DcaLeg[]): string => JSON.stringify(legs);
+
+const syncTotalsFromLegs = (legs: DcaLeg[]) => {
+  const totalInvested = legs.reduce((sum, leg) => sum + leg.invested, 0);
+  const totalQty = legs.reduce((sum, leg) => sum + leg.qty, 0);
+  const ordersCount = legs.filter((leg) => !leg.isBase).length;
+  const lastBuyPrice = legs.length > 0 ? legs[legs.length - 1].price : 0;
+  return { totalInvested, totalQty, ordersCount, lastBuyPrice };
+};
 
 export const extractDcaConfig = (row: any): DcaConfig => ({
   strategyId: Number(row.id),
@@ -61,6 +80,7 @@ export const extractDcaConfig = (row: any): DcaConfig => ({
   orderMultiplier: Math.max(1, Number(row.dca_order_multiplier || 1)),
   tpPercent: Math.max(0.1, Number(row.dca_tp_percent || 3)),
   slPercent: Math.max(0, Number(row.dca_sl_percent || 0)),
+  perLegSl: Number(row.dca_per_leg_sl || 0) === 1,
   orderType: String(row.dca_order_type || 'market') === 'maker' ? 'maker' : 'market',
 });
 
@@ -95,11 +115,45 @@ const buyOrder = async (
   return qty;
 };
 
-const sellAll = async (config: DcaConfig, totalQty: number, reason: string): Promise<void> => {
+const sellQty = async (config: DcaConfig, qty: number, reason: string): Promise<void> => {
   const symbol = `${config.baseSymbol}${config.quoteSymbol}`;
   const exchangeMarketType: 'spot' | 'swap' = config.marketType === 'spot' ? 'spot' : 'swap';
-  logger.info(`[dca] strategy ${config.strategyId}: closing position (${reason}), qty=${totalQty.toFixed(6)}`);
-  await placeOrder(config.apiKeyName, symbol, 'Sell', String(totalQty), undefined, { marketType: exchangeMarketType });
+  logger.info(`[dca] strategy ${config.strategyId}: sell ${qty.toFixed(6)} (${reason})`);
+  await placeOrder(config.apiKeyName, symbol, 'Sell', String(qty), undefined, { marketType: exchangeMarketType });
+};
+
+const persistOpenState = async (
+  strategyId: number,
+  legs: DcaLeg[],
+): Promise<void> => {
+  const { totalInvested, totalQty, ordersCount, lastBuyPrice } = syncTotalsFromLegs(legs);
+  await db.run(
+    `UPDATE strategies SET
+      dca_state = ?,
+      dca_orders_count = ?,
+      dca_total_invested_usdt = ?,
+      dca_total_qty = ?,
+      dca_last_buy_price = ?,
+      dca_legs_json = ?
+    WHERE id = ?`,
+    [
+      legs.length > 0 ? 'open' : 'idle',
+      ordersCount,
+      totalInvested,
+      totalQty,
+      lastBuyPrice,
+      serializeLegs(legs),
+      strategyId,
+    ],
+  );
+};
+
+const resetIdle = async (strategyId: number): Promise<void> => {
+  await db.run(
+    `UPDATE strategies SET dca_state='idle', dca_orders_count=0, dca_total_invested_usdt=0,
+     dca_total_qty=0, dca_last_buy_price=0, dca_legs_json='[]' WHERE id=?`,
+    [strategyId],
+  );
 };
 
 export const executeDca = async (
@@ -121,11 +175,20 @@ export const executeDca = async (
 
   const symbol = `${config.baseSymbol}${config.quoteSymbol}`;
   const state: string = String(row.dca_state || 'idle');
-  const ordersCount = Number(row.dca_orders_count || 0);
-  const totalInvested = Number(row.dca_total_invested_usdt || 0);
-  const totalQty = Number(row.dca_total_qty || 0);
-  const lastBuyPrice = Number(row.dca_last_buy_price || 0);
-  const avgBuyPrice = totalQty > 0 && totalInvested > 0 ? totalInvested / totalQty : 0;
+  let legs = parseDcaLegs(row.dca_legs_json);
+  const legacyTotalQty = Number(row.dca_total_qty || 0);
+  const legacyTotalInvested = Number(row.dca_total_invested_usdt || 0);
+  const legacyLastBuy = Number(row.dca_last_buy_price || 0);
+  if (legs.length === 0 && legacyTotalQty > 0 && legacyTotalInvested > 0) {
+    legs = [{
+      price: legacyLastBuy > 0 ? legacyLastBuy : legacyTotalInvested / legacyTotalQty,
+      qty: legacyTotalQty,
+      invested: legacyTotalInvested,
+      isBase: true,
+    }];
+  }
+  const totals = syncTotalsFromLegs(legs);
+  const avgBuyPrice = totals.totalQty > 0 ? totals.totalInvested / totals.totalQty : 0;
 
   let currentPrice = 0;
   try {
@@ -136,67 +199,71 @@ export const executeDca = async (
 
   if (currentPrice <= 0) return { action: 'skip', details: 'price=0' };
 
-  // ── Если позиция открыта — проверяем TP/SL/safety orders ──
-  if (state === 'open' && totalQty > 0 && avgBuyPrice > 0) {
+  if (state === 'open' && legs.length > 0 && avgBuyPrice > 0) {
     const tpPrice = avgBuyPrice * (1 + config.tpPercent / 100);
-    const slPrice = config.slPercent > 0 ? avgBuyPrice * (1 - config.slPercent / 100) : 0;
 
-    // TP
     if (currentPrice >= tpPrice) {
-      await sellAll(config, totalQty, `TP hit price=${currentPrice.toFixed(4)} >= tp=${tpPrice.toFixed(4)}`);
-      await db.run(
-        `UPDATE strategies SET dca_state='idle', dca_orders_count=0, dca_total_invested_usdt=0,
-         dca_total_qty=0, dca_last_buy_price=0 WHERE id=?`,
-        [strategyId]
-      );
+      await sellQty(config, totals.totalQty, `TP hit price=${currentPrice.toFixed(4)} >= tp=${tpPrice.toFixed(4)}`);
+      await resetIdle(strategyId);
       return { action: 'tp_close', details: `price=${currentPrice.toFixed(4)}, tp=${tpPrice.toFixed(4)}` };
     }
 
-    // SL
-    if (slPrice > 0 && currentPrice <= slPrice) {
-      await sellAll(config, totalQty, `SL hit price=${currentPrice.toFixed(4)} <= sl=${slPrice.toFixed(4)}`);
-      await db.run(
-        `UPDATE strategies SET dca_state='idle', dca_orders_count=0, dca_total_invested_usdt=0,
-         dca_total_qty=0, dca_last_buy_price=0 WHERE id=?`,
-        [strategyId]
-      );
-      return { action: 'sl_close', details: `price=${currentPrice.toFixed(4)}, sl=${slPrice.toFixed(4)}` };
+    if (config.perLegSl && config.slPercent > 0) {
+      let closedAny = false;
+      for (let i = 0; i < legs.length; ) {
+        const leg = legs[i];
+        const legSl = leg.price * (1 - config.slPercent / 100);
+        if (currentPrice <= legSl) {
+          await sellQty(config, leg.qty, `leg SL price=${currentPrice.toFixed(4)} <= ${legSl.toFixed(4)}`);
+          legs.splice(i, 1);
+          closedAny = true;
+        } else {
+          i += 1;
+        }
+      }
+      if (closedAny) {
+        if (legs.length === 0) {
+          await resetIdle(strategyId);
+          return { action: 'leg_sl_flat', details: `all legs closed at ${currentPrice.toFixed(4)}` };
+        }
+        await persistOpenState(strategyId, legs);
+        const nextTotals = syncTotalsFromLegs(legs);
+        return {
+          action: 'leg_sl_partial',
+          details: `legs=${legs.length}, orders=${nextTotals.ordersCount}, avg=${(nextTotals.totalInvested / nextTotals.totalQty).toFixed(4)}`,
+        };
+      }
+    } else if (config.slPercent > 0) {
+      const slPrice = avgBuyPrice * (1 - config.slPercent / 100);
+      if (currentPrice <= slPrice) {
+        await sellQty(config, totals.totalQty, `aggregate SL price=${currentPrice.toFixed(4)} <= sl=${slPrice.toFixed(4)}`);
+        await resetIdle(strategyId);
+        return { action: 'sl_close', details: `price=${currentPrice.toFixed(4)}, sl=${slPrice.toFixed(4)}` };
+      }
     }
 
-    // Safety order: цена упала на stepPercent от цены последней покупки
+    const { ordersCount, lastBuyPrice } = syncTotalsFromLegs(legs);
     if (lastBuyPrice > 0 && ordersCount < config.maxOrders) {
       const stepTrigger = lastBuyPrice * (1 - config.stepPercent / 100);
       if (currentPrice <= stepTrigger) {
-        // Размер safety order = base * multiplier^ordersCount
         const safetySize = config.baseAmountUsdt * Math.pow(config.orderMultiplier, ordersCount);
         logger.info(`[dca] strategy ${strategyId}: safety order #${ordersCount + 1}, size=${safetySize.toFixed(2)} USDT`);
-
         const bought = await buyOrder(config, safetySize, currentPrice);
-        await db.run(
-          `UPDATE strategies SET
-            dca_orders_count = ?,
-            dca_total_invested_usdt = ?,
-            dca_total_qty = ?,
-            dca_last_buy_price = ?
-          WHERE id = ?`,
-          [ordersCount + 1, totalInvested + safetySize, totalQty + bought, currentPrice, strategyId]
-        );
-        const newAvg = (totalInvested + safetySize) / (totalQty + bought);
+        legs.push({ price: currentPrice, qty: bought, invested: safetySize, isBase: false });
+        await persistOpenState(strategyId, legs);
+        const nextTotals = syncTotalsFromLegs(legs);
+        const newAvg = nextTotals.totalInvested / nextTotals.totalQty;
         return {
           action: 'safety_buy',
-          details: `order #${ordersCount + 1}, price=${currentPrice.toFixed(4)}, avg=${newAvg.toFixed(4)}`,
+          details: `order #${nextTotals.ordersCount}, price=${currentPrice.toFixed(4)}, avg=${newAvg.toFixed(4)}`,
         };
       }
     }
 
-    return { action: 'hold', details: `price=${currentPrice.toFixed(4)}, avg=${avgBuyPrice.toFixed(4)}, tp=${tpPrice.toFixed(4)}` };
+    return { action: 'hold', details: `price=${currentPrice.toFixed(4)}, avg=${avgBuyPrice.toFixed(4)}, tp=${tpPrice.toFixed(4)}, legs=${legs.length}` };
   }
 
-  // ── Idle: открываем первую позицию ──
   if (state === 'idle') {
-    let availableUsdt = config.baseAmountUsdt;
-
-    // Если percent-based — можно добавить дополнительную проверку баланса
     try {
       const balances = await getBalances(apiKeyName);
       const usdtEntry = (Array.isArray(balances) ? balances : []).find(
@@ -210,23 +277,14 @@ export const executeDca = async (
       if (available < config.baseAmountUsdt) {
         return { action: 'skip', details: `insufficient balance ${available.toFixed(2)} < ${config.baseAmountUsdt}` };
       }
-      availableUsdt = config.baseAmountUsdt;
     } catch {
-      // нет доступа к балансу — пробуем разместить ордер как есть
+      // proceed without balance check
     }
 
-    logger.info(`[dca] strategy ${strategyId}: opening base position, ${availableUsdt} USDT`);
-    const bought = await buyOrder(config, availableUsdt, currentPrice);
-    await db.run(
-      `UPDATE strategies SET
-        dca_state = 'open',
-        dca_orders_count = 0,
-        dca_total_invested_usdt = ?,
-        dca_total_qty = ?,
-        dca_last_buy_price = ?
-      WHERE id = ?`,
-      [availableUsdt, bought, currentPrice, strategyId]
-    );
+    logger.info(`[dca] strategy ${strategyId}: opening base position, ${config.baseAmountUsdt} USDT`);
+    const bought = await buyOrder(config, config.baseAmountUsdt, currentPrice);
+    legs = [{ price: currentPrice, qty: bought, invested: config.baseAmountUsdt, isBase: true }];
+    await persistOpenState(strategyId, legs);
     return { action: 'base_buy', details: `${bought.toFixed(6)} ${config.baseSymbol} @ ${currentPrice.toFixed(4)}` };
   }
 

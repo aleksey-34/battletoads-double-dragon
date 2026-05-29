@@ -1,4 +1,5 @@
-﻿import fs from 'fs';
+﻿import crypto from 'crypto';
+import fs from 'fs';
 import path from 'path';
 import { runBacktest, type BacktestRunRequest } from '../backtest/engine';
 import { closeStrategyExposure, cancelStrategyWorkingOrders, copyStrategyBlock, createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
@@ -346,6 +347,8 @@ type TsBacktestSnapshot = {
     dateFrom?: string;
     dateTo?: string;
     interval?: string;
+    autoLotByChannelWidth?: boolean;
+    dcaPerLegSl?: boolean;
   };
   updatedAt: string;
 };
@@ -1512,6 +1515,8 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
       ...(typeof settingsRaw.dateTo === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(settingsRaw.dateTo)
         ? { dateTo: settingsRaw.dateTo }
         : {}),
+      ...(settingsRaw.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),
+      ...(settingsRaw.dcaPerLegSl === true ? { dcaPerLegSl: true } : {}),
     },
     updatedAt: asString(parsed.updatedAt, new Date().toISOString()),
   };
@@ -5708,6 +5713,9 @@ export const updateOfferStoreAdminState = async (payload: {
     const normalizedSnapshot = normalizeTsBacktestSnapshot(mergedSnapshot);
     if (normalizedSnapshot) {
       nextTsBacktestSnapshots[key] = normalizedSnapshot;
+      await syncMasterStrategyFlagsFromSnapshot(normalizedSnapshot).catch((error) => {
+        logger.warn(`syncMasterStrategyFlagsFromSnapshot failed for ${key}: ${(error as Error).message}`);
+      });
     }
   }
 
@@ -5863,6 +5871,23 @@ const buildPeriodInfoFromDates = (
   interval,
 });
 
+const addTsMarketLegs = (occupied: Set<string>, rawMarket: string): void => {
+  const text = String(rawMarket || '').trim();
+  if (!text) {
+    return;
+  }
+  const normalizedWhole = normalizePairMarketKey(text);
+  if (normalizedWhole) {
+    occupied.add(normalizedWhole);
+  }
+  for (const part of text.split(/[/|]/)) {
+    const leg = normalizePairMarketKey(part);
+    if (leg) {
+      occupied.add(leg);
+    }
+  }
+};
+
 const collectTsOccupiedMarkets = (
   offerIds: string[],
   catalog: CatalogData | null,
@@ -5871,45 +5896,209 @@ const collectTsOccupiedMarkets = (
   const occupied = new Set<string>();
   offerIds.forEach((offerId) => {
     const storeRow = offerStoreById.get(offerId);
-    const storeMarket = normalizePairMarketKey(asString(storeRow?.market, ''));
-    if (storeMarket) {
-      occupied.add(storeMarket);
-    }
+    addTsMarketLegs(occupied, asString(storeRow?.market, ''));
     const catalogOffer = findOfferByIdOrNull(catalog, offerId);
     if (!catalogOffer) {
       return;
     }
-    const market = normalizePairMarketKey(asString(catalogOffer.strategy?.market, ''));
-    if (market) {
-      occupied.add(market);
-    }
+    addTsMarketLegs(occupied, asString(catalogOffer.strategy?.market, ''));
     const params = catalogOffer.strategy?.params as Record<string, unknown> | undefined;
     const base = normalizePairMarketKey(asString(params?.base_symbol, ''));
     const quote = normalizePairMarketKey(asString(params?.quote_symbol, 'USDT'));
     if (base) {
       occupied.add(base + quote);
       if (quote) {
-        occupied.add(`${base}/${quote}`);
+        addTsMarketLegs(occupied, `${base}/${quote}`);
+      }
+      occupied.add(base);
+      if (quote) {
+        occupied.add(quote);
       }
     }
   });
   return occupied;
 };
 
-const createDcaStrategyRecord = async (apiKeyName: string, baseSymbol: string, quoteSymbol = 'USDT') => {
-  const base = baseSymbol.trim().toUpperCase();
-  const quote = quoteSymbol.trim().toUpperCase() || 'USDT';
-  if (!base) {
-    throw new Error('baseSymbol is required for DCA strategy');
+type DcaStrategySettings = {
+  baseAmountUsdt?: number;
+  baseAmountMode?: 'fixed' | 'percent';
+  baseAmountPercent?: number;
+  stepPercent?: number;
+  maxOrders?: number;
+  orderMultiplier?: number;
+  tpPercent?: number;
+  slPercent?: number;
+  interval?: string;
+  detectionSource?: string;
+  entryFilter?: 'always' | 'rsi_dip' | 'cooldown';
+  reentryBars?: number;
+  rsiPeriod?: number;
+  rsiMax?: number;
+  perLegSl?: boolean;
+};
+
+type NormalizedDcaSettings = Required<Omit<DcaStrategySettings, 'baseAmountMode' | 'baseAmountPercent' | 'interval' | 'detectionSource' | 'entryFilter'>> & {
+  baseAmountMode: 'fixed' | 'percent';
+  baseAmountPercent: number;
+  interval: string;
+  detectionSource: string;
+  entryFilter: 'always' | 'rsi_dip' | 'cooldown';
+};
+
+const DEFAULT_DCA_SETTINGS: Omit<NormalizedDcaSettings, 'baseAmountMode' | 'baseAmountPercent'> = {
+  baseAmountUsdt: 10,
+  stepPercent: 2,
+  maxOrders: 5,
+  orderMultiplier: 1,
+  tpPercent: 3,
+  slPercent: 0,
+  interval: '4h',
+  detectionSource: 'close',
+  entryFilter: 'always',
+  reentryBars: 0,
+  rsiPeriod: 14,
+  rsiMax: 45,
+  perLegSl: false,
+};
+
+const DCA_AUTOTUNE_VERSION = 5;
+
+const buildDcaAutotuneVariants = (): Array<Partial<DcaStrategySettings>> => {
+  const variants: Array<Partial<DcaStrategySettings>> = [];
+  const seen = new Set<string>();
+  const push = (variant: Partial<DcaStrategySettings>) => {
+    const key = JSON.stringify(variant);
+    if (seen.has(key)) {
+      return;
+    }
+    seen.add(key);
+    variants.push(variant);
+  };
+
+  const steps4h = [1, 1.5, 2, 2.5];
+  const tps4h = [1.5, 2, 2.5, 3];
+  for (const stepPercent of steps4h) {
+    for (const tpPercent of tps4h) {
+      if (tpPercent + 0.01 < stepPercent * 0.7) {
+        continue;
+      }
+      push({
+        interval: '4h',
+        stepPercent,
+        tpPercent,
+        slPercent: 0,
+        entryFilter: 'always',
+        perLegSl: false,
+        reentryBars: 0,
+      });
+    }
   }
-  const name = `DCA ${base}`;
+
+  const steps1h = [0.8, 1, 1.5];
+  const tps1h = [1.2, 1.5, 2];
+  for (const stepPercent of steps1h) {
+    for (const tpPercent of tps1h) {
+      push({
+        interval: '1h',
+        stepPercent,
+        tpPercent,
+        slPercent: 0,
+        entryFilter: 'always',
+        perLegSl: false,
+      });
+    }
+  }
+
+  push({ interval: '4h', stepPercent: 1.5, tpPercent: 2, slPercent: 0, entryFilter: 'cooldown', reentryBars: 1, perLegSl: false });
+  push({ interval: '4h', stepPercent: 2, tpPercent: 2.5, slPercent: 12, entryFilter: 'always', perLegSl: true });
+  push({ interval: '4h', stepPercent: 1, tpPercent: 1.5, slPercent: 10, entryFilter: 'rsi_dip', rsiMax: 55, perLegSl: true });
+  push({ interval: '4h', stepPercent: 1.5, tpPercent: 2, slPercent: 8, entryFilter: 'cooldown', reentryBars: 0, perLegSl: false });
+
+  return variants.slice(0, 22);
+};
+
+const DCA_AUTOTUNE_VARIANTS: Array<Partial<DcaStrategySettings>> = buildDcaAutotuneVariants();
+
+const computeDcaCandidateScore = (
+  ret: number,
+  dd: number,
+  pf: number,
+  trades: number,
+  mode: 'scan' | 'autotune' = 'scan',
+): number => {
+  const tradeCap = mode === 'autotune' ? 45 : 22;
+  const tradeDivisor = mode === 'autotune' ? 4 : 8;
+  const tradeBonus = Math.min(Math.max(0, trades) / tradeDivisor, tradeCap);
+  const ddWeight = mode === 'autotune' ? 0.22 : 0.28;
+  const retAdj = ret < 0 ? ret * 1.15 : ret;
+  return retAdj - dd * ddWeight + Math.min(2.5, Math.max(0, pf)) * 3.5 + tradeBonus;
+};
+
+const resolveEffectiveDcaBaseAmount = (
+  settings: DcaStrategySettings | undefined,
+  initialBalance: number,
+): number => {
+  const mode = settings?.baseAmountMode === 'percent' ? 'percent' : 'fixed';
+  if (mode === 'percent') {
+    const pct = Math.max(0.1, asNumber(settings?.baseAmountPercent, 1));
+    return Math.max(1, (initialBalance * pct) / 100);
+  }
+  return Math.max(1, asNumber(settings?.baseAmountUsdt, DEFAULT_DCA_SETTINGS.baseAmountUsdt));
+};
+
+const normalizeDcaEntryFilter = (value: unknown): 'always' | 'rsi_dip' | 'cooldown' => {
+  const raw = String(value || 'always').trim().toLowerCase();
+  if (raw === 'rsi_dip' || raw === 'cooldown') return raw;
+  return 'always';
+};
+
+const normalizeDcaSettings = (
+  settings: DcaStrategySettings | undefined,
+  initialBalance: number,
+): NormalizedDcaSettings => ({
+  ...DEFAULT_DCA_SETTINGS,
+  ...(settings || {}),
+  baseAmountMode: settings?.baseAmountMode === 'percent' ? 'percent' : 'fixed',
+  baseAmountPercent: Math.max(0.1, asNumber(settings?.baseAmountPercent, 1)),
+  baseAmountUsdt: resolveEffectiveDcaBaseAmount(settings, initialBalance),
+  interval: asString(settings?.interval, DEFAULT_DCA_SETTINGS.interval) || '4h',
+  detectionSource: asString(settings?.detectionSource, DEFAULT_DCA_SETTINGS.detectionSource) || 'close',
+  entryFilter: normalizeDcaEntryFilter(settings?.entryFilter),
+  reentryBars: Math.max(0, Math.floor(asNumber(settings?.reentryBars, DEFAULT_DCA_SETTINGS.reentryBars))),
+  rsiPeriod: Math.max(2, Math.floor(asNumber(settings?.rsiPeriod, DEFAULT_DCA_SETTINGS.rsiPeriod))),
+  rsiMax: Math.max(5, Math.min(95, asNumber(settings?.rsiMax, DEFAULT_DCA_SETTINGS.rsiMax))),
+  perLegSl: settings?.perLegSl === true,
+});
+
+const normalizeFullUsdtSymbol = (raw: string): string => {
+  const norm = normalizePairMarketKey(raw);
+  if (!norm) {
+    return '';
+  }
+  return norm.endsWith('USDT') ? norm : `${norm}USDT`;
+};
+
+const createDcaStrategyRecord = async (
+  apiKeyName: string,
+  fullSymbolRaw: string,
+  settings: DcaStrategySettings = {},
+  initialBalance = 10000,
+) => {
+  const fullSymbol = normalizeFullUsdtSymbol(fullSymbolRaw);
+  if (!fullSymbol || fullSymbol.length < 6) {
+    throw new Error('fullSymbol is required for DCA strategy');
+  }
+  const cfg = normalizeDcaSettings(settings, initialBalance);
+  const name = `DCA ${fullSymbol}`;
   const draft = {
     name,
     strategy_type: 'dca',
     market_mode: 'mono',
-    market_type: 'spot',
-    base_symbol: base,
-    quote_symbol: quote,
+    market_type: 'futures',
+    base_symbol: fullSymbol,
+    quote_symbol: 'USDT',
+    interval: cfg.interval,
+    detection_source: cfg.detectionSource,
     is_active: true,
     auto_update: true,
     long_enabled: true,
@@ -5927,14 +6116,82 @@ const createDcaStrategyRecord = async (apiKeyName: string, baseSymbol: string, q
          dca_order_multiplier = ?,
          dca_tp_percent = ?,
          dca_sl_percent = ?,
+         dca_entry_filter = ?,
+         dca_reentry_bars = ?,
+         dca_rsi_period = ?,
+         dca_rsi_max = ?,
+         dca_per_leg_sl = ?,
+         dca_legs_json = '[]',
          dca_order_type = ?,
          dca_state = 'idle',
-         market_type = 'spot',
+         market_type = 'futures',
+         interval = ?,
+         detection_source = ?,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
-    [10, 2, 5, 1, 3, 0, 'market', created.id],
+    [cfg.baseAmountUsdt, cfg.stepPercent, cfg.maxOrders, cfg.orderMultiplier, cfg.tpPercent, cfg.slPercent,
+      cfg.entryFilter, cfg.reentryBars, cfg.rsiPeriod, cfg.rsiMax, cfg.perLegSl ? 1 : 0, 'market', cfg.interval, cfg.detectionSource, created.id],
   );
-  return { ...created, strategyId: Number(created.id) };
+  return { ...created, strategyId: Number(created.id), market: fullSymbol };
+};
+
+const DCA_RESEARCH_SCRATCH_NAME = '__BTDD_DCA_RESEARCH_SCRATCH__';
+
+const getOrCreateDcaResearchScratchId = async (
+  apiKeyName: string,
+  settings: DcaStrategySettings = {},
+): Promise<number> => {
+  const row = await db.get<{ id: number }>(
+    `SELECT s.id FROM strategies s
+     JOIN api_keys ak ON ak.id = s.api_key_id
+     WHERE ak.name = ? AND s.name = ? AND COALESCE(s.is_archived, 0) = 0
+     LIMIT 1`,
+    [apiKeyName, DCA_RESEARCH_SCRATCH_NAME],
+  );
+  if (row?.id) {
+    return Number(row.id);
+  }
+  const created = await createDcaStrategyRecord(apiKeyName, 'BTCUSDT', settings);
+  await db.run(
+    `UPDATE strategies SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+    [DCA_RESEARCH_SCRATCH_NAME, created.strategyId],
+  );
+  return created.strategyId;
+};
+
+const configureDcaScratchForSymbol = async (
+  strategyId: number,
+  fullSymbolRaw: string,
+  settings: DcaStrategySettings = {},
+  initialBalance = 10000,
+): Promise<void> => {
+  const cfg = normalizeDcaSettings(settings, initialBalance);
+  const fullSymbol = normalizeFullUsdtSymbol(fullSymbolRaw);
+  await db.run(
+    `UPDATE strategies
+     SET base_symbol = ?,
+         quote_symbol = 'USDT',
+         market_type = 'futures',
+         market_mode = 'mono',
+         strategy_type = 'dca',
+         dca_base_amount_usdt = ?,
+         dca_step_percent = ?,
+         dca_max_orders = ?,
+         dca_order_multiplier = ?,
+         dca_tp_percent = ?,
+         dca_sl_percent = ?,
+         dca_entry_filter = ?,
+         dca_reentry_bars = ?,
+         dca_rsi_period = ?,
+         dca_rsi_max = ?,
+         dca_per_leg_sl = ?,
+         interval = ?,
+         detection_source = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [fullSymbol, cfg.baseAmountUsdt, cfg.stepPercent, cfg.maxOrders, cfg.orderMultiplier, cfg.tpPercent, cfg.slPercent,
+      cfg.entryFilter, cfg.reentryBars, cfg.rsiPeriod, cfg.rsiMax, cfg.perLegSl ? 1 : 0, cfg.interval, cfg.detectionSource, strategyId],
+  );
 };
 
 export const previewAdminSweepBacktest = async (payload?: {
@@ -5965,6 +6222,8 @@ export const previewAdminSweepBacktest = async (payload?: {
   pairLockSeed?: number;
   /** Internal flag: set to true only for server-side background snapshot refresh. Never expose to clients. */
   isBatchRefresh?: boolean;
+  /** Scale trend entries by inverse Donchian channel width. */
+  autoLotByChannelWidth?: boolean;
 }) => {
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();
@@ -6974,6 +7233,20 @@ export const previewAdminSweepBacktest = async (payload?: {
                 // Ensure the exchange client is initialized so getMarketData can fetch candles from the exchange
                 await ensureExchangeClientInitialized(preferredApiKey);
 
+                const snapshotSettingsRaw = (snapshot.backtestSettings && typeof snapshot.backtestSettings === 'object')
+                  ? (snapshot.backtestSettings as Record<string, unknown>)
+                  : {};
+                const snapshotTradeFrequencyScore = clampNumber(asNumber(snapshotSettingsRaw.tradeFrequencyScore, 5), 0, 10);
+                const snapshotTradeMul = getPreviewTradeMultiplier(snapshotTradeFrequencyScore);
+                const relativeTradeMul = tradeMul / Math.max(0.01, snapshotTradeMul);
+                const storeStrategyKey = snapshotSelectedOffers
+                  .map((item) => Number(item.strategyId || 0))
+                  .join(',');
+                const freqStrategyKey = snapshotRerunOffers
+                  .map((item) => Number(item.strategyId || 0))
+                  .join(',');
+                const freqVariantsApplied = storeStrategyKey !== freqStrategyKey;
+
                 const primaryRequest: Parameters<typeof runBacktest>[0] = {
                   apiKeyName: preferredApiKey,
                   mode: 'portfolio',
@@ -7000,8 +7273,9 @@ export const previewAdminSweepBacktest = async (payload?: {
                   ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
                   ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
                   maxDepositOverride: initialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
-                  lotPercentOverride: lotPercentEffective,
+                  lotPercentOverride: lotPercentEffective * relativeTradeMul,
                   reinvestPercentOverride: reinvestPercent,
+                  ...(payload?.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),
                 };
 
                 let result;
@@ -7026,10 +7300,14 @@ export const previewAdminSweepBacktest = async (payload?: {
                 }
 
                 const summaryAny = result.summary as Record<string, unknown>;
+                const adjustedTradesCount = freqVariantsApplied
+                  ? Number(result.summary.tradesCount || 0)
+                  : Math.max(1, Math.round(Number(result.summary.tradesCount || 0) * relativeTradeMul));
                 const scaledSummary = {
                   ...result.summary,
                   totalReturnPercent: result.summary.totalReturnPercent * rerunRiskMul,
                   maxDrawdownPercent: result.summary.maxDrawdownPercent * rerunRiskMul,
+                  tradesCount: adjustedTradesCount,
                   ...(summaryAny.netProfit != null ? { netProfit: Number(summaryAny.netProfit) * rerunRiskMul } : {}),
                   marginLoadPercent: 0,
                 };
@@ -7084,6 +7362,8 @@ export const previewAdminSweepBacktest = async (payload?: {
                     strategyIds: snapshotStrategyIds,
                     tsMembersCount: snapshotOfferIds.length,
                     riskMul: rerunRiskMul,
+                    tradeMul: relativeTradeMul,
+                    freqVariantsApplied,
                     riskScaleMaxPercent,
                     freqLevel: tradeFrequencyLevel,
                     ...(snapshotRerunDates.usedFullSweepDepth ? { fullSweepDepth: true } : {}),
@@ -7516,17 +7796,30 @@ const DCA_CANDIDATE_SYMBOLS = [
   'XRPUSDT', 'LTCUSDT', 'ADAUSDT', 'DOTUSDT', 'LINKUSDT', 'MATICUSDT',
   'ATOMUSDT', 'NEARUSDT', 'FILUSDT', 'APTUSDT', 'ARBUSDT', 'OPUSDT',
   'SUIUSDT', 'SEIUSDT', 'TIAUSDT', 'WLDUSDT', 'PEPEUSDT', 'DOGEUSDT',
+  'BNBUSDT', 'TRXUSDT', 'AVAXUSDT', 'BCHUSDT', 'ETCUSDT', 'INJUSDT',
 ];
 
-export const pickDcaForTsPortfolio = async (payload?: {
+type DcaTsPickContext = {
+  snapshot: TsBacktestSnapshot;
+  offerIds: string[];
+  occupiedMarkets: Set<string>;
+  previewDates: { dateFrom: string; dateTo: string; usedFullSweepDepth?: boolean };
+  initialBalance: number;
+  preferredApiKey: string;
+  tsStrategyIds: number[];
+  sweep: Awaited<ReturnType<typeof loadCatalogAndSweepWithFallback>>['sweep'];
+  dcaSettings: NormalizedDcaSettings;
+};
+
+const resolveDcaTsPickContext = async (payload?: {
   systemName?: string;
   setKey?: string;
   apiKeyName?: string;
   dateFrom?: string;
   dateTo?: string;
-  maxCandidates?: number;
   initialBalance?: number;
-}) => {
+  dcaSettings?: DcaStrategySettings;
+}): Promise<DcaTsPickContext> => {
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();
   const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
@@ -7560,10 +7853,16 @@ export const pickDcaForTsPortfolio = async (payload?: {
   const occupiedMarkets = collectTsOccupiedMarkets(offerIds, catalog, offerStoreById);
   const requestedDateFrom = asString(payload?.dateFrom, '').trim();
   const requestedDateTo = asString(payload?.dateTo, '').trim();
-  const previewDates = requestedDateFrom && requestedDateTo
-    ? { dateFrom: requestedDateFrom, dateTo: requestedDateTo }
+  const rerunDates = requestedDateFrom && requestedDateTo
+    ? { dateFrom: requestedDateFrom, dateTo: requestedDateTo, usedFullSweepDepth: false }
     : resolveSnapshotRerunDates(snapshot, sweep, '', '');
+  const previewDates = {
+    dateFrom: rerunDates.dateFrom,
+    dateTo: rerunDates.dateTo,
+    usedFullSweepDepth: rerunDates.usedFullSweepDepth,
+  };
   const initialBalance = Math.max(100, asNumber(payload?.initialBalance, asNumber(snapshot.backtestSettings?.initialBalance, 10000)));
+  const dcaSettings = normalizeDcaSettings(payload?.dcaSettings, initialBalance);
 
   const preferredApiKey = asString(payload?.apiKeyName, '')
     || asString(snapshot.apiKeyName, '')
@@ -7573,152 +7872,1110 @@ export const pickDcaForTsPortfolio = async (payload?: {
     throw new Error('API key is required for DCA pair pick');
   }
 
-  const tsPreview = await previewAdminSweepBacktest({
-    kind: 'algofund-ts',
-    offerIds,
-    setKey: asString(snapshot.setKey, ''),
-    dateFrom: previewDates.dateFrom,
-    dateTo: previewDates.dateTo,
-    preferRealBacktest: false,
-    rerunApiKeyName: preferredApiKey,
-    initialBalance,
-    riskScore: Number(snapshot.backtestSettings?.riskScore ?? 5),
-    tradeFrequencyScore: Number(snapshot.backtestSettings?.tradeFrequencyScore ?? 5),
-  });
   const tsStrategyIds = Array.from(new Set(
-    (tsPreview.selectedOffers || [])
-      .map((item) => Number((item as Record<string, unknown>).strategyId || 0))
+    offerIds
+      .map((offerId) => Number(offerStoreById.get(offerId)?.strategyId || parseStrategyIdFromOfferId(offerId)))
       .filter((value) => Number.isFinite(value) && value > 0),
   ));
   if (tsStrategyIds.length === 0) {
     throw new Error('Could not resolve TS strategy ids for DCA pair pick');
   }
 
-  await ensureExchangeClientInitialized(preferredApiKey);
+  return {
+    snapshot,
+    offerIds,
+    occupiedMarkets,
+    previewDates,
+    initialBalance,
+    preferredApiKey,
+    tsStrategyIds,
+    sweep,
+    dcaSettings,
+  };
+};
 
-  const candidatePool = DCA_CANDIDATE_SYMBOLS
-    .map((item) => normalizePairMarketKey(item))
-    .filter((market) => market.endsWith('USDT') && !occupiedMarkets.has(market));
+const buildDcaCandidatePool = async (
+  apiKeyName: string,
+  occupiedMarkets: Set<string>,
+  maxPool = 40,
+): Promise<string[]> => {
+  await ensureExchangeClientInitialized(apiKeyName);
+  let exchangeSymbols: string[] = [];
+  try {
+    const raw = await getAllSymbols(apiKeyName);
+    exchangeSymbols = (Array.isArray(raw) ? raw : [])
+      .map((item) => normalizeFullUsdtSymbol(String(item || '')))
+      .filter((item) => item.endsWith('USDT') && item.length >= 6);
+  } catch (error) {
+    logger.warn(`[buildDcaCandidatePool] getAllSymbols failed for ${apiKeyName}: ${asString((error as Error).message, 'unknown')}`);
+  }
 
-  const maxTry = Math.max(1, Math.min(3, Math.floor(asNumber(payload?.maxCandidates, 2))));
-  const existingDcaRows = await db.all(
-    `SELECT s.id, s.base_symbol, s.quote_symbol
-     FROM strategies s
-     JOIN api_keys ak ON ak.id = s.api_key_id
-     WHERE ak.name = ? AND lower(s.strategy_type) = 'dca' AND COALESCE(s.is_archived, 0) = 0`,
-    [preferredApiKey],
-  ) as Array<{ id: number; base_symbol: string; quote_symbol: string }>;
-  const existingDcaByBase = new Map(
-    existingDcaRows.map((row) => [normalizePairMarketKey(`${row.base_symbol}${row.quote_symbol || 'USDT'}`), Number(row.id)] as const),
-  );
-  const scored: Array<{
-    baseSymbol: string;
+  const exchangeSet = new Set(exchangeSymbols);
+  const prioritized = DCA_CANDIDATE_SYMBOLS
+    .map((item) => normalizeFullUsdtSymbol(item))
+    .filter((item) => item && !occupiedMarkets.has(item) && (exchangeSet.size === 0 || exchangeSet.has(item)));
+  const extra = exchangeSymbols
+    .filter((item) => !occupiedMarkets.has(item) && !prioritized.includes(item))
+    .sort((a, b) => a.localeCompare(b));
+
+  return Array.from(new Set([...prioritized, ...extra])).slice(0, Math.max(1, maxPool));
+};
+
+const dcaSettingsCachePayload = (settings: NormalizedDcaSettings) => ({
+  baseAmountMode: settings.baseAmountMode,
+  baseAmountUsdt: settings.baseAmountUsdt,
+  baseAmountPercent: settings.baseAmountPercent,
+  stepPercent: settings.stepPercent,
+  maxOrders: settings.maxOrders,
+  orderMultiplier: settings.orderMultiplier,
+  tpPercent: settings.tpPercent,
+  slPercent: settings.slPercent,
+  interval: settings.interval,
+  detectionSource: settings.detectionSource,
+  entryFilter: settings.entryFilter,
+  reentryBars: settings.reentryBars,
+  rsiPeriod: settings.rsiPeriod,
+  rsiMax: settings.rsiMax,
+  perLegSl: settings.perLegSl,
+});
+
+const hashDcaCachePayload = (payload: unknown): string => (
+  crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 40)
+);
+
+const buildDcaPairScoreCacheKey = (params: {
+  apiKeyName: string;
+  market: string;
+  previewDates: { dateFrom: string; dateTo: string };
+  initialBalance: number;
+  dcaSettings: NormalizedDcaSettings;
+  sweep: DcaTsPickContext['sweep'];
+}): string => hashDcaCachePayload({
+  kind: 'dca_pair_score',
+  apiKeyName: params.apiKeyName,
+  market: normalizeFullUsdtSymbol(params.market),
+  dateFrom: params.previewDates.dateFrom,
+  dateTo: params.previewDates.dateTo,
+  initialBalance: params.initialBalance,
+  dcaSettings: dcaSettingsCachePayload(params.dcaSettings),
+  sweepBars: asNumber(params.sweep?.config?.backtestBars, 6000),
+  commissionPercent: asNumber(params.sweep?.config?.commissionPercent, 0.1),
+  slippagePercent: asNumber(params.sweep?.config?.slippagePercent, 0.05),
+  scoringVersion: DCA_AUTOTUNE_VERSION,
+});
+
+const buildDcaResearchRunCacheKey = (params: {
+  systemName: string;
+  apiKeyName: string;
+  previewDates: { dateFrom: string; dateTo: string };
+  initialBalance: number;
+  dcaSettings: NormalizedDcaSettings;
+  autotune: boolean;
+  candidatePool: string[];
+}): string => hashDcaCachePayload({
+  kind: 'dca_research_run',
+  systemName: params.systemName,
+  apiKeyName: params.apiKeyName,
+  dateFrom: params.previewDates.dateFrom,
+  dateTo: params.previewDates.dateTo,
+  initialBalance: params.initialBalance,
+  dcaSettings: dcaSettingsCachePayload(params.dcaSettings),
+  autotune: params.autotune,
+  candidatePool: [...params.candidatePool].sort(),
+  autotuneVariants: DCA_AUTOTUNE_VARIANTS.length,
+  scoringVersion: DCA_AUTOTUNE_VERSION,
+});
+
+const loadDcaPairScoreCache = async (cacheKey: string) => {
+  const row = await db.get<{ result_json: string }>(
+    `SELECT result_json FROM dca_pair_score_cache WHERE cache_key = ?`,
+    [cacheKey],
+  ).catch(() => null);
+  if (!row?.result_json) {
+    return null;
+  }
+  try {
+    return JSON.parse(row.result_json) as {
+      market: string;
+      ret: number;
+      dd: number;
+      pf: number;
+      trades: number;
+      score: number;
+      interval?: string;
+      detectionSource?: string;
+      stepPercent?: number;
+      tpPercent?: number;
+      slPercent?: number;
+      entryFilter?: string;
+      perLegSl?: boolean;
+      error?: string;
+    };
+  } catch {
+    return null;
+  }
+};
+
+const saveDcaPairScoreCache = async (
+  cacheKey: string,
+  params: {
+    apiKeyName: string;
     market: string;
-    strategyId: number;
-    ret: number;
-    dd: number;
-    pf: number;
-    trades: number;
-    score: number;
-  }> = [];
+    previewDates: { dateFrom: string; dateTo: string };
+    dcaSettings: NormalizedDcaSettings;
+  },
+  result: Record<string, unknown>,
+): Promise<void> => {
+  await db.run(
+    `INSERT INTO dca_pair_score_cache (
+      cache_key, api_key_name, market, date_from, date_to, dca_settings_json,
+      ret, dd, pf, trades, score, result_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(cache_key) DO UPDATE SET
+      ret = excluded.ret,
+      dd = excluded.dd,
+      pf = excluded.pf,
+      trades = excluded.trades,
+      score = excluded.score,
+      result_json = excluded.result_json,
+      created_at = CURRENT_TIMESTAMP`,
+    [
+      cacheKey,
+      params.apiKeyName,
+      normalizeFullUsdtSymbol(params.market),
+      params.previewDates.dateFrom,
+      params.previewDates.dateTo,
+      JSON.stringify(dcaSettingsCachePayload(params.dcaSettings)),
+      asNumber(result.ret, 0),
+      asNumber(result.dd, 0),
+      asNumber(result.pf, 0),
+      Math.floor(asNumber(result.trades, 0)),
+      asNumber(result.score, 0),
+      JSON.stringify(result),
+    ],
+  ).catch((error) => {
+    logger.warn(`[dca_pair_score_cache] save failed: ${asString((error as Error).message, 'unknown')}`);
+  });
+};
 
-  for (const market of candidatePool) {
-    if (scored.length >= maxTry) {
-      break;
+type DcaResearchCandidateRow = {
+  market: string;
+  ret: number;
+  dd: number;
+  pf: number;
+  trades: number;
+  score: number;
+  interval?: string;
+  detectionSource?: string;
+  stepPercent?: number;
+  tpPercent?: number;
+  slPercent?: number;
+  entryFilter?: string;
+  perLegSl?: boolean;
+  error?: string;
+  status: 'ok' | 'error' | 'skipped';
+  autotuned?: boolean;
+};
+
+type DcaResearchResult = {
+  tsMarkets: string[];
+  period: { dateFrom: string; dateTo: string; interval: string; fullDepth?: boolean };
+  dcaSettings: NormalizedDcaSettings;
+  candidatePoolSize: number;
+  candidates: DcaResearchCandidateRow[];
+  viableCount: number;
+  top: DcaResearchCandidateRow[];
+  fromCache?: boolean;
+  note: string;
+};
+
+const loadDcaResearchRunCache = async (cacheKey: string): Promise<DcaResearchResult | null> => {
+  const row = await db.get<{ result_json: string }>(
+    `SELECT result_json FROM dca_research_run_cache WHERE cache_key = ?`,
+    [cacheKey],
+  ).catch(() => null);
+  if (!row?.result_json) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(row.result_json) as DcaResearchResult;
+    if (!Array.isArray(parsed?.candidates)) {
+      return null;
     }
-    const baseSymbol = market.replace(/USDT$/, '');
-    if (!baseSymbol || baseSymbol.length < 2) {
-      continue;
-    }
-    try {
-      const existingStrategyId = existingDcaByBase.get(market) || 0;
-      const dcaStrategyId = existingStrategyId > 0
-        ? existingStrategyId
-        : (await createDcaStrategyRecord(preferredApiKey, baseSymbol, 'USDT')).strategyId;
-      const result = await runBacktest({
-        apiKeyName: preferredApiKey,
-        mode: 'single',
-        strategyId: dcaStrategyId,
-        bars: 2500,
-        warmupBars: 120,
-        skipMissingSymbols: true,
-        initialBalance,
-        commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
-        slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
-        fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
-        dateFrom: previewDates.dateFrom,
-        dateTo: previewDates.dateTo,
-        enablePairLock: true,
-      } as BacktestRunRequest & { enablePairLock?: boolean });
-      const ret = Number(result.summary.totalReturnPercent || 0);
-      const dd = Number(result.summary.maxDrawdownPercent || 0);
-      const pf = Number(result.summary.profitFactor || 0);
-      const trades = Number(result.summary.tradesCount || 0);
-      const score = ret - dd * 0.35 + Math.min(2, pf) * 5;
-      scored.push({
-        baseSymbol,
+    return parsed;
+  } catch {
+    return null;
+  }
+};
+
+const saveDcaResearchRunCache = async (
+  cacheKey: string,
+  params: {
+    systemName: string;
+    apiKeyName: string;
+    previewDates: { dateFrom: string; dateTo: string };
+    initialBalance: number;
+    dcaSettings: NormalizedDcaSettings;
+    autotune: boolean;
+    candidatePool: string[];
+  },
+  result: Record<string, unknown>,
+): Promise<void> => {
+  await db.run(
+    `INSERT INTO dca_research_run_cache (
+      cache_key, system_name, api_key_name, date_from, date_to, initial_balance,
+      dca_settings_json, autotune, candidate_pool_json, result_json
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(cache_key) DO UPDATE SET
+      result_json = excluded.result_json,
+      created_at = CURRENT_TIMESTAMP`,
+    [
+      cacheKey,
+      params.systemName,
+      params.apiKeyName,
+      params.previewDates.dateFrom,
+      params.previewDates.dateTo,
+      params.initialBalance,
+      JSON.stringify(dcaSettingsCachePayload(params.dcaSettings)),
+      params.autotune ? 1 : 0,
+      JSON.stringify(params.candidatePool),
+      JSON.stringify(result),
+    ],
+  ).catch((error) => {
+    logger.warn(`[dca_research_run_cache] save failed: ${asString((error as Error).message, 'unknown')}`);
+  });
+};
+
+const buildDcaBacktestRequestBase = (
+  apiKeyName: string,
+  ctx: Pick<DcaTsPickContext, 'previewDates' | 'initialBalance' | 'sweep'>,
+) => ({
+  apiKeyName,
+  bars: asNumber(ctx.sweep?.config?.backtestBars, 6000),
+  warmupBars: asNumber(ctx.sweep?.config?.warmupBars, 400),
+  skipMissingSymbols: ctx.sweep?.config?.skipMissingSymbols !== false,
+  initialBalance: ctx.initialBalance,
+  commissionPercent: asNumber(ctx.sweep?.config?.commissionPercent, 0.1),
+  slippagePercent: asNumber(ctx.sweep?.config?.slippagePercent, 0.05),
+  fundingRatePercent: asNumber(ctx.sweep?.config?.fundingRatePercent, 0),
+  dateFrom: ctx.previewDates.dateFrom,
+  dateTo: ctx.previewDates.dateTo,
+  enablePairLock: true,
+});
+
+const scoreDcaCandidate = async (params: {
+  apiKeyName: string;
+  market: string;
+  scratchStrategyId: number;
+  dcaSettings: NormalizedDcaSettings;
+  previewDates: { dateFrom: string; dateTo: string };
+  initialBalance: number;
+  sweep: DcaTsPickContext['sweep'];
+  scoringMode?: 'scan' | 'autotune';
+}): Promise<{
+  market: string;
+  ret: number;
+  dd: number;
+  pf: number;
+  trades: number;
+  score: number;
+  interval?: string;
+  detectionSource?: string;
+  stepPercent?: number;
+  tpPercent?: number;
+  slPercent?: number;
+  entryFilter?: string;
+  perLegSl?: boolean;
+  error?: string;
+}> => {
+  const market = normalizeFullUsdtSymbol(params.market);
+  const cacheKey = buildDcaPairScoreCacheKey({
+    apiKeyName: params.apiKeyName,
+    market,
+    previewDates: params.previewDates,
+    initialBalance: params.initialBalance,
+    dcaSettings: params.dcaSettings,
+    sweep: params.sweep,
+  });
+  const cached = await loadDcaPairScoreCache(cacheKey);
+  if (cached) {
+    return { ...cached, market };
+  }
+  try {
+    await configureDcaScratchForSymbol(
+      params.scratchStrategyId,
+      market,
+      params.dcaSettings,
+      params.initialBalance,
+    );
+    const base = buildDcaBacktestRequestBase(params.apiKeyName, {
+      previewDates: params.previewDates,
+      initialBalance: params.initialBalance,
+      sweep: params.sweep,
+    });
+    const result = await runBacktest({
+      ...base,
+      mode: 'single',
+      strategyId: params.scratchStrategyId,
+    } as BacktestRunRequest & { enablePairLock?: boolean });
+    const ret = Number(result.summary.totalReturnPercent || 0);
+    const dd = Number(result.summary.maxDrawdownPercent || 0);
+    const pf = Number(result.summary.profitFactor || 0);
+    const trades = Number(result.summary.tradesCount || 0);
+    const scoringMode = params.scoringMode === 'autotune' ? 'autotune' : 'scan';
+    const score = computeDcaCandidateScore(ret, dd, pf, trades, scoringMode);
+    if (trades <= 0) {
+      const noTradesResult = {
         market,
-        strategyId: dcaStrategyId,
         ret,
         dd,
         pf,
         trades,
         score,
-      });
-    } catch (error) {
-      logger.warn(`[pickDcaForTsPortfolio] skip ${market}: ${asString((error as Error).message, 'unknown')}`);
+        interval: params.dcaSettings.interval,
+        detectionSource: params.dcaSettings.detectionSource,
+        stepPercent: params.dcaSettings.stepPercent,
+        tpPercent: params.dcaSettings.tpPercent,
+        slPercent: params.dcaSettings.slPercent,
+        entryFilter: params.dcaSettings.entryFilter,
+        perLegSl: params.dcaSettings.perLegSl,
+        error: 'No trades in selected period',
+      };
+      await saveDcaPairScoreCache(cacheKey, params, noTradesResult);
+      return noTradesResult;
+    }
+    const okResult = {
+      market,
+      ret,
+      dd,
+      pf,
+      trades,
+      score,
+      interval: params.dcaSettings.interval,
+      detectionSource: params.dcaSettings.detectionSource,
+      stepPercent: params.dcaSettings.stepPercent,
+      tpPercent: params.dcaSettings.tpPercent,
+      slPercent: params.dcaSettings.slPercent,
+      entryFilter: params.dcaSettings.entryFilter,
+      perLegSl: params.dcaSettings.perLegSl,
+    };
+    await saveDcaPairScoreCache(cacheKey, params, okResult);
+    return okResult;
+  } catch (error) {
+    return {
+      market,
+      ret: 0,
+      dd: 0,
+      pf: 0,
+      trades: 0,
+      score: -Infinity,
+      error: asString((error as Error).message, 'backtest failed'),
+    };
+  }
+};
+
+let dcaResearchJob: {
+  running: boolean;
+  abortRequested: boolean;
+  startedAt: number;
+  finishedAt: number | null;
+  phase: string;
+  progressPercent: number;
+  totalSteps: number;
+  completedSteps: number;
+  currentMarket: string;
+  message: string;
+  result: Record<string, unknown> | null;
+  error: string | null;
+} = {
+  running: false,
+  abortRequested: false,
+  startedAt: 0,
+  finishedAt: null,
+  phase: 'idle',
+  progressPercent: 0,
+  totalSteps: 0,
+  completedSteps: 0,
+  currentMarket: '',
+  message: '',
+  result: null,
+  error: null,
+};
+
+const DCA_RESEARCH_STALE_MS = 20 * 60 * 1000;
+
+const setDcaResearchProgress = (
+  completedSteps: number,
+  totalSteps: number,
+  phase: string,
+  message: string,
+  currentMarket = '',
+) => {
+  dcaResearchJob.completedSteps = completedSteps;
+  dcaResearchJob.totalSteps = Math.max(1, totalSteps);
+  dcaResearchJob.phase = phase;
+  dcaResearchJob.message = message;
+  dcaResearchJob.currentMarket = currentMarket;
+  dcaResearchJob.progressPercent = Math.min(
+    99,
+    Math.round((completedSteps / Math.max(1, totalSteps)) * 100),
+  );
+};
+
+const shouldAbortDcaResearch = (): boolean => dcaResearchJob.abortRequested;
+
+const executeDcaResearchCore = async (payload?: {
+  systemName?: string;
+  setKey?: string;
+  apiKeyName?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  initialBalance?: number;
+  maxCandidates?: number;
+  dcaSettings?: DcaStrategySettings;
+  autotune?: boolean;
+}): Promise<DcaResearchResult> => {
+  const ctx = await resolveDcaTsPickContext(payload);
+  const scratchStrategyId = await getOrCreateDcaResearchScratchId(ctx.preferredApiKey, ctx.dcaSettings);
+  const maxPool = Math.max(6, Math.min(20, Math.floor(asNumber(payload?.maxCandidates, 12))));
+  const candidatePool = await buildDcaCandidatePool(
+    ctx.preferredApiKey,
+    ctx.occupiedMarkets,
+    maxPool,
+  );
+
+  const autotuneTop = payload?.autotune !== false;
+  const autotuneMarketsCap = 3;
+  const autotuneVariantsCount = autotuneTop ? DCA_AUTOTUNE_VARIANTS.length : 0;
+  const autotuneMarketsEstimate = autotuneTop ? Math.min(autotuneMarketsCap, candidatePool.length) : 0;
+  const totalSteps = candidatePool.length + autotuneMarketsEstimate * autotuneVariantsCount;
+  let completedSteps = 0;
+
+  const systemName = asString(payload?.systemName, '')
+    || asString(payload?.setKey, '')
+    || asString(ctx.snapshot.systemName, '')
+    || asString(ctx.snapshot.setKey, '');
+  const runCacheKey = buildDcaResearchRunCacheKey({
+    systemName,
+    apiKeyName: ctx.preferredApiKey,
+    previewDates: ctx.previewDates,
+    initialBalance: ctx.initialBalance,
+    dcaSettings: ctx.dcaSettings,
+    autotune: autotuneTop,
+    candidatePool,
+  });
+  const cachedRun = await loadDcaResearchRunCache(runCacheKey);
+  if (cachedRun) {
+    setDcaResearchProgress(totalSteps, totalSteps, 'cache', 'Loaded from DCA sweep cache', '');
+    return {
+      ...cachedRun,
+      fromCache: true,
+      note: `${asString(cachedRun.note, 'Classic DCA backtest')} • loaded from DCA sweep cache`,
+    };
+  }
+
+  const candidates: DcaResearchCandidateRow[] = [];
+
+  setDcaResearchProgress(0, totalSteps, 'scan', `Scan 0/${candidatePool.length} pairs`, '');
+
+  for (const market of candidatePool) {
+    if (shouldAbortDcaResearch()) {
+      throw new Error('DCA scan aborted by user');
+    }
+    setDcaResearchProgress(
+      completedSteps,
+      totalSteps,
+      'scan',
+      `Scan ${completedSteps + 1}/${candidatePool.length}: ${market}`,
+      market,
+    );
+    const scored = await scoreDcaCandidate({
+      apiKeyName: ctx.preferredApiKey,
+      market,
+      scratchStrategyId,
+      dcaSettings: ctx.dcaSettings,
+      previewDates: ctx.previewDates,
+      initialBalance: ctx.initialBalance,
+      sweep: ctx.sweep,
+    });
+    candidates.push({
+      ...scored,
+      status: scored.error ? 'error' : 'ok',
+    });
+    completedSteps += 1;
+    setDcaResearchProgress(
+      completedSteps,
+      totalSteps,
+      'scan',
+      `Scan ${completedSteps}/${candidatePool.length}: ${market}`,
+      market,
+    );
+  }
+
+  candidates.sort((a, b) => b.score - a.score);
+  if (autotuneTop) {
+    const autotuneMarkets = candidates
+      .filter((item) => item.status === 'ok' && item.trades > 0)
+      .slice(0, autotuneMarketsCap)
+      .map((item) => item.market);
+    for (const market of autotuneMarkets) {
+      if (shouldAbortDcaResearch()) {
+        throw new Error('DCA scan aborted by user');
+      }
+      let best = candidates.find((item) => item.market === market);
+      if (!best) continue;
+      const baselineStep = best.stepPercent;
+      const baselineTp = best.tpPercent;
+      const baselineInterval = best.interval;
+      for (const variant of DCA_AUTOTUNE_VARIANTS) {
+        if (shouldAbortDcaResearch()) {
+          throw new Error('DCA scan aborted by user');
+        }
+        setDcaResearchProgress(
+          completedSteps,
+          totalSteps,
+          'autotune',
+          `Autotune ${market} step×TP (${completedSteps - candidatePool.length + 1}/${autotuneMarkets.length})`,
+          market,
+        );
+        const merged = normalizeDcaSettings({ ...ctx.dcaSettings, ...variant }, ctx.initialBalance);
+        const scored = await scoreDcaCandidate({
+          apiKeyName: ctx.preferredApiKey,
+          market,
+          scratchStrategyId,
+          dcaSettings: merged,
+          previewDates: ctx.previewDates,
+          initialBalance: ctx.initialBalance,
+          sweep: ctx.sweep,
+          scoringMode: 'autotune',
+        });
+        const bestScore = best
+          ? computeDcaCandidateScore(best.ret, best.dd, best.pf, best.trades, 'autotune')
+          : -Infinity;
+        if (!scored.error && scored.trades > 0 && scored.score > bestScore) {
+          best = { ...scored, status: 'ok' as const };
+        }
+        completedSteps += 1;
+        setDcaResearchProgress(
+          completedSteps,
+          totalSteps,
+          'autotune',
+          `Autotune ${market}`,
+          market,
+        );
+      }
+      if (best) {
+        const idx = candidates.findIndex((item) => item.market === market);
+        if (idx >= 0) {
+          const autotuned = best.stepPercent !== baselineStep
+            || best.tpPercent !== baselineTp
+            || best.interval !== baselineInterval;
+          candidates[idx] = { ...best, autotuned };
+        }
+      }
     }
   }
 
-  scored.sort((a, b) => b.score - a.score);
-  const best = scored[0] || null;
-  if (!best) {
-    throw new Error('No suitable non-overlapping DCA pair found');
+  candidates.sort((a, b) => b.score - a.score);
+  const viable = candidates.filter((item) => item.status === 'ok' && item.trades > 0);
+
+  const result: DcaResearchResult = {
+    tsMarkets: Array.from(ctx.occupiedMarkets).sort(),
+    period: {
+      dateFrom: ctx.previewDates.dateFrom,
+      dateTo: ctx.previewDates.dateTo,
+      interval: asString(ctx.sweep?.config?.interval, '4h'),
+      fullDepth: ctx.previewDates.usedFullSweepDepth === true,
+    },
+    dcaSettings: ctx.dcaSettings,
+    candidatePoolSize: candidatePool.length,
+    candidates,
+    viableCount: viable.length,
+    top: viable.slice(0, 5),
+    fromCache: false,
+    note: `Classic DCA backtest (not Donchian). Period ${ctx.previewDates.dateFrom} → ${ctx.previewDates.dateTo}${ctx.previewDates.usedFullSweepDepth ? ' (full card / sweep depth)' : ''}. Autotune top-3: step×TP grid (4h/1h).`,
+  };
+  await saveDcaResearchRunCache(runCacheKey, {
+    systemName,
+    apiKeyName: ctx.preferredApiKey,
+    previewDates: ctx.previewDates,
+    initialBalance: ctx.initialBalance,
+    dcaSettings: ctx.dcaSettings,
+    autotune: autotuneTop,
+    candidatePool,
+  }, result);
+  return result;
+};
+
+export const getDcaResearchJobStatus = () => ({
+  running: dcaResearchJob.running,
+  abortRequested: dcaResearchJob.abortRequested,
+  startedAt: dcaResearchJob.startedAt > 0 ? new Date(dcaResearchJob.startedAt).toISOString() : null,
+  finishedAt: dcaResearchJob.finishedAt ? new Date(dcaResearchJob.finishedAt).toISOString() : null,
+  phase: dcaResearchJob.phase,
+  progressPercent: dcaResearchJob.running ? dcaResearchJob.progressPercent : (dcaResearchJob.result ? 100 : dcaResearchJob.progressPercent),
+  totalSteps: dcaResearchJob.totalSteps,
+  completedSteps: dcaResearchJob.completedSteps,
+  currentMarket: dcaResearchJob.currentMarket,
+  message: dcaResearchJob.message,
+  result: dcaResearchJob.result,
+  error: dcaResearchJob.error,
+});
+
+export const resetDcaResearchJobLock = (): { cleared: boolean; abortRequested: boolean } => {
+  if (!dcaResearchJob.running) {
+    dcaResearchJob.abortRequested = false;
+    return { cleared: false, abortRequested: false };
+  }
+  dcaResearchJob.abortRequested = true;
+  dcaResearchJob.message = 'Abort requested — finish current pair then stop';
+  return { cleared: true, abortRequested: true };
+};
+
+export const startDcaResearchJob = async (payload?: {
+  systemName?: string;
+  setKey?: string;
+  apiKeyName?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  initialBalance?: number;
+  maxCandidates?: number;
+  dcaSettings?: DcaStrategySettings;
+  autotune?: boolean;
+}) => {
+  if (dcaResearchJob.running) {
+    const stale = dcaResearchJob.startedAt > 0 && Date.now() - dcaResearchJob.startedAt > DCA_RESEARCH_STALE_MS;
+    if (!stale) {
+      throw new Error('DCA scan уже выполняется. Дождитесь завершения или сбросьте lock.');
+    }
+    dcaResearchJob.running = false;
+  }
+
+  dcaResearchJob = {
+    running: true,
+    abortRequested: false,
+    startedAt: Date.now(),
+    finishedAt: null,
+    phase: 'starting',
+    progressPercent: 0,
+    totalSteps: 0,
+    completedSteps: 0,
+    currentMarket: '',
+    message: 'Starting DCA scan…',
+    result: null,
+    error: null,
+  };
+
+  void (async () => {
+    try {
+      const result = await executeDcaResearchCore(payload);
+      if (dcaResearchJob.abortRequested) {
+        dcaResearchJob.phase = 'aborted';
+        dcaResearchJob.message = 'Scan aborted';
+        dcaResearchJob.error = 'Scan aborted by user';
+      } else {
+        dcaResearchJob.result = result;
+        dcaResearchJob.phase = 'done';
+        dcaResearchJob.progressPercent = 100;
+        dcaResearchJob.message = `Done: ${result.viableCount} viable / ${result.candidatePoolSize} checked`;
+      }
+    } catch (error) {
+      const msg = asString((error as Error).message, 'DCA scan failed');
+      dcaResearchJob.error = msg;
+      dcaResearchJob.phase = dcaResearchJob.abortRequested ? 'aborted' : 'error';
+      dcaResearchJob.message = msg;
+    } finally {
+      dcaResearchJob.running = false;
+      dcaResearchJob.finishedAt = Date.now();
+      dcaResearchJob.abortRequested = false;
+    }
+  })();
+
+  return getDcaResearchJobStatus();
+};
+
+/** @deprecated Use startDcaResearchJob + poll getDcaResearchJobStatus. Kept for internal sync callers. */
+export const researchDcaForTsPortfolio = async (payload?: {
+  systemName?: string;
+  setKey?: string;
+  apiKeyName?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  initialBalance?: number;
+  maxCandidates?: number;
+  dcaSettings?: DcaStrategySettings;
+  autotune?: boolean;
+}) => {
+  if (dcaResearchJob.running) {
+    throw new Error('DCA scan уже выполняется. Poll /admin/ts-dca-research-status for progress.');
+  }
+  return executeDcaResearchCore(payload);
+};
+
+export const applyDcaToTsPortfolio = async (payload?: {
+  systemName?: string;
+  setKey?: string;
+  apiKeyName?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  initialBalance?: number;
+  markets?: string[];
+  maxApply?: number;
+  dcaSettings?: DcaStrategySettings;
+  marketTuning?: Record<string, Partial<DcaStrategySettings>>;
+}) => {
+  const ctx = await resolveDcaTsPickContext(payload);
+  const requestedMarkets = Array.isArray(payload?.markets)
+    ? payload.markets.map((item) => normalizeFullUsdtSymbol(String(item || ''))).filter(Boolean)
+    : [];
+  const maxApply = Math.max(1, Math.min(5, Math.floor(asNumber(payload?.maxApply, 2))));
+
+  let marketsToApply = requestedMarkets.filter((market) => !ctx.occupiedMarkets.has(market));
+  if (marketsToApply.length === 0) {
+    const research = await researchDcaForTsPortfolio({
+      ...payload,
+      maxCandidates: 30,
+    });
+    marketsToApply = (research.top || [])
+      .map((item) => item.market)
+      .filter((market) => !ctx.occupiedMarkets.has(market))
+      .slice(0, maxApply);
+  } else {
+    marketsToApply = marketsToApply.slice(0, maxApply);
+  }
+
+  if (marketsToApply.length === 0) {
+    throw new Error('No suitable non-overlapping DCA pair found. Run research scan first.');
+  }
+
+  const candidateByMarket = new Map<string, Partial<DcaStrategySettings>>();
+  const rawTuning = payload?.marketTuning;
+  if (rawTuning && typeof rawTuning === 'object') {
+    for (const [marketRaw, tuning] of Object.entries(rawTuning)) {
+      const market = normalizeFullUsdtSymbol(marketRaw);
+      if (market && tuning && typeof tuning === 'object') {
+        candidateByMarket.set(market, tuning);
+      }
+    }
+  }
+  if (candidateByMarket.size === 0) {
+    const research = await researchDcaForTsPortfolio({
+      ...payload,
+      maxCandidates: 40,
+      autotune: true,
+    });
+    for (const item of research.candidates || []) {
+      candidateByMarket.set(item.market, {
+        interval: item.interval,
+        detectionSource: item.detectionSource,
+        stepPercent: item.stepPercent,
+        tpPercent: item.tpPercent,
+        slPercent: item.slPercent,
+        entryFilter: item.entryFilter as DcaStrategySettings['entryFilter'],
+      });
+    }
+  }
+
+  const applied: Array<{
+    market: string;
+    strategyId: number;
+    offerId: string;
+    metrics?: { ret: number; dd: number; pf: number; trades: number };
+  }> = [];
+  const appliedStrategyIds: number[] = [...ctx.tsStrategyIds];
+  const appliedMarkets = new Set(ctx.occupiedMarkets);
+
+  for (const market of marketsToApply) {
+    if (appliedMarkets.has(market)) {
+      continue;
+    }
+    const cand = candidateByMarket.get(market);
+    const marketSettings = normalizeDcaSettings({
+      ...ctx.dcaSettings,
+      ...(cand || {}),
+    }, ctx.initialBalance);
+    const created = await createDcaStrategyRecord(ctx.preferredApiKey, market, marketSettings, ctx.initialBalance);
+    const scratchStrategyId = await getOrCreateDcaResearchScratchId(ctx.preferredApiKey, marketSettings);
+    const scored = await scoreDcaCandidate({
+      apiKeyName: ctx.preferredApiKey,
+      market,
+      scratchStrategyId,
+      dcaSettings: marketSettings,
+      previewDates: ctx.previewDates,
+      initialBalance: ctx.initialBalance,
+      sweep: ctx.sweep,
+    });
+    const offerId = `offer_mono_dca_${market.replace(/USDT$/, '').toLowerCase()}_${created.strategyId}`;
+    applied.push({
+      market,
+      strategyId: created.strategyId,
+      offerId,
+      metrics: scored.error ? undefined : {
+        ret: Number(scored.ret.toFixed(3)),
+        dd: Number(scored.dd.toFixed(3)),
+        pf: Number(scored.pf.toFixed(3)),
+        trades: scored.trades,
+      },
+    });
+    appliedStrategyIds.push(created.strategyId);
+    appliedMarkets.add(market);
+
+    const draftMembers = await getCuratedDraftMembers();
+    const nextMembers = [
+      ...draftMembers.filter((member) => Number(member.strategyId || 0) !== created.strategyId),
+      {
+        strategyId: created.strategyId,
+        strategyName: `DCA ${market}`,
+        strategyType: 'dca',
+        marketMode: 'mono',
+        market,
+        score: Number(scored.score.toFixed(3)),
+        weight: 0.85,
+      },
+    ];
+    await setCuratedDraftMembers(nextMembers);
   }
 
   const combinedResult = await runBacktest({
-    apiKeyName: preferredApiKey,
+    ...buildDcaBacktestRequestBase(ctx.preferredApiKey, ctx),
     mode: 'portfolio',
-    strategyIds: [...tsStrategyIds, best.strategyId],
-    bars: 2500,
-    warmupBars: 120,
-    skipMissingSymbols: true,
-    initialBalance,
-    commissionPercent: asNumber(sweep?.config?.commissionPercent, 0.1),
-    slippagePercent: asNumber(sweep?.config?.slippagePercent, 0.05),
-    fundingRatePercent: asNumber(sweep?.config?.fundingRatePercent, 0),
-    dateFrom: previewDates.dateFrom,
-    dateTo: previewDates.dateTo,
-    enablePairLock: true,
+    strategyIds: appliedStrategyIds,
   } as BacktestRunRequest & { enablePairLock?: boolean });
 
-  const offerId = `offer_mono_dca_${best.baseSymbol.toLowerCase()}_${best.strategyId}`;
   return {
-    tsMarkets: Array.from(occupiedMarkets).sort(),
+    tsMarkets: Array.from(ctx.occupiedMarkets).sort(),
     period: {
-      dateFrom: previewDates.dateFrom,
-      dateTo: previewDates.dateTo,
-      interval: asString(sweep?.config?.interval, '4h'),
+      dateFrom: ctx.previewDates.dateFrom,
+      dateTo: ctx.previewDates.dateTo,
+      interval: asString(ctx.sweep?.config?.interval, '4h'),
     },
-    picked: [{
-      baseSymbol: best.baseSymbol,
-      market: best.market,
-      strategyId: best.strategyId,
-      offerId,
-      metrics: {
-        ret: Number(best.ret.toFixed(3)),
-        dd: Number(best.dd.toFixed(3)),
-        pf: Number(best.pf.toFixed(3)),
-        trades: best.trades,
-      },
-      score: Number(best.score.toFixed(3)),
-    }],
-    candidatesTried: scored.length,
+    dcaSettings: ctx.dcaSettings,
+    applied,
     combinedPreview: {
       summary: combinedResult.summary,
-      strategyIds: [...tsStrategyIds, best.strategyId],
+      strategyIds: appliedStrategyIds,
       tradesCount: combinedResult.summary.tradesCount,
     },
+  };
+};
+
+const findOrCreateDcaStrategyForMarket = async (
+  apiKeyName: string,
+  marketRaw: string,
+  settings: NormalizedDcaSettings,
+  initialBalance: number,
+): Promise<number> => {
+  const fullSymbol = normalizeFullUsdtSymbol(marketRaw);
+  const row = await db.get<{ id: number }>(
+    `SELECT s.id FROM strategies s
+     JOIN api_keys ak ON ak.id = s.api_key_id
+     WHERE ak.name = ? AND s.name != ? AND lower(s.strategy_type) = 'dca'
+       AND upper(s.base_symbol) = ? AND COALESCE(s.is_archived, 0) = 0
+     ORDER BY s.id DESC LIMIT 1`,
+    [apiKeyName, DCA_RESEARCH_SCRATCH_NAME, fullSymbol],
+  );
+  if (row?.id) {
+    await configureDcaScratchForSymbol(Number(row.id), fullSymbol, settings, initialBalance);
+    return Number(row.id);
+  }
+  const created = await createDcaStrategyRecord(apiKeyName, fullSymbol, settings, initialBalance);
+  return created.strategyId;
+};
+
+export const previewDcaCombinedWithTs = async (payload?: {
+  systemName?: string;
+  setKey?: string;
+  apiKeyName?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  initialBalance?: number;
+  markets?: string[];
+  maxOpenPositions?: number;
+  enabled?: boolean;
+  dcaSettings?: DcaStrategySettings;
+  marketTuning?: Record<string, Partial<DcaStrategySettings>>;
+}) => {
+  if (payload?.enabled === false) {
+    return { enabled: false as const };
+  }
+  const ctx = await resolveDcaTsPickContext(payload);
+  const markets = Array.from(new Set(
+    (Array.isArray(payload?.markets) ? payload.markets : [])
+      .map((item) => normalizeFullUsdtSymbol(String(item || '')))
+      .filter((market) => market && !ctx.occupiedMarkets.has(market)),
+  )).slice(0, 5);
+  if (markets.length === 0) {
+    throw new Error('Select at least one non-overlapping DCA market');
+  }
+
+  const tuningByMarket = new Map<string, Partial<DcaStrategySettings>>();
+  if (payload?.marketTuning && typeof payload.marketTuning === 'object') {
+    for (const [marketRaw, tuning] of Object.entries(payload.marketTuning)) {
+      const market = normalizeFullUsdtSymbol(marketRaw);
+      if (market && tuning && typeof tuning === 'object') {
+        tuningByMarket.set(market, tuning);
+      }
+    }
+  }
+
+  const dcaStrategyIds: number[] = [];
+  for (const market of markets) {
+    const perMarketSettings = normalizeDcaSettings(
+      { ...ctx.dcaSettings, ...(tuningByMarket.get(market) || {}) },
+      ctx.initialBalance,
+    );
+    dcaStrategyIds.push(await findOrCreateDcaStrategyForMarket(
+      ctx.preferredApiKey,
+      market,
+      perMarketSettings,
+      ctx.initialBalance,
+    ));
+  }
+
+  const backtestBase = buildDcaBacktestRequestBase(ctx.preferredApiKey, ctx);
+  const maxOpenPositions = Math.max(0, Math.floor(asNumber(payload?.maxOpenPositions, 0)));
+  const portfolioExtras = maxOpenPositions > 0 ? { maxOpenPositions } : {};
+
+  const tsOnly = await runBacktest({
+    ...backtestBase,
+    mode: 'portfolio',
+    strategyIds: ctx.tsStrategyIds,
+    ...portfolioExtras,
+  } as BacktestRunRequest & { enablePairLock?: boolean });
+  const combined = await runBacktest({
+    ...backtestBase,
+    mode: 'portfolio',
+    strategyIds: [...ctx.tsStrategyIds, ...dcaStrategyIds],
+    ...portfolioExtras,
+  } as BacktestRunRequest & { enablePairLock?: boolean });
+
+  return {
+    enabled: true as const,
+    period: {
+      dateFrom: ctx.previewDates.dateFrom,
+      dateTo: ctx.previewDates.dateTo,
+      interval: asString(ctx.sweep?.config?.interval, '4h'),
+      fullDepth: ctx.previewDates.usedFullSweepDepth === true,
+    },
+    markets,
+    dcaStrategyIds,
+    dcaSettings: ctx.dcaSettings,
+    tsOnly: {
+      summary: tsOnly.summary,
+      equity: tsOnly.equityCurve,
+    },
+    combined: {
+      summary: combined.summary,
+      equity: combined.equityCurve,
+    },
+    delta: {
+      ret: Number((combined.summary.totalReturnPercent - tsOnly.summary.totalReturnPercent).toFixed(3)),
+      dd: Number((combined.summary.maxDrawdownPercent - tsOnly.summary.maxDrawdownPercent).toFixed(3)),
+      trades: Number(combined.summary.tradesCount || 0) - Number(tsOnly.summary.tradesCount || 0),
+    },
+  };
+};
+
+type DcaCombinedPreviewPayload = Parameters<typeof previewDcaCombinedWithTs>[0];
+
+let dcaCombinedPreviewJob: {
+  running: boolean;
+  startedAt: number;
+  finishedAt: number | null;
+  requestKey: string;
+  result: Awaited<ReturnType<typeof previewDcaCombinedWithTs>> | null;
+  error: string | null;
+} = {
+  running: false,
+  startedAt: 0,
+  finishedAt: null,
+  requestKey: '',
+  result: null,
+  error: null,
+};
+
+const buildDcaCombinedPreviewRequestKey = (payload: DcaCombinedPreviewPayload | undefined): string => (
+  hashDcaCachePayload({ kind: 'dca_combined_preview', payload: payload || {} })
+);
+
+export const getDcaCombinedPreviewJobStatus = () => ({
+  running: dcaCombinedPreviewJob.running,
+  startedAt: dcaCombinedPreviewJob.startedAt > 0 ? new Date(dcaCombinedPreviewJob.startedAt).toISOString() : null,
+  finishedAt: dcaCombinedPreviewJob.finishedAt ? new Date(dcaCombinedPreviewJob.finishedAt).toISOString() : null,
+  requestKey: dcaCombinedPreviewJob.requestKey,
+  result: dcaCombinedPreviewJob.result,
+  error: dcaCombinedPreviewJob.error,
+});
+
+export const startDcaCombinedPreviewJob = async (payload?: DcaCombinedPreviewPayload) => {
+  const requestKey = buildDcaCombinedPreviewRequestKey(payload);
+  if (dcaCombinedPreviewJob.running && dcaCombinedPreviewJob.requestKey === requestKey) {
+    return getDcaCombinedPreviewJobStatus();
+  }
+
+  dcaCombinedPreviewJob = {
+    running: true,
+    startedAt: Date.now(),
+    finishedAt: null,
+    requestKey,
+    result: null,
+    error: null,
+  };
+
+  void (async () => {
+    try {
+      dcaCombinedPreviewJob.result = await previewDcaCombinedWithTs(payload);
+    } catch (error) {
+      dcaCombinedPreviewJob.error = asString((error as Error).message, 'TS+DCA preview failed');
+    } finally {
+      dcaCombinedPreviewJob.running = false;
+      dcaCombinedPreviewJob.finishedAt = Date.now();
+    }
+  })();
+
+  return getDcaCombinedPreviewJobStatus();
+};
+
+export const pickDcaForTsPortfolio = async (payload?: {
+  systemName?: string;
+  setKey?: string;
+  apiKeyName?: string;
+  dateFrom?: string;
+  dateTo?: string;
+  maxCandidates?: number;
+  initialBalance?: number;
+  dcaSettings?: DcaStrategySettings;
+}) => {
+  const research = await researchDcaForTsPortfolio(payload);
+  const best = (research.top || [])[0] || null;
+  if (!best) {
+    const errors = (research.candidates || [])
+      .filter((item) => item.error)
+      .slice(0, 3)
+      .map((item) => `${item.market}: ${item.error}`)
+      .join('; ');
+    throw new Error(errors
+      ? `No suitable non-overlapping DCA pair found. Sample errors: ${errors}`
+      : 'No suitable non-overlapping DCA pair found');
+  }
+
+  const applied = await applyDcaToTsPortfolio({
+    ...payload,
+    markets: [best.market],
+    maxApply: 1,
+  });
+
+  return {
+    ...applied,
+    picked: applied.applied.map((item) => ({
+      baseSymbol: item.market.replace(/USDT$/, ''),
+      market: item.market,
+      strategyId: item.strategyId,
+      offerId: item.offerId,
+      metrics: item.metrics,
+    })),
+    candidatesTried: research.candidates.length,
+    research,
   };
 };
 
@@ -12526,7 +13783,7 @@ export const previewPublishImpact = async (setKey: string): Promise<{
 const applyCardMetadataOverrides = async (
   cardId: number,
   currentMetadata: Record<string, unknown>,
-  overrides?: { lotPercentOverride?: number; maxOpenPositions?: number }
+  overrides?: { lotPercentOverride?: number; maxOpenPositions?: number; autoLotByChannelWidth?: boolean; dcaPerLegSl?: boolean }
 ): Promise<{ changed: boolean; metadata: Record<string, unknown> }> => {
   if (!overrides) {
     return { changed: false, metadata: currentMetadata };
@@ -12552,6 +13809,20 @@ const applyCardMetadataOverrides = async (
       }
     }
   }
+  if (overrides.autoLotByChannelWidth !== undefined) {
+    const enabled = overrides.autoLotByChannelWidth === true;
+    if (Boolean(next.autoLotByChannelWidth) !== enabled) {
+      next.autoLotByChannelWidth = enabled;
+      changed = true;
+    }
+  }
+  if (overrides.dcaPerLegSl !== undefined) {
+    const enabled = overrides.dcaPerLegSl === true;
+    if (Boolean(next.dcaPerLegSl) !== enabled) {
+      next.dcaPerLegSl = enabled;
+      changed = true;
+    }
+  }
   if (changed) {
     await db.run(
       `UPDATE master_cards SET metadata_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
@@ -12559,6 +13830,37 @@ const applyCardMetadataOverrides = async (
     );
   }
   return { changed, metadata: next };
+};
+
+const syncMasterStrategyFlagsFromSnapshot = async (snapshot: TsBacktestSnapshot): Promise<void> => {
+  const settings = (snapshot.backtestSettings || {}) as Record<string, unknown>;
+  const systemName = String(snapshot.systemName || snapshot.setKey || '').trim();
+  if (!systemName) {
+    return;
+  }
+  const targets = await resolveAlgofundSystemTargets({ systemName }).catch(() => []);
+  const target = targets[0];
+  if (!target?.systemId || !target.apiKeyName) {
+    return;
+  }
+  const autoLot = settings.autoLotByChannelWidth === true ? 1 : 0;
+  const dcaPerLegSl = settings.dcaPerLegSl === true ? 1 : 0;
+  await db.run(
+    `UPDATE strategies
+     SET auto_lot_by_channel_width = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id IN (SELECT strategy_id FROM trading_system_members WHERE system_id = ?)
+       AND api_key_id = (SELECT id FROM api_keys WHERE name = ?)
+       AND COALESCE(strategy_type, '') NOT IN ('dca', 'dca_futures')`,
+    [autoLot, target.systemId, target.apiKeyName],
+  );
+  await db.run(
+    `UPDATE strategies
+     SET dca_per_leg_sl = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id IN (SELECT strategy_id FROM trading_system_members WHERE system_id = ?)
+       AND api_key_id = (SELECT id FROM api_keys WHERE name = ?)
+       AND strategy_type = 'dca'`,
+    [dcaPerLegSl, target.systemId, target.apiKeyName],
+  );
 };
 
 /**
@@ -12727,7 +14029,7 @@ export const publishAdminTradingSystem = async (payload?: {
    * `master_cards.metadata_json` so that `routes.ts` materialize path
    * picks them up for every client.
    */
-  cardOverrides?: { lotPercentOverride?: number; maxOpenPositions?: number };
+  cardOverrides?: { lotPercentOverride?: number; maxOpenPositions?: number; autoLotByChannelWidth?: boolean; dcaPerLegSl?: boolean };
 }) => {
   const catalog = loadLatestClientCatalog();
   const offerIds = normalizePublishOfferIds(payload?.offerIds);

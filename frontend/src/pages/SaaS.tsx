@@ -17,6 +17,7 @@ import {
   List,
   message,
   Modal,
+  Progress,
   Row,
   Select,
   Segmented,
@@ -2843,17 +2844,55 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestDateFrom, setAdminSweepBacktestDateFrom] = useState('');
   const [adminSweepBacktestDateTo, setAdminSweepBacktestDateTo] = useState('');
   const [tsDcaPickLoading, setTsDcaPickLoading] = useState(false);
-  const [tsDcaPickResult, setTsDcaPickResult] = useState<{
-    picked?: Array<{ baseSymbol: string; market: string; strategyId: number; offerId: string; metrics?: { ret?: number; dd?: number; pf?: number; trades?: number } }>;
-    combinedPreview?: { summary?: Record<string, unknown> };
+  const [tsDcaApplyLoading, setTsDcaApplyLoading] = useState(false);
+  const [tsDcaResearchResult, setTsDcaResearchResult] = useState<{
+    candidates?: Array<{ market: string; ret: number; dd: number; pf: number; trades: number; score: number; error?: string; status: string }>;
+    viableCount?: number;
+    candidatePoolSize?: number;
     tsMarkets?: string[];
+    period?: { dateFrom?: string; dateTo?: string; interval?: string };
+    fromCache?: boolean;
+    note?: string;
+  } | null>(null);
+  const [tsDcaApplyResult, setTsDcaApplyResult] = useState<{
+    applied?: Array<{ market: string; strategyId: number; offerId: string; metrics?: { ret?: number; dd?: number; pf?: number; trades?: number } }>;
+    combinedPreview?: { summary?: Record<string, unknown> };
     period?: { dateFrom?: string; dateTo?: string };
   } | null>(null);
+  const [tsDcaSelectedMarkets, setTsDcaSelectedMarkets] = useState<string[]>([]);
+  const [tsDcaEnabled, setTsDcaEnabled] = useState(false);
+  const [tsDcaCombinedLoading, setTsDcaCombinedLoading] = useState(false);
+  const [tsDcaCombinedPreview, setTsDcaCombinedPreview] = useState<{
+    tsOnly?: { summary?: Record<string, unknown>; equity?: Array<{ time: number; equity: number }> };
+    combined?: { summary?: Record<string, unknown>; equity?: Array<{ time: number; equity: number }> };
+    delta?: { ret?: number; dd?: number; trades?: number };
+    period?: { dateFrom?: string; dateTo?: string };
+  } | null>(null);
+  const [tsDcaBaseMode, setTsDcaBaseMode] = useState<'fixed' | 'percent'>('fixed');
+  const [tsDcaBasePercent, setTsDcaBasePercent] = useState(1);
+  const [tsDcaStepPercent, setTsDcaStepPercent] = useState(2);
+  const [tsDcaMaxOrders, setTsDcaMaxOrders] = useState(5);
+  const [tsDcaTpPercent, setTsDcaTpPercent] = useState(3);
+  const [tsDcaSlPercent, setTsDcaSlPercent] = useState(0);
+  const [tsDcaEntryFilter, setTsDcaEntryFilter] = useState<'always' | 'rsi_dip' | 'cooldown'>('always');
+  const [tsDcaReentryBars, setTsDcaReentryBars] = useState(0);
+  const [tsDcaRsiMax, setTsDcaRsiMax] = useState(45);
+  const [tsDcaPerLegSl, setTsDcaPerLegSl] = useState(false);
+  const [tsDcaAutotune, setTsDcaAutotune] = useState(true);
+  const [tsDcaResearchServerRunning, setTsDcaResearchServerRunning] = useState(false);
+  const [tsDcaProgressPercent, setTsDcaProgressPercent] = useState(0);
+  const [tsDcaProgressMessage, setTsDcaProgressMessage] = useState('');
+  const tsDcaPollTimerRef = useRef<number | null>(null);
+  const tsDcaCombinedPollTimerRef = useRef<number | null>(null);
+  const tsDcaResultNotifiedRef = useRef(false);
+  const [adminSweepAutoLotByChannel, setAdminSweepAutoLotByChannel] = useState(false);
+  const [tsDcaBaseAmountUsdt, setTsDcaBaseAmountUsdt] = useState(10);
+  const [tsDcaInterval, setTsDcaInterval] = useState('4h');
+  const [tsDcaDetectionSource, setTsDcaDetectionSource] = useState('close');
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
   const [adminSweepBacktestResult, setAdminSweepBacktestResult] = useState<AdminSweepBacktestPreviewResponse | null>(null);
   const [adminSweepBacktestRerunApiKey, setAdminSweepBacktestRerunApiKey] = useState('');
   const [showBacktestBtcOverlay, setShowBacktestBtcOverlay] = useState(false);
-  const [showBacktestTradeFreqOverlay, setShowBacktestTradeFreqOverlay] = useState(true);
   const [backtestBtcOverlayPoints, setBacktestBtcOverlayPoints] = useState<LinePoint[]>([]);
   const [backtestBtcOverlayLoading, setBacktestBtcOverlayLoading] = useState(false);
   // True when user moved a slider but hasn't yet recalculated — show stale indicator
@@ -6729,6 +6768,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           : undefined,
         dateFrom: effectiveDateFrom,
         dateTo: effectiveDateTo,
+        autoLotByChannelWidth: adminSweepAutoLotByChannel,
       });
       if (requestSeq !== backtestRequestSeqRef.current) {
         return;
@@ -7119,6 +7159,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           ? {
               lotPercentOverride: Math.max(0, Number(adminSweepBacktestLotPercentOverride ?? 0)),
               maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
+              autoLotByChannelWidth: adminSweepAutoLotByChannel,
+              dcaPerLegSl: tsDcaPerLegSl,
             }
           : undefined;
         const publishRes = await axios.post('/api/saas/admin/publish', {
@@ -7174,6 +7216,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               commissionPercent: Math.max(0, Number(adminSweepBacktestCommissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent)),
               slippagePercent: Math.max(0, Number(adminSweepBacktestSlippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent)),
               fundingRatePercent: Math.max(0, Number(adminSweepBacktestFundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent)),
+              autoLotByChannelWidth: adminSweepAutoLotByChannel,
+              dcaPerLegSl: tsDcaPerLegSl,
             },
           },
         },
@@ -7257,7 +7301,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const openEmbeddedBacktest = (context: SaasBacktestContext) => {
     backtestRequestSeqRef.current += 1;
     backtestDatesUserModifiedRef.current = false;
-    setTsDcaPickResult(null);
+    setTsDcaResearchResult(null);
+    setTsDcaApplyResult(null);
+    setTsDcaCombinedPreview(null);
+    setTsDcaEnabled(false);
+    setTsDcaSelectedMarkets([]);
     const settings = resolveBacktestSettingsForContext(context);
     applyBacktestSettings(settings);
 
@@ -7287,33 +7335,325 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }, 0);
   };
 
-  const runTsDcaPairPick = async () => {
+  const buildTsDcaRequestPayload = () => {
+    const hasAdminDates = Boolean(String(adminSweepBacktestDateFrom || '').trim() && String(adminSweepBacktestDateTo || '').trim());
+    // Как у TS sweep: без ручного выбора дат → full card / sweep depth на бэкенде.
+    const cardDates = backtestDatesUserModifiedRef.current && hasAdminDates
+      ? { dateFrom: adminSweepBacktestDateFrom, dateTo: adminSweepBacktestDateTo }
+      : { dateFrom: undefined, dateTo: undefined };
+    return {
+      systemName: backtestDrawerContext?.systemName,
+      setKey: backtestDrawerContext?.setKey,
+      apiKeyName: adminSweepBacktestRerunApiKey || undefined,
+      dateFrom: cardDates.dateFrom || undefined,
+      dateTo: cardDates.dateTo || undefined,
+      initialBalance: adminSweepBacktestInitialBalance,
+      dcaBaseAmountUsdt: tsDcaBaseMode === 'fixed' ? tsDcaBaseAmountUsdt : undefined,
+      dcaBaseAmountMode: tsDcaBaseMode,
+      dcaBaseAmountPercent: tsDcaBaseMode === 'percent' ? tsDcaBasePercent : undefined,
+      dcaStepPercent: tsDcaStepPercent,
+      dcaMaxOrders: tsDcaMaxOrders,
+      dcaTpPercent: tsDcaTpPercent,
+      dcaSlPercent: tsDcaSlPercent,
+      dcaEntryFilter: tsDcaEntryFilter,
+      dcaReentryBars: tsDcaReentryBars,
+      dcaRsiMax: tsDcaRsiMax,
+      dcaPerLegSl: tsDcaPerLegSl,
+      dcaAutotune: tsDcaAutotune,
+      dcaInterval: tsDcaInterval,
+      dcaDetectionSource: tsDcaDetectionSource,
+    };
+  };
+
+  const buildTsDcaMarketTuning = () => {
+    const rows = tsDcaResearchResult?.candidates || [];
+    const byMarket = new Map(rows.map((row: { market?: string }) => [String(row.market || ''), row]));
+    const tuning: Record<string, Record<string, unknown>> = {};
+    for (const market of tsDcaSelectedMarkets) {
+      const row = byMarket.get(market) as {
+        interval?: string;
+        stepPercent?: number;
+        tpPercent?: number;
+        slPercent?: number;
+        entryFilter?: string;
+      } | undefined;
+      if (!row) continue;
+      tuning[market] = {
+        interval: row.interval,
+        stepPercent: row.stepPercent,
+        tpPercent: row.tpPercent,
+        slPercent: row.slPercent,
+        entryFilter: row.entryFilter,
+        perLegSl: (row as { perLegSl?: boolean }).perLegSl,
+      };
+    }
+    return Object.keys(tuning).length > 0 ? tuning : undefined;
+  };
+
+  const runTsDcaCombinedPreview = async () => {
     if (!backtestDrawerContext || backtestDrawerContext.kind !== 'algofund-ts') {
       return;
     }
-    setTsDcaPickLoading(true);
+    if (!tsDcaEnabled || tsDcaSelectedMarkets.length === 0) {
+      setTsDcaCombinedPreview(null);
+      return;
+    }
+    if (tsDcaCombinedPollTimerRef.current) {
+      window.clearTimeout(tsDcaCombinedPollTimerRef.current);
+      tsDcaCombinedPollTimerRef.current = null;
+    }
+    setTsDcaCombinedLoading(true);
+    const requestPayload = {
+      ...buildTsDcaRequestPayload(),
+      markets: tsDcaSelectedMarkets,
+      marketTuning: buildTsDcaMarketTuning(),
+      enabled: true,
+      maxOpenPositions: adminSweepBacktestMaxOpenPositions > 0 ? adminSweepBacktestMaxOpenPositions : undefined,
+    };
+    const pollCombinedOnce = async (): Promise<boolean> => {
+      const response = await axios.get('/api/saas/admin/ts-dca-combined-preview-status');
+      const data = response.data || {};
+      if (data.running) {
+        return true;
+      }
+      setTsDcaCombinedLoading(false);
+      if (data.result && typeof data.result === 'object') {
+        setTsDcaCombinedPreview(data.result as typeof tsDcaCombinedPreview);
+      } else {
+        setTsDcaCombinedPreview(null);
+        if (data.error) {
+          messageApi.error(String(data.error));
+        }
+      }
+      return false;
+    };
     try {
-      const cardDates = backtestDatesUserModifiedRef.current
-        ? { dateFrom: adminSweepBacktestDateFrom, dateTo: adminSweepBacktestDateTo }
-        : { dateFrom: undefined, dateTo: undefined };
-      const response = await axios.post('/api/saas/admin/ts-dca-pair-pick', {
-        systemName: backtestDrawerContext.systemName,
-        setKey: backtestDrawerContext.setKey,
-        apiKeyName: adminSweepBacktestRerunApiKey || undefined,
-        dateFrom: cardDates.dateFrom || undefined,
-        dateTo: cardDates.dateTo || undefined,
-        initialBalance: adminSweepBacktestInitialBalance,
-        maxCandidates: 2,
-      });
-      setTsDcaPickResult(response.data);
-      messageApi.success(`DCA пара подобрана: ${response.data?.picked?.[0]?.baseSymbol || '—'}USDT`);
+      await axios.post('/api/saas/admin/ts-dca-combined-preview', requestPayload, { timeout: 60000 });
+      const tick = async () => {
+        try {
+          const stillRunning = await pollCombinedOnce();
+          if (stillRunning) {
+            tsDcaCombinedPollTimerRef.current = window.setTimeout(() => { void tick(); }, 2000);
+          }
+        } catch (error: any) {
+          setTsDcaCombinedLoading(false);
+          messageApi.error(String(error?.response?.data?.error || error?.message || 'TS+DCA status poll failed'));
+        }
+      };
+      void tick();
     } catch (error: any) {
-      setTsDcaPickResult(null);
-      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось подобрать DCA пару'));
-    } finally {
-      setTsDcaPickLoading(false);
+      const errMsg = String(error?.response?.data?.error || error?.message || '');
+      if (/running|accepted|202/i.test(errMsg)) {
+        void pollCombinedOnce();
+      } else {
+        setTsDcaCombinedLoading(false);
+        messageApi.error(errMsg || 'Не удалось запустить TS+DCA preview');
+      }
     }
   };
+
+  const applyDcaResearchPayload = (payload: Record<string, unknown>, options?: { notify?: boolean }) => {
+    setTsDcaResearchResult(payload);
+    const viable = Number(payload?.viableCount || 0);
+    const preselect = (Array.isArray(payload?.candidates) ? payload.candidates : [])
+      .filter((item: { status?: string; trades?: number }) => item.status === 'ok' && Number(item.trades || 0) > 0)
+      .slice(0, 2)
+      .map((item: { market: string }) => String(item.market || ''))
+      .filter(Boolean);
+    setTsDcaSelectedMarkets(preselect);
+    if (preselect.length > 0) {
+      setTsDcaEnabled(true);
+    }
+    if (options?.notify) {
+      const cacheHint = payload?.fromCache ? ' (из кэша)' : '';
+      if (viable > 0) {
+        messageApi.success(`DCA scan: ${viable} viable из ${payload?.candidatePoolSize || 0}${cacheHint}`);
+      } else {
+        messageApi.warning(`DCA scan: подходящих пар не найдено (${payload?.candidatePoolSize || 0} проверено)${cacheHint}`);
+      }
+    }
+  };
+
+  const pollDcaResearchStatusOnce = async (): Promise<boolean> => {
+    const response = await axios.get('/api/saas/admin/ts-dca-research-status');
+    const data = response.data || {};
+    setTsDcaResearchServerRunning(Boolean(data.running));
+    setTsDcaProgressPercent(Number(data.progressPercent || 0));
+    setTsDcaProgressMessage(String(data.message || data.phase || ''));
+    if (data.running) {
+      return true;
+    }
+    setTsDcaPickLoading(false);
+    if (data.result && typeof data.result === 'object') {
+      const shouldNotify = !tsDcaResultNotifiedRef.current;
+      applyDcaResearchPayload(data.result as Record<string, unknown>, { notify: shouldNotify });
+      if (shouldNotify) {
+        tsDcaResultNotifiedRef.current = true;
+      }
+    } else if (data.error) {
+      setTsDcaResearchResult(null);
+      setTsDcaSelectedMarkets([]);
+      messageApi.error(String(data.error));
+    }
+    return false;
+  };
+
+  const runTsDcaResearch = async () => {
+    if (!backtestDrawerContext || backtestDrawerContext.kind !== 'algofund-ts') {
+      return;
+    }
+    if (tsDcaResearchServerRunning) {
+      messageApi.warning('DCA scan уже выполняется — смотри прогресс ниже.');
+      return;
+    }
+    if (tsDcaPollTimerRef.current) {
+      window.clearTimeout(tsDcaPollTimerRef.current);
+      tsDcaPollTimerRef.current = null;
+    }
+    setTsDcaPickLoading(true);
+    setTsDcaApplyResult(null);
+    setTsDcaProgressPercent(0);
+    setTsDcaProgressMessage('Starting…');
+    tsDcaResultNotifiedRef.current = false;
+    try {
+      await axios.post('/api/saas/admin/ts-dca-pair-research', {
+        ...buildTsDcaRequestPayload(),
+        maxCandidates: 12,
+      }, { timeout: 60000 });
+      setTsDcaResearchServerRunning(true);
+      const tick = async () => {
+        try {
+          const stillRunning = await pollDcaResearchStatusOnce();
+          if (stillRunning) {
+            tsDcaPollTimerRef.current = window.setTimeout(() => { void tick(); }, 2000);
+          }
+        } catch (error: any) {
+          setTsDcaPickLoading(false);
+          messageApi.error(String(error?.response?.data?.error || error?.message || 'DCA status poll failed'));
+        }
+      };
+      void tick();
+    } catch (error: any) {
+      setTsDcaPickLoading(false);
+      const errMsg = String(error?.response?.data?.error || error?.message || '');
+      if (/уже выполняется/i.test(errMsg)) {
+        setTsDcaResearchServerRunning(true);
+        void pollDcaResearchStatusOnce();
+        messageApi.warning('Scan уже идёт — подключаюсь к прогрессу…');
+      } else {
+        messageApi.error(errMsg || 'Не удалось запустить DCA scan');
+      }
+    }
+  };
+
+  const resetTsDcaResearchLock = async () => {
+    try {
+      const response = await axios.post('/api/saas/admin/ts-dca-research-reset');
+      if (response.data?.abortRequested) {
+        messageApi.info('Остановка после текущей пары… (процесс на VPS завершит текущий backtest)');
+      } else {
+        messageApi.info('Активного scan нет');
+        setTsDcaResearchServerRunning(false);
+        setTsDcaPickLoading(false);
+      }
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось прервать scan'));
+    }
+  };
+
+  useEffect(() => {
+    if (!backtestDrawerVisible || backtestDrawerContext?.kind !== 'algofund-ts') {
+      setTsDcaResearchServerRunning(false);
+      setTsDcaProgressPercent(0);
+      setTsDcaProgressMessage('');
+      if (tsDcaPollTimerRef.current) {
+        window.clearTimeout(tsDcaPollTimerRef.current);
+        tsDcaPollTimerRef.current = null;
+      }
+      return;
+    }
+    let ignore = false;
+    const poll = async () => {
+      if (ignore) return;
+      try {
+        await pollDcaResearchStatusOnce();
+      } catch {
+        if (!ignore) setTsDcaResearchServerRunning(false);
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => { void poll(); }, 4000);
+    return () => {
+      ignore = true;
+      window.clearInterval(timer);
+    };
+  }, [backtestDrawerVisible, backtestDrawerContext?.kind]);
+
+  const runTsDcaApply = async () => {
+    if (!backtestDrawerContext || backtestDrawerContext.kind !== 'algofund-ts') {
+      return;
+    }
+    if (tsDcaSelectedMarkets.length === 0) {
+      messageApi.warning('Выбери хотя бы одну DCA пару из таблицы');
+      return;
+    }
+    setTsDcaApplyLoading(true);
+    try {
+      const response = await axios.post('/api/saas/admin/ts-dca-pair-apply', {
+        ...buildTsDcaRequestPayload(),
+        markets: tsDcaSelectedMarkets,
+        maxApply: Math.min(5, tsDcaSelectedMarkets.length),
+        marketTuning: buildTsDcaMarketTuning(),
+      }, { timeout: 900000 });
+      setTsDcaApplyResult(response.data);
+      const applied = response.data?.applied || [];
+      setTsDcaEnabled(true);
+      messageApi.success(`DCA применён: ${applied.map((item: { market: string }) => item.market).join(', ') || '—'}`);
+      if (applied.length > 0) {
+        setTsDcaSelectedMarkets(applied.map((item: { market: string }) => String(item.market || '')).filter(Boolean));
+      }
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось применить DCA'));
+    } finally {
+      setTsDcaApplyLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!backtestDrawerVisible || backtestDrawerContext?.kind !== 'algofund-ts') {
+      return;
+    }
+    if (!tsDcaEnabled || tsDcaSelectedMarkets.length === 0) {
+      setTsDcaCombinedPreview(null);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void runTsDcaCombinedPreview();
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [
+    backtestDrawerVisible,
+    backtestDrawerContext?.kind,
+    tsDcaEnabled,
+    tsDcaSelectedMarkets.join(','),
+    tsDcaBaseMode,
+    tsDcaBaseAmountUsdt,
+    tsDcaBasePercent,
+    tsDcaStepPercent,
+    tsDcaMaxOrders,
+    tsDcaTpPercent,
+    tsDcaSlPercent,
+    tsDcaEntryFilter,
+    tsDcaReentryBars,
+    tsDcaRsiMax,
+    tsDcaInterval,
+    tsDcaDetectionSource,
+    adminSweepBacktestMaxOpenPositions,
+    adminSweepBacktestInitialBalance,
+    adminSweepBacktestDateFrom,
+    adminSweepBacktestDateTo,
+    adminSweepAutoLotByChannel,
+  ]);
 
   const openOfferBacktest = (offer?: typeof adminReviewOfferPool[number] | null) => {
     if (!offer) {
@@ -13129,6 +13469,42 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 message="Слайдеры → real rerun на полной глубине sweep (как при historical sweep). Окно 90d на карточке — только подпись; кастомные даты — если меняешь поля dateFrom/dateTo или кнопки 7d/14d/30d/90d."
               />
             ) : null}
+            {(adminSweepBacktestLoading || tsDcaPickLoading || tsDcaCombinedLoading || tsDcaResearchServerRunning) ? (
+              <Alert
+                type="warning"
+                showIcon
+                message={(
+                  <Space wrap>
+                    <Spin size="small" />
+                    {adminSweepBacktestLoading ? <Tag color="processing">Sweep / API rerun</Tag> : null}
+                    {(tsDcaPickLoading || tsDcaResearchServerRunning) ? <Tag color="processing">DCA scan</Tag> : null}
+                    {tsDcaCombinedLoading ? <Tag color="processing">TS+DCA preview</Tag> : null}
+                    <Text>
+                      {adminSweepBacktestLoading
+                        ? 'Считаю backtest… (real rerun может занять несколько минут)'
+                        : (tsDcaPickLoading || tsDcaResearchServerRunning)
+                          ? (tsDcaProgressMessage || 'DCA scan на сервере…')
+                          : 'Пересчитываю combined TS+DCA…'}
+                    </Text>
+                    {(tsDcaPickLoading || tsDcaResearchServerRunning) ? (
+                      <div style={{ minWidth: 220, flex: '1 1 220px' }}>
+                        <Progress
+                          percent={tsDcaProgressPercent}
+                          size="small"
+                          status={tsDcaResearchServerRunning ? 'active' : 'normal'}
+                          format={(pct) => `${pct ?? 0}%`}
+                        />
+                      </div>
+                    ) : null}
+                    {tsDcaResearchServerRunning ? (
+                      <Button size="small" danger onClick={() => { void resetTsDcaResearchLock(); }}>
+                        Прервать scan
+                      </Button>
+                    ) : null}
+                  </Space>
+                )}
+              />
+            ) : null}
             {isAdminSurface && backtestDrawerContext.kind === 'algofund-ts' ? (
               <Space wrap>
                 <Tag color="geekblue">Тестируемая ТС: {(() => {
@@ -13139,6 +13515,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 <Tag color="blue">Карточек в тесте: {Array.isArray(backtestDrawerContext.offerIds) ? backtestDrawerContext.offerIds.length : 0}</Tag>
               </Space>
             ) : null}
+            <Card size="small" title="Действия">
             <Space wrap>
               {isAdminSurface && (
                 <Button size="small" onClick={returnToReviewFromBacktest}>
@@ -13202,9 +13579,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     <Button
                       size="small"
                       loading={tsDcaPickLoading}
-                      onClick={() => { void runTsDcaPairPick(); }}
+                      onClick={() => { void runTsDcaResearch(); }}
                     >
-                      Подобрать DCA
+                      Сканировать DCA
+                    </Button>
+                    <Button
+                      size="small"
+                      type="primary"
+                      loading={tsDcaApplyLoading}
+                      disabled={tsDcaSelectedMarkets.length === 0}
+                      onClick={() => { void runTsDcaApply(); }}
+                    >
+                      Применить DCA
                     </Button>
                     </>
                   ) : null}
@@ -13226,8 +13612,223 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 </>
               )}
             </Space>
+            </Card>
+
+            {backtestDrawerContext?.kind === 'algofund-ts' ? (
+              <Card size="small" title="DCA — настройки и scan">
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  {(tsDcaResearchResult?.period || tsDcaCombinedPreview?.period) ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message={(
+                        <Space wrap>
+                          <span>{`Период DCA backtest: ${formatPeriodLabel(tsDcaCombinedPreview?.period || tsDcaResearchResult?.period || null)}`}</span>
+                          {(tsDcaCombinedPreview?.period as { fullDepth?: boolean })?.fullDepth
+                            || (tsDcaResearchResult?.period as { fullDepth?: boolean })?.fullDepth
+                            ? <Tag color="gold">full card depth</Tag>
+                            : null}
+                        </Space>
+                      )}
+                      description="По умолчанию — полная глубина карточки / sweep (как real rerun TS). Свой диапазон только если вручную задал даты «от/до» или кнопки 7–90d. Autotune top-3 перебирает step×TP (4h/1h) для большего числа сделок."
+                    />
+                  ) : null}
+                  <Space wrap align="center">
+                    <Switch
+                      checked={tsDcaEnabled}
+                      loading={tsDcaCombinedLoading}
+                      onChange={(checked) => {
+                        setTsDcaEnabled(checked);
+                        if (!checked) {
+                          setTsDcaCombinedPreview(null);
+                        }
+                      }}
+                    />
+                    <Text>DCA в ТС (влияет на equity и метрики ниже)</Text>
+                    {tsDcaCombinedPreview?.delta ? (
+                      <Tag color={Number(tsDcaCombinedPreview.delta.ret || 0) >= 0 ? 'green' : 'red'}>
+                        Δ ret {Number(tsDcaCombinedPreview.delta.ret || 0).toFixed(2)}% • Δ trades {Number(tsDcaCombinedPreview.delta.trades || 0)}
+                      </Tag>
+                    ) : null}
+                  </Space>
+                  <Text type="secondary">
+                    Классическая DCA-сетка: вход при flat + TP/SL от средней. <strong>Autotune top-3</strong> при scan: step×TP grid (4h/1h). Даты «от/до» общие для TS и DCA.
+                  </Text>
+                  <Space wrap align="center">
+                    <Switch checked={tsDcaAutotune} onChange={setTsDcaAutotune} />
+                    <Text>Autotune top-3 при scan</Text>
+                    <Switch checked={tsDcaPerLegSl} onChange={setTsDcaPerLegSl} />
+                    <Tooltip title="SL режет одну ногу сетки и освобождает слот для нового safety-ордера">
+                      <Text>Per-leg SL</Text>
+                    </Tooltip>
+                  </Space>
+                  <Row gutter={[8, 8]}>
+                    <Col xs={24} md={8}>
+                      <Text type="secondary">Base size</Text>
+                      <Segmented
+                        block
+                        size="small"
+                        value={tsDcaBaseMode}
+                        options={[
+                          { label: 'Fixed USDT', value: 'fixed' },
+                          { label: '% депозита', value: 'percent' },
+                        ]}
+                        onChange={(value) => setTsDcaBaseMode(value === 'percent' ? 'percent' : 'fixed')}
+                      />
+                      {tsDcaBaseMode === 'fixed' ? (
+                        <InputNumber min={1} style={{ width: '100%', marginTop: 6 }} value={tsDcaBaseAmountUsdt} onChange={(v) => setTsDcaBaseAmountUsdt(Number(v || 10))} />
+                      ) : (
+                        <InputNumber min={0.1} max={100} step={0.1} style={{ width: '100%', marginTop: 6 }} value={tsDcaBasePercent} onChange={(v) => setTsDcaBasePercent(Number(v || 1))} addonAfter="%" />
+                      )}
+                    </Col>
+                    <Col xs={12} md={4}>
+                      <Text type="secondary">TF</Text>
+                      <Select style={{ width: '100%' }} value={tsDcaInterval} onChange={(v) => setTsDcaInterval(String(v || '4h'))} options={[{ value: '1h', label: '1h' }, { value: '4h', label: '4h' }, { value: '1d', label: '1d' }]} />
+                    </Col>
+                    <Col xs={12} md={4}>
+                      <Text type="secondary">Detection</Text>
+                      <Select style={{ width: '100%' }} value={tsDcaDetectionSource} onChange={(v) => setTsDcaDetectionSource(String(v || 'close'))} options={[{ value: 'close', label: 'close (свеча)' }]} />
+                    </Col>
+                    <Col xs={12} md={4}>
+                      <Text type="secondary">Step %</Text>
+                      <InputNumber min={0.1} step={0.1} style={{ width: '100%' }} value={tsDcaStepPercent} onChange={(v) => setTsDcaStepPercent(Number(v || 2))} />
+                    </Col>
+                    <Col xs={12} md={4}>
+                      <Text type="secondary">Max orders</Text>
+                      <InputNumber min={0} step={1} style={{ width: '100%' }} value={tsDcaMaxOrders} onChange={(v) => setTsDcaMaxOrders(Number(v || 5))} />
+                    </Col>
+                    <Col xs={12} md={4}>
+                      <Text type="secondary">TP %</Text>
+                      <InputNumber min={0.1} step={0.1} style={{ width: '100%' }} value={tsDcaTpPercent} onChange={(v) => setTsDcaTpPercent(Number(v || 3))} />
+                    </Col>
+                    <Col xs={12} md={4}>
+                      <Text type="secondary">SL % (0=off)</Text>
+                      <InputNumber min={0} step={1} style={{ width: '100%' }} value={tsDcaSlPercent} onChange={(v) => setTsDcaSlPercent(Number(v || 0))} />
+                    </Col>
+                    <Col xs={12} md={6}>
+                      <Text type="secondary">Фильтр входа</Text>
+                      <Select
+                        style={{ width: '100%' }}
+                        value={tsDcaEntryFilter}
+                        onChange={(v) => setTsDcaEntryFilter(v === 'rsi_dip' || v === 'cooldown' ? v : 'always')}
+                        options={[
+                          { value: 'always', label: 'always — каждый цикл' },
+                          { value: 'rsi_dip', label: 'RSI dip — перепроданность' },
+                          { value: 'cooldown', label: 'cooldown — пауза после TP' },
+                        ]}
+                      />
+                    </Col>
+                    {tsDcaEntryFilter === 'cooldown' ? (
+                      <Col xs={12} md={3}>
+                        <Text type="secondary">Cooldown bars</Text>
+                        <InputNumber min={0} step={1} style={{ width: '100%' }} value={tsDcaReentryBars} onChange={(v) => setTsDcaReentryBars(Number(v || 0))} />
+                      </Col>
+                    ) : null}
+                    {tsDcaEntryFilter === 'rsi_dip' ? (
+                      <Col xs={12} md={3}>
+                        <Text type="secondary">RSI max</Text>
+                        <InputNumber min={5} max={95} step={1} style={{ width: '100%' }} value={tsDcaRsiMax} onChange={(v) => setTsDcaRsiMax(Number(v || 45))} />
+                      </Col>
+                    ) : null}
+                  </Row>
+                </Space>
+              </Card>
+            ) : null}
+
+            {tsDcaResearchResult ? (
+              <Card
+                size="small"
+                title={(
+                  <Space wrap>
+                    <span>{`DCA scan: ${tsDcaResearchResult.viableCount || 0} viable / ${tsDcaResearchResult.candidatePoolSize || 0} checked`}</span>
+                    {(tsDcaResearchResult as { fromCache?: boolean }).fromCache ? <Tag color="gold">из кэша</Tag> : null}
+                    {tsDcaResearchResult.period ? <Tag>{formatPeriodLabel(tsDcaResearchResult.period)}</Tag> : null}
+                  </Space>
+                )}
+              >
+                <Table
+                  size="small"
+                  rowKey="market"
+                  pagination={{ pageSize: 8 }}
+                  dataSource={(tsDcaResearchResult.candidates || []).map((row) => ({ ...row, key: row.market }))}
+                  rowSelection={{
+                    selectedRowKeys: tsDcaSelectedMarkets,
+                    onChange: (keys) => setTsDcaSelectedMarkets(keys.map((item) => String(item))),
+                    getCheckboxProps: (record) => ({
+                      disabled: record.status !== 'ok' || Number(record.trades || 0) <= 0,
+                    }),
+                  }}
+                  columns={[
+                    { title: 'Пара', dataIndex: 'market', width: 120 },
+                    { title: 'Ret %', dataIndex: 'ret', render: (v: number) => Number(v || 0).toFixed(2) },
+                    { title: 'DD %', dataIndex: 'dd', render: (v: number) => Number(v || 0).toFixed(2) },
+                    { title: 'PF', dataIndex: 'pf', render: (v: number) => Number(v || 0).toFixed(2) },
+                    { title: 'Trades', dataIndex: 'trades' },
+                    { title: 'TF', dataIndex: 'interval', width: 50, render: (v: string) => v || '—' },
+                    { title: 'Step', dataIndex: 'stepPercent', width: 55, render: (v: number) => (v ? Number(v).toFixed(1) : '—') },
+                    { title: 'TP', dataIndex: 'tpPercent', width: 50, render: (v: number) => (v ? Number(v).toFixed(1) : '—') },
+                    { title: 'SL', dataIndex: 'slPercent', width: 50, render: (v: number) => (Number(v || 0) > 0 ? Number(v).toFixed(0) : '—') },
+                    { title: 'Filter', dataIndex: 'entryFilter', width: 70, render: (v: string) => v || 'always' },
+                    { title: 'Tune', dataIndex: 'autotuned', width: 52, render: (v: boolean) => (v ? <Tag color="purple">auto</Tag> : '—') },
+                    { title: 'Leg SL', dataIndex: 'perLegSl', width: 60, render: (v: boolean) => (v ? 'on' : '—') },
+                    {
+                      title: 'Status',
+                      dataIndex: 'status',
+                      render: (_v, record) => (
+                        record.error
+                          ? <Text type="danger">{String(record.error).slice(0, 80)}</Text>
+                          : <Tag color="green">ok</Tag>
+                      ),
+                    },
+                  ]}
+                />
+                <Text type="secondary">
+                  Занято ТС: {tsDcaResearchResult.tsMarkets?.length || 0} market keys • период {tsDcaResearchResult.period?.dateFrom || '—'} → {tsDcaResearchResult.period?.dateTo || '—'}
+                </Text>
+              </Card>
+            ) : null}
+
+            {tsDcaApplyResult?.applied?.length ? (
+              <Alert
+                type="success"
+                showIcon
+                message={`DCA применён: ${tsDcaApplyResult.applied.map((item) => item.market).join(', ')}`}
+                description={(() => {
+                  const combined = tsDcaApplyResult.combinedPreview?.summary || {};
+                  return `TS+DCA ret ${Number((combined as any).totalReturnPercent || 0).toFixed(2)}% • trades ${Number((combined as any).tradesCount || 0)} • стратегии добавлены в draft ТС (Сохранить snapshot чтобы зафиксировать)`;
+                })()}
+              />
+            ) : null}
+
+            {backtestDrawerContext?.kind === 'algofund-ts' ? (
+              <Alert
+                type="info"
+                showIcon
+                message="Что влияет на real rerun (API rerun)"
+                description={(
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    <li><strong>Риск</strong> — масштаб PnL/DD после движка</li>
+                    <li><strong>Макс. ОП</strong> — лимит одновременных позиций (сильно влияет на trades)</li>
+                    <li><strong>Частота сделок</strong> — variant стратегий из sweep (если есть) + lot% и trades estimate</li>
+                    <li><strong>Lot %, реинвест, комса, слиппедж, funding, даты</strong> — напрямую в движок</li>
+                    <li><strong>DCA</strong> — отдельный блок выше, не связан с крутилками ТС</li>
+                    <li><strong>Autolot от ширины канала</strong> — уже на трендах: уже канал → больше лот (switch в блоке ТС)</li>
+                  </ul>
+                )}
+              />
+            ) : null}
 
             <Row gutter={[8, 8]}>
+              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' ? (
+                <Col xs={24}>
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message="Autolot от ширины канала — на паузе"
+                    description="Эксперимент дал просадку на full sweep; пересмотрим формулу отдельно. Флаг всё равно сохраняется в snapshot (выкл.) для будущих прогонов."
+                  />
+                </Col>
+              ) : null}
               <Col xs={24} md={12} lg={isAdminSurface ? 4 : 12}>
                 <Card size="small" title={<Space>{adminSweepBacktestStale ? <Tag color="orange">⟳ Обновить</Tag> : null}<span>Риск{isAdminSurface ? ' бэктеста' : ''} (0-10)</span></Space>}>
                   <Slider
@@ -13465,13 +14066,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           placeholder="dateFrom YYYY-MM-DD"
                           style={{ width: 150 }}
                           value={adminSweepBacktestDateFrom}
-                          onChange={(e) => { backtestDatesUserModifiedRef.current = true; setAdminSweepBacktestDateFrom(e.target.value); setAdminSweepBacktestStale(true); }}
+                          onChange={(e) => {
+                            backtestDatesUserModifiedRef.current = true;
+                            setAdminSweepBacktestDateFrom(e.target.value);
+                            setAdminSweepBacktestStale(true);
+                            scheduleBacktestDebounce();
+                          }}
                         />
                         <Input
                           placeholder="dateTo YYYY-MM-DD"
                           style={{ width: 150 }}
                           value={adminSweepBacktestDateTo}
-                          onChange={(e) => { backtestDatesUserModifiedRef.current = true; setAdminSweepBacktestDateTo(e.target.value); setAdminSweepBacktestStale(true); }}
+                          onChange={(e) => {
+                            backtestDatesUserModifiedRef.current = true;
+                            setAdminSweepBacktestDateTo(e.target.value);
+                            setAdminSweepBacktestStale(true);
+                            scheduleBacktestDebounce();
+                          }}
                         />
                         <Button size="small" onClick={() => {
                           backtestDatesUserModifiedRef.current = false;
@@ -13509,30 +14120,59 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               )}
             </Row>
 
-            {tsDcaPickResult?.picked?.[0] ? (
-              <Alert
-                type="success"
-                showIcon
-                message={`DCA: ${tsDcaPickResult.picked[0].baseSymbol}USDT (не пересекается с ${tsDcaPickResult.tsMarkets?.length || 0} парами ТС)`}
-                description={(() => {
-                  const dca = tsDcaPickResult.picked?.[0]?.metrics || {};
-                  const combined = tsDcaPickResult.combinedPreview?.summary || {};
-                  return `DCA ret ${Number(dca.ret || 0).toFixed(2)}% • TS+DCA ret ${Number((combined as any).totalReturnPercent || 0).toFixed(2)}% • trades ${Number((combined as any).tradesCount || 0)} • ${tsDcaPickResult.period?.dateFrom || '—'} → ${tsDcaPickResult.period?.dateTo || '—'}`;
-                })()}
-              />
-            ) : null}
             {adminSweepBacktestResult ? (
               <Card size="small" title={adminSweepBacktestStale ? <Space><Tag color="orange">⟳ Пересчёт запущен...</Tag><span>Результат sweep backtest</span></Space> : <Tooltip title="Комиссия: 0.1% на сделку (вход + выход) • Проскальзывание: 0.05% • Направленный слиппедж (лонг-вход дороже, шорт-вход дешевле) • Прошлые результаты не гарантируют будущую доходность"><span style={{ cursor: 'help' }}>Результат sweep backtest ⓘ</span></Tooltip>}>
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   {(() => {
                     const rawEquitySeries = toLineSeriesData(adminSweepBacktestResult.preview?.equity || []);
-                    // Apply instant client-side scale while backend recalculates (stale mode)
                     const balance = Number(adminSweepBacktestInitialBalance || 10000);
                     const scale = adminSweepBacktestStale ? adminSweepPreviewRiskScale : 1;
-                    const equitySeries = scale !== 1
+                    const tsSweepEquitySeries = scale !== 1
                       ? rawEquitySeries.map((point) => ({ ...point, value: balance + (point.value - balance) * scale }))
                       : rawEquitySeries;
-                    const summary = adminSweepBacktestResult.preview?.summary || {};
+                    const combinedEquityRaw = tsDcaEnabled && tsDcaCombinedPreview?.combined?.equity
+                      ? (tsDcaCombinedPreview.combined.equity || []).map((point) => ({
+                        time: Number(point.time || 0),
+                        value: Number(point.equity || 0),
+                      }))
+                      : [];
+                    const tsOnlyRealEquityRaw = tsDcaEnabled && tsDcaCombinedPreview?.tsOnly?.equity
+                      ? (tsDcaCombinedPreview.tsOnly.equity || []).map((point) => ({
+                        time: Number(point.time || 0),
+                        value: Number(point.equity || 0),
+                      }))
+                      : [];
+                    const equitySeries = combinedEquityRaw.length > 0
+                      ? toLineSeriesData(combinedEquityRaw)
+                      : tsSweepEquitySeries;
+                    const tsOnlyOverlaySeries = combinedEquityRaw.length > 0 && tsOnlyRealEquityRaw.length > 0
+                      ? toLineSeriesData(tsOnlyRealEquityRaw)
+                      : [];
+                    const usingRealTsDcaEngine = tsDcaEnabled && Boolean(tsDcaCombinedPreview?.combined?.summary);
+                    const isSweepSynthetic = String(adminSweepBacktestResult.preview?.source || '') === 'admin_saved_ts_snapshot_synthetic';
+                    const unifiedPeriod = (() => {
+                      if (tsDcaCombinedPreview?.period) {
+                        return tsDcaCombinedPreview.period;
+                      }
+                      if (tsDcaResearchResult?.period) {
+                        return tsDcaResearchResult.period;
+                      }
+                      if (String(adminSweepBacktestDateFrom || '').trim() && String(adminSweepBacktestDateTo || '').trim()) {
+                        return {
+                          dateFrom: adminSweepBacktestDateFrom,
+                          dateTo: adminSweepBacktestDateTo,
+                          interval: String(adminSweepBacktestResult.period?.interval || '4h'),
+                        };
+                      }
+                      return adminSweepBacktestResult.period || null;
+                    })();
+                    const summary = usingRealTsDcaEngine
+                      ? (tsDcaCombinedPreview!.combined!.summary as Record<string, unknown>)
+                      : (tsDcaEnabled ? null : (adminSweepBacktestResult.preview?.summary || {}));
+                    const tsOnlySummary = usingRealTsDcaEngine
+                      ? (tsDcaCombinedPreview?.tsOnly?.summary as Record<string, unknown> | undefined)
+                      : undefined;
+                    const showSweepEstimateTags = !tsDcaEnabled && isSweepSynthetic;
                     const fallbackCurves = deriveBacktestCurvesFromEquity(
                       equitySeries,
                       balance,
@@ -13544,10 +14184,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     const effectivePnlCurve = pnlCurve.length > 0 ? pnlCurve : fallbackCurves.pnl;
                     const effectiveDrawdownCurve = drawdownCurve.length > 0 ? drawdownCurve : fallbackCurves.drawdown;
 
-                    const finalPnl = Number(summary.unrealizedPnl ?? (effectivePnlCurve.length > 0 ? effectivePnlCurve[effectivePnlCurve.length - 1].value : fallbackCurves.finalPnl) ?? 0);
-                    const serverTradesCount = Number(summary.tradesCount ?? 0);
+                    const finalPnl = summary
+                      ? Number(summary.unrealizedPnl ?? (effectivePnlCurve.length > 0 ? effectivePnlCurve[effectivePnlCurve.length - 1].value : fallbackCurves.finalPnl) ?? 0)
+                      : 0;
+                    const serverTradesCount = summary ? Number(summary.tradesCount ?? 0) : 0;
                     const baseTradeScore = Number(adminSweepBacktestResult.controls?.tradeFrequencyScore ?? 5);
-                    const tradesCount = adminSweepBacktestStale && Number.isFinite(serverTradesCount) && serverTradesCount > 0
+                    const tradesCount = usingRealTsDcaEngine
+                      ? (Number.isFinite(serverTradesCount) ? serverTradesCount : 0)
+                      : adminSweepBacktestStale && Number.isFinite(serverTradesCount) && serverTradesCount > 0
                       ? Math.max(
                         1,
                         Math.round(
@@ -13557,13 +14201,30 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         )
                       )
                       : (Number.isFinite(serverTradesCount) ? serverTradesCount : 0);
-                    const maxDd = Number(summary.maxDrawdownPercent ?? (effectiveDrawdownCurve.length > 0 ? Math.max(...effectiveDrawdownCurve.map((point) => point.value)) : 0));
-                    const marginLoad = Number(summary.marginLoadPercent ?? 0);
+                    const maxDd = summary
+                      ? Number(summary.maxDrawdownPercent ?? (effectiveDrawdownCurve.length > 0 ? Math.max(...effectiveDrawdownCurve.map((point) => point.value)) : 0))
+                      : 0;
+                    const marginLoad = summary ? Number(summary.marginLoadPercent ?? 0) : 0;
                     const rerunErrorText = String(adminSweepBacktestResult.rerun?.error || '').trim();
                     const rerunNeedsHistoricalSweep = /Исторические свечи не найдены|No executable candles|No runnable strategies|No candles in selected date range/i.test(rerunErrorText);
 
                     return (
                       <>
+                  {tsDcaEnabled && !usingRealTsDcaEngine ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message={tsDcaCombinedLoading ? 'TS+DCA engine считается на сервере…' : 'Ожидаю TS+DCA engine (real backtest)'}
+                      description="Sweep-only оценка (607k% ret и т.п.) скрыта — она не совпадает с движком. Метрики и график ниже только после real TS+DCA preview."
+                    />
+                  ) : null}
+                  {tsDcaEnabled && isSweepSynthetic && usingRealTsDcaEngine ? (
+                    <Alert
+                      type="warning"
+                      showIcon
+                      message="TS sweep-only — синтетическая оценка; метрики карточек — real engine TS+DCA"
+                    />
+                  ) : null}
                   {isAdminSurface ? (
                   <Space wrap>
                     <Tag color="blue">offers: {adminSweepBacktestResult.selectedOffers.length}</Tag>
@@ -13575,7 +14236,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     ) : adminSweepBacktestResult.rerun?.requested && adminSweepBacktestResult.rerun?.error ? (
                       <Tag color="red">real rerun failed: {adminSweepBacktestResult.rerun.error}</Tag>
                     ) : (
-                      <Tag color="default">mode: sweep-only</Tag>
+                      <Tag color="default">{tsDcaEnabled ? 'TS: sweep est.' : 'mode: sweep-only'}</Tag>
                     )}
                     {(adminSweepBacktestResult.rerun as { fullSweepDepth?: boolean } | undefined)?.fullSweepDepth ? (
                       <Tag color="gold">full sweep depth</Tag>
@@ -13583,11 +14244,28 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     {(adminSweepBacktestResult as any).snapshotMeta?.bakedMaxOpenPositions > 0 && (
                       <Tag color="orange">snapshot OP={((adminSweepBacktestResult as any).snapshotMeta.bakedMaxOpenPositions)}</Tag>
                     )}
-                    {adminSweepBacktestResult.period ? <Tag color="default">{formatPeriodLabel(adminSweepBacktestResult.period)}</Tag> : null}
-                    {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(adminSweepBacktestResult.preview.summary.totalReturnPercent)}</Tag> : null}
-                    {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(adminSweepBacktestResult.preview.summary.maxDrawdownPercent)}</Tag> : null}
-                    {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.profitFactor || 0), 'pf')}>PF {formatNumber(adminSweepBacktestResult.preview.summary.profitFactor)}</Tag> : null}
-                    {Number.isFinite(tradesCount) ? <Tag color="cyan">trades {formatNumber(tradesCount, 0)}</Tag> : null}
+                    {unifiedPeriod ? <Tag color="blue">Период {formatPeriodLabel(unifiedPeriod)}</Tag> : null}
+                    {usingRealTsDcaEngine ? (
+                      <>
+                        {tsOnlySummary ? <Tag color="orange">TS only {formatPercent(Number(tsOnlySummary.totalReturnPercent || 0))}</Tag> : null}
+                        <Tag color={metricColor(Number(summary?.totalReturnPercent || 0), 'return')}>TS+DCA {formatPercent(Number(summary?.totalReturnPercent || 0))}</Tag>
+                        <Tag color={metricColor(Number(summary?.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(Number(summary?.maxDrawdownPercent || 0))}</Tag>
+                        <Tag color={metricColor(Number(summary?.profitFactor || 0), 'pf')}>PF {formatNumber(Number(summary?.profitFactor || 0))}</Tag>
+                      </>
+                    ) : showSweepEstimateTags ? (
+                      <>
+                        {adminSweepBacktestResult.preview?.summary ? <Tag color="orange">Sweep est. Ret {formatPercent(adminSweepBacktestResult.preview.summary.totalReturnPercent)}</Tag> : null}
+                        {adminSweepBacktestResult.preview?.summary ? <Tag color="orange">DD {formatPercent(adminSweepBacktestResult.preview.summary.maxDrawdownPercent)}</Tag> : null}
+                      </>
+                    ) : !tsDcaEnabled ? (
+                      <>
+                        {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(adminSweepBacktestResult.preview.summary.totalReturnPercent)}</Tag> : null}
+                        {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(adminSweepBacktestResult.preview.summary.maxDrawdownPercent)}</Tag> : null}
+                        {adminSweepBacktestResult.preview?.summary ? <Tag color={metricColor(Number(adminSweepBacktestResult.preview.summary.profitFactor || 0), 'pf')}>PF {formatNumber(adminSweepBacktestResult.preview.summary.profitFactor)}</Tag> : null}
+                      </>
+                    ) : null}
+                    {usingRealTsDcaEngine && Number.isFinite(tradesCount) ? <Tag color="cyan">trades {formatNumber(tradesCount, 0)}</Tag> : null}
+                    {!tsDcaEnabled && Number.isFinite(tradesCount) ? <Tag color="cyan">trades {formatNumber(tradesCount, 0)}</Tag> : null}
                   </Space>
                   ) : (
                   <Space wrap>
@@ -13676,46 +14354,38 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         size="small"
                         title={<Space size={6}><span>Сделки</span><Tag color="geekblue" style={{ marginInlineEnd: 0 }}>зависят от частоты</Tag></Space>}
                       >
-                        <Statistic value={Number.isFinite(tradesCount) ? tradesCount : 0} precision={0} />
+                        <Statistic
+                          value={(usingRealTsDcaEngine || !tsDcaEnabled) && Number.isFinite(tradesCount) ? tradesCount : undefined}
+                          formatter={(val) => (val === undefined ? '…' : val)}
+                          precision={0}
+                        />
                         <Text type="secondary" style={{ fontSize: 12 }}>Риск меняет P/L и DD, частота меняет число сделок.</Text>
                       </Card>
                     </Col>
-                    <Col xs={12} md={6}><Card size="small"><Statistic title="P/L" value={finalPnl} precision={2} suffix="USDT" /></Card></Col>
-                    <Col xs={12} md={6}><Card size="small"><Statistic title="Max DD" value={maxDd} precision={2} suffix="%" /></Card></Col>
-                    <Col xs={12} md={6}><Card size="small"><Statistic title="Margin load" value={marginLoad} precision={2} suffix="%" /></Card></Col>
+                    <Col xs={12} md={6}><Card size="small"><Statistic title="P/L" value={(usingRealTsDcaEngine || !tsDcaEnabled) ? finalPnl : undefined} formatter={(val) => (val === undefined ? '…' : val)} precision={2} suffix="USDT" /></Card></Col>
+                    <Col xs={12} md={6}><Card size="small"><Statistic title="Max DD" value={(usingRealTsDcaEngine || !tsDcaEnabled) ? maxDd : undefined} formatter={(val) => (val === undefined ? '…' : val)} precision={2} suffix="%" /></Card></Col>
+                    <Col xs={12} md={6}><Card size="small"><Statistic title="Margin load" value={(usingRealTsDcaEngine || !tsDcaEnabled) ? marginLoad : undefined} formatter={(val) => (val === undefined ? '…' : val)} precision={2} suffix="%" /></Card></Col>
                   </Row>
                   )}
 
                   {equitySeries.length > 0 ? (
                     <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                      {isAdminSurface && (
-                      <Space wrap>
-                        <Checkbox checked={showBacktestTradeFreqOverlay} onChange={(event) => setShowBacktestTradeFreqOverlay(event.target.checked)}>
-                          Показать частоту сделок по дням
-                        </Checkbox>
-                      </Space>
-                      )}
+                      {tsDcaEnabled && tsOnlyOverlaySeries.length > 0 ? (
+                        <Text type="secondary">Синяя линия — TS+DCA, оранжевая пунктир — только TS</Text>
+                      ) : null}
                       <ChartComponent
                         data={equitySeries.map((point) => ({ time: point.time, equity: point.value }))}
                         type="line"
                         overlayLines={(() => {
                           const overlays: Array<{ id: string; color: string; lineWidth?: number; data: Array<{ time: number; value: number }> }> = [];
 
-                          if (showBacktestTradeFreqOverlay) {
-                            const frequencySeriesRaw = buildDailyTradeFrequencySeries(
-                              adminSweepBacktestResult.preview?.trades,
-                              equitySeries,
-                              Number(summary.tradesCount ?? 0),
-                            );
-                            const frequencySeries = normalizeOverlayToEquityScale(frequencySeriesRaw, equitySeries);
-                            if (frequencySeries.length > 0) {
-                              overlays.push({
-                                id: 'trade-frequency-daily',
-                                color: '#111111',
-                                lineWidth: 1,
-                                data: frequencySeries,
-                              });
-                            }
+                          if (tsOnlyOverlaySeries.length > 0) {
+                            overlays.push({
+                              id: 'ts-only-equity',
+                              color: '#ff7a00',
+                              lineWidth: 1,
+                              data: tsOnlyOverlaySeries,
+                            });
                           }
 
                           if (showBacktestBtcOverlay && backtestBtcOverlayPoints.length > 0) {
@@ -13723,7 +14393,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             if (btcSeries.length > 0) {
                               overlays.push({
                                 id: 'btc-usdt-price',
-                                color: '#ff7a00',
+                                color: '#888888',
                                 lineWidth: 1,
                                 data: btcSeries,
                               });

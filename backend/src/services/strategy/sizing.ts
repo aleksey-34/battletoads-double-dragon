@@ -12,6 +12,33 @@ const MAX_LEG_DEVIATION = 0.3;
 const MAX_OVERSIZE_DEVIATION = 0.2;
 const MAX_TOTAL_DEVIATION = 0.3;
 
+// ── Channel-width lot scaling (trend / Donchian) ─────────────────────────────
+
+/** Narrower Donchian channel → larger lot (within clamp). */
+export function computeChannelWidthLotMultiplier(
+  donchianHigh: number,
+  donchianLow: number,
+  donchianCenter: number,
+  strategy: {
+    auto_lot_channel_ref_width?: number;
+    auto_lot_channel_mult_min?: number;
+    auto_lot_channel_mult_max?: number;
+  },
+): number {
+  const center = Number.isFinite(donchianCenter) && donchianCenter > 0
+    ? donchianCenter
+    : (donchianHigh + donchianLow) / 2;
+  if (!Number.isFinite(center) || center <= 0) {
+    return 1;
+  }
+  const widthPct = ((donchianHigh - donchianLow) / center) * 100;
+  const refWidth = Math.max(0.5, safeNumber(strategy.auto_lot_channel_ref_width, 5));
+  const multMin = Math.max(0.1, safeNumber(strategy.auto_lot_channel_mult_min, 0.5));
+  const multMax = Math.max(multMin, safeNumber(strategy.auto_lot_channel_mult_max, 2));
+  const raw = refWidth / Math.max(widthPct, 0.1);
+  return Math.min(multMax, Math.max(multMin, raw));
+}
+
 // ── Notional Calculation ─────────────────────────────────────────────────────
 
 /**
