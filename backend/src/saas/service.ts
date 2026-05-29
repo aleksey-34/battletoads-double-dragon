@@ -5795,6 +5795,71 @@ const resolveAlgofundTsBacktestSnapshotForPreview = async (params: {
   return normalizeOfferIds(snapshot.offerIds).length > 0 ? snapshot : null;
 };
 
+const todayYmdUtc = (): string => new Date().toISOString().slice(0, 10);
+
+const msToYmd = (value: number | null | undefined): string | null => {
+  if (!Number.isFinite(Number(value))) {
+    return null;
+  }
+  return new Date(Number(value)).toISOString().slice(0, 10);
+};
+
+/** Clamp admin-requested dates to available history (never future / beyond sweep artifacts). */
+const clampRequestedBacktestDates = (
+  requestedFrom: string,
+  requestedTo: string,
+  sweep: { config?: Record<string, unknown> } | null | undefined,
+): {
+  dateFrom: string;
+  dateTo: string;
+  requestedDateFrom: string;
+  requestedDateTo: string;
+  clampNotes: string[];
+} => {
+  const notes: string[] = [];
+  const today = todayYmdUtc();
+  const sweepEnd = asString(sweep?.config?.dateTo, '').trim().slice(0, 10);
+  let from = asString(requestedFrom, '').trim().slice(0, 10);
+  let to = asString(requestedTo, '').trim().slice(0, 10);
+
+  if (from && !to) {
+    to = today;
+    notes.push('dateTo не задан — взяли сегодня');
+  }
+  if (to && !from) {
+    from = new Date(Date.parse(`${to}T00:00:00Z`) - 90 * 86400000).toISOString().slice(0, 10);
+    notes.push('dateFrom не задан — 90d до dateTo');
+  }
+  if (!from || !to) {
+    return {
+      dateFrom: from,
+      dateTo: to,
+      requestedDateFrom: from,
+      requestedDateTo: to,
+      clampNotes: notes,
+    };
+  }
+
+  const caps = [today, sweepEnd].filter((item) => /^\d{4}-\d{2}-\d{2}$/.test(item));
+  const maxAllowedTo = caps.reduce((min, item) => (item < min ? item : min), caps[0] || today);
+  if (to > maxAllowedTo) {
+    notes.push(`dateTo ${to} → ${maxAllowedTo} (сегодня / конец sweep)`);
+    to = maxAllowedTo;
+  }
+  if (from > to) {
+    notes.push(`dateFrom ${from} позже dateTo — сдвинули dateFrom = dateTo`);
+    from = to;
+  }
+
+  return {
+    dateFrom: from,
+    dateTo: to,
+    requestedDateFrom: asString(requestedFrom, '').trim().slice(0, 10),
+    requestedDateTo: asString(requestedTo, '').trim().slice(0, 10),
+    clampNotes: notes,
+  };
+};
+
 const buildPreviewDatesFromPeriodDays = (periodDaysRaw: unknown, requestedFrom: string, requestedTo: string): { dateFrom: string; dateTo: string } => {
   const periodDays = Math.max(1, Math.floor(asNumber(periodDaysRaw, 90)));
   const now = new Date();
@@ -5842,8 +5907,9 @@ const resolveSnapshotRerunDates = (
   requestedFrom: string,
   requestedTo: string,
 ): { dateFrom: string; dateTo: string; usedFullSweepDepth: boolean } => {
-  if (requestedFrom && requestedTo) {
-    return { dateFrom: requestedFrom, dateTo: requestedTo, usedFullSweepDepth: false };
+  if (requestedFrom || requestedTo) {
+    const clamped = clampRequestedBacktestDates(requestedFrom, requestedTo, sweep);
+    return { dateFrom: clamped.dateFrom, dateTo: clamped.dateTo, usedFullSweepDepth: false };
   }
   const sweepFromRaw = asString(sweep?.config?.dateFrom, '').trim();
   const sweepToRaw = asString(sweep?.config?.dateTo, '').trim();
@@ -6701,8 +6767,13 @@ export const previewAdminSweepBacktest = async (payload?: {
   ));
   const hasMixedIntervals = kind === 'algofund-ts' && uniqueSelectedIntervals.length > 1;
   const canTryRealBacktest = payload?.preferRealBacktest === true || (hasMixedIntervals && payload?.isBatchRefresh === true);
-  const requestedDateFrom = asString(payload?.dateFrom, '').trim();
-  const requestedDateTo = asString(payload?.dateTo, '').trim();
+  const requestedDateFromRaw = asString(payload?.dateFrom, '').trim();
+  const requestedDateToRaw = asString(payload?.dateTo, '').trim();
+  const clampedRequestDates = (requestedDateFromRaw || requestedDateToRaw)
+    ? clampRequestedBacktestDates(requestedDateFromRaw, requestedDateToRaw, sweep)
+    : null;
+  const requestedDateFrom = clampedRequestDates?.dateFrom || requestedDateFromRaw;
+  const requestedDateTo = clampedRequestDates?.dateTo || requestedDateToRaw;
   const strategyIds = Array.from(new Set(
     selectedOffers
       .map((item) => Number(item.strategyId || 0))
@@ -6975,10 +7046,23 @@ export const previewAdminSweepBacktest = async (payload?: {
           || (kind === 'offer' ? singleOfferStoreDateTo : '')
           || (kind === 'algofund-ts' ? buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateTo : '')
           || asString(sweep?.config?.dateTo, '');
-        const rerunPeriodInfo: PeriodInfo = {
+        const actualFromYmd = msToYmd(Number(summaryAny.actualDataStartMs));
+        const actualToYmd = msToYmd(Number(summaryAny.actualDataEndMs));
+        const rerunPeriodInfo: PeriodInfo & {
+          requestedDateFrom?: string | null;
+          requestedDateTo?: string | null;
+          actualDateFrom?: string | null;
+          actualDateTo?: string | null;
+          clampNotes?: string[];
+        } = {
           dateFrom: rerunDateFrom || null,
           dateTo: rerunDateTo || null,
           interval: asString(period?.interval, asString(sweep?.config?.interval, '4h')),
+          requestedDateFrom: clampedRequestDates?.requestedDateFrom || requestedDateFromRaw || null,
+          requestedDateTo: clampedRequestDates?.requestedDateTo || requestedDateToRaw || null,
+          actualDateFrom: actualFromYmd,
+          actualDateTo: actualToYmd,
+          clampNotes: clampedRequestDates?.clampNotes || [],
         };
 
         return {
@@ -7322,6 +7406,16 @@ export const previewAdminSweepBacktest = async (payload?: {
                   ),
                 }));
 
+                const snapshotRunSummaryAny = result.summary as Record<string, unknown>;
+                const enrichedSnapshotPeriod = {
+                  ...snapshotPeriodInfo,
+                  requestedDateFrom: clampedRequestDates?.requestedDateFrom || requestedDateFromRaw || null,
+                  requestedDateTo: clampedRequestDates?.requestedDateTo || requestedDateToRaw || null,
+                  actualDateFrom: msToYmd(Number(snapshotRunSummaryAny.actualDataStartMs)),
+                  actualDateTo: msToYmd(Number(snapshotRunSummaryAny.actualDataEndMs)),
+                  clampNotes: clampedRequestDates?.clampNotes || [],
+                };
+
                 return {
                   kind,
                   publishMeta: {
@@ -7339,7 +7433,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                     reinvestPercent,
                     maxOpenPositions,
                   },
-                  period: snapshotPeriodInfo,
+                  period: enrichedSnapshotPeriod,
                   sweepApiKeyName: asString(snapshot.apiKeyName, ''),
                   selectedOffers: snapshotOffersForResponse,
                   preview: {
@@ -7853,8 +7947,15 @@ const resolveDcaTsPickContext = async (payload?: {
   const occupiedMarkets = collectTsOccupiedMarkets(offerIds, catalog, offerStoreById);
   const requestedDateFrom = asString(payload?.dateFrom, '').trim();
   const requestedDateTo = asString(payload?.dateTo, '').trim();
-  const rerunDates = requestedDateFrom && requestedDateTo
-    ? { dateFrom: requestedDateFrom, dateTo: requestedDateTo, usedFullSweepDepth: false }
+  const rerunDates = requestedDateFrom || requestedDateTo
+    ? (() => {
+      const clamped = clampRequestedBacktestDates(requestedDateFrom, requestedDateTo, sweep);
+      return {
+        dateFrom: clamped.dateFrom,
+        dateTo: clamped.dateTo,
+        usedFullSweepDepth: false,
+      };
+    })()
     : resolveSnapshotRerunDates(snapshot, sweep, '', '');
   const previewDates = {
     dateFrom: rerunDates.dateFrom,

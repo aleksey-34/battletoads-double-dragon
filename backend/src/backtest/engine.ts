@@ -231,6 +231,19 @@ const parseTimestampMs = (value: any): number | null => {
   return Math.floor(parsed);
 };
 
+/** YYYY-MM-DD dateTo should include the full calendar day, not 00:00:00. */
+const parseDateToMs = (value: unknown): number | null => {
+  const text = String(value ?? '').trim();
+  const baseMs = parseTimestampMs(value);
+  if (baseMs === null) {
+    return null;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return baseMs + 86400000 - 1;
+  }
+  return baseMs;
+};
+
 const eventLoopYield = async (): Promise<void> => {
   await new Promise<void>((resolve) => setImmediate(resolve));
 };
@@ -1468,7 +1481,7 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(raw.maxOpenPositions, 0)));
   const partialTpPct = Math.max(0, asNumber(raw.partialTpPct, 0));
   const dateFromMs = parseTimestampMs(raw.dateFrom);
-  const dateToMs = parseTimestampMs(raw.dateTo);
+  const dateToMs = parseDateToMs(raw.dateTo);
 
   if (dateFromMs !== null && dateToMs !== null && dateToMs <= dateFromMs) {
     throw new Error('dateTo must be later than dateFrom');

@@ -2586,6 +2586,23 @@ const formatPeriodLabel = (period?: PeriodInfo | null): string => {
   return `${from} -> ${to}${interval}${coverage}`;
 };
 
+const formatPeriodWithActualData = (period?: (PeriodInfo & {
+  actualDateFrom?: string | null;
+  actualDateTo?: string | null;
+  clampNotes?: string[];
+}) | null): string => {
+  if (!period) {
+    return '—';
+  }
+  const base = formatPeriodLabel(period);
+  const actualTo = String(period.actualDateTo || '').slice(0, 10);
+  const effectiveTo = String(period.dateTo || '').slice(0, 10);
+  if (actualTo && effectiveTo && actualTo < effectiveTo) {
+    return `${base} • факт. данные до ${actualTo}`;
+  }
+  return base;
+};
+
 export const hydrateStrategyPreview = (
   payload: Record<string, unknown> | StrategyPreviewResponse | null | undefined,
   offers: CatalogOffer[]
@@ -6776,11 +6793,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setAdminSweepBacktestResult(response.data);
       const responsePeriodFrom = String(response.data?.period?.dateFrom || '').trim().slice(0, 10);
       const responsePeriodTo = String(response.data?.period?.dateTo || '').trim().slice(0, 10);
-      if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodFrom) && !backtestDatesUserModifiedRef.current) {
-        setAdminSweepBacktestDateFrom(responsePeriodFrom);
-      }
-      if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodTo) && !backtestDatesUserModifiedRef.current) {
-        setAdminSweepBacktestDateTo(responsePeriodTo);
+      const clampNotes = Array.isArray((response.data?.period as { clampNotes?: string[] })?.clampNotes)
+        ? ((response.data?.period as { clampNotes?: string[] }).clampNotes || [])
+        : [];
+      if (backtestDatesUserModifiedRef.current) {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodFrom)) {
+          setAdminSweepBacktestDateFrom(responsePeriodFrom);
+        }
+        if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodTo)) {
+          setAdminSweepBacktestDateTo(responsePeriodTo);
+        }
+        if (clampNotes.length > 0) {
+          messageApi.warning(`Период скорректирован: ${clampNotes.join('; ')}`);
+        }
+      } else {
+        if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodFrom) && !backtestDatesUserModifiedRef.current) {
+          setAdminSweepBacktestDateFrom(responsePeriodFrom);
+        }
+        if (/^\d{4}-\d{2}-\d{2}$/.test(responsePeriodTo) && !backtestDatesUserModifiedRef.current) {
+          setAdminSweepBacktestDateTo(responsePeriodTo);
+        }
       }
       // Auto-set rerun key to sweep's key when none has been chosen yet
       if (response.data.sweepApiKeyName && !adminSweepBacktestRerunApiKey) {
@@ -14068,7 +14100,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           value={adminSweepBacktestDateFrom}
                           onChange={(e) => {
                             backtestDatesUserModifiedRef.current = true;
-                            setAdminSweepBacktestDateFrom(e.target.value);
+                            const nextFrom = e.target.value;
+                            const today = new Date().toISOString().slice(0, 10);
+                            setAdminSweepBacktestDateFrom(nextFrom);
+                            const currentTo = String(adminSweepBacktestDateTo || '').trim();
+                            if (!currentTo || currentTo < nextFrom || currentTo > today) {
+                              setAdminSweepBacktestDateTo(today);
+                            }
                             setAdminSweepBacktestStale(true);
                             scheduleBacktestDebounce();
                           }}
@@ -14113,7 +14151,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           }}>{days}d</Button>
                         ))}
                       </Space>
-                      <Text type="secondary">Пусто + без ручного ввода → полная глубина sweep. Поля/кнопки 7–90d → свой диапазон.</Text>
+                      <Text type="secondary">Пусто + «Полная глубина» → full sweep. Меняешь dateFrom — dateTo = сегодня, если был некорректен. Конец периода не дальше сегодня и конца sweep-данных.</Text>
                     </Space>
                   </Card>
                 </Col>
@@ -14244,7 +14282,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     {(adminSweepBacktestResult as any).snapshotMeta?.bakedMaxOpenPositions > 0 && (
                       <Tag color="orange">snapshot OP={((adminSweepBacktestResult as any).snapshotMeta.bakedMaxOpenPositions)}</Tag>
                     )}
-                    {unifiedPeriod ? <Tag color="blue">Период {formatPeriodLabel(unifiedPeriod)}</Tag> : null}
+                    {unifiedPeriod ? <Tag color="blue">Период {formatPeriodWithActualData(unifiedPeriod as PeriodInfo & { actualDateTo?: string })}</Tag> : null}
+                    {(adminSweepBacktestResult?.period as { actualDateTo?: string; dateTo?: string })?.actualDateTo
+                      && String((adminSweepBacktestResult?.period as { actualDateTo?: string }).actualDateTo).slice(0, 10)
+                        < String((adminSweepBacktestResult?.period as { dateTo?: string }).dateTo || '').slice(0, 10) ? (
+                        <Tag color="orange">
+                          Данные до {(adminSweepBacktestResult?.period as { actualDateTo?: string }).actualDateTo}
+                        </Tag>
+                      ) : null}
                     {usingRealTsDcaEngine ? (
                       <>
                         {tsOnlySummary ? <Tag color="orange">TS only {formatPercent(Number(tsOnlySummary.totalReturnPercent || 0))}</Tag> : null}
@@ -14363,7 +14408,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       </Card>
                     </Col>
                     <Col xs={12} md={6}><Card size="small"><Statistic title="P/L" value={(usingRealTsDcaEngine || !tsDcaEnabled) ? finalPnl : undefined} formatter={(val) => (val === undefined ? '…' : val)} precision={2} suffix="USDT" /></Card></Col>
-                    <Col xs={12} md={6}><Card size="small"><Statistic title="Max DD" value={(usingRealTsDcaEngine || !tsDcaEnabled) ? maxDd : undefined} formatter={(val) => (val === undefined ? '…' : val)} precision={2} suffix="%" /></Card></Col>
+                    <Col xs={12} md={6}><Card size="small"><Statistic title="Max DD" value={(usingRealTsDcaEngine || !tsDcaEnabled) ? maxDd : undefined} formatter={(val) => (val === undefined ? '…' : Number(val).toFixed(2))} suffix="%" /></Card></Col>
                     <Col xs={12} md={6}><Card size="small"><Statistic title="Margin load" value={(usingRealTsDcaEngine || !tsDcaEnabled) ? marginLoad : undefined} formatter={(val) => (val === undefined ? '…' : val)} precision={2} suffix="%" /></Card></Col>
                   </Row>
                   )}
