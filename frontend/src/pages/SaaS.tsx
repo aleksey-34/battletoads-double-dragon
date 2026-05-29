@@ -2645,7 +2645,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const backtestRequestSeqRef = useRef(0);
   const backtestDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const backtestDatesUserModifiedRef = useRef(false);
-  const runAdminSweepBacktestPreviewRef = useRef<() => Promise<void>>(async () => {});
+  const runAdminSweepBacktestPreviewRef = useRef<(settingsPatch?: Partial<BacktestCardSettings>) => Promise<void>>(async () => {});
   const monitoringAbortRef = useRef<AbortController | null>(null);
   const [summary, setSummary] = useState<SaasSummary | null>(null);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -6695,6 +6695,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     adminSweepBacktestCommissionPercent,
     adminSweepBacktestSlippagePercent,
     adminSweepBacktestFundingRatePercent,
+    adminSweepBacktestDateFrom,
+    adminSweepBacktestDateTo,
     backtestDrawerContext,
   ]);
 
@@ -6702,15 +6704,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   // В админ-режиме форсим preferRealBacktest=true, иначе бэкенд идёт по snapshot-пути,
   // который масштабирует только risk/freq, и крутилки partialTpPct / maxOpenPositions /
   // commission / slippage / funding ни на что не влияют.
-  const scheduleBacktestDebounce = useCallback(() => {
+  const scheduleBacktestDebounce = useCallback((settingsPatch?: Partial<BacktestCardSettings>) => {
     if (backtestDebounceRef.current !== null) {
       clearTimeout(backtestDebounceRef.current);
     }
     backtestDebounceRef.current = setTimeout(() => {
       backtestDebounceRef.current = null;
-      void runAdminSweepBacktestPreviewRef.current();
+      void runAdminSweepBacktestPreviewRef.current(settingsPatch);
     }, 700);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);
 
   const runAdminSweepBacktestPreview = async (
     context?: SaasBacktestContext | null,
@@ -6920,11 +6922,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     adminSweepBacktestRerunApiKey,
   ]);
   // Debounce: real rerun on sliders. Without explicit user dates → backend uses full sweep depth.
-  runAdminSweepBacktestPreviewRef.current = async () => {
+  runAdminSweepBacktestPreviewRef.current = async (settingsPatch?: Partial<BacktestCardSettings>) => {
+    const baseOverride = isAdminSurface ? buildAdminBacktestSettingsOverride() : undefined;
+    const settingsOverride = baseOverride
+      ? { ...baseOverride, ...(settingsPatch || {}) }
+      : settingsPatch;
     await runAdminSweepBacktestPreview(
       undefined,
       isAdminSurface
-        ? { preferRealBacktest: true, settingsOverride: buildAdminBacktestSettingsOverride() }
+        ? { preferRealBacktest: true, settingsOverride }
         : undefined,
     );
   };
@@ -14102,13 +14108,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             backtestDatesUserModifiedRef.current = true;
                             const nextFrom = e.target.value;
                             const today = new Date().toISOString().slice(0, 10);
-                            setAdminSweepBacktestDateFrom(nextFrom);
                             const currentTo = String(adminSweepBacktestDateTo || '').trim();
-                            if (!currentTo || currentTo < nextFrom || currentTo > today) {
-                              setAdminSweepBacktestDateTo(today);
-                            }
+                            const nextTo = (!currentTo || currentTo < nextFrom || currentTo > today) ? today : currentTo;
+                            setAdminSweepBacktestDateFrom(nextFrom);
+                            setAdminSweepBacktestDateTo(nextTo);
                             setAdminSweepBacktestStale(true);
-                            scheduleBacktestDebounce();
+                            scheduleBacktestDebounce({ dateFrom: nextFrom, dateTo: nextTo });
                           }}
                         />
                         <Input
@@ -14117,9 +14122,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           value={adminSweepBacktestDateTo}
                           onChange={(e) => {
                             backtestDatesUserModifiedRef.current = true;
-                            setAdminSweepBacktestDateTo(e.target.value);
+                            const nextTo = e.target.value;
+                            setAdminSweepBacktestDateTo(nextTo);
                             setAdminSweepBacktestStale(true);
-                            scheduleBacktestDebounce();
+                            scheduleBacktestDebounce({
+                              dateFrom: adminSweepBacktestDateFrom,
+                              dateTo: nextTo,
+                            });
                           }}
                         />
                         <Button size="small" onClick={() => {
@@ -14144,10 +14153,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             backtestDatesUserModifiedRef.current = true;
                             const now = new Date();
                             const from = new Date(now.getTime() - days * 86400000);
-                            setAdminSweepBacktestDateFrom(from.toISOString().slice(0, 10));
-                            setAdminSweepBacktestDateTo(now.toISOString().slice(0, 10));
+                            const nextFrom = from.toISOString().slice(0, 10);
+                            const nextTo = now.toISOString().slice(0, 10);
+                            setAdminSweepBacktestDateFrom(nextFrom);
+                            setAdminSweepBacktestDateTo(nextTo);
                             setAdminSweepBacktestStale(true);
-                            scheduleBacktestDebounce();
+                            scheduleBacktestDebounce({ dateFrom: nextFrom, dateTo: nextTo });
                           }}>{days}d</Button>
                         ))}
                       </Space>
@@ -14189,20 +14200,36 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     const usingRealTsDcaEngine = tsDcaEnabled && Boolean(tsDcaCombinedPreview?.combined?.summary);
                     const isSweepSynthetic = String(adminSweepBacktestResult.preview?.source || '') === 'admin_saved_ts_snapshot_synthetic';
                     const unifiedPeriod = (() => {
+                      const apiPeriod = adminSweepBacktestResult?.period as (PeriodInfo & {
+                        actualDateFrom?: string | null;
+                        actualDateTo?: string | null;
+                        clampNotes?: string[];
+                      }) | undefined;
+                      const mergeActualRange = (base: PeriodInfo | null | undefined) => {
+                        if (!base) {
+                          return null;
+                        }
+                        return {
+                          ...base,
+                          actualDateFrom: apiPeriod?.actualDateFrom ?? null,
+                          actualDateTo: apiPeriod?.actualDateTo ?? null,
+                          clampNotes: apiPeriod?.clampNotes,
+                        };
+                      };
                       if (tsDcaCombinedPreview?.period) {
-                        return tsDcaCombinedPreview.period;
+                        return mergeActualRange(tsDcaCombinedPreview.period);
                       }
                       if (tsDcaResearchResult?.period) {
-                        return tsDcaResearchResult.period;
+                        return mergeActualRange(tsDcaResearchResult.period);
                       }
                       if (String(adminSweepBacktestDateFrom || '').trim() && String(adminSweepBacktestDateTo || '').trim()) {
-                        return {
+                        return mergeActualRange({
                           dateFrom: adminSweepBacktestDateFrom,
                           dateTo: adminSweepBacktestDateTo,
                           interval: String(adminSweepBacktestResult.period?.interval || '4h'),
-                        };
+                        });
                       }
-                      return adminSweepBacktestResult.period || null;
+                      return mergeActualRange(adminSweepBacktestResult.period || null);
                     })();
                     const summary = usingRealTsDcaEngine
                       ? (tsDcaCombinedPreview!.combined!.summary as Record<string, unknown>)
