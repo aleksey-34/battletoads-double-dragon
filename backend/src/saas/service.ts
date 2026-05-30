@@ -28,7 +28,10 @@ import { computeReconciliationMetrics } from '../analytics/liveReconciliation';
 // потолок, чтобы reinvest_percent давал настоящий compound на equity > initialBalance.
 const CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X = 1000;
 
-/** Admin/card preview: reinvest 0 → fixed deposit (как на витрине); >0 → ограниченный compound. */
+/** Admin portfolio rerun: cap compound base per leg (100% reinvest → 20× initial, not 1000×). */
+const ADMIN_PORTFOLIO_MAX_DEPOSIT_GROWTH_X = 20;
+
+/** Admin/card preview: reinvest 0 → fixed deposit; >0 → capped compound for portfolio realism. */
 const resolveAdminPreviewMaxDepositOverride = (
   reinvestPercent: number,
   initialBalance: number,
@@ -39,11 +42,46 @@ const resolveAdminPreviewMaxDepositOverride = (
     return safeBalance;
   }
   const growthCap = Math.min(
-    CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
-    1 + (reinvest / 100) * (CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X - 1),
+    ADMIN_PORTFOLIO_MAX_DEPOSIT_GROWTH_X,
+    1 + (reinvest / 100) * (ADMIN_PORTFOLIO_MAX_DEPOSIT_GROWTH_X - 1),
   );
   return safeBalance * growthCap;
 };
+
+const resolveAdminPreviewLotPercentOverride = (
+  lotPercentEffective: number,
+  rerunRiskMul: number,
+): number => Number(Math.min(500, Math.max(0.1, lotPercentEffective * rerunRiskMul)).toFixed(4));
+
+const buildPortfolioLotMultiplierByStrategyId = (
+  offers: Array<{ offerId?: string; strategyId?: number | string }>,
+  weightsByOfferId: Record<string, number>,
+): Record<number, number> => {
+  const out: Record<number, number> = {};
+  const count = Math.max(1, offers.length);
+  for (const offer of offers) {
+    const strategyId = Number(offer.strategyId || 0);
+    const offerId = asString(offer.offerId, '').trim();
+    if (!Number.isFinite(strategyId) || strategyId <= 0) {
+      continue;
+    }
+    const weight = offerId && Number.isFinite(Number(weightsByOfferId[offerId]))
+      ? Math.max(0, asNumber(weightsByOfferId[offerId], 1 / count))
+      : 1 / count;
+    out[strategyId] = weight;
+  }
+  return out;
+};
+
+const sanitizeEquityCurveForMetrics = (
+  equityCurve: Array<{ time: number; equity: number }>,
+  initialBalance: number,
+): Array<{ time: number; equity: number }> => (
+  equityCurve.map((point) => ({
+    time: point.time,
+    equity: Number(Math.max(0, asNumber(point.equity, initialBalance)).toFixed(4)),
+  }))
+);
 
 /**
  * Lookup master_cards.metadata_json by system name and return per-card overrides.
@@ -3530,7 +3568,7 @@ const buildDerivedPreviewCurves = (
   let peak = asNumber(equityCurve[0]?.equity, initialBalance);
 
   const pnl = equityCurve.map((point) => {
-    const equity = asNumber(point.equity, initialBalance);
+    const equity = Math.max(0, asNumber(point.equity, initialBalance));
     return {
       time: asNumber(point.time, Date.now()),
       value: Number((equity - initialBalance).toFixed(4)),
@@ -3538,7 +3576,7 @@ const buildDerivedPreviewCurves = (
   });
 
   const drawdownPercent = equityCurve.map((point) => {
-    const equity = asNumber(point.equity, initialBalance);
+    const equity = Math.max(0, asNumber(point.equity, initialBalance));
     if (equity > peak) {
       peak = equity;
     }
@@ -3565,20 +3603,7 @@ const buildDerivedPreviewCurves = (
   };
 };
 
-/** Real rerun already applies reinvest in engine — only linear risk scaling for admin slider. */
-const scaleRealRerunEquityCurve = (
-  equityCurve: Array<{ time: number; equity: number }>,
-  initialBalance: number,
-  rerunRiskMul: number,
-): Array<{ time: number; equity: number }> => (
-  equityCurve.map((point) => ({
-    time: point.time,
-    equity: Number((
-      initialBalance + (asNumber(point.equity, initialBalance) - initialBalance) * rerunRiskMul
-    ).toFixed(4)),
-  }))
-);
-
+/** Real rerun: risk/reinvest already in engine lot sizing — metrics from sanitized equity only. */
 const summarizeRealRerunEquityCurve = (
   equityCurve: Array<{ time: number; equity: number }>,
   initialBalance: number,
@@ -3592,9 +3617,10 @@ const summarizeRealRerunEquityCurve = (
       curves: buildDerivedPreviewCurves([], initialBalance, 5),
     };
   }
-  const curves = buildDerivedPreviewCurves(equityCurve, initialBalance, 5);
-  const startEquity = Math.max(0.0001, asNumber(equityCurve[0]?.equity, initialBalance));
-  const finalEquity = asNumber(equityCurve[equityCurve.length - 1]?.equity, initialBalance);
+  const sanitized = sanitizeEquityCurveForMetrics(equityCurve, initialBalance);
+  const curves = buildDerivedPreviewCurves(sanitized, initialBalance, 5);
+  const startEquity = Math.max(0.0001, asNumber(sanitized[0]?.equity, initialBalance));
+  const finalEquity = asNumber(sanitized[sanitized.length - 1]?.equity, initialBalance);
   const totalReturnPercent = ((finalEquity - startEquity) / startEquity) * 100;
   const maxDrawdownPercent = curves.drawdownPercent.length > 0
     ? Math.min(100, Math.max(...curves.drawdownPercent.map((point) => asNumber(point.value, 0))))
@@ -3605,6 +3631,7 @@ const summarizeRealRerunEquityCurve = (
     maxDrawdownPercent: Number(maxDrawdownPercent.toFixed(3)),
     unrealizedPnl: curves.finalUnrealizedPnl,
     curves,
+    equity: sanitized,
   };
 };
 
@@ -7001,6 +7028,10 @@ export const previewAdminSweepBacktest = async (payload?: {
   const reinvestPercent = clampNumber(asNumber(payload?.reinvestPercent, 0), 0, 100);
   const reinvestShare = reinvestPercent / 100;
   const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
+  const adminPreviewLotPercent = resolveAdminPreviewLotPercentOverride(lotPercentEffective, rerunRiskMul);
+  const portfolioLotMultipliers = kind === 'algofund-ts' && selectedOffers.length > 1
+    ? buildPortfolioLotMultiplierByStrategyId(selectedOffers, normalizedOfferWeightsById)
+    : undefined;
   const tradeMul = getPreviewTradeMultiplier(tradeFrequencyScore);
   // oscillationFactor: low risk + low freq → near 0 (straight smooth line);
   //                   high risk + high freq → ~2.5 (very jagged volatile curve)
@@ -7211,14 +7242,15 @@ export const previewAdminSweepBacktest = async (payload?: {
           ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
           ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
           maxDepositOverride: resolveAdminPreviewMaxDepositOverride(reinvestPercent, initialBalance),
-          lotPercentOverride: lotPercentEffective,
+          lotPercentOverride: adminPreviewLotPercent,
           reinvestPercentOverride: reinvestPercent,
+          ...(portfolioLotMultipliers && Object.keys(portfolioLotMultipliers).length > 0
+            ? { lotPercentMultiplierByStrategyId: portfolioLotMultipliers }
+            : {}),
         });
 
         const summaryAny = result.summary as Record<string, unknown>;
-        // Engine already applied reinvestPercentOverride — do not compound again in post-scale.
-        const scaledEquity = scaleRealRerunEquityCurve(result.equityCurve, initialBalance, rerunRiskMul);
-        const rerunMetrics = summarizeRealRerunEquityCurve(scaledEquity, initialBalance);
+        const rerunMetrics = summarizeRealRerunEquityCurve(result.equityCurve, initialBalance);
         const scaledSummary = {
           ...result.summary,
           finalEquity: rerunMetrics.finalEquity,
@@ -7274,7 +7306,7 @@ export const previewAdminSweepBacktest = async (payload?: {
           preview: {
             source: 'admin_sweep_rerun',
             summary: scaledSummary,
-            equity: scaledEquity,
+            equity: rerunMetrics.equity || sanitizeEquityCurveForMetrics(result.equityCurve, initialBalance),
             curves: {
               pnl: rerunMetrics.curves.pnl,
               drawdownPercent: rerunMetrics.curves.drawdownPercent,
@@ -7282,8 +7314,9 @@ export const previewAdminSweepBacktest = async (payload?: {
             },
             trades: result.trades,
             strictPresetMode: false,
-            riskApproximated: rerunRiskMul !== 1,
+            riskApproximated: false,
             reinvestAppliedInEngine: reinvestPercent > 0,
+            portfolioLotWeighted: Boolean(portfolioLotMultipliers && Object.keys(portfolioLotMultipliers).length > 0),
           },
           rerun: {
             requested: true,
@@ -7524,6 +7557,10 @@ export const previewAdminSweepBacktest = async (payload?: {
                   .map((item) => Number(item.strategyId || 0))
                   .join(',');
                 const freqVariantsApplied = storeStrategyKey !== freqStrategyKey;
+                const snapshotPortfolioLotMultipliers = buildPortfolioLotMultiplierByStrategyId(
+                  snapshotRerunOffers,
+                  normalizedOfferWeightsById,
+                );
 
                 const primaryRequest: Parameters<typeof runBacktest>[0] = {
                   apiKeyName: preferredApiKey,
@@ -7551,8 +7588,11 @@ export const previewAdminSweepBacktest = async (payload?: {
                   ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
                   ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
                   maxDepositOverride: resolveAdminPreviewMaxDepositOverride(reinvestPercent, initialBalance),
-                  lotPercentOverride: lotPercentEffective * relativeTradeMul,
+                  lotPercentOverride: resolveAdminPreviewLotPercentOverride(lotPercentEffective * relativeTradeMul, rerunRiskMul),
                   reinvestPercentOverride: reinvestPercent,
+                  ...(Object.keys(snapshotPortfolioLotMultipliers).length > 0
+                    ? { lotPercentMultiplierByStrategyId: snapshotPortfolioLotMultipliers }
+                    : {}),
                   ...(payload?.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),
                 };
 
@@ -7581,8 +7621,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                 const adjustedTradesCount = freqVariantsApplied
                   ? Number(result.summary.tradesCount || 0)
                   : Math.max(1, Math.round(Number(result.summary.tradesCount || 0) * relativeTradeMul));
-                const scaledEquity = scaleRealRerunEquityCurve(result.equityCurve, initialBalance, rerunRiskMul);
-                const rerunMetrics = summarizeRealRerunEquityCurve(scaledEquity, initialBalance);
+                const rerunMetrics = summarizeRealRerunEquityCurve(result.equityCurve, initialBalance);
                 const scaledSummary = {
                   ...result.summary,
                   finalEquity: rerunMetrics.finalEquity,
@@ -7629,7 +7668,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                   preview: {
                     source: 'admin_saved_ts_snapshot_rerun',
                     summary: scaledSummary,
-                    equity: scaledEquity,
+                    equity: rerunMetrics.equity || sanitizeEquityCurveForMetrics(result.equityCurve, initialBalance),
                     curves: {
                       pnl: rerunMetrics.curves.pnl,
                       drawdownPercent: rerunMetrics.curves.drawdownPercent,
@@ -7637,8 +7676,9 @@ export const previewAdminSweepBacktest = async (payload?: {
                     },
                     trades: result.trades,
                     strictPresetMode: false,
-                    riskApproximated: rerunRiskMul !== 1,
+                    riskApproximated: false,
                     reinvestAppliedInEngine: reinvestPercent > 0,
+                    portfolioLotWeighted: Object.keys(snapshotPortfolioLotMultipliers).length > 0,
                   },
                   rerun: {
                     requested: true,

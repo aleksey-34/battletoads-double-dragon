@@ -1078,9 +1078,11 @@ const openPosition = (
     ? Math.min(equityBaseRaw, maxDeposit)
     : equityBaseRaw;
 
-  // Notional = capital × lot_fraction. Leverage is an exchange margin setting only,
-  // NOT a position-size multiplier (consistent with live trading).
-  const notional = baseCapital * lotFraction;
+  // Notional = capital × lot_fraction, capped by free margin passed in as portfolioEquityNow.
+  let notional = baseCapital * lotFraction;
+  if (Number.isFinite(portfolioEquityNow) && portfolioEquityNow > 0) {
+    notional = Math.min(notional, portfolioEquityNow);
+  }
   if (!Number.isFinite(notional) || notional <= 0) {
     return false;
   }
@@ -1647,14 +1649,14 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
   let maxDrawdownPercent = 0;
 
   const pushEquityPoint = (timeMs: number) => {
-    const value = portfolioEquity(ctx.cashEquity, runtimes);
+    const value = Math.max(0, portfolioEquity(ctx.cashEquity, runtimes));
     equityCurve.push({
       time: Math.floor(timeMs / 1000),
       equity: value,
     });
 
     peak = Math.max(peak, value);
-    const drawdownAbs = peak - Math.max(0, value);
+    const drawdownAbs = peak - value;
     const drawdownPct = peak > 0 ? Math.min(100, (drawdownAbs / peak) * 100) : 0;
 
     maxDrawdownAbsolute = Math.max(maxDrawdownAbsolute, drawdownAbs);
