@@ -398,6 +398,8 @@ const parseDcaSettingsBody = (body: Record<string, unknown> | undefined) => {
 const parseDcaJobContextBody = (body: Record<string, unknown> | undefined) => ({
   riskScore: toOptionalNumber(body?.riskScore),
   tradeFrequencyScore: toOptionalNumber(body?.tradeFrequencyScore),
+  reinvestPercent: toOptionalNumber(body?.reinvestPercent),
+  riskScaleMaxPercent: toOptionalNumber(body?.riskScaleMaxPercent),
 });
 
 router.get('/admin/ts-dca-research-status', async (_req, res) => {

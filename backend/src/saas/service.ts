@@ -73,6 +73,61 @@ const buildPortfolioLotMultiplierByStrategyId = (
   return out;
 };
 
+/** Same lot/reinvest/deposit caps as admin sweep rerun — for TS+DCA combined preview parity. */
+const resolveAdminPreviewEngineOverridesForTsPortfolio = async (params: {
+  systemName: string;
+  tsStrategyIds: number[];
+  initialBalance: number;
+  riskScore?: number;
+  riskScaleMaxPercent?: number;
+  reinvestPercent?: number;
+  lotPercentOverride?: number;
+}) => {
+  const riskScore = normalizePreferenceScore(params.riskScore, 'medium');
+  const riskScaleMaxPercent = clampNumber(asNumber(params.riskScaleMaxPercent, 100), 0, 400);
+  const reinvestPercent = clampNumber(asNumber(params.reinvestPercent, 0), 0, 100);
+  const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
+  const cardLotConfig = await getCardConfigBySystemName(asString(params.systemName, '').trim());
+  const lotPercentRequested = Math.max(0, asNumber(params.lotPercentOverride, 0));
+  const lotPercentEffective = lotPercentRequested > 0
+    ? lotPercentRequested
+    : (cardLotConfig.lotPercent > 0 ? cardLotConfig.lotPercent : 100);
+  const lotPercentOverride = resolveAdminPreviewLotPercentOverride(lotPercentEffective, rerunRiskMul);
+  const maxDepositOverride = resolveAdminPreviewMaxDepositOverride(reinvestPercent, params.initialBalance);
+  const lotPercentMultiplierByStrategyId: Record<number, number> = {};
+  const tsCount = Math.max(1, params.tsStrategyIds.length);
+  for (const strategyId of params.tsStrategyIds) {
+    if (Number.isFinite(strategyId) && strategyId > 0) {
+      lotPercentMultiplierByStrategyId[strategyId] = 1 / tsCount;
+    }
+  }
+  return {
+    lotPercentOverride,
+    maxDepositOverride,
+    reinvestPercentOverride: reinvestPercent,
+    lotPercentMultiplierByStrategyId,
+  };
+};
+
+const applyAdminPreviewSummaryFromEquity = (
+  summary: Record<string, unknown>,
+  equityCurve: Array<{ time: number; equity: number }>,
+  initialBalance: number,
+) => {
+  const rerunMetrics = summarizeRealRerunEquityCurve(equityCurve, initialBalance);
+  return {
+    ...summary,
+    finalEquity: rerunMetrics.finalEquity,
+    totalReturnPercent: rerunMetrics.totalReturnPercent,
+    maxDrawdownPercent: rerunMetrics.maxDrawdownPercent,
+    ...(summary.netProfit != null
+      ? { netProfit: Number((rerunMetrics.finalEquity - initialBalance).toFixed(4)) }
+      : {}),
+    marginLoadPercent: 0,
+    unrealizedPnl: rerunMetrics.unrealizedPnl,
+  };
+};
+
 const sanitizeEquityCurveForMetrics = (
   equityCurve: Array<{ time: number; equity: number }>,
   initialBalance: number,
@@ -9177,6 +9232,9 @@ export const previewDcaCombinedWithTs = async (payload?: {
   marketTuning?: Record<string, Partial<DcaStrategySettings>>;
   riskScore?: number;
   tradeFrequencyScore?: number;
+  reinvestPercent?: number;
+  riskScaleMaxPercent?: number;
+  lotPercentOverride?: number;
 }) => {
   if (payload?.enabled === false) {
     return { enabled: false as const };
@@ -9218,25 +9276,63 @@ export const previewDcaCombinedWithTs = async (payload?: {
   const backtestBase = buildDcaBacktestRequestBase(ctx.preferredApiKey, ctx, { enablePairLock: true });
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(payload?.maxOpenPositions, 0)));
   const portfolioExtras = maxOpenPositions > 0 ? { maxOpenPositions } : {};
+  const adminEngineOverrides = await resolveAdminPreviewEngineOverridesForTsPortfolio({
+    systemName: asString(payload?.systemName, asString(ctx.snapshot.systemName, '')),
+    tsStrategyIds: ctx.tsStrategyIds,
+    initialBalance: ctx.initialBalance,
+    riskScore: payload?.riskScore,
+    riskScaleMaxPercent: payload?.riskScaleMaxPercent,
+    reinvestPercent: payload?.reinvestPercent,
+    lotPercentOverride: payload?.lotPercentOverride,
+  });
+  const tsEngineExtras = {
+    lotPercentOverride: adminEngineOverrides.lotPercentOverride,
+    maxDepositOverride: adminEngineOverrides.maxDepositOverride,
+    reinvestPercentOverride: adminEngineOverrides.reinvestPercentOverride,
+    lotPercentMultiplierByStrategyId: adminEngineOverrides.lotPercentMultiplierByStrategyId,
+  };
+  const depositExtras = {
+    maxDepositOverride: adminEngineOverrides.maxDepositOverride,
+    reinvestPercentOverride: adminEngineOverrides.reinvestPercentOverride,
+  };
 
-  const tsOnly = await runBacktest({
+  const tsOnlyRaw = await runBacktest({
     ...backtestBase,
     mode: 'portfolio',
     strategyIds: ctx.tsStrategyIds,
     ...portfolioExtras,
+    ...tsEngineExtras,
   });
-  const dcaOnly = await runBacktest({
+  const dcaOnlyRaw = await runBacktest({
     ...backtestBase,
     mode: 'portfolio',
     strategyIds: dcaStrategyIds,
     ...portfolioExtras,
+    ...depositExtras,
   });
-  const combined = await runBacktest({
+  const combinedRaw = await runBacktest({
     ...backtestBase,
     mode: 'portfolio',
     strategyIds: [...ctx.tsStrategyIds, ...dcaStrategyIds],
     ...portfolioExtras,
+    ...tsEngineExtras,
   });
+
+  const tsOnlySummary = applyAdminPreviewSummaryFromEquity(
+    tsOnlyRaw.summary as Record<string, unknown>,
+    tsOnlyRaw.equityCurve,
+    ctx.initialBalance,
+  );
+  const dcaOnlySummary = applyAdminPreviewSummaryFromEquity(
+    dcaOnlyRaw.summary as Record<string, unknown>,
+    dcaOnlyRaw.equityCurve,
+    ctx.initialBalance,
+  );
+  const combinedSummary = applyAdminPreviewSummaryFromEquity(
+    combinedRaw.summary as Record<string, unknown>,
+    combinedRaw.equityCurve,
+    ctx.initialBalance,
+  );
 
   return {
     enabled: true as const,
@@ -9251,26 +9347,26 @@ export const previewDcaCombinedWithTs = async (payload?: {
     tsStrategyIds: ctx.tsStrategyIds,
     dcaSettings: ctx.dcaSettings,
     tsOnly: {
-      summary: tsOnly.summary,
-      equity: tsOnly.equityCurve,
+      summary: tsOnlySummary,
+      equity: tsOnlyRaw.equityCurve,
     },
     dcaOnly: {
-      summary: dcaOnly.summary,
-      equity: dcaOnly.equityCurve,
+      summary: dcaOnlySummary,
+      equity: dcaOnlyRaw.equityCurve,
     },
     combined: {
-      summary: combined.summary,
-      equity: combined.equityCurve,
+      summary: combinedSummary,
+      equity: combinedRaw.equityCurve,
     },
     delta: {
-      ret: Number((combined.summary.totalReturnPercent - tsOnly.summary.totalReturnPercent).toFixed(3)),
-      dd: Number((combined.summary.maxDrawdownPercent - tsOnly.summary.maxDrawdownPercent).toFixed(3)),
-      trades: Number(combined.summary.tradesCount || 0) - Number(tsOnly.summary.tradesCount || 0),
+      ret: Number((Number(combinedSummary.totalReturnPercent || 0) - Number(tsOnlySummary.totalReturnPercent || 0)).toFixed(3)),
+      dd: Number((Number(combinedSummary.maxDrawdownPercent || 0) - Number(tsOnlySummary.maxDrawdownPercent || 0)).toFixed(3)),
+      trades: Number(combinedRaw.summary.tradesCount || 0) - Number(tsOnlyRaw.summary.tradesCount || 0),
     },
     dcaLayer: {
-      ret: Number(dcaOnly.summary.totalReturnPercent || 0),
-      dd: Number(dcaOnly.summary.maxDrawdownPercent || 0),
-      trades: Number(dcaOnly.summary.tradesCount || 0),
+      ret: Number(dcaOnlySummary.totalReturnPercent || 0),
+      dd: Number(dcaOnlySummary.maxDrawdownPercent || 0),
+      trades: Number(dcaOnlyRaw.summary.tradesCount || 0),
     },
   };
 };

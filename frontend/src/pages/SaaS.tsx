@@ -7395,6 +7395,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       initialBalance: adminSweepBacktestInitialBalance,
       riskScore: adminSweepBacktestRiskScore,
       tradeFrequencyScore: adminSweepBacktestTradeScore,
+      reinvestPercent: adminSweepBacktestReinvestPercent,
+      riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
       dcaBaseAmountUsdt: tsDcaBaseMode === 'fixed' ? tsDcaBaseAmountUsdt : undefined,
       dcaBaseAmountMode: tsDcaBaseMode,
       dcaBaseAmountPercent: tsDcaBaseMode === 'percent' ? tsDcaBasePercent : undefined,
@@ -7421,6 +7423,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       dates: cardDates,
       riskScore: adminSweepBacktestRiskScore,
       tradeFrequencyScore: adminSweepBacktestTradeScore,
+      reinvestPercent: adminSweepBacktestReinvestPercent,
+      riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
       initialBalance: adminSweepBacktestInitialBalance,
       apiKeyName: adminSweepBacktestRerunApiKey || '',
       dcaBaseMode: tsDcaBaseMode,
@@ -7478,6 +7482,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setTsDcaPerLegSl(false);
     setTsDcaAutotune(true);
     messageApi.info('Агрессивный DCA пресет применён — нажми «Сканировать DCA» после завершения TS rerun');
+  };
+
+  const applyTsDcaSuperAggressivePreset = () => {
+    setTsDcaBaseMode('percent');
+    setTsDcaBasePercent(2);
+    setTsDcaInterval('1h');
+    setTsDcaStepPercent(0.6);
+    setTsDcaMaxOrders(15);
+    setTsDcaTpPercent(1);
+    setTsDcaSlPercent(0);
+    setTsDcaEntryFilter('always');
+    setTsDcaReentryBars(0);
+    setTsDcaPerLegSl(false);
+    setTsDcaAutotune(true);
+    messageApi.info('SUPER DCA пресет (2% base, 15 ордеров) — сканируй после TS rerun');
   };
 
   const applyTsDcaModeratePreset = () => {
@@ -7810,6 +7829,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     adminSweepBacktestInitialBalance,
     adminSweepBacktestRiskScore,
     adminSweepBacktestTradeScore,
+    adminSweepBacktestReinvestPercent,
+    adminSweepBacktestRiskScaleMaxPercent,
     adminSweepBacktestRerunApiKey,
     adminSweepBacktestDateFrom,
     adminSweepBacktestDateTo,
@@ -13842,6 +13863,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Space wrap align="center">
                     <Button size="small" onClick={applyTsDcaModeratePreset}>Пресет: умеренный</Button>
                     <Button size="small" type="primary" ghost onClick={applyTsDcaAggressivePreset}>Пресет: агрессивный</Button>
+                    <Button size="small" danger ghost onClick={applyTsDcaSuperAggressivePreset}>Пресет: SUPER</Button>
                   </Space>
                   <Row gutter={[8, 8]}>
                     <Col xs={24} md={8}>
@@ -14529,6 +14551,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     {usingRealTsDcaEngine ? (
                       <>
                         {tsOnlySummary ? <Tag color="orange">TS only {formatPercent(Number(tsOnlySummary.totalReturnPercent || 0))}</Tag> : null}
+                        {tsOnlySummary ? <Tag color="volcano">TS DD {formatPercent(Number(tsOnlySummary.maxDrawdownPercent || 0))}</Tag> : null}
                         <Tag color={metricColor(Number(summary?.totalReturnPercent || 0), 'return')}>TS+DCA {formatPercent(Number(summary?.totalReturnPercent || 0))}</Tag>
                         <Tag color={metricColor(Number(summary?.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(Number(summary?.maxDrawdownPercent || 0))}</Tag>
                         <Tag color={metricColor(Number(summary?.profitFactor || 0), 'pf')}>PF {formatNumber(Number(summary?.profitFactor || 0))}</Tag>
@@ -14644,7 +14667,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       </Card>
                     </Col>
                     <Col xs={12} md={6}><Card size="small"><Statistic title="P/L" value={(usingRealTsDcaEngine || !tsDcaEnabled) ? finalPnl : undefined} formatter={(val) => (val === undefined ? '…' : val)} precision={2} suffix="USDT" /></Card></Col>
-                    <Col xs={12} md={6}><Card size="small"><Statistic title="Max DD" value={(usingRealTsDcaEngine || !tsDcaEnabled) ? maxDd : undefined} formatter={(val) => (val === undefined ? '…' : Number(val).toFixed(2))} suffix="%" /></Card></Col>
+                    <Col xs={12} md={6}><Card size="small"><Statistic title={usingRealTsDcaEngine ? 'Max DD (TS+DCA)' : 'Max DD'} value={(usingRealTsDcaEngine || !tsDcaEnabled) ? maxDd : undefined} formatter={(val) => (val === undefined ? '…' : Number(val).toFixed(2))} suffix="%" /></Card></Col>
+                    {usingRealTsDcaEngine && tsOnlySummary ? (
+                      <Col xs={12} md={6}><Card size="small"><Statistic title="Max DD (TS only)" value={Number(tsOnlySummary.maxDrawdownPercent || 0)} precision={2} suffix="%" /></Card></Col>
+                    ) : null}
                     <Col xs={12} md={6}><Card size="small"><Statistic title="Margin load" value={(usingRealTsDcaEngine || !tsDcaEnabled) ? marginLoad : undefined} formatter={(val) => (val === undefined ? '…' : val)} precision={2} suffix="%" /></Card></Col>
                   </Row>
                   )}
