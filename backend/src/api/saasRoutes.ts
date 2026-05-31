@@ -46,6 +46,7 @@ import {
   resetDcaResearchJobLock,
   startDcaCombinedPreviewJob,
   getDcaCombinedPreviewJobStatus,
+  getPropagationJobStatus,
   applyDcaToTsPortfolio,
   previewDcaCombinedWithTs,
   syncCloudTsFromSweepResult,
@@ -782,6 +783,16 @@ router.get('/admin/publish/preview', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS publish preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/propagation-status', async (_req, res) => {
+  try {
+    res.json({ success: true, ...getPropagationJobStatus() });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS propagation status error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

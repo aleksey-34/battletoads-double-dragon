@@ -14710,6 +14710,124 @@ const materializeClassicDcaToClient = async (
   }
 };
 
+type PropagationLogLevel = 'info' | 'warn' | 'error';
+
+type PropagationJobLogEntry = {
+  ts: string;
+  level: PropagationLogLevel;
+  message: string;
+};
+
+let propagationJob: {
+  running: boolean;
+  systemName: string;
+  startedAt: number;
+  finishedAt: number | null;
+  currentSlug: string;
+  attempted: number;
+  succeeded: number;
+  failed: Array<{ tenantId: number; slug: string; error: string }>;
+  logs: PropagationJobLogEntry[];
+  result: {
+    systemName: string;
+    attempted: number;
+    succeeded: number;
+    failed: Array<{ tenantId: number; slug: string; error: string }>;
+  } | null;
+  error: string | null;
+} = {
+  running: false,
+  systemName: '',
+  startedAt: 0,
+  finishedAt: null,
+  currentSlug: '',
+  attempted: 0,
+  succeeded: 0,
+  failed: [],
+  logs: [],
+  result: null,
+  error: null,
+};
+
+const pushPropagationJobLog = (level: PropagationLogLevel, message: string): void => {
+  propagationJob.logs.push({
+    ts: new Date().toISOString(),
+    level,
+    message: asString(message, ''),
+  });
+  if (propagationJob.logs.length > 400) {
+    propagationJob.logs = propagationJob.logs.slice(-400);
+  }
+};
+
+export const getPropagationJobStatus = () => ({
+  running: propagationJob.running,
+  systemName: propagationJob.systemName,
+  startedAt: propagationJob.startedAt > 0 ? new Date(propagationJob.startedAt).toISOString() : null,
+  finishedAt: propagationJob.finishedAt ? new Date(propagationJob.finishedAt).toISOString() : null,
+  currentSlug: propagationJob.currentSlug,
+  attempted: propagationJob.attempted,
+  succeeded: propagationJob.succeeded,
+  failed: propagationJob.failed,
+  logs: propagationJob.logs,
+  result: propagationJob.result,
+  error: propagationJob.error,
+});
+
+export const startPropagationJob = (
+  systemName: string,
+  masterSystem?: { apiKeyName: string; systemId: number },
+) => {
+  const name = asString(systemName, '').trim();
+  if (!name) {
+    throw new Error('systemName is required for propagation job');
+  }
+  if (propagationJob.running) {
+    return getPropagationJobStatus();
+  }
+
+  propagationJob = {
+    running: true,
+    systemName: name,
+    startedAt: Date.now(),
+    finishedAt: null,
+    currentSlug: '',
+    attempted: 0,
+    succeeded: 0,
+    failed: [],
+    logs: [{
+      ts: new Date().toISOString(),
+      level: 'info',
+      message: `Старт propagate для ${name}`,
+    }],
+    result: null,
+    error: null,
+  };
+
+  void (async () => {
+    try {
+      const result = await propagatePublishToClients(name, masterSystem);
+      propagationJob.result = result;
+      propagationJob.attempted = result.attempted;
+      propagationJob.succeeded = result.succeeded;
+      propagationJob.failed = result.failed;
+      pushPropagationJobLog(
+        'info',
+        `Готово: ${result.succeeded}/${result.attempted} клиентов${result.failed.length > 0 ? `, ошибок: ${result.failed.length}` : ''}`,
+      );
+    } catch (error) {
+      propagationJob.error = asString((error as Error).message, 'Propagation failed');
+      pushPropagationJobLog('error', propagationJob.error);
+    } finally {
+      propagationJob.running = false;
+      propagationJob.finishedAt = Date.now();
+      propagationJob.currentSlug = '';
+    }
+  })();
+
+  return getPropagationJobStatus();
+};
+
 const propagatePublishToClients = async (systemName: string, masterSystem?: {
   apiKeyName: string;
   systemId: number;
@@ -14727,6 +14845,11 @@ const propagatePublishToClients = async (systemName: string, masterSystem?: {
   ).catch(() => []);
   const failed: Array<{ tenantId: number; slug: string; error: string }> = [];
   let succeeded = 0;
+  const total = Array.isArray(rows) ? rows.length : 0;
+  if (propagationJob.running) {
+    propagationJob.attempted = total;
+  }
+  pushPropagationJobLog('info', `Клиентов в очереди: ${total}`);
   for (const row of Array.isArray(rows) ? rows : []) {
     const tenantId = Number(row.tenant_id);
     if (!Number.isFinite(tenantId) || tenantId <= 0) continue;
@@ -14734,6 +14857,10 @@ const propagatePublishToClients = async (systemName: string, masterSystem?: {
     try {
       const tenant = await getTenantById(tenantId);
       slug = tenant?.slug || String(tenantId);
+      if (propagationJob.running) {
+        propagationJob.currentSlug = slug;
+      }
+      pushPropagationJobLog('info', `[${succeeded + failed.length + 1}/${total}] Materialize ${slug}…`);
       const plan = await getPlanForTenant(tenantId, 'algofund_client');
       const profile = await getAlgofundProfile(tenantId);
       if (!plan || !profile) {
@@ -14762,15 +14889,23 @@ const propagatePublishToClients = async (systemName: string, masterSystem?: {
         [tenantId]
       );
       succeeded += 1;
+      if (propagationJob.running) {
+        propagationJob.succeeded = succeeded;
+      }
+      pushPropagationJobLog('info', `✓ ${slug} (${succeeded}/${total})`);
     } catch (error) {
       const msg = (error as Error)?.message || String(error);
       logger.warn(`[propagatePublishToClients] tenant=${tenantId} slug=${slug} failed: ${msg}`);
       failed.push({ tenantId, slug, error: msg });
+      if (propagationJob.running) {
+        propagationJob.failed = [...failed];
+      }
+      pushPropagationJobLog('error', `✗ ${slug}: ${msg}`);
     }
   }
   return {
     systemName,
-    attempted: Array.isArray(rows) ? rows.length : 0,
+    attempted: total,
     succeeded,
     failed,
   };
@@ -14849,9 +14984,10 @@ export const publishAdminTradingSystem = async (payload?: {
     fundingRatePercent: 0,
   });
 
-  let propagation: Awaited<ReturnType<typeof propagatePublishToClients>> | null = null;
+  let propagation: ReturnType<typeof getPropagationJobStatus> | Awaited<ReturnType<typeof propagatePublishToClients>> | null = null;
   if (existing && propagateToClients) {
-    propagation = await propagatePublishToClients(sourceSystem.systemName, {
+    // Background job: HTTP returns immediately; UI polls /admin/propagation-status.
+    propagation = startPropagationJob(sourceSystem.systemName, {
       apiKeyName: sourceSystem.apiKeyName,
       systemId: sourceSystem.systemId,
     });

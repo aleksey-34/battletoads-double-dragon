@@ -2898,6 +2898,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [algofundNote, setAlgofundNote] = useState('');
   const [algofundDecisionNote, setAlgofundDecisionNote] = useState('');
   const [retryMaterializeModalVisible, setRetryMaterializeModalVisible] = useState(false);
+  const [propagationModalVisible, setPropagationModalVisible] = useState(false);
+  const [propagationJobStatus, setPropagationJobStatus] = useState<{
+    running: boolean;
+    systemName: string;
+    currentSlug: string;
+    attempted: number;
+    succeeded: number;
+    failed: Array<{ tenantId: number; slug: string; error: string }>;
+    logs: Array<{ ts: string; level: string; message: string }>;
+    error: string | null;
+  } | null>(null);
   const [publishResponse, setPublishResponse] = useState<AdminPublishResponse | null>(() => {
     if (typeof window === 'undefined') {
       return null;
@@ -7247,6 +7258,49 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const pollPropagationJobUntilDone = async (): Promise<{
+    succeeded: number;
+    failed: Array<{ tenantId: number; slug: string; error: string }>;
+  } | null> => {
+    const maxAttempts = 3600;
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const response = await axios.get<{
+        success?: boolean;
+        running?: boolean;
+        systemName?: string;
+        currentSlug?: string;
+        attempted?: number;
+        succeeded?: number;
+        failed?: Array<{ tenantId: number; slug: string; error: string }>;
+        logs?: Array<{ ts: string; level: string; message: string }>;
+        error?: string | null;
+        result?: { succeeded?: number; failed?: Array<{ tenantId: number; slug: string; error: string }> };
+      }>('/api/saas/admin/propagation-status');
+      const data = response.data || {};
+      setPropagationJobStatus({
+        running: Boolean(data.running),
+        systemName: String(data.systemName || ''),
+        currentSlug: String(data.currentSlug || ''),
+        attempted: Number(data.attempted || 0),
+        succeeded: Number(data.succeeded || 0),
+        failed: Array.isArray(data.failed) ? data.failed : [],
+        logs: Array.isArray(data.logs) ? data.logs : [],
+        error: data.error ? String(data.error) : null,
+      });
+      if (!data.running) {
+        const result = data.result;
+        const failedRaw = Array.isArray(result?.failed) ? result?.failed : data.failed;
+        const failedList = (Array.isArray(failedRaw) ? failedRaw : []) as Array<{ tenantId: number; slug: string; error: string }>;
+        return {
+          succeeded: Number(result?.succeeded ?? data.succeeded ?? 0),
+          failed: failedList,
+        };
+      }
+      await new Promise((resolve) => { window.setTimeout(resolve, 2000); });
+    }
+    return null;
+  };
+
   const saveTsReviewSnapshotFromBacktest = async (options?: { publishAfterSave?: boolean }) => {
     if (!backtestDrawerContext || backtestDrawerContext.kind !== 'algofund-ts' || !adminSweepBacktestResult || adminSweepBacktestResult.kind !== 'algofund-ts') {
       messageApi.warning('Сначала открой backtest ТС и дождись метрик');
@@ -7407,13 +7461,43 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           editInPlace,
           propagateToClients: editInPlace,
           cardOverrides,
-        });
+        }, { timeout: 120000 });
         const publishedSystemName = String(publishRes.data?.sourceSystem?.systemName || '').trim();
         if (publishedSystemName) {
           resolvedSystemName = publishedSystemName;
         }
-        const propagation = publishRes.data?.publishMeta?.propagation;
-        if (editInPlace && propagation) {
+        const propagation = publishRes.data?.publishMeta?.propagation as {
+          running?: boolean;
+          attempted?: number;
+          succeeded?: number;
+          failed?: Array<{ tenantId: number; slug: string; error: string }>;
+        } | null;
+        if (editInPlace && propagation?.running) {
+          setPropagationModalVisible(true);
+          setPropagationJobStatus({
+            running: true,
+            systemName: publishedSystemName || snapshotKey,
+            currentSlug: '',
+            attempted: Number(propagation.attempted || publishPreview?.connectedClientCount || 0),
+            succeeded: 0,
+            failed: [],
+            logs: [{ ts: new Date().toISOString(), level: 'info', message: 'Материализация запущена на сервере…' }],
+            error: null,
+          });
+          const finalPropagation = await pollPropagationJobUntilDone();
+          setPropagationModalVisible(false);
+          if (finalPropagation) {
+            const okN = finalPropagation.succeeded;
+            const failN = finalPropagation.failed.length;
+            if (failN > 0) {
+              messageApi.warning(`Материализация: ${okN} OK, ошибок ${failN}`);
+            } else {
+              messageApi.success(`Применено ко всем ${okN} клиентам`);
+            }
+          } else {
+            messageApi.warning('Материализация: таймаут опроса статуса — проверь journalctl на VPS');
+          }
+        } else if (editInPlace && propagation) {
           const okN = Number(propagation.succeeded || 0);
           const failN = Number((propagation.failed || []).length || 0);
           if (failN > 0) {
@@ -13212,6 +13296,60 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           ].filter((item) => item.key !== 'synctrade' && (isAdminSurface || item.key === surfaceMode))}
         />
       </Spin>
+
+      <Modal
+        title="Материализация на клиентов"
+        open={propagationModalVisible}
+        closable={!propagationJobStatus?.running}
+        maskClosable={false}
+        onCancel={() => {
+          if (!propagationJobStatus?.running) {
+            setPropagationModalVisible(false);
+          }
+        }}
+        footer={propagationJobStatus?.running ? null : (
+          <Button type="primary" onClick={() => setPropagationModalVisible(false)}>Закрыть</Button>
+        )}
+        width={720}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Text type="secondary">
+            Обновление карточки на мастере уже применено. Ниже — propagate по Algofund-клиентам
+            (archive orphans на WEEX может давать 429 — это нормально, процесс идёт).
+          </Text>
+          <Progress
+            percent={propagationJobStatus && propagationJobStatus.attempted > 0
+              ? Math.round((propagationJobStatus.succeeded / propagationJobStatus.attempted) * 100)
+              : (propagationJobStatus?.running ? 5 : 0)}
+            status={propagationJobStatus?.running ? 'active' : 'success'}
+            format={() => `${propagationJobStatus?.succeeded || 0} / ${propagationJobStatus?.attempted || '?'}`}
+          />
+          {propagationJobStatus?.currentSlug ? (
+            <Text>Сейчас: <Text code>{propagationJobStatus.currentSlug}</Text></Text>
+          ) : null}
+          <div
+            style={{
+              maxHeight: 320,
+              overflow: 'auto',
+              fontFamily: 'monospace',
+              fontSize: 12,
+              background: '#0d1117',
+              color: '#c9d1d9',
+              padding: 12,
+              borderRadius: 6,
+            }}
+          >
+            {(propagationJobStatus?.logs || []).slice(-80).map((line, index) => (
+              <div
+                key={`${line.ts}-${index}`}
+                style={{ color: line.level === 'error' ? '#ff7b72' : line.level === 'warn' ? '#d29922' : '#8b949e' }}
+              >
+                {line.message}
+              </div>
+            ))}
+          </div>
+        </Space>
+      </Modal>
 
       <Modal
         title="Retry Algofund Materialization"
