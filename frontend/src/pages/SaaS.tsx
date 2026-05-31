@@ -1752,6 +1752,106 @@ const normalizeSeriesTime = (value: unknown): number | null => {
   return null;
 };
 
+const SECONDS_Y2K = 946684800;
+
+const safeArrayMin = (values: number[]): number => {
+  if (!values.length) {
+    return 0;
+  }
+  let min = values[0];
+  for (let index = 1; index < values.length; index += 1) {
+    if (values[index] < min) {
+      min = values[index];
+    }
+  }
+  return min;
+};
+
+const safeArrayMax = (values: number[]): number => {
+  if (!values.length) {
+    return 0;
+  }
+  let max = values[0];
+  for (let index = 1; index < values.length; index += 1) {
+    if (values[index] > max) {
+      max = values[index];
+    }
+  }
+  return max;
+};
+
+const parsePeriodBoundarySec = (value?: string | null): number | null => {
+  const text = String(value || '').trim().slice(0, 10);
+  if (!text) {
+    return null;
+  }
+  const parsedMs = Date.parse(text);
+  if (!Number.isFinite(parsedMs)) {
+    return null;
+  }
+  return Math.floor(parsedMs / 1000);
+};
+
+const looksLikeIndexTimestamps = (times: number[]): boolean => {
+  if (times.length === 0) {
+    return false;
+  }
+  const min = safeArrayMin(times);
+  const max = safeArrayMax(times);
+  if (max < SECONDS_Y2K) {
+    return true;
+  }
+  if (min < SECONDS_Y2K && max >= SECONDS_Y2K) {
+    return true;
+  }
+  return false;
+};
+
+const anchorLineSeriesToPeriod = (
+  points: LinePoint[],
+  period?: { dateFrom?: string | null; dateTo?: string | null } | null,
+): LinePoint[] => {
+  if (!Array.isArray(points) || points.length === 0) {
+    return points;
+  }
+  const times = points.map((point) => point.time);
+  if (!looksLikeIndexTimestamps(times)) {
+    return points;
+  }
+
+  const endSec = parsePeriodBoundarySec(period?.dateTo) ?? Math.floor(Date.now() / 1000);
+  const startSec = parsePeriodBoundarySec(period?.dateFrom) ?? (endSec - 86400 * 90);
+  const span = Math.max(1, endSec - startSec);
+  const minT = safeArrayMin(times);
+  const maxT = safeArrayMax(times);
+  const tSpan = Math.max(1, maxT - minT);
+
+  if (points.length === 1) {
+    return [{ ...points[0], time: startSec }];
+  }
+
+  return points.map((point) => ({
+    ...point,
+    time: Math.floor(startSec + ((point.time - minT) / tSpan) * span),
+  }));
+};
+
+const formatDcaBaseSettingLabel = (
+  settings?: Record<string, unknown> | null,
+  initialBalance?: number,
+): string => {
+  const cfg = settings || {};
+  const mode = cfg.baseAmountMode === 'percent' ? 'percent' : 'fixed';
+  const usdt = Number(cfg.baseAmountUsdt || 0);
+  const deposit = Number(initialBalance || 0);
+  if (mode === 'percent') {
+    const pct = Number(cfg.baseAmountPercent || 0);
+    const depositHint = deposit > 0 ? ` от ${deposit.toLocaleString('ru-RU')} USDT` : '';
+    return `base ${pct}% депозита (~${usdt.toFixed(0)} USDT${depositHint})`;
+  }
+  return `base ${usdt.toFixed(0)} USDT (fixed)`;
+};
+
 const dedupeLinePoints = (points: LinePoint[]): LinePoint[] => {
   if (points.length <= 1) {
     return points;
@@ -1929,10 +2029,10 @@ const normalizeOverlayToEquityScale = (overlayPoints: LinePoint[], equityPoints:
     return [];
   }
 
-  const overlayMin = Math.min(...overlayValues);
-  const overlayMax = Math.max(...overlayValues);
-  const equityMin = Math.min(...equityValues);
-  const equityMax = Math.max(...equityValues);
+  const overlayMin = safeArrayMin(overlayValues);
+  const overlayMax = safeArrayMax(overlayValues);
+  const equityMin = safeArrayMin(equityValues);
+  const equityMax = safeArrayMax(equityValues);
   const equityRange = Math.max(1e-6, equityMax - equityMin);
   const targetMin = equityMin + equityRange * 0.08;
   const targetMax = equityMax - equityRange * 0.08;
@@ -1969,10 +2069,15 @@ const buildDailyTradeFrequencySeries = (
     }
   }
 
-  const startTime = Math.min(...equityPoints.map((point) => point.time));
-  const endTime = Math.max(...equityPoints.map((point) => point.time));
+  const startTime = safeArrayMin(equityPoints.map((point) => point.time));
+  const endTime = safeArrayMax(equityPoints.map((point) => point.time));
   const startDay = Math.floor(startTime / 86400) * 86400;
   const endDay = Math.floor(endTime / 86400) * 86400;
+  const daySpan = Math.max(0, Math.floor((endDay - startDay) / 86400));
+
+  if (daySpan > 5000) {
+    return downsampleLinePoints([]);
+  }
 
   if (dayCounts.size === 0 && Number(fallbackTradesCount || 0) > 0) {
     const totalTrades = Number(fallbackTradesCount || 0);
@@ -2023,8 +2128,8 @@ const buildDailyTradeFrequencySeries = (
     });
 
     // Range-normalize to [0.3, 1.7] × perDay — guarantees always-visible variation.
-    const minW = Math.min(...rawWeights);
-    const maxW = Math.max(...rawWeights);
+    const minW = safeArrayMin(rawWeights);
+    const maxW = safeArrayMax(rawWeights);
     const span = maxW - minW;
     const normalizedWeights = rawWeights.map((w) =>
       span < 1e-9
@@ -2555,6 +2660,37 @@ const getPeriodDurationDays = (period?: PeriodInfo | null): number | null => {
 
   const days = (toMs - fromMs) / (24 * 60 * 60 * 1000);
   return days > 0 ? days : null;
+};
+
+const resolveSnapshotOfferIds = (offerIds?: string[]) => Array.from(new Set(
+  (Array.isArray(offerIds) ? offerIds : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean),
+));
+
+const computeBacktestDatesFromSnapshot = (
+  snapshot?: TsSnapshotBacktestDatesSource | null,
+): { dateFrom: string; dateTo: string } | null => {
+  if (!snapshot) {
+    return null;
+  }
+  const settings = snapshot.backtestSettings || {};
+  const rawFrom = String(settings.dateFrom || '').trim();
+  const rawTo = String(settings.dateTo || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(rawFrom) && /^\d{4}-\d{2}-\d{2}$/.test(rawTo)) {
+    return { dateFrom: rawFrom, dateTo: rawTo };
+  }
+
+  const periodDays = Math.max(1, Math.floor(Number(snapshot.periodDays || 90)));
+  const anchorMs = Date.parse(String(snapshot.updatedAt || ''));
+  const endMs = Number.isFinite(anchorMs) && anchorMs > 0 ? anchorMs : Date.now();
+  const end = new Date(endMs);
+  end.setUTCHours(0, 0, 0, 0);
+  const start = new Date(end.getTime() - periodDays * 86400000);
+  return {
+    dateFrom: start.toISOString().slice(0, 10),
+    dateTo: end.toISOString().slice(0, 10),
+  };
 };
 
 const formatPeriodLabel = (period?: PeriodInfo | null): string => {
@@ -3543,10 +3679,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     .map((setName) => {
       const runtimeSystem = runtimeMasterSystemByName.get(setName) || null;
       const snapshot = summary?.offerStore?.tsBacktestSnapshots?.[setName] || null;
-      const snapshotOfferIds = normalizeStorefrontTsOfferIds(Array.isArray(snapshot?.offerIds) ? (snapshot?.offerIds || []).map((item: any) => String(item)) : []);
+      const snapshotOfferIds = resolveSnapshotOfferIds(snapshot?.offerIds || []);
       const runtimeOfferIds = normalizeStorefrontTsOfferIds(runtimeSystem?.offerIds || []);
-      const offerIds = runtimeOfferIds.length > 0 ? runtimeOfferIds : snapshotOfferIds;
-      const offerCount = offerIds.length;
+      const offerIds = snapshotOfferIds.length > 0 ? snapshotOfferIds : runtimeOfferIds;
+      const offerCount = snapshotOfferIds.length > 0 ? snapshotOfferIds.length : offerIds.length;
       return {
         setKey: setName,
         displayName: setName,
@@ -3576,8 +3712,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         isDraft: false,
         isSnapshot: true,
         offers: [],
-        offerIds: normalizeStorefrontTsOfferIds(Array.isArray(snap.offerIds) ? snap.offerIds.map(String) : []),
-        offerCount: normalizeStorefrontTsOfferIds(Array.isArray(snap.offerIds) ? snap.offerIds.map(String) : []).length,
+        offerIds: resolveSnapshotOfferIds(snap.offerIds || []),
+        offerCount: resolveSnapshotOfferIds(snap.offerIds || []).length,
         avgRet: Number(snap.ret || 0),
         avgPf: Number(snap.pf || 0),
         avgDd: Number(snap.dd || 0),
@@ -3684,8 +3820,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       .filter((point: any) => Number.isFinite(point.time) && Number.isFinite(point.equity));
   };
 
-  const mapSnapshotEquityPoints = (equityPoints?: number[], periodDays?: number) => {
+  const mapSnapshotEquityPoints = (equityPoints?: number[], periodDays?: number, snapshot?: TsSnapshotBacktestDatesSource | null) => {
     if (!Array.isArray(equityPoints) || equityPoints.length === 0) return [];
+    const computedPeriod = snapshot
+      ? computeBacktestDatesFromSnapshot(snapshot)
+      : (periodDays ? computeBacktestDatesFromSnapshot({ periodDays, backtestSettings: {} }) : null);
+    const fromMs = computedPeriod ? Date.parse(computedPeriod.dateFrom) : NaN;
+    const toMs = computedPeriod ? Date.parse(computedPeriod.dateTo) : NaN;
+    if (Number.isFinite(fromMs) && Number.isFinite(toMs) && toMs > fromMs) {
+      const totalSpanSec = Math.max(1, Math.floor((toMs - fromMs) / 1000));
+      const step = totalSpanSec / Math.max(equityPoints.length - 1, 1);
+      return equityPoints
+        .map((equity: number, index: number) => ({
+          time: Math.floor(fromMs / 1000 + index * step),
+          equity: Number(equity),
+        }))
+        .filter((point: { time: number; equity: number }) => Number.isFinite(point.time) && Number.isFinite(point.equity));
+    }
     const nowSec = Math.floor(Date.now() / 1000);
     const dayS = 86400;
     const days = Number(periodDays) > 0 ? Number(periodDays) : equityPoints.length - 1;
@@ -3970,9 +4121,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     });
     const runtimeSystem = availableSystemByName.get(systemName);
     const runtimeMasterSystem = runtimeMasterSystemByName.get(systemName) || null;
-    const snapshotOfferIds = normalizeStorefrontTsOfferIds(snapshotForSystem?.offerIds || []);
+    const snapshotOfferIds = resolveSnapshotOfferIds(snapshotForSystem?.offerIds || []);
     const runtimeOfferIds = normalizeStorefrontTsOfferIds(runtimeMasterSystem?.offerIds || []);
-    const canonicalOfferIds = runtimeOfferIds.length > 0 ? runtimeOfferIds : snapshotOfferIds;
+    const canonicalOfferIds = snapshotOfferIds.length > 0 ? snapshotOfferIds : runtimeOfferIds;
     const runtimeSystemId = publishResponse?.sourceSystem?.systemName === systemName
       ? Number(publishResponse.sourceSystem.systemId || 0)
       : runtimeSystem?.id || null;
@@ -4001,7 +4152,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       0,
       Number(snapshotForSystem?.backtestSettings?.maxOpenPositions || runtimeSystem?.maxOpenPositions || 0),
     );
-    const snapshotCurve = mapSnapshotEquityPoints(downsampleNumericSeries(Array.isArray(snapshotForSystem?.equityPoints) ? (snapshotForSystem?.equityPoints || []) : [], 64), Number(snapshotForSystem?.periodDays || 0));
+    const snapshotCurve = mapSnapshotEquityPoints(
+      downsampleNumericSeries(Array.isArray(snapshotForSystem?.equityPoints) ? (snapshotForSystem?.equityPoints || []) : [], 64),
+      Number(snapshotForSystem?.periodDays || 0),
+      snapshotForSystem,
+    );
 
     const activeSetKey = String(selectedAdminDraftTsSetKey || '').trim();
     const latestBacktestMatchesSystem = activeSetKey
@@ -6368,6 +6523,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         console.warn('publish preview fetch failed', previewErr);
       }
 
+      const isNewCardIntent = setKey !== fallbackDraftKey;
+      if (isNewCardIntent && editInPlace) {
+        messageApi.error(
+          `Имя «${setKey}» после нормализации совпадает с существующей карточкой (${connectedClients} клиентов). `
+          + 'Выберите другое имя для новой карточки.',
+        );
+        setActionLoading('');
+        return;
+      }
+      editInPlace = editInPlace && !isNewCardIntent;
+
       if (editInPlace && connectedClients > 0) {
         try {
           await new Promise<void>((resolve, reject) => {
@@ -6846,8 +7012,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
-    const startTime = Math.min(...equity.map((point) => point.time));
-    const endTime = Math.max(...equity.map((point) => point.time));
+    const startTime = safeArrayMin(equity.map((point) => point.time));
+    const endTime = safeArrayMax(equity.map((point) => point.time));
     const apiKeyName = String(
       adminSweepBacktestResult.rerun?.apiKeyName
       || adminSweepBacktestResult.sweepApiKeyName
@@ -7146,7 +7312,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         console.warn('publish preview fetch failed', previewErr);
       }
     }
-    const willAffectStorefront = shouldPublishAfterSave && Boolean(publishPreview?.cardExists) && Number(publishPreview?.connectedClientCount || 0) > 0;
+    const willAffectStorefront = shouldPublishAfterSave
+      && !isNewCardName
+      && Boolean(publishPreview?.cardExists)
+      && Number(publishPreview?.connectedClientCount || 0) > 0;
+
+    // User entered a "new" display name but slug normalizes to an existing card
+    // (e.g. "balanced-portfolio-v2+" → slug "balanced-portfolio-v2").
+    if (isNewCardName && publishPreview?.cardExists) {
+      messageApi.error(
+        `Имя «${snapshotKey}» после нормализации совпадает с существующей карточкой (slug «${publishPreview.slug || snapshotKey}», `
+        + `${Number(publishPreview.connectedClientCount || 0)} клиентов). `
+        + 'Выберите другое имя, например balanced-portfolio-v3 или balanced-portfolio-v2-dca.',
+      );
+      return null;
+    }
 
     // If saving/publishing will touch storefront card, ask explicit confirmation.
     if (willAffectStorefront) {
@@ -7189,7 +7369,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       let resolvedSystemName = String(adminSweepBacktestResult?.publishMeta?.systemName || '').trim();
 
       if (shouldPublishAfterSave) {
-        const editInPlace = Boolean(publishPreview?.cardExists);
+        const editInPlace = Boolean(publishPreview?.cardExists) && !isNewCardName;
         const cardOverrides = editInPlace
           ? {
               lotPercentOverride: Math.max(0, Number(adminSweepBacktestLotPercentOverride ?? 0)),
@@ -8024,8 +8204,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const tradeFrequencyScore = Number(settings.tradeFrequencyScore ?? 5);
     const initialBalance = Number(settings.initialBalance ?? 10000);
     const riskScaleMaxPercent = Number(settings.riskScaleMaxPercent ?? 100);
-    const dateFrom = String(settings.dateFrom || '').trim() || undefined;
-    const dateTo = String(settings.dateTo || '').trim() || undefined;
+    const dateFrom = String(settings.dateFrom || '').trim() || computeBacktestDatesFromSnapshot(snapshot)?.dateFrom;
+    const dateTo = String(settings.dateTo || '').trim() || computeBacktestDatesFromSnapshot(snapshot)?.dateTo;
+    const periodDaysFromSnapshot = Math.max(1, Math.floor(Number(snapshot.periodDays ?? 90)));
     const offerStoreById = new Map(
       (summary?.offerStore?.offers || []).map((offer: any) => [String(offer.offerId), offer])
     );
@@ -8037,7 +8218,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       const dd = Number(snapshot.dd ?? 0);
       const trades = Math.max(0, Math.floor(Number(snapshot.trades ?? 0)));
       const wr = Number(snapshot.winRate ?? 0);
-      const periodDaysFromSnapshot = Math.max(1, Math.floor(Number(snapshot.periodDays ?? 90)));
       const tradesPerDay = Number((trades / Math.max(1, periodDaysFromSnapshot)).toFixed(3));
       return {
         offerId,
@@ -8089,9 +8269,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           tradesCount: Math.max(0, Math.floor(Number(snapshot.trades ?? 0))),
           finalEquity: Number(snapshot.finalEquity ?? 0),
         },
-        equity: (Array.isArray(snapshot.equityPoints)
-          ? snapshot.equityPoints.map((value: number, idx: number) => ({ time: idx, value: Number(value) }))
-          : []) as EquityPoint[],
+        equity: mapSnapshotEquityPoints(
+          Array.isArray(snapshot.equityPoints) ? snapshot.equityPoints : [],
+          periodDaysFromSnapshot,
+          snapshot,
+        ).map((point) => ({ time: point.time, value: point.equity })) as EquityPoint[],
       },
     };
     return syntheticResult;
@@ -8108,12 +8290,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const runtimeSystem = runtimeMasterSystemByName.get(normalizedSystemName) || null;
     const snapshotSetKey = String(snapshot?.setKey || '').trim();
     const setKey = snapshotSetKey || (snapshot ? normalizedSystemName : '');
-    const snapshotOfferIds = normalizeStorefrontTsOfferIds(snapshot?.offerIds || []);
+    const snapshotOfferIds = resolveSnapshotOfferIds(snapshot?.offerIds || []);
     const runtimeOfferIds = normalizeStorefrontTsOfferIds(runtimeSystem?.offerIds || []);
-    // Источник истины — снапшот (под него посчитаны опубликованные метрики на карточке).
-    // runtimeOfferIds может быть короче, потому что часть стратегий-членов ТС не имеет
-    // соответствующих карточек в storefront pool (нет single-bt / нет offer.store записи).
-    // Если снапшот пуст — fallback на runtime.
+    // Backtest composition = полный snapshot (38 offers), не curated subset (5).
     const offerIds = snapshotOfferIds.length > 0 ? snapshotOfferIds : runtimeOfferIds;
 
     if (offerIds.length === 0) {
@@ -8131,6 +8310,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       );
       if (syntheticResult) {
         const settings: any = snapshot.backtestSettings || {};
+        const computedDates = computeBacktestDatesFromSnapshot(snapshot);
         applyBacktestSettings({
           riskScore: Number(settings.riskScore ?? 5),
           tradeFrequencyScore: Number(settings.tradeFrequencyScore ?? 5),
@@ -8142,8 +8322,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           commissionPercent: Math.max(0, Number(settings.commissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent)),
           slippagePercent: Math.max(0, Number(settings.slippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent)),
           fundingRatePercent: Math.max(0, Number(settings.fundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent)),
-          dateFrom: String(settings.dateFrom || '').trim() || undefined,
-          dateTo: String(settings.dateTo || '').trim() || undefined,
+          dateFrom: computedDates?.dateFrom,
+          dateTo: computedDates?.dateTo,
         });
         setSelectedAdminDraftTsSetKey(setKey);
         setBacktestTsWeightsByOfferId(normalizeBacktestTsWeights(offerIds, runtimeSystem?.offerWeightsById || {}));
@@ -13996,7 +14176,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     <span>{`DCA scan: ${tsDcaResearchResult.viableCount || 0} viable / ${tsDcaResearchResult.candidatePoolSize || 0} checked`}</span>
                     {(tsDcaResearchResult as { fromCache?: boolean }).fromCache ? <Tag color="gold">из кэша</Tag> : null}
                     {isTsDcaScanStale ? <Tag color="orange">настройки изменились</Tag> : null}
-                    {tsDcaResearchResult.period ? <Tag>{formatPeriodLabel(tsDcaResearchResult.period)}</Tag> : null}
+                    {tsDcaResearchResult.period ? (
+                      <Tag color="blue">
+                        {formatPeriodLabel(tsDcaResearchResult.period)}
+                        {(tsDcaResearchResult.period as { fullDepth?: boolean }).fullDepth ? ' • полная глубина карточки' : ''}
+                      </Tag>
+                    ) : null}
                   </Space>
                 )}
               >
@@ -14008,7 +14193,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     message="Параметры этого scan (с сервера)"
                     description={(() => {
                       const s = (tsDcaResearchResult as { dcaSettings?: Record<string, unknown> }).dcaSettings || {};
-                      return `TF ${String(s.interval || '—')} • step ${Number(s.stepPercent || 0)}% • TP ${Number(s.tpPercent || 0)}% • max orders ${Number(s.maxOrders || 0)} • base ${Number(s.baseAmountUsdt || 0)} USDT • filter ${String(s.entryFilter || 'always')}`;
+                      const deposit = Number((tsDcaResearchResult as { initialBalance?: number }).initialBalance || adminSweepBacktestInitialBalance || 0);
+                      return `TF ${String(s.interval || '—')} • step ${Number(s.stepPercent || 0)}% • TP ${Number(s.tpPercent || 0)}% • max orders ${Number(s.maxOrders || 0)} • ${formatDcaBaseSettingLabel(s, deposit)} • filter ${String(s.entryFilter || 'always')}`;
                     })()}
                   />
                 ) : null}
@@ -14396,11 +14582,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         value: Number(point.equity || 0),
                       }))
                       : [];
-                    const equitySeries = combinedEquityRaw.length > 0
-                      ? toLineSeriesData(combinedEquityRaw)
-                      : tsSweepEquitySeries;
+                    const chartPeriod = tsDcaCombinedPreview?.period
+                      || tsDcaResearchResult?.period
+                      || (backtestDatesUserModifiedRef.current && hasCustomBacktestDates
+                        ? { dateFrom: adminSweepBacktestDateFrom, dateTo: adminSweepBacktestDateTo }
+                        : adminSweepBacktestResult.period);
+                    const equitySeries = anchorLineSeriesToPeriod(
+                      combinedEquityRaw.length > 0
+                        ? toLineSeriesData(combinedEquityRaw)
+                        : tsSweepEquitySeries,
+                      chartPeriod,
+                    );
                     const tsOnlyOverlaySeries = combinedEquityRaw.length > 0 && tsOnlyRealEquityRaw.length > 0
-                      ? toLineSeriesData(tsOnlyRealEquityRaw)
+                      ? anchorLineSeriesToPeriod(toLineSeriesData(tsOnlyRealEquityRaw), chartPeriod)
                       : [];
                     const usingRealTsDcaEngine = tsDcaEnabled && Boolean(tsDcaCombinedPreview?.combined?.summary);
                     const isSweepSynthetic = String(adminSweepBacktestResult.preview?.source || '') === 'admin_saved_ts_snapshot_synthetic';
@@ -14451,12 +14645,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                     const sweepPnlCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.pnl || []);
                     const sweepDrawdownCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.drawdownPercent || []);
-                    const effectivePnlCurve = usingRealTsDcaEngine
-                      ? fallbackCurves.pnl
-                      : (sweepPnlCurve.length > 0 ? sweepPnlCurve : fallbackCurves.pnl);
-                    const effectiveDrawdownCurve = usingRealTsDcaEngine
-                      ? fallbackCurves.drawdown
-                      : (sweepDrawdownCurve.length > 0 ? sweepDrawdownCurve : fallbackCurves.drawdown);
+                    const effectivePnlCurve = anchorLineSeriesToPeriod(
+                      usingRealTsDcaEngine
+                        ? fallbackCurves.pnl
+                        : (sweepPnlCurve.length > 0 ? sweepPnlCurve : fallbackCurves.pnl),
+                      chartPeriod,
+                    );
+                    const effectiveDrawdownCurve = anchorLineSeriesToPeriod(
+                      usingRealTsDcaEngine
+                        ? fallbackCurves.drawdown
+                        : (sweepDrawdownCurve.length > 0 ? sweepDrawdownCurve : fallbackCurves.drawdown),
+                      chartPeriod,
+                    );
 
                     const summaryFinalEquity = summary ? Number(summary.finalEquity ?? NaN) : NaN;
                     const summaryNetPnl = Number.isFinite(summaryFinalEquity)
@@ -14481,10 +14681,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         )
                       )
                       : (Number.isFinite(serverTradesCount) ? serverTradesCount : 0);
+                    const maxDdFromCurve = effectiveDrawdownCurve.length > 0
+                      ? safeArrayMax(effectiveDrawdownCurve.map((point) => point.value))
+                      : 0;
                     const maxDd = usingRealTsDcaEngine && summary
-                      ? Number(summary.maxDrawdownPercent ?? (effectiveDrawdownCurve.length > 0 ? Math.max(...effectiveDrawdownCurve.map((point) => point.value)) : 0))
+                      ? Number(summary.maxDrawdownPercent ?? maxDdFromCurve)
                       : summary
-                        ? Number(summary.maxDrawdownPercent ?? (effectiveDrawdownCurve.length > 0 ? Math.max(...effectiveDrawdownCurve.map((point) => point.value)) : 0))
+                        ? Number(summary.maxDrawdownPercent ?? maxDdFromCurve)
                         : 0;
                     const marginLoad = summary ? Number(summary.marginLoadPercent ?? 0) : 0;
                     const rerunErrorText = String(adminSweepBacktestResult.rerun?.error || '').trim();

@@ -109,6 +109,19 @@ const resolveAdminPreviewEngineOverridesForTsPortfolio = async (params: {
   };
 };
 
+const maxNumericValues = (values: number[]): number => {
+  if (!Array.isArray(values) || values.length === 0) {
+    return 0;
+  }
+  let max = values[0];
+  for (let index = 1; index < values.length; index += 1) {
+    if (values[index] > max) {
+      max = values[index];
+    }
+  }
+  return max;
+};
+
 const applyAdminPreviewSummaryFromEquity = (
   summary: Record<string, unknown>,
   equityCurve: Array<{ time: number; equity: number }>,
@@ -3678,7 +3691,7 @@ const summarizeRealRerunEquityCurve = (
   const finalEquity = asNumber(sanitized[sanitized.length - 1]?.equity, initialBalance);
   const totalReturnPercent = ((finalEquity - startEquity) / startEquity) * 100;
   const maxDrawdownPercent = curves.drawdownPercent.length > 0
-    ? Math.min(100, Math.max(...curves.drawdownPercent.map((point) => asNumber(point.value, 0))))
+    ? Math.min(100, maxNumericValues(curves.drawdownPercent.map((point) => asNumber(point.value, 0))))
     : 0;
   return {
     finalEquity: Number(finalEquity.toFixed(4)),
@@ -4494,6 +4507,8 @@ const getStrategyNameMapByIds = async (strategyIdsRaw: number[]): Promise<Map<nu
 const buildSetSlug = (raw: string): string => asString(raw, '')
   .trim()
   .toLowerCase()
+  // Preserve intentional suffixes: "v2+" and "v2 plus" must not collapse to "v2".
+  .replace(/\+/g, '-plus-')
   .replace(/[^a-z0-9]+/g, '-')
   .replace(/^-+|-+$/g, '')
   .slice(0, 40);
@@ -4639,8 +4654,8 @@ const ensurePublishedSourceSystem = async (
     systemNameSuffix?: string;
   }
 ): Promise<{ apiKeyName: string; systemId: number; systemName: string }> => {
-  const catalog = loadLatestClientCatalog();
-  const draftMembers = Array.isArray(options?.draftMembersOverride) && (options?.draftMembersOverride?.length || 0) > 0
+  let catalog = loadLatestClientCatalog();
+  const draftMembers = Array.isArray(options?.draftMembersOverride) && (options?.draftMembersOverride?.length || 0)  > 0
     ? (options?.draftMembersOverride || [])
     : (catalog?.adminTradingSystemDraft?.members || []);
   const systemNameSuffix = asString(options?.systemNameSuffix, '').trim();
@@ -4689,12 +4704,27 @@ const ensurePublishedSourceSystem = async (
     }
   }
 
+  const memberStrategyIdsOverrideEarly = draftMembers
+    .map((item) => Number(item.strategyId || 0))
+    .filter((value) => Number.isFinite(value) && value > 0);
+
   if (!catalog) {
-    const fallback = await getBestExistingSourceSystem();
-    if (fallback && fallback.apiKeyName && fallback.systemId > 0) {
-      return fallback;
+    if (memberStrategyIdsOverrideEarly.length === 0) {
+      const fallback = await getBestExistingSourceSystem();
+      if (fallback && fallback.apiKeyName && fallback.systemId > 0) {
+        return fallback;
+      }
+      throw new Error('Client catalog JSON not found in results/, and no trading systems available in DB.');
     }
-    throw new Error('Client catalog JSON not found in results/, and no trading systems available in DB.');
+    catalog = {
+      timestamp: new Date().toISOString(),
+      source: { sweepTimestamp: '', catalogPath: 'publish-draft-override' },
+      counts: { mono: 0, synth: 0, total: 0 },
+      apiKeyName: '',
+      config: { interval: '4h' },
+      adminTradingSystemDraft: { members: draftMembers },
+      clientCatalog: { mono: [], synth: [] },
+    } as unknown as CatalogData;
   }
 
   // Resolve api key by strategy ownership in DB (source of truth), not by latest sweep.
@@ -4754,12 +4784,15 @@ const ensurePublishedSourceSystem = async (
   }
 
   const dedupeStrategyIds = new Set<number>();
+  const trustDraftPublishIds = memberStrategyIdsOverrideEarly.length > 0;
   const members = membersRaw
     .map((item) => {
       const currentId = Number(item.strategy_id || 0);
-      const resolvedId = existingStrategyIds.has(currentId)
+      const resolvedId = trustDraftPublishIds
         ? currentId
-        : Number(existingStrategyIdByName.get(asString(item.strategy_name, '').toLowerCase()) || 0);
+        : (existingStrategyIds.has(currentId)
+          ? currentId
+          : Number(existingStrategyIdByName.get(asString(item.strategy_name, '').toLowerCase()) || 0));
 
       if (!resolvedId || dedupeStrategyIds.has(resolvedId)) {
         return null;
@@ -8487,6 +8520,7 @@ type DcaResearchCandidateRow = {
 type DcaResearchResult = {
   tsMarkets: string[];
   period: { dateFrom: string; dateTo: string; interval: string; fullDepth?: boolean };
+  initialBalance?: number;
   dcaSettings: NormalizedDcaSettings;
   scanFingerprint?: string;
   autotune?: boolean;
@@ -8918,6 +8952,7 @@ const executeDcaResearchCore = async (payload?: {
       interval: asString(ctx.sweep?.config?.interval, '4h'),
       fullDepth: ctx.previewDates.usedFullSweepDepth === true,
     },
+    initialBalance: ctx.initialBalance,
     dcaSettings: ctx.dcaSettings,
     scanFingerprint,
     autotune: autotuneTop,
@@ -8926,7 +8961,7 @@ const executeDcaResearchCore = async (payload?: {
     viableCount: viable.length,
     top: viable.slice(0, 5),
     fromCache: false,
-    note: `Classic DCA backtest (not Donchian). Period ${ctx.previewDates.dateFrom} → ${ctx.previewDates.dateTo}${ctx.previewDates.usedFullSweepDepth ? ' (full card / sweep depth)' : ''}. Scan: TF ${ctx.dcaSettings.interval} step ${ctx.dcaSettings.stepPercent}% TP ${ctx.dcaSettings.tpPercent}% max ${ctx.dcaSettings.maxOrders} base ${ctx.dcaSettings.baseAmountUsdt} USDT${autotuneTop ? ' • autotune around baseline' : ''}.`,
+    note: `Classic DCA backtest (not Donchian). Period ${ctx.previewDates.dateFrom} → ${ctx.previewDates.dateTo}${ctx.previewDates.usedFullSweepDepth ? ' (full card / sweep depth)' : ''}. Deposit ${ctx.initialBalance} USDT. Scan: TF ${ctx.dcaSettings.interval} step ${ctx.dcaSettings.stepPercent}% TP ${ctx.dcaSettings.tpPercent}% max ${ctx.dcaSettings.maxOrders} base ${ctx.dcaSettings.baseAmountMode === 'percent' ? `${ctx.dcaSettings.baseAmountPercent}% (~${ctx.dcaSettings.baseAmountUsdt} USDT)` : `${ctx.dcaSettings.baseAmountUsdt} USDT`}${autotuneTop ? ' • autotune around baseline' : ''}.`,
   };
   await saveDcaResearchRunCache(runCacheKey, {
     systemName,
@@ -13089,11 +13124,18 @@ export const getAlgofundState = async (
   );
   const currentPublishedSystemName = asString(profile?.published_system_name, '').trim().toUpperCase();
 
-  // Load available systems even without plan/profile (browse-only mode for dual-mode tenants)
-  const allApiKeyNames = await getAvailableApiKeyNames().catch(() => []);
+  // Load available systems even without plan/profile (browse-only mode for dual-mode tenants).
+  // Scan only master + tenant keys — iterating all client api keys triggers slow exchange snapshots.
+  const tenantApiKeyName = asString(
+    profile?.execution_api_key_name || profile?.assigned_api_key_name || tenant.assigned_api_key_name,
+    '',
+  ).trim();
+  const apiKeysToScan = Array.from(new Set(
+    ['BTDD_D1', tenantApiKeyName].filter(Boolean)
+  ));
   const allAlgofundSystemsMap = new Map<string, any>();
-  for (const apiKeyName of allApiKeyNames) {
-    const systems = await listTradingSystems(apiKeyName).catch(() => []);
+  for (const apiKeyName of apiKeysToScan) {
+    const systems = await listTradingSystems(apiKeyName, { skipMetrics: !forceRefreshPreview }).catch(() => []);
     for (const item of (Array.isArray(systems) ? systems : [])) {
       const systemName = asString(item?.name, '').trim();
       const normalizedSystemName = systemName.toUpperCase();
