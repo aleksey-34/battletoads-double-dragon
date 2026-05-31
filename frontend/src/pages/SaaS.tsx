@@ -3031,6 +3031,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [tsDcaDetectionSource, setTsDcaDetectionSource] = useState('close');
   const [adminSweepBacktestLoading, setAdminSweepBacktestLoading] = useState(false);
   const [adminSweepBacktestResult, setAdminSweepBacktestResult] = useState<AdminSweepBacktestPreviewResponse | null>(null);
+  const [adminSweepBacktestError, setAdminSweepBacktestError] = useState('');
   const [adminSweepBacktestRerunApiKey, setAdminSweepBacktestRerunApiKey] = useState('');
   const [showBacktestBtcOverlay, setShowBacktestBtcOverlay] = useState(false);
   const [backtestBtcOverlayPoints, setBacktestBtcOverlayPoints] = useState<LinePoint[]>([]);
@@ -6874,15 +6875,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   // В админ-режиме форсим preferRealBacktest=true, иначе бэкенд идёт по snapshot-пути,
   // который масштабирует только risk/freq, и крутилки partialTpPct / maxOpenPositions /
   // commission / slippage / funding ни на что не влияют.
-  const scheduleBacktestDebounce = useCallback((settingsPatch?: Partial<BacktestCardSettings>) => {
+  const cancelBacktestDebounce = useCallback(() => {
     if (backtestDebounceRef.current !== null) {
       clearTimeout(backtestDebounceRef.current);
+      backtestDebounceRef.current = null;
     }
+  }, []);
+
+  const scheduleBacktestDebounce = useCallback((settingsPatch?: Partial<BacktestCardSettings>) => {
+    cancelBacktestDebounce();
     backtestDebounceRef.current = setTimeout(() => {
       backtestDebounceRef.current = null;
       void runAdminSweepBacktestPreviewRef.current(settingsPatch);
     }, 700);
-  }, []);
+  }, [cancelBacktestDebounce]);
 
   const runAdminSweepBacktestPreview = async (
     context?: SaasBacktestContext | null,
@@ -6897,6 +6903,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAdminSweepBacktestLoading(true);
     setAdminSweepBacktestStale(false);
     setAdminSweepPreviewRiskScale(1);
+    setAdminSweepBacktestError('');
 
     const effectiveRiskScore = Number(options?.settingsOverride?.riskScore ?? adminSweepBacktestRiskScore);
     const effectiveTradeFrequencyScore = Number(options?.settingsOverride?.tradeFrequencyScore ?? adminSweepBacktestTradeScore);
@@ -6922,17 +6929,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       effectiveDateFrom = (typeof overrideDateFromRaw === 'string' ? overrideDateFromRaw : adminSweepBacktestDateFrom) || undefined;
       effectiveDateTo = (typeof overrideDateToRaw === 'string' ? overrideDateToRaw : adminSweepBacktestDateTo) || undefined;
     }
+    const contextOfferIds = Array.from(new Set(
+      (targetContext.offerIds || [])
+        .map((item) => String(item || '').trim())
+        .filter(Boolean),
+    ));
     try {
-      const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
+      const response = await axios.post<AdminSweepBacktestPreviewResponse & { success?: boolean }>(
+        '/api/saas/admin/sweep-backtest-preview',
+        {
         kind: targetContext.kind,
         setKey: targetContext.setKey,
         systemName: targetContext.systemName,
         offerId: targetContext.offerId,
-        // Когда есть systemName (algofund-ts), бэкенд резолвит состав из trading_system_members (DB).
-        // Явный offerIds перебивает этот путь и даёт только те офферы, у которых есть запись в offer-store,
-        // что меньше полного состава ТС. Поэтому offerIds передаём только когда нет systemName.
-        offerIds: (targetContext.kind === 'algofund-ts' && targetContext.systemName)
-          ? undefined
+        // Сохранённый состав из snapshot/контекста — подсказка для preview (особенно после
+        // локального storefront snapshot без API). Без offerIds бэкенд резолвит из DB runtime.
+        offerIds: targetContext.kind === 'algofund-ts'
+          ? (contextOfferIds.length > 0 ? contextOfferIds : undefined)
           : targetContext.offerIds,
         offerWeightsById: targetContext.kind === 'algofund-ts'
           ? normalizeBacktestTsWeights(
@@ -6958,11 +6971,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         dateFrom: effectiveDateFrom,
         dateTo: effectiveDateTo,
         autoLotByChannelWidth: adminSweepAutoLotByChannel,
-      });
+      }, { timeout: 900000 });
       if (requestSeq !== backtestRequestSeqRef.current) {
         return;
       }
-      setAdminSweepBacktestResult(response.data);
+      const payload = response.data;
+      if (!payload?.kind || !payload?.preview) {
+        throw new Error('Sweep backtest: пустой ответ сервера (нет preview)');
+      }
+      setAdminSweepBacktestResult(payload);
+      setAdminSweepBacktestError('');
       const responsePeriodFrom = String(response.data?.period?.dateFrom || '').trim().slice(0, 10);
       const responsePeriodTo = String(response.data?.period?.dateTo || '').trim().slice(0, 10);
       const clampNotes = Array.isArray((response.data?.period as { clampNotes?: string[] })?.clampNotes)
@@ -6991,8 +7009,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         return;
       }
       const errorMessage = String(error?.response?.data?.error || error?.message || '');
-      setAdminSweepBacktestResult(null);
-      messageApi.error(errorMessage || 'Не удалось построить sweep backtest preview');
+      const isTimeout = /timeout|524|502|503|504|network error/i.test(errorMessage);
+      setAdminSweepBacktestError(errorMessage || 'Не удалось построить sweep backtest preview');
+      messageApi.error(
+        isTimeout
+          ? `${errorMessage || 'Таймаут'} — предыдущие метрики сохранены, повтори API rerun`
+          : (errorMessage || 'Не удалось построить sweep backtest preview'),
+      );
     } finally {
       if (requestSeq === backtestRequestSeqRef.current) {
         setAdminSweepBacktestLoading(false);
@@ -7548,6 +7571,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setBacktestDrawerContext(context);
     setBacktestDrawerVisible(true);
     setAdminSweepBacktestResult(null);
+    setAdminSweepBacktestError('');
     setAdminSweepBacktestRerunApiKey('');
     window.setTimeout(() => {
       const settingsForPreview = context.kind === 'algofund-ts' && !hasSavedCustomDates
@@ -13877,6 +13901,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 <Tag color="blue">Карточек в тесте: {Array.isArray(backtestDrawerContext.offerIds) ? backtestDrawerContext.offerIds.length : 0}</Tag>
               </Space>
             ) : null}
+
+            {adminSweepBacktestError ? (
+              <Alert
+                type="error"
+                showIcon
+                closable
+                onClose={() => setAdminSweepBacktestError('')}
+                message="Sweep / API rerun не завершился"
+                description={adminSweepBacktestError}
+              />
+            ) : null}
+
             <Card size="small" title="Действия">
             <Space wrap>
               {isAdminSurface && (
@@ -13888,6 +13924,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 size="small"
                 loading={adminSweepBacktestLoading}
                 onClick={() => {
+                  cancelBacktestDebounce();
                   void runAdminSweepBacktestPreview(
                     undefined,
                     isAdminSurface ? { preferRealBacktest: true } : undefined,
@@ -13911,6 +13948,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     size="small"
                     loading={adminSweepBacktestLoading}
                     onClick={() => {
+                      cancelBacktestDebounce();
                       void runAdminSweepBacktestPreview(undefined, { preferRealBacktest: true });
                     }}
                   >

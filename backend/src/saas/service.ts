@@ -6708,9 +6708,6 @@ export const previewAdminSweepBacktest = async (payload?: {
         .map((offer) => String(offer.offerId || ''))
         .filter(Boolean);
     }
-    if (offerIds.length === 0 && !requestedSetKey) {
-      throw new Error('No offerIds resolved for TS sweep backtest preview');
-    }
   }
 
   let tsSavedSnapshotForPreview: TsBacktestSnapshot | null = null;
@@ -6729,6 +6726,9 @@ export const previewAdminSweepBacktest = async (payload?: {
       if (snapshotOfferIds.length > 0) {
         offerIds = snapshotOfferIds;
       }
+    }
+    if (offerIds.length === 0) {
+      throw new Error('No offerIds resolved for TS sweep backtest preview');
     }
   }
 
