@@ -3922,6 +3922,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return normalizedName.endsWith(`-${normalizedToken}`) || normalizedName.includes(`${normalizedToken}-`);
   }, [normalizeTsToken]);
 
+  const pickLatestTsSnapshot = useCallback((candidates: Array<{ key: string; snapshot: NonNullable<typeof summary>['offerStore']['tsBacktestSnapshots'][string] }>) => {
+    if (candidates.length === 0) {
+      return null;
+    }
+    if (candidates.length === 1) {
+      return candidates[0].snapshot;
+    }
+    const best = candidates.reduce((acc, item) => {
+      const accTs = Date.parse(String(acc.snapshot?.updatedAt || '')) || 0;
+      const itemTs = Date.parse(String(item.snapshot?.updatedAt || '')) || 0;
+      return itemTs >= accTs ? item : acc;
+    });
+    return best.snapshot;
+  }, []);
+
   const resolveTsSnapshotForSystem = useCallback((systemName: string) => {
     const snapshotMap = summary?.offerStore?.tsBacktestSnapshots || {};
     const entries = Object.entries(snapshotMap)
@@ -3935,31 +3950,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return null;
     }
 
-    const exactKeyMatch = entries.find((item) => String(item.key || '').trim() === systemName);
-    if (exactKeyMatch?.snapshot) {
-      return exactKeyMatch.snapshot;
-    }
-
-    const exactMatch = entries.find((item) => String(item.snapshot?.systemName || '').trim() === systemName);
-    if (exactMatch?.snapshot) {
-      return exactMatch.snapshot;
-    }
-
-    const suffixToken = extractTsSuffixToken(systemName);
-    if (!suffixToken || !suffixToken.includes('-')) {
-      return null;
-    }
-
-    const tokenMatch = entries.find((item) => {
-      const setKey = String(item.snapshot?.setKey || '').trim();
-      if (setKey && matchesTsSnapshotToken(systemName, setKey)) {
+    const safeSystemName = String(systemName || '').trim();
+    const matches = entries.filter((item) => {
+      if (item.key === safeSystemName) {
         return true;
       }
-      return matchesTsSnapshotToken(systemName, item.key);
+      if (String(item.snapshot?.systemName || '').trim() === safeSystemName) {
+        return true;
+      }
+      const setKey = String(item.snapshot?.setKey || '').trim();
+      if (setKey && matchesTsSnapshotToken(safeSystemName, setKey)) {
+        return true;
+      }
+      return matchesTsSnapshotToken(safeSystemName, item.key);
     });
 
-    return tokenMatch?.snapshot || null;
-  }, [summary?.offerStore?.tsBacktestSnapshots, matchesTsSnapshotToken, extractTsSuffixToken]);
+    return pickLatestTsSnapshot(matches);
+  }, [summary?.offerStore?.tsBacktestSnapshots, matchesTsSnapshotToken, pickLatestTsSnapshot]);
 
   const backtestDrawerCardSnapshot = useMemo(() => {
     if (!backtestDrawerContext || backtestDrawerContext.kind !== 'algofund-ts') {
@@ -7512,12 +7519,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         }
       }
 
+      const contextSystemNameForSnapshot = String(backtestDrawerContext?.systemName || '').trim();
+      const canonicalSystemName = contextSystemNameForSnapshot.toUpperCase().startsWith('ALGOFUND_MASTER::')
+        ? contextSystemNameForSnapshot
+        : String(resolvedSystemName || contextSystemNameForSnapshot || '').trim();
+
       await axios.patch('/api/saas/admin/offer-store', {
         tsBacktestSnapshotsPatch: {
           [snapshotKey]: {
             apiKeyName: snapshotApiKeyName,
             setKey: snapshotKey,
-            systemName: resolvedSystemName || undefined,
+            systemName: canonicalSystemName || undefined,
             ret: Number(summary.totalReturnPercent ?? 0),
             pf: Number(summary.profitFactor ?? 0),
             dd: Number(summary.maxDrawdownPercent ?? 0),

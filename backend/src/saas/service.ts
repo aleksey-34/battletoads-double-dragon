@@ -5893,6 +5893,18 @@ export const updateOfferStoreAdminState = async (payload: {
     const normalizedSnapshot = normalizeTsBacktestSnapshot(mergedSnapshot);
     if (normalizedSnapshot) {
       nextTsBacktestSnapshots[key] = normalizedSnapshot;
+      const aliasKeys = new Set<string>();
+      const systemName = asString(normalizedSnapshot.systemName, '').trim();
+      const setKey = asString(normalizedSnapshot.setKey, '').trim();
+      if (systemName && systemName !== key) {
+        aliasKeys.add(systemName);
+      }
+      if (setKey && setKey !== key) {
+        aliasKeys.add(setKey);
+      }
+      for (const aliasKey of aliasKeys) {
+        nextTsBacktestSnapshots[aliasKey] = normalizedSnapshot;
+      }
       await syncMasterStrategyFlagsFromSnapshot(normalizedSnapshot).catch((error) => {
         logger.warn(`syncMasterStrategyFlagsFromSnapshot failed for ${key}: ${(error as Error).message}`);
       });
