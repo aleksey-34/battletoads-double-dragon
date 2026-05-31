@@ -12713,6 +12713,103 @@ const resolvePublishedSystem = <T extends { name?: string }>(
   }) || null;
 };
 
+type MaterializeDraftMember = {
+  strategyId: number;
+  strategyName: string;
+  strategyType: string;
+  marketMode: string;
+  market: string;
+  score: number;
+  weight: number;
+};
+
+const buildMaterializeDraftMemberFromRow = (m: Record<string, unknown>): MaterializeDraftMember => ({
+  strategyId: Number(m['strategy_id'] || 0),
+  strategyName: String(m['strategy_name'] || `strategy-${m['strategy_id']}`),
+  strategyType: String(m['strategy_type'] || ''),
+  marketMode: String(m['market_mode'] || ''),
+  market: String(m['base_symbol'] || ''),
+  score: 0,
+  weight: asNumber(m['weight'], 1),
+});
+
+/** Drop archived master strategies so clients do not inherit zombie TS members. */
+const filterMaterializeDraftMembers = async (
+  tenant: TenantRow,
+  draftMembers: MaterializeDraftMember[],
+): Promise<MaterializeDraftMember[]> => {
+  const strategyIds = draftMembers
+    .map((member) => Number(member.strategyId || 0))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (strategyIds.length === 0) {
+    return draftMembers;
+  }
+  const placeholders = strategyIds.map(() => '?').join(',');
+  const rows = (await db.all(
+    `SELECT id, base_symbol, is_archived
+     FROM strategies WHERE id IN (${placeholders})`,
+    strategyIds,
+  ).catch(() => [])) as Array<{ id: number; base_symbol: string; is_archived: number }>;
+  const byId = new Map(rows.map((row) => [Number(row.id), row]));
+
+  const kept: MaterializeDraftMember[] = [];
+  for (const member of draftMembers) {
+    const row = byId.get(Number(member.strategyId));
+    if (!row) {
+      logger.warn(`Algofund materialize: skip missing master strategy id=${member.strategyId} for ${tenant.slug}`);
+      continue;
+    }
+    if (Number(row.is_archived) === 1) {
+      logger.warn(`Algofund materialize: skip archived master strategy id=${member.strategyId} ${row.base_symbol} for ${tenant.slug}`);
+      continue;
+    }
+    kept.push(member);
+  }
+  if (kept.length !== draftMembers.length) {
+    logger.warn(`Algofund materialize: draft members ${draftMembers.length} -> ${kept.length} after archived filter for ${tenant.slug}`);
+  }
+  return kept;
+};
+
+/** Never attach archived client strategies to trading_system_members. */
+const filterRunnableTradingSystemMembers = async (
+  apiKeyName: string,
+  members: TradingSystemMemberDraft[],
+): Promise<TradingSystemMemberDraft[]> => {
+  const strategyIds = members
+    .map((member) => Number(member.strategy_id || 0))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  if (strategyIds.length === 0) {
+    return members;
+  }
+  const placeholders = strategyIds.map(() => '?').join(',');
+  const rows = (await db.all(
+    `SELECT id, is_archived FROM strategies WHERE id IN (${placeholders})`,
+    strategyIds,
+  ).catch(() => [])) as Array<{ id: number; is_archived: number }>;
+  const archivedIds = new Set(
+    rows.filter((row) => Number(row.is_archived) === 1).map((row) => Number(row.id)),
+  );
+  if (archivedIds.size === 0) {
+    return members;
+  }
+  const filtered = members.filter((member) => !archivedIds.has(Number(member.strategy_id)));
+  logger.warn(
+    `Algofund materialize: removed ${members.length - filtered.length} archived strategies from TS members on ${apiKeyName}`,
+  );
+  return filtered;
+};
+
+const pruneArchivedMasterCardMembers = async (cardId: number): Promise<number> => {
+  const result = await db.run(
+    `DELETE FROM master_card_members
+     WHERE card_id = ?
+       AND strategy_id IN (SELECT id FROM strategies WHERE COALESCE(is_archived, 0) = 1)`,
+    [cardId],
+  );
+  return Number((result as { changes?: number })?.changes || 0);
+};
+
 const getAlgofundEngineState = async (
   tenant: TenantRow,
   profile: AlgofundProfileRow
@@ -12771,15 +12868,7 @@ const materializeAlgofundSystem = async (
   //  3. live API fetch of source TS via resolvePublishedSystem (network, fuzzy-name fallback)
   //  4. catalogDraftMembers — sweep-catalog draft (stale partial last resort)
 
-  const buildDraftMemberFromRow = (m: Record<string, unknown>) => ({
-    strategyId: Number(m['strategy_id'] || 0),
-    strategyName: String(m['strategy_name'] || `strategy-${m['strategy_id']}`),
-    strategyType: String(m['strategy_type'] || ''),
-    marketMode: String(m['market_mode'] || ''),
-    market: String(m['base_symbol'] || ''),
-    score: 0,
-    weight: asNumber(m['weight'], 1),
-  });
+  const buildDraftMemberFromRow = buildMaterializeDraftMemberFromRow;
 
   if (sourceSystemName) {
     // Priority 1: master_card_members (curated card linked to this source system name)
@@ -12791,10 +12880,11 @@ const materializeAlgofundSystem = async (
                 s.strategy_type, s.market_mode, s.base_symbol
          FROM master_card_members mcm
          JOIN strategies s ON s.id = mcm.strategy_id
-         WHERE mcm.card_id = ? AND mcm.is_enabled = 1`,
+         WHERE mcm.card_id = ? AND mcm.is_enabled = 1
+           AND COALESCE(s.is_archived, 0) = 0`,
         [card.id]
       ).catch(() => [])) as Record<string, unknown>[];
-      const cardMembers = mcRows.map(buildDraftMemberFromRow).filter((m: ReturnType<typeof buildDraftMemberFromRow>) => m.strategyId > 0);
+      const cardMembers = mcRows.map(buildDraftMemberFromRow).filter((m) => m.strategyId > 0);
       if (cardMembers.length > 0) {
         draftMembers = cardMembers;
         logger.warn(`Algofund materialize [P1-card]: ${cardMembers.length} members from master_card '${cardCode}' for ${tenant.slug}.`);
@@ -12816,10 +12906,11 @@ const materializeAlgofundSystem = async (
                   s.strategy_type, s.market_mode, s.base_symbol
            FROM trading_system_members tsm
            JOIN strategies s ON s.id = tsm.strategy_id
-           WHERE tsm.system_id = ? AND tsm.is_enabled = 1`,
+           WHERE tsm.system_id = ? AND tsm.is_enabled = 1
+             AND COALESCE(s.is_archived, 0) = 0`,
           [sourceTs.id]
         ).catch(() => [])) as Record<string, unknown>[];
-        const tsMembers = tsRows.map(buildDraftMemberFromRow).filter((m: ReturnType<typeof buildDraftMemberFromRow>) => m.strategyId > 0);
+        const tsMembers = tsRows.map(buildDraftMemberFromRow).filter((m) => m.strategyId > 0);
         if (tsMembers.length > 0) {
           draftMembers = tsMembers;
           logger.warn(`Algofund materialize [P2-db-ts]: ${tsMembers.length} members from trading_system id=${sourceTs.id} ('${sourceSystemName}') for ${tenant.slug}.`);
@@ -12849,10 +12940,11 @@ const materializeAlgofundSystem = async (
                       s.strategy_type, s.market_mode, s.base_symbol
                FROM trading_system_members tsm
                JOIN strategies s ON s.id = tsm.strategy_id
-               WHERE tsm.system_id = ? AND tsm.is_enabled = 1`,
+               WHERE tsm.system_id = ? AND tsm.is_enabled = 1
+                 AND COALESCE(s.is_archived, 0) = 0`,
               [sourceTsLike.id]
             ).catch(() => [])) as Record<string, unknown>[];
-            const tsLikeMembers = tsLikeRows.map(buildDraftMemberFromRow).filter((m: ReturnType<typeof buildDraftMemberFromRow>) => m.strategyId > 0);
+            const tsLikeMembers = tsLikeRows.map(buildDraftMemberFromRow).filter((m) => m.strategyId > 0);
             if (tsLikeMembers.length > 0) {
               draftMembers = tsLikeMembers;
               logger.warn(`Algofund materialize [P2b-db-ts-like]: ${tsLikeMembers.length} members from trading_system id=${sourceTsLike.id} (LIKE '%${likeToken}%') for ${tenant.slug}.`);
@@ -12896,6 +12988,11 @@ const materializeAlgofundSystem = async (
 
   if (draftMembers.length === 0) {
     throw new Error('Admin TS draft members are empty in latest client catalog');
+  }
+
+  draftMembers = await filterMaterializeDraftMembers(tenant, draftMembers);
+  if (draftMembers.length === 0) {
+    throw new Error('Admin TS draft members are empty after archived-master filter');
   }
 
   const riskMultiplier = Math.max(0, Math.min(asNumber(profile.risk_multiplier, 1), asNumber(plan.risk_cap_max, 1)));
@@ -13012,6 +13109,13 @@ const materializeAlgofundSystem = async (
     activate || profile.requested_enabled === 1
   );
 
+  if (materializedStrategies.length !== recordsForMaterialization.length) {
+    logger.warn(
+      `Algofund materialize: ${tenant.slug} materialized ${materializedStrategies.length}/${recordsForMaterialization.length} `
+      + '(exchange pair filter or createStrategy failure — see saas_materialize_pair_unavailable audit)',
+    );
+  }
+
   const systems = await listTradingSystems(executionApiKeyName);
   const systemName = getAlgofundClientSystemName(tenant);
   const existing = systems.find((item) => asString(item.name) === systemName);
@@ -13023,13 +13127,17 @@ const materializeAlgofundSystem = async (
     return arr.findIndex((item) => Number(item.strategyId || 0) === strategyId) === index;
   });
 
-  const members = uniqueMaterialized.map((row, index) => ({
+  let members: TradingSystemMemberDraft[] = uniqueMaterialized.map((row, index) => ({
     strategy_id: Number(row.strategyId),
     weight: Number(((index === 0 ? 1.25 : index === 1 ? 1.1 : 1) * Math.max(0.25, riskMultiplier)).toFixed(4)),
     member_role: index < 3 ? 'core' : 'satellite',
     is_enabled: true,
     notes: `algofund ${tenant.slug}`,
   }));
+  members = await filterRunnableTradingSystemMembers(executionApiKeyName, members);
+  if (members.length === 0) {
+    throw new Error(`Algofund materialize produced no runnable members for ${tenant.slug}`);
+  }
 
   // Resolve maxOpenPositions from master_cards metadata (card override).
   // cardSystemName = published_system_name || local systemName. Fallback: 2
@@ -14342,7 +14450,8 @@ export const previewPublishImpact = async (setKey: string): Promise<{
 const applyCardMetadataOverrides = async (
   cardId: number,
   currentMetadata: Record<string, unknown>,
-  overrides?: { lotPercentOverride?: number; maxOpenPositions?: number; autoLotByChannelWidth?: boolean; dcaPerLegSl?: boolean }
+  overrides?: { lotPercentOverride?: number; maxOpenPositions?: number; autoLotByChannelWidth?: boolean; dcaPerLegSl?: boolean },
+  sourceSystem?: { apiKeyName: string; systemId: number },
 ): Promise<{ changed: boolean; metadata: Record<string, unknown> }> => {
   if (!overrides) {
     return { changed: false, metadata: currentMetadata };
@@ -14388,6 +14497,28 @@ const applyCardMetadataOverrides = async (
       [JSON.stringify(next), cardId]
     );
   }
+
+  const resolvedMaxOpenPositions = Math.max(0, Math.floor(asNumber(next.maxOpenPositions, 0)));
+  if (sourceSystem?.apiKeyName && sourceSystem.systemId > 0 && resolvedMaxOpenPositions > 0) {
+    try {
+      await updateTradingSystem(sourceSystem.apiKeyName, sourceSystem.systemId, {
+        max_open_positions: resolvedMaxOpenPositions,
+      });
+      logger.info(
+        `applyCardMetadataOverrides: synced master TS #${sourceSystem.systemId} max_open_positions=${resolvedMaxOpenPositions}`,
+      );
+    } catch (error) {
+      logger.warn(
+        `applyCardMetadataOverrides: failed to sync master TS max_open_positions: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  const pruned = await pruneArchivedMasterCardMembers(cardId).catch(() => 0);
+  if (pruned > 0) {
+    logger.info(`applyCardMetadataOverrides: pruned ${pruned} archived rows from master_card_members for card #${cardId}`);
+  }
+
   return { changed, metadata: next };
 };
 
@@ -14973,7 +15104,8 @@ export const publishAdminTradingSystem = async (payload?: {
     cardUpdate = await applyCardMetadataOverrides(
       existing.cardId,
       existing.cardMetadata,
-      payload?.cardOverrides
+      payload?.cardOverrides,
+      { apiKeyName: existing.apiKeyName, systemId: existing.systemId },
     );
   } else {
     // Legacy / new-card path: resolve members + suffix as before.
