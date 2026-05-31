@@ -3922,21 +3922,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     return normalizedName.endsWith(`-${normalizedToken}`) || normalizedName.includes(`${normalizedToken}-`);
   }, [normalizeTsToken]);
 
-  const pickLatestTsSnapshot = useCallback((candidates: Array<{ key: string; snapshot: NonNullable<typeof summary>['offerStore']['tsBacktestSnapshots'][string] }>) => {
-    if (candidates.length === 0) {
-      return null;
-    }
-    if (candidates.length === 1) {
-      return candidates[0].snapshot;
-    }
-    const best = candidates.reduce((acc, item) => {
-      const accTs = Date.parse(String(acc.snapshot?.updatedAt || '')) || 0;
-      const itemTs = Date.parse(String(item.snapshot?.updatedAt || '')) || 0;
-      return itemTs >= accTs ? item : acc;
-    });
-    return best.snapshot;
-  }, []);
-
   const resolveTsSnapshotForSystem = useCallback((systemName: string) => {
     const snapshotMap = summary?.offerStore?.tsBacktestSnapshots || {};
     const entries = Object.entries(snapshotMap)
@@ -3965,8 +3950,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return matchesTsSnapshotToken(safeSystemName, item.key);
     });
 
-    return pickLatestTsSnapshot(matches);
-  }, [summary?.offerStore?.tsBacktestSnapshots, matchesTsSnapshotToken, pickLatestTsSnapshot]);
+    if (matches.length === 0) {
+      return null;
+    }
+    if (matches.length === 1) {
+      return matches[0].snapshot;
+    }
+    return matches.reduce((acc, item) => {
+      const accTs = Date.parse(String(acc.snapshot?.updatedAt || '')) || 0;
+      const itemTs = Date.parse(String(item.snapshot?.updatedAt || '')) || 0;
+      return itemTs >= accTs ? item : acc;
+    }).snapshot;
+  }, [summary?.offerStore?.tsBacktestSnapshots, matchesTsSnapshotToken]);
 
   const backtestDrawerCardSnapshot = useMemo(() => {
     if (!backtestDrawerContext || backtestDrawerContext.kind !== 'algofund-ts') {
