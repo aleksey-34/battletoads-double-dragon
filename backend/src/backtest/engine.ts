@@ -1629,8 +1629,11 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
   // Mirrors runtime `getStrategyPairKey` in bot/strategy.ts so backtest matches live behavior.
   const pairKeyByRuntimeIndex: string[] = runtimes.map((rt) => getBacktestPairKey(rt.strategy));
 
+  /** Classic DCA grids use fixed base USDT sizing — they do not consume TS max-open-position slots. */
+  const countsTowardOpLimit = (rt: RuntimeStrategy): boolean => !rt.dcaState?.enabled;
+
   const countOpenPositions = (): number => {
-    return runtimes.filter((rt) => rt.state !== 'flat').length;
+    return runtimes.filter((rt) => rt.state !== 'flat' && countsTowardOpLimit(rt)).length;
   };
 
   const isPairLocked = (selfIndex: number, pairKey: string): boolean => {
@@ -1881,9 +1884,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       if (runtime.state === 'flat' && runtime.dcaState) {
         runtime.dcaState.barsSinceFlat += 1;
         if (!closedOnCurrentBar && passesClassicDcaEntryFilter(runtime.dcaState, runtime.candles, event.candleIndex)) {
-          if (maxOpenPositions > 0 && countOpenPositions() >= maxOpenPositions) {
-            skippedByPositionLimit++;
-          } else if (request.enablePairLock) {
+          // DCA does not participate in TS OP limit (only non-overlap with TS markets at pick/apply time).
+          if (request.enablePairLock) {
             const pairKey = pairKeyByRuntimeIndex[event.strategyIndex];
             if (isPairLocked(event.strategyIndex, pairKey)) {
               skippedByPairLock++;

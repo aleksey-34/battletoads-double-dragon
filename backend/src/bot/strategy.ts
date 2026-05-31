@@ -3205,7 +3205,8 @@ export const executeStrategy = async (
         `SELECT COUNT(*) AS cnt FROM strategies s
          JOIN trading_system_members tsm ON tsm.strategy_id = s.id
          WHERE tsm.system_id = ? AND tsm.is_enabled = 1
-         AND s.is_active = 1 AND s.state != 'flat'`,
+         AND s.is_active = 1 AND s.state != 'flat'
+         AND COALESCE(s.strategy_type, '') NOT IN ('dca', 'dca_futures')`,
         [systemRow.system_id]
       );
 
@@ -4168,6 +4169,7 @@ export const runAutoStrategiesCycle = async () => {
          JOIN api_keys a ON a.id = s.api_key_id
          WHERE tsm.system_id = ? AND tsm.is_enabled = 1
          AND s.is_active = 1 AND s.state != 'flat'
+         AND COALESCE(s.strategy_type, '') NOT IN ('dca', 'dca_futures')
          ORDER BY s.updated_at ASC`,
         [sys.id]
       )) || [];

@@ -7666,17 +7666,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const applyTsDcaSuperAggressivePreset = () => {
     setTsDcaBaseMode('percent');
-    setTsDcaBasePercent(2);
+    setTsDcaBasePercent(5);
     setTsDcaInterval('1h');
-    setTsDcaStepPercent(0.6);
-    setTsDcaMaxOrders(15);
+    setTsDcaStepPercent(0.5);
+    setTsDcaMaxOrders(20);
     setTsDcaTpPercent(1);
     setTsDcaSlPercent(0);
     setTsDcaEntryFilter('always');
     setTsDcaReentryBars(0);
     setTsDcaPerLegSl(false);
     setTsDcaAutotune(true);
-    messageApi.info('SUPER DCA пресет (2% base, 15 ордеров) — сканируй после TS rerun');
+    messageApi.info('SUPER DCA: 5% base, step 0.5%, 20 ордеров — макс. заметность. ОП не режет DCA (только trend).');
   };
 
   const applyTsDcaModeratePreset = () => {
