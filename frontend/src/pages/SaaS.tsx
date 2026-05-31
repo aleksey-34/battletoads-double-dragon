@@ -14016,6 +14016,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       }}
                     />
                     <Text>DCA в ТС (влияет на equity и метрики ниже)</Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>ОП ограничивает только trend; DCA — отдельно. Пары DCA ≠ пары TS (scan фильтрует).</Text>
                     {tsDcaCombinedPreview?.delta ? (
                       <Tooltip title="Δ = combined portfolio − TS-only (не сумма trades из таблицы scan)">
                         <Tag color={Number(tsDcaCombinedPreview.delta.ret || 0) >= 0 ? 'green' : 'red'}>

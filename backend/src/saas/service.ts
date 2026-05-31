@@ -12,6 +12,7 @@ import {
   runTradingSystemBacktest,
   setTradingSystemActivation,
   updateTradingSystem,
+  type TradingSystemMemberDraft,
 } from '../bot/tradingSystems';
 import { getMonitoringLatest } from '../bot/monitoring';
 import { getPositions, closeAllPositions, cancelAllOrders, ensureExchangeClientInitialized, getMarketData, getAllSymbols } from '../bot/exchange';
@@ -9207,6 +9208,13 @@ export const applyDcaToTsPortfolio = async (payload?: {
     await setCuratedDraftMembers(nextMembers);
   }
 
+  const masterSystemName = asString(payload?.systemName, asString(ctx.snapshot.systemName, '')).trim();
+  if (masterSystemName && appliedStrategyIds.length > 0) {
+    await syncMasterTradingSystemDcaMembers(masterSystemName, appliedStrategyIds).catch((error) => {
+      logger.warn(`[applyDcaToTsPortfolio] master TS DCA member sync failed: ${(error as Error).message}`);
+    });
+  }
+
   const combinedResult = await runBacktest({
     ...buildDcaBacktestRequestBase(ctx.preferredApiKey, ctx, { enablePairLock: true }),
     mode: 'portfolio',
@@ -14411,6 +14419,88 @@ const syncMasterStrategyFlagsFromSnapshot = async (snapshot: TsBacktestSnapshot)
  * because partial propagation is far better than total failure when one
  * tenant has a bad exchange key or stale balances.
  */
+/** Append classic DCA strategy_ids to master TS + master_card_members (materialize source). */
+const syncMasterTradingSystemDcaMembers = async (
+  systemName: string,
+  strategyIds: number[],
+): Promise<number> => {
+  const name = asString(systemName, '').trim();
+  const ids = Array.from(new Set(
+    (Array.isArray(strategyIds) ? strategyIds : [])
+      .map((id) => Math.floor(Number(id)))
+      .filter((id) => Number.isFinite(id) && id > 0),
+  ));
+  if (!name || ids.length === 0) {
+    return 0;
+  }
+
+  const targets = await resolveAlgofundSystemTargets({ systemName: name }).catch(() => []);
+  const target = targets[0];
+  if (!target?.systemId || !target?.apiKeyName) {
+    return 0;
+  }
+
+  const system = await getTradingSystem(target.apiKeyName, target.systemId);
+  const memberById = new Map<number, TradingSystemMemberDraft>();
+  for (const member of system.members || []) {
+    const sid = Number(member.strategy_id || 0);
+    if (sid > 0) {
+      memberById.set(sid, {
+        strategy_id: sid,
+        weight: asNumber(member.weight, 1),
+        member_role: asString(member.member_role, 'core'),
+        is_enabled: member.is_enabled !== false,
+        notes: asString(member.notes, ''),
+      });
+    }
+  }
+
+  let added = 0;
+  for (const strategyId of ids) {
+    if (memberById.has(strategyId)) {
+      continue;
+    }
+    memberById.set(strategyId, {
+      strategy_id: strategyId,
+      weight: 0.85,
+      member_role: 'satellite',
+      is_enabled: true,
+      notes: 'dca overlay',
+    });
+    added += 1;
+  }
+
+  if (added > 0) {
+    await replaceTradingSystemMembers(
+      target.apiKeyName,
+      target.systemId,
+      Array.from(memberById.values()),
+    );
+  }
+
+  const card = await db.get<{ id: number }>(
+    'SELECT id FROM master_cards WHERE code = ? AND is_active = 1',
+    [`CARD::${name.toUpperCase()}`],
+  ).catch(() => null);
+  if (card?.id) {
+    for (const strategyId of ids) {
+      await db.run(
+        `INSERT INTO master_card_members (card_id, strategy_id, weight, member_role, is_enabled, notes, created_at)
+         VALUES (?, ?, 0.85, 'satellite', 1, 'dca overlay', CURRENT_TIMESTAMP)
+         ON CONFLICT(card_id, strategy_id) DO UPDATE SET
+           is_enabled = 1,
+           notes = excluded.notes`,
+        [Number(card.id), strategyId],
+      ).catch(() => {});
+    }
+  }
+
+  if (added > 0) {
+    logger.info(`[syncMasterTradingSystemDcaMembers] +${added} DCA members on ${name} (TS #${target.systemId})`);
+  }
+  return added;
+};
+
 /**
  * Copies all dca_futures master strategies that are members of `systemId`
  * from `masterApiKeyName` to `clientApiKeyName`.
@@ -14484,6 +14574,142 @@ const materializeDcaFuturesToClient = async (
   }
 };
 
+/** Copy classic `dca` strategies (modal apply path) from master TS to client API key. */
+const materializeClassicDcaToClient = async (
+  masterApiKeyName: string,
+  clientApiKeyName: string,
+  systemId: number,
+): Promise<void> => {
+  const masters = await db.all<Array<{
+    id: number;
+    name: string;
+    base_symbol: string;
+    quote_symbol: string;
+    interval: string;
+    detection_source: string;
+    dca_base_amount_usdt: number;
+    dca_step_percent: number;
+    dca_max_orders: number;
+    dca_order_multiplier: number;
+    dca_tp_percent: number;
+    dca_sl_percent: number;
+    dca_entry_filter: string;
+    dca_reentry_bars: number;
+    dca_rsi_period: number;
+    dca_rsi_max: number;
+    dca_per_leg_sl: number;
+  }>>(
+    `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.interval, s.detection_source,
+       s.dca_base_amount_usdt, s.dca_step_percent, s.dca_max_orders,
+       s.dca_order_multiplier, s.dca_tp_percent, s.dca_sl_percent,
+       s.dca_entry_filter, s.dca_reentry_bars, s.dca_rsi_period, s.dca_rsi_max, s.dca_per_leg_sl
+     FROM trading_system_members tsm
+     JOIN strategies s ON s.id = tsm.strategy_id
+     JOIN api_keys ak ON ak.id = s.api_key_id
+     WHERE tsm.system_id = ? AND s.strategy_type = 'dca'
+       AND ak.name = ? AND s.is_archived = 0`,
+    [systemId, masterApiKeyName],
+  ).catch(() => []);
+  if (!Array.isArray(masters) || masters.length === 0) {
+    return;
+  }
+
+  const clientAkRow = await db.get<{ id: number }>(
+    `SELECT id FROM api_keys WHERE name = ?`,
+    [clientApiKeyName],
+  ).catch(() => null);
+  if (!clientAkRow) {
+    return;
+  }
+  const clientAkId = Number(clientAkRow.id);
+
+  for (const master of masters) {
+    const masterId = Number(master.id || 0);
+    const clientName = master.name.replace(masterApiKeyName, clientApiKeyName);
+    let existing = await db.get<{ id: number }>(
+      `SELECT id FROM strategies WHERE api_key_id = ? AND name = ? AND is_archived = 0`,
+      [clientAkId, clientName],
+    ).catch(() => null);
+    if (!existing?.id && masterId > 0) {
+      existing = await db.get<{ id: number }>(
+        `SELECT id FROM strategies
+         WHERE api_key_id = ? AND strategy_type = 'dca' AND is_archived = 0
+           AND name LIKE ?`,
+        [clientAkId, `%::SID${masterId}%`],
+      ).catch(() => null);
+    }
+    if (!existing?.id) {
+      const market = asString(master.base_symbol, '').trim().toUpperCase();
+      if (market) {
+        existing = await db.get<{ id: number }>(
+          `SELECT id FROM strategies
+           WHERE api_key_id = ? AND strategy_type = 'dca' AND is_archived = 0
+             AND upper(base_symbol) = ?
+           ORDER BY id DESC LIMIT 1`,
+          [clientAkId, market],
+        ).catch(() => null);
+      }
+    }
+
+    const dcaParams = [
+      master.dca_base_amount_usdt,
+      master.dca_step_percent,
+      master.dca_max_orders,
+      master.dca_order_multiplier,
+      master.dca_tp_percent,
+      master.dca_sl_percent,
+      master.dca_entry_filter,
+      master.dca_reentry_bars,
+      master.dca_rsi_period,
+      master.dca_rsi_max,
+      master.dca_per_leg_sl ? 1 : 0,
+      master.interval,
+      master.detection_source,
+    ];
+
+    if (existing?.id) {
+      await db.run(
+        `UPDATE strategies SET
+           dca_base_amount_usdt = ?, dca_step_percent = ?, dca_max_orders = ?,
+           dca_order_multiplier = ?, dca_tp_percent = ?, dca_sl_percent = ?,
+           dca_entry_filter = ?, dca_reentry_bars = ?, dca_rsi_period = ?, dca_rsi_max = ?,
+           dca_per_leg_sl = ?, interval = ?, detection_source = ?,
+           is_active = 1, auto_update = 1, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [...dcaParams, existing.id],
+      );
+      logger.info(`[materializeClassicDca] updated strategy #${existing.id} (${master.base_symbol}) on ${clientApiKeyName}`);
+    } else {
+      const insertName = clientName !== master.name ? clientName : `DCA ${master.base_symbol}`;
+      await db.run(
+        `INSERT INTO strategies (
+           api_key_id, name, strategy_type, market_mode, market_type,
+           base_symbol, quote_symbol, is_active, is_runtime, is_archived, origin,
+           auto_update, long_enabled, short_enabled,
+           dca_base_amount_usdt, dca_step_percent, dca_max_orders,
+           dca_order_multiplier, dca_tp_percent, dca_sl_percent,
+           dca_entry_filter, dca_reentry_bars, dca_rsi_period, dca_rsi_max, dca_per_leg_sl,
+           interval, detection_source, dca_order_type, dca_state,
+           created_at, updated_at
+         ) VALUES (
+           ?, ?, 'dca', 'mono', 'futures', ?, ?, 1, 1, 0, 'saas_materialize_dca',
+           1, 1, 0,
+           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'market', 'idle',
+           CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
+         )`,
+        [
+          clientAkId,
+          insertName,
+          master.base_symbol,
+          master.quote_symbol,
+          ...dcaParams,
+        ],
+      );
+      logger.info(`[materializeClassicDca] created ${insertName} on ${clientApiKeyName}`);
+    }
+  }
+};
+
 const propagatePublishToClients = async (systemName: string, masterSystem?: {
   apiKeyName: string;
   systemId: number;
@@ -14526,6 +14752,9 @@ const propagatePublishToClients = async (systemName: string, masterSystem?: {
           await materializeDcaFuturesToClient(
             masterSystem.apiKeyName, clientApiKeyName, masterSystem.systemId,
           ).catch((e) => logger.warn(`[propagatePublishToClients] dca_futures copy failed for ${slug}: ${(e as Error)?.message}`));
+          await materializeClassicDcaToClient(
+            masterSystem.apiKeyName, clientApiKeyName, masterSystem.systemId,
+          ).catch((e) => logger.warn(`[propagatePublishToClients] classic dca copy failed for ${slug}: ${(e as Error)?.message}`));
         }
       }
       await db.run(

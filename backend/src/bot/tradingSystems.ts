@@ -198,7 +198,11 @@ const getTradingSystemRow = async (apiKeyId: number, systemId: number): Promise<
   return row;
 };
 
-const loadTradingSystemsWithMembers = async (apiKeyName: string, rows: any[]): Promise<TradingSystem[]> => {
+const loadTradingSystemsWithMembers = async (
+  apiKeyName: string,
+  rows: any[],
+  options?: { skipMetrics?: boolean }
+): Promise<TradingSystem[]> => {
   const systems = Array.isArray(rows) ? rows : [];
   if (systems.length === 0) {
     return [];
@@ -230,13 +234,16 @@ const loadTradingSystemsWithMembers = async (apiKeyName: string, rows: any[]): P
     membersBySystemId.set(systemId, list);
   }
 
-  // Load metrics for each system (by api_key_id)
+  // Load metrics for each system (by api_key_id). Skip on storefront browse — recording
+  // monitoring snapshots can hit exchanges and takes ~3s per unknown api key.
   const metricsMap = new Map<number, TradingSystemMetrics | undefined>();
-  for (const row of systems) {
-    const apiKeyId = Number(row.api_key_id);
-    if (!metricsMap.has(apiKeyId)) {
-      const metrics = await getTradingSystemMetrics(apiKeyName, apiKeyId);
-      metricsMap.set(apiKeyId, metrics);
+  if (!options?.skipMetrics) {
+    for (const row of systems) {
+      const apiKeyId = Number(row.api_key_id);
+      if (!metricsMap.has(apiKeyId)) {
+        const metrics = await getTradingSystemMetrics(apiKeyName, apiKeyId);
+        metricsMap.set(apiKeyId, metrics);
+      }
     }
   }
 
@@ -277,7 +284,7 @@ const validateMembers = async (
 
 export const listTradingSystems = async (
   apiKeyName: string,
-  options?: { marketType?: 'futures' | 'spot' | 'all' }
+  options?: { marketType?: 'futures' | 'spot' | 'all'; skipMetrics?: boolean }
 ): Promise<TradingSystem[]> => {
   const apiKeyId = await getApiKeyId(apiKeyName);
   const params: any[] = [apiKeyId];
@@ -294,7 +301,7 @@ export const listTradingSystems = async (
     params
   );
 
-  return loadTradingSystemsWithMembers(apiKeyName, rows);
+  return loadTradingSystemsWithMembers(apiKeyName, rows, { skipMetrics: options?.skipMetrics });
 };
 
 export const getTradingSystem = async (apiKeyName: string, systemId: number): Promise<TradingSystem> => {
