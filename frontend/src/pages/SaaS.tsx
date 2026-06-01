@@ -3015,6 +3015,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     dcaOnly?: { summary?: Record<string, unknown> };
     delta?: { ret?: number; dd?: number; trades?: number };
     dcaLayer?: { ret?: number; dd?: number; trades?: number };
+    markets?: string[];
     period?: { dateFrom?: string; dateTo?: string };
   } | null>(null);
   const [tsDcaResearchScanFingerprint, setTsDcaResearchScanFingerprint] = useState<string | null>(null);
@@ -3135,7 +3136,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     [summary?.tenants],
   );
   const batchEligibleAlgofundTenants = useMemo(
-    () => (summary?.tenants || []).filter((item) => item.tenant.product_mode === 'algofund_client' || item.tenant.product_mode === 'dual'),
+    () => (summary?.tenants || []).filter((item) => {
+      const mode = item.tenant.product_mode;
+      if (mode !== 'algofund_client' && mode !== 'dual') {
+        return false;
+      }
+      return Number(item.algofundProfile?.actual_enabled || 0) === 1
+        && Number(item.algofundProfile?.requested_enabled || 0) === 1;
+    }),
     [summary?.tenants],
   );
   const algofundTenantsWithPublishedTs = useMemo(
@@ -3919,7 +3927,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (normalizedName === normalizedToken) {
       return true;
     }
-    return normalizedName.endsWith(`-${normalizedToken}`) || normalizedName.includes(`${normalizedToken}-`);
+    // Strict suffix match only — avoid "balanced-portfolio-v2" matching "balanced-real".
+    return normalizedName.endsWith(`-${normalizedToken}`) || normalizedName.endsWith(normalizedToken);
   }, [normalizeTsToken]);
 
   const resolveTsSnapshotForSystem = useCallback((systemName: string) => {
@@ -6748,38 +6757,35 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const resolveBacktestSettingsForContext = useCallback((context: SaasBacktestContext): BacktestCardSettings => {
     if (context.kind === 'algofund-ts') {
-      const snapshots = Object.values(summary?.offerStore?.tsBacktestSnapshots || {});
+      const snapshotMap = summary?.offerStore?.tsBacktestSnapshots || {};
       const contextSetKey = String(context.setKey || selectedAdminDraftTsSetKey || '').trim();
+      const contextSystemName = String(context.systemName || '').trim();
       const contextOfferIds = Array.from(new Set((context.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean))).sort();
 
-      let matchingSnapshot = null as (typeof snapshots[number] | null);
-
-      if (contextSetKey) {
-        matchingSnapshot = snapshots.find((snapshot) => String(snapshot?.setKey || '').trim() === contextSetKey) || null;
-      }
-
-      if (!matchingSnapshot && contextOfferIds.length > 0) {
-        matchingSnapshot = snapshots.find((snapshot) => {
-          const snapshotOfferIds = Array.from(new Set((snapshot?.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean))).sort();
-          if (snapshotOfferIds.length !== contextOfferIds.length) {
-            return false;
-          }
-          return snapshotOfferIds.every((id, index) => id === contextOfferIds[index]);
-        }) || null;
-      }
+      let matchingSnapshot = findTsSnapshotForBacktestContext(snapshotMap, {
+        setKey: contextSetKey,
+        offerIds: contextOfferIds,
+        systemName: contextSystemName,
+      });
 
       if (!matchingSnapshot) {
-        const systemName = String(publishResponse?.sourceSystem?.systemName || selectedAlgofundPublishedSystemName || '').trim();
-        if (systemName) {
-          matchingSnapshot = resolveTsSnapshotForSystem(systemName);
+        const fallbackSystemName = String(publishResponse?.sourceSystem?.systemName || selectedAlgofundPublishedSystemName || '').trim();
+        if (fallbackSystemName) {
+          matchingSnapshot = resolveTsSnapshotForSystem(fallbackSystemName);
         }
       }
 
       if (matchingSnapshot?.backtestSettings) {
-        return enrichBacktestSettingsFromTsSnapshot(
+        const fromSnapshot = enrichBacktestSettingsFromTsSnapshot(
           normalizeBacktestCardSettings(matchingSnapshot.backtestSettings),
           matchingSnapshot,
         );
+        const contextKey = getBacktestContextKey(context);
+        const saved = contextKey ? adminBacktestSettingsByCard[contextKey] : null;
+        if (saved && !Number.isFinite(Number(matchingSnapshot.backtestSettings?.reinvestPercent))) {
+          return normalizeBacktestCardSettings({ ...fromSnapshot, reinvestPercent: saved.reinvestPercent });
+        }
+        return fromSnapshot;
       }
     }
 
@@ -7920,7 +7926,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const viable = Number(payload?.viableCount || 0);
     const preselect = (Array.isArray(payload?.candidates) ? payload.candidates : [])
       .filter((item: { status?: string; trades?: number }) => item.status === 'ok' && Number(item.trades || 0) > 0)
-      .slice(0, 2)
+      .slice(0, 5)
       .map((item: { market: string }) => String(item.market || ''))
       .filter(Boolean);
     setTsDcaSelectedMarkets(preselect);
@@ -7968,9 +7974,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         }
       }
     } else if (data.error) {
+      const errText = String(data.error || '');
+      const isStaleAbort = !data.running && /aborted by user/i.test(errText);
+      if (isStaleAbort) {
+        return false;
+      }
       setTsDcaResearchResult(null);
       setTsDcaSelectedMarkets([]);
-      messageApi.error(String(data.error));
+      if (tsDcaScanAwaitResultRef.current) {
+        messageApi.error(errText);
+      }
     }
     return false;
   };
@@ -8059,6 +8072,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
     let ignore = false;
+    void axios.post('/api/saas/admin/ts-dca-research-reset').catch(() => undefined);
     const poll = async () => {
       if (ignore) return;
       try {
@@ -14232,8 +14246,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       </Tooltip>
                     ) : null}
                     {tsDcaCombinedPreview?.dcaLayer ? (
-                      <Tag color="purple">
-                        DCA layer: ret {Number(tsDcaCombinedPreview.dcaLayer.ret || 0).toFixed(2)}% • trades {Number(tsDcaCombinedPreview.dcaLayer.trades || 0)}
+                      <Tag color="purple" title="Отдельный прогон только DCA-ног на том же депозите — не прирост к ТС. Реальный вклад DCA = Δ vs TS-only выше.">
+                        DCA-only ({tsDcaSelectedMarkets.length} пар): ret {Number(tsDcaCombinedPreview.dcaLayer.ret || 0).toFixed(2)}% • {Number(tsDcaCombinedPreview.dcaLayer.trades || 0)} tr
                       </Tag>
                     ) : null}
                   </Space>
@@ -14447,7 +14461,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   {' • '}
                   {`reinvest ${Number(adminSweepBacktestReinvestPercent || 0)}% (как в слайдере бэктеста)`}
                   {' • '}
-                  Ret в таблице — isolated pair; % base масштабируется с equity этой пары, в TS+DCA — с общим кошельком портфеля.
+                  Ret в таблице — отдельный бектест одной пары (не портфель). В combined участвуют только отмеченные галочкой пары (до 5), на символах вне {tsDcaResearchResult.tsMarkets?.length || 0} занятых ТС. Прирост к ТС смотрите «Δ vs TS-only», не «DCA-only».
                 </Text>
               </Card>
             ) : null}
@@ -14791,10 +14805,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       : [];
                     const tsRerunExecuted = Boolean(adminSweepBacktestResult?.rerun?.executed);
                     const tsRerunEquityRaw = tsDcaEnabled && tsRerunExecuted
-                      ? (adminSweepBacktestResult.preview?.equity || []).map((point: { time?: number; value?: number }) => ({
-                        time: Number(point.time || 0),
-                        value: Number(point.value || 0),
-                      }))
+                      ? toLineSeriesData(adminSweepBacktestResult.preview?.equity || [])
                       : [];
                     const tsOnlyCombinedEquityRaw = tsDcaEnabled && tsDcaCombinedPreview?.tsOnly?.equity
                       ? (tsDcaCombinedPreview.tsOnly.equity || []).map((point) => ({
