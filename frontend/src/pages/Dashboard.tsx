@@ -658,7 +658,46 @@ const buildConstantOverlay = (
 };
 
 const buildEntryOverlay = (payload: any[], id: string, entryRatio: number): OverlayLine | null => {
-  return buildConstantOverlay(payload, id, '#13c2c2', entryRatio, 1);
+  return buildConstantOverlay(payload, id, '#d97706', entryRatio, 2);
+};
+
+const buildTpOverlay = (payload: any[], id: string, tpRatio: number): OverlayLine | null => {
+  return buildConstantOverlay(payload, id, '#16a34a', tpRatio, 2);
+};
+
+const buildOpenPositionMarkers = (
+  strategy: Pick<DDStrategy, 'id' | 'state' | 'base_symbol' | 'quote_symbol' | 'market_mode'>,
+  chartData: any[],
+  entryRatio: number | null | undefined,
+): ChartMarker[] => {
+  const state = String(strategy.state || 'flat').toLowerCase();
+  if (state !== 'long' && state !== 'short') {
+    return [];
+  }
+  const candles = chartData
+    .map(parseCandlePoint)
+    .filter((item): item is ParsedCandlePoint => !!item)
+    .sort((a, b) => a.time - b.time);
+  if (candles.length === 0) {
+    return [];
+  }
+  const entry = Number(entryRatio);
+  if (!Number.isFinite(entry) || entry <= 0) {
+    return [];
+  }
+  const anchor = candles[Math.max(0, candles.length - 2)];
+  const symbol = strategy.market_mode === 'synthetic'
+    ? `${strategy.base_symbol}/${strategy.quote_symbol}`
+    : `${strategy.base_symbol}${strategy.quote_symbol || 'USDT'}`;
+  const isLong = state === 'long';
+  return [{
+    id: `open-pos-${strategy.id}-${anchor.time}`,
+    time: anchor.time,
+    color: isLong ? '#16a34a' : '#dc2626',
+    shape: isLong ? 'arrowUp' : 'arrowDown',
+    position: isLong ? 'belowBar' : 'aboveBar',
+    text: `${isLong ? 'IN' : 'IN'} ${symbol} @ ${entry.toFixed(4)}`,
+  }];
 };
 
 const toFiniteNumber = (value: any, fallback: number = 0): number => {
@@ -3352,11 +3391,17 @@ const Dashboard: React.FC = () => {
                               const tpShortWaveValue = tpWave
                                 ? pickOverlayValueAtTime(tpWave.shortSeries, strategy.show_values_each_bar ? strategyHoverOHLC?.time : undefined)
                                 : null;
-                              const entryOverlay = strategy.show_positions_on_chart && strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
+                              const entryRatioValue = strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
+                                ? Number(strategy.entry_ratio)
+                                : null;
+                              const entryOverlay = strategy.show_positions_on_chart
+                                && entryRatioValue !== null
+                                && Number.isFinite(entryRatioValue)
+                                && strategy.state !== 'flat'
                                 ? buildEntryOverlay(
                                   effectiveStrategyChartData,
                                   `${keyName}:${strategy.id}:entry`,
-                                  Number(strategy.entry_ratio)
+                                  entryRatioValue,
                                 )
                                 : null;
                               const activeTpRatio = strategy.entry_ratio !== null && strategy.entry_ratio !== undefined
@@ -3371,11 +3416,26 @@ const Dashboard: React.FC = () => {
                               const tradeMarkers = strategy.display_on_chart && strategy.show_trades_on_chart
                                 ? buildStrategyTradeMarkers(keyTrades, pairSymbols)
                                 : [];
+                              const openPositionMarkers = strategy.show_positions_on_chart && strategy.show_chart
+                                ? buildOpenPositionMarkers(strategy, effectiveStrategyChartData, entryRatioValue)
+                                : [];
+                              const tpOverlay = strategy.show_positions_on_chart
+                                && strategy.state !== 'flat'
+                                && activeTpRatio !== null
+                                && Number.isFinite(activeTpRatio)
+                                ? buildTpOverlay(
+                                  effectiveStrategyChartData,
+                                  `${keyName}:${strategy.id}:tp`,
+                                  Number(activeTpRatio),
+                                )
+                                : null;
                               const strategyOverlays: OverlayLine[] = [
                                 ...(strategy.display_on_chart && strategy.show_indicators && donchian ? donchian.overlays : []),
                                 ...(strategy.display_on_chart && strategy.show_indicators && tpWave ? tpWave.overlays : []),
-                                ...(strategy.display_on_chart && strategy.show_positions_on_chart && entryOverlay ? [entryOverlay] : []),
+                                ...(strategy.show_chart && strategy.show_positions_on_chart && entryOverlay ? [entryOverlay] : []),
+                                ...(strategy.show_chart && strategy.show_positions_on_chart && tpOverlay ? [tpOverlay] : []),
                               ];
+                              const chartMarkers = [...tradeMarkers, ...openPositionMarkers];
                               return (
                               <>
                                 {strategy.last_action ? <Alert type="info" showIcon message={`Last action: ${strategy.last_action}`} style={{ marginBottom: 12 }} /> : null}
@@ -3911,11 +3971,27 @@ const Dashboard: React.FC = () => {
                                                 )
                                                 : null}
 
+                                              {strategy.state !== 'flat' && orderedPairRows.length > 0
+                                                && orderedPairRows.every(({ position }) => {
+                                                  const size = Math.abs(Number(position?.size || 0));
+                                                  return !position || size <= 0;
+                                                })
+                                                ? (
+                                                  <Alert
+                                                    type="warning"
+                                                    showIcon
+                                                    style={{ marginBottom: 8 }}
+                                                    message="Расхождение: в БД позиция открыта, на бирже size=0"
+                                                    description="Мониторинг видит state LONG/SHORT, но ордер мог не исполниться или позиция закрыта вручную. Entry/TP на графике — по entry_ratio из БД. Проверьте Execute / Close или reconciliation."
+                                                  />
+                                                )
+                                                : null}
+
                                               <ChartComponent
                                                 data={effectiveStrategyChartData}
                                                 type={settings.chartType}
                                                 overlayLines={strategyOverlays}
-                                                markers={tradeMarkers}
+                                                markers={chartMarkers}
                                                 onHoverOHLC={(ohlc) => {
                                                   setStrategyHoverOHLCByKey((prev) => {
                                                     const current = prev[keyName]?.[strategyIdKey] || null;
