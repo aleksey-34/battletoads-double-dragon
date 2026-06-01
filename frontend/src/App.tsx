@@ -181,9 +181,7 @@ function AppShell() {
       });
 
       setClientAuthState('ok');
-      if (isClientAuthRoute) {
-        navigate('/cabinet');
-      }
+      // Do not auto-redirect from /client/login or /client/register — user may switch account or use admin login.
     } catch (error: any) {
       if (Number(error?.response?.status || 0) === 401) {
         setClientAuthState('invalid');

@@ -80,6 +80,7 @@ function useLandingTexts(lang: UILanguage) {
       heroSub: 'Multi-exchange cloud trading platform. 473 активных runtime-стратегии в 18 торговых системах. 58 робастных профилей из 10 000+ бэктестов. 16 живых SaaS-клиентов. Dual Mode тарифы: Стратегии + Алгофонд — сейчас $0 в beta или 40% с прибыли (HWM).',
       btnStart: 'Начать бесплатно',
       btnLogin: 'Войти',
+      btnAdmin: 'Админ-панель',
       betaBadge: 'Бесплатно в бета',
       metrics: [
         { value: '473', label: 'активных стратегий' },
@@ -174,7 +175,7 @@ function useLandingTexts(lang: UILanguage) {
       navStrategies: 'Strategies', navExchanges: 'Exchanges', navSecurity: 'Security', navPricing: 'Pricing', navFaq: 'FAQ',
       heroTitle1: 'Algorithmic Trading', heroTitle2: 'as a Service',
       heroSub: 'Multi-exchange cloud trading platform. 473 active runtime strategies across 18 trading systems. 58 robust profiles selected from 10,000+ backtests. 16 live SaaS clients. Dual Mode pricing: Strategies + Algofund — $0 in beta or 40% profit share (HWM).',
-      btnStart: 'Start Free', btnLogin: 'Log In', betaBadge: 'Free During Beta',
+      btnStart: 'Start Free', btnLogin: 'Log In', btnAdmin: 'Admin panel', betaBadge: 'Free During Beta',
       metrics: [
         { value: '473', label: 'active strategies' }, { value: '18', label: 'trading systems' },
         { value: '10,000+', label: 'backtests' }, { value: '12.0', label: 'best PF' },
@@ -252,7 +253,7 @@ function useLandingTexts(lang: UILanguage) {
       navStrategies: 'Stratejiler', navExchanges: 'Borsalar', navSecurity: 'Güvenlik', navPricing: 'Fiyatlar', navFaq: 'SSS',
       heroTitle1: 'Algoritmik Ticaret', heroTitle2: 'Hizmet Olarak',
       heroSub: '6 borsada 473 aktif runtime stratejisi ve 18 ticaret sistemi. 10.000+ backtestten seçilmiş 58 sağlam profil. 16 canlı SaaS müşterisi. Dual Mode fiyatlama: Strateji + Algofon — betada $0 veya kar uzerinden %40 (HWM).',
-      btnStart: 'Ücretsiz Başla', btnLogin: 'Giriş', betaBadge: 'Betada Ücretsiz',
+      btnStart: 'Ücretsiz Başla', btnLogin: 'Giriş', btnAdmin: 'Yönetici paneli', betaBadge: 'Betada Ücretsiz',
       metrics: [
         { value: '473', label: 'aktif strateji' }, { value: '18', label: 'ticaret sistemi' },
         { value: '10.000+', label: 'backtest' }, { value: '12,0', label: 'en iyi PF' },
@@ -524,6 +525,18 @@ export default function Landing() {
           <a href="/client/login" onClick={() => setMenuOpen(false)} style={{
             ...btnStyle(), display: 'block', textAlign: 'center', padding: '14px', fontSize: 15, marginTop: 12,
           }}>{tx.btnLogin}</a>
+          <a
+            href="/login"
+            onClick={() => {
+              setMenuOpen(false);
+              localStorage.removeItem('clientSessionToken');
+            }}
+            style={{
+              ...btnStyle(), display: 'block', textAlign: 'center', padding: '14px', fontSize: 15, marginTop: 12,
+            }}
+          >
+            {tx.btnAdmin}
+          </a>
         </div>
       )}
 
@@ -551,6 +564,13 @@ export default function Landing() {
           <div style={{ display: 'flex', gap: 12, justifyContent: 'center', marginBottom: 52, flexWrap: 'wrap' }}>
             <a href="/client/register" style={btnStyle(true)}>{tx.btnStart}</a>
             <a href="/client/login" style={btnStyle()}>{tx.btnLogin}</a>
+            <a
+              href="/login"
+              onClick={() => localStorage.removeItem('clientSessionToken')}
+              style={btnStyle()}
+            >
+              {tx.btnAdmin}
+            </a>
             <a href="/whitepaper" style={btnStyle()}>Whitepaper</a>
           </div>
           <div style={{ display: 'flex', justifyContent: 'center', gap: 40, flexWrap: 'wrap' }}>

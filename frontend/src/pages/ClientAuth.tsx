@@ -37,6 +37,18 @@ const saveClientSessionToken = (token: string) => {
   window.dispatchEvent(new Event('auth-changed'));
 };
 
+const clearClientSessionToken = () => {
+  localStorage.removeItem(CLIENT_SESSION_STORAGE_KEY);
+  window.dispatchEvent(new Event('auth-changed'));
+};
+
+type ExistingClientSession = {
+  email: string;
+  tenantDisplayName: string;
+  productMode: string;
+  workspaceRoute: string;
+};
+
 const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
   const { t, language } = useI18n();
   const navigate = useNavigate();
@@ -50,10 +62,53 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
   const [setPasswordForm] = Form.useForm<SetPasswordFormValues>();
   const [magicLinkMode, setMagicLinkMode] = useState<'idle' | 'processing' | 'password_setup' | 'success'>('idle');
   const [magicLinkEmail, setMagicLinkEmail] = useState<string>('');
+  const [existingSession, setExistingSession] = useState<ExistingClientSession | null>(null);
 
   useEffect(() => {
     setMode(initialMode);
   }, [initialMode]);
+
+  useEffect(() => {
+    const magicToken = String(searchParams.get('token') || '').trim();
+    if (magicToken) {
+      return;
+    }
+
+    const token = localStorage.getItem(CLIENT_SESSION_STORAGE_KEY);
+    if (!token) {
+      setExistingSession(null);
+      return;
+    }
+
+    let cancelled = false;
+
+    const probeSession = async () => {
+      try {
+        const response = await axios.get('/api/auth/client/me');
+        if (cancelled) {
+          return;
+        }
+        const user = response?.data?.user;
+        setExistingSession({
+          email: String(user?.email || ''),
+          tenantDisplayName: String(user?.tenantDisplayName || ''),
+          productMode: String(user?.productMode || ''),
+          workspaceRoute: String(response?.data?.workspaceRoute || '/cabinet'),
+        });
+      } catch {
+        if (!cancelled) {
+          clearClientSessionToken();
+          setExistingSession(null);
+        }
+      }
+    };
+
+    void probeSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams]);
 
   useEffect(() => {
     const token = String(searchParams.get('token') || '').trim();
@@ -119,6 +174,24 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleLogoutAndStay = () => {
+    clearClientSessionToken();
+    setExistingSession(null);
+    loginForm.resetFields();
+    registerForm.resetFields();
+    messageApi.info(t('client.auth.sessionCleared', 'Session cleared. Sign in with another account.'));
+  };
+
+  const handleContinueExistingSession = () => {
+    navigate(existingSession?.workspaceRoute || '/cabinet');
+  };
+
+  const handleOpenAdminLogin = () => {
+    clearClientSessionToken();
+    setExistingSession(null);
+    navigate('/login');
   };
 
   const handleLogin = async (values: LoginFormValues) => {
@@ -199,10 +272,37 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 <Button type={mode === 'register' ? 'primary' : 'default'} onClick={() => setMode('register')}>
                   {t('client.auth.registerTab', 'Register')}
                 </Button>
-                <Button type="link" href="/login">
+                <Button type="link" onClick={handleOpenAdminLogin}>
                   {t('client.auth.adminLogin', 'Admin login')}
                 </Button>
               </Space>
+
+              {existingSession ? (
+                <Alert
+                  type="info"
+                  showIcon
+                  message={t('client.auth.existingSessionTitle', 'You are already signed in')}
+                  description={(
+                    <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                      <Typography.Text>
+                        {existingSession.email}
+                        {existingSession.tenantDisplayName ? ` · ${existingSession.tenantDisplayName}` : ''}
+                      </Typography.Text>
+                      <Space wrap>
+                        <Button type="primary" size="small" onClick={handleContinueExistingSession}>
+                          {t('client.auth.continueToCabinet', 'Continue to my cabinet')}
+                        </Button>
+                        <Button size="small" onClick={handleLogoutAndStay}>
+                          {t('client.auth.signInAnother', 'Sign in as another user')}
+                        </Button>
+                        <Button size="small" type="link" onClick={handleOpenAdminLogin}>
+                          {t('client.auth.adminLogin', 'Admin login')}
+                        </Button>
+                      </Space>
+                    </Space>
+                  )}
+                />
+              ) : null}
 
               {errorText ? <Alert type="error" showIcon message={errorText} /> : null}
 
@@ -410,7 +510,9 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 {t('client.auth.helpText', 'After login you are redirected to your own workspace automatically.')}
               </Typography.Paragraph>
               <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-                <Link to="/login">{t('client.auth.switchToAdmin', 'Need admin dashboard access? Use admin login.')}</Link>
+                <Button type="link" style={{ padding: 0, height: 'auto' }} onClick={handleOpenAdminLogin}>
+                  {t('client.auth.switchToAdmin', 'Need admin dashboard access? Use admin login.')}
+                </Button>
               </Typography.Paragraph>
             </>
           )}
