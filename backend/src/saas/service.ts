@@ -9547,6 +9547,8 @@ export const previewDcaCombinedWithTs = async (payload?: {
 
 type DcaCombinedPreviewPayload = Parameters<typeof previewDcaCombinedWithTs>[0];
 
+const DCA_COMBINED_PREVIEW_STALE_MS = 20 * 60 * 1000;
+
 let dcaCombinedPreviewJob: {
   running: boolean;
   startedAt: number;
@@ -9578,8 +9580,16 @@ export const getDcaCombinedPreviewJobStatus = () => ({
 
 export const startDcaCombinedPreviewJob = async (payload?: DcaCombinedPreviewPayload) => {
   const requestKey = buildDcaCombinedPreviewRequestKey(payload);
-  if (dcaCombinedPreviewJob.running && dcaCombinedPreviewJob.requestKey === requestKey) {
-    return getDcaCombinedPreviewJobStatus();
+  if (dcaCombinedPreviewJob.running) {
+    const stale = dcaCombinedPreviewJob.startedAt > 0
+      && Date.now() - dcaCombinedPreviewJob.startedAt > DCA_COMBINED_PREVIEW_STALE_MS;
+    if (!stale && dcaCombinedPreviewJob.requestKey === requestKey) {
+      return getDcaCombinedPreviewJobStatus();
+    }
+    if (stale) {
+      logger.warn(`DCA combined preview stale lock cleared (was running ${Math.round((Date.now() - dcaCombinedPreviewJob.startedAt) / 1000)}s)`);
+      dcaCombinedPreviewJob.running = false;
+    }
   }
 
   dcaCombinedPreviewJob = {

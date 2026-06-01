@@ -7927,9 +7927,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (preselect.length > 0) {
       setTsDcaEnabled(true);
       messageApi.info(
-        `DCA toggle включён (${preselect.join(', ')}). Метрики портфеля — combined engine; оранжевая линия «TS rerun» — ваш последний Real rerun с текущими слайдерами.`,
+        `DCA toggle включён (${preselect.join(', ')}). Считаю TS+DCA combined… Пока ждёте — метрики остаются от Real rerun.`,
         8,
       );
+      window.setTimeout(() => {
+        void runTsDcaCombinedPreview();
+      }, 300);
     }
     if (options?.notify) {
       const cacheHint = payload?.fromCache ? ' (из кэша)' : '';
@@ -14848,9 +14851,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       }
                       return mergeActualRange(adminSweepBacktestResult.period || null);
                     })();
+                    const rerunPreviewSummary = adminSweepBacktestResult.preview?.summary as Record<string, unknown> | undefined;
                     const summary = usingRealTsDcaEngine
                       ? (tsDcaCombinedPreview!.combined!.summary as Record<string, unknown>)
-                      : (tsDcaEnabled ? null : (adminSweepBacktestResult.preview?.summary || {}));
+                      : (tsDcaEnabled && tsDcaCombinedLoading
+                        ? rerunPreviewSummary || {}
+                        : (tsDcaEnabled
+                          ? (rerunPreviewSummary || {})
+                          : (rerunPreviewSummary || {})));
                     const tsOnlyCombinedSummary = usingRealTsDcaEngine
                       ? (tsDcaCombinedPreview?.tsOnly?.summary as Record<string, unknown> | undefined)
                       : undefined;
@@ -14894,12 +14902,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     const finalPnl = usingRealTsDcaEngine && Number.isFinite(summaryNetPnl)
                       ? summaryNetPnl
                       : summary
-                        ? Number(summary.unrealizedPnl ?? (effectivePnlCurve.length > 0 ? effectivePnlCurve[effectivePnlCurve.length - 1].value : fallbackCurves.finalPnl) ?? 0)
+                        ? Number(summary.netProfit ?? summary.unrealizedPnl ?? (effectivePnlCurve.length > 0 ? effectivePnlCurve[effectivePnlCurve.length - 1].value : fallbackCurves.finalPnl) ?? 0)
                         : 0;
                     const serverTradesCount = summary ? Number(summary.tradesCount ?? 0) : 0;
                     const baseTradeScore = Number(adminSweepBacktestResult.controls?.tradeFrequencyScore ?? 5);
                     const tradesCount = usingRealTsDcaEngine
                       ? (Number.isFinite(serverTradesCount) ? serverTradesCount : 0)
+                      : (tsDcaEnabled && tsDcaCombinedLoading && tsRerunExecuted)
+                        ? Number(rerunPreviewSummary?.tradesCount ?? 0)
                       : adminSweepBacktestStale && Number.isFinite(serverTradesCount) && serverTradesCount > 0
                       ? Math.max(
                         1,
@@ -14929,7 +14939,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       type="info"
                       showIcon
                       message={tsDcaCombinedLoading ? 'TS+DCA engine считается на сервере…' : 'Ожидаю TS+DCA engine (real backtest)'}
-                      description="Sweep-only оценка (607k% ret и т.п.) скрыта — она не совпадает с движком. Метрики и график ниже только после real TS+DCA preview."
+                      description={tsRerunExecuted
+                        ? `Пока combined не готов — цифры и график от Real rerun (TS без DCA). После завершения подставятся TS+DCA. Reinvest ${adminSweepBacktestReinvestPercent}%.`
+                        : 'Сначала дождитесь Real rerun, затем combined preview подставит TS+DCA.'}
                     />
                   ) : null}
                   {tsDcaEnabled && usingRealTsDcaEngine ? (
@@ -15117,15 +15129,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         title={<Space size={6}><span>Сделки</span><Tag color="geekblue" style={{ marginInlineEnd: 0 }}>зависят от частоты</Tag></Space>}
                       >
                         <Statistic
-                          value={(usingRealTsDcaEngine || !tsDcaEnabled) && Number.isFinite(tradesCount) ? tradesCount : undefined}
+                          title={usingRealTsDcaEngine ? 'TS+DCA' : 'TS rerun'}
+                          value={summary && Number.isFinite(tradesCount) ? tradesCount : undefined}
                           formatter={(val) => (val === undefined ? '…' : val)}
                           precision={0}
                         />
                         <Text type="secondary" style={{ fontSize: 12 }}>Риск меняет P/L и DD, частота меняет число сделок.</Text>
                       </Card>
                     </Col>
-                    <Col xs={12} md={6}><Card size="small"><Statistic title="P/L" value={(usingRealTsDcaEngine || !tsDcaEnabled) ? finalPnl : undefined} formatter={(val) => (val === undefined ? '…' : val)} precision={2} suffix="USDT" /></Card></Col>
-                    <Col xs={12} md={6}><Card size="small"><Statistic title={usingRealTsDcaEngine ? 'Max DD (TS+DCA)' : 'Max DD'} value={(usingRealTsDcaEngine || !tsDcaEnabled) ? maxDd : undefined} formatter={(val) => (val === undefined ? '…' : Number(val).toFixed(2))} suffix="%" /></Card></Col>
+                    <Col xs={12} md={6}><Card size="small"><Statistic title={usingRealTsDcaEngine ? 'P/L (TS+DCA)' : 'P/L (TS rerun)'} value={summary ? finalPnl : undefined} formatter={(val) => (val === undefined ? '…' : val)} precision={2} suffix="USDT" /></Card></Col>
+                    <Col xs={12} md={6}><Card size="small"><Statistic title={usingRealTsDcaEngine ? 'Max DD (TS+DCA)' : 'Max DD (TS rerun)'} value={summary ? maxDd : undefined} formatter={(val) => (val === undefined ? '…' : Number(val).toFixed(2))} suffix="%" /></Card></Col>
                     {usingRealTsDcaEngine && tsOnlySummary ? (
                       <Col xs={12} md={6}><Card size="small"><Statistic title="Max DD (TS only)" value={Number(tsOnlySummary.maxDrawdownPercent || 0)} precision={2} suffix="%" /></Card></Col>
                     ) : null}

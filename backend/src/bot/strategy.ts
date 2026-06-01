@@ -1507,6 +1507,29 @@ const computeSignal = (
   );
 };
 
+const normalizeExchangeSymbolKey = (raw: string): string => {
+  const token = String(raw || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!token) {
+    return '';
+  }
+  return token.endsWith('USDT') ? token : `${token}USDT`;
+};
+
+const countExchangeOpenPositions = (positions: any[]): number => {
+  const symbols = new Set<string>();
+  for (const row of positions || []) {
+    const size = Math.abs(Number(row?.size || 0));
+    if (!Number.isFinite(size) || size <= 0) {
+      continue;
+    }
+    const key = normalizeExchangeSymbolKey(String(row?.symbol || ''));
+    if (key) {
+      symbols.add(key);
+    }
+  }
+  return symbols.size;
+};
+
 const closeAllForSymbol = async (apiKeyName: string, symbol: string, options?: { marketType?: 'spot' | 'swap' }): Promise<void> => {
   const positions = await getPositions(apiKeyName, symbol);
   const relevant = positions.filter((position: any) => {
@@ -3211,6 +3234,42 @@ export const executeStrategy = async (
       );
 
       const currentOpen = openCount?.cnt || 0;
+      let exchangeOpen = 0;
+      try {
+        const { ensureExchangeClientInitialized: ensureExchange } = await import('./exchange');
+        await ensureExchange(apiKeyName);
+        const exchangePositions = await getPositions(apiKeyName).catch(() => []);
+        exchangeOpen = countExchangeOpenPositions(exchangePositions);
+      } catch (exchangeCountErr) {
+        logger.warn(`ОП exchange count failed for ${apiKeyName}: ${formatActionError(exchangeCountErr)}`);
+      }
+
+      if (exchangeOpen > maxOpen) {
+        logger.info(
+          `ОП exchange limit: ${exchangeOpen}/${maxOpen} live positions on ${apiKeyName}, `
+          + `skipping entry for strategy ${strategyId} (db=${currentOpen})`,
+        );
+        const updated = await updateStrategy(apiKeyName, strategyId, {
+          ...executionBindingPatch,
+          state: 'flat',
+          entry_ratio: null,
+          tp_anchor_ratio: null,
+          last_signal: signal,
+          last_action: closedAction
+            ? `${closedAction}_exchange_op_skip@${currentRatio}`
+            : `exchange_op_skip@${currentRatio}`,
+          last_error: null,
+        });
+        return returnWithProcessedBar({
+          result: `ОП exchange limit reached (${exchangeOpen}/${maxOpen}), entry skipped`,
+          action: closedAction ? `${closedAction}_exchange_op_skip` : 'exchange_op_skip',
+          strategy: updated,
+          currentRatio,
+          donchianHigh,
+          donchianLow,
+          donchianCenter,
+        });
+      }
 
       if (currentOpen >= maxOpen) {
         logger.info(`ОП limit: ${currentOpen}/${maxOpen} positions open in system ${systemRow.system_id}, skipping entry for strategy ${strategyId}`);
@@ -4157,13 +4216,21 @@ export const runAutoStrategiesCycle = async () => {
   // ── Overflow guard: close excess positions if more than ОП ──
   try {
     const systems: any[] = (await db.all(
-      `SELECT id, max_open_positions FROM trading_systems WHERE max_open_positions > 0`
+      `SELECT ts.id, ts.max_open_positions, ak.name AS api_key_name
+       FROM trading_systems ts
+       JOIN api_keys ak ON ak.id = ts.api_key_id
+       WHERE ts.max_open_positions > 0 AND ts.is_active = 1`
     )) || [];
 
     for (const sys of systems) {
-      const maxOpen = sys.max_open_positions;
+      const maxOpen = Number(sys.max_open_positions || 0);
+      const apiKeyName = String(sys.api_key_name || '').trim();
+      if (!apiKeyName || maxOpen <= 0) {
+        continue;
+      }
+
       const openStrategies: any[] = (await db.all(
-        `SELECT s.id AS strategy_id, a.name AS api_key_name, s.updated_at
+        `SELECT s.id AS strategy_id, s.base_symbol, a.name AS api_key_name, s.updated_at
          FROM strategies s
          JOIN trading_system_members tsm ON tsm.strategy_id = s.id
          JOIN api_keys a ON a.id = s.api_key_id
@@ -4186,6 +4253,41 @@ export const runAutoStrategiesCycle = async () => {
             logger.error(`ОП overflow: failed to close strategy ${ex.strategy_id}: ${formatActionError(closeErr)}`);
           }
         }
+      }
+
+      const ownedSymbols = new Set(
+        openStrategies
+          .map((row) => normalizeExchangeSymbolKey(String(row.base_symbol || '')))
+          .filter(Boolean),
+      );
+
+      try {
+        await ensureExchangeClientInitialized(apiKeyName);
+        const exchangePositions = await getPositions(apiKeyName).catch(() => []);
+        const exchangeOpen = countExchangeOpenPositions(exchangePositions);
+        if (exchangeOpen > maxOpen) {
+          logger.warn(
+            `ОП exchange overflow on ${apiKeyName} system ${sys.id}: `
+            + `exchange=${exchangeOpen} db=${openStrategies.length} limit=${maxOpen}`,
+          );
+        }
+        for (const row of exchangePositions || []) {
+          const size = Math.abs(Number(row?.size || 0));
+          if (!Number.isFinite(size) || size <= 0) {
+            continue;
+          }
+          const symbol = String(row?.symbol || '').trim();
+          const symbolKey = normalizeExchangeSymbolKey(symbol);
+          if (!symbolKey || ownedSymbols.has(symbolKey)) {
+            continue;
+          }
+          logger.warn(
+            `ОП orphan exchange position on ${apiKeyName}: ${symbol} (no non-flat TS owner in system ${sys.id}) — closing`,
+          );
+          await closeAllForSymbol(apiKeyName, symbol, { marketType: 'swap' });
+        }
+      } catch (orphanErr) {
+        logger.warn(`ОП orphan cleanup failed for system ${sys.id}: ${formatActionError(orphanErr)}`);
       }
     }
   } catch (overflowErr) {
