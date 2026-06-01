@@ -546,10 +546,6 @@ const ENV_PASSWORD_HASH = String(process.env.PASSWORD_HASH || '').trim();
 const _storedHash = readPasswordStateHash();
 const _envHash = isBcryptHash(ENV_PASSWORD_HASH) ? ENV_PASSWORD_HASH : '';
 let currentPasswordHash = _storedHash || _envHash;
-if (!currentPasswordHash) {
-  // eslint-disable-next-line no-console
-  console.error('[AUTH] CRITICAL: No password configured. Admin access is BLOCKED. Set password via /api/auth/set-password or PASSWORD_HASH env.');
-}
 
 export const verifyDashboardPassword = (password: string): boolean => {
   if (!currentPasswordHash) return false;
@@ -567,6 +563,30 @@ export const setDashboardPassword = (nextPassword: string): void => {
   process.env.PASSWORD_HASH = nextHash;
   writePasswordStateHash(nextHash);
 };
+
+const bootstrapDashboardPasswordFromEnv = (): void => {
+  if (currentPasswordHash) {
+    return;
+  }
+
+  const plainPassword = String(process.env.DASHBOARD_PASSWORD || '').trim();
+  if (!plainPassword || plainPassword === 'your_strong_password_here') {
+    // eslint-disable-next-line no-console
+    console.error('[AUTH] CRITICAL: No password configured. Set DASHBOARD_PASSWORD, PASSWORD_HASH, or .auth-password.json');
+    return;
+  }
+
+  try {
+    setDashboardPassword(plainPassword);
+    // eslint-disable-next-line no-console
+    console.info('[AUTH] Dashboard password hash initialized from DASHBOARD_PASSWORD env');
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error(`[AUTH] Failed to bootstrap dashboard password: ${(error as Error).message}`);
+  }
+};
+
+bootstrapDashboardPasswordFromEnv();
 
 export const registerClientUser = async (payload: ClientRegistrationInput, requestMeta?: SessionRequestMeta): Promise<ClientAuthPayload> => {
   const email = normalizeEmail(payload.email);

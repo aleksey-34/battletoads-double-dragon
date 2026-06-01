@@ -53,8 +53,14 @@ const Login: React.FC = () => {
       window.location.href = '/dashboard';
     } catch (error: any) {
       const status = Number(error?.response?.status || 0);
-      if (status === 401) {
-        setErrorText(t('login.invalidPassword', 'Invalid password. Please check VPS password and try again.'));
+      const apiError = String(error?.response?.data?.error || '').toLowerCase();
+      if (status === 403 && (apiError.includes('platform_admin') || apiError.includes('forbidden'))) {
+        setErrorText(t(
+          'login.platformTokenRequired',
+          'Server requires platform admin token (ADMIN_PLATFORM_TOKEN). Use that token as password, or restore DASHBOARD_PASSWORD hash on VPS.',
+        ));
+      } else if (status === 401 || status === 403 || apiError.includes('unauthorized') || apiError.includes('forbidden')) {
+        setErrorText(t('login.invalidPassword', 'Invalid password. Please check VPS dashboard password and try again.'));
       } else {
         setErrorText(t('login.backendUnavailable', 'Backend is unavailable. Check backend service and network.'));
       }
