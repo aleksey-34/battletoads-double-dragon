@@ -1058,7 +1058,7 @@ const ClientCabinet: React.FC = () => {
 
       const productMode = String(
         workspaceResponse.data?.productMode
-        || workspaceResponse.data?.auth?.productMode
+        || workspaceResponse.data?.auth?.user?.productMode
         || '',
       );
       if (productMode === 'tv_alerts_client') {
