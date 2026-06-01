@@ -401,6 +401,21 @@ const parseDcaJobContextBody = (body: Record<string, unknown> | undefined) => ({
   tradeFrequencyScore: toOptionalNumber(body?.tradeFrequencyScore),
   reinvestPercent: toOptionalNumber(body?.reinvestPercent),
   riskScaleMaxPercent: toOptionalNumber(body?.riskScaleMaxPercent),
+  lotPercentOverride: toOptionalNumber(body?.lotPercentOverride),
+  partialTpPct: toOptionalNumber(body?.partialTpPct),
+  commissionPercent: toOptionalNumber(body?.commissionPercent),
+  slippagePercent: toOptionalNumber(body?.slippagePercent),
+  fundingRatePercent: toOptionalNumber(body?.fundingRatePercent),
+  offerIds: Array.isArray(body?.offerIds)
+    ? body.offerIds.map((item: unknown) => String(item || '').trim()).filter(Boolean)
+    : undefined,
+  offerWeightsById: body?.offerWeightsById && typeof body.offerWeightsById === 'object'
+    ? Object.fromEntries(
+      Object.entries(body.offerWeightsById as Record<string, unknown>)
+        .map(([offerId, weight]) => [offerId, Number(weight)] as const)
+        .filter(([, weight]) => Number.isFinite(weight) && weight > 0),
+    )
+    : undefined,
 });
 
 router.get('/admin/ts-dca-research-status', async (_req, res) => {

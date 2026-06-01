@@ -1846,8 +1846,8 @@ const formatDcaBaseSettingLabel = (
   const deposit = Number(initialBalance || 0);
   if (mode === 'percent') {
     const pct = Number(cfg.baseAmountPercent || 0);
-    const depositHint = deposit > 0 ? ` от ${deposit.toLocaleString('ru-RU')} USDT` : '';
-    return `base ${pct}% депозита (~${usdt.toFixed(0)} USDT${depositHint})`;
+    const depositHint = deposit > 0 ? `, t0≈${usdt.toFixed(0)} USDT при ${deposit.toLocaleString('ru-RU')}` : '';
+    return `base ${pct}% live equity${depositHint}`;
   }
   return `base ${usdt.toFixed(0)} USDT (fixed)`;
 };
@@ -6793,11 +6793,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const contextKey = getBacktestContextKey(context);
     const saved = contextKey ? adminBacktestSettingsByCard[contextKey] : null;
     if (saved) {
-      // NOTE: локальный fallback из localStorage отключён — он ресурректил старые
-      // несохранённые движения ползунков при переоткрытии модалки. Источник истины — только
-      // backend snapshot.backtestSettings (он пишется только по буквальному «Сохранить»).
-      // Оставлено поле saved в state для обратной совместимости (миграция).
-      void saved;
+      // Сессионный fallback: ползунки (reinvest, risk, …) между открытиями модалки без «Сохранить».
+      // Snapshot по-прежнему задаёт состав офферов; saved перекрывает только backtest controls.
+      return normalizeBacktestCardSettings({
+        ...DEFAULT_BACKTEST_SETTINGS,
+        ...saved,
+      });
     }
 
     return { ...DEFAULT_BACKTEST_SETTINGS };
@@ -6970,7 +6971,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         tradeFrequencyScore: effectiveTradeFrequencyScore,
         initialBalance: effectiveInitialBalance,
         riskScaleMaxPercent: effectiveRiskScaleMaxPercent,
-        reinvestPercent: adminSweepBacktestReinvestPercent,
+        reinvestPercent: Number.isFinite(Number(options?.settingsOverride?.reinvestPercent))
+          ? Math.min(100, Math.max(0, Number(options?.settingsOverride?.reinvestPercent)))
+          : adminSweepBacktestReinvestPercent,
         maxOpenPositions: effectiveMaxOpenPositions > 0 ? effectiveMaxOpenPositions : undefined,
         lotPercentOverride: effectiveLotPercentOverride > 0 ? effectiveLotPercentOverride : undefined,
         partialTpPct: effectivePartialTpPct > 0 ? effectivePartialTpPct : undefined,
@@ -7681,6 +7684,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const cardDates = backtestDatesUserModifiedRef.current && hasAdminDates
       ? { dateFrom: adminSweepBacktestDateFrom, dateTo: adminSweepBacktestDateTo }
       : { dateFrom: undefined, dateTo: undefined };
+    const offerIds = Array.from(new Set(
+      (backtestDrawerContext?.offerIds || [])
+        .map((item) => String(item || '').trim())
+        .filter(Boolean),
+    ));
     return {
       systemName: backtestDrawerContext?.systemName,
       setKey: backtestDrawerContext?.setKey,
@@ -7692,6 +7700,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       tradeFrequencyScore: adminSweepBacktestTradeScore,
       reinvestPercent: adminSweepBacktestReinvestPercent,
       riskScaleMaxPercent: adminSweepBacktestRiskScaleMaxPercent,
+      offerIds: offerIds.length > 0 ? offerIds : undefined,
+      offerWeightsById: offerIds.length > 0
+        ? normalizeBacktestTsWeights(offerIds, backtestTsWeightsByOfferId)
+        : undefined,
+      lotPercentOverride: adminSweepBacktestLotPercentOverride > 0 ? adminSweepBacktestLotPercentOverride : undefined,
+      partialTpPct: adminSweepBacktestPartialTpPct > 0 ? adminSweepBacktestPartialTpPct : undefined,
+      commissionPercent: adminSweepBacktestCommissionPercent,
+      slippagePercent: adminSweepBacktestSlippagePercent,
+      fundingRatePercent: adminSweepBacktestFundingRatePercent,
       dcaBaseAmountUsdt: tsDcaBaseMode === 'fixed' ? tsDcaBaseAmountUsdt : undefined,
       dcaBaseAmountMode: tsDcaBaseMode,
       dcaBaseAmountPercent: tsDcaBaseMode === 'percent' ? tsDcaBasePercent : undefined,
@@ -7909,6 +7926,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setTsDcaSelectedMarkets(preselect);
     if (preselect.length > 0) {
       setTsDcaEnabled(true);
+      messageApi.info(
+        `DCA toggle включён (${preselect.join(', ')}). Метрики портфеля — combined engine; оранжевая линия «TS rerun» — ваш последний Real rerun с текущими слайдерами.`,
+        8,
+      );
     }
     if (options?.notify) {
       const cacheHint = payload?.fromCache ? ' (из кэша)' : '';
@@ -14342,7 +14363,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Descriptions.Item>
                           </Descriptions>
                           <Text type="secondary">
-                            Scan-сделки по паре ≠ Δ trades в toggle: scan — single-pair backtest, Δ — прирост портфеля TS+DCA vs TS-only.
+                            Scan — single-pair (Ret по паре). Δ trades в toggle — прирост портфеля TS+DCA vs TS-only. Мельче сетка (1h): step 0.2–0.25%, TP 0.5–0.7%, base 3–4% equity, max orders 18–22; текущий агрессивный 0.3/0.8/5%/20 — уже плотный, дальше — autotune или ручной scan.
                           </Text>
                         </Space>
                       ),
@@ -14420,6 +14441,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 />
                 <Text type="secondary">
                   Занято ТС: {tsDcaResearchResult.tsMarkets?.length || 0} market keys • период {tsDcaResearchResult.period?.dateFrom || '—'} → {tsDcaResearchResult.period?.dateTo || '—'}
+                  {' • '}
+                  {`reinvest ${Number(adminSweepBacktestReinvestPercent || 0)}% (как в слайдере бэктеста)`}
+                  {' • '}
+                  Ret в таблице — isolated pair; % base масштабируется с equity этой пары, в TS+DCA — с общим кошельком портфеля.
                 </Text>
               </Card>
             ) : null}
@@ -14556,8 +14581,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       onChange={(value) => {
                         const next = Math.max(0, Math.min(100, Number(value)));
                         setAdminSweepBacktestReinvestPercent(next);
+                        storeCurrentBacktestSettingsForContext(backtestDrawerContext, { reinvestPercent: next });
                         setAdminSweepBacktestStale(true);
-                        scheduleBacktestDebounce();
+                        scheduleBacktestDebounce({ reinvestPercent: next });
                       }}
                       options={[
                         { value: 0, label: '0% — снимаю всё (флэт)' },
@@ -14760,7 +14786,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         value: Number(point.equity || 0),
                       }))
                       : [];
-                    const tsOnlyRealEquityRaw = tsDcaEnabled && tsDcaCombinedPreview?.tsOnly?.equity
+                    const tsRerunExecuted = Boolean(adminSweepBacktestResult?.rerun?.executed);
+                    const tsRerunEquityRaw = tsDcaEnabled && tsRerunExecuted
+                      ? (adminSweepBacktestResult.preview?.equity || []).map((point: { time?: number; value?: number }) => ({
+                        time: Number(point.time || 0),
+                        value: Number(point.value || 0),
+                      }))
+                      : [];
+                    const tsOnlyCombinedEquityRaw = tsDcaEnabled && tsDcaCombinedPreview?.tsOnly?.equity
                       ? (tsDcaCombinedPreview.tsOnly.equity || []).map((point) => ({
                         time: Number(point.time || 0),
                         value: Number(point.equity || 0),
@@ -14777,8 +14810,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         : tsSweepEquitySeries,
                       chartPeriod,
                     );
-                    const tsOnlyOverlaySeries = combinedEquityRaw.length > 0 && tsOnlyRealEquityRaw.length > 0
-                      ? anchorLineSeriesToPeriod(toLineSeriesData(tsOnlyRealEquityRaw), chartPeriod)
+                    const tsOnlyOverlaySource = tsRerunEquityRaw.length > 0 ? tsRerunEquityRaw : tsOnlyCombinedEquityRaw;
+                    const tsOnlyOverlaySeries = combinedEquityRaw.length > 0 && tsOnlyOverlaySource.length > 0
+                      ? anchorLineSeriesToPeriod(toLineSeriesData(tsOnlyOverlaySource), chartPeriod)
                       : [];
                     const usingRealTsDcaEngine = tsDcaEnabled && Boolean(tsDcaCombinedPreview?.combined?.summary);
                     const isSweepSynthetic = String(adminSweepBacktestResult.preview?.source || '') === 'admin_saved_ts_snapshot_synthetic';
@@ -14817,9 +14851,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     const summary = usingRealTsDcaEngine
                       ? (tsDcaCombinedPreview!.combined!.summary as Record<string, unknown>)
                       : (tsDcaEnabled ? null : (adminSweepBacktestResult.preview?.summary || {}));
-                    const tsOnlySummary = usingRealTsDcaEngine
+                    const tsOnlyCombinedSummary = usingRealTsDcaEngine
                       ? (tsDcaCombinedPreview?.tsOnly?.summary as Record<string, unknown> | undefined)
                       : undefined;
+                    const tsRerunSummary = tsRerunExecuted
+                      ? (adminSweepBacktestResult.preview?.summary as Record<string, unknown> | undefined)
+                      : undefined;
+                    const tsOnlySummary = tsRerunSummary || tsOnlyCombinedSummary;
+                    const tsOnlyRetRerun = Number(tsRerunSummary?.totalReturnPercent ?? NaN);
+                    const tsOnlyRetCombined = Number(tsOnlyCombinedSummary?.totalReturnPercent ?? NaN);
+                    const tsOnlyRetMismatch = tsRerunExecuted
+                      && usingRealTsDcaEngine
+                      && Number.isFinite(tsOnlyRetRerun)
+                      && Number.isFinite(tsOnlyRetCombined)
+                      && Math.abs(tsOnlyRetRerun - tsOnlyRetCombined) > 12;
                     const showSweepEstimateTags = !tsDcaEnabled && isSweepSynthetic;
                     const fallbackCurves = deriveBacktestCurvesFromEquity(
                       equitySeries,
@@ -14887,12 +14932,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       description="Sweep-only оценка (607k% ret и т.п.) скрыта — она не совпадает с движком. Метрики и график ниже только после real TS+DCA preview."
                     />
                   ) : null}
-                  {tsDcaEnabled && isSweepSynthetic && usingRealTsDcaEngine ? (
+                  {tsDcaEnabled && usingRealTsDcaEngine ? (
+                    <Alert
+                      type="info"
+                      showIcon
+                      message="После DCA scan метрики в шапке — combined engine (TS+DCA)"
+                      description={`Синяя линия — портфель TS+DCA. Оранжевая — ваш Real rerun ТС (reinvest ${adminSweepBacktestReinvestPercent}%). Тег «TS only» в шапке — тот же combined-run без DCA-ног; он совпадает с rerun только при тех же слайдерах (reinvest, веса офферов). Карточка ~875% — sweep snapshot до «Сохранить».${tsOnlyRetMismatch ? ` Сейчас rerun ${tsOnlyRetRerun.toFixed(1)}% vs combined TS-only ${tsOnlyRetCombined.toFixed(1)}% — проверьте reinvest и дождитесь пересчёта combined.` : ''}`}
+                    />
+                  ) : null}
+                  {tsDcaEnabled && isSweepSynthetic && !usingRealTsDcaEngine ? (
                     <Alert
                       type="warning"
                       showIcon
-                      message="Метрики карточки (sweep est.) ≠ real engine в модалке"
-                      description="Теги Ret/DD/trades и график — из real TS+DCA backtest. Цифры на опубликованной карточке — sweep-оценка, их нельзя сравнивать напрямую."
+                      message="Карточка (sweep est.) ≠ real engine"
+                      description="Включите DCA-пары и дождитесь combined preview, либо смотрите Real rerun без DCA toggle."
                     />
                   ) : null}
                   {!tsDcaEnabled && adminSweepBacktestResult.rerun?.executed ? (
@@ -14937,8 +14990,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       ) : null}
                     {usingRealTsDcaEngine ? (
                       <>
-                        {tsOnlySummary ? <Tag color="orange">TS only {formatPercent(Number(tsOnlySummary.totalReturnPercent || 0))}</Tag> : null}
-                        {tsOnlySummary ? <Tag color="volcano">TS DD {formatPercent(Number(tsOnlySummary.maxDrawdownPercent || 0))}</Tag> : null}
+                        {tsRerunSummary ? (
+                          <Tag color="orange">
+                            TS rerun {formatPercent(Number(tsRerunSummary.totalReturnPercent || 0))}
+                          </Tag>
+                        ) : null}
+                        {tsOnlyCombinedSummary && tsOnlyRetMismatch ? (
+                          <Tag color="default">
+                            combined TS-only {formatPercent(Number(tsOnlyCombinedSummary.totalReturnPercent || 0))}
+                          </Tag>
+                        ) : null}
+                        {!tsRerunSummary && tsOnlyCombinedSummary ? (
+                          <Tag color="orange">
+                            TS only {formatPercent(Number(tsOnlyCombinedSummary.totalReturnPercent || 0))}
+                          </Tag>
+                        ) : null}
+                        {tsOnlySummary ? (
+                          <Tag color="volcano">
+                            TS DD {formatPercent(Number(tsOnlySummary.maxDrawdownPercent || 0))}
+                          </Tag>
+                        ) : null}
                         <Tag color={metricColor(Number(summary?.totalReturnPercent || 0), 'return')}>TS+DCA {formatPercent(Number(summary?.totalReturnPercent || 0))}</Tag>
                         <Tag color={metricColor(Number(summary?.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(Number(summary?.maxDrawdownPercent || 0))}</Tag>
                         <Tag color={metricColor(Number(summary?.profitFactor || 0), 'pf')}>PF {formatNumber(Number(summary?.profitFactor || 0))}</Tag>
@@ -15065,7 +15136,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   {equitySeries.length > 0 ? (
                     <Space direction="vertical" size={8} style={{ width: '100%' }}>
                       {tsDcaEnabled && tsOnlyOverlaySeries.length > 0 ? (
-                        <Text type="secondary">Синяя линия — TS+DCA, оранжевая пунктир — только TS</Text>
+                        <Text type="secondary">
+                          {tsRerunExecuted
+                            ? 'Синяя — TS+DCA (combined). Оранжевая пунктир — Real rerun ТС (слайдеры модалки).'
+                            : 'Синяя — TS+DCA, оранжевая пунктир — TS-only (combined run).'}
+                        </Text>
                       ) : null}
                       <ChartComponent
                         data={equitySeries.map((point) => ({ time: point.time, equity: point.value }))}

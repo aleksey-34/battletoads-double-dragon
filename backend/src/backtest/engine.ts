@@ -585,8 +585,23 @@ const computeRsiAtIndex = (candles: ParsedCandle[], index: number, period: numbe
   return 100 - (100 / (1 + rs));
 };
 
+const resolveClassicDcaOrderSize = (
+  dc: { baseAmountUsdt: number; baseAmountPercent: number; orderMultiplier: number },
+  portfolioEquityNow: number,
+  safetyOrderIndex: number,
+): number => {
+  const equityBase = Number.isFinite(portfolioEquityNow) && portfolioEquityNow > 0
+    ? portfolioEquityNow
+    : dc.baseAmountUsdt;
+  const base = dc.baseAmountPercent > 0
+    ? Math.max(1, (equityBase * dc.baseAmountPercent) / 100)
+    : dc.baseAmountUsdt;
+  const mult = Math.pow(Math.max(1, dc.orderMultiplier), Math.max(0, safetyOrderIndex));
+  return Math.max(1, base * mult);
+};
+
 const extractDcaConfigFromStrategy = (s: any): {
-  enabled: boolean; baseAmountUsdt: number; stepPercent: number; maxOrders: number;
+  enabled: boolean; baseAmountUsdt: number; baseAmountPercent: number; stepPercent: number; maxOrders: number;
   orderMultiplier: number; tpPercent: number; slPercent: number;
   perLegSl: boolean;
   entryFilter: 'always' | 'rsi_dip' | 'cooldown';
@@ -600,12 +615,17 @@ const extractDcaConfigFromStrategy = (s: any): {
   const t = String(s.strategy_type || '').trim().toLowerCase();
   if (t !== 'dca') return null;
   const ba = Number(s.dca_base_amount_usdt || 10);
-  if (!Number.isFinite(ba) || ba <= 0) return null;
+  const pctRaw = Number(s.dca_base_amount_percent || 0);
+  const baseAmountPercent = Number.isFinite(pctRaw) && pctRaw > 0 ? Math.max(0.1, pctRaw) : 0;
+  if (!Number.isFinite(ba) || ba <= 0) {
+    if (baseAmountPercent <= 0) return null;
+  }
   const rawFilter = String(s.dca_entry_filter || 'always').trim().toLowerCase();
   const entryFilter = rawFilter === 'rsi_dip' || rawFilter === 'cooldown' ? rawFilter : 'always';
   return {
     enabled: true,
     baseAmountUsdt: Math.max(1, ba),
+    baseAmountPercent,
     stepPercent: Math.max(0.1, Number(s.dca_step_percent || 2)),
     maxOrders: Math.max(0, Math.floor(Number(s.dca_max_orders || 5))),
     orderMultiplier: Math.max(1, Number(s.dca_order_multiplier || 1)),
@@ -1007,9 +1027,9 @@ const openPosition = (
 ): boolean => {
   const strategy = runtime.strategy;
 
-  // DCA strategies: use baseAmountUsdt instead of lot percent
+  // DCA strategies: fixed USDT or % of live portfolio equity (TS+DCA shared wallet in portfolio mode).
   if (runtime.dcaState?.enabled) {
-    const dcaSize = runtime.dcaState.baseAmountUsdt;
+    const dcaSize = resolveClassicDcaOrderSize(runtime.dcaState, portfolioEquityNow, 0);
     if (dcaSize <= 0) return false;
     const entryPrice = executionPrice(marketPrice, signal, 'entry', effectiveSlippageRate(ctx, strategy));
     const entryFee = dcaSize * effectiveCommissionRate(ctx, strategy);
@@ -1868,7 +1888,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       const dc = runtime.dcaState;
       const stepTrigger = dc.lastBuyPrice * (1 - dc.stepPercent / 100);
       if (candle.close <= stepTrigger) {
-        const safetySize = dc.baseAmountUsdt * Math.pow(dc.orderMultiplier, dc.ordersCount);
+        const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
+        const safetySize = resolveClassicDcaOrderSize(dc, equityNow, dc.ordersCount);
         const safetyQty = safetySize / candle.close;
         const entryFee = safetySize * effectiveCommissionRate(ctx, runtime.strategy);
         ctx.cashEquity -= entryFee;
@@ -1891,13 +1912,11 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
               skippedByPairLock++;
             } else {
               const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
-              const availableBalance = Math.max(0, equityNow - computeLockedMargin(runtimes));
-              openPosition(ctx, runtime, 'long', event.timeMs, candle.close, availableBalance);
+              openPosition(ctx, runtime, 'long', event.timeMs, candle.close, equityNow);
             }
           } else {
             const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
-            const availableBalance = Math.max(0, equityNow - computeLockedMargin(runtimes));
-            openPosition(ctx, runtime, 'long', event.timeMs, candle.close, availableBalance);
+            openPosition(ctx, runtime, 'long', event.timeMs, candle.close, equityNow);
           }
         }
       }

@@ -744,6 +744,7 @@ export const initDB = async () => {
   await ensureColumn('strategies', "pb_last_buy_at TEXT");
   // DCA strategy fields
   await ensureColumn('strategies', "dca_base_amount_usdt REAL DEFAULT 10");
+  await ensureColumn('strategies', "dca_base_amount_percent REAL DEFAULT 0");
   await ensureColumn('strategies', "dca_step_percent REAL DEFAULT 2");
   await ensureColumn('strategies', "dca_max_orders INTEGER DEFAULT 5");
   await ensureColumn('strategies', "dca_order_multiplier REAL DEFAULT 1");

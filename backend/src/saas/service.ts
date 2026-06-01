@@ -74,7 +74,7 @@ const buildPortfolioLotMultiplierByStrategyId = (
   return out;
 };
 
-/** Same lot/reinvest/deposit caps as admin sweep rerun — for TS+DCA combined preview parity. */
+/** Same lot/reinvest/deposit caps as admin sweep snapshot rerun — for TS+DCA combined preview parity. */
 const resolveAdminPreviewEngineOverridesForTsPortfolio = async (params: {
   systemName: string;
   tsStrategyIds: number[];
@@ -83,25 +83,70 @@ const resolveAdminPreviewEngineOverridesForTsPortfolio = async (params: {
   riskScaleMaxPercent?: number;
   reinvestPercent?: number;
   lotPercentOverride?: number;
+  tradeFrequencyScore?: number;
+  snapshot?: TsBacktestSnapshot | null;
+  offerIds?: string[];
+  offerWeightsById?: Record<string, number>;
+  catalog?: CatalogData | null;
 }) => {
   const riskScore = normalizePreferenceScore(params.riskScore, 'medium');
+  const tradeFrequencyScore = normalizePreferenceScore(params.tradeFrequencyScore, 'medium');
   const riskScaleMaxPercent = clampNumber(asNumber(params.riskScaleMaxPercent, 100), 0, 400);
   const reinvestPercent = clampNumber(asNumber(params.reinvestPercent, 0), 0, 100);
   const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
+  const tradeMul = getPreviewTradeMultiplier(tradeFrequencyScore);
   const cardLotConfig = await getCardConfigBySystemName(asString(params.systemName, '').trim());
   const lotPercentRequested = Math.max(0, asNumber(params.lotPercentOverride, 0));
   const lotPercentEffective = lotPercentRequested > 0
     ? lotPercentRequested
     : (cardLotConfig.lotPercent > 0 ? cardLotConfig.lotPercent : 100);
-  const lotPercentOverride = resolveAdminPreviewLotPercentOverride(lotPercentEffective, rerunRiskMul);
+  const snapshotSettingsRaw = (params.snapshot?.backtestSettings && typeof params.snapshot.backtestSettings === 'object')
+    ? (params.snapshot.backtestSettings as Record<string, unknown>)
+    : {};
+  const snapshotTradeFrequencyScore = clampNumber(asNumber(snapshotSettingsRaw.tradeFrequencyScore, 5), 0, 10);
+  const snapshotTradeMul = getPreviewTradeMultiplier(snapshotTradeFrequencyScore);
+  const relativeTradeMul = tradeMul / Math.max(0.01, snapshotTradeMul);
+  const lotPercentOverride = resolveAdminPreviewLotPercentOverride(
+    lotPercentEffective * relativeTradeMul,
+    rerunRiskMul,
+  );
   const maxDepositOverride = resolveAdminPreviewMaxDepositOverride(reinvestPercent, params.initialBalance);
-  const lotPercentMultiplierByStrategyId: Record<number, number> = {};
-  const tsCount = Math.max(1, params.tsStrategyIds.length);
-  for (const strategyId of params.tsStrategyIds) {
-    if (Number.isFinite(strategyId) && strategyId > 0) {
-      lotPercentMultiplierByStrategyId[strategyId] = 1 / tsCount;
+
+  const offerIds = Array.from(new Set(
+    (Array.isArray(params.offerIds) ? params.offerIds : [])
+      .map((item) => asString(item, '').trim())
+      .filter(Boolean),
+  ));
+  const weightsByOfferId = params.offerWeightsById && typeof params.offerWeightsById === 'object'
+    ? params.offerWeightsById
+    : {};
+  const portfolioOffers: Array<{ offerId: string; strategyId: number }> = [];
+  if (params.catalog && offerIds.length > 0) {
+    for (const offerId of offerIds) {
+      const offer = findOfferByIdOrNull(params.catalog, offerId);
+      const strategyId = Number(
+        offer?.strategy?.id
+        || parseStrategyIdFromOfferId(offerId)
+        || 0,
+      );
+      if (Number.isFinite(strategyId) && strategyId > 0 && params.tsStrategyIds.includes(strategyId)) {
+        portfolioOffers.push({ offerId, strategyId });
+      }
     }
   }
+  const lotPercentMultiplierByStrategyId = portfolioOffers.length > 0
+    ? buildPortfolioLotMultiplierByStrategyId(portfolioOffers, weightsByOfferId)
+  : (() => {
+    const fallback: Record<number, number> = {};
+    const tsCount = Math.max(1, params.tsStrategyIds.length);
+    for (const strategyId of params.tsStrategyIds) {
+      if (Number.isFinite(strategyId) && strategyId > 0) {
+        fallback[strategyId] = 1 / tsCount;
+      }
+    }
+    return fallback;
+  })();
+
   return {
     lotPercentOverride,
     maxDepositOverride,
@@ -6291,7 +6336,7 @@ const DEFAULT_DCA_SETTINGS: Omit<NormalizedDcaSettings, 'baseAmountMode' | 'base
   perLegSl: false,
 };
 
-const DCA_AUTOTUNE_VERSION = 7;
+const DCA_AUTOTUNE_VERSION = 8;
 
 const buildDcaAutotuneVariants = (): Array<Partial<DcaStrategySettings>> => {
   const variants: Array<Partial<DcaStrategySettings>> = [];
@@ -6499,9 +6544,11 @@ const createDcaStrategyRecord = async (
   if (!created.id) {
     throw new Error('DCA strategy created but id missing');
   }
+  const dcaBasePercentDb = cfg.baseAmountMode === 'percent' ? cfg.baseAmountPercent : 0;
   await db.run(
     `UPDATE strategies
      SET dca_base_amount_usdt = ?,
+         dca_base_amount_percent = ?,
          dca_step_percent = ?,
          dca_max_orders = ?,
          dca_order_multiplier = ?,
@@ -6520,7 +6567,7 @@ const createDcaStrategyRecord = async (
          detection_source = ?,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
-    [cfg.baseAmountUsdt, cfg.stepPercent, cfg.maxOrders, cfg.orderMultiplier, cfg.tpPercent, cfg.slPercent,
+    [cfg.baseAmountUsdt, dcaBasePercentDb, cfg.stepPercent, cfg.maxOrders, cfg.orderMultiplier, cfg.tpPercent, cfg.slPercent,
       cfg.entryFilter, cfg.reentryBars, cfg.rsiPeriod, cfg.rsiMax, cfg.perLegSl ? 1 : 0, 'market', cfg.interval, cfg.detectionSource, created.id],
   );
   return { ...created, strategyId: Number(created.id), market: fullSymbol };
@@ -6558,6 +6605,7 @@ const configureDcaScratchForSymbol = async (
 ): Promise<void> => {
   const cfg = normalizeDcaSettings(settings, initialBalance);
   const fullSymbol = normalizeFullUsdtSymbol(fullSymbolRaw);
+  const dcaBasePercentDb = cfg.baseAmountMode === 'percent' ? cfg.baseAmountPercent : 0;
   await db.run(
     `UPDATE strategies
      SET base_symbol = ?,
@@ -6566,6 +6614,7 @@ const configureDcaScratchForSymbol = async (
          market_mode = 'mono',
          strategy_type = 'dca',
          dca_base_amount_usdt = ?,
+         dca_base_amount_percent = ?,
          dca_step_percent = ?,
          dca_max_orders = ?,
          dca_order_multiplier = ?,
@@ -6580,7 +6629,7 @@ const configureDcaScratchForSymbol = async (
          detection_source = ?,
          updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`,
-    [fullSymbol, cfg.baseAmountUsdt, cfg.stepPercent, cfg.maxOrders, cfg.orderMultiplier, cfg.tpPercent, cfg.slPercent,
+    [fullSymbol, cfg.baseAmountUsdt, dcaBasePercentDb, cfg.stepPercent, cfg.maxOrders, cfg.orderMultiplier, cfg.tpPercent, cfg.slPercent,
       cfg.entryFilter, cfg.reentryBars, cfg.rsiPeriod, cfg.rsiMax, cfg.perLegSl ? 1 : 0, cfg.interval, cfg.detectionSource, strategyId],
   );
 };
@@ -8373,6 +8422,17 @@ const dcaSettingsCachePayload = (settings: NormalizedDcaSettings) => ({
   perLegSl: settings.perLegSl,
 });
 
+const buildDcaScanEngineOverrides = (params: {
+  reinvestPercent?: number;
+  initialBalance: number;
+}) => {
+  const reinvestPercent = clampNumber(asNumber(params.reinvestPercent, 0), 0, 100);
+  return {
+    maxDepositOverride: resolveAdminPreviewMaxDepositOverride(reinvestPercent, params.initialBalance),
+    reinvestPercentOverride: reinvestPercent,
+  };
+};
+
 const buildDcaScanFingerprint = (params: {
   previewDates: { dateFrom: string; dateTo: string };
   initialBalance: number;
@@ -8380,6 +8440,7 @@ const buildDcaScanFingerprint = (params: {
   autotune: boolean;
   riskScore?: number;
   tradeFrequencyScore?: number;
+  reinvestPercent?: number;
 }): string => hashDcaCachePayload({
   kind: 'dca_scan_fingerprint',
   scoringVersion: DCA_AUTOTUNE_VERSION,
@@ -8390,6 +8451,7 @@ const buildDcaScanFingerprint = (params: {
   autotune: params.autotune,
   riskScore: params.riskScore ?? null,
   tradeFrequencyScore: params.tradeFrequencyScore ?? null,
+  reinvestPercent: params.reinvestPercent ?? null,
 });
 
 const hashDcaCachePayload = (payload: unknown): string => (
@@ -8403,6 +8465,7 @@ const buildDcaPairScoreCacheKey = (params: {
   initialBalance: number;
   dcaSettings: NormalizedDcaSettings;
   sweep: DcaTsPickContext['sweep'];
+  reinvestPercent?: number;
 }): string => hashDcaCachePayload({
   kind: 'dca_pair_score',
   apiKeyName: params.apiKeyName,
@@ -8415,6 +8478,7 @@ const buildDcaPairScoreCacheKey = (params: {
   commissionPercent: asNumber(params.sweep?.config?.commissionPercent, 0.1),
   slippagePercent: asNumber(params.sweep?.config?.slippagePercent, 0.05),
   scoringVersion: DCA_AUTOTUNE_VERSION,
+  reinvestPercent: params.reinvestPercent ?? null,
 });
 
 const buildDcaResearchRunCacheKey = (params: {
@@ -8628,6 +8692,7 @@ const scoreDcaCandidate = async (params: {
   previewDates: { dateFrom: string; dateTo: string };
   initialBalance: number;
   sweep: DcaTsPickContext['sweep'];
+  reinvestPercent?: number;
   scoringMode?: 'scan' | 'autotune';
   skipCache?: boolean;
 }): Promise<{
@@ -8647,6 +8712,10 @@ const scoreDcaCandidate = async (params: {
   error?: string;
 }> => {
   const market = normalizeFullUsdtSymbol(params.market);
+  const scanEngineOverrides = buildDcaScanEngineOverrides({
+    reinvestPercent: params.reinvestPercent,
+    initialBalance: params.initialBalance,
+  });
   const cacheKey = buildDcaPairScoreCacheKey({
     apiKeyName: params.apiKeyName,
     market,
@@ -8654,6 +8723,7 @@ const scoreDcaCandidate = async (params: {
     initialBalance: params.initialBalance,
     dcaSettings: params.dcaSettings,
     sweep: params.sweep,
+    reinvestPercent: scanEngineOverrides.reinvestPercentOverride,
   });
   if (!params.skipCache) {
     const cached = await loadDcaPairScoreCache(cacheKey);
@@ -8677,6 +8747,8 @@ const scoreDcaCandidate = async (params: {
       ...base,
       mode: 'single',
       strategyId: params.scratchStrategyId,
+      maxDepositOverride: scanEngineOverrides.maxDepositOverride,
+      reinvestPercentOverride: scanEngineOverrides.reinvestPercentOverride,
     });
     const ret = Number(result.summary.totalReturnPercent || 0);
     const dd = Number(result.summary.maxDrawdownPercent || 0);
@@ -8797,6 +8869,7 @@ const executeDcaResearchCore = async (payload?: {
   forceRefresh?: boolean;
   riskScore?: number;
   tradeFrequencyScore?: number;
+  reinvestPercent?: number;
 }): Promise<DcaResearchResult> => {
   const ctx = await resolveDcaTsPickContext(payload);
   const scratchStrategyId = await getOrCreateDcaResearchScratchId(ctx.preferredApiKey, ctx.dcaSettings);
@@ -8810,6 +8883,7 @@ const executeDcaResearchCore = async (payload?: {
   const autotuneTop = payload?.autotune !== false;
   const autotuneVariants = autotuneTop ? buildAutotuneVariantsForBaseline(ctx.dcaSettings) : [];
   const skipCache = payload?.forceRefresh === true;
+  const scanReinvestPercent = clampNumber(asNumber(payload?.reinvestPercent, 0), 0, 100);
   const scanFingerprint = buildDcaScanFingerprint({
     previewDates: ctx.previewDates,
     initialBalance: ctx.initialBalance,
@@ -8817,6 +8891,7 @@ const executeDcaResearchCore = async (payload?: {
     autotune: autotuneTop,
     riskScore: payload?.riskScore,
     tradeFrequencyScore: payload?.tradeFrequencyScore,
+    reinvestPercent: scanReinvestPercent,
   });
   const autotuneMarketsCap = 3;
   const autotuneVariantsCount = autotuneTop ? autotuneVariants.length : 0;
@@ -8873,6 +8948,7 @@ const executeDcaResearchCore = async (payload?: {
       previewDates: ctx.previewDates,
       initialBalance: ctx.initialBalance,
       sweep: ctx.sweep,
+      reinvestPercent: scanReinvestPercent,
       skipCache,
     });
     candidates.push({
@@ -8924,6 +9000,7 @@ const executeDcaResearchCore = async (payload?: {
           previewDates: ctx.previewDates,
           initialBalance: ctx.initialBalance,
           sweep: ctx.sweep,
+          reinvestPercent: scanReinvestPercent,
           scoringMode: 'autotune',
           skipCache,
         });
@@ -8974,7 +9051,7 @@ const executeDcaResearchCore = async (payload?: {
     viableCount: viable.length,
     top: viable.slice(0, 5),
     fromCache: false,
-    note: `Classic DCA backtest (not Donchian). Period ${ctx.previewDates.dateFrom} → ${ctx.previewDates.dateTo}${ctx.previewDates.usedFullSweepDepth ? ' (full card / sweep depth)' : ''}. Deposit ${ctx.initialBalance} USDT. Scan: TF ${ctx.dcaSettings.interval} step ${ctx.dcaSettings.stepPercent}% TP ${ctx.dcaSettings.tpPercent}% max ${ctx.dcaSettings.maxOrders} base ${ctx.dcaSettings.baseAmountMode === 'percent' ? `${ctx.dcaSettings.baseAmountPercent}% (~${ctx.dcaSettings.baseAmountUsdt} USDT)` : `${ctx.dcaSettings.baseAmountUsdt} USDT`}${autotuneTop ? ' • autotune around baseline' : ''}.`,
+    note: `Classic DCA backtest (not Donchian). Period ${ctx.previewDates.dateFrom} → ${ctx.previewDates.dateTo}${ctx.previewDates.usedFullSweepDepth ? ' (full card / sweep depth)' : ''}. Deposit ${ctx.initialBalance} USDT, reinvest ${scanReinvestPercent}%. Scan: TF ${ctx.dcaSettings.interval} step ${ctx.dcaSettings.stepPercent}% TP ${ctx.dcaSettings.tpPercent}% max ${ctx.dcaSettings.maxOrders} base ${ctx.dcaSettings.baseAmountMode === 'percent' ? `${ctx.dcaSettings.baseAmountPercent}% of live equity (t0≈${ctx.dcaSettings.baseAmountUsdt} USDT)` : `${ctx.dcaSettings.baseAmountUsdt} USDT fixed`}${autotuneTop ? ' • autotune around baseline' : ''}.`,
   };
   await saveDcaResearchRunCache(runCacheKey, {
     systemName,
@@ -9026,6 +9103,7 @@ export const startDcaResearchJob = async (payload?: {
   forceRefresh?: boolean;
   riskScore?: number;
   tradeFrequencyScore?: number;
+  reinvestPercent?: number;
 }) => {
   if (dcaResearchJob.running) {
     const stale = dcaResearchJob.startedAt > 0 && Date.now() - dcaResearchJob.startedAt > DCA_RESEARCH_STALE_MS;
@@ -9290,6 +9368,12 @@ export const previewDcaCombinedWithTs = async (payload?: {
   reinvestPercent?: number;
   riskScaleMaxPercent?: number;
   lotPercentOverride?: number;
+  offerIds?: string[];
+  offerWeightsById?: Record<string, number>;
+  partialTpPct?: number;
+  commissionPercent?: number;
+  slippagePercent?: number;
+  fundingRatePercent?: number;
 }) => {
   if (payload?.enabled === false) {
     return { enabled: false as const };
@@ -9328,9 +9412,39 @@ export const previewDcaCombinedWithTs = async (payload?: {
     ));
   }
 
-  const backtestBase = buildDcaBacktestRequestBase(ctx.preferredApiKey, ctx, { enablePairLock: true });
+  const { catalog: sourceCatalog } = await loadCatalogAndSweepWithFallback();
+  const apiKeys = await getAvailableApiKeyNames();
+  const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
+  const toFiniteOrNull = (value: unknown): number | null => {
+    const n = Number(value);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  };
+  const commissionPercentOverride = toFiniteOrNull(payload?.commissionPercent);
+  const slippagePercentOverride = toFiniteOrNull(payload?.slippagePercent);
+  const fundingRatePercentOverride = toFiniteOrNull(payload?.fundingRatePercent);
+  const partialTpPct = Math.max(0, asNumber(payload?.partialTpPct, 0));
+  const payloadOfferIds = Array.from(new Set(
+    (Array.isArray(payload?.offerIds) ? payload.offerIds : ctx.offerIds)
+      .map((item) => asString(item, '').trim())
+      .filter(Boolean),
+  ));
+  const backtestBase = {
+    ...buildDcaBacktestRequestBase(ctx.preferredApiKey, ctx, { enablePairLock: true }),
+    commissionPercent: commissionPercentOverride !== null
+      ? commissionPercentOverride
+      : asNumber(ctx.sweep?.config?.commissionPercent, 0.1),
+    slippagePercent: slippagePercentOverride !== null
+      ? slippagePercentOverride
+      : asNumber(ctx.sweep?.config?.slippagePercent, 0.05),
+    fundingRatePercent: fundingRatePercentOverride !== null
+      ? fundingRatePercentOverride
+      : asNumber(ctx.sweep?.config?.fundingRatePercent, 0),
+  };
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(payload?.maxOpenPositions, 0)));
-  const portfolioExtras = maxOpenPositions > 0 ? { maxOpenPositions } : {};
+  const portfolioExtras = {
+    ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
+    ...(partialTpPct > 0 ? { partialTpPct } : {}),
+  };
   const adminEngineOverrides = await resolveAdminPreviewEngineOverridesForTsPortfolio({
     systemName: asString(payload?.systemName, asString(ctx.snapshot.systemName, '')),
     tsStrategyIds: ctx.tsStrategyIds,
@@ -9339,6 +9453,11 @@ export const previewDcaCombinedWithTs = async (payload?: {
     riskScaleMaxPercent: payload?.riskScaleMaxPercent,
     reinvestPercent: payload?.reinvestPercent,
     lotPercentOverride: payload?.lotPercentOverride,
+    tradeFrequencyScore: payload?.tradeFrequencyScore,
+    snapshot: ctx.snapshot,
+    offerIds: payloadOfferIds,
+    offerWeightsById: payload?.offerWeightsById,
+    catalog,
   });
   const tsEngineExtras = {
     lotPercentOverride: adminEngineOverrides.lotPercentOverride,
