@@ -5,6 +5,7 @@ import {
   placeOrder,
   getOrderStatus,
   getBalances,
+  formatExchangeErrorForUser,
   getPositions,
   ensureExchangeClientInitialized,
   closePosition,
@@ -75,6 +76,7 @@ import {
   requestPasswordRecoveryCode,
   resetPasswordWithRecoveryCode,
 } from '../system/passwordRecovery';
+import tvAlertsRoutes from './tvAlertsRoutes';
 import {
   getAlgofundState,
   listClientCustomTsSystemsState,
@@ -95,6 +97,7 @@ import {
 } from '../saas/service';
 import analyticsRoutes from './analyticsRoutes';
 import saasRoutes from './saasRoutes';
+import { getAlgofundPositionHealthSummary } from '../admin/positionHealth';
 import fs from 'fs';
 import path from 'path';
 
@@ -109,6 +112,8 @@ router.use('/razgon', (_req, res) => {
 router.use('/saas/synctrade', (_req, res) => {
   return res.status(404).json({ error: 'Not Found' });
 });
+
+router.use(tvAlertsRoutes);
 
 const STRATEGY_PATCH_ALLOWED_FIELDS = new Set<string>([
   'id',
@@ -1742,7 +1747,8 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
     const days = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : undefined;
 
     const requestedMode = String(req.query.mode || '').trim().toLowerCase();
-    const [tenant, strategyProfile, algofundProfile] = await Promise.all([
+    const productMode = String(session.user?.productMode || '').trim().toLowerCase();
+    const [tenant, strategyProfile, algofundProfile, tvAlertsProfile] = await Promise.all([
       db.get(
         'SELECT assigned_api_key_name FROM tenants WHERE id = ?',
         [tenantId]
@@ -1755,20 +1761,28 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
         'SELECT assigned_api_key_name, execution_api_key_name FROM algofund_profiles WHERE tenant_id = ?',
         [tenantId]
       ) as Promise<{ assigned_api_key_name?: string; execution_api_key_name?: string } | undefined>,
+      db.get(
+        'SELECT default_api_key_name FROM tv_alerts_profiles WHERE tenant_id = ?',
+        [tenantId]
+      ) as Promise<{ default_api_key_name?: string } | undefined>,
     ]);
 
     const tenantApiKeyName = String(tenant?.assigned_api_key_name || '').trim();
     const strategyApiKeyName = String(strategyProfile?.assigned_api_key_name || '').trim();
     const algofundApiKeyName = String(algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name || '').trim();
+    const tvAlertsApiKeyName = String(tvAlertsProfile?.default_api_key_name || '').trim();
 
     const resolveApiKeyName = () => {
+      if (productMode === 'tv_alerts_client') {
+        return tvAlertsApiKeyName || tenantApiKeyName || strategyApiKeyName || algofundApiKeyName;
+      }
       if (requestedMode === 'algofund') {
         return algofundApiKeyName || strategyApiKeyName || tenantApiKeyName;
       }
       if (requestedMode === 'strategy') {
         return strategyApiKeyName || algofundApiKeyName || tenantApiKeyName;
       }
-      return strategyApiKeyName || algofundApiKeyName || tenantApiKeyName;
+      return strategyApiKeyName || algofundApiKeyName || tvAlertsApiKeyName || tenantApiKeyName;
     };
 
     const apiKeyName = resolveApiKeyName();
@@ -1835,24 +1849,64 @@ router.use('/analytics', analyticsRoutes);
 router.get('/api-keys', requirePlatformAdmin, async (req, res) => {
   try {
     const { apiKeys } = await loadSettings();
-    // Enrich with tenant info for Dashboard labels
-    const tenantMapping = await db.all(
-      `SELECT t.display_name, t.product_mode, COALESCE(t.assigned_api_key_name, '') AS api_key_name
-       FROM tenants t WHERE t.status != 'deleted'`
-    ).catch(() => []) as Array<{ display_name: string; product_mode: string; api_key_name: string }>;
-    const tenantByApiKey = new Map<string, { displayName: string; productMode: string }>();
-    for (const row of tenantMapping) {
+    const tenantRows = await db.all(
+      `SELECT t.display_name, t.product_mode,
+              COALESCE(NULLIF(ap.execution_api_key_name,''), ap.assigned_api_key_name, t.assigned_api_key_name, '') AS api_key_name,
+              COALESCE(ap.actual_enabled, 0) AS algofund_actual_enabled,
+              COALESCE(ap.requested_enabled, 0) AS algofund_requested_enabled
+       FROM tenants t
+       LEFT JOIN algofund_profiles ap ON ap.tenant_id = t.id
+       WHERE t.status != 'deleted'`,
+    ).catch(() => []) as Array<{
+      display_name: string;
+      product_mode: string;
+      api_key_name: string;
+      algofund_actual_enabled: number;
+      algofund_requested_enabled: number;
+    }>;
+    const tenantByApiKey = new Map<string, {
+      displayName: string;
+      productMode: string;
+      algofundActualEnabled: boolean;
+      algofundRequestedEnabled: boolean;
+    }>();
+    for (const row of tenantRows) {
       const key = String(row.api_key_name || '').trim();
-      if (key) tenantByApiKey.set(key, { displayName: row.display_name, productMode: row.product_mode });
+      if (!key) continue;
+      tenantByApiKey.set(key, {
+        displayName: row.display_name,
+        productMode: row.product_mode,
+        algofundActualEnabled: Number(row.algofund_actual_enabled || 0) === 1,
+        algofundRequestedEnabled: Number(row.algofund_requested_enabled || 0) === 1,
+      });
     }
     const enriched = apiKeys.map((k: any) => {
       const tenant = tenantByApiKey.get(String(k.name || ''));
-      return tenant ? { ...k, tenantDisplayName: tenant.displayName, tenantProductMode: tenant.productMode } : k;
+      if (!tenant) return k;
+      const dematerialized = tenant.productMode === 'algofund_client'
+        && (!tenant.algofundActualEnabled || !tenant.algofundRequestedEnabled);
+      return {
+        ...k,
+        tenantDisplayName: tenant.displayName,
+        tenantProductMode: tenant.productMode,
+        algofundDematerialized: dematerialized,
+      };
     });
     res.json(enriched);
   } catch (error) {
     const err = error as Error;
     logger.error(`Error loading API keys: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/position-health', requirePlatformAdmin, async (_req, res) => {
+  try {
+    const summary = await getAlgofundPositionHealthSummary();
+    res.json({ success: true, ...summary });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`position-health failed: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -3744,8 +3798,16 @@ router.get('/balances/:apiKeyName', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Balances error for ${apiKeyName}: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: formatExchangeErrorForUser(err, apiKeyName),
+      code: /40018|无效的IP|invalid\s*ip/i.test(err.message) ? 'WEEX_IP_WHITELIST' : 'EXCHANGE_ERROR',
+    });
   }
+});
+
+router.get('/admin/egress-ip', requirePlatformAdmin, (_req, res) => {
+  const ip = String(process.env.BTDD_EGRESS_IP || process.env.VPS_PUBLIC_IP || '176.57.184.98').trim();
+  res.json({ ip });
 });
 
 router.get('/positions/:apiKeyName', async (req, res) => {
@@ -3776,7 +3838,10 @@ router.get('/positions/:apiKeyName', async (req, res) => {
       logger.warn(`Positions temporary fallback for ${apiKeyName}: ${err.message}`);
       return res.json([]);
     }
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: formatExchangeErrorForUser(err, apiKeyName),
+      code: /40018|无效的IP|invalid\s*ip/i.test(err.message) ? 'WEEX_IP_WHITELIST' : 'EXCHANGE_ERROR',
+    });
   }
 });
 

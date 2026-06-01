@@ -517,6 +517,79 @@ export const initDB = async () => {
       FOREIGN KEY (tenant_id) REFERENCES tenants(id)
     );
 
+    CREATE TABLE IF NOT EXISTS tv_alerts_profiles (
+      tenant_id INTEGER PRIMARY KEY,
+      default_api_key_name TEXT DEFAULT '',
+      default_exchange TEXT DEFAULT 'bybit',
+      enabled BOOLEAN DEFAULT 1,
+      signal_conflict_mode TEXT DEFAULT 'wait_close',
+      global_settings_json TEXT DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE TABLE IF NOT EXISTS tv_alerts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      tenant_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      slug TEXT NOT NULL,
+      webhook_secret TEXT NOT NULL,
+      symbol TEXT NOT NULL DEFAULT '',
+      exchange TEXT DEFAULT '',
+      api_key_name TEXT DEFAULT '',
+      enabled BOOLEAN DEFAULT 1,
+      lot_mode TEXT DEFAULT 'usdt',
+      lot_value REAL DEFAULT 100,
+      leverage REAL DEFAULT 1,
+      config_json TEXT DEFAULT '{}',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_tv_alerts_tenant_slug
+      ON tv_alerts (tenant_id, slug);
+
+    CREATE TABLE IF NOT EXISTS tv_alert_positions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      alert_id INTEGER NOT NULL,
+      tenant_id INTEGER NOT NULL,
+      api_key_name TEXT NOT NULL,
+      symbol TEXT NOT NULL,
+      side TEXT NOT NULL,
+      status TEXT DEFAULT 'open',
+      entry_price REAL DEFAULT 0,
+      qty TEXT DEFAULT '0',
+      remaining_qty TEXT DEFAULT '0',
+      state_json TEXT DEFAULT '{}',
+      opened_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      closed_at TEXT,
+      FOREIGN KEY (alert_id) REFERENCES tv_alerts(id),
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tv_alert_positions_alert_status
+      ON tv_alert_positions (alert_id, status);
+
+    CREATE TABLE IF NOT EXISTS tv_alert_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      alert_id INTEGER,
+      tenant_id INTEGER NOT NULL,
+      position_id INTEGER,
+      source TEXT DEFAULT 'webhook',
+      action TEXT DEFAULT '',
+      status TEXT DEFAULT 'received',
+      payload_json TEXT DEFAULT '{}',
+      error_message TEXT DEFAULT '',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (alert_id) REFERENCES tv_alerts(id),
+      FOREIGN KEY (tenant_id) REFERENCES tenants(id)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_tv_alert_events_tenant_created
+      ON tv_alert_events (tenant_id, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS algofund_start_stop_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL,
@@ -652,6 +725,12 @@ export const initDB = async () => {
 
     CREATE INDEX IF NOT EXISTS idx_copytrading_profiles_tenant
       ON copytrading_profiles (tenant_id, updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_tv_alerts_tenant
+      ON tv_alerts (tenant_id, enabled, updated_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_tv_alerts_profiles_tenant
+      ON tv_alerts_profiles (tenant_id);
 
     CREATE INDEX IF NOT EXISTS idx_strategy_backtest_pair_requests_tenant
       ON strategy_backtest_pair_requests (tenant_id, status, created_at DESC);

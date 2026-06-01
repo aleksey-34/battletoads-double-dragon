@@ -8,6 +8,7 @@ import { runAutoStrategiesCycle } from './bot/strategy';
 import { startPreviewWorker } from './workers/previewWorker';
 import { startResearchSchedulerWorker } from './workers/researchSchedulerWorker';
 import { runLiquidityScanCycle, runMonitoringCycle, runReconciliationCycle } from './automation/scheduler';
+import { runTvAlertsMonitorCycle } from './tvAlerts/engine';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -179,6 +180,22 @@ const startServer = async () => {
       liquidityScanCycleRunning = false;
     }
   }, liquidityScanMin * 60 * 1000);
+
+  const tvAlertsMonitorSec = Math.max(5, Math.floor(Number(process.env.TV_ALERTS_MONITOR_SEC || 15) || 15));
+  let tvAlertsMonitorRunning = false;
+  setInterval(async () => {
+    if (tvAlertsMonitorRunning) {
+      return;
+    }
+    tvAlertsMonitorRunning = true;
+    try {
+      await runTvAlertsMonitorCycle();
+    } catch (error) {
+      logger.error(`TV alerts monitor error: ${(error as Error).message}`);
+    } finally {
+      tvAlertsMonitorRunning = false;
+    }
+  }, tvAlertsMonitorSec * 1000);
 };
 
 startServer();

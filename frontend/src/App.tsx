@@ -18,6 +18,7 @@ const Settings = lazy(() => import('./pages/Settings'));
 const TradingSystems = lazy(() => import('./pages/TradingSystems'));
 const Positions = lazy(() => import('./pages/Positions'));
 const ClientCabinet = lazy(() => import('./pages/ClientCabinet'));
+const TvAlertsCabinet = lazy(() => import('./pages/TvAlertsCabinet'));
 const Logs = lazy(() => import('./pages/Logs'));
 const Research = lazy(() => import('./pages/Research'));
 const SaaS = lazy(() => import('./pages/SaaS'));
@@ -43,6 +44,7 @@ function AppShell() {
     return (saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'light';
   });
   const isClientRoute = location.pathname.startsWith('/client') || location.pathname.startsWith('/cabinet');
+  const isTvAlertsCabinetRoute = location.pathname.startsWith('/cabinet/tv-alerts');
   const isClientAuthRoute = location.pathname.startsWith('/client/login') || location.pathname.startsWith('/client/register');
   const isClientCabinetRoute = location.pathname.startsWith('/cabinet');
   const isClientSaasSurface = false;
@@ -115,6 +117,7 @@ function AppShell() {
     if (location.pathname.startsWith('/admin-docs')) return t('nav.docs', 'Docs');
     if (location.pathname.startsWith('/client/login')) return 'Client Login';
     if (location.pathname.startsWith('/client/register')) return 'Client Register';
+    if (location.pathname.startsWith('/cabinet/tv-alerts')) return 'TradingView Alerts';
     if (location.pathname.startsWith('/cabinet')) return 'Client Cabinet';
     if (location.pathname.startsWith('/login')) return 'Login';
     return t('nav.dashboard', 'Dashboard');
@@ -329,6 +332,11 @@ function AppShell() {
           <Route path="/login" element={<Login />} />
           <Route path="/client/login" element={<ClientAuth initialMode="login" />} />
           <Route path="/client/register" element={<ClientAuth initialMode="register" />} />
+          <Route path="/cabinet/tv-alerts" element={
+            clientAuthState === 'ok' ? <TvAlertsCabinet /> :
+            clientAuthState === 'checking' ? null :
+            <Navigate to="/client/login" replace />
+          } />
           <Route path="/cabinet" element={
             clientAuthState === 'ok' ? <ClientCabinet /> :
             clientAuthState === 'checking' ? null :

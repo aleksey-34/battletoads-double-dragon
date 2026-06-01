@@ -27,6 +27,7 @@ import { initExchangeClient } from './bot/exchange';
 import { runAutoStrategiesCycle } from './bot/strategy';
 import { runLiquidityScanCycle, runMonitoringCycle, runReconciliationCycle } from './automation/scheduler';
 import { startAdminTelegramReporter } from './notifications/adminTelegramReporter';
+import { runTvAlertsMonitorCycle } from './tvAlerts/engine';
 
 const parseBool = (value: unknown, fallback = false): boolean => {
   if (value === undefined || value === null || value === '') {
@@ -192,6 +193,23 @@ const startRuntime = async () => {
   } else {
     logger.warn('[runtime] Liquidity scan cycle is disabled by runtime flag');
   }
+
+  const tvAlertsMonitorSec = Math.max(5, Math.floor(Number(process.env.TV_ALERTS_MONITOR_SEC || 15) || 15));
+  let tvAlertsMonitorRunning = false;
+  setInterval(async () => {
+    if (tvAlertsMonitorRunning) {
+      return;
+    }
+    tvAlertsMonitorRunning = true;
+    try {
+      await runTvAlertsMonitorCycle();
+    } catch (error) {
+      logger.error(`[runtime] TV alerts monitor error: ${(error as Error).message}`);
+    } finally {
+      tvAlertsMonitorRunning = false;
+    }
+  }, tvAlertsMonitorSec * 1000);
+  logger.info(`[runtime] TV alerts trailing monitor: every ${tvAlertsMonitorSec}s`);
 
   if (!autoCycleEnabled && !monitoringCycleEnabled && !reconciliationCycleEnabled && !liquidityScanCycleEnabled) {
     logger.warn('[runtime] All runtime cycles are disabled by flags; waiting for explicit enable');

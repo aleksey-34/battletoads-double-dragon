@@ -21,7 +21,7 @@ type RegisterFormValues = {
   email: string;
   password: string;
   confirmPassword: string;
-  productMode: 'strategy_client' | 'algofund_client' | 'dual';
+  productMode: 'strategy_client' | 'algofund_client' | 'dual' | 'tv_alerts_client';
   planCode: string;
 };
 
@@ -138,7 +138,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
 
       saveClientSessionToken(token);
       messageApi.success(t('client.auth.loginSuccess', 'Client login successful'));
-      navigate('/cabinet');
+      navigate(String(response?.data?.workspaceRoute || '/cabinet'));
     } catch (error: any) {
       setErrorText(String(error?.response?.data?.error || error?.message || t('client.auth.loginFailed', 'Login failed')));
     } finally {
@@ -168,7 +168,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
 
       saveClientSessionToken(token);
       messageApi.success(t('client.auth.registerSuccess', 'Account created. Welcome to your cabinet.'));
-      navigate('/cabinet');
+      navigate(String(response?.data?.workspaceRoute || '/cabinet'));
     } catch (error: any) {
       setErrorText(String(error?.response?.data?.error || error?.message || t('client.auth.registerFailed', 'Registration failed')));
     } finally {
@@ -274,6 +274,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                         { value: 'strategy_client', label: t('client.auth.productModeStrategy', 'Strategy Client') },
                         { value: 'algofund_client', label: t('client.auth.productModeAlgofund', 'Algofund Client') },
                         { value: 'dual', label: t('client.auth.productModeDual', 'Dual: Strategies + Algofund') },
+                        { value: 'tv_alerts_client', label: t('client.auth.productModeTvAlerts', 'TradingView Alerts (no storefront)') },
                       ]}
                     />
                   </Form.Item>
@@ -290,6 +291,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                         { value: 'strategy_20', label: t('client.auth.planDualStart', 'Dual Start — $39/мес · до 3 стратегий · депозит до $5k') },
                         { value: 'strategy_50', label: t('client.auth.planDualPro', 'Dual Pro — $129/мес · до 10 стратегий · до $50k') },
                         { value: 'strategy_100', label: t('client.auth.planDualScale', 'Dual Scale — $399/мес · до 30 стратегий · до $250k') },
+                        { value: 'tv_alerts_300', label: t('client.auth.planTvAlerts', 'TV Alerts Pro — $300/мес · до 50 алертов') },
                       ]}
                     />
                   </Form.Item>

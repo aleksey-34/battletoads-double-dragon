@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { db } from './database';
 
-type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'dual';
+type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'tv_alerts_client' | 'dual';
 
 type SessionRequestMeta = {
   ip?: string;
@@ -106,6 +106,7 @@ const DEFAULT_CLIENT_SESSION_DAYS = 30;
 const DEFAULT_STRATEGY_PLAN_CODE = 'strategy_20';
 const DEFAULT_ALGOFUND_PLAN_CODE = 'algofund_20';
 const DEFAULT_COPYTRADING_PLAN_CODE = 'copytrading_100';
+const DEFAULT_TV_ALERTS_PLAN_CODE = 'tv_alerts_300';
 
 const getClientSessionTtlMs = (): number => {
   const envValue = Number(process.env.CLIENT_SESSION_TTL_DAYS || DEFAULT_CLIENT_SESSION_DAYS);
@@ -128,6 +129,9 @@ const normalizeProductMode = (value: unknown): ProductMode => {
   }
   if (raw === 'copytrading' || raw === 'copytrading_client') {
     return 'copytrading_client';
+  }
+  if (raw === 'tv_alerts' || raw === 'tv_alerts_client' || raw === 'tradingview' || raw === 'tradingview_alerts') {
+    return 'tv_alerts_client';
   }
   return 'strategy_client';
 };
@@ -304,7 +308,9 @@ const ensureRegistrationPlanId = async (productMode: Exclude<ProductMode, 'dual'
     ? DEFAULT_STRATEGY_PLAN_CODE
     : productMode === 'copytrading_client'
       ? DEFAULT_COPYTRADING_PLAN_CODE
-      : DEFAULT_ALGOFUND_PLAN_CODE;
+      : productMode === 'tv_alerts_client'
+        ? DEFAULT_TV_ALERTS_PLAN_CODE
+        : DEFAULT_ALGOFUND_PLAN_CODE;
 
   let row = await db.get(
     'SELECT id FROM plans WHERE code = ? AND product_mode = ? AND is_active = 1 LIMIT 1',
@@ -326,21 +332,28 @@ const ensureRegistrationPlanId = async (productMode: Exclude<ProductMode, 'dual'
 
   const isStrategy = productMode === 'strategy_client';
   const isCopytrading = productMode === 'copytrading_client';
-  const fallbackCode = isCopytrading
-    ? 'selfreg_copytrading_starter'
-    : isStrategy
-      ? 'selfreg_strategy_starter'
-      : 'selfreg_algofund_starter';
-  const fallbackTitle = isCopytrading
-    ? 'Copytrading Starter'
-    : isStrategy
-      ? 'Strategy Client Starter'
-      : 'Algofund Starter';
-  const features = isCopytrading
-    ? { settings: true, apiKeyUpdate: false, monitoring: true, backtest: false, startStopRequests: false }
-    : isStrategy
-      ? { settings: true, apiKeyUpdate: false, monitoring: true, backtest: true, startStopRequests: false }
-      : { settings: true, apiKeyUpdate: false, monitoring: true, backtest: true, startStopRequests: true };
+  const isTvAlerts = productMode === 'tv_alerts_client';
+  const fallbackCode = isTvAlerts
+    ? 'selfreg_tv_alerts_starter'
+    : isCopytrading
+      ? 'selfreg_copytrading_starter'
+      : isStrategy
+        ? 'selfreg_strategy_starter'
+        : 'selfreg_algofund_starter';
+  const fallbackTitle = isTvAlerts
+    ? 'TradingView Alerts Pro'
+    : isCopytrading
+      ? 'Copytrading Starter'
+      : isStrategy
+        ? 'Strategy Client Starter'
+        : 'Algofund Starter';
+  const features = isTvAlerts
+    ? { settings: true, apiKeyUpdate: true, monitoring: true, backtest: false, startStopRequests: false, tvAlerts: true }
+    : isCopytrading
+      ? { settings: true, apiKeyUpdate: false, monitoring: true, backtest: false, startStopRequests: false }
+      : isStrategy
+        ? { settings: true, apiKeyUpdate: false, monitoring: true, backtest: true, startStopRequests: false }
+        : { settings: true, apiKeyUpdate: false, monitoring: true, backtest: true, startStopRequests: true };
 
   await db.run(
     `INSERT INTO plans (
@@ -362,10 +375,10 @@ const ensureRegistrationPlanId = async (productMode: Exclude<ProductMode, 'dual'
       fallbackCode,
       fallbackTitle,
       productMode,
-      20,
-      1000,
+      isTvAlerts ? 300 : 20,
+      isTvAlerts ? 100000 : 1000,
       isStrategy ? 0 : 1,
-      isStrategy ? 3 : 0,
+      isTvAlerts ? 50 : (isStrategy ? 3 : 0),
       isStrategy ? 0 : 1,
       JSON.stringify(features),
     ]
@@ -397,6 +410,23 @@ const ensureTenantProfile = async (tenantId: number, productMode: ProductMode): 
          assigned_api_key_name, published_system_name, latest_preview_json,
          created_at, updated_at
        ) VALUES (?, 1, 0, 0, '', '', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(tenant_id) DO NOTHING`,
+      [tenantId]
+    );
+    return;
+  }
+  if (productMode === 'tv_alerts_client') {
+    await db.run(
+      `INSERT INTO tv_alerts_profiles (
+         tenant_id,
+         default_api_key_name,
+         default_exchange,
+         enabled,
+         signal_conflict_mode,
+         global_settings_json,
+         created_at,
+         updated_at
+       ) VALUES (?, '', 'bybit', 1, 'wait_close', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        ON CONFLICT(tenant_id) DO NOTHING`,
       [tenantId]
     );
@@ -475,10 +505,14 @@ const createClientSession = async (user: ClientUserWithTenantRow, requestMeta?: 
     [Number(user.user_id)]
   );
 
+  const workspaceRoute = user.product_mode === 'tv_alerts_client'
+    ? '/cabinet/tv-alerts'
+    : '/cabinet';
+
   return {
     token,
     expiresAt,
-    workspaceRoute: '/cabinet',
+    workspaceRoute,
     user: buildClientAuthUser(user),
   };
 };

@@ -1056,6 +1056,16 @@ const ClientCabinet: React.FC = () => {
         axios.get<{ guides?: GuideItem[] }>('/api/client/guides'),
       ]);
 
+      const productMode = String(
+        workspaceResponse.data?.productMode
+        || workspaceResponse.data?.auth?.productMode
+        || '',
+      );
+      if (productMode === 'tv_alerts_client') {
+        navigate('/cabinet/tv-alerts', { replace: true });
+        return;
+      }
+
       setWorkspace(workspaceResponse.data);
       setGuides(Array.isArray(guidesResponse.data?.guides) ? guidesResponse.data.guides : []);
 
