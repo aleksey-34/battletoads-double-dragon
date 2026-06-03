@@ -9039,7 +9039,7 @@ const executeDcaResearchCore = async (payload?: {
     period: {
       dateFrom: ctx.previewDates.dateFrom,
       dateTo: ctx.previewDates.dateTo,
-      interval: asString(ctx.sweep?.config?.interval, '4h'),
+      interval: ctx.dcaSettings.interval || asString(ctx.sweep?.config?.interval, '4h'),
       fullDepth: ctx.previewDates.usedFullSweepDepth === true,
     },
     initialBalance: ctx.initialBalance,
@@ -9051,7 +9051,7 @@ const executeDcaResearchCore = async (payload?: {
     viableCount: viable.length,
     top: viable.slice(0, 5),
     fromCache: false,
-    note: `Classic DCA backtest (not Donchian). Period ${ctx.previewDates.dateFrom} → ${ctx.previewDates.dateTo}${ctx.previewDates.usedFullSweepDepth ? ' (full card / sweep depth)' : ''}. Deposit ${ctx.initialBalance} USDT, reinvest ${scanReinvestPercent}%. Scan: TF ${ctx.dcaSettings.interval} step ${ctx.dcaSettings.stepPercent}% TP ${ctx.dcaSettings.tpPercent}% max ${ctx.dcaSettings.maxOrders} base ${ctx.dcaSettings.baseAmountMode === 'percent' ? `${ctx.dcaSettings.baseAmountPercent}% of live equity (t0≈${ctx.dcaSettings.baseAmountUsdt} USDT)` : `${ctx.dcaSettings.baseAmountUsdt} USDT fixed`}${autotuneTop ? ' • autotune around baseline' : ''}.`,
+    note: `Classic DCA backtest (not Donchian). Period ${ctx.previewDates.dateFrom} → ${ctx.previewDates.dateTo}${ctx.previewDates.usedFullSweepDepth ? ' (full card / sweep depth)' : ''}. Deposit ${ctx.initialBalance} USDT, reinvest ${scanReinvestPercent}%. Scan: TF ${ctx.dcaSettings.interval} step ${ctx.dcaSettings.stepPercent}% TP ${ctx.dcaSettings.tpPercent}% max ${ctx.dcaSettings.maxOrders} base ${ctx.dcaSettings.baseAmountMode === 'percent' ? `${ctx.dcaSettings.baseAmountPercent}% депозита (≈${ctx.dcaSettings.baseAmountUsdt} USDT/нога)` : `${ctx.dcaSettings.baseAmountUsdt} USDT fixed`}. Trades = завершённые циклы (TP), не каждый safety-order.${autotuneTop ? ' • autotune around baseline' : ''}.`,
   };
   await saveDcaResearchRunCache(runCacheKey, {
     systemName,
@@ -9330,7 +9330,7 @@ export const applyDcaToTsPortfolio = async (payload?: {
     period: {
       dateFrom: ctx.previewDates.dateFrom,
       dateTo: ctx.previewDates.dateTo,
-      interval: asString(ctx.sweep?.config?.interval, '4h'),
+      interval: ctx.dcaSettings.interval || asString(ctx.sweep?.config?.interval, '4h'),
     },
     dcaSettings: ctx.dcaSettings,
     applied,
@@ -9527,7 +9527,7 @@ export const previewDcaCombinedWithTs = async (payload?: {
     period: {
       dateFrom: ctx.previewDates.dateFrom,
       dateTo: ctx.previewDates.dateTo,
-      interval: asString(ctx.sweep?.config?.interval, '4h'),
+      interval: ctx.dcaSettings.interval || asString(ctx.sweep?.config?.interval, '4h'),
       fullDepth: ctx.previewDates.usedFullSweepDepth === true,
     },
     markets,

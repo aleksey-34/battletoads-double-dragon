@@ -1847,7 +1847,7 @@ const formatDcaBaseSettingLabel = (
   if (mode === 'percent') {
     const pct = Number(cfg.baseAmountPercent || 0);
     const depositHint = deposit > 0 ? `, t0≈${usdt.toFixed(0)} USDT при ${deposit.toLocaleString('ru-RU')}` : '';
-    return `base ${pct}% live equity${depositHint}`;
+    return `base ${pct}% депозита${depositHint}`;
   }
   return `base ${usdt.toFixed(0)} USDT (fixed)`;
 };
@@ -14439,7 +14439,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Descriptions.Item>
                           </Descriptions>
                           <Text type="secondary">
-                            Scan — single-pair (Ret по паре). Δ trades в toggle — прирост портфеля TS+DCA vs TS-only. Мельче сетка (1h): step 0.2–0.25%, TP 0.5–0.7%, base 3–4% equity, max orders 18–22; текущий агрессивный 0.3/0.8/5%/20 — уже плотный, дальше — autotune или ручной scan.
+                            Trades в таблице — <strong>завершённые DCA-циклы</strong> (закрытие сетки по TP), не каждый добор. На 15m за 732d типично 30–120 циклов/пару: пока сетка открыта, новый цикл не стартует. Scan — isolated single-pair. Δ ret в toggle — shared wallet TS+DCA (DCA не отдельный счёт).
                           </Text>
                         </Space>
                       ),

@@ -585,17 +585,12 @@ const computeRsiAtIndex = (candles: ParsedCandle[], index: number, period: numbe
   return 100 - (100 / (1 + rs));
 };
 
+/** First leg / safety size from deposit-based base (dca_base_amount_usdt), not live TS equity. */
 const resolveClassicDcaOrderSize = (
-  dc: { baseAmountUsdt: number; baseAmountPercent: number; orderMultiplier: number },
-  portfolioEquityNow: number,
+  dc: { baseAmountUsdt: number; orderMultiplier: number },
   safetyOrderIndex: number,
 ): number => {
-  const equityBase = Number.isFinite(portfolioEquityNow) && portfolioEquityNow > 0
-    ? portfolioEquityNow
-    : dc.baseAmountUsdt;
-  const base = dc.baseAmountPercent > 0
-    ? Math.max(1, (equityBase * dc.baseAmountPercent) / 100)
-    : dc.baseAmountUsdt;
+  const base = Math.max(1, dc.baseAmountUsdt);
   const mult = Math.pow(Math.max(1, dc.orderMultiplier), Math.max(0, safetyOrderIndex));
   return Math.max(1, base * mult);
 };
@@ -860,6 +855,12 @@ const portfolioEquity = (cashEquity: number, runtimes: RuntimeStrategy[]): numbe
   return cashEquity + unrealized;
 };
 
+/** Free equity for new entries — TS and DCA must share the same wallet cap. */
+const portfolioAvailableBalance = (cashEquity: number, runtimes: RuntimeStrategy[]): number => {
+  const equityNow = portfolioEquity(cashEquity, runtimes);
+  return Math.max(0, equityNow - computeLockedMargin(runtimes));
+};
+
 const applyFunding = (ctx: BacktestContext, runtime: RuntimeStrategy): void => {
   if (!runtime.openTrade || runtime.state === 'flat' || runtime.notional <= 0) {
     return;
@@ -1024,12 +1025,16 @@ const openPosition = (
   marketPrice: number,
   portfolioEquityNow: number,
   lotChannelWidthMult = 1,
+  availableCap?: number,
 ): boolean => {
   const strategy = runtime.strategy;
+  const freeMarginCap = Number.isFinite(availableCap) && (availableCap as number) > 0
+    ? (availableCap as number)
+    : portfolioEquityNow;
 
-  // DCA strategies: fixed USDT or % of live portfolio equity (TS+DCA shared wallet in portfolio mode).
+  // DCA: lot from deposit (stored dca_base_amount_usdt), capped by free margin in shared wallet.
   if (runtime.dcaState?.enabled) {
-    const dcaSize = resolveClassicDcaOrderSize(runtime.dcaState, portfolioEquityNow, 0);
+    const dcaSize = Math.min(resolveClassicDcaOrderSize(runtime.dcaState, 0), freeMarginCap);
     if (dcaSize <= 0) return false;
     const entryPrice = executionPrice(marketPrice, signal, 'entry', effectiveSlippageRate(ctx, strategy));
     const entryFee = dcaSize * effectiveCommissionRate(ctx, strategy);
@@ -1098,10 +1103,10 @@ const openPosition = (
     ? Math.min(equityBaseRaw, maxDeposit)
     : equityBaseRaw;
 
-  // Notional = capital × lot_fraction, capped by free margin passed in as portfolioEquityNow.
+  // Notional = capital × lot_fraction, capped by free margin (not total equity).
   let notional = baseCapital * lotFraction;
-  if (Number.isFinite(portfolioEquityNow) && portfolioEquityNow > 0) {
-    notional = Math.min(notional, portfolioEquityNow);
+  if (Number.isFinite(freeMarginCap) && freeMarginCap > 0) {
+    notional = Math.min(notional, freeMarginCap);
   }
   if (!Number.isFinite(notional) || notional <= 0) {
     return false;
@@ -1888,8 +1893,12 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       const dc = runtime.dcaState;
       const stepTrigger = dc.lastBuyPrice * (1 - dc.stepPercent / 100);
       if (candle.close <= stepTrigger) {
-        const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
-        const safetySize = resolveClassicDcaOrderSize(dc, equityNow, dc.ordersCount);
+        const availableNow = portfolioAvailableBalance(ctx.cashEquity, runtimes);
+        const safetySize = Math.min(resolveClassicDcaOrderSize(dc, dc.ordersCount), availableNow);
+        if (safetySize <= 0) {
+          pushEquityPoint(event.timeMs);
+          continue;
+        }
         const safetyQty = safetySize / candle.close;
         const entryFee = safetySize * effectiveCommissionRate(ctx, runtime.strategy);
         ctx.cashEquity -= entryFee;
@@ -1912,11 +1921,13 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
               skippedByPairLock++;
             } else {
               const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
-              openPosition(ctx, runtime, 'long', event.timeMs, candle.close, equityNow);
+              const availableNow = portfolioAvailableBalance(ctx.cashEquity, runtimes);
+              openPosition(ctx, runtime, 'long', event.timeMs, candle.close, equityNow, 1, availableNow);
             }
           } else {
             const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
-            openPosition(ctx, runtime, 'long', event.timeMs, candle.close, equityNow);
+            const availableNow = portfolioAvailableBalance(ctx.cashEquity, runtimes);
+            openPosition(ctx, runtime, 'long', event.timeMs, candle.close, equityNow, 1, availableNow);
           }
         }
       }
@@ -1964,9 +1975,9 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     }
 
     const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
-    const availableBalance = Math.max(0, equityNow - computeLockedMargin(runtimes));
+    const availableBalance = portfolioAvailableBalance(ctx.cashEquity, runtimes);
     const lotChannelMult = resolveAutoLotChannelWidthMult(runtime, event.candleIndex, strategy, ctx, signalPayload);
-    openPosition(ctx, runtime, signalPayload.signal, event.timeMs, signalPayload.current, availableBalance, lotChannelMult);
+    openPosition(ctx, runtime, signalPayload.signal, event.timeMs, signalPayload.current, equityNow, lotChannelMult, availableBalance);
     pushEquityPoint(event.timeMs);
   }
 
