@@ -3747,6 +3747,20 @@ router.post('/manual-order/:apiKeyName', async (req, res) => {
   }
 });
 
+const CHART_ROUTE_TIMEOUT_MS = 45_000;
+
+const withChartRouteTimeout = async <T>(promise: Promise<T>, label: string): Promise<T> => (
+  Promise.race([
+    promise,
+    new Promise<T>((_resolve, reject) => {
+      setTimeout(
+        () => reject(new Error(`${label} timeout after ${CHART_ROUTE_TIMEOUT_MS}ms`)),
+        CHART_ROUTE_TIMEOUT_MS,
+      );
+    }),
+  ])
+);
+
 // Маршруты для данных
 router.get('/market-data/:apiKeyName', async (req, res) => {
   const { apiKeyName } = req.params;
@@ -3756,12 +3770,18 @@ router.get('/market-data/:apiKeyName', async (req, res) => {
     return res.status(400).json({ error: 'Missing required parameters: symbol, interval' });
   }
   try {
-    const data = await getMarketData(apiKeyName, symbol as string, interval as string, parseInt(limit as string) || 100);
+    await ensureExchangeClientInitialized(apiKeyName);
+    const safeLimit = Math.min(500, Math.max(50, parseInt(limit as string, 10) || 220));
+    const data = await withChartRouteTimeout(
+      getMarketData(apiKeyName, symbol as string, interval as string, safeLimit),
+      `market-data ${symbol}`,
+    );
     res.json(data);
   } catch (error) {
     const err = error as Error;
     logger.error(`Market data error: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    const status = /timeout/i.test(err.message) ? 504 : 500;
+    res.status(status).json({ error: err.message });
   }
 });
 
@@ -3873,23 +3893,33 @@ router.get('/orders/:apiKeyName', async (req, res) => {
 
 router.get('/strategy-trades/:apiKeyName', async (req, res) => {
   const { apiKeyName } = req.params;
-  const limit = Math.min(2000, Math.max(1, Number(req.query.limit) || 500));
+  const limit = Math.min(5000, Math.max(1, Number(req.query.limit) || 2000));
   const days = Math.min(365, Math.max(1, Number(req.query.days) || 90));
+  const strategyIdRaw = Number(req.query.strategyId);
+  const strategyId = Number.isFinite(strategyIdRaw) && strategyIdRaw > 0 ? Math.floor(strategyIdRaw) : null;
 
   try {
     const cutoffMs = Date.now() - days * 86400000;
+    const params: Array<string | number> = [apiKeyName, cutoffMs];
+    let strategyFilter = '';
+    if (strategyId !== null) {
+      strategyFilter = ' AND lte.strategy_id = ?';
+      params.push(strategyId);
+    }
+    params.push(limit);
+
     const rows = await db.all(
       `SELECT lte.id, lte.strategy_id AS strategyId, lte.trade_type AS tradeType,
               lte.side, lte.source_symbol AS symbol, lte.actual_price AS price,
               lte.position_size AS qty, lte.actual_time AS timestamp,
-              lte.actual_fee AS fee
+              lte.actual_fee AS fee, lte.event_origin AS eventOrigin
        FROM live_trade_events lte
        JOIN strategies s ON s.id = lte.strategy_id
        JOIN api_keys a ON a.id = s.api_key_id
-       WHERE a.name = ? AND lte.actual_time >= ?
+       WHERE a.name = ? AND lte.actual_time >= ?${strategyFilter}
        ORDER BY lte.actual_time DESC
        LIMIT ?`,
-      [apiKeyName, cutoffMs, limit]
+      params
     );
 
     res.json(Array.isArray(rows) ? rows : []);
@@ -4191,12 +4221,26 @@ router.get('/synthetic-chart/:apiKeyName', async (req, res) => {
   const { base, quote, baseCoef, quoteCoef, interval, limit } = req.query;
   logger.info(`Synthetic chart request for key: ${apiKeyName}`);
   try {
-    const data = await calculateSyntheticOHLC(apiKeyName, base as string, quote as string, parseFloat(baseCoef as string), parseFloat(quoteCoef as string), interval as string, parseInt(limit as string));
+    await ensureExchangeClientInitialized(apiKeyName);
+    const safeLimit = Math.min(500, Math.max(50, parseInt(limit as string, 10) || 220));
+    const data = await withChartRouteTimeout(
+      calculateSyntheticOHLC(
+        apiKeyName,
+        base as string,
+        quote as string,
+        parseFloat(baseCoef as string),
+        parseFloat(quoteCoef as string),
+        interval as string,
+        safeLimit,
+      ),
+      `synthetic-chart ${base}/${quote}`,
+    );
     res.json(data);
   } catch (error) {
     const err = error as Error;
     logger.error(`Error calculating synthetic chart: ${err.message}`);
-    res.status(500).json({ error: err.message });
+    const status = /timeout/i.test(err.message) ? 504 : 500;
+    res.status(status).json({ error: err.message });
   }
 });
 

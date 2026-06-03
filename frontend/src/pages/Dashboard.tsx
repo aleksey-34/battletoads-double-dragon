@@ -14,6 +14,25 @@ type ApiKey = {
   exchange: string;
   tenantDisplayName?: string;
   tenantProductMode?: string;
+  algofundDematerialized?: boolean;
+};
+
+type PositionHealthSummary = {
+  checkedAt: string;
+  clientsChecked: number;
+  okCount: number;
+  issueCount: number;
+  apiErrors: number;
+  issues: Array<{
+    slug: string;
+    apiKey: string;
+    mop: number;
+    dbOpen: number;
+    exchangeOpen: number;
+    orphans: string[];
+    ghosts: string[];
+    problems: string[];
+  }>;
 };
 
 type KeyStatus = {
@@ -110,6 +129,20 @@ type TradeHistoryRow = {
   realizedPnl: string;
   isMaker: boolean;
   timestamp: string;
+};
+
+/** Bot execution log (live_trade_events) — привязка к конкретной стратегии/оферу. */
+type StrategyTradeEvent = {
+  id: number;
+  strategyId: number;
+  tradeType: 'entry' | 'exit';
+  side: 'long' | 'short';
+  symbol: string;
+  price: number;
+  qtyUsdt: number;
+  timestamp: number;
+  fee: number;
+  eventOrigin?: string;
 };
 
 type CopyBlockResponse = {
@@ -428,16 +461,123 @@ const normalizeTimestampMs = (value: any): number | null => {
   return numeric > 9999999999 ? Math.floor(numeric) : Math.floor(numeric * 1000);
 };
 
-const buildStrategyTradeMarkers = (
+const formatTradeUsdtLabel = (usdt: number): string => {
+  if (!Number.isFinite(usdt) || usdt <= 0) {
+    return '';
+  }
+  if (usdt >= 1000) {
+    return `${(usdt / 1000).toFixed(1)}k$`;
+  }
+  if (usdt >= 100) {
+    return `${Math.round(usdt)}$`;
+  }
+  if (usdt >= 10) {
+    return `${usdt.toFixed(0)}$`;
+  }
+  return `${usdt.toFixed(1)}$`;
+};
+
+const chartTimeBoundsFromCandles = (chartData: any[]): { minSec: number; maxSec: number } | null => {
+  if (!Array.isArray(chartData) || chartData.length === 0) {
+    return null;
+  }
+  let minMs = Number.POSITIVE_INFINITY;
+  let maxMs = 0;
+  chartData.forEach((point) => {
+    const parsed = parseCandlePoint(point);
+    if (!parsed) {
+      return;
+    }
+    minMs = Math.min(minMs, parsed.time);
+    maxMs = Math.max(maxMs, parsed.time);
+  });
+  if (!Number.isFinite(minMs) || maxMs <= 0) {
+    return null;
+  }
+  return {
+    minSec: Math.floor(minMs / 1000) - 120,
+    maxSec: Math.floor(maxMs / 1000) + 120,
+  };
+};
+
+const buildStrategyTradeMarkersFromEvents = (
+  events: StrategyTradeEvent[],
+  symbols: string[],
+  options?: {
+    strategyId?: number;
+    chartData?: any[];
+    markerLimit?: number;
+  },
+): ChartMarker[] => {
+  if (!Array.isArray(events) || events.length === 0 || symbols.length === 0) {
+    return [];
+  }
+
+  const symbolSet = new Set(symbols.map((symbol) => String(symbol || '').toUpperCase()));
+  const bounds = options?.chartData ? chartTimeBoundsFromCandles(options.chartData) : null;
+  const strategyId = options?.strategyId;
+  const markerLimit = Math.max(10, Math.min(3000, options?.markerLimit ?? 800));
+
+  return events
+    .filter((event) => {
+      if (strategyId !== undefined && Number(event.strategyId) !== strategyId) {
+        return false;
+      }
+      const sym = String(event.symbol || '').toUpperCase();
+      if (!symbolSet.has(sym)) {
+        return false;
+      }
+      const timeSec = normalizeTimestampMs(event.timestamp);
+      if (timeSec === null) {
+        return false;
+      }
+      const timeUnix = Math.floor(timeSec / 1000);
+      if (bounds && (timeUnix < bounds.minSec || timeUnix > bounds.maxSec)) {
+        return false;
+      }
+      return true;
+    })
+    .map((event, index) => {
+      const timeMs = normalizeTimestampMs(event.timestamp);
+      if (timeMs === null) {
+        return null;
+      }
+      const timeSec = Math.floor(timeMs / 1000);
+      const usdt = Number(event.qtyUsdt);
+      const usdtLabel = formatTradeUsdtLabel(usdt);
+      const isEntry = event.tradeType === 'entry';
+      const isLong = event.side === 'long';
+      const isBuy = isEntry ? isLong : !isLong;
+
+      return {
+        id: `lte-${event.id}-${timeSec}`,
+        time: timeSec,
+        color: isEntry ? (isLong ? '#16a34a' : '#dc2626') : '#d97706',
+        shape: isBuy ? 'arrowUp' : 'arrowDown',
+        position: isBuy ? 'belowBar' : 'aboveBar',
+        text: `${isEntry ? (isLong ? 'L' : 'S') : 'X'}${usdtLabel ? ` ${usdtLabel}` : ''}`,
+      } as ChartMarker;
+    })
+    .filter((marker): marker is ChartMarker => !!marker)
+    .sort((left, right) => left.time - right.time)
+    .slice(-markerLimit);
+};
+
+const buildStrategyTradeMarkersFromExchange = (
   trades: TradeHistoryRow[],
   symbols: string[],
-  markerLimit: number = 500
+  options?: {
+    chartData?: any[];
+    markerLimit?: number;
+  },
 ): ChartMarker[] => {
   if (!Array.isArray(trades) || trades.length === 0 || symbols.length === 0) {
     return [];
   }
 
   const symbolSet = new Set(symbols.map((symbol) => String(symbol || '').toUpperCase()));
+  const bounds = options?.chartData ? chartTimeBoundsFromCandles(options.chartData) : null;
+  const markerLimit = Math.max(10, Math.min(2000, options?.markerLimit ?? 400));
 
   return trades
     .filter((trade) => symbolSet.has(String(trade.symbol || '').toUpperCase()))
@@ -446,22 +586,49 @@ const buildStrategyTradeMarkers = (
       if (timeMs === null) {
         return null;
       }
+      const timeSec = Math.floor(timeMs / 1000);
+      if (bounds && (timeSec < bounds.minSec || timeSec > bounds.maxSec)) {
+        return null;
+      }
 
       const sideRaw = String(trade.side || '').toLowerCase();
       const isBuy = sideRaw === 'buy';
+      const notional = Number(trade.notional);
+      const usdtFromQty = Number(trade.qty) * Number(trade.price);
+      const usdtLabel = formatTradeUsdtLabel(
+        Number.isFinite(notional) && notional > 0 ? notional : usdtFromQty,
+      );
 
       return {
-        id: `${trade.tradeId || trade.orderId || `trade-${index}`}-${trade.symbol}-${timeMs}`,
-        time: timeMs,
-        color: isBuy ? '#16a34a' : '#dc2626',
+        id: `ex-${trade.tradeId || trade.orderId || `trade-${index}`}-${trade.symbol}-${timeSec}`,
+        time: timeSec,
+        color: isBuy ? '#22c55e' : '#ef4444',
         shape: isBuy ? 'arrowUp' : 'arrowDown',
         position: isBuy ? 'belowBar' : 'aboveBar',
-        text: `${isBuy ? 'B' : 'S'} ${trade.symbol}`,
+        text: `${isBuy ? 'B' : 'S'}${usdtLabel ? ` ${usdtLabel}` : ''}`,
       } as ChartMarker;
     })
     .filter((marker): marker is ChartMarker => !!marker)
     .sort((left, right) => left.time - right.time)
-    .slice(-Math.max(10, Math.min(2000, markerLimit)));
+    .slice(-markerLimit);
+};
+
+const buildStrategyTradeMarkers = (
+  strategyEvents: StrategyTradeEvent[],
+  exchangeTrades: TradeHistoryRow[],
+  symbols: string[],
+  strategyId: number,
+  chartData?: any[],
+): ChartMarker[] => {
+  const fromLogs = buildStrategyTradeMarkersFromEvents(strategyEvents, symbols, {
+    strategyId,
+    chartData,
+    markerLimit: 800,
+  });
+  if (fromLogs.length > 0) {
+    return fromLogs;
+  }
+  return buildStrategyTradeMarkersFromExchange(exchangeTrades, symbols, { chartData, markerLimit: 400 });
 };
 
 type DonchianSnapshot = {
@@ -1028,7 +1195,7 @@ const parseStrategy = (raw: any): DDStrategy => {
     show_settings: readBoolean(raw?.show_settings, true),
     show_indicators: readBoolean(raw?.show_indicators, true),
     show_positions_on_chart: readBoolean(raw?.show_positions_on_chart, true),
-    show_trades_on_chart: readBoolean(raw?.show_trades_on_chart, false),
+    show_trades_on_chart: readBoolean(raw?.show_trades_on_chart, true),
     show_values_each_bar: readBoolean(raw?.show_values_each_bar, false),
     auto_update: readBoolean(raw?.auto_update, true),
     long_enabled: readBoolean(raw?.long_enabled, true),
@@ -1071,6 +1238,7 @@ const Dashboard: React.FC = () => {
   const [balances, setBalances] = useState<{ [key: string]: any[] }>({});
   const [positionsByKey, setPositionsByKey] = useState<{ [key: string]: any[] }>({});
   const [tradesByKey, setTradesByKey] = useState<{ [key: string]: TradeHistoryRow[] }>({});
+  const [strategyTradesByKey, setStrategyTradesByKey] = useState<{ [key: string]: StrategyTradeEvent[] }>({});
   const [chartSettings, setChartSettings] = useState<{ [key: string]: ChartSetting }>({});
   const [activePanel, setActivePanel] = useState<string[]>([]);
   const [chartLoadingKey, setChartLoadingKey] = useState<string | null>(null);
@@ -1113,6 +1281,10 @@ const Dashboard: React.FC = () => {
     uniqueSymbols: number;
     symbols: string[];
   }>>([]);
+  const [positionHealth, setPositionHealth] = useState<PositionHealthSummary | null>(null);
+  const [positionHealthLoading, setPositionHealthLoading] = useState(false);
+  const [positionHealthError, setPositionHealthError] = useState('');
+  const [hideDematerializedKeys, setHideDematerializedKeys] = useState(true);
   const requestLocksRef = useRef<Record<string, boolean>>({});
 
   const isApiKeyActive = (keyName: string): boolean => apiKeyToggles[keyName] ?? true;
@@ -1163,6 +1335,7 @@ const Dashboard: React.FC = () => {
     }
 
     void fetchApiKeys();
+    void fetchPositionHealth();
     void (async () => {
       try {
         const res = await axios.get('/api/exchanges/universe');
@@ -1172,6 +1345,19 @@ const Dashboard: React.FC = () => {
       }
     })();
   }, []);
+
+  const fetchPositionHealth = async () => {
+    setPositionHealthLoading(true);
+    setPositionHealthError('');
+    try {
+      const res = await axios.get('/api/admin/position-health', { timeout: 120000 });
+      setPositionHealth(res.data as PositionHealthSummary);
+    } catch (error: any) {
+      setPositionHealthError(String(error?.response?.data?.error || error?.message || 'position-health failed'));
+    } finally {
+      setPositionHealthLoading(false);
+    }
+  };
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -1230,6 +1416,11 @@ const Dashboard: React.FC = () => {
 
       if (shouldRefreshTrades) {
         void fetchTradesForKey(selectedApiKey, { silent: true });
+        selectedStrategies
+          .filter((strategy) => strategy.show_chart && strategy.show_trades_on_chart)
+          .forEach((strategy) => {
+            void fetchStrategyTradesForKey(selectedApiKey, { silent: true, strategyId: strategy.id, days: 120 });
+          });
       }
     }, normalizedUpdateSec * 1000);
 
@@ -1449,7 +1640,7 @@ const Dashboard: React.FC = () => {
     try {
       const res = await axios.get(`/api/trades/${keyName}`, {
         params: {
-          limit: 200,
+          limit: 500,
         },
       });
 
@@ -1477,6 +1668,75 @@ const Dashboard: React.FC = () => {
     } finally {
       releaseRequestLock(requestLockKey);
     }
+  };
+
+  /** История исполнений бота (live_trade_events) — для маркеров на чарте офера. */
+  const fetchStrategyTradesForKey = async (
+    keyName: string,
+    options?: { silent?: boolean; strategyId?: number; days?: number },
+  ) => {
+    if (!isApiKeyActive(keyName)) {
+      return;
+    }
+
+    const requestLockKey = `strategy-trades:${keyName}:${options?.strategyId ?? 'all'}`;
+    if (!acquireRequestLock(requestLockKey)) {
+      return;
+    }
+
+    try {
+      const res = await axios.get(`/api/strategy-trades/${keyName}`, {
+        params: {
+          limit: 2000,
+          days: options?.days ?? 120,
+          ...(options?.strategyId ? { strategyId: options.strategyId } : {}),
+        },
+      });
+      const raw = Array.isArray(res.data) ? res.data : [];
+      const payload: StrategyTradeEvent[] = raw.map((row: any): StrategyTradeEvent => {
+        const tradeType: StrategyTradeEvent['tradeType'] = String(row.tradeType || 'entry') === 'exit' ? 'exit' : 'entry';
+        const side: StrategyTradeEvent['side'] = String(row.side || 'long').toLowerCase() === 'short' ? 'short' : 'long';
+        return {
+          id: Number(row.id),
+          strategyId: Number(row.strategyId),
+          tradeType,
+          side,
+          symbol: String(row.symbol || '').toUpperCase(),
+          price: Number(row.price) || 0,
+          qtyUsdt: Number(row.qty) || 0,
+          timestamp: Number(row.timestamp) || 0,
+          fee: Number(row.fee) || 0,
+          eventOrigin: String(row.eventOrigin || ''),
+        };
+      }).filter((row) => Number.isFinite(row.id) && row.id > 0);
+
+      if (options?.strategyId) {
+        setStrategyTradesByKey((prev) => {
+          const existing = (prev[keyName] || []).filter((item) => item.strategyId !== options.strategyId);
+          return { ...prev, [keyName]: [...existing, ...payload] };
+        });
+      } else {
+        setStrategyTradesByKey((prev) => ({ ...prev, [keyName]: payload }));
+      }
+    } catch (error) {
+      if (options?.silent !== true) {
+        console.error(error);
+      }
+    } finally {
+      releaseRequestLock(requestLockKey);
+    }
+  };
+
+  const ensureStrategyTradesLoaded = (keyName: string, strategy: DDStrategy) => {
+    if (!strategy.show_chart || !strategy.show_trades_on_chart) {
+      return;
+    }
+    const cached = strategyTradesByKey[keyName] || [];
+    const hasForStrategy = cached.some((item) => item.strategyId === strategy.id);
+    if (!hasForStrategy) {
+      void fetchStrategyTradesForKey(keyName, { silent: true, strategyId: strategy.id, days: 120 });
+    }
+    void fetchTradesForKey(keyName, { silent: true });
   };
 
   const fetchMonitoring = async (
@@ -1752,6 +2012,7 @@ const Dashboard: React.FC = () => {
 
       if (detailed.show_chart) {
         void loadStrategyChart(keyName, detailed, { silent: true, force: true });
+        ensureStrategyTradesLoaded(keyName, detailed);
       }
     } catch (error) {
       const fallback = 'Failed to load strategy details';
@@ -1811,7 +2072,7 @@ const Dashboard: React.FC = () => {
         show_chart: true,
         show_indicators: true,
         show_positions_on_chart: true,
-        show_trades_on_chart: false,
+        show_trades_on_chart: true,
         show_values_each_bar: false,
         auto_update: true,
         take_profit_percent: newStrategyDefaults.takeProfitPercent,
@@ -2505,8 +2766,9 @@ const Dashboard: React.FC = () => {
             baseCoef: strategy.base_coef || 1,
             quoteCoef: strategy.quote_coef || 1,
             interval: strategy.interval || '1h',
-            limit: 100,
+            limit: 220,
           },
+          timeout: 50000,
         });
         payload = Array.isArray(res.data) ? res.data : [];
       } else {
@@ -2514,8 +2776,9 @@ const Dashboard: React.FC = () => {
           params: {
             symbol: strategy.base_symbol,
             interval: strategy.interval || '1h',
-            limit: 100,
+            limit: 220,
           },
+          timeout: 50000,
         });
         payload = Array.isArray(res.data) ? res.data : [];
       }
@@ -2593,7 +2856,11 @@ const Dashboard: React.FC = () => {
   };
 
 
-  const collapseItems = apiKeys.map((key) => {
+  const visibleApiKeys = hideDematerializedKeys
+    ? apiKeys.filter((key) => !key.algofundDematerialized)
+    : apiKeys;
+
+  const collapseItems = visibleApiKeys.map((key) => {
     const keyName = key.name;
     const keyActive = isApiKeyActive(keyName);
     const keyStatus = keyStatuses[keyName] || { status: keyActive ? 'ok' : 'warning', message: keyActive ? 'Connected' : 'Disabled' };
@@ -2613,6 +2880,7 @@ const Dashboard: React.FC = () => {
     const keyBalances = balances[keyName] || [];
     const keyPositions = positionsByKey[keyName] || [];
     const keyTrades = tradesByKey[keyName] || [];
+    const keyStrategyTrades = strategyTradesByKey[keyName] || [];
     const marginStats = calculateMarginStats(keyBalances, keyPositions);
     const activeStrategyPanels = activeStrategyPanelsByKey[keyName] || [];
     const newStrategyName = newStrategyNameByKey[keyName] || '';
@@ -2662,6 +2930,7 @@ const Dashboard: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
           <span>{key.name} ({key.exchange})</span>
           {key.tenantDisplayName ? <Tag color={key.tenantProductMode === 'algofund_client' ? 'purple' : key.tenantProductMode === 'strategy_client' ? 'cyan' : 'default'}>{key.tenantDisplayName}{key.tenantProductMode === 'algofund_client' ? ' · Алгофонд' : key.tenantProductMode === 'strategy_client' ? ' · Стратегии' : ''}</Tag> : <Tag color='default'>без привязки</Tag>}
+          {key.algofundDematerialized ? <Tag color="default">дематериализован</Tag> : null}
           <StatusIndicator status={keyStatus.status} message={keyStatus.message} />
           <span style={{ fontSize: 12, color: '#666666' }}>API: {keyStatusText}</span>
           <Tag color="blue">sets: {keyStrategiesTotal}</Tag>
@@ -3230,6 +3499,10 @@ const Dashboard: React.FC = () => {
                             const strategyId = Number(panelId);
                             if (Number.isFinite(strategyId) && strategyId > 0) {
                               void fetchStrategyDetails(keyName, strategyId, { silent: true });
+                              const opened = keyStrategies.find((item) => item.id === strategyId);
+                              if (opened) {
+                                ensureStrategyTradesLoaded(keyName, opened);
+                              }
                             }
                           });
                         }}
@@ -3414,8 +3687,15 @@ const Dashboard: React.FC = () => {
                               const longLotUsdt = resolveLotUsdt(strategy.lot_long_usdt, strategy.max_deposit, strategy.lot_long_percent);
                               const shortLotUsdt = resolveLotUsdt(strategy.lot_short_usdt, strategy.max_deposit, strategy.lot_short_percent);
                               const tradeMarkers = strategy.display_on_chart && strategy.show_trades_on_chart
-                                ? buildStrategyTradeMarkers(keyTrades, pairSymbols)
+                                ? buildStrategyTradeMarkers(
+                                  keyStrategyTrades,
+                                  keyTrades,
+                                  pairSymbols,
+                                  strategy.id,
+                                  effectiveStrategyChartData,
+                                )
                                 : [];
+                              const tradeMarkersInRange = tradeMarkers.length;
                               const openPositionMarkers = strategy.show_positions_on_chart && strategy.show_chart
                                 ? buildOpenPositionMarkers(strategy, effectiveStrategyChartData, entryRatioValue)
                                 : [];
@@ -3624,7 +3904,12 @@ const Dashboard: React.FC = () => {
                                                   <span>Show trades</span>
                                                   <Switch
                                                     checked={strategy.show_trades_on_chart}
-                                                    onChange={(checked) => updateStrategyDraft(keyName, strategy.id, { show_trades_on_chart: checked })}
+                                                    onChange={(checked) => {
+                                                      updateStrategyDraft(keyName, strategy.id, { show_trades_on_chart: checked });
+                                                      if (checked) {
+                                                        ensureStrategyTradesLoaded(keyName, { ...strategy, show_trades_on_chart: true });
+                                                      }
+                                                    }}
                                                     disabled={!keyActive}
                                                   />
                                                 </div>
@@ -3987,6 +4272,16 @@ const Dashboard: React.FC = () => {
                                                 )
                                                 : null}
 
+                                              {strategy.show_trades_on_chart ? (
+                                                <div style={{ marginBottom: 6, fontSize: 12, color: '#6b7280' }}>
+                                                  Сделки на видимом диапазоне: <strong>{tradeMarkersInRange}</strong>
+                                                  {' · '}
+                                                  <span style={{ color: '#16a34a' }}>L/S</span> вход (USDT),
+                                                  <span style={{ color: '#d97706' }}> X</span> выход — из лога бота;
+                                                  если пусто, подгружаются сделки биржи (B/S).
+                                                </div>
+                                              ) : null}
+
                                               <ChartComponent
                                                 data={effectiveStrategyChartData}
                                                 type={settings.chartType}
@@ -4240,6 +4535,46 @@ const Dashboard: React.FC = () => {
           </Space>
         </Card>
       ) : null}
+      <Card
+        size="small"
+        title="Здоровье позиций Algofund (БД ↔ биржа)"
+        style={{ marginBottom: 12 }}
+        extra={(
+          <Space>
+            <Checkbox checked={hideDematerializedKeys} onChange={(e) => setHideDematerializedKeys(e.target.checked)}>
+              Скрыть дематериализованные ключи
+            </Checkbox>
+            <Button size="small" loading={positionHealthLoading} onClick={() => { void fetchPositionHealth(); }}>
+              Обновить
+            </Button>
+          </Space>
+        )}
+      >
+        {positionHealthError ? <Alert type="error" message={positionHealthError} showIcon /> : null}
+        {positionHealthLoading && !positionHealth ? <Spin /> : null}
+        {positionHealth ? (
+          <Space direction="vertical" style={{ width: '100%' }} size={8}>
+            <span style={{ fontSize: 12, color: '#666' }}>
+              {`Проверено ${positionHealth.clientsChecked} клиентов · OK ${positionHealth.okCount} · проблем ${positionHealth.issueCount}`}
+              {positionHealth.apiErrors > 0 ? ` · API ошибок ${positionHealth.apiErrors}` : ''}
+              {` · ${new Date(positionHealth.checkedAt).toLocaleString()}`}
+            </span>
+            {positionHealth.issueCount === 0 ? (
+              <Alert type="success" message="Расхождений OP / orphan / ghost не найдено" showIcon />
+            ) : (
+              positionHealth.issues.map((row) => (
+                <Alert
+                  key={row.slug}
+                  type="warning"
+                  showIcon
+                  message={`${row.slug} (${row.apiKey})`}
+                  description={`OP ${row.mop} · БД ${row.dbOpen} · биржа ${row.exchangeOpen} · ${row.problems.join(' · ')}`}
+                />
+              ))
+            )}
+          </Space>
+        ) : null}
+      </Card>
       <Collapse activeKey={activePanel} onChange={handlePanelChange} items={collapseItems} />
     </div>
   );

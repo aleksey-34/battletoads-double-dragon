@@ -6654,6 +6654,8 @@ export const previewAdminSweepBacktest = async (payload?: {
   dateTo?: string;
   preferRealBacktest?: boolean;
   rerunApiKeyName?: string;
+  /** When true, keep payload.offerIds instead of replacing from saved TS snapshot (synthetic research runs). */
+  forceOfferIds?: boolean;
   /** Optional pair-lock toggle (Etap B comparison). Defaults to engine default (true). */
   enablePairLock?: boolean;
   /** Optional pair-lock RNG seed for tie-break. Defaults to engine default. */
@@ -6776,7 +6778,7 @@ export const previewAdminSweepBacktest = async (payload?: {
       systemName: requestedSystemName,
       offerIds,
     });
-    if (tsSavedSnapshotForPreview) {
+    if (tsSavedSnapshotForPreview && payload?.forceOfferIds !== true) {
       const snapshotOfferIds = Array.from(new Set(
         (Array.isArray(tsSavedSnapshotForPreview.offerIds) ? tsSavedSnapshotForPreview.offerIds : [])
           .map((item) => asString(item, '').trim())
