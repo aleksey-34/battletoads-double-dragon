@@ -1679,9 +1679,7 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
       riskScaleMaxPercent: Number(clampNumber(asNumber(settingsRaw.riskScaleMaxPercent, 100), 0, 400).toFixed(2)),
       maxOpenPositions: Math.max(0, Math.floor(asNumber(settingsRaw.maxOpenPositions, 0))),
       lotPercentOverride: Math.max(0, Math.floor(asNumber(settingsRaw.lotPercentOverride, 0))),
-      ...(Number.isFinite(Number(settingsRaw.reinvestPercent))
-        ? { reinvestPercent: Number(clampNumber(asNumber(settingsRaw.reinvestPercent, 0), 0, 100).toFixed(2)) }
-        : {}),
+      reinvestPercent: Number(clampNumber(asNumber(settingsRaw.reinvestPercent, 0), 0, 100).toFixed(2)),
       ...(typeof settingsRaw.dateFrom === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(settingsRaw.dateFrom)
         ? { dateFrom: settingsRaw.dateFrom }
         : {}),
@@ -8267,11 +8265,13 @@ export const previewAdminSweepBacktest = async (payload?: {
   };
 };
 
+/** Volatile / high-turnover pairs first — DCA scan pool order matters for maxCandidates cap. */
 const DCA_CANDIDATE_SYMBOLS = [
+  'PEPEUSDT', 'WIFUSDT', 'BONKUSDT', 'DOGEUSDT', 'SHIBUSDT', 'FLOKIUSDT',
+  'SUIUSDT', 'SEIUSDT', 'INJUSDT', 'TRXUSDT', 'NEARUSDT', 'WLDUSDT',
+  'TIAUSDT', 'APTUSDT', 'ARBUSDT', 'OPUSDT',
   'XRPUSDT', 'LTCUSDT', 'ADAUSDT', 'DOTUSDT', 'LINKUSDT', 'MATICUSDT',
-  'ATOMUSDT', 'NEARUSDT', 'FILUSDT', 'APTUSDT', 'ARBUSDT', 'OPUSDT',
-  'SUIUSDT', 'SEIUSDT', 'TIAUSDT', 'WLDUSDT', 'PEPEUSDT', 'DOGEUSDT',
-  'BNBUSDT', 'TRXUSDT', 'AVAXUSDT', 'BCHUSDT', 'ETCUSDT', 'INJUSDT',
+  'ATOMUSDT', 'FILUSDT', 'BNBUSDT', 'AVAXUSDT', 'BCHUSDT', 'ETCUSDT',
 ];
 
 type DcaTsPickContext = {
@@ -9080,10 +9080,24 @@ export const getDcaResearchJobStatus = () => ({
   error: dcaResearchJob.error,
 });
 
+export const clearDcaResearchJobStaleState = (): void => {
+  if (dcaResearchJob.running) {
+    return;
+  }
+  dcaResearchJob.error = null;
+  dcaResearchJob.abortRequested = false;
+  if (dcaResearchJob.phase === 'aborted' || dcaResearchJob.phase === 'error') {
+    dcaResearchJob.phase = 'idle';
+    dcaResearchJob.message = '';
+    dcaResearchJob.progressPercent = 0;
+  }
+};
+
 export const resetDcaResearchJobLock = (): { cleared: boolean; abortRequested: boolean } => {
   if (!dcaResearchJob.running) {
     dcaResearchJob.abortRequested = false;
-    return { cleared: false, abortRequested: false };
+    clearDcaResearchJobStaleState();
+    return { cleared: true, abortRequested: false };
   }
   dcaResearchJob.abortRequested = true;
   dcaResearchJob.message = 'Abort requested — finish current pair then stop';

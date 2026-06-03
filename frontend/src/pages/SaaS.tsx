@@ -2626,6 +2626,35 @@ const renderOfferLifecycleTag = (offer: {
   );
 };
 
+/** INSANE DCA scan: prefer volatile pairs with most completed cycles over the full card period. */
+const TS_DCA_INSANE_VOLATILE_MARKETS = [
+  'PEPEUSDT', 'WIFUSDT', 'BONKUSDT', 'DOGEUSDT', 'SHIBUSDT', 'FLOKIUSDT',
+  'SUIUSDT', 'SEIUSDT', 'INJUSDT', 'TRXUSDT', 'NEARUSDT', 'WLDUSDT',
+  'TIAUSDT', 'APTUSDT', 'ARBUSDT', 'OPUSDT',
+];
+const TS_DCA_INSANE_VOLATILE_SET = new Set(TS_DCA_INSANE_VOLATILE_MARKETS);
+
+const pickTsDcaResearchMarkets = (
+  candidates: Array<{ market?: string; status?: string; trades?: number; ret?: number }>,
+  limit = 5,
+): string[] => {
+  const insaneRank = (market: string) => (TS_DCA_INSANE_VOLATILE_SET.has(market) ? 1 : 0);
+  return candidates
+    .filter((item) => item.status === 'ok' && Number(item.trades || 0) > 0)
+    .sort((a, b) => {
+      const marketA = String(a.market || '');
+      const marketB = String(b.market || '');
+      const volatileDelta = insaneRank(marketB) - insaneRank(marketA);
+      if (volatileDelta !== 0) return volatileDelta;
+      const tradesDelta = Number(b.trades || 0) - Number(a.trades || 0);
+      if (tradesDelta !== 0) return tradesDelta;
+      return Number(b.ret || 0) - Number(a.ret || 0);
+    })
+    .slice(0, limit)
+    .map((item) => String(item.market || ''))
+    .filter(Boolean);
+};
+
 const formatPeriodCoverage = (period?: PeriodInfo | null): string => {
   if (!period?.dateFrom || !period?.dateTo) {
     return '';
@@ -7767,11 +7796,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!settings) {
       return false;
     }
-    const expectedBase = tsDcaBaseMode === 'fixed'
+    const resultAutotune = payload?.autotune !== false;
+    const resultMode = settings.baseAmountMode === 'percent' ? 'percent' : 'fixed';
+    if (tsDcaBaseMode !== resultMode) {
+      return false;
+    }
+    if (tsDcaBaseMode === 'percent') {
+      if (Math.abs(Number(settings.baseAmountPercent || 0) - tsDcaBasePercent) > 0.01) {
+        return false;
+      }
+    } else if (Math.abs(Number(settings.baseAmountUsdt || 0) - tsDcaBaseAmountUsdt) > 0.05) {
+      return false;
+    }
+    const expectedBaseUsdt = tsDcaBaseMode === 'fixed'
       ? tsDcaBaseAmountUsdt
       : Math.max(1, (adminSweepBacktestInitialBalance * tsDcaBasePercent) / 100);
-    const resultAutotune = payload?.autotune !== false;
-    return Math.abs(Number(settings.baseAmountUsdt || 0) - expectedBase) < 0.05
+    return Math.abs(Number(settings.baseAmountUsdt || 0) - expectedBaseUsdt) < 0.05
       && Number(settings.stepPercent) === tsDcaStepPercent
       && Number(settings.maxOrders) === tsDcaMaxOrders
       && Number(settings.tpPercent) === tsDcaTpPercent
@@ -7815,6 +7855,25 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setTsDcaPerLegSl(false);
     setTsDcaAutotune(true);
     messageApi.info('SUPER DCA: 5% base, step 0.5%, 20 ордеров — макс. заметность. ОП не режет DCA (только trend).');
+  };
+
+  /** Максимум циклов (trades): мелкий step/TP, короткий TF. Base % — размер лота, не число сделок. */
+  const applyTsDcaInsaneGridPreset = () => {
+    setTsDcaBaseMode('percent');
+    setTsDcaBasePercent(4);
+    setTsDcaInterval('15m');
+    setTsDcaStepPercent(0.12);
+    setTsDcaMaxOrders(30);
+    setTsDcaTpPercent(0.2);
+    setTsDcaSlPercent(0);
+    setTsDcaEntryFilter('always');
+    setTsDcaReentryBars(0);
+    setTsDcaPerLegSl(false);
+    setTsDcaAutotune(false);
+    messageApi.warning(
+      'INSANE: 15m, step 0.12%, TP 0.2%, base 4%, max 30, autotune OFF. Скан на полной глубине карточки (732d) — медленно, но честно. «Сканировать DCA» заново.',
+      10,
+    );
   };
 
   const applyTsDcaModeratePreset = () => {
@@ -7924,11 +7983,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const serverFingerprint = String(payload?.scanFingerprint || '').trim();
     setTsDcaResearchScanFingerprint(serverFingerprint || buildTsDcaScanFingerprint());
     const viable = Number(payload?.viableCount || 0);
-    const preselect = (Array.isArray(payload?.candidates) ? payload.candidates : [])
-      .filter((item: { status?: string; trades?: number }) => item.status === 'ok' && Number(item.trades || 0) > 0)
-      .slice(0, 5)
-      .map((item: { market: string }) => String(item.market || ''))
-      .filter(Boolean);
+    const preselect = pickTsDcaResearchMarkets(
+      Array.isArray(payload?.candidates) ? payload.candidates as Array<{ market?: string; status?: string; trades?: number; ret?: number }> : [],
+      5,
+    );
     setTsDcaSelectedMarkets(preselect);
     if (preselect.length > 0) {
       setTsDcaEnabled(true);
@@ -8016,7 +8074,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     try {
       await axios.post('/api/saas/admin/ts-dca-pair-research', {
         ...buildTsDcaRequestPayload(),
-        maxCandidates: 12,
+        maxCandidates: 16,
         dcaForceRefresh: true,
       }, { timeout: 60000 });
       setTsDcaResearchServerRunning(true);
@@ -14266,6 +14324,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     <Button size="small" onClick={applyTsDcaModeratePreset}>Пресет: умеренный</Button>
                     <Button size="small" type="primary" ghost onClick={applyTsDcaAggressivePreset}>Пресет: агрессивный</Button>
                     <Button size="small" danger ghost onClick={applyTsDcaSuperAggressivePreset}>Пресет: SUPER</Button>
+                    <Button size="small" danger onClick={applyTsDcaInsaneGridPreset}>Пресет: INSANE (много trades)</Button>
                   </Space>
                   <Row gutter={[8, 8]}>
                     <Col xs={24} md={8}>
@@ -14418,6 +14477,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       const deposit = Number((tsDcaResearchResult as { initialBalance?: number }).initialBalance || adminSweepBacktestInitialBalance || 0);
                       return `TF ${String(s.interval || '—')} • step ${Number(s.stepPercent || 0)}% • TP ${Number(s.tpPercent || 0)}% • max orders ${Number(s.maxOrders || 0)} • ${formatDcaBaseSettingLabel(s, deposit)} • filter ${String(s.entryFilter || 'always')}`;
                     })()}
+                  />
+                ) : null}
+                {isTsDcaScanStale ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    style={{ marginBottom: 8 }}
+                    message="Таблица ниже — от старого scan. Base/step/TP изменились, но пересчёт не запускался."
+                    description={`Сейчас в форме: ${tsDcaBaseMode === 'percent' ? `base ${tsDcaBasePercent}% equity` : `base ${tsDcaBaseAmountUsdt} USDT`}, step ${tsDcaStepPercent}%, TP ${tsDcaTpPercent}%. Нажмите «Сканировать DCA». Base % меняет Ret/DD, но не число trades (trades = step/TP/TF/период).`}
                   />
                 ) : null}
                 <Table
