@@ -58,7 +58,7 @@ async function upsertDcaStrategy(fullSymbol, sc) {
       dca_base_amount_usdt, dca_base_amount_percent, dca_step_percent, dca_max_orders,
       dca_order_multiplier, dca_tp_percent, dca_sl_percent, dca_entry_filter, long_enabled, short_enabled)
      VALUES (?, ?, ?, 'dca', 1, ?, 50, ?, ?, ?, 1, ?, 0, 'always', 1, 0)`,
-    [name, ak.id, fullSymbol, ...params],
+    [name, ak.id, fullSymbol, sc.interval, sc.basePct, sc.step, sc.maxOrders, sc.tp],
   );
   return ins.lastID;
 }
