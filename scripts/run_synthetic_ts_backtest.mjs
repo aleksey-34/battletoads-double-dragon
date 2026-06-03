@@ -24,6 +24,7 @@ const {
   loadCatalogAndSweepWithFallback,
   previewAdminSweepBacktest,
 } = require(path.join(root, 'dist/saas/service.js'));
+const { ensureExchangeClientInitialized } = require(path.join(root, 'dist/bot/exchange.js'));
 
 const apiKey = process.env.TS_API_KEY || 'BTDD_D1';
 const dateFrom = process.env.TS_DATE_FROM || '2024-06-01';
@@ -62,6 +63,10 @@ const pickTop = (rows, limit, monoOnly) => {
 const summarize = (label, result) => {
   const preview = result?.preview?.summary || result?.summary || result;
   const offers = result?.selectedOffers || [];
+  const source = String(result?.preview?.source || result?.rerun?.executed ? 'rerun' : 'preset/snapshot');
+  const rerun = result?.rerun || {};
+  const processed = Number(preview?.processedStrategies ?? 0);
+  const skipped = Number(preview?.skippedStrategies ?? 0);
   const modes = offers.map((o) => o.mode || o.familyMode || '?').join(',');
   console.log(
     [
@@ -71,9 +76,16 @@ const summarize = (label, result) => {
       `pf ${Number(preview?.profitFactor ?? 0).toFixed(2)}`,
       `trades ${Number(preview?.tradesCount ?? 0)}`,
       `offers ${offers.length}`,
-      modes ? `modes[${modes.slice(0, 80)}${modes.length > 80 ? '…' : ''}]` : '',
+      processed > 0 ? `ran ${processed}` : '',
+      skipped > 0 ? `skip ${skipped}` : '',
+      `src ${source}`,
+      rerun.executed ? `key ${rerun.apiKeyName || '?'}` : '',
+      modes ? `modes[${modes.slice(0, 60)}${modes.length > 60 ? '…' : ''}]` : '',
     ].filter(Boolean).join('\t'),
   );
+  if (skipped > 0 && processed < offers.length) {
+    console.log(`  ⚠ ${skipped} стратегий без данных (часто Client not initialized — перезапусти после фикса)`);
+  }
 };
 
 const runPortfolio = async (label, offerIds, extra = {}) => {
@@ -119,8 +131,11 @@ const monoRows = pickTop(evaluated, monoLimit, true);
 const synthOfferIds = synthRows.map(offerIdFromRecord);
 const monoOfferIds = monoRows.map(offerIdFromRecord);
 
+await ensureExchangeClientInitialized(apiKey);
+
 console.log(`TS compare  ${dateFrom} → ${dateTo}  key=${apiKey}  reinvest=${reinvestPercent}%`);
 console.log(`Sweep evaluated: ${evaluated.length}  synth picked: ${synthOfferIds.length}  mono picked: ${monoOfferIds.length}`);
+console.log('Важно: сравнивай только прогоны с src admin_sweep_rerun / snapshot rerun и skip≈0');
 
 if (synthOfferIds.length === 0) {
   console.error('No synthetic offers in sweep — run historical sweep first');

@@ -8,6 +8,18 @@
 
 Синтетика (`stat_arb_zscore`, пара base/quote, decorrelation) в **sweep** есть (`topByMode.synth`), но в **этой** TS она не была выбрана при сохранении snapshot.
 
+## Как читать результаты compare (частая путаница)
+
+| Прогон | Что значит |
+|--------|------------|
+| **SYNTHETIC ~1%**, 5 offers, 153 trades | Часто **сломанный** прогон: в логе `Client not initialized for BTDD_D1` — стратегии пропущены, портфель из оставшихся 5 synth. **Не сравнивать** с balanced. |
+| **MONO ~1.8%**, 10 offers | То же: часть skip, неполный real rerun. |
+| **BALANCED-V2 ~278%**, 38 offers | **Полный** real rerun: snapshot + `ensureExchangeClient` + все 38 mono-офферов за 732d. Это **клиентская карточка**, не «top-5 synth». |
+
+**Вывод:** 1% vs 278% — не «синтетика хуже mono», а **разный состав (5 vs 38)** и **баг инициализации** на research-прогонах. После фикса перезапусти скрипт — в строке должно быть `src admin_sweep_rerun`, `skip 0` (или мало).
+
+Синтетика в sweep не хуже по определению — в balanced-v2 её просто **нет в snapshot**.
+
 ## Отдельный прогон только Synthetic TS
 
 ```bash

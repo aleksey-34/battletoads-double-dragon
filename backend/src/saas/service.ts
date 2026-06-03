@@ -7356,6 +7356,7 @@ export const previewAdminSweepBacktest = async (payload?: {
         // Keep TS composition fixed. Frequency is applied via preset variant selection
         // for each member (resolveOfferPresetByPreference), not by dropping members.
         const rerunStrategyIds = [...strategyIds];
+        await ensureExchangeClientInitialized(preferredApiKey);
 
         const result = await runBacktest({
           apiKeyName: preferredApiKey,
