@@ -24,7 +24,7 @@ const { ensureExchangeClientInitialized } = require(path.join(root, 'dist/bot/ex
 const apiKey = process.env.TS_API_KEY || 'BTDD_D1';
 const dateFrom = process.env.TS_DATE_FROM || '2024-06-01';
 const dateTo = process.env.TS_DATE_TO || '2026-06-03';
-const portfolioSize = Math.max(1, Math.min(20, Number(process.env.TS_PORTFOLIO_SIZE || process.env.TS_SYNTH_LIMIT || 10)));
+const portfolioSize = Math.max(6, Math.min(24, Number(process.env.TS_PORTFOLIO_SIZE || process.env.TS_SYNTH_LIMIT || 18)));
 const reinvestPercent = Number(process.env.TS_REINVEST ?? 100);
 const initialBalance = Number(process.env.TS_DEPOSIT || 10000);
 const balancedSystem = process.env.TS_BALANCED_SYSTEM
@@ -45,31 +45,100 @@ const offerIdFromRecord = (row) => {
   return `offer_${mode}_${type}_${row.strategyId}`;
 };
 
-const synthTypeRank = (row) => {
-  const t = String(row.strategyType || '').toLowerCase();
-  if (t === 'stat_arb_zscore') return 0;
-  if (t === 'dd_battletoads') return 1;
-  if (t === 'zz_breakout') return 2;
-  return 3;
+const SYNTH_TYPES = ['stat_arb_zscore', 'dd_battletoads', 'zz_breakout'];
+const minPerSynthType = Math.max(1, Math.min(6, Number(process.env.TS_MIN_PER_TYPE || 3)));
+
+const rowScore = (row) => {
+  const robust = row.robust === true ? 1 : 0;
+  const ret = Number(row.totalReturnPercent || 0);
+  const pf = Number(row.profitFactor || 0);
+  const trades = Number(row.tradesCount || row.trades || 0);
+  const dd = Number(row.maxDrawdownPercent || 99);
+  const score = Number(row.score || 0);
+  return [robust, ret, pf, trades, -dd, score];
+};
+
+const compareRows = (a, b) => {
+  const sa = rowScore(a);
+  const sb = rowScore(b);
+  for (let i = 0; i < sa.length; i += 1) {
+    if (sb[i] !== sa[i]) return sb[i] - sa[i];
+  }
+  return 0;
+};
+
+const passesSynthFilters = (row) => {
+  const pf = Number(row.profitFactor || 0);
+  const trades = Number(row.tradesCount || row.trades || 0);
+  const ret = Number(row.totalReturnPercent || 0);
+  if (ret <= 0 && row.robust !== true) return false;
+  if (pf < 1.05 && row.robust !== true) return false;
+  if (trades < 15 && row.robust !== true) return false;
+  return SYNTH_TYPES.includes(String(row.strategyType || '').toLowerCase());
+};
+
+const pickDiversifiedSynth = (rows, limit) => {
+  const pool = rows
+    .filter((row) => !isMono(row))
+    .filter((row) => Number(row.strategyId || 0) > 0)
+    .filter((row) => allowedIntervals.has(normInterval(row)))
+    .filter(passesSynthFilters);
+
+  const byType = Object.fromEntries(SYNTH_TYPES.map((t) => [t, []]));
+  for (const row of pool) {
+    const t = String(row.strategyType || '').toLowerCase();
+    if (byType[t]) byType[t].push(row);
+  }
+  for (const t of SYNTH_TYPES) byType[t].sort(compareRows);
+
+  const picked = [];
+  const seenMarkets = new Set();
+  const seenIds = new Set();
+  const tryAdd = (row) => {
+    const sid = Number(row.strategyId || 0);
+    const market = String(row.market || '').trim();
+    if (seenIds.has(sid)) return false;
+    if (market && seenMarkets.has(market)) return false;
+    picked.push(row);
+    seenIds.add(sid);
+    if (market) seenMarkets.add(market);
+    return true;
+  };
+
+  for (const t of SYNTH_TYPES) {
+    let n = 0;
+    for (const row of byType[t]) {
+      if (n >= minPerSynthType) break;
+      if (tryAdd(row)) n += 1;
+    }
+  }
+
+  let typeIdx = 0;
+  while (picked.length < limit) {
+    const t = SYNTH_TYPES[typeIdx % SYNTH_TYPES.length];
+    typeIdx += 1;
+    let added = false;
+    for (const row of byType[t]) {
+      if (picked.length >= limit) break;
+      if (tryAdd(row)) {
+        added = true;
+        break;
+      }
+    }
+    if (!added && typeIdx > SYNTH_TYPES.length * 50) break;
+  }
+  return picked.slice(0, limit);
 };
 
 const pickTop = (rows, limit, monoOnly) => {
+  if (!monoOnly) return pickDiversifiedSynth(rows, limit);
+
   const pool = rows
-    .filter((row) => (monoOnly ? isMono(row) : !isMono(row)))
+    .filter((row) => isMono(row))
     .filter((row) => Number(row.strategyId || 0) > 0)
     .filter((row) => allowedIntervals.has(normInterval(row)))
     .filter((row) => Number(row.totalReturnPercent ?? 0) > 0 || row.robust === true)
-    .sort((a, b) => {
-      const robustDelta = Number(Boolean(b.robust)) - Number(Boolean(a.robust));
-      if (robustDelta !== 0) return robustDelta;
-      if (!monoOnly) {
-        const typeDelta = synthTypeRank(a) - synthTypeRank(b);
-        if (typeDelta !== 0) return typeDelta;
-      }
-      const retDelta = Number(b.totalReturnPercent || 0) - Number(a.totalReturnPercent || 0);
-      if (Math.abs(retDelta) > 0.01) return retDelta;
-      return Number(b.score || 0) - Number(a.score || 0);
-    });
+    .sort(compareRows);
 
   const seenMarkets = new Set();
   const out = [];
@@ -84,13 +153,20 @@ const pickTop = (rows, limit, monoOnly) => {
 };
 
 const logPicks = (label, rows) => {
+  const byType = {};
+  const byInterval = {};
   console.log(`\n${label} (${rows.length}):`);
   for (const row of rows) {
+    const t = String(row.strategyType || '').toLowerCase();
+    const iv = normInterval(row);
+    byType[t] = (byType[t] || 0) + 1;
+    byInterval[iv] = (byInterval[iv] || 0) + 1;
     console.log(
-      `  #${row.strategyId} ${row.strategyType} ${normInterval(row)} ${row.market} `
+      `  #${row.strategyId} ${row.strategyType} ${iv} ${row.market} `
       + `ret=${Number(row.totalReturnPercent || 0).toFixed(1)}% score=${Number(row.score || 0).toFixed(2)}`,
     );
   }
+  console.log(`  by type: ${JSON.stringify(byType)}  by interval: ${JSON.stringify(byInterval)}`);
 };
 
 const summarize = (label, result) => {
