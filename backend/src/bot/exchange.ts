@@ -38,6 +38,22 @@ type OrderOptions = {
   marketType?: 'spot' | 'swap';
 };
 
+/** Human-readable hint when WEEX rejects VPS IP (code 40018 / 无效的IP). */
+export const formatExchangeErrorForUser = (error: unknown, apiKeyName?: string): string => {
+  const raw = String((error as Error)?.message || error || '').trim();
+  const isWeexIpBlock = /40018|无效的IP|invalid\s*ip|-1056/i.test(raw);
+  if (!isWeexIpBlock) {
+    return raw || 'Exchange API error';
+  }
+  const egressIp = String(process.env.BTDD_EGRESS_IP || process.env.VPS_PUBLIC_IP || '176.57.184.98').trim();
+  const keyHint = apiKeyName ? ` для ключа «${apiKeyName}»` : '';
+  return (
+    `WEEX отклонил запрос${keyHint}: IP сервера не в whitelist API-ключа. `
+    + `Добавьте в кабинете WEEX → API → IP whitelist: ${egressIp}. `
+    + `После сохранения нажмите «Обновить» на странице позиций.`
+  );
+};
+
 type MarketDataOptions = {
   startMs?: number;
   endMs?: number;
