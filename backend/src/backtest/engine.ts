@@ -585,14 +585,46 @@ const computeRsiAtIndex = (candles: ParsedCandle[], index: number, period: numbe
   return 100 - (100 / (1 + rs));
 };
 
-/** First leg / safety size from deposit-based base (dca_base_amount_usdt), not live TS equity. */
-const resolveClassicDcaOrderSize = (
-  dc: { baseAmountUsdt: number; orderMultiplier: number },
-  safetyOrderIndex: number,
+/** Deposit equity for DCA % sizing — same reinvest compound as TS, not free-margin base. */
+const resolveDcaDepositEquity = (
+  ctx: BacktestContext,
+  strategy: RuntimeStrategy['strategy'],
+  portfolioEquityNow: number,
 ): number => {
-  const base = Math.max(1, dc.baseAmountUsdt);
+  const maxDeposit = ctx.maxDepositOverride > 0
+    ? ctx.maxDepositOverride
+    : asNumber(strategy.max_deposit, 0);
+  const reinvestShare = strategy.fixed_lot
+    ? 0
+    : clampReinvestShare(
+      ctx.reinvestPercentOverride >= 0
+        ? ctx.reinvestPercentOverride
+        : asNumber(strategy.reinvest_percent, 0),
+    );
+  const equityBaseRaw = ctx.initialBalance
+    + Math.max(0, portfolioEquityNow - ctx.initialBalance) * reinvestShare;
+  return maxDeposit > 0 ? Math.min(equityBaseRaw, maxDeposit) : equityBaseRaw;
+};
+
+/** % депозита (compound) × multiplier; cap only by free margin, not by margin as % base. */
+const resolveClassicDcaOrderSize = (
+  dc: { baseAmountUsdt: number; baseAmountPercent: number; orderMultiplier: number },
+  depositEquityNow: number,
+  safetyOrderIndex: number,
+  availableCap?: number,
+): number => {
+  const equityBase = Number.isFinite(depositEquityNow) && depositEquityNow > 0
+    ? depositEquityNow
+    : dc.baseAmountUsdt;
+  const base = dc.baseAmountPercent > 0
+    ? Math.max(1, (equityBase * dc.baseAmountPercent) / 100)
+    : Math.max(1, dc.baseAmountUsdt);
   const mult = Math.pow(Math.max(1, dc.orderMultiplier), Math.max(0, safetyOrderIndex));
-  return Math.max(1, base * mult);
+  let size = Math.max(1, base * mult);
+  if (Number.isFinite(availableCap) && (availableCap as number) > 0) {
+    size = Math.min(size, availableCap as number);
+  }
+  return size;
 };
 
 const extractDcaConfigFromStrategy = (s: any): {
@@ -1032,9 +1064,10 @@ const openPosition = (
     ? (availableCap as number)
     : portfolioEquityNow;
 
-  // DCA: lot from deposit (stored dca_base_amount_usdt), capped by free margin in shared wallet.
+  // DCA: % депозита с compound (reinvest), вход только если хватает свободной маржи.
   if (runtime.dcaState?.enabled) {
-    const dcaSize = Math.min(resolveClassicDcaOrderSize(runtime.dcaState, 0), freeMarginCap);
+    const depositEquity = resolveDcaDepositEquity(ctx, strategy, portfolioEquityNow);
+    const dcaSize = resolveClassicDcaOrderSize(runtime.dcaState, depositEquity, 0, freeMarginCap);
     if (dcaSize <= 0) return false;
     const entryPrice = executionPrice(marketPrice, signal, 'entry', effectiveSlippageRate(ctx, strategy));
     const entryFee = dcaSize * effectiveCommissionRate(ctx, strategy);
@@ -1893,8 +1926,10 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       const dc = runtime.dcaState;
       const stepTrigger = dc.lastBuyPrice * (1 - dc.stepPercent / 100);
       if (candle.close <= stepTrigger) {
+        const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
+        const depositEquity = resolveDcaDepositEquity(ctx, runtime.strategy, equityNow);
         const availableNow = portfolioAvailableBalance(ctx.cashEquity, runtimes);
-        const safetySize = Math.min(resolveClassicDcaOrderSize(dc, dc.ordersCount), availableNow);
+        const safetySize = resolveClassicDcaOrderSize(dc, depositEquity, dc.ordersCount, availableNow);
         if (safetySize <= 0) {
           pushEquityPoint(event.timeMs);
           continue;

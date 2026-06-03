@@ -9051,7 +9051,7 @@ const executeDcaResearchCore = async (payload?: {
     viableCount: viable.length,
     top: viable.slice(0, 5),
     fromCache: false,
-    note: `Classic DCA backtest (not Donchian). Period ${ctx.previewDates.dateFrom} → ${ctx.previewDates.dateTo}${ctx.previewDates.usedFullSweepDepth ? ' (full card / sweep depth)' : ''}. Deposit ${ctx.initialBalance} USDT, reinvest ${scanReinvestPercent}%. Scan: TF ${ctx.dcaSettings.interval} step ${ctx.dcaSettings.stepPercent}% TP ${ctx.dcaSettings.tpPercent}% max ${ctx.dcaSettings.maxOrders} base ${ctx.dcaSettings.baseAmountMode === 'percent' ? `${ctx.dcaSettings.baseAmountPercent}% депозита (≈${ctx.dcaSettings.baseAmountUsdt} USDT/нога)` : `${ctx.dcaSettings.baseAmountUsdt} USDT fixed`}. Trades = завершённые циклы (TP), не каждый safety-order.${autotuneTop ? ' • autotune around baseline' : ''}.`,
+    note: `Classic DCA backtest (not Donchian). Period ${ctx.previewDates.dateFrom} → ${ctx.previewDates.dateTo}${ctx.previewDates.usedFullSweepDepth ? ' (full card / sweep depth)' : ''}. Deposit ${ctx.initialBalance} USDT, reinvest ${scanReinvestPercent}%. Scan: TF ${ctx.dcaSettings.interval} step ${ctx.dcaSettings.stepPercent}% TP ${ctx.dcaSettings.tpPercent}% max ${ctx.dcaSettings.maxOrders} base ${ctx.dcaSettings.baseAmountMode === 'percent' ? `${ctx.dcaSettings.baseAmountPercent}% депозита + compound reinvest (t0≈${ctx.dcaSettings.baseAmountUsdt} USDT)` : `${ctx.dcaSettings.baseAmountUsdt} USDT fixed`}. Trades = завершённые сетки (TP), не volume-churn.${autotuneTop ? ' • autotune around baseline' : ''}.`,
   };
   await saveDcaResearchRunCache(runCacheKey, {
     systemName,

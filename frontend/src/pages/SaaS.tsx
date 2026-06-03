@@ -1847,7 +1847,7 @@ const formatDcaBaseSettingLabel = (
   if (mode === 'percent') {
     const pct = Number(cfg.baseAmountPercent || 0);
     const depositHint = deposit > 0 ? `, t0≈${usdt.toFixed(0)} USDT при ${deposit.toLocaleString('ru-RU')}` : '';
-    return `base ${pct}% депозита${depositHint}`;
+    return `base ${pct}% депозита + compound${depositHint}`;
   }
   return `base ${usdt.toFixed(0)} USDT (fixed)`;
 };
@@ -14439,7 +14439,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             </Descriptions.Item>
                           </Descriptions>
                           <Text type="secondary">
-                            Trades в таблице — <strong>завершённые DCA-циклы</strong> (закрытие сетки по TP), не каждый добор. На 15m за 732d типично 30–120 циклов/пару: пока сетка открыта, новый цикл не стартует. Scan — isolated single-pair. Δ ret в toggle — shared wallet TS+DCA (DCA не отдельный счёт).
+                            Trades = <strong>закрытые DCA-сетки</strong>, не каждый Buy/Close как hamster. Volume-churn (5m, L/S, 99% депа) — другой продукт: тысячи сделок/день; Classic DCA — десятки–сотни циклов за 2 года. Base % масштабируется с депозитом (reinvest), вход cap по свободной марже. См. docs/DCA_VS_VOLUME_CHURN_RU.md
                           </Text>
                         </Space>
                       ),
