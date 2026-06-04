@@ -15,11 +15,11 @@ Optional: load sweep from disk instead of offer-store catalog:
 from __future__ import annotations
 
 import argparse
+import copy
 import glob
 import json
 import os
 import sqlite3
-import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
@@ -41,14 +41,15 @@ API_KEY = os.environ.get("SYNTH_API_KEY", "BTDD_D1")
 DATE_FROM = os.environ.get("SYNTH_DATE_FROM", "2024-06-01")
 DATE_TO = os.environ.get("SYNTH_DATE_TO", "2026-06-03")
 INITIAL_BALANCE = float(os.environ.get("SYNTH_INITIAL_BALANCE", "10000"))
-REINVEST_PERCENT = float(os.environ.get("SYNTH_REINVEST", "100"))
-RISK_SCORE = float(os.environ.get("SYNTH_RISK_SCORE", "8"))
+REINVEST_PERCENT = float(os.environ.get("SYNTH_REINVEST", "0"))
+RISK_SCORE = float(os.environ.get("SYNTH_RISK_SCORE", "5"))
 TRADE_FREQ = float(os.environ.get("SYNTH_TRADE_FREQ", "5"))
 TARGET_SIZE = int(os.environ.get("SYNTH_TARGET_SIZE", "18"))
 MIN_PER_TYPE = int(os.environ.get("SYNTH_MIN_PER_TYPE", "4"))
 MIN_PF = float(os.environ.get("SYNTH_MIN_PF", "0.95"))
 MIN_TRADES = int(os.environ.get("SYNTH_MIN_TRADES", "10"))
-MIN_PICKS = int(os.environ.get("SYNTH_MIN_PICKS", "6"))
+MIN_PICKS = int(os.environ.get("SYNTH_MIN_PICKS", "3"))
+REQUIRE_POSITIVE_RET = os.environ.get("SYNTH_REQUIRE_POSITIVE_RET", "1").strip().lower() not in ("0", "false", "no")
 ALLOWED_INTERVALS = {
     s.strip().lower()
     for s in os.environ.get("SYNTH_INTERVALS", "1h,2h,4h").split(",")
@@ -128,6 +129,10 @@ def passes_filters(row: dict) -> bool:
         return False
     if pf < MIN_PF and not row.get("robust"):
         return False
+    if REQUIRE_POSITIVE_RET:
+        ret = float(row.get("totalReturnPercent") or 0)
+        if ret <= 0 and not row.get("robust"):
+            return False
     return True
 
 
@@ -432,31 +437,140 @@ def publish_card(offer_ids: list[str], store: dict, snapshot: dict) -> str:
     return system_name
 
 
-def sync_catalog_offers(offer_ids: list[str], sweep_path: str) -> None:
-    """Persist sweep offers into client catalog so offer-store resolves 7/7."""
-    if os.environ.get("SYNTH_SKIP_CATALOG_SYNC", "").strip() in ("1", "true", "yes"):
+def catalog_path_for_sweep(sweep_path: str) -> str:
+    override = os.environ.get("CATALOG_JSON", "").strip()
+    if override:
+        return override
+    base = os.path.basename(sweep_path)
+    if "_historical_sweep_" in base:
+        return os.path.join(
+            os.path.dirname(sweep_path),
+            base.replace("_historical_sweep_", "_client_catalog_"),
+        )
+    pattern = os.path.join(REPO_ROOT, "results", "*_client_catalog_*.json")
+    files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+    return files[0] if files else ""
+
+
+def build_catalog_offer(row: dict, template: dict | None) -> dict:
+    mode = "synth"
+    st = str(row.get("strategyType") or "DD_BattleToads")
+    sid = int(row.get("strategyId") or 0)
+    market = str(row.get("market") or "")
+    iv = norm_interval(row) or "4h"
+    ret = float(row.get("totalReturnPercent") or 0)
+    pf = float(row.get("profitFactor") or 0)
+    dd = float(row.get("maxDrawdownPercent") or 0)
+    wr = float(row.get("winRatePercent") or 0)
+    trades = int(row.get("tradesCount") or row.get("trades") or 0)
+    score = float(row.get("score") or 0)
+    name = str(row.get("strategyName") or f"Strategy {sid}")
+    oid = offer_id(row)
+
+    if template:
+        offer = copy.deepcopy(template)
+        offer["offerId"] = oid
+        offer["titleRu"] = f"SYNTH • {st} • {market}"
+        offer["strategy"] = {
+            **(offer.get("strategy") or {}),
+            "id": sid,
+            "name": name,
+            "type": st,
+            "mode": mode,
+            "market": market,
+            "params": {
+                **((offer.get("strategy") or {}).get("params") or {}),
+                "interval": iv,
+                "length": int(row.get("length") or 24),
+                "takeProfitPercent": float(row.get("takeProfitPercent") or 0),
+                "detectionSource": str(row.get("detectionSource") or "close"),
+                "zscoreEntry": float(row.get("zscoreEntry") or 2),
+                "zscoreExit": float(row.get("zscoreExit") or 0.5),
+                "zscoreStop": float(row.get("zscoreStop") or 3),
+            },
+        }
+        offer["metrics"] = {
+            "ret": ret,
+            "pf": pf,
+            "dd": dd,
+            "wr": wr,
+            "trades": trades,
+            "score": score,
+            "robust": bool(row.get("robust")),
+        }
+        return offer
+
+    params = {
+        "interval": iv,
+        "length": int(row.get("length") or 24),
+        "takeProfitPercent": float(row.get("takeProfitPercent") or 0),
+        "detectionSource": str(row.get("detectionSource") or "close"),
+        "zscoreEntry": float(row.get("zscoreEntry") or 2),
+        "zscoreExit": float(row.get("zscoreExit") or 0.5),
+        "zscoreStop": float(row.get("zscoreStop") or 3),
+    }
+    preset = {
+        "strategyId": sid,
+        "strategyName": name,
+        "score": round(score, 3),
+        "metrics": {"ret": ret, "pf": pf, "dd": dd, "wr": wr, "trades": trades},
+        "params": params,
+    }
+    return {
+        "offerId": oid,
+        "titleRu": f"SYNTH • {st} • {market}",
+        "descriptionRu": "Собрано из sweep для synthetic TS card.",
+        "strategy": {"id": sid, "name": name, "type": st, "mode": mode, "market": market, "params": params},
+        "metrics": {"ret": ret, "pf": pf, "dd": dd, "wr": wr, "trades": trades, "score": score, "robust": bool(row.get("robust"))},
+        "sliderPresets": {"risk": {"medium": preset}, "tradeFrequency": {"medium": preset}},
+        "presetMatrix": {"medium": {"medium": preset}},
+    }
+
+
+def sync_catalog_offers(offer_ids: list[str], sweep_path: str, rows: list[dict]) -> None:
+    """Fast Python merge into client catalog JSON (no heavy node import)."""
+    if os.environ.get("SYNTH_SKIP_CATALOG_SYNC", "").strip().lower() in ("1", "true", "yes"):
         print("SYNTH_SKIP_CATALOG_SYNC=1, skip catalog sync")
         return
-    script = os.path.join(REPO_ROOT, "scripts", "sync_catalog_offers_from_sweep.mjs")
-    if not os.path.isfile(script):
-        print(f"WARN: {script} missing, skip catalog sync")
+
+    catalog_path = catalog_path_for_sweep(sweep_path)
+    if not catalog_path or not os.path.isfile(catalog_path):
+        print(f"WARN: catalog not found ({catalog_path}), skip sync")
         return
-    env = {**os.environ, "SWEEP_JSON": sweep_path}
-    proc = subprocess.run(
-        ["node", script, *offer_ids],
-        cwd=REPO_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        timeout=300,
-        check=False,
-    )
-    if proc.stdout:
-        print(proc.stdout.strip())
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"catalog sync failed ({proc.returncode}): {(proc.stderr or proc.stdout or '')[:500]}",
-        )
+
+    with open(catalog_path, encoding="utf-8") as f:
+        catalog = json.load(f)
+    client = catalog.setdefault("clientCatalog", {})
+    synth = list(client.get("synth") or [])
+    existing = {str(o.get("offerId") or "") for o in synth}
+    missing = [oid for oid in offer_ids if oid not in existing]
+    if not missing:
+        print(f"Catalog already has all {len(offer_ids)} offers")
+        return
+
+    by_id = {int(r.get("strategyId") or 0): r for r in rows if int(r.get("strategyId") or 0) > 0}
+    template = synth[0] if synth else None
+    added: list[str] = []
+    for oid in missing:
+        sid = int(oid.rsplit("_", 1)[-1])
+        row = by_id.get(sid)
+        if not row:
+            print(f"WARN: sweep row missing for {oid}")
+            continue
+        synth.append(build_catalog_offer(row, template))
+        existing.add(oid)
+        added.append(oid)
+
+    if not added:
+        return
+
+    client["synth"] = synth
+    counts = catalog.setdefault("counts", {})
+    counts["synthCatalog"] = len(synth)
+    with open(catalog_path, "w", encoding="utf-8") as f:
+        json.dump(catalog, f, indent=2, ensure_ascii=False)
+    print(f"Catalog updated: {catalog_path}")
+    print(f"Added {len(added)}/{len(missing)}: {', '.join(added)}")
 
 
 def log_picks(rows: list[dict]) -> None:
@@ -489,6 +603,7 @@ def main() -> None:
     rows, source = load_sweep_rows()
     print(f"Sweep pool: {len(rows)} unique strategies ({source})")
     print(f"Window: {DATE_FROM} .. {DATE_TO}  key={API_KEY}  target={TARGET_SIZE}")
+    print(f"Backtest: risk={RISK_SCORE} reinvest={REINVEST_PERCENT}% requireRet>0={REQUIRE_POSITIVE_RET}")
 
     picked = pick_diversified_synth(rows, target=TARGET_SIZE, min_per_type=MIN_PER_TYPE)
     if len(picked) < MIN_PICKS:
@@ -505,9 +620,9 @@ def main() -> None:
         files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
         sweep_path = next((f for f in files if "checkpoint" not in f), "")
 
-    if sweep_path and os.path.isfile(sweep_path) and os.environ.get("SYNTH_SKIP_CATALOG_SYNC", "").strip() not in ("1", "true", "yes"):
+    if sweep_path and os.path.isfile(sweep_path):
         print("\n=== Sync offers into client catalog ===")
-        sync_catalog_offers(offer_ids, sweep_path)
+        sync_catalog_offers(offer_ids, sweep_path, rows)
 
     draft_system = f"ALGOFUND_MASTER::{API_KEY}::{SET_KEY}"
     api_patch("/api/saas/admin/offer-store", {
