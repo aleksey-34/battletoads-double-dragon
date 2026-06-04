@@ -434,6 +434,9 @@ def publish_card(offer_ids: list[str], store: dict, snapshot: dict) -> str:
 
 def sync_catalog_offers(offer_ids: list[str], sweep_path: str) -> None:
     """Persist sweep offers into client catalog so offer-store resolves 7/7."""
+    if os.environ.get("SYNTH_SKIP_CATALOG_SYNC", "").strip() in ("1", "true", "yes"):
+        print("SYNTH_SKIP_CATALOG_SYNC=1, skip catalog sync")
+        return
     script = os.path.join(REPO_ROOT, "scripts", "sync_catalog_offers_from_sweep.mjs")
     if not os.path.isfile(script):
         print(f"WARN: {script} missing, skip catalog sync")
@@ -445,7 +448,7 @@ def sync_catalog_offers(offer_ids: list[str], sweep_path: str) -> None:
         env=env,
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=300,
         check=False,
     )
     if proc.stdout:
@@ -502,7 +505,7 @@ def main() -> None:
         files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
         sweep_path = next((f for f in files if "checkpoint" not in f), "")
 
-    if sweep_path and os.path.isfile(sweep_path):
+    if sweep_path and os.path.isfile(sweep_path) and os.environ.get("SYNTH_SKIP_CATALOG_SYNC", "").strip() not in ("1", "true", "yes"):
         print("\n=== Sync offers into client catalog ===")
         sync_catalog_offers(offer_ids, sweep_path)
 
