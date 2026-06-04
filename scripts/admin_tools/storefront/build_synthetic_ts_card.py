@@ -143,10 +143,10 @@ def best_per_market(rows: list[dict]) -> list[dict]:
 
 
 def pick_diversified_synth(rows: list[dict], *, target: int, min_per_type: int) -> list[dict]:
-    pool = best_per_market([r for r in rows if passes_filters(r)])
-    by_type: dict[str, list[dict]] = {t: [] for t in SYNTH_TYPES}
-    for row in pool:
-        by_type[norm_type(row)].append(row)
+    by_type: dict[str, list[dict]] = {
+        t: best_per_market([r for r in rows if passes_filters(r) and norm_type(r) == t])
+        for t in SYNTH_TYPES
+    }
     for t in SYNTH_TYPES:
         by_type[t].sort(key=row_score, reverse=True)
 

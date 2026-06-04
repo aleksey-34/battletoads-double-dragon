@@ -90,18 +90,18 @@ const bestPerMarket = (rows) => {
 };
 
 const pickDiversifiedSynth = (rows, limit) => {
-  const pool = bestPerMarket(
-    rows
-      .filter((row) => Number(row.strategyId || 0) > 0)
-      .filter((row) => allowedIntervals.has(normInterval(row)))
-      .filter(passesSynthFilters),
+  const byType = Object.fromEntries(
+    SYNTH_TYPES.map((t) => [
+      t,
+      bestPerMarket(
+        rows
+          .filter((row) => Number(row.strategyId || 0) > 0)
+          .filter((row) => allowedIntervals.has(normInterval(row)))
+          .filter(passesSynthFilters)
+          .filter((row) => String(row.strategyType || '').toLowerCase() === t),
+      ),
+    ]),
   );
-
-  const byType = Object.fromEntries(SYNTH_TYPES.map((t) => [t, []]));
-  for (const row of pool) {
-    const t = String(row.strategyType || '').toLowerCase();
-    if (byType[t]) byType[t].push(row);
-  }
   for (const t of SYNTH_TYPES) byType[t].sort(compareRows);
 
   const picked = [];
