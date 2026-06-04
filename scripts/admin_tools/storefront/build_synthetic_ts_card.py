@@ -19,6 +19,7 @@ import glob
 import json
 import os
 import sqlite3
+import subprocess
 from datetime import datetime, timezone
 from typing import Any
 
@@ -431,6 +432,30 @@ def publish_card(offer_ids: list[str], store: dict, snapshot: dict) -> str:
     return system_name
 
 
+def sync_catalog_offers(offer_ids: list[str], sweep_path: str) -> None:
+    """Persist sweep offers into client catalog so offer-store resolves 7/7."""
+    script = os.path.join(REPO_ROOT, "scripts", "sync_catalog_offers_from_sweep.mjs")
+    if not os.path.isfile(script):
+        print(f"WARN: {script} missing, skip catalog sync")
+        return
+    env = {**os.environ, "SWEEP_JSON": sweep_path}
+    proc = subprocess.run(
+        ["node", script, *offer_ids],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if proc.stdout:
+        print(proc.stdout.strip())
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"catalog sync failed ({proc.returncode}): {(proc.stderr or proc.stdout or '')[:500]}",
+        )
+
+
 def log_picks(rows: list[dict]) -> None:
     print(f"\nPicked {len(rows)} synthetic offers (quota min {MIN_PER_TYPE}/type):")
     by_type: dict[str, int] = {}
@@ -470,6 +495,16 @@ def main() -> None:
         )
     offer_ids = [offer_id(r) for r in picked]
     log_picks(picked)
+
+    sweep_path = os.environ.get("SWEEP_JSON", "").strip()
+    if not sweep_path:
+        pattern = os.path.join(REPO_ROOT, "results", "*_historical_sweep_*.json")
+        files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+        sweep_path = next((f for f in files if "checkpoint" not in f), "")
+
+    if sweep_path and os.path.isfile(sweep_path):
+        print("\n=== Sync offers into client catalog ===")
+        sync_catalog_offers(offer_ids, sweep_path)
 
     draft_system = f"ALGOFUND_MASTER::{API_KEY}::{SET_KEY}"
     api_patch("/api/saas/admin/offer-store", {

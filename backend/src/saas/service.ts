@@ -2966,6 +2966,71 @@ const buildSweepPresetFromRecord = (record: SweepRecord, riskLevel: Level3): Cat
   };
 };
 
+/** Inject explicit offerIds from sweep rows when they are outside default catalog top-N. */
+export const augmentCatalogWithForcedOfferIds = (
+  catalog: CatalogData,
+  sweepRows: SweepRecord[],
+  offerIds: string[],
+): CatalogData => {
+  if (!catalog || !offerIds.length || !sweepRows.length) {
+    return catalog;
+  }
+
+  const existing = new Set(getAllOffers(catalog).map((item) => item.offerId));
+  const mono = [...(catalog.clientCatalog?.mono || [])];
+  const synth = [...(catalog.clientCatalog?.synth || [])];
+  const familyRowsByKey = new Map<string, SweepRecord[]>();
+  sweepRows.forEach((row) => {
+    const key = buildSweepFamilyKey(row);
+    const next = familyRowsByKey.get(key) || [];
+    next.push(row);
+    familyRowsByKey.set(key, next);
+  });
+
+  let added = 0;
+  for (const offerId of offerIds) {
+    if (existing.has(offerId)) {
+      continue;
+    }
+    const strategyId = parseStrategyIdFromOfferId(offerId);
+    const record = sweepRows.find((row) => Number(row.strategyId || 0) === strategyId);
+    if (!record) {
+      continue;
+    }
+    const family = familyRowsByKey.get(buildSweepFamilyKey(record)) || [record];
+    const built = buildOfferFromSweepRecord(record, family);
+    if (built.strategy?.mode === 'synth') {
+      synth.push(built);
+    } else {
+      mono.push(built);
+    }
+    existing.add(offerId);
+    added += 1;
+  }
+
+  if (added === 0) {
+    return catalog;
+  }
+
+  return {
+    ...catalog,
+    clientCatalog: {
+      mono,
+      synth,
+    },
+    counts: {
+      ...(catalog.counts || {}),
+      monoCatalog: mono.length,
+      synthCatalog: synth.length,
+    },
+  };
+};
+
+export const clearCatalogAndSweepCache = (): void => {
+  _catalogCache = null;
+  _catalogCacheAt = 0;
+};
+
 export const buildOfferFromSweepRecord = (record: SweepRecord, familyRows: SweepRecord[] = [record]): CatalogOffer => {
   const rawMode = asString(record.marketMode, 'mono');
   const mode = rawMode === 'synthetic' || rawMode === 'synth' ? 'synth' : 'mono';
@@ -6667,7 +6732,7 @@ export const previewAdminSweepBacktest = async (payload?: {
 }) => {
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();
-  const catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
+  let catalog = sourceCatalog || await buildFallbackCatalogFromPresets(sourceCatalog, apiKeys);
   if (!catalog) {
     throw new Error('Catalog is unavailable for sweep backtest preview');
   }
@@ -6791,6 +6856,10 @@ export const previewAdminSweepBacktest = async (payload?: {
     if (offerIds.length === 0) {
       throw new Error('No offerIds resolved for TS sweep backtest preview');
     }
+  }
+
+  if (kind === 'algofund-ts' && payload?.forceOfferIds === true && offerIds.length > 0 && sweepEvaluatedRows.length > 0) {
+    catalog = augmentCatalogWithForcedOfferIds(catalog, sweepEvaluatedRows, offerIds);
   }
 
   const offerStoreState = await getOfferStoreAdminState().catch(() => null);
