@@ -67,22 +67,35 @@ const compareRows = (a, b) => {
   return 0;
 };
 
+const isRatioSynth = (row) => !isMono(row) && String(row.market || '').includes('/');
+
 const passesSynthFilters = (row) => {
+  if (!isRatioSynth(row)) return false;
   const pf = Number(row.profitFactor || 0);
   const trades = Number(row.tradesCount || row.trades || 0);
-  const ret = Number(row.totalReturnPercent || 0);
-  if (ret <= 0 && row.robust !== true) return false;
-  if (pf < 1.05 && row.robust !== true) return false;
-  if (trades < 15 && row.robust !== true) return false;
+  if (trades < 10) return false;
+  if (pf < 0.95 && row.robust !== true) return false;
   return SYNTH_TYPES.includes(String(row.strategyType || '').toLowerCase());
 };
 
+const bestPerMarket = (rows) => {
+  const byMarket = new Map();
+  for (const row of rows) {
+    const market = String(row.market || '').trim();
+    if (!market) continue;
+    const prev = byMarket.get(market);
+    if (!prev || compareRows(row, prev) < 0) byMarket.set(market, row);
+  }
+  return [...byMarket.values()];
+};
+
 const pickDiversifiedSynth = (rows, limit) => {
-  const pool = rows
-    .filter((row) => !isMono(row))
-    .filter((row) => Number(row.strategyId || 0) > 0)
-    .filter((row) => allowedIntervals.has(normInterval(row)))
-    .filter(passesSynthFilters);
+  const pool = bestPerMarket(
+    rows
+      .filter((row) => Number(row.strategyId || 0) > 0)
+      .filter((row) => allowedIntervals.has(normInterval(row)))
+      .filter(passesSynthFilters),
+  );
 
   const byType = Object.fromEntries(SYNTH_TYPES.map((t) => [t, []]));
   for (const row of pool) {
@@ -92,23 +105,25 @@ const pickDiversifiedSynth = (rows, limit) => {
   for (const t of SYNTH_TYPES) byType[t].sort(compareRows);
 
   const picked = [];
-  const seenMarkets = new Set();
   const seenIds = new Set();
+  const seenKeys = new Set();
   const tryAdd = (row) => {
     const sid = Number(row.strategyId || 0);
     const market = String(row.market || '').trim();
-    if (seenIds.has(sid)) return false;
-    if (market && seenMarkets.has(market)) return false;
+    const st = String(row.strategyType || '').toLowerCase();
+    const key = `${market}::${st}`;
+    if (seenIds.has(sid) || seenKeys.has(key)) return false;
     picked.push(row);
     seenIds.add(sid);
-    if (market) seenMarkets.add(market);
+    seenKeys.add(key);
     return true;
   };
 
+  const perType = Math.max(1, Math.min(minPerSynthType, Math.floor(limit / SYNTH_TYPES.length) || 1));
   for (const t of SYNTH_TYPES) {
     let n = 0;
     for (const row of byType[t]) {
-      if (n >= minPerSynthType) break;
+      if (n >= perType) break;
       if (tryAdd(row)) n += 1;
     }
   }

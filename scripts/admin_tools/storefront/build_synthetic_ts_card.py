@@ -45,8 +45,9 @@ RISK_SCORE = float(os.environ.get("SYNTH_RISK_SCORE", "8"))
 TRADE_FREQ = float(os.environ.get("SYNTH_TRADE_FREQ", "5"))
 TARGET_SIZE = int(os.environ.get("SYNTH_TARGET_SIZE", "18"))
 MIN_PER_TYPE = int(os.environ.get("SYNTH_MIN_PER_TYPE", "4"))
-MIN_PF = float(os.environ.get("SYNTH_MIN_PF", "1.05"))
-MIN_TRADES = int(os.environ.get("SYNTH_MIN_TRADES", "15"))
+MIN_PF = float(os.environ.get("SYNTH_MIN_PF", "0.95"))
+MIN_TRADES = int(os.environ.get("SYNTH_MIN_TRADES", "10"))
+MIN_PICKS = int(os.environ.get("SYNTH_MIN_PICKS", "6"))
 ALLOWED_INTERVALS = {
     s.strip().lower()
     for s in os.environ.get("SYNTH_INTERVALS", "1h,2h,4h").split(",")
@@ -103,8 +104,14 @@ def row_score(row: dict) -> tuple:
     return (robust, ret, pf, trades, -dd, score)
 
 
-def passes_filters(row: dict) -> bool:
+def is_ratio_synth(row: dict) -> bool:
     if is_mono(row):
+        return False
+    return "/" in str(row.get("market") or "")
+
+
+def passes_filters(row: dict) -> bool:
+    if not is_ratio_synth(row):
         return False
     sid = int(row.get("strategyId") or 0)
     if sid <= 0:
@@ -116,18 +123,27 @@ def passes_filters(row: dict) -> bool:
         return False
     pf = float(row.get("profitFactor") or 0)
     trades = int(row.get("tradesCount") or row.get("trades") or 0)
-    ret = float(row.get("totalReturnPercent") or 0)
+    if trades < MIN_TRADES:
+        return False
     if pf < MIN_PF and not row.get("robust"):
-        return False
-    if trades < MIN_TRADES and not row.get("robust"):
-        return False
-    if ret <= 0 and not row.get("robust"):
         return False
     return True
 
 
+def best_per_market(rows: list[dict]) -> list[dict]:
+    by_market: dict[str, dict] = {}
+    for row in rows:
+        market = str(row.get("market") or "").strip()
+        if not market:
+            continue
+        prev = by_market.get(market)
+        if prev is None or row_score(row) > row_score(prev):
+            by_market[market] = row
+    return list(by_market.values())
+
+
 def pick_diversified_synth(rows: list[dict], *, target: int, min_per_type: int) -> list[dict]:
-    pool = [r for r in rows if passes_filters(r)]
+    pool = best_per_market([r for r in rows if passes_filters(r)])
     by_type: dict[str, list[dict]] = {t: [] for t in SYNTH_TYPES}
     for row in pool:
         by_type[norm_type(row)].append(row)
@@ -135,26 +151,26 @@ def pick_diversified_synth(rows: list[dict], *, target: int, min_per_type: int) 
         by_type[t].sort(key=row_score, reverse=True)
 
     picked: list[dict] = []
-    seen_markets: set[str] = set()
     seen_ids: set[int] = set()
+    seen_keys: set[tuple[str, str]] = set()
 
     def try_add(row: dict) -> bool:
         sid = int(row.get("strategyId") or 0)
         market = str(row.get("market") or "").strip()
-        if sid in seen_ids:
-            return False
-        if market and market in seen_markets:
+        st = norm_type(row)
+        key = (market, st)
+        if sid in seen_ids or key in seen_keys:
             return False
         picked.append(row)
         seen_ids.add(sid)
-        if market:
-            seen_markets.add(market)
+        seen_keys.add(key)
         return True
 
+    per_type = max(1, min(min_per_type, target // len(SYNTH_TYPES) or 1))
     for st in SYNTH_TYPES:
         n = 0
         for row in by_type[st]:
-            if n >= min_per_type:
+            if n >= per_type:
                 break
             if try_add(row):
                 n += 1
@@ -447,9 +463,10 @@ def main() -> None:
     print(f"Window: {DATE_FROM} .. {DATE_TO}  key={API_KEY}  target={TARGET_SIZE}")
 
     picked = pick_diversified_synth(rows, target=TARGET_SIZE, min_per_type=MIN_PER_TYPE)
-    if len(picked) < 6:
+    if len(picked) < MIN_PICKS:
         raise RuntimeError(
-            f"Only {len(picked)} synth offers after filters — rerun sweep or relax SYNTH_MIN_PF/SYNTH_MIN_TRADES"
+            f"Only {len(picked)} synth offers after filters — need>={MIN_PICKS}; "
+            "relax SYNTH_MIN_PF/SYNTH_MIN_TRADES or expand synthMarkets in sweep",
         )
     offer_ids = [offer_id(r) for r in picked]
     log_picks(picked)
