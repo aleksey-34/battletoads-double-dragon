@@ -2943,6 +2943,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     logs: Array<{ ts: string; level: string; message: string }>;
     error: string | null;
   } | null>(null);
+  const [materializationAuditBySystem, setMaterializationAuditBySystem] = useState<Record<string, {
+    totalClients: number;
+    okCount: number;
+    partialCount: number;
+    errorCount: number;
+    aggregateStatus: 'ok' | 'partial' | 'error' | 'running';
+    clients: Array<{ slug: string; status: string; issues: string[]; dcaCount: number; lotPercent: number }>;
+    propagation?: { running?: boolean; logs?: Array<{ ts: string; level: string; message: string }> };
+  }>>({});
+  const [materializationLogTarget, setMaterializationLogTarget] = useState<string | null>(null);
   const [publishResponse, setPublishResponse] = useState<AdminPublishResponse | null>(() => {
     if (typeof window === 'undefined') {
       return null;
@@ -4364,6 +4374,39 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         return rightScore - leftScore;
       });
   }, [algofundState?.availableSystems, summary?.offerStore?.tsBacktestSnapshots, batchEligibleAlgofundTenants, publishResponse, adminSweepBacktestResult, backtestDrawerContext, selectedAdminDraftTsSetKey, matchesTsSnapshotToken, resolveTsSnapshotForSystem, publishedAlgofundSystems, normalizeTsToken, normalizeStorefrontTsOfferIds, runtimeMasterSystemByName]);
+
+  useEffect(() => {
+    if (!isAdminSurface || algofundStorefrontSystems.length === 0) {
+      return undefined;
+    }
+    let cancelled = false;
+    const loadAudits = async () => {
+      const next: typeof materializationAuditBySystem = {};
+      await Promise.all(algofundStorefrontSystems.map(async (item) => {
+        if (!item.systemName || Number(item.tenantCount || 0) <= 0) {
+          return;
+        }
+        try {
+          const response = await axios.get(`/api/saas/admin/materialization-audit?systemName=${encodeURIComponent(item.systemName)}`);
+          if (response.data?.success) {
+            next[item.systemName] = response.data;
+          }
+        } catch {
+          // ignore transient audit errors
+        }
+      }));
+      if (!cancelled) {
+        setMaterializationAuditBySystem(next);
+      }
+    };
+    void loadAudits();
+    const timer = window.setInterval(() => { void loadAudits(); }, 20000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isAdminSurface, algofundStorefrontSystems]);
+
   const offerTitleById = useMemo(() => offerStoreOffers.reduce<Record<string, string>>((acc, offer) => {
     acc[String(offer.offerId)] = String(offer.titleRu || offer.offerId);
     return acc;
@@ -12295,6 +12338,43 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                       ? <Tag color="purple">DCA {item.dcaSatelliteMarkets.map((m: string) => String(m || '').replace(/USDT$/i, '')).join('+')}</Tag>
                                                       : null}
                                                   </Space>
+                                                  {(() => {
+                                                    const audit = materializationAuditBySystem[item.systemName];
+                                                    if (!audit || Number(item.tenantCount || 0) <= 0) {
+                                                      return null;
+                                                    }
+                                                    const pct = audit.totalClients > 0
+                                                      ? Math.round((audit.okCount / audit.totalClients) * 100)
+                                                      : 0;
+                                                    const progStatus = audit.aggregateStatus === 'running'
+                                                      ? 'active'
+                                                      : audit.aggregateStatus === 'ok'
+                                                        ? 'success'
+                                                        : audit.aggregateStatus === 'partial'
+                                                          ? 'normal'
+                                                          : 'exception';
+                                                    const badgeStatus = audit.aggregateStatus === 'ok'
+                                                      ? 'success'
+                                                      : audit.aggregateStatus === 'partial'
+                                                        ? 'warning'
+                                                        : audit.aggregateStatus === 'running'
+                                                          ? 'processing'
+                                                          : 'error';
+                                                    return (
+                                                      <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                                        <Space wrap>
+                                                          <Badge
+                                                            status={badgeStatus}
+                                                            text={`Материализация ${audit.okCount}/${audit.totalClients}${audit.partialCount ? ` (+${audit.partialCount} частично)` : ''}${audit.errorCount ? ` (${audit.errorCount} ошибок)` : ''}`}
+                                                          />
+                                                          <Button size="small" type="link" onClick={() => setMaterializationLogTarget(item.systemName)}>
+                                                            Лог материализации
+                                                          </Button>
+                                                        </Space>
+                                                        <Progress percent={pct} size="small" status={progStatus} />
+                                                      </Space>
+                                                    );
+                                                  })()}
                                                   {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
                                                     <ChartComponent data={item.equityCurve} type="line" fixedHeight={120} />
                                                   ) : (
@@ -13543,6 +13623,74 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             ))}
           </div>
         </Space>
+      </Modal>
+
+      <Modal
+        title={`Материализация: ${materializationLogTarget || '—'}`}
+        open={Boolean(materializationLogTarget)}
+        onCancel={() => setMaterializationLogTarget(null)}
+        footer={<Button type="primary" onClick={() => setMaterializationLogTarget(null)}>Закрыть</Button>}
+        width={820}
+      >
+        {materializationLogTarget && materializationAuditBySystem[materializationLogTarget] ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Text type="secondary">
+              Зелёный — все проверки OK (lot, reinvest, 2 DCA, состав TS). Жёлтый — частично. Красный — критичные пробелы.
+            </Text>
+            <Table
+              size="small"
+              pagination={false}
+              rowKey="slug"
+              dataSource={materializationAuditBySystem[materializationLogTarget].clients || []}
+              columns={[
+                {
+                  title: 'Клиент',
+                  dataIndex: 'slug',
+                  render: (slug: string, row: { status?: string }) => (
+                    <Space>
+                      <Badge status={row.status === 'ok' ? 'success' : row.status === 'partial' ? 'warning' : 'error'} />
+                      <Text code>{slug}</Text>
+                    </Space>
+                  ),
+                },
+                { title: 'Lot %', dataIndex: 'lotPercent', width: 70 },
+                { title: 'Reinv %', dataIndex: 'reinvestPercent', width: 80 },
+                { title: 'DCA', dataIndex: 'dcaCount', width: 50 },
+                { title: 'TS #', dataIndex: 'tsMemberCount', width: 60 },
+                {
+                  title: 'Замечания',
+                  dataIndex: 'issues',
+                  render: (issues: string[]) => (Array.isArray(issues) && issues.length > 0
+                    ? issues.join('; ')
+                    : '—'),
+                },
+              ]}
+            />
+            {Array.isArray(materializationAuditBySystem[materializationLogTarget].propagation?.logs)
+              && materializationAuditBySystem[materializationLogTarget].propagation!.logs!.length > 0 ? (
+              <div
+                style={{
+                  maxHeight: 240,
+                  overflow: 'auto',
+                  fontFamily: 'monospace',
+                  fontSize: 12,
+                  background: '#0d1117',
+                  color: '#c9d1d9',
+                  padding: 12,
+                  borderRadius: 6,
+                }}
+              >
+                {(materializationAuditBySystem[materializationLogTarget].propagation?.logs || []).slice(-80).map((line, index) => (
+                  <div key={`${line.ts}-${index}`} style={{ color: line.level === 'error' ? '#ff7b72' : line.level === 'warn' ? '#d29922' : '#c9d1d9' }}>
+                    [{line.ts}] {line.message}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </Space>
+        ) : (
+          <Spin />
+        )}
       </Modal>
 
       <Modal

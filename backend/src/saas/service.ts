@@ -15326,6 +15326,7 @@ const materializeClassicDcaToClient = async (
     interval: string;
     detection_source: string;
     dca_base_amount_usdt: number;
+    dca_base_amount_percent: number;
     dca_step_percent: number;
     dca_max_orders: number;
     dca_order_multiplier: number;
@@ -15338,7 +15339,7 @@ const materializeClassicDcaToClient = async (
     dca_per_leg_sl: number;
   }>>(
     `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.interval, s.detection_source,
-       s.dca_base_amount_usdt, s.dca_step_percent, s.dca_max_orders,
+       s.dca_base_amount_usdt, s.dca_base_amount_percent, s.dca_step_percent, s.dca_max_orders,
        s.dca_order_multiplier, s.dca_tp_percent, s.dca_sl_percent,
        s.dca_entry_filter, s.dca_reentry_bars, s.dca_rsi_period, s.dca_rsi_max, s.dca_per_leg_sl
      FROM trading_system_members tsm
@@ -15392,8 +15393,10 @@ const materializeClassicDcaToClient = async (
       }
     }
 
+    const dcaBasePercent = Math.max(0, asNumber(master.dca_base_amount_percent, 0));
     const dcaParams = [
       master.dca_base_amount_usdt,
+      dcaBasePercent,
       master.dca_step_percent,
       master.dca_max_orders,
       master.dca_order_multiplier,
@@ -15411,7 +15414,7 @@ const materializeClassicDcaToClient = async (
     if (existing?.id) {
       await db.run(
         `UPDATE strategies SET
-           dca_base_amount_usdt = ?, dca_step_percent = ?, dca_max_orders = ?,
+           dca_base_amount_usdt = ?, dca_base_amount_percent = ?, dca_step_percent = ?, dca_max_orders = ?,
            dca_order_multiplier = ?, dca_tp_percent = ?, dca_sl_percent = ?,
            dca_entry_filter = ?, dca_reentry_bars = ?, dca_rsi_period = ?, dca_rsi_max = ?,
            dca_per_leg_sl = ?, interval = ?, detection_source = ?,
@@ -15428,7 +15431,7 @@ const materializeClassicDcaToClient = async (
            api_key_id, name, strategy_type, market_mode, market_type,
            base_symbol, quote_symbol, is_active, is_runtime, is_archived, origin,
            auto_update, long_enabled, short_enabled,
-           dca_base_amount_usdt, dca_step_percent, dca_max_orders,
+           dca_base_amount_usdt, dca_base_amount_percent, dca_step_percent, dca_max_orders,
            dca_order_multiplier, dca_tp_percent, dca_sl_percent,
            dca_entry_filter, dca_reentry_bars, dca_rsi_period, dca_rsi_max, dca_per_leg_sl,
            interval, detection_source, dca_order_type, dca_state,
@@ -15521,6 +15524,128 @@ export const getPropagationJobStatus = () => ({
   result: propagationJob.result,
   error: propagationJob.error,
 });
+
+export type AlgofundMaterializationClientAudit = {
+  tenantId: number;
+  slug: string;
+  status: 'ok' | 'partial' | 'error';
+  lotPercent: number;
+  reinvestPercent: number;
+  dcaCount: number;
+  tsMemberCount: number;
+  issues: string[];
+};
+
+/** Per-client runtime readiness for a published algofund system (materialization audit). */
+export const getAlgofundMaterializationAudit = async (systemName: string) => {
+  const target = asString(systemName, '').trim();
+  if (!target) {
+    throw new Error('systemName is required');
+  }
+  const cardCfg = await getCardConfigBySystemName(target);
+  const expectedLot = cardCfg.lotPercent > 0 ? cardCfg.lotPercent : 20;
+  const expectedReinvest = cardCfg.reinvestPercent >= 0 ? cardCfg.reinvestPercent : 100;
+  const rows = await db.all<Array<{
+    tenant_id: number;
+    slug: string;
+    execution_api_key_name: string;
+    published_system_name: string;
+  }>>(
+    `SELECT ap.tenant_id, t.slug, ap.execution_api_key_name, ap.published_system_name
+     FROM algofund_profiles ap
+     JOIN tenants t ON t.id = ap.tenant_id
+     WHERE TRIM(COALESCE(ap.published_system_name, '')) != ''`,
+  ).catch(() => []);
+
+  const clients: AlgofundMaterializationClientAudit[] = [];
+  for (const row of rows) {
+    const published = asString(row.published_system_name, '').trim();
+    if (published !== target && !published.endsWith(target.split('::').pop() || '')) {
+      continue;
+    }
+    const apiKey = asString(row.execution_api_key_name, '').trim();
+    if (!apiKey) {
+      clients.push({
+        tenantId: Number(row.tenant_id),
+        slug: asString(row.slug, ''),
+        status: 'error',
+        lotPercent: 0,
+        reinvestPercent: 0,
+        dcaCount: 0,
+        tsMemberCount: 0,
+        issues: ['missing execution_api_key_name'],
+      });
+      continue;
+    }
+    const stratRow = await db.get<{ lot: number; reinvest: number }>(
+      `SELECT lot_long_percent AS lot, reinvest_percent AS reinvest
+       FROM strategies s JOIN api_keys ak ON ak.id = s.api_key_id
+       WHERE ak.name = ? AND s.is_active = 1 AND s.is_archived = 0
+         AND COALESCE(s.strategy_type, '') NOT IN ('dca', 'dca_futures')
+       LIMIT 1`,
+      [apiKey],
+    ).catch(() => null);
+    const dcaCountRow = await db.get<{ cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM strategies s JOIN api_keys ak ON ak.id = s.api_key_id
+       WHERE ak.name = ? AND s.strategy_type = 'dca' AND s.is_archived = 0
+         AND s.base_symbol IN ('SUIUSDT', 'TRXUSDT')`,
+      [apiKey],
+    ).catch(() => null);
+    const tsMembersRow = await db.get<{ cnt: number }>(
+      `SELECT COUNT(*) AS cnt FROM trading_system_members tsm
+       JOIN trading_systems ts ON ts.id = tsm.system_id
+       JOIN api_keys ak ON ak.id = ts.api_key_id
+       WHERE ak.name = ? AND ts.name = 'ALGOFUND::' || ? AND ts.is_active = 1`,
+      [apiKey, asString(row.slug, '')],
+    ).catch(() => null);
+    const lot = Number(stratRow?.lot || 0);
+    const reinvest = Number(stratRow?.reinvest || 0);
+    const dcaCount = Number(dcaCountRow?.cnt || 0);
+    const tsMemberCount = Number(tsMembersRow?.cnt || 0);
+    const issues: string[] = [];
+    if (Math.abs(lot - expectedLot) > 0.01) issues.push(`lot ${lot}% (expected ${expectedLot}%)`);
+    if (Math.abs(reinvest - expectedReinvest) > 0.01) issues.push(`reinvest ${reinvest}% (expected ${expectedReinvest}%)`);
+    if (dcaCount < 2) issues.push(`DCA satellites ${dcaCount}/2`);
+    if (tsMemberCount < 34) issues.push(`TS members ${tsMemberCount} (expected ≥34)`);
+    const status: AlgofundMaterializationClientAudit['status'] = issues.length === 0
+      ? 'ok'
+      : (dcaCount >= 2 && lot > 0 ? 'partial' : 'error');
+    clients.push({
+      tenantId: Number(row.tenant_id),
+      slug: asString(row.slug, ''),
+      status,
+      lotPercent: lot,
+      reinvestPercent: reinvest,
+      dcaCount,
+      tsMemberCount,
+      issues,
+    });
+  }
+  const okCount = clients.filter((c) => c.status === 'ok').length;
+  const partialCount = clients.filter((c) => c.status === 'partial').length;
+  const errorCount = clients.filter((c) => c.status === 'error').length;
+  const propagation = getPropagationJobStatus();
+  let aggregateStatus: 'ok' | 'partial' | 'error' | 'running' = 'ok';
+  if (propagation.running && propagation.systemName === target) {
+    aggregateStatus = 'running';
+  } else if (errorCount > 0) {
+    aggregateStatus = 'error';
+  } else if (partialCount > 0) {
+    aggregateStatus = 'partial';
+  }
+  return {
+    systemName: target,
+    totalClients: clients.length,
+    okCount,
+    partialCount,
+    errorCount,
+    aggregateStatus,
+    expectedLot,
+    expectedReinvest,
+    clients,
+    propagation,
+  };
+};
 
 export const startPropagationJob = (
   systemName: string,

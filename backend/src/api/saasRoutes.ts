@@ -47,6 +47,7 @@ import {
   startDcaCombinedPreviewJob,
   getDcaCombinedPreviewJobStatus,
   getPropagationJobStatus,
+  getAlgofundMaterializationAudit,
   applyDcaToTsPortfolio,
   previewDcaCombinedWithTs,
   syncCloudTsFromSweepResult,
@@ -812,6 +813,22 @@ router.get('/admin/propagation-status', async (_req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS propagation status error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/materialization-audit', async (req, res) => {
+  try {
+    const systemName = String(req.query.systemName || req.query.system || '').trim();
+    if (!systemName) {
+      res.status(400).json({ error: 'systemName query param is required' });
+      return;
+    }
+    const data = await getAlgofundMaterializationAudit(systemName);
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS materialization audit error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

@@ -29,6 +29,8 @@ export type DcaConfig = {
   quoteSymbol: string;
   marketType: 'spot' | 'futures';
   baseAmountUsdt: number;
+  /** When > 0, first leg size = equity × percent / 100 (same as backtest). */
+  baseAmountPercent: number;
   stepPercent: number;
   maxOrders: number;
   orderMultiplier: number;
@@ -36,6 +38,18 @@ export type DcaConfig = {
   slPercent: number;
   perLegSl: boolean;
   orderType: 'market' | 'maker';
+};
+
+const resolveDcaOrderSizeUsdt = (
+  config: Pick<DcaConfig, 'baseAmountUsdt' | 'baseAmountPercent' | 'orderMultiplier'>,
+  equityUsdt: number,
+  safetyOrderIndex: number,
+): number => {
+  const equityBase = Number.isFinite(equityUsdt) && equityUsdt > 0 ? equityUsdt : config.baseAmountUsdt;
+  const base = config.baseAmountPercent > 0
+    ? Math.max(1, (equityBase * config.baseAmountPercent) / 100)
+    : Math.max(1, config.baseAmountUsdt);
+  return Math.max(1, base * Math.pow(Math.max(1, config.orderMultiplier), Math.max(0, safetyOrderIndex)));
 };
 
 const MAKER_OFFSET = 0.001;
@@ -75,6 +89,7 @@ export const extractDcaConfig = (row: any): DcaConfig => ({
   quoteSymbol: String(row.quote_symbol || 'USDT').trim().toUpperCase(),
   marketType: String(row.market_type || 'spot') === 'futures' ? 'futures' : 'spot',
   baseAmountUsdt: Math.max(1, Number(row.dca_base_amount_usdt || 10)),
+  baseAmountPercent: Math.max(0, Number(row.dca_base_amount_percent || 0)),
   stepPercent: Math.max(0.1, Number(row.dca_step_percent || 2)),
   maxOrders: Math.max(0, Math.floor(Number(row.dca_max_orders || 5))),
   orderMultiplier: Math.max(1, Number(row.dca_order_multiplier || 1)),
@@ -199,6 +214,23 @@ export const executeDca = async (
 
   if (currentPrice <= 0) return { action: 'skip', details: 'price=0' };
 
+  let equityUsdt = config.baseAmountUsdt;
+  try {
+    const balances = await getBalances(apiKeyName);
+    const usdtEntry = (Array.isArray(balances) ? balances : []).find(
+      (b: any) =>
+        String(b.coin || '').toUpperCase() === 'USDT' &&
+        (config.marketType === 'spot'
+          ? String(b.accountType || '').toLowerCase() === 'spot'
+          : String(b.accountType || '').toLowerCase() !== 'spot'),
+    );
+    const wallet = Number(String((usdtEntry as { walletBalance?: string | number })?.walletBalance || 0));
+    const available = Number(String((usdtEntry as { availableBalance?: string | number })?.availableBalance || 0));
+    equityUsdt = wallet > 0 ? wallet : (available > 0 ? available : equityUsdt);
+  } catch {
+    // keep fallback baseAmountUsdt
+  }
+
   if (state === 'open' && legs.length > 0 && avgBuyPrice > 0) {
     const tpPrice = avgBuyPrice * (1 + config.tpPercent / 100);
 
@@ -246,7 +278,7 @@ export const executeDca = async (
     if (lastBuyPrice > 0 && ordersCount < config.maxOrders) {
       const stepTrigger = lastBuyPrice * (1 - config.stepPercent / 100);
       if (currentPrice <= stepTrigger) {
-        const safetySize = config.baseAmountUsdt * Math.pow(config.orderMultiplier, ordersCount);
+        const safetySize = resolveDcaOrderSizeUsdt(config, equityUsdt, ordersCount);
         logger.info(`[dca] strategy ${strategyId}: safety order #${ordersCount + 1}, size=${safetySize.toFixed(2)} USDT`);
         const bought = await buyOrder(config, safetySize, currentPrice);
         legs.push({ price: currentPrice, qty: bought, invested: safetySize, isBase: false });
@@ -264,6 +296,7 @@ export const executeDca = async (
   }
 
   if (state === 'idle') {
+    const baseSize = resolveDcaOrderSizeUsdt(config, equityUsdt, 0);
     try {
       const balances = await getBalances(apiKeyName);
       const usdtEntry = (Array.isArray(balances) ? balances : []).find(
@@ -271,19 +304,19 @@ export const executeDca = async (
           String(b.coin || '').toUpperCase() === 'USDT' &&
           (config.marketType === 'spot'
             ? String(b.accountType || '').toLowerCase() === 'spot'
-            : String(b.accountType || '').toLowerCase() !== 'spot')
+            : String(b.accountType || '').toLowerCase() !== 'spot'),
       );
       const available = Number(usdtEntry?.availableBalance || 0);
-      if (available < config.baseAmountUsdt) {
-        return { action: 'skip', details: `insufficient balance ${available.toFixed(2)} < ${config.baseAmountUsdt}` };
+      if (available < baseSize) {
+        return { action: 'skip', details: `insufficient balance ${available.toFixed(2)} < ${baseSize.toFixed(2)}` };
       }
     } catch {
       // proceed without balance check
     }
 
-    logger.info(`[dca] strategy ${strategyId}: opening base position, ${config.baseAmountUsdt} USDT`);
-    const bought = await buyOrder(config, config.baseAmountUsdt, currentPrice);
-    legs = [{ price: currentPrice, qty: bought, invested: config.baseAmountUsdt, isBase: true }];
+    logger.info(`[dca] strategy ${strategyId}: opening base position, ${baseSize.toFixed(2)} USDT${config.baseAmountPercent > 0 ? ` (${config.baseAmountPercent}% of ~${equityUsdt.toFixed(0)} equity)` : ''}`);
+    const bought = await buyOrder(config, baseSize, currentPrice);
+    legs = [{ price: currentPrice, qty: bought, invested: baseSize, isBase: true }];
     await persistOpenState(strategyId, legs);
     return { action: 'base_buy', details: `${bought.toFixed(6)} ${config.baseSymbol} @ ${currentPrice.toFixed(4)}` };
   }
