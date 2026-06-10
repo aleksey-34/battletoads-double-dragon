@@ -101,16 +101,18 @@ export const ensureDefaultSchedulerJobs = async (): Promise<void> => {
   const db = getResearchDb();
 
   for (const item of DEFAULT_JOBS) {
+    const enabled = item.job_key === 'bt_rt_daily_snapshot' ? 0 : 1;
     await db.run(
       `INSERT OR IGNORE INTO research_scheduler_jobs
          (job_key, title, is_enabled, schedule_kind, hour_utc, minute_utc, last_status, next_run_at, run_count, created_at, updated_at)
-       VALUES (?, ?, 1, 'daily', ?, ?, 'idle', ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [item.job_key, item.title, item.hour_utc, item.minute_utc, computeNextDailyRunAtUtc(item.hour_utc, item.minute_utc)]
+       VALUES (?, ?, ?, 'daily', ?, ?, 'idle', ?, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [item.job_key, item.title, enabled, item.hour_utc, item.minute_utc, computeNextDailyRunAtUtc(item.hour_utc, item.minute_utc)]
     );
 
     await db.run(
       `UPDATE research_scheduler_jobs
-       SET next_run_at = COALESCE(next_run_at, ?), updated_at = CURRENT_TIMESTAMP
+       SET is_enabled = CASE WHEN job_key = 'bt_rt_daily_snapshot' THEN 0 ELSE is_enabled END,
+           next_run_at = COALESCE(next_run_at, ?), updated_at = CURRENT_TIMESTAMP
        WHERE job_key = ?`,
       [computeNextDailyRunAtUtc(item.hour_utc, item.minute_utc), item.job_key]
     );
@@ -891,15 +893,9 @@ const runSchedulerJobByKey = async (jobKey: SchedulerJobKey): Promise<{ status: 
   }
 
   if (jobKey === 'bt_rt_daily_snapshot') {
-    const result = await runBtRtDailySweep();
     return {
-      status: 'done',
-      details: {
-        date: result.date,
-        processed: result.processed,
-        skipped: result.skipped,
-        errors: result.errors,
-      },
+      status: 'skipped',
+      details: { reason: 'BT/RT daily drift monitor temporarily disabled' },
     };
   }
 

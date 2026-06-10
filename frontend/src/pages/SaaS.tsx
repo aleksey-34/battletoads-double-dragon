@@ -555,7 +555,12 @@ type SaasSummary = {
         initialBalance?: number;
         riskScaleMaxPercent?: number;
         maxOpenPositions?: number;
+        lotPercentOverride?: number;
+        reinvestPercent?: number;
+        macroShield?: boolean;
       };
+      macroShield?: boolean;
+      dcaMarkets?: string[];
       updatedAt?: string;
     }>;
     tsBacktestSnapshot?: {
@@ -3044,6 +3049,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     dcaOnly?: { summary?: Record<string, unknown> };
     delta?: { ret?: number; dd?: number; trades?: number };
     dcaLayer?: { ret?: number; dd?: number; trades?: number };
+    macroShield?: boolean;
     markets?: string[];
     period?: { dateFrom?: string; dateTo?: string };
   } | null>(null);
@@ -3059,6 +3065,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [tsDcaRsiMax, setTsDcaRsiMax] = useState(45);
   const [tsDcaPerLegSl, setTsDcaPerLegSl] = useState(false);
   const [tsDcaAutotune, setTsDcaAutotune] = useState(true);
+  const [tsDcaMacroShield, setTsDcaMacroShield] = useState(true);
   const [tsDcaResearchServerRunning, setTsDcaResearchServerRunning] = useState(false);
   const [tsDcaProgressPercent, setTsDcaProgressPercent] = useState(0);
   const [tsDcaProgressMessage, setTsDcaProgressMessage] = useState('');
@@ -3066,6 +3073,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const tsDcaCombinedPollTimerRef = useRef<number | null>(null);
   const tsDcaResultNotifiedRef = useRef(false);
   const tsDcaScanAwaitResultRef = useRef(false);
+  const tsDcaResearchResultRef = useRef<Record<string, unknown> | null>(null);
   const [adminSweepAutoLotByChannel, setAdminSweepAutoLotByChannel] = useState(false);
   const [tsDcaBaseAmountUsdt, setTsDcaBaseAmountUsdt] = useState(10);
   const [tsDcaInterval, setTsDcaInterval] = useState('4h');
@@ -4136,12 +4144,44 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return safeName.toUpperCase().startsWith('ALGOFUND_MASTER::') || lower.startsWith('ts-');
     };
 
-    const availableSystemNames = Array.from(new Set([
+    const availableSystemNamesRaw = Array.from(new Set([
       ...Array.from(publishedSystemSet),
       ...snapshotSystemNames,
       ...snapshotMasterSystemNames,
       String(publishResponse?.sourceSystem?.systemName || '').trim(),
     ].filter((name) => isStorefrontSystemName(String(name || '')))));
+
+    // Collapse alias snapshot keys (balanced-shield-dca-v1 vs …-x4wc64) into one storefront card.
+    const availableSystemNameGroups: string[][] = [];
+    for (const name of availableSystemNamesRaw) {
+      let placed = false;
+      for (const group of availableSystemNameGroups) {
+        if (group.some((candidate) => matchesTsSnapshotToken(name, candidate) || matchesTsSnapshotToken(candidate, name))) {
+          group.push(name);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) {
+        availableSystemNameGroups.push([name]);
+      }
+    }
+    const availableSystemNames = availableSystemNameGroups.map((group) => {
+      const publishedMatch = group.find((name) => publishedSystemSet.has(name));
+      if (publishedMatch) {
+        return publishedMatch;
+      }
+      const withClients = group
+        .map((name) => ({
+          name,
+          tenants: batchEligibleAlgofundTenants.filter((tenant) => {
+            const tenantSystemName = String(tenant.algofundProfile?.published_system_name || '').trim();
+            return tenantSystemName === name || matchesTsSnapshotToken(tenantSystemName, name);
+          }).length,
+        }))
+        .sort((left, right) => right.tenants - left.tenants || right.name.length - left.name.length);
+      return withClients[0]?.name || group.sort((a, b) => b.length - a.length)[0];
+    }).filter(Boolean);
 
     const mapped = availableSystemNames.map((systemName) => {
     const storefrontLabel = `TS offer #${availableSystemNames.indexOf(systemName) + 1}`;
@@ -4204,6 +4244,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       0,
       Number(snapshotForSystem?.backtestSettings?.maxOpenPositions || runtimeSystem?.maxOpenPositions || 0),
     );
+    const macroShieldEnabled = Boolean(
+      snapshotForSystem?.backtestSettings?.macroShield
+      ?? (snapshotForSystem as { macroShield?: boolean } | null)?.macroShield
+      ?? /shield/i.test(systemName),
+    );
+    const dcaSatelliteMarkets = Array.isArray((snapshotForSystem as { dcaMarkets?: string[] } | null)?.dcaMarkets)
+      ? ((snapshotForSystem as { dcaMarkets?: string[] }).dcaMarkets || [])
+      : ['SUIUSDT', 'TRXUSDT'];
     const snapshotCurve = mapSnapshotEquityPoints(
       downsampleNumericSeries(Array.isArray(snapshotForSystem?.equityPoints) ? (snapshotForSystem?.equityPoints || []) : [], 64),
       Number(snapshotForSystem?.periodDays || 0),
@@ -4261,6 +4309,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       activeCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.actual_enabled || 0) === 1).length,
       pendingCount: tenants.filter((tenant) => Number(tenant.algofundProfile?.requested_enabled || 0) === 1 && Number(tenant.algofundProfile?.actual_enabled || 0) !== 1).length,
       maxOpenPositions,
+      macroShieldEnabled,
+      dcaSatelliteMarkets,
     };
     }).filter((item) => {
       if (!item.hasMeaningfulState) {
@@ -7064,7 +7114,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setAdminSweepBacktestError(errorMessage || 'Не удалось построить sweep backtest preview');
       messageApi.error(
         isTimeout
-          ? `${errorMessage || 'Таймаут'} — предыдущие метрики сохранены, повтори API rerun`
+          ? `${errorMessage || 'Таймаут 524'} — Cloudflare обрывает длинный API rerun (~100с). Сохранённый snapshot не затронут; для rerun открой админку по IP http://176.57.184.98 или нажми «Пересчитать» позже.`
           : (errorMessage || 'Не удалось построить sweep backtest preview'),
       );
     } finally {
@@ -7683,20 +7733,58 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     backtestDatesUserModifiedRef.current = hasSavedCustomDates;
     applyBacktestSettings(settings);
 
-    // NOTE: Раньше здесь писали settings в localStorage «про запас» — это создавало
-    // иллюзию «сохранённых» настроек без нажатия кнопки. Убрали — источник истины
-    // только backend snapshot, в который пишет только кнопка «Сохранить» / «Сохранить и отправить».
+    const contextOfferIds = Array.from(new Set((context.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
+
     if (context.kind === 'algofund-ts') {
-      const offerIds = Array.from(new Set((context.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
       setBacktestTsWeightsByOfferId((prev) => {
         const source = context.offerWeightsById && Object.keys(context.offerWeightsById).length > 0
           ? context.offerWeightsById
           : prev;
-        return normalizeBacktestTsWeights(offerIds, source);
+        return normalizeBacktestTsWeights(contextOfferIds, source);
       });
+
+      const snapshotMap = summary?.offerStore?.tsBacktestSnapshots || {};
+      const matchingSnapshot = findTsSnapshotForBacktestContext(snapshotMap, {
+        setKey: String(context.setKey || selectedAdminDraftTsSetKey || '').trim(),
+        offerIds: contextOfferIds,
+        systemName: String(context.systemName || '').trim(),
+      }) || (context.systemName ? resolveTsSnapshotForSystem(String(context.systemName)) : null);
+
+      if (matchingSnapshot) {
+        const setKey = String(matchingSnapshot.setKey || context.setKey || selectedAdminDraftTsSetKey || '').trim();
+        const snapshotOfferIds = resolveSnapshotOfferIds(
+          Array.isArray(matchingSnapshot.offerIds) && matchingSnapshot.offerIds.length > 0
+            ? matchingSnapshot.offerIds
+            : contextOfferIds,
+        );
+        const systemName = String(context.systemName || matchingSnapshot.systemName || setKey).trim();
+        if (setKey && snapshotOfferIds.length > 0 && Number.isFinite(Number((matchingSnapshot as { ret?: number }).ret))) {
+          const syntheticResult = buildSyntheticBacktestResultFromSnapshot(
+            matchingSnapshot,
+            setKey,
+            snapshotOfferIds,
+            systemName,
+          );
+          if (syntheticResult) {
+            setBacktestDrawerContext({
+              ...context,
+              offerIds: snapshotOfferIds,
+              setKey,
+              systemName: context.systemName || matchingSnapshot.systemName,
+            });
+            setBacktestDrawerVisible(true);
+            setAdminSweepBacktestResult(syntheticResult);
+            setAdminSweepBacktestStale(false);
+            setAdminSweepBacktestError('');
+            setAdminSweepBacktestRerunApiKey(String((matchingSnapshot as { apiKeyName?: string }).apiKeyName || ''));
+            return;
+          }
+        }
+      }
     } else {
       setBacktestTsWeightsByOfferId({});
     }
+
     setBacktestDrawerContext(context);
     setBacktestDrawerVisible(true);
     setAdminSweepBacktestResult(null);
@@ -7707,7 +7795,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         ? { ...settings, dateFrom: undefined, dateTo: undefined }
         : settings;
       void runAdminSweepBacktestPreview(context, {
-        preferRealBacktest: isAdminSurface,
+        preferRealBacktest: false,
         settingsOverride: settingsForPreview,
       });
     }, 0);
@@ -7758,6 +7846,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       dcaAutotune: tsDcaAutotune,
       dcaInterval: tsDcaInterval,
       dcaDetectionSource: tsDcaDetectionSource,
+      macroShield: tsDcaMacroShield,
     };
   };
 
@@ -7979,6 +8068,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   const applyDcaResearchPayload = (payload: Record<string, unknown>, options?: { notify?: boolean }) => {
+    tsDcaResearchResultRef.current = payload;
     setTsDcaResearchResult(payload);
     const serverFingerprint = String(payload?.scanFingerprint || '').trim();
     setTsDcaResearchScanFingerprint(serverFingerprint || buildTsDcaScanFingerprint());
@@ -8021,6 +8111,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (data.result && typeof data.result === 'object') {
       const payload = data.result as Record<string, unknown>;
       const shouldApply = tsDcaScanAwaitResultRef.current
+        || !tsDcaResearchResultRef.current
         || resultMatchesCurrentDcaSettings(payload)
         || String(payload?.scanFingerprint || '') === String(tsDcaResearchScanFingerprint || '');
       if (shouldApply) {
@@ -8037,6 +8128,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       if (isStaleAbort) {
         return false;
       }
+      tsDcaResearchResultRef.current = null;
       setTsDcaResearchResult(null);
       setTsDcaSelectedMarkets([]);
       if (tsDcaScanAwaitResultRef.current) {
@@ -8064,6 +8156,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     setTsDcaPickLoading(true);
     setTsDcaApplyResult(null);
+    tsDcaResearchResultRef.current = null;
     setTsDcaResearchResult(null);
     setTsDcaSelectedMarkets([]);
     setTsDcaResearchScanFingerprint(null);
@@ -8130,7 +8223,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
     let ignore = false;
-    void axios.post('/api/saas/admin/ts-dca-research-reset').catch(() => undefined);
     const poll = async () => {
       if (ignore) return;
       try {
@@ -8209,6 +8301,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     tsDcaRsiMax,
     tsDcaPerLegSl,
     tsDcaAutotune,
+    tsDcaMacroShield,
     tsDcaInterval,
     tsDcaDetectionSource,
     tsDcaResearchScanFingerprint,
@@ -8520,21 +8613,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         normalizedSystemName,
       );
       if (syntheticResult) {
-        const settings: any = snapshot.backtestSettings || {};
         const computedDates = computeBacktestDatesFromSnapshot(snapshot);
+        const settings = enrichBacktestSettingsFromTsSnapshot(
+          normalizeBacktestCardSettings(snapshot.backtestSettings || {}),
+          snapshot,
+        );
         applyBacktestSettings({
-          riskScore: Number(settings.riskScore ?? 5),
-          tradeFrequencyScore: Number(settings.tradeFrequencyScore ?? 5),
-          initialBalance: Number(settings.initialBalance ?? 10000),
-          riskScaleMaxPercent: Number(settings.riskScaleMaxPercent ?? 100),
-          maxOpenPositions: Math.max(0, Math.floor(Number(settings.maxOpenPositions ?? 0))),
-          lotPercentOverride: Math.max(0, Math.floor(Number(settings.lotPercentOverride ?? 0))),
-          partialTpPct: Math.max(0, Number(settings.partialTpPct ?? 0)),
-          commissionPercent: Math.max(0, Number(settings.commissionPercent ?? DEFAULT_BACKTEST_SETTINGS.commissionPercent)),
-          slippagePercent: Math.max(0, Number(settings.slippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent)),
-          fundingRatePercent: Math.max(0, Number(settings.fundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent)),
-          dateFrom: computedDates?.dateFrom,
-          dateTo: computedDates?.dateTo,
+          ...settings,
+          dateFrom: computedDates?.dateFrom ?? settings.dateFrom,
+          dateTo: computedDates?.dateTo ?? settings.dateTo,
         });
         setSelectedAdminDraftTsSetKey(setKey);
         setBacktestTsWeightsByOfferId(normalizeBacktestTsWeights(offerIds, runtimeSystem?.offerWeightsById || {}));
@@ -12203,6 +12290,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                         })()
                                                       : null}
                                                     {Number(item.maxOpenPositions || 0) > 0 ? <Tag color="volcano">ОП {Number(item.maxOpenPositions || 0)}</Tag> : null}
+                                                    {item.macroShieldEnabled ? <Tag color="cyan">Shield RSI≥70</Tag> : null}
+                                                    {Array.isArray(item.dcaSatelliteMarkets) && item.dcaSatelliteMarkets.length > 0
+                                                      ? <Tag color="purple">DCA {item.dcaSatelliteMarkets.map((m: string) => String(m || '').replace(/USDT$/i, '')).join('+')}</Tag>
+                                                      : null}
                                                   </Space>
                                                   {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
                                                     <ChartComponent data={item.equityCurve} type="line" fixedHeight={120} />
@@ -14315,6 +14406,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Space wrap align="center">
                     <Switch checked={tsDcaAutotune} onChange={setTsDcaAutotune} />
                     <Text>Autotune top-3 при scan</Text>
+                    <Switch checked={tsDcaMacroShield} onChange={setTsDcaMacroShield} />
+                    <Text>Macro shield (ETH/BTC RSI≥70 exit longs)</Text>
+                    {tsDcaCombinedPreview?.macroShield ? <Tag color="cyan">shield ON</Tag> : null}
                     <Switch checked={tsDcaPerLegSl} onChange={setTsDcaPerLegSl} />
                     <Tooltip title="SL режет одну ногу сетки и освобождает слот для нового safety-ордера">
                       <Text>Per-leg SL</Text>

@@ -2585,6 +2585,16 @@ router.post('/cards/materialize/:targetApiKeyName', async (req, res) => {
           [lotRaw, lotRaw, targetName]
         );
       }
+      const reinvestRaw = Number((meta as { reinvestPercentOverride?: unknown })?.reinvestPercentOverride);
+      if (Number.isFinite(reinvestRaw) && reinvestRaw >= 0) {
+        await db.run(
+          `UPDATE strategies
+           SET reinvest_percent = ?, updated_at = CURRENT_TIMESTAMP
+           WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ?)
+             AND COALESCE(origin, '') <> 'saas_overlay_legacy'`,
+          [Math.min(100, Math.max(0, reinvestRaw)), targetName]
+        );
+      }
       const autoLot = (meta as { autoLotByChannelWidth?: unknown }).autoLotByChannelWidth === true ? 1 : 0;
       await db.run(
         `UPDATE strategies

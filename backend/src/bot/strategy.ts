@@ -16,6 +16,7 @@ import { calculateSyntheticOHLC } from './synthetic';
 import { recordLiveTradeEvent } from '../analytics/liveReconciliation';
 import logger from '../utils/logger';
 import { computeChannelWidthLotMultiplier } from '../services/strategy/sizing';
+import { evaluateMacroShieldLongExit, isMacroShieldEnabledForApiKey } from './macroExitShield';
 
 // ── Market data cache for auto-strategy cycle ────────────────────────────────
 // Avoids re-fetching the same symbol+interval when multiple strategies share them.
@@ -2469,7 +2470,8 @@ export const executeStrategy = async (
     | 'mean_revert_exit_long'
     | 'mean_revert_exit_short'
     | 'zscore_stop_long'
-    | 'zscore_stop_short';
+    | 'zscore_stop_short'
+    | 'macro_shield_exit_long';
   let closedAction: StrategyCloseAction | null = null;
   let closedResult: string | null = null;
   const evaluatedBarTimeMs = candleContext.evaluatedBarTimeMs;
@@ -2902,6 +2904,24 @@ export const executeStrategy = async (
         donchianLow,
         donchianCenter,
       };
+    }
+  }
+
+  const strategyType = String(mergedStrategy.strategy_type || '');
+  if (!closedAction && state === 'long'
+    && strategyType !== 'dca'
+    && strategyType !== 'dca_futures') {
+    try {
+      if (await isMacroShieldEnabledForApiKey(apiKeyName)) {
+        const macroSignal = await evaluateMacroShieldLongExit(apiKeyName);
+        if (macroSignal?.shouldExit) {
+          await closeAndRecordExit('macro_shield_exit_long', 'long');
+          closedAction = 'macro_shield_exit_long';
+          closedResult = `Macro shield exit for long ${positionLabel} (${macroSignal.symbol} RSI=${macroSignal.rsi.toFixed(1)})`;
+        }
+      }
+    } catch (macroErr) {
+      logger.warn(`Macro shield check failed for strategy ${strategyId} (${apiKeyName}): ${formatActionError(macroErr)}`);
     }
   }
 

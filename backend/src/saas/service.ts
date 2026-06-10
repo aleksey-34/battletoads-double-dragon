@@ -1,7 +1,7 @@
 ﻿import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { runBacktest, type BacktestRunRequest } from '../backtest/engine';
+import { runBacktest, type BacktestRunRequest, type MacroExitOverlay } from '../backtest/engine';
 import { closeStrategyExposure, cancelStrategyWorkingOrders, copyStrategyBlock, createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
 import {
   createTradingSystem,
@@ -32,7 +32,7 @@ const CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X = 1000;
 /** Admin portfolio rerun: cap compound base per leg (100% reinvest → 20× initial, not 1000×). */
 const ADMIN_PORTFOLIO_MAX_DEPOSIT_GROWTH_X = 20;
 
-/** Admin/card preview: reinvest 0 → fixed deposit; >0 → capped compound for portfolio realism. */
+/** Admin/card preview: reinvest 0 → honor strategy max_deposit; >0 → capped compound for portfolio realism. */
 const resolveAdminPreviewMaxDepositOverride = (
   reinvestPercent: number,
   initialBalance: number,
@@ -40,7 +40,7 @@ const resolveAdminPreviewMaxDepositOverride = (
   const safeBalance = Math.max(100, asNumber(initialBalance, 10000));
   const reinvest = clampNumber(asNumber(reinvestPercent, 0), 0, 100);
   if (reinvest <= 0) {
-    return safeBalance;
+    return 0;
   }
   const growthCap = Math.min(
     ADMIN_PORTFOLIO_MAX_DEPOSIT_GROWTH_X,
@@ -53,6 +53,101 @@ const resolveAdminPreviewLotPercentOverride = (
   lotPercentEffective: number,
   rerunRiskMul: number,
 ): number => Number(Math.min(500, Math.max(0.1, lotPercentEffective * rerunRiskMul)).toFixed(4));
+
+const resolveSnapshotLotPercent = (
+  snapshot: TsBacktestSnapshot | null | undefined,
+): number => {
+  if (!snapshot?.backtestSettings || typeof snapshot.backtestSettings !== 'object') {
+    return 0;
+  }
+  const settings = snapshot.backtestSettings as Record<string, unknown>;
+  const raw = settings.lotPercentOverride ?? settings.lotPercent;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
+
+/** Real rerun must use offer-store / offerId strategy ids — not freq-variant substitutions. */
+const resolveOfferStoreStrategyIds = (
+  offerIds: string[],
+  offerStoreById: Map<string, Record<string, unknown>>,
+): number[] => {
+  const out: number[] = [];
+  for (const offerId of offerIds) {
+    const trimmed = asString(offerId, '').trim();
+    if (!trimmed) {
+      continue;
+    }
+    const row = offerStoreById.get(trimmed);
+    const sid = Number(row?.strategyId || parseStrategyIdFromOfferId(trimmed) || 0);
+    if (Number.isFinite(sid) && sid > 0) {
+      out.push(Math.floor(sid));
+    }
+  }
+  return Array.from(new Set(out));
+};
+
+const resolveAdminPreviewBacktestMode = (
+  strategyIds: number[],
+): 'single' | 'portfolio' => (strategyIds.length === 1 ? 'single' : 'portfolio');
+
+/** Match full-historical sweep window: open-ended sweeps cap via backtestBars, not calendar dateTo. */
+const resolveAdminPreviewRerunWindow = (
+  sweep: { config?: Record<string, unknown> } | null | undefined,
+  snapshot: TsBacktestSnapshot | null | undefined,
+  requestedFrom: string,
+  requestedTo: string,
+  overrides?: { bars?: number; warmupBars?: number },
+): {
+  dateFrom: string;
+  dateTo?: string;
+  bars: number;
+  warmupBars: number;
+  usedCalendarRange: boolean;
+} => {
+  const sweepConfig = (sweep?.config || {}) as Record<string, unknown>;
+  const sweepFrom = asString(sweepConfig.dateFrom, '').trim().slice(0, 10);
+  const sweepToRaw = sweepConfig.dateTo;
+  const sweepTo = sweepToRaw === null || sweepToRaw === undefined
+    ? ''
+    : asString(sweepToRaw, '').trim().slice(0, 10);
+  const sweepHasEndDate = /^\d{4}-\d{2}-\d{2}$/.test(sweepTo);
+  const settings = snapshot?.backtestSettings && typeof snapshot.backtestSettings === 'object'
+    ? (snapshot.backtestSettings as Record<string, unknown>)
+    : {};
+  const bars = Math.max(
+    100,
+    Math.floor(asNumber(
+      overrides?.bars ?? settings.backtestBars ?? sweepConfig.backtestBars,
+      6000,
+    )),
+  );
+  const warmupBars = Math.max(
+    0,
+    Math.floor(asNumber(
+      overrides?.warmupBars ?? settings.warmupBars ?? sweepConfig.warmupBars,
+      400,
+    )),
+  );
+  const dateFrom = asString(requestedFrom, '').trim().slice(0, 10)
+    || asString(settings.dateFrom, '').trim().slice(0, 10)
+    || sweepFrom;
+  const settingsTo = asString(settings.dateTo, '').trim().slice(0, 10);
+  const requestedToTrim = asString(requestedTo, '').trim().slice(0, 10);
+
+  // Sweep jobs with dateTo=null intentionally rely on backtestBars — do not expand to calendar span.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateFrom) && !sweepHasEndDate) {
+    return { dateFrom, bars, warmupBars, usedCalendarRange: false };
+  }
+
+  const dateTo = requestedToTrim || settingsTo || sweepTo;
+  return {
+    dateFrom,
+    ...( /^\d{4}-\d{2}-\d{2}$/.test(dateTo) ? { dateTo } : {} ),
+    bars,
+    warmupBars,
+    usedCalendarRange: /^\d{4}-\d{2}-\d{2}$/.test(dateFrom) && /^\d{4}-\d{2}-\d{2}$/.test(dateTo),
+  };
+};
 
 const buildPortfolioLotMultiplierByStrategyId = (
   offers: Array<{ offerId?: string; strategyId?: number | string }>,
@@ -96,10 +191,13 @@ const resolveAdminPreviewEngineOverridesForTsPortfolio = async (params: {
   const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
   const tradeMul = getPreviewTradeMultiplier(tradeFrequencyScore);
   const cardLotConfig = await getCardConfigBySystemName(asString(params.systemName, '').trim());
+  const snapshotLotPercent = resolveSnapshotLotPercent(params.snapshot);
   const lotPercentRequested = Math.max(0, asNumber(params.lotPercentOverride, 0));
   const lotPercentEffective = lotPercentRequested > 0
     ? lotPercentRequested
-    : (cardLotConfig.lotPercent > 0 ? cardLotConfig.lotPercent : 100);
+    : (snapshotLotPercent > 0
+      ? snapshotLotPercent
+      : (cardLotConfig.lotPercent > 0 ? cardLotConfig.lotPercent : 100));
   const snapshotSettingsRaw = (params.snapshot?.backtestSettings && typeof params.snapshot.backtestSettings === 'object')
     ? (params.snapshot.backtestSettings as Record<string, unknown>)
     : {};
@@ -202,14 +300,25 @@ const sanitizeEquityCurveForMetrics = (
  * Returns zeros if card not found / metadata empty — caller decides fallback.
  * Card code convention: `CARD::<UPPER(systemName)>`.
  */
+export type CardRuntimeConfig = {
+  maxOpenPositions: number;
+  lotPercent: number;
+  reinvestPercent: number;
+  macroShield: boolean;
+};
+
 export const getCardConfigBySystemName = async (
   systemName: string,
-): Promise<{ maxOpenPositions: number; lotPercent: number }> => {
+): Promise<CardRuntimeConfig> => {
   const name = String(systemName || '').trim();
-  if (!name) return { maxOpenPositions: 0, lotPercent: 0 };
+  if (!name) {
+    return { maxOpenPositions: 0, lotPercent: 0, reinvestPercent: 0, macroShield: false };
+  }
   const code = `CARD::${name.toUpperCase()}`;
   let mop = 0;
   let lot = 0;
+  let reinvest = 0;
+  let macroShield = false;
   try {
     const row = await db.get<{ metadata_json?: string }>(
       'SELECT metadata_json FROM master_cards WHERE code = ? AND is_active = 1',
@@ -225,11 +334,43 @@ export const getCardConfigBySystemName = async (
       if (Number.isFinite(lotRaw) && lotRaw > 0) {
         lot = lotRaw;
       }
+      const reinvestRaw = Number((meta as { reinvestPercentOverride?: unknown })?.reinvestPercentOverride);
+      if (Number.isFinite(reinvestRaw) && reinvestRaw >= 0) {
+        reinvest = Math.min(100, Math.max(0, reinvestRaw));
+      }
+      macroShield = (meta as { macroShield?: unknown }).macroShield === true;
     }
   } catch {
     // Swallow: missing/invalid metadata simply means no override.
   }
-  return { maxOpenPositions: mop, lotPercent: lot };
+  return { maxOpenPositions: mop, lotPercent: lot, reinvestPercent: reinvest, macroShield };
+};
+
+/** Apply card lot/reinvest overrides to all runtime strategies on a client API key. */
+export const applyClientCardStrategyOverrides = async (
+  executionApiKeyName: string,
+  systemName: string,
+): Promise<void> => {
+  const cfg = await getCardConfigBySystemName(systemName);
+  if (cfg.lotPercent > 0) {
+    await db.run(
+      `UPDATE strategies
+       SET lot_long_percent = ?, lot_short_percent = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ?)
+         AND COALESCE(origin, '') <> 'saas_overlay_legacy'
+         AND COALESCE(strategy_type, '') NOT IN ('dca', 'dca_futures')`,
+      [cfg.lotPercent, cfg.lotPercent, executionApiKeyName],
+    );
+  }
+  if (cfg.reinvestPercent > 0) {
+    await db.run(
+      `UPDATE strategies
+       SET reinvest_percent = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ?)
+         AND COALESCE(origin, '') <> 'saas_overlay_legacy'`,
+      [cfg.reinvestPercent, executionApiKeyName],
+    );
+  }
 };
 
 export type ProductMode = 'strategy_client' | 'algofund_client' | 'copytrading_client' | 'dual';
@@ -517,9 +658,16 @@ type TsBacktestSnapshot = {
     dateTo?: string;
     interval?: string;
     reinvestPercent?: number;
+    backtestBars?: number;
+    warmupBars?: number;
     autoLotByChannelWidth?: boolean;
     dcaPerLegSl?: boolean;
+    macroShield?: boolean;
   };
+  /** Macro RSI shield enabled for this TS card. */
+  macroShield?: boolean;
+  /** DCA satellite markets (mono spot/futures grid, not sweep offers). */
+  dcaMarkets?: string[];
   updatedAt: string;
 };
 
@@ -1678,8 +1826,10 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
       initialBalance: Math.max(100, Math.floor(asNumber(settingsRaw.initialBalance, 10000))),
       riskScaleMaxPercent: Number(clampNumber(asNumber(settingsRaw.riskScaleMaxPercent, 100), 0, 400).toFixed(2)),
       maxOpenPositions: Math.max(0, Math.floor(asNumber(settingsRaw.maxOpenPositions, 0))),
-      lotPercentOverride: Math.max(0, Math.floor(asNumber(settingsRaw.lotPercentOverride, 0))),
+      lotPercentOverride: Math.max(0, asNumber(settingsRaw.lotPercentOverride ?? settingsRaw.lotPercent, 0)),
       reinvestPercent: Number(clampNumber(asNumber(settingsRaw.reinvestPercent, 0), 0, 100).toFixed(2)),
+      backtestBars: Math.max(0, Math.floor(asNumber(settingsRaw.backtestBars, 0))),
+      warmupBars: Math.max(0, Math.floor(asNumber(settingsRaw.warmupBars, 0))),
       ...(typeof settingsRaw.dateFrom === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(settingsRaw.dateFrom)
         ? { dateFrom: settingsRaw.dateFrom }
         : {}),
@@ -1688,7 +1838,16 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
         : {}),
       ...(settingsRaw.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),
       ...(settingsRaw.dcaPerLegSl === true ? { dcaPerLegSl: true } : {}),
+      ...(settingsRaw.macroShield === true ? { macroShield: true } : {}),
     },
+    ...(parsed.macroShield === true || settingsRaw.macroShield === true ? { macroShield: true } : {}),
+    ...(Array.isArray(parsed.dcaMarkets)
+      ? {
+        dcaMarkets: Array.from(new Set(
+          parsed.dcaMarkets.map((item) => String(item || '').trim().toUpperCase()).filter(Boolean),
+        )),
+      }
+      : {}),
     updatedAt: asString(parsed.updatedAt, new Date().toISOString()),
   };
 };
@@ -6011,6 +6170,10 @@ export const updateOfferStoreAdminState = async (payload: {
         aliasKeys.add(setKey);
       }
       for (const aliasKey of aliasKeys) {
+        // Avoid duplicate storefront cards: skip short alias when canonical master name already stored.
+        if (aliasKey !== key && nextTsBacktestSnapshots[key] && aliasKey.length < key.length) {
+          continue;
+        }
         nextTsBacktestSnapshots[aliasKey] = normalizedSnapshot;
       }
       await syncMasterStrategyFlagsFromSnapshot(normalizedSnapshot).catch((error) => {
@@ -6719,6 +6882,8 @@ export const previewAdminSweepBacktest = async (payload?: {
   dateTo?: string;
   preferRealBacktest?: boolean;
   rerunApiKeyName?: string;
+  backtestBars?: number;
+  warmupBars?: number;
   /** When true, keep payload.offerIds instead of replacing from saved TS snapshot (synthetic research runs). */
   forceOfferIds?: boolean;
   /** Optional pair-lock toggle (Etap B comparison). Defaults to engine default (true). */
@@ -6957,7 +7122,8 @@ export const previewAdminSweepBacktest = async (payload?: {
       // TS fallback for older catalogs: derive low/medium/high frequency variant
       // directly from sweep family rows so freq changes strategy variant (not TS size).
       let familyVariant: SweepRecord | null = null;
-      if (kind === 'algofund-ts' && sweepEvaluatedRows.length > 0) {
+      const useExactOfferStrategyIds = payload?.forceOfferIds === true || payload?.preferRealBacktest === true;
+      if (kind === 'algofund-ts' && sweepEvaluatedRows.length > 0 && !useExactOfferStrategyIds) {
         const modeToken = offer.strategy?.mode === 'synth' ? 'synthetic' : 'mono';
         const intervalToken = asString(preset.params?.interval || offer.strategy?.params?.interval, '');
         const familyRows = sweepEvaluatedRows.filter((row) => {
@@ -7222,17 +7388,25 @@ export const previewAdminSweepBacktest = async (payload?: {
       .map((item) => Number(item.strategyId || 0))
       .filter((value) => Number.isFinite(value) && value > 0)
   ));
+  const rerunStrategyIdsFromOffers = resolveOfferStoreStrategyIds(offerIds, offerStoreById);
+  const rerunStrategyIds = rerunStrategyIdsFromOffers.length > 0
+    ? rerunStrategyIdsFromOffers
+    : strategyIds;
+  const rerunBacktestMode = resolveAdminPreviewBacktestMode(rerunStrategyIds);
 
   // Risk multiplier applied post-hoc to real backtest result.
   // Exponential: risk=0 → ~0.18x, risk=5 → 1.0x, risk=10 → ~5.5x.
   const riskScaleMaxPercent = clampNumber(asNumber(payload?.riskScaleMaxPercent, 100), 0, 400);
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(payload?.maxOpenPositions, 0)));
   const lotPercentRequested = Math.max(0, asNumber(payload?.lotPercentOverride, 0));
-  // Lot resolution priority: explicit payload → master_cards.metadata_json → 100% (legacy default).
+  // Lot resolution priority: explicit payload → snapshot → master_cards.metadata_json → 100% (legacy default).
   const cardLotConfig = await getCardConfigBySystemName(asString(payload?.systemName, '').trim());
+  const snapshotLotPercent = resolveSnapshotLotPercent(tsSavedSnapshotForPreview);
   const lotPercentEffective = lotPercentRequested > 0
     ? lotPercentRequested
-    : (cardLotConfig.lotPercent > 0 ? cardLotConfig.lotPercent : 100);
+    : (snapshotLotPercent > 0
+      ? snapshotLotPercent
+      : (cardLotConfig.lotPercent > 0 ? cardLotConfig.lotPercent : 100));
   const partialTpPct = Math.max(0, asNumber(payload?.partialTpPct, 0));
   // Admin overrides for execution-cost assumptions. Defaults align with WEEX
   // futures (taker 0.06% × 2 legs = ~0.1%, slippage 0.05%, funding 0).
@@ -7248,7 +7422,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   const reinvestShare = reinvestPercent / 100;
   const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
   const adminPreviewLotPercent = resolveAdminPreviewLotPercentOverride(lotPercentEffective, rerunRiskMul);
-  const portfolioLotMultipliers = kind === 'algofund-ts' && selectedOffers.length > 1
+  const portfolioLotMultipliers = kind === 'algofund-ts' && rerunStrategyIds.length > 1
     ? buildPortfolioLotMultiplierByStrategyId(selectedOffers, normalizedOfferWeightsById)
     : undefined;
   const tradeMul = getPreviewTradeMultiplier(tradeFrequencyScore);
@@ -7410,9 +7584,13 @@ export const previewAdminSweepBacktest = async (payload?: {
   }
 
   let rerunFailureReason = '';
-  if (canTryRealBacktest && strategyIds.length > 0 && !tsSavedSnapshotForPreview) {
+  const rerunWindowOverrides = {
+    bars: Math.max(0, Math.floor(asNumber(payload?.backtestBars, 0))) || undefined,
+    warmupBars: Math.max(0, Math.floor(asNumber(payload?.warmupBars, 0))) || undefined,
+  };
+  if (canTryRealBacktest && rerunStrategyIds.length > 0 && !tsSavedSnapshotForPreview) {
     const sweepConfigAny = (sweep?.config || {}) as Record<string, unknown>;
-    const resolvedByStrategiesApiKey = await resolveApiKeyNameForStrategyIds(strategyIds, '', { strict: false });
+    const resolvedByStrategiesApiKey = await resolveApiKeyNameForStrategyIds(rerunStrategyIds, '', { strict: false });
     const preferredApiKey = asString(payload?.rerunApiKeyName, '')
       || resolvedByStrategiesApiKey
       || asString(sweep?.apiKeyName, '')
@@ -7424,16 +7602,27 @@ export const previewAdminSweepBacktest = async (payload?: {
       try {
         // Keep TS composition fixed. Frequency is applied via preset variant selection
         // for each member (resolveOfferPresetByPreference), not by dropping members.
-        const rerunStrategyIds = [...strategyIds];
         await ensureExchangeClientInitialized(preferredApiKey);
+
+        const rerunWindow = resolveAdminPreviewRerunWindow(
+          sweep,
+          tsSavedSnapshotForPreview,
+          requestedDateFrom
+            || (kind === 'offer' ? singleOfferStoreDateFrom : '')
+            || asString(sweep?.config?.dateFrom, '').slice(0, 10),
+          requestedDateTo
+            || (kind === 'offer' ? singleOfferStoreDateTo : '')
+            || '',
+          rerunWindowOverrides,
+        );
 
         const result = await runBacktest({
           apiKeyName: preferredApiKey,
-          mode: kind === 'offer' ? 'single' : 'portfolio',
-          strategyId: kind === 'offer' ? rerunStrategyIds[0] : undefined,
-          strategyIds: kind === 'algofund-ts' ? rerunStrategyIds : undefined,
-          bars: asNumber(sweep?.config?.backtestBars, 6000),
-          warmupBars: asNumber(sweep?.config?.warmupBars, 400),
+          mode: rerunBacktestMode,
+          strategyId: rerunBacktestMode === 'single' ? rerunStrategyIds[0] : undefined,
+          strategyIds: rerunBacktestMode === 'portfolio' ? rerunStrategyIds : undefined,
+          bars: rerunWindow.bars,
+          warmupBars: rerunWindow.warmupBars,
           skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
           initialBalance,
           commissionPercent: commissionPercentOverride !== null
@@ -7445,18 +7634,8 @@ export const previewAdminSweepBacktest = async (payload?: {
           fundingRatePercent: fundingRatePercentOverride !== null
             ? fundingRatePercentOverride
             : asNumber(sweep?.config?.fundingRatePercent, 0),
-          dateFrom: requestedDateFrom
-            || (kind === 'offer' ? singleOfferStoreDateFrom : '')
-            || (kind === 'algofund-ts' && tsSavedSnapshotForPreview
-              ? resolveSnapshotRerunDates(tsSavedSnapshotForPreview, sweep, requestedDateFrom, requestedDateTo).dateFrom
-              : buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateFrom)
-            || asString(sweep?.config?.dateFrom, ''),
-          dateTo: requestedDateTo
-            || (kind === 'offer' ? singleOfferStoreDateTo : '')
-            || (kind === 'algofund-ts' && tsSavedSnapshotForPreview
-              ? resolveSnapshotRerunDates(tsSavedSnapshotForPreview, sweep, requestedDateFrom, requestedDateTo).dateTo
-              : buildPreviewDatesFromPeriodDays(periodDays, requestedDateFrom, requestedDateTo).dateTo)
-            || asString(sweep?.config?.dateTo, ''),
+          dateFrom: rerunWindow.dateFrom,
+          ...(rerunWindow.dateTo ? { dateTo: rerunWindow.dateTo } : {}),
           ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
           ...(partialTpPct > 0 ? { partialTpPct } : {}),
           ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
@@ -7730,11 +7909,15 @@ export const previewAdminSweepBacktest = async (payload?: {
           const snapshotRerunOffers = snapshotOfferIds
             .map((offerId) => selectedByOfferId.get(offerId) || null)
             .filter((item): item is typeof selectedOffers[number] => Boolean(item));
-          const snapshotStrategyIds = Array.from(new Set(
-            (snapshotRerunOffers.length > 0 ? snapshotRerunOffers : snapshotSelectedOffers)
-              .map((item) => Number(item.strategyId || 0))
-              .filter((value) => Number.isFinite(value) && value > 0),
-          ));
+          const snapshotStrategyIdsFromOffers = resolveOfferStoreStrategyIds(snapshotOfferIds, offerStoreById);
+          const snapshotStrategyIds = snapshotStrategyIdsFromOffers.length > 0
+            ? snapshotStrategyIdsFromOffers
+            : Array.from(new Set(
+              (snapshotRerunOffers.length > 0 ? snapshotRerunOffers : snapshotSelectedOffers)
+                .map((item) => Number(item.strategyId || 0))
+                .filter((value) => Number.isFinite(value) && value > 0),
+            ));
+          const snapshotBacktestMode = resolveAdminPreviewBacktestMode(snapshotStrategyIds);
           const snapshotOffersForResponse = snapshotRerunOffers.length > 0
             ? snapshotRerunOffers
             : snapshotSelectedOffers;
@@ -7770,24 +7953,37 @@ export const previewAdminSweepBacktest = async (payload?: {
                 const snapshotTradeFrequencyScore = clampNumber(asNumber(snapshotSettingsRaw.tradeFrequencyScore, 5), 0, 10);
                 const snapshotTradeMul = getPreviewTradeMultiplier(snapshotTradeFrequencyScore);
                 const relativeTradeMul = tradeMul / Math.max(0.01, snapshotTradeMul);
-                const storeStrategyKey = snapshotSelectedOffers
-                  .map((item) => Number(item.strategyId || 0))
-                  .join(',');
+                const snapshotStoredLot = resolveSnapshotLotPercent(snapshot);
+                const snapshotLotEffective = lotPercentRequested > 0
+                  ? lotPercentRequested
+                  : (snapshotStoredLot > 0 ? snapshotStoredLot : lotPercentEffective);
+                const storeStrategyKey = snapshotStrategyIds.join(',');
                 const freqStrategyKey = snapshotRerunOffers
                   .map((item) => Number(item.strategyId || 0))
                   .join(',');
                 const freqVariantsApplied = storeStrategyKey !== freqStrategyKey;
-                const snapshotPortfolioLotMultipliers = buildPortfolioLotMultiplierByStrategyId(
-                  snapshotRerunOffers,
-                  normalizedOfferWeightsById,
+                const snapshotPortfolioLotMultipliers = snapshotStrategyIds.length > 1
+                  ? buildPortfolioLotMultiplierByStrategyId(
+                    snapshotRerunOffers,
+                    normalizedOfferWeightsById,
+                  )
+                  : {};
+
+                const snapshotRerunWindow = resolveAdminPreviewRerunWindow(
+                  sweep,
+                  snapshot,
+                  snapshotDateFromResolved || asString(sweep?.config?.dateFrom, '').slice(0, 10),
+                  snapshotDateToResolved || requestedDateTo || '',
+                  rerunWindowOverrides,
                 );
 
                 const primaryRequest: Parameters<typeof runBacktest>[0] = {
                   apiKeyName: preferredApiKey,
-                  mode: 'portfolio',
-                  strategyIds: snapshotStrategyIds,
-                  bars: asNumber(sweep?.config?.backtestBars, 6000),
-                  warmupBars: asNumber(sweep?.config?.warmupBars, 400),
+                  mode: snapshotBacktestMode,
+                  strategyId: snapshotBacktestMode === 'single' ? snapshotStrategyIds[0] : undefined,
+                  strategyIds: snapshotBacktestMode === 'portfolio' ? snapshotStrategyIds : undefined,
+                  bars: snapshotRerunWindow.bars,
+                  warmupBars: snapshotRerunWindow.warmupBars,
                   skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
                   initialBalance,
                   // Admin overrides win over sweep config defaults so sliders
@@ -7801,14 +7997,14 @@ export const previewAdminSweepBacktest = async (payload?: {
                   fundingRatePercent: fundingRatePercentOverride !== null
                     ? fundingRatePercentOverride
                     : asNumber(sweep?.config?.fundingRatePercent, 0),
-                  dateFrom: snapshotDateFromResolved || asString(sweep?.config?.dateFrom, ''),
-                  dateTo: snapshotDateToResolved || asString(sweep?.config?.dateTo, ''),
+                  dateFrom: snapshotRerunWindow.dateFrom,
+                  ...(snapshotRerunWindow.dateTo ? { dateTo: snapshotRerunWindow.dateTo } : {}),
                   ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
                   ...(partialTpPct > 0 ? { partialTpPct } : {}),
                   ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
                   ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
                   maxDepositOverride: resolveAdminPreviewMaxDepositOverride(reinvestPercent, initialBalance),
-                  lotPercentOverride: resolveAdminPreviewLotPercentOverride(lotPercentEffective * relativeTradeMul, rerunRiskMul),
+                  lotPercentOverride: resolveAdminPreviewLotPercentOverride(snapshotLotEffective * relativeTradeMul, rerunRiskMul),
                   reinvestPercentOverride: reinvestPercent,
                   ...(Object.keys(snapshotPortfolioLotMultipliers).length > 0
                     ? { lotPercentMultiplierByStrategyId: snapshotPortfolioLotMultipliers }
@@ -9137,7 +9333,19 @@ const executeDcaResearchCore = async (payload?: {
   return result;
 };
 
-export const getDcaResearchJobStatus = () => ({
+export const getDcaResearchJobStatus = () => {
+  if (
+    dcaResearchJob.running
+    && dcaResearchJob.startedAt > 0
+    && Date.now() - dcaResearchJob.startedAt > DCA_RESEARCH_STALE_MS
+  ) {
+    dcaResearchJob.running = false;
+    dcaResearchJob.finishedAt = Date.now();
+    dcaResearchJob.phase = 'error';
+    dcaResearchJob.error = 'DCA scan stale lock cleared — перезапустите скан';
+    dcaResearchJob.message = dcaResearchJob.error;
+  }
+  return {
   running: dcaResearchJob.running,
   abortRequested: dcaResearchJob.abortRequested,
   startedAt: dcaResearchJob.startedAt > 0 ? new Date(dcaResearchJob.startedAt).toISOString() : null,
@@ -9150,7 +9358,8 @@ export const getDcaResearchJobStatus = () => ({
   message: dcaResearchJob.message,
   result: dcaResearchJob.result,
   error: dcaResearchJob.error,
-});
+};
+};
 
 export const clearDcaResearchJobStaleState = (): void => {
   if (dcaResearchJob.running) {
@@ -9437,6 +9646,27 @@ const findOrCreateDcaStrategyForMarket = async (
   return created.strategyId;
 };
 
+/** Macro RSI shield: lock long profits when BTC/ETH overbought (research-backed on balanced-v2). */
+export const DEFAULT_TS_MACRO_SHIELD_OVERLAY: MacroExitOverlay = {
+  anchorInterval: '4h',
+  rules: [
+    {
+      source: 'anchor',
+      anchorSymbol: 'ETHUSDT',
+      rsiPeriod: 14,
+      longExitRsiAbove: 70,
+      label: 'eth_tp',
+    },
+    {
+      source: 'anchor',
+      anchorSymbol: 'BTCUSDT',
+      rsiPeriod: 14,
+      longExitRsiAbove: 70,
+      label: 'btc_tp',
+    },
+  ],
+};
+
 export const previewDcaCombinedWithTs = async (payload?: {
   systemName?: string;
   setKey?: string;
@@ -9460,6 +9690,9 @@ export const previewDcaCombinedWithTs = async (payload?: {
   commissionPercent?: number;
   slippagePercent?: number;
   fundingRatePercent?: number;
+  macroExitOverlay?: MacroExitOverlay;
+  /** When true, applies DEFAULT_TS_MACRO_SHIELD_OVERLAY on TS + combined runs. */
+  macroShield?: boolean;
 }) => {
   if (payload?.enabled === false) {
     return { enabled: false as const };
@@ -9509,6 +9742,9 @@ export const previewDcaCombinedWithTs = async (payload?: {
   const slippagePercentOverride = toFiniteOrNull(payload?.slippagePercent);
   const fundingRatePercentOverride = toFiniteOrNull(payload?.fundingRatePercent);
   const partialTpPct = Math.max(0, asNumber(payload?.partialTpPct, 0));
+  const macroOverlay = payload?.macroExitOverlay
+    || (payload?.macroShield === true ? DEFAULT_TS_MACRO_SHIELD_OVERLAY : undefined);
+  const macroExtras = macroOverlay ? { macroExitOverlay: macroOverlay } : {};
   const payloadOfferIds = Array.from(new Set(
     (Array.isArray(payload?.offerIds) ? payload.offerIds : ctx.offerIds)
       .map((item) => asString(item, '').trim())
@@ -9562,6 +9798,7 @@ export const previewDcaCombinedWithTs = async (payload?: {
     strategyIds: ctx.tsStrategyIds,
     ...portfolioExtras,
     ...tsEngineExtras,
+    ...macroExtras,
   });
   const dcaOnlyRaw = await runBacktest({
     ...backtestBase,
@@ -9576,6 +9813,7 @@ export const previewDcaCombinedWithTs = async (payload?: {
     strategyIds: [...ctx.tsStrategyIds, ...dcaStrategyIds],
     ...portfolioExtras,
     ...tsEngineExtras,
+    ...macroExtras,
   });
 
   const tsOnlySummary = applyAdminPreviewSummaryFromEquity(
@@ -9628,6 +9866,7 @@ export const previewDcaCombinedWithTs = async (payload?: {
       dd: Number(dcaOnlySummary.maxDrawdownPercent || 0),
       trades: Number(dcaOnlyRaw.summary.tradesCount || 0),
     },
+    macroShield: Boolean(macroOverlay),
   };
 };
 
@@ -10094,6 +10333,19 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
       const existingKey = resolveTsSnapshotKeyBySystemName(nextTsSnapshotMap, systemName) || systemName;
       const existing = nextTsSnapshotMap[existingKey] || null;
       try {
+        const existingSettingsRaw = existing?.backtestSettings || {};
+        const existingSettings = existingSettingsRaw as Record<string, unknown>;
+        const hasCustomAdminTuning = (
+          Number(existingSettings.reinvestPercent ?? 0) > 0
+          || Number(existingSettings.lotPercentOverride ?? 0) > 0
+          || Number(existingSettings.maxOpenPositions ?? 0) > 0
+          || Number(existingSettings.partialTpPct ?? 0) > 0
+        );
+        if (hasCustomAdminTuning) {
+          // Admin «Сохранить» with reinvest/lot/OP — do not clobber with lightweight sweep preview.
+          continue;
+        }
+
         const preview = await previewAdminSweepBacktest({
           kind: 'algofund-ts',
           systemName,
@@ -10101,10 +10353,14 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
           offerIds: Array.isArray(existing?.offerIds)
             ? existing.offerIds.map((item) => asString(item, '').trim()).filter(Boolean)
             : undefined,
-          riskScore: Number(existing?.backtestSettings?.riskScore ?? 5),
-          tradeFrequencyScore: Number(existing?.backtestSettings?.tradeFrequencyScore ?? 5),
-          initialBalance: Number(existing?.backtestSettings?.initialBalance ?? 10000),
-          riskScaleMaxPercent: Number(existing?.backtestSettings?.riskScaleMaxPercent ?? 100),
+          riskScore: Number(existingSettings.riskScore ?? 5),
+          tradeFrequencyScore: Number(existingSettings.tradeFrequencyScore ?? 5),
+          initialBalance: Number(existingSettings.initialBalance ?? 10000),
+          riskScaleMaxPercent: Number(existingSettings.riskScaleMaxPercent ?? 100),
+          reinvestPercent: Number(existingSettings.reinvestPercent ?? 0),
+          maxOpenPositions: Number(existingSettings.maxOpenPositions ?? 0),
+          lotPercentOverride: Number(existingSettings.lotPercentOverride ?? 0),
+          partialTpPct: Number(existingSettings.partialTpPct ?? 0),
           isBatchRefresh: true,
         });
 
@@ -10150,13 +10406,14 @@ export const refreshOfferStoreSnapshotsFromSweep = async (options?: {
           equityPoints,
           offerIds,
           backtestSettings: {
-            riskScore: Number(existing?.backtestSettings?.riskScore ?? 5),
-            tradeFrequencyScore: Number(existing?.backtestSettings?.tradeFrequencyScore ?? 5),
-            initialBalance: Number(existing?.backtestSettings?.initialBalance ?? 10000),
-            riskScaleMaxPercent: Number(existing?.backtestSettings?.riskScaleMaxPercent ?? 100),
+            ...(existingSettings || {}),
+            riskScore: Number(existingSettings.riskScore ?? 5),
+            tradeFrequencyScore: Number(existingSettings.tradeFrequencyScore ?? 5),
+            initialBalance: Number(existingSettings.initialBalance ?? 10000),
+            riskScaleMaxPercent: Number(existingSettings.riskScaleMaxPercent ?? 100),
             dateFrom: asString((preview.period as Record<string, unknown> | undefined)?.dateFrom, previewPeriodFrom),
             dateTo: asString((preview.period as Record<string, unknown> | undefined)?.dateTo, previewPeriodTo),
-            interval: asString((preview.period as Record<string, unknown> | undefined)?.interval, asString(existing?.backtestSettings?.interval, '4h')),
+            interval: asString((preview.period as Record<string, unknown> | undefined)?.interval, asString(existingSettings.interval, '4h')),
           },
           updatedAt: new Date().toISOString(),
         });
@@ -13420,6 +13677,39 @@ const materializeAlgofundSystem = async (
     await setTradingSystemActivation(executionApiKeyName, systemId, true, true);
   }
 
+  await applyClientCardStrategyOverrides(executionApiKeyName, cardSystemName).catch((error) => {
+    logger.warn(`Algofund materialize card overrides failed for ${tenant.slug}: ${(error as Error).message}`);
+  });
+
+  const masterTargets = await resolveAlgofundSystemTargets({ systemName: cardSystemName }).catch(() => []);
+  const masterTarget = masterTargets[0];
+  if (masterTarget?.apiKeyName && masterTarget.systemId > 0) {
+    const dcaStrategyIds = await materializeClassicDcaToClient(
+      masterTarget.apiKeyName,
+      executionApiKeyName,
+      masterTarget.systemId,
+    ).catch((error) => {
+      logger.warn(`Algofund materialize classic DCA copy failed for ${tenant.slug}: ${(error as Error).message}`);
+      return [] as number[];
+    });
+    if (dcaStrategyIds.length > 0 && systemId > 0) {
+      await attachClientDcaMembersToTradingSystem(
+        executionApiKeyName,
+        systemId,
+        dcaStrategyIds,
+      ).catch((error) => {
+        logger.warn(`Algofund attach client DCA members failed for ${tenant.slug}: ${(error as Error).message}`);
+      });
+    }
+    await materializeDcaFuturesToClient(
+      masterTarget.apiKeyName,
+      executionApiKeyName,
+      masterTarget.systemId,
+    ).catch((error) => {
+      logger.warn(`Algofund materialize dca_futures copy failed for ${tenant.slug}: ${(error as Error).message}`);
+    });
+  }
+
   await db.run(
     `UPDATE algofund_profiles
      SET assigned_api_key_name = ?,
@@ -14665,7 +14955,7 @@ export const previewPublishImpact = async (setKey: string): Promise<{
 const applyCardMetadataOverrides = async (
   cardId: number,
   currentMetadata: Record<string, unknown>,
-  overrides?: { lotPercentOverride?: number; maxOpenPositions?: number; autoLotByChannelWidth?: boolean; dcaPerLegSl?: boolean },
+  overrides?: { lotPercentOverride?: number; maxOpenPositions?: number; autoLotByChannelWidth?: boolean; dcaPerLegSl?: boolean; reinvestPercentOverride?: number; macroShield?: boolean },
   sourceSystem?: { apiKeyName: string; systemId: number },
 ): Promise<{ changed: boolean; metadata: Record<string, unknown> }> => {
   if (!overrides) {
@@ -14703,6 +14993,20 @@ const applyCardMetadataOverrides = async (
     const enabled = overrides.dcaPerLegSl === true;
     if (Boolean(next.dcaPerLegSl) !== enabled) {
       next.dcaPerLegSl = enabled;
+      changed = true;
+    }
+  }
+  if (overrides.reinvestPercentOverride !== undefined) {
+    const reinvest = Math.min(100, Math.max(0, Number(overrides.reinvestPercentOverride)));
+    if (Number.isFinite(reinvest) && Number(next.reinvestPercentOverride) !== reinvest) {
+      next.reinvestPercentOverride = reinvest;
+      changed = true;
+    }
+  }
+  if (overrides.macroShield !== undefined) {
+    const enabled = overrides.macroShield === true;
+    if (Boolean(next.macroShield) !== enabled) {
+      next.macroShield = enabled;
       changed = true;
     }
   }
@@ -14829,6 +15133,9 @@ const syncMasterTradingSystemDcaMembers = async (
   }
 
   if (added > 0) {
+    await updateTradingSystem(target.apiKeyName, target.systemId, {
+      max_members: Math.max(memberById.size, Number(system.max_members || 0), 6),
+    });
     await replaceTradingSystemMembers(
       target.apiKeyName,
       target.systemId,
@@ -14932,12 +15239,85 @@ const materializeDcaFuturesToClient = async (
   }
 };
 
+/** Attach copied DCA strategy_ids to a client's runtime trading system. */
+const attachClientDcaMembersToTradingSystem = async (
+  clientApiKeyName: string,
+  clientSystemId: number,
+  dcaStrategyIds: number[],
+): Promise<number> => {
+  const ids = Array.from(new Set(dcaStrategyIds.map((id) => Number(id || 0)).filter((id) => id > 0)));
+  if (ids.length === 0 || clientSystemId <= 0) {
+    return 0;
+  }
+
+  const system = await getTradingSystem(clientApiKeyName, clientSystemId).catch(() => null);
+  if (!system) {
+    return 0;
+  }
+
+  const memberById = new Map<number, TradingSystemMemberDraft>();
+  for (const member of system.members || []) {
+    const sid = Number(member.strategy_id || 0);
+    if (sid > 0) {
+      memberById.set(sid, {
+        strategy_id: sid,
+        weight: asNumber(member.weight, 1),
+        member_role: asString(member.member_role, 'core'),
+        is_enabled: member.is_enabled !== false,
+        notes: asString(member.notes, ''),
+      });
+    }
+  }
+
+  let added = 0;
+  for (const strategyId of ids) {
+    if (memberById.has(strategyId)) {
+      continue;
+    }
+    memberById.set(strategyId, {
+      strategy_id: strategyId,
+      weight: 0.85,
+      member_role: 'satellite',
+      is_enabled: true,
+      notes: 'dca satellite',
+    });
+    added += 1;
+  }
+
+  if (added <= 0) {
+    return 0;
+  }
+
+  await updateTradingSystem(clientApiKeyName, clientSystemId, {
+    max_members: Math.max(memberById.size, Number(system.max_members || 0), 6),
+  });
+  await replaceTradingSystemMembers(
+    clientApiKeyName,
+    clientSystemId,
+    Array.from(memberById.values()),
+  );
+  logger.info(`[attachClientDcaMembers] +${added} DCA on ${clientApiKeyName} TS #${clientSystemId}`);
+  return added;
+};
+
 /** Copy classic `dca` strategies (modal apply path) from master TS to client API key. */
 const materializeClassicDcaToClient = async (
   masterApiKeyName: string,
   clientApiKeyName: string,
   systemId: number,
-): Promise<void> => {
+): Promise<number[]> => {
+  // Master DCA rows may be archived during card edits — restore before copy.
+  await db.run(
+    `UPDATE strategies
+     SET is_archived = 0, is_active = 1, updated_at = CURRENT_TIMESTAMP
+     WHERE id IN (
+       SELECT tsm.strategy_id FROM trading_system_members tsm
+       JOIN strategies s ON s.id = tsm.strategy_id
+       WHERE tsm.system_id = ? AND s.strategy_type = 'dca'
+     )`,
+    [systemId],
+  ).catch(() => {});
+
   const masters = await db.all<Array<{
     id: number;
     name: string;
@@ -14965,19 +15345,22 @@ const materializeClassicDcaToClient = async (
      JOIN strategies s ON s.id = tsm.strategy_id
      JOIN api_keys ak ON ak.id = s.api_key_id
      WHERE tsm.system_id = ? AND s.strategy_type = 'dca'
-       AND ak.name = ? AND s.is_archived = 0`,
+       AND ak.name = ? AND COALESCE(tsm.is_enabled, 1) = 1`,
     [systemId, masterApiKeyName],
   ).catch(() => []);
   if (!Array.isArray(masters) || masters.length === 0) {
-    return;
+    logger.warn(`[materializeClassicDca] no enabled DCA masters on TS #${systemId} (${masterApiKeyName})`);
+    return [];
   }
+
+  const clientStrategyIds: number[] = [];
 
   const clientAkRow = await db.get<{ id: number }>(
     `SELECT id FROM api_keys WHERE name = ?`,
     [clientApiKeyName],
   ).catch(() => null);
   if (!clientAkRow) {
-    return;
+    return [];
   }
   const clientAkId = Number(clientAkRow.id);
 
@@ -15032,10 +15415,11 @@ const materializeClassicDcaToClient = async (
            dca_order_multiplier = ?, dca_tp_percent = ?, dca_sl_percent = ?,
            dca_entry_filter = ?, dca_reentry_bars = ?, dca_rsi_period = ?, dca_rsi_max = ?,
            dca_per_leg_sl = ?, interval = ?, detection_source = ?,
-           is_active = 1, auto_update = 1, updated_at = CURRENT_TIMESTAMP
+           is_active = 1, is_archived = 0, auto_update = 1, updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`,
         [...dcaParams, existing.id],
       );
+      clientStrategyIds.push(Number(existing.id));
       logger.info(`[materializeClassicDca] updated strategy #${existing.id} (${master.base_symbol}) on ${clientApiKeyName}`);
     } else {
       const insertName = clientName !== master.name ? clientName : `DCA ${master.base_symbol}`;
@@ -15063,9 +15447,15 @@ const materializeClassicDcaToClient = async (
           ...dcaParams,
         ],
       );
+      const created = await db.get<{ id: number }>('SELECT last_insert_rowid() AS id').catch(() => null);
+      if (created?.id) {
+        clientStrategyIds.push(Number(created.id));
+      }
       logger.info(`[materializeClassicDca] created ${insertName} on ${clientApiKeyName}`);
     }
   }
+
+  return clientStrategyIds;
 };
 
 type PropagationLogLevel = 'info' | 'warn' | 'error';
@@ -15290,7 +15680,7 @@ export const publishAdminTradingSystem = async (payload?: {
    * `master_cards.metadata_json` so that `routes.ts` materialize path
    * picks them up for every client.
    */
-  cardOverrides?: { lotPercentOverride?: number; maxOpenPositions?: number; autoLotByChannelWidth?: boolean; dcaPerLegSl?: boolean };
+  cardOverrides?: { lotPercentOverride?: number; maxOpenPositions?: number; autoLotByChannelWidth?: boolean; dcaPerLegSl?: boolean; reinvestPercentOverride?: number; macroShield?: boolean };
 }) => {
   const catalog = loadLatestClientCatalog();
   const offerIds = normalizePublishOfferIds(payload?.offerIds);

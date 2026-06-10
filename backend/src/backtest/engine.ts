@@ -120,8 +120,35 @@ export type BacktestRunRequest = {
    * at market and set break-even anchor on the remainder (0 = disabled).
    */
   partialTpPct?: number;
+  /** RSI / anchor-based early exit overlay (research + TS preview). */
+  macroExitOverlay?: MacroExitOverlay;
   /** When true, scale trend lot by inverse Donchian channel width at entry. */
   autoLotByChannelWidth?: boolean;
+};
+
+export type MacroExitRule = {
+  /** self = strategy symbol; anchor = BTCUSDT / ETHUSDT / SOLUSDT etc. */
+  source: 'self' | 'anchor';
+  anchorSymbol?: string;
+  rsiPeriod?: number;
+  /** Close long when RSI >= threshold (take profit / overbought). */
+  longExitRsiAbove?: number;
+  /** Close long when RSI <= threshold (reversal / risk-off). */
+  longExitRsiBelow?: number;
+  /** Close short when RSI <= threshold. */
+  shortExitRsiBelow?: number;
+  /** Close short when RSI >= threshold. */
+  shortExitRsiAbove?: number;
+  mode?: 'full' | 'partial';
+  /** Fraction to close when mode=partial (default 0.5). */
+  closeFraction?: number;
+  label?: string;
+};
+
+export type MacroExitOverlay = {
+  rules: MacroExitRule[];
+  /** Interval for anchor symbol candles (defaults to first strategy interval). */
+  anchorInterval?: string;
 };
 
 export type BacktestRunResult = {
@@ -153,6 +180,7 @@ type NormalizedBacktestRequest = {
   lotPercentMultiplierByStrategyId: Map<number, number>;
   reinvestPercentOverride: number;
   partialTpPct: number;
+  macroExitOverlay: MacroExitOverlay | null;
   autoLotByChannelWidth: boolean;
   /**
    * If true (default), mirror runtime pair-lock semantics in the backtest engine.
@@ -585,6 +613,116 @@ const computeRsiAtIndex = (candles: ParsedCandle[], index: number, period: numbe
   return 100 - (100 / (1 + rs));
 };
 
+const findCandleIndexAtOrBefore = (candles: ParsedCandle[], timeMs: number): number => {
+  if (!candles.length) return 0;
+  let lo = 0;
+  let hi = candles.length - 1;
+  let ans = 0;
+  while (lo <= hi) {
+    const mid = Math.floor((lo + hi) / 2);
+    if (candles[mid].timeMs <= timeMs) {
+      ans = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return ans;
+};
+
+const normalizeMacroExitOverlay = (raw: unknown): MacroExitOverlay | null => {
+  if (!raw || typeof raw !== 'object') return null;
+  const src = raw as MacroExitOverlay;
+  if (!Array.isArray(src.rules) || src.rules.length === 0) return null;
+
+  const rules: MacroExitRule[] = [];
+  for (const item of src.rules) {
+    if (!item || typeof item !== 'object') continue;
+    const ruleRaw = item as MacroExitRule;
+    const source = ruleRaw.source === 'anchor' ? 'anchor' : 'self';
+    const rule: MacroExitRule = { source };
+    if (source === 'anchor') {
+      const sym = String(ruleRaw.anchorSymbol || '').trim().toUpperCase();
+      if (!sym) continue;
+      rule.anchorSymbol = sym;
+    }
+    rule.rsiPeriod = Math.max(2, Math.floor(asNumber(ruleRaw.rsiPeriod, 14)));
+    if (ruleRaw.longExitRsiAbove != null) {
+      rule.longExitRsiAbove = clamp(asNumber(ruleRaw.longExitRsiAbove, 0), 0, 100);
+    }
+    if (ruleRaw.longExitRsiBelow != null) {
+      rule.longExitRsiBelow = clamp(asNumber(ruleRaw.longExitRsiBelow, 0), 0, 100);
+    }
+    if (ruleRaw.shortExitRsiBelow != null) {
+      rule.shortExitRsiBelow = clamp(asNumber(ruleRaw.shortExitRsiBelow, 0), 0, 100);
+    }
+    if (ruleRaw.shortExitRsiAbove != null) {
+      rule.shortExitRsiAbove = clamp(asNumber(ruleRaw.shortExitRsiAbove, 0), 0, 100);
+    }
+    rule.mode = ruleRaw.mode === 'partial' ? 'partial' : 'full';
+    rule.closeFraction = clamp(asNumber(ruleRaw.closeFraction, 0.5), 0.05, 0.95);
+    const label = String(ruleRaw.label || '').trim();
+    if (label) rule.label = label;
+
+    const hasThreshold = rule.longExitRsiAbove != null
+      || rule.longExitRsiBelow != null
+      || rule.shortExitRsiBelow != null
+      || rule.shortExitRsiAbove != null;
+    if (!hasThreshold) continue;
+    rules.push(rule);
+  }
+
+  if (rules.length === 0) return null;
+  const anchorInterval = String(src.anchorInterval || '').trim();
+  return {
+    rules,
+    ...(anchorInterval ? { anchorInterval } : {}),
+  };
+};
+
+const macroExitRuleKey = (ruleIdx: number, rule: MacroExitRule): string => {
+  const label = rule.label || `${rule.source}_${rule.anchorSymbol || 'self'}`;
+  return `${ruleIdx}:${label}`;
+};
+
+const shouldTriggerMacroExit = (
+  rule: MacroExitRule,
+  state: PositionState,
+  rsi: number,
+): boolean => {
+  if (state === 'long') {
+    if (rule.longExitRsiAbove != null && rsi >= rule.longExitRsiAbove) return true;
+    if (rule.longExitRsiBelow != null && rsi <= rule.longExitRsiBelow) return true;
+  }
+  if (state === 'short') {
+    if (rule.shortExitRsiBelow != null && rsi <= rule.shortExitRsiBelow) return true;
+    if (rule.shortExitRsiAbove != null && rsi >= rule.shortExitRsiAbove) return true;
+  }
+  return false;
+};
+
+const loadAnchorCandlesForMacroExit = async (
+  request: NormalizedBacktestRequest,
+  symbol: string,
+  interval: string,
+  candlesLimit: number,
+): Promise<ParsedCandle[]> => {
+  const raw = await getMarketData(
+    request.dataApiKeyName,
+    symbol,
+    interval,
+    candlesLimit,
+    {
+      startMs: request.dateFromMs ?? undefined,
+      endMs: request.dateToMs ?? undefined,
+    },
+  );
+  return (Array.isArray(raw) ? raw : [])
+    .map((item) => parseCandle(item))
+    .filter((item): item is ParsedCandle => !!item)
+    .sort((a, b) => a.timeMs - b.timeMs);
+};
+
 /** Deposit equity for DCA % sizing — same reinvest compound as TS, not free-margin base. */
 const resolveDcaDepositEquity = (
   ctx: BacktestContext,
@@ -812,6 +950,8 @@ type RuntimeStrategy = {
   endIndex: number;
   /** Has the partial TP (50% close) already fired for the current open position? */
   partialTpTriggered: boolean;
+  /** Macro-exit partial rules already fired for the current open position. */
+  macroPartialRulesFired: Set<string>;
   dcaState: ReturnType<typeof extractDcaConfigFromStrategy>;
 };
 
@@ -974,6 +1114,7 @@ const closePosition = (
   runtime.notional = 0;
   runtime.openTrade = null;
   runtime.partialTpTriggered = false;
+  runtime.macroPartialRulesFired.clear();
 };
 
 /**
@@ -1077,6 +1218,7 @@ const openPosition = (
     runtime.tpAnchorPrice = marketPrice;
     runtime.notional = dcaSize;
     runtime.partialTpTriggered = false;
+    runtime.macroPartialRulesFired = new Set();
     runtime.openTrade = { side: signal, entryTime: eventTime, entryPrice, notional: dcaSize, entryFee, funding: 0 };
     ctx.lockedMargin += dcaSize;
     const qty = dcaSize / entryPrice;
@@ -1155,6 +1297,7 @@ const openPosition = (
   runtime.tpAnchorPrice = marketPrice;
   runtime.notional = notional;
   runtime.partialTpTriggered = false;
+  runtime.macroPartialRulesFired = new Set();
   runtime.openTrade = {
     side: signal,
     entryTime: eventTime,
@@ -1167,6 +1310,75 @@ const openPosition = (
   ctx.lockedMargin += notional;
 
   return true;
+};
+
+const applyMacroExitOverlay = (
+  ctx: BacktestContext,
+  runtime: RuntimeStrategy,
+  macroOverlay: MacroExitOverlay,
+  anchorCandleCache: Map<string, ParsedCandle[]>,
+  event: StrategyEvent,
+  state: PositionState,
+  signalPrice: number,
+): boolean => {
+  if (state !== 'long' && state !== 'short') return false;
+
+  const strategy = runtime.strategy;
+  for (let ruleIdx = 0; ruleIdx < macroOverlay.rules.length; ruleIdx++) {
+    const rule = macroOverlay.rules[ruleIdx];
+    const ruleKey = macroExitRuleKey(ruleIdx, rule);
+    if (rule.mode === 'partial' && runtime.macroPartialRulesFired.has(ruleKey)) {
+      continue;
+    }
+
+    let candles: ParsedCandle[] | null = null;
+    let candleIndex = event.candleIndex;
+    if (rule.source === 'self') {
+      candles = runtime.candles;
+    } else if (rule.anchorSymbol) {
+      candles = anchorCandleCache.get(rule.anchorSymbol) || null;
+      if (candles) {
+        candleIndex = findCandleIndexAtOrBefore(candles, event.timeMs);
+      }
+    }
+    if (!candles || candles.length === 0) continue;
+
+    const period = rule.rsiPeriod ?? 14;
+    if (candleIndex < period) continue;
+
+    const rsi = computeRsiAtIndex(candles, candleIndex, period);
+    if (!shouldTriggerMacroExit(rule, state, rsi)) continue;
+
+    const reason = `macro_rsi_${rule.label || ruleKey}_${rsi.toFixed(1)}`;
+    if (rule.mode === 'partial') {
+      const fraction = rule.closeFraction ?? 0.5;
+      partialClosePosition(
+        ctx,
+        runtime,
+        Number(strategy.id),
+        strategy.name,
+        event.timeMs,
+        signalPrice,
+        reason,
+        fraction,
+      );
+      runtime.macroPartialRulesFired.add(ruleKey);
+      continue;
+    }
+
+    closePosition(
+      ctx,
+      runtime,
+      Number(strategy.id),
+      strategy.name,
+      event.timeMs,
+      signalPrice,
+      reason,
+    );
+    return true;
+  }
+
+  return false;
 };
 
 type StrategyEvent = {
@@ -1520,7 +1732,8 @@ const loadRuntimeStrategies = async (
       startIndex,
       endIndex,
       partialTpTriggered: false,
-        dcaState: extractDcaConfigFromStrategy(strategy),
+      macroPartialRulesFired: new Set(),
+      dcaState: extractDcaConfigFromStrategy(strategy),
     });
   }
 
@@ -1590,6 +1803,7 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
       return Number.isFinite(n) && n >= 0 ? Math.min(100, n) : -1;
     })(),
     partialTpPct,
+    macroExitOverlay: normalizeMacroExitOverlay(raw.macroExitOverlay),
     autoLotByChannelWidth: raw.autoLotByChannelWidth === true,
     enablePairLock: (raw as unknown as { enablePairLock?: boolean })?.enablePairLock !== false,
     pairLockSeed: Math.max(
@@ -1680,6 +1894,34 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
 
   const maxOpenPositions = request.maxOpenPositions;
   const partialTpPct = request.partialTpPct;
+  const macroOverlay = request.macroExitOverlay;
+  const anchorCandleCache = new Map<string, ParsedCandle[]>();
+  if (macroOverlay && macroOverlay.rules.some((rule) => rule.source === 'anchor')) {
+    const anchorInterval = macroOverlay.anchorInterval
+      || String(runtimes[0]?.strategy.interval || '4h');
+    const candlesLimit = Math.max(request.bars + request.warmupBars + 500, 2000);
+    const anchorSymbols = Array.from(new Set(
+      macroOverlay.rules
+        .filter((rule) => rule.source === 'anchor' && rule.anchorSymbol)
+        .map((rule) => rule.anchorSymbol as string),
+    ));
+    for (const sym of anchorSymbols) {
+      try {
+        const candles = await loadAnchorCandlesForMacroExit(
+          request,
+          sym,
+          anchorInterval,
+          candlesLimit,
+        );
+        if (candles.length > 0) {
+          anchorCandleCache.set(sym, candles);
+        }
+      } catch (error) {
+        logger.warn(`macro exit: failed to load anchor ${sym}: ${(error as Error).message}`);
+      }
+    }
+  }
+
   let skippedByPositionLimit = 0;
   let skippedByPairLock = 0;
 
@@ -1819,6 +2061,13 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
           runtime.dcaState.barsSinceFlat = 0;
           closedOnCurrentBar = true;
         }
+      }
+    }
+
+    // Macro RSI exit overlay (self symbol + BTC/ETH/SOL anchors)
+    if (!isClassicDca && !closedOnCurrentBar && macroOverlay && (state === 'long' || state === 'short')) {
+      if (applyMacroExitOverlay(ctx, runtime, macroOverlay, anchorCandleCache, event, state, signalPayload.current)) {
+        closedOnCurrentBar = true;
       }
     }
 

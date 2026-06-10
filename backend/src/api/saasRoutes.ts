@@ -465,6 +465,10 @@ router.post('/admin/ts-dca-combined-preview', async (req, res) => {
           ]),
         )
         : undefined,
+      macroShield: req.body?.macroShield === true,
+      macroExitOverlay: req.body?.macroExitOverlay && typeof req.body.macroExitOverlay === 'object'
+        ? req.body.macroExitOverlay as import('../backtest/engine').MacroExitOverlay
+        : undefined,
     };
     const status = await startDcaCombinedPreviewJob(payload);
     res.status(202).json({ success: true, accepted: true, ...status });
