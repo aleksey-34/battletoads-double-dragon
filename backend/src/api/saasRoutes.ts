@@ -76,6 +76,7 @@ import {
   updateStrategyClientCustomTsDraft,
   previewStrategyClientCustomTsDraft,
   getSaasObservabilityAlerts,
+  parseCardMetadataOverridesBody,
 } from '../saas/service';
 
 type OfferStoreLabel = 'research_catalog' | 'runtime_snapshot' | 'fallback_preset';
@@ -340,6 +341,13 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
       enablePairLock: req.body?.enablePairLock !== undefined ? toBool(req.body.enablePairLock, true) : undefined,
       pairLockSeed: toOptionalNumber(req.body?.pairLockSeed),
       autoLotByChannelWidth: req.body?.autoLotByChannelWidth === true,
+      macroShield: req.body?.macroShield === true,
+      macroExitOverlay: req.body?.macroExitOverlay && typeof req.body.macroExitOverlay === 'object'
+        ? req.body.macroExitOverlay as import('../backtest/engine').MacroExitOverlay
+        : undefined,
+      statArbEntryGate: req.body?.statArbEntryGate && typeof req.body.statArbEntryGate === 'object'
+        ? req.body.statArbEntryGate as import('../backtest/engine').StatArbEntryGate
+        : undefined,
     });
     // Auto-sync Cloud TS members from sweep result (fire-and-forget)
     if (data.kind === 'algofund-ts' && Array.isArray(data.selectedOffers) && data.selectedOffers.length > 0) {
@@ -470,6 +478,13 @@ router.post('/admin/ts-dca-combined-preview', async (req, res) => {
       macroExitOverlay: req.body?.macroExitOverlay && typeof req.body.macroExitOverlay === 'object'
         ? req.body.macroExitOverlay as import('../backtest/engine').MacroExitOverlay
         : undefined,
+      statArbEntryGate: req.body?.statArbEntryGate && typeof req.body.statArbEntryGate === 'object'
+        ? req.body.statArbEntryGate as import('../backtest/engine').StatArbEntryGate
+        : undefined,
+      orderBlockEntryGate: req.body?.orderBlockEntryGate && typeof req.body.orderBlockEntryGate === 'object'
+        ? req.body.orderBlockEntryGate as import('../bot/orderBlockLiquidity').OrderBlockEntryGate
+        : undefined,
+      enablePairLock: req.body?.enablePairLock !== false,
     };
     const status = await startDcaCombinedPreviewJob(payload);
     res.status(202).json({ success: true, accepted: true, ...status });
@@ -516,6 +531,13 @@ router.post('/admin/ts-dca-combined-preview-sync', async (req, res) => {
             parseDcaSettingsBody(tuning as Record<string, unknown>) || {},
           ]),
         )
+        : undefined,
+      macroShield: req.body?.macroShield === true,
+      macroExitOverlay: req.body?.macroExitOverlay && typeof req.body.macroExitOverlay === 'object'
+        ? req.body.macroExitOverlay as import('../backtest/engine').MacroExitOverlay
+        : undefined,
+      statArbEntryGate: req.body?.statArbEntryGate && typeof req.body.statArbEntryGate === 'object'
+        ? req.body.statArbEntryGate as import('../backtest/engine').StatArbEntryGate
         : undefined,
     });
     res.json({ success: true, ...data });
@@ -839,14 +861,7 @@ router.post('/admin/publish', async (req, res) => {
       ? req.body.cardOverrides as Record<string, unknown>
       : null;
     const cardOverrides = cardOverridesRaw
-      ? {
-          ...(cardOverridesRaw.lotPercentOverride !== undefined
-            ? { lotPercentOverride: Number(cardOverridesRaw.lotPercentOverride) }
-            : {}),
-          ...(cardOverridesRaw.maxOpenPositions !== undefined
-            ? { maxOpenPositions: Number(cardOverridesRaw.maxOpenPositions) }
-            : {}),
-        }
+      ? parseCardMetadataOverridesBody(cardOverridesRaw)
       : undefined;
     const data = await publishAdminTradingSystem({
       offerIds: Array.isArray(req.body?.offerIds) ? req.body.offerIds.map((item: unknown) => String(item || '')) : undefined,

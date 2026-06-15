@@ -31,6 +31,7 @@ type ApiKey = {
   id: number;
   name: string;
   exchange: string;
+  algofundDematerialized?: boolean;
 };
 
 type BalanceRow = {
@@ -148,7 +149,10 @@ const Positions: React.FC = () => {
   const [tradesByKey, setTradesByKey] = useState<{ [key: string]: TradeRow[] }>({});
   const [balancesByKey, setBalancesByKey] = useState<{ [key: string]: BalanceRow[] }>({});
   const [loadingByKey, setLoadingByKey] = useState<{ [key: string]: boolean }>({});
-  const [errorByKey, setErrorByKey] = useState<{ [key: string]: string }>({});
+  const [balanceErrorByKey, setBalanceErrorByKey] = useState<{ [key: string]: string }>({});
+  const [positionErrorByKey, setPositionErrorByKey] = useState<{ [key: string]: string }>({});
+  const [hideDematerializedKeys, setHideDematerializedKeys] = useState(true);
+  const [serverEgressIp, setServerEgressIp] = useState('176.57.184.98');
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [actionLoading, setActionLoading] = useState<{ [key: string]: boolean }>({});
   const [refreshAllLoading, setRefreshAllLoading] = useState<boolean>(false);
@@ -177,6 +181,10 @@ const Positions: React.FC = () => {
 
     axios.defaults.headers.common.Authorization = `Bearer ${password}`;
     void fetchApiKeys();
+    void axios.get('/api/admin/egress-ip').then((res) => {
+      const ip = String(res.data?.ip || '').trim();
+      if (ip) setServerEgressIp(ip);
+    }).catch(() => undefined);
   }, []);
 
   const refreshForKeys = async (keys: ApiKey[], options?: { includeTrades?: boolean }) => {
@@ -244,7 +252,7 @@ const Positions: React.FC = () => {
 
   const fetchPositions = async (apiKeyName: string) => {
     setLoadingByKey((prev) => ({ ...prev, [apiKeyName]: true }));
-    setErrorByKey((prev) => ({ ...prev, [apiKeyName]: '' }));
+    setPositionErrorByKey((prev) => ({ ...prev, [apiKeyName]: '' }));
 
     try {
       const res = await axios.get(`/api/positions/${apiKeyName}`);
@@ -270,7 +278,7 @@ const Positions: React.FC = () => {
       setPositionsByKey((prev) => ({ ...prev, [apiKeyName]: normalized }));
     } catch (error: any) {
       console.error(error);
-      setErrorByKey((prev) => ({
+      setPositionErrorByKey((prev) => ({
         ...prev,
         [apiKeyName]: error.response?.data?.error || t('positions.msg.loadPositionsFailed', 'Failed to load positions'),
       }));
@@ -299,10 +307,6 @@ const Positions: React.FC = () => {
       setOrdersByKey((prev) => ({ ...prev, [apiKeyName]: normalized }));
     } catch (error: any) {
       console.error(error);
-      setErrorByKey((prev) => ({
-        ...prev,
-        [apiKeyName]: error.response?.data?.error || t('positions.msg.loadOrdersFailed', 'Failed to load open orders'),
-      }));
     } finally {
       setLoadingByKey((prev) => ({ ...prev, [`orders:${apiKeyName}`]: false }));
     }
@@ -336,10 +340,6 @@ const Positions: React.FC = () => {
       setTradesByKey((prev) => ({ ...prev, [apiKeyName]: normalized }));
     } catch (error: any) {
       console.error(error);
-      setErrorByKey((prev) => ({
-        ...prev,
-        [apiKeyName]: error.response?.data?.error || t('positions.msg.loadTradesFailed', 'Failed to load trade history'),
-      }));
     } finally {
       setLoadingByKey((prev) => ({ ...prev, [`trades:${apiKeyName}`]: false }));
     }
@@ -347,6 +347,7 @@ const Positions: React.FC = () => {
 
   const fetchBalances = async (apiKeyName: string) => {
     setLoadingByKey((prev) => ({ ...prev, [`balances:${apiKeyName}`]: true }));
+    setBalanceErrorByKey((prev) => ({ ...prev, [apiKeyName]: '' }));
 
     try {
       const res = await axios.get(`/api/balances/${apiKeyName}`);
@@ -362,7 +363,7 @@ const Positions: React.FC = () => {
       setBalancesByKey((prev) => ({ ...prev, [apiKeyName]: normalized }));
     } catch (error: any) {
       console.error(error);
-      setErrorByKey((prev) => ({
+      setBalanceErrorByKey((prev) => ({
         ...prev,
         [apiKeyName]: error.response?.data?.error || t('positions.msg.loadBalancesFailed', 'Failed to load balances'),
       }));
@@ -707,8 +708,19 @@ const Positions: React.FC = () => {
     return raw;
   };
 
+  const visibleApiKeys = useMemo(
+    () => (hideDematerializedKeys ? apiKeys.filter((k) => !k.algofundDematerialized) : apiKeys),
+    [apiKeys, hideDematerializedKeys],
+  );
+
+  const weexIpErrorCount = useMemo(
+    () => Object.values({ ...balanceErrorByKey, ...positionErrorByKey })
+      .filter((msg) => /whitelist|WEEX отклонил|无效的IP|40018/i.test(String(msg || ''))).length,
+    [balanceErrorByKey, positionErrorByKey],
+  );
+
   const apiKeysByExchange = useMemo(() => {
-    return apiKeys.reduce((acc, apiKey) => {
+    return visibleApiKeys.reduce((acc, apiKey) => {
       const exchange = canonicalExchange(apiKey.exchange || t('common.unknown', 'Unknown'));
       if (!acc[exchange]) {
         acc[exchange] = [];
@@ -716,7 +728,7 @@ const Positions: React.FC = () => {
       acc[exchange].push(apiKey);
       return acc;
     }, {} as { [exchange: string]: ApiKey[] });
-  }, [apiKeys, t]);
+  }, [visibleApiKeys, t]);
 
   const loadMonChart = async (key: string, days: number) => {
     setMonChartLoading(true);
@@ -774,7 +786,20 @@ const Positions: React.FC = () => {
             { label: t('positions.segment.all', 'All'), value: 'all' },
           ]}
         />
+        <Checkbox checked={hideDematerializedKeys} onChange={(e) => setHideDematerializedKeys(e.target.checked)}>
+          Скрыть дематериализованные ключи
+        </Checkbox>
       </Space>
+
+      {weexIpErrorCount > 0 ? (
+        <Alert
+          type="warning"
+          showIcon
+          style={{ marginBottom: 12 }}
+          message="WEEX: неверный IP в whitelist API-ключа"
+          description={`Запросы с сервера идут с IP ${serverEgressIp}. В кабинете WEEX для каждого проблемного API-ключа добавьте этот IP в список разрешённых, затем нажмите «Обновить». Ключи без whitelist показывают 0 USDT и пустые позиции — это не слив, а блокировка API.`}
+        />
+      ) : null}
 
       <Modal
         title="📊 Мониторинг позиций"
@@ -907,6 +932,9 @@ const Positions: React.FC = () => {
 
                   <Card className="battletoads-card" size="small" title={t('positions.balances', 'Balances')} style={{ marginBottom: 8 }} bodyStyle={{ padding: 10 }}>
                     <Space direction="vertical" style={{ width: '100%' }} size={6}>
+                      {balanceErrorByKey[key.name] ? (
+                        <Alert type="error" showIcon message={balanceErrorByKey[key.name]} />
+                      ) : null}
                       <Space wrap>
                         <Tag color="blue">{t('positions.totalBalance', 'Total USD')}: {formatCompact(totalUsd, 2)}</Tag>
                         {balancesLoading ? <Tag color="processing">{t('common.loading', 'Loading')}</Tag> : null}
@@ -1031,8 +1059,8 @@ const Positions: React.FC = () => {
                     </div>
                   </Card>
 
-                  {errorByKey[key.name] ? (
-                    <Alert type="error" showIcon message={errorByKey[key.name]} style={{ marginBottom: 12 }} />
+                  {positionErrorByKey[key.name] ? (
+                    <Alert type="error" showIcon message={positionErrorByKey[key.name]} style={{ marginBottom: 12 }} />
                   ) : null}
 
                   {shouldShowPositions ? (

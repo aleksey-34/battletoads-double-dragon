@@ -8,6 +8,12 @@ Usage (VPS, API up):
   python3 scripts/admin_tools/storefront/build_synthetic_ts_card.py --apply
   python3 scripts/admin_tools/storefront/build_synthetic_ts_card.py --apply --publish
 
+Decorrelation-first pick (default SYNTH_USE_DECORR_SCORE=1):
+  python3 scripts/admin_tools/storefront/score_synth_pair_decorrelation.py
+  python3 scripts/vps_start_synth_decorrelation_sweep_20260603.py   # after sweep completes
+  SWEEP_JSON=results/btdd_d1_historical_sweep_*.json \\
+    python3 scripts/admin_tools/storefront/build_synthetic_ts_card.py --apply
+
 Optional: load sweep from disk instead of offer-store catalog:
   SWEEP_JSON=/opt/battletoads-double-dragon/results/btdd_d1_historical_sweep_*.json \\
     python3 scripts/admin_tools/storefront/build_synthetic_ts_card.py
@@ -43,6 +49,7 @@ DATE_TO = os.environ.get("SYNTH_DATE_TO", "2026-06-03")
 INITIAL_BALANCE = float(os.environ.get("SYNTH_INITIAL_BALANCE", "10000"))
 REINVEST_PERCENT = float(os.environ.get("SYNTH_REINVEST", "0"))
 RISK_SCORE = float(os.environ.get("SYNTH_RISK_SCORE", "5"))
+LOT_PERCENT = float(os.environ.get("SYNTH_LOT_PERCENT", "10"))
 TRADE_FREQ = float(os.environ.get("SYNTH_TRADE_FREQ", "5"))
 TARGET_SIZE = int(os.environ.get("SYNTH_TARGET_SIZE", "18"))
 MIN_PER_TYPE = int(os.environ.get("SYNTH_MIN_PER_TYPE", "4"))
@@ -50,12 +57,21 @@ MIN_PF = float(os.environ.get("SYNTH_MIN_PF", "0.95"))
 MIN_TRADES = int(os.environ.get("SYNTH_MIN_TRADES", "10"))
 MIN_PICKS = int(os.environ.get("SYNTH_MIN_PICKS", "3"))
 REQUIRE_POSITIVE_RET = os.environ.get("SYNTH_REQUIRE_POSITIVE_RET", "1").strip().lower() not in ("0", "false", "no")
+USE_DECORR_SCORE = os.environ.get("SYNTH_USE_DECORR_SCORE", "1").strip().lower() not in ("0", "false", "no")
+MAX_ABS_LEG_CORR = float(os.environ.get("SYNTH_MAX_ABS_LEG_CORR", "0.92"))
+DECORR_SCORES_JSON = os.environ.get("SYNTH_PAIR_SCORES", "").strip()
 ALLOWED_INTERVALS = {
     s.strip().lower()
     for s in os.environ.get("SYNTH_INTERVALS", "1h,2h,4h").split(",")
     if s.strip()
 }
-SYNTH_TYPES = ("stat_arb_zscore", "dd_battletoads", "zz_breakout")
+_TYPES_RAW = os.environ.get("SYNTH_STRATEGY_TYPES", "").strip()
+SYNTH_TYPES: tuple[str, ...] = (
+    tuple(t.strip().lower() for t in _TYPES_RAW.split(",") if t.strip())
+    if _TYPES_RAW
+    else ("stat_arb_zscore", "dd_battletoads", "zz_breakout")
+)
+MIN_PUBLISH_MEMBERS = int(os.environ.get("SYNTH_MIN_PUBLISH", "6"))
 
 
 def api_post(path: str, payload: dict, timeout: int = 300) -> dict:
@@ -96,14 +112,67 @@ def offer_id(row: dict) -> str:
     return f"offer_{mode}_{norm_type(row)}_{int(row.get('strategyId') or 0)}"
 
 
-def row_score(row: dict) -> tuple:
+def norm_market_key(market: str) -> str:
+    s = str(market or "").strip().upper().replace("_", "/")
+    return s if "/" in s else s
+
+
+def load_pair_decorrelation_scores() -> dict[str, dict]:
+    path = DECORR_SCORES_JSON
+    if not path:
+        latest = os.path.join(REPO_ROOT, "results", "synth_pair_decorrelation_latest.json")
+        path = latest if os.path.isfile(latest) else ""
+    if not path or not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    ranked = doc.get("ranked") if isinstance(doc.get("ranked"), list) else []
+    out: dict[str, dict] = {}
+    for row in ranked:
+        if not isinstance(row, dict):
+            continue
+        key = norm_market_key(str(row.get("market") or ""))
+        if key:
+            out[key] = row
+    print(f"Decorr scores: {len(out)} markets from {path}")
+    return out
+
+
+def decorr_tuple(market: str, pair_scores: dict[str, dict]) -> tuple:
+    ps = pair_scores.get(norm_market_key(market))
+    if not ps or ps.get("error"):
+        return (-1.0, 0.0, 0.0, 0.0)
+    corr = abs(float(ps.get("legReturnCorr") or ps.get("absLegCorr") or 0))
+    return (
+        -corr,
+        float(ps.get("ratioVolAnnualPct") or 0),
+        float(ps.get("ratioMaxSwingPct") or 0),
+        float(ps.get("oppositeMoveFrac") or 0),
+    )
+
+
+def row_score(row: dict, pair_scores: dict[str, dict] | None = None) -> tuple:
     robust = 1 if row.get("robust") else 0
     ret = float(row.get("totalReturnPercent") or 0)
     pf = float(row.get("profitFactor") or 0)
     trades = int(row.get("tradesCount") or row.get("trades") or 0)
     score = float(row.get("score") or 0)
     dd = float(row.get("maxDrawdownPercent") or 99)
-    return (robust, ret, pf, trades, -dd, score)
+    base = (robust, ret, pf, trades, -dd, score)
+    if pair_scores:
+        return (*decorr_tuple(str(row.get("market") or ""), pair_scores), *base)
+    return base
+
+
+def market_passes_decorr_filter(market: str, pair_scores: dict[str, dict]) -> bool:
+    if not pair_scores:
+        return True
+    ps = pair_scores.get(norm_market_key(market))
+    if not ps:
+        return True
+    if ps.get("error"):
+        return True
+    return abs(float(ps.get("legReturnCorr") or ps.get("absLegCorr") or 0)) <= MAX_ABS_LEG_CORR
 
 
 def is_ratio_synth(row: dict) -> bool:
@@ -136,25 +205,41 @@ def passes_filters(row: dict) -> bool:
     return True
 
 
-def best_per_market(rows: list[dict]) -> list[dict]:
+def best_per_market(rows: list[dict], pair_scores: dict[str, dict] | None = None) -> list[dict]:
     by_market: dict[str, dict] = {}
     for row in rows:
         market = str(row.get("market") or "").strip()
         if not market:
             continue
         prev = by_market.get(market)
-        if prev is None or row_score(row) > row_score(prev):
+        if prev is None or row_score(row, pair_scores) > row_score(prev, pair_scores):
             by_market[market] = row
     return list(by_market.values())
 
 
-def pick_diversified_synth(rows: list[dict], *, target: int, min_per_type: int) -> list[dict]:
+def pick_diversified_synth(
+    rows: list[dict],
+    *,
+    target: int,
+    min_per_type: int,
+    pair_scores: dict[str, dict] | None = None,
+) -> list[dict]:
+    def eligible(r: dict) -> bool:
+        if not passes_filters(r):
+            return False
+        if pair_scores and USE_DECORR_SCORE:
+            return market_passes_decorr_filter(str(r.get("market") or ""), pair_scores)
+        return True
+
+    score_key = lambda r: row_score(r, pair_scores if USE_DECORR_SCORE else None)
+
+    ps = pair_scores if USE_DECORR_SCORE else None
     by_type: dict[str, list[dict]] = {
-        t: best_per_market([r for r in rows if passes_filters(r) and norm_type(r) == t])
+        t: best_per_market([r for r in rows if eligible(r) and norm_type(r) == t], ps)
         for t in SYNTH_TYPES
     }
     for t in SYNTH_TYPES:
-        by_type[t].sort(key=row_score, reverse=True)
+        by_type[t].sort(key=score_key, reverse=True)
 
     picked: list[dict] = []
     seen_ids: set[int] = set()
@@ -269,6 +354,9 @@ def preview_portfolio(offer_ids: list[str], *, max_open_positions: int) -> dict:
         "tradeFrequencyScore": TRADE_FREQ,
         "preferRealBacktest": True,
         "rerunApiKeyName": API_KEY,
+        "lotPercentOverride": LOT_PERCENT,
+        "backtestBars": int(os.environ.get("SYNTH_BACKTEST_BARS", "8000")),
+        "warmupBars": int(os.environ.get("SYNTH_WARMUP_BARS", "200")),
     }
     if max_open_positions > 0:
         payload["maxOpenPositions"] = max_open_positions
@@ -279,8 +367,8 @@ def summarize_preview(label: str, data: dict) -> dict:
     preview = data.get("preview") or {}
     summary = preview.get("summary") or data.get("rerun") or {}
     offers = data.get("selectedOffers") or []
-    processed = int(preview.get("processedStrategies") or 0)
-    skipped = int(preview.get("skippedStrategies") or 0)
+    processed = int(summary.get("processedStrategies") or preview.get("processedStrategies") or 0)
+    skipped = int(summary.get("skippedStrategies") or preview.get("skippedStrategies") or 0)
     ret = float(summary.get("totalReturnPercent") or 0)
     dd = float(summary.get("maxDrawdownPercent") or 0)
     pf = float(summary.get("profitFactor") or 0)
@@ -360,6 +448,9 @@ def build_snapshot(
             "riskScore": RISK_SCORE,
             "tradeFrequencyScore": TRADE_FREQ,
             "reinvestPercent": REINVEST_PERCENT,
+            "lotPercent": LOT_PERCENT,
+            "backtestBars": int(os.environ.get("SYNTH_BACKTEST_BARS", "8000")),
+            "warmupBars": int(os.environ.get("SYNTH_WARMUP_BARS", "200")),
             "maxOpenPositions": max_open_positions,
             "dateFrom": date_from,
             "dateTo": date_to,
@@ -411,8 +502,8 @@ def publish_card(offer_ids: list[str], store: dict, snapshot: dict) -> str:
             "score": float(offer.get("score") or 0),
             "weight": round(1 / max(1, len(offer_ids)), 4),
         })
-    if len(members) < 6:
-        raise RuntimeError(f"Need >=6 resolvable draft members, got {len(members)}")
+    if len(members) < MIN_PUBLISH_MEMBERS:
+        raise RuntimeError(f"Need >={MIN_PUBLISH_MEMBERS} resolvable draft members, got {len(members)}")
 
     api_post("/api/saas/admin/curated-draft-members", {"members": members}, timeout=120)
     publish = api_post("/api/saas/admin/publish", {
@@ -573,7 +664,7 @@ def sync_catalog_offers(offer_ids: list[str], sweep_path: str, rows: list[dict])
     print(f"Added {len(added)}/{len(missing)}: {', '.join(added)}")
 
 
-def log_picks(rows: list[dict]) -> None:
+def log_picks(rows: list[dict], pair_scores: dict[str, dict] | None = None) -> None:
     print(f"\nPicked {len(rows)} synthetic offers (quota min {MIN_PER_TYPE}/type):")
     by_type: dict[str, int] = {}
     by_interval: dict[str, int] = {}
@@ -582,10 +673,14 @@ def log_picks(rows: list[dict]) -> None:
         iv = norm_interval(row)
         by_type[st] = by_type.get(st, 0) + 1
         by_interval[iv] = by_interval.get(iv, 0) + 1
+        ps = (pair_scores or {}).get(norm_market_key(str(row.get("market") or "")))
+        decorr = ""
+        if ps and not ps.get("error"):
+            decorr = f" corr={float(ps.get('legReturnCorr') or 0):+.2f} swing={float(ps.get('ratioMaxSwingPct') or 0):.0f}%"
         print(
             f"  #{row.get('strategyId')} {st} {iv} {row.get('market')} "
             f"ret={float(row.get('totalReturnPercent') or 0):.1f}% "
-            f"pf={float(row.get('profitFactor') or 0):.2f}"
+            f"pf={float(row.get('profitFactor') or 0):.2f}{decorr}"
         )
     print(f"  by type: {by_type}")
     print(f"  by interval: {by_interval}")
@@ -603,16 +698,45 @@ def main() -> None:
     rows, source = load_sweep_rows()
     print(f"Sweep pool: {len(rows)} unique strategies ({source})")
     print(f"Window: {DATE_FROM} .. {DATE_TO}  key={API_KEY}  target={TARGET_SIZE}")
-    print(f"Backtest: risk={RISK_SCORE} reinvest={REINVEST_PERCENT}% requireRet>0={REQUIRE_POSITIVE_RET}")
+    print(f"Backtest: risk={RISK_SCORE} lot={LOT_PERCENT}% reinvest={REINVEST_PERCENT}% requireRet>0={REQUIRE_POSITIVE_RET}")
 
-    picked = pick_diversified_synth(rows, target=TARGET_SIZE, min_per_type=MIN_PER_TYPE)
-    if len(picked) < MIN_PICKS:
-        raise RuntimeError(
-            f"Only {len(picked)} synth offers after filters — need>={MIN_PICKS}; "
-            "relax SYNTH_MIN_PF/SYNTH_MIN_TRADES or expand synthMarkets in sweep",
+    pair_scores = load_pair_decorrelation_scores() if USE_DECORR_SCORE else {}
+    if USE_DECORR_SCORE and not pair_scores:
+        print("WARN: no decorr scores — run score_synth_pair_decorrelation.py; using sweep metrics only")
+    elif pair_scores:
+        print(f"Pick order: decorr (|corr|<={MAX_ABS_LEG_CORR}) then sweep ret/pf")
+
+    forced_offer_ids = [
+        x.strip() for x in os.environ.get("SYNTH_OFFER_IDS", "").split(",") if x.strip()
+    ]
+    if forced_offer_ids:
+        by_id = {int(r.get("strategyId") or 0): r for r in rows if int(r.get("strategyId") or 0) > 0}
+        picked = []
+        for oid in forced_offer_ids:
+            sid = int(oid.rsplit("_", 1)[-1])
+            row = by_id.get(sid)
+            if row:
+                picked.append(row)
+            else:
+                print(f"WARN: no sweep row for forced offer {oid}")
+        if len(picked) < MIN_PICKS:
+            raise RuntimeError(f"Forced offers resolved to {len(picked)} rows, need>={MIN_PICKS}")
+        offer_ids = [offer_id(r) for r in picked]
+        log_picks(picked, pair_scores or None)
+    else:
+        picked = pick_diversified_synth(
+            rows, target=TARGET_SIZE, min_per_type=MIN_PER_TYPE, pair_scores=pair_scores or None,
         )
-    offer_ids = [offer_id(r) for r in picked]
-    log_picks(picked)
+        if len(picked) < MIN_PICKS and pair_scores and USE_DECORR_SCORE:
+            print(f"WARN: only {len(picked)} after decorr filter — retry without SYNTH_MAX_ABS_LEG_CORR or rerun sweep")
+        if len(picked) < MIN_PICKS:
+            raise RuntimeError(
+                f"Only {len(picked)} synth offers after filters — need>={MIN_PICKS}; "
+                "run score_synth_pair_decorrelation.py + vps_start_synth_decorrelation_sweep_20260603.py "
+                "or relax SYNTH_MIN_PF/SYNTH_REQUIRE_POSITIVE_RET",
+            )
+        offer_ids = [offer_id(r) for r in picked]
+        log_picks(picked, pair_scores or None)
 
     sweep_path = os.environ.get("SWEEP_JSON", "").strip()
     if not sweep_path:
@@ -638,6 +762,9 @@ def main() -> None:
                     "riskScore": RISK_SCORE,
                     "tradeFrequencyScore": TRADE_FREQ,
                     "reinvestPercent": REINVEST_PERCENT,
+                    "lotPercent": LOT_PERCENT,
+                    "backtestBars": int(os.environ.get("SYNTH_BACKTEST_BARS", "8000")),
+                    "warmupBars": int(os.environ.get("SYNTH_WARMUP_BARS", "200")),
                     "dateFrom": DATE_FROM,
                     "dateTo": DATE_TO,
                 },
@@ -681,6 +808,7 @@ def main() -> None:
                 "offerId": offer_id(r),
                 "sweepRet": r.get("totalReturnPercent"),
                 "pf": r.get("profitFactor"),
+                "decorr": (pair_scores or {}).get(norm_market_key(str(r.get("market") or ""))),
             }
             for r in picked
         ],

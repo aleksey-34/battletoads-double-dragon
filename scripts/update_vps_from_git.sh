@@ -24,6 +24,8 @@ MULTI_SERVICES="${MULTI_SERVICES:-btdd-api btdd-runtime btdd-research}"
 # Какие сервисы перезапускать при деплое API (runtime обычно не трогаем)
 # Установите RESTART_RUNTIME=0 чтобы не перезапускать торговый контур при обновлении API
 RESTART_RUNTIME="${RESTART_RUNTIME:-1}"
+# Установите RESTART_RESEARCH=0 чтобы не убивать активный historical sweep (btdd-research)
+RESTART_RESEARCH="${RESTART_RESEARCH:-1}"
 # 1 => не блокировать деплой при изменениях tracked-файлов и принудительно
 # выбросить локальные правки через git reset --hard origin/<branch>.
 ALLOW_DIRTY_TRACKED="${ALLOW_DIRTY_TRACKED:-0}"
@@ -130,6 +132,7 @@ write_deploy_manifest() {
 	},
 	"deployMode": "$DEPLOY_MODE",
 	"restartRuntime": "$RESTART_RUNTIME",
+	"restartResearch": "$RESTART_RESEARCH",
 	"artifacts": {
 		"backend": {
 			"serverJsSha256": "$(hash_file_or_empty "$BACKEND_DIR/dist/server.js")",
@@ -210,6 +213,13 @@ if [[ "$BUILD_FRONTEND" == "1" ]]; then
 fi
 
 cd "$APP_DIR"
+
+# btdd-api / sweep worker run as ubuntu and write logs/*.log here
+deploy_user="${DEPLOY_USER:-ubuntu}"
+mkdir -p "$APP_DIR/logs"
+if id "$deploy_user" >/dev/null 2>&1; then
+	chown "$deploy_user:$deploy_user" "$APP_DIR/logs" 2>/dev/null || true
+fi
 
 DEPLOY_START="$(date +%s)"
 local_head="$(git rev-parse --short HEAD)"
@@ -375,6 +385,10 @@ if [[ "$DEPLOY_MODE" == "multi" ]]; then
 	for svc in $MULTI_SERVICES; do
 		if [[ "$svc" == "btdd-runtime" && "$RESTART_RUNTIME" == "0" ]]; then
 			log "Пропускаем перезапуск $svc (RESTART_RUNTIME=0)"
+			continue
+		fi
+		if [[ "$svc" == "btdd-research" && "$RESTART_RESEARCH" == "0" ]]; then
+			log "Пропускаем перезапуск $svc (RESTART_RESEARCH=0 — sweep не прервётся)"
 			continue
 		fi
 		if systemctl is-enabled --quiet "$svc" 2>/dev/null; then

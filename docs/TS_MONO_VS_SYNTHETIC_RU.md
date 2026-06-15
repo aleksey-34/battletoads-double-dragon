@@ -37,12 +37,23 @@ node scripts/run_synthetic_ts_backtest.mjs
 | MONO TS | Top-N mono для сравнения |
 | BALANCED-V2 | Текущий snapshot клиентской карточки |
 
-На VPS:
+На VPS (**git только от `ubuntu`**, не от root):
 
 ```bash
+# 1. Обновить код (root → sudo -u ubuntu)
+sudo -u ubuntu git -C /opt/battletoads-double-dragon fetch origin main
+sudo -u ubuntu git -C /opt/battletoads-double-dragon reset --hard origin/main
+
+# 2. Собрать backend
 cd /opt/battletoads-double-dragon/backend && npm run build
-cd .. && node scripts/run_synthetic_ts_backtest.mjs 2>&1 | tee logs/synthetic_ts_compare.log
+
+# 3. Запуск — из КОРНЯ репо (не backend!)
+cd /opt/battletoads-double-dragon
+node scripts/run_synthetic_ts_backtest.mjs 2>&1 | tee logs/synthetic_ts_compare_v2.log
 ```
+
+**Не** `git pull` от root (Permission denied).  
+**Не** `node ../scripts/...` из корня реpo — путь станет `/opt/scripts/...` и MODULE_NOT_FOUND.
 
 ## DCA и деплой
 

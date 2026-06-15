@@ -62,6 +62,26 @@ log "Deploy latest build"
 DEPLOY_MODE=multi BACKEND_BUILD=always FRONTEND_BUILD_MODE=always bash scripts/update_vps_from_git.sh || \
   bash scripts/vps_deploy_api_key_fix.sh
 
+log "Ensure dashboard password file exists (set DASHBOARD_PASSWORD in .env before restore)"
+if grep -q '^DASHBOARD_PASSWORD=' "$APP_DIR/.env" 2>/dev/null; then
+  DASHBOARD_PASSWORD="$(grep '^DASHBOARD_PASSWORD=' "$APP_DIR/.env" | cut -d= -f2- | tr -d ' \"')"
+  if [[ -n "$DASHBOARD_PASSWORD" && "$DASHBOARD_PASSWORD" != "your_strong_password_here" ]]; then
+    sudo -u ubuntu node -e "
+const bcrypt = require('bcrypt');
+const fs = require('fs');
+const path = require('path');
+const pwd = process.argv[1];
+const hash = bcrypt.hashSync(pwd, 10);
+const file = path.join('$APP_DIR/backend', '.auth-password.json');
+fs.writeFileSync(file, JSON.stringify({ passwordHash: hash, updatedAt: new Date().toISOString() }, null, 2) + '\n');
+fs.chmodSync(file, 0o600);
+" "$DASHBOARD_PASSWORD" 2>/dev/null || log "WARN: could not write .auth-password.json (run npm install in backend first)"
+    log "Dashboard password hash refreshed from .env"
+  fi
+fi
+
+bash "$APP_DIR/scripts/vps_setup_github_deploy_key.sh" || log "WARN: github deploy key setup skipped"
+
 systemctl status btdd-api btdd-research btdd-runtime --no-pager || true
 curl -sf "http://127.0.0.1:${API_PORT}/api/health" && log "API health OK" || log "WARN: API health check failed"
 

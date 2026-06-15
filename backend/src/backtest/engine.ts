@@ -7,6 +7,13 @@ import fs from 'fs';
 import path from 'path';
 import logger from '../utils/logger';
 import { computeChannelWidthLotMultiplier } from '../services/strategy/sizing';
+import {
+  normalizeOrderBlockEntryGate,
+  passesOrderBlockEntryGate,
+  type OrderBlockEntryGate,
+} from '../bot/orderBlockLiquidity';
+
+export type { OrderBlockEntryGate };
 
 export type BacktestMode = 'single' | 'portfolio';
 
@@ -74,6 +81,7 @@ export type BacktestSummary = {
   skippedByPositionLimit: number;
   /** Number of entries skipped because another strategy holds the same pair (mirrors runtime pair-lock). */
   skippedByPairLock: number;
+  skippedByOrderBlockGate: number;
   /** Earliest candle timestamp actually used across all runtime strategies (ms). */
   actualDataStartMs: number | null;
   /** Latest candle timestamp actually used across all runtime strategies (ms). */
@@ -122,6 +130,10 @@ export type BacktestRunRequest = {
   partialTpPct?: number;
   /** RSI / anchor-based early exit overlay (research + TS preview). */
   macroExitOverlay?: MacroExitOverlay;
+  /** Fractal/RSI entry gate for stat_arb_zscore strategies only. */
+  statArbEntryGate?: StatArbEntryGate;
+  /** BTC liquidity / order-block fade gate for all TS entries. */
+  orderBlockEntryGate?: import('../bot/orderBlockLiquidity').OrderBlockEntryGate;
   /** When true, scale trend lot by inverse Donchian channel width at entry. */
   autoLotByChannelWidth?: boolean;
 };
@@ -139,8 +151,32 @@ export type MacroExitRule = {
   shortExitRsiBelow?: number;
   /** Close short when RSI >= threshold. */
   shortExitRsiAbove?: number;
+  /** Exit long on confirmed bearish (swing-high) Williams fractal. */
+  longExitBearishFractal?: boolean;
+  /** Exit short on confirmed bullish (swing-low) Williams fractal. */
+  shortExitBullishFractal?: boolean;
+  /** Fractal wing bars each side (default 2 = classic 5-bar fractal). */
+  fractalWings?: number;
+  /** When RSI + fractal both set: require both ('and') or either ('or'). Default 'and'. */
+  combineWith?: 'and' | 'or';
   mode?: 'full' | 'partial';
   /** Fraction to close when mode=partial (default 0.5). */
+  closeFraction?: number;
+  label?: string;
+};
+
+export type MacroExitVoteConfig = {
+  /** Minimum anchor votes required (e.g. 2 of BTC/ETH/SOL). */
+  minVotes: number;
+  anchors: string[];
+  rsiPeriod?: number;
+  fractalWings?: number;
+  longExitRsiAbove?: number;
+  longExitBearishFractal?: boolean;
+  shortExitRsiBelow?: number;
+  shortExitRsiAbove?: number;
+  shortExitBullishFractal?: boolean;
+  mode?: 'full' | 'partial';
   closeFraction?: number;
   label?: string;
 };
@@ -149,6 +185,41 @@ export type MacroExitOverlay = {
   rules: MacroExitRule[];
   /** Interval for anchor symbol candles (defaults to first strategy interval). */
   anchorInterval?: string;
+  /** Global multi-anchor vote (e.g. 2/3 BTC+ETH+SOL overheat → full exit). */
+  globalVote?: MacroExitVoteConfig;
+  /** Pair-local exit on the strategy's own symbol (typically partial). */
+  localSelf?: MacroExitRule;
+};
+
+/** Gate stat_arb_zscore entries with fractal / RSI confirmation on self or anchor. */
+export type StatArbEntryGate = {
+  /** Candle interval for gate signals (defaults to strategy interval). */
+  gateInterval?: string;
+  /** Use anchor symbol candles instead of the strategy's market. */
+  anchorSymbol?: string;
+  fractalWings?: number;
+  /** How many gate-TF bars back to search for a confirmed fractal. */
+  lookbackBars?: number;
+  /** Long entry requires recent bullish (swing-low) fractal. */
+  longRequireBullishFractal?: boolean;
+  /** Short entry requires recent bearish (swing-high) fractal. */
+  shortRequireBearishFractal?: boolean;
+  rsiPeriod?: number;
+  /** Long entry when gate RSI <= threshold (oversold). */
+  longRsiBelow?: number;
+  /** Short entry when gate RSI >= threshold (overbought). */
+  shortRsiAbove?: number;
+  combineWith?: 'and' | 'or';
+  label?: string;
+};
+
+export const DEFAULT_STAT_ARB_ENTRY_GATE: StatArbEntryGate = {
+  gateInterval: '4h',
+  fractalWings: 2,
+  lookbackBars: 12,
+  longRequireBullishFractal: true,
+  shortRequireBearishFractal: true,
+  label: 'self_frac4h_lb12',
 };
 
 export type BacktestRunResult = {
@@ -181,6 +252,8 @@ type NormalizedBacktestRequest = {
   reinvestPercentOverride: number;
   partialTpPct: number;
   macroExitOverlay: MacroExitOverlay | null;
+  statArbEntryGate: StatArbEntryGate | null;
+  orderBlockEntryGate: OrderBlockEntryGate | null;
   autoLotByChannelWidth: boolean;
   /**
    * If true (default), mirror runtime pair-lock semantics in the backtest engine.
@@ -630,10 +703,42 @@ const findCandleIndexAtOrBefore = (candles: ParsedCandle[], timeMs: number): num
   return ans;
 };
 
+const isBearishFractalAt = (candles: ParsedCandle[], index: number, wings: number): boolean => {
+  if (index < wings || index + wings >= candles.length) return false;
+  const pivotHigh = candles[index].high;
+  for (let offset = 1; offset <= wings; offset += 1) {
+    if (candles[index - offset].high >= pivotHigh) return false;
+    if (candles[index + offset].high >= pivotHigh) return false;
+  }
+  return true;
+};
+
+const isBullishFractalAt = (candles: ParsedCandle[], index: number, wings: number): boolean => {
+  if (index < wings || index + wings >= candles.length) return false;
+  const pivotLow = candles[index].low;
+  for (let offset = 1; offset <= wings; offset += 1) {
+    if (candles[index - offset].low <= pivotLow) return false;
+    if (candles[index + offset].low <= pivotLow) return false;
+  }
+  return true;
+};
+
+const hasConfirmedBearishFractal = (candles: ParsedCandle[], candleIndex: number, wings: number): boolean => {
+  const pivotIndex = candleIndex - wings;
+  return pivotIndex >= wings && isBearishFractalAt(candles, pivotIndex, wings);
+};
+
+const hasConfirmedBullishFractal = (candles: ParsedCandle[], candleIndex: number, wings: number): boolean => {
+  const pivotIndex = candleIndex - wings;
+  return pivotIndex >= wings && isBullishFractalAt(candles, pivotIndex, wings);
+};
+
 const normalizeMacroExitOverlay = (raw: unknown): MacroExitOverlay | null => {
   if (!raw || typeof raw !== 'object') return null;
   const src = raw as MacroExitOverlay;
-  if (!Array.isArray(src.rules) || src.rules.length === 0) return null;
+  if (!Array.isArray(src.rules)) return null;
+  const hasVoteOnly = !!(src.globalVote || src.localSelf);
+  if (src.rules.length === 0 && !hasVoteOnly) return null;
 
   const rules: MacroExitRule[] = [];
   for (const item of src.rules) {
@@ -659,25 +764,152 @@ const normalizeMacroExitOverlay = (raw: unknown): MacroExitOverlay | null => {
     if (ruleRaw.shortExitRsiAbove != null) {
       rule.shortExitRsiAbove = clamp(asNumber(ruleRaw.shortExitRsiAbove, 0), 0, 100);
     }
+    if (ruleRaw.longExitBearishFractal === true) {
+      rule.longExitBearishFractal = true;
+    }
+    if (ruleRaw.shortExitBullishFractal === true) {
+      rule.shortExitBullishFractal = true;
+    }
+    rule.fractalWings = Math.max(1, Math.floor(asNumber(ruleRaw.fractalWings, 2)));
+    rule.combineWith = ruleRaw.combineWith === 'or' ? 'or' : 'and';
     rule.mode = ruleRaw.mode === 'partial' ? 'partial' : 'full';
     rule.closeFraction = clamp(asNumber(ruleRaw.closeFraction, 0.5), 0.05, 0.95);
     const label = String(ruleRaw.label || '').trim();
     if (label) rule.label = label;
 
-    const hasThreshold = rule.longExitRsiAbove != null
+    const hasRsiThreshold = rule.longExitRsiAbove != null
       || rule.longExitRsiBelow != null
       || rule.shortExitRsiBelow != null
       || rule.shortExitRsiAbove != null;
-    if (!hasThreshold) continue;
+    const hasFractal = rule.longExitBearishFractal === true || rule.shortExitBullishFractal === true;
+    if (!hasRsiThreshold && !hasFractal) continue;
     rules.push(rule);
   }
 
-  if (rules.length === 0) return null;
+  if (rules.length === 0 && !src.globalVote && !src.localSelf) return null;
   const anchorInterval = String(src.anchorInterval || '').trim();
-  return {
+  const out: MacroExitOverlay = {
     rules,
     ...(anchorInterval ? { anchorInterval } : {}),
   };
+  if (src.globalVote && typeof src.globalVote === 'object') {
+    const gv = src.globalVote as MacroExitVoteConfig;
+    const anchors = Array.isArray(gv.anchors)
+      ? gv.anchors.map((item) => String(item || '').trim().toUpperCase()).filter(Boolean)
+      : [];
+    if (anchors.length > 0) {
+      out.globalVote = {
+        minVotes: Math.max(1, Math.floor(asNumber(gv.minVotes, 2))),
+        anchors,
+        rsiPeriod: Math.max(2, Math.floor(asNumber(gv.rsiPeriod, 14))),
+        fractalWings: Math.max(1, Math.floor(asNumber(gv.fractalWings, 2))),
+        mode: gv.mode === 'partial' ? 'partial' : 'full',
+        closeFraction: clamp(asNumber(gv.closeFraction, 0.5), 0.05, 0.95),
+        ...(gv.longExitRsiAbove != null ? { longExitRsiAbove: clamp(asNumber(gv.longExitRsiAbove, 0), 0, 100) } : {}),
+        ...(gv.longExitBearishFractal === true ? { longExitBearishFractal: true } : {}),
+        ...(gv.shortExitRsiBelow != null ? { shortExitRsiBelow: clamp(asNumber(gv.shortExitRsiBelow, 0), 0, 100) } : {}),
+        ...(gv.shortExitRsiAbove != null ? { shortExitRsiAbove: clamp(asNumber(gv.shortExitRsiAbove, 0), 0, 100) } : {}),
+        ...(gv.shortExitBullishFractal === true ? { shortExitBullishFractal: true } : {}),
+        ...(String(gv.label || '').trim() ? { label: String(gv.label).trim() } : {}),
+      };
+    }
+  }
+  if (src.localSelf && typeof src.localSelf === 'object') {
+    const ls = src.localSelf as MacroExitRule;
+    out.localSelf = {
+      source: 'self',
+      rsiPeriod: Math.max(2, Math.floor(asNumber(ls.rsiPeriod, 14))),
+      fractalWings: Math.max(1, Math.floor(asNumber(ls.fractalWings, 2))),
+      mode: ls.mode === 'partial' ? 'partial' : 'full',
+      closeFraction: clamp(asNumber(ls.closeFraction, 0.4), 0.05, 0.95),
+      combineWith: ls.combineWith === 'or' ? 'or' : 'and',
+      ...(ls.longExitRsiAbove != null ? { longExitRsiAbove: clamp(asNumber(ls.longExitRsiAbove, 0), 0, 100) } : {}),
+      ...(ls.longExitBearishFractal === true ? { longExitBearishFractal: true } : {}),
+      ...(ls.shortExitRsiBelow != null ? { shortExitRsiBelow: clamp(asNumber(ls.shortExitRsiBelow, 0), 0, 100) } : {}),
+      ...(ls.shortExitRsiAbove != null ? { shortExitRsiAbove: clamp(asNumber(ls.shortExitRsiAbove, 0), 0, 100) } : {}),
+      ...(ls.shortExitBullishFractal === true ? { shortExitBullishFractal: true } : {}),
+      ...(String(ls.label || '').trim() ? { label: String(ls.label).trim() } : {}),
+    };
+  }
+  return out;
+};
+
+const normalizeStatArbEntryGate = (raw: unknown): StatArbEntryGate | null => {
+  if (!raw || typeof raw !== 'object') return null;
+  const src = raw as StatArbEntryGate;
+  const hasFractal = src.longRequireBullishFractal === true || src.shortRequireBearishFractal === true;
+  const hasRsi = src.longRsiBelow != null || src.shortRsiAbove != null;
+  if (!hasFractal && !hasRsi) return null;
+  const gateInterval = String(src.gateInterval || '').trim();
+  const anchorSymbol = String(src.anchorSymbol || '').trim().toUpperCase();
+  return {
+    ...(gateInterval ? { gateInterval } : {}),
+    ...(anchorSymbol ? { anchorSymbol } : {}),
+    fractalWings: Math.max(1, Math.floor(asNumber(src.fractalWings, 2))),
+    lookbackBars: Math.max(4, Math.floor(asNumber(src.lookbackBars, 24))),
+    rsiPeriod: Math.max(2, Math.floor(asNumber(src.rsiPeriod, 14))),
+    combineWith: src.combineWith === 'and' ? 'and' : 'or',
+    ...(src.longRequireBullishFractal === true ? { longRequireBullishFractal: true } : {}),
+    ...(src.shortRequireBearishFractal === true ? { shortRequireBearishFractal: true } : {}),
+    ...(src.longRsiBelow != null ? { longRsiBelow: clamp(asNumber(src.longRsiBelow, 0), 0, 100) } : {}),
+    ...(src.shortRsiAbove != null ? { shortRsiAbove: clamp(asNumber(src.shortRsiAbove, 0), 0, 100) } : {}),
+    ...(String(src.label || '').trim() ? { label: String(src.label).trim() } : {}),
+  };
+};
+
+const hasRecentConfirmedFractal = (
+  candles: ParsedCandle[],
+  candleIndex: number,
+  wings: number,
+  lookbackBars: number,
+  kind: 'bullish' | 'bearish',
+): boolean => {
+  const start = Math.max(wings * 2, candleIndex - lookbackBars);
+  for (let idx = candleIndex; idx >= start; idx -= 1) {
+    if (kind === 'bullish' && hasConfirmedBullishFractal(candles, idx, wings)) return true;
+    if (kind === 'bearish' && hasConfirmedBearishFractal(candles, idx, wings)) return true;
+  }
+  return false;
+};
+
+const passesStatArbEntryGate = (
+  gate: StatArbEntryGate,
+  side: PositionState,
+  gateCandles: ParsedCandle[],
+  candleIndex: number,
+): boolean => {
+  if (side !== 'long' && side !== 'short') return true;
+  const wings = Math.max(1, Math.floor(gate.fractalWings ?? 2));
+  const lookback = Math.max(4, Math.floor(gate.lookbackBars ?? 24));
+  const period = Math.max(2, Math.floor(gate.rsiPeriod ?? 14));
+  const hasFractal = side === 'long'
+    ? gate.longRequireBullishFractal === true
+    : gate.shortRequireBearishFractal === true;
+  const hasRsi = side === 'long'
+    ? gate.longRsiBelow != null
+    : gate.shortRsiAbove != null;
+  const fractalHit = hasFractal
+    ? hasRecentConfirmedFractal(
+      gateCandles,
+      candleIndex,
+      wings,
+      lookback,
+      side === 'long' ? 'bullish' : 'bearish',
+    )
+    : false;
+  const rsi = hasRsi && candleIndex >= period
+    ? computeRsiAtIndex(gateCandles, candleIndex, period)
+    : null;
+  const rsiHit = hasRsi && rsi != null
+    ? (side === 'long'
+      ? rsi <= (gate.longRsiBelow as number)
+      : rsi >= (gate.shortRsiAbove as number))
+    : false;
+  if (hasFractal && hasRsi) {
+    return gate.combineWith === 'or' ? (fractalHit || rsiHit) : (fractalHit && rsiHit);
+  }
+  if (hasFractal) return fractalHit;
+  return rsiHit;
 };
 
 const macroExitRuleKey = (ruleIdx: number, rule: MacroExitRule): string => {
@@ -685,7 +917,7 @@ const macroExitRuleKey = (ruleIdx: number, rule: MacroExitRule): string => {
   return `${ruleIdx}:${label}`;
 };
 
-const shouldTriggerMacroExit = (
+const shouldTriggerMacroExitRsi = (
   rule: MacroExitRule,
   state: PositionState,
   rsi: number,
@@ -699,6 +931,43 @@ const shouldTriggerMacroExit = (
     if (rule.shortExitRsiAbove != null && rsi >= rule.shortExitRsiAbove) return true;
   }
   return false;
+};
+
+const shouldTriggerMacroExitFractal = (
+  rule: MacroExitRule,
+  state: PositionState,
+  candles: ParsedCandle[],
+  candleIndex: number,
+): boolean => {
+  const wings = Math.max(1, Math.floor(rule.fractalWings ?? 2));
+  if (state === 'long' && rule.longExitBearishFractal) {
+    return hasConfirmedBearishFractal(candles, candleIndex, wings);
+  }
+  if (state === 'short' && rule.shortExitBullishFractal) {
+    return hasConfirmedBullishFractal(candles, candleIndex, wings);
+  }
+  return false;
+};
+
+const shouldTriggerMacroExit = (
+  rule: MacroExitRule,
+  state: PositionState,
+  rsi: number | null,
+  candles: ParsedCandle[],
+  candleIndex: number,
+): boolean => {
+  const hasRsi = rule.longExitRsiAbove != null
+    || rule.longExitRsiBelow != null
+    || rule.shortExitRsiBelow != null
+    || rule.shortExitRsiAbove != null;
+  const hasFractal = rule.longExitBearishFractal === true || rule.shortExitBullishFractal === true;
+  const rsiHit = hasRsi && rsi != null ? shouldTriggerMacroExitRsi(rule, state, rsi) : false;
+  const fractalHit = hasFractal ? shouldTriggerMacroExitFractal(rule, state, candles, candleIndex) : false;
+  if (hasRsi && hasFractal) {
+    return rule.combineWith === 'or' ? (rsiHit || fractalHit) : (rsiHit && fractalHit);
+  }
+  if (hasFractal) return fractalHit;
+  return rsiHit;
 };
 
 const loadAnchorCandlesForMacroExit = async (
@@ -1312,6 +1581,91 @@ const openPosition = (
   return true;
 };
 
+const applyMacroExitRule = (
+  ctx: BacktestContext,
+  runtime: RuntimeStrategy,
+  rule: MacroExitRule,
+  ruleKey: string,
+  candles: ParsedCandle[],
+  candleIndex: number,
+  event: StrategyEvent,
+  state: PositionState,
+  signalPrice: number,
+): boolean => {
+  const strategy = runtime.strategy;
+  if (rule.mode === 'partial' && runtime.macroPartialRulesFired.has(ruleKey)) {
+    return false;
+  }
+  const period = rule.rsiPeriod ?? 14;
+  const hasRsi = rule.longExitRsiAbove != null
+    || rule.longExitRsiBelow != null
+    || rule.shortExitRsiBelow != null
+    || rule.shortExitRsiAbove != null;
+  const rsi = hasRsi && candleIndex >= period
+    ? computeRsiAtIndex(candles, candleIndex, period)
+    : null;
+  if (!shouldTriggerMacroExit(rule, state, rsi, candles, candleIndex)) {
+    return false;
+  }
+
+  const reasonParts = [`macro_${rule.label || ruleKey}`];
+  if (rsi != null && hasRsi) reasonParts.push(`rsi_${rsi.toFixed(1)}`);
+  if (rule.longExitBearishFractal || rule.shortExitBullishFractal) reasonParts.push('fractal');
+  const reason = reasonParts.join('_');
+  if (rule.mode === 'partial') {
+    partialClosePosition(
+      ctx,
+      runtime,
+      Number(strategy.id),
+      strategy.name,
+      event.timeMs,
+      signalPrice,
+      reason,
+      rule.closeFraction ?? 0.5,
+    );
+    runtime.macroPartialRulesFired.add(ruleKey);
+    return false;
+  }
+
+  closePosition(
+    ctx,
+    runtime,
+    Number(strategy.id),
+    strategy.name,
+    event.timeMs,
+    signalPrice,
+    reason,
+  );
+  return true;
+};
+
+const evaluateVoteAnchorSignal = (
+  vote: MacroExitVoteConfig,
+  state: PositionState,
+  candles: ParsedCandle[],
+  candleIndex: number,
+): boolean => {
+  const pseudoRule: MacroExitRule = {
+    source: 'anchor',
+    rsiPeriod: vote.rsiPeriod ?? 14,
+    fractalWings: vote.fractalWings ?? 2,
+    longExitRsiAbove: vote.longExitRsiAbove,
+    longExitBearishFractal: vote.longExitBearishFractal,
+    shortExitRsiBelow: vote.shortExitRsiBelow,
+    shortExitRsiAbove: vote.shortExitRsiAbove,
+    shortExitBullishFractal: vote.shortExitBullishFractal,
+    combineWith: 'or',
+  };
+  const period = pseudoRule.rsiPeriod ?? 14;
+  const hasRsi = vote.longExitRsiAbove != null
+    || vote.shortExitRsiBelow != null
+    || vote.shortExitRsiAbove != null;
+  const rsi = hasRsi && candleIndex >= period
+    ? computeRsiAtIndex(candles, candleIndex, period)
+    : null;
+  return shouldTriggerMacroExit(pseudoRule, state, rsi, candles, candleIndex);
+};
+
 const applyMacroExitOverlay = (
   ctx: BacktestContext,
   runtime: RuntimeStrategy,
@@ -1324,6 +1678,69 @@ const applyMacroExitOverlay = (
   if (state !== 'long' && state !== 'short') return false;
 
   const strategy = runtime.strategy;
+
+  if (macroOverlay.globalVote) {
+    const vote = macroOverlay.globalVote;
+    let votes = 0;
+    const voted: string[] = [];
+    for (const sym of vote.anchors) {
+      const candles = anchorCandleCache.get(sym) || null;
+      if (!candles?.length) continue;
+      const candleIndex = findCandleIndexAtOrBefore(candles, event.timeMs);
+      if (evaluateVoteAnchorSignal(vote, state, candles, candleIndex)) {
+        votes += 1;
+        voted.push(sym.replace('USDT', ''));
+      }
+    }
+    if (votes >= Math.max(1, vote.minVotes)) {
+      const voteKey = `vote:${vote.label || 'global'}:${votes}`;
+      if (vote.mode === 'partial') {
+        if (!runtime.macroPartialRulesFired.has(voteKey)) {
+          partialClosePosition(
+            ctx,
+            runtime,
+            Number(strategy.id),
+            strategy.name,
+            event.timeMs,
+            signalPrice,
+            `macro_vote_${votes}of${vote.anchors.length}_${voted.join('+')}`,
+            vote.closeFraction ?? 0.5,
+          );
+          runtime.macroPartialRulesFired.add(voteKey);
+        }
+      } else {
+        closePosition(
+          ctx,
+          runtime,
+          Number(strategy.id),
+          strategy.name,
+          event.timeMs,
+          signalPrice,
+          `macro_vote_${votes}of${vote.anchors.length}_${voted.join('+')}`,
+        );
+        return true;
+      }
+    }
+  }
+
+  if (macroOverlay.localSelf) {
+    const rule = macroOverlay.localSelf;
+    const ruleKey = `local:${rule.label || 'self'}`;
+    if (applyMacroExitRule(
+      ctx,
+      runtime,
+      { ...rule, source: 'self' },
+      ruleKey,
+      runtime.candles,
+      event.candleIndex,
+      event,
+      state,
+      signalPrice,
+    )) {
+      return true;
+    }
+  }
+
   for (let ruleIdx = 0; ruleIdx < macroOverlay.rules.length; ruleIdx++) {
     const rule = macroOverlay.rules[ruleIdx];
     const ruleKey = macroExitRuleKey(ruleIdx, rule);
@@ -1343,39 +1760,9 @@ const applyMacroExitOverlay = (
     }
     if (!candles || candles.length === 0) continue;
 
-    const period = rule.rsiPeriod ?? 14;
-    if (candleIndex < period) continue;
-
-    const rsi = computeRsiAtIndex(candles, candleIndex, period);
-    if (!shouldTriggerMacroExit(rule, state, rsi)) continue;
-
-    const reason = `macro_rsi_${rule.label || ruleKey}_${rsi.toFixed(1)}`;
-    if (rule.mode === 'partial') {
-      const fraction = rule.closeFraction ?? 0.5;
-      partialClosePosition(
-        ctx,
-        runtime,
-        Number(strategy.id),
-        strategy.name,
-        event.timeMs,
-        signalPrice,
-        reason,
-        fraction,
-      );
-      runtime.macroPartialRulesFired.add(ruleKey);
-      continue;
+    if (applyMacroExitRule(ctx, runtime, rule, ruleKey, candles, candleIndex, event, state, signalPrice)) {
+      return true;
     }
-
-    closePosition(
-      ctx,
-      runtime,
-      Number(strategy.id),
-      strategy.name,
-      event.timeMs,
-      signalPrice,
-      reason,
-    );
-    return true;
   }
 
   return false;
@@ -1804,6 +2191,8 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     })(),
     partialTpPct,
     macroExitOverlay: normalizeMacroExitOverlay(raw.macroExitOverlay),
+    statArbEntryGate: normalizeStatArbEntryGate((raw as { statArbEntryGate?: unknown }).statArbEntryGate),
+    orderBlockEntryGate: normalizeOrderBlockEntryGate((raw as { orderBlockEntryGate?: unknown }).orderBlockEntryGate),
     autoLotByChannelWidth: raw.autoLotByChannelWidth === true,
     enablePairLock: (raw as unknown as { enablePairLock?: boolean })?.enablePairLock !== false,
     pairLockSeed: Math.max(
@@ -1896,15 +2285,23 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
   const partialTpPct = request.partialTpPct;
   const macroOverlay = request.macroExitOverlay;
   const anchorCandleCache = new Map<string, ParsedCandle[]>();
-  if (macroOverlay && macroOverlay.rules.some((rule) => rule.source === 'anchor')) {
-    const anchorInterval = macroOverlay.anchorInterval
-      || String(runtimes[0]?.strategy.interval || '4h');
-    const candlesLimit = Math.max(request.bars + request.warmupBars + 500, 2000);
-    const anchorSymbols = Array.from(new Set(
-      macroOverlay.rules
-        .filter((rule) => rule.source === 'anchor' && rule.anchorSymbol)
-        .map((rule) => rule.anchorSymbol as string),
-    ));
+  const anchorInterval = macroOverlay?.anchorInterval
+    || String(runtimes[0]?.strategy.interval || '4h');
+  const candlesLimit = Math.max(request.bars + request.warmupBars + 500, 2000);
+  const anchorSymbols = new Set<string>();
+  if (macroOverlay) {
+    for (const rule of macroOverlay.rules) {
+      if (rule.source === 'anchor' && rule.anchorSymbol) {
+        anchorSymbols.add(rule.anchorSymbol);
+      }
+    }
+    if (macroOverlay.globalVote?.anchors) {
+      for (const sym of macroOverlay.globalVote.anchors) {
+        anchorSymbols.add(sym);
+      }
+    }
+  }
+  if (anchorSymbols.size > 0) {
     for (const sym of anchorSymbols) {
       try {
         const candles = await loadAnchorCandlesForMacroExit(
@@ -1922,7 +2319,87 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     }
   }
 
+  const statArbEntryGate = request.statArbEntryGate;
+  const orderBlockEntryGate = request.orderBlockEntryGate;
+  const gateCandleCache = new Map<string, ParsedCandle[]>();
+  if (statArbEntryGate) {
+    const gateInterval = statArbEntryGate.gateInterval
+      || String(runtimes[0]?.strategy.interval || '4h');
+    const gateSymbols = new Set<string>();
+    if (statArbEntryGate.anchorSymbol) {
+      gateSymbols.add(statArbEntryGate.anchorSymbol);
+    } else {
+      for (const rt of runtimes) {
+        if (normalizeStrategyType(rt.strategy.strategy_type) !== 'stat_arb_zscore') continue;
+        if (normalizeMarketMode(rt.strategy.market_mode) === 'synthetic') continue;
+        const sym = String(rt.strategy.base_symbol || '').trim().toUpperCase();
+        if (sym) gateSymbols.add(sym);
+      }
+    }
+    for (const sym of gateSymbols) {
+      const cacheKey = `${sym}:${gateInterval}`;
+      if (gateCandleCache.has(cacheKey)) continue;
+      try {
+        const candles = await loadAnchorCandlesForMacroExit(
+          request,
+          sym,
+          gateInterval,
+          candlesLimit,
+        );
+        if (candles.length > 0) {
+          gateCandleCache.set(cacheKey, candles);
+        }
+      } catch (error) {
+        logger.warn(`stat arb entry gate: failed to load ${sym}@${gateInterval}: ${(error as Error).message}`);
+      }
+    }
+  }
+  if (orderBlockEntryGate) {
+    const obInterval = String(orderBlockEntryGate.gateInterval || '4h').trim() || '4h';
+    if (orderBlockEntryGate.useSelf) {
+      for (const rt of runtimes) {
+        if (normalizeMarketMode(rt.strategy.market_mode) === 'synthetic') continue;
+        const sym = String(rt.strategy.base_symbol || '').trim().toUpperCase();
+        if (!sym) continue;
+        const cacheKey = `${sym}:${obInterval}`;
+        if (gateCandleCache.has(cacheKey)) continue;
+        try {
+          const candles = await loadAnchorCandlesForMacroExit(
+            request,
+            sym,
+            obInterval,
+            candlesLimit,
+          );
+          if (candles.length > 0) {
+            gateCandleCache.set(cacheKey, candles);
+          }
+        } catch (error) {
+          logger.warn(`order block gate: failed to load ${sym}@${obInterval}: ${(error as Error).message}`);
+        }
+      }
+    } else {
+      const obSym = String(orderBlockEntryGate.anchorSymbol || 'BTCUSDT').trim().toUpperCase();
+      const cacheKey = `${obSym}:${obInterval}`;
+      if (!gateCandleCache.has(cacheKey)) {
+        try {
+          const candles = await loadAnchorCandlesForMacroExit(
+            request,
+            obSym,
+            obInterval,
+            candlesLimit,
+          );
+          if (candles.length > 0) {
+            gateCandleCache.set(cacheKey, candles);
+          }
+        } catch (error) {
+          logger.warn(`order block gate: failed to load ${obSym}@${obInterval}: ${(error as Error).message}`);
+        }
+      }
+    }
+  }
+
   let skippedByPositionLimit = 0;
+  let skippedByOrderBlockGate = 0;
   let skippedByPairLock = 0;
 
   // Precompute pair keys per runtime so we can do O(N) pair-lock check per signal.
@@ -2258,6 +2735,66 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       }
     }
 
+    if (isStatArb && statArbEntryGate
+      && (signalPayload.signal === 'long' || signalPayload.signal === 'short')) {
+      const gateInterval = statArbEntryGate.gateInterval
+        || String(strategy.interval || '4h');
+      const mode = normalizeMarketMode(strategy.market_mode);
+      let gateCandles: ParsedCandle[];
+      let gateIndex: number;
+      if (statArbEntryGate.anchorSymbol) {
+        const gateSymbol = statArbEntryGate.anchorSymbol;
+        const cacheKey = `${gateSymbol}:${gateInterval}`;
+        gateCandles = gateCandleCache.get(cacheKey) || runtime.candles;
+        gateIndex = gateCandles === runtime.candles
+          ? event.candleIndex
+          : findCandleIndexAtOrBefore(gateCandles, event.timeMs);
+      } else if (mode === 'synthetic') {
+        gateCandles = runtime.candles;
+        gateIndex = event.candleIndex;
+      } else {
+        const gateSymbol = String(strategy.base_symbol || '').trim().toUpperCase();
+        const cacheKey = `${gateSymbol}:${gateInterval}`;
+        gateCandles = gateCandleCache.get(cacheKey) || runtime.candles;
+        gateIndex = gateCandles === runtime.candles
+          ? event.candleIndex
+          : findCandleIndexAtOrBefore(gateCandles, event.timeMs);
+      }
+      if (!passesStatArbEntryGate(
+        statArbEntryGate,
+        signalPayload.signal,
+        gateCandles,
+        gateIndex,
+      )) {
+        pushEquityPoint(event.timeMs);
+        continue;
+      }
+    }
+
+    if (orderBlockEntryGate
+      && (signalPayload.signal === 'long' || signalPayload.signal === 'short')) {
+      const obInterval = String(orderBlockEntryGate.gateInterval || '4h').trim() || '4h';
+      const obSym = orderBlockEntryGate.useSelf
+        ? String(strategy.base_symbol || '').trim().toUpperCase()
+        : String(orderBlockEntryGate.anchorSymbol || 'BTCUSDT').trim().toUpperCase();
+      if (obSym) {
+        const cacheKey = `${obSym}:${obInterval}`;
+        const obCandles = gateCandleCache.get(cacheKey) || [];
+        const obIndex = findCandleIndexAtOrBefore(obCandles, event.timeMs);
+        if (obCandles.length >= 30 && obIndex >= 0
+          && !passesOrderBlockEntryGate(
+            orderBlockEntryGate,
+            signalPayload.signal,
+            obCandles,
+            obIndex,
+          )) {
+          skippedByOrderBlockGate += 1;
+          pushEquityPoint(event.timeMs);
+          continue;
+        }
+      }
+    }
+
     const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
     const availableBalance = portfolioAvailableBalance(ctx.cashEquity, runtimes);
     const lotChannelMult = resolveAutoLotChannelWidthMult(runtime, event.candleIndex, strategy, ctx, signalPayload);
@@ -2355,6 +2892,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     maxOpenPositions: request.maxOpenPositions,
     skippedByPositionLimit,
     skippedByPairLock,
+    skippedByOrderBlockGate,
     actualDataStartMs,
     actualDataEndMs,
   };
@@ -2641,6 +3179,7 @@ export const getBacktestRun = async (id: number): Promise<BacktestRunResult | nu
     maxOpenPositions: 0,
     skippedByPositionLimit: 0,
     skippedByPairLock: 0,
+    skippedByOrderBlockGate: 0,
     actualDataStartMs: null,
     actualDataEndMs: null,
   });

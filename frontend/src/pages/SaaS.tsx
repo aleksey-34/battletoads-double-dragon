@@ -561,6 +561,7 @@ type SaasSummary = {
       };
       macroShield?: boolean;
       dcaMarkets?: string[];
+      dcaLayer?: TsDcaLayerSnapshot;
       updatedAt?: string;
     }>;
     tsBacktestSnapshot?: {
@@ -1050,6 +1051,80 @@ const DEFAULT_BACKTEST_SETTINGS: BacktestCardSettings = {
   dateFrom: '',
   dateTo: '',
 };
+
+type TsDcaLayerSnapshot = {
+  enabled?: boolean;
+  markets?: string[];
+  tuning?: Record<string, Record<string, unknown>>;
+  macroExitOverlay?: Record<string, unknown>;
+  statArbEntryGate?: Record<string, unknown>;
+  tunePreset?: string;
+  dcaBaseAmountMode?: string;
+  dcaBaseAmountPercent?: number;
+  dcaStepPercent?: number;
+  dcaTpPercent?: number;
+  dcaInterval?: string;
+  dcaMaxOrders?: number;
+  dcaAutotune?: boolean;
+  dcaEntryFilter?: string;
+  dcaPerLegSl?: boolean;
+  scanFingerprint?: string;
+};
+
+const V2_DCA_TUNE_DEFAULT = {
+  interval: '1h',
+  stepPercent: 0.5,
+  tpPercent: 1.2,
+  slPercent: 0,
+  entryFilter: 'always',
+  perLegSl: false,
+};
+
+const V2_MACRO_EXIT_OVERLAY = {
+  anchorInterval: '1h',
+  rules: [],
+  localSelf: {
+    source: 'self',
+    rsiPeriod: 14,
+    fractalWings: 2,
+    mode: 'partial',
+    closeFraction: 0.35,
+    combineWith: 'or',
+    longExitRsiAbove: 70,
+    shortExitRsiBelow: 20,
+    shortExitRsiAbove: 70,
+    label: 'local_rsi1h',
+  },
+};
+
+const V2_STAT_ARB_ENTRY_GATE = {
+  gateInterval: '4h',
+  fractalWings: 2,
+  lookbackBars: 12,
+  longRequireBullishFractal: true,
+  shortRequireBearishFractal: true,
+  label: 'self_frac4h_lb12',
+};
+
+const V2_SYNTH_DCA_DEFAULTS = {
+  markets: ['SUIUSDT', 'TRXUSDT'],
+  tunePreset: 'v2dca_dense',
+  dcaBaseAmountMode: 'percent' as const,
+  dcaBaseAmountPercent: 4,
+  dcaInterval: '1h',
+  dcaStepPercent: 0.5,
+  dcaTpPercent: 1.2,
+  dcaMaxOrders: 20,
+  dcaAutotune: false,
+  dcaEntryFilter: 'always' as const,
+  dcaPerLegSl: false,
+  macroExitOverlay: V2_MACRO_EXIT_OVERLAY,
+  statArbEntryGate: V2_STAT_ARB_ENTRY_GATE,
+};
+
+const isV2SynthCardContext = (setKey?: string, systemName?: string): boolean => (
+  /v2-synth/i.test(String(setKey || '')) || /v2-synth/i.test(String(systemName || ''))
+);
 
 const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
   const parsed = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
@@ -1855,6 +1930,57 @@ const formatDcaBaseSettingLabel = (
     return `base ${pct}% депозита + compound${depositHint}`;
   }
   return `base ${usdt.toFixed(0)} USDT (fixed)`;
+};
+
+const formatSavedCardControlsDescription = (params: {
+  tsDcaEnabled: boolean;
+  markets: string[];
+  tunePreset?: string;
+  tsDcaBaseMode: 'fixed' | 'percent';
+  tsDcaBasePercent: number;
+  tsDcaBaseAmountUsdt: number;
+  tsDcaInterval: string;
+  tsDcaStepPercent: number;
+  tsDcaTpPercent: number;
+  tsDcaMaxOrders: number;
+  tsDcaAutotune: boolean;
+  tsDcaExitOverlayEnabled: boolean;
+  tsDcaStatArbGateEnabled: boolean;
+  lotPercent: number;
+  maxOpenPositions: number;
+  reinvestPercent: number;
+  hasCustomDates: boolean;
+  dateFrom?: string;
+  dateTo?: string;
+  periodDays?: number;
+  initialBalance?: number;
+}): string => {
+  const parts: string[] = [];
+  if (params.tsDcaEnabled && params.markets.length > 0) {
+    parts.push(`DCA ON • ${params.markets.join(', ')}`);
+    if (params.tunePreset) {
+      parts.push(`preset ${params.tunePreset}`);
+    }
+    parts.push(formatDcaBaseSettingLabel({
+      baseAmountMode: params.tsDcaBaseMode,
+      baseAmountPercent: params.tsDcaBasePercent,
+      baseAmountUsdt: params.tsDcaBaseAmountUsdt,
+    }, params.initialBalance));
+    parts.push(`TF ${params.tsDcaInterval} • step ${params.tsDcaStepPercent}% • TP ${params.tsDcaTpPercent}% • max ${params.tsDcaMaxOrders}`);
+    parts.push(`autotune ${params.tsDcaAutotune ? 'ON' : 'OFF'}`);
+    parts.push(`overlay ${params.tsDcaExitOverlayEnabled ? 'ON' : 'OFF'} • stat gate ${params.tsDcaStatArbGateEnabled ? 'ON' : 'OFF'}`);
+  } else {
+    parts.push('DCA OFF');
+  }
+  parts.push(`lot ${params.lotPercent}% • OP ${params.maxOpenPositions} • reinvest ${params.reinvestPercent}%`);
+  if (params.hasCustomDates && params.dateFrom && params.dateTo) {
+    parts.push(`период ${params.dateFrom} → ${params.dateTo}`);
+  } else if (params.periodDays && params.periodDays > 0) {
+    parts.push(`период: полная глубина (~${params.periodDays}d, даты пустые)`);
+  } else {
+    parts.push('период: полная глубина sweep (даты пустые)');
+  }
+  return parts.join(' • ');
 };
 
 const dedupeLinePoints = (points: LinePoint[]): LinePoint[] => {
@@ -3060,6 +3186,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     delta?: { ret?: number; dd?: number; trades?: number };
     dcaLayer?: { ret?: number; dd?: number; trades?: number };
     macroShield?: boolean;
+    statArbEntryGate?: Record<string, unknown>;
+    macroExitOverlay?: Record<string, unknown>;
     markets?: string[];
     period?: { dateFrom?: string; dateTo?: string };
   } | null>(null);
@@ -3075,7 +3203,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [tsDcaRsiMax, setTsDcaRsiMax] = useState(45);
   const [tsDcaPerLegSl, setTsDcaPerLegSl] = useState(false);
   const [tsDcaAutotune, setTsDcaAutotune] = useState(true);
-  const [tsDcaMacroShield, setTsDcaMacroShield] = useState(true);
+  const [tsDcaExitOverlayEnabled, setTsDcaExitOverlayEnabled] = useState(false);
+  const [tsDcaStatArbGateEnabled, setTsDcaStatArbGateEnabled] = useState(false);
+  const [tsDcaTunePreset, setTsDcaTunePreset] = useState('');
+  const backtestCardMechanicsRef = useRef<{
+    macroExitOverlay?: Record<string, unknown>;
+    statArbEntryGate?: Record<string, unknown>;
+    tunePreset?: string;
+  }>({});
+  const [tsDcaMarketTuningSaved, setTsDcaMarketTuningSaved] = useState<Record<string, Record<string, unknown>>>({});
   const [tsDcaResearchServerRunning, setTsDcaResearchServerRunning] = useState(false);
   const [tsDcaProgressPercent, setTsDcaProgressPercent] = useState(0);
   const [tsDcaProgressMessage, setTsDcaProgressMessage] = useState('');
@@ -7115,6 +7251,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         dateFrom: effectiveDateFrom,
         dateTo: effectiveDateTo,
         autoLotByChannelWidth: adminSweepAutoLotByChannel,
+        macroExitOverlay: tsDcaExitOverlayEnabled ? backtestCardMechanicsRef.current.macroExitOverlay : undefined,
+        statArbEntryGate: tsDcaStatArbGateEnabled ? backtestCardMechanicsRef.current.statArbEntryGate : undefined,
+        macroShield: tsDcaExitOverlayEnabled,
       }, { timeout: 900000 });
       if (requestSeq !== backtestRequestSeqRef.current) {
         return;
@@ -7440,12 +7579,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return;
     }
 
-    const summary = adminSweepBacktestResult.preview?.summary || {};
-    const equityPointsRaw = Array.isArray(adminSweepBacktestResult.preview?.equity)
-      ? (adminSweepBacktestResult.preview?.equity || [])
-        .map((point) => Number(point?.equity ?? point?.value ?? NaN))
+    const combinedSummary = tsDcaEnabled && tsDcaCombinedPreview?.combined?.summary
+      ? tsDcaCombinedPreview.combined.summary
+      : null;
+    const summary = combinedSummary || adminSweepBacktestResult.preview?.summary || {};
+    const equityPointsRaw = tsDcaEnabled && Array.isArray(tsDcaCombinedPreview?.combined?.equity)
+      ? (tsDcaCombinedPreview?.combined?.equity || [])
+        .map((point) => Number((point as { equity?: number; value?: number }).equity ?? (point as { value?: number }).value ?? NaN))
         .filter((value) => Number.isFinite(value))
-      : [];
+      : (Array.isArray(adminSweepBacktestResult.preview?.equity)
+        ? (adminSweepBacktestResult.preview?.equity || [])
+          .map((point) => Number(point?.equity ?? point?.value ?? NaN))
+          .filter((value) => Number.isFinite(value))
+        : []);
+    const dcaLayerForSave = buildDcaLayerForSave();
     const equityPoints = downsampleNumericSeries(equityPointsRaw, 160);
     const resultOfferIds = (adminSweepBacktestResult.selectedOffers || [])
       .map((item) => String(item.offerId || '').trim())
@@ -7580,14 +7727,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
       if (shouldPublishAfterSave) {
         const editInPlace = Boolean(publishPreview?.cardExists) && !isNewCardName;
-        const cardOverrides = editInPlace
-          ? {
-              lotPercentOverride: Math.max(0, Number(adminSweepBacktestLotPercentOverride ?? 0)),
-              maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
-              autoLotByChannelWidth: adminSweepAutoLotByChannel,
-              dcaPerLegSl: tsDcaPerLegSl,
-            }
-          : undefined;
+        const cardOverrides = shouldPublishAfterSave ? buildCardOverridesForPublish() : undefined;
         const publishRes = await axios.post('/api/saas/admin/publish', {
           offerIds,
           setKey: snapshotKey || undefined,
@@ -7679,7 +7819,27 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               reinvestPercent: Math.max(0, Math.min(100, Number(adminSweepBacktestReinvestPercent ?? 0))),
               autoLotByChannelWidth: adminSweepAutoLotByChannel,
               dcaPerLegSl: tsDcaPerLegSl,
+              macroShield: tsDcaExitOverlayEnabled,
+              ...(tsDcaExitOverlayEnabled && dcaLayerForSave.macroExitOverlay
+                ? { macroExitOverlay: dcaLayerForSave.macroExitOverlay }
+                : {}),
+              ...(tsDcaStatArbGateEnabled && dcaLayerForSave.statArbEntryGate
+                ? { statArbEntryGate: dcaLayerForSave.statArbEntryGate }
+                : {}),
+              enablePairLock: true,
+              dcaEnabled: tsDcaEnabled,
+              dcaMarkets: tsDcaSelectedMarkets,
+              dcaInterval: tsDcaInterval,
+              dcaStepPercent: tsDcaStepPercent,
+              dcaTpPercent: tsDcaTpPercent,
+              dcaMaxOrders: tsDcaMaxOrders,
+              dcaBaseAmountMode: tsDcaBaseMode,
+              dcaBaseAmountPercent: tsDcaBaseMode === 'percent' ? tsDcaBasePercent : undefined,
+              dcaAutotune: tsDcaAutotune,
+              preset: dcaLayerForSave.tunePreset,
             },
+            dcaMarkets: tsDcaSelectedMarkets.length > 0 ? tsDcaSelectedMarkets : undefined,
+            dcaLayer: dcaLayerForSave,
           },
         },
       });
@@ -7760,14 +7920,184 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
-  const openEmbeddedBacktest = (context: SaasBacktestContext) => {
-    backtestRequestSeqRef.current += 1;
+  const applyDcaLayerFromSnapshot = (
+    snapshot: Record<string, unknown> | null | undefined,
+    context?: { setKey?: string; systemName?: string },
+  ) => {
+    const layer = (snapshot?.dcaLayer || null) as TsDcaLayerSnapshot | null;
+    const bs = (snapshot?.backtestSettings || {}) as Record<string, unknown>;
+    const setKey = String(context?.setKey || snapshot?.setKey || '').trim();
+    const systemName = String(context?.systemName || snapshot?.systemName || '').trim();
+    const v2Fallback = isV2SynthCardContext(setKey, systemName) ? V2_SYNTH_DCA_DEFAULTS : null;
+
+    const overlay = (layer?.macroExitOverlay
+      || bs.macroExitOverlay
+      || v2Fallback?.macroExitOverlay) as Record<string, unknown> | undefined;
+    const gate = (layer?.statArbEntryGate
+      || bs.statArbEntryGate
+      || v2Fallback?.statArbEntryGate) as Record<string, unknown> | undefined;
+    const tunePreset = String(layer?.tunePreset || bs.preset || v2Fallback?.tunePreset || '').trim();
+
+    backtestCardMechanicsRef.current = {
+      ...(overlay ? { macroExitOverlay: overlay } : {}),
+      ...(gate ? { statArbEntryGate: gate } : {}),
+      ...(tunePreset ? { tunePreset } : {}),
+    };
+    setTsDcaTunePreset(tunePreset);
+    setTsDcaExitOverlayEnabled(Boolean(overlay));
+    setTsDcaStatArbGateEnabled(Boolean(gate));
+
+    const snapshotDcaMarkets = Array.isArray(snapshot?.dcaMarkets)
+      ? (snapshot?.dcaMarkets ?? []).map((item) => String(item || '').trim().toUpperCase()).filter(Boolean)
+      : [];
+    const layerMarkets = layer?.markets;
+    const markets = Array.isArray(layerMarkets) && layerMarkets.length > 0
+      ? layerMarkets
+      : snapshotDcaMarkets;
+    const fallbackMarkets = v2Fallback?.markets || [];
+    const resolvedMarkets = markets.length > 0 ? markets : fallbackMarkets;
+
+    if (resolvedMarkets.length > 0) {
+      setTsDcaSelectedMarkets(resolvedMarkets);
+      setTsDcaEnabled(layer?.enabled !== false && (
+        layer?.enabled === true
+        || bs.dcaEnabled === true
+        || Boolean(v2Fallback)
+      ));
+    } else {
+      setTsDcaEnabled(false);
+      setTsDcaSelectedMarkets([]);
+    }
+
+    const tuning = layer?.tuning && typeof layer.tuning === 'object'
+      ? layer.tuning
+      : (resolvedMarkets.length > 0
+        ? Object.fromEntries(resolvedMarkets.map((market) => [market, { ...V2_DCA_TUNE_DEFAULT }]))
+        : {});
+    setTsDcaMarketTuningSaved(tuning);
+
+    const globalInterval = String(layer?.dcaInterval || bs.dcaInterval || v2Fallback?.dcaInterval || '4h');
+    const globalStep = Number(layer?.dcaStepPercent ?? bs.dcaStepPercent ?? v2Fallback?.dcaStepPercent ?? 2);
+    const globalTp = Number(layer?.dcaTpPercent ?? bs.dcaTpPercent ?? v2Fallback?.dcaTpPercent ?? 3);
+    const globalMaxOrders = Number(layer?.dcaMaxOrders ?? bs.dcaMaxOrders ?? v2Fallback?.dcaMaxOrders ?? 5);
+    const globalBaseMode = String(layer?.dcaBaseAmountMode || bs.dcaBaseAmountMode || v2Fallback?.dcaBaseAmountMode || 'fixed');
+    const globalBasePct = Number(layer?.dcaBaseAmountPercent ?? bs.dcaBaseAmountPercent ?? v2Fallback?.dcaBaseAmountPercent ?? 1);
+    const globalAutotune = layer?.dcaAutotune ?? bs.dcaAutotune ?? v2Fallback?.dcaAutotune;
+    const globalEntryFilter = String(layer?.dcaEntryFilter || bs.dcaEntryFilter || v2Fallback?.dcaEntryFilter || 'always');
+    const globalPerLegSl = layer?.dcaPerLegSl === true || bs.dcaPerLegSl === true || v2Fallback?.dcaPerLegSl === true;
+
+    setTsDcaInterval(globalInterval);
+    setTsDcaStepPercent(globalStep);
+    setTsDcaTpPercent(globalTp);
+    setTsDcaMaxOrders(globalMaxOrders);
+    setTsDcaBaseMode(globalBaseMode === 'percent' ? 'percent' : 'fixed');
+    setTsDcaBasePercent(globalBasePct);
+    if (globalAutotune === true) {
+      setTsDcaAutotune(true);
+    } else if (globalAutotune === false) {
+      setTsDcaAutotune(false);
+    }
+    setTsDcaEntryFilter(globalEntryFilter === 'rsi_dip' || globalEntryFilter === 'cooldown' ? globalEntryFilter : 'always');
+    setTsDcaPerLegSl(globalPerLegSl);
+    if (typeof layer?.scanFingerprint === 'string' && layer.scanFingerprint.trim()) {
+      setTsDcaResearchScanFingerprint(layer.scanFingerprint.trim());
+    }
+  };
+
+  const buildDcaLayerForSave = (): TsDcaLayerSnapshot => {
+    const markets = tsDcaSelectedMarkets;
+    const scanTuning = buildTsDcaMarketTuning();
+    const tuning = scanTuning || (Object.keys(tsDcaMarketTuningSaved).length > 0
+      ? tsDcaMarketTuningSaved
+      : (markets.length > 0
+        ? Object.fromEntries(markets.map((market) => [market, {
+          interval: tsDcaInterval,
+          stepPercent: tsDcaStepPercent,
+          tpPercent: tsDcaTpPercent,
+          slPercent: tsDcaSlPercent,
+          entryFilter: tsDcaEntryFilter,
+          perLegSl: tsDcaPerLegSl,
+        }]))
+        : undefined));
+    return {
+      enabled: tsDcaEnabled,
+      markets,
+      ...(tuning ? { tuning } : {}),
+      ...(tsDcaExitOverlayEnabled && backtestCardMechanicsRef.current.macroExitOverlay
+        ? { macroExitOverlay: backtestCardMechanicsRef.current.macroExitOverlay }
+        : {}),
+      ...(tsDcaStatArbGateEnabled && backtestCardMechanicsRef.current.statArbEntryGate
+        ? { statArbEntryGate: backtestCardMechanicsRef.current.statArbEntryGate }
+        : {}),
+      tunePreset: backtestCardMechanicsRef.current.tunePreset || 'v2dca_dense',
+      dcaBaseAmountMode: tsDcaBaseMode,
+      dcaBaseAmountPercent: tsDcaBaseMode === 'percent' ? tsDcaBasePercent : undefined,
+      dcaStepPercent: tsDcaStepPercent,
+      dcaTpPercent: tsDcaTpPercent,
+      dcaInterval: tsDcaInterval,
+      dcaMaxOrders: tsDcaMaxOrders,
+      dcaAutotune: tsDcaAutotune,
+      dcaEntryFilter: tsDcaEntryFilter,
+      dcaPerLegSl: tsDcaPerLegSl,
+      scanFingerprint: tsDcaResearchScanFingerprint || buildTsDcaScanFingerprint(),
+    };
+  };
+
+  const buildCardOverridesForPublish = () => ({
+    lotPercentOverride: Math.max(0, Number(adminSweepBacktestLotPercentOverride ?? 0)),
+    maxOpenPositions: Math.max(0, Math.floor(Number(adminSweepBacktestMaxOpenPositions ?? 0))),
+    autoLotByChannelWidth: adminSweepAutoLotByChannel,
+    dcaPerLegSl: tsDcaPerLegSl,
+    reinvestPercentOverride: Math.max(0, Math.min(100, Number(adminSweepBacktestReinvestPercent ?? 0))),
+    macroShield: tsDcaExitOverlayEnabled,
+    ...(tsDcaExitOverlayEnabled && backtestCardMechanicsRef.current.macroExitOverlay
+      ? { macroExitOverlay: backtestCardMechanicsRef.current.macroExitOverlay }
+      : {}),
+    ...(tsDcaStatArbGateEnabled && backtestCardMechanicsRef.current.statArbEntryGate
+      ? { statArbEntryGate: backtestCardMechanicsRef.current.statArbEntryGate }
+      : {}),
+    ...(backtestCardMechanicsRef.current.tunePreset
+      ? { tunePreset: backtestCardMechanicsRef.current.tunePreset }
+      : {}),
+    enablePairLock: true,
+    ...(tsDcaEnabled && tsDcaSelectedMarkets.length > 0
+      ? { dcaEnabled: true, dcaMarkets: tsDcaSelectedMarkets }
+      : {}),
+  });
+
+  const resetBacktestDrawerDcaState = () => {
     setTsDcaResearchResult(null);
     setTsDcaApplyResult(null);
     setTsDcaCombinedPreview(null);
     setTsDcaResearchScanFingerprint(null);
     setTsDcaEnabled(false);
     setTsDcaSelectedMarkets([]);
+    setTsDcaMarketTuningSaved({});
+    setTsDcaExitOverlayEnabled(false);
+    setTsDcaStatArbGateEnabled(false);
+    setTsDcaTunePreset('');
+    backtestCardMechanicsRef.current = {};
+  };
+
+  const applyBacktestSettingsFromSnapshot = (
+    snapshot: Record<string, unknown> | null | undefined,
+  ) => {
+    const settings = enrichBacktestSettingsFromTsSnapshot(
+      normalizeBacktestCardSettings((snapshot?.backtestSettings || {}) as Record<string, unknown>),
+      snapshot as TsSnapshotBacktestDatesSource | null,
+    );
+    const hasSavedCustomDates = Boolean(
+      /^\d{4}-\d{2}-\d{2}$/.test(String(settings.dateFrom || '').trim())
+      && /^\d{4}-\d{2}-\d{2}$/.test(String(settings.dateTo || '').trim()),
+    );
+    backtestDatesUserModifiedRef.current = hasSavedCustomDates;
+    applyBacktestSettings(settings);
+    return settings;
+  };
+
+  const openEmbeddedBacktest = (context: SaasBacktestContext) => {
+    backtestRequestSeqRef.current += 1;
+    resetBacktestDrawerDcaState();
     const settings = resolveBacktestSettingsForContext(context);
     const hasSavedCustomDates = Boolean(
       /^\d{4}-\d{2}-\d{2}$/.test(String(settings.dateFrom || '').trim())
@@ -7801,6 +8131,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             : contextOfferIds,
         );
         const systemName = String(context.systemName || matchingSnapshot.systemName || setKey).trim();
+        applyDcaLayerFromSnapshot(matchingSnapshot as Record<string, unknown>, { setKey, systemName });
         if (setKey && snapshotOfferIds.length > 0 && Number.isFinite(Number((matchingSnapshot as { ret?: number }).ret))) {
           const syntheticResult = buildSyntheticBacktestResultFromSnapshot(
             matchingSnapshot,
@@ -7889,7 +8220,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       dcaAutotune: tsDcaAutotune,
       dcaInterval: tsDcaInterval,
       dcaDetectionSource: tsDcaDetectionSource,
-      macroShield: tsDcaMacroShield,
+      macroExitOverlay: tsDcaExitOverlayEnabled ? backtestCardMechanicsRef.current.macroExitOverlay : undefined,
+      statArbEntryGate: tsDcaStatArbGateEnabled ? backtestCardMechanicsRef.current.statArbEntryGate : undefined,
     };
   };
 
@@ -8035,15 +8367,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         slPercent?: number;
         entryFilter?: string;
       } | undefined;
-      if (!row) continue;
-      tuning[market] = {
-        interval: row.interval,
-        stepPercent: row.stepPercent,
-        tpPercent: row.tpPercent,
-        slPercent: row.slPercent,
-        entryFilter: row.entryFilter,
-        perLegSl: (row as { perLegSl?: boolean }).perLegSl,
-      };
+      const saved = tsDcaMarketTuningSaved[market];
+      if (row) {
+        tuning[market] = {
+          interval: row.interval,
+          stepPercent: row.stepPercent,
+          tpPercent: row.tpPercent,
+          slPercent: row.slPercent,
+          entryFilter: row.entryFilter,
+          perLegSl: (row as { perLegSl?: boolean }).perLegSl,
+        };
+      } else if (saved) {
+        tuning[market] = saved;
+      }
     }
     return Object.keys(tuning).length > 0 ? tuning : undefined;
   };
@@ -8344,7 +8680,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     tsDcaRsiMax,
     tsDcaPerLegSl,
     tsDcaAutotune,
-    tsDcaMacroShield,
+    tsDcaExitOverlayEnabled,
+    tsDcaStatArbGateEnabled,
     tsDcaInterval,
     tsDcaDetectionSource,
     tsDcaResearchScanFingerprint,
@@ -8656,15 +8993,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         normalizedSystemName,
       );
       if (syntheticResult) {
-        const computedDates = computeBacktestDatesFromSnapshot(snapshot);
-        const settings = enrichBacktestSettingsFromTsSnapshot(
-          normalizeBacktestCardSettings(snapshot.backtestSettings || {}),
-          snapshot,
-        );
-        applyBacktestSettings({
-          ...settings,
-          dateFrom: computedDates?.dateFrom ?? settings.dateFrom,
-          dateTo: computedDates?.dateTo ?? settings.dateTo,
+        backtestRequestSeqRef.current += 1;
+        resetBacktestDrawerDcaState();
+        applyBacktestSettingsFromSnapshot(snapshot as Record<string, unknown>);
+        applyDcaLayerFromSnapshot(snapshot as Record<string, unknown>, {
+          setKey,
+          systemName: normalizedSystemName,
         });
         setSelectedAdminDraftTsSetKey(setKey);
         setBacktestTsWeightsByOfferId(normalizeBacktestTsWeights(offerIds, runtimeSystem?.offerWeightsById || {}));
@@ -8679,7 +9013,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         });
         setAdminSweepBacktestResult(syntheticResult);
         setAdminSweepBacktestStale(false);
-        setAdminSweepBacktestRerunApiKey('');
+        setAdminSweepBacktestRerunApiKey(String((snapshot as { apiKeyName?: string }).apiKeyName || ''));
         setBacktestDrawerVisible(true);
         return;
       }
@@ -14514,6 +14848,44 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       description="По умолчанию — полная глубина карточки / sweep (как real rerun TS). Свой диапазон — только если вручную задал даты «от/до». Autotune top-3 перебирает step×TP (4h/1h)."
                     />
                   ) : null}
+                  {backtestDrawerCardSnapshot ? (
+                    <Alert
+                      type="success"
+                      showIcon
+                      message={(
+                        <Space wrap>
+                          <span>Загружено из snapshot карточки</span>
+                          {tsDcaTunePreset ? <Tag color="purple">{tsDcaTunePreset}</Tag> : null}
+                          {tsDcaSelectedMarkets.map((market) => (
+                            <Tag key={market} color="blue">{market}</Tag>
+                          ))}
+                        </Space>
+                      )}
+                      description={formatSavedCardControlsDescription({
+                        tsDcaEnabled,
+                        markets: tsDcaSelectedMarkets,
+                        tunePreset: tsDcaTunePreset,
+                        tsDcaBaseMode,
+                        tsDcaBasePercent,
+                        tsDcaBaseAmountUsdt,
+                        tsDcaInterval,
+                        tsDcaStepPercent,
+                        tsDcaTpPercent,
+                        tsDcaMaxOrders,
+                        tsDcaAutotune,
+                        tsDcaExitOverlayEnabled,
+                        tsDcaStatArbGateEnabled,
+                        lotPercent: Number(adminSweepBacktestLotPercentOverride || 0),
+                        maxOpenPositions: Number(adminSweepBacktestMaxOpenPositions || 0),
+                        reinvestPercent: Number(adminSweepBacktestReinvestPercent || 0),
+                        hasCustomDates: hasCustomBacktestDates,
+                        dateFrom: adminSweepBacktestDateFrom,
+                        dateTo: adminSweepBacktestDateTo,
+                        periodDays: Number((backtestDrawerCardSnapshot as { periodDays?: number }).periodDays || 0),
+                        initialBalance: Number(adminSweepBacktestInitialBalance || 10000),
+                      })}
+                    />
+                  ) : null}
                   {isTsDcaScanStale ? (
                     <Alert
                       type="warning"
@@ -14535,6 +14907,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     />
                     <Text>DCA в ТС (влияет на equity и метрики ниже)</Text>
                     <Text type="secondary" style={{ fontSize: 12 }}>ОП ограничивает только trend; DCA — отдельно. Пары DCA ≠ пары TS (scan фильтрует).</Text>
+                    {tsDcaSelectedMarkets.length > 0 ? (
+                      <Space wrap size={4}>
+                        <Text type="secondary" style={{ fontSize: 12 }}>Пары:</Text>
+                        {tsDcaSelectedMarkets.map((market) => (
+                          <Tag key={`dca-pair-${market}`} color="geekblue">{market}</Tag>
+                        ))}
+                      </Space>
+                    ) : null}
                     {tsDcaCombinedPreview?.delta ? (
                       <Tooltip title="Δ = combined portfolio − TS-only (не сумма trades из таблицы scan)">
                         <Tag color={Number(tsDcaCombinedPreview.delta.ret || 0) >= 0 ? 'green' : 'red'}>
@@ -14554,9 +14934,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Space wrap align="center">
                     <Switch checked={tsDcaAutotune} onChange={setTsDcaAutotune} />
                     <Text>Autotune top-3 при scan</Text>
-                    <Switch checked={tsDcaMacroShield} onChange={setTsDcaMacroShield} />
-                    <Text>Macro shield (ETH/BTC RSI≥70 exit longs)</Text>
-                    {tsDcaCombinedPreview?.macroShield ? <Tag color="cyan">shield ON</Tag> : null}
+                    <Switch checked={tsDcaExitOverlayEnabled} onChange={setTsDcaExitOverlayEnabled} />
+                    <Tooltip title="V2: partial ~35% exit on local pair RSI 1h (не v1 BTC/ETH full close)">
+                      <Text>V2 exit overlay</Text>
+                    </Tooltip>
+                    <Switch checked={tsDcaStatArbGateEnabled} onChange={setTsDcaStatArbGateEnabled} />
+                    <Tooltip title="Fractal 4h entry filter для stat_arb_zscore офферов">
+                      <Text>Stat-arb gate</Text>
+                    </Tooltip>
+                    {tsDcaCombinedPreview?.macroShield ? <Tag color="cyan">overlay ON</Tag> : null}
+                    {tsDcaCombinedPreview?.statArbEntryGate ? <Tag color="purple">stat gate ON</Tag> : null}
                     <Switch checked={tsDcaPerLegSl} onChange={setTsDcaPerLegSl} />
                     <Tooltip title="SL режет одну ногу сетки и освобождает слот для нового safety-ордера">
                       <Text>Per-leg SL</Text>
@@ -15603,13 +15990,47 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       {
                         title: 'Карточка',
                         key: 'offer',
-                        render: (_, row: any) => (
-                          <Space direction="vertical" size={0}>
-                            <Text strong>{row.titleRu}</Text>
-                            <Text type="secondary">{String(row.mode || '').toUpperCase()} • {row.market || '—'}{backtestDrawerContext.kind !== 'algofund-ts' && row.familyInterval ? ` • ${row.familyInterval}` : ''}</Text>
-                            <Text type="secondary">strategy #{Number(row.strategyId || 0)} • {String(row.strategyName || '').trim() || '—'}</Text>
-                          </Space>
-                        ),
+                        render: (_, row: any) => {
+                          const tf = String(
+                            row.familyInterval
+                            || row.preset?.params?.interval
+                            || row.interval
+                            || '',
+                          ).trim() || '—';
+                          const metrics = row.metrics || {};
+                          const hasOfferMetrics = String(row.metricsSource || '') !== 'snapshot_only'
+                            && (
+                              Number.isFinite(Number(metrics.ret))
+                              || Number.isFinite(Number(metrics.dd))
+                              || Number.isFinite(Number(metrics.pf))
+                            );
+                          return (
+                            <Space direction="vertical" size={2}>
+                              <Text strong>{row.titleRu}</Text>
+                              <Text type="secondary">
+                                {String(row.mode || '').toUpperCase()} • {row.market || '—'} • TF {tf}
+                              </Text>
+                              <Text type="secondary">
+                                strategy #{Number(row.strategyId || 0)} • {String(row.strategyName || '').trim() || '—'}
+                              </Text>
+                              {hasOfferMetrics ? (
+                                <Space wrap size={4}>
+                                  <Tag color={metricColor(Number(metrics.ret || 0), 'return')}>
+                                    Ret {formatPercent(metrics.ret)}
+                                  </Tag>
+                                  <Tag color={metricColor(Number(metrics.dd || 0), 'drawdown')}>
+                                    DD {formatPercent(metrics.dd)}
+                                  </Tag>
+                                  <Tag color={metricColor(Number(metrics.pf || 0), 'pf')}>
+                                    PF {formatNumber(metrics.pf)}
+                                  </Tag>
+                                </Space>
+                              ) : (
+                                <Text type="secondary" style={{ fontSize: 12 }}>метрики оффера: n/a</Text>
+                              )}
+                            </Space>
+                          );
+                        },
                       },
                       {
                         title: 'Вес',

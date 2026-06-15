@@ -16,7 +16,9 @@ import { calculateSyntheticOHLC } from './synthetic';
 import { recordLiveTradeEvent } from '../analytics/liveReconciliation';
 import logger from '../utils/logger';
 import { computeChannelWidthLotMultiplier } from '../services/strategy/sizing';
-import { evaluateMacroShieldLongExit, isMacroShieldEnabledForApiKey } from './macroExitShield';
+import { clearMacroShieldPartialState, evaluateMacroShieldExit, getMacroExitOverlayForApiKey, isMacroShieldEnabledForApiKey } from './macroExitShield';
+import { getStatArbEntryGateForApiKey, passesStatArbEntryGateLive } from './statArbEntryGate';
+import { getOrderBlockEntryGateForApiKey, passesOrderBlockEntryGateLive } from './orderBlockEntryGate';
 
 // ── Market data cache for auto-strategy cycle ────────────────────────────────
 // Avoids re-fetching the same symbol+interval when multiple strategies share them.
@@ -2471,7 +2473,9 @@ export const executeStrategy = async (
     | 'mean_revert_exit_short'
     | 'zscore_stop_long'
     | 'zscore_stop_short'
-    | 'macro_shield_exit_long';
+    | 'macro_shield_exit_long'
+    | 'macro_shield_exit_short'
+    | 'macro_shield_partial';
   let closedAction: StrategyCloseAction | null = null;
   let closedResult: string | null = null;
   const evaluatedBarTimeMs = candleContext.evaluatedBarTimeMs;
@@ -2582,6 +2586,7 @@ export const executeStrategy = async (
     signalSnapshot: StrategySignal
   ): Promise<void> => {
     partialTpTriggeredByStrategy.delete(strategyId);
+    clearMacroShieldPartialState(strategyId);
     const exitEntryRatio = entryRatio;
     await updateStrategy(apiKeyName, strategyId, {
       ...executionBindingPatch,
@@ -2908,16 +2913,39 @@ export const executeStrategy = async (
   }
 
   const strategyType = String(mergedStrategy.strategy_type || '');
-  if (!closedAction && state === 'long'
+  if (!closedAction && (state === 'long' || state === 'short')
     && strategyType !== 'dca'
     && strategyType !== 'dca_futures') {
     try {
       if (await isMacroShieldEnabledForApiKey(apiKeyName)) {
-        const macroSignal = await evaluateMacroShieldLongExit(apiKeyName);
-        if (macroSignal?.shouldExit) {
-          await closeAndRecordExit('macro_shield_exit_long', 'long');
-          closedAction = 'macro_shield_exit_long';
-          closedResult = `Macro shield exit for long ${positionLabel} (${macroSignal.symbol} RSI=${macroSignal.rsi.toFixed(1)})`;
+        const overlay = await getMacroExitOverlayForApiKey(apiKeyName);
+        if (overlay) {
+          const macroSignal = await evaluateMacroShieldExit(
+            apiKeyName,
+            state,
+            String(mergedStrategy.base_symbol || ''),
+            overlay,
+            strategyId,
+          );
+          if (macroSignal?.action === 'full') {
+            const fullAction: StrategyCloseAction = state === 'long'
+              ? 'macro_shield_exit_long'
+              : 'macro_shield_exit_short';
+            await closeAndRecordExit(fullAction, state);
+            closedAction = fullAction;
+            closedResult = `Macro shield full exit for ${state} ${positionLabel} (${macroSignal.detail})`;
+          } else if (macroSignal?.action === 'partial') {
+            try {
+              for (const sym of getStrategySymbols(mergedStrategy)) {
+                await closePositionPercent(apiKeyName, strategyId, sym, macroSignal.closePercent);
+              }
+              closedAction = 'macro_shield_partial';
+              closedResult = `Macro shield partial ${macroSignal.closePercent}% for ${state} ${positionLabel} (${macroSignal.detail})`;
+              logger.info(`Macro shield partial ${macroSignal.closePercent}% for strategy ${strategyId}: ${macroSignal.detail}`);
+            } catch (partialErr) {
+              logger.warn(`Macro shield partial failed for ${strategyId}: ${formatActionError(partialErr)}`);
+            }
+          }
         }
       }
     } catch (macroErr) {
@@ -3434,6 +3462,82 @@ export const executeStrategy = async (
     }
 
     throw new Error('Calculated trade notional is invalid');
+  }
+
+  if (isStatArb && (signal === 'long' || signal === 'short')) {
+    const entryGate = await getStatArbEntryGateForApiKey(apiKeyName);
+    if (entryGate) {
+      const gateOk = await passesStatArbEntryGateLive(
+        apiKeyName,
+        String(mergedStrategy.base_symbol || ''),
+        signal,
+        entryGate,
+      );
+      if (!gateOk) {
+        const updated = await updateStrategy(apiKeyName, strategyId, {
+          ...executionBindingPatch,
+          ...(closedAction
+            ? { state: 'flat' as const, entry_ratio: null, tp_anchor_ratio: null }
+            : {}),
+          last_signal: signal,
+          last_action: closedAction
+            ? `${closedAction}_stat_arb_entry_gate_skip@${currentRatio}`
+            : `stat_arb_entry_gate_skip@${currentRatio}`,
+          last_error: null,
+        });
+        logger.info(
+          `Stat-arb entry gate blocked ${signal} for strategy ${strategyId} (${apiKeyName}) `
+          + `[${entryGate.label || 'fractal_gate'}]`,
+        );
+        return returnWithProcessedBar({
+          result: closedResult || `Stat-arb entry gate: ${signal} blocked (fractal/RSI confirmation missing)`,
+          action: closedAction ? `${closedAction}_stat_arb_entry_gate_skip` : 'stat_arb_entry_gate_skip',
+          strategy: updated,
+          currentRatio,
+          donchianHigh,
+          donchianLow,
+          donchianCenter,
+        });
+      }
+    }
+  }
+
+  if (signal === 'long' || signal === 'short') {
+    const obGate = await getOrderBlockEntryGateForApiKey(apiKeyName);
+    if (obGate) {
+      const obOk = await passesOrderBlockEntryGateLive(
+        apiKeyName,
+        signal,
+        String(mergedStrategy.base_symbol || ''),
+        obGate,
+      );
+      if (!obOk) {
+        const updated = await updateStrategy(apiKeyName, strategyId, {
+          ...executionBindingPatch,
+          ...(closedAction
+            ? { state: 'flat' as const, entry_ratio: null, tp_anchor_ratio: null }
+            : {}),
+          last_signal: signal,
+          last_action: closedAction
+            ? `${closedAction}_order_block_gate_skip@${currentRatio}`
+            : `order_block_gate_skip@${currentRatio}`,
+          last_error: null,
+        });
+        logger.info(
+          `Order-block gate blocked ${signal} for strategy ${strategyId} (${apiKeyName}) `
+          + `[${obGate.label || 'btc_liq_ob'}]`,
+        );
+        return returnWithProcessedBar({
+          result: closedResult || `Order-block gate: ${signal} blocked at BTC liquidity zone`,
+          action: closedAction ? `${closedAction}_order_block_gate_skip` : 'order_block_gate_skip',
+          strategy: updated,
+          currentRatio,
+          donchianHigh,
+          donchianLow,
+          donchianCenter,
+        });
+      }
+    }
   }
 
   const basePrice = await getLatestMarketClose(apiKeyName, mergedStrategy.base_symbol);

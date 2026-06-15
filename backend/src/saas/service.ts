@@ -1,7 +1,7 @@
 ﻿import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { runBacktest, type BacktestRunRequest, type MacroExitOverlay } from '../backtest/engine';
+import { runBacktest, type BacktestRunRequest, type MacroExitOverlay, type StatArbEntryGate, DEFAULT_STAT_ARB_ENTRY_GATE } from '../backtest/engine';
 import { closeStrategyExposure, cancelStrategyWorkingOrders, copyStrategyBlock, createStrategy, getStrategies, updateStrategy } from '../bot/strategy';
 import {
   createTradingSystem,
@@ -619,6 +619,40 @@ type OfferReviewSnapshot = {
   updatedAt: string;
 };
 
+export type TsDcaLayerSnapshot = {
+  enabled?: boolean;
+  markets?: string[];
+  tuning?: Record<string, Partial<DcaStrategySettings>>;
+  macroExitOverlay?: MacroExitOverlay;
+  statArbEntryGate?: StatArbEntryGate;
+  tunePreset?: string;
+  dcaBaseAmountMode?: string;
+  dcaBaseAmountPercent?: number;
+  dcaStepPercent?: number;
+  dcaTpPercent?: number;
+  dcaInterval?: string;
+  dcaMaxOrders?: number;
+  dcaAutotune?: boolean;
+  dcaEntryFilter?: string;
+  dcaPerLegSl?: boolean;
+  scanFingerprint?: string;
+};
+
+export type CardMetadataOverrides = {
+  lotPercentOverride?: number;
+  maxOpenPositions?: number;
+  autoLotByChannelWidth?: boolean;
+  dcaPerLegSl?: boolean;
+  reinvestPercentOverride?: number;
+  macroShield?: boolean;
+  macroExitOverlay?: MacroExitOverlay | null;
+  statArbEntryGate?: StatArbEntryGate | null;
+  tunePreset?: string;
+  enablePairLock?: boolean;
+  dcaMarkets?: string[];
+  dcaEnabled?: boolean;
+};
+
 type TsBacktestSnapshot = {
   apiKeyName?: string;
   systemName?: string;
@@ -663,11 +697,26 @@ type TsBacktestSnapshot = {
     autoLotByChannelWidth?: boolean;
     dcaPerLegSl?: boolean;
     macroShield?: boolean;
+    macroExitOverlay?: MacroExitOverlay;
+    statArbEntryGate?: StatArbEntryGate;
+    enablePairLock?: boolean;
+    dcaEnabled?: boolean;
+    dcaMarkets?: string[];
+    dcaInterval?: string;
+    dcaStepPercent?: number;
+    dcaTpPercent?: number;
+    dcaMaxOrders?: number;
+    dcaBaseAmountMode?: string;
+    dcaBaseAmountPercent?: number;
+    dcaAutotune?: boolean;
+    preset?: string;
   };
   /** Macro RSI shield enabled for this TS card. */
   macroShield?: boolean;
   /** DCA satellite markets (mono spot/futures grid, not sweep offers). */
   dcaMarkets?: string[];
+  /** Full DCA + card mechanics block (v2-synth preset). */
+  dcaLayer?: TsDcaLayerSnapshot;
   updatedAt: string;
 };
 
@@ -1770,6 +1819,102 @@ const getOfferReviewSnapshots = async (): Promise<Record<string, OfferReviewSnap
   return result;
 };
 
+const parseMacroExitOverlayFromUnknown = (raw: unknown): MacroExitOverlay | undefined => (
+  raw && typeof raw === 'object' ? (raw as MacroExitOverlay) : undefined
+);
+
+const parseStatArbEntryGateFromUnknown = (raw: unknown): StatArbEntryGate | undefined => (
+  raw && typeof raw === 'object' ? (raw as StatArbEntryGate) : undefined
+);
+
+const parseTsDcaLayerSnapshot = (raw: unknown): TsDcaLayerSnapshot | undefined => {
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  const parsed = raw as Record<string, unknown>;
+  const layer: TsDcaLayerSnapshot = {};
+  if (Array.isArray(parsed.markets)) {
+    layer.markets = Array.from(new Set(
+      parsed.markets.map((item) => String(item || '').trim().toUpperCase()).filter(Boolean),
+    ));
+  }
+  const overlay = parseMacroExitOverlayFromUnknown(parsed.macroExitOverlay);
+  if (overlay) {
+    layer.macroExitOverlay = overlay;
+  }
+  const gate = parseStatArbEntryGateFromUnknown(parsed.statArbEntryGate);
+  if (gate) {
+    layer.statArbEntryGate = gate;
+  }
+  if (parsed.tuning && typeof parsed.tuning === 'object') {
+    layer.tuning = parsed.tuning as Record<string, Partial<DcaStrategySettings>>;
+  }
+  if (typeof parsed.tunePreset === 'string' && parsed.tunePreset.trim()) {
+    layer.tunePreset = parsed.tunePreset.trim();
+  }
+  if (parsed.enabled === true) {
+    layer.enabled = true;
+  } else if (parsed.enabled === false) {
+    layer.enabled = false;
+  }
+  if (typeof parsed.dcaInterval === 'string' && parsed.dcaInterval.trim()) {
+    layer.dcaInterval = parsed.dcaInterval.trim();
+  }
+  if (Number.isFinite(Number(parsed.dcaStepPercent))) {
+    layer.dcaStepPercent = Number(parsed.dcaStepPercent);
+  }
+  if (Number.isFinite(Number(parsed.dcaTpPercent))) {
+    layer.dcaTpPercent = Number(parsed.dcaTpPercent);
+  }
+  if (Number.isFinite(Number(parsed.dcaMaxOrders))) {
+    layer.dcaMaxOrders = Math.max(0, Math.floor(Number(parsed.dcaMaxOrders)));
+  }
+  if (typeof parsed.dcaBaseAmountMode === 'string' && parsed.dcaBaseAmountMode.trim()) {
+    layer.dcaBaseAmountMode = parsed.dcaBaseAmountMode.trim();
+  }
+  if (Number.isFinite(Number(parsed.dcaBaseAmountPercent))) {
+    layer.dcaBaseAmountPercent = Number(parsed.dcaBaseAmountPercent);
+  }
+  if (parsed.dcaAutotune === true) {
+    layer.dcaAutotune = true;
+  } else if (parsed.dcaAutotune === false) {
+    layer.dcaAutotune = false;
+  }
+  if (typeof parsed.dcaEntryFilter === 'string' && parsed.dcaEntryFilter.trim()) {
+    layer.dcaEntryFilter = parsed.dcaEntryFilter.trim();
+  }
+  if (parsed.dcaPerLegSl === true) {
+    layer.dcaPerLegSl = true;
+  }
+  if (typeof parsed.scanFingerprint === 'string' && parsed.scanFingerprint.trim()) {
+    layer.scanFingerprint = parsed.scanFingerprint.trim();
+  }
+  return Object.keys(layer).length > 0 ? layer : undefined;
+};
+
+export const getMasterCardMetadataBySystemName = async (
+  systemName: string,
+): Promise<Record<string, unknown> | null> => {
+  const name = String(systemName || '').trim();
+  if (!name) {
+    return null;
+  }
+  const code = `CARD::${name.toUpperCase()}`;
+  try {
+    const row = await db.get<{ metadata_json?: string }>(
+      'SELECT metadata_json FROM master_cards WHERE code = ? AND is_active = 1',
+      [code],
+    );
+    if (!row?.metadata_json) {
+      return null;
+    }
+    const meta = JSON.parse(row.metadata_json) as Record<string, unknown>;
+    return meta && typeof meta === 'object' ? meta : null;
+  } catch {
+    return null;
+  }
+};
+
 const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null => {
   const parsed = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
   if (!parsed) {
@@ -1790,6 +1935,7 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
   const settingsRaw = parsed.backtestSettings && typeof parsed.backtestSettings === 'object'
     ? (parsed.backtestSettings as Record<string, unknown>)
     : {};
+  const dcaLayerParsed = parseTsDcaLayerSnapshot(parsed.dcaLayer);
 
   return {
     apiKeyName: asString(parsed.apiKeyName, ''),
@@ -1839,6 +1985,43 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
       ...(settingsRaw.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),
       ...(settingsRaw.dcaPerLegSl === true ? { dcaPerLegSl: true } : {}),
       ...(settingsRaw.macroShield === true ? { macroShield: true } : {}),
+      ...(parseMacroExitOverlayFromUnknown(settingsRaw.macroExitOverlay)
+        ? { macroExitOverlay: parseMacroExitOverlayFromUnknown(settingsRaw.macroExitOverlay) }
+        : {}),
+      ...(parseStatArbEntryGateFromUnknown(settingsRaw.statArbEntryGate)
+        ? { statArbEntryGate: parseStatArbEntryGateFromUnknown(settingsRaw.statArbEntryGate) }
+        : {}),
+      ...(settingsRaw.enablePairLock === true ? { enablePairLock: true } : {}),
+      ...(settingsRaw.dcaEnabled === true ? { dcaEnabled: true } : {}),
+      ...(Array.isArray(settingsRaw.dcaMarkets)
+        ? {
+          dcaMarkets: Array.from(new Set(
+            settingsRaw.dcaMarkets.map((item) => String(item || '').trim().toUpperCase()).filter(Boolean),
+          )),
+        }
+        : {}),
+      ...(typeof settingsRaw.dcaInterval === 'string' && settingsRaw.dcaInterval.trim()
+        ? { dcaInterval: settingsRaw.dcaInterval.trim() }
+        : {}),
+      ...(Number.isFinite(Number(settingsRaw.dcaStepPercent))
+        ? { dcaStepPercent: Number(settingsRaw.dcaStepPercent) }
+        : {}),
+      ...(Number.isFinite(Number(settingsRaw.dcaTpPercent))
+        ? { dcaTpPercent: Number(settingsRaw.dcaTpPercent) }
+        : {}),
+      ...(Number.isFinite(Number(settingsRaw.dcaMaxOrders))
+        ? { dcaMaxOrders: Math.max(0, Math.floor(Number(settingsRaw.dcaMaxOrders))) }
+        : {}),
+      ...(typeof settingsRaw.dcaBaseAmountMode === 'string' && settingsRaw.dcaBaseAmountMode.trim()
+        ? { dcaBaseAmountMode: settingsRaw.dcaBaseAmountMode.trim() }
+        : {}),
+      ...(Number.isFinite(Number(settingsRaw.dcaBaseAmountPercent))
+        ? { dcaBaseAmountPercent: Number(settingsRaw.dcaBaseAmountPercent) }
+        : {}),
+      ...(settingsRaw.dcaAutotune === true ? { dcaAutotune: true } : {}),
+      ...(typeof settingsRaw.preset === 'string' && settingsRaw.preset.trim()
+        ? { preset: settingsRaw.preset.trim() }
+        : {}),
     },
     ...(parsed.macroShield === true || settingsRaw.macroShield === true ? { macroShield: true } : {}),
     ...(Array.isArray(parsed.dcaMarkets)
@@ -1848,6 +2031,7 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
         )),
       }
       : {}),
+    ...(dcaLayerParsed ? { dcaLayer: dcaLayerParsed } : {}),
     updatedAt: asString(parsed.updatedAt, new Date().toISOString()),
   };
 };
@@ -6179,6 +6363,9 @@ export const updateOfferStoreAdminState = async (payload: {
       await syncMasterStrategyFlagsFromSnapshot(normalizedSnapshot).catch((error) => {
         logger.warn(`syncMasterStrategyFlagsFromSnapshot failed for ${key}: ${(error as Error).message}`);
       });
+      await syncCardMechanicsFromSnapshot(normalizedSnapshot).catch((error) => {
+        logger.warn(`syncCardMechanicsFromSnapshot failed for ${key}: ${(error as Error).message}`);
+      });
     }
   }
 
@@ -6894,6 +7081,9 @@ export const previewAdminSweepBacktest = async (payload?: {
   isBatchRefresh?: boolean;
   /** Scale trend entries by inverse Donchian channel width. */
   autoLotByChannelWidth?: boolean;
+  macroExitOverlay?: MacroExitOverlay;
+  statArbEntryGate?: StatArbEntryGate;
+  macroShield?: boolean;
 }) => {
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();
@@ -7021,6 +7211,22 @@ export const previewAdminSweepBacktest = async (payload?: {
     if (offerIds.length === 0) {
       throw new Error('No offerIds resolved for TS sweep backtest preview');
     }
+  }
+
+  let tsPreviewMechanicsExtras: Pick<BacktestRunRequest, 'macroExitOverlay' | 'statArbEntryGate'> = {};
+  if (kind === 'algofund-ts') {
+    const mechanics = await resolvePreviewCardMechanics({
+      systemName: requestedSystemName,
+      setKey: asString(payload?.setKey, ''),
+      snapshot: tsSavedSnapshotForPreview,
+      payloadMacroExitOverlay: payload?.macroExitOverlay,
+      payloadStatArbEntryGate: payload?.statArbEntryGate,
+      payloadMacroShield: payload?.macroShield,
+    });
+    tsPreviewMechanicsExtras = {
+      ...(mechanics.macroExitOverlay ? { macroExitOverlay: mechanics.macroExitOverlay } : {}),
+      ...(mechanics.statArbEntryGate ? { statArbEntryGate: mechanics.statArbEntryGate } : {}),
+    };
   }
 
   if (kind === 'algofund-ts' && payload?.forceOfferIds === true && offerIds.length > 0 && sweepEvaluatedRows.length > 0) {
@@ -7646,6 +7852,7 @@ export const previewAdminSweepBacktest = async (payload?: {
           ...(portfolioLotMultipliers && Object.keys(portfolioLotMultipliers).length > 0
             ? { lotPercentMultiplierByStrategyId: portfolioLotMultipliers }
             : {}),
+          ...tsPreviewMechanicsExtras,
         });
 
         const summaryAny = result.summary as Record<string, unknown>;
@@ -8010,6 +8217,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                     ? { lotPercentMultiplierByStrategyId: snapshotPortfolioLotMultipliers }
                     : {}),
                   ...(payload?.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),
+                  ...tsPreviewMechanicsExtras,
                 };
 
                 let result;
@@ -9667,6 +9875,206 @@ export const DEFAULT_TS_MACRO_SHIELD_OVERLAY: MacroExitOverlay = {
   ],
 };
 
+/** v2 card default: local pair RSI partial ~35% (Jun 2026 research). */
+export const LOCAL_SELF_RSI_PARTIAL_MACRO_OVERLAY: MacroExitOverlay = {
+  anchorInterval: '1h',
+  rules: [],
+  localSelf: {
+    source: 'self',
+    rsiPeriod: 14,
+    fractalWings: 2,
+    mode: 'partial',
+    closeFraction: 0.35,
+    combineWith: 'or',
+    longExitRsiAbove: 70,
+    shortExitRsiBelow: 20,
+    shortExitRsiAbove: 70,
+    label: 'local_rsi1h',
+  },
+};
+
+/** Hybrid candidate: local partial + global 3/3 BTC+ETH+SOL (pending hybrid research). */
+export const HYBRID_MACRO_EXIT_OVERLAY: MacroExitOverlay = {
+  anchorInterval: '4h',
+  rules: [],
+  localSelf: LOCAL_SELF_RSI_PARTIAL_MACRO_OVERLAY.localSelf,
+  globalVote: {
+    minVotes: 3,
+    anchors: ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'],
+    rsiPeriod: 14,
+    fractalWings: 2,
+    mode: 'full',
+    longExitRsiAbove: 70,
+    longExitBearishFractal: true,
+    shortExitRsiBelow: 20,
+    shortExitRsiAbove: 70,
+    shortExitBullishFractal: true,
+    label: 'global_3of3',
+  },
+};
+
+/** Default overlay for balanced-shield-dca-v2 card previews (swap to HYBRID after approval). */
+export const SHIELD_V2_MACRO_EXIT_OVERLAY = LOCAL_SELF_RSI_PARTIAL_MACRO_OVERLAY;
+
+export { DEFAULT_STAT_ARB_ENTRY_GATE };
+
+const isV2SynthCardKey = (setKey: string, systemName: string): boolean => (
+  /v2-synth/i.test(setKey) || /v2-synth/i.test(systemName)
+);
+
+export const resolvePreviewCardMechanics = async (params: {
+  systemName?: string;
+  setKey?: string;
+  snapshot?: TsBacktestSnapshot | null;
+  payloadMacroExitOverlay?: MacroExitOverlay;
+  payloadStatArbEntryGate?: StatArbEntryGate;
+  payloadMacroShield?: boolean;
+}): Promise<{
+  macroExitOverlay?: MacroExitOverlay;
+  statArbEntryGate?: StatArbEntryGate;
+}> => {
+  const snapshot = params.snapshot || null;
+  const dcaLayer = snapshot?.dcaLayer;
+  const settingsRaw = (snapshot?.backtestSettings || {}) as Record<string, unknown>;
+  const setKey = asString(params.setKey, asString(snapshot?.setKey, '')).trim();
+  const systemName = asString(params.systemName, asString(snapshot?.systemName, '')).trim();
+
+  let macroExitOverlay = params.payloadMacroExitOverlay
+    || dcaLayer?.macroExitOverlay
+    || parseMacroExitOverlayFromUnknown(settingsRaw.macroExitOverlay);
+  let statArbEntryGate = params.payloadStatArbEntryGate
+    || dcaLayer?.statArbEntryGate
+    || parseStatArbEntryGateFromUnknown(settingsRaw.statArbEntryGate);
+
+  if ((!macroExitOverlay || !statArbEntryGate) && systemName) {
+    const cardMeta = await getMasterCardMetadataBySystemName(systemName);
+    if (!macroExitOverlay) {
+      macroExitOverlay = parseMacroExitOverlayFromUnknown(cardMeta?.macroExitOverlay);
+    }
+    if (!statArbEntryGate) {
+      statArbEntryGate = parseStatArbEntryGateFromUnknown(cardMeta?.statArbEntryGate);
+    }
+  }
+
+  const isV2Synth = isV2SynthCardKey(setKey, systemName);
+  if (!macroExitOverlay && params.payloadMacroShield === true && !isV2Synth) {
+    macroExitOverlay = DEFAULT_TS_MACRO_SHIELD_OVERLAY;
+  }
+  if (!macroExitOverlay && isV2Synth) {
+    macroExitOverlay = SHIELD_V2_MACRO_EXIT_OVERLAY;
+  }
+  if (!statArbEntryGate && isV2Synth) {
+    statArbEntryGate = DEFAULT_STAT_ARB_ENTRY_GATE;
+  }
+
+  return {
+    ...(macroExitOverlay ? { macroExitOverlay } : {}),
+    ...(statArbEntryGate ? { statArbEntryGate } : {}),
+  };
+};
+
+export const parseCardMetadataOverridesBody = (
+  raw: Record<string, unknown> | null | undefined,
+): CardMetadataOverrides | undefined => {
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  const out: CardMetadataOverrides = {};
+  if (raw.lotPercentOverride !== undefined && Number.isFinite(Number(raw.lotPercentOverride))) {
+    out.lotPercentOverride = Math.max(0, Number(raw.lotPercentOverride));
+  }
+  if (raw.maxOpenPositions !== undefined && Number.isFinite(Number(raw.maxOpenPositions))) {
+    out.maxOpenPositions = Math.max(0, Math.floor(Number(raw.maxOpenPositions)));
+  }
+  if (raw.autoLotByChannelWidth !== undefined) {
+    out.autoLotByChannelWidth = raw.autoLotByChannelWidth === true;
+  }
+  if (raw.dcaPerLegSl !== undefined) {
+    out.dcaPerLegSl = raw.dcaPerLegSl === true;
+  }
+  if (raw.reinvestPercentOverride !== undefined && Number.isFinite(Number(raw.reinvestPercentOverride))) {
+    out.reinvestPercentOverride = Math.min(100, Math.max(0, Number(raw.reinvestPercentOverride)));
+  }
+  if (raw.macroShield !== undefined) {
+    out.macroShield = raw.macroShield === true;
+  }
+  if (raw.macroExitOverlay === null) {
+    out.macroExitOverlay = null;
+  } else if (raw.macroExitOverlay && typeof raw.macroExitOverlay === 'object') {
+    out.macroExitOverlay = raw.macroExitOverlay as MacroExitOverlay;
+  }
+  if (raw.statArbEntryGate === null) {
+    out.statArbEntryGate = null;
+  } else if (raw.statArbEntryGate && typeof raw.statArbEntryGate === 'object') {
+    out.statArbEntryGate = raw.statArbEntryGate as StatArbEntryGate;
+  }
+  if (typeof raw.tunePreset === 'string' && raw.tunePreset.trim()) {
+    out.tunePreset = raw.tunePreset.trim();
+  }
+  if (raw.enablePairLock !== undefined) {
+    out.enablePairLock = raw.enablePairLock === true;
+  }
+  if (Array.isArray(raw.dcaMarkets)) {
+    out.dcaMarkets = Array.from(new Set(
+      raw.dcaMarkets.map((item) => String(item || '').trim().toUpperCase()).filter(Boolean),
+    ));
+  }
+  if (raw.dcaEnabled !== undefined) {
+    out.dcaEnabled = raw.dcaEnabled === true;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+};
+
+export const buildCardMechanicsOverridesFromSnapshot = (
+  snapshot: TsBacktestSnapshot,
+): CardMetadataOverrides => {
+  const layer = snapshot.dcaLayer;
+  const bs = snapshot.backtestSettings || {};
+  const overrides: CardMetadataOverrides = {};
+  if (Number.isFinite(Number(bs.reinvestPercent))) {
+    overrides.reinvestPercentOverride = Math.min(100, Math.max(0, Number(bs.reinvestPercent)));
+  }
+  if (bs.autoLotByChannelWidth === true) {
+    overrides.autoLotByChannelWidth = true;
+  }
+  if (bs.dcaPerLegSl === true || layer?.dcaPerLegSl === true) {
+    overrides.dcaPerLegSl = true;
+  }
+  if (Number.isFinite(Number(bs.maxOpenPositions)) && Number(bs.maxOpenPositions) > 0) {
+    overrides.maxOpenPositions = Math.floor(Number(bs.maxOpenPositions));
+  }
+  if (Number.isFinite(Number(bs.lotPercentOverride)) && Number(bs.lotPercentOverride) > 0) {
+    overrides.lotPercentOverride = Number(bs.lotPercentOverride);
+  }
+  const overlay = layer?.macroExitOverlay || bs.macroExitOverlay;
+  if (overlay) {
+    overrides.macroExitOverlay = overlay;
+    overrides.macroShield = true;
+  } else if (snapshot.macroShield === true || bs.macroShield === true) {
+    overrides.macroShield = true;
+  }
+  const gate = layer?.statArbEntryGate || bs.statArbEntryGate;
+  if (gate) {
+    overrides.statArbEntryGate = gate;
+  }
+  if (layer?.tunePreset) {
+    overrides.tunePreset = layer.tunePreset;
+  } else if (bs.preset) {
+    overrides.tunePreset = bs.preset;
+  }
+  const markets = layer?.markets?.length ? layer.markets : snapshot.dcaMarkets;
+  if (markets && markets.length > 0) {
+    overrides.dcaMarkets = markets;
+  }
+  if (layer?.enabled === true || bs.dcaEnabled === true) {
+    overrides.dcaEnabled = true;
+  }
+  if (bs.enablePairLock === true) {
+    overrides.enablePairLock = true;
+  }
+  return overrides;
+};
+
 export const previewDcaCombinedWithTs = async (payload?: {
   systemName?: string;
   setKey?: string;
@@ -9693,6 +10101,10 @@ export const previewDcaCombinedWithTs = async (payload?: {
   macroExitOverlay?: MacroExitOverlay;
   /** When true, applies DEFAULT_TS_MACRO_SHIELD_OVERLAY on TS + combined runs. */
   macroShield?: boolean;
+  /** Fractal/RSI gate for stat_arb_zscore entries (v2 card). */
+  statArbEntryGate?: StatArbEntryGate;
+  /** BTC liquidity / order-block fade gate for all TS entries. */
+  orderBlockEntryGate?: import('../bot/orderBlockLiquidity').OrderBlockEntryGate;
 }) => {
   if (payload?.enabled === false) {
     return { enabled: false as const };
@@ -9708,8 +10120,13 @@ export const previewDcaCombinedWithTs = async (payload?: {
   }
 
   const tuningByMarket = new Map<string, Partial<DcaStrategySettings>>();
-  if (payload?.marketTuning && typeof payload.marketTuning === 'object') {
-    for (const [marketRaw, tuning] of Object.entries(payload.marketTuning)) {
+  const payloadMarketTuning = payload?.marketTuning && typeof payload.marketTuning === 'object'
+    ? payload.marketTuning
+    : undefined;
+  const snapshotMarketTuning = ctx.snapshot.dcaLayer?.tuning;
+  const effectiveMarketTuning = payloadMarketTuning || snapshotMarketTuning;
+  if (effectiveMarketTuning && typeof effectiveMarketTuning === 'object') {
+    for (const [marketRaw, tuning] of Object.entries(effectiveMarketTuning)) {
       const market = normalizeFullUsdtSymbol(marketRaw);
       if (market && tuning && typeof tuning === 'object') {
         tuningByMarket.set(market, tuning);
@@ -9742,9 +10159,20 @@ export const previewDcaCombinedWithTs = async (payload?: {
   const slippagePercentOverride = toFiniteOrNull(payload?.slippagePercent);
   const fundingRatePercentOverride = toFiniteOrNull(payload?.fundingRatePercent);
   const partialTpPct = Math.max(0, asNumber(payload?.partialTpPct, 0));
-  const macroOverlay = payload?.macroExitOverlay
-    || (payload?.macroShield === true ? DEFAULT_TS_MACRO_SHIELD_OVERLAY : undefined);
+  const mechanics = await resolvePreviewCardMechanics({
+    systemName: asString(payload?.systemName, asString(ctx.snapshot.systemName, '')),
+    setKey: asString(payload?.setKey, asString(ctx.snapshot.setKey, '')),
+    snapshot: ctx.snapshot,
+    payloadMacroExitOverlay: payload?.macroExitOverlay,
+    payloadStatArbEntryGate: payload?.statArbEntryGate,
+    payloadMacroShield: payload?.macroShield,
+  });
+  const macroOverlay = mechanics.macroExitOverlay;
   const macroExtras = macroOverlay ? { macroExitOverlay: macroOverlay } : {};
+  const statArbGate = mechanics.statArbEntryGate;
+  const statArbGateExtras = statArbGate ? { statArbEntryGate: statArbGate } : {};
+  const orderBlockGate = payload?.orderBlockEntryGate ?? undefined;
+  const orderBlockGateExtras = orderBlockGate ? { orderBlockEntryGate: orderBlockGate } : {};
   const payloadOfferIds = Array.from(new Set(
     (Array.isArray(payload?.offerIds) ? payload.offerIds : ctx.offerIds)
       .map((item) => asString(item, '').trim())
@@ -9799,6 +10227,8 @@ export const previewDcaCombinedWithTs = async (payload?: {
     ...portfolioExtras,
     ...tsEngineExtras,
     ...macroExtras,
+    ...statArbGateExtras,
+    ...orderBlockGateExtras,
   });
   const dcaOnlyRaw = await runBacktest({
     ...backtestBase,
@@ -9814,6 +10244,8 @@ export const previewDcaCombinedWithTs = async (payload?: {
     ...portfolioExtras,
     ...tsEngineExtras,
     ...macroExtras,
+    ...statArbGateExtras,
+    ...orderBlockGateExtras,
   });
 
   const tsOnlySummary = applyAdminPreviewSummaryFromEquity(
@@ -9867,6 +10299,8 @@ export const previewDcaCombinedWithTs = async (payload?: {
       trades: Number(dcaOnlyRaw.summary.tradesCount || 0),
     },
     macroShield: Boolean(macroOverlay),
+    statArbEntryGate: statArbGate || undefined,
+    macroExitOverlay: macroOverlay || undefined,
   };
 };
 
@@ -14955,7 +15389,7 @@ export const previewPublishImpact = async (setKey: string): Promise<{
 const applyCardMetadataOverrides = async (
   cardId: number,
   currentMetadata: Record<string, unknown>,
-  overrides?: { lotPercentOverride?: number; maxOpenPositions?: number; autoLotByChannelWidth?: boolean; dcaPerLegSl?: boolean; reinvestPercentOverride?: number; macroShield?: boolean },
+  overrides?: CardMetadataOverrides,
   sourceSystem?: { apiKeyName: string; systemId: number },
 ): Promise<{ changed: boolean; metadata: Record<string, unknown> }> => {
   if (!overrides) {
@@ -15010,6 +15444,60 @@ const applyCardMetadataOverrides = async (
       changed = true;
     }
   }
+  if (overrides.macroExitOverlay === null) {
+    if (next.macroExitOverlay !== undefined) {
+      delete next.macroExitOverlay;
+      changed = true;
+    }
+  } else if (overrides.macroExitOverlay) {
+    const serialized = JSON.stringify(overrides.macroExitOverlay);
+    if (JSON.stringify(next.macroExitOverlay || null) !== serialized) {
+      next.macroExitOverlay = overrides.macroExitOverlay;
+      changed = true;
+    }
+  }
+  if (overrides.statArbEntryGate === null) {
+    if (next.statArbEntryGate !== undefined) {
+      delete next.statArbEntryGate;
+      changed = true;
+    }
+  } else if (overrides.statArbEntryGate) {
+    const serialized = JSON.stringify(overrides.statArbEntryGate);
+    if (JSON.stringify(next.statArbEntryGate || null) !== serialized) {
+      next.statArbEntryGate = overrides.statArbEntryGate;
+      changed = true;
+    }
+  }
+  if (overrides.tunePreset !== undefined) {
+    const preset = String(overrides.tunePreset || '').trim();
+    if (preset && next.tunePreset !== preset) {
+      next.tunePreset = preset;
+      changed = true;
+    }
+  }
+  if (overrides.enablePairLock !== undefined) {
+    const enabled = overrides.enablePairLock === true;
+    if (Boolean(next.enablePairLock) !== enabled) {
+      next.enablePairLock = enabled;
+      changed = true;
+    }
+  }
+  if (overrides.dcaMarkets !== undefined) {
+    const markets = Array.from(new Set(
+      overrides.dcaMarkets.map((item) => String(item || '').trim().toUpperCase()).filter(Boolean),
+    ));
+    if (JSON.stringify(next.dcaMarkets || []) !== JSON.stringify(markets)) {
+      next.dcaMarkets = markets;
+      changed = true;
+    }
+  }
+  if (overrides.dcaEnabled !== undefined) {
+    const enabled = overrides.dcaEnabled === true;
+    if (Boolean(next.dcaEnabled) !== enabled) {
+      next.dcaEnabled = enabled;
+      changed = true;
+    }
+  }
   if (changed) {
     await db.run(
       `UPDATE master_cards SET metadata_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
@@ -15039,6 +15527,45 @@ const applyCardMetadataOverrides = async (
   }
 
   return { changed, metadata: next };
+};
+
+const syncCardMechanicsFromSnapshot = async (snapshot: TsBacktestSnapshot): Promise<void> => {
+  const systemName = asString(snapshot.systemName, '').trim();
+  if (!systemName) {
+    return;
+  }
+  const overrides = buildCardMechanicsOverridesFromSnapshot(snapshot);
+  if (Object.keys(overrides).length === 0) {
+    return;
+  }
+  const code = `CARD::${systemName.toUpperCase()}`;
+  const row = await db.get<{ id: number; metadata_json?: string; source_system_id?: number }>(
+    'SELECT id, metadata_json, source_system_id FROM master_cards WHERE code = ? AND is_active = 1',
+    [code],
+  ).catch(() => null);
+  if (!row?.id) {
+    return;
+  }
+  const currentMeta = row.metadata_json
+    ? (JSON.parse(row.metadata_json) as Record<string, unknown>)
+    : {};
+  let sourceSystem: { apiKeyName: string; systemId: number } | undefined;
+  if (row.source_system_id) {
+    const tsRow = await db.get<{ id: number; api_key_name: string }>(
+      `SELECT ts.id, ak.name AS api_key_name
+       FROM trading_systems ts
+       JOIN api_keys ak ON ak.id = ts.api_key_id
+       WHERE ts.id = ?`,
+      [row.source_system_id],
+    ).catch(() => null);
+    if (tsRow?.id && tsRow.api_key_name) {
+      sourceSystem = { apiKeyName: tsRow.api_key_name, systemId: tsRow.id };
+    }
+  }
+  const result = await applyCardMetadataOverrides(row.id, currentMeta, overrides, sourceSystem);
+  if (result.changed) {
+    logger.info(`syncCardMechanicsFromSnapshot: updated master_card metadata for ${systemName}`);
+  }
 };
 
 const syncMasterStrategyFlagsFromSnapshot = async (snapshot: TsBacktestSnapshot): Promise<void> => {
@@ -15544,7 +16071,7 @@ export const getAlgofundMaterializationAudit = async (systemName: string) => {
   }
   const cardCfg = await getCardConfigBySystemName(target);
   const expectedLot = cardCfg.lotPercent > 0 ? cardCfg.lotPercent : 20;
-  const expectedReinvest = cardCfg.reinvestPercent >= 0 ? cardCfg.reinvestPercent : 100;
+  const expectedReinvest = cardCfg.reinvestPercent > 0 ? cardCfg.reinvestPercent : 100;
   const rows = await db.all<Array<{
     tenant_id: number;
     slug: string;
@@ -15805,7 +16332,7 @@ export const publishAdminTradingSystem = async (payload?: {
    * `master_cards.metadata_json` so that `routes.ts` materialize path
    * picks them up for every client.
    */
-  cardOverrides?: { lotPercentOverride?: number; maxOpenPositions?: number; autoLotByChannelWidth?: boolean; dcaPerLegSl?: boolean; reinvestPercentOverride?: number; macroShield?: boolean };
+  cardOverrides?: CardMetadataOverrides;
 }) => {
   const catalog = loadLatestClientCatalog();
   const offerIds = normalizePublishOfferIds(payload?.offerIds);
