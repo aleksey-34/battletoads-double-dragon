@@ -44,9 +44,12 @@ PAYLOAD = {
     "skipMissingSymbols": True,
     "robust": {
         "minProfitFactor": 1.05,
-        "maxDrawdownPercent": 20,
+        "maxDrawdownPercent": 30,
         "minTrades": 8,
     },
+    "sweepLotPercent": 100,
+    "sweepReinvestPercent": 100,
+    "sweepMaxDeposit": 0,
     "exhaustiveMode": False,
     "turboMode": True,
     "resumeEnabled": True,

@@ -26,7 +26,15 @@ export interface RiskSettings {
   reinvest_percent: number;
 }
 
-export type StrategyType = 'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'periodic_buy' | 'dca' | 'hideep';
+export type StrategyType =
+  | 'DD_BattleToads'
+  | 'stat_arb_zscore'
+  | 'zz_breakout'
+  | 'ZZ_Fast'
+  | 'ZZ_Instance'
+  | 'periodic_buy'
+  | 'dca'
+  | 'hideep';
 export type MarketMode = 'synthetic' | 'mono';
 export type MarketType = 'futures' | 'spot';
 

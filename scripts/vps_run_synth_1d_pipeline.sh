@@ -15,7 +15,7 @@ export DECORR_TOP="${DECORR_TOP:-30}"
 export DECORR_LIMIT="${DECORR_LIMIT:-800}"
 export SYNTH_SWEEP_MARKET_CAP="${SYNTH_SWEEP_MARKET_CAP:-30}"
 export DECORR_MIN_BARS="${DECORR_MIN_BARS:-60}"
-export SWEEP_CONCURRENCY="${SWEEP_CONCURRENCY:-6}"
+export SWEEP_CONCURRENCY="${SWEEP_CONCURRENCY:-5}"
 
 exec >>"$LOG" 2>&1
 echo "=== synth 1d pipeline $(date -Is) ==="

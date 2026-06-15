@@ -45,12 +45,13 @@ type HistoricalSweepConfig = {
     maxDrawdownPercent: number;
     minTrades: number;
   };
-  strategyTypes: Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'hideep'>;
+  strategyTypes: Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'ZZ_Fast' | 'ZZ_Instance' | 'hideep'>;
   monoMarkets: string[];
   synthMarkets: string[];
   ddLengths: number[];
   ddTakeProfits: number[];
   ddSources: Array<'close' | 'wick'>;
+  zzPivotLengths: number[];
   statLengths: number[];
   statEntry: number[];
   statExit: number[];
@@ -60,6 +61,9 @@ type HistoricalSweepConfig = {
   hidDeepTakeProfits: number[];
   systemName: string;
   strategyPrefix: string;
+  sweepLotPercent: number;
+  sweepReinvestPercent: number;
+  sweepMaxDeposit: number;
   longOnly: boolean;
   spotMode: boolean;
 };
@@ -67,7 +71,7 @@ type HistoricalSweepConfig = {
 type SweepRunPlan = {
   key: string;
   index: number;
-  strategyType: 'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'hideep';
+  strategyType: 'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'ZZ_Fast' | 'ZZ_Instance' | 'hideep';
   marketMode: 'mono' | 'synth';
   market: string;
   baseSymbol: string;
@@ -184,9 +188,12 @@ const parseNumberList = (raw: unknown): number[] => {
   return Array.from(new Set(normalized));
 };
 
-const parseStrategyTypes = (raw: unknown): Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'hideep'> => {
+const parseStrategyTypes = (raw: unknown): Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'ZZ_Fast' | 'ZZ_Instance' | 'hideep'> => {
   const values = parseStringList(raw);
-  const allowed = new Set(['DD_BATTLETOADS', 'STAT_ARB_ZSCORE', 'ZZ_BREAKOUT', 'HIDEEP']);
+  const allowed = new Set([
+    'DD_BATTLETOADS', 'STAT_ARB_ZSCORE', 'ZZ_BREAKOUT', 'ZZ_FAST', 'ZZ_INSTANCE', 'HIDEEP',
+    'ZZ_HAMSTER_ZZ6', 'ZZ_HAMSTER_ZZ2',
+  ]);
   const parsed = values
     .filter((value) => allowed.has(value))
     .map((value) => {
@@ -195,6 +202,12 @@ const parseStrategyTypes = (raw: unknown): Array<'DD_BattleToads' | 'stat_arb_zs
       }
       if (value === 'ZZ_BREAKOUT') {
         return 'zz_breakout';
+      }
+      if (value === 'ZZ_FAST' || value === 'ZZ_HAMSTER_ZZ6') {
+        return 'ZZ_Fast';
+      }
+      if (value === 'ZZ_INSTANCE' || value === 'ZZ_HAMSTER_ZZ2') {
+        return 'ZZ_Instance';
       }
       if (value === 'HIDEEP') {
         return 'hideep';
@@ -300,6 +313,11 @@ const buildDefaultConfig = (input?: Partial<HistoricalSweepConfig> & { mode?: un
     ddSources: parseDdSources((input as any)?.ddSources).length > 0
       ? parseDdSources((input as any)?.ddSources)
       : defaultDdSources,
+    zzPivotLengths: parseNumberList((input as any)?.zzPivotLengths).length > 0
+      ? parseNumberList((input as any)?.zzPivotLengths)
+      : parseNumberList((input as any)?.zzHamsterLengths).length > 0
+        ? parseNumberList((input as any)?.zzHamsterLengths)
+        : [2, 3, 5, 6],
     statLengths: parseNumberList((input as any)?.statLengths).length > 0
       ? parseNumberList((input as any)?.statLengths)
       : defaultStatLengths,
@@ -323,6 +341,9 @@ const buildDefaultConfig = (input?: Partial<HistoricalSweepConfig> & { mode?: un
       : [3, 5, 7.5],
     systemName: safeSystemName,
     strategyPrefix: safePrefix,
+    sweepLotPercent: Math.max(0, Math.min(100, Number((input as any)?.sweepLotPercent ?? 10))),
+    sweepReinvestPercent: Math.max(0, Math.min(100, Number((input as any)?.sweepReinvestPercent ?? 0))),
+    sweepMaxDeposit: Math.max(0, Number((input as any)?.sweepMaxDeposit ?? 1000)),
   };
 };
 
@@ -334,6 +355,12 @@ const buildStrategyName = (config: HistoricalSweepConfig, plan: SweepRunPlan): s
   }
   if (plan.strategyType === 'hideep') {
     return `${config.strategyPrefix}_HD_${modeToken}_${marketToken}_${plan.interval}_M${plan.length}_R${formatMetricToken(plan.zscoreEntry)}_TP${formatMetricToken(plan.takeProfitPercent)}`;
+  }
+  if (plan.strategyType === 'ZZ_Fast') {
+    return `${config.strategyPrefix}_ZZF_${modeToken}_${marketToken}_${plan.interval}_L${plan.length}`;
+  }
+  if (plan.strategyType === 'ZZ_Instance') {
+    return `${config.strategyPrefix}_ZZI_${modeToken}_${marketToken}_${plan.interval}_L${plan.length}`;
   }
   const typeToken = plan.strategyType === 'zz_breakout' ? 'ZZ' : 'DD';
   return `${config.strategyPrefix}_${typeToken}_${modeToken}_${marketToken}_${plan.interval}_L${plan.length}_TP${formatMetricToken(plan.takeProfitPercent)}_SRC${plan.detectionSource}`;
@@ -412,6 +439,27 @@ const buildRunPlans = (config: HistoricalSweepConfig): SweepRunPlan[] => {
               });
             }
           }
+        }
+        continue;
+      }
+
+      if (strategyType === 'ZZ_Fast' || strategyType === 'ZZ_Instance') {
+        const lengths = config.zzPivotLengths.length > 0 ? config.zzPivotLengths : [2, 3, 5, 6];
+        for (const length of lengths) {
+          addPlan({
+            strategyType,
+            marketMode,
+            market,
+            baseSymbol,
+            quoteSymbol,
+            interval,
+            length,
+            takeProfitPercent: 0,
+            detectionSource: 'wick',
+            zscoreEntry: 2,
+            zscoreExit: 0.5,
+            zscoreStop: 3.5,
+          });
         }
         continue;
       }
@@ -496,7 +544,9 @@ const buildRunPlans = (config: HistoricalSweepConfig): SweepRunPlan[] => {
 
 const computeScore = (ret: number, pf: number, dd: number, wr: number, trades: number): number => {
   const tradeBonus = Math.min(12, Math.log10(Math.max(1, trades)) * 5);
-  return Number((ret + pf * 10 + wr * 0.12 - dd * 1.2 + tradeBonus).toFixed(6));
+  const ddOverPenalty = dd > 30 ? (dd - 30) * 2.5 : 0;
+  const ddUnderBonus = dd <= 30 ? (30 - dd) * 0.35 : 0;
+  return Number((ret + pf * 10 + wr * 0.12 - dd * 1.2 - ddOverPenalty + ddUnderBonus + tradeBonus).toFixed(6));
 };
 
 const isRobust = (config: HistoricalSweepConfig, record: SweepRecordInternal): boolean => {
@@ -701,13 +751,13 @@ const buildStrategyDraft = (plan: SweepRunPlan, config: HistoricalSweepConfig): 
   quote_coef: plan.marketMode === 'mono' ? 0 : 1,
   long_enabled: true,
   short_enabled: !config.longOnly,
-  lot_long_percent: 10,
-  lot_short_percent: 10,
-  max_deposit: 1000,
+  lot_long_percent: config.sweepLotPercent,
+  lot_short_percent: config.sweepLotPercent,
+  max_deposit: config.sweepMaxDeposit,
   margin_type: 'cross',
   leverage: config.spotMode ? 1 : 20,
   fixed_lot: false,
-  reinvest_percent: 0,
+  reinvest_percent: config.sweepReinvestPercent,
   market_type: config.spotMode ? 'spot' : 'futures',
 });
 

@@ -12,6 +12,14 @@ import {
   passesOrderBlockEntryGate,
   type OrderBlockEntryGate,
 } from '../bot/orderBlockLiquidity';
+import {
+  buildZzPivotLevelSeries,
+  computeZzPivotEntrySignal,
+  isZzPivotStrategyType,
+  normalizeZzPivotStrategyType,
+  zzPivotVariantFromType,
+  type ZzPivotLevels,
+} from '../bot/zzPivotLevels';
 
 export type { OrderBlockEntryGate };
 
@@ -431,6 +439,8 @@ type BacktestSignalPayload = {
   signal: Signal;
   current: number;
   donchianCenter: number;
+  donchianHigh?: number;
+  donchianLow?: number;
   zScore: number | null;
 };
 
@@ -635,6 +645,30 @@ const computeHiDeepSignalAtIndex = (
   return { signal: 'none', current: current.close, donchianCenter: mac1Val, zScore: fastRsi };
 };
 
+const computeZzPivotSignalAtIndex = (
+  candles: ParsedCandle[],
+  index: number,
+  zzPivotLevelSeries: ZzPivotLevels[] | undefined,
+  longEnabled: boolean,
+  shortEnabled: boolean,
+): BacktestSignalPayload => {
+  const levels = zzPivotLevelSeries?.[index];
+  const current = candles[index];
+  if (!levels || !current) {
+    return { signal: 'none', current: current?.close ?? 0, donchianCenter: 0, zScore: null };
+  }
+  const entry = computeZzPivotEntrySignal(current, levels, longEnabled, shortEnabled);
+  const center = (levels.levelLong + levels.levelShort) / 2;
+  return {
+    signal: entry,
+    current: current.close,
+    donchianCenter: center,
+    donchianHigh: levels.levelLong,
+    donchianLow: levels.levelShort,
+    zScore: null,
+  };
+};
+
 const computeSignalAtIndex = (
   strategyType: StrategyType,
   candles: ParsedCandle[],
@@ -643,7 +677,8 @@ const computeSignalAtIndex = (
   source: DetectionSource,
   zscoreEntry: number,
   longEnabled: boolean,
-  shortEnabled: boolean
+  shortEnabled: boolean,
+  zzPivotLevelSeries?: ZzPivotLevels[],
 ): BacktestSignalPayload => {
   if (strategyType === 'stat_arb_zscore') {
     return computeStatArbSignalAtIndex(candles, index, length, zscoreEntry, longEnabled, shortEnabled);
@@ -651,6 +686,17 @@ const computeSignalAtIndex = (
 
   if (strategyType === 'hideep') {
     return computeHiDeepSignalAtIndex(candles, index, length, zscoreEntry, longEnabled, shortEnabled);
+  }
+
+  const canonicalType = normalizeZzPivotStrategyType(strategyType) as StrategyType;
+  if (isZzPivotStrategyType(canonicalType)) {
+    return computeZzPivotSignalAtIndex(
+      candles,
+      index,
+      zzPivotLevelSeries,
+      longEnabled,
+      shortEnabled,
+    );
   }
 
   return computeDonchianSignalAtIndex(candles, index, length, source, longEnabled, shortEnabled);
@@ -1222,6 +1268,7 @@ type RuntimeStrategy = {
   /** Macro-exit partial rules already fired for the current open position. */
   macroPartialRulesFired: Set<string>;
   dcaState: ReturnType<typeof extractDcaConfigFromStrategy>;
+  zzPivotLevelSeries?: ZzPivotLevels[];
 };
 
 type BacktestContext = {
@@ -1784,6 +1831,15 @@ const normalizeStrategyType = (value: any): StrategyType => {
   if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'hideep') {
     return normalized;
   }
+  if (normalized === 'ZZ_Fast' || normalized === 'ZZ_Instance') {
+    return normalized;
+  }
+  if (normalized === 'ZZ_HAMSTER_ZZ6' || normalized === 'zz_hamster_zz6') {
+    return 'ZZ_Fast';
+  }
+  if (normalized === 'ZZ_HAMSTER_ZZ2' || normalized === 'zz_hamster_zz2') {
+    return 'ZZ_Instance';
+  }
   return 'DD_BattleToads';
 };
 
@@ -2107,6 +2163,11 @@ const loadRuntimeStrategies = async (
       throw new Error(`Strategy ${strategy.name}: ${reason}`);
     }
 
+    const strategyType = normalizeStrategyType(strategy.strategy_type);
+    const zzPivotLevelSeries = isZzPivotStrategyType(normalizeZzPivotStrategyType(strategyType) as StrategyType)
+      ? buildZzPivotLevelSeries(candles, Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 6))), zzPivotVariantFromType(strategyType))
+      : undefined;
+
     runtimes.push({
       strategy,
       candles,
@@ -2121,6 +2182,7 @@ const loadRuntimeStrategies = async (
       partialTpTriggered: false,
       macroPartialRulesFired: new Set(),
       dcaState: extractDcaConfigFromStrategy(strategy),
+      zzPivotLevelSeries,
     });
   }
 
@@ -2468,8 +2530,11 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       strategy.detection_source,
       zscoreEntry,
       strategy.long_enabled,
-      strategy.short_enabled
+      strategy.short_enabled,
+      runtime.zzPivotLevelSeries,
     );
+
+    const isZzPivot = isZzPivotStrategyType(normalizeZzPivotStrategyType(strategyType) as StrategyType);
 
     const isStatArb = strategyType === 'stat_arb_zscore';
     const zscoreExit = normalizeZscoreExit(strategy.zscore_exit, zscoreEntry);
@@ -2589,6 +2654,21 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         closedOnCurrentBar = true;
       }
     } else if (!isClassicDca) {
+      // ZZ pivot SAR exit (opposite level)
+      if (!closedOnCurrentBar && isZzPivot) {
+        const levels = runtime.zzPivotLevelSeries?.[event.candleIndex];
+        if (levels) {
+          if (state === 'long' && candle.low <= levels.levelShort) {
+            closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'zz_sar_long');
+            closedOnCurrentBar = true;
+          }
+          if (!closedOnCurrentBar && state === 'short' && candle.high >= levels.levelLong) {
+            closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'zz_sar_short');
+            closedOnCurrentBar = true;
+          }
+        }
+      }
+
       // HiDeep RSI-based exit: fastRSI (stored in zScore) crosses overbought/oversold
       if (strategyType === 'hideep' && Number.isFinite(signalPayload.zScore)) {
         const fastRsi = Number(signalPayload.zScore);
@@ -2634,12 +2714,12 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         }
       }
 
-      if (!closedOnCurrentBar && state === 'long' && entryPrice && signalPayload.current <= signalPayload.donchianCenter) {
+      if (!closedOnCurrentBar && !isZzPivot && state === 'long' && entryPrice && signalPayload.current <= signalPayload.donchianCenter) {
         closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'stop_loss_long_center');
         closedOnCurrentBar = true;
       }
 
-      if (!closedOnCurrentBar && state === 'short' && entryPrice && signalPayload.current >= signalPayload.donchianCenter) {
+      if (!closedOnCurrentBar && !isZzPivot && state === 'short' && entryPrice && signalPayload.current >= signalPayload.donchianCenter) {
         closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'stop_loss_short_center');
         closedOnCurrentBar = true;
       }
@@ -2697,6 +2777,11 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     }
 
     if (signalPayload.signal === 'none') {
+      pushEquityPoint(event.timeMs);
+      continue;
+    }
+
+    if (isZzPivot && state !== 'flat') {
       pushEquityPoint(event.timeMs);
       continue;
     }

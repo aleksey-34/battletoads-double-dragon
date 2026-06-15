@@ -7306,6 +7306,79 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const cardNeedsCombinedDcaEngine = (): boolean => {
+    if (backtestDrawerContext?.kind !== 'algofund-ts') {
+      return false;
+    }
+    if (tsDcaEnabled && tsDcaSelectedMarkets.length > 0) {
+      return true;
+    }
+    const snap = backtestDrawerCardSnapshot as {
+      dcaLayer?: { enabled?: boolean; markets?: string[] };
+      dcaMarkets?: string[];
+    } | null;
+    const snapMarkets = Array.isArray(snap?.dcaLayer?.markets)
+      ? snap?.dcaLayer?.markets
+      : (Array.isArray(snap?.dcaMarkets) ? snap?.dcaMarkets : []);
+    return Boolean(snap?.dcaLayer?.enabled && snapMarkets && snapMarkets.length > 0);
+  };
+
+  const runFullCardTruthRerun = async (
+    context?: SaasBacktestContext | null,
+    options?: { preferRealBacktest?: boolean; settingsOverride?: Partial<BacktestCardSettings> },
+  ) => {
+    cancelBacktestDebounce();
+    const targetContext = context || backtestDrawerContext;
+    if (targetContext?.kind === 'algofund-ts' && cardNeedsCombinedDcaEngine()) {
+      const snap = backtestDrawerCardSnapshot as {
+        dcaLayer?: { markets?: string[] };
+        dcaMarkets?: string[];
+      } | null;
+      const layerMarkets = snap?.dcaLayer?.markets ?? [];
+      const snapshotMarkets = snap?.dcaMarkets ?? [];
+      const markets = (tsDcaSelectedMarkets.length > 0
+        ? tsDcaSelectedMarkets
+        : (layerMarkets.length > 0 ? layerMarkets : snapshotMarkets))
+        .map((item) => String(item || '').trim().toUpperCase())
+        .filter(Boolean);
+      if (markets.length === 0) {
+        messageApi.warning('В карточке включён DCA, но нет пар — запустите «Сканировать DCA» или выберите рынки');
+        await runAdminSweepBacktestPreview(targetContext, options);
+        return;
+      }
+      setAdminSweepBacktestLoading(true);
+      setTsDcaCombinedLoading(true);
+      try {
+        const combinedResponse = await axios.post(
+          '/api/saas/admin/ts-dca-combined-preview-sync',
+          {
+            ...buildTsDcaRequestPayload(),
+            markets,
+            enabled: true,
+            macroShield: tsDcaExitOverlayEnabled,
+          },
+          { timeout: 900000 },
+        );
+        setTsDcaCombinedPreview(combinedResponse.data);
+        setTsDcaEnabled(true);
+        if (tsDcaSelectedMarkets.length === 0) {
+          setTsDcaSelectedMarkets(markets);
+        }
+        await runAdminSweepBacktestPreview(targetContext, {
+          preferRealBacktest: options?.preferRealBacktest !== false,
+          settingsOverride: options?.settingsOverride,
+        });
+      } catch (error: any) {
+        setAdminSweepBacktestError(String(error?.response?.data?.error || error?.message || 'Combined rerun failed'));
+        messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось пересчитать полный engine TS+DCA'));
+      } finally {
+        setTsDcaCombinedLoading(false);
+      }
+      return;
+    }
+    await runAdminSweepBacktestPreview(targetContext, options);
+  };
+
   useEffect(() => {
     if (!backtestDrawerVisible || !showBacktestBtcOverlay || !adminSweepBacktestResult) {
       setBacktestBtcOverlayPoints([]);
@@ -8871,6 +8944,33 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   const openBacktestDrawerForAdminTs = () => {
+    const publishedName = String(
+      selectedAlgofundPublishedSystemName
+      || publishResponse?.sourceSystem?.systemName
+      || algofundState?.engine?.systemName
+      || ''
+    ).trim();
+    if (publishedName && resolveTsSnapshotForSystem(publishedName)) {
+      openBacktestDrawerForStorefrontTs(publishedName);
+      return;
+    }
+
+    const draftSetKey = String(selectedAdminDraftTsSetKey || '').trim();
+    if (draftSetKey) {
+      const draftSnapshot = summary?.offerStore?.tsBacktestSnapshots?.[draftSetKey];
+      const draftSystemName = String(draftSnapshot?.systemName || draftSetKey).trim();
+      if (draftSnapshot && draftSystemName) {
+        openBacktestDrawerForStorefrontTs(draftSystemName);
+        return;
+      }
+    }
+
+    const firstStorefront = algofundStorefrontSystems[0];
+    if (firstStorefront?.systemName) {
+      openBacktestDrawerForStorefrontTs(String(firstStorefront.systemName));
+      return;
+    }
+
     openDraftTsBacktest();
   };
 
@@ -14739,7 +14839,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 loading={adminSweepBacktestLoading}
                 onClick={() => {
                   cancelBacktestDebounce();
-                  void runAdminSweepBacktestPreview(
+                  void runFullCardTruthRerun(
                     undefined,
                     isAdminSurface ? { preferRealBacktest: true } : undefined,
                   );
@@ -14763,7 +14863,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     loading={adminSweepBacktestLoading}
                     onClick={() => {
                       cancelBacktestDebounce();
-                      void runAdminSweepBacktestPreview(undefined, { preferRealBacktest: true });
+                      void runFullCardTruthRerun(undefined, { preferRealBacktest: true });
                     }}
                   >
                     API rerun (реальный)

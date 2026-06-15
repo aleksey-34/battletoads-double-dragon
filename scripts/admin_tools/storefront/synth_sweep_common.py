@@ -17,6 +17,22 @@ TOP_DECORR_FALLBACK = [
     "STXUSDT/IMXUSDT", "ENAUSDT/SUIUSDT",
 ]
 
+# TV-style ratio pairs (user research set + extras); merged into synth sweeps.
+USER_SYNTH_PAIRS = [
+    "ETHUSDT/APTUSDT",
+    "BCHUSDT/APEUSDT",
+    "LINKUSDT/AIXBTUSDT",
+    "ZECUSDT/RUNEUSDT",
+    "ZENUSDT/ALGOUSDT",
+    "ATOMUSDT/DOGEUSDT",
+    "SOLUSDT/AVAXUSDT",
+    "INJUSDT/TIAUSDT",
+    "NEARUSDT/FILUSDT",
+    "SUIUSDT/SEIUSDT",
+    "ARBUSDT/OPUSDT",
+    "WLDUSDT/JUPUSDT",
+]
+
 DEFAULT_FAN_KEYS = [
     "BTDD_D1", "BTDD_D1_OP3_SOURCE", "HDB_17", "HDB_15", "HDB_18", "Mehmet_Bingx",
 ]
@@ -40,7 +56,15 @@ def load_decorr_synth_markets(*, cap: int = 14) -> list[str]:
                 break
     if not markets:
         markets = list(TOP_DECORR_FALLBACK)
-    return markets[:cap]
+    merged: list[str] = []
+    seen: set[str] = set()
+    for raw in [*USER_SYNTH_PAIRS, *markets]:
+        token = str(raw).upper().replace("_", "/").strip()
+        if not token or "/" not in token or token in seen:
+            continue
+        seen.add(token)
+        merged.append(token)
+    return merged[:cap]
 
 
 def mono_anchors_from_synth(synth_markets: list[str]) -> list[str]:

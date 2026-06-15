@@ -49,51 +49,54 @@ STATUS: ✅ READY for MONO backtest immediately
 RISK: 🟢 LOW - universal price logic
 */
 
-// ==================== STRATEGY 2: hamster-bot ZZ ====================
+// ==================== STRATEGY 2: ZZ pivot (ZZ_Fast / ZZ_Instance) ====================
 /*
-PINESCRIPT VARIANTS:
-  ZZ6: Zigzag breakout (simpler)
-    - len: zigzag depth (default 5)
-    - risklong/riskshort: risk percent (default 1%)
-    
-  ZZ2: MA-based levels (complex)
-    - Depth, Detection, MA types, RSI filter
-    - Distance filter: pause if levels too close
-    - Flat filter: pause if choppy market
-    - MA crossing filters
-    - Trailing stop via MA
+VARIANTS:
+  ZZ_Fast: fast pivot len, slow = len × 3, SAR exit at opposite level
+  ZZ_Instance: fast pivot len, slow = len × 2, SAR exit
 
 MAPPING TO BACKEND:
-  strategy_type: 'zz_breakout'  (or could be 'stat_arb_zscore' for ZZ2 variant)
+  strategy_type: 'ZZ_Fast' | 'ZZ_Instance'
   market_mode: 'mono' or 'synthetic'
-  price_channel_length: 5 (for zigzag)
-  zscore_entry/exit/stop: for ZZ2 MA-based variant
-  base_symbol: single or pair base
-  quote_symbol: pair quote or ''
+  price_channel_length: pivot fast length (e.g. 3, 5, 6)
+  take_profit_percent: 0 (SAR exit only)
+  detection_source: 'wick'
 
-LOGIC FLOW (ZZ6):
-  1. Calculate zigzag levels (high/low extrema)
-  2. Entry: price breaks level + distance filter OK + flat filter OK
-  3. Exit: reverse zigzag level or TP/SL
-  4. Pyramiding: multiple entries until max_risk
+LOGIC FLOW:
+  1. Track pivot levels (fast/slow high/low alignment)
+  2. Entry: wick breaks levelLong (long) or levelShort (short)
+  3. Exit: SAR — long stops at levelShort, short at levelLong
 
-MONO Example:
-  - Symbol: ETHUSDT
-  - ZZ6 depth: 5
-  - Entry: break of zigzag level (after reversal)
-  - Filters: distance < 1000 (level spread OK), flat > 0.5% (not choppy)
-  - Exit: next reversal level or TP = entry * 1.04
-
-SYNTHETIC Example:
-  - Symbols: ETHUSDT / LTCUSDT  
-  - Zigzag on ratio
-  - Entry/exit as above but on ratio breakout
-
-STATUS: ⚠️  MEDIUM - needs verification of zigzag calculation
-RISK: 🟡 MEDIUM - many filters, parameter-sensitive
+STATUS: ✅ implemented in backend/src/bot/zzPivotLevels.ts
 */
 
-// ==================== STRATEGY 3: hamster-bot HiDeep ====================
+// ==================== STRATEGY 3: stat_arb_zscore (pair / ratio mean reversion) ====================
+/*
+NOT the same as HiDeep Pine (that is `hideep`). Classic stat-arb on TV = z-score of spread/ratio.
+
+OUR ENGINE (backend stat_arb_zscore):
+  - Series: synthetic ratio close (base/quote) or mono close
+  - Window: price_channel_length bars BEFORE current bar (no look-ahead)
+  - z = (close - mean(window)) / stdev(window)
+  - Entry SHORT: z >= zscore_entry (ratio rich vs history)
+  - Entry LONG:  z <= -zscore_entry (ratio cheap)
+  - Exit mean-revert LONG:  z >= -zscore_exit
+  - Exit mean-revert SHORT: z <= +zscore_exit
+  - Stop LONG:  z <= -zscore_stop ( deeper cheap )
+  - Stop SHORT: z >= +zscore_stop
+
+OPTIONAL statArbEntryGate (card / v2 synth — NOT in raw sweep):
+  - Fractal confirmation on self or anchor (4h, wings=2, lookback=12)
+  - Optional RSI oversold/overbought on gate TF
+  - Mirrors TV idea of “don’t fade until local swing confirms”
+
+TV HiDeep extras we do NOT map to stat_arb (separate hideep type):
+  - ATR trend channel, MA bands, pyramiding, trail MA exit, PDD flip mode
+
+SWEEP (honest sizing): lot 100%, reinvest 100%, score penalizes DD > 30%.
+*/
+
+// ==================== STRATEGY 4: HiDeep (TV overlay oscillator) ====================
 /*
 PINESCRIPT PARAMETERS:
   HiDeep Oscillator:
@@ -235,10 +238,11 @@ export const BACKTEST_CONFIG = {
       take_profit_percent: [5, 7.5, 10],
       detection_source: ['close', 'hl2'],
     },
-    ZZ6: {
-      len: [3, 5, 8],
-      risklong: [0.5, 1.0, 1.5],
-      distance_filter: [500, 1000, 2000],
+    ZZ_Fast: {
+      len: [3, 5, 6, 8],
+    },
+    ZZ_Instance: {
+      len: [2, 3, 5],
     },
     HIDEEP: {
       up1: [1, 2, 3],

@@ -19,6 +19,13 @@ import { computeChannelWidthLotMultiplier } from '../services/strategy/sizing';
 import { clearMacroShieldPartialState, evaluateMacroShieldExit, getMacroExitOverlayForApiKey, isMacroShieldEnabledForApiKey } from './macroExitShield';
 import { getStatArbEntryGateForApiKey, passesStatArbEntryGateLive } from './statArbEntryGate';
 import { getOrderBlockEntryGateForApiKey, passesOrderBlockEntryGateLive } from './orderBlockEntryGate';
+import {
+  buildZzPivotLevelSeries,
+  computeZzPivotEntrySignal,
+  isZzPivotStrategyType,
+  normalizeZzPivotStrategyType,
+  zzPivotVariantFromType,
+} from './zzPivotLevels';
 
 // ── Market data cache for auto-strategy cycle ────────────────────────────────
 // Avoids re-fetching the same symbol+interval when multiple strategies share them.
@@ -197,6 +204,15 @@ const normalizeStrategyType = (value: any): StrategyType => {
   const normalized = String(value || '').trim();
   if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'periodic_buy' || normalized === 'dca' || normalized === 'hideep') {
     return normalized as StrategyType;
+  }
+  if (normalized === 'ZZ_Fast' || normalized === 'ZZ_Instance') {
+    return normalized as StrategyType;
+  }
+  if (normalized === 'ZZ_HAMSTER_ZZ6' || normalized === 'zz_hamster_zz6') {
+    return 'ZZ_Fast';
+  }
+  if (normalized === 'ZZ_HAMSTER_ZZ2' || normalized === 'zz_hamster_zz2') {
+    return 'ZZ_Instance';
   }
   return 'DD_BattleToads';
 };
@@ -1482,6 +1498,31 @@ const computeStatArbSignal = (
   };
 };
 
+const computeZzPivotSignal = (
+  candles: ParsedSyntheticCandle[],
+  length: number,
+  strategyType: StrategyType,
+  longEnabled: boolean,
+  shortEnabled: boolean,
+): ComputedSignal => {
+  const fastLen = Math.max(2, Math.floor(length));
+  const variant = zzPivotVariantFromType(strategyType);
+  const levelsSeries = buildZzPivotLevelSeries(candles, fastLen, variant);
+  const index = candles.length - 1;
+  const current = candles[index];
+  const levels = levelsSeries[index];
+  const entry = computeZzPivotEntrySignal(current, levels, longEnabled, shortEnabled);
+  const center = (levels.levelLong + levels.levelShort) / 2;
+  return {
+    signal: entry,
+    currentRatio: current.close,
+    donchianHigh: levels.levelLong,
+    donchianLow: levels.levelShort,
+    donchianCenter: center,
+    zScore: null,
+  };
+};
+
 const computeSignal = (
   strategyType: StrategyType,
   candles: ParsedSyntheticCandle[],
@@ -1499,6 +1540,10 @@ const computeSignal = (
       longEnabled,
       shortEnabled
     );
+  }
+
+  if (isZzPivotStrategyType(strategyType)) {
+    return computeZzPivotSignal(candles, length, strategyType, longEnabled, shortEnabled);
   }
 
   return computeDonchianSignal(
@@ -2458,6 +2503,7 @@ export const executeStrategy = async (
   // ───────────────────────────────────────────────────────────────────────────
 
   const isStatArb = mergedStrategy.strategy_type === 'stat_arb_zscore';
+  const isZzPivot = isZzPivotStrategyType(normalizeZzPivotStrategyType(String(mergedStrategy.strategy_type || '')));
   const zscoreExit = normalizeZscoreExit(mergedStrategy.zscore_exit, DEFAULT_STRATEGY.zscore_exit, mergedStrategy.zscore_entry);
   const zscoreStop = normalizeZscoreStop(mergedStrategy.zscore_stop, DEFAULT_STRATEGY.zscore_stop, mergedStrategy.zscore_entry);
 
@@ -2980,6 +3026,20 @@ export const executeStrategy = async (
       closedResult = `Mean-reversion exit for short ${positionLabel} (z=${Number(zScore).toFixed(3)})`;
     }
   } else {
+    const evalBar = candleContext.candlesForSignal[candleContext.candlesForSignal.length - 1];
+
+    if (!closedAction && isZzPivot && state === 'long' && evalBar && evalBar.low <= donchianLow) {
+      await closeAndRecordExit('stop_loss_long', 'long');
+      closedAction = 'stop_loss_long';
+      closedResult = `ZZ SAR long exit at level ${donchianLow.toFixed(6)}`;
+    }
+
+    if (!closedAction && isZzPivot && state === 'short' && evalBar && evalBar.high >= donchianHigh) {
+      await closeAndRecordExit('stop_loss_short', 'short');
+      closedAction = 'stop_loss_short';
+      closedResult = `ZZ SAR short exit at level ${donchianHigh.toFixed(6)}`;
+    }
+
     if (!closedAction && state === 'long' && takeProfitPercent > 0) {
       const anchorFromStorage = Number(mergedStrategy.tp_anchor_ratio);
       let trailingAnchor = Number.isFinite(anchorFromStorage) && anchorFromStorage > 0
@@ -3050,7 +3110,7 @@ export const executeStrategy = async (
       }
     }
 
-    if (!closedAction && state === 'long' && entryRatio && currentRatio <= donchianCenter) {
+    if (!closedAction && !isZzPivot && state === 'long' && entryRatio && currentRatio <= donchianCenter) {
       await closeAndRecordExit('stop_loss_long', 'long');
       closedAction = 'stop_loss_long';
       closedResult = `Stop-loss (center) hit for long ${positionLabel}`;
@@ -3058,7 +3118,7 @@ export const executeStrategy = async (
       logger.info(`DD_BattleToads SL long triggered for strategy ${strategyId} (${apiKeyName})`);
     }
 
-    if (!closedAction && state === 'short' && entryRatio && currentRatio >= donchianCenter) {
+    if (!closedAction && !isZzPivot && state === 'short' && entryRatio && currentRatio >= donchianCenter) {
       await closeAndRecordExit('stop_loss_short', 'short');
       closedAction = 'stop_loss_short';
       closedResult = `Stop-loss (center) hit for short ${positionLabel}`;
@@ -3068,7 +3128,7 @@ export const executeStrategy = async (
   }
 
   if (signal === 'none') {
-    const noSignalResult = isStatArb ? 'No z-score signal' : 'No Donchian signal';
+    const noSignalResult = isStatArb ? 'No z-score signal' : (isZzPivot ? 'No ZZ pivot signal' : 'No Donchian signal');
     const noSignalAction = closedAction
       ? `${closedAction}_then_no_signal@${currentRatio}`
       : `no_signal@${currentRatio}`;
@@ -3090,6 +3150,27 @@ export const executeStrategy = async (
     return returnWithProcessedBar({
       result: closedResult || noSignalResult,
       action: closedAction ? `${closedAction}_no_signal` : 'no_signal',
+      strategy: updated,
+      currentRatio,
+      donchianHigh,
+      donchianLow,
+      donchianCenter,
+    });
+  }
+
+  if (isZzPivot && state !== 'flat') {
+    const updated = await updateStrategy(apiKeyName, strategyId, {
+      ...executionBindingPatch,
+      last_signal: signal,
+      last_action: closedAction
+        ? `${closedAction}_then_hold_${state}@${currentRatio}`
+        : `hold_${state}@${currentRatio}`,
+      last_error: null,
+    });
+
+    return returnWithProcessedBar({
+      result: closedResult || `ZZ ${state}: waiting SAR exit`,
+      action: `hold_${state}`,
       strategy: updated,
       currentRatio,
       donchianHigh,
