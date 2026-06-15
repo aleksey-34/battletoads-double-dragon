@@ -116,7 +116,8 @@ def load_fan_api_key_names(*, limit: int = 8) -> list[str]:
 
 def sweep_turbo_extras() -> dict:
     fan = load_fan_api_key_names()
-    concurrency = max(1, min(32, int(os.environ.get("SWEEP_CONCURRENCY", "8"))))
+    # Default 5 on 8GB VPS: concurrency 8 + fan keys OOM-killed sweep worker (~4.8GB RSS).
+    concurrency = max(1, min(32, int(os.environ.get("SWEEP_CONCURRENCY", "5"))))
     return {
         "fanApiKeyNames": fan,
         "concurrency": concurrency,
