@@ -20,6 +20,10 @@ import {
   zzPivotVariantFromType,
   type ZzPivotLevels,
 } from '../bot/zzPivotLevels';
+import {
+  computeCtFractalSignalAtIndex,
+  isCtFractalStrategyType,
+} from '../bot/ctFractalSignal';
 
 export type { OrderBlockEntryGate };
 
@@ -441,6 +445,7 @@ type BacktestSignalPayload = {
   donchianCenter: number;
   donchianHigh?: number;
   donchianLow?: number;
+  fastRsi?: number | null;
   zScore: number | null;
 };
 
@@ -697,6 +702,24 @@ const computeSignalAtIndex = (
       longEnabled,
       shortEnabled,
     );
+  }
+
+  if (isCtFractalStrategyType(strategyType)) {
+    const ct = computeCtFractalSignalAtIndex(
+      candles,
+      index,
+      length,
+      zscoreEntry,
+      longEnabled,
+      shortEnabled,
+    );
+    return {
+      signal: ct.signal,
+      current: ct.current,
+      donchianCenter: ct.donchianCenter,
+      zScore: ct.zScore,
+      fastRsi: ct.fastRsi,
+    };
   }
 
   return computeDonchianSignalAtIndex(candles, index, length, source, longEnabled, shortEnabled);
@@ -1828,7 +1851,7 @@ type RuntimeLoadResult = {
 
 const normalizeStrategyType = (value: any): StrategyType => {
   const normalized = String(value || '').trim();
-  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'hideep') {
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'hideep' || normalized === 'CT_Fractal') {
     return normalized;
   }
   if (normalized === 'ZZ_Fast' || normalized === 'ZZ_Instance') {
@@ -2005,7 +2028,9 @@ const loadRuntimeStrategies = async (
     const length = Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 50)));
     const strategyTypeForLength = normalizeStrategyType(strategy.strategy_type);
     // HiDeep needs mac1 + sma1Period(100) bars minimum — so effective warmup length is mac1+105
-    const effectiveLength = strategyTypeForLength === 'hideep' ? Math.max(length + 105, 115) : length;
+    const effectiveLength = (strategyTypeForLength === 'hideep' || strategyTypeForLength === 'CT_Fractal')
+      ? Math.max(length + 105, 115)
+      : length;
     const interval = String(strategy.interval || '1h');
     const intervalMs = intervalToMs(interval);
     const warmupBars = Math.max(0, Math.floor(request.warmupBars));
@@ -2536,7 +2561,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
 
     const isZzPivot = isZzPivotStrategyType(normalizeZzPivotStrategyType(strategyType) as StrategyType);
 
-    const isStatArb = strategyType === 'stat_arb_zscore';
+    const isStatArb = strategyType === 'stat_arb_zscore' || strategyType === 'CT_Fractal';
+    const isCtFractal = strategyType === 'CT_Fractal';
     const zscoreExit = normalizeZscoreExit(strategy.zscore_exit, zscoreEntry);
     const zscoreStop = normalizeZscoreStop(strategy.zscore_stop, zscoreEntry);
     const state = runtime.state;
@@ -2670,8 +2696,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       }
 
       // HiDeep RSI-based exit: fastRSI (stored in zScore) crosses overbought/oversold
-      if (strategyType === 'hideep' && Number.isFinite(signalPayload.zScore)) {
-        const fastRsi = Number(signalPayload.zScore);
+      if ((strategyType === 'hideep' || isCtFractal) && Number.isFinite(isCtFractal ? signalPayload.fastRsi : signalPayload.zScore)) {
+        const fastRsi = isCtFractal ? Number(signalPayload.fastRsi) : Number(signalPayload.zScore);
         if (!closedOnCurrentBar && state === 'long' && fastRsi > 90) {
           closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'hideep_rsi_exit_long');
           closedOnCurrentBar = true;
@@ -2820,7 +2846,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       }
     }
 
-    if (isStatArb && statArbEntryGate
+    if (isStatArb && !isCtFractal && statArbEntryGate
       && (signalPayload.signal === 'long' || signalPayload.signal === 'short')) {
       const gateInterval = statArbEntryGate.gateInterval
         || String(strategy.interval || '4h');

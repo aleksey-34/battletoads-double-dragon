@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Decorr top-30 → 1d DD/ZZ sweep → wait → 1d stat_arb sweep (background on VPS).
+# Decorr top-30 → 1d DD/ZZ → wait → stat_arb → wait → CT_Fractal (background on VPS).
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/battletoads-double-dragon}"
@@ -20,25 +20,33 @@ export SWEEP_CONCURRENCY="${SWEEP_CONCURRENCY:-5}"
 exec >>"$LOG" 2>&1
 echo "=== synth 1d pipeline $(date -Is) ==="
 
-echo "[1/3] score decorr pairs top-$DECORR_TOP interval=$DECORR_INTERVAL"
+wait_for_sweep() {
+  local label="$1"
+  echo "waiting for ${label} sweep..."
+  while true; do
+    st="$(curl -s -H "Authorization: Bearer $TOKEN" "$API/api/research/sweeps/full-historical/status" || true)"
+    status="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('status',''))" "$st" 2>/dev/null || echo running)"
+    if [[ "$status" == "done" || "$status" == "failed" || "$status" == "aborted" || "$status" == "" ]]; then
+      echo "${label} finished status=$status"
+      break
+    fi
+    pct="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('progress_percent',0))" "$st" 2>/dev/null || echo 0)"
+    echo "  ${label} progress ${pct}% status=$status"
+    sleep 45
+  done
+}
+
+echo "[1/4] score decorr pairs top-$DECORR_TOP interval=$DECORR_INTERVAL"
 python3 scripts/admin_tools/storefront/score_synth_pair_decorrelation.py --top "$DECORR_TOP"
 
-echo "[2/3] start 1d DD/ZZ sweep"
+echo "[2/4] start 1d DD/ZZ sweep"
 python3 scripts/vps_start_synth_1d_dd_zz_sweep.py
+wait_for_sweep "DD/ZZ"
 
-echo "waiting for DD/ZZ sweep..."
-while true; do
-  st="$(curl -s -H "Authorization: Bearer $TOKEN" "$API/api/research/sweeps/full-historical/status" || true)"
-  status="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('status',''))" "$st" 2>/dev/null || echo running)"
-  if [[ "$status" == "done" || "$status" == "failed" || "$status" == "aborted" || "$status" == "" ]]; then
-    echo "DD/ZZ finished status=$status"
-    break
-  fi
-  pct="$(python3 -c "import json,sys; d=json.loads(sys.argv[1]); print(d.get('progress_percent',0))" "$st" 2>/dev/null || echo 0)"
-  echo "  progress ${pct}% status=$status"
-  sleep 45
-done
-
-echo "[3/3] start 1d stat_arb sweep"
+echo "[3/4] start 1d stat_arb sweep"
 python3 scripts/vps_start_synth_1d_stat_arb_sweep.py
-echo "=== pipeline launched stat_arb $(date -Is) ==="
+wait_for_sweep "stat_arb"
+
+echo "[4/4] start 1d CT_Fractal sweep"
+python3 scripts/vps_start_synth_1d_ct_fractal_sweep.py
+echo "=== pipeline launched CT_Fractal $(date -Is) ==="

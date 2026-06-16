@@ -143,6 +143,29 @@ STATUS: ✅ READY for MONO backtest
 RISK: 🔴 HIGH - complex, presets for specific instruments needed
 */
 
+// ==================== STRATEGY 4: CT_Fractal (contrarian synth combo) ====================
+/*
+Triple confluence on synthetic ratio pairs — fewer but higher-conviction entries.
+
+COMPONENTS (all three required for entry):
+  1. stat_arb_zscore: ratio z-score extreme (|z| >= zscore_entry)
+  2. HiDeep deep: bear/bull candle + momentum (len1 > sma1) + fastRSI < 10 / > 90
+  3. Fractal: confirmed Bill Williams fractal (wings=2) within lookback=12 bars
+     — bullish fractal for long, bearish for short
+
+EXITS:
+  - Z mean-revert / z-score stop (same as stat_arb)
+  - HiDeep RSI exit: fastRSI > 90 closes long, < 10 closes short
+  - No separate statArbEntryGate (fractal already built into entry)
+
+SWEEP GRID (1d synth):
+  strategyTypes: ['CT_Fractal']
+  statLengths / statEntry / statExit / statStop — same fields as stat_arb
+  lot 100%, reinvest 100%, DD scoring ≤ 30%
+
+STATUS: ✅ wired in backtest + sweep pipeline step [4/4]
+*/
+
 // ==================== BACKTEST VALIDATION PLAN ====================
 /*
 

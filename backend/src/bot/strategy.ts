@@ -26,6 +26,7 @@ import {
   normalizeZzPivotStrategyType,
   zzPivotVariantFromType,
 } from './zzPivotLevels';
+import { computeCtFractalSignalAtIndex, isCtFractalStrategyType } from './ctFractalSignal';
 
 // ── Market data cache for auto-strategy cycle ────────────────────────────────
 // Avoids re-fetching the same symbol+interval when multiple strategies share them.
@@ -202,7 +203,7 @@ type ExecuteStrategyOptions = {
 
 const normalizeStrategyType = (value: any): StrategyType => {
   const normalized = String(value || '').trim();
-  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'periodic_buy' || normalized === 'dca' || normalized === 'hideep') {
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'periodic_buy' || normalized === 'dca' || normalized === 'hideep' || normalized === 'CT_Fractal') {
     return normalized as StrategyType;
   }
   if (normalized === 'ZZ_Fast' || normalized === 'ZZ_Instance') {
@@ -277,7 +278,7 @@ const DEFAULT_STRATEGY: Omit<Strategy, 'api_key_id' | 'id'> = {
 };
 
 const getTypeAwareStrategyDefaults = (strategyType: StrategyType) => {
-  if (strategyType === 'stat_arb_zscore') {
+  if (strategyType === 'stat_arb_zscore' || strategyType === 'CT_Fractal') {
     return {
       take_profit_percent: 0,
       price_channel_length: 120,
@@ -796,7 +797,9 @@ const makeSignalGroupKey = (
   const type = String(strategy.strategy_type || 'DD_BattleToads');
   const len = Math.max(2, Math.floor(Number(strategy.price_channel_length) || 50));
   const src = String(strategy.detection_source || 'close');
-  const zEntry = type === 'stat_arb_zscore' ? Number(strategy.zscore_entry || 2.5).toFixed(4) : '';
+  const zEntry = (type === 'stat_arb_zscore' || type === 'CT_Fractal')
+    ? Number(strategy.zscore_entry || 2.5).toFixed(4)
+    : '';
   const longs = strategy.long_enabled ? '1' : '0';
   const shorts = strategy.short_enabled ? '1' : '0';
   return `${apiKeyName}|${mode}|${base}|${quote}|${baseCoef}|${quoteCoef}|${strategy.interval}|${type}|${len}|${src}|${zEntry}|${longs}|${shorts}`;
@@ -1347,6 +1350,7 @@ type ComputedSignal = {
   donchianLow: number;
   donchianCenter: number;
   zScore: number | null;
+  fastRsi?: number | null;
 };
 
 const mean = (values: number[]): number => {
@@ -1523,6 +1527,34 @@ const computeZzPivotSignal = (
   };
 };
 
+const computeCtFractalSignal = (
+  candles: ParsedSyntheticCandle[],
+  length: number,
+  zscoreEntry: number,
+  longEnabled: boolean,
+  shortEnabled: boolean,
+): ComputedSignal => {
+  const index = candles.length - 1;
+  const ct = computeCtFractalSignalAtIndex(
+    candles,
+    index,
+    length,
+    zscoreEntry,
+    longEnabled,
+    shortEnabled,
+  );
+  const sigma = Math.abs(ct.zScore) > 0 ? Math.abs(ct.current - ct.donchianCenter) / Math.max(Math.abs(ct.zScore), 1e-12) : 0;
+  return {
+    signal: ct.signal,
+    currentRatio: ct.current,
+    donchianHigh: ct.donchianCenter + sigma,
+    donchianLow: ct.donchianCenter - sigma,
+    donchianCenter: ct.donchianCenter,
+    zScore: ct.zScore,
+    fastRsi: ct.fastRsi,
+  };
+};
+
 const computeSignal = (
   strategyType: StrategyType,
   candles: ParsedSyntheticCandle[],
@@ -1540,6 +1572,10 @@ const computeSignal = (
       longEnabled,
       shortEnabled
     );
+  }
+
+  if (isCtFractalStrategyType(strategyType)) {
+    return computeCtFractalSignal(candles, length, zscoreEntry, longEnabled, shortEnabled);
   }
 
   if (isZzPivotStrategyType(strategyType)) {
@@ -2455,9 +2491,12 @@ export const executeStrategy = async (
   }
 
   const signalLength = Math.max(2, Math.floor(mergedStrategy.price_channel_length));
-  const lookback = mergedStrategy.strategy_type === 'stat_arb_zscore'
-    ? Math.max(signalLength + 90, 220)
-    : Math.max(signalLength + 30, 120);
+  const strategyTypeNorm = normalizeStrategyType(mergedStrategy.strategy_type);
+  const lookback = (strategyTypeNorm === 'stat_arb_zscore' || strategyTypeNorm === 'CT_Fractal')
+    ? Math.max(signalLength + 120, 220)
+    : strategyTypeNorm === 'hideep'
+      ? Math.max(signalLength + 110, 220)
+      : Math.max(signalLength + 30, 120);
 
   const candles = await loadStrategyCandles(apiKeyName, mergedStrategy, lookback);
 
@@ -2485,6 +2524,7 @@ export const executeStrategy = async (
       donchianLow: cachedSignal.donchianLow,
       donchianCenter: cachedSignal.donchianCenter,
       zScore: cachedSignal.zScore,
+      fastRsi: cachedSignal.fastRsi,
     };
   } else {
     computedSignalResult = computeSignal(
@@ -2499,10 +2539,11 @@ export const executeStrategy = async (
     signalCache.set(signalGroupKey, { ...computedSignalResult, evaluatedBarTimeMs: candleContext.evaluatedBarTimeMs });
   }
 
-  const { signal, currentRatio, donchianHigh, donchianLow, donchianCenter, zScore } = computedSignalResult;
+  const { signal, currentRatio, donchianHigh, donchianLow, donchianCenter, zScore, fastRsi } = computedSignalResult;
   // ───────────────────────────────────────────────────────────────────────────
 
-  const isStatArb = mergedStrategy.strategy_type === 'stat_arb_zscore';
+  const isCtFractal = isCtFractalStrategyType(String(mergedStrategy.strategy_type || ''));
+  const isStatArb = mergedStrategy.strategy_type === 'stat_arb_zscore' || isCtFractal;
   const isZzPivot = isZzPivotStrategyType(normalizeZzPivotStrategyType(String(mergedStrategy.strategy_type || '')));
   const zscoreExit = normalizeZscoreExit(mergedStrategy.zscore_exit, DEFAULT_STRATEGY.zscore_exit, mergedStrategy.zscore_entry);
   const zscoreStop = normalizeZscoreStop(mergedStrategy.zscore_stop, DEFAULT_STRATEGY.zscore_stop, mergedStrategy.zscore_entry);
@@ -3025,7 +3066,24 @@ export const executeStrategy = async (
       closedAction = 'mean_revert_exit_short';
       closedResult = `Mean-reversion exit for short ${positionLabel} (z=${Number(zScore).toFixed(3)})`;
     }
-  } else {
+  }
+
+  if (!closedAction && (mergedStrategy.strategy_type === 'hideep' || isCtFractal)) {
+    const rsiVal = isCtFractal ? fastRsi : zScore;
+    if (Number.isFinite(rsiVal)) {
+      if (state === 'long' && Number(rsiVal) > 90) {
+        await closeAndRecordExit('mean_revert_exit_long', 'long');
+        closedAction = 'mean_revert_exit_long';
+        closedResult = `HiDeep RSI exit for long ${positionLabel} (rsi=${Number(rsiVal).toFixed(1)})`;
+      } else if (state === 'short' && Number(rsiVal) < 10) {
+        await closeAndRecordExit('mean_revert_exit_short', 'short');
+        closedAction = 'mean_revert_exit_short';
+        closedResult = `HiDeep RSI exit for short ${positionLabel} (rsi=${Number(rsiVal).toFixed(1)})`;
+      }
+    }
+  }
+
+  if (!isStatArb) {
     const evalBar = candleContext.candlesForSignal[candleContext.candlesForSignal.length - 1];
 
     if (!closedAction && isZzPivot && state === 'long' && evalBar && evalBar.low <= donchianLow) {
@@ -3545,7 +3603,7 @@ export const executeStrategy = async (
     throw new Error('Calculated trade notional is invalid');
   }
 
-  if (isStatArb && (signal === 'long' || signal === 'short')) {
+  if (isStatArb && !isCtFractal && (signal === 'long' || signal === 'short')) {
     const entryGate = await getStatArbEntryGateForApiKey(apiKeyName);
     if (entryGate) {
       const gateOk = await passesStatArbEntryGateLive(
@@ -4642,9 +4700,11 @@ export const runAutoStrategiesCycle = async () => {
     // periodic_buy doesn't need candle pre-warm — it fetches 1m candle on its own
     if ((row.strategy_type as string) === 'periodic_buy' || (row.strategy_type as string) === 'dca' || (row.strategy_type as string) === 'dca_futures') continue;
     const signalLength = Math.max(2, Math.floor(Number(row.price_channel_length) || 50));
-    const lookback = strategyType === 'stat_arb_zscore'
-      ? Math.max(signalLength + 90, 220)
-      : Math.max(signalLength + 30, 120);
+    const lookback = (strategyType === 'stat_arb_zscore' || strategyType === 'CT_Fractal')
+      ? Math.max(signalLength + 120, 220)
+      : strategyType === 'hideep'
+        ? Math.max(signalLength + 110, 220)
+        : Math.max(signalLength + 30, 120);
 
     const marketMode = normalizeMarketMode(row.market_mode);
     const baseSymbol = String(row.base_symbol || '').trim().toUpperCase();

@@ -45,7 +45,7 @@ type HistoricalSweepConfig = {
     maxDrawdownPercent: number;
     minTrades: number;
   };
-  strategyTypes: Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'ZZ_Fast' | 'ZZ_Instance' | 'hideep'>;
+  strategyTypes: Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'ZZ_Fast' | 'ZZ_Instance' | 'hideep' | 'CT_Fractal'>;
   monoMarkets: string[];
   synthMarkets: string[];
   ddLengths: number[];
@@ -71,7 +71,7 @@ type HistoricalSweepConfig = {
 type SweepRunPlan = {
   key: string;
   index: number;
-  strategyType: 'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'ZZ_Fast' | 'ZZ_Instance' | 'hideep';
+  strategyType: 'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'ZZ_Fast' | 'ZZ_Instance' | 'hideep' | 'CT_Fractal';
   marketMode: 'mono' | 'synth';
   market: string;
   baseSymbol: string;
@@ -188,10 +188,10 @@ const parseNumberList = (raw: unknown): number[] => {
   return Array.from(new Set(normalized));
 };
 
-const parseStrategyTypes = (raw: unknown): Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'ZZ_Fast' | 'ZZ_Instance' | 'hideep'> => {
+const parseStrategyTypes = (raw: unknown): Array<'DD_BattleToads' | 'stat_arb_zscore' | 'zz_breakout' | 'ZZ_Fast' | 'ZZ_Instance' | 'hideep' | 'CT_Fractal'> => {
   const values = parseStringList(raw);
   const allowed = new Set([
-    'DD_BATTLETOADS', 'STAT_ARB_ZSCORE', 'ZZ_BREAKOUT', 'ZZ_FAST', 'ZZ_INSTANCE', 'HIDEEP',
+    'DD_BATTLETOADS', 'STAT_ARB_ZSCORE', 'ZZ_BREAKOUT', 'ZZ_FAST', 'ZZ_INSTANCE', 'HIDEEP', 'CT_FRACTAL',
     'ZZ_HAMSTER_ZZ6', 'ZZ_HAMSTER_ZZ2',
   ]);
   const parsed = values
@@ -211,6 +211,9 @@ const parseStrategyTypes = (raw: unknown): Array<'DD_BattleToads' | 'stat_arb_zs
       }
       if (value === 'HIDEEP') {
         return 'hideep';
+      }
+      if (value === 'CT_FRACTAL') {
+        return 'CT_Fractal';
       }
       return 'stat_arb_zscore';
     });
@@ -353,6 +356,9 @@ const buildStrategyName = (config: HistoricalSweepConfig, plan: SweepRunPlan): s
   if (plan.strategyType === 'stat_arb_zscore') {
     return `${config.strategyPrefix}_SZ_${modeToken}_${marketToken}_${plan.interval}_L${plan.length}_ZE${formatMetricToken(plan.zscoreEntry)}_ZX${formatMetricToken(plan.zscoreExit)}_ZS${formatMetricToken(plan.zscoreStop)}`;
   }
+  if (plan.strategyType === 'CT_Fractal') {
+    return `${config.strategyPrefix}_CTF_${modeToken}_${marketToken}_${plan.interval}_L${plan.length}_ZE${formatMetricToken(plan.zscoreEntry)}_ZX${formatMetricToken(plan.zscoreExit)}_ZS${formatMetricToken(plan.zscoreStop)}`;
+  }
   if (plan.strategyType === 'hideep') {
     return `${config.strategyPrefix}_HD_${modeToken}_${marketToken}_${plan.interval}_M${plan.length}_R${formatMetricToken(plan.zscoreEntry)}_TP${formatMetricToken(plan.takeProfitPercent)}`;
   }
@@ -394,6 +400,32 @@ const buildRunPlans = (config: HistoricalSweepConfig): SweepRunPlan[] => {
     for (const interval of intervals) {
       for (const strategyType of config.strategyTypes) {
       if (strategyType === 'stat_arb_zscore') {
+        for (const length of config.statLengths) {
+          for (const zscoreEntry of config.statEntry) {
+            for (const zscoreExit of config.statExit) {
+              for (const zscoreStop of config.statStop) {
+                addPlan({
+                  strategyType,
+                  marketMode,
+                  market,
+                  baseSymbol,
+                  quoteSymbol,
+                  interval,
+                  length,
+                  takeProfitPercent: 0,
+                  detectionSource: 'close',
+                  zscoreEntry,
+                  zscoreExit,
+                  zscoreStop,
+                });
+              }
+            }
+          }
+        }
+        continue;
+      }
+
+      if (strategyType === 'CT_Fractal') {
         for (const length of config.statLengths) {
           for (const zscoreEntry of config.statEntry) {
             for (const zscoreExit of config.statExit) {
