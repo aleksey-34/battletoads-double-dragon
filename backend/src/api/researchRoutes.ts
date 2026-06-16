@@ -397,6 +397,13 @@ router.post('/sweeps/full-historical/start', async (req, res) => {
       checkpointEvery: req.body?.checkpointEvery ? Number(req.body.checkpointEvery) : undefined,
       longOnly: req.body?.longOnly === true || req.body?.longOnly === 'true',
       spotMode: req.body?.spotMode === true || req.body?.spotMode === 'true',
+      sweepLotPercent: req.body?.sweepLotPercent != null ? Number(req.body.sweepLotPercent) : undefined,
+      sweepReinvestPercent: req.body?.sweepReinvestPercent != null ? Number(req.body.sweepReinvestPercent) : undefined,
+      sweepMaxDeposit: req.body?.sweepMaxDeposit != null ? Number(req.body.sweepMaxDeposit) : undefined,
+      zzPivotLengths: req.body?.zzPivotLengths,
+      hidDeepMac1: req.body?.hidDeepMac1,
+      hidDeepRsiPeriod: req.body?.hidDeepRsiPeriod,
+      hidDeepTakeProfits: req.body?.hidDeepTakeProfits,
     });
     res.json({ success: true, ...result });
   } catch (err) {
