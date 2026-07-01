@@ -284,6 +284,32 @@ def pick_diversified_synth(
 
 
 def load_sweep_rows() -> tuple[list[dict], str]:
+    multi = os.environ.get("SWEEP_JSONS", "").strip()
+    if multi:
+        paths = [p.strip() for p in multi.split(",") if p.strip()]
+        by_id: dict[int, dict] = {}
+        loaded: list[str] = []
+        for sweep_path in paths:
+            if not os.path.isfile(sweep_path):
+                print(f"WARN: missing sweep file {sweep_path}")
+                continue
+            with open(sweep_path, encoding="utf-8") as f:
+                sweep = json.load(f)
+            chunks: list[dict] = []
+            for key in ("evaluated", "topAll"):
+                rows = sweep.get(key)
+                if isinstance(rows, list):
+                    chunks.extend(rows)
+            top_by_mode = sweep.get("topByMode") or {}
+            if isinstance(top_by_mode.get("synth"), list):
+                chunks.extend(top_by_mode["synth"])
+            for row in chunks:
+                sid = int(row.get("strategyId") or 0)
+                if sid > 0 and sid not in by_id:
+                    by_id[sid] = row
+            loaded.append(sweep_path)
+        return list(by_id.values()), f"merged:{len(loaded)} files"
+
     sweep_path = os.environ.get("SWEEP_JSON", "").strip()
     if not sweep_path:
         pattern = os.path.join(REPO_ROOT, "results", "*_historical_sweep_*.json")
@@ -485,23 +511,40 @@ def enable_storefront_vitrine(system_name: str) -> int:
     return enabled
 
 
-def publish_card(offer_ids: list[str], store: dict, snapshot: dict) -> str:
-    offers_by_id = {str(o.get("offerId")): o for o in (store.get("offers") or [])}
+def publish_card(offer_ids: list[str], store: dict, snapshot: dict, picked_rows: list[dict] | None = None) -> str:
     members = []
-    for oid in offer_ids:
-        offer = offers_by_id.get(oid) or {}
-        strategy_id = int(offer.get("strategyId") or 0)
-        if strategy_id <= 0:
-            continue
-        members.append({
-            "strategyId": strategy_id,
-            "strategyName": str(offer.get("titleRu") or oid),
-            "strategyType": str(offer.get("strategyType") or norm_type({"strategyType": offer.get("strategyType")})),
-            "marketMode": "synthetic",
-            "market": str(offer.get("market") or ""),
-            "score": float(offer.get("score") or 0),
-            "weight": round(1 / max(1, len(offer_ids)), 4),
-        })
+    if picked_rows:
+        for row, oid in zip(picked_rows, offer_ids):
+            sid = int(row.get("strategyId") or 0)
+            if sid <= 0:
+                continue
+            members.append({
+                "strategyId": sid,
+                "strategyName": str(row.get("strategyName") or oid),
+                "strategyType": str(row.get("strategyType") or norm_type(row)),
+                "marketMode": "synthetic",
+                "market": str(row.get("market") or ""),
+                "score": float(row.get("score") or 0),
+                "weight": round(1 / max(1, len(offer_ids)), 4),
+            })
+    if not members:
+        offers_by_id = {str(o.get("offerId")): o for o in (store.get("offers") or [])}
+        for oid in offer_ids:
+            offer = offers_by_id.get(oid) or {}
+            strategy_id = int(offer.get("strategyId") or 0)
+            if strategy_id <= 0:
+                strategy_id = int(oid.rsplit("_", 1)[-1]) if oid.rsplit("_", 1)[-1].isdigit() else 0
+            if strategy_id <= 0:
+                continue
+            members.append({
+                "strategyId": strategy_id,
+                "strategyName": str(offer.get("titleRu") or oid),
+                "strategyType": str(offer.get("strategyType") or norm_type({"strategyType": offer.get("strategyType")})),
+                "marketMode": "synthetic",
+                "market": str(offer.get("market") or ""),
+                "score": float(offer.get("score") or 0),
+                "weight": round(1 / max(1, len(offer_ids)), 4),
+            })
     if len(members) < MIN_PUBLISH_MEMBERS:
         raise RuntimeError(f"Need >={MIN_PUBLISH_MEMBERS} resolvable draft members, got {len(members)}")
 
@@ -709,12 +752,21 @@ def main() -> None:
     forced_offer_ids = [
         x.strip() for x in os.environ.get("SYNTH_OFFER_IDS", "").split(",") if x.strip()
     ]
+    forced_picks_json = os.environ.get("SYNTH_FORCED_PICKS_JSON", "").strip()
+    forced_picks_from_env = []
+    if forced_picks_json:
+        try:
+            forced_picks_from_env = json.loads(forced_picks_json)
+        except json.JSONDecodeError:
+            print("WARN: invalid SYNTH_FORCED_PICKS_JSON")
     if forced_offer_ids:
         by_id = {int(r.get("strategyId") or 0): r for r in rows if int(r.get("strategyId") or 0) > 0}
         picked = []
         for oid in forced_offer_ids:
-            sid = int(oid.rsplit("_", 1)[-1])
+            sid = int(oid.rsplit("_", 1)[-1]) if oid.rsplit("_", 1)[-1].isdigit() else 0
             row = by_id.get(sid)
+            if not row and forced_picks_from_env:
+                row = next((r for r in forced_picks_from_env if int(r.get("strategyId") or 0) == sid), None)
             if row:
                 picked.append(row)
             else:
@@ -836,7 +888,8 @@ def main() -> None:
 
     if args.publish:
         store = api_get("/api/saas/admin/offer-store")
-        system_name = publish_card(offer_ids, store, snapshot)
+        publish_rows = picked if os.environ.get("SYNTH_PUBLISH_FROM_ROWS", "").strip().lower() in ("1", "true", "yes") else None
+        system_name = publish_card(offer_ids, store, snapshot, picked_rows=publish_rows)
         report["publishedSystemName"] = system_name
         with open(report_path, "w", encoding="utf-8") as f:
             json.dump(report, f, indent=2, ensure_ascii=False)

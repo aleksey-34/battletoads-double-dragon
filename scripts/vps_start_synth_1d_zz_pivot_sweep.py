@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-1d synth sweep: CT_Fractal — stat_arb z-score + HiDeep deep + confirmed fractal (triple confluence).
+1d synth sweep: ZZ_Fast + ZZ_Instance (real pivot levels, not Donchian zz_breakout).
 
-Run after stat_arb 1d job completes, or via pipeline script step [4/4].
+Run after CT_Fractal job completes (pipeline step 5).
 
-  python3 scripts/vps_start_synth_1d_ct_fractal_sweep.py
+  python3 scripts/vps_start_synth_1d_zz_pivot_sweep.py
 """
 from __future__ import annotations
 
@@ -30,13 +30,10 @@ PAYLOAD = {
     "dateFrom": "2024-06-01T00:00:00Z",
     "dateTo": None,
     "intervals": ["1d"],
-    "strategyTypes": ["CT_Fractal"],
-    "statLengths": [18, 24, 36, 48, 72],
-    "statEntry": [1.75, 2.0, 2.25, 2.5],
-    "statExit": [0.25, 0.5, 0.75],
-    "statStop": [2.5, 3.0, 3.5, 4.0],
+    "strategyTypes": ["ZZ_Fast", "ZZ_Instance"],
+    "zzPivotLengths": [2, 3, 5, 6, 8, 12],
     "backtestBars": 900,
-    "warmupBars": 120,
+    "warmupBars": 80,
     "initialBalance": 10000,
     "commissionPercent": 0.1,
     "slippagePercent": 0.05,
@@ -54,14 +51,14 @@ PAYLOAD = {
     "turboMode": True,
     "resumeEnabled": True,
     "checkpointEvery": 15,
-    "maxRuns": int(os.environ.get("SYNTH_1D_CTF_MAX_RUNS", "1500")),
-    "maxVariantsPerMarketType": 60,
+    "maxRuns": int(os.environ.get("SYNTH_1D_ZZ_MAX_RUNS", "1200")),
+    "maxVariantsPerMarketType": 48,
     "allowDuplicateMarkets": False,
     "updateExistingStrategies": False,
     "windowBacktestsEnabled": False,
     "maxMembers": 24,
-    "strategyPrefix": "SYNTH1D_CTF_20260602",
-    "systemName": "Synth 1d CT_Fractal contrarian (732d turbo)",
+    "strategyPrefix": "SYNTH1D_ZZP_20260616",
+    "systemName": "Synth 1d ZZ_Fast/ZZ_Instance pivot (732d turbo)",
 }
 
 
@@ -70,8 +67,7 @@ def main() -> None:
     payload = dict(PAYLOAD)
     payload.update(sweep_turbo_extras())
     # Important: keep per-sweep checkpoints isolated (ZZ/CT share the same backfill job runner).
-    # Otherwise concurrent/serial sweeps can stomp each other's resume state and "freeze" progress.
-    checkpoint_suffix = payload.get("strategyPrefix", "ctf").lower()
+    checkpoint_suffix = payload.get("strategyPrefix", "zzp").lower()
     payload["checkpointFile"] = os.environ.get(
         "SWEEP_CHECKPOINT_FILE",
         f"/opt/battletoads-double-dragon/results/btdd_d1_historical_sweep_checkpoint_{checkpoint_suffix}.json",
@@ -79,10 +75,10 @@ def main() -> None:
     payload["synthMarkets"] = synth
     payload["monoMarkets"] = mono_anchors_from_synth(synth)
     print(
-        f"1d CT_Fractal sweep: {len(synth)} synth pairs, maxRuns={payload['maxRuns']}, "
+        f"1d ZZ pivot sweep: {len(synth)} synth pairs, maxRuns={payload['maxRuns']}, "
         f"concurrency={payload.get('concurrency')}, fanKeys={payload.get('fanApiKeyNames')}"
     )
-    abort_running_sweep(API_BASE, ADMIN_TOKEN, "replace with synth 1d CT_Fractal turbo sweep")
+    abort_running_sweep(API_BASE, ADMIN_TOKEN, "replace with synth 1d ZZ pivot turbo sweep")
 
     req = request.Request(
         f"{API_BASE}/api/research/sweeps/full-historical/start",

@@ -34,6 +34,8 @@ SET_KEY = "union-synth-heavy-jun2026-v3"
 SYSTEM = "ALGOFUND_MASTER::BTDD_D1::union-synth-heavy-jun2026-v3-qzwjsh"
 
 SWEEP_FILES = [
+    "btdd_d1_historical_sweep_2026-07-01T20-53-15-730Z.json",
+    "btdd_d1_historical_sweep_2026-07-01T20-46-18-697Z.json",
     "btdd_d1_historical_sweep_2026-07-01T17-11-55-932Z.json",
     "btdd_d1_historical_sweep_2026-07-01T16-19-01-575Z.json",
     "btdd_d1_historical_sweep_2026-06-16T10-43-14-084Z.json",
@@ -65,6 +67,16 @@ def db_type(stype: str) -> str:
         "zz_instance": "ZZ_Instance",
         "stat_arb_zscore": "stat_arb_zscore",
     }.get(stype, stype)
+
+
+def leg_strategy_id(conn: sqlite3.Connection, row: dict, stype: str, market: str, mode: str = "synth") -> int | None:
+    """Prefer sweep-evaluated strategyId (has candle data); fallback to DB lookup."""
+    sid = int(row.get("strategyId") or 0)
+    if sid > 0:
+        hit = conn.execute("SELECT id FROM strategies WHERE id=?", (sid,)).fetchone()
+        if hit:
+            return sid
+    return resolve_db_id(conn, stype, market, mode=mode)
 
 
 def resolve_db_id(conn: sqlite3.Connection, stype: str, market: str, mode: str = "synth") -> int | None:
@@ -134,6 +146,7 @@ def pick_pool(
         if str(r.get("strategyType") or "") == dt
         and str(r.get("marketMode") or "").lower() == want_mode
         and float(r.get("maxDrawdownPercent") or 99) <= max_dd
+        and int(r.get("tradesCount") or r.get("trades") or 0) > 0
         and ("/" in str(r.get("market") or "") if want_mode == "synth" else True)
     ]
     if want_mode == "mono":
@@ -148,7 +161,7 @@ def pick_pool(
             continue
         st_key = stype
         mode_key = "mono" if want_mode == "mono" else "synth"
-        sid = resolve_db_id(conn, st_key, market, mode=mode_key)
+        sid = leg_strategy_id(conn, r, st_key, market, mode=mode_key)
         if not sid:
             continue
         out.append((mode_key, st_key, sid, market))
@@ -199,6 +212,7 @@ def pick_pool_v3c(
         if str(r.get("strategyType") or "") == dt
         and str(r.get("marketMode") or "").lower() == want_mode
         and float(r.get("maxDrawdownPercent") or 99) <= max_dd
+        and int(r.get("tradesCount") or r.get("trades") or 0) > 0
         and ("/" in str(r.get("market") or "") if want_mode == "synth" else True)
     ]
     pool.sort(key=lambda r: (_market_prio(str(r.get("market") or ""), priority),) + tuple(-x for x in row_rank(r)))
@@ -209,7 +223,7 @@ def pick_pool_v3c(
         if not market or market in seen_markets:
             continue
         mode_key = "mono" if want_mode == "mono" else "synth"
-        sid = resolve_db_id(conn, stype, market, mode=mode_key)
+        sid = leg_strategy_id(conn, r, stype, market, mode=mode_key)
         if not sid:
             continue
         out.append((mode_key, stype, sid, market))
@@ -220,7 +234,7 @@ def pick_pool_v3c(
     return out
 
 
-def build_leg_set_v3c(rows: list[dict], *, max_legs: int = 32) -> list[tuple[str, str, int, str]]:
+def build_leg_set_v3c(rows: list[dict], *, max_legs: int = 32, max_dd: float = 28.0) -> list[tuple[str, str, int, str]]:
     """Decorr-priority union: one leg per ratio market, stat → CT → ZZ."""
     priority = load_decorr_priority()
     seen: set[str] = set()
@@ -236,6 +250,7 @@ def build_leg_set_v3c(rows: list[dict], *, max_legs: int = 32) -> list[tuple[str
                 rows,
                 stype=stype,
                 mode="synth",
+                max_dd=max_dd,
                 cap=cap,
                 seen_markets=seen,
                 priority=priority,

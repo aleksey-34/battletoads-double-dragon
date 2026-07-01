@@ -1238,9 +1238,12 @@ export const getMarketData = async (
   const { client, limiter } = getClientEntry(apiKeyName);
   // Convert interval to Bybit format
   const bybitInterval = interval.replace('m', '').replace('h', '').replace('d', 'D').replace('w', 'W').replace('M', 'M');
-  // For hours, multiply by 60
   let finalInterval = bybitInterval;
-  if (interval.endsWith('h')) {
+  if (interval === '1d' || interval === '1D' || bybitInterval === '1D') {
+    finalInterval = 'D';
+  } else if (interval === '1w' || interval === '1W' || bybitInterval === '1W') {
+    finalInterval = 'W';
+  } else if (interval.endsWith('h')) {
     finalInterval = (parseInt(bybitInterval, 10) * 60).toString();
   }
   logger.info(`Converted interval ${interval} to ${finalInterval}`);

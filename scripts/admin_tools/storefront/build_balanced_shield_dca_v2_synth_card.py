@@ -304,7 +304,10 @@ def publish_new_card(store: dict, offer_ids: list[str], weights: dict[str, float
             "score": float(offer.get("score") or 0),
             "weight": round(weights.get(offer_id, 1 / len(offer_ids)), 6),
         })
+    print(f"[publish] curated-draft-members: {len(members)}")
     api_post("/api/saas/admin/curated-draft-members", {"members": members}, timeout=120)
+
+    print(f"[publish] /admin/publish setKey={SET_KEY} offers={len(offer_ids)}")
     publish = api_post("/api/saas/admin/publish", {
         "offerIds": offer_ids,
         "setKey": SET_KEY,
@@ -320,6 +323,7 @@ def publish_new_card(store: dict, offer_ids: list[str], weights: dict[str, float
         raise RuntimeError(f"Publish failed: {publish}")
 
     dca_payload = build_combined_payload(offer_ids, weights, api_key, date_from, date_to)
+    print(f"[publish] apply DCA markets={len(DCA_MARKETS)}")
     applied = api_post("/api/saas/admin/ts-dca-pair-apply", {
         **dca_payload, "maxApply": len(DCA_MARKETS),
     }, timeout=600)
@@ -355,6 +359,7 @@ def publish_new_card(store: dict, offer_ids: list[str], weights: dict[str, float
         },
     }
     published = list(store.get("algofundPublishedSystemNames") or [])
+    print("[publish] patch offer-store snapshot + published names")
     api_patch("/api/saas/admin/offer-store", {
         "tsBacktestSnapshotsPatch": {SET_KEY: snapshot, system_name: snapshot},
         "algofundPublishedSystemNames": list(dict.fromkeys([system_name, *published])),

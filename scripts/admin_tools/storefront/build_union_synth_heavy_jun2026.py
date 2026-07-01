@@ -13,6 +13,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import sqlite3
 import sys
 import time
@@ -82,6 +83,8 @@ CURATED = [
 
 # Jul 2026 fresh sweeps: CT job #116 + ZZ job #115 (+ stat_arb anchor)
 JUL2026_SWEEP_FILES = [
+    "btdd_d1_historical_sweep_2026-07-01T20-53-15-730Z.json",
+    "btdd_d1_historical_sweep_2026-07-01T20-46-18-697Z.json",
     "btdd_d1_historical_sweep_2026-07-01T17-11-55-932Z.json",
     "btdd_d1_historical_sweep_2026-07-01T16-19-01-575Z.json",
     "btdd_d1_historical_sweep_2026-06-16T10-43-14-084Z.json",
@@ -150,7 +153,7 @@ def merge_jul2026_sweeps() -> str:
                 str(row.get("marketMode") or "").lower(),
             )
             if sid > 0:
-                by_sid.setdefault(sid, row)
+                by_sid[sid] = row
             elif key not in by_key:
                 by_key[key] = row
     merged_rows.extend(by_sid.values())
@@ -344,6 +347,55 @@ def api_patch(path: str, payload: dict, timeout: int = 120) -> dict:
     return r.json()
 
 
+def filter_btdd_d1_runnable(
+    offer_ids: list[str],
+    picks: list[dict],
+    date_to: str,
+) -> tuple[list[str], list[dict]]:
+    """Keep legs that backtest on BTDD_D1 (sweep fan keys may differ)."""
+    remaining = list(zip(offer_ids, picks))
+    for _ in range(max(1, len(remaining))):
+        strategy_ids = [int(p.get("strategyId") or 0) for _, p in remaining if int(p.get("strategyId") or 0) > 0]
+        if not strategy_ids:
+            break
+        probe = {
+            "apiKeyName": "BTDD_D1",
+            "mode": "portfolio",
+            "strategyIds": strategy_ids,
+            "dateFrom": DATE_FROM,
+            "dateTo": date_to,
+            "bars": 900,
+            "warmupBars": 120,
+            "initialBalance": INITIAL_BALANCE,
+            "commissionPercent": 0.1,
+            "slippagePercent": 0.05,
+            "skipMissingSymbols": True,
+            "lotPercentOverride": LOT_PERCENT,
+        }
+        try:
+            data = api_post("/api/backtest/run", probe, timeout=600)
+            if data.get("success"):
+                kept_offers = [o for o, _ in remaining]
+                kept_picks = [p for _, p in remaining]
+                print(f"BTDD_D1 runnable: {len(kept_offers)}/{len(offer_ids)} legs")
+                return kept_offers, kept_picks
+            err = str(data.get("error") or "backtest failed")
+        except RuntimeError as exc:
+            err = str(exc)
+        skipped = {int(x) for x in re.findall(r"#(\d+)", err)}
+        if not skipped:
+            raise RuntimeError(err)
+        before = len(remaining)
+        remaining = [(o, p) for o, p in remaining if int(p.get("strategyId") or 0) not in skipped]
+        print(f"  removed {before - len(remaining)} unrunnable legs ({len(remaining)} left)")
+        if len(remaining) == before:
+            raise RuntimeError(err)
+    kept_offers = [o for o, _ in remaining]
+    kept_picks = [p for _, p in remaining]
+    print(f"BTDD_D1 runnable: {len(kept_offers)}/{len(offer_ids)} legs")
+    return kept_offers, kept_picks
+
+
 def poll_combined() -> dict:
     for _ in range(900):
         st = api_get("/api/saas/admin/ts-dca-combined-preview-status")
@@ -493,6 +545,7 @@ def main() -> None:
     merged_rows: list[dict] | None = None
     curated = None
     no_dca = False
+    grid = None
     if args.v3b or args.v3c:
         spec = importlib.util.spec_from_file_location(
             "grid", os.path.join(os.path.dirname(__file__), "research_union_v3b_grid_jul2026.py"),
@@ -522,9 +575,35 @@ def main() -> None:
         os.environ["SWEEP_JSONS"] = ",".join(
             os.path.join(REPO, "results", f) for f in JUL2026_SWEEP_FILES if os.path.isfile(os.path.join(REPO, "results", f))
         )
-    offer_ids, picks = build_legs(curated, merged_rows)
-    weights = {oid: round(1 / len(offer_ids), 6) for oid in offer_ids}
     date_to = datetime.now(timezone.utc).date().isoformat()
+    min_legs = int(os.environ.get("UNION_MIN_LEGS", "10"))
+
+    if args.v3c and grid is not None:
+        rows_for_v3c = grid.load_rows()
+        max_dd = float(os.environ.get("V3C_MAX_DD", "28"))
+        target = int(os.environ.get("V3C_MAX_LEGS", "32"))
+        while True:
+            leg_set = grid.build_leg_set_v3c(rows_for_v3c, max_legs=target * 2, max_dd=max_dd)
+            offer_ids, picks = build_legs(
+                [(m, st, sid, mk, None) for m, st, sid, mk in leg_set],
+                merged_rows,
+            )
+            offer_ids, picks = filter_btdd_d1_runnable(offer_ids, picks, date_to)
+            if len(offer_ids) >= min_legs or max_dd >= 50:
+                break
+            max_dd += 7
+            print(f"v3c: only {len(offer_ids)} runnable on BTDD_D1, relax max_dd -> {max_dd}")
+        offer_ids = offer_ids[:target]
+        picks = picks[:target]
+    else:
+        offer_ids, picks = build_legs(curated, merged_rows)
+        if no_dca:
+            offer_ids, picks = filter_btdd_d1_runnable(offer_ids, picks, date_to)
+
+    if len(offer_ids) < min_legs:
+        raise SystemExit(f"Need >={min_legs} BTDD_D1-runnable legs, got {len(offer_ids)}")
+
+    weights = {oid: round(1 / len(offer_ids), 6) for oid in offer_ids}
 
     print(f"{DISPLAY_LABEL}: {len(offer_ids)} legs (no v2 42-core)")
     for oid in offer_ids:

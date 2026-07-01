@@ -47,6 +47,10 @@ echo "[3/4] start 1d stat_arb sweep"
 python3 scripts/vps_start_synth_1d_stat_arb_sweep.py
 wait_for_sweep "stat_arb"
 
-echo "[4/4] start 1d CT_Fractal sweep"
+echo "[4/5] start 1d CT_Fractal sweep"
 python3 scripts/vps_start_synth_1d_ct_fractal_sweep.py
-echo "=== pipeline launched CT_Fractal $(date -Is) ==="
+wait_for_sweep "CT_Fractal"
+
+echo "[5/5] start 1d ZZ_Fast/ZZ_Instance pivot sweep"
+python3 scripts/vps_start_synth_1d_zz_pivot_sweep.py
+echo "=== pipeline launched ZZ pivot $(date -Is) ==="
