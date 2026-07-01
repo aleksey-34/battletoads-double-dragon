@@ -216,6 +216,17 @@ cd "$APP_DIR"
 
 # btdd-api / sweep worker run as ubuntu and write logs/*.log here
 deploy_user="${DEPLOY_USER:-ubuntu}"
+
+git_as_deploy_user() {
+	if [[ "$(id -un)" == "$deploy_user" ]]; then
+		"$@"
+	elif id "$deploy_user" >/dev/null 2>&1; then
+		sudo -u "$deploy_user" -- "$@"
+	else
+		"$@"
+	fi
+}
+
 mkdir -p "$APP_DIR/logs"
 if id "$deploy_user" >/dev/null 2>&1; then
 	chown "$deploy_user:$deploy_user" "$APP_DIR/logs" 2>/dev/null || true
@@ -226,7 +237,7 @@ local_head="$(git rev-parse --short HEAD)"
 log "Starting deploy in $APP_DIR"
 log "Local HEAD before update: $local_head"
 
-run git fetch --prune origin
+run git_as_deploy_user git fetch --prune origin
 
 # SQLite backups before repository reset/restart.
 backup_sqlite_db "$BACKEND_DIR/database.db" "database"
@@ -248,8 +259,8 @@ if [[ "$dirty_count" != "0" ]]; then
 	fi
 fi
 
-run git checkout "$BRANCH"
-run git reset --hard "origin/$BRANCH"
+run git_as_deploy_user git checkout "$BRANCH"
+run git_as_deploy_user git reset --hard "origin/$BRANCH"
 
 local_head_after="$(git rev-parse --short HEAD)"
 log "Local HEAD after update: $local_head_after"
