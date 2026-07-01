@@ -7199,8 +7199,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const overrideDateToRaw = options?.settingsOverride?.dateTo;
     let effectiveDateFrom: string | undefined;
     let effectiveDateTo: string | undefined;
-    if (targetContext.kind === 'algofund-ts' && !backtestDatesUserModifiedRef.current) {
-      // Full sweep depth on backend — do not send card label dates (90d window).
+    if (targetContext.kind === 'algofund-ts' && options?.preferRealBacktest) {
+      const snapDates = resolveBacktestSettingsForContext(targetContext);
+      const snapFrom = String(snapDates.dateFrom || '').trim();
+      const snapTo = String(snapDates.dateTo || '').trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(snapFrom) && /^\d{4}-\d{2}-\d{2}$/.test(snapTo)) {
+        effectiveDateFrom = (typeof overrideDateFromRaw === 'string' ? overrideDateFromRaw : snapFrom) || undefined;
+        effectiveDateTo = (typeof overrideDateToRaw === 'string' ? overrideDateToRaw : snapTo) || undefined;
+      } else if (!backtestDatesUserModifiedRef.current) {
+        effectiveDateFrom = undefined;
+        effectiveDateTo = undefined;
+      } else {
+        effectiveDateFrom = (typeof overrideDateFromRaw === 'string' ? overrideDateFromRaw : adminSweepBacktestDateFrom) || undefined;
+        effectiveDateTo = (typeof overrideDateToRaw === 'string' ? overrideDateToRaw : adminSweepBacktestDateTo) || undefined;
+      }
+    } else if (targetContext.kind === 'algofund-ts' && !backtestDatesUserModifiedRef.current) {
       effectiveDateFrom = undefined;
       effectiveDateTo = undefined;
     } else {

@@ -54,6 +54,17 @@ const resolveAdminPreviewLotPercentOverride = (
   rerunRiskMul: number,
 ): number => Number(Math.min(500, Math.max(0.1, lotPercentEffective * rerunRiskMul)).toFixed(4));
 
+/** Real engine rerun must match publish-time /api/backtest/run — no risk slider lot scaling. */
+const resolveRealEngineLotPercentOverride = (
+  lotPercentEffective: number,
+  preferRealBacktest: boolean,
+  rerunRiskMul: number,
+): number => (
+  preferRealBacktest
+    ? Number(Math.min(500, Math.max(0.1, lotPercentEffective)).toFixed(4))
+    : resolveAdminPreviewLotPercentOverride(lotPercentEffective, rerunRiskMul)
+);
+
 const resolveSnapshotLotPercent = (
   snapshot: TsBacktestSnapshot | null | undefined,
 ): number => {
@@ -114,19 +125,23 @@ const resolveAdminPreviewRerunWindow = (
   const settings = snapshot?.backtestSettings && typeof snapshot.backtestSettings === 'object'
     ? (snapshot.backtestSettings as Record<string, unknown>)
     : {};
+  const pickPositiveInt = (value: unknown, fallback: number): number => {
+    const n = Math.floor(Number(value));
+    return Number.isFinite(n) && n > 0 ? n : fallback;
+  };
   const bars = Math.max(
     100,
-    Math.floor(asNumber(
+    pickPositiveInt(
       overrides?.bars ?? settings.backtestBars ?? sweepConfig.backtestBars,
-      6000,
-    )),
+      pickPositiveInt(sweepConfig.backtestBars, 900),
+    ),
   );
   const warmupBars = Math.max(
     0,
-    Math.floor(asNumber(
+    pickPositiveInt(
       overrides?.warmupBars ?? settings.warmupBars ?? sweepConfig.warmupBars,
-      400,
-    )),
+      pickPositiveInt(sweepConfig.warmupBars, 120),
+    ),
   );
   const dateFrom = asString(requestedFrom, '').trim().slice(0, 10)
     || asString(settings.dateFrom, '').trim().slice(0, 10)
@@ -147,6 +162,19 @@ const resolveAdminPreviewRerunWindow = (
     warmupBars,
     usedCalendarRange: /^\d{4}-\d{2}-\d{2}$/.test(dateFrom) && /^\d{4}-\d{2}-\d{2}$/.test(dateTo),
   };
+};
+
+const buildEqualPortfolioLotMultipliers = (strategyIds: number[]): Record<number, number> => {
+  const ids = Array.from(new Set(strategyIds.filter((sid) => Number.isFinite(sid) && sid > 0)));
+  if (ids.length <= 1) {
+    return {};
+  }
+  const w = Number((1 / ids.length).toFixed(6));
+  const out: Record<number, number> = {};
+  ids.forEach((sid) => {
+    out[sid] = w;
+  });
+  return out;
 };
 
 const buildPortfolioLotMultiplierByStrategyId = (
@@ -4139,9 +4167,9 @@ const summarizeRealRerunEquityCurve = (
   }
   const sanitized = sanitizeEquityCurveForMetrics(equityCurve, initialBalance);
   const curves = buildDerivedPreviewCurves(sanitized, initialBalance, 5);
-  const startEquity = Math.max(0.0001, asNumber(sanitized[0]?.equity, initialBalance));
-  const finalEquity = asNumber(sanitized[sanitized.length - 1]?.equity, initialBalance);
-  const totalReturnPercent = ((finalEquity - startEquity) / startEquity) * 100;
+  const safeInitial = Math.max(0.0001, asNumber(initialBalance, 10000));
+  const finalEquity = asNumber(sanitized[sanitized.length - 1]?.equity, safeInitial);
+  const totalReturnPercent = ((finalEquity - safeInitial) / safeInitial) * 100;
   const maxDrawdownPercent = curves.drawdownPercent.length > 0
     ? Math.min(100, maxNumericValues(curves.drawdownPercent.map((point) => asNumber(point.value, 0))))
     : 0;
@@ -6567,6 +6595,14 @@ const resolveSnapshotRerunDates = (
     const clamped = clampRequestedBacktestDates(requestedFrom, requestedTo, sweep);
     return { dateFrom: clamped.dateFrom, dateTo: clamped.dateTo, usedFullSweepDepth: false };
   }
+  const settings = snapshot?.backtestSettings && typeof snapshot.backtestSettings === 'object'
+    ? snapshot.backtestSettings
+    : {};
+  const settingsFrom = asString(settings.dateFrom, '').trim().slice(0, 10);
+  const settingsTo = asString(settings.dateTo, '').trim().slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(settingsFrom) && /^\d{4}-\d{2}-\d{2}$/.test(settingsTo)) {
+    return { dateFrom: settingsFrom, dateTo: settingsTo, usedFullSweepDepth: false };
+  }
   const sweepFromRaw = asString(sweep?.config?.dateFrom, '').trim();
   const sweepToRaw = asString(sweep?.config?.dateTo, '').trim();
   const sweepFrom = sweepFromRaw.length >= 10 ? sweepFromRaw.slice(0, 10) : sweepFromRaw;
@@ -6578,14 +6614,6 @@ const resolveSnapshotRerunDates = (
       dateTo: sweepTo || nowYmd,
       usedFullSweepDepth: true,
     };
-  }
-  const settings = snapshot?.backtestSettings && typeof snapshot.backtestSettings === 'object'
-    ? snapshot.backtestSettings
-    : {};
-  const settingsFrom = asString(settings.dateFrom, '').trim().slice(0, 10);
-  const settingsTo = asString(settings.dateTo, '').trim().slice(0, 10);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(settingsFrom) && /^\d{4}-\d{2}-\d{2}$/.test(settingsTo)) {
-    return { dateFrom: settingsFrom, dateTo: settingsTo, usedFullSweepDepth: false };
   }
   return { dateFrom: nowYmd, dateTo: nowYmd, usedFullSweepDepth: false };
 };
@@ -7626,10 +7654,17 @@ export const previewAdminSweepBacktest = async (payload?: {
   const fundingRatePercentOverride = toFiniteOrNull(payload?.fundingRatePercent);
   const reinvestPercent = clampNumber(asNumber(payload?.reinvestPercent, 0), 0, 100);
   const reinvestShare = reinvestPercent / 100;
+  const preferRealBacktest = payload?.preferRealBacktest === true;
   const rerunRiskMul = getPreviewRiskMultiplier(riskScore, riskScaleMaxPercent);
-  const adminPreviewLotPercent = resolveAdminPreviewLotPercentOverride(lotPercentEffective, rerunRiskMul);
+  const adminPreviewLotPercent = resolveRealEngineLotPercentOverride(
+    lotPercentEffective,
+    preferRealBacktest,
+    rerunRiskMul,
+  );
   const portfolioLotMultipliers = kind === 'algofund-ts' && rerunStrategyIds.length > 1
-    ? buildPortfolioLotMultiplierByStrategyId(selectedOffers, normalizedOfferWeightsById)
+    ? (preferRealBacktest
+      ? buildEqualPortfolioLotMultipliers(rerunStrategyIds)
+      : buildPortfolioLotMultiplierByStrategyId(selectedOffers, normalizedOfferWeightsById))
     : undefined;
   const tradeMul = getPreviewTradeMultiplier(tradeFrequencyScore);
   // oscillationFactor: low risk + low freq → near 0 (straight smooth line);
@@ -7844,7 +7879,9 @@ export const previewAdminSweepBacktest = async (payload?: {
           ...(rerunWindow.dateTo ? { dateTo: rerunWindow.dateTo } : {}),
           ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
           ...(partialTpPct > 0 ? { partialTpPct } : {}),
-          ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
+          ...(payload?.enablePairLock !== undefined
+            ? { enablePairLock: payload.enablePairLock }
+            : { enablePairLock: true }),
           ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
           maxDepositOverride: resolveAdminPreviewMaxDepositOverride(reinvestPercent, initialBalance),
           lotPercentOverride: adminPreviewLotPercent,
@@ -8164,16 +8201,20 @@ export const previewAdminSweepBacktest = async (payload?: {
                 const snapshotLotEffective = lotPercentRequested > 0
                   ? lotPercentRequested
                   : (snapshotStoredLot > 0 ? snapshotStoredLot : lotPercentEffective);
+                const snapshotMaxOp = Math.max(0, Math.floor(asNumber(snapshotSettingsRaw.maxOpenPositions, 0)));
+                const engineMaxOpenPositions = maxOpenPositions > 0 ? maxOpenPositions : snapshotMaxOp;
                 const storeStrategyKey = snapshotStrategyIds.join(',');
                 const freqStrategyKey = snapshotRerunOffers
                   .map((item) => Number(item.strategyId || 0))
                   .join(',');
                 const freqVariantsApplied = storeStrategyKey !== freqStrategyKey;
                 const snapshotPortfolioLotMultipliers = snapshotStrategyIds.length > 1
-                  ? buildPortfolioLotMultiplierByStrategyId(
-                    snapshotRerunOffers,
-                    normalizedOfferWeightsById,
-                  )
+                  ? (preferRealBacktest
+                    ? buildEqualPortfolioLotMultipliers(snapshotStrategyIds)
+                    : buildPortfolioLotMultiplierByStrategyId(
+                      snapshotRerunOffers,
+                      normalizedOfferWeightsById,
+                    ))
                   : {};
 
                 const snapshotRerunWindow = resolveAdminPreviewRerunWindow(
@@ -8206,12 +8247,20 @@ export const previewAdminSweepBacktest = async (payload?: {
                     : asNumber(sweep?.config?.fundingRatePercent, 0),
                   dateFrom: snapshotRerunWindow.dateFrom,
                   ...(snapshotRerunWindow.dateTo ? { dateTo: snapshotRerunWindow.dateTo } : {}),
-                  ...(maxOpenPositions > 0 ? { maxOpenPositions } : {}),
+                  ...(engineMaxOpenPositions > 0 ? { maxOpenPositions: engineMaxOpenPositions } : {}),
                   ...(partialTpPct > 0 ? { partialTpPct } : {}),
-                  ...(payload?.enablePairLock !== undefined ? { enablePairLock: payload.enablePairLock } : {}),
+                  ...(payload?.enablePairLock !== undefined
+                    ? { enablePairLock: payload.enablePairLock }
+                    : { enablePairLock: snapshotSettingsRaw.enablePairLock !== false }),
                   ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
                   maxDepositOverride: resolveAdminPreviewMaxDepositOverride(reinvestPercent, initialBalance),
-                  lotPercentOverride: resolveAdminPreviewLotPercentOverride(snapshotLotEffective * relativeTradeMul, rerunRiskMul),
+                  lotPercentOverride: resolveRealEngineLotPercentOverride(
+                    preferRealBacktest
+                      ? snapshotLotEffective
+                      : snapshotLotEffective * relativeTradeMul,
+                    preferRealBacktest,
+                    rerunRiskMul,
+                  ),
                   reinvestPercentOverride: reinvestPercent,
                   ...(Object.keys(snapshotPortfolioLotMultipliers).length > 0
                     ? { lotPercentMultiplierByStrategyId: snapshotPortfolioLotMultipliers }
