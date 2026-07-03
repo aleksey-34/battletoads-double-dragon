@@ -653,6 +653,10 @@ def assign_weights(members: list[dict], tier_weights: dict[str, float]) -> None:
             # Post-tune lot only — tier weight is allocation metadata, NOT engine mult.
             # Engine: lot = lotPercentOverride × multiplier. Using weight here crushed exposure ~40×.
             m["effectiveMult"] = round(float(m.get("legLotMult") or 1.0), 4)
+    # Legs in tiers with zero share still need metadata for publish/admin.
+    for m in members:
+        m.setdefault("weight", round(1.0 / max(1, len(members)), 6))
+        m.setdefault("effectiveMult", round(float(m.get("legLotMult") or 1.0), 4))
 
 
 def main() -> None:
