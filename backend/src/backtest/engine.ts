@@ -8,6 +8,11 @@ import path from 'path';
 import logger from '../utils/logger';
 import { computeChannelWidthLotMultiplier } from '../services/strategy/sizing';
 import {
+  PortfolioCircuitBreakerConfig,
+  PortfolioCircuitBreakerTracker,
+  parsePortfolioCircuitBreaker,
+} from '../services/portfolioCircuitBreaker';
+import {
   normalizeOrderBlockEntryGate,
   passesOrderBlockEntryGate,
   type OrderBlockEntryGate,
@@ -94,6 +99,8 @@ export type BacktestSummary = {
   /** Number of entries skipped because another strategy holds the same pair (mirrors runtime pair-lock). */
   skippedByPairLock: number;
   skippedByOrderBlockGate: number;
+  /** CB triggers fired during backtest (0 when disabled). */
+  portfolioCircuitBreakerTriggers?: number;
   /** Earliest candle timestamp actually used across all runtime strategies (ms). */
   actualDataStartMs: number | null;
   /** Latest candle timestamp actually used across all runtime strategies (ms). */
@@ -148,6 +155,8 @@ export type BacktestRunRequest = {
   orderBlockEntryGate?: import('../bot/orderBlockLiquidity').OrderBlockEntryGate;
   /** When true, scale trend lot by inverse Donchian channel width at entry. */
   autoLotByChannelWidth?: boolean;
+  /** Portfolio DD circuit breaker — scales new entry lot during drawdown cooldown. */
+  portfolioCircuitBreaker?: PortfolioCircuitBreakerConfig;
 };
 
 export type MacroExitRule = {
@@ -279,6 +288,7 @@ type NormalizedBacktestRequest = {
    * fire on the same timestamp. Same seed → reproducible result.
    */
   pairLockSeed: number;
+  portfolioCircuitBreaker: PortfolioCircuitBreakerConfig | null;
 };
 
 export type BacktestRunListItem = {
@@ -1307,6 +1317,9 @@ type BacktestContext = {
   reinvestPercentOverride: number;
   initialBalance: number;
   autoLotByChannelWidth: boolean;
+  portfolioCircuitBreaker: PortfolioCircuitBreakerTracker | null;
+  /** Lot multiplier from portfolio CB for the current event (1.0 = full lot). */
+  eventCbLotMult: number;
 };
 
 const computeLockedMargin = (runtimes: RuntimeStrategy[]): number => {
@@ -1584,7 +1597,7 @@ const openPosition = (
   const multiplier = Number.isFinite(strategyId) && ctx.lotPercentMultiplierByStrategyId.has(strategyId)
     ? ctx.lotPercentMultiplierByStrategyId.get(strategyId) as number
     : 1;
-  const lotPercent = baseLotPercent * multiplier * safeChannelMult;
+  const lotPercent = baseLotPercent * multiplier * safeChannelMult * Math.max(0, ctx.eventCbLotMult || 1);
 
   const lotFraction = Math.max(0, lotPercent) / 100;
   if (lotFraction <= 0) {
@@ -2286,6 +2299,9 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
       1,
       Math.floor(asNumber((raw as unknown as { pairLockSeed?: number })?.pairLockSeed, 1759827600)),
     ),
+    portfolioCircuitBreaker: parsePortfolioCircuitBreaker(
+      (raw as { portfolioCircuitBreaker?: unknown }).portfolioCircuitBreaker,
+    ),
   };
 };
 
@@ -2366,6 +2382,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     reinvestPercentOverride: request.reinvestPercentOverride,
     initialBalance: request.initialBalance,
     autoLotByChannelWidth: request.autoLotByChannelWidth,
+    portfolioCircuitBreaker: PortfolioCircuitBreakerTracker.tryCreate(request.portfolioCircuitBreaker),
+    eventCbLotMult: 1,
   };
 
   const maxOpenPositions = request.maxOpenPositions;
@@ -2544,6 +2562,11 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     runtime.currentPrice = candle.close;
 
     applyFunding(ctx, runtime);
+
+    const equityForCb = portfolioEquity(ctx.cashEquity, runtimes);
+    ctx.eventCbLotMult = ctx.portfolioCircuitBreaker
+      ? ctx.portfolioCircuitBreaker.update(equityForCb, event.timeMs).lotMultiplier
+      : 1;
 
     const length = Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 50)));
     const zscoreEntry = normalizeZscoreEntry(strategy.zscore_entry);
@@ -2761,7 +2784,9 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
         const depositEquity = resolveDcaDepositEquity(ctx, runtime.strategy, equityNow);
         const availableNow = portfolioAvailableBalance(ctx.cashEquity, runtimes);
-        const safetySize = resolveClassicDcaOrderSize(dc, depositEquity, dc.ordersCount, availableNow);
+        const cbMult = Math.max(0, ctx.eventCbLotMult || 1);
+        let safetySize = resolveClassicDcaOrderSize(dc, depositEquity, dc.ordersCount, availableNow);
+        safetySize *= cbMult;
         if (safetySize <= 0) {
           pushEquityPoint(event.timeMs);
           continue;
@@ -3004,6 +3029,9 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     skippedByPositionLimit,
     skippedByPairLock,
     skippedByOrderBlockGate,
+    ...(ctx.portfolioCircuitBreaker
+      ? { portfolioCircuitBreakerTriggers: ctx.portfolioCircuitBreaker.getTriggerCount() }
+      : {}),
     actualDataStartMs,
     actualDataEndMs,
   };

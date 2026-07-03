@@ -233,6 +233,14 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
   );
 
   const created = await db.get('SELECT * FROM monitoring_snapshots WHERE id = ?', [insert.lastID]);
+
+  try {
+    const { syncPortfolioCircuitBreakerEquity } = await import('./portfolioCircuitBreakerRuntime');
+    await syncPortfolioCircuitBreakerEquity(apiKeyName, metrics.equityUsd);
+  } catch {
+    // non-critical
+  }
+
   return created;
 };
 

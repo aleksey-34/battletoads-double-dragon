@@ -22,6 +22,10 @@ import logger from '../utils/logger';
 import { initResearchDb } from '../research/db';
 import { getPreset, listOfferIds } from '../research/presetBuilder';
 import { computeReconciliationMetrics } from '../analytics/liveReconciliation';
+import {
+  parsePortfolioCircuitBreaker,
+  type PortfolioCircuitBreakerConfig,
+} from '../services/portfolioCircuitBreaker';
 
 // При нормализации карточек на initialBalance lotPercentOverride=100% даёт notional=baseCapital.
 // Если ставить maxDepositOverride=initialBalance, то baseCapital всегда упирается в initialBalance
@@ -177,6 +181,39 @@ const buildEqualPortfolioLotMultipliers = (strategyIds: number[]): Record<number
   return out;
 };
 
+/** Prefer per-leg multipliers saved in snapshot (publish-time /api/backtest/run parity). */
+const resolveSnapshotPortfolioLotMultipliers = (
+  snapshot: TsBacktestSnapshot | null | undefined,
+  strategyIds: number[],
+  preferRealBacktest: boolean,
+  offers: Array<{ offerId?: string; strategyId?: number | string }>,
+  weightsByOfferId: Record<string, number>,
+): Record<number, number> => {
+  const ids = Array.from(new Set(strategyIds.filter((sid) => Number.isFinite(sid) && sid > 0)));
+  if (ids.length <= 1) {
+    return {};
+  }
+  if (preferRealBacktest && snapshot?.backtestSettings && typeof snapshot.backtestSettings === 'object') {
+    const raw = (snapshot.backtestSettings as Record<string, unknown>).lotPercentMultiplierByStrategyId;
+    if (raw && typeof raw === 'object') {
+      const src = raw as Record<string, unknown>;
+      const out: Record<number, number> = {};
+      for (const sid of ids) {
+        const m = Number(src[String(sid)] ?? src[sid]);
+        if (Number.isFinite(m) && m > 0) {
+          out[sid] = m;
+        }
+      }
+      if (Object.keys(out).length === ids.length) {
+        return out;
+      }
+    }
+  }
+  return preferRealBacktest
+    ? buildEqualPortfolioLotMultipliers(ids)
+    : buildPortfolioLotMultiplierByStrategyId(offers, weightsByOfferId);
+};
+
 const buildPortfolioLotMultiplierByStrategyId = (
   offers: Array<{ offerId?: string; strategyId?: number | string }>,
   weightsByOfferId: Record<string, number>,
@@ -195,6 +232,22 @@ const buildPortfolioLotMultiplierByStrategyId = (
     out[strategyId] = weight;
   }
   return out;
+};
+
+/** Portfolio CB from admin payload or saved TS snapshot (rerun parity with publish). */
+const resolveSnapshotPortfolioCircuitBreaker = (
+  snapshot: TsBacktestSnapshot | null | undefined,
+  payloadRaw?: unknown,
+): PortfolioCircuitBreakerConfig | undefined => {
+  const fromPayload = parsePortfolioCircuitBreaker(payloadRaw);
+  if (fromPayload && fromPayload.enabled !== false) {
+    return fromPayload;
+  }
+  const settings = snapshot?.backtestSettings && typeof snapshot.backtestSettings === 'object'
+    ? (snapshot.backtestSettings as Record<string, unknown>)
+    : {};
+  const fromSnapshot = parsePortfolioCircuitBreaker(settings.portfolioCircuitBreaker);
+  return fromSnapshot && fromSnapshot.enabled !== false ? fromSnapshot : undefined;
 };
 
 /** Same lot/reinvest/deposit caps as admin sweep snapshot rerun — for TS+DCA combined preview parity. */
@@ -333,6 +386,7 @@ export type CardRuntimeConfig = {
   lotPercent: number;
   reinvestPercent: number;
   macroShield: boolean;
+  portfolioCircuitBreaker: PortfolioCircuitBreakerConfig | null;
 };
 
 export const getCardConfigBySystemName = async (
@@ -340,13 +394,20 @@ export const getCardConfigBySystemName = async (
 ): Promise<CardRuntimeConfig> => {
   const name = String(systemName || '').trim();
   if (!name) {
-    return { maxOpenPositions: 0, lotPercent: 0, reinvestPercent: 0, macroShield: false };
+    return {
+      maxOpenPositions: 0,
+      lotPercent: 0,
+      reinvestPercent: 0,
+      macroShield: false,
+      portfolioCircuitBreaker: null,
+    };
   }
   const code = `CARD::${name.toUpperCase()}`;
   let mop = 0;
   let lot = 0;
   let reinvest = 0;
   let macroShield = false;
+  let portfolioCircuitBreaker: PortfolioCircuitBreakerConfig | null = null;
   try {
     const row = await db.get<{ metadata_json?: string }>(
       'SELECT metadata_json FROM master_cards WHERE code = ? AND is_active = 1',
@@ -367,11 +428,18 @@ export const getCardConfigBySystemName = async (
         reinvest = Math.min(100, Math.max(0, reinvestRaw));
       }
       macroShield = (meta as { macroShield?: unknown }).macroShield === true;
+      portfolioCircuitBreaker = parsePortfolioCircuitBreaker(meta.portfolioCircuitBreaker);
     }
   } catch {
     // Swallow: missing/invalid metadata simply means no override.
   }
-  return { maxOpenPositions: mop, lotPercent: lot, reinvestPercent: reinvest, macroShield };
+  return {
+    maxOpenPositions: mop,
+    lotPercent: lot,
+    reinvestPercent: reinvest,
+    macroShield,
+    portfolioCircuitBreaker,
+  };
 };
 
 /** Apply card lot/reinvest overrides to all runtime strategies on a client API key. */
@@ -679,6 +747,7 @@ export type CardMetadataOverrides = {
   enablePairLock?: boolean;
   dcaMarkets?: string[];
   dcaEnabled?: boolean;
+  portfolioCircuitBreaker?: PortfolioCircuitBreakerConfig | null;
 };
 
 type TsBacktestSnapshot = {
@@ -716,6 +785,7 @@ type TsBacktestSnapshot = {
     riskScaleMaxPercent: number;
     maxOpenPositions?: number;
     lotPercentOverride?: number;
+    lotPercentMultiplierByStrategyId?: Record<string | number, number>;
     dateFrom?: string;
     dateTo?: string;
     interval?: string;
@@ -738,6 +808,7 @@ type TsBacktestSnapshot = {
     dcaBaseAmountPercent?: number;
     dcaAutotune?: boolean;
     preset?: string;
+    portfolioCircuitBreaker?: PortfolioCircuitBreakerConfig;
   };
   /** Macro RSI shield enabled for this TS card. */
   macroShield?: boolean;
@@ -2049,6 +2120,19 @@ const normalizeTsBacktestSnapshot = (raw: unknown): TsBacktestSnapshot | null =>
       ...(settingsRaw.dcaAutotune === true ? { dcaAutotune: true } : {}),
       ...(typeof settingsRaw.preset === 'string' && settingsRaw.preset.trim()
         ? { preset: settingsRaw.preset.trim() }
+        : {}),
+      ...(settingsRaw.lotPercentMultiplierByStrategyId
+        && typeof settingsRaw.lotPercentMultiplierByStrategyId === 'object'
+        ? {
+          lotPercentMultiplierByStrategyId: Object.fromEntries(
+            Object.entries(settingsRaw.lotPercentMultiplierByStrategyId as Record<string, unknown>)
+              .map(([k, v]) => [String(k), Number(asNumber(v, 0))] as const)
+              .filter(([, v]) => Number.isFinite(v) && v > 0),
+          ),
+        }
+        : {}),
+      ...(parsePortfolioCircuitBreaker(settingsRaw.portfolioCircuitBreaker)
+        ? { portfolioCircuitBreaker: parsePortfolioCircuitBreaker(settingsRaw.portfolioCircuitBreaker) as PortfolioCircuitBreakerConfig }
         : {}),
     },
     ...(parsed.macroShield === true || settingsRaw.macroShield === true ? { macroShield: true } : {}),
@@ -7112,6 +7196,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   macroExitOverlay?: MacroExitOverlay;
   statArbEntryGate?: StatArbEntryGate;
   macroShield?: boolean;
+  portfolioCircuitBreaker?: PortfolioCircuitBreakerConfig;
 }) => {
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();
@@ -7635,6 +7720,14 @@ export const previewAdminSweepBacktest = async (payload?: {
   const lotPercentRequested = Math.max(0, asNumber(payload?.lotPercentOverride, 0));
   // Lot resolution priority: explicit payload → snapshot → master_cards.metadata_json → 100% (legacy default).
   const cardLotConfig = await getCardConfigBySystemName(asString(payload?.systemName, '').trim());
+  const portfolioCircuitBreakerForEngine =
+    resolveSnapshotPortfolioCircuitBreaker(tsSavedSnapshotForPreview, payload?.portfolioCircuitBreaker)
+    ?? (cardLotConfig.portfolioCircuitBreaker && cardLotConfig.portfolioCircuitBreaker.enabled !== false
+      ? cardLotConfig.portfolioCircuitBreaker
+      : undefined);
+  const portfolioCircuitBreakerExtras = portfolioCircuitBreakerForEngine
+    ? { portfolioCircuitBreaker: portfolioCircuitBreakerForEngine }
+    : {};
   const snapshotLotPercent = resolveSnapshotLotPercent(tsSavedSnapshotForPreview);
   const lotPercentEffective = lotPercentRequested > 0
     ? lotPercentRequested
@@ -7662,9 +7755,13 @@ export const previewAdminSweepBacktest = async (payload?: {
     rerunRiskMul,
   );
   const portfolioLotMultipliers = kind === 'algofund-ts' && rerunStrategyIds.length > 1
-    ? (preferRealBacktest
-      ? buildEqualPortfolioLotMultipliers(rerunStrategyIds)
-      : buildPortfolioLotMultiplierByStrategyId(selectedOffers, normalizedOfferWeightsById))
+    ? resolveSnapshotPortfolioLotMultipliers(
+      tsSavedSnapshotForPreview,
+      rerunStrategyIds,
+      preferRealBacktest,
+      selectedOffers,
+      normalizedOfferWeightsById,
+    )
     : undefined;
   const tradeMul = getPreviewTradeMultiplier(tradeFrequencyScore);
   // oscillationFactor: low risk + low freq → near 0 (straight smooth line);
@@ -7890,6 +7987,7 @@ export const previewAdminSweepBacktest = async (payload?: {
             ? { lotPercentMultiplierByStrategyId: portfolioLotMultipliers }
             : {}),
           ...tsPreviewMechanicsExtras,
+          ...portfolioCircuitBreakerExtras,
         });
 
         const summaryAny = result.summary as Record<string, unknown>;
@@ -8209,12 +8307,13 @@ export const previewAdminSweepBacktest = async (payload?: {
                   .join(',');
                 const freqVariantsApplied = storeStrategyKey !== freqStrategyKey;
                 const snapshotPortfolioLotMultipliers = snapshotStrategyIds.length > 1
-                  ? (preferRealBacktest
-                    ? buildEqualPortfolioLotMultipliers(snapshotStrategyIds)
-                    : buildPortfolioLotMultiplierByStrategyId(
-                      snapshotRerunOffers,
-                      normalizedOfferWeightsById,
-                    ))
+                  ? resolveSnapshotPortfolioLotMultipliers(
+                    snapshot,
+                    snapshotStrategyIds,
+                    preferRealBacktest,
+                    snapshotRerunOffers,
+                    normalizedOfferWeightsById,
+                  )
                   : {};
 
                 const snapshotRerunWindow = resolveAdminPreviewRerunWindow(
@@ -8267,6 +8366,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                     : {}),
                   ...(payload?.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),
                   ...tsPreviewMechanicsExtras,
+                  ...portfolioCircuitBreakerExtras,
                 };
 
                 let result;
@@ -10071,6 +10171,11 @@ export const parseCardMetadataOverridesBody = (
   if (raw.dcaEnabled !== undefined) {
     out.dcaEnabled = raw.dcaEnabled === true;
   }
+  if (raw.portfolioCircuitBreaker === null) {
+    out.portfolioCircuitBreaker = null;
+  } else if (raw.portfolioCircuitBreaker && typeof raw.portfolioCircuitBreaker === 'object') {
+    out.portfolioCircuitBreaker = raw.portfolioCircuitBreaker as PortfolioCircuitBreakerConfig;
+  }
   return Object.keys(out).length > 0 ? out : undefined;
 };
 
@@ -10120,6 +10225,10 @@ export const buildCardMechanicsOverridesFromSnapshot = (
   }
   if (bs.enablePairLock === true) {
     overrides.enablePairLock = true;
+  }
+  const pcb = parsePortfolioCircuitBreaker(bs.portfolioCircuitBreaker);
+  if (pcb && pcb.enabled !== false) {
+    overrides.portfolioCircuitBreaker = pcb;
   }
   return overrides;
 };
@@ -15544,6 +15653,18 @@ const applyCardMetadataOverrides = async (
     const enabled = overrides.dcaEnabled === true;
     if (Boolean(next.dcaEnabled) !== enabled) {
       next.dcaEnabled = enabled;
+      changed = true;
+    }
+  }
+  if (overrides.portfolioCircuitBreaker === null) {
+    if (next.portfolioCircuitBreaker !== undefined) {
+      delete next.portfolioCircuitBreaker;
+      changed = true;
+    }
+  } else if (overrides.portfolioCircuitBreaker) {
+    const serialized = JSON.stringify(overrides.portfolioCircuitBreaker);
+    if (JSON.stringify(next.portfolioCircuitBreaker || null) !== serialized) {
+      next.portfolioCircuitBreaker = overrides.portfolioCircuitBreaker;
       changed = true;
     }
   }

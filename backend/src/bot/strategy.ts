@@ -3572,10 +3572,21 @@ export const executeStrategy = async (
     }
   } catch { /* non-critical: fallback to 1.0 */ }
 
+  let portfolioCbMult = 1.0;
+  try {
+    const { resolvePortfolioCircuitBreakerLotMultiplier } = await import('./portfolioCircuitBreakerRuntime');
+    portfolioCbMult = await resolvePortfolioCircuitBreakerLotMultiplier(apiKeyName, availableBalance);
+  } catch { /* non-critical */ }
+
   const channelLotMult = Number((mergedStrategy as any).auto_lot_by_channel_width || 0) === 1
     ? computeChannelWidthLotMultiplier(donchianHigh, donchianLow, donchianCenter, mergedStrategy as any)
     : 1;
-  const totalNotional = computeSignalTotalNotional(mergedStrategy, availableBalance, signal, riskMultiplier) * channelLotMult;
+  const totalNotional = computeSignalTotalNotional(
+    mergedStrategy,
+    availableBalance,
+    signal,
+    riskMultiplier * portfolioCbMult,
+  ) * channelLotMult;
 
   if (!Number.isFinite(totalNotional) || totalNotional <= 0) {
     if (closedAction) {

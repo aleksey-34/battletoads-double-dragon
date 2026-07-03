@@ -348,6 +348,9 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
       statArbEntryGate: req.body?.statArbEntryGate && typeof req.body.statArbEntryGate === 'object'
         ? req.body.statArbEntryGate as import('../backtest/engine').StatArbEntryGate
         : undefined,
+      portfolioCircuitBreaker: req.body?.portfolioCircuitBreaker && typeof req.body.portfolioCircuitBreaker === 'object'
+        ? req.body.portfolioCircuitBreaker as import('../services/portfolioCircuitBreaker').PortfolioCircuitBreakerConfig
+        : undefined,
     });
     // Auto-sync Cloud TS members from sweep result (fire-and-forget)
     if (data.kind === 'algofund-ts' && Array.isArray(data.selectedOffers) && data.selectedOffers.length > 0) {
