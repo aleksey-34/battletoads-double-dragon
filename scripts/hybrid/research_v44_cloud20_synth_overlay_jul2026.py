@@ -71,9 +71,15 @@ OPS = [int(x) for x in os.environ.get("V44_OPS", "16,20,24,28,32").split(",")]
 
 
 def api_post(path: str, payload: dict, timeout: int = 1200) -> dict:
-    for attempt in range(20):
-        r = requests.post(f"{API}{path}", headers=HEADERS, json=payload, timeout=timeout)
-        data = r.json()
+    for attempt in range(30):
+        try:
+            r = requests.post(f"{API}{path}", headers=HEADERS, json=payload, timeout=timeout)
+            data = r.json()
+        except requests.RequestException as exc:
+            if attempt < 29:
+                time.sleep(5 + attempt * 2)
+                continue
+            raise RuntimeError(str(exc)) from exc
         if data.get("success") is not False and "error" not in data:
             return data
         err = str(data.get("error") or "")
