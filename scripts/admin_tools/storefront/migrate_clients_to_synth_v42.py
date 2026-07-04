@@ -62,12 +62,14 @@ def conn() -> sqlite3.Connection:
     return sqlite3.connect(DB_PATH)
 
 
-def list_source_clients(cur: sqlite3.Cursor) -> list[tuple[int, str, str]]:
-    return cur.execute(
+def list_source_clients(cur: sqlite3.Cursor, exchange: str | None = None) -> list[tuple[int, str, str, str]]:
+    rows = cur.execute(
         """
-        SELECT t.id, t.slug, COALESCE(ap.execution_api_key_name, ap.assigned_api_key_name, '')
+        SELECT t.id, t.slug, COALESCE(ap.execution_api_key_name, ap.assigned_api_key_name, ''),
+               COALESCE(ak.exchange, '')
         FROM tenants t
         JOIN algofund_profiles ap ON ap.tenant_id = t.id
+        LEFT JOIN api_keys ak ON ak.name = COALESCE(ap.execution_api_key_name, ap.assigned_api_key_name)
         WHERE t.status = 'active'
           AND ap.published_system_name = ?
           AND COALESCE(ap.actual_enabled, 0) = 1
@@ -75,6 +77,10 @@ def list_source_clients(cur: sqlite3.Cursor) -> list[tuple[int, str, str]]:
         """,
         (SOURCE_SYSTEM,),
     ).fetchall()
+    if exchange:
+        ex = exchange.strip().lower()
+        rows = [r for r in rows if str(r[3] or "").lower() == ex]
+    return rows
 
 
 def ensure_master_card(cur: sqlite3.Cursor) -> None:
@@ -171,6 +177,7 @@ def main() -> None:
     parser.add_argument("--yes", action="store_true")
     parser.add_argument("--no-close", action="store_true", help="Skip cancel/close before switch (not recommended)")
     parser.add_argument("--skip-card", action="store_true")
+    parser.add_argument("--exchange", metavar="weex|bingx", help="Migrate only clients on this exchange")
     args = parser.parse_args()
 
     with conn() as db:
@@ -178,22 +185,25 @@ def main() -> None:
         if not args.skip_card:
             ensure_master_card(cur)
             db.commit()
-        clients = list_source_clients(cur)
+        clients = list_source_clients(cur, args.exchange)
 
     print(f"Source: {SOURCE_SYSTEM}")
     print(f"Target: {TARGET_SYSTEM} (id={TARGET_SYSTEM_ID})")
+    if args.exchange:
+        print(f"Exchange filter: {args.exchange}")
     print(f"Active clients on source: {len(clients)}")
 
     if args.dry_run:
-        for tid, slug, key in clients:
+        for tid, slug, key, ex in clients:
+            print(f"  [{ex or '?'}] {slug}")
             migrate_one(tid, slug, key, not args.no_close, dry_run=True)
         return
 
     if args.pilot:
-        match = [(tid, slug, key) for tid, slug, key in clients if slug == args.pilot.strip()]
+        match = [(tid, slug, key, ex) for tid, slug, key, ex in clients if slug == args.pilot.strip()]
         if not match:
             raise SystemExit(f"Pilot slug not on source system: {args.pilot}")
-        tid, slug, key = match[0]
+        tid, slug, key, _ex = match[0]
         migrate_one(tid, slug, key, not args.no_close, dry_run=False)
         return
 
@@ -201,7 +211,7 @@ def main() -> None:
         if not args.yes:
             raise SystemExit("Use --yes to confirm batch migration")
         ok, fail = 0, 0
-        for tid, slug, key in clients:
+        for tid, slug, key, _ex in clients:
             try:
                 migrate_one(tid, slug, key, not args.no_close, dry_run=False)
                 ok += 1
