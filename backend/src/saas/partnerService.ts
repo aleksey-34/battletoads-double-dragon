@@ -1,5 +1,7 @@
-import { getMonitoringLatest, getMonitoringSnapshots } from '../bot/monitoring';
+import { getMonitoringLatest, getMonitoringSnapshots, recordMonitoringSnapshot } from '../bot/monitoring';
 import { db } from '../utils/database';
+
+const sleepMs = (ms: number) => new Promise<void>((resolve) => { setTimeout(resolve, Math.max(0, ms)); });
 
 const asString = (v: unknown, fallback = ''): string => {
   const s = String(v ?? '').trim();
@@ -9,6 +11,23 @@ const asString = (v: unknown, fallback = ''): string => {
 const asNumber = (v: unknown, fallback = 0): number => {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
+};
+
+const PARTNER_LIVE_REFRESH_COOLDOWN_MS = Math.max(
+  60_000,
+  asNumber(process.env.PARTNER_LIVE_REFRESH_COOLDOWN_MS, 3_600_000),
+);
+let lastPartnerLiveRefreshAt = 0;
+
+const partnerLiveRefreshAllowed = (): { allowed: boolean; retryAfterSec: number } => {
+  const elapsed = Date.now() - lastPartnerLiveRefreshAt;
+  if (elapsed >= PARTNER_LIVE_REFRESH_COOLDOWN_MS) {
+    return { allowed: true, retryAfterSec: 0 };
+  }
+  return {
+    allowed: false,
+    retryAfterSec: Math.ceil((PARTNER_LIVE_REFRESH_COOLDOWN_MS - elapsed) / 1000),
+  };
 };
 
 const partnerSlugPrefixes = (): string[] => {
@@ -28,7 +47,27 @@ const isPartnerTenantSlug = (slug: string): boolean => {
   return partnerSlugPrefixes().some((prefix) => s.startsWith(prefix));
 };
 
-export const getPartnerDashboard = async () => {
+const getTsMemberCount = async (slug: string): Promise<number> => {
+  const row = await db.get<{ cnt?: number }>(
+    `SELECT COUNT(*) AS cnt
+     FROM trading_system_members m
+     JOIN trading_systems ts ON ts.id = m.system_id
+     WHERE ts.name = ?`,
+    [`ALGOFUND::${slug}`],
+  ).catch(() => null);
+  return Math.max(0, asNumber(row?.cnt, 0));
+};
+
+const snapshotAgeMinutes = (recordedAt: string): number | null => {
+  const ts = Date.parse(recordedAt);
+  if (!Number.isFinite(ts)) return null;
+  return Math.max(0, Math.round((Date.now() - ts) / 60_000));
+};
+
+export const getPartnerDashboard = async (options?: { refresh?: boolean }) => {
+  const refreshGate = options?.refresh ? partnerLiveRefreshAllowed() : null;
+  const doLiveRefresh = Boolean(options?.refresh && refreshGate?.allowed);
+
   const rows = await db.all(
     `SELECT t.id, t.slug, t.display_name, t.status,
             ap.published_system_name, ap.actual_enabled, ap.execution_api_key_name,
@@ -44,16 +83,30 @@ export const getPartnerDashboard = async () => {
     const slug = asString(row.slug);
     if (!isPartnerTenantSlug(slug)) continue;
     const apiKey = asString(row.execution_api_key_name) || asString(row.assigned_api_key_name);
+    const publishedSystem = asString(row.published_system_name);
+    const tsMemberCount = await getTsMemberCount(slug);
+    const tsExpected = publishedSystem.includes('v4-2') ? 20 : 0;
+
+    if (doLiveRefresh && apiKey) {
+      await recordMonitoringSnapshot(apiKey).catch(() => null);
+      // WEEX rate limits: gentle spacing between clients
+      await sleepMs(2500);
+    }
+
     const monitoring = apiKey
       ? await getMonitoringLatest(apiKey).catch(() => null)
       : null;
+    const recordedAt = monitoring ? asString(monitoring.recorded_at) : '';
     clients.push({
       tenantId: asNumber(row.id),
       slug,
       displayName: asString(row.display_name, slug),
       apiKeyName: apiKey,
-      publishedSystem: asString(row.published_system_name),
+      publishedSystem,
       enabled: asNumber(row.actual_enabled) === 1,
+      tsMemberCount,
+      tsExpected: tsExpected > 0 ? tsExpected : null,
+      tsComplete: tsExpected > 0 ? tsMemberCount >= tsExpected : null,
       monitoring: monitoring ? {
         equityUsd: asNumber(monitoring.equity_usd),
         unrealizedPnl: asNumber(monitoring.unrealized_pnl),
@@ -61,19 +114,29 @@ export const getPartnerDashboard = async () => {
         drawdownPercent: asNumber(monitoring.drawdown_percent),
         effectiveLeverage: asNumber(monitoring.effective_leverage),
         pnlNetUsd: monitoring.pnl_net_usd != null ? asNumber(monitoring.pnl_net_usd) : null,
-        recordedAt: asString(monitoring.recorded_at),
+        recordedAt,
+        ageMinutes: recordedAt ? snapshotAgeMinutes(recordedAt) : null,
       } : null,
     });
   }
 
+  if (doLiveRefresh) {
+    lastPartnerLiveRefreshAt = Date.now();
+  }
+
   return {
     generatedAt: new Date().toISOString(),
+    refreshed: doLiveRefresh,
+    refreshSkipped: Boolean(options?.refresh && !doLiveRefresh),
+    refreshRetryAfterSec: refreshGate && !refreshGate.allowed ? refreshGate.retryAfterSec : 0,
+    liveRefreshCooldownSec: Math.round(PARTNER_LIVE_REFRESH_COOLDOWN_MS / 1000),
     slugPrefixes: partnerSlugPrefixes(),
     clients,
     totals: {
       clients: clients.length,
       enabled: clients.filter((c) => c.enabled).length,
       onV42: clients.filter((c) => c.publishedSystem.includes('v4-2')).length,
+      tsComplete: clients.filter((c) => c.tsComplete === true).length,
     },
   };
 };

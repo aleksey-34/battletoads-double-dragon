@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Button, Card, Checkbox, Input, Modal, Segmented, Space, Spin, Table, Tag, message,
+  Button, Card, Checkbox, Input, Modal, Segmented, Space, Spin, Table, Tag, Typography, message,
 } from 'antd';
 import axios from 'axios';
 import ChartComponent from '../components/ChartComponent';
@@ -12,6 +12,9 @@ type PartnerClient = {
   apiKeyName: string;
   publishedSystem: string;
   enabled: boolean;
+  tsMemberCount?: number;
+  tsExpected?: number | null;
+  tsComplete?: boolean | null;
   monitoring: {
     equityUsd: number;
     unrealizedPnl: number;
@@ -20,6 +23,7 @@ type PartnerClient = {
     effectiveLeverage: number;
     pnlNetUsd: number | null;
     recordedAt: string;
+    ageMinutes?: number | null;
   } | null;
 };
 
@@ -74,15 +78,34 @@ const PartnerCabinet: React.FC = () => {
   const [showUpnl, setShowUpnl] = useState(true);
   const [showDd, setShowDd] = useState(false);
 
-  const loadDashboard = useCallback(async () => {
-    setLoading(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+
+  const loadDashboard = useCallback(async (live = false) => {
+    if (live) setRefreshing(true);
+    else setLoading(true);
     try {
-      const res = await axios.get('/api/saas/partner/dashboard');
+      const res = await axios.get('/api/saas/partner/dashboard', {
+        params: live ? { refresh: '1' } : undefined,
+        timeout: live ? 300_000 : 30_000,
+      });
       setData(res.data);
+      setGeneratedAt(String(res.data?.generatedAt || ''));
+      if (live) {
+        if (res.data?.refreshSkipped) {
+          const min = Math.ceil(Number(res.data.refreshRetryAfterSec || 0) / 60);
+          message.warning(min > 0
+            ? `С биржи можно обновить через ~${min} мин — показаны сохранённые снимки`
+            : 'Показаны сохранённые снимки');
+        } else if (res.data?.refreshed) {
+          message.success('Данные обновлены с биржи');
+        }
+      }
     } catch (err: any) {
       message.error(err?.response?.data?.error || 'Не удалось загрузить данные');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -134,13 +157,31 @@ const PartnerCabinet: React.FC = () => {
         <span style={{ fontSize: 11, color: '#6b7280' }}>{row.slug}</span>
       </Space>
     ) },
-    { title: 'ТС', dataIndex: 'publishedSystem', render: (v: string) => (
-      <Tag color={v.includes('v4-2') ? 'green' : 'default'}>{systemShort(v)}</Tag>
+    { title: 'ТС', dataIndex: 'publishedSystem', width: 100, render: (v: string, row: PartnerClient) => (
+      <Space direction="vertical" size={0}>
+        <Tag color={v.includes('v4-2') ? 'green' : 'default'}>{systemShort(v)}</Tag>
+        {row.tsExpected ? (
+          <span style={{ fontSize: 11, color: row.tsComplete ? '#16a34a' : '#d97706' }}>
+            {row.tsMemberCount}/{row.tsExpected} legs
+          </span>
+        ) : null}
+      </Space>
     ) },
     { title: 'Статус', dataIndex: 'enabled', width: 90, render: (v: boolean) => (
       <Tag color={v ? 'success' : 'default'}>{v ? 'активен' : 'стоп'}</Tag>
     ) },
-    { title: 'Equity', render: (_: unknown, row: PartnerClient) => `$${fmt(row.monitoring?.equityUsd)}` },
+    { title: 'Equity', render: (_: unknown, row: PartnerClient) => (
+      <Space direction="vertical" size={0}>
+        <span>${fmt(row.monitoring?.equityUsd)}</span>
+        {row.monitoring?.recordedAt ? (
+          <span style={{ fontSize: 10, color: (row.monitoring.ageMinutes ?? 0) > 15 ? '#d97706' : '#9ca3af' }}>
+            {(row.monitoring.ageMinutes ?? 0) <= 1 ? 'только что' : `${row.monitoring.ageMinutes} мин назад`}
+          </span>
+        ) : (
+          <span style={{ fontSize: 10, color: '#9ca3af' }}>нет snapshot</span>
+        )}
+      </Space>
+    ) },
     { title: 'UPNL', render: (_: unknown, row: PartnerClient) => {
       const v = Number(row.monitoring?.unrealizedPnl || 0);
       return <span style={{ color: v >= 0 ? '#16a34a' : '#dc2626' }}>${fmt(v)}</span>;
@@ -164,7 +205,9 @@ const PartnerCabinet: React.FC = () => {
         title="Кабинет партнёра — мониторинг клиентов"
         extra={(
           <Space>
-            <Button onClick={() => void loadDashboard()} loading={loading}>Обновить</Button>
+            <Button onClick={() => void loadDashboard(true)} loading={refreshing || loading}>
+              Обновить с биржи
+            </Button>
             <Button onClick={() => { localStorage.removeItem('partner_token'); window.location.href = '/partner/login'; }}>
               Выйти
             </Button>
@@ -176,8 +219,18 @@ const PartnerCabinet: React.FC = () => {
             <Tag color="blue">Клиентов: {data.totals.clients}</Tag>
             <Tag color="green">Активных: {data.totals.enabled}</Tag>
             <Tag color="purple">На v4.2: {data.totals.onV42}</Tag>
+            {typeof data.totals.tsComplete === 'number' ? (
+              <Tag color="cyan">TS 20/20: {data.totals.tsComplete}</Tag>
+            ) : null}
+            {generatedAt ? (
+              <Tag>обновлено {new Date(generatedAt).toLocaleTimeString()}</Tag>
+            ) : null}
           </Space>
         ) : null}
+        <Typography.Paragraph type="secondary" style={{ marginBottom: 12, fontSize: 12 }}>
+          Цифры из снимков мониторинга (runtime ~10 мин). Без кнопки биржа не опрашивается.
+          «Обновить с биржи» — вручную, не чаще 1 раза в час. Legs: 20/20 для v4.2.
+        </Typography.Paragraph>
         <Spin spinning={loading}>
           <Table
             rowKey="tenantId"

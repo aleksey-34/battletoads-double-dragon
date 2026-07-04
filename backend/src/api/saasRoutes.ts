@@ -136,9 +136,11 @@ const requirePartnerOrAdmin = (req: any, res: any, next: any) => {
   return res.status(403).json({ error: 'Forbidden: partner or admin required' });
 };
 
-router.get('/partner/dashboard', requirePartnerOrAdmin, async (_req, res) => {
+router.get('/partner/dashboard', requirePartnerOrAdmin, async (req, res) => {
   try {
-    res.json(await getPartnerDashboard());
+    const refresh = String(req.query.refresh || '').trim() === '1'
+      || String(req.query.refresh || '').toLowerCase() === 'true';
+    res.json(await getPartnerDashboard({ refresh }));
   } catch (error) {
     const err = error as Error;
     logger.error(`Partner dashboard error: ${err.message}`);

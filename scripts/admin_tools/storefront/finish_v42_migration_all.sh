@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Finish v4.2 migration: rematerialize partial + migrate remaining shield clients.
+# Optional: archive orphan SAAS before migrate (flat only).
 set -o pipefail
 LOG=/tmp/finish_v42_all.log
 API="${BTDD_API:-http://127.0.0.1:3001}"
@@ -7,7 +8,16 @@ DB="${BTDD_DB_PATH:-/opt/battletoads-double-dragon/backend/database.db}"
 REPO="${BTDD_REPO:-/opt/battletoads-double-dragon}"
 cd "$REPO"
 
+CLEANUP_ORPHANS="${CLEANUP_ORPHANS:-1}"
+
 echo "=== $(date -u +%Y-%m-%dT%H:%M:%SZ) finish v4.2 all ===" | tee "$LOG"
+
+archive_orphans() {
+  local slug="$1"
+  echo "--- archive orphans $slug ---" | tee -a "$LOG"
+  python3 scripts/admin_tools/storefront/archive_orphan_saas_strategies.py --slug "$slug" 2>&1 | tee -a "$LOG"
+  python3 scripts/admin_tools/storefront/archive_orphan_saas_strategies.py --slug "$slug" --apply 2>&1 | tee -a "$LOG"
+}
 
 unarchive_saas() {
   local api="$1"
@@ -55,10 +65,21 @@ migrate_slug() {
 }
 
 # Partial v4.2
+if [[ "$CLEANUP_ORPHANS" == "1" ]]; then
+  archive_orphans artursk-4149120679
+  archive_orphans artursk-9592571500
+fi
 retry_mat 69199 artursk-4149120679
 retry_mat 41170 ruslan
 
 # Remaining shield → v4.2
+if [[ "$CLEANUP_ORPHANS" == "1" ]]; then
+  archive_orphans artursk-6323499563
+  archive_orphans artursk-6659194994
+  archive_orphans artursk-8018546252
+  archive_orphans artursk-9592571500
+  archive_orphans artursk-5374535192
+fi
 migrate_slug artursk-6323499563 artursk-6323499563-api
 migrate_slug artursk-6659194994 artursk-6659194994-api
 migrate_slug artursk-8018546252 artursk-8018546252-api
