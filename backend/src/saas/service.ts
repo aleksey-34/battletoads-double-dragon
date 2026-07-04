@@ -407,6 +407,8 @@ export type CardRuntimeConfig = {
   reinvestPercent: number;
   macroShield: boolean;
   portfolioCircuitBreaker: PortfolioCircuitBreakerConfig | null;
+  dcaLayersRequired: boolean;
+  expectedMemberCount: number;
 };
 
 export const getCardConfigBySystemName = async (
@@ -420,6 +422,8 @@ export const getCardConfigBySystemName = async (
       reinvestPercent: 0,
       macroShield: false,
       portfolioCircuitBreaker: null,
+      dcaLayersRequired: true,
+      expectedMemberCount: 0,
     };
   }
   const code = `CARD::${name.toUpperCase()}`;
@@ -428,6 +432,8 @@ export const getCardConfigBySystemName = async (
   let reinvest = 0;
   let macroShield = false;
   let portfolioCircuitBreaker: PortfolioCircuitBreakerConfig | null = null;
+  let dcaLayersRequired = true;
+  let expectedMemberCount = 0;
   try {
     const row = await db.get<{ metadata_json?: string }>(
       'SELECT metadata_json FROM master_cards WHERE code = ? AND is_active = 1',
@@ -449,6 +455,26 @@ export const getCardConfigBySystemName = async (
       }
       macroShield = (meta as { macroShield?: unknown }).macroShield === true;
       portfolioCircuitBreaker = parsePortfolioCircuitBreaker(meta.portfolioCircuitBreaker);
+      if ((meta as { dcaLayersRequired?: unknown }).dcaLayersRequired === false) {
+        dcaLayersRequired = false;
+      }
+      const category = String((meta as { category?: unknown }).category || '').trim();
+      if (category === 'synth-stable-v42' || category === 'synth-stable-v4-2') {
+        dcaLayersRequired = false;
+      }
+      const memberRaw = Number((meta as { expectedMemberCount?: unknown }).expectedMemberCount);
+      if (Number.isFinite(memberRaw) && memberRaw > 0) {
+        expectedMemberCount = Math.floor(memberRaw);
+      }
+    }
+    if (expectedMemberCount <= 0) {
+      const memberRow = await db.get<{ cnt: number }>(
+        `SELECT COUNT(*) AS cnt FROM master_card_members mcm
+         JOIN master_cards mc ON mc.id = mcm.card_id
+         WHERE mc.code = ? AND COALESCE(mcm.is_enabled, 1) = 1`,
+        [code],
+      ).catch(() => null);
+      expectedMemberCount = Math.max(0, Number(memberRow?.cnt || 0));
     }
   } catch {
     // Swallow: missing/invalid metadata simply means no override.
@@ -459,6 +485,8 @@ export const getCardConfigBySystemName = async (
     reinvestPercent: reinvest,
     macroShield,
     portfolioCircuitBreaker,
+    dcaLayersRequired,
+    expectedMemberCount,
   };
 };
 
@@ -8074,6 +8102,12 @@ export const previewAdminSweepBacktest = async (payload?: {
               pnl: rerunMetrics.curves.pnl,
               drawdownPercent: rerunMetrics.curves.drawdownPercent,
               marginLoadPercent: rerunMetrics.curves.marginLoadPercent,
+              unrealizedPnl: (result.equityCurve || [])
+                .filter((point) => Number.isFinite(Number(point.unrealizedPnl)))
+                .map((point) => ({
+                  time: asNumber(point.time, 0),
+                  value: Number(asNumber(point.unrealizedPnl, 0).toFixed(4)),
+                })),
             },
             trades: result.trades,
             strictPresetMode: false,
@@ -16265,6 +16299,8 @@ export const getAlgofundMaterializationAudit = async (systemName: string) => {
   const cardCfg = await getCardConfigBySystemName(target);
   const expectedLot = cardCfg.lotPercent > 0 ? cardCfg.lotPercent : 20;
   const expectedReinvest = cardCfg.reinvestPercent > 0 ? cardCfg.reinvestPercent : 100;
+  const expectedMembers = cardCfg.expectedMemberCount > 0 ? cardCfg.expectedMemberCount : 34;
+  const dcaRequired = cardCfg.dcaLayersRequired !== false;
   const rows = await db.all<Array<{
     tenant_id: number;
     slug: string;
@@ -16325,11 +16361,12 @@ export const getAlgofundMaterializationAudit = async (systemName: string) => {
     const issues: string[] = [];
     if (Math.abs(lot - expectedLot) > 0.01) issues.push(`lot ${lot}% (expected ${expectedLot}%)`);
     if (Math.abs(reinvest - expectedReinvest) > 0.01) issues.push(`reinvest ${reinvest}% (expected ${expectedReinvest}%)`);
-    if (dcaCount < 2) issues.push(`DCA satellites ${dcaCount}/2`);
-    if (tsMemberCount < 34) issues.push(`TS members ${tsMemberCount} (expected ≥34)`);
+    if (dcaRequired && dcaCount < 2) issues.push(`DCA satellites ${dcaCount}/2`);
+    const minMembers = Math.max(1, Math.floor(expectedMembers * 0.5));
+    if (tsMemberCount < minMembers) issues.push(`TS members ${tsMemberCount} (expected ≥${expectedMembers})`);
     const status: AlgofundMaterializationClientAudit['status'] = issues.length === 0
       ? 'ok'
-      : (dcaCount >= 2 && lot > 0 ? 'partial' : 'error');
+      : (issues.every((item) => !item.includes('TS members') && !item.includes('missing')) ? 'partial' : 'error');
     clients.push({
       tenantId: Number(row.tenant_id),
       slug: asString(row.slug, ''),
@@ -16362,6 +16399,8 @@ export const getAlgofundMaterializationAudit = async (systemName: string) => {
     aggregateStatus,
     expectedLot,
     expectedReinvest,
+    expectedMembers,
+    dcaRequired,
     clients,
     propagation,
   };

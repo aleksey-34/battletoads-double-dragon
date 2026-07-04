@@ -118,6 +118,7 @@ type AdminSweepBacktestPreviewResponse = {
       pnl?: EquityPoint[];
       drawdownPercent?: EquityPoint[];
       marginLoadPercent?: EquityPoint[];
+      unrealizedPnl?: EquityPoint[];
     } | null;
     trades?: Array<Record<string, unknown>>;
   };
@@ -14290,7 +14291,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         {materializationLogTarget && materializationAuditBySystem[materializationLogTarget] ? (
           <Space direction="vertical" size={12} style={{ width: '100%' }}>
             <Text type="secondary">
-              Зелёный — все проверки OK (lot, reinvest, 2 DCA, состав TS). Жёлтый — частично. Красный — критичные пробелы.
+              Зелёный — lot/reinvest/состав TS OK. Жёлтый — мелочи. Красный — критично. DCA проверяется только если включён в карточке (v4.2 — без DCA).
             </Text>
             <Table
               size="small"
@@ -15687,28 +15688,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   </Card>
                 </Col>
               )}
-              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
-                <Col xs={24} md={12} lg={4}>
-                  <Card size="small" title={<Space>{modulePanelLabel(adminSweepBacktestPartialTpPct > 0, 'Partial TP %')}{adminSweepBacktestStale ? <Tag color="orange">⟳</Tag> : null}</Space>}>
-                    <InputNumber
-                      min={0}
-                      max={100}
-                      step={0.5}
-                      style={{ width: '100%' }}
-                      value={adminSweepBacktestPartialTpPct}
-                      onChange={(value) => {
-                        const next = Math.max(0, Number(value || 0));
-                        setAdminSweepBacktestPartialTpPct(next);
-                        setAdminSweepBacktestStale(true);
-                        scheduleBacktestDebounce();
-                      }}
-                    />
-                    <Text type="secondary">{adminSweepBacktestPartialTpPct > 0 ? `Закрыть 50% при +${adminSweepBacktestPartialTpPct}%` : '0 = выкл.'}</Text>
-                  </Card>
-                </Col>
-              )}
               {isAdminSurface && (
-                <Col xs={24} md={24} lg={6}>
+                <Col xs={24}>
+                  <Collapse
+                    ghost
+                    defaultActiveKey={hasCustomBacktestDates ? ['costs-period'] : []}
+                    items={[{
+                      key: 'costs-period',
+                      label: modulePanelLabel(hasCustomBacktestDates, 'Издержки и период бэктеста'),
+                      children: (
+                        <Row gutter={[8, 8]}>
+              {isAdminSurface && (
+                <Col xs={24} md={24} lg={12}>
                   <Card size="small" title={<Space>{modulePanelLabel(true, 'Комиссия / Слиппедж / Funding')}{adminSweepBacktestStale ? <Tag color="orange">⟳</Tag> : null}</Space>}>
                     <Space direction="vertical" size={4} style={{ width: '100%' }}>
                       <Space wrap size={4}>
@@ -15815,16 +15806,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 </Col>
               )}
               {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && backtestLegRows.length > 1 && (
-                <Col xs={24}>
+                <Col xs={24} lg={12}>
                   <Card size="small" title={<Space>{modulePanelLabel(true, `Per-leg lot mult (${backtestLegRows.length} ног)`)}{adminSweepBacktestStale ? <Tag color="orange">⟳</Tag> : null}</Space>}>
                     <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                      <Row gutter={[8, 6]}>
                       {backtestLegRows.map((row) => (
-                        <Space key={row.strategyId} wrap style={{ width: '100%', marginBottom: 6, justifyContent: 'space-between' }}>
-                          <Text style={{ fontSize: 11, maxWidth: '55%' }} ellipsis title={row.label}>{row.label}</Text>
+                        <Col xs={24} sm={12} key={row.strategyId}>
+                        <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+                          <Text style={{ fontSize: 11, maxWidth: '62%' }} ellipsis title={row.label}>{row.label}</Text>
                           <InputNumber
                             min={0.05}
                             max={2}
                             step={0.05}
+                            size="small"
+                            style={{ width: 72 }}
                             value={row.mult}
                             onChange={(value) => {
                               const next = Math.max(0.05, Math.min(2, Number(value || 1)));
@@ -15834,14 +15829,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             }}
                           />
                         </Space>
+                        </Col>
                       ))}
+                      </Row>
                     </div>
-                    <Text type="secondary" style={{ fontSize: 11 }}>Множитель к базовому lot% для каждой стратегии (tune 0.35–1.0, burst 1.0).</Text>
+                    <Text type="secondary" style={{ fontSize: 11 }}>Множитель к базовому lot% (tune 0.35–1.0, burst 1.0).</Text>
                   </Card>
                 </Col>
               )}
               {isAdminSurface && (
-                <Col xs={24} md={24} lg={backtestDrawerContext?.kind === 'algofund-ts' ? 8 : 8}>
+                <Col xs={24} md={24} lg={12}>
                   <Card size="small" title={<Space>{modulePanelLabel(hasCustomBacktestDates, 'Период бэктеста')}{adminSweepBacktestStale ? <Tag color="orange">⟳</Tag> : null}</Space>}>
                     <Space direction="vertical" size={4} style={{ width: '100%' }}>
                       <Space wrap>
@@ -15884,9 +15881,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           scheduleBacktestDebounce();
                         }}>Полная глубина sweep</Button>
                       </Space>
-                      <Text type="secondary">Пустые даты → real rerun по полному диапазону sweep/карточки. Заполните обе даты — свой период админа.</Text>
+                      <Text type="secondary">Пустые даты → real rerun по полному диапазону sweep/карточки.</Text>
                     </Space>
                   </Card>
+                </Col>
+              )}
+                        </Row>
+                      ),
+                    }]}
+                  />
                 </Col>
               )}
               {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' ? (
@@ -15917,6 +15920,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   Для v4.2 burst mono (15m EMA+ADX) имеет смысл отдельный прогон; CT synth не трогаем.
                                 </Text>
                               </Space>
+                            </Card>
+                          </Col>
+                          <Col xs={24} md={12}>
+                            <Card size="small" title={<Space>{modulePanelLabel(adminSweepBacktestPartialTpPct > 0, 'Partial TP %')}</Space>}>
+                              <InputNumber
+                                min={0}
+                                max={100}
+                                step={0.5}
+                                style={{ width: '100%' }}
+                                value={adminSweepBacktestPartialTpPct}
+                                onChange={(value) => {
+                                  const next = Math.max(0, Number(value || 0));
+                                  setAdminSweepBacktestPartialTpPct(next);
+                                  setAdminSweepBacktestStale(true);
+                                  scheduleBacktestDebounce();
+                                }}
+                              />
+                              <Text type="secondary" style={{ fontSize: 11 }}>{adminSweepBacktestPartialTpPct > 0 ? `50% при +${adminSweepBacktestPartialTpPct}%` : '0 = выкл.'}</Text>
                             </Card>
                           </Col>
                           <Col xs={24} md={12}>
@@ -16042,6 +16063,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                     const sweepPnlCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.pnl || []);
                     const sweepDrawdownCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.drawdownPercent || []);
+                    const sweepUpnlCurve = toLineSeriesData(adminSweepBacktestResult.preview?.curves?.unrealizedPnl || []);
                     const effectivePnlCurve = anchorLineSeriesToPeriod(
                       usingRealTsDcaEngine
                         ? fallbackCurves.pnl
@@ -16052,6 +16074,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       usingRealTsDcaEngine
                         ? fallbackCurves.drawdown
                         : (sweepDrawdownCurve.length > 0 ? sweepDrawdownCurve : fallbackCurves.drawdown),
+                      chartPeriod,
+                    );
+                    const effectiveUpnlCurve = anchorLineSeriesToPeriod(
+                      sweepUpnlCurve.length > 0 ? sweepUpnlCurve : [],
                       chartPeriod,
                     );
 
@@ -16358,6 +16384,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           <ChartComponent data={effectivePnlCurve.map((point) => ({ time: point.time, equity: point.value }))} type="line" />
                         ) : (
                           <Empty description="Нет данных P/L" />
+                        )}
+                      </Card>
+                    </Col>
+                    <Col xs={24} md={8}>
+                      <Card size="small" title="График UPNL (открытые позы)">
+                        {effectiveUpnlCurve.length > 0 ? (
+                          <ChartComponent data={effectiveUpnlCurve.map((point) => ({ time: point.time, equity: point.value }))} type="line" />
+                        ) : (
+                          <Empty description="Нет UPNL — нужен real rerun" />
                         )}
                       </Card>
                     </Col>

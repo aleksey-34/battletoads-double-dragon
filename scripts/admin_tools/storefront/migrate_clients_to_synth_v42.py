@@ -39,6 +39,8 @@ CARD_METADATA = {
     "lotPercentOverride": 22,
     "maxOpenPositions": 15,
     "reinvestPercentOverride": 50,
+    "dcaLayersRequired": False,
+    "expectedMemberCount": 20,
     "portfolioCircuitBreaker": {
         "enabled": True,
         "peakWindowDays": 30,

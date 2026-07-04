@@ -275,6 +275,9 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 <Button type="link" onClick={handleOpenAdminLogin}>
                   {t('client.auth.adminLogin', 'Admin login')}
                 </Button>
+                <Button type="link" onClick={() => { window.location.href = '/partner/login'; }}>
+                  Кабинет партнёра
+                </Button>
               </Space>
 
               {existingSession ? (
@@ -512,6 +515,10 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
               <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
                 <Button type="link" style={{ padding: 0, height: 'auto' }} onClick={handleOpenAdminLogin}>
                   {t('client.auth.switchToAdmin', 'Need admin dashboard access? Use admin login.')}
+                </Button>
+                {' · '}
+                <Button type="link" style={{ padding: 0, height: 'auto' }} onClick={() => { window.location.href = '/partner/login'; }}>
+                  Кабинет партнёра (мониторинг клиентов)
                 </Button>
               </Typography.Paragraph>
             </>

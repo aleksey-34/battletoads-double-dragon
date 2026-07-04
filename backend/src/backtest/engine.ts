@@ -57,6 +57,8 @@ type ParsedCandle = {
 export type BacktestPoint = {
   time: number;
   equity: number;
+  cashEquity?: number;
+  unrealizedPnl?: number;
 };
 
 export type BacktestTrade = {
@@ -2586,10 +2588,13 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
   let maxDrawdownPercent = 0;
 
   const pushEquityPoint = (timeMs: number) => {
+    const unrealized = runtimes.reduce((sum, runtime) => sum + unrealizedPnl(runtime), 0);
     const value = Math.max(0, portfolioEquity(ctx.cashEquity, runtimes));
     equityCurve.push({
       time: Math.floor(timeMs / 1000),
       equity: value,
+      cashEquity: ctx.cashEquity,
+      unrealizedPnl: unrealized,
     });
 
     peak = Math.max(peak, value);
