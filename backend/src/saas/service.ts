@@ -4766,18 +4766,46 @@ const buildStrategyDraftFromRecord = (
   };
 };
 
-const normalizeSweepMarketLabel = (record: SweepRecord): string => {
-  const marketRaw = asString(record.market, '').trim().toUpperCase();
+const parseSweepMarketLegs = (params: {
+  marketMode: string;
+  market?: string;
+  baseSymbol?: string;
+  quoteSymbol?: string;
+}): { marketMode: 'mono' | 'synthetic'; base: string; quote: string; label: string } => {
+  const modeRaw = asString(params.marketMode, 'mono').trim().toLowerCase();
+  const marketMode: 'mono' | 'synthetic' = modeRaw === 'mono' ? 'mono' : 'synthetic';
+  const marketRaw = asString(params.market, '').trim().toUpperCase();
   const marketParts = marketRaw.split('/').map((part) => part.trim()).filter(Boolean);
-  const base = asString(marketParts[0] || marketRaw.replace(/\/+$/g, ''), '').trim();
-  const quote = asString(marketParts[1] || '', '').trim();
-  if (record.marketMode === 'mono') {
-    return base;
+  const base = asString(params.baseSymbol || marketParts[0] || marketRaw.replace(/\/+$/g, ''), '').trim().toUpperCase();
+  const quote = asString(params.quoteSymbol || marketParts[1] || '', '').trim().toUpperCase();
+  const label = marketMode === 'mono' || !quote ? base : `${base}/${quote}`;
+  return { marketMode, base, quote, label };
+};
+
+const isMarketAvailableOnExchange = (
+  availableSymbols: Set<string>,
+  params: {
+    marketMode: string;
+    market?: string;
+    baseSymbol?: string;
+    quoteSymbol?: string;
   }
-  if (!base || !quote) {
-    return marketRaw;
+): boolean => {
+  const parsed = parseSweepMarketLegs(params);
+  if (!parsed.base) {
+    return false;
   }
-  return `${base}/${quote}`;
+  if (parsed.marketMode === 'mono' || !parsed.quote) {
+    return availableSymbols.has(parsed.base);
+  }
+  return availableSymbols.has(parsed.base) && availableSymbols.has(parsed.quote);
+};
+
+const normalizeSweepMarketLabel = (record: SweepRecord): string => {
+  return parseSweepMarketLegs({
+    marketMode: record.marketMode,
+    market: record.market,
+  }).label;
 };
 
 const prefixStrategyName = (tenant: TenantRow, record: SweepRecord): string => {
@@ -4868,9 +4896,21 @@ const upsertTenantStrategies = async (
   for (const item of records) {
     // Skip pairs not available on the client's exchange (Cloud multi-exchange support)
     if (availableSymbols) {
-      const market = asString(item.record.market, '').toUpperCase();
-      if (market && !availableSymbols.has(market)) {
-        logger.info(`[upsertTenantStrategies] Skipping ${market} for ${apiKeyName}: pair not available on client exchange`);
+      const parsed = parseSweepMarketLegs({
+        marketMode: item.record.marketMode,
+        market: item.record.market,
+      });
+      if (parsed.label && !isMarketAvailableOnExchange(availableSymbols, {
+        marketMode: item.record.marketMode,
+        market: item.record.market,
+      })) {
+        const missingLegs = parsed.marketMode === 'synthetic' && parsed.quote
+          ? [parsed.base, parsed.quote].filter((leg) => !availableSymbols!.has(leg))
+          : [parsed.base].filter((leg) => !availableSymbols!.has(leg));
+        logger.info(
+          `[upsertTenantStrategies] Skipping ${parsed.label} for ${apiKeyName}: `
+          + `pair not available on client exchange (missing: ${missingLegs.join(', ') || parsed.label})`
+        );
         await db.run(
           `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
            VALUES (?, 'system', 'saas_materialize_pair_unavailable', ?, CURRENT_TIMESTAMP)`,
@@ -4878,7 +4918,8 @@ const upsertTenantStrategies = async (
             tenant.id,
             JSON.stringify({
               apiKeyName,
-              market,
+              market: parsed.label,
+              missingLegs,
               offerId: item.offerId,
               strategyType: item.record.strategyType,
               marketMode: item.record.marketMode,
@@ -15346,15 +15387,17 @@ const applyApprovedAlgofundAction = async (params: {
               continue;
             }
 
-            const marketMode = asString(sourceStrategy.market_mode || sourceStrategy.marketMode, '').trim().toLowerCase();
+            const marketMode = asString(sourceStrategy.market_mode || sourceStrategy.marketMode, 'mono');
             const base = asString(sourceStrategy.base_symbol || sourceStrategy.baseSymbol, '').trim().toUpperCase();
             const quote = asString(sourceStrategy.quote_symbol || sourceStrategy.quoteSymbol, '').trim().toUpperCase();
-            const market = (marketMode === 'mono' || !quote)
-              ? base
-              : `${base}/${quote}`;
+            const parsed = parseSweepMarketLegs({ marketMode, baseSymbol: base, quoteSymbol: quote });
 
-            if (market && !availableSymbols.has(market)) {
-              skippedPairs.push({ strategyId, market });
+            if (parsed.label && !isMarketAvailableOnExchange(availableSymbols, {
+              marketMode,
+              baseSymbol: base,
+              quoteSymbol: quote,
+            })) {
+              skippedPairs.push({ strategyId, market: parsed.label });
               continue;
             }
 
