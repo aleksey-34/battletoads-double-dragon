@@ -27,6 +27,12 @@ import {
   zzPivotVariantFromType,
 } from './zzPivotLevels';
 import { computeCtFractalSignalAtIndex, isCtFractalStrategyType } from './ctFractalSignal';
+import {
+  computeMomentumScalpSignalAtIndex,
+  extractMomentumScalpParams,
+  isMomentumScalpStrategyType,
+  momentumScalpTpSlPrices,
+} from './momentumScalpSignal';
 
 // ── Market data cache for auto-strategy cycle ────────────────────────────────
 // Avoids re-fetching the same symbol+interval when multiple strategies share them.
@@ -203,7 +209,7 @@ type ExecuteStrategyOptions = {
 
 const normalizeStrategyType = (value: any): StrategyType => {
   const normalized = String(value || '').trim();
-  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'periodic_buy' || normalized === 'dca' || normalized === 'hideep' || normalized === 'CT_Fractal') {
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'periodic_buy' || normalized === 'dca' || normalized === 'hideep' || normalized === 'CT_Fractal' || normalized === 'momentum_scalp_tv') {
     return normalized as StrategyType;
   }
   if (normalized === 'ZZ_Fast' || normalized === 'ZZ_Instance') {
@@ -283,6 +289,17 @@ const getTypeAwareStrategyDefaults = (strategyType: StrategyType) => {
       take_profit_percent: 0,
       price_channel_length: 120,
       detection_source: 'close' as const,
+    };
+  }
+
+  if (strategyType === 'momentum_scalp_tv') {
+    return {
+      take_profit_percent: 2,
+      price_channel_length: 8,
+      detection_source: 'close' as const,
+      zscore_entry: 21,
+      zscore_exit: 20,
+      zscore_stop: 1.2,
     };
   }
 
@@ -1578,6 +1595,26 @@ const computeSignal = (
     return computeCtFractalSignal(candles, length, zscoreEntry, longEnabled, shortEnabled);
   }
 
+  if (isMomentumScalpStrategyType(strategyType)) {
+    const params = extractMomentumScalpParams({
+      price_channel_length: length,
+      zscore_entry: zscoreEntry,
+      long_enabled: longEnabled,
+      short_enabled: shortEnabled,
+    } as Strategy);
+    const idx = candles.length - 1;
+    const ms = computeMomentumScalpSignalAtIndex(candles, idx, params);
+    return {
+      signal: ms.signal,
+      currentRatio: ms.current,
+      donchianHigh: ms.current,
+      donchianLow: ms.current,
+      donchianCenter: ms.current,
+      zScore: ms.adx,
+      fastRsi: ms.plusDi,
+    };
+  }
+
   if (isZzPivotStrategyType(strategyType)) {
     return computeZzPivotSignal(candles, length, strategyType, longEnabled, shortEnabled);
   }
@@ -2496,7 +2533,9 @@ export const executeStrategy = async (
     ? Math.max(signalLength + 120, 220)
     : strategyTypeNorm === 'hideep'
       ? Math.max(signalLength + 110, 220)
-      : Math.max(signalLength + 30, 120);
+      : isMomentumScalpStrategyType(strategyTypeNorm)
+        ? Math.max(signalLength + 160, 200)
+        : Math.max(signalLength + 30, 120);
 
   const candles = await loadStrategyCandles(apiKeyName, mergedStrategy, lookback);
 
@@ -2527,15 +2566,37 @@ export const executeStrategy = async (
       fastRsi: cachedSignal.fastRsi,
     };
   } else {
-    computedSignalResult = computeSignal(
-      mergedStrategy.strategy_type || 'DD_BattleToads',
-      candleContext.candlesForSignal,
-      signalLength,
-      mergedStrategy.detection_source,
-      mergedStrategy.zscore_entry,
-      mergedStrategy.long_enabled,
-      mergedStrategy.short_enabled
-    );
+    if (isMomentumScalpStrategyType(strategyTypeNorm)) {
+      const msParams = extractMomentumScalpParams(mergedStrategy);
+      const idx = candleContext.candlesForSignal.length - 1;
+      const posSide = (mergedStrategy.state || 'flat') as 'flat' | 'long' | 'short';
+      const ms = computeMomentumScalpSignalAtIndex(
+        candleContext.candlesForSignal,
+        idx,
+        msParams,
+        undefined,
+        posSide,
+      );
+      computedSignalResult = {
+        signal: ms.signal,
+        currentRatio: ms.current,
+        donchianHigh: ms.current,
+        donchianLow: ms.current,
+        donchianCenter: ms.current,
+        zScore: ms.adx,
+        fastRsi: ms.plusDi,
+      };
+    } else {
+      computedSignalResult = computeSignal(
+        mergedStrategy.strategy_type || 'DD_BattleToads',
+        candleContext.candlesForSignal,
+        signalLength,
+        mergedStrategy.detection_source,
+        mergedStrategy.zscore_entry,
+        mergedStrategy.long_enabled,
+        mergedStrategy.short_enabled
+      );
+    }
     signalCache.set(signalGroupKey, { ...computedSignalResult, evaluatedBarTimeMs: candleContext.evaluatedBarTimeMs });
   }
 
@@ -2543,6 +2604,7 @@ export const executeStrategy = async (
   // ───────────────────────────────────────────────────────────────────────────
 
   const isCtFractal = isCtFractalStrategyType(String(mergedStrategy.strategy_type || ''));
+  const isMomentumScalp = isMomentumScalpStrategyType(String(mergedStrategy.strategy_type || ''));
   const isStatArb = mergedStrategy.strategy_type === 'stat_arb_zscore' || isCtFractal;
   const isZzPivot = isZzPivotStrategyType(normalizeZzPivotStrategyType(String(mergedStrategy.strategy_type || '')));
   const zscoreExit = normalizeZscoreExit(mergedStrategy.zscore_exit, DEFAULT_STRATEGY.zscore_exit, mergedStrategy.zscore_entry);
@@ -3083,7 +3145,41 @@ export const executeStrategy = async (
     }
   }
 
-  if (!isStatArb) {
+  if (!closedAction && isMomentumScalp && entryRatio && (state === 'long' || state === 'short')) {
+    const msParams = extractMomentumScalpParams(mergedStrategy);
+    const { tp, sl } = momentumScalpTpSlPrices(state, entryRatio, msParams);
+    if (state === 'long') {
+      if (currentRatio <= sl) {
+        await closeAndRecordExit('stop_loss_long', 'long');
+        closedAction = 'stop_loss_long';
+        closedResult = `Momentum scalp SL long ${positionLabel}`;
+      } else if (currentRatio >= tp) {
+        await closeAndRecordExit('take_profit_long', 'long');
+        closedAction = 'take_profit_long';
+        closedResult = `Momentum scalp TP long ${positionLabel}`;
+      } else if (msParams.exitOnOppositeCross && signal === 'short') {
+        await closeAndRecordExit('stop_loss_long', 'long');
+        closedAction = 'stop_loss_long';
+        closedResult = `Momentum scalp cross-exit long ${positionLabel}`;
+      }
+    } else if (!closedAction) {
+      if (currentRatio >= sl) {
+        await closeAndRecordExit('stop_loss_short', 'short');
+        closedAction = 'stop_loss_short';
+        closedResult = `Momentum scalp SL short ${positionLabel}`;
+      } else if (currentRatio <= tp) {
+        await closeAndRecordExit('take_profit_short', 'short');
+        closedAction = 'take_profit_short';
+        closedResult = `Momentum scalp TP short ${positionLabel}`;
+      } else if (msParams.exitOnOppositeCross && signal === 'long') {
+        await closeAndRecordExit('stop_loss_short', 'short');
+        closedAction = 'stop_loss_short';
+        closedResult = `Momentum scalp cross-exit short ${positionLabel}`;
+      }
+    }
+  }
+
+  if (!isStatArb && !isMomentumScalp) {
     const evalBar = candleContext.candlesForSignal[candleContext.candlesForSignal.length - 1];
 
     if (!closedAction && isZzPivot && state === 'long' && evalBar && evalBar.low <= donchianLow) {

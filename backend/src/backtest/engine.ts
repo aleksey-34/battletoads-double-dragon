@@ -29,6 +29,14 @@ import {
   computeCtFractalSignalAtIndex,
   isCtFractalStrategyType,
 } from '../bot/ctFractalSignal';
+import {
+  buildMomentumScalpIndicatorSeries,
+  computeMomentumScalpSignalAtIndex,
+  extractMomentumScalpParams,
+  isMomentumScalpStrategyType,
+  momentumScalpTpSlPrices,
+  type MomentumScalpIndicatorSeries,
+} from '../bot/momentumScalpSignal';
 
 export type { OrderBlockEntryGate };
 
@@ -694,6 +702,14 @@ const computeSignalAtIndex = (
   longEnabled: boolean,
   shortEnabled: boolean,
   zzPivotLevelSeries?: ZzPivotLevels[],
+  msOptions?: {
+    params?: ReturnType<typeof extractMomentumScalpParams>;
+    series?: MomentumScalpIndicatorSeries;
+    positionSide?: PositionState;
+    zscoreExit?: number;
+    zscoreStop?: number;
+    takeProfitPercent?: number;
+  },
 ): BacktestSignalPayload => {
   if (strategyType === 'stat_arb_zscore') {
     return computeStatArbSignalAtIndex(candles, index, length, zscoreEntry, longEnabled, shortEnabled);
@@ -729,6 +745,32 @@ const computeSignalAtIndex = (
       donchianCenter: ct.donchianCenter,
       zScore: ct.zScore,
       fastRsi: ct.fastRsi,
+    };
+  }
+
+  if (isMomentumScalpStrategyType(strategyType)) {
+    const params = msOptions?.params ?? extractMomentumScalpParams({
+      price_channel_length: length,
+      zscore_entry: zscoreEntry,
+      zscore_exit: msOptions?.zscoreExit,
+      zscore_stop: msOptions?.zscoreStop,
+      take_profit_percent: msOptions?.takeProfitPercent,
+      long_enabled: longEnabled,
+      short_enabled: shortEnabled,
+    } as Strategy);
+    const ms = computeMomentumScalpSignalAtIndex(
+      candles,
+      index,
+      params,
+      msOptions?.series,
+      msOptions?.positionSide ?? 'flat',
+    );
+    return {
+      signal: ms.signal,
+      current: ms.current,
+      donchianCenter: ms.current,
+      zScore: ms.adx,
+      fastRsi: ms.plusDi,
     };
   }
 
@@ -1302,6 +1344,8 @@ type RuntimeStrategy = {
   macroPartialRulesFired: Set<string>;
   dcaState: ReturnType<typeof extractDcaConfigFromStrategy>;
   zzPivotLevelSeries?: ZzPivotLevels[];
+  momentumScalpSeries?: MomentumScalpIndicatorSeries;
+  momentumScalpParams?: ReturnType<typeof extractMomentumScalpParams>;
 };
 
 type BacktestContext = {
@@ -1864,7 +1908,7 @@ type RuntimeLoadResult = {
 
 const normalizeStrategyType = (value: any): StrategyType => {
   const normalized = String(value || '').trim();
-  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'hideep' || normalized === 'CT_Fractal') {
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'hideep' || normalized === 'CT_Fractal' || normalized === 'momentum_scalp_tv') {
     return normalized;
   }
   if (normalized === 'ZZ_Fast' || normalized === 'ZZ_Instance') {
@@ -2205,6 +2249,12 @@ const loadRuntimeStrategies = async (
     const zzPivotLevelSeries = isZzPivotStrategyType(normalizeZzPivotStrategyType(strategyType) as StrategyType)
       ? buildZzPivotLevelSeries(candles, Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 6))), zzPivotVariantFromType(strategyType))
       : undefined;
+    const momentumScalpParams = isMomentumScalpStrategyType(strategyType)
+      ? extractMomentumScalpParams(strategy)
+      : undefined;
+    const momentumScalpSeries = momentumScalpParams
+      ? buildMomentumScalpIndicatorSeries(candles, momentumScalpParams)
+      : undefined;
 
     runtimes.push({
       strategy,
@@ -2221,6 +2271,8 @@ const loadRuntimeStrategies = async (
       macroPartialRulesFired: new Set(),
       dcaState: extractDcaConfigFromStrategy(strategy),
       zzPivotLevelSeries,
+      momentumScalpSeries,
+      momentumScalpParams,
     });
   }
 
@@ -2570,6 +2622,18 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
 
     const length = Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 50)));
     const zscoreEntry = normalizeZscoreEntry(strategy.zscore_entry);
+
+    const isZzPivot = isZzPivotStrategyType(normalizeZzPivotStrategyType(strategyType) as StrategyType);
+
+    const isStatArb = strategyType === 'stat_arb_zscore' || strategyType === 'CT_Fractal';
+    const isCtFractal = strategyType === 'CT_Fractal';
+    const isMomentumScalp = isMomentumScalpStrategyType(strategyType);
+    const zscoreExit = normalizeZscoreExit(strategy.zscore_exit, zscoreEntry);
+    const zscoreStop = normalizeZscoreStop(strategy.zscore_stop, zscoreEntry);
+    const state = runtime.state;
+    const entryPrice = runtime.entryPrice;
+    const takeProfitPercent = Math.max(0, asNumber(strategy.take_profit_percent, 0));
+
     const signalPayload = computeSignalAtIndex(
       strategyType,
       runtime.candles,
@@ -2580,17 +2644,17 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       strategy.long_enabled,
       strategy.short_enabled,
       runtime.zzPivotLevelSeries,
+      isMomentumScalp
+        ? {
+            params: runtime.momentumScalpParams,
+            series: runtime.momentumScalpSeries,
+            positionSide: state,
+            zscoreExit: asNumber(strategy.zscore_exit, 20),
+            zscoreStop: asNumber(strategy.zscore_stop, 1.2),
+            takeProfitPercent,
+          }
+        : undefined,
     );
-
-    const isZzPivot = isZzPivotStrategyType(normalizeZzPivotStrategyType(strategyType) as StrategyType);
-
-    const isStatArb = strategyType === 'stat_arb_zscore' || strategyType === 'CT_Fractal';
-    const isCtFractal = strategyType === 'CT_Fractal';
-    const zscoreExit = normalizeZscoreExit(strategy.zscore_exit, zscoreEntry);
-    const zscoreStop = normalizeZscoreStop(strategy.zscore_stop, zscoreEntry);
-    const state = runtime.state;
-    const entryPrice = runtime.entryPrice;
-    const takeProfitPercent = Math.max(0, asNumber(strategy.take_profit_percent, 0));
 
     let closedOnCurrentBar = false;
 
@@ -2662,8 +2726,37 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       }
     }
 
-    // Partial TP: applies to non-DCA strategy types
-    if (!isClassicDca && !closedOnCurrentBar && !runtime.partialTpTriggered && partialTpPct > 0 && (state === 'long' || state === 'short') && entryPrice && entryPrice > 0) {
+    // TV momentum scalp: fixed TP/SL + optional opposite EMA cross exit
+    if (!isClassicDca && !closedOnCurrentBar && isMomentumScalp && (state === 'long' || state === 'short') && entryPrice && runtime.momentumScalpParams) {
+      const msParams = runtime.momentumScalpParams;
+      const { tp, sl } = momentumScalpTpSlPrices(state, entryPrice, msParams);
+      if (state === 'long') {
+        if (candle.low <= sl) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, sl, 'ms_sl_long');
+          closedOnCurrentBar = true;
+        } else if (candle.high >= tp) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, tp, 'ms_tp_long');
+          closedOnCurrentBar = true;
+        } else if (msParams.exitOnOppositeCross && signalPayload.signal === 'short') {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'ms_cross_long');
+          closedOnCurrentBar = true;
+        }
+      } else if (!closedOnCurrentBar) {
+        if (candle.high >= sl) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, sl, 'ms_sl_short');
+          closedOnCurrentBar = true;
+        } else if (candle.low <= tp) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, tp, 'ms_tp_short');
+          closedOnCurrentBar = true;
+        } else if (msParams.exitOnOppositeCross && signalPayload.signal === 'long') {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'ms_cross_short');
+          closedOnCurrentBar = true;
+        }
+      }
+    }
+
+    // Partial TP: applies to non-DCA strategy types (not momentum burst)
+    if (!isClassicDca && !isMomentumScalp && !closedOnCurrentBar && !runtime.partialTpTriggered && partialTpPct > 0 && (state === 'long' || state === 'short') && entryPrice && entryPrice > 0) {
       const currentPnlPct = state === 'long'
         ? ((signalPayload.current / entryPrice) - 1) * 100
         : ((entryPrice / signalPayload.current) - 1) * 100;
@@ -2702,7 +2795,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'mean_revert_exit_short');
         closedOnCurrentBar = true;
       }
-    } else if (!isClassicDca) {
+    } else if (!isClassicDca && !isMomentumScalp) {
       // ZZ pivot SAR exit (opposite level)
       if (!closedOnCurrentBar && isZzPivot) {
         const levels = runtime.zzPivotLevelSeries?.[event.candleIndex];

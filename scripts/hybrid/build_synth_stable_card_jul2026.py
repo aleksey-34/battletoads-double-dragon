@@ -19,7 +19,13 @@ from datetime import datetime, timezone
 import requests
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-DB = os.environ.get("BTDD_DB_PATH", os.path.join(REPO, "backend", "database.db.hybrid_slim"))
+_PROD_DB = os.path.join(REPO, "backend", "database.db")
+_SLIM_DB = os.path.join(REPO, "backend", "database.db.hybrid_slim")
+# Preview/apply must hit the same DB as btdd-api (database.db on VPS).
+DB = os.environ.get(
+    "BTDD_DB_PATH",
+    _PROD_DB if os.path.isfile(_PROD_DB) else _SLIM_DB,
+)
 API = os.environ.get("BTDD_API", "http://127.0.0.1:3001")
 AUTH_RAW = os.environ.get("ADMIN_SWEEP_TOKEN", "btdd_admin_sweep_2026").strip()
 AUTH = AUTH_RAW if AUTH_RAW.lower().startswith("bearer ") else f"Bearer {AUTH_RAW}"
@@ -29,6 +35,7 @@ STRATEGIES_EXPORT = os.path.join(REPO, "results/synth_stable_strategies_export.j
 HYBRID_4H_MERGE = os.path.join(REPO, "results/hybrid_sweep_SYNTH4H_V2_20260702_merged.json")
 
 CARD_VER = os.environ.get("SYNTH_CARD_VER", "v4").strip().lower()
+W_BURST_TV = 0.0
 WF_RANK = os.path.join(REPO, "results/hybrid_walkforward_rank_jul2026.json")
 
 PORTFOLIO_CB = {
@@ -44,15 +51,36 @@ V41_ADDONS = [
     {"strategyId": 218660, "market": "DOGEUSDT/SOLUSDT", "tier": "1d_dd_trend", "legLotMult": 0.5},
 ]
 
-if CARD_VER == "v4.1":
+TV_BURST_SPECS = [
+    {"base": "SUIUSDT", "name": "TV_BURST_15M_SUIUSDT"},
+    {"base": "DOGEUSDT", "name": "TV_BURST_15M_DOGEUSDT"},
+    {"base": "SOLUSDT", "name": "TV_BURST_15M_SOLUSDT"},
+]
+
+if CARD_VER == "v4.2":
+    SET_KEY = "synth-stable-union-v4.2-jul2026"
+    DISPLAY_LABEL = "Synth Stable Union v4.2 (+ TV 15m EMA+ADX burst)"
+    CARD_OUT = os.path.join(REPO, "results/synth_stable_union_card_v4.2_jul2026.json")
+    W_4H = float(os.environ.get("SYNTH_W_4H", "0.48"))
+    W_MONO_4H = float(os.environ.get("SYNTH_W_MONO_4H", "0.07"))
+    W_1D_DD = float(os.environ.get("SYNTH_W_1D_DD", "0.04"))
+    W_1D_CT = float(os.environ.get("SYNTH_W_1D_CT", "0.18"))
+    W_1D_SA = float(os.environ.get("SYNTH_W_1D_SA", "0.14"))
+    W_BURST_TV = float(os.environ.get("SYNTH_W_BURST_TV", "0.09"))
+    MAX_MONO_4H = int(os.environ.get("SYNTH_MAX_MONO_4H", "2"))
+    MAX_4H = int(os.environ.get("SYNTH_MAX_4H_LEGS", "10"))
+    MAX_1D_DD = 0
+    MAX_1D_CT = int(os.environ.get("SYNTH_MAX_1D_CT", "5"))
+    MAX_1D_SA = int(os.environ.get("SYNTH_MAX_1D_SA", "3"))
+elif CARD_VER == "v4.1":
     SET_KEY = "synth-stable-union-v4.1-jul2026"
     DISPLAY_LABEL = "Synth Stable Union v4.1 (WF + CB8 + compensators)"
     CARD_OUT = os.path.join(REPO, "results/synth_stable_union_card_v4.1_jul2026.json")
     W_4H = float(os.environ.get("SYNTH_W_4H", "0.52"))
     W_MONO_4H = float(os.environ.get("SYNTH_W_MONO_4H", "0.08"))
-    W_1D_DD = 0.0
-    W_1D_CT = float(os.environ.get("SYNTH_W_1D_CT", "0.22"))
-    W_1D_SA = float(os.environ.get("SYNTH_W_1D_SA", "0.18"))
+    W_1D_DD = float(os.environ.get("SYNTH_W_1D_DD", "0.04"))
+    W_1D_CT = float(os.environ.get("SYNTH_W_1D_CT", "0.20"))
+    W_1D_SA = float(os.environ.get("SYNTH_W_1D_SA", "0.16"))
     MAX_MONO_4H = int(os.environ.get("SYNTH_MAX_MONO_4H", "2"))
     MAX_4H = int(os.environ.get("SYNTH_MAX_4H_LEGS", "10"))
     MAX_1D_DD = 0
@@ -101,8 +129,8 @@ else:
     MAX_1D_CT = int(os.environ.get("SYNTH_MAX_1D_CT", "5"))
     MAX_1D_SA = int(os.environ.get("SYNTH_MAX_1D_SA", "5"))
 
-if CARD_VER in ("v4", "v4.1"):
-    LOT_PERCENT = float(os.environ.get("SYNTH_LOT_PERCENT", "20"))
+if CARD_VER in ("v4", "v4.1", "v4.2"):
+    LOT_PERCENT = float(os.environ.get("SYNTH_LOT_PERCENT", "22" if CARD_VER == "v4.2" else "20"))
 else:
     LOT_PERCENT = float(os.environ.get("SYNTH_LOT_PERCENT", "25" if CARD_VER != "v2" else "25"))
 
@@ -110,7 +138,7 @@ DATE_FROM = os.environ.get("SYNTH_DATE_FROM", "2024-06-01")
 DATE_TO = os.environ.get("SYNTH_DATE_TO", datetime.now(timezone.utc).date().isoformat())
 INITIAL_BALANCE = float(os.environ.get("SYNTH_INITIAL", "10000"))
 REINVEST_PERCENT = float(os.environ.get("SYNTH_REINVEST", "50"))
-MAX_OPEN_POSITIONS = int(os.environ.get("SYNTH_MAX_OP", "12"))
+MAX_OPEN_POSITIONS = int(os.environ.get("SYNTH_MAX_OP", "15" if CARD_VER == "v4.2" else "12"))
 API_KEY = "BTDD_D1"
 RISK_SCORE = float(os.environ.get("SYNTH_RISK_SCORE", "4"))
 TRADE_FREQ = float(os.environ.get("SYNTH_TRADE_FREQ", "5"))
@@ -325,7 +353,7 @@ def build_snapshot(
     except ValueError:
         period_days = 400
     equity = downsample_equity(s.get("equity") or [])
-    return {
+    snapshot = {
         "setKey": SET_KEY,
         "displayLabel": DISPLAY_LABEL,
         "offerIds": offer_ids,
@@ -500,6 +528,64 @@ def append_v41_addons(members: list[dict], conn: sqlite3.Connection) -> None:
         existing_ids.add(sid)
 
 
+def ensure_tv_burst_strategy(conn: sqlite3.Connection, base: str, name: str) -> int:
+    row = conn.execute(
+        """SELECT s.id FROM strategies s
+           JOIN api_keys ak ON ak.id = s.api_key_id
+           WHERE ak.name = ? AND s.name = ?""",
+        (API_KEY, name),
+    ).fetchone()
+    if row:
+        return int(row[0])
+    ak = conn.execute("SELECT id FROM api_keys WHERE name=?", (API_KEY,)).fetchone()
+    if not ak:
+        raise SystemExit(f"api_key {API_KEY} not found")
+    conn.execute(
+        """INSERT INTO strategies (
+            name, api_key_id, strategy_type, market_mode, base_symbol, quote_symbol, interval,
+            price_channel_length, zscore_entry, zscore_exit, zscore_stop, take_profit_percent,
+            long_enabled, short_enabled, lot_long_percent, lot_short_percent, is_active,
+            display_on_chart, show_settings, show_chart, show_indicators, show_positions_on_chart,
+            auto_update, reinvest_percent, leverage, margin_type, detection_source, state
+        ) VALUES (?, ?, 'momentum_scalp_tv', 'mono', ?, '', '15m',
+            8, 21, 20, 1.2, 2.0, 1, 1, 100, 100, 0, 0, 1, 0, 0, 0, 1, 100, 20, 'cross', 'close', 'flat')""",
+        (name, int(ak[0]), base),
+    )
+    conn.commit()
+    row = conn.execute("SELECT id FROM strategies WHERE name=? AND api_key_id=?", (name, int(ak[0]))).fetchone()
+    return int(row[0])
+
+
+def append_v42_tv_burst(members: list[dict], conn: sqlite3.Connection) -> None:
+    """v4.2: TV EMA+ADX 15m mono burst legs (SUI/DOGE/SOL) @ full mult."""
+    existing_ids = {int(m["strategyId"]) for m in members if m.get("strategyId")}
+    for spec in TV_BURST_SPECS:
+        sid = ensure_tv_burst_strategy(conn, spec["base"], spec["name"])
+        if sid in existing_ids:
+            continue
+        members.append({
+            "strategyId": sid,
+            "strategyName": spec["name"],
+            "strategyType": "momentum_scalp_tv",
+            "marketMode": "mono",
+            "market": spec["base"],
+            "interval": "15m",
+            "tier": "burst_15m_tv",
+            "legLotMult": float(os.environ.get("SYNTH_BURST_LEG_MULT", "1.0")),
+            "tunedLotPct": 100,
+            "tunedRetEst": 0,
+            "tunedDdEst": 0,
+            "burstPreset": {
+                "emaFast": 8,
+                "emaSlow": 21,
+                "adxMin": 20,
+                "tpPercent": 2.0,
+                "slPercent": 1.2,
+            },
+        })
+        existing_ids.add(sid)
+
+
 def load_mono_4h_ct_rows() -> list[dict]:
     """Top mono 4h CT from SYNTH4H_V2 merge (CRV, 1000SATS, TIA)."""
     if not os.path.isfile(HYBRID_4H_MERGE):
@@ -510,7 +596,7 @@ def load_mono_4h_ct_rows() -> list[dict]:
         "1000SATSUSDT": 252153,
         "TIAUSDT": 253223,
     }
-    if CARD_VER in ("v4", "v4.1"):
+    if CARD_VER in ("v4", "v4.1", "v4.2"):
         MONO_PICK_IDS = {
             "CRVUSDT": 253635,
             "TIAUSDT": 253223,
@@ -573,6 +659,8 @@ def tier_weights_map() -> dict[str, float]:
     }
     if W_MONO_4H > 0:
         m["mono_4h_ct"] = W_MONO_4H
+    if CARD_VER == "v4.2":
+        m["burst_15m_tv"] = W_BURST_TV
     return m
 
 
@@ -585,6 +673,7 @@ def composition_counts(members: list[dict]) -> dict:
         "1dDdTrend": sum(1 for m in members if m["tier"] == "1d_dd_trend"),
         "1dCt": sum(1 for m in members if m["tier"] == "1d_ct"),
         "1dStatArb": sum(1 for m in members if m["tier"] == "1d_stat_arb"),
+        "burst15mTv": sum(1 for m in members if m["tier"] == "burst_15m_tv"),
         "needsLotTune": sum(1 for m in members if m.get("tunedLotPct", 100) < 100),
         "tierWeights": tw,
     }
@@ -674,9 +763,30 @@ def main() -> None:
     if args.from_card:
         card = json.load(open(args.from_card, encoding="utf-8"))
         members = list(card.get("members") or [])
+        conn = sqlite3.connect(DB)
+        if CARD_VER == "v4.2":
+            append_v42_tv_burst(members, conn)
+            assign_weights(members, tier_weights_map())
         if len(members) < 8:
             raise SystemExit(f"Card has {len(members)} legs, need >=8")
-        out = args.from_card
+        out = CARD_OUT if CARD_VER == "v4.2" else args.from_card
+        if CARD_VER == "v4.2":
+            card = {
+                **card,
+                "generatedAt": datetime.now(timezone.utc).isoformat(),
+                "setKey": SET_KEY,
+                "displayLabel": DISPLAY_LABEL,
+                "cardVersion": CARD_VER,
+                "members": members,
+                "composition": composition_counts(members),
+                "portfolio": {
+                    **(card.get("portfolio") or {}),
+                    "lotPercent": LOT_PERCENT,
+                    "maxOpenPositions": MAX_OPEN_POSITIONS,
+                },
+                "portfolioCircuitBreaker": PORTFOLIO_CB if PORTFOLIO_CB.get("enabled") else None,
+            }
+            json.dump(card, open(out, "w"), indent=2, ensure_ascii=False)
     else:
         if not os.path.isfile(POST_TUNE):
             subprocess.check_call([sys.executable, os.path.join(REPO, "scripts/hybrid/rank_post_tune_jul2026.py")])
@@ -686,7 +796,7 @@ def main() -> None:
         members = []
         wf = None
 
-        if CARD_VER in ("v4", "v4.1"):
+        if CARD_VER in ("v4", "v4.1", "v4.2"):
             if not os.path.isfile(WF_RANK):
                 v3_card = os.path.join(REPO, "results/synth_stable_union_card_v3_jul2026.json")
                 wf_cmd = [
@@ -749,6 +859,10 @@ def main() -> None:
         if CARD_VER == "v4.1":
             append_v41_addons(members, conn)
 
+        if CARD_VER == "v4.2":
+            append_v41_addons(members, conn)
+            append_v42_tv_burst(members, conn)
+
         if len(members) < 8:
             raise SystemExit(f"Need >=8 legs, got {len(members)}")
 
@@ -773,7 +887,7 @@ def main() -> None:
             "members": members,
             "offerIds": [offer_id(m) for m in members],
             "postTuneNotes": pt.get("notes") or {},
-            "walkForward": wf if CARD_VER in ("v4", "v4.1") else None,
+            "walkForward": wf if CARD_VER in ("v4", "v4.1", "v4.2") else None,
             "portfolioCircuitBreaker": PORTFOLIO_CB if PORTFOLIO_CB.get("enabled") else None,
         }
         if card.get("walkForward") is None:

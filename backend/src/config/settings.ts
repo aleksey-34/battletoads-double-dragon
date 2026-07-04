@@ -33,6 +33,7 @@ export type StrategyType =
   | 'ZZ_Fast'
   | 'ZZ_Instance'
   | 'CT_Fractal'
+  | 'momentum_scalp_tv'
   | 'periodic_buy'
   | 'dca'
   | 'hideep';
