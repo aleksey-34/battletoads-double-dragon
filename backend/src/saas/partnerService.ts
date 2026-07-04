@@ -17,7 +17,7 @@ const partnerSlugPrefixes = (): string[] => {
 };
 
 const partnerExtraSlugs = (): Set<string> => {
-  const raw = String(process.env.PARTNER_TENANT_EXTRA_SLUGS || 'ivan-weex,mikitamikado').trim();
+  const raw = String(process.env.PARTNER_TENANT_EXTRA_SLUGS || '').trim();
   return new Set(raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean));
 };
 
