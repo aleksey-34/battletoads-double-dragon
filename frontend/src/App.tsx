@@ -17,6 +17,8 @@ const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Settings = lazy(() => import('./pages/Settings'));
 const TradingSystems = lazy(() => import('./pages/TradingSystems'));
 const Positions = lazy(() => import('./pages/Positions'));
+const PartnerCabinet = lazy(() => import('./pages/PartnerCabinet'));
+const PartnerLogin = lazy(() => import('./pages/PartnerCabinet').then((m) => ({ default: m.PartnerLogin })));
 const ClientCabinet = lazy(() => import('./pages/ClientCabinet'));
 const TvAlertsCabinet = lazy(() => import('./pages/TvAlertsCabinet'));
 const Logs = lazy(() => import('./pages/Logs'));
@@ -345,6 +347,8 @@ function AppShell() {
           } />
           <Route path="/dashboard" element={adminAuthState === 'ok' ? <Dashboard /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
           <Route path="/settings" element={adminAuthState === 'ok' ? <Settings /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/partner/login" element={<PartnerLogin />} />
+          <Route path="/partner" element={<PartnerCabinet />} />
           <Route path="/positions" element={adminAuthState === 'ok' ? <Positions /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
           <Route path="/logs" element={adminAuthState === 'ok' ? <Logs /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
           <Route path="/backtest" element={<Navigate to="/saas" replace />} />

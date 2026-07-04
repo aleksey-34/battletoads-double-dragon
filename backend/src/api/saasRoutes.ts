@@ -1,6 +1,7 @@
 ﻿import { Router } from 'express';
 import logger from '../utils/logger';
-import { createClientMagicLink, requirePlatformAdmin } from '../utils/auth';
+import { createClientMagicLink, requirePlatformAdmin, verifyDashboardPassword } from '../utils/auth';
+import { getPartnerDashboard, getPartnerMonitoringSeries } from '../saas/partnerService';
 import { runAdminTelegramReportNow } from '../notifications/adminTelegramReporter';
 import {
   getAlgofundState,
@@ -111,6 +112,55 @@ const toOptionalNumber = (value: unknown): number | undefined => {
 const isLevel3 = (value: unknown): value is 'low' | 'medium' | 'high' => {
   return value === 'low' || value === 'medium' || value === 'high';
 };
+
+const requirePartnerOrAdmin = (req: any, res: any, next: any) => {
+  const partnerToken = String(process.env.PARTNER_VIEW_TOKEN || '').trim();
+  const authHeader = String(req?.headers?.authorization || '').trim();
+  if (!authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  const token = authHeader.slice(7).trim();
+  if (partnerToken && token === partnerToken) {
+    req.partnerAuth = { mode: 'partner_token' };
+    return next();
+  }
+  const platformToken = String(process.env.ADMIN_PLATFORM_TOKEN || '').trim();
+  if (platformToken && token === platformToken) {
+    req.adminAuth = { role: 'platform_admin', authMode: 'platform_token' };
+    return next();
+  }
+  if (verifyDashboardPassword(token)) {
+    req.adminAuth = { role: 'platform_admin', authMode: 'dashboard_password' };
+    return next();
+  }
+  return res.status(403).json({ error: 'Forbidden: partner or admin required' });
+};
+
+router.get('/partner/dashboard', requirePartnerOrAdmin, async (_req, res) => {
+  try {
+    res.json(await getPartnerDashboard());
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Partner dashboard error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/partner/monitoring/:apiKeyName', requirePartnerOrAdmin, async (req, res) => {
+  try {
+    const apiKeyName = String(req.params.apiKeyName || '').trim();
+    if (!apiKeyName) {
+      return res.status(400).json({ error: 'apiKeyName required' });
+    }
+    const days = toOptionalNumber(req.query.days);
+    const limit = toOptionalNumber(req.query.limit);
+    res.json(await getPartnerMonitoringSeries(apiKeyName, { days, limit }));
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Partner monitoring error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // All /admin/* routes require platform admin authentication
 router.use('/admin', requirePlatformAdmin);

@@ -110,6 +110,11 @@ type ManualOrderDraft = {
   price?: number;
 };
 
+const sleep = (ms: number) => new Promise<void>((resolve) => { window.setTimeout(resolve, ms); });
+
+const BATCH_SIZE = 3;
+const BATCH_DELAY_MS = 400;
+
 const toNumber = (value: any): number => {
   const numeric = Number(value);
   return Number.isFinite(numeric) ? numeric : 0;
@@ -142,6 +147,19 @@ const extractLastClosePrice = (payload: any): number | null => {
   return null;
 };
 
+const canonicalExchangeLabel = (raw: string): string => {
+  const s = String(raw || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (s.startsWith('mexc')) return 'MEXC';
+  if (s.startsWith('bybit')) return 'Bybit';
+  if (s.startsWith('binance')) return 'Binance';
+  if (s.startsWith('bingx')) return 'BingX';
+  if (s.startsWith('bitget')) return 'Bitget';
+  if (s.startsWith('weex')) return 'WEEX';
+  if (s.startsWith('okx')) return 'OKX';
+  if (s.startsWith('htx') || s.startsWith('huobi')) return 'HTX';
+  return raw || 'Unknown';
+};
+
 const Positions: React.FC = () => {
   const { t } = useI18n();
   const [positionsByKey, setPositionsByKey] = useState<{ [key: string]: PositionRow[] }>({});
@@ -166,10 +184,14 @@ const Positions: React.FC = () => {
   const [monChartLatest, setMonChartLatest] = useState<MonitoringSnapshot | null>(null);
   const [monChartRaw, setMonChartRaw] = useState<MonitoringSnapshot[]>([]);
   const [monShowPnl, setMonShowPnl] = useState(true);
+  const [monShowUpnl, setMonShowUpnl] = useState(true);
   const [monShowDd, setMonShowDd] = useState(false);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(false);
+  const [activeExchangeTab, setActiveExchangeTab] = useState<string>('');
+  const [loadedKeys, setLoadedKeys] = useState<Set<string>>(() => new Set());
   const [manualOrderDraftByKey, setManualOrderDraftByKey] = useState<{ [key: string]: ManualOrderDraft }>({});
   const apiKeysRef = useRef<ApiKey[]>([]);
+  const activeExchangeTabRef = useRef('');
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -187,18 +209,32 @@ const Positions: React.FC = () => {
     }).catch(() => undefined);
   }, []);
 
-  const refreshForKeys = async (keys: ApiKey[], options?: { includeTrades?: boolean }) => {
+  const refreshSingleKey = async (apiKeyName: string, options?: { includeTrades?: boolean }) => {
     const includeTrades = options?.includeTrades === true;
-    await Promise.all(
-      keys.map(async (key) => {
-        await Promise.all([
-          fetchPositions(key.name),
-          fetchOrders(key.name),
-          fetchBalances(key.name),
-          includeTrades ? fetchTrades(key.name) : Promise.resolve(),
-        ]);
-      })
-    );
+    await Promise.all([
+      fetchPositions(apiKeyName),
+      fetchOrders(apiKeyName),
+      fetchBalances(apiKeyName),
+      includeTrades ? fetchTrades(apiKeyName) : Promise.resolve(),
+    ]);
+  };
+
+  const refreshKeysBatched = async (keys: ApiKey[], options?: { includeTrades?: boolean; force?: boolean }) => {
+    const force = options?.force === true;
+    const pending = keys.filter((k) => force || !loadedKeys.has(k.name));
+    if (pending.length === 0) return;
+    for (let i = 0; i < pending.length; i += BATCH_SIZE) {
+      const batch = pending.slice(i, i + BATCH_SIZE);
+      await Promise.all(batch.map((k) => refreshSingleKey(k.name, options)));
+      setLoadedKeys((prev) => {
+        const next = new Set(prev);
+        batch.forEach((k) => next.add(k.name));
+        return next;
+      });
+      if (i + BATCH_SIZE < pending.length) {
+        await sleep(BATCH_DELAY_MS);
+      }
+    }
   };
 
   const fetchApiKeys = async () => {
@@ -223,7 +259,7 @@ const Positions: React.FC = () => {
         return next;
       });
 
-      await refreshForKeys(keys, { includeTrades: false });
+      setLoadedKeys(new Set());
     } catch (error) {
       console.error(error);
     }
@@ -234,14 +270,47 @@ const Positions: React.FC = () => {
   }, [apiKeys]);
 
   useEffect(() => {
+    activeExchangeTabRef.current = activeExchangeTab;
+  }, [activeExchangeTab]);
+
+  const visibleApiKeys = useMemo(
+    () => (hideDematerializedKeys ? apiKeys.filter((k) => !k.algofundDematerialized) : apiKeys),
+    [apiKeys, hideDematerializedKeys],
+  );
+
+  const apiKeysByExchange = useMemo(() => {
+    return visibleApiKeys.reduce((acc, apiKey) => {
+      const exchange = canonicalExchangeLabel(apiKey.exchange || t('common.unknown', 'Unknown'));
+      if (!acc[exchange]) acc[exchange] = [];
+      acc[exchange].push(apiKey);
+      return acc;
+    }, {} as { [exchange: string]: ApiKey[] });
+  }, [visibleApiKeys, t]);
+
+  useEffect(() => {
+    const exchanges = Object.keys(apiKeysByExchange);
+    if (exchanges.length === 0) return;
+    setActiveExchangeTab((prev) => (prev && exchanges.includes(prev) ? prev : exchanges[0]));
+  }, [apiKeysByExchange]);
+
+  useEffect(() => {
+    if (!activeExchangeTab) return;
+    const keys = apiKeysByExchange[activeExchangeTab] || [];
+    if (keys.length > 0) {
+      void refreshKeysBatched(keys);
+    }
+  }, [activeExchangeTab, apiKeysByExchange]);
+
+  useEffect(() => {
     if (!autoRefreshEnabled) {
       return () => undefined;
     }
 
     const timerId = window.setInterval(() => {
-      const keys = apiKeysRef.current;
+      const tab = activeExchangeTabRef.current;
+      const keys = apiKeysRef.current.filter((k) => canonicalExchangeLabel(k.exchange || '') === tab);
       if (keys.length > 0) {
-        void refreshForKeys(keys, { includeTrades: false });
+        void refreshKeysBatched(keys, { force: true });
       }
     }, 180000);
 
@@ -505,7 +574,7 @@ const Positions: React.FC = () => {
   const refreshAllPositions = async () => {
     setRefreshAllLoading(true);
     try {
-      await refreshForKeys(apiKeysRef.current, { includeTrades: true });
+      await refreshKeysBatched(visibleApiKeys, { includeTrades: true, force: true });
       message.success(t('positions.msg.refreshedAll', 'Positions, orders and trades refreshed for all API keys'));
     } catch (error) {
       console.error(error);
@@ -695,40 +764,13 @@ const Positions: React.FC = () => {
     },
   ];
 
-  const canonicalExchange = (raw: string): string => {
-    const s = raw.toLowerCase().replace(/[^a-z0-9]/g, '');
-    if (s.startsWith('mexc')) return 'MEXC';
-    if (s.startsWith('bybit')) return 'Bybit';
-    if (s.startsWith('binance')) return 'Binance';
-    if (s.startsWith('bingx')) return 'BingX';
-    if (s.startsWith('bitget')) return 'Bitget';
-    if (s.startsWith('weex')) return 'WEEX';
-    if (s.startsWith('okx')) return 'OKX';
-    if (s.startsWith('htx') || s.startsWith('huobi')) return 'HTX';
-    return raw;
-  };
-
-  const visibleApiKeys = useMemo(
-    () => (hideDematerializedKeys ? apiKeys.filter((k) => !k.algofundDematerialized) : apiKeys),
-    [apiKeys, hideDematerializedKeys],
-  );
+  const canonicalExchange = canonicalExchangeLabel;
 
   const weexIpErrorCount = useMemo(
     () => Object.values({ ...balanceErrorByKey, ...positionErrorByKey })
       .filter((msg) => /whitelist|WEEX отклонил|无效的IP|40018/i.test(String(msg || ''))).length,
     [balanceErrorByKey, positionErrorByKey],
   );
-
-  const apiKeysByExchange = useMemo(() => {
-    return visibleApiKeys.reduce((acc, apiKey) => {
-      const exchange = canonicalExchange(apiKey.exchange || t('common.unknown', 'Unknown'));
-      if (!acc[exchange]) {
-        acc[exchange] = [];
-      }
-      acc[exchange].push(apiKey);
-      return acc;
-    }, {} as { [exchange: string]: ApiKey[] });
-  }, [visibleApiKeys, t]);
 
   const loadMonChart = async (key: string, days: number) => {
     setMonChartLoading(true);
@@ -840,7 +882,11 @@ const Positions: React.FC = () => {
         ))}
       </Modal>
 
-      <Tabs type="card" items={Object.entries(apiKeysByExchange).map(([exchange, keys]) => ({
+      <Tabs
+        type="card"
+        activeKey={activeExchangeTab || undefined}
+        onChange={(key) => setActiveExchangeTab(key)}
+        items={Object.entries(apiKeysByExchange).map(([exchange, keys]) => ({
         key: exchange,
         label: `${exchange} (${keys.length})`,
         children: (
@@ -868,6 +914,7 @@ const Positions: React.FC = () => {
               const ordersLoading = Boolean(loadingByKey[`orders:${key.name}`]);
               const tradesLoading = Boolean(loadingByKey[`trades:${key.name}`]);
               const balancesLoading = Boolean(loadingByKey[`balances:${key.name}`]);
+              const keyNotLoaded = !loadedKeys.has(key.name) && !positionsLoading && !balancesLoading;
               const totalUsd = keyBalances.reduce((sum, item) => sum + toNumber(item.usdValue), 0);
               const topBalances = keyBalances
                 .filter((item) => toNumber(item.walletBalance) > 0)
@@ -883,6 +930,9 @@ const Positions: React.FC = () => {
                   style={{ width: '100%' }}
                   bodyStyle={{ padding: 10 }}
                 >
+                  {keyNotLoaded ? (
+                    <div style={{ padding: 12, textAlign: 'center' }}><Spin size="small" /> <span style={{ marginLeft: 8, color: '#6b7280' }}>Загрузка…</span></div>
+                  ) : null}
                   <Space wrap style={{ marginBottom: 8 }}>
                     <Button size="small" onClick={() => openMonChart(key.name)} style={{ background: '#7c3aed', color: '#fff', border: 'none' }}>
                       📈 Мониторинг
@@ -1154,10 +1204,22 @@ const Positions: React.FC = () => {
                 {monChartLatest && monChartLatest.pnl_net_usd != null
                   ? <Tag color={Number(monChartLatest.pnl_net_usd) >= 0 ? 'green' : 'red'}>PnL ${fmtNum(monChartLatest.pnl_net_usd)}</Tag>
                   : null}
+                {monChartLatest ? (
+                  <Tag color={Number(monChartLatest.unrealized_pnl || 0) >= 0 ? 'purple' : 'magenta'}>
+                    UPNL ${fmtNum(monChartLatest.unrealized_pnl)}
+                  </Tag>
+                ) : null}
               </Space>
               <Space wrap>
-                <Checkbox checked={monShowPnl} onChange={(e) => setMonShowPnl(e.target.checked)}>PnL</Checkbox>
-                <Checkbox checked={monShowDd} onChange={(e) => setMonShowDd(e.target.checked)}>DD %</Checkbox>
+                <Checkbox checked={monShowPnl} onChange={(e) => setMonShowPnl(e.target.checked)}>
+                  <span style={{ color: '#16a34a' }}>●</span> PnL
+                </Checkbox>
+                <Checkbox checked={monShowUpnl} onChange={(e) => setMonShowUpnl(e.target.checked)}>
+                  <span style={{ color: '#7c3aed' }}>●</span> UPNL
+                </Checkbox>
+                <Checkbox checked={monShowDd} onChange={(e) => setMonShowDd(e.target.checked)}>
+                  <span style={{ color: '#d97706' }}>●</span> DD %
+                </Checkbox>
                 <Segmented
                   options={[
                     { label: '1д', value: 1 },
@@ -1189,6 +1251,20 @@ const Positions: React.FC = () => {
                                 ? r.pnl_net_usd
                                 : Number(r.equity_usd || 0) - Number(r.unrealized_pnl || 0) - Number(r.deposit_base_usd || 0)
                             );
+                            return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
+                          })
+                          .filter((p): p is { time: number; value: number } => !!p),
+                      }]
+                    : []),
+                  ...(monShowUpnl
+                    ? [{
+                        id: 'upnl',
+                        color: '#7c3aed',
+                        lineWidth: 2,
+                        data: monChartRaw
+                          .map((r) => {
+                            const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
+                            const v = Number(r.unrealized_pnl);
                             return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
                           })
                           .filter((p): p is { time: number; value: number } => !!p),
