@@ -1018,6 +1018,14 @@ type AdminPublishPreview = {
   cardMetadata: Record<string, unknown>;
 };
 
+type PortfolioCircuitBreakerSettings = {
+  enabled?: boolean;
+  peakWindowDays?: number;
+  ddTriggerPercent?: number;
+  lotMultiplier?: number;
+  pauseDays?: number;
+};
+
 type BacktestCardSettings = {
   riskScore: number;
   tradeFrequencyScore: number;
@@ -1032,6 +1040,16 @@ type BacktestCardSettings = {
   reinvestPercent?: number;
   dateFrom?: string;
   dateTo?: string;
+  portfolioCircuitBreaker?: PortfolioCircuitBreakerSettings | null;
+  lotPercentMultiplierByStrategyId?: Record<string, number>;
+};
+
+const DEFAULT_PORTFOLIO_CB: PortfolioCircuitBreakerSettings = {
+  enabled: true,
+  peakWindowDays: 30,
+  ddTriggerPercent: 8,
+  lotMultiplier: 0.5,
+  pauseDays: 14,
 };
 
 const ADMIN_PUBLISH_RESPONSE_STORAGE_KEY = 'saasAdminPublishResponse';
@@ -1142,6 +1160,34 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
   const isYmd = (v: unknown): v is string => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
   const dateFromRaw = parsed.dateFrom;
   const dateToRaw = parsed.dateTo;
+  const legMultRaw = parsed.lotPercentMultiplierByStrategyId;
+  const legMults: Record<string, number> = {};
+  if (legMultRaw && typeof legMultRaw === 'object') {
+    for (const [key, value] of Object.entries(legMultRaw as Record<string, unknown>)) {
+      const n = Number(value);
+      if (Number.isFinite(n) && n > 0) {
+        legMults[String(key)] = Math.min(2, Math.max(0.05, n));
+      }
+    }
+  }
+  const pcbRaw = parsed.portfolioCircuitBreaker;
+  let portfolioCircuitBreaker: PortfolioCircuitBreakerSettings | null | undefined;
+  if (pcbRaw === null) {
+    portfolioCircuitBreaker = null;
+  } else if (pcbRaw && typeof pcbRaw === 'object') {
+    const pcb = pcbRaw as Record<string, unknown>;
+    portfolioCircuitBreaker = {
+      enabled: pcb.enabled !== false,
+      peakWindowDays: Number.isFinite(Number(pcb.peakWindowDays)) ? Number(pcb.peakWindowDays) : DEFAULT_PORTFOLIO_CB.peakWindowDays,
+      ddTriggerPercent: Number.isFinite(Number(pcb.ddTriggerPercent ?? pcb.ddTrigger))
+        ? Number(pcb.ddTriggerPercent ?? pcb.ddTrigger)
+        : DEFAULT_PORTFOLIO_CB.ddTriggerPercent,
+      lotMultiplier: Number.isFinite(Number(pcb.lotMultiplier ?? pcb.lotMult))
+        ? Number(pcb.lotMultiplier ?? pcb.lotMult)
+        : DEFAULT_PORTFOLIO_CB.lotMultiplier,
+      pauseDays: Number.isFinite(Number(pcb.pauseDays)) ? Number(pcb.pauseDays) : DEFAULT_PORTFOLIO_CB.pauseDays,
+    };
+  }
   return {
     riskScore: Number.isFinite(riskScore) ? Math.min(10, Math.max(0, riskScore)) : DEFAULT_BACKTEST_SETTINGS.riskScore,
     tradeFrequencyScore: Number.isFinite(tradeFrequencyScore) ? Math.min(10, Math.max(0, tradeFrequencyScore)) : DEFAULT_BACKTEST_SETTINGS.tradeFrequencyScore,
@@ -1156,6 +1202,8 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
     reinvestPercent: Number.isFinite(reinvestPercent) ? Math.min(100, Math.max(0, reinvestPercent)) : DEFAULT_BACKTEST_SETTINGS.reinvestPercent,
     dateFrom: isYmd(dateFromRaw) ? dateFromRaw : '',
     dateTo: isYmd(dateToRaw) ? dateToRaw : '',
+    ...(portfolioCircuitBreaker !== undefined ? { portfolioCircuitBreaker } : {}),
+    ...(Object.keys(legMults).length > 0 ? { lotPercentMultiplierByStrategyId: legMults } : {}),
   };
 };
 
@@ -3158,6 +3206,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestSlippagePercent, setAdminSweepBacktestSlippagePercent] = useState(DEFAULT_BACKTEST_SETTINGS.slippagePercent);
   const [adminSweepBacktestFundingRatePercent, setAdminSweepBacktestFundingRatePercent] = useState(DEFAULT_BACKTEST_SETTINGS.fundingRatePercent);
   const [adminSweepBacktestReinvestPercent, setAdminSweepBacktestReinvestPercent] = useState<number>(0);
+  const [adminSweepPortfolioCbEnabled, setAdminSweepPortfolioCbEnabled] = useState(DEFAULT_PORTFOLIO_CB.enabled !== false);
+  const [adminSweepPortfolioCbDd, setAdminSweepPortfolioCbDd] = useState(DEFAULT_PORTFOLIO_CB.ddTriggerPercent ?? 8);
+  const [adminSweepPortfolioCbLotMult, setAdminSweepPortfolioCbLotMult] = useState(DEFAULT_PORTFOLIO_CB.lotMultiplier ?? 0.5);
+  const [adminSweepPortfolioCbPauseDays, setAdminSweepPortfolioCbPauseDays] = useState(DEFAULT_PORTFOLIO_CB.pauseDays ?? 14);
+  const [adminSweepPortfolioCbPeakDays, setAdminSweepPortfolioCbPeakDays] = useState(DEFAULT_PORTFOLIO_CB.peakWindowDays ?? 30);
+  const [adminSweepLegLotMults, setAdminSweepLegLotMults] = useState<Record<string, number>>({});
+  const [adminSweepBacktestAsyncStatus, setAdminSweepBacktestAsyncStatus] = useState('');
   const [adminSweepBacktestDateFrom, setAdminSweepBacktestDateFrom] = useState('');
   const [adminSweepBacktestDateTo, setAdminSweepBacktestDateTo] = useState('');
   const [tsDcaPickLoading, setTsDcaPickLoading] = useState(false);
@@ -4179,6 +4234,34 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     selectedAdminDraftTsSetKey,
     resolveTsSnapshotForSystem,
     summary?.offerStore?.tsBacktestSnapshots,
+  ]);
+
+  const backtestLegRows = useMemo(() => {
+    if (!backtestDrawerContext || backtestDrawerContext.kind !== 'algofund-ts') {
+      return [] as Array<{ strategyId: string; label: string; mult: number }>;
+    }
+    const offerIds = Array.from(new Set((backtestDrawerContext.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
+    const offers = summary?.offerStore?.offers || [];
+    const snapshotMults = (
+      (backtestDrawerCardSnapshot?.backtestSettings as { lotPercentMultiplierByStrategyId?: Record<string, number> } | undefined)
+        ?.lotPercentMultiplierByStrategyId
+    ) || {};
+    return offerIds.map((offerId) => {
+      const offer = offers.find((item) => String(item.offerId || '') === offerId);
+      const strategyId = String(offer?.strategyId || offerId.replace(/^.*_(\d+)$/, '$1') || '').trim();
+      const label = String(offer?.titleRu || offerId).slice(0, 72);
+      const mult = Number(adminSweepLegLotMults[strategyId] ?? snapshotMults[strategyId] ?? 1);
+      return {
+        strategyId,
+        label,
+        mult: Number.isFinite(mult) && mult > 0 ? mult : 1,
+      };
+    }).filter((row) => row.strategyId.length > 0);
+  }, [
+    adminSweepLegLotMults,
+    backtestDrawerCardSnapshot,
+    backtestDrawerContext,
+    summary?.offerStore?.offers,
   ]);
 
   const masterSnapshotForReportSystem = useMemo(() => {
@@ -7011,6 +7094,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         ? Math.min(100, Math.max(0, Number(settings.reinvestPercent)))
         : DEFAULT_BACKTEST_SETTINGS.reinvestPercent ?? 0,
     );
+    const pcb = settings.portfolioCircuitBreaker;
+    if (pcb === null || pcb?.enabled === false) {
+      setAdminSweepPortfolioCbEnabled(false);
+    } else if (pcb) {
+      setAdminSweepPortfolioCbEnabled(true);
+      setAdminSweepPortfolioCbPeakDays(Math.max(1, Math.floor(Number(pcb.peakWindowDays ?? DEFAULT_PORTFOLIO_CB.peakWindowDays ?? 30))));
+      setAdminSweepPortfolioCbDd(Math.max(0.5, Number(pcb.ddTriggerPercent ?? DEFAULT_PORTFOLIO_CB.ddTriggerPercent ?? 8)));
+      setAdminSweepPortfolioCbLotMult(Math.min(1, Math.max(0, Number(pcb.lotMultiplier ?? DEFAULT_PORTFOLIO_CB.lotMultiplier ?? 0.5))));
+      setAdminSweepPortfolioCbPauseDays(Math.max(1, Math.floor(Number(pcb.pauseDays ?? DEFAULT_PORTFOLIO_CB.pauseDays ?? 14))));
+    }
+    setAdminSweepLegLotMults(settings.lotPercentMultiplierByStrategyId || {});
   }, []);
 
   const resolveBacktestSettingsForContext = useCallback((context: SaasBacktestContext): BacktestCardSettings => {
@@ -7112,6 +7206,36 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     && String(adminSweepBacktestDateTo || '').trim(),
   );
 
+  const buildPortfolioCbPayload = useCallback((): PortfolioCircuitBreakerSettings | null => {
+    if (!adminSweepPortfolioCbEnabled) {
+      return { enabled: false };
+    }
+    return {
+      enabled: true,
+      peakWindowDays: adminSweepPortfolioCbPeakDays,
+      ddTriggerPercent: adminSweepPortfolioCbDd,
+      lotMultiplier: adminSweepPortfolioCbLotMult,
+      pauseDays: adminSweepPortfolioCbPauseDays,
+    };
+  }, [
+    adminSweepPortfolioCbDd,
+    adminSweepPortfolioCbEnabled,
+    adminSweepPortfolioCbLotMult,
+    adminSweepPortfolioCbPauseDays,
+    adminSweepPortfolioCbPeakDays,
+  ]);
+
+  const buildLegMultPayload = useCallback((): Record<string, number> | undefined => {
+    if (backtestLegRows.length === 0) {
+      return undefined;
+    }
+    const out: Record<string, number> = {};
+    backtestLegRows.forEach((row) => {
+      out[row.strategyId] = row.mult;
+    });
+    return out;
+  }, [backtestLegRows]);
+
   const buildAdminBacktestSettingsOverride = useCallback((): Partial<BacktestCardSettings> => {
     const base = {
       riskScore: adminSweepBacktestRiskScore,
@@ -7124,6 +7248,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       commissionPercent: adminSweepBacktestCommissionPercent,
       slippagePercent: adminSweepBacktestSlippagePercent,
       fundingRatePercent: adminSweepBacktestFundingRatePercent,
+      portfolioCircuitBreaker: buildPortfolioCbPayload(),
+      lotPercentMultiplierByStrategyId: buildLegMultPayload(),
     };
     if (!backtestDatesUserModifiedRef.current) {
       return base;
@@ -7147,6 +7273,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     adminSweepBacktestDateFrom,
     adminSweepBacktestDateTo,
     backtestDrawerContext,
+    buildLegMultPayload,
+    buildPortfolioCbPayload,
   ]);
 
   // Debounce helper: triggers auto-recalculate after slider changes with 700ms delay.
@@ -7225,49 +7353,100 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         .map((item) => String(item || '').trim())
         .filter(Boolean),
     ));
+    const preferReal = options?.preferRealBacktest === true;
+    const portfolioCircuitBreaker = buildPortfolioCbPayload();
+    const lotPercentMultiplierByStrategyId = buildLegMultPayload();
+    const requestBody = {
+      kind: targetContext.kind,
+      setKey: targetContext.setKey,
+      systemName: targetContext.systemName,
+      offerId: targetContext.offerId,
+      offerIds: targetContext.kind === 'algofund-ts'
+        ? (contextOfferIds.length > 0 ? contextOfferIds : undefined)
+        : targetContext.offerIds,
+      offerWeightsById: targetContext.kind === 'algofund-ts'
+        ? normalizeBacktestTsWeights(
+          Array.from(new Set((targetContext.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean))),
+          backtestTsWeightsByOfferId,
+        )
+        : undefined,
+      riskScore: effectiveRiskScore,
+      tradeFrequencyScore: effectiveTradeFrequencyScore,
+      initialBalance: effectiveInitialBalance,
+      riskScaleMaxPercent: effectiveRiskScaleMaxPercent,
+      reinvestPercent: Number.isFinite(Number(options?.settingsOverride?.reinvestPercent))
+        ? Math.min(100, Math.max(0, Number(options?.settingsOverride?.reinvestPercent)))
+        : adminSweepBacktestReinvestPercent,
+      maxOpenPositions: effectiveMaxOpenPositions > 0 ? effectiveMaxOpenPositions : undefined,
+      lotPercentOverride: effectiveLotPercentOverride > 0 ? effectiveLotPercentOverride : undefined,
+      partialTpPct: effectivePartialTpPct > 0 ? effectivePartialTpPct : undefined,
+      commissionPercent: Number.isFinite(effectiveCommissionPercent) ? effectiveCommissionPercent : undefined,
+      slippagePercent: Number.isFinite(effectiveSlippagePercent) ? effectiveSlippagePercent : undefined,
+      fundingRatePercent: Number.isFinite(effectiveFundingRatePercent) ? effectiveFundingRatePercent : undefined,
+      preferRealBacktest: preferReal,
+      rerunApiKeyName: preferReal ? (adminSweepBacktestRerunApiKey || undefined) : undefined,
+      dateFrom: effectiveDateFrom,
+      dateTo: effectiveDateTo,
+      autoLotByChannelWidth: adminSweepAutoLotByChannel,
+      macroExitOverlay: tsDcaExitOverlayEnabled ? backtestCardMechanicsRef.current.macroExitOverlay : undefined,
+      statArbEntryGate: tsDcaStatArbGateEnabled ? backtestCardMechanicsRef.current.statArbEntryGate : undefined,
+      macroShield: tsDcaExitOverlayEnabled,
+      portfolioCircuitBreaker,
+      lotPercentMultiplierByStrategyId,
+    };
     try {
-      const response = await axios.post<AdminSweepBacktestPreviewResponse & { success?: boolean }>(
-        '/api/saas/admin/sweep-backtest-preview',
-        {
-        kind: targetContext.kind,
-        setKey: targetContext.setKey,
-        systemName: targetContext.systemName,
-        offerId: targetContext.offerId,
-        // Сохранённый состав из snapshot/контекста — подсказка для preview (особенно после
-        // локального storefront snapshot без API). Без offerIds бэкенд резолвит из DB runtime.
-        offerIds: targetContext.kind === 'algofund-ts'
-          ? (contextOfferIds.length > 0 ? contextOfferIds : undefined)
-          : targetContext.offerIds,
-        offerWeightsById: targetContext.kind === 'algofund-ts'
-          ? normalizeBacktestTsWeights(
-            Array.from(new Set((targetContext.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean))),
-            backtestTsWeightsByOfferId,
-          )
-          : undefined,
-        riskScore: effectiveRiskScore,
-        tradeFrequencyScore: effectiveTradeFrequencyScore,
-        initialBalance: effectiveInitialBalance,
-        riskScaleMaxPercent: effectiveRiskScaleMaxPercent,
-        reinvestPercent: Number.isFinite(Number(options?.settingsOverride?.reinvestPercent))
-          ? Math.min(100, Math.max(0, Number(options?.settingsOverride?.reinvestPercent)))
-          : adminSweepBacktestReinvestPercent,
-        maxOpenPositions: effectiveMaxOpenPositions > 0 ? effectiveMaxOpenPositions : undefined,
-        lotPercentOverride: effectiveLotPercentOverride > 0 ? effectiveLotPercentOverride : undefined,
-        partialTpPct: effectivePartialTpPct > 0 ? effectivePartialTpPct : undefined,
-        commissionPercent: Number.isFinite(effectiveCommissionPercent) ? effectiveCommissionPercent : undefined,
-        slippagePercent: Number.isFinite(effectiveSlippagePercent) ? effectiveSlippagePercent : undefined,
-        fundingRatePercent: Number.isFinite(effectiveFundingRatePercent) ? effectiveFundingRatePercent : undefined,
-        preferRealBacktest: options?.preferRealBacktest === true,
-        rerunApiKeyName: options?.preferRealBacktest
-          ? (adminSweepBacktestRerunApiKey || undefined)
-          : undefined,
-        dateFrom: effectiveDateFrom,
-        dateTo: effectiveDateTo,
-        autoLotByChannelWidth: adminSweepAutoLotByChannel,
-        macroExitOverlay: tsDcaExitOverlayEnabled ? backtestCardMechanicsRef.current.macroExitOverlay : undefined,
-        statArbEntryGate: tsDcaStatArbGateEnabled ? backtestCardMechanicsRef.current.statArbEntryGate : undefined,
-        macroShield: tsDcaExitOverlayEnabled,
-      }, { timeout: 900000 });
+      let response: { data: AdminSweepBacktestPreviewResponse & { success?: boolean } } | undefined;
+      if (preferReal) {
+        setAdminSweepBacktestAsyncStatus('Запуск portfolio engine…');
+        const startedAt = Date.now();
+        const start = await axios.post('/api/saas/admin/sweep-backtest-preview', {
+          ...requestBody,
+          asyncMode: true,
+        }, { timeout: 120000 });
+        const jobId = String(start.data?.jobId || '').trim();
+        if (!jobId) {
+          response = await axios.post<AdminSweepBacktestPreviewResponse & { success?: boolean }>(
+            '/api/saas/admin/sweep-backtest-preview',
+            requestBody,
+            { timeout: 900000 },
+          );
+        } else {
+          const deadline = Date.now() + 900_000;
+          while (Date.now() < deadline) {
+            if (requestSeq !== backtestRequestSeqRef.current) {
+              return;
+            }
+            await new Promise((resolve) => setTimeout(resolve, 2500));
+            const poll = await axios.get<AdminSweepBacktestPreviewResponse & {
+              success?: boolean;
+              status?: string;
+              error?: string;
+            }>(`/api/saas/admin/sweep-backtest-preview/jobs/${jobId}`, { timeout: 60_000 });
+            if (poll.data?.status === 'running') {
+              setAdminSweepBacktestAsyncStatus(`Portfolio engine… ${Math.round((Date.now() - startedAt) / 1000)}s`);
+              continue;
+            }
+            if (poll.data?.status === 'error') {
+              throw new Error(String(poll.data?.error || 'Engine rerun failed'));
+            }
+            response = { data: poll.data };
+            break;
+          }
+          if (!response) {
+            throw new Error('Engine rerun timeout (>15 min)');
+          }
+          setAdminSweepBacktestAsyncStatus('');
+        }
+      } else {
+        response = await axios.post<AdminSweepBacktestPreviewResponse & { success?: boolean }>(
+          '/api/saas/admin/sweep-backtest-preview',
+          requestBody,
+          { timeout: 900000 },
+        );
+      }
+      if (!response) {
+        throw new Error('Empty sweep backtest response');
+      }
       if (requestSeq !== backtestRequestSeqRef.current) {
         return;
       }
@@ -7309,12 +7488,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setAdminSweepBacktestError(errorMessage || 'Не удалось построить sweep backtest preview');
       messageApi.error(
         isTimeout
-          ? `${errorMessage || 'Таймаут 524'} — Cloudflare обрывает длинный API rerun (~100с). Сохранённый snapshot не затронут; для rerun открой админку по IP http://176.57.184.98 или нажми «Пересчитать» позже.`
+          ? `${errorMessage || 'Таймаут'} — длинный portfolio rerun. Повтори «Пересчитать»; async job должен обходить Cloudflare 524.`
           : (errorMessage || 'Не удалось построить sweep backtest preview'),
       );
     } finally {
       if (requestSeq === backtestRequestSeqRef.current) {
         setAdminSweepBacktestLoading(false);
+        setAdminSweepBacktestAsyncStatus('');
       }
     }
   };
@@ -7923,6 +8103,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               dcaBaseAmountPercent: tsDcaBaseMode === 'percent' ? tsDcaBasePercent : undefined,
               dcaAutotune: tsDcaAutotune,
               preset: dcaLayerForSave.tunePreset,
+              portfolioCircuitBreaker: buildPortfolioCbPayload(),
+              lotPercentMultiplierByStrategyId: buildLegMultPayload(),
             },
             dcaMarkets: tsDcaSelectedMarkets.length > 0 ? tsDcaSelectedMarkets : undefined,
             dcaLayer: dcaLayerForSave,
@@ -7948,6 +8130,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           slippagePercent: Math.max(0, Number(adminSweepBacktestSlippagePercent ?? DEFAULT_BACKTEST_SETTINGS.slippagePercent)),
           fundingRatePercent: Math.max(0, Number(adminSweepBacktestFundingRatePercent ?? DEFAULT_BACKTEST_SETTINGS.fundingRatePercent)),
           reinvestPercent: Math.max(0, Math.min(100, Number(adminSweepBacktestReinvestPercent ?? 0))),
+          portfolioCircuitBreaker: buildPortfolioCbPayload(),
+          lotPercentMultiplierByStrategyId: buildLegMultPayload(),
         }
       );
       await loadSummary('full');
@@ -8149,6 +8333,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     ...(tsDcaEnabled && tsDcaSelectedMarkets.length > 0
       ? { dcaEnabled: true, dcaMarkets: tsDcaSelectedMarkets }
       : {}),
+    portfolioCircuitBreaker: buildPortfolioCbPayload(),
+    ...(buildLegMultPayload() ? { lotPercentMultiplierByStrategyId: buildLegMultPayload() } : {}),
   });
 
   const resetBacktestDrawerDcaState = () => {
@@ -14794,7 +14980,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     {tsDcaCombinedLoading ? <Tag color="processing">TS+DCA preview</Tag> : null}
                     <Text>
                       {adminSweepBacktestLoading
-                        ? 'Считаю backtest… (real rerun может занять несколько минут)'
+                        ? (adminSweepBacktestAsyncStatus || 'Считаю backtest… (async job, обходит Cloudflare 524)')
                         : (tsDcaPickLoading || tsDcaResearchServerRunning)
                           ? (tsDcaProgressMessage || 'DCA scan на сервере…')
                           : 'Пересчитываю combined TS+DCA…'}
@@ -15543,6 +15729,72 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       </Space>
                       <Text type="secondary" style={{ fontSize: 10 }}>WEEX по умолчанию 0.1 / 0.05 / 0. Synthetic-стратегии удваиваются автоматически.</Text>
                     </Space>
+                  </Card>
+                </Col>
+              )}
+              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
+                <Col xs={24} md={12} lg={8}>
+                  <Card size="small" title="Portfolio CB (просадка)">
+                    <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                      <Space wrap>
+                        <Text>Включён</Text>
+                        <Switch
+                          checked={adminSweepPortfolioCbEnabled}
+                          onChange={(checked) => {
+                            setAdminSweepPortfolioCbEnabled(checked);
+                            setAdminSweepBacktestStale(true);
+                            scheduleBacktestDebounce();
+                          }}
+                        />
+                      </Space>
+                      {adminSweepPortfolioCbEnabled ? (
+                        <>
+                          <Space wrap size={8}>
+                            <Text type="secondary">DD триггер %</Text>
+                            <InputNumber min={1} max={40} step={0.5} value={adminSweepPortfolioCbDd}
+                              onChange={(v) => { setAdminSweepPortfolioCbDd(Number(v || 8)); setAdminSweepBacktestStale(true); scheduleBacktestDebounce(); }} />
+                            <Text type="secondary">Lot×</Text>
+                            <InputNumber min={0} max={1} step={0.05} value={adminSweepPortfolioCbLotMult}
+                              onChange={(v) => { setAdminSweepPortfolioCbLotMult(Number(v || 0.5)); setAdminSweepBacktestStale(true); scheduleBacktestDebounce(); }} />
+                          </Space>
+                          <Space wrap size={8}>
+                            <Text type="secondary">Peak окно d</Text>
+                            <InputNumber min={7} max={90} step={1} value={adminSweepPortfolioCbPeakDays}
+                              onChange={(v) => { setAdminSweepPortfolioCbPeakDays(Number(v || 30)); setAdminSweepBacktestStale(true); scheduleBacktestDebounce(); }} />
+                            <Text type="secondary">Pause d</Text>
+                            <InputNumber min={1} max={30} step={1} value={adminSweepPortfolioCbPauseDays}
+                              onChange={(v) => { setAdminSweepPortfolioCbPauseDays(Number(v || 14)); setAdminSweepBacktestStale(true); scheduleBacktestDebounce(); }} />
+                          </Space>
+                        </>
+                      ) : null}
+                      <Text type="secondary" style={{ fontSize: 11 }}>CB8: при DD от rolling peak → lot×{adminSweepPortfolioCbLotMult} на {adminSweepPortfolioCbPauseDays}d.</Text>
+                    </Space>
+                  </Card>
+                </Col>
+              )}
+              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && backtestLegRows.length > 1 && (
+                <Col xs={24}>
+                  <Card size="small" title={`Per-leg lot mult (${backtestLegRows.length} ног)`}>
+                    <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                      {backtestLegRows.map((row) => (
+                        <Space key={row.strategyId} wrap style={{ width: '100%', marginBottom: 6, justifyContent: 'space-between' }}>
+                          <Text style={{ fontSize: 11, maxWidth: '55%' }} ellipsis title={row.label}>{row.label}</Text>
+                          <InputNumber
+                            min={0.05}
+                            max={2}
+                            step={0.05}
+                            value={row.mult}
+                            onChange={(value) => {
+                              const next = Math.max(0.05, Math.min(2, Number(value || 1)));
+                              setAdminSweepLegLotMults((prev) => ({ ...prev, [row.strategyId]: next }));
+                              setAdminSweepBacktestStale(true);
+                              scheduleBacktestDebounce();
+                            }}
+                          />
+                        </Space>
+                      ))}
+                    </div>
+                    <Text type="secondary" style={{ fontSize: 11 }}>Множитель к базовому lot% для каждой стратегии (tune 0.35–1.0, burst 1.0).</Text>
                   </Card>
                 </Col>
               )}

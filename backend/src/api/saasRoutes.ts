@@ -78,6 +78,10 @@ import {
   getSaasObservabilityAlerts,
   parseCardMetadataOverridesBody,
 } from '../saas/service';
+import {
+  getAdminSweepBacktestJob,
+  startAdminSweepBacktestJob,
+} from '../saas/adminSweepBacktestJobService';
 
 type OfferStoreLabel = 'research_catalog' | 'runtime_snapshot' | 'fallback_preset';
 
@@ -295,76 +299,167 @@ router.patch('/admin/offer-store', async (req, res) => {
   }
 });
 
+const parseLotMultByStrategyBody = (raw: unknown): Record<string, number> | undefined => {
+  if (!raw || typeof raw !== 'object') {
+    return undefined;
+  }
+  const out: Record<string, number> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n > 0) {
+      out[String(key)] = n;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+};
+
+const buildSweepBacktestPreviewPayload = (body: Record<string, unknown>) => {
+  const source = String(body?.source || '').trim().toLowerCase();
+  const hasSystemName = String(body?.systemName || '').trim().length > 0;
+  const requestedKind = String(body?.kind || '').trim().toLowerCase();
+  const inferredKind = requestedKind === 'offer' || requestedKind === 'algofund-ts'
+    ? requestedKind as 'offer' | 'algofund-ts'
+    : (
+      source === 'offer_store'
+      || source === 'runtime_system'
+      || hasSystemName
+        ? 'algofund-ts'
+        : 'offer'
+    );
+  return {
+    kind: inferredKind,
+    setKey: body?.setKey ? String(body.setKey) : undefined,
+    systemName: body?.systemName ? String(body.systemName) : undefined,
+    offerId: body?.offerId ? String(body.offerId) : undefined,
+    offerIds: Array.isArray(body?.offerIds) ? body.offerIds.map((item: unknown) => String(item)) : undefined,
+    offerWeightsById: body?.offerWeightsById && typeof body.offerWeightsById === 'object'
+      ? Object.fromEntries(
+        Object.entries(body.offerWeightsById as Record<string, unknown>)
+          .map(([key, value]) => [String(key), toOptionalNumber(value) ?? 0]),
+      )
+      : undefined,
+    riskScore: toOptionalNumber(body?.riskScore),
+    tradeFrequencyScore: toOptionalNumber(body?.tradeFrequencyScore),
+    initialBalance: toOptionalNumber(body?.initialBalance),
+    reinvestPercent: toOptionalNumber(body?.reinvestPercent),
+    riskScaleMaxPercent: toOptionalNumber(body?.riskScaleMaxPercent),
+    maxOpenPositions: toOptionalNumber(body?.maxOpenPositions),
+    lotPercentOverride: toOptionalNumber(body?.lotPercentOverride),
+    partialTpPct: toOptionalNumber(body?.partialTpPct),
+    commissionPercent: toOptionalNumber(body?.commissionPercent),
+    slippagePercent: toOptionalNumber(body?.slippagePercent),
+    fundingRatePercent: toOptionalNumber(body?.fundingRatePercent),
+    dateFrom: body?.dateFrom ? String(body.dateFrom) : undefined,
+    dateTo: body?.dateTo ? String(body.dateTo) : undefined,
+    rerunApiKeyName: body?.rerunApiKeyName ? String(body.rerunApiKeyName) : undefined,
+    preferRealBacktest: body?.preferRealBacktest === true,
+    enablePairLock: body?.enablePairLock !== undefined ? toBool(body.enablePairLock, true) : undefined,
+    pairLockSeed: toOptionalNumber(body?.pairLockSeed),
+    autoLotByChannelWidth: body?.autoLotByChannelWidth === true,
+    macroShield: body?.macroShield === true,
+    macroExitOverlay: body?.macroExitOverlay && typeof body.macroExitOverlay === 'object'
+      ? body.macroExitOverlay as import('../backtest/engine').MacroExitOverlay
+      : undefined,
+    statArbEntryGate: body?.statArbEntryGate && typeof body.statArbEntryGate === 'object'
+      ? body.statArbEntryGate as import('../backtest/engine').StatArbEntryGate
+      : undefined,
+    portfolioCircuitBreaker: body?.portfolioCircuitBreaker === null
+      ? null
+      : (body?.portfolioCircuitBreaker && typeof body.portfolioCircuitBreaker === 'object'
+        ? body.portfolioCircuitBreaker as import('../services/portfolioCircuitBreaker').PortfolioCircuitBreakerConfig
+        : undefined),
+    lotPercentMultiplierByStrategyId: parseLotMultByStrategyBody(body?.lotPercentMultiplierByStrategyId),
+  };
+};
+
+const logSweepBacktestPreviewDone = (data: Record<string, unknown>): void => {
+  const rerunInfo = (data as { rerun?: Record<string, unknown> })?.rerun || {};
+  const summaryInfo = (data as { preview?: { summary?: Record<string, unknown> } })?.preview?.summary || {};
+  logger.info(
+    `[sweep-backtest-preview] done source=${(data as { preview?: { source?: string } })?.preview?.source} `
+    + `rerun.executed=${rerunInfo.executed} rerun.requested=${rerunInfo.requested} `
+    + `rerun.error="${String(rerunInfo.error || '').slice(0, 120)}" `
+    + `ret=${summaryInfo.totalReturnPercent} trades=${summaryInfo.tradesCount} `
+    + `period=${String((data as { period?: { dateFrom?: string } })?.period?.dateFrom || '').slice(0, 10)}`
+    + `..${String((data as { period?: { dateTo?: string } })?.period?.dateTo || '').slice(0, 10)} `
+    + `fullSweep=${Boolean((rerunInfo as { fullSweepDepth?: boolean }).fullSweepDepth)}`,
+  );
+};
+
+const finalizeSweepBacktestPreview = async (data: Awaited<ReturnType<typeof previewAdminSweepBacktest>>) => {
+  if (data.kind === 'algofund-ts' && Array.isArray(data.selectedOffers) && data.selectedOffers.length > 0) {
+    syncCloudTsFromSweepResult(data.selectedOffers).catch((err) => {
+      logger.error(`Cloud TS auto-sync failed: ${(err as Error).message}`);
+    });
+  }
+  logSweepBacktestPreviewDone(data as Record<string, unknown>);
+  return { success: true, ...data };
+};
+
 router.post('/admin/sweep-backtest-preview', async (req, res) => {
   try {
-    const source = String(req.body?.source || '').trim().toLowerCase();
-    const hasSystemName = String(req.body?.systemName || '').trim().length > 0;
-    const requestedKind = String(req.body?.kind || '').trim().toLowerCase();
-    logger.info(`[sweep-backtest-preview] kind=${requestedKind || 'auto'} system="${String(req.body?.systemName||'').slice(0,80)}" partialTpPct=${req.body?.partialTpPct} reinvest=${req.body?.reinvestPercent} maxOP=${req.body?.maxOpenPositions} preferReal=${req.body?.preferRealBacktest} dateFrom=${String(req.body?.dateFrom||'').slice(0,10)||'-'} dateTo=${String(req.body?.dateTo||'').slice(0,10)||'-'}`);
-    const inferredKind = requestedKind === 'offer' || requestedKind === 'algofund-ts'
-      ? requestedKind as 'offer' | 'algofund-ts'
-      : (
-        source === 'offer_store'
-        || source === 'runtime_system'
-        || hasSystemName
-          ? 'algofund-ts'
-          : 'offer'
-      );
-    const data = await previewAdminSweepBacktest({
-      kind: inferredKind,
-      setKey: req.body?.setKey ? String(req.body.setKey) : undefined,
-      systemName: req.body?.systemName ? String(req.body.systemName) : undefined,
-      offerId: req.body?.offerId ? String(req.body.offerId) : undefined,
-      offerIds: Array.isArray(req.body?.offerIds) ? req.body.offerIds.map((item: unknown) => String(item)) : undefined,
-      offerWeightsById: req.body?.offerWeightsById && typeof req.body.offerWeightsById === 'object'
-        ? Object.fromEntries(
-          Object.entries(req.body.offerWeightsById as Record<string, unknown>)
-            .map(([key, value]) => [String(key), toOptionalNumber(value) ?? 0])
-        )
-        : undefined,
-      riskScore: toOptionalNumber(req.body?.riskScore),
-      tradeFrequencyScore: toOptionalNumber(req.body?.tradeFrequencyScore),
-      initialBalance: toOptionalNumber(req.body?.initialBalance),
-      reinvestPercent: toOptionalNumber(req.body?.reinvestPercent),
-      riskScaleMaxPercent: toOptionalNumber(req.body?.riskScaleMaxPercent),
-      maxOpenPositions: toOptionalNumber(req.body?.maxOpenPositions),
-      lotPercentOverride: toOptionalNumber(req.body?.lotPercentOverride),
-      partialTpPct: toOptionalNumber(req.body?.partialTpPct),
-      commissionPercent: toOptionalNumber(req.body?.commissionPercent),
-      slippagePercent: toOptionalNumber(req.body?.slippagePercent),
-      fundingRatePercent: toOptionalNumber(req.body?.fundingRatePercent),
-      dateFrom: req.body?.dateFrom ? String(req.body.dateFrom) : undefined,
-      dateTo: req.body?.dateTo ? String(req.body.dateTo) : undefined,
-      rerunApiKeyName: req.body?.rerunApiKeyName ? String(req.body.rerunApiKeyName) : undefined,
-      // Admin sliders: real rerun when explicitly requested.
-      preferRealBacktest: req.body?.preferRealBacktest === true,
-      enablePairLock: req.body?.enablePairLock !== undefined ? toBool(req.body.enablePairLock, true) : undefined,
-      pairLockSeed: toOptionalNumber(req.body?.pairLockSeed),
-      autoLotByChannelWidth: req.body?.autoLotByChannelWidth === true,
-      macroShield: req.body?.macroShield === true,
-      macroExitOverlay: req.body?.macroExitOverlay && typeof req.body.macroExitOverlay === 'object'
-        ? req.body.macroExitOverlay as import('../backtest/engine').MacroExitOverlay
-        : undefined,
-      statArbEntryGate: req.body?.statArbEntryGate && typeof req.body.statArbEntryGate === 'object'
-        ? req.body.statArbEntryGate as import('../backtest/engine').StatArbEntryGate
-        : undefined,
-      portfolioCircuitBreaker: req.body?.portfolioCircuitBreaker && typeof req.body.portfolioCircuitBreaker === 'object'
-        ? req.body.portfolioCircuitBreaker as import('../services/portfolioCircuitBreaker').PortfolioCircuitBreakerConfig
-        : undefined,
-    });
-    // Auto-sync Cloud TS members from sweep result (fire-and-forget)
-    if (data.kind === 'algofund-ts' && Array.isArray(data.selectedOffers) && data.selectedOffers.length > 0) {
-      syncCloudTsFromSweepResult(data.selectedOffers).catch((err) => {
-        logger.error(`Cloud TS auto-sync failed: ${(err as Error).message}`);
+    const body = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
+    const requestedKind = String(body?.kind || '').trim().toLowerCase();
+    logger.info(
+      `[sweep-backtest-preview] kind=${requestedKind || 'auto'} `
+      + `system="${String(body?.systemName || '').slice(0, 80)}" `
+      + `partialTpPct=${body?.partialTpPct} reinvest=${body?.reinvestPercent} maxOP=${body?.maxOpenPositions} `
+      + `preferReal=${body?.preferRealBacktest} async=${body?.asyncMode} `
+      + `dateFrom=${String(body?.dateFrom || '').slice(0, 10) || '-'} `
+      + `dateTo=${String(body?.dateTo || '').slice(0, 10) || '-'}`,
+    );
+    const payload = buildSweepBacktestPreviewPayload(body);
+
+    if (body?.asyncMode === true) {
+      const jobId = startAdminSweepBacktestJob(async () => {
+        const data = await previewAdminSweepBacktest(payload);
+        const response = await finalizeSweepBacktestPreview(data);
+        return response as unknown as Record<string, unknown>;
+      });
+      return res.status(202).json({
+        success: true,
+        async: true,
+        jobId,
+        status: 'running',
       });
     }
-    const rerunInfo = (data as any)?.rerun || {};
-    const summaryInfo = (data as any)?.preview?.summary || {};
-    logger.info(`[sweep-backtest-preview] done source=${(data as any)?.preview?.source} rerun.executed=${rerunInfo.executed} rerun.requested=${rerunInfo.requested} rerun.error="${String(rerunInfo.error||'').slice(0,120)}" ret=${summaryInfo.totalReturnPercent} trades=${summaryInfo.tradesCount} period=${String((data as any)?.period?.dateFrom||'').slice(0,10)}..${String((data as any)?.period?.dateTo||'').slice(0,10)} fullSweep=${Boolean((rerunInfo as any)?.fullSweepDepth)}`);
-    res.json({ success: true, ...data });
+
+    const data = await previewAdminSweepBacktest(payload);
+    const response = await finalizeSweepBacktestPreview(data);
+    res.json(response);
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS admin sweep backtest preview error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/admin/sweep-backtest-preview/jobs/:jobId', async (req, res) => {
+  try {
+    const job = getAdminSweepBacktestJob(String(req.params.jobId || '').trim());
+    if (!job) {
+      return res.status(404).json({ error: 'Backtest job not found' });
+    }
+    if (job.status === 'running') {
+      return res.json({ success: true, status: 'running', jobId: job.id });
+    }
+    if (job.status === 'error') {
+      return res.json({
+        success: false,
+        status: 'error',
+        jobId: job.id,
+        error: job.error || 'Backtest failed',
+      });
+    }
+    return res.json({
+      success: true,
+      status: 'done',
+      jobId: job.id,
+      ...(job.result || {}),
+    });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS sweep backtest job poll error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

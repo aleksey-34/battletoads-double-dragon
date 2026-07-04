@@ -188,10 +188,24 @@ const resolveSnapshotPortfolioLotMultipliers = (
   preferRealBacktest: boolean,
   offers: Array<{ offerId?: string; strategyId?: number | string }>,
   weightsByOfferId: Record<string, number>,
+  payloadMultipliers?: Record<string, number>,
 ): Record<number, number> => {
   const ids = Array.from(new Set(strategyIds.filter((sid) => Number.isFinite(sid) && sid > 0)));
   if (ids.length <= 1) {
     return {};
+  }
+  if (payloadMultipliers && typeof payloadMultipliers === 'object') {
+    const src = payloadMultipliers;
+    const out: Record<number, number> = {};
+    for (const sid of ids) {
+      const m = Number(src[String(sid)] ?? src[sid]);
+      if (Number.isFinite(m) && m > 0) {
+        out[sid] = m;
+      }
+    }
+    if (Object.keys(out).length === ids.length) {
+      return out;
+    }
   }
   if (preferRealBacktest && snapshot?.backtestSettings && typeof snapshot.backtestSettings === 'object') {
     const raw = (snapshot.backtestSettings as Record<string, unknown>).lotPercentMultiplierByStrategyId;
@@ -239,6 +253,12 @@ const resolveSnapshotPortfolioCircuitBreaker = (
   snapshot: TsBacktestSnapshot | null | undefined,
   payloadRaw?: unknown,
 ): PortfolioCircuitBreakerConfig | undefined => {
+  if (payloadRaw === null) {
+    return undefined;
+  }
+  if (payloadRaw && typeof payloadRaw === 'object' && (payloadRaw as PortfolioCircuitBreakerConfig).enabled === false) {
+    return undefined;
+  }
   const fromPayload = parsePortfolioCircuitBreaker(payloadRaw);
   if (fromPayload && fromPayload.enabled !== false) {
     return fromPayload;
@@ -7196,7 +7216,8 @@ export const previewAdminSweepBacktest = async (payload?: {
   macroExitOverlay?: MacroExitOverlay;
   statArbEntryGate?: StatArbEntryGate;
   macroShield?: boolean;
-  portfolioCircuitBreaker?: PortfolioCircuitBreakerConfig;
+  portfolioCircuitBreaker?: PortfolioCircuitBreakerConfig | null;
+  lotPercentMultiplierByStrategyId?: Record<string, number>;
 }) => {
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();
@@ -7761,6 +7782,7 @@ export const previewAdminSweepBacktest = async (payload?: {
       preferRealBacktest,
       selectedOffers,
       normalizedOfferWeightsById,
+      payload?.lotPercentMultiplierByStrategyId,
     )
     : undefined;
   const tradeMul = getPreviewTradeMultiplier(tradeFrequencyScore);
@@ -8313,6 +8335,7 @@ export const previewAdminSweepBacktest = async (payload?: {
                     preferRealBacktest,
                     snapshotRerunOffers,
                     normalizedOfferWeightsById,
+                    payload?.lotPercentMultiplierByStrategyId,
                   )
                   : {};
 
