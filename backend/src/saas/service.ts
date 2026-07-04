@@ -4406,7 +4406,11 @@ const markMaterializedRuntimeOrigin = async (
   try {
     await db.run(
       `UPDATE strategies
-       SET origin = ?, is_runtime = ?, updated_at = CURRENT_TIMESTAMP
+       SET origin = ?,
+           is_runtime = ?,
+           is_archived = 0,
+           is_active = 1,
+           updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
       [origin, isRuntime, strategyId]
     );
