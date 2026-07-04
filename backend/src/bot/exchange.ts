@@ -5,6 +5,7 @@ import { ApiKey } from '../config/settings';
 import { db } from '../utils/database';
 // weexClient.ts is the legacy custom REST adapter; ccxt ≥4.5.49 has native weex support
 import { createWeexClient } from './weexClient';
+import { readHybridCandles } from './hybridCandleStore';
 
 type ExchangeClientEntry = {
   client: RestClientV5;
@@ -1031,6 +1032,18 @@ export const getMarketData = async (
   const startMs = Number.isFinite(Number(options?.startMs)) ? Number(options?.startMs) : undefined;
   const endMs = Number.isFinite(Number(options?.endMs)) ? Number(options?.endMs) : undefined;
   const hasRange = startMs !== undefined || endMs !== undefined;
+
+  const hybridHit = readHybridCandles(symbol, interval, {
+    limit: Number.isFinite(limit) ? Math.floor(limit) : undefined,
+    startMs,
+    endMs,
+  });
+  if (hybridHit && hybridHit.length > 0) {
+    if (process.env.HYBRID_QUIET !== '1') {
+      logger.info(`Hybrid bundle: ${symbol} ${interval} → ${hybridHit.length} candles`);
+    }
+    return hybridHit;
+  }
 
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);

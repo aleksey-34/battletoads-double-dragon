@@ -1742,3 +1742,6 @@ export const abortRunningFullHistoricalSweepJob = async (reason: string = 'abort
     workerSignaled: Boolean(child && !child.killed),
   };
 };
+
+export type { HistoricalSweepConfig };
+export { buildRunPlans as buildHistoricalSweepRunPlans };

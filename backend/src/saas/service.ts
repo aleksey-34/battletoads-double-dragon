@@ -213,7 +213,12 @@ const resolveSnapshotPortfolioLotMultipliers = (
       const src = raw as Record<string, unknown>;
       const out: Record<number, number> = {};
       for (const sid of ids) {
-        const m = Number(src[String(sid)] ?? src[sid]);
+        const m = Number(
+          src[String(sid)]
+          ?? src[sid]
+          ?? src[`tv-burst-turbo-${sid}`]
+          ?? src[`offer-${sid}`],
+        );
         if (Number.isFinite(m) && m > 0) {
           out[sid] = m;
         }
