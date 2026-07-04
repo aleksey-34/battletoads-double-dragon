@@ -1230,6 +1230,28 @@ const enrichBacktestSettingsFromTsSnapshot = (
   };
 };
 
+const ModuleStatusLed = ({ active, title }: { active: boolean; title?: string }) => (
+  <span
+    title={title || (active ? 'в engine rerun' : 'выкл / не используется')}
+    style={{
+      display: 'inline-block',
+      width: 9,
+      height: 9,
+      borderRadius: '50%',
+      backgroundColor: active ? '#52c41a' : '#ff4d4f',
+      boxShadow: active ? '0 0 6px rgba(82, 196, 26, 0.55)' : 'none',
+      flexShrink: 0,
+    }}
+  />
+);
+
+const modulePanelLabel = (active: boolean, text: string) => (
+  <Space size={8}>
+    <ModuleStatusLed active={active} />
+    <span>{text}</span>
+  </Space>
+);
+
 const findTsSnapshotForBacktestContext = (
   snapshots: Record<string, TsSnapshotBacktestDatesSource>,
   context: { setKey?: string; offerIds?: string[]; systemName?: string },
@@ -15129,7 +15151,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             </Card>
 
             {backtestDrawerContext?.kind === 'algofund-ts' ? (
-              <Card size="small" title="DCA — настройки и scan">
+              <Collapse
+                ghost
+                defaultActiveKey={tsDcaEnabled ? ['dca-layer'] : []}
+                items={[{
+                  key: 'dca-layer',
+                  label: modulePanelLabel(tsDcaEnabled, 'DCA — настройки и scan'),
+                  children: (
+              <Card size="small" bordered={false} styles={{ body: { padding: 0 } }}>
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                   {(tsDcaResearchResult?.period || tsDcaCombinedPreview?.period) ? (
                     <Alert
@@ -15375,6 +15404,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   />
                 </Space>
               </Card>
+                  ),
+                }]}
+              />
             ) : null}
 
             {tsDcaResearchResult ? (
@@ -15486,21 +15518,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     <li><strong>Частота сделок</strong> — variant стратегий из sweep (если есть) + lot% и trades estimate</li>
                     <li><strong>Lot %, реинвест, комса, слиппедж, funding, даты</strong> — напрямую в движок</li>
                     <li><strong>DCA</strong> — отдельный блок выше, не связан с крутилками ТС</li>
-                    <li><strong>Autolot от ширины канала</strong> — уже на трендах: уже канал → больше лот (switch в блоке ТС)</li>
+                    <li><strong>Autolot от ширины канала</strong> — в «Экспериментах», сейчас выкл (на CT synth давал лишнюю DD)</li>
                   </ul>
                 )}
               />
             ) : null}
 
             <Row gutter={[8, 8]}>
-              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' ? (
+              {isAdminSurface ? (
                 <Col xs={24}>
-                  <Alert
-                    type="warning"
-                    showIcon
-                    message="Autolot от ширины канала — на паузе"
-                    description="Эксперимент дал просадку на full sweep; пересмотрим формулу отдельно. Флаг всё равно сохраняется в snapshot (выкл.) для будущих прогонов."
-                  />
+                  <Text type="secondary" style={{ fontSize: 12 }}>
+                    <Space size={8}>
+                      {modulePanelLabel(true, 'Сайзинг и риск')}
+                      <span>— lot, ОП, реинвест, risk slider → engine</span>
+                    </Space>
+                  </Text>
                 </Col>
               ) : null}
               <Col xs={24} md={12} lg={isAdminSurface ? 4 : 12}>
@@ -15657,7 +15689,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               )}
               {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
                 <Col xs={24} md={12} lg={4}>
-                  <Card size="small" title="Partial TP %">
+                  <Card size="small" title={<Space>{modulePanelLabel(adminSweepBacktestPartialTpPct > 0, 'Partial TP %')}{adminSweepBacktestStale ? <Tag color="orange">⟳</Tag> : null}</Space>}>
                     <InputNumber
                       min={0}
                       max={100}
@@ -15677,7 +15709,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               )}
               {isAdminSurface && (
                 <Col xs={24} md={24} lg={6}>
-                  <Card size="small" title="Комиссия / Слиппедж / Funding (admin)">
+                  <Card size="small" title={<Space>{modulePanelLabel(true, 'Комиссия / Слиппедж / Funding')}{adminSweepBacktestStale ? <Tag color="orange">⟳</Tag> : null}</Space>}>
                     <Space direction="vertical" size={4} style={{ width: '100%' }}>
                       <Space wrap size={4}>
                         <span style={{ fontSize: 11, minWidth: 60 }}>Комса %</span>
@@ -15732,9 +15764,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   </Card>
                 </Col>
               )}
+              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' ? (
+                <Col xs={24}>
+                  <Text type="secondary" style={{ fontSize: 12, marginTop: 4 }}>
+                    <Space size={8}>
+                      {modulePanelLabel(adminSweepPortfolioCbEnabled, 'Защита портфеля')}
+                      <span>— CB8 + per-leg tune</span>
+                    </Space>
+                  </Text>
+                </Col>
+              ) : null}
               {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
                 <Col xs={24} md={12} lg={8}>
-                  <Card size="small" title="Portfolio CB (просадка)">
+                  <Card size="small" title={<Space>{modulePanelLabel(adminSweepPortfolioCbEnabled, 'Portfolio CB (просадка)')}{adminSweepBacktestStale ? <Tag color="orange">⟳</Tag> : null}</Space>}>
                     <Space direction="vertical" size={6} style={{ width: '100%' }}>
                       <Space wrap>
                         <Text>Включён</Text>
@@ -15774,7 +15816,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               )}
               {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && backtestLegRows.length > 1 && (
                 <Col xs={24}>
-                  <Card size="small" title={`Per-leg lot mult (${backtestLegRows.length} ног)`}>
+                  <Card size="small" title={<Space>{modulePanelLabel(true, `Per-leg lot mult (${backtestLegRows.length} ног)`)}{adminSweepBacktestStale ? <Tag color="orange">⟳</Tag> : null}</Space>}>
                     <div style={{ maxHeight: 220, overflowY: 'auto' }}>
                       {backtestLegRows.map((row) => (
                         <Space key={row.strategyId} wrap style={{ width: '100%', marginBottom: 6, justifyContent: 'space-between' }}>
@@ -15800,7 +15842,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               )}
               {isAdminSurface && (
                 <Col xs={24} md={24} lg={backtestDrawerContext?.kind === 'algofund-ts' ? 8 : 8}>
-                  <Card size="small" title="Период бэктеста">
+                  <Card size="small" title={<Space>{modulePanelLabel(hasCustomBacktestDates, 'Период бэктеста')}{adminSweepBacktestStale ? <Tag color="orange">⟳</Tag> : null}</Space>}>
                     <Space direction="vertical" size={4} style={{ width: '100%' }}>
                       <Space wrap>
                         <Input
@@ -15847,6 +15889,51 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   </Card>
                 </Col>
               )}
+              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' ? (
+                <Col xs={24}>
+                  <Collapse
+                    ghost
+                    items={[{
+                      key: 'experiments',
+                      label: modulePanelLabel(
+                        adminSweepAutoLotByChannel || adminSweepBacktestPartialTpPct > 0,
+                        'Эксперименты (свёрнуто — красный = выкл)',
+                      ),
+                      children: (
+                        <Row gutter={[8, 8]}>
+                          <Col xs={24} md={12}>
+                            <Card size="small" title={<Space>{modulePanelLabel(adminSweepAutoLotByChannel, 'Autolot от ширины канала')}</Space>}>
+                              <Space direction="vertical" size={6}>
+                                <Switch
+                                  checked={adminSweepAutoLotByChannel}
+                                  onChange={(checked) => {
+                                    setAdminSweepAutoLotByChannel(checked);
+                                    setAdminSweepBacktestStale(true);
+                                    scheduleBacktestDebounce();
+                                  }}
+                                />
+                                <Text type="secondary" style={{ fontSize: 11 }}>
+                                  Узкий Donchian → больше lot на trend-входах. На full sweep давал лишнюю DD — пауза.
+                                  Для v4.2 burst mono (15m EMA+ADX) имеет смысл отдельный прогон; CT synth не трогаем.
+                                </Text>
+                              </Space>
+                            </Card>
+                          </Col>
+                          <Col xs={24} md={12}>
+                            <Card size="small" title={<Space>{modulePanelLabel(tsDcaEnabled, 'DCA-слой')}</Space>}>
+                              <Text type="secondary" style={{ fontSize: 11 }}>
+                                {tsDcaEnabled
+                                  ? 'DCA активен — блок выше, не смешивается с крутилками ТС.'
+                                  : 'DCA выкл на этой карточке (v4.2 pure synth + burst).'}
+                              </Text>
+                            </Card>
+                          </Col>
+                        </Row>
+                      ),
+                    }]}
+                  />
+                </Col>
+              ) : null}
             </Row>
 
             {adminSweepBacktestResult ? (
