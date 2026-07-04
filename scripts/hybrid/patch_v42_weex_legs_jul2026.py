@@ -126,6 +126,20 @@ def load_strategy(conn: sqlite3.Connection, sid: int) -> dict:
 
 def apply_replacements(members: list[dict], conn: sqlite3.Connection) -> tuple[list[dict], list[dict]]:
     remove_markets = {r["removeMarket"] for r in REPLACEMENTS}
+    add_markets = {r["addMarket"] for r in REPLACEMENTS}
+    present_removals = {str(m.get("market") or "").upper() for m in members} & remove_markets
+    present_additions = {str(m.get("market") or "").upper() for m in members} & add_markets
+    if not present_removals and present_additions == add_markets:
+        swap_log = [{
+            "removed": r["removeMarket"],
+            "added": r["addMarket"],
+            "strategyId": r["strategyId"],
+            "strategyName": load_strategy(conn, int(r["strategyId"]))["strategyName"],
+            "reason": r["reason"],
+            "alreadyApplied": True,
+        } for r in REPLACEMENTS]
+        return list(members), swap_log
+
     out = [m for m in members if str(m.get("market") or "").upper() not in remove_markets]
     swap_log: list[dict] = []
     existing_ids = {int(m["strategyId"]) for m in out if m.get("strategyId")}
@@ -339,9 +353,21 @@ def main() -> None:
     parser.add_argument("--apply", action="store_true", help="Write patched card JSON")
     parser.add_argument("--publish", action="store_true", help="Publish patched card in-place")
     parser.add_argument("--rematerialize", action="store_true", help="Retry materialize all v4.2 clients")
+    parser.add_argument("--rematerialize-only", action="store_true", help="Skip card edits; only rematerialize")
     args = parser.parse_args()
     if args.publish:
         args.apply = True
+    if args.rematerialize_only:
+        args.rematerialize = True
+
+    if args.rematerialize_only:
+        conn = sqlite3.connect(DB)
+        summary = rematerialize_v42_clients(conn)
+        ok = sum(1 for r in summary if r.get("ok"))
+        full = sum(1 for r in summary if r.get("after") == 20)
+        print(json.dumps(summary, ensure_ascii=False, indent=2))
+        print(f"Rematerialized {ok}/{len(summary)} clients, {full} at 20/20")
+        return
 
     if not os.path.isfile(CARD_IN):
         raise SystemExit(f"Missing card: {CARD_IN}")
