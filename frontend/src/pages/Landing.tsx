@@ -337,7 +337,7 @@ const EXCHANGES = [
   { name: 'Bitget', ref: 'https://partner.bitget.com/bg/VJ90ZR' },
   { name: 'BingX', ref: 'https://bingxdao.com/invite/AD0H6D/' },
   { name: 'MEXC', ref: 'https://www.mexc.com/acquisition/custom-sign-up?shareCode=mexc-12A4vC' },
-  { name: 'WEEX', ref: 'https://www.weex.com/register?ref=BTDD' },
+  { name: 'WEEX', ref: 'https://www.weex.com/register?vipCode=qq8i' },
 ];
 
 export default function Landing() {

@@ -14,6 +14,12 @@ import {
 } from './exchange';
 import { calculateSyntheticOHLC } from './synthetic';
 import { getCachedMarketData, warmMarketDataCache, type MarketDataWarmupJob } from './marketDataCache';
+import {
+  capBalancedLegQty,
+  clampQtyString,
+  effectiveMaxQty,
+  resolveInstrumentMaxQty,
+} from './orderQtyGuard';
 import { recordLiveTradeEvent } from '../analytics/liveReconciliation';
 import logger from '../utils/logger';
 import { computeChannelWidthLotMultiplier } from '../services/strategy/sizing';
@@ -855,7 +861,7 @@ const loadQtyRules = async (apiKeyName: string, symbol: string): Promise<QtyRule
 
   const qtyStepRaw = String(info?.lotSizeFilter?.qtyStep || '0.001');
   const minQtyRaw = String(info?.lotSizeFilter?.minOrderQty || '0');
-  const maxQtyRaw = String(info?.lotSizeFilter?.maxOrderQty || '0');
+  const maxQtyRaw = String(resolveInstrumentMaxQty(info) || info?.lotSizeFilter?.maxOrderQty || '0');
 
   const qtyStep = Number.parseFloat(qtyStepRaw);
   const minQty = Number.parseFloat(minQtyRaw);
@@ -892,8 +898,9 @@ const buildQtyCandidates = (rawQty: number, price: number, rules: QtyRules): Qty
   }
 
   const step = rules.qtyStep;
-  const maxUnits = Number.isFinite(rules.maxQty)
-    ? Math.floor((rules.maxQty + SIZING_EPSILON) / step)
+  const maxCap = effectiveMaxQty(rules);
+  const maxUnits = Number.isFinite(maxCap)
+    ? Math.floor((maxCap + SIZING_EPSILON) / step)
     : Number.POSITIVE_INFINITY;
   const minUnitsByFilter = Math.max(1, Math.ceil((rules.minQty - SIZING_EPSILON) / step));
   const centerUnits = rawQty / step;
@@ -924,7 +931,7 @@ const buildQtyCandidates = (rawQty: number, price: number, rules: QtyRules): Qty
     .map((units) => qtyFromUnits(units, rules))
     .filter((qty) => Number.isFinite(qty) && qty > 0)
     .filter((qty) => qty + SIZING_EPSILON >= rules.minQty)
-    .filter((qty) => qty <= rules.maxQty + SIZING_EPSILON)
+    .filter((qty) => qty <= maxCap + SIZING_EPSILON)
     .map((qty) => ({
       qty,
       notional: qty * price,
@@ -3748,6 +3755,15 @@ export const executeStrategy = async (
       totalNotional
     );
     baseQty = singleQtyPlan.qty;
+    const monoRules = await loadQtyRules(apiKeyName, mergedStrategy.base_symbol);
+    const cappedMono = clampQtyString(baseQty, monoRules);
+    if (cappedMono !== baseQty) {
+      logger.warn(
+        `[qty-cap] mono ${mergedStrategy.base_symbol} capped ${baseQty} → ${cappedMono} `
+        + `(max=${effectiveMaxQty(monoRules)})`
+      );
+      baseQty = cappedMono;
+    }
   } else {
     quotePrice = await getLatestMarketClose(apiKeyName, mergedStrategy.quote_symbol);
 
@@ -3767,6 +3783,21 @@ export const executeStrategy = async (
 
     baseQty = qtyPlan.baseQty;
     quoteQty = qtyPlan.quoteQty;
+
+    const [baseRulesCap, quoteRulesCap] = await Promise.all([
+      loadQtyRules(apiKeyName, mergedStrategy.base_symbol),
+      loadQtyRules(apiKeyName, mergedStrategy.quote_symbol!),
+    ]);
+    const cappedPair = capBalancedLegQty(baseQty, quoteQty, baseRulesCap, quoteRulesCap);
+    if (cappedPair.scaled || cappedPair.baseQty !== baseQty || cappedPair.quoteQty !== quoteQty) {
+      logger.warn(
+        `[qty-cap] synth ${mergedStrategy.base_symbol}/${mergedStrategy.quote_symbol} `
+        + `base ${baseQty}→${cappedPair.baseQty} quote ${quoteQty}→${cappedPair.quoteQty} `
+        + `(scaled=${cappedPair.scaled})`
+      );
+      baseQty = cappedPair.baseQty;
+      quoteQty = cappedPair.quoteQty;
+    }
   }
 
   const latestBeforeOpen = normalizeStrategy(await getStrategyRow(apiKeyName, strategyId));

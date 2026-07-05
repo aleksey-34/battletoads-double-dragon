@@ -8,6 +8,13 @@ import { createWeexClient } from './weexClient';
 import { readHybridCandles } from './hybridCandleStore';
 import { registerMarketDataRelayKey } from './marketDataCache';
 import { batchPositionsSequential, getCachedPositions } from './positionPollCache';
+import {
+  clampQtyToParsedMax,
+  clampQtyString,
+  parseOrderQtyLimitError,
+  qtyRulesFromInstrument,
+  scaleQtyString,
+} from './orderQtyGuard';
 
 type ExchangeClientEntry = {
   client: RestClientV5;
@@ -1382,7 +1389,94 @@ export const placeOrder = async (
   price?: string,
   options?: OrderOptions
 ) => {
-  if (ccxtClients[apiKeyName]) {
+  const submitWithQty = async (qtyToSubmit: string) => {
+    if (ccxtClients[apiKeyName]) {
+      return placeOrderCcxt(apiKeyName, symbol, side, qtyToSubmit, price, options);
+    }
+    return placeOrderBybit(apiKeyName, symbol, side, qtyToSubmit, price, options);
+  };
+
+  let currentQty = qty;
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      return await submitWithQty(currentQty);
+    } catch (error) {
+      lastError = error as Error;
+      const parsed = parseOrderQtyLimitError(lastError.message);
+      if (!parsed || attempt >= 2) {
+        throw error;
+      }
+
+      let rules: ReturnType<typeof qtyRulesFromInstrument> | null = null;
+      try {
+        const info = await getInstrumentInfo(apiKeyName, symbol);
+        rules = qtyRulesFromInstrument(symbol, info);
+      } catch {
+        rules = null;
+      }
+
+      if (parsed.type === 'max_qty') {
+        const nextQty = rules
+          ? clampQtyToParsedMax(currentQty, parsed.maxQty, rules)
+          : currentQty;
+        if (nextQty === currentQty) {
+          throw error;
+        }
+        logger.warn(
+          `[qty-cap-retry] ${apiKeyName} ${symbol} ${side}: ${currentQty} → ${nextQty} `
+          + `(exchange max_qty=${parsed.maxQty})`
+        );
+        currentQty = nextQty;
+        continue;
+      }
+
+      if (parsed.type === 'risk_tier') {
+        try {
+          await applySymbolRiskSettings(
+            apiKeyName,
+            symbol,
+            'cross',
+            parsed.suggestedLeverage,
+          );
+        } catch (riskErr) {
+          logger.warn(
+            `[risk-tier-retry] leverage adjust failed for ${apiKeyName} ${symbol}: `
+            + `${(riskErr as Error).message}`
+          );
+        }
+
+        const scale = attempt === 0 ? 0.88 : 0.75;
+        const nextQty = rules
+          ? scaleQtyString(currentQty, scale, rules)
+          : currentQty;
+        if (nextQty === currentQty) {
+          throw error;
+        }
+        logger.warn(
+          `[risk-tier-retry] ${apiKeyName} ${symbol} ${side}: qty ${currentQty} → ${nextQty} `
+          + `(leverage≤${parsed.suggestedLeverage}, scale=${scale})`
+        );
+        currentQty = nextQty;
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw lastError || new Error(`Failed to place order for ${symbol}`);
+};
+
+const placeOrderCcxt = async (
+  apiKeyName: string,
+  symbol: string,
+  side: 'Buy' | 'Sell',
+  qty: string,
+  price?: string,
+  options?: OrderOptions
+) => {
     const entry = getCcxtClientEntry(apiKeyName);
     const isSpot = options?.marketType === 'spot';
     const rawCcxtSymbol = await resolveCcxtSymbol(entry, symbol, isSpot ? 'spot' : 'swap');
@@ -1482,8 +1576,16 @@ export const placeOrder = async (
       logger.error(`Error placing ccxt order for ${apiKeyName} ${symbol} ${side}: ${err.message}`);
       throw error;
     }
-  }
+};
 
+const placeOrderBybit = async (
+  apiKeyName: string,
+  symbol: string,
+  side: 'Buy' | 'Sell',
+  qty: string,
+  price?: string,
+  options?: OrderOptions
+) => {
   try {
     const order: any = await callPrivateWithDemoFallback(apiKeyName, 'submitOrder', (client) =>
       client.submitOrder({
@@ -2356,7 +2458,17 @@ export const getInstrumentInfo = async (apiKeyName: string, symbol: string) => {
             : precisionAmount)
           : NaN);
       const minOrderQty = Number(market?.limits?.amount?.min ?? 0);
-      const maxOrderQty = Number(market?.limits?.amount?.max ?? 0);
+      const nativeMaxOrder = Number(market?.info?.lotSizeFilter?.maxOrderQty ?? 0);
+      const nativeMaxMkt = Number(market?.info?.lotSizeFilter?.maxMktOrderQty ?? 0);
+      const maxOrderQty = Number(
+        market?.info?.lotSizeFilter
+          ? (() => {
+            const fromNative = [nativeMaxOrder, nativeMaxMkt].filter((v) => Number.isFinite(v) && v > 0);
+            if (fromNative.length > 0) return Math.min(...fromNative);
+            return Number(market?.limits?.amount?.max ?? 0);
+          })()
+          : (market?.limits?.amount?.max ?? 0)
+      );
       const maxLeverage = Number(
         market?.limits?.leverage?.max
         ?? market?.info?.maxLeverage
@@ -2865,7 +2977,12 @@ export const applySymbolRiskSettings = async (
   );
 
   if (!isBybitSuccess(leverageResponse)) {
-    throw formatBybitError(leverageResponse, `setLeverage:${symbol}`);
+    const levMsg = String(leverageResponse?.retMsg || '');
+    const levCode = Number(leverageResponse?.retCode);
+    const leverageAlreadySet = /not modified/i.test(levMsg) || levCode === 110043;
+    if (!leverageAlreadySet) {
+      throw formatBybitError(leverageResponse, `setLeverage:${symbol}`);
+    }
   }
 
   const tradeMode = marginType === 'isolated' ? 1 : 0;
