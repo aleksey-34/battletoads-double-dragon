@@ -10,6 +10,7 @@ import {
   getInstrumentInfo,
   getMarketData,
   getPositions,
+  isRateLimitError,
   placeOrder,
 } from './exchange';
 import { calculateSyntheticOHLC } from './synthetic';
@@ -2732,7 +2733,22 @@ export const executeStrategy = async (
     await persistFlatAfterExit(action, signalSnapshot);
   };
 
-  const livePositions = await getPositions(apiKeyName);
+  const livePositions: any[] = [];
+  let positionsFetchReliable = true;
+  try {
+    const fetched = await getPositions(apiKeyName);
+    livePositions.push(...(Array.isArray(fetched) ? fetched : []));
+  } catch (positionError) {
+    if (isRateLimitError(positionError)) {
+      positionsFetchReliable = false;
+      logger.warn(
+        `Position poll unavailable for strategy ${strategyId} (${apiKeyName}): `
+        + `${formatActionError(positionError)} — skipping state resync this cycle`
+      );
+    } else {
+      throw positionError;
+    }
+  }
   const liveBase = livePositions.find((position: any) => {
     return normalizeSymbolKey(position?.symbol) === normalizeSymbolKey(mergedStrategy.base_symbol)
       && Number.parseFloat(String(position?.size || '0')) > 0;
@@ -2902,7 +2918,7 @@ export const executeStrategy = async (
     });
   }
 
-  if (state !== 'flat' && livePairState === 'flat') {
+  if (positionsFetchReliable && state !== 'flat' && livePairState === 'flat') {
     // ── Two-stage confirmation guard ──
     // Bug context: a single transient empty getPositions() response (rate-limit
     // glitch, propagation race when a sibling SAAS strategy on the same apiKey

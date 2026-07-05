@@ -124,11 +124,30 @@ const snapshotAgeMinutes = (recordedAt: string): number | null => {
 
 const buildClientPayload = async (row: PartnerClientRow) => {
   const tsMemberCount = await getTsMemberCount(row.slug);
-  const tsExpected = row.publishedSystem.includes('v4-2') ? 20 : 0;
+  const tsExpected = row.publishedSystem.includes('v4-2') || row.publishedSystem.includes('v4-4') || row.publishedSystem.includes('b3') ? 20 : 0;
   const monitoring = row.apiKeyName
     ? await getMonitoringLatest(row.apiKeyName).catch(() => null)
     : null;
   const recordedAt = monitoring ? asString(monitoring.recorded_at) : '';
+
+  let lastTradeAt: string | null = null;
+  let trades24h = 0;
+  if (row.apiKeyName) {
+    const tradeRow = await db.get<{ last_trade_at?: number; trades_24h?: number }>(
+      `SELECT MAX(lte.actual_time) AS last_trade_at,
+              SUM(CASE WHEN lte.actual_time >= ? THEN 1 ELSE 0 END) AS trades_24h
+       FROM live_trade_events lte
+       JOIN strategies s ON s.id = lte.strategy_id
+       JOIN api_keys a ON a.id = s.api_key_id
+       WHERE a.name = ?`,
+      [Date.now() - 86_400_000, row.apiKeyName],
+    ).catch(() => null);
+    lastTradeAt = tradeRow?.last_trade_at
+      ? new Date(asNumber(tradeRow.last_trade_at)).toISOString()
+      : null;
+    trades24h = Math.max(0, asNumber(tradeRow?.trades_24h, 0));
+  }
+
   return {
     tenantId: row.tenantId,
     slug: row.slug,
@@ -139,6 +158,8 @@ const buildClientPayload = async (row: PartnerClientRow) => {
     tsMemberCount,
     tsExpected: tsExpected > 0 ? tsExpected : null,
     tsComplete: tsExpected > 0 ? tsMemberCount >= tsExpected : null,
+    lastTradeAt,
+    trades24h,
     monitoring: monitoring ? {
       equityUsd: asNumber(monitoring.equity_usd),
       unrealizedPnl: asNumber(monitoring.unrealized_pnl),
@@ -283,6 +304,13 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
   periodHours: number;
   generatedAt: string;
   systemMedian: number;
+  totals: {
+    clients: number;
+    withTrades: number;
+    trades: number;
+    entries: number;
+    exits: number;
+  };
   rows: PartnerTradeSummaryRow[];
   outliers: PartnerTradeSummaryRow[];
 }> => {
@@ -390,6 +418,13 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
     periodHours: hours,
     generatedAt: new Date().toISOString(),
     systemMedian: globalMedian,
+    totals: {
+      clients: rows.length,
+      withTrades: rows.filter((r) => r.tradesCount > 0).length,
+      trades: rows.reduce((sum, r) => sum + r.tradesCount, 0),
+      entries: rows.reduce((sum, r) => sum + r.entries, 0),
+      exits: rows.reduce((sum, r) => sum + r.exits, 0),
+    },
     rows: rows.sort((a, b) => b.tradesCount - a.tradesCount),
     outliers,
   };

@@ -15,6 +15,8 @@ type PartnerClient = {
   tsMemberCount?: number;
   tsExpected?: number | null;
   tsComplete?: boolean | null;
+  lastTradeAt: string | null;
+  trades24h?: number;
   monitoring: {
     equityUsd: number;
     unrealizedPnl: number;
@@ -108,12 +110,13 @@ const PartnerCabinet: React.FC = () => {
   const pollRef = useRef<number | null>(null);
 
   const [tradesLoading, setTradesLoading] = useState(false);
-  const [tradesHours, setTradesHours] = useState(6);
+  const [tradesHours, setTradesHours] = useState(24);
   const [tradesData, setTradesData] = useState<{
     rows: TradeSummaryRow[];
     systemMedian: number;
     outliers: TradeSummaryRow[];
     periodHours: number;
+    totals?: { clients: number; withTrades: number; trades: number; entries: number; exits: number };
   } | null>(null);
 
   const loadDashboard = useCallback(async () => {
@@ -221,10 +224,10 @@ const PartnerCabinet: React.FC = () => {
   }, [loadDashboard]);
 
   useEffect(() => {
-    if (activeTab === 'trades' && !tradesData) {
+    if (activeTab === 'trades') {
       void loadTradesSummary();
     }
-  }, [activeTab, tradesData, loadTradesSummary]);
+  }, [activeTab, loadTradesSummary]);
 
   const loadChart = async (client: PartnerClient, days: number) => {
     if (!client.apiKeyName) return;
@@ -299,6 +302,18 @@ const PartnerCabinet: React.FC = () => {
       if (v == null) return '—';
       return <span style={{ color: Number(v) >= 0 ? '#16a34a' : '#dc2626' }}>${fmt(v)}</span>;
     } },
+    { title: 'Сделки 24ч', width: 100, render: (_: unknown, row: PartnerClient) => (
+      <Space direction="vertical" size={0}>
+        <span>{row.trades24h ?? 0}</span>
+        {row.lastTradeAt ? (
+          <span style={{ fontSize: 10, color: '#9ca3af' }}>
+            посл. {new Date(row.lastTradeAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+          </span>
+        ) : (
+          <span style={{ fontSize: 10, color: '#9ca3af' }}>нет сделок</span>
+        )}
+      </Space>
+    ) },
     { title: '', width: 110, render: (_: unknown, row: PartnerClient) => (
       <Button size="small" type="primary" ghost disabled={!row.apiKeyName} onClick={() => openChart(row)}>
         График
@@ -405,7 +420,7 @@ const PartnerCabinet: React.FC = () => {
           </>
         ) : (
           <>
-            <Space style={{ marginBottom: 12 }}>
+            <Space style={{ marginBottom: 12 }} wrap>
               <Segmented
                 options={[
                   { label: '6ч', value: 6 },
@@ -419,10 +434,23 @@ const PartnerCabinet: React.FC = () => {
                   void loadTradesSummary(hours);
                 }}
               />
-              {tradesData ? (
-                <Tag>Медиана по системам: {tradesData.systemMedian} сделок / {tradesData.periodHours}ч</Tag>
+              {tradesData?.totals ? (
+                <>
+                  <Tag color="blue">Сделок: {tradesData.totals.trades}</Tag>
+                  <Tag color="green">Клиентов с сделками: {tradesData.totals.withTrades}/{tradesData.totals.clients}</Tag>
+                  <Tag>Медиана: {tradesData.systemMedian}</Tag>
+                </>
               ) : null}
             </Space>
+            {!tradesLoading && tradesData && tradesData.totals?.trades === 0 ? (
+              <Alert
+                type="info"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message={`За последние ${tradesData.periodHours}ч новых сделок нет`}
+                description="Runtime работает — стратегии в no_signal на закрытых барах. Смотрите колонку «Сделки 24ч» на вкладке Мониторинг или переключите период на 24ч/7д."
+              />
+            ) : null}
             {tradesData?.outliers?.length ? (
               <Alert
                 type="warning"

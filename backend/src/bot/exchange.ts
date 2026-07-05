@@ -194,7 +194,7 @@ const isTransientCcxtError = (error: unknown): boolean => {
     || message.includes('econnreset');
 };
 
-const isRateLimitError = (error: unknown): boolean => {
+export const isRateLimitError = (error: unknown): boolean => {
   const message = String((error as any)?.message || error || '').toLowerCase();
   const code = Number((error as any)?.code ?? (error as any)?.info?.code ?? (error as any)?.data?.code ?? 0);
   return message.includes('rate limit')
