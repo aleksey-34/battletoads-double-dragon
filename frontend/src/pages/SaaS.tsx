@@ -7431,10 +7431,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           response = await axios.post<AdminSweepBacktestPreviewResponse & { success?: boolean }>(
             '/api/saas/admin/sweep-backtest-preview',
             requestBody,
-            { timeout: 900000 },
+            { timeout: 1_800_000 },
           );
         } else {
-          const deadline = Date.now() + 900_000;
+          const deadline = Date.now() + 1_800_000;
           while (Date.now() < deadline) {
             if (requestSeq !== backtestRequestSeqRef.current) {
               return;
@@ -7456,7 +7456,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             break;
           }
           if (!response) {
-            throw new Error('Engine rerun timeout (>15 min)');
+            throw new Error('Engine rerun timeout (>30 min)');
           }
           setAdminSweepBacktestAsyncStatus('');
         }

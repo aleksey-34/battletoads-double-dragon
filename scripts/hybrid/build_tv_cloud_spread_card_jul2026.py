@@ -88,6 +88,19 @@ def ensure_tv(conn: sqlite3.Connection, base: str) -> int:
     return int(conn.execute("SELECT id FROM strategies WHERE name=? AND api_key_id=?", (name, int(ak[0]))).fetchone()[0])
 
 
+CB_DEFAULT = {
+    "enabled": True, "peakWindowDays": 30, "ddTriggerPercent": 8,
+    "lotMultiplier": 0.5, "pauseDays": 14,
+}
+
+
+def portfolio_cb() -> dict | None:
+    raw = os.environ.get("CLOUD_CB", "1").strip().lower()
+    if raw in ("0", "false", "no", "off"):
+        return None
+    return CB_DEFAULT
+
+
 def portfolio_preview(members: list[dict], lot: float, op: int, reinvest: float) -> dict:
     sids = [int(m["strategyId"]) for m in members]
     growth = min(20.0, 1.0 + (reinvest / 100.0) * 19.0) if reinvest > 0 else 0
@@ -109,6 +122,9 @@ def portfolio_preview(members: list[dict], lot: float, op: int, reinvest: float)
         "enablePairLock": True,
         "skipMissingSymbols": True,
     }
+    cb = portfolio_cb()
+    if cb:
+        payload["portfolioCircuitBreaker"] = cb
     return api_post("/api/backtest/run", payload).get("result") or {}
 
 
@@ -167,6 +183,21 @@ def build_snapshot(
         period_days = 760
     trades = int(s.get("tradesCount") or 0)
     growth = min(20.0, 1.0 + (reinvest / 100.0) * 19.0) if reinvest > 0 else 0
+    bs = {
+            "dateFrom": DATE_FROM,
+            "dateTo": DATE_TO,
+            "initialBalance": INITIAL,
+            "lotPercentOverride": lot,
+            "maxOpenPositions": op,
+            "reinvestPercent": reinvest,
+            "maxDepositOverride": INITIAL * growth if growth else 0,
+            "enablePairLock": True,
+            "backtestBars": 900,
+            "warmupBars": 120,
+        }
+    cb = portfolio_cb()
+    if cb:
+        bs["portfolioCircuitBreaker"] = cb
     return {
         "kind": "algofund-ts",
         "setKey": SET_KEY,
@@ -182,18 +213,7 @@ def build_snapshot(
         "periodDays": period_days,
         "membersCount": len(members),
         "finalEquity": round(float(s.get("finalEquity") or INITIAL), 2),
-        "backtestSettings": {
-            "dateFrom": DATE_FROM,
-            "dateTo": DATE_TO,
-            "initialBalance": INITIAL,
-            "lotPercentOverride": lot,
-            "maxOpenPositions": op,
-            "reinvestPercent": reinvest,
-            "maxDepositOverride": INITIAL * growth if growth else 0,
-            "enablePairLock": True,
-            "backtestBars": 900,
-            "warmupBars": 120,
-        },
+        "backtestSettings": bs,
     }
 
 

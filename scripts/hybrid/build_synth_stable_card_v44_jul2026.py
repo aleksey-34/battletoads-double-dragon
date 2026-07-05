@@ -25,12 +25,13 @@ SWEEP = os.path.join(REPO, "results", "v44_cloud20_synth_overlay_jul2026.json")
 CARD_OUT = os.path.join(REPO, "results", "synth_stable_union_card_v4.4_jul2026.json")
 
 API_KEY = "BTDD_D1"
-SET_KEY = "synth-stable-union-v4-4-jul2026"
-DISPLAY_LABEL = "Synth Stable Union v4.4 (+ Cloud Spread 20 TV)"
+SET_KEY = os.environ.get("V44_SET_KEY", "synth-stable-union-v4-4-jul2026")
+DISPLAY_LABEL = os.environ.get("V44_DISPLAY", "Synth Stable Union v4.4 (+ Cloud Spread 20 TV)")
 DATE_FROM = "2024-06-01"
 DATE_TO = os.environ.get("SYNTH_DATE_TO", datetime.now(timezone.utc).date().isoformat())
-LOT = 22.0
-REINVEST = 50.0
+LOT = float(os.environ.get("V44_LOT", "22"))
+REINVEST = float(os.environ.get("V44_REINVEST", "50"))
+SYNTH_SCALE = float(os.environ.get("V44_SYNTH_SCALE", "1.0"))
 INITIAL = 10000.0
 RISK_SCORE = 4.5
 TRADE_FREQ = 6.0
@@ -93,14 +94,15 @@ def ensure_tv(conn: sqlite3.Connection, base: str) -> int:
     return int(conn.execute("SELECT id FROM strategies WHERE name=?", (name,)).fetchone()[0])
 
 
-def load_params() -> tuple[float, int]:
-    tv_mult = float(os.environ.get("V44_TV_MULT", "0"))
-    op = int(os.environ.get("V44_OP", "0"))
+def load_params() -> tuple[float, int, float]:
+    tv_mult = float(os.environ.get("V44_TV_MULT", "0") or "0")
+    op = int(os.environ.get("V44_OP", "0") or "0")
+    synth_scale = float(os.environ.get("V44_SYNTH_SCALE", "1.0"))
     if os.path.isfile(SWEEP) and (tv_mult <= 0 or op <= 0):
         best = json.load(open(SWEEP, encoding="utf-8")).get("best") or {}
         tv_mult = tv_mult or float(best.get("tvMult") or 1.0)
         op = op or int(best.get("op") or 24)
-    return float(tv_mult or 1.0), int(op or 24)
+    return float(tv_mult or 1.0), int(op or 24), synth_scale
 
 
 def cloud_symbols() -> list[str]:
@@ -112,7 +114,7 @@ def cloud_symbols() -> list[str]:
     return list(CLOUD20)
 
 
-def build_members(conn: sqlite3.Connection, tv_mult: float) -> list[dict]:
+def build_members(conn: sqlite3.Connection, tv_mult: float, synth_scale: float) -> list[dict]:
     members: list[dict] = []
     for sid, mult in SYNTH_MULT.items():
         row = conn.execute(
@@ -122,11 +124,12 @@ def build_members(conn: sqlite3.Connection, tv_mult: float) -> list[dict]:
         if not row:
             continue
         market = f"{row[4]}/{row[5]}" if row[5] else row[4]
+        eff = round(float(mult) * synth_scale, 4)
         members.append({
             "strategyId": int(row[0]), "strategyName": row[1], "strategyType": row[2],
             "marketMode": "mono" if str(row[3]).lower() == "mono" else "synthetic",
             "market": market, "interval": row[6], "tier": "synth_alpha",
-            "legLotMult": mult, "effectiveMult": mult,
+            "legLotMult": eff, "effectiveMult": eff,
         })
     for sym in cloud_symbols():
         tid = ensure_tv(conn, sym)
@@ -167,11 +170,13 @@ def publish(members: list[dict], snapshot: dict) -> str:
         "score": snapshot.get("ret", 0), "weight": round(1.0 / len(members), 4),
     } for m in members]
     api_post("/api/saas/admin/curated-draft-members", {"members": draft}, timeout=120)
-    pub = api_post("/api/saas/admin/publish", {"offerIds": offer_ids, "setKey": SET_KEY, "editInPlace": False}, timeout=300)
+    edit_in_place = os.environ.get("V44_EDIT_IN_PLACE", "1").strip().lower() in ("1", "true", "yes")
+    pub = api_post("/api/saas/admin/publish", {"offerIds": offer_ids, "setKey": SET_KEY, "editInPlace": edit_in_place}, timeout=300)
     system_name = str((pub.get("sourceSystem") or {}).get("systemName") or "").strip()
     if not system_name:
         raise RuntimeError(f"publish failed: {pub}")
     snapshot["systemName"] = system_name
+    snapshot["offerIds"] = offer_ids
     published = list(store.get("algofundPublishedSystemNames") or [])
     api_patch("/api/saas/admin/offer-store", {
         "tsBacktestSnapshotsPatch": {SET_KEY: snapshot, system_name: snapshot},
@@ -181,9 +186,9 @@ def publish(members: list[dict], snapshot: dict) -> str:
 
 
 def main() -> None:
-    tv_mult, op = load_params()
+    tv_mult, op, synth_scale = load_params()
     conn = sqlite3.connect(DB)
-    members = build_members(conn, tv_mult)
+    members = build_members(conn, tv_mult, synth_scale)
     preview = portfolio_preview(members, op)
     s = preview.get("summary") or {}
     mul = {str(m["strategyId"]): float(m["effectiveMult"]) for m in members}
@@ -207,11 +212,12 @@ def main() -> None:
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "setKey": SET_KEY, "displayLabel": DISPLAY_LABEL, "cardVersion": "v4.4",
         "parentCard": "synth-stable-union-v4-3-jul2026",
-        "cloudUpgrade": {"tvLegs": cloud_symbols(), "tvMult": tv_mult, "op": op},
+        "cloudUpgrade": {"tvLegs": cloud_symbols(), "tvMult": tv_mult, "op": op, "synthScale": synth_scale, "lot": LOT},
+        "offerIds": [offer_id(m) for m in members],
         "members": members, "preview": snapshot,
     }
     json.dump(card, open(CARD_OUT, "w", encoding="utf-8"), indent=2)
-    print(f"v4.4: {len(members)} legs (16 synth + {len(cloud_symbols())} TV) tvMult={tv_mult} OP={op}")
+    print(f"v4.4: {len(members)} legs (16 synth + {len(cloud_symbols())} TV) lot={LOT}% tvMult={tv_mult} synth×={synth_scale} OP={op}")
     print(f"  ret={snapshot['ret']}% dd={snapshot['dd']}% trades={snapshot['trades']} pf={snapshot['pf']}")
     print(f"wrote {CARD_OUT}")
     if os.environ.get("PUBLISH", "").strip() in ("1", "true", "yes"):
