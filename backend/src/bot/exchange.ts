@@ -6,6 +6,8 @@ import { db } from '../utils/database';
 // weexClient.ts is the legacy custom REST adapter; ccxt ≥4.5.49 has native weex support
 import { createWeexClient } from './weexClient';
 import { readHybridCandles } from './hybridCandleStore';
+import { registerMarketDataRelayKey } from './marketDataCache';
+import { batchPositionsSequential, getCachedPositions } from './positionPollCache';
 
 type ExchangeClientEntry = {
   client: RestClientV5;
@@ -18,6 +20,8 @@ type CcxtClientEntry = {
   exchange: 'bitget' | 'bingx' | 'binance' | 'mexc' | 'weex';
   client: any;
   limiter: Bottleneck;
+  /** Per-key limiter for public klines — NOT chained to exchange parent (relay rotation spreads load). */
+  publicLimiter: Bottleneck;
   symbolMap: Map<string, string>;
   spotSymbolMap: Map<string, string>;
   uiSymbolMap: Map<string, string>;
@@ -139,7 +143,7 @@ const exchangeParentLimiters = new Map<string, Bottleneck>();
 //   bingx —  9×429/24h: tighten to {3, 200ms}.
 //   binance — 0×429: keep generous {4, 100ms}.
 const EXCHANGE_PARENT_LIMITS: Record<string, { maxConcurrent: number; minTime: number }> = {
-  weex:    { maxConcurrent: 1, minTime: 800 },
+  weex:    { maxConcurrent: 1, minTime: 1000 },
   bybit:   { maxConcurrent: 3, minTime: 200 },
   mexc:    { maxConcurrent: 3, minTime: 200 },
   bingx:   { maxConcurrent: 3, minTime: 200 },
@@ -805,6 +809,8 @@ export const initExchangeClient = (apiKey: ApiKey) => {
   }).chain(exchangeParent);
   attachRateLimitRetry(limiter);
 
+  registerMarketDataRelayKey(apiKey.exchange || '', apiKey.name);
+
   const exchange = detectExchange(apiKey.exchange);
 
   if (exchange !== 'bybit') {
@@ -854,10 +860,17 @@ export const initExchangeClient = (apiKey: ApiKey) => {
       client.setSandboxMode(true);
     }
 
+    const publicLimiter = new Bottleneck({
+      minTime: isWeex ? 500 : 250,
+      maxConcurrent: 1,
+    });
+    attachRateLimitRetry(publicLimiter);
+
     ccxtClients[apiKey.name] = {
       exchange,
       client,
       limiter,
+      publicLimiter,
       symbolMap: new Map<string, string>(),
       spotSymbolMap: new Map<string, string>(),
       uiSymbolMap: new Map<string, string>(),
@@ -1081,7 +1094,7 @@ export const getMarketData = async (
         const pageLimit = Math.min(safeLimit, 1000);
 
         if (!hasRange) {
-          const candles = await entry.limiter.schedule(() =>
+          const candles = await (entry.publicLimiter || entry.limiter).schedule(() =>
             weexClient.fetchOHLCV(symbol, interval, undefined, pageLimit)
           );
           const normalized = Array.isArray(candles)
@@ -1102,7 +1115,7 @@ export const getMarketData = async (
         const maxPages = Math.max(1, Math.ceil((effectiveEnd - effectiveStart) / Math.max(intervalMs, 1) / pageLimit) + 5);
         let since = effectiveStart;
         for (let page = 0; page < maxPages; page += 1) {
-          const candles = await entry.limiter.schedule(() =>
+          const candles = await (entry.publicLimiter || entry.limiter).schedule(() =>
             weexClient.fetchOHLCV(symbol, interval, since, pageLimit)
           );
           const list = Array.isArray(candles) ? candles : [];
@@ -1140,7 +1153,7 @@ export const getMarketData = async (
 
     try {
       if (!hasRange) {
-        const candles = await entry.limiter.schedule(() =>
+        const candles = await (entry.publicLimiter || entry.limiter).schedule(() =>
           entry.client.fetchOHLCV(ccxtSymbol, interval, undefined, safeLimit)
         );
 
@@ -1172,7 +1185,7 @@ export const getMarketData = async (
       let since = effectiveStart;
 
       for (let page = 0; page < maxPages; page += 1) {
-        const candles = await entry.limiter.schedule(() =>
+        const candles = await (entry.publicLimiter || entry.limiter).schedule(() =>
           entry.client.fetchOHLCV(ccxtSymbol, interval, since, pageLimit)
         );
 
@@ -1765,7 +1778,7 @@ export const getBalances = async (apiKeyName: string) => {
   throw firstApiError || lastTransportError || new Error('Не удалось получить балансы ни по одному типу аккаунта');
 };
 
-export const getPositions = async (apiKeyName: string, symbol?: string) => {
+const fetchPositionsDirect = async (apiKeyName: string, symbol?: string) => {
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
 
@@ -1823,7 +1836,11 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
             .filter((item): item is any => !!item);
         }
       } catch (weexErr) {
-        logger.warn(`[positions] WEEX legacy client failed for ${apiKeyName}: ${(weexErr as Error).message}`);
+        const msg = String((weexErr as Error).message || weexErr || '');
+        logger.warn(`[positions] WEEX legacy client failed for ${apiKeyName}: ${msg}`);
+        if (isRateLimitError(weexErr)) {
+          throw weexErr;
+        }
         return [];
       }
     }
@@ -2124,6 +2141,16 @@ export const getPositions = async (apiKeyName: string, symbol?: string) => {
     .filter((item): item is any => Boolean(item));
 
   return normalized;
+};
+
+export const getPositions = async (apiKeyName: string, symbol?: string) => {
+  const exchange = String(getExchangeForApiKey(apiKeyName) || '').toLowerCase();
+  return getCachedPositions(
+    apiKeyName,
+    symbol,
+    exchange,
+    () => fetchPositionsDirect(apiKeyName, symbol),
+  );
 };
 
 export const get24hVolume = async (apiKeyName: string, symbol: string) => {
@@ -3163,21 +3190,48 @@ export const batchGetPositions = async (
   apiKeyNames: string[],
   timeoutMs: number = 10000,
 ): Promise<BatchPositionsResult[]> => {
-  const results = await Promise.allSettled(
-    apiKeyNames.map(async (name): Promise<BatchPositionsResult> => {
-      const positions = await Promise.race([
-        getPositions(name),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('positions fetch timeout')), timeoutMs),
-        ),
-      ]);
-      return { apiKeyName: name, positions };
-    }),
+  const fetchWithTimeout = async (name: string): Promise<any[]> => Promise.race([
+    getPositions(name),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('positions fetch timeout')), timeoutMs),
+    ),
+  ]);
+
+  const weexKeys = apiKeyNames.filter((name) => getExchangeForApiKey(name) === 'weex');
+  const otherKeys = apiKeyNames.filter((name) => getExchangeForApiKey(name) !== 'weex');
+
+  const weexResults = weexKeys.length > 0
+    ? await batchPositionsSequential(weexKeys, fetchWithTimeout, 700)
+    : [];
+
+  const otherResults = await Promise.allSettled(
+    otherKeys.map(async (name): Promise<BatchPositionsResult> => ({
+      apiKeyName: name,
+      positions: await fetchWithTimeout(name),
+    })),
   );
 
-  return results.map((r, i) => {
-    if (r.status === 'fulfilled') return r.value;
-    return { apiKeyName: apiKeyNames[i], positions: [], error: (r.reason as Error)?.message || 'unknown' };
+  const merged = new Map<string, BatchPositionsResult>();
+  for (const row of weexResults) {
+    merged.set(row.apiKeyName, row);
+  }
+  otherResults.forEach((r, i) => {
+    const name = otherKeys[i];
+    if (r.status === 'fulfilled') {
+      merged.set(name, r.value);
+    } else {
+      merged.set(name, {
+        apiKeyName: name,
+        positions: [],
+        error: (r.reason as Error)?.message || 'unknown',
+      });
+    }
+  });
+
+  return apiKeyNames.map((name) => merged.get(name) || {
+    apiKeyName: name,
+    positions: [],
+    error: 'missing result',
   });
 };
 

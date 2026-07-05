@@ -1,4 +1,4 @@
-import { getMarketData } from './exchange';
+import { getCachedMarketData } from './marketDataCache';
 
 type ParsedCandle = {
   timeMs: number;
@@ -154,8 +154,8 @@ export async function calculateSyntheticOHLC(
     ? Math.max(safeLimit * ratio + 5, safeLimit)
     : Math.min(1000, Math.max(safeLimit * ratio + 5, safeLimit));
 
-  const baseData = await getMarketData(apiKeyName, base, sourceInterval, sourceLimit, options);
-  const quoteData = await getMarketData(apiKeyName, quote, sourceInterval, sourceLimit, options);
+  const baseData = await getCachedMarketData(apiKeyName, base, sourceInterval, sourceLimit, options);
+  const quoteData = await getCachedMarketData(apiKeyName, quote, sourceInterval, sourceLimit, options);
 
   if (!baseData || !Array.isArray(baseData) || baseData.length === 0) {
     throw new Error(`Нет данных по базовой паре: ${base}`);

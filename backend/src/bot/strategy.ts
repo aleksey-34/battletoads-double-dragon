@@ -13,6 +13,7 @@ import {
   placeOrder,
 } from './exchange';
 import { calculateSyntheticOHLC } from './synthetic';
+import { getCachedMarketData, warmMarketDataCache, type MarketDataWarmupJob } from './marketDataCache';
 import { recordLiveTradeEvent } from '../analytics/liveReconciliation';
 import logger from '../utils/logger';
 import { computeChannelWidthLotMultiplier } from '../services/strategy/sizing';
@@ -34,12 +35,6 @@ import {
   momentumScalpTpSlPrices,
 } from './momentumScalpSignal';
 
-// ── Market data cache for auto-strategy cycle ────────────────────────────────
-// Avoids re-fetching the same symbol+interval when multiple strategies share them.
-// TTL = 25s (auto cycle runs every 30s, so stale data is refreshed next cycle).
-const CANDLE_CACHE_TTL_MS = 25_000;
-interface CandleCacheEntry { data: any[]; fetchedAt: number; }
-const candleAutoCache = new Map<string, CandleCacheEntry>();
 const OFFLINE_SYMBOL_LOG_COOLDOWN_MS = 5 * 60 * 1000;
 const offlineSymbolLogCooldown = new Map<string, number>();
 
@@ -96,12 +91,6 @@ const acquireApiKeyPairEntryLock = async (apiKeyName: string, pairKey: string): 
   };
 };
 
-// In-flight de-duplication: if multiple strategies on the same exchange request the
-// same (symbol,interval,limit) within the cache TTL window, only ONE actual REST call
-// is made and all callers await the same Promise. This eliminates the WEEX 429 burst
-// pattern caused by 10x duplicated strategies for the same pair across many api-keys.
-const candleAutoInflight = new Map<string, Promise<any[]>>();
-
 // ── State-resync confirmation tracker ────────────────────────────────────────
 // Bug fix (2026-05): single-cycle `state_resynced_flat` was triggering on
 // transient empty getPositions() responses (rate-limit, propagation glitch),
@@ -113,48 +102,6 @@ const candleAutoInflight = new Map<string, Promise<any[]>>();
 const RESYNC_CONFIRM_MS = 90_000; // 90 s window — covers 1 full auto-cycle (30 s) + slack
 interface PendingFlatEntry { firstDetectedMs: number; lastRatio: number; }
 const resyncPendingFlatByStrategy = new Map<number, PendingFlatEntry>();
-
-const getCachedMarketData = async (
-  apiKeyName: string, symbol: string, interval: string, limit: number,
-  options?: { startMs?: number; endMs?: number },
-): Promise<any[]> => {
-  // Only cache when no custom time range (standard auto-cycle fetch)
-  if (options?.startMs || options?.endMs) {
-    return getMarketData(apiKeyName, symbol, interval, limit, options);
-  }
-  // Cache key is exchange-scoped (not api-key-scoped) because public klines are identical
-  // for all api-keys on the same exchange. Falls back to apiKeyName when exchange unknown.
-  const exchange = getExchangeForApiKey(apiKeyName) || `key:${apiKeyName}`;
-  const key = `${exchange}:${symbol}:${interval}:${limit}`;
-  const cached = candleAutoCache.get(key);
-  if (cached && Date.now() - cached.fetchedAt < CANDLE_CACHE_TTL_MS) {
-    return cached.data;
-  }
-  const inflight = candleAutoInflight.get(key);
-  if (inflight) {
-    return inflight;
-  }
-  const promise = (async () => {
-    try {
-      const data = await getMarketData(apiKeyName, symbol, interval, limit, options);
-      const arr = Array.isArray(data) ? data : [];
-      candleAutoCache.set(key, { data: arr, fetchedAt: Date.now() });
-      return arr;
-    } finally {
-      candleAutoInflight.delete(key);
-    }
-  })();
-  candleAutoInflight.set(key, promise);
-  return promise;
-};
-
-// Periodic cleanup to prevent memory growth
-setInterval(() => {
-  const now = Date.now();
-  for (const [k, v] of candleAutoCache) {
-    if (now - v.fetchedAt > CANDLE_CACHE_TTL_MS * 2) candleAutoCache.delete(k);
-  }
-}, 60_000);
 
 setInterval(() => {
   const now = Date.now();
@@ -4798,11 +4745,11 @@ export const runAutoStrategiesCycle = async () => {
   // SAME closed bar — eliminating timing desync caused by bar closes mid-cycle.
   // Strategies with identical signal parameters (same pair/interval/length) are guaranteed
   // to compute the same signal from the same candle snapshot.
-  const seenCacheKeys = new Set<string>();
-  const warmupJobs: (() => Promise<void>)[] = [];
+  const warmupJobs: MarketDataWarmupJob[] = [];
 
   for (const row of validJobs) {
     const apiKeyName = String(row.api_key_name);
+    const exchange = getExchangeForApiKey(apiKeyName) || `key:${apiKeyName}`;
     const strategyType = normalizeStrategyType(row.strategy_type);
     // periodic_buy doesn't need candle pre-warm — it fetches 1m candle on its own
     if ((row.strategy_type as string) === 'periodic_buy' || (row.strategy_type as string) === 'dca' || (row.strategy_type as string) === 'dca_futures') continue;
@@ -4829,35 +4776,23 @@ export const runAutoStrategiesCycle = async () => {
     }
 
     for (const { symbol, limit } of symbolsToWarm) {
-      const cacheKey = `${apiKeyName}:${symbol}:${interval}:${limit}`;
-      if (seenCacheKeys.has(cacheKey)) {
-        continue;
-      }
-      seenCacheKeys.add(cacheKey);
-
-      // Capture loop variables for closure
-      const capturedApiKey = apiKeyName;
-      const capturedSymbol = symbol;
-      const capturedInterval = interval;
-      const capturedLimit = limit;
-      warmupJobs.push(async () => {
-        try {
-          await getCachedMarketData(capturedApiKey, capturedSymbol, capturedInterval, capturedLimit);
-        } catch {
-          // Non-critical: strategy will handle its own candle fetch error later
-        }
+      warmupJobs.push({
+        exchange,
+        apiKeyName,
+        symbol,
+        interval,
+        limit,
       });
     }
   }
 
   if (warmupJobs.length > 0) {
-    await Promise.allSettled(warmupJobs.map((fn) => fn()));
-    logger.info(`Auto-cycle: warmed candle cache for ${warmupJobs.length} symbol-key combos (${seenCacheKeys.size} unique)`);
+    const warmed = await warmMarketDataCache(warmupJobs);
+    logger.info(`Auto-cycle: warmed candle cache for ${warmed} exchange-scoped symbol combos (from ${warmupJobs.length} leg requests)`);
   }
 
   // ── Phase 2: Execute all strategies in parallel ──
-  // Candle data is shared via candleAutoCache (TTL 25s) — only one fetch per
-  // symbol+interval per cycle regardless of how many strategies share the pair.
+  // Candle data is shared via marketDataCache (TTL 25s, exchange-scoped, relay-key rotation).
   // Exchange order calls (market orders) are independent per account and can
   // safely overlap. SQLite writes are serialized by the WAL layer automatically.
   const executeOne = async (row: any): Promise<void> => {
