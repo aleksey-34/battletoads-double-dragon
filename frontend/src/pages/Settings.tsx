@@ -116,6 +116,8 @@ const extractApiErrorMessage = (error: any, fallback: string): string => {
 const Settings: React.FC = () => {
   const { t } = useI18n();
   const [apiKeys, setApiKeys] = useState<ApiKeyRecord[]>([]);
+  const [apiKeysError, setApiKeysError] = useState<string | null>(null);
+  const [apiKeysLoading, setApiKeysLoading] = useState<boolean>(false);
   const [editingKey, setEditingKey] = useState<ApiKeyRecord | null>(null);
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateJob, setUpdateJob] = useState<UpdateJob | null>(null);
@@ -182,11 +184,22 @@ const Settings: React.FC = () => {
   }, [updateJob?.activeState]);
 
   const fetchApiKeys = async () => {
+    setApiKeysLoading(true);
+    setApiKeysError(null);
     try {
       const res = await axios.get('/api/api-keys');
-      setApiKeys(res.data);
-    } catch (error) {
+      const list = Array.isArray(res.data) ? res.data : [];
+      setApiKeys(list);
+      if (list.length === 0) {
+        setApiKeysError(null);
+      }
+    } catch (error: any) {
       console.error(error);
+      setApiKeys([]);
+      setApiKeysError(extractApiErrorMessage(error, t('settings.msg.apiKeysLoadError', 'Не удалось загрузить список API-ключей')));
+      message.error(extractApiErrorMessage(error, t('settings.msg.apiKeysLoadError', 'Не удалось загрузить список API-ключей')));
+    } finally {
+      setApiKeysLoading(false);
     }
   };
 
@@ -409,8 +422,21 @@ const Settings: React.FC = () => {
           {editingKey && <Button onClick={() => { setEditingKey(null); form.resetFields(); }}>{t('settings.form.cancel', 'Cancel')}</Button>}
         </Form>
       </Card>
-      <Card className="battletoads-card" title={t('settings.list.title', 'API Keys List')} style={{ marginTop: 16 }}>
+      <Card className="battletoads-card" title={t('settings.list.title', 'API Keys List')} style={{ marginTop: 16 }} id="api-keys-list">
+        {apiKeysError ? (
+          <Alert
+            type="error"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={apiKeysError}
+            action={<Button size="small" onClick={() => { void fetchApiKeys(); }}>{t('settings.list.reload', 'Повторить')}</Button>}
+          />
+        ) : null}
+        {!apiKeysLoading && !apiKeysError && apiKeys.length === 0 ? (
+          <Alert type="info" showIcon message={t('settings.list.empty', 'API-ключей пока нет — добавьте первый ключ в форме выше.')} />
+        ) : null}
         <List
+          loading={apiKeysLoading}
           dataSource={apiKeys}
           renderItem={item => (
             <List.Item

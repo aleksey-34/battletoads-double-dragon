@@ -1055,6 +1055,9 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
 
   // Anti-spam for alert summary: store last sent alert-set hash + ts.
   const alertState: { lastHash: string; lastSentMs: number } = { lastHash: '', lastSentMs: 0 };
+  const partnerDigestState: { lastSentMs: number } = { lastSentMs: 0 };
+  const PARTNER_DIGEST_HOURS = Math.max(1, Math.floor(Number(process.env.TELEGRAM_PARTNER_TRADES_HOURS || 6) || 6));
+  const PARTNER_DIGEST_MS = PARTNER_DIGEST_HOURS * 3_600_000;
   const ALERT_REPEAT_MS = 60 * 60_000; // повторяем тот же набор алертов не чаще раза в час
 
   const hashAlertText = (text: string): string => {
@@ -1097,6 +1100,17 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
 
       // Watchdog: rate-limit / low-lot / failed cycles (отдельный канал, свой cooldown).
       await sendWatchdogAlertIfNeeded();
+
+      if (nowMs - partnerDigestState.lastSentMs >= PARTNER_DIGEST_MS) {
+        try {
+          const { buildPartnerTradesTelegramDigest } = await import('../saas/partnerService');
+          const digest = await buildPartnerTradesTelegramDigest(PARTNER_DIGEST_HOURS);
+          await sendTelegramMessage(trimTelegramText(digest));
+          partnerDigestState.lastSentMs = nowMs;
+        } catch (digestErr) {
+          logger.warn(`[tg-admin] partner trades digest failed: ${(digestErr as Error).message}`);
+        }
+      }
     } catch (error) {
       logger.warn(`[tg-admin] tick failed: ${(error as Error).message}`);
     }

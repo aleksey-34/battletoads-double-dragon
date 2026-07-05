@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Button, Card, Checkbox, Input, Modal, Segmented, Space, Spin, Table, Tag, Typography, message,
+  Alert, Button, Card, Checkbox, Input, Modal, Progress, Segmented, Space, Spin, Table, Tabs, Tag, Typography, message,
 } from 'antd';
 import axios from 'axios';
 import ChartComponent from '../components/ChartComponent';
@@ -27,6 +27,29 @@ type PartnerClient = {
   } | null;
 };
 
+type PartnerRefreshJob = {
+  status: 'idle' | 'running' | 'done' | 'error';
+  startedAt: string | null;
+  finishedAt: string | null;
+  total: number;
+  done: number;
+  failed: number;
+  current: string | null;
+};
+
+type TradeSummaryRow = {
+  slug: string;
+  displayName: string;
+  apiKeyName: string;
+  publishedSystem: string;
+  tradesCount: number;
+  entries: number;
+  exits: number;
+  lastTradeAt: string | null;
+  deviationPct: number | null;
+  isOutlier: boolean;
+};
+
 type MonitoringSnapshot = {
   recorded_at?: string;
   equity_usd?: number;
@@ -45,7 +68,7 @@ const fmt = (v: unknown, d = 2) => {
 
 const systemShort = (name: string) => {
   const s = String(name || '');
-  if (s.includes('v4-2')) return 'v4.2';
+  if (s.includes('v4-2') || s.includes('v4-4') || s.includes('b3')) return 'B3/v4';
   if (s.includes('shield')) return 'shield-v2';
   return s.split('::').pop() || s;
 };
@@ -66,6 +89,7 @@ const ChartLegend = ({ items }: { items: Array<{ color: string; label: string; a
 );
 
 const PartnerCabinet: React.FC = () => {
+  const [activeTab, setActiveTab] = useState('monitoring');
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<{ clients: PartnerClient[]; totals?: Record<string, number> } | null>(null);
   const [chartOpen, setChartOpen] = useState(false);
@@ -79,35 +103,111 @@ const PartnerCabinet: React.FC = () => {
   const [showDd, setShowDd] = useState(false);
 
   const [refreshing, setRefreshing] = useState(false);
+  const [refreshJob, setRefreshJob] = useState<PartnerRefreshJob | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const pollRef = useRef<number | null>(null);
 
-  const loadDashboard = useCallback(async (live = false) => {
-    if (live) setRefreshing(true);
-    else setLoading(true);
+  const [tradesLoading, setTradesLoading] = useState(false);
+  const [tradesHours, setTradesHours] = useState(6);
+  const [tradesData, setTradesData] = useState<{
+    rows: TradeSummaryRow[];
+    systemMedian: number;
+    outliers: TradeSummaryRow[];
+    periodHours: number;
+  } | null>(null);
+
+  const loadDashboard = useCallback(async () => {
+    setLoading(true);
     try {
-      const res = await axios.get('/api/saas/partner/dashboard', {
-        params: live ? { refresh: '1' } : undefined,
-        timeout: live ? 300_000 : 30_000,
-      });
+      const res = await axios.get('/api/saas/partner/dashboard', { timeout: 30_000 });
       setData(res.data);
       setGeneratedAt(String(res.data?.generatedAt || ''));
-      if (live) {
-        if (res.data?.refreshSkipped) {
-          const min = Math.ceil(Number(res.data.refreshRetryAfterSec || 0) / 60);
-          message.warning(min > 0
-            ? `С биржи можно обновить через ~${min} мин — показаны сохранённые снимки`
-            : 'Показаны сохранённые снимки');
-        } else if (res.data?.refreshed) {
-          message.success('Данные обновлены с биржи');
+      if (res.data?.refreshJob) {
+        setRefreshJob(res.data.refreshJob);
+        if (res.data.refreshJob.status === 'running') {
+          setRefreshing(true);
         }
       }
     } catch (err: any) {
       message.error(err?.response?.data?.error || 'Не удалось загрузить данные');
     } finally {
       setLoading(false);
-      setRefreshing(false);
     }
   }, []);
+
+  const loadTradesSummary = useCallback(async (hours = tradesHours) => {
+    setTradesLoading(true);
+    try {
+      const res = await axios.get('/api/saas/partner/trades-summary', {
+        params: { hours },
+        timeout: 30_000,
+      });
+      setTradesData(res.data);
+    } catch (err: any) {
+      message.error(err?.response?.data?.error || 'Не удалось загрузить сводку сделок');
+    } finally {
+      setTradesLoading(false);
+    }
+  }, [tradesHours]);
+
+  const stopPolling = () => {
+    if (pollRef.current != null) {
+      window.clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  };
+
+  const pollRefreshStatus = useCallback(() => {
+    stopPolling();
+    pollRef.current = window.setInterval(() => {
+      void (async () => {
+        try {
+          const [statusRes, dashRes] = await Promise.all([
+            axios.get('/api/saas/partner/refresh-status', { timeout: 15_000 }),
+            axios.get('/api/saas/partner/dashboard', { timeout: 15_000 }),
+          ]);
+          setRefreshJob(statusRes.data);
+          setData(dashRes.data);
+          setGeneratedAt(String(dashRes.data?.generatedAt || ''));
+          if (statusRes.data?.status !== 'running') {
+            stopPolling();
+            setRefreshing(false);
+            if (statusRes.data?.status === 'done') {
+              message.success(`Обновлено: ${statusRes.data.done}/${statusRes.data.total} клиентов`);
+            } else if (statusRes.data?.status === 'error') {
+              message.warning(`Обновление завершено с ошибками (${statusRes.data.failed || 0})`);
+            }
+            void loadDashboard();
+          }
+        } catch {
+          // keep polling
+        }
+      })();
+    }, 3000);
+  }, [loadDashboard]);
+
+  const startLiveRefresh = async () => {
+    setRefreshing(true);
+    try {
+      const res = await axios.post('/api/saas/partner/refresh', {}, { timeout: 20_000 });
+      if (res.data?.refreshSkipped) {
+        const min = Math.ceil(Number(res.data.refreshRetryAfterSec || 0) / 60);
+        message.warning(min > 0
+          ? `С биржи можно обновить через ~${min} мин`
+          : 'Обновление недоступно — показаны сохранённые снимки');
+        setRefreshing(false);
+        return;
+      }
+      if (res.data?.job) {
+        setRefreshJob(res.data.job);
+      }
+      message.info('Опрос биржи запущен — обновляем клиентов пакетами');
+      pollRefreshStatus();
+    } catch (err: any) {
+      message.error(err?.response?.data?.error || 'Не удалось запустить обновление');
+      setRefreshing(false);
+    }
+  };
 
   useEffect(() => {
     const token = localStorage.getItem('partner_token') || localStorage.getItem('password');
@@ -117,7 +217,14 @@ const PartnerCabinet: React.FC = () => {
     }
     axios.defaults.headers.common.Authorization = `Bearer ${token}`;
     void loadDashboard();
+    return () => stopPolling();
   }, [loadDashboard]);
+
+  useEffect(() => {
+    if (activeTab === 'trades' && !tradesData) {
+      void loadTradesSummary();
+    }
+  }, [activeTab, tradesData, loadTradesSummary]);
 
   const loadChart = async (client: PartnerClient, days: number) => {
     if (!client.apiKeyName) return;
@@ -150,7 +257,7 @@ const PartnerCabinet: React.FC = () => {
     return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
   }).filter((x): x is LinePoint => x !== null), [chartRaw]);
 
-  const columns = [
+  const monitoringColumns = [
     { title: 'Клиент', dataIndex: 'slug', render: (_: string, row: PartnerClient) => (
       <Space direction="vertical" size={0}>
         <strong>{row.displayName || row.slug}</strong>
@@ -159,7 +266,7 @@ const PartnerCabinet: React.FC = () => {
     ) },
     { title: 'ТС', dataIndex: 'publishedSystem', width: 100, render: (v: string, row: PartnerClient) => (
       <Space direction="vertical" size={0}>
-        <Tag color={v.includes('v4-2') ? 'green' : 'default'}>{systemShort(v)}</Tag>
+        <Tag color={v.includes('v4') ? 'green' : 'default'}>{systemShort(v)}</Tag>
         {row.tsExpected ? (
           <span style={{ fontSize: 11, color: row.tsComplete ? '#16a34a' : '#d97706' }}>
             {row.tsMemberCount}/{row.tsExpected} legs
@@ -199,47 +306,145 @@ const PartnerCabinet: React.FC = () => {
     ) },
   ];
 
+  const tradesColumns = [
+    { title: 'Клиент', dataIndex: 'displayName', render: (v: string, row: TradeSummaryRow) => (
+      <Space direction="vertical" size={0}>
+        <strong>{v || row.slug}</strong>
+        <span style={{ fontSize: 11, color: '#6b7280' }}>{systemShort(row.publishedSystem)}</span>
+      </Space>
+    ) },
+    { title: 'Сделок', dataIndex: 'tradesCount', width: 90, sorter: (a: TradeSummaryRow, b: TradeSummaryRow) => a.tradesCount - b.tradesCount },
+    { title: 'In', dataIndex: 'entries', width: 70 },
+    { title: 'Out', dataIndex: 'exits', width: 70 },
+    { title: 'vs медиана', render: (_: unknown, row: TradeSummaryRow) => {
+      if (row.deviationPct == null) return '—';
+      const color = row.isOutlier ? '#d97706' : '#6b7280';
+      const sign = row.deviationPct > 0 ? '+' : '';
+      return <span style={{ color }}>{sign}{row.deviationPct}%</span>;
+    } },
+    { title: 'Последняя', render: (_: unknown, row: TradeSummaryRow) => (
+      row.lastTradeAt ? new Date(row.lastTradeAt).toLocaleString('ru-RU') : '—'
+    ) },
+    { title: '', width: 90, render: (_: unknown, row: TradeSummaryRow) => (
+      row.isOutlier ? <Tag color="warning">отклонение</Tag> : null
+    ) },
+  ];
+
+  const refreshPercent = refreshJob && refreshJob.total > 0
+    ? Math.round((refreshJob.done / refreshJob.total) * 100)
+    : 0;
+
   return (
     <div style={{ padding: 16, maxWidth: 1200, margin: '0 auto' }}>
       <Card
-        title="Кабинет партнёра — мониторинг клиентов"
+        title="Кабинет партнёра"
         extra={(
           <Space>
-            <Button onClick={() => void loadDashboard(true)} loading={refreshing || loading}>
-              Обновить с биржи
-            </Button>
+            {activeTab === 'monitoring' ? (
+              <Button onClick={() => void startLiveRefresh()} loading={refreshing} disabled={refreshing}>
+                Обновить с биржи
+              </Button>
+            ) : (
+              <Button onClick={() => void loadTradesSummary()} loading={tradesLoading}>
+                Обновить сводку
+              </Button>
+            )}
             <Button onClick={() => { localStorage.removeItem('partner_token'); window.location.href = '/partner/login'; }}>
               Выйти
             </Button>
           </Space>
         )}
       >
-        {data?.totals ? (
-          <Space wrap style={{ marginBottom: 16 }}>
-            <Tag color="blue">Клиентов: {data.totals.clients}</Tag>
-            <Tag color="green">Активных: {data.totals.enabled}</Tag>
-            <Tag color="purple">На v4.2: {data.totals.onV42}</Tag>
-            {typeof data.totals.tsComplete === 'number' ? (
-              <Tag color="cyan">TS 20/20: {data.totals.tsComplete}</Tag>
-            ) : null}
-            {generatedAt ? (
-              <Tag>обновлено {new Date(generatedAt).toLocaleTimeString()}</Tag>
-            ) : null}
-          </Space>
-        ) : null}
-        <Typography.Paragraph type="secondary" style={{ marginBottom: 12, fontSize: 12 }}>
-          Цифры из снимков мониторинга (runtime ~10 мин). Без кнопки биржа не опрашивается.
-          «Обновить с биржи» — вручную, не чаще 1 раза в час. Legs: 20/20 для v4.2.
-        </Typography.Paragraph>
-        <Spin spinning={loading}>
-          <Table
-            rowKey="tenantId"
-            size="small"
-            pagination={{ pageSize: 20 }}
-            dataSource={data?.clients || []}
-            columns={columns}
+        <Tabs
+          activeKey={activeTab}
+          onChange={setActiveTab}
+          items={[
+            { key: 'monitoring', label: 'Мониторинг' },
+            { key: 'trades', label: 'Сделки' },
+          ]}
+        />
+
+        {refreshing && refreshJob ? (
+          <Alert
+            type="info"
+            showIcon
+            style={{ marginBottom: 12 }}
+            message={`Опрос биржи: ${refreshJob.done}/${refreshJob.total}${refreshJob.current ? ` — ${refreshJob.current}` : ''}`}
+            description={<Progress percent={refreshPercent} size="small" status="active" />}
           />
-        </Spin>
+        ) : null}
+
+        {activeTab === 'monitoring' ? (
+          <>
+            {data?.totals ? (
+              <Space wrap style={{ marginBottom: 16 }}>
+                <Tag color="blue">Клиентов: {data.totals.clients}</Tag>
+                <Tag color="green">Активных: {data.totals.enabled}</Tag>
+                <Tag color="purple">На v4.2+: {data.totals.onV42}</Tag>
+                {typeof data.totals.tsComplete === 'number' ? (
+                  <Tag color="cyan">TS 20/20: {data.totals.tsComplete}</Tag>
+                ) : null}
+                {generatedAt ? (
+                  <Tag>обновлено {new Date(generatedAt).toLocaleTimeString()}</Tag>
+                ) : null}
+              </Space>
+            ) : null}
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 12, fontSize: 12 }}>
+              Цифры из снимков мониторинга (runtime ~10 мин). Кнопка запускает фоновый опрос биржи
+              (WEEX по одному, остальные пакетами) — не чаще 1 раза в час.
+            </Typography.Paragraph>
+            <Spin spinning={loading}>
+              <Table
+                rowKey="tenantId"
+                size="small"
+                pagination={{ pageSize: 20 }}
+                dataSource={data?.clients || []}
+                columns={monitoringColumns}
+              />
+            </Spin>
+          </>
+        ) : (
+          <>
+            <Space style={{ marginBottom: 12 }}>
+              <Segmented
+                options={[
+                  { label: '6ч', value: 6 },
+                  { label: '24ч', value: 24 },
+                  { label: '7д', value: 168 },
+                ]}
+                value={tradesHours}
+                onChange={(v) => {
+                  const hours = Number(v);
+                  setTradesHours(hours);
+                  void loadTradesSummary(hours);
+                }}
+              />
+              {tradesData ? (
+                <Tag>Медиана по системам: {tradesData.systemMedian} сделок / {tradesData.periodHours}ч</Tag>
+              ) : null}
+            </Space>
+            {tradesData?.outliers?.length ? (
+              <Alert
+                type="warning"
+                showIcon
+                style={{ marginBottom: 12 }}
+                message={`Отклонения: ${tradesData.outliers.length} клиент(ов) сильно отличаются от медианы по своей ТС`}
+              />
+            ) : null}
+            <Spin spinning={tradesLoading}>
+              <Table
+                rowKey="slug"
+                size="small"
+                pagination={{ pageSize: 20 }}
+                dataSource={tradesData?.rows || []}
+                columns={tradesColumns}
+              />
+            </Spin>
+            <Typography.Paragraph type="secondary" style={{ marginTop: 12, fontSize: 12 }}>
+              Та же сводка уходит в Telegram админ-бота каждые 6 часов (отклонения и топ активности).
+            </Typography.Paragraph>
+          </>
+        )}
       </Card>
 
       <Modal

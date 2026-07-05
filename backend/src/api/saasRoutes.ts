@@ -1,7 +1,13 @@
 ﻿import { Router } from 'express';
 import logger from '../utils/logger';
 import { createClientMagicLink, requirePlatformAdmin, verifyDashboardPassword } from '../utils/auth';
-import { getPartnerDashboard, getPartnerMonitoringSeries } from '../saas/partnerService';
+import {
+  getPartnerDashboard,
+  getPartnerMonitoringSeries,
+  getPartnerRefreshStatus,
+  getPartnerTradesSummary,
+  startPartnerLiveRefresh,
+} from '../saas/partnerService';
 import { runAdminTelegramReportNow } from '../notifications/adminTelegramReporter';
 import {
   getAlgofundState,
@@ -138,12 +144,41 @@ const requirePartnerOrAdmin = (req: any, res: any, next: any) => {
 
 router.get('/partner/dashboard', requirePartnerOrAdmin, async (req, res) => {
   try {
-    const refresh = String(req.query.refresh || '').trim() === '1'
-      || String(req.query.refresh || '').toLowerCase() === 'true';
-    res.json(await getPartnerDashboard({ refresh }));
+    res.json(await getPartnerDashboard());
   } catch (error) {
     const err = error as Error;
     logger.error(`Partner dashboard error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/partner/refresh', requirePartnerOrAdmin, async (_req, res) => {
+  try {
+    const result = await startPartnerLiveRefresh();
+    res.json(result);
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Partner refresh error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/partner/refresh-status', requirePartnerOrAdmin, async (_req, res) => {
+  try {
+    res.json(getPartnerRefreshStatus());
+  } catch (error) {
+    const err = error as Error;
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/partner/trades-summary', requirePartnerOrAdmin, async (req, res) => {
+  try {
+    const hours = Number(req.query.hours || 6);
+    res.json(await getPartnerTradesSummary(hours));
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Partner trades summary error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
