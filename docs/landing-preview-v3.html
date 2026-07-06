@@ -51,6 +51,19 @@
     }
     @keyframes scan { 0% { opacity: .3; } 50% { opacity: .6; } 100% { opacity: .3; } }
 
+    /* faint background chart ghosts */
+    .bg-ghost {
+      position: absolute; opacity: .04; pointer-events: none;
+      animation: ghostFloat 22s ease-in-out infinite alternate;
+    }
+    .bg-ghost-1 { width: 340px; top: 12%; left: 4%; animation-delay: 0s; }
+    .bg-ghost-2 { width: 280px; top: 55%; right: 6%; animation-delay: -7s; }
+    .bg-ghost-3 { width: 220px; bottom: 8%; left: 30%; animation-delay: -14s; }
+    @keyframes ghostFloat {
+      0% { transform: translateY(0) scale(1); opacity: .03; }
+      100% { transform: translateY(-24px) scale(1.04); opacity: .06; }
+    }
+
     .wrap { width: min(var(--max), calc(100% - 40px)); margin: 0 auto; position: relative; z-index: 1; }
     a { color: inherit; text-decoration: none; }
 
@@ -150,6 +163,28 @@
     .trade-row .sym { color: var(--text); }
     .trade-row .pnl { color: var(--green); font-variant-numeric: tabular-nums; }
 
+    .side-tabs { display: flex; gap: 4px; padding: 8px 10px 0; border-bottom: 1px solid var(--border); }
+    .side-tab {
+      flex: 1; text-align: center; font-size: 10px; font-weight: 700; letter-spacing: .06em;
+      text-transform: uppercase; padding: 6px 4px; border-radius: 8px 8px 0 0; color: var(--muted);
+      cursor: pointer; border: 1px solid transparent; border-bottom: none; background: transparent;
+    }
+    .side-tab.active { color: var(--gold); background: rgba(240,196,25,.06); border-color: var(--border); }
+    .side-panel { display: none; }
+    .side-panel.active { display: block; }
+    .vitrine-row {
+      display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center;
+      padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.04); font-size: 11px;
+    }
+    .vitrine-row strong { display: block; font-size: 11px; color: var(--text); }
+    .vitrine-row span { color: var(--muted); font-size: 10px; }
+    .vitrine-row .ret { color: var(--green); font-weight: 700; }
+    .vitrine-btn {
+      font-size: 10px; padding: 4px 8px; border-radius: 999px; border: 1px solid rgba(240,196,25,.35);
+      color: var(--gold); background: rgba(240,196,25,.08); white-space: nowrap;
+    }
+    .mini-spark { width: 48px; height: 20px; opacity: .85; }
+
     section { padding: 56px 0; }
     h2 { margin: 0 0 10px; font-size: clamp(26px, 3vw, 36px); letter-spacing: -.02em; }
     .sub { color: var(--muted); max-width: 58ch; margin-bottom: 28px; font-size: 15px; }
@@ -158,11 +193,16 @@
     .chip {
       padding: 10px 16px; border-radius: 12px; border: 1px solid var(--border);
       background: var(--card); font-size: 13px; transition: border-color .25s, transform .25s, box-shadow .25s;
-      animation: fadeUp .6s ease both;
+      animation: fadeUp .6s ease both; cursor: default;
     }
     .chip:hover { border-color: rgba(240,196,25,.4); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.3); }
     .chip strong { display: block; color: var(--gold); font-size: 12px; margin-bottom: 2px; }
-    .chip span { color: var(--muted); font-size: 12px; }
+    .chip span { color: var(--muted); font-size: 12px; display: block; }
+    .chip .chip-more {
+      max-height: 0; opacity: 0; overflow: hidden; font-size: 11px; color: var(--muted);
+      transition: max-height .3s, opacity .3s, margin-top .3s;
+    }
+    .chip:hover .chip-more { max-height: 60px; opacity: 1; margin-top: 6px; }
 
     .strat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
     .strat-card {
@@ -174,16 +214,32 @@
     .strat-card h3 { margin: 0 0 6px; font-size: 17px; }
     .strat-card p { margin: 0; color: var(--muted); font-size: 13px; }
 
-    .pillars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .pillars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
     .pillar {
       padding: 24px; border-radius: 16px; border: 1px solid var(--border); background: var(--surface);
       min-height: 190px; display: flex; flex-direction: column;
-      transition: border-color .25s;
+      transition: border-color .25s, transform .25s, box-shadow .25s;
+      position: relative; overflow: hidden;
     }
-    .pillar:hover { border-color: rgba(240,196,25,.3); }
+    .pillar:hover {
+      border-color: rgba(240,196,25,.4); transform: translateY(-4px);
+      box-shadow: 0 16px 40px rgba(0,0,0,.35);
+    }
     .pillar .num { color: var(--gold); font-weight: 800; font-size: 12px; margin-bottom: 8px; }
     .pillar h3 { margin: 0 0 8px; font-size: 19px; }
     .pillar p { margin: 0; color: var(--muted); font-size: 14px; flex: 1; }
+    .pillar .pillar-short { display: block; }
+    .pillar .pillar-long {
+      max-height: 0; opacity: 0; overflow: hidden; margin-top: 0;
+      transition: max-height .35s ease, opacity .3s ease, margin-top .3s ease;
+      color: var(--muted); font-size: 13px; line-height: 1.5;
+    }
+    .pillar:hover .pillar-long { max-height: 120px; opacity: 1; margin-top: 10px; }
+    .pillar .alpha-badge {
+      position: absolute; top: 12px; right: 12px; font-size: 9px; font-weight: 700;
+      letter-spacing: .08em; padding: 3px 8px; border-radius: 999px;
+      background: rgba(167,139,250,.15); color: var(--purple); border: 1px solid rgba(167,139,250,.3);
+    }
     .pillar a { margin-top: 14px; color: var(--gold); font-size: 13px; font-weight: 600; }
 
     .pricing { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: stretch; }
@@ -225,6 +281,7 @@
 
     @media (max-width: 960px) {
       .hero, .showcase-body, .strat-grid, .pillars, .pricing { grid-template-columns: 1fr; }
+      .pillars { grid-template-columns: 1fr; }
       .trades-panel { border-left: none; border-top: 1px solid var(--border); }
       .links { display: none; }
     }
@@ -233,6 +290,9 @@
 <body>
   <div class="bg-layer" aria-hidden="true">
     <div class="bg-grid"></div>
+    <svg class="bg-ghost bg-ghost-1" viewBox="0 0 200 60"><path fill="none" stroke="#60a5fa" stroke-width="2" d="M0,50 L30,45 L60,40 L90,28 L120,22 L150,15 L200,8"/></svg>
+    <svg class="bg-ghost bg-ghost-2" viewBox="0 0 200 60"><path fill="none" stroke="#4ade80" stroke-width="2" d="M0,40 L40,38 L80,30 L120,25 L160,18 L200,12"/></svg>
+    <svg class="bg-ghost bg-ghost-3" viewBox="0 0 200 60"><path fill="none" stroke="#f0c419" stroke-width="1.5" stroke-dasharray="3 3" d="M0,55 L50,50 L100,35 L150,28 L200,20"/></svg>
     <div class="orb orb-1"></div>
     <div class="orb orb-2"></div>
     <div class="orb orb-3"></div>
@@ -293,12 +353,44 @@
             </svg>
           </div>
           <aside class="trades-panel">
-            <h4>Сделки · 24ч</h4>
-            <div class="trade-row"><span><span class="in">IN</span> <span class="sym">SOL</span></span><span class="pnl">+2.1%</span></div>
-            <div class="trade-row"><span><span class="out">OUT</span> <span class="sym">DOGE</span></span><span class="pnl">+0.8%</span></div>
-            <div class="trade-row"><span><span class="in">IN</span> <span class="sym">AVAX</span></span><span class="pnl">+1.2%</span></div>
-            <div class="trade-row"><span><span class="out">OUT</span> <span class="sym">LINK</span></span><span class="pnl">+1.4%</span></div>
-            <div class="trade-row"><span><span class="in">IN</span> <span class="sym">ARB</span></span><span class="pnl">+0.6%</span></div>
+            <div class="side-tabs">
+              <button type="button" class="side-tab active" data-panel="trades">Сделки</button>
+              <button type="button" class="side-tab" data-panel="vitrine">Витрина</button>
+            </div>
+            <div class="side-panel active" id="panel-trades" style="padding: 10px;">
+              <h4 style="margin:0 0 10px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">24ч</h4>
+              <div class="trade-row"><span><span class="in">IN</span> <span class="sym">SOL</span></span><span class="pnl">+2.1%</span></div>
+              <div class="trade-row"><span><span class="out">OUT</span> <span class="sym">DOGE</span></span><span class="pnl">+0.8%</span></div>
+              <div class="trade-row"><span><span class="in">IN</span> <span class="sym">AVAX</span></span><span class="pnl">+1.2%</span></div>
+              <div class="trade-row"><span><span class="out">OUT</span> <span class="sym">LINK</span></span><span class="pnl">+1.4%</span></div>
+            </div>
+            <div class="side-panel" id="panel-vitrine" style="padding: 10px;">
+              <h4 style="margin:0 0 8px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Топ витрины</h4>
+              <div class="vitrine-row">
+                <div>
+                  <strong>Synth Stable Union</strong>
+                  <span>36 стратегий · PF 1.6</span>
+                  <svg class="mini-spark" viewBox="0 0 48 20"><path fill="none" stroke="#60a5fa" stroke-width="1.5" d="M0,18 L8,16 L16,14 L24,10 L32,7 L40,4 L48,2"/></svg>
+                </div>
+                <div><span class="ret">+142%</span><br><a class="vitrine-btn" href="/client/register">Подключить</a></div>
+              </div>
+              <div class="vitrine-row">
+                <div>
+                  <strong>MONO zz_breakout · JUP</strong>
+                  <span>4h · 255 сд.</span>
+                  <svg class="mini-spark" viewBox="0 0 48 20"><path fill="none" stroke="#4ade80" stroke-width="1.5" d="M0,16 L12,14 L24,11 L36,8 L48,5"/></svg>
+                </div>
+                <div><span class="ret">+2.8%</span><br><a class="vitrine-btn" href="/client/register">Подключить</a></div>
+              </div>
+              <div class="vitrine-row">
+                <div>
+                  <strong>TV Momentum Cloud</strong>
+                  <span>Торговая система</span>
+                  <svg class="mini-spark" viewBox="0 0 48 20"><path fill="none" stroke="#f0c419" stroke-width="1.5" d="M0,17 L10,15 L20,12 L30,9 L40,6 L48,3"/></svg>
+                </div>
+                <div><span class="ret">+89%</span><br><a class="vitrine-btn" href="/client/register">Подключить</a></div>
+              </div>
+            </div>
           </aside>
         </div>
       </div>
@@ -308,12 +400,13 @@
       <h2>Что внутри движка</h2>
       <p class="sub">Не один бот — исследовательский контур: сотни конфигураций, walk-forward, портфельная сборка.</p>
       <div class="chips">
-        <div class="chip" style="animation-delay:.05s"><strong>Stat-arb</strong><span>поиск раскорреляции пар</span></div>
-        <div class="chip" style="animation-delay:.1s"><strong>Синтетика</strong><span>хедж и декорреляция</span></div>
-        <div class="chip" style="animation-delay:.15s"><strong>AI-свип</strong><span>автооптимизация параметров</span></div>
-        <div class="chip" style="animation-delay:.2s"><strong>Order block</strong><span>структурные входы</span></div>
-        <div class="chip" style="animation-delay:.25s"><strong>Shield DCA</strong><span>защита просадки</span></div>
-        <div class="chip" style="animation-delay:.3s"><strong>Мульти-TF</strong><span>1m — 1d в одном портфеле</span></div>
+        <div class="chip" style="animation-delay:.05s"><strong>Stat-arb</strong><span>поиск раскорреляции пар</span><span class="chip-more">Z-score входы, хедж по корзине, walk-forward отбор.</span></div>
+        <div class="chip" style="animation-delay:.1s"><strong>Синтетика</strong><span>хедж и декорреляция</span><span class="chip-more">Портфели с низкой корреляцией, union-карточки.</span></div>
+        <div class="chip" style="animation-delay:.15s"><strong>AI-свип</strong><span>автооптимизация параметров</span><span class="chip-more">Сотни прогонов на VPS, отбор по DD и PF.</span></div>
+        <div class="chip" style="animation-delay:.2s"><strong>Order block</strong><span>структурные входы</span><span class="chip-more">Уровни ликвидности и структура рынка.</span></div>
+        <div class="chip" style="animation-delay:.25s"><strong>Shield DCA</strong><span>защита просадки</span><span class="chip-more">Макро-оверлеи и мягкий circuit breaker.</span></div>
+        <div class="chip" style="animation-delay:.3s"><strong>Мульти-TF</strong><span>1m — 1d в одном портфеле</span><span class="chip-more">Разные интервалы в одной торговой системе.</span></div>
+        <div class="chip" style="animation-delay:.35s"><strong>TradingView</strong><span>алерты → исполнение (α)</span><span class="chip-more">Webhook из Pine, ваш ключ, наш runtime.</span></div>
       </div>
       <div class="strat-grid">
         <article class="strat-card">
@@ -335,26 +428,37 @@
     </section>
 
     <section id="offer">
-      <h2>Три сценария вовлечённости</h2>
-      <p class="sub">Один кабинет — от готового портфеля до собственной сборки и копирования сигналов.</p>
+      <h2>Четыре режима — наведи для деталей</h2>
+      <p class="sub">Один кабинет: портфель, сборка, копирование или свой сигнал из TradingView. Режим выбирается при регистрации.</p>
       <div class="pillars">
         <article class="pillar">
           <div class="num">01</div>
           <h3>Готовый портфель</h3>
-          <p>Торговая система с историей бэктеста. Подключили — платформа исполняет, вы задаёте риск.</p>
+          <p class="pillar-short">Торговая система с бэктестом — подключили и контролируете риск.</p>
+          <p class="pillar-long">Портфель из десятков стратегий уже собран и протестирован. Выбираете ТС на витрине, задаёте риск — runtime исполняет 24/7.</p>
           <a href="/client/register">Пассивный режим →</a>
         </article>
         <article class="pillar">
           <div class="num">02</div>
           <h3>Сборка из каталога</h3>
-          <p>Сотни стратегий с метриками. Соберите набор, сохраните конфиг и масштабируйте.</p>
+          <p class="pillar-short">Сотни оферов с метриками — свой набор стратегий.</p>
+          <p class="pillar-long">Фильтр по паре, таймфрейму, доходности и просадке. Сохраняете конфигурацию, масштабируете по опыту.</p>
           <a href="/client/register">Активный режим →</a>
         </article>
         <article class="pillar">
           <div class="num">03</div>
           <h3>Копирование сигналов</h3>
-          <p>Мастер-счёт и подписчики на одном API-контуре — для партнёров и закрытых групп.</p>
+          <p class="pillar-short">Мастер-счёт и подписчики на одном API-контуре.</p>
+          <p class="pillar-long">Для партнёров и закрытых групп: без лимитов биржевого copy-trade, единый мониторинг и контроль риска.</p>
           <a href="/partner/login">Партнёрам →</a>
+        </article>
+        <article class="pillar">
+          <span class="alpha-badge">ALPHA</span>
+          <div class="num">04</div>
+          <h3>TradingView алерты</h3>
+          <p class="pillar-short">Подключите свою стратегию с TradingView — мы исполняем.</p>
+          <p class="pillar-long">Webhook из Pine-скрипта или алерта → облачный runtime на вашем API-ключе. Тариф α доступен в бета-программе.</p>
+          <a href="/client/register">Режим TV →</a>
         </article>
       </div>
     </section>
@@ -370,7 +474,7 @@
           <p class="price"><span class="strike">$99/мес</span> $0</p>
           <ul>
             <li>Фикс зачёркнут — платите $0</li>
-            <li>Все режимы и мониторинг</li>
+            <li>Все режимы: портфель, сборка, TV α</li>
             <li>Без комиссии с прибыли в бета</li>
           </ul>
           <div class="pick">Для старта и пилотов</div>
@@ -415,5 +519,23 @@
   </main>
 
   <footer><div class="wrap">© BattleToads · Алгоритмическая торговля · <a href="/whitepaper">Документы</a></div></footer>
+  <script>
+    document.querySelectorAll('.side-tab').forEach((tab) => {
+      tab.addEventListener('click', () => {
+        const panel = tab.getAttribute('data-panel');
+        document.querySelectorAll('.side-tab').forEach((t) => t.classList.toggle('active', t === tab));
+        document.querySelectorAll('.side-panel').forEach((p) => {
+          p.classList.toggle('active', p.id === `panel-${panel}`);
+        });
+      });
+    });
+    // auto-rotate vitrine tab every 8s for demo
+    let showVitrine = false;
+    setInterval(() => {
+      showVitrine = !showVitrine;
+      const tab = document.querySelector(`.side-tab[data-panel="${showVitrine ? 'vitrine' : 'trades'}"]`);
+      if (tab) tab.click();
+    }, 8000);
+  </script>
 </body>
 </html>

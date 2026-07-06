@@ -13127,11 +13127,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                 onOpenDetail={() => openBacktestDrawerForStorefrontTs(item.systemName)}
                                                 footerExtra={(
                                                   <Space wrap>
-                                                    <Text type="secondary" style={{ fontSize: 12 }}>
-                                                      {item.tenants.length > 0
-                                                        ? item.tenants.map((t: any) => t.tenant.display_name).join(', ')
-                                                        : 'Нет подключённых клиентов'}
-                                                    </Text>
                                                     <Button size="small" onClick={() => openBacktestDrawerForStorefrontTs(item.systemName)}>Бэктест ТС</Button>
                                                     <Button
                                                       size="small"

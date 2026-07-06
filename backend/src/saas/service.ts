@@ -6317,7 +6317,8 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
         || strategyIdToTsOfferId.get(strategyId)
         || `offer_${mode}_${strategyType.toLowerCase()}_${strategyId}`;
       const snapshot = reviewSnapshots[fallbackOfferId] || null;
-      const trades = Math.max(0, Math.floor(asNumber(snapshot?.trades, 0)));
+      const sweepRecord = sweepByStrategyId.get(strategyId) || null;
+      const trades = Math.max(0, Math.floor(preferSnapshotMetric(snapshot?.trades, sweepRecord?.tradesCount ?? 0, { allowZero: false })));
       const periodDaysRow = Math.max(1, Math.floor(asNumber(snapshot?.periodDays, periodDays)));
       const rowMarketType = String((row as { market_type?: string }).market_type || 'futures') === 'spot' ? 'spot' : 'futures';
       return {
@@ -6327,10 +6328,10 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
         market,
         market_type: rowMarketType as 'futures' | 'spot',
         strategyId,
-        score: 0,
-        ret: Number(asNumber(snapshot?.ret, 0).toFixed(3)),
-        pf: Number(asNumber(snapshot?.pf, 0).toFixed(3)),
-        dd: Number(asNumber(snapshot?.dd, 0).toFixed(3)),
+        score: Number(asNumber(sweepRecord?.score, 0).toFixed(3)),
+        ret: Number(preferSnapshotMetric(snapshot?.ret, sweepRecord?.totalReturnPercent ?? 0, { allowZero: false }).toFixed(3)),
+        pf: Number(preferSnapshotMetric(snapshot?.pf, sweepRecord?.profitFactor ?? 0, { allowZero: false }).toFixed(3)),
+        dd: Number(preferSnapshotMetric(snapshot?.dd, sweepRecord?.maxDrawdownPercent ?? 0, { allowZero: true }).toFixed(3)),
         trades,
         tradesPerDay: Number(asNumber(snapshot?.tradesPerDay, trades / Math.max(1, periodDaysRow)).toFixed(3)),
         periodDays: periodDaysRow,
@@ -6481,13 +6482,30 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
       );
       const reviewEq = reviewSnapshots[row.offerId]?.equityPoints;
       const rawEq = (Array.isArray(reviewEq) && reviewEq.length > 0 ? reviewEq : null) || equityByOfferId.get(row.offerId) || [];
-      const ret = Number(asNumber(row.ret, 0).toFixed(3));
-      const pf = Number(asNumber(row.pf, 0).toFixed(3));
-      const dd = Number(asNumber(row.dd, 0).toFixed(3));
-      const trades = Math.max(0, Math.floor(asNumber(row.trades, 0)));
+      const presetMetrics = presetMetricsByOfferId.get(row.offerId);
+      const sweepRecord = sweepByStrategyId.get(Number(row.strategyId || 0)) || null;
+      let ret = Number(asNumber(row.ret, 0).toFixed(3));
+      let pf = Number(asNumber(row.pf, 0).toFixed(3));
+      let dd = Number(asNumber(row.dd, 0).toFixed(3));
+      let trades = Math.max(0, Math.floor(asNumber(row.trades, 0)));
+      if (sweepRecord) {
+        if (ret <= 0) ret = Number(asNumber(sweepRecord.totalReturnPercent, 0).toFixed(3));
+        if (pf <= 0) pf = Number(asNumber(sweepRecord.profitFactor, 0).toFixed(3));
+        if (dd <= 0) dd = Number(asNumber(sweepRecord.maxDrawdownPercent, 0).toFixed(3));
+        if (trades <= 0) trades = Math.max(0, Math.floor(asNumber(sweepRecord.tradesCount, 0)));
+      }
+      if (presetMetrics && typeof presetMetrics === 'object') {
+        if (ret <= 0) ret = Number(asNumber(presetMetrics.ret ?? presetMetrics.totalReturnPercent, 0).toFixed(3));
+        if (pf <= 0) pf = Number(asNumber(presetMetrics.pf ?? presetMetrics.profitFactor, 0).toFixed(3));
+        if (dd <= 0) dd = Number(asNumber(presetMetrics.dd ?? presetMetrics.maxDrawdownPercent, 0).toFixed(3));
+        if (trades <= 0) trades = Math.max(0, Math.floor(asNumber(presetMetrics.trades ?? presetMetrics.tradesCount, 0)));
+      }
       const periodDaysRow = Math.max(1, Math.floor(asNumber(row.periodDays, defaults.periodDays)));
       const tradesPerDay = Number(asNumber(row.tradesPerDay, trades / Math.max(1, periodDaysRow)).toFixed(3));
-      const normalizedEq = normalizeEquityCurveOrientation(rawEq, ret, 10000 * (1 + asNumber(ret, 0) / 100), 10000);
+      let normalizedEq = normalizeEquityCurveOrientation(rawEq, ret, 10000 * (1 + asNumber(ret, 0) / 100), 10000);
+      if (normalizedEq.length < 2 && Math.abs(ret) > 0.0001) {
+        normalizedEq = toPresetOnlyEquity(10000, ret, periodDaysRow).map((point) => Number(asNumber(point.equity, 0).toFixed(4)));
+      }
 
       return {
         ...row,
