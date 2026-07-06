@@ -10,7 +10,7 @@
 
 | # | Задача | Статус | Риск |
 |---|--------|--------|------|
-| A | Распил `strategy.ts` → модули + фасад | 🔄 sizing вынесен (~2990) | низкий |
+| A | Распил `strategy.ts` → модули + фасад | 🔄 cycle вынесен (~2290) | низкий |
 | B | Распил `routes.ts` → sub-routers | ✅ client/backtest/admin | низкий |
 | C | Client backtest → async queue (`preview_jobs`) | ✅ | средний |
 | D | Presets вместо live `runBacktest` в SaaS client preview | ✅ default strict | средний |
@@ -30,16 +30,19 @@ backend/src/bot/strategy/
   crud.ts           ← get/create/update/delete strategies (~1005)
   sizing.ts         ← buildBalanced/SingleQtyPlan, leg balance (~421)
   candles.ts        ← loadStrategyCandles, parse candles, latest close (~108)
-bot/strategy.ts     ← фасад: executeStrategy + runAutoStrategiesCycle (~2890)
+  cycle/cache.ts    ← per-cycle signal cache + group key
+  cycle/autoRun.ts  ← runAutoStrategiesCycle (~410)
+  cycle/*.ts        ← algofundSync, positionGuards, offlineSymbol
+bot/strategy.ts     ← фасад: executeStrategy (~2290, было ~4980)
 ```
 
 **Не используем:** `backend/src/services/strategy/{crud,mutex,sizing}.ts` — устаревшие заглушки.
 
 ### Прогресс
 
-- [x] `mutex.ts`, `types.ts`, `normalize.ts`, `signals.ts`, `crud.ts`, `sizing.ts`, `candles.ts`
-- [x] `strategy.ts` — импорты из подмодулей, реэкспорт CRUD API (~2890 строк)
-- [ ] `cycle.ts` — signal cache, runAutoStrategiesCycle оркестрация
+- [x] `mutex.ts`, `types.ts`, `normalize.ts`, `signals.ts`, `crud.ts`, `sizing.ts`, `candles.ts`, `cycle/*`
+- [x] `strategy.ts` — импорты из подмодулей, реэкспорт CRUD + runAutoStrategiesCycle
+- [ ] `execution.ts` — хелперы open/close/align внутри executeStrategy
 
 ---
 
