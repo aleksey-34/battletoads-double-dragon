@@ -4772,12 +4772,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
     return true;
   }), [summary?.tenants, clientsModeFilter, clientsClassKind, clientsClassValue]);
-  const resolveSummaryScope = (): SummaryScope => {
-    if (activeTab === 'admin' && adminTab === 'offer-ts') {
-      return 'full';
-    }
-    return 'light';
-  };
+  const summaryNeedsOfferStore = activeTab === 'strategy-client'
+    || activeTab === 'algofund'
+    || (activeTab === 'admin' && adminTab === 'offer-ts');
+
+  const resolveSummaryScope = (): SummaryScope => (
+    summaryNeedsOfferStore ? 'full' : 'light'
+  );
 
   const loadSummary = async (scope: SummaryScope = resolveSummaryScope()): Promise<SaasSummary | null> => {
     const requestSeq = summaryRequestSeqRef.current + 1;
@@ -5717,16 +5718,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!isAdminSurface) {
       return;
     }
-    const adminNeedsSweepData = activeTab === 'admin' && adminTab === 'offer-ts';
-    if (
-      adminNeedsSweepData
-      && (!summary?.offerStore || !summary?.sweepSummary || !summary?.catalog)
-      && !summaryLoading
-    ) {
+    const needsFull = summaryNeedsOfferStore;
+    const missingOfferStore = !summary?.offerStore;
+    const missingSweepData = activeTab === 'admin' && adminTab === 'offer-ts'
+      && (!summary?.sweepSummary || !summary?.catalog);
+    if (needsFull && (missingOfferStore || missingSweepData) && !summaryLoading) {
       void loadSummary('full');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAdminSurface, activeTab, adminTab, summary?.offerStore, summary?.sweepSummary, summary?.catalog]);
+  }, [isAdminSurface, activeTab, adminTab, summaryNeedsOfferStore, summary?.offerStore, summary?.sweepSummary, summary?.catalog, summaryLoading]);
 
   useEffect(() => {
     if (!isAdminSurface || activeTab !== 'admin' || adminTab !== 'offer-ts') {

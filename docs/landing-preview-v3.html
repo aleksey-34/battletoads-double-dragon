@@ -106,11 +106,11 @@
       display: flex; align-items: center; justify-content: space-between; padding: 14px 18px;
       border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted);
     }
-    .dots { display: flex; gap: 6px; }
-    .dots span { width: 8px; height: 8px; border-radius: 50%; background: #333; }
-    .dots span:nth-child(1) { background: #ef4444; }
-    .dots span:nth-child(2) { background: #eab308; }
-    .dots span:nth-child(3) { background: #22c55e; }
+    .showcase-label {
+      font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
+      color: var(--gold); padding: 4px 10px; border-radius: 999px;
+      border: 1px solid rgba(240,196,25,.25); background: rgba(240,196,25,.06);
+    }
     .showcase-body { display: grid; grid-template-columns: 1fr 200px; min-height: 280px; }
     .chart-zone { padding: 16px 12px 8px; position: relative; }
     .chart-tags { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; padding: 0 6px; }
@@ -257,10 +257,10 @@
     <section class="hero">
       <div>
         <div class="eyebrow">Cloud trading platform</div>
-        <h1>Алгоритмы торгуют.<br><em>Счёт остаётся на бирже.</em></h1>
+        <h1>Алгоритмы торгуют.<br><em>Средства в безопасности.</em></h1>
         <p class="lead">
-          Подключите API-ключ — исполнение в облаке, баланс и позиции на вашей площадке.
-          Мониторинг, бэктесты и витрина стратегий в одном кабинете.
+          Подключите API-ключ — торговля в облаке, деньги остаются на бирже под вашим ключом.
+          Бэктесты, мониторинг и витрина стратегий в одном кабинете.
         </p>
         <div class="hero-cta">
           <a class="btn btn-gold" href="/client/register">Открыть кабинет</a>
@@ -269,8 +269,8 @@
 
       <div class="showcase" aria-label="Пример мониторинга">
         <div class="showcase-head">
-          <div class="dots"><span></span><span></span><span></span></div>
-          <span>Мониторинг · демо-портфель</span>
+          <span class="showcase-label">Демо кабинета</span>
+          <span>Мониторинг · портфель</span>
         </div>
         <div class="showcase-body">
           <div class="chart-zone">
@@ -296,9 +296,9 @@
             <h4>Сделки · 24ч</h4>
             <div class="trade-row"><span><span class="in">IN</span> <span class="sym">SOL</span></span><span class="pnl">+2.1%</span></div>
             <div class="trade-row"><span><span class="out">OUT</span> <span class="sym">DOGE</span></span><span class="pnl">+0.8%</span></div>
-            <div class="trade-row"><span><span class="in">IN</span> <span class="sym">AVAX</span></span><span>—</span></div>
+            <div class="trade-row"><span><span class="in">IN</span> <span class="sym">AVAX</span></span><span class="pnl">+1.2%</span></div>
             <div class="trade-row"><span><span class="out">OUT</span> <span class="sym">LINK</span></span><span class="pnl">+1.4%</span></div>
-            <div class="trade-row"><span><span class="in">IN</span> <span class="sym">ARB</span></span><span>—</span></div>
+            <div class="trade-row"><span><span class="in">IN</span> <span class="sym">ARB</span></span><span class="pnl">+0.6%</span></div>
           </aside>
         </div>
       </div>
