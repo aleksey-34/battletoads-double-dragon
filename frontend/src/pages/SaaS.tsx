@@ -19,6 +19,7 @@ import {
   message,
   Modal,
   Progress,
+  Pagination,
   Row,
   Select,
   Segmented,
@@ -37,6 +38,10 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import { useNavigate } from 'react-router-dom';
 import ChartComponent from '../components/ChartComponent';
+import StorefrontGrid from '../components/storefront/StorefrontGrid';
+import StrategyOfferCard from '../components/storefront/StrategyOfferCard';
+import TradingSystemCard from '../components/storefront/TradingSystemCard';
+import { pointsToChartSeries } from '../components/storefront/storefrontMetrics';
 import { useI18n } from '../i18n';
 
 const { Paragraph, Text, Title } = Typography;
@@ -1487,8 +1492,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     seed: 'Инициализировать demo tenants',
     publish: 'Опубликовать admin TS',
     admin: 'Admin',
-    strategyClient: 'Клиент стратегий',
-    algofund: 'Алгофонд',
+    strategyClient: 'Стратегии',
+    algofund: 'Торговые системы',
     latestCatalog: 'Последний client catalog',
     latestSweep: 'Последний historical sweep',
     noCatalog: 'Каталог стратегий временно недоступен. Проверьте сборку каталога в админ-контуре.',
@@ -1604,8 +1609,8 @@ const COPY_BY_LANGUAGE: Record<'ru' | 'en' | 'tr', Copy> = {
     seed: 'Seed demo tenants',
     publish: 'Publish admin TS',
     admin: 'Admin',
-    strategyClient: 'Strategy Client',
-    algofund: 'Algofund',
+    strategyClient: 'Strategies',
+    algofund: 'Trading Systems',
     latestCatalog: 'Latest client catalog',
     latestSweep: 'Latest historical sweep',
     noCatalog: 'Strategy catalog is temporarily unavailable. Check catalog build in admin mode.',
@@ -3334,6 +3339,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminOfferInstrumentFilter, setAdminOfferInstrumentFilter] = useState<string>('all');
   const [adminOfferSortBy, setAdminOfferSortBy] = useState<'ret' | 'dd' | 'pf' | 'trades'>('ret');
   const [storefrontCardInstrumentFilter, setStorefrontCardInstrumentFilter] = useState<string>('all');
+  const [strategyVitrineMarketTab, setStrategyVitrineMarketTab] = useState<'futures' | 'spot'>('futures');
+  const [algofundVitrineMarketTab, setAlgofundVitrineMarketTab] = useState<'futures' | 'spot'>('futures');
   const [storefrontCardSortBy, setStorefrontCardSortBy] = useState<'ret' | 'dd' | 'pf' | 'trades'>('ret');
   const [storefrontCardPage, setStorefrontCardPage] = useState(1);
   const STOREFRONT_PAGE_SIZE = 24;
@@ -3659,6 +3666,37 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const curatedStorefrontOffers = useMemo(
     () => offerStoreOffers.filter((offer) => storefrontOfferIds.has(String(offer.offerId || ''))),
     [offerStoreOffers, storefrontOfferIds],
+  );
+  const allTsSnapshotOfferIds = useMemo(() => {
+    const ids = new Set<string>();
+    Object.values(summary?.offerStore?.tsBacktestSnapshots || {}).forEach((snap: any) => {
+      (Array.isArray(snap?.offerIds) ? snap.offerIds : []).forEach((offerId: unknown) => {
+        const safe = String(offerId || '').trim();
+        if (safe) ids.add(safe);
+      });
+    });
+    return ids;
+  }, [summary?.offerStore?.tsBacktestSnapshots]);
+  const strategyVitrineOfferIds = useMemo(() => {
+    const merged = new Set(storefrontOfferIds);
+    allTsSnapshotOfferIds.forEach((offerId) => merged.add(offerId));
+    return merged;
+  }, [storefrontOfferIds, allTsSnapshotOfferIds]);
+  const strategyVitrineOffers = useMemo(
+    () => offerStoreOffers.filter((offer) => strategyVitrineOfferIds.has(String(offer.offerId || ''))),
+    [offerStoreOffers, strategyVitrineOfferIds],
+  );
+  const strategyVitrineOffersFutures = useMemo(
+    () => strategyVitrineOffers.filter((offer: any) => String(offer.market_type || 'futures') !== 'spot'),
+    [strategyVitrineOffers],
+  );
+  const strategyVitrineOffersSpot = useMemo(
+    () => strategyVitrineOffers.filter((offer: any) => String(offer.market_type || 'futures') === 'spot'),
+    [strategyVitrineOffers],
+  );
+  const strategyVitrineActiveOffers = useMemo(
+    () => (strategyVitrineMarketTab === 'spot' ? strategyVitrineOffersSpot : strategyVitrineOffersFutures),
+    [strategyVitrineMarketTab, strategyVitrineOffersFutures, strategyVitrineOffersSpot],
   );
   const filteredOfferStoreOffers = useMemo(
     () => {
@@ -4563,6 +4601,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       maxOpenPositions,
       macroShieldEnabled,
       dcaSatelliteMarkets,
+      marketType: String(
+        (snapshotForSystem as any)?.backtestSettings?.marketType
+        || (snapshotForSystem as any)?.marketType
+        || (runtimeSystem as any)?.marketType
+        || (runtimeSystem as any)?.market_type
+        || 'futures',
+      ),
     };
     }).filter((item) => {
       if (!item.hasMeaningfulState) {
@@ -4616,6 +4661,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         return rightScore - leftScore;
       });
   }, [algofundState?.availableSystems, summary?.offerStore?.tsBacktestSnapshots, batchEligibleAlgofundTenants, publishResponse, adminSweepBacktestResult, backtestDrawerContext, selectedAdminDraftTsSetKey, matchesTsSnapshotToken, resolveTsSnapshotForSystem, publishedAlgofundSystems, normalizeTsToken, normalizeStorefrontTsOfferIds, runtimeMasterSystemByName]);
+
+  const algofundVitrineSystemsFutures = useMemo(
+    () => algofundStorefrontSystems.filter((row: any) => String(row.marketType || 'futures') !== 'spot'),
+    [algofundStorefrontSystems],
+  );
+  const algofundVitrineSystemsSpot = useMemo(
+    () => algofundStorefrontSystems.filter((row: any) => String(row.marketType || 'futures') === 'spot'),
+    [algofundStorefrontSystems],
+  );
+  const algofundVitrineActiveSystems = useMemo(
+    () => (algofundVitrineMarketTab === 'spot' ? algofundVitrineSystemsSpot : algofundVitrineSystemsFutures),
+    [algofundVitrineMarketTab, algofundVitrineSystemsFutures, algofundVitrineSystemsSpot],
+  );
 
   useEffect(() => {
     if (!isAdminSurface || algofundStorefrontSystems.length === 0) {
@@ -12175,7 +12233,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Spin spinning={strategyLoading && !strategyState}>
                     {strategyState ? (
                       <>
-                        <Card className="battletoads-card" title={isAdminSurface ? 'Витрина Клиент стратегий' : copy.tenantWorkspace}>
+                        <Card className="battletoads-card" title={isAdminSurface ? 'Витрина Стратегий' : copy.tenantWorkspace}>
                           {isAdminSurface ? (
                             <Tabs
                               destroyOnHidden
@@ -12188,10 +12246,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       <Alert
                                         type="info"
                                         showIcon
-                                        message="Витрина оферов Клиента стратегий: curated-набор карточек. Published отмечается отдельно и не управляет самим storefront."
+                                        message="Витрина оферов: curated + все оферы из опубликованных ТС. Published отмечается отдельно."
                                       />
-                                      {curatedStorefrontOffers.length === 0 ? (
-                                        <Empty description="Curated-витрина оферов пока пуста: сначала добавь карточки в curated в Админ → Оферы и ТС" />
+                                      <Segmented
+                                        value={strategyVitrineMarketTab}
+                                        onChange={(value) => {
+                                          setStrategyVitrineMarketTab(value as 'futures' | 'spot');
+                                          setStorefrontCardPage(1);
+                                        }}
+                                        options={[
+                                          { label: `Фьючерсы (${strategyVitrineOffersFutures.length})`, value: 'futures' },
+                                          { label: `Спот (${strategyVitrineOffersSpot.length})`, value: 'spot' },
+                                        ]}
+                                      />
+                                      {strategyVitrineActiveOffers.length === 0 ? (
+                                        <Empty description={strategyVitrineMarketTab === 'spot' ? 'Спот-оферы пока не добавлены — после spot-sweep появятся здесь' : 'Витрина оферов пуста: добавь карточки в curated или опубликуй ТС в Админ → Оферы и ТС'} />
                                       ) : (
                                         <>
                                         <Space wrap size={8} style={{ marginBottom: 12 }}>
@@ -12201,10 +12270,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             value={storefrontCardInstrumentFilter}
                                             onChange={(v) => { setStorefrontCardInstrumentFilter(v); setStorefrontCardPage(1); }}
                                             options={[
-                                              { value: 'all', label: `Все инструменты (${curatedStorefrontOffers.length})` },
-                                              ...Array.from(new Set(curatedStorefrontOffers.map((o: any) => String(o.market || '')).filter(Boolean))).sort().map((m) => ({
+                                              { value: 'all', label: `Все инструменты (${strategyVitrineActiveOffers.length})` },
+                                              ...Array.from(new Set(strategyVitrineActiveOffers.map((o: any) => String(o.market || '')).filter(Boolean))).sort().map((m) => ({
                                                 value: m,
-                                                label: `${m} (${curatedStorefrontOffers.filter((o: any) => String(o.market || '') === m).length})`,
+                                                label: `${m} (${strategyVitrineActiveOffers.filter((o: any) => String(o.market || '') === m).length})`,
                                               })),
                                             ]}
                                           />
@@ -12221,105 +12290,121 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             ]}
                                           />
                                           <Tag>{(() => {
-                                            const filtered = curatedStorefrontOffers.filter((o: any) => storefrontCardInstrumentFilter === 'all' || String(o.market || '') === storefrontCardInstrumentFilter);
+                                            const filtered = strategyVitrineActiveOffers.filter((o: any) => storefrontCardInstrumentFilter === 'all' || String(o.market || '') === storefrontCardInstrumentFilter);
                                             return `${filtered.length} карточек`;
                                           })()}</Tag>
                                         </Space>
-                                        <List
-                                          grid={{ gutter: 10, xs: 1, md: 2, xl: 4 }}
-                                          pagination={{ pageSize: STOREFRONT_PAGE_SIZE, current: storefrontCardPage, onChange: setStorefrontCardPage, showSizeChanger: false, size: 'small' }}
-                                          dataSource={[...curatedStorefrontOffers]
+                                        {(() => {
+                                          const filteredOffers = [...strategyVitrineActiveOffers]
                                             .filter((o: any) => storefrontCardInstrumentFilter === 'all' || String(o.market || '') === storefrontCardInstrumentFilter)
                                             .sort((a: any, b: any) => {
                                               if (storefrontCardSortBy === 'dd') return Number(a.dd || 0) - Number(b.dd || 0);
                                               if (storefrontCardSortBy === 'pf') return Number(b.pf || 0) - Number(a.pf || 0);
                                               if (storefrontCardSortBy === 'trades') return Number(b.trades || 0) - Number(a.trades || 0);
                                               return Number(b.ret || 0) - Number(a.ret || 0);
-                                            })
-                                          }
-                                          renderItem={(row: any) => {
-                                            const points = downsampleNumericSeries(
-                                              (Array.isArray(row.equityPoints) ? row.equityPoints : [])
-                                                .map((value: unknown) => Number(value))
-                                                .filter((value: number) => Number.isFinite(value)),
-                                              36
-                                            );
-                                            return (
-                                              <List.Item key={String(row.offerId || '')}>
-                                                <Card size="small" bordered>
-                                                  <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                                                    <Space direction="vertical" size={0}>
-                                                      <Tooltip title={(() => {
-                                                        const sType = String(row.strategyType || '').trim();
-                                                        const hint = getTsStrategyHint(sType) || `Стратегия ${sType || row.titleRu}`;
-                                                        const params = row.strategyParams;
-                                                        const interval = String(params?.interval || row.interval || '');
-                                                        const length = Number(params?.length || 0);
-                                                        const tp = Number(params?.takeProfitPercent || 0);
-                                                        const src = String(params?.detectionSource || '');
-                                                        const ze = Number(params?.zscoreEntry || 0);
-                                                        let detail = `Таймфрейм: ${interval || '?'} • Период: ${length || '?'} • Пара: ${row.market}`;
-                                                        if (tp) detail += `\nTP: ${tp}% • Источник: ${src || '?'}`;
-                                                        if (ze) detail += `\nZ-entry: ${ze}, Z-exit: ${params?.zscoreExit ?? '?'}, Z-stop: ${params?.zscoreStop ?? '?'}`;
-                                                        return `${hint}\n${detail}`;
-                                                      })()} placement="topLeft">
-                                                        <Text strong style={{ cursor: 'help' }}>{row.titleRu}</Text>
-                                                      </Tooltip>
-                                                      <Text type="secondary" style={{ fontSize: 11 }}>{String(row.mode || '').toUpperCase()} • {row.market}</Text>
-                                                    </Space>
-                                                    <Space size={4} wrap>
-                                                      <Tag color="default">{Number(row.periodDays || 0)}d</Tag>
-                                                      <Tag color={metricColor(Number(row.ret || 0), 'return')}>Ret {formatPercent(row.ret)}</Tag>
-                                                      <Tag color={metricColor(Number(row.dd || 0), 'drawdown')}>DD {formatPercent(row.dd)}</Tag>
-                                                      <Tag color={metricColor(Number(row.pf || 0), 'pf')}>PF {formatNumber(row.pf)}</Tag>
-                                                      <Tag color={Number(row.connectedClients || 0) > 0 ? 'cyan' : 'default'}>clients {Number(row.connectedClients || 0)}</Tag>
-                                                      <Tag color={storefrontOfferIds.has(String(row.offerId || '')) ? 'processing' : 'default'}>{storefrontOfferIds.has(String(row.offerId || '')) ? '✓ curated' : '⊘ not curated'}</Tag>
-                                                      <Tag color={publishedOfferIds.has(String(row.offerId || '')) ? 'success' : 'default'}>{publishedOfferIds.has(String(row.offerId || '')) ? '✓ published' : '⊘ not published'}</Tag>
-                                                    </Space>
-                                                    <Tooltip title="Бэктест учитывает: комиссию 0.1% (вход+выход), проскальзывание 0.05%, направленный слиппедж. Прошлые результаты не гарантируют будущую доходность."><Text type="secondary" style={{ fontSize: 10, cursor: 'help' }}>ⓘ С учётом комиссий и слиппеджа</Text></Tooltip>
-                                                    {points.length >= 2 ? (
-                                                      <ChartComponent
-                                                        data={(() => { const nowSec = Math.floor(Date.now() / 1000); const dayS = 86400; const periodDays = Number(row.periodDays || 0) > 0 ? Number(row.periodDays || 0) : (points.length - 1); const totalSpan = Math.max(periodDays, 1) * dayS; const startSec = nowSec - totalSpan; const step = totalSpan / Math.max(points.length - 1, 1); return points.map((value, index) => ({ time: Math.floor(startSec + index * step), equity: value })); })()}
-                                                        type="line"
-                                                        fixedHeight={120}
-                                                      />
-                                                    ) : (
-                                                      <Text type="secondary" style={{ fontSize: 11 }}>no snapshot</Text>
-                                                    )}
-                                                    <Space size={4} wrap>
-                                                      <Button size="small" onClick={() => openOfferBacktest(row)}>Бэктест</Button>
-                                                      <Button
-                                                        size="small"
-                                                        type="primary"
-                                                        onClick={() => {
-                                                          const alreadyConnected = strategyTenants
-                                                            .filter((t: any) => (t.strategyProfile?.selectedOfferIds || []).includes(String(row.offerId)))
-                                                            .map((t: any) => Number(t.tenant.id));
-                                                          setStrategyConnectTarget({ offerId: String(row.offerId), offerTitle: String(row.titleRu || row.offerId), tenantIds: alreadyConnected, initialTenantIds: alreadyConnected });
-                                                        }}
-                                                      >
-                                                        Подключить клиентов
-                                                      </Button>
-                                                      <Button
-                                                        size="small"
-                                                        onClick={() => { void toggleOfferPublished(String(row.offerId), !publishedOfferIds.has(String(row.offerId || ''))); }}
-                                                      >
-                                                        {publishedOfferIds.has(String(row.offerId || '')) ? 'Снять published' : 'В published'}
-                                                      </Button>
-                                                      <Button
-                                                        size="small"
-                                                        danger
-                                                        onClick={() => { void openUnpublishWizard(String(row.offerId)); }}
-                                                      >
-                                                        Убрать из curated
-                                                      </Button>
-                                                    </Space>
-                                                  </Space>
-                                                </Card>
-                                              </List.Item>
-                                            );
-                                          }}
-                                        />
+                                            });
+                                          const pagedOffers = filteredOffers.slice(
+                                            (storefrontCardPage - 1) * STOREFRONT_PAGE_SIZE,
+                                            storefrontCardPage * STOREFRONT_PAGE_SIZE,
+                                          );
+                                          return (
+                                            <>
+                                              <StorefrontGrid>
+                                                {pagedOffers.map((row: any) => {
+                                                  const points = downsampleNumericSeries(
+                                                    (Array.isArray(row.equityPoints) ? row.equityPoints : [])
+                                                      .map((value: unknown) => Number(value))
+                                                      .filter((value: number) => Number.isFinite(value)),
+                                                    36,
+                                                  );
+                                                  const chartSeries = points.length >= 2
+                                                    ? pointsToChartSeries(points, Number(row.periodDays || 0))
+                                                    : [];
+                                                  const sType = String(row.strategyType || '').trim();
+                                                  const hint = getTsStrategyHint(sType) || `Стратегия ${sType || row.titleRu}`;
+                                                  const params = row.strategyParams;
+                                                  const interval = String(params?.interval || row.interval || '');
+                                                  const length = Number(params?.length || 0);
+                                                  const tp = Number(params?.takeProfitPercent || 0);
+                                                  const src = String(params?.detectionSource || '');
+                                                  const ze = Number(params?.zscoreEntry || 0);
+                                                  let detail = `${hint}\nТаймфрейм: ${interval || '?'} • Период: ${length || '?'} • Пара: ${row.market}`;
+                                                  if (tp) detail += `\nTP: ${tp}% • Источник: ${src || '?'}`;
+                                                  if (ze) detail += `\nZ-entry: ${ze}, Z-exit: ${params?.zscoreExit ?? '?'}, Z-stop: ${params?.zscoreStop ?? '?'}`;
+                                                  return (
+                                                    <StrategyOfferCard
+                                                      key={String(row.offerId || '')}
+                                                      offer={{
+                                                        id: String(row.offerId || ''),
+                                                        title: String(row.titleRu || row.offerId || ''),
+                                                        description: detail,
+                                                        market: String(row.market || ''),
+                                                        mode: String(row.mode || ''),
+                                                        interval,
+                                                        marketType: String(row.market_type || 'futures'),
+                                                        ret: Number(row.ret || 0),
+                                                        dd: Number(row.dd || 0),
+                                                        pf: Number(row.pf || 0),
+                                                        trades: Number(row.trades || 0),
+                                                      }}
+                                                      chartSeries={chartSeries}
+                                                      extraBadges={(
+                                                        <>
+                                                          <Tag className="storefront-card__pill">{Number(row.periodDays || 0)}d</Tag>
+                                                          <Tag color={Number(row.connectedClients || 0) > 0 ? 'cyan' : 'default'}>clients {Number(row.connectedClients || 0)}</Tag>
+                                                          <Tag color={storefrontOfferIds.has(String(row.offerId || '')) ? 'processing' : 'default'}>{storefrontOfferIds.has(String(row.offerId || '')) ? 'curated' : 'not curated'}</Tag>
+                                                          <Tag color={publishedOfferIds.has(String(row.offerId || '')) ? 'success' : 'default'}>{publishedOfferIds.has(String(row.offerId || '')) ? 'published' : 'not published'}</Tag>
+                                                        </>
+                                                      )}
+                                                      onOpenDetail={() => openOfferBacktest(row)}
+                                                      footerExtra={(
+                                                        <Space size={4} wrap>
+                                                          <Button size="small" onClick={() => openOfferBacktest(row)}>Бэктест</Button>
+                                                          <Button
+                                                            size="small"
+                                                            type="primary"
+                                                            onClick={() => {
+                                                              const alreadyConnected = strategyTenants
+                                                                .filter((t: any) => (t.strategyProfile?.selectedOfferIds || []).includes(String(row.offerId)))
+                                                                .map((t: any) => Number(t.tenant.id));
+                                                              setStrategyConnectTarget({ offerId: String(row.offerId), offerTitle: String(row.titleRu || row.offerId), tenantIds: alreadyConnected, initialTenantIds: alreadyConnected });
+                                                            }}
+                                                          >
+                                                            Подключить клиентов
+                                                          </Button>
+                                                          <Button
+                                                            size="small"
+                                                            onClick={() => { void toggleOfferPublished(String(row.offerId), !publishedOfferIds.has(String(row.offerId || ''))); }}
+                                                          >
+                                                            {publishedOfferIds.has(String(row.offerId || '')) ? 'Снять published' : 'В published'}
+                                                          </Button>
+                                                          <Button
+                                                            size="small"
+                                                            danger
+                                                            onClick={() => { void openUnpublishWizard(String(row.offerId)); }}
+                                                          >
+                                                            Убрать из curated
+                                                          </Button>
+                                                        </Space>
+                                                      )}
+                                                    />
+                                                  );
+                                                })}
+                                              </StorefrontGrid>
+                                              {filteredOffers.length > STOREFRONT_PAGE_SIZE ? (
+                                                <Pagination
+                                                  size="small"
+                                                  current={storefrontCardPage}
+                                                  pageSize={STOREFRONT_PAGE_SIZE}
+                                                  total={filteredOffers.length}
+                                                  showSizeChanger={false}
+                                                  onChange={setStorefrontCardPage}
+                                                  style={{ marginTop: 12 }}
+                                                />
+                                              ) : null}
+                                            </>
+                                          );
+                                        })()}
                                         </>
                                       )}
                                     </Space>
@@ -12918,7 +13003,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Spin spinning={algofundLoading && !algofundState}>
                     {algofundState ? (
                       <>
-                        <Card className="battletoads-card" title={isAdminSurface ? <span className="storefront-title-accent">Витрина Алгофонд</span> : copy.tenantWorkspace}>
+                        <Card className="battletoads-card" title={isAdminSurface ? <span className="storefront-title-accent">Витрина Торговых систем</span> : copy.tenantWorkspace}>
                           {isAdminSurface ? (
                             <Tabs
                               destroyOnHidden
@@ -12931,116 +13016,109 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       <Alert
                                         type="info"
                                         showIcon
-                                        message="Одобренная витрина Алгофонда и текущие TS-офферы."
+                                        message="Одобренная витрина торговых систем и текущие TS-офферы."
                                       />
-                                      {algofundStorefrontSystems.length === 0 ? (
-                                        <Empty description="Витрина Алгофонда сейчас пуста: опубликованная TS еще не привязана к algofund-клиентам" />
+                                      <Segmented
+                                        value={algofundVitrineMarketTab}
+                                        onChange={(value) => setAlgofundVitrineMarketTab(value as 'futures' | 'spot')}
+                                        options={[
+                                          { label: `Фьючерсы (${algofundVitrineSystemsFutures.length})`, value: 'futures' },
+                                          { label: `Спот (${algofundVitrineSystemsSpot.length})`, value: 'spot' },
+                                        ]}
+                                      />
+                                      {algofundVitrineActiveSystems.length === 0 ? (
+                                        <Empty description={algofundVitrineMarketTab === 'spot' ? 'Спот-ТС пока нет — появятся после spot-sweep' : 'Витрина пуста: опубликуй ТС и привяжи к algofund-клиентам'} />
                                       ) : (
                                         <Space direction="vertical" size={8} style={{ width: '100%' }}>
-                                          <Tag color="success">Опубликованные TS: {algofundStorefrontSystems.length}</Tag>
-                                          <Tag color="default">Неопубликованные TS: {algofundStorefrontSystems.filter((row: any) => !row.isPublished).length}</Tag>
+                                          <Tag color="success">Опубликованные TS: {algofundVitrineActiveSystems.length}</Tag>
+                                          <Tag color="default">Неопубликованные TS: {algofundVitrineActiveSystems.filter((row: any) => !row.isPublished).length}</Tag>
                                           <Text>Витринные TS офферы синхронизированы и доступны в карточках ниже</Text>
                                           <Text type="secondary">Клиентов с привязанной TS: {algofundTenantsWithPublishedTs.length}</Text>
                                         </Space>
                                       )}
-                                      {algofundStorefrontSystems.length > 0 ? (
-                                        <List
-                                          grid={{ gutter: 12, xs: 1, sm: 2, md: 3, lg: 3, xl: 3 }}
-                                          dataSource={algofundStorefrontSystems}
-                                          renderItem={(item) => (
-                                            <List.Item key={item.systemName}>
-                                              <Card
-                                                size="small"
-                                                bordered
-                                                title={
-                                                  <Space>
-                                                    <Tooltip title={getTsStrategyHint(item.systemName) ?? undefined} placement="topLeft"><Text strong style={{ cursor: getTsStrategyHint(item.systemName) ? 'help' : undefined }}>{item.displayLabel}</Text></Tooltip>
-                                                    {item.activeCount > 0
-                                                      ? <Badge status="success" text="active" />
-                                                      : item.pendingCount > 0
-                                                        ? <Badge status="processing" text="pending" />
-                                                        : <Badge status="default" text="no clients" />}
-                                                  </Space>
-                                                }
-                                              >
-                                                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                      {algofundVitrineActiveSystems.length > 0 ? (
+                                        <StorefrontGrid>
+                                          {algofundVitrineActiveSystems.map((item: any) => {
+                                            const chartSeries = Array.isArray(item.equityCurve) && item.equityCurve.length > 1
+                                              ? item.equityCurve.map((pt: any) => ({
+                                                time: Number(pt.time || pt.t || 0),
+                                                value: Number(pt.value ?? pt.equity ?? 0),
+                                              }))
+                                              : [];
+                                            const audit = materializationAuditBySystem[item.systemName];
+                                            const materializationBlock = audit && Number(item.tenantCount || 0) > 0 ? (() => {
+                                              const pct = audit.totalClients > 0
+                                                ? Math.round((audit.okCount / audit.totalClients) * 100)
+                                                : 0;
+                                              const progStatus = audit.aggregateStatus === 'running'
+                                                ? 'active'
+                                                : audit.aggregateStatus === 'ok'
+                                                  ? 'success'
+                                                  : audit.aggregateStatus === 'partial'
+                                                    ? 'normal'
+                                                    : 'exception';
+                                              const badgeStatus = audit.aggregateStatus === 'ok'
+                                                ? 'success'
+                                                : audit.aggregateStatus === 'partial'
+                                                  ? 'warning'
+                                                  : audit.aggregateStatus === 'running'
+                                                    ? 'processing'
+                                                    : 'error';
+                                              return (
+                                                <Space direction="vertical" size={4} style={{ width: '100%' }}>
                                                   <Space wrap>
-                                                    {item.isCurated ? <Tag color="blue">✓ curated</Tag> : <Tag color="default">not curated</Tag>}
-                                                    {item.isPublished ? <Tag color="success">✓ published</Tag> : <Tag color="warning">not published</Tag>}
+                                                    <Badge
+                                                      status={badgeStatus}
+                                                      text={`Материализация ${audit.okCount}/${audit.totalClients}${audit.partialCount ? ` (+${audit.partialCount} частично)` : ''}${audit.errorCount ? ` (${audit.errorCount} ошибок)` : ''}`}
+                                                    />
+                                                    <Button size="small" type="link" onClick={() => setMaterializationLogTarget(item.systemName)}>
+                                                      Лог материализации
+                                                    </Button>
+                                                  </Space>
+                                                  <Progress percent={pct} size="small" status={progStatus} />
+                                                </Space>
+                                              );
+                                            })() : null;
+                                            return (
+                                              <TradingSystemCard
+                                                key={item.systemName}
+                                                system={{
+                                                  id: item.systemName,
+                                                  name: item.systemName,
+                                                  displayLabel: item.displayLabel,
+                                                  hint: getTsStrategyHint(item.systemName) ?? undefined,
+                                                  marketType: String(item.marketType || 'futures'),
+                                                  ret: Number(item.summary?.totalReturnPercent || 0),
+                                                  dd: Number(item.summary?.maxDrawdownPercent || 0),
+                                                  pf: Number(item.summary?.profitFactor || 0),
+                                                  trades: Number(item.summary?.tradesCount || 0),
+                                                  periodDays: Number(item.summary?.periodDays || 0),
+                                                  membersCount: Number(item.membersCount || item.summary?.membersCount || (Array.isArray(item.offerIds) ? item.offerIds.length : 0) || 0),
+                                                  marketCount: Number(item.summary?.marketCount || 0),
+                                                  maxPerMarket: Number(item.summary?.maxPerMarket || 0),
+                                                }}
+                                                connected={item.activeCount > 0}
+                                                chartSeries={chartSeries}
+                                                extraBadges={(
+                                                  <>
+                                                    {item.isCurated ? <Tag color="blue">curated</Tag> : <Tag color="default">not curated</Tag>}
+                                                    {item.isPublished ? <Tag color="success">published</Tag> : <Tag color="warning">not published</Tag>}
                                                     <Tag color="blue">clients {Number(item.tenantCount || 0)}</Tag>
                                                     <Tag color="green">active {Number(item.activeCount || 0)}</Tag>
                                                     {item.pendingCount > 0 ? <Tag color="gold">pending {item.pendingCount}</Tag> : null}
-                                                    {!item.tenants.length && !item.runtimeSystemId ? <Tag color="default">legacy snapshot</Tag> : null}
-                                                    {item.summary?.totalReturnPercent !== undefined
-                                                      ? <Tag color={metricColor(Number(item.summary.totalReturnPercent || 0), 'return')}>Ret {formatPercent(item.summary.totalReturnPercent)}</Tag>
-                                                      : null}
-                                                    {item.summary?.maxDrawdownPercent !== undefined
-                                                      ? <Tag color={metricColor(Number(item.summary.maxDrawdownPercent || 0), 'drawdown')}>DD {formatPercent(item.summary.maxDrawdownPercent)}</Tag>
-                                                      : null}
-                                                    {item.summary?.profitFactor !== undefined
-                                                      ? <Tag color={metricColor(Number(item.summary.profitFactor || 0), 'pf')}>PF {formatNumber(item.summary.profitFactor)}</Tag>
-                                                      : null}
-                                                    {item.summary?.tradesCount !== undefined
-                                                      ? (() => {
-                                                          const activity = resolveTradeActivity(item.summary.tradesCount, item.summary?.periodDays);
-                                                          return activity
-                                                            ? <Tag color={activity.color}>{activity.label}</Tag>
-                                                            : <Tag color="blue">сделок {formatNumber(item.summary.tradesCount, 0)}</Tag>;
-                                                        })()
-                                                      : null}
                                                     {Number(item.maxOpenPositions || 0) > 0 ? <Tag color="volcano">ОП {Number(item.maxOpenPositions || 0)}</Tag> : null}
                                                     {item.macroShieldEnabled ? <Tag color="cyan">Shield RSI≥70</Tag> : null}
-                                                    {Array.isArray(item.dcaSatelliteMarkets) && item.dcaSatelliteMarkets.length > 0
-                                                      ? <Tag color="purple">DCA {item.dcaSatelliteMarkets.map((m: string) => String(m || '').replace(/USDT$/i, '')).join('+')}</Tag>
-                                                      : null}
-                                                  </Space>
-                                                  {(() => {
-                                                    const audit = materializationAuditBySystem[item.systemName];
-                                                    if (!audit || Number(item.tenantCount || 0) <= 0) {
-                                                      return null;
-                                                    }
-                                                    const pct = audit.totalClients > 0
-                                                      ? Math.round((audit.okCount / audit.totalClients) * 100)
-                                                      : 0;
-                                                    const progStatus = audit.aggregateStatus === 'running'
-                                                      ? 'active'
-                                                      : audit.aggregateStatus === 'ok'
-                                                        ? 'success'
-                                                        : audit.aggregateStatus === 'partial'
-                                                          ? 'normal'
-                                                          : 'exception';
-                                                    const badgeStatus = audit.aggregateStatus === 'ok'
-                                                      ? 'success'
-                                                      : audit.aggregateStatus === 'partial'
-                                                        ? 'warning'
-                                                        : audit.aggregateStatus === 'running'
-                                                          ? 'processing'
-                                                          : 'error';
-                                                    return (
-                                                      <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                                                        <Space wrap>
-                                                          <Badge
-                                                            status={badgeStatus}
-                                                            text={`Материализация ${audit.okCount}/${audit.totalClients}${audit.partialCount ? ` (+${audit.partialCount} частично)` : ''}${audit.errorCount ? ` (${audit.errorCount} ошибок)` : ''}`}
-                                                          />
-                                                          <Button size="small" type="link" onClick={() => setMaterializationLogTarget(item.systemName)}>
-                                                            Лог материализации
-                                                          </Button>
-                                                        </Space>
-                                                        <Progress percent={pct} size="small" status={progStatus} />
-                                                      </Space>
-                                                    );
-                                                  })()}
-                                                  {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
-                                                    <ChartComponent data={item.equityCurve} type="line" fixedHeight={120} />
-                                                  ) : (
-                                                    <Text type="secondary" style={{ fontSize: 12 }}>График не сохранен</Text>
-                                                  )}
-                                                  <Tooltip title="Бэктест учитывает: комиссию 0.1% (вход+выход), проскальзывание 0.05%, направленный слиппедж. Прошлые результаты не гарантируют будущую доходность."><Text type="secondary" style={{ fontSize: 10, cursor: 'help' }}>ⓘ С учётом комиссий и слиппеджа</Text></Tooltip>
-                                                  {item.tenants.length > 0
-                                                    ? <Text type="secondary" style={{ fontSize: 12 }}>{item.tenants.map((t) => t.tenant.display_name).join(', ')}</Text>
-                                                    : <Text type="secondary" style={{ fontSize: 12 }}>Нет подключённых клиентов</Text>}
+                                                  </>
+                                                )}
+                                                bodyExtra={materializationBlock}
+                                                onOpenDetail={() => openBacktestDrawerForStorefrontTs(item.systemName)}
+                                                footerExtra={(
                                                   <Space wrap>
+                                                    <Text type="secondary" style={{ fontSize: 12 }}>
+                                                      {item.tenants.length > 0
+                                                        ? item.tenants.map((t: any) => t.tenant.display_name).join(', ')
+                                                        : 'Нет подключённых клиентов'}
+                                                    </Text>
                                                     <Button size="small" onClick={() => openBacktestDrawerForStorefrontTs(item.systemName)}>Бэктест ТС</Button>
                                                     <Button
                                                       size="small"
@@ -13051,8 +13129,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                           return;
                                                         }
                                                         const initialIds2 = (item.tenants || [])
-                                                            .map((tenant) => Number(tenant?.tenant?.id || 0))
-                                                            .filter((tenantId) => Number.isFinite(tenantId) && tenantId > 0);
+                                                          .map((tenant: any) => Number(tenant?.tenant?.id || 0))
+                                                          .filter((tenantId: number) => Number.isFinite(tenantId) && tenantId > 0);
                                                         setStorefrontConnectTarget({
                                                           systemId: runtimeSystemId,
                                                           systemName: item.systemName,
@@ -13079,11 +13157,11 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                       Убрать из curated
                                                     </Button>
                                                   </Space>
-                                                </Space>
-                                              </Card>
-                                            </List.Item>
-                                          )}
-                                        />
+                                                )}
+                                              />
+                                            );
+                                          })}
+                                        </StorefrontGrid>
                                       ) : null}
                                       <Space wrap>
                                         <Button onClick={() => navigateToAdminTab('clients')}>К клиентам Алгофонда</Button>

@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { useI18n, UILanguage } from '../i18n';
 
 /* ─── Theme definitions ─── */
-type LandingTheme = 'zignaly' | 'fire' | 'neon' | 'classic' | 'light';
+type LandingTheme = 'anthracite' | 'fire' | 'neon' | 'classic' | 'light';
 
 const THEMES: Record<LandingTheme, {
   bg: string; bgAlt: string; bgCard: string; bgGlass: string;
@@ -13,15 +13,15 @@ const THEMES: Record<LandingTheme, {
   greenAccent: string; greenBg: string; greenText: string;
   isDark: boolean;
 }> = {
-  zignaly: {
-    bg: '#070b14', bgAlt: '#0d1220', bgCard: '#121829', bgGlass: 'rgba(18,24,41,0.88)',
-    text: '#eef2ff', textSec: '#9aa8c7', textMuted: '#66738f',
-    border: 'rgba(123,97,255,0.18)', accent: '#7b61ff', accentGlow: 'rgba(123,97,255,0.28)',
-    heroGrad: 'radial-gradient(ellipse 80% 60% at 50% 18%, rgba(123,97,255,0.18) 0%, transparent 72%)',
-    ctaBg: 'linear-gradient(135deg, #7b61ff 0%, #5b8cff 100%)',
-    navBg: 'transparent', navBgScroll: 'rgba(7,11,20,0.94)',
-    cardBorder: 'rgba(123,97,255,0.16)', proofBg: 'rgba(123,97,255,0.08)', proofAccent: '#7b61ff',
-    greenAccent: '#34d399', greenBg: 'rgba(52,211,153,0.12)', greenText: '#6ee7b7',
+  anthracite: {
+    bg: '#0a0a0a', bgAlt: '#111111', bgCard: '#161616', bgGlass: 'rgba(22,22,22,0.9)',
+    text: '#f3f3f3', textSec: '#a8a8a8', textMuted: '#6f6f6f',
+    border: 'rgba(240,196,25,0.18)', accent: '#f0c419', accentGlow: 'rgba(240,196,25,0.24)',
+    heroGrad: 'radial-gradient(ellipse 80% 60% at 50% 18%, rgba(240,196,25,0.12) 0%, transparent 72%)',
+    ctaBg: 'linear-gradient(135deg, #f0c419 0%, #d9a806 100%)',
+    navBg: 'transparent', navBgScroll: 'rgba(10,10,10,0.94)',
+    cardBorder: 'rgba(240,196,25,0.14)', proofBg: 'rgba(240,196,25,0.07)', proofAccent: '#f0c419',
+    greenAccent: '#4ade80', greenBg: 'rgba(74,222,128,0.12)', greenText: '#86efac',
     isDark: true,
   },
   fire: {
@@ -71,7 +71,7 @@ const THEMES: Record<LandingTheme, {
 };
 
 const THEME_OPTS: { value: LandingTheme; icon: string; label: string }[] = [
-  { value: 'zignaly', icon: '🟣', label: 'Zignaly' },
+  { value: 'anthracite', icon: '⬛', label: 'Anthracite' },
   { value: 'fire', icon: '🟠', label: 'Fire' },
   { value: 'neon', icon: '🟢', label: 'Neon' },
   { value: 'classic', icon: '🔵', label: 'Classic' },
@@ -359,7 +359,8 @@ export default function Landing() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [theme, setTheme] = useState<LandingTheme>(() => {
     const s = localStorage.getItem('btddLandingTheme');
-    return (s === 'zignaly' || s === 'fire' || s === 'neon' || s === 'classic' || s === 'light') ? s : 'zignaly';
+    const normalized = s === 'zignaly' ? 'anthracite' : s;
+    return (normalized === 'anthracite' || normalized === 'fire' || normalized === 'neon' || normalized === 'classic' || normalized === 'light') ? normalized as LandingTheme : 'anthracite';
   });
 
   const T = THEMES[theme];

@@ -31,6 +31,22 @@ export const metricTone = (value: number, kind: MetricKind): 'positive' | 'negat
 
 export type LinePoint = { time: number; value: number };
 
+export const pointsToChartSeries = (points: number[], periodDays?: number): LinePoint[] => {
+  if (!Array.isArray(points) || points.length < 2) {
+    return [];
+  }
+  const nowSec = Math.floor(Date.now() / 1000);
+  const dayS = 86_400;
+  const spanDays = Number(periodDays || 0) > 0 ? Number(periodDays) : Math.max(1, points.length - 1);
+  const totalSpan = Math.max(spanDays, 1) * dayS;
+  const startSec = nowSec - totalSpan;
+  const step = totalSpan / Math.max(points.length - 1, 1);
+  return points.map((value, index) => ({
+    time: Math.floor(startSec + index * step),
+    value: Number(value),
+  }));
+};
+
 export const equityPointsToSeries = (points: number[], periodDays?: number): LinePoint[] => {
   if (!Array.isArray(points) || points.length === 0) {
     return [];

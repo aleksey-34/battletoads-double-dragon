@@ -29,14 +29,21 @@ const AdminDocs = lazy(() => import('./pages/AdminDocs'));
 const { Header, Content, Sider } = Layout;
 
 type AuthState = 'checking' | 'ok' | 'missing' | 'invalid' | 'error';
-type ColorTheme = 'zignaly' | 'classic' | 'neon' | 'fire' | 'light';
+type ColorTheme = 'anthracite' | 'classic' | 'neon' | 'fire' | 'light';
 
 const CLIENT_SESSION_STORAGE_KEY = 'clientSessionToken';
 const ADMIN_PASSWORD_STORAGE_KEY = 'password';
 
 const isValidColorTheme = (value: string | null): value is ColorTheme => (
-  value === 'zignaly' || value === 'classic' || value === 'neon' || value === 'fire' || value === 'light'
+  value === 'anthracite' || value === 'classic' || value === 'neon' || value === 'fire' || value === 'light'
 );
+
+const resolveColorTheme = (saved: string | null): ColorTheme => {
+  if (saved === 'zignaly') {
+    return 'anthracite';
+  }
+  return isValidColorTheme(saved) ? saved : 'anthracite';
+};
 
 const isAuthStorageKey = (key: string | null): boolean => (
   key === null || key === ADMIN_PASSWORD_STORAGE_KEY || key === CLIENT_SESSION_STORAGE_KEY
@@ -56,7 +63,7 @@ function AppShell() {
   const [authCheckLoading, setAuthCheckLoading] = useState(false);
   const [colorTheme, setColorTheme] = useState<ColorTheme>(() => {
     const saved = localStorage.getItem('btddColorTheme');
-    return isValidColorTheme(saved) ? saved : 'zignaly';
+    return resolveColorTheme(saved);
   });
   const isClientRoute = location.pathname.startsWith('/client') || location.pathname.startsWith('/cabinet');
   const isTvAlertsCabinetRoute = location.pathname.startsWith('/cabinet/tv-alerts');
@@ -65,7 +72,7 @@ function AppShell() {
   const isClientSaasSurface = false;
 
   useEffect(() => {
-    document.body.classList.remove('theme-zignaly', 'theme-classic', 'theme-neon', 'theme-fire', 'theme-light');
+    document.body.classList.remove('theme-anthracite', 'theme-classic', 'theme-neon', 'theme-fire', 'theme-light');
     document.body.classList.add(`theme-${colorTheme}`);
     document.body.setAttribute('data-btdd-theme', colorTheme);
     document.documentElement.setAttribute('data-btdd-theme', colorTheme);
@@ -308,7 +315,7 @@ function AppShell() {
               size="small"
               style={{ width: 100 }}
               options={[
-                { value: 'zignaly', label: '🟣 Zignaly' },
+                { value: 'anthracite', label: '⬛ Anthracite' },
                 { value: 'classic', label: '🔵 Classic' },
                 { value: 'neon', label: '🟢 Neon' },
                 { value: 'fire', label: '🟠 Fire' },
@@ -420,13 +427,13 @@ function AppWithProviders() {
   const { language } = useI18n();
   const [currentTheme, setCurrentTheme] = useState<ColorTheme>(() => {
     const saved = localStorage.getItem('btddColorTheme');
-    return isValidColorTheme(saved) ? saved : 'zignaly';
+    return resolveColorTheme(saved);
   });
 
   useEffect(() => {
     const sync = () => {
       const saved = localStorage.getItem('btddColorTheme');
-      setCurrentTheme(isValidColorTheme(saved) ? saved : 'zignaly');
+      setCurrentTheme(resolveColorTheme(saved));
     };
     window.addEventListener('storage', sync);
     window.addEventListener('theme-changed', sync);
@@ -434,7 +441,7 @@ function AppWithProviders() {
   }, []);
 
   const isLight = currentTheme === 'light';
-  const isZignaly = currentTheme === 'zignaly';
+  const isAnthracite = currentTheme === 'anthracite';
 
   const antdLocale = useMemo(() => {
     if (language === 'ru') return ruRU;
@@ -455,14 +462,14 @@ function AppWithProviders() {
         colorTextSecondary: '#475569',
         borderRadius: 10,
         fontFamily: "'Inter', 'Segoe UI', 'Trebuchet MS', sans-serif",
-      } : isZignaly ? {
-        colorPrimary: '#7b61ff',
-        colorBgBase: '#070b14',
-        colorBgContainer: '#121829',
-        colorBgElevated: '#171f33',
-        colorBorder: '#24304a',
-        colorText: '#eef2ff',
-        colorTextSecondary: '#9aa8c7',
+      } : isAnthracite ? {
+        colorPrimary: '#f0c419',
+        colorBgBase: '#0a0a0a',
+        colorBgContainer: '#141414',
+        colorBgElevated: '#1c1c1c',
+        colorBorder: '#2a2a2a',
+        colorText: '#f3f3f3',
+        colorTextSecondary: '#a8a8a8',
         borderRadius: 12,
         fontFamily: "'Inter', 'Segoe UI', 'Trebuchet MS', sans-serif",
       } : {

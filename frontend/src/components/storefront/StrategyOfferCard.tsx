@@ -27,6 +27,8 @@ type StrategyOfferCardProps = {
   selected?: boolean;
   portfolioMode?: boolean;
   chartSeries?: LinePoint[];
+  extraBadges?: React.ReactNode;
+  footerExtra?: React.ReactNode;
   onToggleSelect?: (checked: boolean) => void;
   onOpenDetail?: () => void;
   onConnect?: () => void;
@@ -37,6 +39,8 @@ const StrategyOfferCard: React.FC<StrategyOfferCardProps> = ({
   selected = false,
   portfolioMode = false,
   chartSeries = [],
+  extraBadges = null,
+  footerExtra = null,
   onToggleSelect,
   onOpenDetail,
   onConnect,
@@ -71,6 +75,7 @@ const StrategyOfferCard: React.FC<StrategyOfferCardProps> = ({
           <Tag className="storefront-card__pill">{offer.mode.toUpperCase()}</Tag>
           <Tag className="storefront-card__pill">{offer.market}</Tag>
           {offer.interval ? <Tag className="storefront-card__pill">{offer.interval}</Tag> : null}
+          {extraBadges}
         </div>
       </div>
 
@@ -104,14 +109,17 @@ const StrategyOfferCard: React.FC<StrategyOfferCardProps> = ({
       </div>
 
       <div className="storefront-card__footer">
-        <Space wrap size={6}>
-          {selected ? <Tag color="gold">В портфеле</Tag> : null}
-          <Button size="small" onClick={onOpenDetail}>Подробнее</Button>
-          {portfolioMode && !selected ? (
-            <Button size="small" type="primary" className="storefront-card__cta" onClick={onConnect}>
-              Подключить
-            </Button>
-          ) : null}
+        <Space wrap size={6} direction="vertical" style={{ width: '100%' }}>
+          <Space wrap size={6}>
+            {selected ? <Tag color="gold">В портфеле</Tag> : null}
+            <Button size="small" onClick={onOpenDetail}>Подробнее</Button>
+            {portfolioMode && !selected ? (
+              <Button size="small" type="primary" className="storefront-card__cta" onClick={onConnect}>
+                Подключить
+              </Button>
+            ) : null}
+          </Space>
+          {footerExtra}
         </Space>
       </div>
     </article>

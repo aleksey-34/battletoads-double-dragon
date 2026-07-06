@@ -90,34 +90,59 @@ body.theme-light,
   --btdd-magenta: #ec4899;
 }
 
-/* ── Zignaly theme (deep navy + purple gradient accent) ── */
-body.theme-zignaly,
-:root[data-btdd-theme='zignaly'] {
-  --btdd-bg-primary: #070b14;
-  --btdd-bg-surface: #0d1220;
-  --btdd-bg-card: #121829;
-  --btdd-bg-elevated: #171f33;
-  --btdd-border: #24304a;
-  --btdd-border-strong: #334466;
-  --btdd-text-primary: #eef2ff;
-  --btdd-text-secondary: #9aa8c7;
-  --btdd-text-muted: #66738f;
-  --btdd-accent: #7b61ff;
-  --btdd-accent-hover: #9b84ff;
-  --btdd-accent-005: rgba(123,97,255,0.05);
-  --btdd-accent-006: rgba(123,97,255,0.06);
-  --btdd-accent-007: rgba(123,97,255,0.07);
-  --btdd-accent-015: rgba(123,97,255,0.15);
-  --btdd-accent-020: rgba(123,97,255,0.2);
-  --btdd-accent-030: rgba(123,97,255,0.3);
-  --btdd-accent-040: rgba(123,97,255,0.4);
-  --btdd-accent-035: rgba(123,97,255,0.35);
-  --btdd-hero-mid: #10172b;
-  --btdd-teal: #2dd4bf;
-  --btdd-green: #34d399;
-  --btdd-orange: #f59e0b;
+/* ── Anthracite theme (black steel + gold accent, BTDD signature) ── */
+body.theme-anthracite,
+:root[data-btdd-theme='anthracite'] {
+  --btdd-bg-primary: #0a0a0a;
+  --btdd-bg-surface: #111111;
+  --btdd-bg-card: #161616;
+  --btdd-bg-elevated: #1e1e1e;
+  --btdd-border: #2c2c2c;
+  --btdd-border-strong: #3d3d3d;
+  --btdd-text-primary: #f3f3f3;
+  --btdd-text-secondary: #a8a8a8;
+  --btdd-text-muted: #6f6f6f;
+  --btdd-accent: #f0c419;
+  --btdd-accent-hover: #ffd84d;
+  --btdd-accent-005: rgba(240,196,25,0.05);
+  --btdd-accent-006: rgba(240,196,25,0.06);
+  --btdd-accent-007: rgba(240,196,25,0.07);
+  --btdd-accent-015: rgba(240,196,25,0.15);
+  --btdd-accent-020: rgba(240,196,25,0.2);
+  --btdd-accent-030: rgba(240,196,25,0.3);
+  --btdd-accent-040: rgba(240,196,25,0.4);
+  --btdd-accent-035: rgba(240,196,25,0.35);
+  --btdd-hero-mid: #141414;
+  --btdd-teal: #f0c419;
+  --btdd-green: #4ade80;
+  --btdd-orange: #f0c419;
   --btdd-red: #f87171;
-  --btdd-magenta: #c084fc;
+  --btdd-magenta: #fbbf24;
+}
+
+body.theme-anthracite::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.35;
+  background-image:
+    radial-gradient(circle at 12% 8%, rgba(240, 196, 25, 0.07), transparent 28%),
+    radial-gradient(circle at 88% 0%, rgba(255, 255, 255, 0.03), transparent 24%),
+    repeating-linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.018) 0,
+      rgba(255, 255, 255, 0.018) 1px,
+      transparent 1px,
+      transparent 5px
+    );
+}
+
+body.theme-anthracite .app-root-layout,
+body.theme-anthracite .app-root-layout .ant-layout {
+  position: relative;
+  z-index: 1;
 }
 
 /* ── Fire theme (orange blaze accent) ── */
@@ -178,22 +203,38 @@ code {
   border-bottom: 1px solid var(--btdd-border);
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
 }
-body.theme-zignaly .app-root-layout .ant-layout-header {
-  background: linear-gradient(92deg, #070b14 0%, #121829 45%, #171f33 100%) !important;
+body.theme-anthracite .app-root-layout .ant-layout-header {
+  background: linear-gradient(92deg, #0a0a0a 0%, #141414 48%, #101010 100%) !important;
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.65), inset 0 -1px 0 rgba(240, 196, 25, 0.12);
 }
 
-body.theme-zignaly .ant-btn-primary,
-body.theme-zignaly .storefront-card__cta {
-  background: linear-gradient(135deg, #7b61ff 0%, #5b8cff 100%) !important;
+body.theme-anthracite .ant-btn-primary,
+body.theme-anthracite .storefront-card__cta {
+  background: linear-gradient(135deg, #f0c419 0%, #d9a806 100%) !important;
   border: none !important;
-  box-shadow: 0 8px 24px rgba(123, 97, 255, 0.28);
+  color: #111111 !important;
+  box-shadow: 0 8px 24px rgba(240, 196, 25, 0.22);
 }
 
-body.theme-zignaly .ant-btn-primary:hover,
-body.theme-zignaly .ant-btn-primary:focus,
-body.theme-zignaly .storefront-card__cta:hover,
-body.theme-zignaly .storefront-card__cta:focus {
-  background: linear-gradient(135deg, #9b84ff 0%, #74a0ff 100%) !important;
+body.theme-anthracite .ant-btn-primary:hover,
+body.theme-anthracite .ant-btn-primary:focus,
+body.theme-anthracite .storefront-card__cta:hover,
+body.theme-anthracite .storefront-card__cta:focus {
+  background: linear-gradient(135deg, #ffd84d 0%, #f0c419 100%) !important;
+  color: #111111 !important;
+}
+
+body.theme-anthracite .storefront-card {
+  background:
+    linear-gradient(180deg, rgba(240, 196, 25, 0.04) 0%, transparent 38%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.02) 0%, transparent 42%),
+    var(--btdd-bg-card);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+body.theme-anthracite .storefront-card:hover {
+  border-color: rgba(240, 196, 25, 0.42);
+  box-shadow: inset 0 1px 0 rgba(240, 196, 25, 0.08), 0 16px 36px rgba(0, 0, 0, 0.42);
 }
 
 body.theme-neon .app-root-layout .ant-layout-header {
@@ -1290,7 +1331,7 @@ body.theme-light .saas-page .ant-statistic-content-value,
   opacity: 0.9;
 }
 
-/* ─── Storefront grid + cards (Zignaly-style) ─── */
+/* ─── Storefront grid + cards ─── */
 .storefront-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

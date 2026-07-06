@@ -30,6 +30,9 @@ type TradingSystemCardProps = {
   connected?: boolean;
   riskMultiplier?: number | null;
   chartSeries?: LinePoint[];
+  extraBadges?: React.ReactNode;
+  bodyExtra?: React.ReactNode;
+  footerExtra?: React.ReactNode;
   onOpenDetail?: () => void;
   onConnect?: () => void;
   connectLoading?: boolean;
@@ -40,6 +43,9 @@ const TradingSystemCard: React.FC<TradingSystemCardProps> = ({
   connected = false,
   riskMultiplier = null,
   chartSeries = [],
+  extraBadges = null,
+  bodyExtra = null,
+  footerExtra = null,
   onOpenDetail,
   onConnect,
   connectLoading = false,
@@ -74,6 +80,7 @@ const TradingSystemCard: React.FC<TradingSystemCardProps> = ({
               {system.marketCount} рынков{system.maxPerMarket ? ` · max ${system.maxPerMarket}` : ''}
             </Tag>
           ) : null}
+          {extraBadges}
         </div>
       </div>
 
@@ -106,27 +113,32 @@ const TradingSystemCard: React.FC<TradingSystemCardProps> = ({
         )}
       </div>
 
+      {bodyExtra}
+
       <div className="storefront-card__footer">
-        <Space wrap size={6}>
-          {connected ? <Tag color="success">Подключена</Tag> : null}
-          {riskMultiplier != null && Number.isFinite(riskMultiplier) && riskMultiplier > 0 ? (
-            <Tag color="blue">Риск {formatStorefrontNumber(riskMultiplier)}x</Tag>
-          ) : null}
-          {system.trades ? (
-            <Tag className="storefront-card__pill">{formatStorefrontNumber(system.trades, 0)} сд.</Tag>
-          ) : null}
-          <Button size="small" onClick={onOpenDetail}>Подробнее</Button>
-          {!connected ? (
-            <Button
-              size="small"
-              type="primary"
-              className="storefront-card__cta"
-              loading={connectLoading}
-              onClick={onConnect}
-            >
-              Подключить
-            </Button>
-          ) : null}
+        <Space wrap size={6} direction="vertical" style={{ width: '100%' }}>
+          <Space wrap size={6}>
+            {connected ? <Tag color="success">Подключена</Tag> : null}
+            {riskMultiplier != null && Number.isFinite(riskMultiplier) && riskMultiplier > 0 ? (
+              <Tag color="blue">Риск {formatStorefrontNumber(riskMultiplier)}x</Tag>
+            ) : null}
+            {system.trades ? (
+              <Tag className="storefront-card__pill">{formatStorefrontNumber(system.trades, 0)} сд.</Tag>
+            ) : null}
+            <Button size="small" onClick={onOpenDetail}>Подробнее</Button>
+            {!connected ? (
+              <Button
+                size="small"
+                type="primary"
+                className="storefront-card__cta"
+                loading={connectLoading}
+                onClick={onConnect}
+              >
+                Подключить
+              </Button>
+            ) : null}
+          </Space>
+          {footerExtra}
         </Space>
       </div>
     </article>
