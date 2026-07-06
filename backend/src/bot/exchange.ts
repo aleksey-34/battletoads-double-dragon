@@ -3136,6 +3136,22 @@ export const getOpenOrders = async (apiKeyName: string, symbol?: string) => {
   return deduped;
 };
 
+export const cancelOrderById = async (apiKeyName: string, symbol: string, orderId: string) => {
+  const safeOrderId = String(orderId || '').trim();
+  if (!safeOrderId) {
+    throw new Error('orderId required');
+  }
+
+  if (ccxtClients[apiKeyName]) {
+    const entry = getCcxtClientEntry(apiKeyName);
+    const resolvedSymbol = await resolveCcxtSymbol(entry, symbol);
+    await entry.limiter.schedule(() => entry.client.cancelOrder(safeOrderId, resolvedSymbol));
+    return { cancelled: true, orderId: safeOrderId };
+  }
+
+  throw new Error(`cancelOrderById is not supported for ${apiKeyName}`);
+};
+
 export const cancelAllOrders = async (apiKeyName: string, symbol?: string) => {
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
