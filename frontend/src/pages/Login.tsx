@@ -40,7 +40,7 @@ const Login: React.FC = () => {
 
     try {
       await axios.get('/api/saas/admin/summary', {
-        params: { detail: 'light' },
+        params: { scope: 'light' },
         headers: {
           Authorization: `Bearer ${values.password}`,
         },

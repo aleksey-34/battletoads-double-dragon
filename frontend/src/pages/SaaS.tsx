@@ -4802,7 +4802,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return response.data;
     } catch (error: any) {
       if (requestSeq === summaryRequestSeqRef.current) {
-        setSummaryError(String(error?.response?.data?.error || error?.message || 'Failed to load SaaS summary'));
+        const status = Number(error?.response?.status || 0);
+        if (status === 502 || status === 503 || status === 504) {
+          setSummaryError('Бэкенд временно недоступен (502). Подождите 10–20 секунд после перезапуска и нажмите «Обновить».');
+        } else {
+          setSummaryError(String(error?.response?.data?.error || error?.message || 'Failed to load SaaS summary'));
+        }
       }
       return null;
     } finally {
@@ -5650,7 +5655,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   useEffect(() => {
-    void loadSummary(isAdminSurface ? 'full' : 'light');
+    void loadSummary('light');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdminSurface]);
 
@@ -10603,7 +10608,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         </Row>
       </Card>
 
-      {summaryError ? <Alert style={{ marginTop: 16 }} type="error" message={summaryError} showIcon /> : null}
+      {summaryError ? (
+        <Alert
+          style={{ marginTop: 16 }}
+          type="error"
+          message={summaryError}
+          showIcon
+          action={<Button size="small" loading={summaryLoading} onClick={() => void loadSummary(resolveSummaryScope())}>Обновить</Button>}
+        />
+      ) : null}
 
       <Spin spinning={summaryLoading && !summary}>
         <Tabs

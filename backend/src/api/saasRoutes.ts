@@ -219,7 +219,6 @@ router.post('/admin/seed', async (_req, res) => {
   try {
     const data = await seedDemoSaasData();
     res.json({ success: true, ...data });
-  type OfferStoreLabel = 'research_catalog' | 'runtime_snapshot' | 'fallback_preset';
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS seed error: ${err.message}`);

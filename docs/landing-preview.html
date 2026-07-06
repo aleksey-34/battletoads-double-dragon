@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BattleToads — облачная алгоритмическая торговля</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #0a0a0a;
+      --surface: #141414;
+      --card: #181818;
+      --border: #2c2c2c;
+      --text: #f3f3f3;
+      --muted: #a8a8a8;
+      --dim: #6f6f6f;
+      --gold: #f0c419;
+      --gold-dim: #d9a806;
+      --green: #4ade80;
+      --radius: 16px;
+      --max: 1120px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      font-family: Inter, system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0.35;
+      background:
+        radial-gradient(circle at 15% 10%, rgba(240,196,25,.08), transparent 30%),
+        repeating-linear-gradient(135deg, rgba(255,255,255,.015) 0 1px, transparent 1px 5px);
+    }
+
+    a { color: inherit; text-decoration: none; }
+    .wrap { width: min(var(--max), calc(100% - 40px)); margin: 0 auto; position: relative; z-index: 1; }
+
+    /* Nav */
+    .nav {
+      position: sticky; top: 0; z-index: 10;
+      backdrop-filter: blur(12px);
+      background: rgba(10,10,10,.88);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav-inner {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 14px 0; gap: 16px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; font-size: 13px; }
+    .brand-mark { width: 28px; height: 28px; border-radius: 8px; background: linear-gradient(135deg, var(--gold), var(--gold-dim)); }
+    .nav-links { display: flex; gap: 22px; font-size: 14px; color: var(--muted); }
+    .nav-links a:hover { color: var(--text); }
+    .nav-cta { display: flex; gap: 10px; }
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 10px 18px; border-radius: 999px; font-weight: 600; font-size: 14px;
+      border: 1px solid var(--border); background: transparent; color: var(--text);
+      cursor: pointer; transition: .15s ease;
+    }
+    .btn:hover { border-color: rgba(240,196,25,.4); }
+    .btn-primary {
+      background: linear-gradient(135deg, var(--gold), var(--gold-dim));
+      color: #111; border: none;
+      box-shadow: 0 8px 28px rgba(240,196,25,.22);
+    }
+    .btn-primary:hover { filter: brightness(1.05); }
+
+    /* Hero */
+    .hero { padding: 72px 0 48px; }
+    .badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 6px 12px; border-radius: 999px;
+      border: 1px solid rgba(240,196,25,.25);
+      background: rgba(240,196,25,.08);
+      color: var(--gold); font-size: 12px; font-weight: 600;
+      margin-bottom: 20px;
+    }
+    .hero h1 {
+      margin: 0 0 16px; font-size: clamp(34px, 5vw, 56px);
+      line-height: 1.08; letter-spacing: -.02em; max-width: 14ch;
+    }
+    .hero h1 span { color: var(--gold); }
+    .hero-lead {
+      max-width: 58ch; color: var(--muted); font-size: 18px; margin-bottom: 28px;
+    }
+    .hero-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 40px; }
+    .metrics {
+      display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px;
+    }
+    .metric {
+      padding: 16px 18px; border-radius: 14px;
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(255,255,255,.02), transparent), var(--card);
+    }
+    .metric strong { display: block; font-size: 26px; line-height: 1.1; margin-bottom: 4px; }
+    .metric span { color: var(--muted); font-size: 13px; }
+
+    /* Sections */
+    section { padding: 56px 0; }
+    .section-head { margin-bottom: 28px; max-width: 62ch; }
+    .section-head h2 { margin: 0 0 10px; font-size: clamp(26px, 3vw, 36px); letter-spacing: -.02em; }
+    .section-head p { margin: 0; color: var(--muted); font-size: 16px; }
+
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .card {
+      padding: 22px; border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: linear-gradient(180deg, rgba(240,196,25,.04), transparent 40%), var(--card);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
+    }
+    .card h3 { margin: 0 0 8px; font-size: 18px; }
+    .card p { margin: 0; color: var(--muted); font-size: 14px; }
+    .card .tag {
+      display: inline-block; margin-bottom: 12px; font-size: 11px; font-weight: 700;
+      letter-spacing: .06em; text-transform: uppercase; color: var(--gold);
+    }
+    .card.popular { border-color: rgba(240,196,25,.45); box-shadow: 0 0 0 1px rgba(240,196,25,.12), 0 16px 40px rgba(0,0,0,.35); }
+
+    .steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; counter-reset: step; }
+    .step {
+      padding: 20px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface);
+    }
+    .step::before {
+      counter-increment: step; content: counter(step);
+      display: inline-flex; width: 32px; height: 32px; align-items: center; justify-content: center;
+      border-radius: 10px; background: rgba(240,196,25,.12); color: var(--gold);
+      font-weight: 700; margin-bottom: 12px;
+    }
+
+    .trust-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    }
+    .trust-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
+    .trust-list li {
+      padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border);
+      background: var(--card); font-size: 14px;
+    }
+    .trust-list strong { color: var(--gold); }
+
+    .pricing {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    }
+    .price-card { padding: 24px; border-radius: var(--radius); border: 1px solid var(--border); background: var(--card); }
+    .price-card h3 { margin: 0 0 6px; }
+    .price-card .amount { font-size: 32px; font-weight: 800; margin: 12px 0; }
+    .price-card ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 14px; }
+
+    .faq { display: grid; gap: 10px; }
+    details {
+      border: 1px solid var(--border); border-radius: 12px;
+      background: var(--card); padding: 14px 16px;
+    }
+    summary { cursor: pointer; font-weight: 600; }
+    details p { color: var(--muted); font-size: 14px; margin: 10px 0 0; }
+
+    .cta-band {
+      margin: 40px 0 64px; padding: 36px; border-radius: 20px; text-align: center;
+      border: 1px solid rgba(240,196,25,.25);
+      background: radial-gradient(circle at top, rgba(240,196,25,.12), transparent 55%), var(--surface);
+    }
+    .cta-band h2 { margin: 0 0 10px; font-size: 28px; }
+    .cta-band p { margin: 0 0 20px; color: var(--muted); }
+
+    footer {
+      border-top: 1px solid var(--border); padding: 24px 0 40px;
+      color: var(--dim); font-size: 13px;
+    }
+
+    @media (max-width: 900px) {
+      .metrics, .grid-3, .steps, .trust-grid, .pricing { grid-template-columns: 1fr; }
+      .nav-links { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <header class="nav">
+    <div class="wrap nav-inner">
+      <div class="brand"><div class="brand-mark"></div> BattleToads</div>
+      <nav class="nav-links">
+        <a href="#products">Продукты</a>
+        <a href="#how">Как это работает</a>
+        <a href="#security">Безопасность</a>
+        <a href="#pricing">Тарифы</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="btn" href="/client/login">Войти</a>
+        <a class="btn btn-primary" href="/client/register">Начать бесплатно</a>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <section class="hero">
+      <div class="badge">● Бета — без абонплаты</div>
+      <h1>Алгоритмическая торговля <span>на вашей бирже</span></h1>
+      <p class="hero-lead">
+        Подключите API-ключ — средства остаются у вас. Платформа управляет портфелем стратегий,
+        показывает результат в личном кабинете и берёт комиссию только с реальной прибыли.
+      </p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="/client/register">Открыть кабинет</a>
+        <a class="btn" href="#products">Смотреть продукты</a>
+      </div>
+      <div class="metrics">
+        <div class="metric"><strong>6+</strong><span>бирж (Binance, Bybit, BingX, WEEX…)</span></div>
+        <div class="metric"><strong>470+</strong><span>активных стратегий</span></div>
+        <div class="metric"><strong>18</strong><span>готовых торговых систем</span></div>
+        <div class="metric"><strong>24/7</strong><span>облачный мониторинг</span></div>
+      </div>
+    </section>
+
+    <section id="products">
+      <div class="section-head">
+        <h2>Три формата — от «подключил и забыл» до полного контроля</h2>
+        <p>Выберите уровень участия. Во всех режимах ключи только у вас, отзыв доступа — в один клик.</p>
+      </div>
+      <div class="grid-3">
+        <article class="card popular">
+          <div class="tag">Популярный</div>
+          <h3>Управляемый портфель</h3>
+          <p>Готовая торговая система из проверенных стратегий. Подключили ключ — платформа торгует по выбранному риск-профилю.</p>
+        </article>
+        <article class="card">
+          <div class="tag">Для продвинутых</div>
+          <h3>Свой набор стратегий</h3>
+          <p>Каталог с метриками доходности и просадки. Соберите портфель под себя и сохраните конфигурацию в кабинете.</p>
+        </article>
+        <article class="card">
+          <div class="tag">Для команд</div>
+          <h3>Копитрейдинг</h3>
+          <p>Один мастер-счёт — несколько подписчиков. Удобно для партнёров и закрытых групп без лимитов биржевого копирования.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="how">
+      <div class="section-head">
+        <h2>Как начать за 15 минут</h2>
+        <p>Без перевода средств на сторонние кошельки и без сложной настройки серверов.</p>
+      </div>
+      <div class="steps">
+        <div class="step"><h3>Регистрация</h3><p>Создайте аккаунт и выберите режим: портфель, стратегии или копитрейдинг.</p></div>
+        <div class="step"><h3>API-ключ</h3><p>Добавьте ключ биржи с правами на торговлю. Вывод средств не требуется.</p></div>
+        <div class="step"><h3>Запуск</h3><p>Выберите систему или стратегии, подтвердите риск — мониторинг и отчёты в кабинете.</p></div>
+      </div>
+    </section>
+
+    <section id="security">
+      <div class="section-head">
+        <h2>Безопасность и прозрачность</h2>
+        <p>Мы не кастодиан. Ваша биржа — ваш баланс. Платформа только исполняет алгоритмы по API.</p>
+      </div>
+      <div class="trust-grid">
+        <ul class="trust-list">
+          <li><strong>Некастодиально</strong> — деньги не покидают биржевой аккаунт</li>
+          <li><strong>Изоляция контуров</strong> — торговля, исследования и клиентский кабинет разделены</li>
+          <li><strong>Мониторинг</strong> — equity, просадка, сделки в реальном времени</li>
+        </ul>
+        <ul class="trust-list">
+          <li><strong>Бэктесты</strong> — каждая витринная стратегия с историей и метриками</li>
+          <li><strong>Контроль риска</strong> — лимиты, мультипликаторы, остановка в один клик</li>
+          <li><strong>Поддержка</strong> — Telegram-отчёты и алерты для админов и клиентов</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="pricing">
+      <div class="section-head">
+        <h2>Понятные тарифы</h2>
+        <p>Сейчас бета: можно работать без фиксированной платы. После запуска — только с прибыли.</p>
+      </div>
+      <div class="pricing">
+        <div class="price-card">
+          <h3>Бета</h3>
+          <div class="amount">$0</div>
+          <ul>
+            <li>Полный доступ к кабинету</li>
+            <li>Все режимы: портфель, стратегии, копитрейдинг</li>
+            <li>Для ранних клиентов и тестовых аккаунтов</li>
+          </ul>
+        </div>
+        <div class="price-card">
+          <h3>После бета</h3>
+          <div class="amount">40%</div>
+          <ul>
+            <li>Комиссия только с новой прибыли (high-water mark)</li>
+            <li>Нет платы в убыточные периоды</li>
+            <li>Отчёты и биллинг в личном кабинете</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="faq">
+      <div class="section-head"><h2>Частые вопросы</h2></div>
+      <div class="faq">
+        <details>
+          <summary>Нужно ли переводить деньги на платформу?</summary>
+          <p>Нет. Вы торгуете на своём биржевом аккаунте через API. Мы не принимаем депозиты.</p>
+        </details>
+        <details>
+          <summary>Что если я хочу остановить торговлю?</summary>
+          <p>Отключите систему в кабинете или удалите API-ключ на бирже — исполнение прекратится.</p>
+        </details>
+        <details>
+          <summary>Какие биржи поддерживаются?</summary>
+          <p>Binance, Bybit, BingX, Bitget, MEXC, WEEX и другие — список расширяется. Уточняйте в кабинете при подключении ключа.</p>
+        </details>
+        <details>
+          <summary>Это гарантия дохода?</summary>
+          <p>Нет. Алгоритмическая торговля связана с риском. Мы показываем исторические бэктесты и live-метрики, но прошлый результат не обещает будущий.</p>
+        </details>
+      </div>
+    </section>
+
+    <div class="cta-band">
+      <h2>Готовы попробовать?</h2>
+      <p>Регистрация бесплатна. Первый ключ подключается за несколько минут.</p>
+      <a class="btn btn-primary" href="/client/register">Создать аккаунт</a>
+    </div>
+  </main>
+
+  <footer>
+    <div class="wrap">© BattleToads · Облачная алгоритмическая торговля · <a href="/whitepaper">Документация</a></div>
+  </footer>
+</body>
+</html>

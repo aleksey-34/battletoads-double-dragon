@@ -166,7 +166,7 @@ function AppShell() {
 
     try {
       await axios.get('/api/saas/admin/summary', {
-        params: { detail: 'light' },
+        params: { scope: 'light' },
       });
       setAdminAuthState('ok');
       if (location.pathname === '/login') {
