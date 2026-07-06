@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { Button, Checkbox, Segmented, Space, Tag, Typography } from 'antd';
-import ChartComponent, { ChartMarker } from './ChartComponent';
+import ChartComponent from './ChartComponent';
 
 export type MonitoringSnapshot = {
   recorded_at?: string;
@@ -76,14 +76,14 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   onChartDaysChange,
   trades24h = 0,
   lastTradeAt = null,
-  tradeMarkers = [],
+  tradeMarkers: _tradeMarkers = [],
   loading = false,
 }) => {
   const [showEquity, setShowEquity] = useState(true);
-  const [showPnl, setShowPnl] = useState(true);
-  const [showUpnl, setShowUpnl] = useState(true);
+  const [showPnl, setShowPnl] = useState(false);
+  const [showUpnl, setShowUpnl] = useState(false);
   const [showDd, setShowDd] = useState(false);
-  const [independentScale, setIndependentScale] = useState(true);
+  const [independentScale, setIndependentScale] = useState(false);
 
   const seriesRaw = useMemo(() => ({
     equity: snapshotToPoints(snapshots, (r) => Number(r.equity_usd)),
@@ -125,15 +125,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     };
   }), [seriesRaw, useNormalized, visibleKeys]);
 
-  const chartMarkers = useMemo((): ChartMarker[] => tradeMarkers.map((trade, index) => ({
-    id: `trade-${index}-${trade.time}`,
-    time: trade.time,
-    color: trade.tradeType === 'entry' ? '#16a34a' : '#dc2626',
-    position: trade.tradeType === 'entry' ? 'belowBar' : 'aboveBar',
-    shape: trade.tradeType === 'entry' ? 'arrowUp' : 'arrowDown',
-    text: `${trade.tradeType === 'entry' ? 'IN' : 'OUT'} ${trade.symbol || ''}`.trim(),
-  })), [tradeMarkers]);
-
+  // Trade markers on chart: disabled for now — list view + DB restore planned (see docs/MONITORING_CHART_ROADMAP.md).
   const latest = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
   const allSelected = showEquity && showPnl && showUpnl && showDd;
   const noneSelected = !showEquity && !showPnl && !showUpnl && !showDd;
@@ -237,7 +229,6 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
         <ChartComponent
           data={primarySeries}
           type="line"
-          markers={chartMarkers}
           overlayLines={overlayLines}
         />
       ) : (

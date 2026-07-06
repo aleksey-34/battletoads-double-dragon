@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BattleToads — алгоритмическая торговля</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #060608; --surface: #0e0e12; --card: #14141a; --border: #252530;
+      --text: #f4f4f5; --muted: #9ca3af; --gold: #f0c419; --gold2: #d9a806;
+      --green: #4ade80; --red: #f87171; --purple: #a78bfa; --max: 1180px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0; font-family: Inter, sans-serif; background: var(--bg); color: var(--text);
+      line-height: 1.6; overflow-x: hidden;
+    }
+
+    /* ── animated backdrop ── */
+    .bg-layer { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+    .bg-grid {
+      position: absolute; inset: -50%;
+      background-image:
+        linear-gradient(rgba(240,196,25,.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(240,196,25,.04) 1px, transparent 1px);
+      background-size: 48px 48px;
+      animation: gridDrift 40s linear infinite;
+      mask-image: radial-gradient(ellipse 80% 70% at 50% 30%, black 20%, transparent 75%);
+    }
+  @keyframes gridDrift {
+      0% { transform: translate(0, 0) rotate(0deg); }
+      100% { transform: translate(48px, 48px) rotate(0.5deg); }
+    }
+    .orb {
+      position: absolute; border-radius: 50%; filter: blur(80px); opacity: .45;
+      animation: orbFloat 18s ease-in-out infinite alternate;
+    }
+    .orb-1 { width: 420px; height: 420px; background: rgba(240,196,25,.18); top: -8%; left: 10%; }
+    .orb-2 { width: 320px; height: 320px; background: rgba(74,222,128,.1); top: 40%; right: -5%; animation-delay: -6s; }
+    .orb-3 { width: 280px; height: 280px; background: rgba(167,139,250,.08); bottom: 10%; left: 25%; animation-delay: -12s; }
+    @keyframes orbFloat {
+      0% { transform: translate(0, 0) scale(1); }
+      100% { transform: translate(30px, -40px) scale(1.08); }
+    }
+    .scanline {
+      position: absolute; inset: 0;
+      background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,.008) 2px, rgba(255,255,255,.008) 4px);
+      animation: scan 8s linear infinite;
+    }
+    @keyframes scan { 0% { opacity: .3; } 50% { opacity: .6; } 100% { opacity: .3; } }
+
+    .wrap { width: min(var(--max), calc(100% - 40px)); margin: 0 auto; position: relative; z-index: 1; }
+    a { color: inherit; text-decoration: none; }
+
+    .nav {
+      position: sticky; top: 0; z-index: 20;
+      background: rgba(6,6,8,.75); backdrop-filter: blur(14px); border-bottom: 1px solid var(--border);
+    }
+    .nav-in { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; gap: 12px; }
+    .logo { font-weight: 800; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; }
+    .links { display: flex; gap: 22px; color: var(--muted); font-size: 14px; }
+    .links a:hover { color: var(--gold); }
+    .btn {
+      padding: 10px 18px; border-radius: 999px; font-weight: 600; font-size: 14px;
+      border: 1px solid var(--border); display: inline-block; transition: transform .2s, box-shadow .2s;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn-gold {
+      background: linear-gradient(135deg, var(--gold), var(--gold2)); color: #111; border: none;
+      box-shadow: 0 4px 24px rgba(240,196,25,.25);
+    }
+
+    .hero { padding: 72px 0 48px; display: grid; grid-template-columns: 1fr 1.15fr; gap: 36px; align-items: center; }
+    .eyebrow {
+      color: var(--gold); font-size: 11px; font-weight: 700; letter-spacing: .14em;
+      text-transform: uppercase; margin-bottom: 14px; animation: fadeUp .7s ease both;
+    }
+    h1 {
+      margin: 0 0 16px; font-size: clamp(34px, 4.8vw, 52px); line-height: 1.06;
+      letter-spacing: -.03em; animation: fadeUp .7s .1s ease both;
+    }
+    h1 em { font-style: normal; color: var(--gold); }
+    .lead {
+      color: var(--muted); font-size: 17px; max-width: 44ch; margin-bottom: 28px;
+      animation: fadeUp .7s .2s ease both;
+    }
+    .hero-cta { animation: fadeUp .7s .3s ease both; }
+    @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+
+    /* ── showcase mock ── */
+    .showcase {
+      position: relative; border-radius: 20px; border: 1px solid rgba(240,196,25,.22);
+      background: linear-gradient(145deg, rgba(240,196,25,.06), transparent 45%), var(--card);
+      box-shadow: 0 24px 80px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.03) inset;
+      overflow: hidden; animation: fadeUp .9s .25s ease both;
+    }
+    .showcase::before {
+      content: ''; position: absolute; top: 0; left: -100%; width: 60%; height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(240,196,25,.06), transparent);
+      animation: shimmer 6s ease-in-out infinite;
+    }
+    @keyframes shimmer { 0%, 100% { left: -100%; } 50% { left: 120%; } }
+    .showcase-head {
+      display: flex; align-items: center; justify-content: space-between; padding: 14px 18px;
+      border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted);
+    }
+    .dots { display: flex; gap: 6px; }
+    .dots span { width: 8px; height: 8px; border-radius: 50%; background: #333; }
+    .dots span:nth-child(1) { background: #ef4444; }
+    .dots span:nth-child(2) { background: #eab308; }
+    .dots span:nth-child(3) { background: #22c55e; }
+    .showcase-body { display: grid; grid-template-columns: 1fr 200px; min-height: 280px; }
+    .chart-zone { padding: 16px 12px 8px; position: relative; }
+    .chart-tags { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; padding: 0 6px; }
+    .tag {
+      font-size: 11px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border);
+      background: rgba(0,0,0,.3);
+    }
+    .tag b { font-weight: 700; }
+    .tag.eq b { color: #60a5fa; }
+    .tag.pnl b { color: var(--green); }
+    .tag.dd b { color: #fb923c; }
+    .chart-svg { width: 100%; height: 200px; display: block; }
+    .chart-line {
+      fill: none; stroke: #60a5fa; stroke-width: 2.2; stroke-linecap: round;
+      stroke-dasharray: 1200; stroke-dashoffset: 1200;
+      animation: drawLine 2.5s ease forwards .5s;
+    }
+    .chart-fill { opacity: 0; animation: fadeIn .8s ease forwards 2s; }
+    @keyframes drawLine { to { stroke-dashoffset: 0; } }
+    @keyframes fadeIn { to { opacity: 1; } }
+    .trades-panel {
+      border-left: 1px solid var(--border); background: rgba(0,0,0,.25);
+      padding: 12px 10px; font-size: 11px;
+    }
+    .trades-panel h4 { margin: 0 0 10px; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+    .trade-row {
+      display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.04);
+      animation: slideIn .5s ease both;
+    }
+    .trade-row:nth-child(2) { animation-delay: .1s; }
+    .trade-row:nth-child(3) { animation-delay: .2s; }
+    .trade-row:nth-child(4) { animation-delay: .3s; }
+    .trade-row:nth-child(5) { animation-delay: .4s; }
+    @keyframes slideIn { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
+    .trade-row .in { color: var(--green); font-weight: 600; }
+    .trade-row .out { color: var(--red); font-weight: 600; }
+    .trade-row .sym { color: var(--text); }
+    .trade-row .pnl { color: var(--green); font-variant-numeric: tabular-nums; }
+
+    section { padding: 56px 0; }
+    h2 { margin: 0 0 10px; font-size: clamp(26px, 3vw, 36px); letter-spacing: -.02em; }
+    .sub { color: var(--muted); max-width: 58ch; margin-bottom: 28px; font-size: 15px; }
+
+    .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 32px; }
+    .chip {
+      padding: 10px 16px; border-radius: 12px; border: 1px solid var(--border);
+      background: var(--card); font-size: 13px; transition: border-color .25s, transform .25s, box-shadow .25s;
+      animation: fadeUp .6s ease both;
+    }
+    .chip:hover { border-color: rgba(240,196,25,.4); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+    .chip strong { display: block; color: var(--gold); font-size: 12px; margin-bottom: 2px; }
+    .chip span { color: var(--muted); font-size: 12px; }
+
+    .strat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .strat-card {
+      padding: 22px; border-radius: 16px; border: 1px solid var(--border); background: var(--card);
+      transition: transform .3s, border-color .3s;
+    }
+    .strat-card:hover { transform: translateY(-4px); border-color: rgba(240,196,25,.35); }
+    .strat-card .ico { font-size: 22px; margin-bottom: 10px; }
+    .strat-card h3 { margin: 0 0 6px; font-size: 17px; }
+    .strat-card p { margin: 0; color: var(--muted); font-size: 13px; }
+
+    .pillars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .pillar {
+      padding: 24px; border-radius: 16px; border: 1px solid var(--border); background: var(--surface);
+      min-height: 190px; display: flex; flex-direction: column;
+      transition: border-color .25s;
+    }
+    .pillar:hover { border-color: rgba(240,196,25,.3); }
+    .pillar .num { color: var(--gold); font-weight: 800; font-size: 12px; margin-bottom: 8px; }
+    .pillar h3 { margin: 0 0 8px; font-size: 19px; }
+    .pillar p { margin: 0; color: var(--muted); font-size: 14px; flex: 1; }
+    .pillar a { margin-top: 14px; color: var(--gold); font-size: 13px; font-weight: 600; }
+
+    .pricing { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: stretch; }
+    .plan {
+      padding: 26px 22px; border-radius: 18px; border: 1px solid var(--border); background: var(--surface);
+      position: relative; display: flex; flex-direction: column;
+      transition: transform .25s, box-shadow .25s;
+    }
+    .plan:hover { transform: translateY(-3px); box-shadow: 0 12px 40px rgba(0,0,0,.35); }
+    .plan.featured {
+      border-color: rgba(240,196,25,.5);
+      background: linear-gradient(160deg, rgba(240,196,25,.08), transparent 55%), var(--card);
+      box-shadow: 0 0 40px rgba(240,196,25,.08);
+    }
+    .plan .badge {
+      position: absolute; top: 14px; right: 14px; font-size: 10px; padding: 4px 10px;
+      border-radius: 999px; background: rgba(240,196,25,.2); color: var(--gold); font-weight: 700;
+    }
+    .plan h3 { margin: 0 0 4px; font-size: 17px; }
+    .plan .hint { font-size: 12px; color: var(--muted); margin-bottom: 8px; min-height: 32px; }
+    .price { font-size: 36px; font-weight: 800; margin: 4px 0 12px; line-height: 1.1; }
+    .strike { text-decoration: line-through; color: var(--muted); font-size: 16px; font-weight: 500; margin-right: 6px; }
+    .plan ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 13px; flex: 1; }
+    .plan li { margin-bottom: 6px; }
+    .plan .pick {
+      margin-top: 16px; padding: 10px; text-align: center; border-radius: 10px;
+      border: 1px dashed var(--border); font-size: 12px; color: var(--muted);
+    }
+    .plan.featured .pick { border-color: rgba(240,196,25,.4); color: var(--gold); }
+
+    .venture {
+      padding: 36px; border-radius: 20px;
+      background: linear-gradient(120deg, rgba(240,196,25,.1), transparent 50%), var(--card);
+      border: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap;
+    }
+
+    footer { border-top: 1px solid var(--border); padding: 28px 0 48px; color: var(--muted); font-size: 13px; }
+
+    @media (max-width: 960px) {
+      .hero, .showcase-body, .strat-grid, .pillars, .pricing { grid-template-columns: 1fr; }
+      .trades-panel { border-left: none; border-top: 1px solid var(--border); }
+      .links { display: none; }
+    }
+  </style>
+</head>
+<body>
+  <div class="bg-layer" aria-hidden="true">
+    <div class="bg-grid"></div>
+    <div class="orb orb-1"></div>
+    <div class="orb orb-2"></div>
+    <div class="orb orb-3"></div>
+    <div class="scanline"></div>
+  </div>
+
+  <header class="nav"><div class="wrap nav-in">
+    <div class="logo">BattleToads</div>
+    <nav class="links">
+      <a href="#engine">Движок</a>
+      <a href="#offer">Режимы</a>
+      <a href="#pricing">Тарифы</a>
+      <a href="#venture">Инвесторам</a>
+    </nav>
+    <div>
+      <a class="btn" href="/client/login">Войти</a>
+      <a class="btn btn-gold" href="/client/register">Регистрация</a>
+    </div>
+  </div></header>
+
+  <main class="wrap">
+    <section class="hero">
+      <div>
+        <div class="eyebrow">Cloud trading platform</div>
+        <h1>Алгоритмы торгуют.<br><em>Счёт остаётся на бирже.</em></h1>
+        <p class="lead">
+          Подключите API-ключ — исполнение в облаке, баланс и позиции на вашей площадке.
+          Мониторинг, бэктесты и витрина стратегий в одном кабинете.
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-gold" href="/client/register">Открыть кабинет</a>
+        </div>
+      </div>
+
+      <div class="showcase" aria-label="Пример мониторинга">
+        <div class="showcase-head">
+          <div class="dots"><span></span><span></span><span></span></div>
+          <span>Мониторинг · демо-портфель</span>
+        </div>
+        <div class="showcase-body">
+          <div class="chart-zone">
+            <div class="chart-tags">
+              <span class="tag eq">Equity <b>$12 840</b></span>
+              <span class="tag pnl">PnL net <b>+$1 240</b></span>
+              <span class="tag dd">DD <b>8.2%</b></span>
+            </div>
+            <svg class="chart-svg" viewBox="0 0 400 200" preserveAspectRatio="none">
+              <defs>
+                <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="0%" stop-color="#60a5fa" stop-opacity=".35"/>
+                  <stop offset="100%" stop-color="#60a5fa" stop-opacity="0"/>
+                </linearGradient>
+              </defs>
+              <path class="chart-fill" fill="url(#eqFill)" d="M0,160 L40,155 L80,148 L120,130 L160,125 L200,110 L240,95 L280,88 L320,72 L360,58 L400,45 L400,200 L0,200 Z"/>
+              <path class="chart-line" d="M0,160 L40,155 L80,148 L120,130 L160,125 L200,110 L240,95 L280,88 L320,72 L360,58 L400,45"/>
+              <path fill="none" stroke="rgba(74,222,128,.5)" stroke-width="1.5" stroke-dasharray="4 4"
+                d="M0,170 L80,165 L160,150 L240,130 L320,115 L400,100" opacity=".7"/>
+            </svg>
+          </div>
+          <aside class="trades-panel">
+            <h4>Сделки · 24ч</h4>
+            <div class="trade-row"><span><span class="in">IN</span> <span class="sym">SOL</span></span><span class="pnl">+2.1%</span></div>
+            <div class="trade-row"><span><span class="out">OUT</span> <span class="sym">DOGE</span></span><span class="pnl">+0.8%</span></div>
+            <div class="trade-row"><span><span class="in">IN</span> <span class="sym">AVAX</span></span><span>—</span></div>
+            <div class="trade-row"><span><span class="out">OUT</span> <span class="sym">LINK</span></span><span class="pnl">+1.4%</span></div>
+            <div class="trade-row"><span><span class="in">IN</span> <span class="sym">ARB</span></span><span>—</span></div>
+          </aside>
+        </div>
+      </div>
+    </section>
+
+    <section id="engine">
+      <h2>Что внутри движка</h2>
+      <p class="sub">Не один бот — исследовательский контур: сотни конфигураций, walk-forward, портфельная сборка.</p>
+      <div class="chips">
+        <div class="chip" style="animation-delay:.05s"><strong>Stat-arb</strong><span>поиск раскорреляции пар</span></div>
+        <div class="chip" style="animation-delay:.1s"><strong>Синтетика</strong><span>хедж и декорреляция</span></div>
+        <div class="chip" style="animation-delay:.15s"><strong>AI-свип</strong><span>автооптимизация параметров</span></div>
+        <div class="chip" style="animation-delay:.2s"><strong>Order block</strong><span>структурные входы</span></div>
+        <div class="chip" style="animation-delay:.25s"><strong>Shield DCA</strong><span>защита просадки</span></div>
+        <div class="chip" style="animation-delay:.3s"><strong>Мульти-TF</strong><span>1m — 1d в одном портфеле</span></div>
+      </div>
+      <div class="strat-grid">
+        <article class="strat-card">
+          <div class="ico">📊</div>
+          <h3>Бэктест + витрина</h3>
+          <p>Каждая система с кривой equity, PF и max DD. Сравнение до подключения к live.</p>
+        </article>
+        <article class="strat-card">
+          <div class="ico">⚡</div>
+          <h3>Исполнение 24/7</h3>
+          <p>Runtime в облаке: сигналы, риск-лимиты, ребаланс портфеля без вашего терминала.</p>
+        </article>
+        <article class="strat-card">
+          <div class="ico">🔐</div>
+          <h3>Только API</h3>
+          <p>Ключи с правом торговли, без вывода. Остановка и смена стратегии — в один клик.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="offer">
+      <h2>Три сценария вовлечённости</h2>
+      <p class="sub">Один кабинет — от готового портфеля до собственной сборки и копирования сигналов.</p>
+      <div class="pillars">
+        <article class="pillar">
+          <div class="num">01</div>
+          <h3>Готовый портфель</h3>
+          <p>Торговая система с историей бэктеста. Подключили — платформа исполняет, вы задаёте риск.</p>
+          <a href="/client/register">Пассивный режим →</a>
+        </article>
+        <article class="pillar">
+          <div class="num">02</div>
+          <h3>Сборка из каталога</h3>
+          <p>Сотни стратегий с метриками. Соберите набор, сохраните конфиг и масштабируйте.</p>
+          <a href="/client/register">Активный режим →</a>
+        </article>
+        <article class="pillar">
+          <div class="num">03</div>
+          <h3>Копирование сигналов</h3>
+          <p>Мастер-счёт и подписчики на одном API-контуре — для партнёров и закрытых групп.</p>
+          <a href="/partner/login">Партнёрам →</a>
+        </article>
+      </div>
+    </section>
+
+    <section id="pricing">
+      <h2>Модели оплаты</h2>
+      <p class="sub">Три варианта: бета сейчас, после запуска — фикс или процент с прибыли. Выбираете сами.</p>
+      <div class="pricing">
+        <div class="plan featured">
+          <span class="badge">Сейчас</span>
+          <h3>Бета</h3>
+          <p class="hint">Полный доступ без абонплаты на период теста</p>
+          <p class="price"><span class="strike">$99/мес</span> $0</p>
+          <ul>
+            <li>Фикс зачёркнут — платите $0</li>
+            <li>Все режимы и мониторинг</li>
+            <li>Без комиссии с прибыли в бета</li>
+          </ul>
+          <div class="pick">Для старта и пилотов</div>
+        </div>
+        <div class="plan">
+          <h3>Фикс</h3>
+          <p class="hint">После запуска — предсказуемый ежемесячный платёж</p>
+          <p class="price">$99<span style="font-size:15px;color:var(--muted)">/мес</span></p>
+          <ul>
+            <li>Не платите много с профита</li>
+            <li>Комиссия с PnL ниже или нулевая</li>
+            <li>Стабильный расход при долгой работе</li>
+          </ul>
+          <div class="pick">Если важен фиксированный бюджет</div>
+        </div>
+        <div class="plan">
+          <h3>% с прибыли</h3>
+          <p class="hint">После запуска — только с новой прибыли (HWM)</p>
+          <p class="price">40%</p>
+          <ul>
+            <li>Нет абонплаты — платите когда зарабатываете</li>
+            <li>В минус — комиссия не начисляется</li>
+            <li>Меньше риска на старте</li>
+          </ul>
+          <div class="pick">Если не хотите фикс в месяц</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="venture">
+      <div class="venture">
+        <div>
+          <h2 style="margin-bottom: 8px;">Для инвесторов и венчуров</h2>
+          <p style="margin: 0; color: var(--muted); max-width: 52ch;">
+            Unit-экономика, архитектура runtime, дорожная карта и due diligence —
+            в whitepaper. Отдельный контур для институциональных запросов.
+          </p>
+        </div>
+        <a class="btn btn-gold" href="/whitepaper">Whitepaper →</a>
+      </div>
+    </section>
+  </main>
+
+  <footer><div class="wrap">© BattleToads · Алгоритмическая торговля · <a href="/whitepaper">Документы</a></div></footer>
+</body>
+</html>

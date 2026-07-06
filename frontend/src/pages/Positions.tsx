@@ -864,8 +864,8 @@ const Positions: React.FC = () => {
     setMonChartLoading(true);
     try {
       const params: Record<string, number | string> = days > 1
-        ? { days, includeTrades: '1' }
-        : { limit: 288, includeTrades: '1' };
+        ? { days }
+        : { limit: 288 };
       const res = await axios.get(
         `/api/monitoring/${encodeURIComponent(key)}`, { params },
       );
@@ -875,7 +875,7 @@ const Positions: React.FC = () => {
         trades24h: Number(res.data?.tradeStats?.trades24h || 0),
         lastTradeAt: res.data?.tradeStats?.lastTradeAt || null,
       });
-      setMonChartTradeMarkers(Array.isArray(res.data?.tradeMarkers) ? res.data.tradeMarkers : []);
+      setMonChartTradeMarkers([]);
     } catch {
       setMonChartRaw([]);
       setMonChartTradeStats({ trades24h: 0, lastTradeAt: null });
