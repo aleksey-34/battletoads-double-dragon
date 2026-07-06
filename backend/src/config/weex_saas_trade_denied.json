@@ -1,0 +1,15 @@
+{
+  "comment": "Pairs/symbols that return WEEX -1058 on SaaS subaccounts (klines OK, orders denied).",
+  "synthPairs": [
+    "LINKUSDT/AIXBTUSDT",
+    "ZECUSDT/RUNEUSDT",
+    "IPUSDT/ZECUSDT",
+    "ORDIUSDT/ZECUSDT"
+  ],
+  "monoSymbols": [
+    "AIXBTUSDT"
+  ],
+  "replacements": {
+    "LINKUSDT/AIXBTUSDT": "LINKUSDT/UNIUSDT"
+  }
+}

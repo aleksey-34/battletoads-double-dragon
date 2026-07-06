@@ -21,7 +21,7 @@ import {
 } from 'antd';
 import axios from 'axios';
 import { useI18n } from '../i18n';
-import ChartComponent from '../components/ChartComponent';
+import MonitoringChartPanel, { MonitoringSnapshot, MonitoringTradeMarker } from '../components/MonitoringChartPanel';
 
 /* eslint-disable react-hooks/exhaustive-deps */
 
@@ -32,6 +32,20 @@ type ApiKey = {
   name: string;
   exchange: string;
   algofundDematerialized?: boolean;
+  tenantDisplayName?: string;
+};
+
+type AdminMonitoringRow = {
+  apiKeyName: string;
+  exchange: string;
+  tenantLabel: string;
+  equityUsd: number | null;
+  unrealizedPnl: number | null;
+  pnlNetUsd: number | null;
+  drawdownPercent: number | null;
+  recordedAt: string | null;
+  trades24h: number;
+  lastTradeAt: string | null;
 };
 
 type BalanceRow = {
@@ -85,18 +99,7 @@ type TradeRow = {
 };
 
 type ViewMode = 'positions' | 'orders' | 'trades' | 'all';
-
-type LinePoint = { time: number; value: number };
-type MonitoringSnapshot = {
-  recorded_at?: string;
-  equity_usd?: number;
-  unrealized_pnl?: number;
-  margin_load_percent?: number;
-  effective_leverage?: number;
-  drawdown_percent?: number;
-  deposit_base_usd?: number | null;
-  pnl_net_usd?: number | null;
-};
+type PageTab = 'monitoring' | 'positions';
 
 type ManualAmountMode = 'coin' | 'usdt';
 type ManualOrderType = 'market' | 'limit';
@@ -170,6 +173,10 @@ const Positions: React.FC = () => {
   const [balanceErrorByKey, setBalanceErrorByKey] = useState<{ [key: string]: string }>({});
   const [positionErrorByKey, setPositionErrorByKey] = useState<{ [key: string]: string }>({});
   const [hideDematerializedKeys, setHideDematerializedKeys] = useState(true);
+  const [hideUnboundKeys, setHideUnboundKeys] = useState(true);
+  const [pageTab, setPageTab] = useState<PageTab>('monitoring');
+  const [monitoringRows, setMonitoringRows] = useState<AdminMonitoringRow[]>([]);
+  const [monitoringTableLoading, setMonitoringTableLoading] = useState(false);
   const [serverEgressIp, setServerEgressIp] = useState('176.57.184.98');
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
   const [actionLoading, setActionLoading] = useState<{ [key: string]: boolean }>({});
@@ -180,12 +187,9 @@ const Positions: React.FC = () => {
   const [monChartKey, setMonChartKey] = useState('');
   const [monChartDays, setMonChartDays] = useState(1);
   const [monChartLoading, setMonChartLoading] = useState(false);
-  const [monChartPoints, setMonChartPoints] = useState<LinePoint[]>([]);
-  const [monChartLatest, setMonChartLatest] = useState<MonitoringSnapshot | null>(null);
   const [monChartRaw, setMonChartRaw] = useState<MonitoringSnapshot[]>([]);
-  const [monShowPnl, setMonShowPnl] = useState(true);
-  const [monShowUpnl, setMonShowUpnl] = useState(true);
-  const [monShowDd, setMonShowDd] = useState(false);
+  const [monChartTradeStats, setMonChartTradeStats] = useState<{ trades24h: number; lastTradeAt: string | null }>({ trades24h: 0, lastTradeAt: null });
+  const [monChartTradeMarkers, setMonChartTradeMarkers] = useState<MonitoringTradeMarker[]>([]);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(false);
   const [activeExchangeTab, setActiveExchangeTab] = useState<string>('');
   const [loadedKeys, setLoadedKeys] = useState<Set<string>>(() => new Set());
@@ -274,8 +278,12 @@ const Positions: React.FC = () => {
   }, [activeExchangeTab]);
 
   const visibleApiKeys = useMemo(
-    () => (hideDematerializedKeys ? apiKeys.filter((k) => !k.algofundDematerialized) : apiKeys),
-    [apiKeys, hideDematerializedKeys],
+    () => apiKeys.filter((k) => {
+      if (hideDematerializedKeys && k.algofundDematerialized) return false;
+      if (hideUnboundKeys && !String(k.tenantDisplayName || '').trim()) return false;
+      return true;
+    }),
+    [apiKeys, hideDematerializedKeys, hideUnboundKeys],
   );
 
   const apiKeysByExchange = useMemo(() => {
@@ -294,12 +302,12 @@ const Positions: React.FC = () => {
   }, [apiKeysByExchange]);
 
   useEffect(() => {
-    if (!activeExchangeTab) return;
+    if (pageTab !== 'positions' || !activeExchangeTab) return;
     const keys = apiKeysByExchange[activeExchangeTab] || [];
     if (keys.length > 0) {
       void refreshKeysBatched(keys);
     }
-  }, [activeExchangeTab, apiKeysByExchange]);
+  }, [activeExchangeTab, apiKeysByExchange, pageTab]);
 
   useEffect(() => {
     if (!autoRefreshEnabled) {
@@ -772,22 +780,77 @@ const Positions: React.FC = () => {
     [balanceErrorByKey, positionErrorByKey],
   );
 
+  const loadMonitoringTable = async (keys: ApiKey[]) => {
+    setMonitoringTableLoading(true);
+    try {
+      const rows = await Promise.all(keys.map(async (key): Promise<AdminMonitoringRow> => {
+        try {
+          const res = await axios.get(`/api/monitoring/${encodeURIComponent(key.name)}`, {
+            params: { limit: 1, includeTrades: '1' },
+            timeout: 20_000,
+          });
+          const latest = res.data?.latest || null;
+          return {
+            apiKeyName: key.name,
+            exchange: key.exchange,
+            tenantLabel: String(key.tenantDisplayName || '').trim() || 'без привязки',
+            equityUsd: latest?.equity_usd != null ? Number(latest.equity_usd) : null,
+            unrealizedPnl: latest?.unrealized_pnl != null ? Number(latest.unrealized_pnl) : null,
+            pnlNetUsd: latest?.pnl_net_usd != null ? Number(latest.pnl_net_usd) : null,
+            drawdownPercent: latest?.drawdown_percent != null ? Number(latest.drawdown_percent) : null,
+            recordedAt: latest?.recorded_at || null,
+            trades24h: Number(res.data?.tradeStats?.trades24h || 0),
+            lastTradeAt: res.data?.tradeStats?.lastTradeAt || null,
+          };
+        } catch {
+          return {
+            apiKeyName: key.name,
+            exchange: key.exchange,
+            tenantLabel: String(key.tenantDisplayName || '').trim() || 'без привязки',
+            equityUsd: null,
+            unrealizedPnl: null,
+            pnlNetUsd: null,
+            drawdownPercent: null,
+            recordedAt: null,
+            trades24h: 0,
+            lastTradeAt: null,
+          };
+        }
+      }));
+      setMonitoringRows(rows);
+    } finally {
+      setMonitoringTableLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (pageTab !== 'monitoring' || visibleApiKeys.length === 0) return;
+    void loadMonitoringTable(visibleApiKeys);
+  }, [pageTab, visibleApiKeys]);
+
   const loadMonChart = async (key: string, days: number) => {
     setMonChartLoading(true);
     try {
-      const params: Record<string, number> = days > 1 ? { days } : { limit: 288 };
-      const res = await axios.get<{ points?: MonitoringSnapshot[]; latest?: MonitoringSnapshot }>(
-        `/api/monitoring/${encodeURIComponent(key)}`, { params }
+      const params: Record<string, number | string> = days > 1
+        ? { days, includeTrades: '1' }
+        : { limit: 288, includeTrades: '1' };
+      const res = await axios.get(
+        `/api/monitoring/${encodeURIComponent(key)}`, { params },
       );
       const rows = Array.isArray(res.data?.points) ? res.data.points : [];
       setMonChartRaw(rows);
-      setMonChartPoints(rows.map(r => {
-        const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
-        const v = Number(r.equity_usd);
-        return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
-      }).filter((x): x is LinePoint => x !== null));
-      setMonChartLatest(res.data?.latest || null);
-    } catch { setMonChartRaw([]); setMonChartPoints([]); setMonChartLatest(null); } finally { setMonChartLoading(false); }
+      setMonChartTradeStats({
+        trades24h: Number(res.data?.tradeStats?.trades24h || 0),
+        lastTradeAt: res.data?.tradeStats?.lastTradeAt || null,
+      });
+      setMonChartTradeMarkers(Array.isArray(res.data?.tradeMarkers) ? res.data.tradeMarkers : []);
+    } catch {
+      setMonChartRaw([]);
+      setMonChartTradeStats({ trades24h: 0, lastTradeAt: null });
+      setMonChartTradeMarkers([]);
+    } finally {
+      setMonChartLoading(false);
+    }
   };
 
   const openMonChart = (key: string) => {
@@ -799,12 +862,81 @@ const Positions: React.FC = () => {
 
   const fmtNum = (v: unknown, d = 2) => { const n = Number(v); return Number.isFinite(n) ? n.toFixed(d) : '-'; };
 
+  const monitoringColumns = [
+    { title: 'API ключ', dataIndex: 'apiKeyName', render: (v: string, row: AdminMonitoringRow) => (
+      <Space direction="vertical" size={0}>
+        <strong>{v}</strong>
+        <span style={{ fontSize: 11, color: '#6b7280' }}>{row.exchange}</span>
+      </Space>
+    ) },
+    { title: 'Клиент', dataIndex: 'tenantLabel' },
+    { title: 'Equity', render: (_: unknown, row: AdminMonitoringRow) => `$${fmtNum(row.equityUsd)}` },
+    { title: 'UPNL', render: (_: unknown, row: AdminMonitoringRow) => {
+      const v = Number(row.unrealizedPnl || 0);
+      return <span style={{ color: v >= 0 ? '#16a34a' : '#dc2626' }}>${fmtNum(v)}</span>;
+    } },
+    { title: 'PnL net', render: (_: unknown, row: AdminMonitoringRow) => {
+      if (row.pnlNetUsd == null) return '—';
+      const v = Number(row.pnlNetUsd);
+      return <span style={{ color: v >= 0 ? '#16a34a' : '#dc2626' }}>${fmtNum(v)}</span>;
+    } },
+    { title: 'DD %', render: (_: unknown, row: AdminMonitoringRow) => `${fmtNum(row.drawdownPercent)}%` },
+    { title: 'Сделки 24ч', render: (_: unknown, row: AdminMonitoringRow) => (
+      <Space direction="vertical" size={0}>
+        <span>{row.trades24h}</span>
+        {row.lastTradeAt ? (
+          <span style={{ fontSize: 10, color: '#9ca3af' }}>
+            {new Date(row.lastTradeAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+          </span>
+        ) : null}
+      </Space>
+    ) },
+    { title: '', width: 100, render: (_: unknown, row: AdminMonitoringRow) => (
+      <Button size="small" type="primary" ghost onClick={() => openMonChart(row.apiKeyName)}>График</Button>
+    ) },
+  ];
+
   const shouldShowPositions = viewMode === 'positions' || viewMode === 'all';
   const shouldShowOrders = viewMode === 'orders' || viewMode === 'all';
   const shouldShowTrades = viewMode === 'trades' || viewMode === 'all';
 
   return (
     <div className="positions-page">
+      <Tabs
+        activeKey={pageTab}
+        onChange={(key) => setPageTab(key as PageTab)}
+        style={{ marginBottom: 12 }}
+        items={[
+          { key: 'monitoring', label: 'Мониторинг' },
+          { key: 'positions', label: t('positions.segment.positions', 'Позиции') },
+        ]}
+      />
+
+      {pageTab === 'monitoring' ? (
+        <>
+          <Space style={{ marginBottom: 12 }} wrap>
+            <Button loading={monitoringTableLoading} onClick={() => void loadMonitoringTable(visibleApiKeys)}>
+              Обновить сводку
+            </Button>
+            <Checkbox checked={hideUnboundKeys} onChange={(e) => setHideUnboundKeys(e.target.checked)}>
+              Скрыть ключи без привязки
+            </Checkbox>
+            <Checkbox checked={hideDematerializedKeys} onChange={(e) => setHideDematerializedKeys(e.target.checked)}>
+              Скрыть дематериализованные ключи
+            </Checkbox>
+          </Space>
+          <Spin spinning={monitoringTableLoading}>
+            <Table
+              rowKey="apiKeyName"
+              size="small"
+              pagination={{ pageSize: 20 }}
+              dataSource={monitoringRows}
+              columns={monitoringColumns}
+            />
+          </Spin>
+        </>
+      ) : (
+        <>
       <Space style={{ marginBottom: 8 }}>
         <Button loading={refreshAllLoading} onClick={() => { void refreshAllPositions(); }}>
           {t('positions.refreshAll', 'Refresh all')}
@@ -830,6 +962,9 @@ const Positions: React.FC = () => {
         />
         <Checkbox checked={hideDematerializedKeys} onChange={(e) => setHideDematerializedKeys(e.target.checked)}>
           Скрыть дематериализованные ключи
+        </Checkbox>
+        <Checkbox checked={hideUnboundKeys} onChange={(e) => setHideUnboundKeys(e.target.checked)}>
+          Скрыть ключи без привязки
         </Checkbox>
       </Space>
 
@@ -1184,8 +1319,9 @@ const Positions: React.FC = () => {
           </Space>
         ),
       }))} />
+        </>
+      )}
 
-      {/* Monitoring Chart Modal */}
       <Modal
         title={`Мониторинг: ${monChartKey || '—'}`}
         open={monChartOpen}
@@ -1193,105 +1329,15 @@ const Positions: React.FC = () => {
         footer={null}
         width={960}
       >
-        <Spin spinning={monChartLoading}>
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
-              <Space wrap>
-                {monChartLatest ? <Tag color="blue">Eq ${fmtNum(monChartLatest.equity_usd)}</Tag> : null}
-                {monChartLatest ? <Tag color="purple">ML {fmtNum(monChartLatest.margin_load_percent)}%</Tag> : null}
-                {monChartLatest ? <Tag color="red">Lev {fmtNum(monChartLatest.effective_leverage)}x</Tag> : null}
-                {monChartLatest ? <Tag color="orange">DD {fmtNum(monChartLatest.drawdown_percent)}%</Tag> : null}
-                {monChartLatest && monChartLatest.pnl_net_usd != null
-                  ? <Tag color={Number(monChartLatest.pnl_net_usd) >= 0 ? 'green' : 'red'}>PnL ${fmtNum(monChartLatest.pnl_net_usd)}</Tag>
-                  : null}
-                {monChartLatest ? (
-                  <Tag color={Number(monChartLatest.unrealized_pnl || 0) >= 0 ? 'purple' : 'magenta'}>
-                    UPNL ${fmtNum(monChartLatest.unrealized_pnl)}
-                  </Tag>
-                ) : null}
-              </Space>
-              <Space wrap>
-                <Checkbox checked={monShowPnl} onChange={(e) => setMonShowPnl(e.target.checked)}>
-                  <span style={{ color: '#16a34a' }}>●</span> PnL
-                </Checkbox>
-                <Checkbox checked={monShowUpnl} onChange={(e) => setMonShowUpnl(e.target.checked)}>
-                  <span style={{ color: '#7c3aed' }}>●</span> UPNL
-                </Checkbox>
-                <Checkbox checked={monShowDd} onChange={(e) => setMonShowDd(e.target.checked)}>
-                  <span style={{ color: '#d97706' }}>●</span> DD %
-                </Checkbox>
-                <Segmented
-                  options={[
-                    { label: '1д', value: 1 },
-                    { label: '7д', value: 7 },
-                    { label: '30д', value: 30 },
-                    { label: '60д', value: 60 },
-                    { label: '90д', value: 90 },
-                  ]}
-                  value={monChartDays}
-                  onChange={(v) => setMonChartDays(Number(v))}
-                />
-              </Space>
-            </Space>
-            {monChartPoints.length > 0 ? (
-              <ChartComponent
-                data={monChartPoints}
-                type="line"
-                overlayLines={[
-                  ...(monShowPnl
-                    ? [{
-                        id: 'pnl-net',
-                        color: '#16a34a',
-                        lineWidth: 2,
-                        data: monChartRaw
-                          .map((r) => {
-                            const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
-                            const v = Number(
-                              r.pnl_net_usd != null
-                                ? r.pnl_net_usd
-                                : Number(r.equity_usd || 0) - Number(r.unrealized_pnl || 0) - Number(r.deposit_base_usd || 0)
-                            );
-                            return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
-                          })
-                          .filter((p): p is { time: number; value: number } => !!p),
-                      }]
-                    : []),
-                  ...(monShowUpnl
-                    ? [{
-                        id: 'upnl',
-                        color: '#7c3aed',
-                        lineWidth: 2,
-                        data: monChartRaw
-                          .map((r) => {
-                            const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
-                            const v = Number(r.unrealized_pnl);
-                            return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
-                          })
-                          .filter((p): p is { time: number; value: number } => !!p),
-                      }]
-                    : []),
-                  ...(monShowDd
-                    ? [{
-                        id: 'drawdown-pct',
-                        color: '#d97706',
-                        lineWidth: 1,
-                        priceScaleId: 'left' as const,
-                        data: monChartRaw
-                          .map((r) => {
-                            const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
-                            const v = Number(r.drawdown_percent);
-                            return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
-                          })
-                          .filter((p): p is { time: number; value: number } => !!p),
-                      }]
-                    : []),
-                ]}
-              />
-            ) : (
-              <Empty description="Нет данных мониторинга" />
-            )}
-          </Space>
-        </Spin>
+        <MonitoringChartPanel
+          snapshots={monChartRaw}
+          chartDays={monChartDays}
+          onChartDaysChange={setMonChartDays}
+          trades24h={monChartTradeStats.trades24h}
+          lastTradeAt={monChartTradeStats.lastTradeAt}
+          tradeMarkers={monChartTradeMarkers}
+          loading={monChartLoading}
+        />
       </Modal>
     </div>
   );

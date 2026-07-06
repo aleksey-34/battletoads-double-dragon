@@ -1285,6 +1285,7 @@ const Dashboard: React.FC = () => {
   const [positionHealthLoading, setPositionHealthLoading] = useState(false);
   const [positionHealthError, setPositionHealthError] = useState('');
   const [hideDematerializedKeys, setHideDematerializedKeys] = useState(true);
+  const [hideUnboundKeys, setHideUnboundKeys] = useState(true);
   const requestLocksRef = useRef<Record<string, boolean>>({});
 
   const isApiKeyActive = (keyName: string): boolean => apiKeyToggles[keyName] ?? true;
@@ -1335,7 +1336,6 @@ const Dashboard: React.FC = () => {
     }
 
     void fetchApiKeys();
-    void fetchPositionHealth();
     void (async () => {
       try {
         const res = await axios.get('/api/exchanges/universe');
@@ -1350,7 +1350,7 @@ const Dashboard: React.FC = () => {
     setPositionHealthLoading(true);
     setPositionHealthError('');
     try {
-      const res = await axios.get('/api/admin/position-health', { timeout: 120000 });
+      const res = await axios.get('/api/admin/position-health', { timeout: 180000 });
       setPositionHealth(res.data as PositionHealthSummary);
     } catch (error: any) {
       setPositionHealthError(String(error?.response?.data?.error || error?.message || 'position-health failed'));
@@ -2856,8 +2856,12 @@ const Dashboard: React.FC = () => {
   };
 
 
-  const visibleApiKeys = hideDematerializedKeys
-    ? apiKeys.filter((key) => !key.algofundDematerialized)
+  const visibleApiKeys = (hideDematerializedKeys || hideUnboundKeys)
+    ? apiKeys.filter((key) => {
+      if (hideDematerializedKeys && key.algofundDematerialized) return false;
+      if (hideUnboundKeys && !String(key.tenantDisplayName || '').trim()) return false;
+      return true;
+    })
     : apiKeys;
 
   const collapseItems = visibleApiKeys.map((key) => {
@@ -4543,6 +4547,9 @@ const Dashboard: React.FC = () => {
           <Space>
             <Checkbox checked={hideDematerializedKeys} onChange={(e) => setHideDematerializedKeys(e.target.checked)}>
               Скрыть дематериализованные ключи
+            </Checkbox>
+            <Checkbox checked={hideUnboundKeys} onChange={(e) => setHideUnboundKeys(e.target.checked)}>
+              Скрыть ключи без привязки
             </Checkbox>
             <Button size="small" loading={positionHealthLoading} onClick={() => { void fetchPositionHealth(); }}>
               Обновить

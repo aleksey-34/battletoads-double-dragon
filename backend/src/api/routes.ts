@@ -50,7 +50,13 @@ import {
   setTradingSystemActivation,
   updateTradingSystem,
 } from '../bot/tradingSystems';
-import { getMonitoringLatest, getMonitoringSnapshots, recordMonitoringSnapshot } from '../bot/monitoring';
+import {
+  getMonitoringLatest,
+  getMonitoringSnapshots,
+  getMonitoringTradeMarkers,
+  getMonitoringTradeStats,
+  recordMonitoringSnapshot,
+} from '../bot/monitoring';
 import { deleteBacktestRun, getBacktestRun, listBacktestRuns, runBacktest, saveBacktestRun } from '../backtest/engine';
 import { loadSettings, saveApiKey, saveRiskSettings, normalizeExchangeName, ApiKey, RiskSettings, Strategy } from '../config/settings';
 import { db } from '../utils/database';
@@ -4119,8 +4125,19 @@ router.get('/monitoring/:apiKeyName', async (req, res) => {
 
     const points = await getMonitoringSnapshots(apiKeyName, limit, days);
     const latest = points.length > 0 ? points[points.length - 1] : await getMonitoringLatest(apiKeyName);
+    const includeTrades = String(req.query.includeTrades || '0') === '1'
+      || String(req.query.includeTrades || '').toLowerCase() === 'true';
+    const tradeStats = includeTrades
+      ? await getMonitoringTradeStats(apiKeyName).catch(() => ({ trades24h: 0, lastTradeAt: null }))
+      : undefined;
+    const sinceMs = days && days > 0
+      ? Date.now() - days * 86_400_000
+      : Date.now() - 86_400_000;
+    const tradeMarkers = includeTrades
+      ? await getMonitoringTradeMarkers(apiKeyName, sinceMs).catch(() => [])
+      : undefined;
 
-    res.json({ points, latest });
+    res.json({ points, latest, tradeStats, tradeMarkers });
   } catch (error) {
     const err = error as Error;
     logger.error(`Error loading monitoring data for ${apiKeyName}: ${err.message}`);

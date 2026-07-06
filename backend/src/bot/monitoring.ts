@@ -299,3 +299,79 @@ export const getMonitoringLatest = async (apiKeyName: string) => {
   );
   return row || null;
 };
+
+export type MonitoringTradeMarker = {
+  time: number;
+  tradeType: 'entry' | 'exit';
+  side: 'long' | 'short';
+  symbol: string;
+};
+
+export const getMonitoringTradeStats = async (apiKeyName: string) => {
+  const key = await getApiKeyRow(apiKeyName);
+  const since24h = Date.now() - 86_400_000;
+  const stats = await db.get<{
+    trades_count?: number;
+    last_trade_at?: number;
+  }>(
+    `SELECT
+       COUNT(*) AS trades_count,
+       MAX(lte.actual_time) AS last_trade_at
+     FROM live_trade_events lte
+     JOIN strategies s ON s.id = lte.strategy_id
+     WHERE s.api_key_id = ?
+       AND lte.actual_time >= ?`,
+    [key.id, since24h],
+  ).catch(() => null);
+
+  return {
+    trades24h: Math.max(0, toFiniteNumber(stats?.trades_count, 0)),
+    lastTradeAt: stats?.last_trade_at
+      ? new Date(toFiniteNumber(stats.last_trade_at)).toISOString()
+      : null,
+  };
+};
+
+export const getMonitoringTradeMarkers = async (
+  apiKeyName: string,
+  sinceMs: number,
+): Promise<MonitoringTradeMarker[]> => {
+  const key = await getApiKeyRow(apiKeyName);
+  const safeSince = Math.max(0, Math.floor(sinceMs));
+  const rows = await db.all(
+    `SELECT lte.trade_type, lte.side, lte.source_symbol, lte.actual_time
+     FROM live_trade_events lte
+     JOIN strategies s ON s.id = lte.strategy_id
+     WHERE s.api_key_id = ?
+       AND lte.actual_time >= ?
+     ORDER BY lte.actual_time ASC
+     LIMIT 500`,
+    [key.id, safeSince],
+  ).catch(() => []) as Array<{
+    trade_type?: string;
+    side?: string;
+    source_symbol?: string;
+    actual_time?: number;
+  }>;
+
+  return rows
+    .map((row) => {
+      const time = Math.floor(toFiniteNumber(row.actual_time, 0) / 1000);
+      const tradeType = String(row.trade_type || '').toLowerCase();
+      const side = String(row.side || '').toLowerCase();
+      const symbol = String(row.source_symbol || '').trim();
+      if (time <= 0 || (tradeType !== 'entry' && tradeType !== 'exit')) {
+        return null;
+      }
+      if (side !== 'long' && side !== 'short') {
+        return null;
+      }
+      return {
+        time,
+        tradeType: tradeType as 'entry' | 'exit',
+        side: side as 'long' | 'short',
+        symbol,
+      };
+    })
+    .filter((row): row is MonitoringTradeMarker => row !== null);
+};

@@ -19,7 +19,7 @@ const dictionaries: Record<UILanguage, Dictionary> = {
     'app.title': 'BattleToads Control',
     'nav.dashboard': 'Дашборд',
     'nav.settings': 'Настройки',
-    'nav.positions': 'Позиции',
+    'nav.positions': 'Мониторинг',
     'nav.logs': 'Логи',
     'nav.backtest': 'Бектест',
     'nav.tradingSystems': 'Офер и ТС',

@@ -21,8 +21,7 @@ TOP_DECORR_FALLBACK = [
 USER_SYNTH_PAIRS = [
     "ETHUSDT/APTUSDT",
     "BCHUSDT/APEUSDT",
-    "LINKUSDT/AIXBTUSDT",
-    "ZECUSDT/RUNEUSDT",
+    "LINKUSDT/UNIUSDT",
     "ZENUSDT/ALGOUSDT",
     "ATOMUSDT/DOGEUSDT",
     "SOLUSDT/AVAXUSDT",
@@ -78,11 +77,12 @@ def mono_anchors_from_synth(synth_markets: list[str]) -> list[str]:
     return sorted(syms)[:24]
 
 
-def load_fan_api_key_names(*, limit: int = 8) -> list[str]:
+def load_fan_api_key_names(*, limit: int | None = None) -> list[str]:
+    cap = limit or int(os.environ.get("SWEEP_FAN_KEY_LIMIT", "8"))
     env = os.environ.get("SWEEP_FAN_KEYS", "").strip()
     if env:
         keys = [k.strip() for k in env.split(",") if k.strip()]
-        return keys[:limit]
+        return keys[:cap]
 
     db_path = os.environ.get(
         "BTDD_DB_PATH",
@@ -125,7 +125,7 @@ def load_fan_api_key_names(*, limit: int = 8) -> list[str]:
                     continue
                 add(name)
                 per_ex[ex] = per_ex.get(ex, 0) + 1
-                if len(picked) >= limit:
+                if len(picked) >= cap:
                     break
         except Exception:
             pass
@@ -133,9 +133,9 @@ def load_fan_api_key_names(*, limit: int = 8) -> list[str]:
     if len(picked) < 2:
         for k in DEFAULT_FAN_KEYS:
             add(k)
-            if len(picked) >= limit:
+            if len(picked) >= cap:
                 break
-    return picked[:limit]
+    return picked[:cap]
 
 
 def sweep_turbo_extras() -> dict:

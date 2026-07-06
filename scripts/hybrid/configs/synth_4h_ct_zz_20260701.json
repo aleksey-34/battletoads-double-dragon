@@ -1,0 +1,60 @@
+{
+  "mode": "heavy",
+  "apiKeyName": "BTDD_D1",
+  "fanApiKeyNames": [
+    "BTDD_D1",
+    "BTDD_D1_OP3_SOURCE",
+    "HDB_17",
+    "HDB_14",
+    "HDB_15",
+    "IVAN_WEEX_RESEARCH",
+    "artursk-1049539016-api",
+    "HDB_18",
+    "Mehmet_Bingx",
+    "mustafa"
+  ],
+  "concurrency": 4,
+  "dateFrom": "2024-06-01T00:00:00Z",
+  "dateTo": null,
+  "intervals": ["4h"],
+  "strategyTypes": ["CT_Fractal", "ZZ_Fast", "ZZ_Instance"],
+  "statLengths": [12, 18, 24, 36, 48],
+  "statEntry": [1.5, 1.75, 2.0, 2.25, 2.5],
+  "statExit": [0.25, 0.5, 0.75],
+  "statStop": [2.0, 2.5, 3.0, 3.5],
+  "zzPivotLengths": [2, 3, 5, 6, 8],
+  "backtestBars": 4800,
+  "warmupBars": 120,
+  "initialBalance": 10000,
+  "commissionPercent": 0.1,
+  "slippagePercent": 0.05,
+  "skipMissingSymbols": true,
+  "robust": {
+    "minProfitFactor": 1.04,
+    "maxDrawdownPercent": 28,
+    "minTrades": 2
+  },
+  "sweepLotPercent": 100,
+  "sweepReinvestPercent": 100,
+  "sweepMaxDeposit": 0,
+  "maxRuns": 5500,
+  "maxVariantsPerMarketType": 72,
+  "strategyPrefix": "SYNTH4H_HYBRID_20260701",
+  "systemName": "Synth 4h CT+ZZ hybrid local (732d)",
+  "synthMarkets": [
+    "ETHUSDT/APTUSDT", "BCHUSDT/APEUSDT",
+    "ZENUSDT/ALGOUSDT", "ATOMUSDT/DOGEUSDT", "SOLUSDT/AVAXUSDT", "INJUSDT/TIAUSDT",
+    "NEARUSDT/FILUSDT", "SUIUSDT/SEIUSDT", "ARBUSDT/OPUSDT", "WLDUSDT/JUPUSDT",
+    "TRUUSDT/GRTUSDT", "ORDIUSDT/PYTHUSDT",
+    "JUPUSDT/WLDUSDT", "WLDUSDT/NEARUSDT", "AUCTIONUSDT/MERLUSDT", "NEARUSDT/SEIUSDT",
+    "BERAUSDT/IPUSDT", "ATOMUSDT/DOTUSDT", "INJUSDT/GRTUSDT", "LTCUSDT/BCHUSDT",
+    "ONDOUSDT/TIAUSDT", "TIAUSDT/SEIUSDT", "FETUSDT/OPUSDT", "ENAUSDT/SUIUSDT",
+    "STXUSDT/IMXUSDT", "LINKUSDT/UNIUSDT"
+  ],
+  "monoMarkets": [
+    "1000SATSUSDT", "ALGOUSDT", "APEUSDT", "APTUSDT", "ARBUSDT", "ATOMUSDT", "AUCTIONUSDT",
+    "AVAXUSDT", "BCHUSDT", "BERAUSDT", "DOGEUSDT", "DOTUSDT", "ENAUSDT", "ETHUSDT",
+    "FETUSDT", "FILUSDT", "GRTUSDT", "IMXUSDT", "INJUSDT", "IPUSDT", "JUPUSDT",
+    "LINKUSDT", "LTCUSDT", "MERLUSDT"
+  ]
+}

@@ -219,7 +219,7 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
     } else {
       const lineSeries = chart.addSeries(LineSeries, {});
       seriesRef.current = lineSeries;
-      markerPluginRef.current = null;
+      markerPluginRef.current = createSeriesMarkers(lineSeries as any, []);
     }
 
     return () => {
@@ -598,10 +598,6 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
   }, [overlayLines]);
 
   useEffect(() => {
-    if (type !== 'candlestick') {
-      return;
-    }
-
     if (!markerPluginRef.current || typeof markerPluginRef.current.setMarkers !== 'function') {
       return;
     }

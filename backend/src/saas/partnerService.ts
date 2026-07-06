@@ -1,5 +1,10 @@
 import { runMonitoringCycleForApiKeys } from '../automation/scheduler';
-import { getMonitoringLatest, getMonitoringSnapshots } from '../bot/monitoring';
+import {
+  getMonitoringLatest,
+  getMonitoringSnapshots,
+  getMonitoringTradeMarkers,
+  getMonitoringTradeStats,
+} from '../bot/monitoring';
 import { db } from '../utils/database';
 import logger from '../utils/logger';
 
@@ -284,7 +289,12 @@ export const getPartnerMonitoringSeries = async (
     ? await getMonitoringSnapshots(apiKeyName, 5000, days).catch(() => [])
     : await getMonitoringSnapshots(apiKeyName, limit).catch(() => []);
   const latest = await getMonitoringLatest(apiKeyName).catch(() => null);
-  return { points, latest };
+  const tradeStats = await getMonitoringTradeStats(apiKeyName).catch(() => ({ trades24h: 0, lastTradeAt: null }));
+  const sinceMs = days > 1
+    ? Date.now() - days * 86_400_000
+    : Date.now() - 86_400_000;
+  const tradeMarkers = await getMonitoringTradeMarkers(apiKeyName, sinceMs).catch(() => []);
+  return { points, latest, tradeStats, tradeMarkers };
 };
 
 export type PartnerTradeSummaryRow = {

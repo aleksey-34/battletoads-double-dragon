@@ -1,9 +1,9 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Alert, Button, Card, Checkbox, Input, Modal, Progress, Segmented, Space, Spin, Table, Tabs, Tag, Typography, message,
 } from 'antd';
 import axios from 'axios';
-import ChartComponent from '../components/ChartComponent';
+import MonitoringChartPanel, { MonitoringSnapshot, MonitoringTradeMarker } from '../components/MonitoringChartPanel';
 
 type PartnerClient = {
   tenantId: number;
@@ -52,17 +52,6 @@ type TradeSummaryRow = {
   isOutlier: boolean;
 };
 
-type MonitoringSnapshot = {
-  recorded_at?: string;
-  equity_usd?: number;
-  unrealized_pnl?: number;
-  drawdown_percent?: number;
-  pnl_net_usd?: number | null;
-  deposit_base_usd?: number | null;
-};
-
-type LinePoint = { time: number; value: number };
-
 const fmt = (v: unknown, d = 2) => {
   const n = Number(v);
   return Number.isFinite(n) ? n.toFixed(d) : '—';
@@ -75,21 +64,6 @@ const systemShort = (name: string) => {
   return s.split('::').pop() || s;
 };
 
-const ChartLegend = ({ items }: { items: Array<{ color: string; label: string; active: boolean }> }) => (
-  <Space wrap size={12}>
-    {items.map((item) => (
-      <Space key={item.label} size={6}>
-        <span style={{
-          width: 10, height: 10, borderRadius: '50%', display: 'inline-block',
-          backgroundColor: item.active ? item.color : '#d9d9d9',
-          boxShadow: item.active ? `0 0 4px ${item.color}88` : 'none',
-        }} />
-        <span style={{ fontSize: 12, color: item.active ? '#374151' : '#9ca3af' }}>{item.label}</span>
-      </Space>
-    ))}
-  </Space>
-);
-
 const PartnerCabinet: React.FC = () => {
   const [activeTab, setActiveTab] = useState('monitoring');
   const [loading, setLoading] = useState(true);
@@ -99,10 +73,8 @@ const PartnerCabinet: React.FC = () => {
   const [chartDays, setChartDays] = useState(1);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartRaw, setChartRaw] = useState<MonitoringSnapshot[]>([]);
-  const [showEquity, setShowEquity] = useState(true);
-  const [showPnl, setShowPnl] = useState(true);
-  const [showUpnl, setShowUpnl] = useState(true);
-  const [showDd, setShowDd] = useState(false);
+  const [chartTradeStats, setChartTradeStats] = useState<{ trades24h: number; lastTradeAt: string | null }>({ trades24h: 0, lastTradeAt: null });
+  const [chartTradeMarkers, setChartTradeMarkers] = useState<MonitoringTradeMarker[]>([]);
 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshJob, setRefreshJob] = useState<PartnerRefreshJob | null>(null);
@@ -233,9 +205,14 @@ const PartnerCabinet: React.FC = () => {
     if (!client.apiKeyName) return;
     setChartLoading(true);
     try {
-      const params: Record<string, number> = days > 1 ? { days } : { limit: 288 };
+      const params: Record<string, number | string> = days > 1 ? { days, includeTrades: '1' } : { limit: 288, includeTrades: '1' };
       const res = await axios.get(`/api/saas/partner/monitoring/${encodeURIComponent(client.apiKeyName)}`, { params });
       setChartRaw(Array.isArray(res.data?.points) ? res.data.points : []);
+      setChartTradeStats({
+        trades24h: Number(res.data?.tradeStats?.trades24h || 0),
+        lastTradeAt: res.data?.tradeStats?.lastTradeAt || null,
+      });
+      setChartTradeMarkers(Array.isArray(res.data?.tradeMarkers) ? res.data.tradeMarkers : []);
     } catch {
       setChartRaw([]);
     } finally {
@@ -252,13 +229,7 @@ const PartnerCabinet: React.FC = () => {
 
   useEffect(() => {
     if (chartOpen && chartClient) void loadChart(chartClient, chartDays);
-  }, [chartDays]);
-
-  const equitySeries = useMemo(() => chartRaw.map((r) => {
-    const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
-    const v = Number(r.equity_usd);
-    return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
-  }).filter((x): x is LinePoint => x !== null), [chartRaw]);
+  }, [chartDays, chartOpen, chartClient]);
 
   const monitoringColumns = [
     { title: 'Клиент', dataIndex: 'slug', render: (_: string, row: PartnerClient) => (
@@ -483,66 +454,15 @@ const PartnerCabinet: React.FC = () => {
         width={960}
       >
         <Spin spinning={chartLoading}>
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
-            <ChartLegend items={[
-              { color: '#2563eb', label: 'Equity', active: showEquity },
-              { color: '#16a34a', label: 'PnL net', active: showPnl },
-              { color: '#7c3aed', label: 'UPNL', active: showUpnl },
-              { color: '#d97706', label: 'DD %', active: showDd },
-            ]} />
-            <Space wrap>
-              <Checkbox checked={showEquity} onChange={(e) => setShowEquity(e.target.checked)}>Equity</Checkbox>
-              <Checkbox checked={showPnl} onChange={(e) => setShowPnl(e.target.checked)}>PnL</Checkbox>
-              <Checkbox checked={showUpnl} onChange={(e) => setShowUpnl(e.target.checked)}>UPNL</Checkbox>
-              <Checkbox checked={showDd} onChange={(e) => setShowDd(e.target.checked)}>DD %</Checkbox>
-              <Segmented
-                options={[{ label: '1д', value: 1 }, { label: '7д', value: 7 }, { label: '30д', value: 30 }]}
-                value={chartDays}
-                onChange={(v) => setChartDays(Number(v))}
-              />
-            </Space>
-            {equitySeries.length > 0 ? (
-              <ChartComponent
-                data={showEquity ? equitySeries : equitySeries}
-                type="line"
-                overlayLines={[
-                  ...(showPnl ? [{
-                    id: 'pnl-net',
-                    color: '#16a34a',
-                    lineWidth: 2,
-                    data: chartRaw.map((r) => {
-                      const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
-                      const v = Number(r.pnl_net_usd != null ? r.pnl_net_usd : Number(r.equity_usd || 0) - Number(r.unrealized_pnl || 0) - Number(r.deposit_base_usd || 0));
-                      return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
-                    }).filter((p): p is LinePoint => !!p),
-                  }] : []),
-                  ...(showUpnl ? [{
-                    id: 'upnl',
-                    color: '#7c3aed',
-                    lineWidth: 2,
-                    data: chartRaw.map((r) => {
-                      const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
-                      const v = Number(r.unrealized_pnl);
-                      return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
-                    }).filter((p): p is LinePoint => !!p),
-                  }] : []),
-                  ...(showDd ? [{
-                    id: 'drawdown-pct',
-                    color: '#d97706',
-                    lineWidth: 1,
-                    priceScaleId: 'left' as const,
-                    data: chartRaw.map((r) => {
-                      const t = r.recorded_at ? new Date(r.recorded_at).getTime() / 1000 : 0;
-                      const v = Number(r.drawdown_percent);
-                      return Number.isFinite(t) && t > 0 && Number.isFinite(v) ? { time: Math.floor(t), value: v } : null;
-                    }).filter((p): p is LinePoint => !!p),
-                  }] : []),
-                ]}
-              />
-            ) : (
-              <div style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>Нет снимков мониторинга</div>
-            )}
-          </Space>
+          <MonitoringChartPanel
+            snapshots={chartRaw}
+            chartDays={chartDays}
+            onChartDaysChange={setChartDays}
+            trades24h={chartTradeStats.trades24h}
+            lastTradeAt={chartTradeStats.lastTradeAt}
+            tradeMarkers={chartTradeMarkers}
+            loading={chartLoading}
+          />
         </Spin>
       </Modal>
     </div>
