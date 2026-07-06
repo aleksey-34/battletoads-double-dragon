@@ -21,6 +21,7 @@ import { db, initDB } from '../utils/database';
 import logger from '../utils/logger';
 import { initResearchDb } from '../research/db';
 import { getPreset, listOfferIds } from '../research/presetBuilder';
+import { enqueueClientPreview, getClientPreviewJobPayload } from '../research/clientPreviewQueue';
 import { computeReconciliationMetrics } from '../analytics/liveReconciliation';
 import {
   parsePortfolioCircuitBreaker,
@@ -1428,7 +1429,7 @@ const asString = (value: unknown, fallback = ''): string => {
 };
 
 const clampNumber = (value: number, min: number, max: number): number => Math.min(max, Math.max(min, value));
-const CLIENT_STRICT_PRESET_MODE = String(process.env.CLIENT_STRICT_PRESET_MODE || '0').trim() !== '0';
+const CLIENT_STRICT_PRESET_MODE = String(process.env.CLIENT_STRICT_PRESET_MODE ?? '1').trim() !== '0';
 
 const levelToPreferenceScore = (level: Level3): number => {
   if (level === 'low') return 0;
@@ -2322,13 +2323,21 @@ const deriveOfferStoreLabels = (args: {
   return result;
 };
 
-const getStorefrontOfferIds = (offerStore: Pick<OfferStoreState, 'publishedOfferIds' | 'curatedOfferIds' | 'labels'>): Set<string> => {
+const getStorefrontOfferIds = (offerStore: Pick<OfferStoreState, 'publishedOfferIds' | 'curatedOfferIds' | 'labels' | 'tsBacktestSnapshots'>): Set<string> => {
+  const tsOfferIds = new Set<string>();
+  Object.values(offerStore.tsBacktestSnapshots || {}).forEach((snap) => {
+    (Array.isArray(snap?.offerIds) ? snap.offerIds : []).forEach((offerId) => {
+      const safe = String(offerId || '').trim();
+      if (safe) tsOfferIds.add(safe);
+    });
+  });
   const runtimeSnapshotIds = Object.entries(offerStore.labels || {})
     .filter(([, label]) => normalizeOfferStoreLabel(label) === 'runtime_snapshot')
     .map(([offerId]) => String(offerId || '').trim())
     .filter(Boolean);
   if (runtimeSnapshotIds.length > 0) {
-    return new Set(runtimeSnapshotIds);
+    runtimeSnapshotIds.forEach((id) => tsOfferIds.add(id));
+    return new Set(tsOfferIds);
   }
   const curatedIds = Array.isArray(offerStore.curatedOfferIds)
     ? offerStore.curatedOfferIds.map((item) => String(item || '').trim()).filter(Boolean)
@@ -2336,7 +2345,9 @@ const getStorefrontOfferIds = (offerStore: Pick<OfferStoreState, 'publishedOffer
   const publishedIds = Array.isArray(offerStore.publishedOfferIds)
     ? offerStore.publishedOfferIds.map((item) => String(item || '').trim()).filter(Boolean)
     : [];
-  return new Set((publishedIds.length > 0 ? publishedIds : curatedIds));
+  const base = publishedIds.length > 0 ? publishedIds : curatedIds;
+  base.forEach((id) => tsOfferIds.add(id));
+  return tsOfferIds;
 };
 
 const isEligibleStorefrontOffer = (offer: {
@@ -6249,6 +6260,49 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     }
   }
 
+  const strategyIdToTsOfferId = new Map<number, string>();
+  for (const snap of Object.values(tsBacktestSnapshots || {})) {
+    for (const offerIdRaw of Array.isArray(snap?.offerIds) ? snap.offerIds : []) {
+      const offerId = asString(offerIdRaw, '').trim();
+      const strategyId = parseStrategyIdFromOfferId(offerId);
+      if (strategyId <= 0) {
+        continue;
+      }
+      if (!strategyIdToTsOfferId.has(strategyId)) {
+        strategyIdToTsOfferId.set(strategyId, offerId);
+      }
+      if (!strategyIdToExistingOfferId.has(strategyId)) {
+        missingStrategyIds.add(strategyId);
+      }
+    }
+  }
+
+  const unresolvedStrategyIds = Array.from(missingStrategyIds).filter((strategyId) => !runtimeStrategyRowsById.has(strategyId));
+  if (unresolvedStrategyIds.length > 0) {
+    const extraRows = await db.all(
+      `SELECT DISTINCT s.id, s.name, s.strategy_type, s.market_mode, s.base_symbol, s.quote_symbol, s.interval,
+              COALESCE(s.market_type, 'futures') AS market_type
+       FROM strategies s
+       WHERE s.id IN (${unresolvedStrategyIds.map(() => '?').join(',')})`,
+      unresolvedStrategyIds,
+    ) as Array<{
+      id?: number;
+      name?: string;
+      strategy_type?: string;
+      market_mode?: string;
+      base_symbol?: string;
+      quote_symbol?: string;
+      interval?: string;
+      market_type?: string;
+    }>;
+    for (const row of extraRows) {
+      const strategyId = Number(row.id || 0);
+      if (strategyId > 0 && !runtimeStrategyRowsById.has(strategyId)) {
+        runtimeStrategyRowsById.set(strategyId, row);
+      }
+    }
+  }
+
   const fallbackOffers = Array.from(missingStrategyIds)
     .map((strategyId) => {
       const row = runtimeStrategyRowsById.get(strategyId);
@@ -6260,16 +6314,18 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
       const market = [asString(row.base_symbol, ''), asString(row.quote_symbol, '')].filter(Boolean).join('/');
       const fallbackOfferId = strategyIdToCuratedOfferId.get(strategyId)
         || strategyIdToPublishedOfferId.get(strategyId)
+        || strategyIdToTsOfferId.get(strategyId)
         || `offer_${mode}_${strategyType.toLowerCase()}_${strategyId}`;
       const snapshot = reviewSnapshots[fallbackOfferId] || null;
       const trades = Math.max(0, Math.floor(asNumber(snapshot?.trades, 0)));
       const periodDaysRow = Math.max(1, Math.floor(asNumber(snapshot?.periodDays, periodDays)));
+      const rowMarketType = String((row as { market_type?: string }).market_type || 'futures') === 'spot' ? 'spot' : 'futures';
       return {
         offerId: fallbackOfferId,
         titleRu: `${mode.toUpperCase()} • ${strategyType} • ${market || asString(row.base_symbol, '')}`,
         mode,
         market,
-        market_type: 'futures' as 'futures' | 'spot',
+        market_type: rowMarketType as 'futures' | 'spot',
         strategyId,
         score: 0,
         ret: Number(asNumber(snapshot?.ret, 0).toFixed(3)),
@@ -12310,6 +12366,13 @@ export const getStrategyClientState = async (tenantId: number) => {
     } as CatalogOffer;
   });
 
+  const clientPrefs = safeJsonParse<{ showFutures?: boolean; showSpot?: boolean }>(
+    (tenant as { client_preferences_json?: string }).client_preferences_json,
+    { showFutures: true, showSpot: true },
+  );
+  const showFuturesOffers = clientPrefs.showFutures !== false;
+  const showSpotOffers = clientPrefs.showSpot !== false;
+
   const normalizedClientOffers = enrichedOffers.map((offer) => {
     const familyInterval = asString(
       (offer as Record<string, unknown>).familyInterval,
@@ -12327,14 +12390,22 @@ export const getStrategyClientState = async (tenantId: number) => {
           .map((point) => asNumber(point?.equity, Number.NaN))
           .filter((value) => Number.isFinite(value))
         : [];
+    const marketType = String((offer as Record<string, unknown>).market_type || 'futures') === 'spot' ? 'spot' : 'futures';
 
     return {
       ...offer,
+      market_type: marketType,
       interval: familyInterval || null,
       familyInterval: familyInterval || null,
       strategyParams: offer.strategy?.params || null,
       equityPoints,
     } as CatalogOffer;
+  }).filter((offer) => {
+    const marketType = String((offer as Record<string, unknown>).market_type || 'futures');
+    if (marketType === 'spot') {
+      return showSpotOffers;
+    }
+    return showFuturesOffers;
   });
 
   const recommendedSets = buildRecommendedSets(catalog);
@@ -12363,6 +12434,7 @@ export const getStrategyClientState = async (tenantId: number) => {
     plan,
     capabilities,
     monitoring,
+    clientPreferences: clientPrefs,
     profile: profile ? {
       ...profile,
       selectedOfferIds: savedOfferIds,
@@ -13059,10 +13131,13 @@ export const previewStrategyClientOffer = async (
 
   const singleInitBal = asNumber(sweep?.config?.initialBalance, 10000);
   const record = findSweepRecordByStrategyId(sweep, preset.strategyId);
-  const result = await runBacktest({
+  const strategyId = record ? Number(record.strategyId) : preset.strategyId;
+
+  const queued = await enqueueClientPreview({
+    tenantId,
     apiKeyName: state.catalog.apiKeyName,
-    mode: 'single',
-    strategyId: record ? Number(record.strategyId) : preset.strategyId,
+    kind: 'single',
+    strategyId,
     bars: asNumber(sweep?.config?.backtestBars, 6000),
     warmupBars: asNumber(sweep?.config?.warmupBars, 400),
     skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
@@ -13074,11 +13149,33 @@ export const previewStrategyClientOffer = async (
     lotPercentOverride: 100,
   });
 
+  if (queued.status === 'done' || queued.cached) {
+    const jobPayload = await getClientPreviewJobPayload(tenantId, queued.jobId);
+    if (jobPayload?.preview) {
+      const preview = {
+        source: 'single_backtest',
+        summary: jobPayload.preview.summary,
+        equity: jobPayload.preview.equity,
+        trades: [],
+      };
+      const latestPreviewPayload = { offerId, offer, preset, controls, period, preview };
+      await db.run(
+        `UPDATE strategy_client_profiles
+         SET latest_preview_json = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ?`,
+        [JSON.stringify(latestPreviewPayload), tenantId]
+      );
+      return { offer, preset, controls, period, preview };
+    }
+  }
+
   const preview = {
-    source: 'single_backtest',
-    summary: result.summary,
-    equity: result.equityCurve,
-    trades: result.trades.slice(0, 30),
+    source: 'queued_backtest',
+    jobId: queued.jobId,
+    status: queued.status,
+    summary: null,
+    equity: [],
+    trades: [],
   };
 
   const latestPreviewPayload = { offerId, offer, preset, controls, period, preview };
@@ -13212,9 +13309,10 @@ export const previewStrategyClientSelection = async (
 
   const previewInitialBalance = asNumber(sweep?.config?.initialBalance, 10000);
 
-  const result = await runBacktest({
+  const queued = await enqueueClientPreview({
+    tenantId,
     apiKeyName: state.catalog.apiKeyName,
-    mode: 'portfolio',
+    kind: 'portfolio',
     strategyIds: uniqueStrategyIds,
     bars: asNumber(sweep?.config?.backtestBars, 6000),
     warmupBars: asNumber(sweep?.config?.warmupBars, 400),
@@ -13226,6 +13324,33 @@ export const previewStrategyClientSelection = async (
     maxDepositOverride: previewInitialBalance * CARD_PREVIEW_MAX_DEPOSIT_GROWTH_X,
     lotPercentOverride: 100,
   });
+
+  if (queued.status === 'done' || queued.cached) {
+    const jobPayload = await getClientPreviewJobPayload(tenantId, queued.jobId);
+    if (jobPayload?.preview) {
+      return {
+        period,
+        controls,
+        constraints,
+        selectedOffers: selectedOffers.map((item) => ({
+          offerId: item.offerId,
+          titleRu: item.offer.titleRu,
+          market: item.offer.strategy.market,
+          mode: item.offer.strategy.mode,
+          strategyId: item.preset.strategyId,
+          strategyName: item.preset.strategyName,
+          score: item.preset.score,
+          metrics: item.preset.metrics,
+        })),
+        preview: {
+          source: 'portfolio_backtest',
+          summary: jobPayload.preview.summary,
+          equity: jobPayload.preview.equity,
+          trades: [],
+        },
+      };
+    }
+  }
 
   return {
     period,
@@ -13242,10 +13367,12 @@ export const previewStrategyClientSelection = async (
       metrics: item.preset.metrics,
     })),
     preview: {
-      source: 'portfolio_backtest',
-      summary: result.summary,
-      equity: result.equityCurve,
-      trades: result.trades.slice(0, 50),
+      source: 'queued_backtest',
+      jobId: queued.jobId,
+      status: queued.status,
+      summary: null,
+      equity: [],
+      trades: [],
     },
   };
 };
@@ -14699,6 +14826,59 @@ export const getAlgofundState = async (
     availableSystems = Array.from(availableByName.values());
   }
 
+  const algofundMemberStrategyIds = Array.from(new Set(
+    availableSystems.flatMap((system) => (
+      Array.isArray(system.memberStrategyIds)
+        ? system.memberStrategyIds.map((id) => Number(id)).filter((id) => Number.isFinite(id) && id > 0)
+        : []
+    )),
+  ));
+  const algofundStrategyMarketType = new Map<number, 'futures' | 'spot'>();
+  if (algofundMemberStrategyIds.length > 0) {
+    const memberRows = await db.all(
+      `SELECT id, COALESCE(market_type, 'futures') AS market_type
+       FROM strategies
+       WHERE id IN (${algofundMemberStrategyIds.map(() => '?').join(',')})`,
+      algofundMemberStrategyIds,
+    ) as Array<{ id?: number; market_type?: string }>;
+    for (const row of memberRows) {
+      const strategyId = Number(row.id || 0);
+      if (strategyId > 0) {
+        algofundStrategyMarketType.set(
+          strategyId,
+          String(row.market_type || 'futures') === 'spot' ? 'spot' : 'futures',
+        );
+      }
+    }
+  }
+  for (const system of availableSystems) {
+    const memberIds = Array.isArray(system.memberStrategyIds)
+      ? system.memberStrategyIds.map((id) => Number(id)).filter((id) => id > 0)
+      : [];
+    const memberTypes = memberIds
+      .map((id) => algofundStrategyMarketType.get(id))
+      .filter((value): value is 'futures' | 'spot' => value === 'futures' || value === 'spot');
+    const nameUpper = asString(system?.name, '').trim().toUpperCase();
+    const marketType: 'futures' | 'spot' = memberTypes.length > 0
+      ? (memberTypes.every((value) => value === 'spot') ? 'spot' : 'futures')
+      : (nameUpper.includes('SPOT') ? 'spot' : 'futures');
+    (system as { marketType?: 'futures' | 'spot' }).marketType = marketType;
+  }
+
+  const algofundClientPrefs = safeJsonParse<{ showFutures?: boolean; showSpot?: boolean }>(
+    (tenant as { client_preferences_json?: string }).client_preferences_json,
+    { showFutures: true, showSpot: true },
+  );
+  const showFuturesSystems = algofundClientPrefs.showFutures !== false;
+  const showSpotSystems = algofundClientPrefs.showSpot !== false;
+  availableSystems = availableSystems.filter((system) => {
+    const marketType = (system as { marketType?: 'futures' | 'spot' }).marketType || 'futures';
+    if (marketType === 'spot') {
+      return showSpotSystems;
+    }
+    return showFuturesSystems;
+  });
+
   // Browse-only mode: no plan or profile — return systems with snapshots but no controls
   if (!plan || !profile) {
     return {
@@ -14709,6 +14889,7 @@ export const getAlgofundState = async (
       engine: null,
       activeSystems: [],
       availableSystems,
+      clientPreferences: algofundClientPrefs,
       preview: null,
       portfolioPassport: null,
       requests: [],
@@ -14936,6 +15117,7 @@ export const getAlgofundState = async (
     tenant,
     plan,
     capabilities,
+    clientPreferences: algofundClientPrefs,
     profile: {
       ...effectiveProfile,
       latestPreview: safeJsonParse<Record<string, unknown>>(profile.latest_preview_json, {}),

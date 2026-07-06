@@ -647,6 +647,36 @@ const capabilityTag = (label: string, enabled: boolean) => <Tag color={enabled ?
 const CLIENT_STOREFRONT_PAGE_SIZE = 24;
 type ClientCabinetTabKey = 'strategy' | 'algofund' | 'custom-ts' | 'settings';
 
+type ClientPreviewJobResponse = {
+  status: string;
+  preview?: {
+    source?: string;
+    summary?: Record<string, unknown>;
+    equity?: unknown;
+    trades?: unknown[];
+  };
+  error?: string;
+};
+
+const pollClientPreviewJob = async (
+  jobId: number,
+  signal?: AbortSignal,
+  maxAttempts = 45,
+): Promise<ClientPreviewJobResponse> => {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const response = await axios.get<ClientPreviewJobResponse>(`/api/client/strategy/preview-job/${jobId}`, { signal });
+    const status = String(response.data?.status || '');
+    if (status === 'done' && response.data?.preview) {
+      return response.data;
+    }
+    if (status === 'failed') {
+      throw new Error(String(response.data?.error || 'Preview job failed'));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  throw new Error('Preview job timeout');
+};
+
 const ClientCabinet: React.FC = () => {
   const { t } = useI18n();
   const navigate = useNavigate();
@@ -1348,7 +1378,17 @@ const ClientCabinet: React.FC = () => {
         tradeFrequencyScore: strategyTradeInput,
       }, { signal: controller.signal });
 
-      setStrategySelectionPreview(response.data);
+      const jobId = Number((response.data as any)?.preview?.jobId || 0);
+      const previewSource = String((response.data as any)?.preview?.source || '');
+      if (jobId > 0 && previewSource === 'queued_backtest') {
+        const jobResult = await pollClientPreviewJob(jobId, controller.signal);
+        setStrategySelectionPreview({
+          ...response.data,
+          preview: jobResult.preview as StrategySelectionPreviewResponse['preview'],
+        });
+      } else {
+        setStrategySelectionPreview(response.data);
+      }
       messageApi.success(t('client.strategy.previewReady', 'Preview updated'));
     } catch (error: any) {
       if (axios.isCancel?.(error) || error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
@@ -1377,7 +1417,18 @@ const ClientCabinet: React.FC = () => {
         riskScore: strategyRiskInput,
         tradeFrequencyScore: strategyTradeInput,
       }, { signal: controller.signal });
-      setSingleOfferPreview(response.data);
+
+      const jobId = Number((response.data as any)?.preview?.jobId || 0);
+      const previewSource = String((response.data as any)?.preview?.source || '');
+      if (jobId > 0 && previewSource === 'queued_backtest') {
+        const jobResult = await pollClientPreviewJob(jobId, controller.signal);
+        setSingleOfferPreview({
+          ...response.data,
+          preview: jobResult.preview,
+        });
+      } else {
+        setSingleOfferPreview(response.data);
+      }
     } catch (error: any) {
       if (axios.isCancel?.(error) || error?.name === 'CanceledError' || error?.code === 'ERR_CANCELED') {
         return;

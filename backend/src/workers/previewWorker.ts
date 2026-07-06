@@ -54,7 +54,10 @@ const executeJob = async (jobId: number, configJson: string): Promise<void> => {
     initialBalance: config.initialBalance != null ? Number(config.initialBalance) : 1000,
     commissionPercent: config.commissionPercent != null ? Number(config.commissionPercent) : 0.1,
     slippagePercent: config.slippagePercent != null ? Number(config.slippagePercent) : 0.05,
+    fundingRatePercent: config.fundingRatePercent != null ? Number(config.fundingRatePercent) : 0,
     skipMissingSymbols: config.skipMissingSymbols === true,
+    maxDepositOverride: config.maxDepositOverride != null ? Number(config.maxDepositOverride) : undefined,
+    lotPercentOverride: config.lotPercentOverride != null ? Number(config.lotPercentOverride) : undefined,
   };
 
   if (!request.apiKeyName) {
