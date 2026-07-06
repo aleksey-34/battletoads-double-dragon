@@ -179,6 +179,8 @@ const Positions: React.FC = () => {
   const [monitoringTableLoading, setMonitoringTableLoading] = useState(false);
   const [serverEgressIp, setServerEgressIp] = useState('176.57.184.98');
   const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
+  const [apiKeysLoading, setApiKeysLoading] = useState(true);
+  const [apiKeysError, setApiKeysError] = useState('');
   const [actionLoading, setActionLoading] = useState<{ [key: string]: boolean }>({});
   const [refreshAllLoading, setRefreshAllLoading] = useState<boolean>(false);
   const [viewMode, setViewMode] = useState<ViewMode>('positions');
@@ -197,15 +199,7 @@ const Positions: React.FC = () => {
   const apiKeysRef = useRef<ApiKey[]>([]);
   const activeExchangeTabRef = useRef('');
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    const password = localStorage.getItem('password');
-    if (!password) {
-      window.location.href = '/login';
-      return;
-    }
-
-    axios.defaults.headers.common.Authorization = `Bearer ${password}`;
     void fetchApiKeys();
     void axios.get('/api/admin/egress-ip').then((res) => {
       const ip = String(res.data?.ip || '').trim();
@@ -242,6 +236,8 @@ const Positions: React.FC = () => {
   };
 
   const fetchApiKeys = async () => {
+    setApiKeysLoading(true);
+    setApiKeysError('');
     try {
       const res = await axios.get('/api/api-keys');
       const keys: ApiKey[] = Array.isArray(res.data) ? res.data : [];
@@ -264,8 +260,22 @@ const Positions: React.FC = () => {
       });
 
       setLoadedKeys(new Set());
-    } catch (error) {
+    } catch (error: any) {
+      const status = Number(error?.response?.status || 0);
+      const serverMessage = String(error?.response?.data?.error || '').trim();
+      if (status === 403) {
+        setApiKeysError('Нет доступа к API-ключам. Проверьте platform token или пароль админки.');
+      } else if (status === 401) {
+        setApiKeysError('Сессия истекла. Перелогиньтесь через кнопку в шапке.');
+      } else if (status > 0) {
+        setApiKeysError(serverMessage || `Не удалось загрузить API-ключи (HTTP ${status}).`);
+      } else {
+        setApiKeysError('Бэкенд недоступен. Проверьте API и повторите.');
+      }
+      setApiKeys([]);
       console.error(error);
+    } finally {
+      setApiKeysLoading(false);
     }
   };
 
@@ -772,7 +782,29 @@ const Positions: React.FC = () => {
     },
   ];
 
-  const canonicalExchange = canonicalExchangeLabel;
+  const hiddenByFiltersCount = useMemo(
+    () => apiKeys.length - visibleApiKeys.length,
+    [apiKeys.length, visibleApiKeys.length],
+  );
+
+  const monitoringEmptyDescription = useMemo(() => {
+    if (apiKeysLoading) {
+      return 'Загрузка API-ключей...';
+    }
+    if (apiKeysError) {
+      return apiKeysError;
+    }
+    if (apiKeys.length === 0) {
+      return 'API-ключи не найдены. Добавьте ключи в настройках.';
+    }
+    if (visibleApiKeys.length === 0) {
+      return `Все ${apiKeys.length} ключ(ей) скрыты фильтрами. Снимите галочки «Скрыть ключи без привязки» / «Скрыть дематериализованные».`;
+    }
+    if (monitoringRows.length === 0) {
+      return 'Нет снимков мониторинга. Нажмите «Обновить сводку» или дождитесь планового снимка.';
+    }
+    return 'Нет данных';
+  }, [apiKeys.length, apiKeysError, apiKeysLoading, monitoringRows.length, visibleApiKeys.length]);
 
   const weexIpErrorCount = useMemo(
     () => Object.values({ ...balanceErrorByKey, ...positionErrorByKey })
@@ -915,7 +947,7 @@ const Positions: React.FC = () => {
       {pageTab === 'monitoring' ? (
         <>
           <Space style={{ marginBottom: 12 }} wrap>
-            <Button loading={monitoringTableLoading} onClick={() => void loadMonitoringTable(visibleApiKeys)}>
+            <Button loading={monitoringTableLoading || apiKeysLoading} onClick={() => void loadMonitoringTable(visibleApiKeys)}>
               Обновить сводку
             </Button>
             <Checkbox checked={hideUnboundKeys} onChange={(e) => setHideUnboundKeys(e.target.checked)}>
@@ -925,13 +957,31 @@ const Positions: React.FC = () => {
               Скрыть дематериализованные ключи
             </Checkbox>
           </Space>
-          <Spin spinning={monitoringTableLoading}>
+          {apiKeysError ? (
+            <Alert
+              type="error"
+              showIcon
+              message={apiKeysError}
+              action={<Button size="small" onClick={() => void fetchApiKeys()}>Повторить</Button>}
+              style={{ marginBottom: 12 }}
+            />
+          ) : null}
+          {hiddenByFiltersCount > 0 ? (
+            <Alert
+              type="info"
+              showIcon
+              message={`Скрыто фильтрами: ${hiddenByFiltersCount} из ${apiKeys.length} ключ(ей).`}
+              style={{ marginBottom: 12 }}
+            />
+          ) : null}
+          <Spin spinning={monitoringTableLoading || apiKeysLoading}>
             <Table
               rowKey="apiKeyName"
               size="small"
               pagination={{ pageSize: 20 }}
               dataSource={monitoringRows}
               columns={monitoringColumns}
+              locale={{ emptyText: <Empty description={monitoringEmptyDescription} /> }}
             />
           </Spin>
         </>

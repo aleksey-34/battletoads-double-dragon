@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Card, Spin, Alert, Table, Tag, Typography } from 'antd';
+import { Card, Spin, Alert, Table, Tag, Typography, Button } from 'antd';
 import axios from 'axios';
 import { useI18n } from '../i18n';
 
@@ -74,23 +74,31 @@ const Logs: React.FC = () => {
   const { t } = useI18n();
   const [logs, setLogs] = useState<string[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
+  const [fetchError, setFetchError] = useState<string>('');
 
   useEffect(() => {
-    const password = localStorage.getItem('password');
-    if (!password) {
-      window.location.href = '/login';
-      return;
-    }
-    axios.defaults.headers.common['Authorization'] = `Bearer ${password}`;
-
-    fetchLogs();
+    void fetchLogs();
   }, []);
 
   const fetchLogs = async () => {
+    setLoading(true);
+    setFetchError('');
     try {
       const res = await axios.get('/api/logs');
-      setLogs(res.data);
-    } catch (error) {
+      setLogs(Array.isArray(res.data) ? res.data : []);
+    } catch (error: any) {
+      const status = Number(error?.response?.status || 0);
+      const serverMessage = String(error?.response?.data?.error || '').trim();
+      if (status === 403) {
+        setFetchError(t('logs.error.forbidden', 'Access denied. Check admin token or dashboard password.'));
+      } else if (status === 401) {
+        setFetchError(t('logs.error.unauthorized', 'Session expired. Re-login from the header.'));
+      } else if (status > 0) {
+        setFetchError(serverMessage || t('logs.error.http', 'Failed to load logs (HTTP {status}).').replace('{status}', String(status)));
+      } else {
+        setFetchError(t('logs.error.network', 'Backend unavailable. Check API health and try again.'));
+      }
+      setLogs([]);
       console.error(error);
     } finally {
       setLoading(false);
@@ -113,6 +121,15 @@ const Logs: React.FC = () => {
     <div className="battletoads-form-shell">
       <h1>{t('logs.title', 'Logs')}</h1>
       <Card className="battletoads-card">
+        {fetchError ? (
+          <Alert
+            type="error"
+            showIcon
+            message={fetchError}
+            action={<Button size="small" onClick={() => void fetchLogs()}>{t('action.retry', 'Retry')}</Button>}
+            style={{ marginBottom: 12 }}
+          />
+        ) : null}
         {loading ? (
           <Spin tip={t('logs.loading', 'Loading logs...')} />
         ) : logs.length > 0 ? (
@@ -154,7 +171,7 @@ const Logs: React.FC = () => {
               },
             ]}
           />
-        ) : (
+        ) : fetchError ? null : (
           <Alert type="info" message={t('logs.empty', 'No logs available')} showIcon />
         )}
       </Card>

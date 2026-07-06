@@ -32,6 +32,15 @@ type AuthState = 'checking' | 'ok' | 'missing' | 'invalid' | 'error';
 type ColorTheme = 'classic' | 'neon' | 'fire' | 'light';
 
 const CLIENT_SESSION_STORAGE_KEY = 'clientSessionToken';
+const ADMIN_PASSWORD_STORAGE_KEY = 'password';
+
+const isAuthStorageKey = (key: string | null): boolean => (
+  key === null || key === ADMIN_PASSWORD_STORAGE_KEY || key === CLIENT_SESSION_STORAGE_KEY
+);
+
+const isAdminRouteAllowed = (state: AuthState): boolean => state === 'ok' || state === 'error';
+
+const isClientRouteAllowed = (state: AuthState): boolean => state === 'ok' || state === 'error';
 // Build marker: force fresh asset hash to bypass stale CDN cache.
 
 function AppShell() {
@@ -210,14 +219,22 @@ function AppShell() {
       void checkAdminAuth();
     };
 
+    const onStorage = (event: StorageEvent) => {
+      if (!isAuthStorageKey(event.key)) {
+        return;
+      }
+      syncAuth();
+    };
+
     window.addEventListener('auth-changed', syncAuth);
-    window.addEventListener('storage', syncAuth);
+    window.addEventListener('storage', onStorage);
     return () => {
       window.removeEventListener('auth-changed', syncAuth);
-      window.removeEventListener('storage', syncAuth);
+      window.removeEventListener('storage', onStorage);
     };
+    // Re-check only when switching client/admin surfaces, not on every menu click.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location.pathname]);
+  }, [isClientRoute]);
 
   const handleLogout = () => {
     if (isClientRoute) {
@@ -312,7 +329,7 @@ function AppShell() {
             >
               {t('action.check', 'Check')}
             </Button>
-            {effectiveAuthState === 'ok' ? (
+            {(effectiveAuthState === 'ok' || effectiveAuthState === 'error') ? (
               <Button size="small" danger onClick={handleLogout}>{t('action.logout', 'Logout')}</Button>
             ) : (
               <Button
@@ -333,34 +350,34 @@ function AppShell() {
           <Route path="/client/login" element={<ClientAuth initialMode="login" />} />
           <Route path="/client/register" element={<ClientAuth initialMode="register" />} />
           <Route path="/cabinet/tv-alerts" element={
-            clientAuthState === 'ok' ? <TvAlertsCabinet /> :
+            isClientRouteAllowed(clientAuthState) ? <TvAlertsCabinet /> :
             clientAuthState === 'checking' ? null :
             <Navigate to="/client/login" replace />
           } />
           <Route path="/cabinet" element={
-            clientAuthState === 'ok' ? <ClientCabinet /> :
+            isClientRouteAllowed(clientAuthState) ? <ClientCabinet /> :
             clientAuthState === 'checking' ? null :
             <Navigate to="/client/login" replace />
           } />
           <Route path="/" element={
             adminAuthState === 'ok' ? <Navigate to="/saas" replace /> : <Navigate to="/login" replace />
           } />
-          <Route path="/dashboard" element={adminAuthState === 'ok' ? <Dashboard /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
-          <Route path="/settings" element={adminAuthState === 'ok' ? <Settings /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/dashboard" element={isAdminRouteAllowed(adminAuthState) ? <Dashboard /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/settings" element={isAdminRouteAllowed(adminAuthState) ? <Settings /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
           <Route path="/partner/login" element={<PartnerLogin />} />
           <Route path="/partner" element={<PartnerCabinet />} />
-          <Route path="/positions" element={adminAuthState === 'ok' ? <Positions /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
-          <Route path="/logs" element={adminAuthState === 'ok' ? <Logs /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/positions" element={isAdminRouteAllowed(adminAuthState) ? <Positions /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/logs" element={isAdminRouteAllowed(adminAuthState) ? <Logs /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
           <Route path="/backtest" element={<Navigate to="/saas" replace />} />
           <Route path="/trading-systems" element={<Navigate to="/saas/admin?adminTab=offer-ts" replace />} />
-          <Route path="/trading-systems-workbench" element={adminAuthState === 'ok' ? <TradingSystems /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
-          <Route path="/saas" element={adminAuthState === 'ok' ? <SaaS surfaceMode="admin" /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
-          <Route path="/saas/admin" element={adminAuthState === 'ok' ? <SaaS initialTab="admin" surfaceMode="admin" /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/trading-systems-workbench" element={isAdminRouteAllowed(adminAuthState) ? <TradingSystems /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/saas" element={isAdminRouteAllowed(adminAuthState) ? <SaaS surfaceMode="admin" /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/saas/admin" element={isAdminRouteAllowed(adminAuthState) ? <SaaS initialTab="admin" surfaceMode="admin" /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
           <Route path="/saas/strategy-client" element={<Navigate to="/saas/admin?adminTab=strategy-client" replace />} />
           <Route path="/saas/algofund" element={<Navigate to="/saas/admin?adminTab=algofund" replace />} />
           <Route path="/saas/copytrading" element={<Navigate to="/saas/admin?adminTab=copytrading" replace />} />
-          <Route path="/research" element={adminAuthState === 'ok' ? <Research /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
-          <Route path="/admin-docs" element={adminAuthState === 'ok' ? <AdminDocs /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/research" element={isAdminRouteAllowed(adminAuthState) ? <Research /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
+          <Route path="/admin-docs" element={isAdminRouteAllowed(adminAuthState) ? <AdminDocs /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
         </Routes>
         </Suspense>
       </Content>

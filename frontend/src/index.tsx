@@ -9,6 +9,10 @@ const CLIENT_SESSION_STORAGE_KEY = 'clientSessionToken';
 
 const isClientApiRequest = (url: string): boolean => /\/api\/(client|auth\/client)(\/|$)/i.test(url);
 
+const isAdminAuthProbeRequest = (url: string): boolean => /\/api\/saas\/admin\/summary(\?|$)/i.test(url);
+
+const isClientAuthProbeRequest = (url: string): boolean => /\/api\/auth\/client\/me(\?|$)/i.test(url);
+
 const normalizeBase = (value: string): string => {
   if (!value) {
     return '/api';
@@ -87,24 +91,30 @@ axios.interceptors.response.use(
     const url = String(error?.config?.url || '');
     const isClientApi = isClientApiRequest(url);
 
+    // Only invalidate session on explicit auth-probe endpoints — not on every 401
+    // from positions/logs/monitoring, which caused random logouts during deploys or blips.
     if (status === 401 && url.includes('/api')) {
       if (isClientApi) {
-        localStorage.removeItem(CLIENT_SESSION_STORAGE_KEY);
+        if (isClientAuthProbeRequest(url)) {
+          localStorage.removeItem(CLIENT_SESSION_STORAGE_KEY);
 
-        const path = String(window.location.pathname || '');
-        const inClientAuthScreen = path.startsWith('/client/login') || path.startsWith('/client/register');
-        if (!inClientAuthScreen) {
-          window.location.href = '/client/login';
+          const path = String(window.location.pathname || '');
+          const inClientAuthScreen = path.startsWith('/client/login') || path.startsWith('/client/register');
+          if (!inClientAuthScreen) {
+            window.location.href = '/client/login';
+          }
         }
 
         return Promise.reject(error);
       }
 
-      localStorage.removeItem(DASHBOARD_PASSWORD_STORAGE_KEY);
-      delete axios.defaults.headers.common.Authorization;
+      if (isAdminAuthProbeRequest(url)) {
+        localStorage.removeItem(DASHBOARD_PASSWORD_STORAGE_KEY);
+        delete axios.defaults.headers.common.Authorization;
 
-      if (window.location.pathname !== '/login') {
-        window.location.href = '/login';
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
       }
     }
 
