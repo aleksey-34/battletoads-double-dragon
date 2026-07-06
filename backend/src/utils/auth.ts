@@ -68,6 +68,8 @@ type ClientRegistrationInput = {
   preferredLanguage?: string;
   productMode?: string;
   planCode?: string;
+  showFutures?: boolean;
+  showSpot?: boolean;
 };
 
 type ClientLoginInput = {
@@ -615,6 +617,10 @@ export const registerClientUser = async (payload: ClientRegistrationInput, reque
   await db.exec('BEGIN');
   try {
     const tenantSlug = await ensureUniqueTenantSlug(companyName);
+    const clientPreferences = JSON.stringify({
+      showFutures: payload.showFutures !== false,
+      showSpot: payload.showSpot !== false,
+    });
     const tenantInsert = await db.run(
       `INSERT INTO tenants (
          slug,
@@ -623,10 +629,11 @@ export const registerClientUser = async (payload: ClientRegistrationInput, reque
          status,
          preferred_language,
          assigned_api_key_name,
+         client_preferences_json,
          created_at,
          updated_at
-       ) VALUES (?, ?, ?, 'active', ?, '', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [tenantSlug, companyName, productMode, language]
+       ) VALUES (?, ?, ?, 'active', ?, '', ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [tenantSlug, companyName, productMode, language, clientPreferences]
     );
 
     const tenantId = Number((tenantInsert as any).lastID || 0);

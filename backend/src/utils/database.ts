@@ -869,6 +869,7 @@ export const initDB = async () => {
   await ensureColumn('live_trade_events', 'source_symbol TEXT');
   await ensureColumn('algofund_start_stop_requests', "request_payload_json TEXT DEFAULT '{}'");
   await ensureColumn('strategy_client_profiles', 'active_system_profile_id INTEGER');
+  await ensureColumn('tenants', "client_preferences_json TEXT DEFAULT '{}'");
   await ensureColumn('algofund_profiles', "execution_api_key_name TEXT DEFAULT ''");
   await ensureColumn('copytrading_profiles', 'copy_ratio REAL DEFAULT 1');
   await ensureColumn('copytrading_profiles', "last_master_positions_json TEXT DEFAULT '[]'");
