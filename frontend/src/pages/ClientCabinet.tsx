@@ -32,6 +32,10 @@ import {
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import ChartComponent from '../components/ChartComponent';
+import StorefrontGrid from '../components/storefront/StorefrontGrid';
+import StrategyOfferCard from '../components/storefront/StrategyOfferCard';
+import TradingSystemCard from '../components/storefront/TradingSystemCard';
+import { equityPointsToSeries as storefrontEquitySeries } from '../components/storefront/storefrontMetrics';
 import { useI18n } from '../i18n';
 
 type ProductMode = 'strategy_client' | 'algofund_client' | 'dual';
@@ -1743,6 +1747,8 @@ const ClientCabinet: React.FC = () => {
                     Выберите стратегии для вашего портфеля и нажмите «Сохранить выбор».
                   </Typography.Text>
                 ) : null}
+                <div className="storefront-section">
+                <div className="storefront-section__toolbar">
                 <Space wrap size={8}>
                   <Select
                     size="small"
@@ -1776,58 +1782,46 @@ const ClientCabinet: React.FC = () => {
                     ]}
                   />
                 </Space>
-                <Row gutter={[12, 12]}>
-                  {strategyStorefrontPagedOffers.map((offer) => (
-                    <Col key={offer.offerId} xs={24} sm={12} md={8} xl={6}>
-                      <Card size="small" bordered style={strategyOfferIds.includes(offer.offerId) ? { borderColor: '#f5a623', borderWidth: 2 } : undefined}>
-                        <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                          <Space direction="vertical" size={0}>
-                            <Space>
-                              <Tooltip title={getOfferDescription(offer, false)} placement="topLeft">
-                                <Typography.Text strong style={{ fontSize: 12, cursor: 'help' }}>{offer.titleRu}</Typography.Text>
-                              </Tooltip>
-                              {strategyOfferIds.includes(offer.offerId) ? <Tag color="gold" style={{ fontSize: 10 }}>В портфеле</Tag> : null}
-                              {strategyWorkspace.capabilities?.settings
-                                ? <Checkbox checked={strategyOfferIds.includes(offer.offerId)} onChange={(e) => {
-                                    e.stopPropagation();
-                                    if (e.target.checked) {
-                                      setStrategyOfferIds((current) => current.includes(offer.offerId) ? current : [...current, offer.offerId]);
-                                    } else {
-                                      setStrategyOfferIds((current) => current.filter((id) => id !== offer.offerId));
-                                    }
-                                  }} />
-                                : null}
-                            </Space>
-                              <Typography.Text type="secondary" style={{ fontSize: 11 }}>{offer.strategy.mode.toUpperCase()} • {offer.strategy.market}</Typography.Text>
-                          </Space>
-                          <Space size={4} wrap>
-                              <Tag style={{ fontSize: 11 }}>{String(offer.strategy.params?.interval || '1h')}</Tag>
-                            <Tag color={metricTagColor(Number(offer.metrics.ret || 0), 'return')} style={{ fontSize: 11 }}>Ret {formatPercent(offer.metrics.ret)}</Tag>
-                            <Tag color={metricTagColor(Number(offer.metrics.dd || 0), 'drawdown')} style={{ fontSize: 11 }}>DD {formatPercent(offer.metrics.dd)}</Tag>
-                            <Tag color={metricTagColor(Number(offer.metrics.pf || 0), 'pf')} style={{ fontSize: 11 }}>PF {formatNumber(offer.metrics.pf)}</Tag>
-                            {offer.metrics.trades ? <Tag color="cyan" style={{ fontSize: 11 }}>{formatNumber(offer.metrics.trades, 0)} сд.</Tag> : null}
-                          </Space>
-                          {(() => {
-                            const eqVals = getOfferEquityValues(offer);
-                            return eqVals.length > 1 ? (
-                              <ChartComponent data={equityPointsToSeries(eqVals)} type="line" fixedHeight={120} compact />
-                            ) : (
-                              <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
-                            );
-                          })()}
-                          <Space wrap>
-                            <Button size="small" onClick={() => setStrategyOfferDetail(offer.offerId)}>Подробнее</Button>
-                            {strategyWorkspace.capabilities?.settings && !strategyOfferIds.includes(offer.offerId) ? (
-                              <Button size="small" type="primary" onClick={() => {
-                                setStrategyOfferIds((current) => [...current, offer.offerId]);
-                              }}>Подключить</Button>
-                            ) : null}
-                          </Space>
-                        </Space>
-                      </Card>
-                    </Col>
-                  ))}
-                </Row>
+                </div>
+                <StorefrontGrid>
+                  {strategyStorefrontPagedOffers.map((offer) => {
+                    const eqVals = getOfferEquityValues(offer);
+                    const chartSeries = eqVals.length > 1 ? storefrontEquitySeries(eqVals) : [];
+                    const isSelected = strategyOfferIds.includes(offer.offerId);
+                    return (
+                      <StrategyOfferCard
+                        key={offer.offerId}
+                        offer={{
+                          id: offer.offerId,
+                          title: offer.titleRu,
+                          description: getOfferDescription(offer, false),
+                          market: offer.strategy.market,
+                          mode: offer.strategy.mode,
+                          interval: String(offer.strategy.params?.interval || '1h'),
+                          marketType: String((offer as any).market_type || 'futures'),
+                          ret: Number(offer.metrics.ret || 0),
+                          dd: Number(offer.metrics.dd || 0),
+                          pf: Number(offer.metrics.pf || 0),
+                          trades: Number(offer.metrics.trades || 0),
+                        }}
+                        selected={isSelected}
+                        portfolioMode={Boolean(strategyWorkspace.capabilities?.settings)}
+                        chartSeries={chartSeries}
+                        onToggleSelect={(checked) => {
+                          if (checked) {
+                            setStrategyOfferIds((current) => current.includes(offer.offerId) ? current : [...current, offer.offerId]);
+                          } else {
+                            setStrategyOfferIds((current) => current.filter((id) => id !== offer.offerId));
+                          }
+                        }}
+                        onOpenDetail={() => setStrategyOfferDetail(offer.offerId)}
+                        onConnect={() => {
+                          setStrategyOfferIds((current) => [...current, offer.offerId]);
+                        }}
+                      />
+                    );
+                  })}
+                </StorefrontGrid>
                 {strategyStorefrontOffers.length > CLIENT_STOREFRONT_PAGE_SIZE ? (
                   <Pagination
                     size="small"
@@ -1848,6 +1842,7 @@ const ClientCabinet: React.FC = () => {
                     </Button>
                   </Space>
                 ) : null}
+                </div>
               </Space>
             )}
           </Card>
@@ -2364,7 +2359,7 @@ const ClientCabinet: React.FC = () => {
               <Empty description="Торговые системы Алгофонда пока не опубликованы" />
             ) : (
               <>
-                <Row gutter={[12, 12]}>
+                <StorefrontGrid>
                   {algofundStorefrontPagedSystems.map((system) => {
                     const systemName = String(system?.name || '').trim();
                     const matchingActiveSystems = algofundActiveSystems.filter((item) => String(item.systemName || '').trim() === systemName);
@@ -2374,60 +2369,38 @@ const ClientCabinet: React.FC = () => {
                       .filter((value) => Number.isFinite(value) && value > 0);
                     const snap = (system as any).backtestSnapshot as { ret: number; pf: number; dd: number; trades: number; equityPoints: number[]; finalEquity: number; periodDays: number; tradesPerDay: number; sharpe?: number; membersCount?: number; marketCount?: number; maxPerMarket?: number } | null | undefined;
                     const eqPts = snap?.equityPoints;
-                    const hasChart = isCurrent ? (algofundPreviewSeries.length > 0 || (Array.isArray(eqPts) && eqPts.length > 1)) : (Array.isArray(eqPts) && eqPts.length > 1);
+                    const chartSeries = isCurrent && algofundPreviewSeries.length > 0
+                      ? algofundPreviewSeries
+                      : (Array.isArray(eqPts) && eqPts.length > 1 ? storefrontEquitySeries(eqPts, snap?.periodDays) : []);
                     return (
-                      <Col xs={24} sm={12} md={8} xl={6} key={String(system?.id || system?.name || Math.random())}>
-                        <Card
-                          size="small"
-                          bordered
-                          style={isCurrent ? { borderColor: '#f5a623', borderWidth: 2 } : undefined}
-                        >
-                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
-                            <Space direction="vertical" size={0}>
-                              <Space>
-                                <Tooltip title={getTsHint(system.name) ?? undefined} placement="topLeft">
-                                  <Typography.Text strong style={{ fontSize: 12, cursor: getTsHint(system.name) ? 'help' : undefined }}>{((system as any).displayLabel as string | undefined)?.trim() || tsDisplayName(system.name)}</Typography.Text>
-                                </Tooltip>
-                                {isCurrent ? <Tag color="success" style={{ fontSize: 10, fontWeight: 700 }}>Подключена</Tag> : null}
-                                {currentWeights.length > 0 ? <Tag color="blue" style={{ fontSize: 10 }}>Риск {formatNumber(currentWeights[0])}x</Tag> : null}
-                              </Space>
-                            </Space>
-                            <Space size={4} wrap>
-                              {snap?.periodDays ? <Tag style={{ fontSize: 11 }}>{Math.round(snap.periodDays)}d</Tag> : null}
-                              {snap?.membersCount ? <Tag color="geekblue" style={{ fontSize: 11 }}>{snap.membersCount} стратегий</Tag> : null}
-                              {snap?.marketCount ? <Tag color="purple" style={{ fontSize: 11 }}>{snap.marketCount} рынков{snap.maxPerMarket ? ` · max ${snap.maxPerMarket}/рынок` : ''}</Tag> : null}
-                              {snap ? <Tag color={metricTagColor(Number(snap.ret || 0), 'return')} style={{ fontSize: 11 }}>Ret {formatPercent(snap.ret)}</Tag> : null}
-                              {snap ? <Tag color={metricTagColor(Number(snap.dd || 0), 'drawdown')} style={{ fontSize: 11 }}>DD {formatPercent(snap.dd)}</Tag> : null}
-                              {snap?.sharpe != null ? <Tag color="purple" style={{ fontSize: 11 }}>Sharpe {formatNumber(snap.sharpe)}</Tag> : null}
-                              {snap ? <Tag color={metricTagColor(Number(snap.pf || 0), 'pf')} style={{ fontSize: 11 }}>PF {formatNumber(snap.pf)}</Tag> : null}
-                              {snap?.trades ? <Tag color="cyan" style={{ fontSize: 11 }}>{formatNumber(snap.trades, 0)} сд.</Tag> : null}
-                            </Space>
-                            {hasChart ? (
-                              <ChartComponent
-                                data={isCurrent && algofundPreviewSeries.length > 0
-                                  ? algofundPreviewSeries
-                                  : equityPointsToSeries(eqPts || [], snap?.periodDays)}
-                                type="line"
-                                fixedHeight={120}
-                                compact
-                              />
-                            ) : (
-                              <Typography.Text type="secondary" style={{ fontSize: 11 }}>Бэктест не загружен</Typography.Text>
-                            )}
-                            <Space size={4} wrap>
-                              <Button size="small" onClick={() => { setTsModalRiskMultiplier(1); setSystemDetailModal({ name: system.name, id: system.id }); }}>Подробнее</Button>
-                              {!isCurrent ? (
-                                <Button size="small" type="primary" loading={actionLoading === 'algofund-start'} onClick={() => { void sendAlgofundRequest('start', { id: Number(system.id || 0), name: String(system.name || '') }); }}>
-                                  Подключить
-                                </Button>
-                              ) : null}
-                            </Space>
-                          </Space>
-                        </Card>
-                      </Col>
+                      <TradingSystemCard
+                        key={String(system?.id || system?.name || Math.random())}
+                        system={{
+                          id: system.id,
+                          name: system.name,
+                          displayLabel: ((system as any).displayLabel as string | undefined)?.trim() || tsDisplayName(system.name),
+                          hint: getTsHint(system.name) ?? undefined,
+                          marketType: String((system as any).marketType || (snap as any)?.marketType || 'futures'),
+                          ret: snap?.ret,
+                          dd: snap?.dd,
+                          pf: snap?.pf,
+                          trades: snap?.trades,
+                          sharpe: snap?.sharpe,
+                          periodDays: snap?.periodDays,
+                          membersCount: snap?.membersCount,
+                          marketCount: snap?.marketCount,
+                          maxPerMarket: snap?.maxPerMarket,
+                        }}
+                        connected={isCurrent}
+                        riskMultiplier={currentWeights.length > 0 ? currentWeights[0] : null}
+                        chartSeries={chartSeries}
+                        onOpenDetail={() => { setTsModalRiskMultiplier(1); setSystemDetailModal({ name: system.name, id: system.id }); }}
+                        onConnect={() => { void sendAlgofundRequest('start', { id: Number(system.id || 0), name: String(system.name || '') }); }}
+                        connectLoading={actionLoading === 'algofund-start'}
+                      />
                     );
                   })}
-                </Row>
+                </StorefrontGrid>
                 {algofundSortedSystems.length > CLIENT_STOREFRONT_PAGE_SIZE ? (
                   <Pagination
                     size="small"
@@ -2997,22 +2970,18 @@ const ClientCabinet: React.FC = () => {
       {contextHolder}
 
       {/* — Шапка ——————————————————————————————————————————————————— */}
-      <Card className="battletoads-card" bordered={false} style={{ marginBottom: 0 }}>
-        <Row align="middle" justify="space-between" gutter={[8, 8]}>
-          <Col>
-            <Typography.Title level={3} style={{ margin: 0 }}>Личный кабинет</Typography.Title>
-            <Typography.Text type="secondary" style={{ wordBreak: 'break-all' }}>
-              {clientUser?.email || '—'}{clientUser?.tenantDisplayName ? ` · ${clientUser.tenantDisplayName}` : ''}
-            </Typography.Text>
-          </Col>
-          <Col>
-            <Space wrap>
-              <Button onClick={() => void loadWorkspace()} loading={loading}>Обновить</Button>
-              <Button danger onClick={() => void logoutClient()}>Выйти</Button>
-            </Space>
-          </Col>
-        </Row>
-      </Card>
+      <div className="client-cabinet-hero">
+        <div>
+          <Typography.Title level={3} className="client-cabinet-hero__title">Личный кабинет</Typography.Title>
+          <Typography.Text type="secondary" style={{ wordBreak: 'break-all' }}>
+            {clientUser?.email || '—'}{clientUser?.tenantDisplayName ? ` · ${clientUser.tenantDisplayName}` : ''}
+          </Typography.Text>
+        </div>
+        <Space wrap>
+          <Button onClick={() => void loadWorkspace()} loading={loading}>Обновить</Button>
+          <Button danger onClick={() => void logoutClient()}>Выйти</Button>
+        </Space>
+      </div>
 
       {errorText ? <Alert type="error" showIcon message={errorText} /> : null}
 

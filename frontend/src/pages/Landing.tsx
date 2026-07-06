@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react';
 import { useI18n, UILanguage } from '../i18n';
 
 /* ─── Theme definitions ─── */
-type LandingTheme = 'fire' | 'neon' | 'classic' | 'light';
+type LandingTheme = 'zignaly' | 'fire' | 'neon' | 'classic' | 'light';
 
 const THEMES: Record<LandingTheme, {
   bg: string; bgAlt: string; bgCard: string; bgGlass: string;
@@ -13,6 +13,17 @@ const THEMES: Record<LandingTheme, {
   greenAccent: string; greenBg: string; greenText: string;
   isDark: boolean;
 }> = {
+  zignaly: {
+    bg: '#070b14', bgAlt: '#0d1220', bgCard: '#121829', bgGlass: 'rgba(18,24,41,0.88)',
+    text: '#eef2ff', textSec: '#9aa8c7', textMuted: '#66738f',
+    border: 'rgba(123,97,255,0.18)', accent: '#7b61ff', accentGlow: 'rgba(123,97,255,0.28)',
+    heroGrad: 'radial-gradient(ellipse 80% 60% at 50% 18%, rgba(123,97,255,0.18) 0%, transparent 72%)',
+    ctaBg: 'linear-gradient(135deg, #7b61ff 0%, #5b8cff 100%)',
+    navBg: 'transparent', navBgScroll: 'rgba(7,11,20,0.94)',
+    cardBorder: 'rgba(123,97,255,0.16)', proofBg: 'rgba(123,97,255,0.08)', proofAccent: '#7b61ff',
+    greenAccent: '#34d399', greenBg: 'rgba(52,211,153,0.12)', greenText: '#6ee7b7',
+    isDark: true,
+  },
   fire: {
     bg: '#0c0a08', bgAlt: '#141210', bgCard: '#1a1614', bgGlass: 'rgba(26,22,20,0.85)',
     text: '#f0e8e0', textSec: '#aa9580', textMuted: '#6e5840',
@@ -60,6 +71,7 @@ const THEMES: Record<LandingTheme, {
 };
 
 const THEME_OPTS: { value: LandingTheme; icon: string; label: string }[] = [
+  { value: 'zignaly', icon: '🟣', label: 'Zignaly' },
   { value: 'fire', icon: '🟠', label: 'Fire' },
   { value: 'neon', icon: '🟢', label: 'Neon' },
   { value: 'classic', icon: '🔵', label: 'Classic' },
@@ -347,7 +359,7 @@ export default function Landing() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [theme, setTheme] = useState<LandingTheme>(() => {
     const s = localStorage.getItem('btddLandingTheme');
-    return (s === 'fire' || s === 'neon' || s === 'classic' || s === 'light') ? s : 'light';
+    return (s === 'zignaly' || s === 'fire' || s === 'neon' || s === 'classic' || s === 'light') ? s : 'zignaly';
   });
 
   const T = THEMES[theme];

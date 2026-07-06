@@ -26,13 +26,17 @@ const Research = lazy(() => import('./pages/Research'));
 const SaaS = lazy(() => import('./pages/SaaS'));
 const AdminDocs = lazy(() => import('./pages/AdminDocs'));
 
-const { Header, Content } = Layout;
+const { Header, Content, Sider } = Layout;
 
 type AuthState = 'checking' | 'ok' | 'missing' | 'invalid' | 'error';
-type ColorTheme = 'classic' | 'neon' | 'fire' | 'light';
+type ColorTheme = 'zignaly' | 'classic' | 'neon' | 'fire' | 'light';
 
 const CLIENT_SESSION_STORAGE_KEY = 'clientSessionToken';
 const ADMIN_PASSWORD_STORAGE_KEY = 'password';
+
+const isValidColorTheme = (value: string | null): value is ColorTheme => (
+  value === 'zignaly' || value === 'classic' || value === 'neon' || value === 'fire' || value === 'light'
+);
 
 const isAuthStorageKey = (key: string | null): boolean => (
   key === null || key === ADMIN_PASSWORD_STORAGE_KEY || key === CLIENT_SESSION_STORAGE_KEY
@@ -52,7 +56,7 @@ function AppShell() {
   const [authCheckLoading, setAuthCheckLoading] = useState(false);
   const [colorTheme, setColorTheme] = useState<ColorTheme>(() => {
     const saved = localStorage.getItem('btddColorTheme');
-    return (saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'light';
+    return isValidColorTheme(saved) ? saved : 'zignaly';
   });
   const isClientRoute = location.pathname.startsWith('/client') || location.pathname.startsWith('/cabinet');
   const isTvAlertsCabinetRoute = location.pathname.startsWith('/cabinet/tv-alerts');
@@ -61,7 +65,7 @@ function AppShell() {
   const isClientSaasSurface = false;
 
   useEffect(() => {
-    document.body.classList.remove('theme-classic', 'theme-neon', 'theme-fire', 'theme-light');
+    document.body.classList.remove('theme-zignaly', 'theme-classic', 'theme-neon', 'theme-fire', 'theme-light');
     document.body.classList.add(`theme-${colorTheme}`);
     document.body.setAttribute('data-btdd-theme', colorTheme);
     document.documentElement.setAttribute('data-btdd-theme', colorTheme);
@@ -270,6 +274,8 @@ function AppShell() {
     return <Tag color="processing">{t('session.checking', 'Session: checking')}</Tag>;
   })();
 
+  const showAdminSidebar = menuItems.length > 0;
+
   return (
     <Layout style={{ minHeight: '100vh' }} className="app-root-layout">
       <Header style={{ color: 'white', paddingInline: 16 }}>
@@ -279,15 +285,19 @@ function AppShell() {
             <Typography.Text className="app-brand-title">{t('app.title', 'BattleToads Control')}</Typography.Text>
           </Space>
           <Tag color="blue">Section: {currentSectionLabel}</Tag>
-          {menuItems.length > 0 ? (
-            <Menu
-              className="app-main-menu"
-              theme="dark"
-              mode="horizontal"
-              selectedKeys={[selectedMenuKey]}
-              items={menuItems}
-              onClick={handleMenuClick}
-            />
+          {!showAdminSidebar ? (
+            menuItems.length > 0 ? (
+              <Menu
+                className="app-main-menu"
+                theme="dark"
+                mode="horizontal"
+                selectedKeys={[selectedMenuKey]}
+                items={menuItems}
+                onClick={handleMenuClick}
+              />
+            ) : (
+              <div style={{ flex: 1 }} />
+            )
           ) : (
             <div style={{ flex: 1 }} />
           )}
@@ -298,6 +308,7 @@ function AppShell() {
               size="small"
               style={{ width: 100 }}
               options={[
+                { value: 'zignaly', label: '🟣 Zignaly' },
                 { value: 'classic', label: '🔵 Classic' },
                 { value: 'neon', label: '🟢 Neon' },
                 { value: 'fire', label: '🟠 Fire' },
@@ -343,7 +354,25 @@ function AppShell() {
           </Space>
         </div>
       </Header>
-      <Content style={{ padding: '20px' }}>
+      <Layout className="app-shell-body">
+        {showAdminSidebar ? (
+          <Sider
+            className="app-sidebar"
+            width={220}
+            breakpoint="lg"
+            collapsedWidth={0}
+          >
+            <Menu
+              className="app-sidebar-menu"
+              theme="dark"
+              mode="inline"
+              selectedKeys={[selectedMenuKey]}
+              items={menuItems}
+              onClick={handleMenuClick}
+            />
+          </Sider>
+        ) : null}
+        <Content className="app-content-shell">
         <Suspense fallback={<div style={{ display: 'flex', justifyContent: 'center', padding: 80 }}><Spin size="large" /></div>}>
         <Routes>
           <Route path="/login" element={<Login />} />
@@ -380,7 +409,8 @@ function AppShell() {
           <Route path="/admin-docs" element={isAdminRouteAllowed(adminAuthState) ? <AdminDocs /> : adminAuthState === 'checking' ? null : <Navigate to="/login" replace />} />
         </Routes>
         </Suspense>
-      </Content>
+        </Content>
+      </Layout>
       <FloatButton.BackTop visibilityHeight={280} />
     </Layout>
   );
@@ -390,13 +420,13 @@ function AppWithProviders() {
   const { language } = useI18n();
   const [currentTheme, setCurrentTheme] = useState<ColorTheme>(() => {
     const saved = localStorage.getItem('btddColorTheme');
-    return (saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'light';
+    return isValidColorTheme(saved) ? saved : 'zignaly';
   });
 
   useEffect(() => {
     const sync = () => {
       const saved = localStorage.getItem('btddColorTheme');
-      setCurrentTheme((saved === 'classic' || saved === 'neon' || saved === 'light') ? saved : 'light');
+      setCurrentTheme(isValidColorTheme(saved) ? saved : 'zignaly');
     };
     window.addEventListener('storage', sync);
     window.addEventListener('theme-changed', sync);
@@ -404,6 +434,7 @@ function AppWithProviders() {
   }, []);
 
   const isLight = currentTheme === 'light';
+  const isZignaly = currentTheme === 'zignaly';
 
   const antdLocale = useMemo(() => {
     if (language === 'ru') return ruRU;
@@ -423,6 +454,16 @@ function AppWithProviders() {
         colorText: '#0f172a',
         colorTextSecondary: '#475569',
         borderRadius: 10,
+        fontFamily: "'Inter', 'Segoe UI', 'Trebuchet MS', sans-serif",
+      } : isZignaly ? {
+        colorPrimary: '#7b61ff',
+        colorBgBase: '#070b14',
+        colorBgContainer: '#121829',
+        colorBgElevated: '#171f33',
+        colorBorder: '#24304a',
+        colorText: '#eef2ff',
+        colorTextSecondary: '#9aa8c7',
+        borderRadius: 12,
         fontFamily: "'Inter', 'Segoe UI', 'Trebuchet MS', sans-serif",
       } : {
         colorPrimary: '#f5a623',

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Alert, Button, Card, Form, Input, Select, Space, Spin, Typography, message } from 'antd';
+import { Alert, Button, Card, Checkbox, Form, Input, Select, Space, Spin, Typography, message } from 'antd';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useI18n } from '../i18n';
 
@@ -23,6 +23,8 @@ type RegisterFormValues = {
   confirmPassword: string;
   productMode: 'strategy_client' | 'algofund_client' | 'dual' | 'tv_alerts_client';
   planCode: string;
+  showFutures: boolean;
+  showSpot: boolean;
 };
 
 type SetPasswordFormValues = {
@@ -223,6 +225,12 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
     setLoading(true);
     setErrorText('');
 
+    if (values.showFutures === false && values.showSpot === false) {
+      setErrorText(t('client.auth.marketVisibilityRequired', 'Выберите хотя бы один рынок: фьючерсы или спот'));
+      setLoading(false);
+      return;
+    }
+
     try {
       const response = await axios.post('/api/auth/client/register', {
         companyName: values.companyName,
@@ -232,6 +240,8 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
         productMode: values.productMode,
         planCode: values.planCode,
         preferredLanguage: language,
+        showFutures: values.showFutures !== false,
+        showSpot: values.showSpot !== false,
       });
 
       const token = String(response?.data?.token || '');
@@ -252,17 +262,16 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
   return (
     <div className="battletoads-form-shell client-auth-shell">
       {contextHolder}
+      <div className="client-auth-hero">
+        <Typography.Title level={2} className="client-auth-hero__title">
+          {t('client.auth.title', 'Client Access')}
+        </Typography.Title>
+        <div className="client-auth-hero__subtitle">
+          {t('client.auth.subtitle', 'Register once, then you always land in your own workspace.')}
+        </div>
+      </div>
       <Card className="battletoads-card client-auth-card" bordered>
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
-          <div>
-            <Typography.Title level={3} style={{ marginBottom: 4 }}>
-              {t('client.auth.title', 'Client Access')}
-            </Typography.Title>
-            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
-              {t('client.auth.subtitle', 'Register once, then you always land in your own workspace.')}
-            </Typography.Paragraph>
-          </div>
-
           {magicLinkMode === 'idle' && (
             <>
               <Space wrap>
@@ -340,7 +349,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 <Form<RegisterFormValues>
                   layout="vertical"
                   form={registerForm}
-                  initialValues={{ productMode: 'dual', planCode: 'dual_beta' }}
+                  initialValues={{ productMode: 'dual', planCode: 'dual_beta', showFutures: true, showSpot: true }}
                   onFinish={handleRegister}
                 >
                   <Form.Item
@@ -397,6 +406,16 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                         { value: 'tv_alerts_300', label: t('client.auth.planTvAlerts', 'TV Alerts Pro — $300/мес · до 50 алертов') },
                       ]}
                     />
+                  </Form.Item>
+                  <Form.Item label={t('client.auth.marketVisibility', 'Что показывать в кабинете')} style={{ marginBottom: 8 }}>
+                    <Space direction="vertical">
+                      <Form.Item name="showFutures" valuePropName="checked" noStyle>
+                        <Checkbox>{t('client.auth.showFutures', 'Фьючерсы')}</Checkbox>
+                      </Form.Item>
+                      <Form.Item name="showSpot" valuePropName="checked" noStyle>
+                        <Checkbox>{t('client.auth.showSpot', 'Спот')}</Checkbox>
+                      </Form.Item>
+                    </Space>
                   </Form.Item>
                   <Form.Item
                     label={t('client.auth.password', 'Password')}
