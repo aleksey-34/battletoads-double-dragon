@@ -2,7 +2,6 @@
 import { MarketMode, Strategy, StrategyType } from '../config/settings';
 import {
   applySymbolRiskSettings,
-  cancelAllOrders,
   closePosition,
   getBalances,
   getAllSymbols,
@@ -75,7 +74,21 @@ import {
 import { computeSignal } from './strategy/signals';
 import { getCycleSignalCache, makeSignalGroupKey } from './strategy/cycle/cache';
 import { POSITION_ALIGNMENT_EXCLUDED_API_KEYS } from './strategy/cycle/algofundSync';
-import { closeAllForSymbol, countExchangeOpenPositions } from './strategy/cycle/positionGuards';
+import { countExchangeOpenPositions } from './strategy/cycle/positionGuards';
+import {
+  TRAILING_RATIO_EPSILON,
+  RESYNC_CONFIRM_MS,
+  cancelStrategyWorkingOrders,
+  closeStrategyExposure,
+  inferMonoStateFromPosition,
+  inferSyntheticStateFromPair,
+  loadPairPositionsForValidation,
+  loadSinglePositionForValidation,
+  partialTpTriggeredByStrategy,
+  processedClosedBarByStrategy,
+  resyncPendingFlatByStrategy,
+  resolveExecutionCandleContext,
+} from './strategy/execution';
 import {
   getLatestMarketClose,
   loadStrategyCandles,
@@ -106,256 +119,7 @@ export {
   formatActionError,
 };
 export { runAutoStrategiesCycle } from './strategy/cycle/autoRun';
-
-// ── State-resync confirmation tracker ────────────────────────────────────────
-// Bug fix (2026-05): single-cycle `state_resynced_flat` was triggering on
-// transient empty getPositions() responses (rate-limit, propagation glitch),
-// destroying open SAAS positions and leaving them as orphans on exchange.
-// Now we require TWO consecutive flat detections separated by at least
-// RESYNC_CONFIRM_MS, AND verify no sibling active strategy on the same
-// (apiKey, base_symbol) is currently in a non-flat state (since the visible
-// "flat" might be a momentary pre-aggregation race when siblings are open).
-const RESYNC_CONFIRM_MS = 90_000; // 90 s window — covers 1 full auto-cycle (30 s) + slack
-interface PendingFlatEntry { firstDetectedMs: number; lastRatio: number; }
-const resyncPendingFlatByStrategy = new Map<number, PendingFlatEntry>();
-
-const BAR_CLOSE_FRESHNESS_MS = 1500;
-const TRAILING_RATIO_EPSILON = 1e-12;
-
-const processedClosedBarByStrategy = new Map<string, number>();
-
-// Tracks partial TP (50% close) per strategy to prevent double-fire.
-const partialTpTriggeredByStrategy = new Map<number, boolean>();
-
-const sleepMs = async (ms: number): Promise<void> => {
-  await new Promise<void>((resolve) => setTimeout(resolve, Math.max(0, ms)));
-};
-
-const loadPairPositionsForValidation = async (
-  apiKeyName: string,
-  baseSymbol: string,
-  quoteSymbol: string,
-  attempts: number = 3,
-  waitMs: number = 300
-): Promise<{ basePosition: any | null; quotePosition: any | null }> => {
-  const safeAttempts = Math.max(1, Math.floor(attempts));
-
-  for (let attempt = 0; attempt < safeAttempts; attempt += 1) {
-    const positions = await getPositions(apiKeyName);
-
-    const basePosition = positions.find((position: any) => {
-      return (
-        String(position?.symbol || '').toUpperCase() === baseSymbol.toUpperCase()
-        && Number.parseFloat(String(position?.size || '0')) > 0
-      );
-    }) || null;
-
-    const quotePosition = positions.find((position: any) => {
-      return (
-        String(position?.symbol || '').toUpperCase() === quoteSymbol.toUpperCase()
-        && Number.parseFloat(String(position?.size || '0')) > 0
-      );
-    }) || null;
-
-    if (basePosition && quotePosition) {
-      return { basePosition, quotePosition };
-    }
-
-    if (attempt < safeAttempts - 1) {
-      await sleepMs(waitMs);
-    }
-  }
-
-  return {
-    basePosition: null,
-    quotePosition: null,
-  };
-};
-
-const loadSinglePositionForValidation = async (
-  apiKeyName: string,
-  symbol: string,
-  attempts: number = 3,
-  waitMs: number = 300
-): Promise<any | null> => {
-  const safeAttempts = Math.max(1, Math.floor(attempts));
-
-  for (let attempt = 0; attempt < safeAttempts; attempt += 1) {
-    const positions = await getPositions(apiKeyName);
-    const position = positions.find((item: any) => {
-      return (
-        String(item?.symbol || '').toUpperCase() === symbol.toUpperCase()
-        && Number.parseFloat(String(item?.size || '0')) > 0
-      );
-    }) || null;
-
-    if (position) {
-      return position;
-    }
-
-    if (attempt < safeAttempts - 1) {
-      await sleepMs(waitMs);
-    }
-  }
-
-  return null;
-};
-
-const resolveExecutionCandleContext = (
-  candles: ParsedSyntheticCandle[],
-  interval: string,
-  closedBarOnly: boolean
-): ExecutionCandleContext => {
-  if (!Array.isArray(candles) || candles.length === 0) {
-    throw new Error('No synthetic candles available for execution');
-  }
-
-  if (!closedBarOnly) {
-    const latest = candles[candles.length - 1];
-    return {
-      candlesForSignal: candles,
-      evaluatedBarTimeMs: latest.timeMs,
-    };
-  }
-
-  const intervalMs = Math.max(60 * 1000, intervalToMs(interval));
-  let closedIndex = candles.length - 1;
-  const latest = candles[closedIndex];
-  const latestClosesAt = latest.timeMs + intervalMs;
-
-  if (latestClosesAt > Date.now() + BAR_CLOSE_FRESHNESS_MS) {
-    closedIndex -= 1;
-  }
-
-  if (closedIndex < 0) {
-    throw new Error('No closed candles available for execution');
-  }
-
-  return {
-    candlesForSignal: candles.slice(0, closedIndex + 1),
-    evaluatedBarTimeMs: candles[closedIndex].timeMs,
-  };
-};
-
-
-// Returns true if any OTHER active strategy on the same api_key + base_symbol
-// is currently in long/short. When this is the case, the exchange position is
-// shared and we must NOT call closeAllForSymbol — doing so would clobber every
-// sibling strategy and trigger the cross-strategy churn loop that costs fees
-// without delivering signal-driven trades.
-const hasOpenSiblingsForSymbol = async (
-  apiKeyName: string,
-  symbol: string,
-  strategyId: number,
-): Promise<boolean> => {
-  if (!apiKeyName || !symbol || !Number.isFinite(strategyId)) {
-    return false;
-  }
-  try {
-    const { db } = await import('../utils/database');
-    const apiKeyRow: any = await db.get(`SELECT id FROM api_keys WHERE name = ?`, [apiKeyName]);
-    if (!apiKeyRow?.id) {
-      return false;
-    }
-    const row: any = await db.get(
-      `SELECT COUNT(*) AS cnt FROM strategies
-       WHERE api_key_id = ?
-         AND is_active = 1
-         AND state != 'flat'
-         AND id != ?
-         AND (UPPER(base_symbol) = UPPER(?) OR UPPER(quote_symbol) = UPPER(?))`,
-      [apiKeyRow.id, strategyId, symbol, symbol],
-    );
-    return (row?.cnt || 0) > 0;
-  } catch (err) {
-    logger.warn(`hasOpenSiblingsForSymbol(${apiKeyName}, ${symbol}) failed: ${(err as Error).message}`);
-    return false;
-  }
-};
-
-export const closeStrategyExposure = async (
-  apiKeyName: string,
-  strategy: Pick<Strategy, 'id' | 'market_mode' | 'base_symbol' | 'quote_symbol' | 'market_type'>
-): Promise<void> => {
-  const symbols = getStrategySymbols(strategy);
-  const exchangeMarketType: 'spot' | 'swap' | undefined = strategy.market_type === 'spot' ? 'spot' : undefined;
-  for (const symbol of symbols) {
-    // Cohabitation guard: if any sibling strategy on the same api_key still
-    // owns a position on this symbol, the exchange position is shared and
-    // closing it would nuke the sibling. Skip the exchange close in that case;
-    // the caller will still mark THIS strategy as flat (DB-only release of
-    // the symbol slot), and the actual exchange position is freed only when
-    // the LAST owner exits.
-    const strategyId = Number((strategy as any)?.id);
-    if (Number.isFinite(strategyId) && strategyId > 0) {
-      const siblings = await hasOpenSiblingsForSymbol(apiKeyName, symbol, strategyId);
-      if (siblings) {
-        logger.info(
-          `closeStrategyExposure: skipping exchange close for ${apiKeyName}/${symbol} — `
-          + `sibling strategies still hold the shared position (strategy=${strategyId})`
-        );
-        continue;
-      }
-    }
-    await closeAllForSymbol(apiKeyName, symbol, exchangeMarketType ? { marketType: exchangeMarketType } : undefined);
-  }
-};
-
-const cancelStrategyWorkingOrders = async (
-  apiKeyName: string,
-  strategy: Pick<Strategy, 'market_mode' | 'base_symbol' | 'quote_symbol'>
-): Promise<void> => {
-  const symbols = getStrategySymbols(strategy);
-  for (const symbol of symbols) {
-    await cancelAllOrders(apiKeyName, symbol);
-  }
-};
-
-export { cancelStrategyWorkingOrders };
-
-const inferMonoStateFromPosition = (
-  position: any | null
-): 'flat' | 'long' | 'short' | 'mixed' => {
-  if (!position) {
-    return 'flat';
-  }
-
-  const side = String(position?.side || '').toLowerCase();
-  if (side === 'buy') {
-    return 'long';
-  }
-  if (side === 'sell') {
-    return 'short';
-  }
-  return 'mixed';
-};
-
-const inferSyntheticStateFromPair = (
-  basePosition: any | null,
-  quotePosition: any | null
-): 'flat' | 'long' | 'short' | 'mixed' => {
-  if (!basePosition && !quotePosition) {
-    return 'flat';
-  }
-
-  if (!basePosition || !quotePosition) {
-    return 'mixed';
-  }
-
-  const baseSide = String(basePosition?.side || '').toLowerCase();
-  const quoteSide = String(quotePosition?.side || '').toLowerCase();
-
-  if (baseSide === 'buy' && quoteSide === 'sell') {
-    return 'long';
-  }
-
-  if (baseSide === 'sell' && quoteSide === 'buy') {
-    return 'short';
-  }
-
-  return 'mixed';
-};
-
+export { cancelStrategyWorkingOrders, closeStrategyExposure } from './strategy/execution';
 
 
 export const executeStrategy = async (

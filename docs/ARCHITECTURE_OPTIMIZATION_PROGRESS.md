@@ -10,7 +10,7 @@
 
 | # | Задача | Статус | Риск |
 |---|--------|--------|------|
-| A | Распил `strategy.ts` → модули + фасад | 🔄 cycle вынесен (~2290) | низкий |
+| A | Распил `strategy.ts` → модули + фасад | 🔄 execution (~2050) | низкий |
 | B | Распил `routes.ts` → sub-routers | ✅ client/backtest/admin | низкий |
 | C | Client backtest → async queue (`preview_jobs`) | ✅ | средний |
 | D | Presets вместо live `runBacktest` в SaaS client preview | ✅ default strict | средний |
@@ -32,17 +32,18 @@ backend/src/bot/strategy/
   candles.ts        ← loadStrategyCandles, parse candles, latest close (~108)
   cycle/cache.ts    ← per-cycle signal cache + group key
   cycle/autoRun.ts  ← runAutoStrategiesCycle (~410)
-  cycle/*.ts        ← algofundSync, positionGuards, offlineSymbol
-bot/strategy.ts     ← фасад: executeStrategy (~2290, было ~4980)
+  cycle/*.ts        ← algofundSync, positionGuards, offlineSymbol, autoRun
+  execution.ts      ← close/partial TP, position validation, candle context (~235)
+bot/strategy.ts     ← фасад: executeStrategy (~2050, было ~4980)
 ```
 
 **Не используем:** `backend/src/services/strategy/{crud,mutex,sizing}.ts` — устаревшие заглушки.
 
 ### Прогресс
 
-- [x] `mutex.ts`, `types.ts`, `normalize.ts`, `signals.ts`, `crud.ts`, `sizing.ts`, `candles.ts`, `cycle/*`
-- [x] `strategy.ts` — импорты из подмодулей, реэкспорт CRUD + runAutoStrategiesCycle
-- [ ] `execution.ts` — хелперы open/close/align внутри executeStrategy
+- [x] `mutex.ts`, `types.ts`, `normalize.ts`, `signals.ts`, `crud.ts`, `sizing.ts`, `candles.ts`, `cycle/*`, `execution.ts`
+- [x] `strategy.ts` — фасад executeStrategy + re-export cycle/execution API
+- [ ] `bot/strategies/*` — DoubleDragon, StatArb, ZigZag
 
 ---
 
