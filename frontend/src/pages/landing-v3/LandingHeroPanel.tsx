@@ -148,7 +148,7 @@ export default function LandingHeroPanel() {
             <h4>Сделки · лучшие</h4>
             <div className="trades-live">
               <span className="live-dot" style={{ width: 5, height: 5 }} />
-              live · обновление раз в сутки
+              Лайв
             </div>
             {trades.map((t) => {
               const sideCls = t.side === 'long' ? 'in' : 'out';

@@ -36,7 +36,7 @@
       box-shadow: 0 4px 24px rgba(240,196,25,.25);
     }
 
-    .hero { padding: 72px 0 48px; display: grid; grid-template-columns: 1fr 1.55fr; gap: 32px; align-items: center; }
+    .hero { padding: 72px 0 48px; display: grid; grid-template-columns: 1fr 1.85fr; gap: 28px; align-items: center; }
     .eyebrow { color: var(--gold); font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; margin-bottom: 14px; animation: fadeUp .7s ease both; }
     h1 { margin: 0 0 16px; font-size: clamp(34px, 4.8vw, 52px); line-height: 1.06; letter-spacing: -.03em; animation: fadeUp .7s .1s ease both; }
     h1 em { font-style: normal; color: var(--gold); }
@@ -46,12 +46,12 @@
 
     /* ── demo cabinet + vitrine (sibling columns) ── */
     .hero-visual {
-      position: relative; min-width: 0;
-      display: flex; align-items: stretch; gap: 12px;
+      position: relative; min-width: 0; width: 100%;
+      display: flex; align-items: stretch; gap: 10px;
       animation: fadeUp .9s .25s ease both;
     }
     .showcase {
-      flex: 1; min-width: 0;
+      flex: 1 1 auto; min-width: 0;
       border-radius: 20px;
       border: 1px solid rgba(240,196,25,.22);
       background: linear-gradient(145deg, rgba(240,196,25,.05), transparent 45%), var(--card);
@@ -81,7 +81,7 @@
     }
     .showcase-body {
       display: grid; grid-template-columns: 1fr 148px;
-      min-height: 320px; background: var(--card);
+      min-height: 380px; background: var(--card);
     }
     .chart-zone { padding: 12px 12px 8px; min-width: 0; display: flex; flex-direction: column; }
     .chart-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 8px; flex-wrap: wrap; }
@@ -150,26 +150,28 @@
     .trade-row .out { color: var(--red); font-weight: 600; }
     .trade-row .pnl { color: var(--green); font-variant-numeric: tabular-nums; }
 
-    /* vitrine — reserved 232px; frame grows 116→232 on hover */
+    /* vitrine — 116px collapsed, frame 232px on hover, 6 cards inside */
     .vitrine-wrap {
-      width: 232px; flex-shrink: 0; align-self: stretch;
+      width: 116px; flex-shrink: 0; align-self: stretch;
       display: flex; justify-content: flex-end;
+      transition: width .42s cubic-bezier(.4,0,.2,1);
     }
+    .vitrine-wrap:hover { width: 232px; }
     .vitrine-slot {
-      width: 116px; height: 100%;
+      width: 100%; height: 100%;
       border-radius: 20px;
       border: 1px solid rgba(240,196,25,.35);
       background: linear-gradient(135deg, rgba(16,16,20,.97), rgba(8,8,12,.98));
       box-shadow: 0 24px 80px rgba(0,0,0,.45);
       overflow: hidden;
-      transition: width .42s cubic-bezier(.4,0,.2,1);
     }
-    .vitrine-wrap:hover .vitrine-slot { width: 232px; }
     .vitrine-rail {
       width: 232px; min-height: 100%;
       display: flex; flex-direction: row; align-items: stretch;
       margin-left: -116px;
+      transition: margin-left .42s cubic-bezier(.4,0,.2,1);
     }
+    .vitrine-wrap:hover .vitrine-rail { margin-left: 0; }
     .vitrine-col {
       width: 116px; flex-shrink: 0;
       display: flex; flex-direction: column; gap: 7px;
@@ -181,10 +183,7 @@
     }
     .vitrine-col--expand {
       border: none; background: transparent;
-      opacity: .55;
-      transition: opacity .32s;
     }
-    .vitrine-wrap:hover .vitrine-col--expand { opacity: 1; }
     .vitrine-rail__head {
       font-size: 9px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase;
       color: var(--gold); text-align: center; padding: 6px 4px;
@@ -374,7 +373,7 @@
             </div>
             <aside class="trades-panel">
               <h4>Сделки · лучшие</h4>
-              <div class="trades-live"><span class="live-dot" style="width:5px;height:5px"></span> live · обновление раз в сутки</div>
+              <div class="trades-live"><span class="live-dot" style="width:5px;height:5px"></span> Лайв</div>
               <div id="tradesList"></div>
             </aside>
           </div>
