@@ -66,6 +66,8 @@ router.post('/auth/client/register', async (req, res) => {
         planCode: req.body?.planCode,
         showFutures: req.body?.showFutures !== false,
         showSpot: req.body?.showSpot !== false,
+        riskDisclaimerAccepted: req.body?.riskDisclaimerAccepted === true,
+        riskDisclaimerVersion: req.body?.riskDisclaimerVersion,
       },
       {
         ip: String(req.ip || ''),

@@ -13,6 +13,7 @@ import './App.css';
 
 // Heavy admin/client surfaces are code-split to keep the public bundle small.
 const Whitepaper = lazy(() => import('./pages/Whitepaper'));
+const RiskDisclaimer = lazy(() => import('./pages/RiskDisclaimer'));
 const Dashboard = lazy(() => import('./pages/Dashboard'));
 const Settings = lazy(() => import('./pages/Settings'));
 const TradingSystems = lazy(() => import('./pages/TradingSystems'));
@@ -489,6 +490,7 @@ function AppWithProviders() {
           <Route path="/" element={<Landing />} />
           <Route path="/landing" element={<Landing />} />
           <Route path="/whitepaper" element={<Whitepaper />} />
+          <Route path="/legal/risks" element={<RiskDisclaimer />} />
           <Route path="*" element={<AppShell />} />
         </Routes>
       </Router>

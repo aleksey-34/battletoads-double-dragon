@@ -173,7 +173,7 @@ export default function LandingPage() {
 
       <footer>
         <div className="wrap">
-          © BattleToads · <a href="/whitepaper">Документы</a>
+          © BattleToads · <a href="/whitepaper">Документы</a> · <a href="/legal/risks">Риски</a>
         </div>
       </footer>
     </div>

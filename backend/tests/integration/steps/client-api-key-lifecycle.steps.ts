@@ -56,6 +56,8 @@ Given('an authenticated dual-mode client workspace', async () => {
       companyName: `Workspace ${nonce}`,
       preferredLanguage: 'ru',
       productMode: 'dual',
+      riskDisclaimerAccepted: true,
+      riskDisclaimerVersion: '2026-07-07-2',
     });
 
   sharedState.response = response;

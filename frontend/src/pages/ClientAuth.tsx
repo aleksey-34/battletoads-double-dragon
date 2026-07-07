@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Alert, Button, Card, Checkbox, Form, Input, Select, Space, Spin, Typography, message } from 'antd';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useI18n } from '../i18n';
+import RiskDisclaimerModal from '../components/RiskDisclaimerModal';
+import { RISK_DISCLAIMER_VERSION } from '../content/riskDisclaimer';
 
 type AuthMode = 'login' | 'register';
 
@@ -25,6 +27,7 @@ type RegisterFormValues = {
   planCode: string;
   showFutures: boolean;
   showSpot: boolean;
+  riskDisclaimerAccepted: boolean;
 };
 
 type SetPasswordFormValues = {
@@ -65,6 +68,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
   const [magicLinkMode, setMagicLinkMode] = useState<'idle' | 'processing' | 'password_setup' | 'success'>('idle');
   const [magicLinkEmail, setMagicLinkEmail] = useState<string>('');
   const [existingSession, setExistingSession] = useState<ExistingClientSession | null>(null);
+  const [riskDisclaimerOpen, setRiskDisclaimerOpen] = useState(false);
 
   useEffect(() => {
     setMode(initialMode);
@@ -242,6 +246,8 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
         preferredLanguage: language,
         showFutures: values.showFutures !== false,
         showSpot: values.showSpot !== false,
+        riskDisclaimerAccepted: values.riskDisclaimerAccepted === true,
+        riskDisclaimerVersion: RISK_DISCLAIMER_VERSION,
       });
 
       const token = String(response?.data?.token || '');
@@ -349,7 +355,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 <Form<RegisterFormValues>
                   layout="vertical"
                   form={registerForm}
-                  initialValues={{ productMode: 'dual', planCode: 'dual_beta', showFutures: true, showSpot: true }}
+                  initialValues={{ productMode: 'dual', planCode: 'dual_beta', showFutures: true, showSpot: true, riskDisclaimerAccepted: false }}
                   onFinish={handleRegister}
                 >
                   <Form.Item
@@ -444,6 +450,35 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                     ]}
                   >
                     <Input.Password autoComplete="new-password" placeholder={t('client.auth.confirmPasswordPlaceholder', 'Repeat your password')} />
+                  </Form.Item>
+                  <Form.Item
+                    name="riskDisclaimerAccepted"
+                    valuePropName="checked"
+                    rules={[
+                      {
+                        validator: (_, value) => (
+                          value === true
+                            ? Promise.resolve()
+                            : Promise.reject(new Error(t('client.auth.riskDisclaimerRequired', 'Подтвердите, что вы принимаете уведомление о рисках')))
+                        ),
+                      },
+                    ]}
+                  >
+                    <Checkbox>
+                      {t('client.auth.riskDisclaimerPrefix', 'Я ознакомился(ась) с')}{' '}
+                      <Button
+                        type="link"
+                        style={{ padding: 0, height: 'auto', verticalAlign: 'baseline' }}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          setRiskDisclaimerOpen(true);
+                        }}
+                      >
+                        {t('client.auth.riskDisclaimerLink', 'Уведомлением о рисках')}
+                      </Button>
+                      {t('client.auth.riskDisclaimerSuffix', ' и принимаю, что стратегии и ТС не гарантируют прибыль, результат зависит от рынка, а платформа не несёт ответственности за убытки.')}
+                    </Checkbox>
                   </Form.Item>
                   <Form.Item style={{ marginBottom: 0 }}>
                     <Button type="primary" htmlType="submit" loading={loading} block>
@@ -544,6 +579,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
           )}
         </Space>
       </Card>
+      <RiskDisclaimerModal open={riskDisclaimerOpen} onClose={() => setRiskDisclaimerOpen(false)} />
     </div>
   );
 };

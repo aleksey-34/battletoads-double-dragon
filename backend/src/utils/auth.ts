@@ -70,7 +70,11 @@ type ClientRegistrationInput = {
   planCode?: string;
   showFutures?: boolean;
   showSpot?: boolean;
+  riskDisclaimerAccepted?: boolean;
+  riskDisclaimerVersion?: string;
 };
+
+const CLIENT_RISK_DISCLAIMER_VERSION = '2026-07-07-2';
 
 type ClientLoginInput = {
   email: string;
@@ -602,6 +606,15 @@ export const registerClientUser = async (payload: ClientRegistrationInput, reque
     throw new Error('Password must be at least 10 characters long');
   }
 
+  if (payload.riskDisclaimerAccepted !== true) {
+    throw new Error('Risk disclosure must be accepted before registration');
+  }
+
+  const disclaimerVersion = String(payload.riskDisclaimerVersion || '').trim();
+  if (disclaimerVersion !== CLIENT_RISK_DISCLAIMER_VERSION) {
+    throw new Error('Risk disclosure version is outdated. Please refresh the page and accept the current version');
+  }
+
   const existingByEmail = await fetchClientUserByEmail(email);
   if (existingByEmail) {
     throw new Error('A user with this email already exists');
@@ -620,6 +633,10 @@ export const registerClientUser = async (payload: ClientRegistrationInput, reque
     const clientPreferences = JSON.stringify({
       showFutures: payload.showFutures !== false,
       showSpot: payload.showSpot !== false,
+      riskDisclaimer: {
+        version: CLIENT_RISK_DISCLAIMER_VERSION,
+        acceptedAt: new Date().toISOString(),
+      },
     });
     const tenantInsert = await db.run(
       `INSERT INTO tenants (
