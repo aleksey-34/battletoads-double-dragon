@@ -2204,6 +2204,48 @@ const normalizeEpochSeconds = (value: unknown): number | null => {
   return null;
 };
 
+const parseStrategyIdFromOfferId = (offerId: string): number => {
+  const parsed = Number((String(offerId || '').match(/(\d+)$/)?.[1]) || 0);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+};
+
+const resolveSyntheticOfferInterval = (
+  offerId: string,
+  row: Record<string, unknown>,
+  sweepRecord?: Record<string, unknown> | null,
+): string => {
+  const fromRow = String(
+    row?.familyInterval
+    || row?.interval
+    || (row?.strategyParams as Record<string, unknown> | undefined)?.interval
+    || '',
+  ).trim();
+  if (fromRow) {
+    return fromRow;
+  }
+  const fromSweep = String(sweepRecord?.interval || '').trim();
+  if (fromSweep) {
+    return fromSweep;
+  }
+  const haystack = `${offerId} ${row?.titleRu || ''} ${row?.strategyType || ''}`.toLowerCase();
+  if (haystack.includes('momentum_scalp')) {
+    return '15m';
+  }
+  return '';
+};
+
+const hasFiniteOfferMetrics = (metrics: {
+  ret?: number;
+  pf?: number;
+  dd?: number;
+  trades?: number;
+}): boolean => (
+  Number.isFinite(Number(metrics?.ret))
+  || Number.isFinite(Number(metrics?.dd))
+  || Number.isFinite(Number(metrics?.pf))
+  || Number(metrics?.trades) > 0
+);
+
 const extractTradeEventTime = (trade: Record<string, unknown>): number | null => {
   const candidates = [
     trade.actual_time,
@@ -3669,14 +3711,34 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   );
   const allTsSnapshotOfferIds = useMemo(() => {
     const ids = new Set<string>();
-    Object.values(summary?.offerStore?.tsBacktestSnapshots || {}).forEach((snap: any) => {
+    const publishedSet = new Set(
+      publishedAlgofundSystems
+        .map((name) => String(name || '').trim())
+        .filter(Boolean),
+    );
+    Object.entries(summary?.offerStore?.tsBacktestSnapshots || {}).forEach(([key, snap]: [string, any]) => {
+      const snapshotKey = String(key || '').trim();
+      const systemName = String(snap?.systemName || '').trim();
+      const isPublished = publishedSet.size === 0
+        || publishedSet.has(snapshotKey)
+        || publishedSet.has(systemName)
+        || publishedAlgofundSystems.some((name) => {
+          const full = String(name || '').trim().toLowerCase();
+          const token = full.split('::').pop() || full;
+          const key = snapshotKey.toLowerCase();
+          const sys = systemName.toLowerCase();
+          return full === key || full === sys || (token && (key.includes(token) || sys.includes(token)));
+        });
+      if (!isPublished) {
+        return;
+      }
       (Array.isArray(snap?.offerIds) ? snap.offerIds : []).forEach((offerId: unknown) => {
         const safe = String(offerId || '').trim();
         if (safe) ids.add(safe);
       });
     });
     return ids;
-  }, [summary?.offerStore?.tsBacktestSnapshots]);
+  }, [summary?.offerStore?.tsBacktestSnapshots, publishedAlgofundSystems]);
   const strategyVitrineOfferIds = useMemo(() => {
     const merged = new Set(storefrontOfferIds);
     allTsSnapshotOfferIds.forEach((offerId) => merged.add(offerId));
@@ -4197,7 +4259,27 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const tsDisplayName = (systemName: string): string => normalizeTsToken(systemName) || systemName;
 
-  const getTsStrategyHint = (systemName: string): string | null => {
+  const tsCardShortLabel = (publishedSystem: string): string => {
+    const token = String(publishedSystem || '').trim().toLowerCase();
+    if (!token) return '—';
+    if (token.includes('b3-jul2026') || token.includes('v4-4-b3')) return 'B3';
+    if (token.includes('v4-4-safe') || token.includes('-safe-jul')) return 'Safe';
+    if (token.includes('conservative')) return 'Consv 1.1';
+    if (token.includes('l400')) return 'L400';
+    if (token.includes('spread-jul') || token.includes('cloud-spread')) return 'Spread';
+    if (token.includes('spot-shield')) return 'Spot Shield';
+    if (token.includes('spot-balanced')) return 'Spot Bal';
+    if (token.includes('spot-momentum')) return 'Spot Mom';
+    if (token.includes('burst-turbo')) return 'Burst';
+    const tail = token.split('::').pop() || token;
+    return tail.length > 14 ? `${tail.slice(0, 12)}…` : tail;
+  };
+
+  const getTsStrategyHint = (systemName: string, snapshot?: { storefrontDescription?: string; displayLabel?: string } | null): string | null => {
+    const fromSnapshot = String(snapshot?.storefrontDescription || '').trim();
+    if (fromSnapshot) {
+      return fromSnapshot;
+    }
     const upper = String(systemName || '').toUpperCase();
     if (upper.includes('_SA_') || upper.includes('STAT_ARB') || upper.includes('STATARB') || upper.includes('-SA-')) {
       return 'StatArb Z-Score — возврат к среднему\nОткрывает позицию когда цена отклоняется на ≥N σ от скользящего среднего пары и ждёт возврата к среднему.\nЛучше работает на синтетических парах в боковом рынке.';
@@ -4601,12 +4683,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       maxOpenPositions,
       macroShieldEnabled,
       dcaSatelliteMarkets,
+      storefrontDescription: String((snapshotForSystem as any)?.storefrontDescription || '').trim(),
+      riskProfile: String((snapshotForSystem as any)?.riskProfile || '').trim(),
       marketType: String(
         (snapshotForSystem as any)?.backtestSettings?.marketType
         || (snapshotForSystem as any)?.marketType
         || (runtimeSystem as any)?.marketType
         || (runtimeSystem as any)?.market_type
-        || 'futures',
+        || (String(systemName).toLowerCase().includes('spot-') ? 'spot' : 'futures'),
       ),
     };
     }).filter((item) => {
@@ -9277,37 +9361,58 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const dateTo = String(settings.dateTo || '').trim() || computeBacktestDatesFromSnapshot(snapshot)?.dateTo;
     const periodDaysFromSnapshot = Math.max(1, Math.floor(Number(snapshot.periodDays ?? 90)));
     const offerStoreById = new Map(
-      (summary?.offerStore?.offers || []).map((offer: any) => [String(offer.offerId), offer])
+      (offerStoreOffers || []).map((offer: any) => [String(offer.offerId || '').trim(), offer] as const)
+        .filter(([offerId]) => offerId.length > 0),
     );
     const selectedOffers = offerIds.map((offerId) => {
-      const row = offerStoreById.get(offerId) || {};
-      const strategyId = Number(row?.strategyId || 0);
-      const ret = Number(snapshot.ret ?? 0);
-      const pf = Number(snapshot.pf ?? 1);
-      const dd = Number(snapshot.dd ?? 0);
-      const trades = Math.max(0, Math.floor(Number(snapshot.trades ?? 0)));
-      const wr = Number(snapshot.winRate ?? 0);
-      const tradesPerDay = Number((trades / Math.max(1, periodDaysFromSnapshot)).toFixed(3));
+      const normalizedOfferId = String(offerId || '').trim();
+      const parsedStrategyId = parseStrategyIdFromOfferId(normalizedOfferId);
+      const row = (offerStoreById.get(normalizedOfferId)
+        || (parsedStrategyId > 0 ? offerStoreOfferByStrategyId.get(parsedStrategyId) : null)
+        || {}) as Record<string, unknown>;
+      const strategyId = Number(row?.strategyId || parsedStrategyId || 0);
+      const sweepRecord = strategyId > 0 ? (sweepRecordByStrategyId[strategyId] as Record<string, unknown> | undefined) : undefined;
+      const interval = resolveSyntheticOfferInterval(normalizedOfferId, row, sweepRecord);
+      const periodDaysFromRow = Math.max(1, Math.floor(Number(row?.periodDays || periodDaysFromSnapshot)));
+      const ret = Number(row?.ret ?? sweepRecord?.totalReturnPercent ?? 0);
+      const pf = Number(row?.pf ?? sweepRecord?.profitFactor ?? 0);
+      const dd = Number(row?.dd ?? sweepRecord?.maxDrawdownPercent ?? 0);
+      const trades = Math.max(0, Math.floor(Number(row?.trades ?? sweepRecord?.tradesCount ?? 0)));
+      const wr = Number(sweepRecord?.winRatePercent ?? 0);
+      const tradesPerDay = Number((trades / Math.max(1, periodDaysFromRow)).toFixed(3));
+      const metrics = {
+        ret: Number(ret.toFixed(3)),
+        pf: Number(pf.toFixed(3)),
+        dd: Number(dd.toFixed(3)),
+        wr: Number(wr.toFixed(3)),
+        trades,
+      };
+      const strategyName = String(
+        sweepRecord?.strategyName
+        || row?.strategyName
+        || (typeof row?.titleRu === 'string' ? row.titleRu.split('•').map((part) => part.trim())[1] : '')
+        || '',
+      ).trim() || `Strategy #${strategyId || 0}`;
       return {
-        offerId,
-        titleRu: String(row?.titleRu || offerId),
+        offerId: normalizedOfferId,
+        titleRu: String(row?.titleRu || normalizedOfferId),
         weight: 1,
         mode: String(row?.mode || 'mono') === 'synth' ? 'synth' as const : 'mono' as const,
-        market: String(row?.market || ''),
+        market: String(row?.market || sweepRecord?.market || ''),
         strategyId,
-        strategyName: String(row?.titleRu || 'Strategy #' + strategyId),
-        score: Number(row?.score ?? 0),
-        metricsSource: 'snapshot_only' as const,
-        metrics: {
-          ret: Number(ret.toFixed(3)),
-          pf: Number(pf.toFixed(3)),
-          dd: Number(dd.toFixed(3)),
-          wr: Number(wr.toFixed(3)),
-          trades,
-        },
+        strategyName,
+        strategyType: String(row?.strategyType || sweepRecord?.strategyType || ''),
+        interval,
+        familyInterval: interval,
+        preset: interval ? { params: { interval } } : undefined,
+        score: Number(row?.score ?? sweepRecord?.score ?? 0),
+        metricsSource: hasFiniteOfferMetrics(metrics) ? 'offer_store' as const : 'snapshot_only' as const,
+        metrics,
         tradesPerDay,
-        periodDays: periodDaysFromSnapshot,
-        equityPoints: (Array.isArray(snapshot.equityPoints) ? snapshot.equityPoints : []) as number[],
+        periodDays: periodDaysFromRow,
+        equityPoints: (Array.isArray(row?.equityPoints) && row.equityPoints.length > 0
+          ? row.equityPoints
+          : Array.isArray(snapshot.equityPoints) ? snapshot.equityPoints : []) as number[],
       };
     });
     const syntheticResult: AdminSweepBacktestPreviewResponse = {
@@ -10386,11 +10491,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       const lotHint = buildLotSizingHint(logNotes);
       if (lotHint) comments.push(lotHint);
 
+      const publishedSystemName = String(
+        row.algofundProfile?.published_system_name || '',
+      ).trim();
+      const tsCardLabel = tsCardShortLabel(publishedSystemName);
+
       return {
         ...row,
         requestedEnabled,
         actualEnabled,
         apiKeyName,
+        publishedSystemName,
+        tsCardLabel,
         systems,
         positionsDigest,
         strategiesDigest,
@@ -10485,6 +10597,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       key: 'mode',
       width: 130,
       render: (_, row) => productModeTag(row.tenant.product_mode),
+    },
+    {
+      title: 'TS карточка',
+      key: 'tsCard',
+      width: 100,
+      render: (_, row) => (
+        row.tsCardLabel && row.tsCardLabel !== '—'
+          ? <Tooltip title={row.publishedSystemName || undefined}><Tag color="geekblue">{row.tsCardLabel}</Tag></Tooltip>
+          : <Tag color="default">—</Tag>
+      ),
     },
     {
       title: copy.apiKey,
@@ -13099,7 +13221,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                   id: item.systemName,
                                                   name: item.systemName,
                                                   displayLabel: item.displayLabel,
-                                                  hint: getTsStrategyHint(item.systemName) ?? undefined,
+                                                  hint: getTsStrategyHint(item.systemName, { storefrontDescription: item.storefrontDescription }) ?? undefined,
                                                   marketType: String(item.marketType || 'futures'),
                                                   ret: Number(item.summary?.totalReturnPercent || 0),
                                                   dd: Number(item.summary?.maxDrawdownPercent || 0),
@@ -16571,12 +16693,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             || '',
                           ).trim() || '—';
                           const metrics = row.metrics || {};
-                          const hasOfferMetrics = String(row.metricsSource || '') !== 'snapshot_only'
-                            && (
-                              Number.isFinite(Number(metrics.ret))
-                              || Number.isFinite(Number(metrics.dd))
-                              || Number.isFinite(Number(metrics.pf))
-                            );
+                          const hasOfferMetrics = hasFiniteOfferMetrics(metrics);
                           return (
                             <Space direction="vertical" size={2}>
                               <Text strong>{row.titleRu}</Text>
@@ -16668,21 +16785,21 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       {
                         title: 'Метрики',
                         key: 'metrics',
-                        render: (_, row: any) => (
+                        render: (_, row: any) => {
+                          const metrics = row.metrics || {};
+                          if (!hasFiniteOfferMetrics(metrics)) {
+                            return <Tag color="default">метрики оффера: n/a</Tag>;
+                          }
+                          return (
                           <Space wrap>
-                            {String(row.metricsSource || '') === 'snapshot_only' ? (
-                              <Tag color="default">источник: snapshot-only (без per-offer метрик)</Tag>
-                            ) : (
-                              <>
-                                <Tag color={metricColor(Number(row.metrics?.ret || 0), 'return')}>Ret {formatPercent(row.metrics?.ret)}</Tag>
-                                <Tag color={metricColor(Number(row.metrics?.dd || 0), 'drawdown')}>DD {formatPercent(row.metrics?.dd)}</Tag>
-                                <Tag color={metricColor(Number(row.metrics?.pf || 0), 'pf')}>PF {formatNumber(row.metrics?.pf)}</Tag>
-                                <Tag color="blue">trades {formatNumber(row.metrics?.trades, 0)}</Tag>
+                                <Tag color={metricColor(Number(metrics.ret || 0), 'return')}>Ret {formatPercent(metrics.ret)}</Tag>
+                                <Tag color={metricColor(Number(metrics.dd || 0), 'drawdown')}>DD {formatPercent(metrics.dd)}</Tag>
+                                <Tag color={metricColor(Number(metrics.pf || 0), 'pf')}>PF {formatNumber(metrics.pf)}</Tag>
+                                <Tag color="blue">trades {formatNumber(metrics.trades, 0)}</Tag>
                                 <Tag color="cyan">tpd {formatNumber(row.tradesPerDay, 2)}</Tag>
-                              </>
-                            )}
                           </Space>
-                        ),
+                          );
+                        },
                       },
                     ]}
                   />
