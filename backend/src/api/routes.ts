@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { Router } from 'express';
 import {
   getPasswordRecoveryStatus,
@@ -15,6 +17,8 @@ import logger from '../utils/logger';
 
 const router = Router();
 
+const landingDemoPath = path.resolve(__dirname, '../../../docs/landing-demo-trades.json');
+
 // Legacy hard-stubs: Razgon and Synctrade APIs were removed.
 router.use('/razgon', (_req, res) => {
   return res.status(404).json({ error: 'Not Found' });
@@ -22,6 +26,20 @@ router.use('/razgon', (_req, res) => {
 
 router.use('/saas/synctrade', (_req, res) => {
   return res.status(404).json({ error: 'Not Found' });
+});
+
+router.get('/public/landing-demo-trades', (_req, res) => {
+  try {
+    if (!fs.existsSync(landingDemoPath)) {
+      return res.status(404).json({ error: 'Landing demo not generated' });
+    }
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.type('json').send(fs.readFileSync(landingDemoPath, 'utf8'));
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`landing-demo-trades: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 router.use(tvAlertsRoutes);

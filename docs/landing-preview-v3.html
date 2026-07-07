@@ -13,63 +13,14 @@
     }
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; }
-    body {
-      margin: 0; font-family: Inter, sans-serif; background: var(--bg); color: var(--text);
-      line-height: 1.6; overflow-x: hidden;
-    }
-
-    /* ── animated backdrop ── */
-    .bg-layer { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
-    .bg-grid {
-      position: absolute; inset: -50%;
-      background-image:
-        linear-gradient(rgba(240,196,25,.04) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(240,196,25,.04) 1px, transparent 1px);
-      background-size: 48px 48px;
-      animation: gridDrift 40s linear infinite;
-      mask-image: radial-gradient(ellipse 80% 70% at 50% 30%, black 20%, transparent 75%);
-    }
-  @keyframes gridDrift {
-      0% { transform: translate(0, 0) rotate(0deg); }
-      100% { transform: translate(48px, 48px) rotate(0.5deg); }
-    }
-    .orb {
-      position: absolute; border-radius: 50%; filter: blur(80px); opacity: .45;
-      animation: orbFloat 18s ease-in-out infinite alternate;
-    }
-    .orb-1 { width: 420px; height: 420px; background: rgba(240,196,25,.18); top: -8%; left: 10%; }
-    .orb-2 { width: 320px; height: 320px; background: rgba(74,222,128,.1); top: 40%; right: -5%; animation-delay: -6s; }
-    .orb-3 { width: 280px; height: 280px; background: rgba(167,139,250,.08); bottom: 10%; left: 25%; animation-delay: -12s; }
-    @keyframes orbFloat {
-      0% { transform: translate(0, 0) scale(1); }
-      100% { transform: translate(30px, -40px) scale(1.08); }
-    }
-    .scanline {
-      position: absolute; inset: 0;
-      background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(255,255,255,.008) 2px, rgba(255,255,255,.008) 4px);
-      animation: scan 8s linear infinite;
-    }
-    @keyframes scan { 0% { opacity: .3; } 50% { opacity: .6; } 100% { opacity: .3; } }
-
-    /* faint background chart ghosts */
-    .bg-ghost {
-      position: absolute; opacity: .04; pointer-events: none;
-      animation: ghostFloat 22s ease-in-out infinite alternate;
-    }
-    .bg-ghost-1 { width: 340px; top: 12%; left: 4%; animation-delay: 0s; }
-    .bg-ghost-2 { width: 280px; top: 55%; right: 6%; animation-delay: -7s; }
-    .bg-ghost-3 { width: 220px; bottom: 8%; left: 30%; animation-delay: -14s; }
-    @keyframes ghostFloat {
-      0% { transform: translateY(0) scale(1); opacity: .03; }
-      100% { transform: translateY(-24px) scale(1.04); opacity: .06; }
-    }
+    body { margin: 0; font-family: Inter, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; overflow-x: hidden; }
 
     .wrap { width: min(var(--max), calc(100% - 40px)); margin: 0 auto; position: relative; z-index: 1; }
     a { color: inherit; text-decoration: none; }
 
     .nav {
       position: sticky; top: 0; z-index: 20;
-      background: rgba(6,6,8,.75); backdrop-filter: blur(14px); border-bottom: 1px solid var(--border);
+      background: rgba(6,6,8,.8); backdrop-filter: blur(14px); border-bottom: 1px solid var(--border);
     }
     .nav-in { display: flex; align-items: center; justify-content: space-between; padding: 14px 0; gap: 12px; }
     .logo { font-weight: 800; font-size: 13px; letter-spacing: .1em; text-transform: uppercase; }
@@ -85,105 +36,183 @@
       box-shadow: 0 4px 24px rgba(240,196,25,.25);
     }
 
-    .hero { padding: 72px 0 48px; display: grid; grid-template-columns: 1fr 1.15fr; gap: 36px; align-items: center; }
-    .eyebrow {
-      color: var(--gold); font-size: 11px; font-weight: 700; letter-spacing: .14em;
-      text-transform: uppercase; margin-bottom: 14px; animation: fadeUp .7s ease both;
-    }
-    h1 {
-      margin: 0 0 16px; font-size: clamp(34px, 4.8vw, 52px); line-height: 1.06;
-      letter-spacing: -.03em; animation: fadeUp .7s .1s ease both;
-    }
+    .hero { padding: 72px 0 48px; display: grid; grid-template-columns: 1fr 1.55fr; gap: 32px; align-items: center; }
+    .eyebrow { color: var(--gold); font-size: 11px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; margin-bottom: 14px; animation: fadeUp .7s ease both; }
+    h1 { margin: 0 0 16px; font-size: clamp(34px, 4.8vw, 52px); line-height: 1.06; letter-spacing: -.03em; animation: fadeUp .7s .1s ease both; }
     h1 em { font-style: normal; color: var(--gold); }
-    .lead {
-      color: var(--muted); font-size: 17px; max-width: 44ch; margin-bottom: 28px;
-      animation: fadeUp .7s .2s ease both;
-    }
+    .lead { color: var(--muted); font-size: 17px; max-width: 44ch; margin-bottom: 28px; animation: fadeUp .7s .2s ease both; }
     .hero-cta { animation: fadeUp .7s .3s ease both; }
     @keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 
-    /* ── showcase mock ── */
+    /* ── demo cabinet + vitrine (sibling columns) ── */
+    .hero-visual {
+      position: relative; min-width: 0;
+      display: flex; align-items: stretch; gap: 12px;
+      animation: fadeUp .9s .25s ease both;
+    }
     .showcase {
-      position: relative; border-radius: 20px; border: 1px solid rgba(240,196,25,.22);
-      background: linear-gradient(145deg, rgba(240,196,25,.06), transparent 45%), var(--card);
-      box-shadow: 0 24px 80px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.03) inset;
-      overflow: hidden; animation: fadeUp .9s .25s ease both;
+      flex: 1; min-width: 0;
+      border-radius: 20px;
+      border: 1px solid rgba(240,196,25,.22);
+      background: linear-gradient(145deg, rgba(240,196,25,.05), transparent 45%), var(--card);
+      box-shadow: 0 24px 80px rgba(0,0,0,.5); overflow: hidden;
     }
-    .showcase::before {
-      content: ''; position: absolute; top: 0; left: -100%; width: 60%; height: 100%;
-      background: linear-gradient(90deg, transparent, rgba(240,196,25,.06), transparent);
-      animation: shimmer 6s ease-in-out infinite;
-    }
-    @keyframes shimmer { 0%, 100% { left: -100%; } 50% { left: 120%; } }
     .showcase-head {
-      display: flex; align-items: center; justify-content: space-between; padding: 14px 18px;
+      display: flex; align-items: center; justify-content: space-between; padding: 12px 16px;
       border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted);
+      background: var(--card); gap: 8px; flex-wrap: wrap;
     }
+    .showcase-head-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .live-dot {
+      width: 7px; height: 7px; border-radius: 50%; background: var(--green);
+      box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite;
+    }
+    @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }
+    .period-tabs { display: flex; gap: 4px; }
+    .period-tabs span {
+      font-size: 10px; padding: 3px 8px; border-radius: 6px; color: var(--muted);
+      border: 1px solid transparent;
+    }
+    .period-tabs span.on { color: var(--gold); border-color: rgba(240,196,25,.3); background: rgba(240,196,25,.08); }
     .showcase-label {
       font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase;
       color: var(--gold); padding: 4px 10px; border-radius: 999px;
       border: 1px solid rgba(240,196,25,.25); background: rgba(240,196,25,.06);
     }
-    .showcase-body { display: grid; grid-template-columns: 1fr 200px; min-height: 280px; }
-    .chart-zone { padding: 16px 12px 8px; position: relative; }
-    .chart-tags { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; padding: 0 6px; }
-    .tag {
-      font-size: 11px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border);
-      background: rgba(0,0,0,.3);
+    .showcase-body {
+      display: grid; grid-template-columns: 1fr 148px;
+      min-height: 320px; background: var(--card);
     }
+    .chart-zone { padding: 12px 12px 8px; min-width: 0; display: flex; flex-direction: column; }
+    .chart-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; gap: 8px; flex-wrap: wrap; }
+    .chart-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+    .tag { font-size: 11px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: rgba(0,0,0,.3); }
     .tag b { font-weight: 700; }
     .tag.eq b { color: #60a5fa; }
     .tag.pnl b { color: var(--green); }
     .tag.dd b { color: #fb923c; }
-    .chart-svg { width: 100%; height: 200px; display: block; }
-    .chart-line {
-      fill: none; stroke: #60a5fa; stroke-width: 2.2; stroke-linecap: round;
-      stroke-dasharray: 1200; stroke-dashoffset: 1200;
-      animation: drawLine 2.5s ease forwards .5s;
+    .open-pos {
+      display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; align-items: center;
+    }
+    .open-pos .pos-label { font-size: 10px; color: var(--muted); }
+    .open-pos .sym-tag {
+      font-size: 10px; padding: 3px 8px; border-radius: 999px;
+      border: 1px solid rgba(74,222,128,.25); background: rgba(74,222,128,.08); color: var(--green);
+    }
+    .chart-wrap { position: relative; flex: 1; min-height: 170px; }
+    .chart-layer { width: 100%; height: 100%; min-height: 170px; display: block; transition: opacity .28s; }
+    .chart-layer.equity-view { opacity: 1; }
+    .chart-layer.equity-view.dim { opacity: .12; }
+    .chart-layer.coin-view {
+      position: absolute; inset: 0; opacity: 0; pointer-events: none;
+    }
+    .chart-layer.coin-view.on { opacity: 1; }
+    .coin-title {
+      position: absolute; top: 6px; left: 8px; font-size: 11px; font-weight: 700;
+      color: var(--gold); opacity: 0; transition: opacity .25s; z-index: 2;
+    }
+    .coin-title.on { opacity: 1; }
+    .chart-line { fill: none; stroke: #60a5fa; stroke-width: 2.2; stroke-linecap: round; stroke-dasharray: 1200; stroke-dashoffset: 1200; animation: drawLine 2.5s ease forwards .5s; }
+    .coin-line { fill: none; stroke: var(--gold); stroke-width: 2.2; stroke-linecap: round; }
+    .coin-wick { stroke-width: 1; }
+    .coin-wick.up { stroke: #4ade80; }
+    .coin-wick.down { stroke: #f87171; }
+    .coin-body.up { fill: rgba(74,222,128,.85); }
+    .coin-body.down { fill: rgba(248,113,113,.85); }
+    .chart-grid line { stroke: rgba(255,255,255,.04); stroke-width: 1; }
+    .coin-marker circle { stroke-width: 2.5; }
+    .coin-marker.long circle { fill: rgba(74,222,128,.5); stroke: #4ade80; }
+    .coin-marker.short circle { fill: rgba(248,113,113,.5); stroke: #f87171; }
+    .coin-marker text { font-size: 9px; font-weight: 800; fill: #fff; }
+    .trade-path { fill: none; stroke-width: 2.8; stroke-linecap: round; opacity: .95; }
+    .trade-path.long { stroke: #4ade80; }
+    .trade-path.short { stroke: #f87171; }
+    .chart-hint {
+      font-size: 9px; color: var(--muted); margin-top: 4px; opacity: .7;
     }
     .chart-fill { opacity: 0; animation: fadeIn .8s ease forwards 2s; }
     @keyframes drawLine { to { stroke-dashoffset: 0; } }
     @keyframes fadeIn { to { opacity: 1; } }
+
     .trades-panel {
-      border-left: 1px solid var(--border); background: rgba(0,0,0,.25);
-      padding: 12px 10px; font-size: 11px;
+      border-left: 1px solid var(--border); background: rgba(0,0,0,.35);
+      padding: 12px 10px; font-size: 11px; display: flex; flex-direction: column;
     }
-    .trades-panel h4 { margin: 0 0 10px; font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .06em; }
+    .trades-panel h4 { margin: 0 0 4px; font-size: 10px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+    .trades-live { font-size: 9px; color: var(--green); margin-bottom: 8px; display: flex; align-items: center; gap: 5px; }
     .trade-row {
-      display: flex; justify-content: space-between; padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.04);
-      animation: slideIn .5s ease both;
+      display: flex; justify-content: space-between; padding: 7px 6px; margin: 0 -6px;
+      border-radius: 8px; border-bottom: 1px solid rgba(255,255,255,.04);
+      cursor: pointer; transition: background .15s;
     }
-    .trade-row:nth-child(2) { animation-delay: .1s; }
-    .trade-row:nth-child(3) { animation-delay: .2s; }
-    .trade-row:nth-child(4) { animation-delay: .3s; }
-    .trade-row:nth-child(5) { animation-delay: .4s; }
-    @keyframes slideIn { from { opacity: 0; transform: translateX(8px); } to { opacity: 1; transform: none; } }
+    .trade-row:hover, .trade-row.active { background: rgba(240,196,25,.08); }
     .trade-row .in { color: var(--green); font-weight: 600; }
     .trade-row .out { color: var(--red); font-weight: 600; }
-    .trade-row .sym { color: var(--text); }
     .trade-row .pnl { color: var(--green); font-variant-numeric: tabular-nums; }
 
-    .side-tabs { display: flex; gap: 4px; padding: 8px 10px 0; border-bottom: 1px solid var(--border); }
-    .side-tab {
-      flex: 1; text-align: center; font-size: 10px; font-weight: 700; letter-spacing: .06em;
-      text-transform: uppercase; padding: 6px 4px; border-radius: 8px 8px 0 0; color: var(--muted);
-      cursor: pointer; border: 1px solid transparent; border-bottom: none; background: transparent;
+    /* vitrine — reserved 232px; frame grows 116→232 on hover */
+    .vitrine-wrap {
+      width: 232px; flex-shrink: 0; align-self: stretch;
+      display: flex; justify-content: flex-end;
     }
-    .side-tab.active { color: var(--gold); background: rgba(240,196,25,.06); border-color: var(--border); }
-    .side-panel { display: none; }
-    .side-panel.active { display: block; }
-    .vitrine-row {
-      display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center;
-      padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,.04); font-size: 11px;
+    .vitrine-slot {
+      width: 116px; height: 100%;
+      border-radius: 20px;
+      border: 1px solid rgba(240,196,25,.35);
+      background: linear-gradient(135deg, rgba(16,16,20,.97), rgba(8,8,12,.98));
+      box-shadow: 0 24px 80px rgba(0,0,0,.45);
+      overflow: hidden;
+      transition: width .42s cubic-bezier(.4,0,.2,1);
     }
-    .vitrine-row strong { display: block; font-size: 11px; color: var(--text); }
-    .vitrine-row span { color: var(--muted); font-size: 10px; }
-    .vitrine-row .ret { color: var(--green); font-weight: 700; }
-    .vitrine-btn {
-      font-size: 10px; padding: 4px 8px; border-radius: 999px; border: 1px solid rgba(240,196,25,.35);
-      color: var(--gold); background: rgba(240,196,25,.08); white-space: nowrap;
+    .vitrine-wrap:hover .vitrine-slot { width: 232px; }
+    .vitrine-rail {
+      width: 232px; min-height: 100%;
+      display: flex; flex-direction: row; align-items: stretch;
+      margin-left: -116px;
     }
-    .mini-spark { width: 48px; height: 20px; opacity: .85; }
+    .vitrine-col {
+      width: 116px; flex-shrink: 0;
+      display: flex; flex-direction: column; gap: 7px;
+      padding: 6px 4px; min-height: 100%;
+    }
+    .vitrine-col--main {
+      border: none; border-radius: 0; box-shadow: none;
+      background: transparent;
+    }
+    .vitrine-col--expand {
+      border: none; background: transparent;
+      opacity: .55;
+      transition: opacity .32s;
+    }
+    .vitrine-wrap:hover .vitrine-col--expand { opacity: 1; }
+    .vitrine-rail__head {
+      font-size: 9px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase;
+      color: var(--gold); text-align: center; padding: 6px 4px;
+      border: 1px solid rgba(240,196,25,.25); border-radius: 10px;
+      background: rgba(240,196,25,.06);
+    }
+    .v-tile {
+      flex-shrink: 0; padding: 10px 8px; border-radius: 12px;
+      border: 1px solid var(--border); background: var(--card);
+      transition: border-color .2s, box-shadow .2s;
+      overflow: hidden;
+    }
+    .vitrine-wrap:hover .v-tile { border-color: rgba(240,196,25,.3); }
+    .v-tile strong {
+      display: block; font-size: 10px; line-height: 1.25; margin-bottom: 4px;
+      overflow: hidden; text-overflow: ellipsis;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    }
+    .v-tile .ret { font-size: 14px; font-weight: 800; color: var(--green); line-height: 1; }
+    .v-tile .meta { font-size: 9px; color: var(--muted); margin-top: 3px; }
+    .v-tile svg { width: 100%; height: 22px; margin-top: 6px; display: block; opacity: .85; }
+    .v-tile .v-btn {
+      display: block; height: 28px; line-height: 28px; margin-top: 8px;
+      padding: 0 4px; font-size: 10px; font-weight: 700; text-align: center; border-radius: 6px;
+      background: linear-gradient(135deg, var(--gold), var(--gold2)); color: #111;
+      opacity: 0; transition: opacity .25s;
+    }
+    .vitrine-wrap:hover .v-tile .v-btn { opacity: 1; }
 
     section { padding: 56px 0; }
     h2 { margin: 0 0 10px; font-size: clamp(26px, 3vw, 36px); letter-spacing: -.02em; }
@@ -191,24 +220,18 @@
 
     .chips { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 32px; }
     .chip {
-      padding: 10px 16px; border-radius: 12px; border: 1px solid var(--border);
-      background: var(--card); font-size: 13px; transition: border-color .25s, transform .25s, box-shadow .25s;
-      animation: fadeUp .6s ease both; cursor: default;
+      padding: 10px 16px; border-radius: 12px; border: 1px solid var(--border); background: var(--card);
+      font-size: 13px; transition: border-color .25s, transform .25s, box-shadow .25s, padding-bottom .25s;
+      animation: fadeUp .6s ease both;
     }
-    .chip:hover { border-color: rgba(240,196,25,.4); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+    .chip:hover { border-color: rgba(240,196,25,.4); transform: translateY(-2px); box-shadow: 0 8px 24px rgba(0,0,0,.3); padding-bottom: 14px; }
     .chip strong { display: block; color: var(--gold); font-size: 12px; margin-bottom: 2px; }
     .chip span { color: var(--muted); font-size: 12px; display: block; }
-    .chip .chip-more {
-      max-height: 0; opacity: 0; overflow: hidden; font-size: 11px; color: var(--muted);
-      transition: max-height .3s, opacity .3s, margin-top .3s;
-    }
+    .chip .chip-more { max-height: 0; opacity: 0; overflow: hidden; font-size: 11px; color: var(--muted); transition: max-height .3s, opacity .3s, margin-top .3s; }
     .chip:hover .chip-more { max-height: 60px; opacity: 1; margin-top: 6px; }
 
     .strat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-    .strat-card {
-      padding: 22px; border-radius: 16px; border: 1px solid var(--border); background: var(--card);
-      transition: transform .3s, border-color .3s;
-    }
+    .strat-card { padding: 22px; border-radius: 16px; border: 1px solid var(--border); background: var(--card); transition: transform .3s, border-color .3s; }
     .strat-card:hover { transform: translateY(-4px); border-color: rgba(240,196,25,.35); }
     .strat-card .ico { font-size: 22px; margin-bottom: 10px; }
     .strat-card h3 { margin: 0 0 6px; font-size: 17px; }
@@ -217,57 +240,38 @@
     .pillars { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
     .pillar {
       padding: 24px; border-radius: 16px; border: 1px solid var(--border); background: var(--surface);
-      min-height: 190px; display: flex; flex-direction: column;
+      min-height: 200px; display: flex; flex-direction: column; position: relative; overflow: hidden;
       transition: border-color .25s, transform .25s, box-shadow .25s;
-      position: relative; overflow: hidden;
     }
-    .pillar:hover {
-      border-color: rgba(240,196,25,.4); transform: translateY(-4px);
-      box-shadow: 0 16px 40px rgba(0,0,0,.35);
-    }
+    .pillar:hover { border-color: rgba(240,196,25,.4); transform: translateY(-4px); box-shadow: 0 16px 40px rgba(0,0,0,.35); }
     .pillar .num { color: var(--gold); font-weight: 800; font-size: 12px; margin-bottom: 8px; }
-    .pillar h3 { margin: 0 0 8px; font-size: 19px; }
-    .pillar p { margin: 0; color: var(--muted); font-size: 14px; flex: 1; }
-    .pillar .pillar-short { display: block; }
+    .pillar h3 { margin: 0 0 8px; font-size: 18px; }
+    .pillar .pillar-short { margin: 0; color: var(--muted); font-size: 14px; }
     .pillar .pillar-long {
-      max-height: 0; opacity: 0; overflow: hidden; margin-top: 0;
+      max-height: 0; opacity: 0; overflow: hidden; margin: 0;
       transition: max-height .35s ease, opacity .3s ease, margin-top .3s ease;
       color: var(--muted); font-size: 13px; line-height: 1.5;
     }
-    .pillar:hover .pillar-long { max-height: 120px; opacity: 1; margin-top: 10px; }
+    .pillar:hover .pillar-long { max-height: 100px; opacity: 1; margin-top: 10px; }
     .pillar .alpha-badge {
       position: absolute; top: 12px; right: 12px; font-size: 9px; font-weight: 700;
       letter-spacing: .08em; padding: 3px 8px; border-radius: 999px;
       background: rgba(167,139,250,.15); color: var(--purple); border: 1px solid rgba(167,139,250,.3);
     }
-    .pillar a { margin-top: 14px; color: var(--gold); font-size: 13px; font-weight: 600; }
+    .pillar a { margin-top: auto; padding-top: 14px; color: var(--gold); font-size: 13px; font-weight: 600; }
 
-    .pricing { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; align-items: stretch; }
-    .plan {
-      padding: 26px 22px; border-radius: 18px; border: 1px solid var(--border); background: var(--surface);
-      position: relative; display: flex; flex-direction: column;
-      transition: transform .25s, box-shadow .25s;
-    }
+    .pricing { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .plan { padding: 26px 22px; border-radius: 18px; border: 1px solid var(--border); background: var(--surface); position: relative; display: flex; flex-direction: column; transition: transform .25s; }
     .plan:hover { transform: translateY(-3px); box-shadow: 0 12px 40px rgba(0,0,0,.35); }
-    .plan.featured {
-      border-color: rgba(240,196,25,.5);
-      background: linear-gradient(160deg, rgba(240,196,25,.08), transparent 55%), var(--card);
-      box-shadow: 0 0 40px rgba(240,196,25,.08);
-    }
-    .plan .badge {
-      position: absolute; top: 14px; right: 14px; font-size: 10px; padding: 4px 10px;
-      border-radius: 999px; background: rgba(240,196,25,.2); color: var(--gold); font-weight: 700;
-    }
+    .plan.featured { border-color: rgba(240,196,25,.5); background: linear-gradient(160deg, rgba(240,196,25,.08), transparent 55%), var(--card); }
+    .plan .badge { position: absolute; top: 14px; right: 14px; font-size: 10px; padding: 4px 10px; border-radius: 999px; background: rgba(240,196,25,.2); color: var(--gold); font-weight: 700; }
     .plan h3 { margin: 0 0 4px; font-size: 17px; }
     .plan .hint { font-size: 12px; color: var(--muted); margin-bottom: 8px; min-height: 32px; }
-    .price { font-size: 36px; font-weight: 800; margin: 4px 0 12px; line-height: 1.1; }
+    .price { font-size: 36px; font-weight: 800; margin: 4px 0 12px; }
     .strike { text-decoration: line-through; color: var(--muted); font-size: 16px; font-weight: 500; margin-right: 6px; }
     .plan ul { margin: 0; padding-left: 16px; color: var(--muted); font-size: 13px; flex: 1; }
     .plan li { margin-bottom: 6px; }
-    .plan .pick {
-      margin-top: 16px; padding: 10px; text-align: center; border-radius: 10px;
-      border: 1px dashed var(--border); font-size: 12px; color: var(--muted);
-    }
+    .plan .pick { margin-top: 16px; padding: 10px; text-align: center; border-radius: 10px; border: 1px dashed var(--border); font-size: 12px; color: var(--muted); }
     .plan.featured .pick { border-color: rgba(240,196,25,.4); color: var(--gold); }
 
     .venture {
@@ -276,29 +280,27 @@
       border: 1px solid var(--border);
       display: flex; align-items: center; justify-content: space-between; gap: 24px; flex-wrap: wrap;
     }
-
     footer { border-top: 1px solid var(--border); padding: 28px 0 48px; color: var(--muted); font-size: 13px; }
 
     @media (max-width: 960px) {
-      .hero, .showcase-body, .strat-grid, .pillars, .pricing { grid-template-columns: 1fr; }
-      .pillars { grid-template-columns: 1fr; }
+      .hero, .strat-grid, .pillars, .pricing { grid-template-columns: 1fr; }
+      .showcase-body { grid-template-columns: 1fr; }
       .trades-panel { border-left: none; border-top: 1px solid var(--border); }
+      .hero-visual { flex-direction: column; gap: 12px; }
+      .showcase { border-radius: 20px; }
+      .vitrine-wrap { width: 100%; }
+      .vitrine-slot { width: 100%; min-height: 280px; border-radius: 20px; }
+      .vitrine-rail { margin-left: 0; width: 100%; flex-wrap: wrap; }
+      .vitrine-col { width: 50%; }
+      .vitrine-col--expand { opacity: 1; }
+      .vitrine-col--main { border-radius: 0 0 20px 20px; border-left: 1px solid rgba(240,196,25,.35); }
+      .v-tile .v-btn { opacity: 1; }
+      .pillars { grid-template-columns: 1fr; }
       .links { display: none; }
     }
   </style>
 </head>
 <body>
-  <div class="bg-layer" aria-hidden="true">
-    <div class="bg-grid"></div>
-    <svg class="bg-ghost bg-ghost-1" viewBox="0 0 200 60"><path fill="none" stroke="#60a5fa" stroke-width="2" d="M0,50 L30,45 L60,40 L90,28 L120,22 L150,15 L200,8"/></svg>
-    <svg class="bg-ghost bg-ghost-2" viewBox="0 0 200 60"><path fill="none" stroke="#4ade80" stroke-width="2" d="M0,40 L40,38 L80,30 L120,25 L160,18 L200,12"/></svg>
-    <svg class="bg-ghost bg-ghost-3" viewBox="0 0 200 60"><path fill="none" stroke="#f0c419" stroke-width="1.5" stroke-dasharray="3 3" d="M0,55 L50,50 L100,35 L150,28 L200,20"/></svg>
-    <div class="orb orb-1"></div>
-    <div class="orb orb-2"></div>
-    <div class="orb orb-3"></div>
-    <div class="scanline"></div>
-  </div>
-
   <header class="nav"><div class="wrap nav-in">
     <div class="logo">BattleToads</div>
     <nav class="links">
@@ -327,137 +329,164 @@
         </div>
       </div>
 
-      <div class="showcase" aria-label="Пример мониторинга">
-        <div class="showcase-head">
-          <span class="showcase-label">Демо кабинета</span>
-          <span>Мониторинг · портфель</span>
-        </div>
-        <div class="showcase-body">
-          <div class="chart-zone">
-            <div class="chart-tags">
-              <span class="tag eq">Equity <b>$12 840</b></span>
-              <span class="tag pnl">PnL net <b>+$1 240</b></span>
-              <span class="tag dd">DD <b>8.2%</b></span>
+      <div class="hero-visual">
+        <div class="showcase" aria-label="Демо кабинета">
+          <div class="showcase-head">
+            <div class="showcase-head-left">
+              <span class="showcase-label">Демо кабинета</span>
+              <span class="live-dot" title="Runtime active"></span>
             </div>
-            <svg class="chart-svg" viewBox="0 0 400 200" preserveAspectRatio="none">
-              <defs>
-                <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stop-color="#60a5fa" stop-opacity=".35"/>
-                  <stop offset="100%" stop-color="#60a5fa" stop-opacity="0"/>
-                </linearGradient>
-              </defs>
-              <path class="chart-fill" fill="url(#eqFill)" d="M0,160 L40,155 L80,148 L120,130 L160,125 L200,110 L240,95 L280,88 L320,72 L360,58 L400,45 L400,200 L0,200 Z"/>
-              <path class="chart-line" d="M0,160 L40,155 L80,148 L120,130 L160,125 L200,110 L240,95 L280,88 L320,72 L360,58 L400,45"/>
-              <path fill="none" stroke="rgba(74,222,128,.5)" stroke-width="1.5" stroke-dasharray="4 4"
-                d="M0,170 L80,165 L160,150 L240,130 L320,115 L400,100" opacity=".7"/>
-            </svg>
+            <div class="period-tabs">
+              <span class="on">1д</span><span>7д</span><span>30д</span>
+            </div>
           </div>
-          <aside class="trades-panel">
-            <div class="side-tabs">
-              <button type="button" class="side-tab active" data-panel="trades">Сделки</button>
-              <button type="button" class="side-tab" data-panel="vitrine">Витрина</button>
-            </div>
-            <div class="side-panel active" id="panel-trades" style="padding: 10px;">
-              <h4 style="margin:0 0 10px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">24ч</h4>
-              <div class="trade-row"><span><span class="in">IN</span> <span class="sym">SOL</span></span><span class="pnl">+2.1%</span></div>
-              <div class="trade-row"><span><span class="out">OUT</span> <span class="sym">DOGE</span></span><span class="pnl">+0.8%</span></div>
-              <div class="trade-row"><span><span class="in">IN</span> <span class="sym">AVAX</span></span><span class="pnl">+1.2%</span></div>
-              <div class="trade-row"><span><span class="out">OUT</span> <span class="sym">LINK</span></span><span class="pnl">+1.4%</span></div>
-            </div>
-            <div class="side-panel" id="panel-vitrine" style="padding: 10px;">
-              <h4 style="margin:0 0 8px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em">Топ витрины</h4>
-              <div class="vitrine-row">
-                <div>
-                  <strong>Synth Stable Union</strong>
-                  <span>36 стратегий · PF 1.6</span>
-                  <svg class="mini-spark" viewBox="0 0 48 20"><path fill="none" stroke="#60a5fa" stroke-width="1.5" d="M0,18 L8,16 L16,14 L24,10 L32,7 L40,4 L48,2"/></svg>
+          <div class="showcase-body">
+            <div class="chart-zone">
+              <div class="chart-toolbar">
+                <div class="chart-tags">
+                  <span class="tag eq">Equity <b>$12 840</b></span>
+                  <span class="tag pnl">PnL <b>+$1 240</b></span>
+                  <span class="tag dd">DD <b>8.2%</b></span>
+                  <span class="tag">UPNL <b style="color:#a78bfa">+$186</b></span>
                 </div>
-                <div><span class="ret">+142%</span><br><a class="vitrine-btn" href="/client/register">Подключить</a></div>
               </div>
-              <div class="vitrine-row">
-                <div>
-                  <strong>MONO zz_breakout · JUP</strong>
-                  <span>4h · 255 сд.</span>
-                  <svg class="mini-spark" viewBox="0 0 48 20"><path fill="none" stroke="#4ade80" stroke-width="1.5" d="M0,16 L12,14 L24,11 L36,8 L48,5"/></svg>
-                </div>
-                <div><span class="ret">+2.8%</span><br><a class="vitrine-btn" href="/client/register">Подключить</a></div>
+              <div class="open-pos" id="openPos"></div>
+              <div class="chart-wrap">
+                <div class="coin-title" id="coinTitle"></div>
+                <svg class="chart-layer equity-view" id="equityChart" viewBox="0 0 400 200" preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id="eqFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stop-color="#60a5fa" stop-opacity=".35"/>
+                      <stop offset="100%" stop-color="#60a5fa" stop-opacity="0"/>
+                    </linearGradient>
+                  </defs>
+                  <g class="chart-grid">
+                    <line x1="0" y1="50" x2="400" y2="50"/><line x1="0" y1="100" x2="400" y2="100"/>
+                    <line x1="0" y1="150" x2="400" y2="150"/><line x1="100" y1="0" x2="100" y2="200"/>
+                    <line x1="200" y1="0" x2="200" y2="200"/><line x1="300" y1="0" x2="300" y2="200"/>
+                  </g>
+                  <path class="chart-fill" fill="url(#eqFill)" d="M0,160 L40,155 L80,148 L120,130 L160,125 L200,110 L240,95 L280,88 L320,72 L360,58 L400,45 L400,200 L0,200 Z"/>
+                  <path class="chart-line" d="M0,160 L40,155 L80,148 L120,130 L160,125 L200,110 L240,95 L280,88 L320,72 L360,58 L400,45"/>
+                </svg>
+                <svg class="chart-layer coin-view" id="coinChart" viewBox="0 0 400 200" preserveAspectRatio="none"></svg>
               </div>
-              <div class="vitrine-row">
-                <div>
-                  <strong>TV Momentum Cloud</strong>
-                  <span>Торговая система</span>
-                  <svg class="mini-spark" viewBox="0 0 48 20"><path fill="none" stroke="#f0c419" stroke-width="1.5" d="M0,17 L10,15 L20,12 L30,9 L40,6 L48,3"/></svg>
-                </div>
-                <div><span class="ret">+89%</span><br><a class="vitrine-btn" href="/client/register">Подключить</a></div>
-              </div>
+              <div class="chart-hint">Наведи на сделку — реальный график цены с входом и выходом</div>
             </div>
-          </aside>
+            <aside class="trades-panel">
+              <h4>Сделки · лучшие</h4>
+              <div class="trades-live"><span class="live-dot" style="width:5px;height:5px"></span> live · обновление раз в сутки</div>
+              <div id="tradesList"></div>
+            </aside>
+          </div>
+        </div>
+
+        <div class="vitrine-wrap">
+        <div class="vitrine-slot">
+        <aside class="vitrine-rail" aria-label="Витрина торговых систем">
+          <div class="vitrine-col vitrine-col--expand" aria-hidden="true">
+            <div class="vitrine-rail__head" style="visibility:hidden">·</div>
+            <article class="v-tile">
+              <strong>Hedge Bomb Suite</strong>
+              <div class="ret">+76%</div>
+              <div class="meta">хедж · 24 стр</div>
+              <svg viewBox="0 0 80 22" preserveAspectRatio="none"><path fill="none" stroke="#a78bfa" stroke-width="2" d="M0,17 L25,15 L50,10 L80,5"/></svg>
+              <a class="v-btn" href="/client/register">Подключить</a>
+            </article>
+            <article class="v-tile">
+              <strong>Balanced Shield DCA</strong>
+              <div class="ret">+54%</div>
+              <div class="meta">shield · DD 8%</div>
+              <svg viewBox="0 0 80 22" preserveAspectRatio="none"><path fill="none" stroke="#60a5fa" stroke-width="2" d="M0,20 L30,18 L60,12 L80,8"/></svg>
+              <a class="v-btn" href="/client/register">Подключить</a>
+            </article>
+            <article class="v-tile">
+              <strong>Cloud Stars 1.2</strong>
+              <div class="ret">+112%</div>
+              <div class="meta">cloud · curated</div>
+              <svg viewBox="0 0 80 22" preserveAspectRatio="none"><path fill="none" stroke="#f0c419" stroke-width="2" d="M0,21 L15,19 L35,14 L55,9 L80,4"/></svg>
+              <a class="v-btn" href="/client/register">Подключить</a>
+            </article>
+          </div>
+          <div class="vitrine-col vitrine-col--main">
+            <div class="vitrine-rail__head">Витрина</div>
+            <article class="v-tile">
+              <strong>Synth Stable Union v4.4</strong>
+              <div class="ret">+142%</div>
+              <div class="meta">36 стр · PF 1.6</div>
+              <svg viewBox="0 0 80 22" preserveAspectRatio="none"><path fill="none" stroke="#60a5fa" stroke-width="2" d="M0,20 L20,17 L40,12 L60,7 L80,3"/></svg>
+              <a class="v-btn" href="/client/register">Подключить</a>
+            </article>
+            <article class="v-tile">
+              <strong>TV Momentum Cloud</strong>
+              <div class="ret">+89%</div>
+              <div class="meta">L400 · DD 11%</div>
+              <svg viewBox="0 0 80 22" preserveAspectRatio="none"><path fill="none" stroke="#f0c419" stroke-width="2" d="M0,18 L20,15 L40,11 L60,7 L80,4"/></svg>
+              <a class="v-btn" href="/client/register">Подключить</a>
+            </article>
+            <article class="v-tile">
+              <strong>Mega Synth Shield</strong>
+              <div class="ret">+218%</div>
+              <div class="meta">union · PF 1.8</div>
+              <svg viewBox="0 0 80 22" preserveAspectRatio="none"><path fill="none" stroke="#4ade80" stroke-width="2" d="M0,19 L20,16 L40,11 L60,6 L80,2"/></svg>
+              <a class="v-btn" href="/client/register">Подключить</a>
+            </article>
+          </div>
+        </aside>
+        </div>
         </div>
       </div>
     </section>
 
     <section id="engine">
       <h2>Что внутри движка</h2>
-      <p class="sub">Не один бот — исследовательский контур: сотни конфигураций, walk-forward, портфельная сборка.</p>
+      <p class="sub">Исследовательский контур: сотни конфигураций, walk-forward, портфельная сборка.</p>
       <div class="chips">
         <div class="chip" style="animation-delay:.05s"><strong>Stat-arb</strong><span>поиск раскорреляции пар</span><span class="chip-more">Z-score входы, хедж по корзине, walk-forward отбор.</span></div>
         <div class="chip" style="animation-delay:.1s"><strong>Синтетика</strong><span>хедж и декорреляция</span><span class="chip-more">Портфели с низкой корреляцией, union-карточки.</span></div>
-        <div class="chip" style="animation-delay:.15s"><strong>AI-свип</strong><span>автооптимизация параметров</span><span class="chip-more">Сотни прогонов на VPS, отбор по DD и PF.</span></div>
+        <div class="chip" style="animation-delay:.15s"><strong>AI-свип</strong><span>автооптимизация параметров</span><span class="chip-more">Сотни прогонов, отбор по DD и PF.</span></div>
         <div class="chip" style="animation-delay:.2s"><strong>Order block</strong><span>структурные входы</span><span class="chip-more">Уровни ликвидности и структура рынка.</span></div>
-        <div class="chip" style="animation-delay:.25s"><strong>Shield DCA</strong><span>защита просадки</span><span class="chip-more">Макро-оверлеи и мягкий circuit breaker.</span></div>
-        <div class="chip" style="animation-delay:.3s"><strong>Мульти-TF</strong><span>1m — 1d в одном портфеле</span><span class="chip-more">Разные интервалы в одной торговой системе.</span></div>
+        <div class="chip" style="animation-delay:.25s"><strong>Shield DCA</strong><span>защита просадки</span><span class="chip-more">Макро-оверлеи и circuit breaker.</span></div>
+        <div class="chip" style="animation-delay:.3s"><strong>Мульти-TF</strong><span>1m — 1d в портфеле</span><span class="chip-more">Разные интервалы в одной ТС.</span></div>
         <div class="chip" style="animation-delay:.35s"><strong>TradingView</strong><span>алерты → исполнение (α)</span><span class="chip-more">Webhook из Pine, ваш ключ, наш runtime.</span></div>
       </div>
       <div class="strat-grid">
-        <article class="strat-card">
-          <div class="ico">📊</div>
-          <h3>Бэктест + витрина</h3>
-          <p>Каждая система с кривой equity, PF и max DD. Сравнение до подключения к live.</p>
-        </article>
-        <article class="strat-card">
-          <div class="ico">⚡</div>
-          <h3>Исполнение 24/7</h3>
-          <p>Runtime в облаке: сигналы, риск-лимиты, ребаланс портфеля без вашего терминала.</p>
-        </article>
-        <article class="strat-card">
-          <div class="ico">🔐</div>
-          <h3>Только API</h3>
-          <p>Ключи с правом торговли, без вывода. Остановка и смена стратегии — в один клик.</p>
-        </article>
+        <article class="strat-card"><div class="ico">📊</div><h3>Бэктест + витрина</h3><p>Каждая система с кривой equity, PF и max DD до подключения к live.</p></article>
+        <article class="strat-card"><div class="ico">⚡</div><h3>Исполнение 24/7</h3><p>Runtime в облаке: сигналы, риск-лимиты, ребаланс без терминала.</p></article>
+        <article class="strat-card"><div class="ico">🔐</div><h3>Только API</h3><p>Ключи с правом торговли, без вывода. Остановка — в один клик.</p></article>
       </div>
     </section>
 
     <section id="offer">
-      <h2>Четыре режима — наведи для деталей</h2>
-      <p class="sub">Один кабинет: портфель, сборка, копирование или свой сигнал из TradingView. Режим выбирается при регистрации.</p>
+      <h2>Четыре режима работы</h2>
+      <p class="sub">Портфель, сборка, копирование или сигнал из TradingView — выбирается при регистрации.</p>
       <div class="pillars">
         <article class="pillar">
           <div class="num">01</div>
           <h3>Готовый портфель</h3>
           <p class="pillar-short">Торговая система с бэктестом — подключили и контролируете риск.</p>
-          <p class="pillar-long">Портфель из десятков стратегий уже собран и протестирован. Выбираете ТС на витрине, задаёте риск — runtime исполняет 24/7.</p>
+          <p class="pillar-long">Портфель из десятков стратегий собран и протестирован. Выбираете ТС на витрине, задаёте риск — runtime исполняет 24/7.</p>
           <a href="/client/register">Пассивный режим →</a>
         </article>
         <article class="pillar">
           <div class="num">02</div>
           <h3>Сборка из каталога</h3>
           <p class="pillar-short">Сотни оферов с метриками — свой набор стратегий.</p>
-          <p class="pillar-long">Фильтр по паре, таймфрейму, доходности и просадке. Сохраняете конфигурацию, масштабируете по опыту.</p>
+          <p class="pillar-long">Фильтр по паре, таймфрейму, доходности и просадке. Сохраняете конфигурацию и масштабируете.</p>
           <a href="/client/register">Активный режим →</a>
         </article>
         <article class="pillar">
           <div class="num">03</div>
           <h3>Копирование сигналов</h3>
           <p class="pillar-short">Мастер-счёт и подписчики на одном API-контуре.</p>
-          <p class="pillar-long">Для партнёров и закрытых групп: без лимитов биржевого copy-trade, единый мониторинг и контроль риска.</p>
+          <p class="pillar-long">Для партнёров и закрытых групп без лимитов биржевого copy-trade.</p>
           <a href="/partner/login">Партнёрам →</a>
         </article>
         <article class="pillar">
           <span class="alpha-badge">ALPHA</span>
           <div class="num">04</div>
           <h3>TradingView алерты</h3>
-          <p class="pillar-short">Подключите свою стратегию с TradingView — мы исполняем.</p>
-          <p class="pillar-long">Webhook из Pine-скрипта или алерта → облачный runtime на вашем API-ключе. Тариф α доступен в бета-программе.</p>
+          <p class="pillar-short">Своя стратегия с TradingView — мы исполняем.</p>
+          <p class="pillar-long">Webhook из Pine → облачный runtime на вашем API-ключе. Доступно в бета-программе.</p>
           <a href="/client/register">Режим TV →</a>
         </article>
       </div>
@@ -465,41 +494,41 @@
 
     <section id="pricing">
       <h2>Модели оплаты</h2>
-      <p class="sub">Три варианта: бета сейчас, после запуска — фикс или процент с прибыли. Выбираете сами.</p>
+      <p class="sub">Бета сейчас, после запуска — фикс или процент с прибыли.</p>
       <div class="pricing">
         <div class="plan featured">
           <span class="badge">Сейчас</span>
           <h3>Бета</h3>
-          <p class="hint">Полный доступ без абонплаты на период теста</p>
+          <p class="hint">Полный доступ без абонплаты</p>
           <p class="price"><span class="strike">$99/мес</span> $0</p>
           <ul>
-            <li>Фикс зачёркнут — платите $0</li>
-            <li>Все режимы: портфель, сборка, TV α</li>
-            <li>Без комиссии с прибыли в бета</li>
+            <li>Все режимы, включая TV α</li>
+            <li>Мониторинг и витрина</li>
+            <li>Без комиссии с прибыли</li>
           </ul>
-          <div class="pick">Для старта и пилотов</div>
+          <div class="pick">Для старта</div>
         </div>
         <div class="plan">
           <h3>Фикс</h3>
-          <p class="hint">После запуска — предсказуемый ежемесячный платёж</p>
+          <p class="hint">Предсказуемый ежемесячный платёж</p>
           <p class="price">$99<span style="font-size:15px;color:var(--muted)">/мес</span></p>
           <ul>
             <li>Не платите много с профита</li>
             <li>Комиссия с PnL ниже или нулевая</li>
-            <li>Стабильный расход при долгой работе</li>
+            <li>Стабильный бюджет</li>
           </ul>
-          <div class="pick">Если важен фиксированный бюджет</div>
+          <div class="pick">Долгая работа</div>
         </div>
         <div class="plan">
           <h3>% с прибыли</h3>
-          <p class="hint">После запуска — только с новой прибыли (HWM)</p>
+          <p class="hint">Только с новой прибыли (HWM)</p>
           <p class="price">40%</p>
           <ul>
-            <li>Нет абонплаты — платите когда зарабатываете</li>
-            <li>В минус — комиссия не начисляется</li>
+            <li>Нет абонплаты</li>
+            <li>В минус — комиссия 0</li>
             <li>Меньше риска на старте</li>
           </ul>
-          <div class="pick">Если не хотите фикс в месяц</div>
+          <div class="pick">Без фикса в месяц</div>
         </div>
       </div>
     </section>
@@ -508,34 +537,189 @@
       <div class="venture">
         <div>
           <h2 style="margin-bottom: 8px;">Для инвесторов и венчуров</h2>
-          <p style="margin: 0; color: var(--muted); max-width: 52ch;">
-            Unit-экономика, архитектура runtime, дорожная карта и due diligence —
-            в whitepaper. Отдельный контур для институциональных запросов.
-          </p>
+          <p style="margin: 0; color: var(--muted); max-width: 52ch;">Unit-экономика, архитектура runtime и due diligence — в whitepaper.</p>
         </div>
         <a class="btn btn-gold" href="/whitepaper">Whitepaper →</a>
       </div>
     </section>
   </main>
 
-  <footer><div class="wrap">© BattleToads · Алгоритмическая торговля · <a href="/whitepaper">Документы</a></div></footer>
+  <footer><div class="wrap">© BattleToads · <a href="/whitepaper">Документы</a></div></footer>
+  <script src="landing-demo-trades.js"></script>
   <script>
-    document.querySelectorAll('.side-tab').forEach((tab) => {
-      tab.addEventListener('click', () => {
-        const panel = tab.getAttribute('data-panel');
-        document.querySelectorAll('.side-tab').forEach((t) => t.classList.toggle('active', t === tab));
-        document.querySelectorAll('.side-panel').forEach((p) => {
-          p.classList.toggle('active', p.id === `panel-${panel}`);
-        });
+    const equityChart = document.getElementById('equityChart');
+    const coinChart = document.getElementById('coinChart');
+    const coinTitle = document.getElementById('coinTitle');
+    const tradesList = document.getElementById('tradesList');
+    const openPos = document.getElementById('openPos');
+    let tradeMap = new Map();
+    let activeRow = null;
+
+    const W = 400;
+    const H = 200;
+    const PAD = { t: 14, r: 8, b: 14, l: 8 };
+
+    function nearestBarIndex(candles, ts) {
+      let best = 0;
+      let bestDiff = Infinity;
+      candles.forEach((c, i) => {
+        const d = Math.abs(c[0] - ts);
+        if (d < bestDiff) { bestDiff = d; best = i; }
       });
-    });
-    // auto-rotate vitrine tab every 8s for demo
-    let showVitrine = false;
-    setInterval(() => {
-      showVitrine = !showVitrine;
-      const tab = document.querySelector(`.side-tab[data-panel="${showVitrine ? 'vitrine' : 'trades'}"]`);
-      if (tab) tab.click();
-    }, 8000);
+      return best;
+    }
+
+    function barAt(candles, ts) {
+      const idx = nearestBarIndex(candles, ts);
+      return { idx, bar: candles[idx] };
+    }
+
+    function renderCoinChart(trade) {
+      const candles = trade.candles || [];
+      if (candles.length < 2) return;
+      const plotW = W - PAD.l - PAD.r;
+      const plotH = H - PAD.t - PAD.b;
+      const lows = candles.map((c) => c[3]);
+      const highs = candles.map((c) => c[2]);
+      const minP = Math.min(...lows);
+      const maxP = Math.max(...highs);
+      const range = Math.max(1e-9, maxP - minP);
+      const xStep = plotW / Math.max(1, candles.length - 1);
+      const bodyW = Math.max(1.4, Math.min(5.5, xStep * 0.62));
+      const y = (p) => PAD.t + ((maxP - p) / range) * plotH;
+      const isLong = trade.side === 'long';
+      const pathCls = isLong ? 'long' : 'short';
+
+      const defs = `<defs>
+        <marker id="arrowLong" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 Z" fill="#4ade80"/>
+        </marker>
+        <marker id="arrowShort" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 Z" fill="#f87171"/>
+        </marker>
+      </defs>`;
+
+      const grid = `<g class="chart-grid">
+        <line x1="${PAD.l}" y1="${PAD.t + plotH * 0.25}" x2="${W - PAD.r}" y2="${PAD.t + plotH * 0.25}"/>
+        <line x1="${PAD.l}" y1="${PAD.t + plotH * 0.5}" x2="${W - PAD.r}" y2="${PAD.t + plotH * 0.5}"/>
+        <line x1="${PAD.l}" y1="${PAD.t + plotH * 0.75}" x2="${W - PAD.r}" y2="${PAD.t + plotH * 0.75}"/>
+      </g>`;
+
+      const bodies = candles.map((c, i) => {
+        const [, o, h, l, cl] = c;
+        const x = PAD.l + i * xStep;
+        const up = cl >= o;
+        const cls = up ? 'up' : 'down';
+        const yO = y(o);
+        const yC = y(cl);
+        const yH = y(h);
+        const yL = y(l);
+        const top = Math.min(yO, yC);
+        const hBody = Math.max(1, Math.abs(yC - yO));
+        return `<line class="coin-wick ${cls}" x1="${x}" y1="${yH}" x2="${x}" y2="${yL}"/>
+          <rect class="coin-body ${cls}" x="${x - bodyW / 2}" y="${top}" width="${bodyW}" height="${hBody}" rx="0.4"/>`;
+      }).join('');
+
+      const entry = (trade.markers || []).find((m) => m.type === 'entry');
+      const exit = (trade.markers || []).find((m) => m.type === 'exit');
+      let pathArrow = '';
+      let markers = '';
+
+      if (entry && exit) {
+        const inBar = barAt(candles, entry.ts);
+        const outBar = barAt(candles, exit.ts);
+        const xIn = PAD.l + inBar.idx * xStep;
+        const xOut = PAD.l + outBar.idx * xStep;
+        const yIn = y(inBar.bar[4]);
+        const yOut = y(outBar.bar[4]);
+        const arrowId = isLong ? 'arrowLong' : 'arrowShort';
+        pathArrow = `<line class="trade-path ${pathCls}" x1="${xIn}" y1="${yIn}" x2="${xOut}" y2="${yOut}" marker-end="url(#${arrowId})"/>`;
+        const sideCls = isLong ? 'long' : 'short';
+        markers = `
+          <g class="coin-marker entry ${sideCls}">
+            <circle cx="${xIn}" cy="${yIn}" r="9" stroke-width="2.5"/>
+            <text x="${xIn}" y="${yIn + 4}" text-anchor="middle">IN</text>
+          </g>
+          <g class="coin-marker exit ${sideCls}">
+            <circle cx="${xOut}" cy="${yOut}" r="9" stroke-width="2.5"/>
+            <text x="${xOut}" y="${yOut + 4}" text-anchor="middle">OUT</text>
+          </g>`;
+      } else {
+        markers = (trade.markers || []).map((m) => {
+          const { idx, bar } = barAt(candles, m.ts);
+          const x = PAD.l + idx * xStep;
+          const yy = y(bar[4]);
+          const label = m.type === 'entry' ? 'IN' : 'OUT';
+          const sideCls = isLong ? 'long' : 'short';
+          return `<g class="coin-marker ${m.type} ${sideCls}">
+            <circle cx="${x}" cy="${yy}" r="9" stroke-width="2.5"/>
+            <text x="${x}" y="${yy + 4}" text-anchor="middle">${label}</text>
+          </g>`;
+        }).join('');
+      }
+
+      coinChart.innerHTML = defs + grid + bodies + pathArrow + markers;
+      coinTitle.textContent = `${trade.symbol} · ${trade.interval} · ${trade.pnlPct > 0 ? '+' : ''}${trade.pnlPct}%`;
+      equityChart.classList.add('dim');
+      coinChart.classList.add('on');
+      coinTitle.classList.add('on');
+    }
+
+    function clearCoinChart() {
+      coinChart.innerHTML = '';
+      equityChart.classList.remove('dim');
+      coinChart.classList.remove('on');
+      coinTitle.classList.remove('on');
+      if (activeRow) activeRow.classList.remove('active');
+      activeRow = null;
+    }
+
+    function bindTradeRows() {
+      tradesList.querySelectorAll('.trade-row[data-trade-id]').forEach((row) => {
+        row.addEventListener('mouseenter', () => {
+          const trade = tradeMap.get(row.dataset.tradeId);
+          if (!trade) return;
+          if (activeRow) activeRow.classList.remove('active');
+          activeRow = row;
+          row.classList.add('active');
+          renderCoinChart(trade);
+        });
+        row.addEventListener('mouseleave', clearCoinChart);
+      });
+    }
+
+    function renderTrades(data) {
+      const trades = data.trades || [];
+      tradeMap = new Map(trades.map((t) => [t.id, t]));
+      tradesList.innerHTML = trades.map((t) => {
+        const sideCls = t.side === 'long' ? 'in' : 'out';
+        const sideLbl = t.side === 'long' ? 'LONG' : 'SHORT';
+        const pnl = `${t.pnlPct > 0 ? '+' : ''}${t.pnlPct}%`;
+        return `<div class="trade-row" data-trade-id="${t.id}">
+          <span><span class="${sideCls}">${sideLbl}</span> ${t.short}</span>
+          <span class="pnl">${pnl}</span>
+        </div>`;
+      }).join('');
+      const syms = [...new Set(trades.map((t) => t.symbol))].slice(0, 2);
+      openPos.innerHTML = `
+        <span class="pos-label">${trades.length} лучших сделок</span>
+        ${syms.map((s) => `<span class="sym-tag">${s}</span>`).join('')}
+        <span class="pos-label">· ${data.rotateAfter || 'ежедневно'}</span>`;
+      bindTradeRows();
+    }
+
+    async function loadDemo() {
+      if (window.LANDING_DEMO?.trades?.length) {
+        renderTrades(window.LANDING_DEMO);
+        return;
+      }
+      try {
+        const res = await fetch('landing-demo-trades.json');
+        if (res.ok) renderTrades(await res.json());
+      } catch (_) { /* offline preview */ }
+    }
+
+    loadDemo();
   </script>
 </body>
 </html>

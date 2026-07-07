@@ -12,25 +12,18 @@ async function gotoStable(page, path) {
   }
 }
 
-async function expectDefaultLightLanding(page) {
+async function expectV3Landing(page) {
   await expect.poll(async () => page.evaluate(() => {
-    const root = Array.from(document.querySelectorAll('div')).find((element) => {
-      return element instanceof HTMLDivElement && element.style.minHeight === '100vh';
-    });
-    const lightButton = document.querySelector('button[title="Light"]');
-    const rootBackground = root ? getComputedStyle(root).backgroundColor : null;
-    const lightButtonBackground = lightButton ? getComputedStyle(lightButton).backgroundColor : null;
-    return {
-      rootBackground,
-      lightButtonBackground,
-    };
+    const root = document.querySelector('.landing-v3-root');
+    const bg = root ? getComputedStyle(root).backgroundColor : null;
+    return { hasRoot: Boolean(root), bg };
   })).toEqual({
-    rootBackground: 'rgb(255, 255, 255)',
-    lightButtonBackground: 'rgba(99, 102, 241, 0.15)',
+    hasRoot: true,
+    bg: 'rgb(6, 6, 8)',
   });
 }
 const NAV_CASES = [
-  { path: '/', expectedUrl: /\/$/, expected: /BTDD|Start Free|Sign Up|Algorithmic Trading/i },
+  { path: '/', expectedUrl: /\/$/, expected: /BattleToads|Алгоритмы торгуют|Открыть кабинет|Регистрация/i },
   { path: '/settings', expectedUrl: /\/login$/, expected: /Dashboard Login|Invalid password|Session: missing/i },
   { path: '/positions', expectedUrl: /\/login$/, expected: /Dashboard Login|Session: missing/i },
   { path: '/logs', expectedUrl: /\/login$/, expected: /Dashboard Login|Session: missing/i },
@@ -47,9 +40,9 @@ test('all main tabs open without runtime crash', async ({ page }) => {
   });
 
   await gotoStable(page, '/');
-  await expect(page.locator('body')).toContainText(/BTDD|Battletoads|BattleToads/i, { timeout: 20000 });
-  await expect(page.locator('body')).toContainText(/Start Free|Sign Up|Algorithmic Trading/i, { timeout: 20000 });
-  await expectDefaultLightLanding(page);
+  await expect(page.locator('body')).toContainText(/BattleToads|Алгоритмы торгуют/i, { timeout: 20000 });
+  await expect(page.locator('body')).toContainText(/Открыть кабинет|Регистрация/i, { timeout: 20000 });
+  await expectV3Landing(page);
   await expect(page.locator('body')).not.toContainText(/Cannot GET|404|Application error|Runtime error|Unhandled/i, { timeout: 20000 });
 
   for (const nav of NAV_CASES) {
