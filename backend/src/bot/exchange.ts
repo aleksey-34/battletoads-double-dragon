@@ -717,14 +717,31 @@ const isBingxHedgeModeError = (error: unknown): boolean => {
     || (message.includes('109400') && message.includes('reduceonly'));
 };
 
+/** BingX 109400 when account is one-way but we sent LONG/SHORT positionSide. */
+const isBingxOneWayModeRejection = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '').toLowerCase();
+  return message.includes('one-way mode')
+    || message.includes('one way mode')
+    || (message.includes('109400') && message.includes('positionside'));
+};
+
+const demoteBingxAccountToOneWay = async (apiKeyName: string, reason: string): Promise<void> => {
+  const safe = String(apiKeyName || '').trim();
+  if (!safe || bingxConfirmedOneWay.has(safe)) {
+    return;
+  }
+  bingxConfirmedHedge.delete(safe);
+  bingxConfirmedOneWay.add(safe);
+  await persistBingxOneWayAccount(safe);
+  logger.warn(`BingX account ${safe} demoted to one-way mode (${reason})`);
+};
+
 const isTimestampSyncError = (error: unknown): boolean => {
   const message = String((error as any)?.message || error || '').toLowerCase();
   return message.includes('timestamp is invalid')
     || message.includes('timestamp for this request')
     || message.includes('recvwindow')
-    || message.includes('expired')
-    || message.includes('code":109400')
-    || message.includes('code 109400');
+    || message.includes('expired');
 };
 
 // MEXC error 700007 = "No permission to access the endpoint"
@@ -1656,17 +1673,19 @@ const placeOrderCcxt = async (
             if (!isBingxPositionSideError(error)) {
               throw error;
             }
+            if (bingxConfirmedHedge.has(apiKeyName) && isBingxOneWayModeRejection(error)) {
+              await demoteBingxAccountToOneWay(apiKeyName, '109400 one-way positionSide rejection');
+              break;
+            }
             if (!bingxConfirmedOneWay.has(apiKeyName) && !bingxConfirmedHedge.has(apiKeyName)) {
-              bingxConfirmedOneWay.add(apiKeyName);
-              await persistBingxOneWayAccount(apiKeyName);
-              logger.info(`BingX one-way mode confirmed for account ${apiKeyName} (positionSide ${candidateSide} rejected)`);
+              await demoteBingxAccountToOneWay(apiKeyName, `positionSide ${candidateSide || 'omitted'} rejected`);
             }
             logger.warn(
               `BingX order retry for ${apiKeyName} ${symbol}: positionSide=${candidateSide || 'omitted'} failed (${lastError.message})`
             );
           }
         }
-        if (!bingxConfirmedHedge.has(apiKeyName)) {
+        if (bingxConfirmedOneWay.has(apiKeyName)) {
           break;
         }
       }

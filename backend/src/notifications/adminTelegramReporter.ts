@@ -673,6 +673,74 @@ const HEALTH_THRESHOLDS = {
   desyncMinMaster: 5,     // алерт включается, только если на TS медиана ≥ 5 сделок
   zeroExchangeFillHours: 24, // enabled клиент без exchange_fill за N часов
   momentumSilenceHours: 24, // fleet momentum: 0 signals + 0 fills
+  ctMaxEntriesPerClient24h: 3, // ~1.5 synth cycles/day (entry+exit ≈ 2 events/cycle)
+};
+
+type ClientExecutionContext = {
+  apiKeyName: string;
+  momentumOnly: boolean;
+  hasCtLegs: boolean;
+  bingxPositionSideError: boolean;
+  ctEntries24h: number;
+};
+
+const fetchClientExecutionContexts = async (apiKeyNames: string[]): Promise<Map<string, ClientExecutionContext>> => {
+  const names = Array.from(new Set(apiKeyNames.map((v) => String(v || '').trim()).filter(Boolean)));
+  const out = new Map<string, ClientExecutionContext>();
+  if (names.length === 0) {
+    return out;
+  }
+  const placeholders = names.map(() => '?').join(',');
+  const rows = await db.all(
+    `SELECT
+       a.name AS api_key_name,
+       SUM(CASE WHEN COALESCE(s.strategy_type, '') = 'momentum_scalp_tv' THEN 1 ELSE 0 END) AS momentum_legs,
+       SUM(CASE WHEN COALESCE(s.strategy_type, '') NOT IN ('momentum_scalp_tv', 'dca', 'dca_futures') THEN 1 ELSE 0 END) AS non_momentum_legs,
+       SUM(CASE WHEN COALESCE(s.strategy_type, '') = 'CT_Fractal' THEN 1 ELSE 0 END) AS ct_legs,
+       MAX(CASE
+         WHEN COALESCE(s.last_error, '') LIKE '%109400%'
+           OR LOWER(COALESCE(s.last_error, '')) LIKE '%one-way mode%'
+           OR LOWER(COALESCE(s.last_error, '')) LIKE '%positionside%'
+         THEN 1 ELSE 0 END) AS bingx_pos_err,
+       (SELECT COUNT(*)
+        FROM live_trade_events lte
+        JOIN strategies s2 ON s2.id = lte.strategy_id
+        WHERE s2.api_key_id = a.id
+          AND COALESCE(s2.strategy_type, '') = 'CT_Fractal'
+          AND lte.trade_type = 'entry'
+          AND COALESCE(lte.event_origin, 'exchange_fill') = 'exchange_fill'
+          AND lte.actual_time >= (strftime('%s', 'now', '-24 hours') * 1000)) AS ct_entries_24h
+     FROM api_keys a
+     LEFT JOIN strategies s ON s.api_key_id = a.id
+       AND COALESCE(s.is_active, 0) = 1
+       AND COALESCE(s.auto_update, 0) = 1
+       AND COALESCE(s.is_archived, 0) = 0
+     WHERE a.name IN (${placeholders})
+     GROUP BY a.name`,
+    names,
+  ) as Array<{
+    api_key_name?: string;
+    momentum_legs?: number;
+    non_momentum_legs?: number;
+    ct_legs?: number;
+    bingx_pos_err?: number;
+    ct_entries_24h?: number;
+  }>;
+
+  for (const row of rows || []) {
+    const apiKeyName = String(row.api_key_name || '').trim();
+    if (!apiKeyName) continue;
+    const momentumLegs = Math.max(0, Math.floor(toFinite(row.momentum_legs, 0)));
+    const nonMomentumLegs = Math.max(0, Math.floor(toFinite(row.non_momentum_legs, 0)));
+    out.set(apiKeyName, {
+      apiKeyName,
+      momentumOnly: momentumLegs > 0 && nonMomentumLegs === 0,
+      hasCtLegs: Math.max(0, Math.floor(toFinite(row.ct_legs, 0))) > 0,
+      bingxPositionSideError: Math.floor(toFinite(row.bingx_pos_err, 0)) > 0,
+      ctEntries24h: Math.max(0, Math.floor(toFinite(row.ct_entries_24h, 0))),
+    });
+  }
+  return out;
 };
 
 type MomentumFleetStats = {
@@ -747,6 +815,7 @@ const fetchMomentumFleetStats = async (): Promise<MomentumFleetStats> => {
 const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; text: string }> => {
   const rows = await fetchHealthRows(periodHours);
   const duplicateSidByApiKey = await fetchDuplicateSidGroupsByApiKey(rows.map((r) => r.api_key_name || ''));
+  const clientCtxByApiKey = await fetchClientExecutionContexts(rows.map((r) => r.api_key_name || ''));
   const total = rows.length;
   if (total === 0) {
     return { ok: true, text: `<b>📊 BTDD health (${periodHours}h)</b>\nАктивных algofund-клиентов нет.` };
@@ -802,16 +871,45 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
   }
 
   // 5. ZERO exchange_fill: торговля включена, но на бирже 0 fill за 24ч.
+  const momentum = await fetchMomentumFleetStats();
+  const momentumRegimeSilent = momentum.activeLegs > 0
+    && momentum.exchangeFills24h === 0
+    && momentum.signalEntries24h === 0;
+
   for (const r of rows) {
     if (r.exchange_fills_24h > 0) continue;
     const label = r.display_name || r.tenant_slug || r.api_key_name || 'client';
+    const apiKey = String(r.api_key_name || '').trim();
+    const ctx = apiKey ? clientCtxByApiKey.get(apiKey) : undefined;
+    const tsMs = parseSqliteUtc(r.recorded_at);
+    const snapshotAgeMin = tsMs ? (nowMs - tsMs) / 60000 : Number.POSITIVE_INFINITY;
+
+    // Momentum-only + fleet regime silence → не дублируем (см. fleet-алерт ниже).
+    if (ctx?.momentumOnly && momentumRegimeSilent) {
+      continue;
+    }
+    // Stale snapshot >2ч — клиент уже в stale-алерте, не шумим zero-fill.
+    if (snapshotAgeMin > 120) {
+      continue;
+    }
+    if (ctx?.bingxPositionSideError) {
+      alerts.push(
+        `🛑 <b>${escapeHtml(label)}</b>: BingX execution bug — one-way/positionSide (0 fill за 24ч, ${escapeHtml(apiKey || '-')})`,
+      );
+      continue;
+    }
+    if (ctx?.momentumOnly) {
+      alerts.push(
+        `📉 <b>${escapeHtml(label)}</b>: momentum-only, 0 fill за 24ч — ждём сигнал (regime/chop, ${escapeHtml(apiKey || '-')})`,
+      );
+      continue;
+    }
     alerts.push(
-      `🛑 <b>${escapeHtml(label)}</b>: 0 exchange_fill за ${HEALTH_THRESHOLDS.zeroExchangeFillHours}ч при включённой торговле (${escapeHtml(r.api_key_name || '-')}) — проверь BingX/WEEX исполнение`
+      `🛑 <b>${escapeHtml(label)}</b>: 0 exchange_fill за ${HEALTH_THRESHOLDS.zeroExchangeFillHours}ч при включённой торговле (${escapeHtml(apiKey || '-')}) — проверь BingX/WEEX исполнение`,
     );
   }
 
   // 6. MOMENTUM fleet silence: enabled legs but 0 signals and 0 fills in 24h.
-  const momentum = await fetchMomentumFleetStats();
   if (
     momentum.activeLegs > 0
     && momentum.exchangeFills24h === 0
@@ -853,9 +951,32 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
     const cutoff = Math.max(1, Math.floor(median * HEALTH_THRESHOLDS.desyncMaxRatio));
     const lagging = group.filter((r) => r.trades_period < cutoff);
     for (const r of lagging) {
+      const apiKey = String(r.api_key_name || '').trim();
+      const ctx = apiKey ? clientCtxByApiKey.get(apiKey) : undefined;
+      const tsMs = parseSqliteUtc(r.recorded_at);
+      const snapshotAgeMin = tsMs ? (nowMs - tsMs) / 60000 : Number.POSITIVE_INFINITY;
+      if (r.exchange_fills_24h === 0 && (snapshotAgeMin > 120 || ctx?.bingxPositionSideError || (ctx?.momentumOnly && momentumRegimeSilent))) {
+        continue;
+      }
       const label = r.display_name || r.tenant_slug || r.api_key_name || 'client';
       alerts.push(`🔀 <b>${escapeHtml(label)}</b>: desync — ${r.trades_period} сделок vs медиана ${median} по TS ${escapeHtml(shorten(ts, 40))}`);
     }
+  }
+
+  // 8. CT churn: >1.5 synth cycles/client/day (proxy: CT entries/24h).
+  const ctHotClients = rows
+    .map((r) => {
+      const apiKey = String(r.api_key_name || '').trim();
+      const ctx = apiKey ? clientCtxByApiKey.get(apiKey) : undefined;
+      return { row: r, ctx, entries: ctx?.ctEntries24h || 0 };
+    })
+    .filter((item) => item.ctx?.hasCtLegs && item.entries > HEALTH_THRESHOLDS.ctMaxEntriesPerClient24h)
+    .sort((a, b) => b.entries - a.entries);
+  for (const item of ctHotClients.slice(0, 5)) {
+    const label = item.row.display_name || item.row.tenant_slug || item.row.api_key_name || 'client';
+    alerts.push(
+      `⚡ <b>${escapeHtml(label)}</b>: CT churn — ${item.entries} entry/24ч (порог ${HEALTH_THRESHOLDS.ctMaxEntriesPerClient24h}, цель ≤1.5 synth cycles/день)`,
+    );
   }
 
   const headerOk = `✅ <b>BTDD: всё OK</b> (${periodHours}ч)`;
