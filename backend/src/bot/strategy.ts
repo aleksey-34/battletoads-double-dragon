@@ -144,7 +144,7 @@ export const executeStrategy = async (
   const closedBarOnly = options?.closedBarOnly !== false;
   const dedupeClosedBar = options?.dedupeClosedBar === true;
 
-  if (!strategy.is_active) {
+  if (!strategy.is_active || !strategy.auto_update) {
     return {
       result: 'Strategy is paused',
       action: 'paused',
@@ -345,6 +345,61 @@ export const executeStrategy = async (
     }
   };
 
+  const synthLegSide = (leg: 'base' | 'quote', signalSide: 'long' | 'short'): 'long' | 'short' => {
+    if (isMono || leg === 'base') {
+      return signalSide;
+    }
+    return signalSide === 'long' ? 'short' : 'long';
+  };
+
+  const orderFillPrice = (order: unknown): number | undefined => {
+    const raw = (order as any)?.average
+      ?? (order as any)?.avgPrice
+      ?? (order as any)?.avg_price
+      ?? (order as any)?.price;
+    const value = Number(raw);
+    return Number.isFinite(value) && value > 0 ? value : undefined;
+  };
+
+  const recordSynthRuntimeEvents = async (
+    tradeType: 'entry' | 'exit',
+    signalSide: 'long' | 'short',
+    ratioPrice: number,
+    baseQty: number,
+    quoteQty: number,
+    baseOrder?: unknown,
+    quoteOrder?: unknown,
+    entryRatioOverride?: number,
+  ): Promise<void> => {
+    const baseOrderId = String((baseOrder as any)?.orderId || (baseOrder as any)?.order_id || '').trim() || undefined;
+    const quoteOrderId = String((quoteOrder as any)?.orderId || (quoteOrder as any)?.order_id || '').trim() || undefined;
+    await recordRuntimeTradeEvent(
+      tradeType,
+      synthLegSide('base', signalSide),
+      ratioPrice,
+      baseQty,
+      baseOrderId,
+      mergedStrategy.base_symbol,
+      entryRatioOverride,
+      orderFillPrice(baseOrder),
+    );
+    if (!isMono && mergedStrategy.quote_symbol && quoteQty > 0) {
+      const quoteLegPrice = Number.isFinite(Number(quotePrice)) && Number(quotePrice) > 0
+        ? Number(quotePrice)
+        : ratioPrice;
+      await recordRuntimeTradeEvent(
+        tradeType,
+        synthLegSide('quote', signalSide),
+        quoteLegPrice,
+        quoteQty,
+        quoteOrderId,
+        mergedStrategy.quote_symbol,
+        entryRatioOverride,
+        orderFillPrice(quoteOrder),
+      );
+    }
+  };
+
   const persistTpAnchorRatio = async (nextAnchor: number | null): Promise<void> => {
     const currentAnchorRaw = mergedStrategy.tp_anchor_ratio;
     const currentAnchor = Number(currentAnchorRaw);
@@ -380,7 +435,9 @@ export const executeStrategy = async (
 
   const persistFlatAfterExit = async (
     action: StrategyCloseAction,
-    signalSnapshot: StrategySignal
+    signalSnapshot: StrategySignal,
+    exitBaseQty = 0,
+    exitQuoteQty = 0,
   ): Promise<void> => {
     partialTpTriggeredByStrategy.delete(strategyId);
     clearMacroShieldPartialState(strategyId);
@@ -403,7 +460,16 @@ export const executeStrategy = async (
 
     if (signalSnapshot === 'long' || signalSnapshot === 'short') {
       logger.info(`[pnl_debug] strategy=${strategyId} exit ${signalSnapshot}: exitEntryRatio=${exitEntryRatio}, currentRatio=${currentRatio}, mergedEntryRatio=${mergedStrategy.entry_ratio}, diff=${exitEntryRatio != null ? (currentRatio - exitEntryRatio).toFixed(8) : 'null'}`);
-      await recordRuntimeTradeEvent('exit', signalSnapshot, currentRatio, 0, undefined, mergedStrategy.base_symbol, exitEntryRatio ?? undefined);
+      await recordSynthRuntimeEvents(
+        'exit',
+        signalSnapshot,
+        currentRatio,
+        exitBaseQty,
+        exitQuoteQty,
+        undefined,
+        undefined,
+        exitEntryRatio ?? undefined,
+      );
     }
   };
 
@@ -417,13 +483,33 @@ export const executeStrategy = async (
     action: StrategyCloseAction,
     signalSnapshot: StrategySignal
   ): Promise<void> => {
+    let exitBaseQty = 0;
+    let exitQuoteQty = 0;
+    try {
+      const positions = await getPositions(apiKeyName);
+      const list = Array.isArray(positions) ? positions : [];
+      const basePos = list.find((position: any) => (
+        normalizeSymbolKey(position?.symbol) === normalizeSymbolKey(mergedStrategy.base_symbol)
+        && Number.parseFloat(String(position?.size || '0')) > 0
+      ));
+      const quotePos = !isMono
+        ? list.find((position: any) => (
+          normalizeSymbolKey(position?.symbol) === normalizeSymbolKey(mergedStrategy.quote_symbol)
+          && Number.parseFloat(String(position?.size || '0')) > 0
+        ))
+        : null;
+      exitBaseQty = Math.abs(Number.parseFloat(String(basePos?.size || '0')));
+      exitQuoteQty = Math.abs(Number.parseFloat(String(quotePos?.size || '0')));
+    } catch (positionError) {
+      logger.debug(`Could not read exit position sizes for strategy ${strategyId}: ${formatActionError(positionError)}`);
+    }
     // Step 1: close on exchange — if this fails, do NOT touch DB state;
     // the position is still open and next cycle will retry.
     await closeStrategyExposure(apiKeyName, mergedStrategy);
     // Step 2: exchange confirmed close — now persist flat + exit event.
     // If THIS fails, resync will catch the discrepancy on the next cycle
     // (state=long/short in DB but flat on exchange → state_resynced_flat).
-    await persistFlatAfterExit(action, signalSnapshot);
+    await persistFlatAfterExit(action, signalSnapshot, exitBaseQty, exitQuoteQty);
   };
 
   const livePositions: any[] = [];
@@ -1046,6 +1132,34 @@ export const executeStrategy = async (
     });
   }
 
+  // Backtest parity: after any exit on the evaluated closed bar, defer re-entry to the next bar.
+  if (closedAction && state === 'flat' && (signal === 'long' || signal === 'short')) {
+    const updated = await updateStrategy(apiKeyName, strategyId, {
+      ...executionBindingPatch,
+      state: 'flat',
+      entry_ratio: null,
+      tp_anchor_ratio: null,
+      last_signal: signal,
+      last_action: `${closedAction}_same_bar_no_reentry@${currentRatio}`,
+      last_error: null,
+    });
+
+    logger.info(
+      `Same-bar re-entry blocked for strategy ${strategyId} (${apiKeyName}): `
+      + `exit=${closedAction}, deferred signal=${signal}`
+    );
+
+    return returnWithProcessedBar({
+      result: closedResult || `Exit on current bar; re-entry deferred to next closed bar`,
+      action: `${closedAction}_same_bar_no_reentry`,
+      strategy: updated,
+      currentRatio,
+      donchianHigh,
+      donchianLow,
+      donchianCenter,
+    });
+  }
+
   // ── Cold-start guard: skip entry on first N bars after strategy materialization ──
   // Prevents entering on a stale signal that was already in progress before this
   // account was activated. Wait for a fresh signal generated after materialization.
@@ -1657,9 +1771,10 @@ export const executeStrategy = async (
     mergedStrategy.market_type === 'spot' ? { marketType: 'spot' } : undefined,
   );
 
+  let quoteOrder: unknown = null;
   if (!isMono && quoteSide && quoteQty) {
     try {
-      await placeOrder(
+      quoteOrder = await placeOrder(
         apiKeyName,
         mergedStrategy.quote_symbol!,
         quoteSide,
@@ -1806,20 +1921,15 @@ export const executeStrategy = async (
     last_error: null,
   });
 
-  const openedPositionSize = Number.isFinite(currentRatio) && currentRatio > 0
-    ? totalNotional / currentRatio
-    : 0;
-  const baseOrderId = String((baseOrder as any)?.orderId || (baseOrder as any)?.order_id || '').trim() || undefined;
-  // Real fill price from exchange — ccxt: order.average / order.price; native Bybit: avgPrice.
-  const baseOrderFillPriceRaw = (baseOrder as any)?.average
-    ?? (baseOrder as any)?.avgPrice
-    ?? (baseOrder as any)?.avg_price
-    ?? (baseOrder as any)?.price;
-  const baseOrderFillPrice = Number(baseOrderFillPriceRaw);
-  const actualEntryPrice = Number.isFinite(baseOrderFillPrice) && baseOrderFillPrice > 0
-    ? baseOrderFillPrice
-    : undefined;
-  await recordRuntimeTradeEvent('entry', signal, currentRatio, openedPositionSize, baseOrderId, mergedStrategy.base_symbol, undefined, actualEntryPrice);
+  await recordSynthRuntimeEvents(
+    'entry',
+    signal,
+    currentRatio,
+    Number(baseQty) || 0,
+    Number(quoteQty) || 0,
+    baseOrder,
+    quoteOrder ?? undefined,
+  );
 
   // Trigger DCA-Futures overlay on same symbol if any idle dca_futures strategy exists
   if ((signal === 'long' || signal === 'short') && mergedStrategy.base_symbol) {
@@ -1912,6 +2022,21 @@ export const executeStrategy = async (
       } catch (eventErr) {
         logger.warn(`Failed to record low-lot warning event: ${(eventErr as Error).message}`);
       }
+    }
+  }
+
+  if (isMomentumScalp && (signal === 'long' || signal === 'short')) {
+    try {
+      const { handleMomentumBingxCanaryAfterEntry } = await import('./momentumBingxCanary');
+      void handleMomentumBingxCanaryAfterEntry({
+        apiKeyName,
+        strategyId,
+        baseSymbol: mergedStrategy.base_symbol,
+        signal,
+        currentRatio,
+      });
+    } catch (canaryErr) {
+      logger.warn(`[momentum-canary] post-entry hook failed: ${(canaryErr as Error).message}`);
     }
   }
 

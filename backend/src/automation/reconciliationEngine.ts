@@ -62,6 +62,55 @@ const normalizeSide = (side: 'Buy' | 'Sell'): 'long' | 'short' => {
   return side === 'Buy' ? 'long' : 'short';
 };
 
+const isSyntheticBinding = (binding: StrategyTradeBinding): boolean => {
+  const quoteSymbol = String(binding.quote_symbol || '').trim();
+  if (!quoteSymbol) {
+    return false;
+  }
+  const mode = String(binding.market_mode || '').trim().toLowerCase();
+  return mode !== 'mono' && mode !== 'single';
+};
+
+export const syncExchangeFillsForApiKey = async (
+  apiKeyName: string,
+  tradeLimitPerSymbol: number = 200,
+): Promise<{ apiKeyName: string; syncedEvents: number; strategies: number }> => {
+  if (RECONCILIATION_EXCLUDED_API_KEYS.has(apiKeyName)) {
+    return { apiKeyName, syncedEvents: 0, strategies: 0 };
+  }
+
+  const strategies = await getStrategies(apiKeyName, { includeLotPreview: false });
+  const active = strategies.filter((strategy) => strategy.is_active && strategy.auto_update);
+
+  let syncedEvents = 0;
+  for (const strategy of active) {
+    const strategyId = Number(strategy.id || 0);
+    if (!strategyId) {
+      continue;
+    }
+
+    try {
+      const inserted = await syncRecentTradesForStrategy(
+        apiKeyName,
+        strategyId,
+        {
+          market_mode: strategy.market_mode,
+          base_symbol: String(strategy.base_symbol || ''),
+          quote_symbol: String(strategy.quote_symbol || ''),
+        },
+        tradeLimitPerSymbol,
+      );
+      syncedEvents += inserted;
+    } catch (error) {
+      logger.warn(
+        `Exchange-fill sync failed for strategy ${strategyId} (${apiKeyName}): ${(error as Error).message}`,
+      );
+    }
+  }
+
+  return { apiKeyName, syncedEvents, strategies: active.length };
+};
+
 const getApiKeyId = async (apiKeyName: string): Promise<number> => {
   const row = await db.get('SELECT id FROM api_keys WHERE name = ?', [apiKeyName]);
   if (!row) {
@@ -78,7 +127,7 @@ const syncRecentTradesForStrategy = async (
 ): Promise<number> => {
   const baseSymbol = String(binding.base_symbol || '').trim();
   const quoteSymbol = String(binding.quote_symbol || '').trim();
-  const isSynthetic = String(binding.market_mode || 'synthetic') !== 'mono' && Boolean(quoteSymbol);
+  const isSynthetic = isSyntheticBinding(binding);
   const symbols = Array.from(new Set([baseSymbol, isSynthetic ? quoteSymbol : ''].filter(Boolean)));
 
   if (symbols.length === 0) {
@@ -234,22 +283,33 @@ const syncRecentTradesForStrategy = async (
 const refreshBacktestPredictions = async (
   apiKeyName: string,
   strategyId: number,
-  bars: number
+  bars: number,
+  periodStartMs?: number,
 ): Promise<number> => {
+  const dateTo = new Date().toISOString().slice(0, 10);
+  const dateFrom = periodStartMs && Number.isFinite(periodStartMs)
+    ? new Date(periodStartMs).toISOString().slice(0, 10)
+    : undefined;
+
   const run = await runBacktest({
     apiKeyName,
     mode: 'single',
     strategyId,
     bars,
+    ...(dateFrom ? { dateFrom, dateTo, warmupBars: 0 } : {}),
     initialBalance: 10000,
     commissionPercent: 0.1,
     slippagePercent: 0.05,
     fundingRatePercent: 0,
   });
 
-  const trades = Array.isArray(run.trades) ? run.trades.slice(-40) : [];
+  const trades = Array.isArray(run.trades) ? run.trades : [];
+  const windowTrades = periodStartMs && Number.isFinite(periodStartMs)
+    ? trades.filter((trade) => Number(trade.entryTime || 0) >= periodStartMs)
+    : trades;
+  const selectedTrades = windowTrades.slice(-40);
 
-  for (const trade of trades) {
+  for (const trade of selectedTrades) {
     await recordBacktestPrediction(strategyId, {
       strategy_id: strategyId,
       side: trade.side,
@@ -269,7 +329,7 @@ const refreshBacktestPredictions = async (
     [strategyId, cutoff]
   );
 
-  return trades.length;
+  return selectedTrades.length;
 };
 
 const saveReconciliationReport = async (
@@ -383,7 +443,12 @@ export const runReconciliationForApiKey = async (
   const backtestBars = Math.max(120, Math.floor(toFinite(options?.backtestBars, 336)));
 
   const strategies = await getStrategies(apiKeyName, { includeLotPreview: false });
-  const active = strategies.filter((strategy) => strategy.is_active && strategy.auto_update);
+  const active = strategies.filter((strategy) => {
+    if (!strategy.is_active || !strategy.auto_update) {
+      return false;
+    }
+    return true;
+  });
 
   const periodEnd = Date.now();
   const periodStart = periodEnd - periodHours * 3600_000;
@@ -410,7 +475,7 @@ export const runReconciliationForApiKey = async (
         120
       );
 
-      const generatedPredictions = await refreshBacktestPredictions(apiKeyName, strategyId, backtestBars);
+      const generatedPredictions = await refreshBacktestPredictions(apiKeyName, strategyId, backtestBars, periodStart);
       const metrics = await computeReconciliationMetrics(strategyId, periodStart, periodEnd);
       const recommendation = await analyzeDriftAndRecommend(strategyId, metrics);
       const actionNote = await maybeApplyRecommendation(apiKeyName, strategyId, recommendation, options || {});

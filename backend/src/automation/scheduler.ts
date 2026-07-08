@@ -2,7 +2,7 @@ import logger from '../utils/logger';
 import { db } from '../utils/database';
 import { ensureExchangeClientInitialized, hasExchangeClient } from '../bot/exchange';
 import { recordMonitoringSnapshot } from '../bot/monitoring';
-import { runReconciliationForApiKey } from './reconciliationEngine';
+import { runReconciliationForApiKey, syncExchangeFillsForApiKey } from './reconciliationEngine';
 import { runLiquidityScanForApiKey } from './liquidityScanner';
 
 // Maximum concurrency for parallel API key operations.
@@ -103,6 +103,11 @@ export const runMonitoringCycleForApiKeys = async (
         batch.map(async (apiKeyName) => {
           report(apiKeyName);
           await recordMonitoringSnapshot(apiKeyName);
+          try {
+            await syncExchangeFillsForApiKey(apiKeyName);
+          } catch (syncError) {
+            logger.debug(`Exchange-fill sync skipped for ${apiKeyName}: ${(syncError as Error).message}`);
+          }
           return apiKeyName;
         }),
       );
@@ -122,6 +127,11 @@ export const runMonitoringCycleForApiKeys = async (
     report(weexKey);
     try {
       await recordMonitoringSnapshot(weexKey);
+      try {
+        await syncExchangeFillsForApiKey(weexKey);
+      } catch (syncError) {
+        logger.debug(`Exchange-fill sync skipped for WEEX ${weexKey}: ${(syncError as Error).message}`);
+      }
       processed += 1;
       await new Promise((resolve) => setTimeout(resolve, 2000));
     } catch (e) {

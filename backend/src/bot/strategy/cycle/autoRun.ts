@@ -100,16 +100,44 @@ export const runAutoStrategiesCycle = async () => {
   }
 
   try {
+    const staleRows: Array<{ strategy_id: number; api_key_name: string }> = (await db.all(
+      `SELECT s.id AS strategy_id, a.name AS api_key_name
+       FROM strategies s
+       JOIN api_keys a ON a.id = s.api_key_id
+       WHERE s.state != 'flat'
+         AND (s.is_active = 0 OR COALESCE(s.is_archived, 0) = 1 OR s.auto_update = 0)`
+    )) || [];
+
+    let closed = 0;
+    for (const row of staleRows) {
+      const strategyId = Number(row?.strategy_id || 0);
+      const apiKeyName = String(row?.api_key_name || '').trim();
+      if (!strategyId || !apiKeyName) {
+        continue;
+      }
+      try {
+        await ensureExchangeClientInitialized(apiKeyName);
+        await closeStrategyPositions(apiKeyName, strategyId);
+        closed += 1;
+      } catch (closeErr) {
+        logger.warn(
+          `Auto-cycle hygiene close failed for strategy ${strategyId} (${apiKeyName}): ${formatActionError(closeErr)}`,
+        );
+      }
+    }
+
     const fixRes: any = await db.run(
       `UPDATE strategies
        SET state = 'flat',
+           entry_ratio = NULL,
+           tp_anchor_ratio = NULL,
            updated_at = CURRENT_TIMESTAMP
        WHERE state != 'flat'
-         AND (is_active = 0 OR COALESCE(is_archived, 0) = 1)`
+         AND (is_active = 0 OR COALESCE(is_archived, 0) = 1 OR auto_update = 0)`
     );
     const fixed = Number(fixRes?.changes || 0);
-    if (fixed > 0) {
-      logger.warn(`Auto-cycle hygiene: reset ${fixed} orphan strategy states to flat`);
+    if (closed > 0 || fixed > 0) {
+      logger.warn(`Auto-cycle hygiene: closed ${closed} stale exposures, reset ${fixed} orphan states to flat`);
     }
   } catch (e) {
     logger.warn(`Auto-cycle hygiene failed: ${(e as Error).message}`);

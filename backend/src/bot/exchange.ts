@@ -173,7 +173,88 @@ const getOrCreateExchangeParentLimiter = (exchange: string): Bottleneck => {
   return exchangeParentLimiters.get(key)!;
 };
 // Accounts confirmed to be in one-way mode (keyed by apiKeyName)
-const bingxConfirmedOneWay = new Set<string>();
+const BINGX_ONE_WAY_FLAG_KEY = 'exchange.bingx_one_way_api_keys';
+const BINGX_HEDGE_FLAG_KEY = 'exchange.bingx_hedge_api_keys';
+const BINGX_ONE_WAY_KNOWN_DEFAULTS = ['Mehmet_Bingx'];
+const bingxConfirmedOneWay = new Set<string>(BINGX_ONE_WAY_KNOWN_DEFAULTS);
+const bingxConfirmedHedge = new Set<string>();
+let bingxModeFlagsLoaded = false;
+
+const loadBingxModeFlags = async (): Promise<void> => {
+  if (bingxModeFlagsLoaded) {
+    return;
+  }
+  bingxModeFlagsLoaded = true;
+  const loadFlag = async (key: string, target: Set<string>): Promise<void> => {
+    try {
+      const row = await db.get('SELECT value FROM app_runtime_flags WHERE key = ?', [key]);
+      const parsed = row?.value ? JSON.parse(String(row.value)) : [];
+      if (!Array.isArray(parsed)) {
+        return;
+      }
+      parsed.forEach((name) => {
+        const safe = String(name || '').trim();
+        if (safe) {
+          target.add(safe);
+        }
+      });
+    } catch (error) {
+      const err = error as Error;
+      logger.warn(`Failed to load BingX flag ${key}: ${err.message}`);
+    }
+  };
+  await loadFlag(BINGX_ONE_WAY_FLAG_KEY, bingxConfirmedOneWay);
+  await loadFlag(BINGX_HEDGE_FLAG_KEY, bingxConfirmedHedge);
+  // Hedge wins if both flags were persisted historically.
+  for (const name of bingxConfirmedHedge) {
+    bingxConfirmedOneWay.delete(name);
+  }
+};
+
+const persistBingxModeFlag = async (key: string, names: Set<string>): Promise<void> => {
+  try {
+    const payload = JSON.stringify(Array.from(names).sort());
+    await db.run(
+      `INSERT INTO app_runtime_flags (key, value, updated_at)
+       VALUES (?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP`,
+      [key, payload],
+    );
+  } catch (error) {
+    const err = error as Error;
+    logger.warn(`Failed to persist BingX flag ${key}: ${err.message}`);
+  }
+};
+
+const persistBingxOneWayAccount = async (apiKeyName: string): Promise<void> => {
+  const safe = String(apiKeyName || '').trim();
+  if (!safe || !bingxConfirmedOneWay.has(safe)) {
+    return;
+  }
+  bingxConfirmedHedge.delete(safe);
+  await persistBingxModeFlag(BINGX_ONE_WAY_FLAG_KEY, bingxConfirmedOneWay);
+  await persistBingxModeFlag(BINGX_HEDGE_FLAG_KEY, bingxConfirmedHedge);
+};
+
+const persistBingxHedgeAccount = async (apiKeyName: string): Promise<void> => {
+  const safe = String(apiKeyName || '').trim();
+  if (!safe) {
+    return;
+  }
+  bingxConfirmedOneWay.delete(safe);
+  bingxConfirmedHedge.add(safe);
+  await persistBingxModeFlag(BINGX_ONE_WAY_FLAG_KEY, bingxConfirmedOneWay);
+  await persistBingxModeFlag(BINGX_HEDGE_FLAG_KEY, bingxConfirmedHedge);
+};
+
+const markBingxAccountHedge = async (apiKeyName: string): Promise<void> => {
+  const safe = String(apiKeyName || '').trim();
+  if (!safe || bingxConfirmedHedge.has(safe)) {
+    return;
+  }
+  logger.info(`BingX hedge mode confirmed for account ${safe}`);
+  await persistBingxHedgeAccount(safe);
+};
 const CACHE_TTL = 5 * 60 * 1000; // 5 min
 const SYMBOL_MAP_REFRESH_MS = 15 * 60 * 1000; // 15 min
 const CCXT_REQUEST_TIMEOUT_MS = 20000;
@@ -599,17 +680,25 @@ const getBingxPositionSideCandidates = (
 ): Array<'BOTH' | 'LONG' | 'SHORT' | undefined> => {
   const directional = getBingxPositionSide(side);
 
+  if (apiKeyName && bingxConfirmedHedge.has(apiKeyName)) {
+    // Hedge mode: LONG/SHORT only, reduceOnly is rejected by BingX.
+    return [directional, undefined];
+  }
+
   if (reduceOnly) {
-    // In one-way mode BingX requires BOTH. In hedge mode LONG/SHORT can be required.
+    // One-way close: BOTH first. Unknown account: try BOTH then hedge-style directional.
+    if (apiKeyName && bingxConfirmedOneWay.has(apiKeyName)) {
+      return ['BOTH', undefined];
+    }
     return ['BOTH', undefined, directional];
   }
 
-  // If we already confirmed this account is in one-way mode, start with BOTH to skip the retry cycle
+  // One-way BingX accounts must use BOTH on entries.
   if (apiKeyName && bingxConfirmedOneWay.has(apiKeyName)) {
     return ['BOTH', undefined];
   }
 
-  return [directional, 'BOTH', undefined];
+  return ['BOTH', directional, undefined];
 };
 
 const isBingxNoPositionError = (error: unknown): boolean => {
@@ -620,6 +709,12 @@ const isBingxNoPositionError = (error: unknown): boolean => {
 const isBingxPositionSideError = (error: unknown): boolean => {
   const message = String((error as any)?.message || error || '').toLowerCase();
   return message.includes('positionside') || message.includes('position side') || message.includes('109400') || message.includes('both');
+};
+
+const isBingxHedgeModeError = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '').toLowerCase();
+  return message.includes('hedge mode')
+    || (message.includes('109400') && message.includes('reduceonly'));
 };
 
 const isTimestampSyncError = (error: unknown): boolean => {
@@ -686,6 +781,10 @@ const tryEnsureBingxOneWayMode = async (
   ccxtSymbol: string
 ): Promise<void> => {
   if (entry.exchange !== 'bingx') {
+    return;
+  }
+  await loadBingxModeFlags();
+  if (bingxConfirmedHedge.has(apiKeyName)) {
     return;
   }
 
@@ -1478,6 +1577,9 @@ const placeOrderCcxt = async (
   options?: OrderOptions
 ) => {
     const entry = getCcxtClientEntry(apiKeyName);
+    if (entry.exchange === 'bingx') {
+      await loadBingxModeFlags();
+    }
     const isSpot = options?.marketType === 'spot';
     const rawCcxtSymbol = await resolveCcxtSymbol(entry, symbol, isSpot ? 'spot' : 'swap');
     const ccxtSymbol = isSpot ? toSpotCcxtSymbol(rawCcxtSymbol) : rawCcxtSymbol;
@@ -1536,26 +1638,36 @@ const placeOrderCcxt = async (
       }
 
       let lastError: Error | null = null;
-      for (const candidateSide of getBingxPositionSideCandidates(side, options?.reduceOnly, apiKeyName)) {
-        try {
-          const order = await submitOrderAttempt(candidateSide);
-          logger.info(
-            `Placed BingX ccxt order: ${side} ${qty} ${symbol} (positionSide=${candidateSide || 'omitted'})`
-          );
-          return order;
-        } catch (error) {
-          lastError = error as Error;
-          if (!isBingxPositionSideError(error)) {
-            throw error;
+      for (let pass = 0; pass < 2; pass += 1) {
+        const candidateSides = getBingxPositionSideCandidates(side, options?.reduceOnly, apiKeyName);
+        for (const candidateSide of candidateSides) {
+          try {
+            const order = await submitOrderAttempt(candidateSide);
+            logger.info(
+              `Placed BingX ccxt order: ${side} ${qty} ${symbol} (positionSide=${candidateSide || 'omitted'})`
+            );
+            return order;
+          } catch (error) {
+            lastError = error as Error;
+            if (isBingxHedgeModeError(error)) {
+              await markBingxAccountHedge(apiKeyName);
+              break;
+            }
+            if (!isBingxPositionSideError(error)) {
+              throw error;
+            }
+            if (!bingxConfirmedOneWay.has(apiKeyName) && !bingxConfirmedHedge.has(apiKeyName)) {
+              bingxConfirmedOneWay.add(apiKeyName);
+              await persistBingxOneWayAccount(apiKeyName);
+              logger.info(`BingX one-way mode confirmed for account ${apiKeyName} (positionSide ${candidateSide} rejected)`);
+            }
+            logger.warn(
+              `BingX order retry for ${apiKeyName} ${symbol}: positionSide=${candidateSide || 'omitted'} failed (${lastError.message})`
+            );
           }
-          // Mark this account as confirmed one-way so next orders start with BOTH directly
-          if (!bingxConfirmedOneWay.has(apiKeyName)) {
-            bingxConfirmedOneWay.add(apiKeyName);
-            logger.info(`BingX one-way mode confirmed for account ${apiKeyName} (positionSide ${candidateSide} rejected)`);
-          }
-          logger.warn(
-            `BingX order retry for ${apiKeyName} ${symbol}: positionSide=${candidateSide || 'omitted'} failed (${lastError.message})`
-          );
+        }
+        if (!bingxConfirmedHedge.has(apiKeyName)) {
+          break;
         }
       }
 
@@ -2601,37 +2713,48 @@ export const closePosition = async (
         return order;
       }
 
-      const directionalSide = currentSide === 'Buy' ? 'LONG' : 'SHORT';
-      // BingX One-way mode: reduceOnly works with BOTH or omitted positionSide.
-      // BingX Hedge mode: positionSide must be LONG/SHORT, reduceOnly is forbidden.
-      // We try one-way candidates first, then hedge-mode candidates (no reduceOnly).
-      const fallbackCandidates: Array<{ side?: 'BOTH' | 'LONG' | 'SHORT'; withClosePosition: boolean; withReduceOnly?: boolean }> = [
-        { side: 'BOTH', withClosePosition: false },
-        { side: 'BOTH', withClosePosition: true },
-        { side: undefined, withClosePosition: false },
-        { side: directionalSide, withClosePosition: false },
-        { side: directionalSide, withClosePosition: true },
-        // Hedge-mode candidates: positionSide=LONG/SHORT, NO reduceOnly
-        { side: directionalSide, withClosePosition: true, withReduceOnly: false },
-        { side: directionalSide, withClosePosition: false, withReduceOnly: false },
-      ];
-
       let lastError: Error | null = null;
-      for (const candidate of fallbackCandidates) {
-        try {
-          const order = await submitCloseOrder(candidate.side, candidate.withClosePosition, candidate.withReduceOnly ?? true);
-          logger.info(
-            `Closed BingX position via ccxt: ${qty} ${symbol} (positionSide=${candidate.side || 'omitted'}, closePosition=${candidate.withClosePosition}, reduceOnly=${candidate.withReduceOnly ?? true})`
-          );
-          return order;
-        } catch (error) {
-          lastError = error as Error;
-          if (!isBingxPositionSideError(error)) {
-            throw error;
+      for (let pass = 0; pass < 2; pass += 1) {
+        await loadBingxModeFlags();
+        const directionalSide = currentSide === 'Buy' ? 'LONG' : 'SHORT';
+        const oneWayCandidates: Array<{ side?: 'BOTH' | 'LONG' | 'SHORT'; withClosePosition: boolean; withReduceOnly?: boolean }> = [
+          { side: 'BOTH', withClosePosition: false },
+          { side: 'BOTH', withClosePosition: true },
+          { side: undefined, withClosePosition: false },
+          { side: directionalSide, withClosePosition: false },
+          { side: directionalSide, withClosePosition: true },
+        ];
+        const hedgeCandidates: Array<{ side?: 'BOTH' | 'LONG' | 'SHORT'; withClosePosition: boolean; withReduceOnly?: boolean }> = [
+          { side: directionalSide, withClosePosition: false, withReduceOnly: false },
+          { side: directionalSide, withClosePosition: true, withReduceOnly: false },
+        ];
+        const fallbackCandidates = bingxConfirmedHedge.has(apiKeyName)
+          ? hedgeCandidates
+          : [...oneWayCandidates, ...hedgeCandidates];
+
+        for (const candidate of fallbackCandidates) {
+          try {
+            const order = await submitCloseOrder(candidate.side, candidate.withClosePosition, candidate.withReduceOnly ?? true);
+            logger.info(
+              `Closed BingX position via ccxt: ${qty} ${symbol} (positionSide=${candidate.side || 'omitted'}, closePosition=${candidate.withClosePosition}, reduceOnly=${candidate.withReduceOnly ?? true})`
+            );
+            return order;
+          } catch (error) {
+            lastError = error as Error;
+            if (isBingxHedgeModeError(error)) {
+              await markBingxAccountHedge(apiKeyName);
+              break;
+            }
+            if (!isBingxPositionSideError(error)) {
+              throw error;
+            }
+            logger.warn(
+              `BingX close retry for ${apiKeyName} ${symbol}: positionSide=${candidate.side || 'omitted'}, closePosition=${candidate.withClosePosition} failed (${lastError.message})`
+            );
           }
-          logger.warn(
-            `BingX close retry for ${apiKeyName} ${symbol}: positionSide=${candidate.side || 'omitted'}, closePosition=${candidate.withClosePosition} failed (${lastError.message})`
-          );
+        }
+        if (!bingxConfirmedHedge.has(apiKeyName)) {
+          break;
         }
       }
 

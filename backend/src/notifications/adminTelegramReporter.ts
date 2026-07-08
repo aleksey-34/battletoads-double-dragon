@@ -522,12 +522,15 @@ type HealthRow = {
   api_key_name: string | null;
   system_name: string | null;
   equity: number;
+  equity_start: number;
+  equity_delta: number;
   upnl: number;
   margin: number;
   dd: number;
   recorded_at: string | null;
   snap_count: number;
   trades_period: number;
+  exchange_fills_24h: number;
 };
 
 const fetchDuplicateSidGroupsByApiKey = async (apiKeyNames: string[]): Promise<Map<string, number>> => {
@@ -576,6 +579,8 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
        COALESCE(NULLIF(ap.execution_api_key_name,''), NULLIF(t.assigned_api_key_name,''), NULLIF(ap.assigned_api_key_name,'')) AS api_key_name,
        COALESCE(ap.published_system_name,'') AS system_name,
        COALESCE(ms.equity_usd,0)            AS equity,
+       COALESCE(ms_start.equity_usd, COALESCE(ms.equity_usd,0)) AS equity_start,
+       COALESCE(ms.equity_usd,0) - COALESCE(ms_start.equity_usd, COALESCE(ms.equity_usd,0)) AS equity_delta,
        COALESCE(ms.unrealized_pnl,0)        AS upnl,
        COALESCE(ms.margin_load_percent,0)   AS margin,
        COALESCE(ms.drawdown_percent,0)      AS dd,
@@ -592,7 +597,11 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
        END AS period_dd,
        (SELECT COUNT(*) FROM monitoring_snapshots ms2 WHERE ms2.api_key_id = a.id AND datetime(ms2.recorded_at) >= datetime('now', ?)) AS snap_count,
        (SELECT COUNT(*) FROM live_trade_events lte JOIN strategies s ON s.id=lte.strategy_id
-         WHERE s.api_key_id = a.id AND lte.actual_time >= (strftime('%s','now', ?) * 1000)) AS trades_period
+         WHERE s.api_key_id = a.id AND lte.actual_time >= (strftime('%s','now', ?) * 1000)) AS trades_period,
+       (SELECT COUNT(*) FROM live_trade_events lte JOIN strategies s ON s.id=lte.strategy_id
+         WHERE s.api_key_id = a.id
+           AND COALESCE(lte.event_origin, 'exchange_fill') = 'exchange_fill'
+           AND lte.actual_time >= (strftime('%s','now','-24 hours') * 1000)) AS exchange_fills_24h
      FROM algofund_profiles ap
      JOIN tenants t ON t.id = ap.tenant_id
      LEFT JOIN api_keys a ON a.name = COALESCE(NULLIF(ap.execution_api_key_name,''), NULLIF(t.assigned_api_key_name,''), NULLIF(ap.assigned_api_key_name,''))
@@ -602,6 +611,16 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
        JOIN (SELECT api_key_id, MAX(datetime(recorded_at)) AS mx FROM monitoring_snapshots GROUP BY api_key_id) j
          ON j.api_key_id = m1.api_key_id AND datetime(m1.recorded_at) = j.mx
      ) ms ON ms.api_key_id = a.id
+     LEFT JOIN (
+       SELECT ms0.api_key_id, ms0.equity_usd
+       FROM monitoring_snapshots ms0
+       JOIN (
+         SELECT api_key_id, MIN(datetime(recorded_at)) AS min_at
+         FROM monitoring_snapshots
+         WHERE datetime(recorded_at) >= datetime('now', ?)
+         GROUP BY api_key_id
+       ) mn ON mn.api_key_id = ms0.api_key_id AND datetime(ms0.recorded_at) = mn.min_at
+     ) ms_start ON ms_start.api_key_id = a.id
      LEFT JOIN (
        SELECT api_key_id, MAX(equity_usd) AS peak_equity
        FROM monitoring_snapshots
@@ -623,7 +642,7 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
          )
        )
      ORDER BY t.display_name ASC`,
-    [`-${periodHours} hours`, `-${periodHours} hours`, `-${periodHours} hours`]
+    [`-${periodHours} hours`, `-${periodHours} hours`, `-${periodHours} hours`, `-${periodHours} hours`]
   ) as any[];
   return (rows || []).map((r) => ({
     display_name: r.display_name,
@@ -631,6 +650,8 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
     api_key_name: r.api_key_name,
     system_name: r.system_name,
     equity: toFinite(r.equity, 0),
+    equity_start: toFinite(r.equity_start, 0),
+    equity_delta: toFinite(r.equity_delta, 0),
     upnl: toFinite(r.upnl, 0),
     margin: toFinite(r.margin, 0),
     // Используем ТОЛЬКО period_dd (по equity_usd, пик = только «чистые» снепшоты без котировочных спайков).
@@ -639,6 +660,7 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
     recorded_at: r.recorded_at,
     snap_count: Math.max(0, Math.floor(toFinite(r.snap_count, 0))),
     trades_period: Math.max(0, Math.floor(toFinite(r.trades_period, 0))),
+    exchange_fills_24h: Math.max(0, Math.floor(toFinite(r.exchange_fills_24h, 0))),
   }));
 };
 
@@ -649,6 +671,77 @@ const HEALTH_THRESHOLDS = {
   duplicateSidGroups: 1,  // дубли source SID среди активных стратегий
   desyncMaxRatio: 0.2,    // у клиента <20% сделок от медианы по той же TS
   desyncMinMaster: 5,     // алерт включается, только если на TS медиана ≥ 5 сделок
+  zeroExchangeFillHours: 24, // enabled клиент без exchange_fill за N часов
+  momentumSilenceHours: 24, // fleet momentum: 0 signals + 0 fills
+};
+
+type MomentumFleetStats = {
+  activeLegs: number;
+  exchangeFills24h: number;
+  signalEntries24h: number;
+  lastFillAt: string | null;
+  canaryArmed: boolean;
+  canaryApiKey: string | null;
+};
+
+const fetchMomentumFleetStats = async (): Promise<MomentumFleetStats> => {
+  const row = await db.get(
+    `SELECT
+       (SELECT COUNT(*)
+        FROM strategies s
+        JOIN api_keys a ON a.id = s.api_key_id
+        JOIN algofund_profiles ap ON ap.execution_api_key_name = a.name OR ap.assigned_api_key_name = a.name
+        JOIN tenants t ON t.id = ap.tenant_id
+        WHERE COALESCE(ap.requested_enabled, 0) = 1
+          AND COALESCE(ap.actual_enabled, 0) = 1
+          AND COALESCE(s.is_active, 0) = 1
+          AND COALESCE(s.auto_update, 0) = 1
+          AND COALESCE(s.is_archived, 0) = 0
+          AND COALESCE(s.strategy_type, '') = 'momentum_scalp_tv') AS active_legs,
+       (SELECT COUNT(*)
+        FROM live_trade_events lte
+        JOIN strategies s ON s.id = lte.strategy_id
+        WHERE COALESCE(s.strategy_type, '') = 'momentum_scalp_tv'
+          AND COALESCE(lte.event_origin, 'exchange_fill') = 'exchange_fill'
+          AND lte.actual_time >= (strftime('%s', 'now', '-24 hours') * 1000)) AS fills_24h,
+       (SELECT COUNT(*)
+        FROM live_trade_events lte
+        JOIN strategies s ON s.id = lte.strategy_id
+        WHERE COALESCE(s.strategy_type, '') = 'momentum_scalp_tv'
+          AND COALESCE(lte.event_origin, 'strategy_signal') = 'strategy_signal'
+          AND lte.side IN ('long', 'short')
+          AND lte.actual_time >= (strftime('%s', 'now', '-24 hours') * 1000)) AS signal_entries_24h,
+       (SELECT datetime(MAX(lte.actual_time) / 1000, 'unixepoch')
+        FROM live_trade_events lte
+        JOIN strategies s ON s.id = lte.strategy_id
+        WHERE COALESCE(s.strategy_type, '') = 'momentum_scalp_tv'
+          AND COALESCE(lte.event_origin, 'exchange_fill') = 'exchange_fill') AS last_fill_at`,
+  ) as {
+    active_legs?: number;
+    fills_24h?: number;
+    signal_entries_24h?: number;
+    last_fill_at?: string | null;
+  } | undefined;
+
+  const flagRow = await db.get('SELECT value FROM app_runtime_flags WHERE key = ?', ['runtime.momentum_bingx_canary']);
+  let canaryArmed = false;
+  let canaryApiKey: string | null = null;
+  try {
+    const parsed = JSON.parse(String(flagRow?.value || '')) as { enabled?: boolean; apiKeyName?: string };
+    canaryArmed = parsed?.enabled === true;
+    canaryApiKey = canaryArmed ? String(parsed.apiKeyName || 'HDB_15') : null;
+  } catch {
+    canaryArmed = false;
+  }
+
+  return {
+    activeLegs: Math.max(0, Math.floor(toFinite(row?.active_legs, 0))),
+    exchangeFills24h: Math.max(0, Math.floor(toFinite(row?.fills_24h, 0))),
+    signalEntries24h: Math.max(0, Math.floor(toFinite(row?.signal_entries_24h, 0))),
+    lastFillAt: row?.last_fill_at ? String(row.last_fill_at) : null,
+    canaryArmed,
+    canaryApiKey,
+  };
 };
 
 const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; text: string }> => {
@@ -661,6 +754,7 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
 
   const nowMs = Date.now();
   const sumEquity = rows.reduce((s, r) => s + r.equity, 0);
+  const sumEquityDelta = rows.reduce((s, r) => s + r.equity_delta, 0);
   const sumUpnl = rows.reduce((s, r) => s + r.upnl, 0);
   const sumTrades = rows.reduce((s, r) => s + r.trades_period, 0);
 
@@ -707,7 +801,42 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
     }
   }
 
-  // 5. DESYNC: для каждой TS считаем медиану trades_period; кто <20% от медианы — алерт.
+  // 5. ZERO exchange_fill: торговля включена, но на бирже 0 fill за 24ч.
+  for (const r of rows) {
+    if (r.exchange_fills_24h > 0) continue;
+    const label = r.display_name || r.tenant_slug || r.api_key_name || 'client';
+    alerts.push(
+      `🛑 <b>${escapeHtml(label)}</b>: 0 exchange_fill за ${HEALTH_THRESHOLDS.zeroExchangeFillHours}ч при включённой торговле (${escapeHtml(r.api_key_name || '-')}) — проверь BingX/WEEX исполнение`
+    );
+  }
+
+  // 6. MOMENTUM fleet silence: enabled legs but 0 signals and 0 fills in 24h.
+  const momentum = await fetchMomentumFleetStats();
+  if (
+    momentum.activeLegs > 0
+    && momentum.exchangeFills24h === 0
+    && momentum.signalEntries24h === 0
+  ) {
+    const lastFill = momentum.lastFillAt ? escapeHtml(momentum.lastFillAt) : 'никогда';
+    const canaryHint = momentum.canaryArmed
+      ? ` · canary armed: ${escapeHtml(momentum.canaryApiKey || 'HDB_15')}`
+      : '';
+    alerts.push(
+      `📉 <b>Momentum fleet</b>: 0 raw signals и 0 exchange_fill за ${HEALTH_THRESHOLDS.momentumSilenceHours}ч `
+      + `(${momentum.activeLegs} ног) — вероятно regime_no_signal; последний fill: ${lastFill}${canaryHint}`,
+    );
+  } else if (
+    momentum.activeLegs > 0
+    && momentum.exchangeFills24h === 0
+    && momentum.signalEntries24h > 0
+  ) {
+    alerts.push(
+      `⚠️ <b>Momentum fleet</b>: ${momentum.signalEntries24h} strategy_signal за 24ч, но 0 exchange_fill `
+      + `(${momentum.activeLegs} ног) — проверь исполнение (BingX/WEEX)`,
+    );
+  }
+
+  // 7. DESYNC: для каждой TS считаем медиану trades_period; кто <20% от медианы — алерт.
   const byTs = new Map<string, HealthRow[]>();
   for (const r of rows) {
     const ts = (r.system_name || '').trim();
@@ -734,9 +863,10 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
 
   const worstDd = rows.reduce((w, r) => r.dd > w.dd ? r : w, rows[0]);
   const worstUpnl = rows.reduce((w, r) => r.upnl < w.upnl ? r : w, rows[0]);
+  const deltaSign = sumEquityDelta >= 0 ? '+' : '';
   const upnlSign = sumUpnl >= 0 ? '+' : '';
   const stats = [
-    `Клиентов: ${total} · equity: $${sumEquity.toFixed(0)} · uPnL: ${upnlSign}${sumUpnl.toFixed(2)}`,
+    `Клиентов: ${total} · equity: $${sumEquity.toFixed(0)} · Δ${periodHours}h: ${deltaSign}$${sumEquityDelta.toFixed(2)} · uPnL: ${upnlSign}${sumUpnl.toFixed(2)}`,
     `Сделок за ${periodHours}ч: ${sumTrades} · worst DD: ${worstDd.dd.toFixed(1)}% (${escapeHtml(worstDd.display_name || worstDd.api_key_name || '')})`,
   ].join('\n');
 
@@ -908,6 +1038,13 @@ const isWatchdogEnabledDb = async (): Promise<boolean> => {
 /**
  * Notify admin about a new client registration.
  */
+export const notifyAdminUrgent = async (text: string): Promise<void> => {
+  if (!(await isAdminReporterEnabledInDb()) || !isEnabled()) {
+    return;
+  }
+  await sendTelegramMessage(trimTelegramText(text));
+};
+
 export const notifyAdminNewUser = async (info: {
   email: string;
   displayName: string;
