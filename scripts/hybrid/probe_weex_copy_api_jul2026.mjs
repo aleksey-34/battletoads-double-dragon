@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 
 const backendRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'backend');
 const require = createRequire(import.meta.url);
-const { initDB, db } = require(path.join(backendRoot, 'dist/utils/database.js'));
+const database = require(path.join(backendRoot, 'dist/utils/database.js'));
 const { createWeexClient } = require(path.join(backendRoot, 'dist/bot/weexClient.js'));
 const exchange = require(path.join(backendRoot, 'dist/bot/exchange.js'));
 
@@ -40,7 +40,8 @@ const summarizeBalances = (rows) => {
     }));
 };
 
-await initDB();
+await database.initDB();
+const { db } = database;
 const keys = KEYS.length ? KEYS : DEFAULT_KEYS;
 const report = { generatedAt: new Date().toISOString(), keys: {} };
 
