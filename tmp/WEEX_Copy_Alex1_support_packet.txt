@@ -1,0 +1,52 @@
+WEEX API support — Copy_Alex1 / Main_Alex1 (BTDD)
+Date: 2026-07-09
+Caller IP (VPS): 176.57.184.98
+Also present on host: IPv6 2a02:c206:2068:95::1
+
+Keys in our DB (new Copy_Alex1 recreated by client):
+- Copy_Alex1  api_key prefix: weex_f8930afac99daaf21d0…  secretLen=64  passphraseLen=14
+- Main_Alex1  api_key prefix: weex_9169c40ba289f5960df…  secretLen=64  passphraseLen=14
+
+Client UI settings (per partner support):
+- checkbox 1: read-only
+- checkbox 2: futures
+Support said this should be enough. From our VPS it is NOT enough — private futures API still fails.
+
+=== Exact errors from VPS 176.57.184.98 (same machine where working client keys succeed) ===
+
+1) GET /capi/v3/openOrders
+HTTP 403
+{"code":-1056,"msg":"Invalid IP address."}
+
+2) POST /capi/v3/account/leverage  (symbol BTCUSDT, leverage 5)
+HTTP 403
+{"code":-1056,"msg":"Invalid IP address."}
+
+3) GET /capi/v3/account/position/allPosition
+HTTP 403
+{"code":-1056,"msg":"Invalid IP address."}
+
+4) GET /capi/v2/account/assets
+HTTP 400
+{"code":"40006","msg":"无效的ACCESS_KEY","requestTime":1783617182162,"data":null}
+(Note: v2 assets also returns 40006 for a WORKING trading key on the same host —
+so 40006 alone is not diagnostic. The blocking errors for trading are v3 -1056.)
+
+=== Control: working key from SAME IP ===
+api_key name: artursk-6323499563-api
+- GET /capi/v3/openOrders → OK []
+- POST /capi/v3/account/leverage → OK
+- GET /capi/v3/account/position/allPosition → OK
+
+Therefore the failure is key/IP binding for Copy_Alex1 & Main_Alex1, not our server IP or code path.
+
+=== Please check / advise ===
+1) Is IP whitelist applied to this key? If yes, confirm exact whitelist entries include:
+   - 176.57.184.98
+   - optionally IPv6 2a02:c206:2068:95::1
+2) Can we temporarily create a key with NO IP whitelist to verify?
+3) Is Copy Trading account API key type different from regular futures API key?
+   (Copy_Alex1 is a copy-trading account — does it need a special key product / permission?)
+4) Confirm futures trade permission is actually granted server-side (not only UI checkboxes).
+
+We cannot place/read futures orders for these two keys until -1056 is resolved.

@@ -117,15 +117,16 @@ const emaSeries = (values: number[], period: number): number[] => {
   return out;
 };
 
-const wilderSeries = (seed: number, values: number[], period: number, startIdx: number): number[] => {
-  const out = new Array<number>(values.length).fill(NaN);
-  if (startIdx + period > values.length) return out;
-  let sum = seed;
-  for (let i = startIdx; i < startIdx + period; i += 1) sum += values[i];
+/** Wilder RMA aligned to full-length series; first value at `firstIdx` = SMA of period samples ending there. */
+const wilderSmoothFull = (raw: number[], period: number, firstIdx: number): number[] => {
+  const out = new Array<number>(raw.length).fill(NaN);
+  if (firstIdx < period || firstIdx >= raw.length) return out;
+  let sum = 0;
+  for (let i = firstIdx - period + 1; i <= firstIdx; i += 1) sum += raw[i];
   let prev = sum / period;
-  out[startIdx + period - 1] = prev;
-  for (let i = startIdx + period; i < values.length; i += 1) {
-    prev = (prev * (period - 1) + values[i]) / period;
+  out[firstIdx] = prev;
+  for (let i = firstIdx + 1; i < raw.length; i += 1) {
+    prev = (prev * (period - 1) + raw[i]) / period;
     out[i] = prev;
   }
   return out;
@@ -134,7 +135,7 @@ const wilderSeries = (seed: number, values: number[], period: number, startIdx: 
 const computeAdxRows = (candles: WickCandle[], period: number): AdxRow[] => {
   const n = candles.length;
   const out: AdxRow[] = new Array(n).fill(null).map(() => ({ adx: NaN, plusDi: NaN, minusDi: NaN }));
-  if (n < period * 2) return out;
+  if (n <= period * 2) return out;
 
   const tr: number[] = new Array(n).fill(0);
   const plusDm: number[] = new Array(n).fill(0);
@@ -150,13 +151,13 @@ const computeAdxRows = (candles: WickCandle[], period: number): AdxRow[] => {
     tr[i] = Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
   }
 
-  const trSm = wilderSeries(tr[1], tr.slice(1), period, 0);
-  const plusSm = wilderSeries(plusDm[1], plusDm.slice(1), period, 0);
-  const minusSm = wilderSeries(minusDm[1], minusDm.slice(1), period, 0);
+  const atr = wilderSmoothFull(tr, period, period);
+  const plusSm = wilderSmoothFull(plusDm, period, period);
+  const minusSm = wilderSmoothFull(minusDm, period, period);
 
   const dx: number[] = new Array(n).fill(NaN);
-  for (let i = 0; i < n; i += 1) {
-    const trv = trSm[i];
+  for (let i = period; i < n; i += 1) {
+    const trv = atr[i];
     if (!Number.isFinite(trv) || trv <= 0) continue;
     const pdi = (100 * plusSm[i]) / trv;
     const mdi = (100 * minusSm[i]) / trv;
@@ -165,10 +166,24 @@ const computeAdxRows = (candles: WickCandle[], period: number): AdxRow[] => {
     dx[i] = denom > 0 ? (100 * Math.abs(pdi - mdi)) / denom : 0;
   }
 
-  const dxVals = dx.map((v) => (Number.isFinite(v) ? v : 0));
-  const adxSm = wilderSeries(dxVals[period], dxVals.slice(period), period, 0);
-  for (let i = 0; i < n; i += 1) {
-    if (Number.isFinite(adxSm[i])) out[i].adx = adxSm[i];
+  const adxFirst = period * 2;
+  let dxSum = 0;
+  let dxOk = true;
+  for (let i = period; i <= adxFirst; i += 1) {
+    if (!Number.isFinite(dx[i])) {
+      dxOk = false;
+      break;
+    }
+    dxSum += dx[i];
+  }
+  if (dxOk) {
+    let prev = dxSum / period;
+    out[adxFirst].adx = prev;
+    for (let i = adxFirst + 1; i < n; i += 1) {
+      if (!Number.isFinite(dx[i])) break;
+      prev = (prev * (period - 1) + dx[i]) / period;
+      out[i].adx = prev;
+    }
   }
   return out;
 };

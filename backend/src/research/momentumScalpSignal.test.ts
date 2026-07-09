@@ -54,6 +54,32 @@ describe('momentumScalpSignal', () => {
     assert.ok(finiteAdx.length > 10);
   });
 
+  it('keeps finite ADX/DI on the last closed bar (live eval index)', () => {
+    const bars = synthTrendUp();
+    const series = buildMomentumScalpIndicatorSeries(bars, MOMENTUM_SCALP_TV_DEFAULTS);
+    const last = bars.length - 1;
+    assert.ok(Number.isFinite(series.adx[last]), 'last ADX must be finite for live closed-bar eval');
+    assert.ok(Number.isFinite(series.plusDi[last]), 'last +DI must be finite');
+    assert.ok(Number.isFinite(series.minusDi[last]), 'last -DI must be finite');
+  });
+
+  it('live-pattern prefix rebuild matches full-series signals on last bar', () => {
+    const bars = synthTrendUp();
+    const full = buildMomentumScalpIndicatorSeries(bars, MOMENTUM_SCALP_TV_DEFAULTS);
+    let liveHits = 0;
+    let fullHits = 0;
+    for (let end = full.warmup; end < bars.length; end += 1) {
+      const fullSig = computeMomentumScalpSignalAtIndex(bars, end, MOMENTUM_SCALP_TV_DEFAULTS, full);
+      const prefix = bars.slice(0, end + 1);
+      const liveSig = computeMomentumScalpSignalAtIndex(prefix, prefix.length - 1, MOMENTUM_SCALP_TV_DEFAULTS);
+      if (fullSig.signal !== 'none') fullHits += 1;
+      if (liveSig.signal !== 'none') liveHits += 1;
+      assert.equal(liveSig.signal, fullSig.signal, `signal mismatch at bar ${end}`);
+    }
+    assert.ok(fullHits > 0);
+    assert.equal(liveHits, fullHits);
+  });
+
   it('computes TP/SL prices symmetrically', () => {
     const { tp, sl } = momentumScalpTpSlPrices('long', 100, MOMENTUM_SCALP_TV_DEFAULTS);
     assert.ok(tp > 100);

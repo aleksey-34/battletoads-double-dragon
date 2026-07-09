@@ -1,4 +1,17 @@
 /**
+ * momentum_scalp_tv — полный код сигнала + фрагменты runtime (BTDD)
+ *
+ * Для коллег: это self-contained экспорт из production.
+ * Живые файлы:
+ *   backend/src/bot/momentumScalpSignal.ts
+ *   backend/src/bot/strategy.ts (executeStrategy, ~строки 242-251, 1545-1563, 2483-2548, 3095-3127)
+ */
+
+// =============================================================================
+// SIGNAL ENGINE — backend/src/bot/momentumScalpSignal.ts
+// =============================================================================
+
+/**
  * TV EMA crossover + ADX/DI trend filter (momentum_scalp_tv).
  *
  * Strategy field mapping (no extra DB columns):
@@ -8,8 +21,6 @@
  *   take_profit_percent  → tpPercent (default 2)
  *   zscore_stop          → slPercent (default 1.2)
  */
-
-import type { Strategy } from '../config/settings';
 
 export type MomentumScalpBar = {
   open: number;
@@ -78,7 +89,7 @@ const boolFlag = (v: unknown, fallback: boolean): boolean => {
   return String(v).trim() !== '0' && String(v).trim().toLowerCase() !== 'false';
 };
 
-export const extractMomentumScalpParams = (strategy: Partial<Strategy>): MomentumScalpParams => ({
+export const extractMomentumScalpParams = (strategy: Record<string, unknown>): MomentumScalpParams => ({
   emaFastPeriod: Math.max(2, Math.floor(num(strategy.price_channel_length, MOMENTUM_SCALP_TV_DEFAULTS.emaFastPeriod))),
   emaSlowPeriod: Math.max(3, Math.floor(num(strategy.zscore_entry, MOMENTUM_SCALP_TV_DEFAULTS.emaSlowPeriod))),
   adxPeriod: MOMENTUM_SCALP_TV_DEFAULTS.adxPeriod,
@@ -146,7 +157,6 @@ export const buildMomentumScalpIndicatorSeries = (
       tr[i] = Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
     }
 
-    // First smoothed TR/+DM/-DM at bar `period` (SMA of bars 1..period).
     const atr = wilderSmoothFull(tr, period, period);
     const plusSm = wilderSmoothFull(plusDm, period, period);
     const minusSm = wilderSmoothFull(minusDm, period, period);
@@ -162,7 +172,6 @@ export const buildMomentumScalpIndicatorSeries = (
       dx[i] = denom > 0 ? (100 * Math.abs(pdi - mdi)) / denom : 0;
     }
 
-    // First ADX at bar 2*period = SMA of DX[period .. 2*period].
     const adxFirst = period * 2;
     let dxSum = 0;
     let dxOk = true;
@@ -258,3 +267,65 @@ export const momentumScalpTpSlPrices = (
     sl: entryPrice * (1 + params.slPercent / 100),
   };
 };
+
+// =============================================================================
+// RUNTIME INTEGRATION — backend/src/bot/strategy.ts (executeStrategy)
+// =============================================================================
+
+/*
+── Defaults (getStrategyTypeDefaults) ──
+
+if (strategyType === 'momentum_scalp_tv') {
+  return {
+    take_profit_percent: 2,
+    price_channel_length: 8,
+    detection_source: 'close',
+    zscore_entry: 21,
+    zscore_exit: 20,
+    zscore_stop: 1.2,
+  };
+}
+
+── Lookback ──
+
+lookback = max(emaSlow + 160, 200)  // ~200+ свечей на closed bar
+
+── Signal (shared cache per cycle) ──
+
+if (isMomentumScalpStrategyType(strategyTypeNorm)) {
+  const msParams = extractMomentumScalpParams(mergedStrategy);
+  const idx = candleContext.candlesForSignal.length - 1;
+  const posSide = (mergedStrategy.state || 'flat') as 'flat' | 'long' | 'short';
+  const ms = computeMomentumScalpSignalAtIndex(
+    candleContext.candlesForSignal, idx, msParams, undefined, posSide,
+  );
+  computedSignalResult = {
+    signal: ms.signal,
+    currentRatio: ms.current,
+    zScore: ms.adx,
+    fastRsi: ms.plusDi,
+    ...
+  };
+}
+
+── Exits (TP / SL / opposite cross) ──
+
+if (!closedAction && isMomentumScalp && entryRatio && (state === 'long' || state === 'short')) {
+  const msParams = extractMomentumScalpParams(mergedStrategy);
+  const { tp, sl } = momentumScalpTpSlPrices(state, entryRatio, msParams);
+  if (state === 'long') {
+    if (currentRatio <= sl) close('stop_loss_long');
+    else if (currentRatio >= tp) close('take_profit_long');
+    else if (msParams.exitOnOppositeCross && signal === 'short') close('cross-exit');
+  } else {
+    if (currentRatio >= sl) close('stop_loss_short');
+    else if (currentRatio <= tp) close('take_profit_short');
+    else if (msParams.exitOnOppositeCross && signal === 'long') close('cross-exit');
+  }
+}
+
+── Entries ──
+
+Когда flat && signal long/short → стандартный market order path (lot, CB, exchange limits).
+Сигнал считается на закрытой свече (closedBarOnly в auto-cycle).
+*/
