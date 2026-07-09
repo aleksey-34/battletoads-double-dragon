@@ -426,6 +426,7 @@ type SaasSummary = {
         strategyType: string;
         marketMode: string;
         market: string;
+        interval?: string;
         score: number;
         weight: number;
       }>;
@@ -4147,10 +4148,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     [adminDraftTsOfferCandidates],
   );
   const adminDraftMembersDetailed = useMemo(
-    () => (adminTradingSystemDraft?.members || []).map((member) => ({
-      ...member,
-      reviewRecord: sweepRecordByStrategyId[Number(member.strategyId || 0)] || null,
-    })),
+    () => (adminTradingSystemDraft?.members || []).map((member) => {
+      const reviewRecord = sweepRecordByStrategyId[Number(member.strategyId || 0)] || null;
+      const interval = String(
+        member.interval
+        || (reviewRecord as { interval?: string } | null)?.interval
+        || '',
+      ).trim();
+      return {
+        ...member,
+        interval: interval || member.interval,
+        reviewRecord,
+      };
+    }),
     [adminTradingSystemDraft?.members, sweepRecordByStrategyId],
   );
   
@@ -11067,6 +11077,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       </Space>
                                       <Space wrap>
                                         <Tag color={index < 3 ? 'geekblue' : 'default'}>{index < 3 ? 'core' : 'satellite'}</Tag>
+                                        {member.interval || (member.reviewRecord as { interval?: string } | null)?.interval ? (
+                                          <Tag color="cyan">TF {String(member.interval || (member.reviewRecord as { interval?: string } | null)?.interval)}</Tag>
+                                        ) : null}
+                                        <Tag color="purple">{member.strategyType || '—'}</Tag>
                                         <Tag color="cyan">score {formatNumber(member.score)}</Tag>
                                         <Tag color="purple">w {formatNumber(member.weight)}</Tag>
                                         {member.reviewRecord ? <Tag color={metricColor(Number(member.reviewRecord.totalReturnPercent || 0), 'return')}>Ret {formatPercent(member.reviewRecord.totalReturnPercent)}</Tag> : null}

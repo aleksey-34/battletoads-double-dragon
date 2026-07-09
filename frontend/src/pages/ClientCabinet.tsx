@@ -289,6 +289,16 @@ type AlgofundState = {
     name: string;
     isActive: boolean;
     memberCount: number;
+    memberDetails?: Array<{
+      strategyId: number;
+      name: string;
+      strategyType: string;
+      interval: string;
+      baseSymbol: string;
+      quoteSymbol: string;
+      market: string;
+      weight: number;
+    }>;
     metrics?: {
       equityUsd?: number;
       drawdownPercent?: number;
@@ -2541,6 +2551,31 @@ const ClientCabinet: React.FC = () => {
                     <Typography.Text type="secondary" style={{ fontSize: 12, whiteSpace: 'pre-line' }}>
                       {getTsHint(system.name)}
                     </Typography.Text>
+                  ) : null}
+                  {Array.isArray((system as any).memberDetails) && (system as any).memberDetails.length > 0 ? (
+                    <div>
+                      <Typography.Text strong>Состав системы</Typography.Text>
+                      <div style={{ maxHeight: 220, overflowY: 'auto', marginTop: 6 }}>
+                        <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                          {((system as any).memberDetails as Array<{
+                            strategyId: number;
+                            name: string;
+                            strategyType: string;
+                            interval: string;
+                            market: string;
+                          }>).map((m) => (
+                            <Space key={m.strategyId} wrap size={4}>
+                              <Tag color="blue">{m.market || '—'}</Tag>
+                              <Tag color="purple">{m.interval || '—'}</Tag>
+                              {m.strategyType ? <Tag color="geekblue">{m.strategyType}</Tag> : null}
+                              <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                                {(m.name || `#${m.strategyId}`).slice(0, 48)}
+                              </Typography.Text>
+                            </Space>
+                          ))}
+                        </Space>
+                      </div>
+                    </div>
                   ) : null}
                   {chartData.length > 0 ? (
                     <div style={{ height: 240 }}>

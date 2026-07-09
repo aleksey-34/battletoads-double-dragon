@@ -1127,6 +1127,7 @@ export type CatalogData = {
       strategyType: string;
       marketMode: string;
       market: string;
+      interval?: string;
       score: number;
       weight: number;
     }>;
@@ -14035,19 +14036,25 @@ type MaterializeDraftMember = {
   strategyType: string;
   marketMode: string;
   market: string;
+  interval?: string;
   score: number;
   weight: number;
 };
 
-const buildMaterializeDraftMemberFromRow = (m: Record<string, unknown>): MaterializeDraftMember => ({
-  strategyId: Number(m['strategy_id'] || 0),
-  strategyName: String(m['strategy_name'] || `strategy-${m['strategy_id']}`),
-  strategyType: String(m['strategy_type'] || ''),
-  marketMode: String(m['market_mode'] || ''),
-  market: String(m['base_symbol'] || ''),
-  score: 0,
-  weight: asNumber(m['weight'], 1),
-});
+const buildMaterializeDraftMemberFromRow = (m: Record<string, unknown>): MaterializeDraftMember => {
+  const base = String(m['base_symbol'] || '');
+  const quote = String(m['quote_symbol'] || '');
+  return {
+    strategyId: Number(m['strategy_id'] || 0),
+    strategyName: String(m['strategy_name'] || `strategy-${m['strategy_id']}`),
+    strategyType: String(m['strategy_type'] || ''),
+    marketMode: String(m['market_mode'] || ''),
+    market: quote ? `${base}/${quote}` : base,
+    interval: String(m['interval'] || '').trim() || undefined,
+    score: 0,
+    weight: asNumber(m['weight'], 1),
+  };
+};
 
 /** Drop archived master strategies so clients do not inherit zombie TS members. */
 const filterMaterializeDraftMembers = async (
@@ -14193,7 +14200,7 @@ const materializeAlgofundSystem = async (
     if (card?.id) {
       const mcRows = (await db.all(
         `SELECT mcm.strategy_id, mcm.weight, s.name AS strategy_name,
-                s.strategy_type, s.market_mode, s.base_symbol
+                s.strategy_type, s.market_mode, s.base_symbol, s.quote_symbol, s.interval
          FROM master_card_members mcm
          JOIN strategies s ON s.id = mcm.strategy_id
          WHERE mcm.card_id = ? AND mcm.is_enabled = 1
@@ -14219,7 +14226,7 @@ const materializeAlgofundSystem = async (
       if (sourceTs?.id) {
         const tsRows = (await db.all(
           `SELECT tsm.strategy_id, tsm.weight, s.name AS strategy_name,
-                  s.strategy_type, s.market_mode, s.base_symbol
+                  s.strategy_type, s.market_mode, s.base_symbol, s.quote_symbol, s.interval
            FROM trading_system_members tsm
            JOIN strategies s ON s.id = tsm.strategy_id
            WHERE tsm.system_id = ? AND tsm.is_enabled = 1
@@ -14253,7 +14260,7 @@ const materializeAlgofundSystem = async (
           if (sourceTsLike?.id) {
             const tsLikeRows = (await db.all(
               `SELECT tsm.strategy_id, tsm.weight, s.name AS strategy_name,
-                      s.strategy_type, s.market_mode, s.base_symbol
+                      s.strategy_type, s.market_mode, s.base_symbol, s.quote_symbol, s.interval
                FROM trading_system_members tsm
                JOIN strategies s ON s.id = tsm.strategy_id
                WHERE tsm.system_id = ? AND tsm.is_enabled = 1
@@ -14653,6 +14660,29 @@ export const getAlgofundState = async (
           .filter(([strategyId]: [string, number]) => Number(strategyId) > 0)
       )
       : {},
+    // Per-leg composition for client/admin TS modals (TF / type / market — previously discarded).
+    memberDetails: Array.isArray(item?.members)
+      ? item.members
+          .filter((member: any) => member && member.is_enabled !== false)
+          .map((member: any) => {
+            const strategy = member?.strategy || {};
+            const strategyId = Number(member?.strategy_id || strategy?.id || 0);
+            const baseSymbol = asString(strategy?.base_symbol, '');
+            const quoteSymbol = asString(strategy?.quote_symbol, '');
+            const weight = asNumber(member?.weight, 1);
+            return {
+              strategyId,
+              name: asString(strategy?.name, ''),
+              strategyType: asString(strategy?.strategy_type, ''),
+              interval: asString(strategy?.interval, ''),
+              baseSymbol,
+              quoteSymbol,
+              market: quoteSymbol ? `${baseSymbol}/${quoteSymbol}` : baseSymbol,
+              weight: Number((Number.isFinite(weight) && weight > 0 ? weight : 1).toFixed(6)),
+            };
+          })
+          .filter((row: { strategyId: number }) => Number.isFinite(row.strategyId) && row.strategyId > 0)
+      : [],
     metrics: item?.metrics ? {
       equityUsd: asNumber(item.metrics.equity_usd, 0),
       unrealizedPnl: asNumber(item.metrics.unrealized_pnl, 0),

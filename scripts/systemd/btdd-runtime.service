@@ -20,6 +20,8 @@ EnvironmentFile=-/opt/battletoads-double-dragon/.env
 # Environment=LIQUIDITY_SCAN_INTERVAL_MIN=180
 # Environment=RECONCILIATION_AUTO_APPLY=0
 # Environment=RECONCILIATION_AUTO_PAUSE=0
+# CT_Fractal: bars to wait after exit before re-entry (4h×3 ≈ 12h). 0 = same-bar only.
+Environment=CT_REENTRY_MIN_BARS=3
 
 ExecStart=/usr/bin/node /opt/battletoads-double-dragon/backend/dist/runtime-main.js
 Restart=always

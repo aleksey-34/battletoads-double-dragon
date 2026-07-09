@@ -2945,8 +2945,25 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     }
 
     if (closedOnCurrentBar && runtime.state === 'flat') {
+      // CT re-entry cooldown (parity with live CT_REENTRY_MIN_BARS). Default 0 = same-bar only.
+      if (isCtFractal) {
+        const minBars = Math.max(0, Math.floor(Number(process.env.CT_REENTRY_MIN_BARS || 0) || 0));
+        if (minBars > 0) {
+          (runtime as any).ctReentryCooldownBarsLeft = minBars;
+        }
+      }
       pushEquityPoint(event.timeMs);
       continue;
+    }
+
+    // Multi-bar CT re-entry cooldown after exit (skip entries while countdown > 0).
+    if (isCtFractal && runtime.state === 'flat') {
+      const left = Math.max(0, Math.floor(Number((runtime as any).ctReentryCooldownBarsLeft || 0) || 0));
+      if (left > 0) {
+        (runtime as any).ctReentryCooldownBarsLeft = left - 1;
+        pushEquityPoint(event.timeMs);
+        continue;
+      }
     }
 
     // Position Limiter (ОП): skip entry if max open positions reached

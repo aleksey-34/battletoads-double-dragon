@@ -1160,6 +1160,61 @@ export const executeStrategy = async (
     });
   }
 
+  // CT multi-bar re-entry cooldown (CT_REENTRY_MIN_BARS). Default 0 = disabled beyond same-bar guard.
+  // On 4h, 3 bars ≈ 12h; on 1h, 12 bars ≈ 12h. Reduces LINK/HBAR churn without changing TF.
+  if (
+    isCtFractal
+    && state === 'flat'
+    && !closedAction
+    && (signal === 'long' || signal === 'short')
+  ) {
+    const minBars = Math.max(0, Math.floor(Number(process.env.CT_REENTRY_MIN_BARS || 0) || 0));
+    if (minBars > 0) {
+      const lastAction = String(mergedStrategy.last_action || '');
+      const exitMarkers = [
+        'mean_revert_exit',
+        'zscore_stop',
+        'take_profit',
+        'stop_loss',
+        'macro_shield',
+        'signal_flip',
+        'desync_closed',
+      ];
+      const looksLikeExit = exitMarkers.some((m) => lastAction.includes(m));
+      if (looksLikeExit && mergedStrategy.updated_at) {
+        const updatedAtMs = new Date(String(mergedStrategy.updated_at).replace(' ', 'T') + 'Z').getTime();
+        const barMs = intervalToMs(mergedStrategy.interval);
+        if (Number.isFinite(updatedAtMs) && updatedAtMs > 0 && barMs > 0) {
+          const coolUntilMs = updatedAtMs + minBars * barMs;
+          if (evaluatedBarTimeMs < coolUntilMs) {
+            const updated = await updateStrategy(apiKeyName, strategyId, {
+              ...executionBindingPatch,
+              state: 'flat',
+              entry_ratio: null,
+              tp_anchor_ratio: null,
+              last_signal: signal,
+              last_action: `${lastAction.split('@')[0] || 'exit'}_ct_reentry_cooldown@${currentRatio}`,
+              last_error: null,
+            });
+            logger.info(
+              `CT re-entry cooldown: skip ${signal} for strategy ${strategyId} (${apiKeyName}) — `
+              + `minBars=${minBars}, until=${new Date(coolUntilMs).toISOString()}`
+            );
+            return returnWithProcessedBar({
+              result: `CT re-entry cooldown (${minBars} bars) after exit`,
+              action: 'ct_reentry_cooldown',
+              strategy: updated,
+              currentRatio,
+              donchianHigh,
+              donchianLow,
+              donchianCenter,
+            });
+          }
+        }
+      }
+    }
+  }
+
   // ── Cold-start guard: skip entry on first N bars after strategy materialization ──
   // Prevents entering on a stale signal that was already in progress before this
   // account was activated. Wait for a fresh signal generated after materialization.
