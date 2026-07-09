@@ -265,6 +265,25 @@ const marketErrorLogUntil = new Map<string, number>();
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+const CCXT_POSITIONS_TIMEOUT_MS = Math.max(
+  3000,
+  Math.floor(Number(process.env.BTDD_CCXT_POSITIONS_TIMEOUT_MS || 12000) || 12000),
+);
+
+const withTimeout = async <T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+};
+
 const isTransientCcxtError = (error: unknown): boolean => {
   const message = String((error as any)?.message || error || '').toLowerCase();
   return message.includes('timed out')
@@ -2083,14 +2102,40 @@ const fetchPositionsDirect = async (apiKeyName: string, symbol?: string) => {
       const resolvedSymbol = symbol ? await resolveCcxtSymbol(entry, symbol) : undefined;
 
       let positions: any[] = [];
-      if (typeof entry.client.fetchPositions === 'function') {
-        const raw = await scheduleWithRateLimitRetry(entry.limiter, () =>
-          entry.client.fetchPositions(resolvedSymbol ? [resolvedSymbol] : undefined)
-        );
-        positions = Array.isArray(raw) ? raw : [];
-      } else if (resolvedSymbol && typeof entry.client.fetchPosition === 'function') {
-        const single = await scheduleWithRateLimitRetry(entry.limiter, () => entry.client.fetchPosition(resolvedSymbol));
-        positions = single ? [single] : [];
+      const fetchPositionsOnce = async (): Promise<any[]> => {
+        if (typeof entry.client.fetchPositions === 'function') {
+          const raw = await entry.client.fetchPositions(resolvedSymbol ? [resolvedSymbol] : undefined);
+          return Array.isArray(raw) ? raw : [];
+        }
+        if (resolvedSymbol && typeof entry.client.fetchPosition === 'function') {
+          const single = await entry.client.fetchPosition(resolvedSymbol);
+          return single ? [single] : [];
+        }
+        return [];
+      };
+
+      const maxAttempts = entry.exchange === 'bingx' ? 3 : 2;
+      let lastPosError: Error | null = null;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        try {
+          positions = await scheduleWithRateLimitRetry(entry.limiter, () =>
+            withTimeout(
+              fetchPositionsOnce(),
+              entry.exchange === 'bingx' ? CCXT_POSITIONS_TIMEOUT_MS : CCXT_POSITIONS_TIMEOUT_MS * 2,
+              `ccxt fetchPositions ${apiKeyName}`,
+            )
+          );
+          lastPosError = null;
+          break;
+        } catch (posError) {
+          lastPosError = posError as Error;
+          if (attempt < maxAttempts - 1) {
+            await delay(400 * (attempt + 1));
+          }
+        }
+      }
+      if (lastPosError) {
+        throw lastPosError;
       }
 
       // Collect unique symbols that need ticker data for mark price.
