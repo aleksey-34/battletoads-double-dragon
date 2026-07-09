@@ -219,15 +219,24 @@ export const computeMomentumScalpSignalAtIndex = (
   const adxVal = ind.adx[index];
   const pdi = ind.plusDi[index];
   const mdi = ind.minusDi[index];
-  if (![ef, es, efP, esP].every(Number.isFinite) || !Number.isFinite(adxVal)) return none;
+  if (![ef, es, efP, esP].every(Number.isFinite)) return none;
 
   const bullCross = efP <= esP && ef > es;
   const bearCross = efP >= esP && ef < es;
-  const trending = adxVal >= params.adxMin;
+  // Exit hint is EMA-only (matches research BT cross-exit; does not require ADX).
   const oppositeCross =
     (positionSide === 'short' && bullCross) ||
     (positionSide === 'long' && bearCross);
 
+  if (!Number.isFinite(adxVal)) {
+    return {
+      ...none,
+      current: bars[index].close,
+      oppositeCross,
+    };
+  }
+
+  const trending = adxVal >= params.adxMin;
   let signal: 'long' | 'short' | 'none' = 'none';
   if (params.longEnabled && bullCross && trending && pdi > mdi) signal = 'long';
   else if (params.shortEnabled && bearCross && trending && mdi > pdi) signal = 'short';

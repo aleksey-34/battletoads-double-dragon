@@ -467,6 +467,7 @@ type BacktestSignalPayload = {
   donchianLow?: number;
   fastRsi?: number | null;
   zScore: number | null;
+  oppositeCross?: boolean;
 };
 
 const computeDonchianSignalAtIndex = (
@@ -773,6 +774,7 @@ const computeSignalAtIndex = (
       donchianCenter: ms.current,
       zScore: ms.adx,
       fastRsi: ms.plusDi,
+      oppositeCross: ms.oppositeCross,
     };
   }
 
@@ -2731,30 +2733,32 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       }
     }
 
-    // TV momentum scalp: fixed TP/SL + optional opposite EMA cross exit
+    // TV momentum scalp: fixed TP/SL on closed-bar close + optional opposite EMA cross
+    // (matches live strategy.ts — no wick fills).
     if (!isClassicDca && !closedOnCurrentBar && isMomentumScalp && (state === 'long' || state === 'short') && entryPrice && runtime.momentumScalpParams) {
       const msParams = runtime.momentumScalpParams;
       const { tp, sl } = momentumScalpTpSlPrices(state, entryPrice, msParams);
+      const px = signalPayload.current;
       if (state === 'long') {
-        if (candle.low <= sl) {
-          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, sl, 'ms_sl_long');
+        if (px <= sl) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, px, 'ms_sl_long');
           closedOnCurrentBar = true;
-        } else if (candle.high >= tp) {
-          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, tp, 'ms_tp_long');
+        } else if (px >= tp) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, px, 'ms_tp_long');
           closedOnCurrentBar = true;
-        } else if (msParams.exitOnOppositeCross && signalPayload.signal === 'short') {
-          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'ms_cross_long');
+        } else if (msParams.exitOnOppositeCross && signalPayload.oppositeCross) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, px, 'ms_cross_long');
           closedOnCurrentBar = true;
         }
       } else if (!closedOnCurrentBar) {
-        if (candle.high >= sl) {
-          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, sl, 'ms_sl_short');
+        if (px >= sl) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, px, 'ms_sl_short');
           closedOnCurrentBar = true;
-        } else if (candle.low <= tp) {
-          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, tp, 'ms_tp_short');
+        } else if (px <= tp) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, px, 'ms_tp_short');
           closedOnCurrentBar = true;
-        } else if (msParams.exitOnOppositeCross && signalPayload.signal === 'long') {
-          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'ms_cross_short');
+        } else if (msParams.exitOnOppositeCross && signalPayload.oppositeCross) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, px, 'ms_cross_short');
           closedOnCurrentBar = true;
         }
       }

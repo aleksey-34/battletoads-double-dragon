@@ -38,6 +38,8 @@ export type ComputedSignal = {
   donchianCenter: number;
   zScore: number | null;
   fastRsi?: number | null;
+  /** Momentum scalp: opposite EMA cross while flat/in-position (exit hint). */
+  oppositeCross?: boolean;
 };
 
 export type GetStrategiesOptions = {

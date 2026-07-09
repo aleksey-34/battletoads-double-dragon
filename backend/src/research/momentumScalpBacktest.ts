@@ -7,6 +7,8 @@ import type { WickCandle } from './wickRetestBacktest';
 
 export type MomentumScalpSideMode = 'long' | 'short' | 'both';
 
+export type MomentumScalpExitMode = 'wick' | 'close';
+
 export type MomentumScalpConfig = {
   emaFastPeriod: number;
   emaSlowPeriod: number;
@@ -16,6 +18,11 @@ export type MomentumScalpConfig = {
   slPercent: number;
   /** Exit on opposite EMA cross */
   exitOnOppositeCross: boolean;
+  /**
+   * wick = intrabar high/low hits TP/SL (optimistic research).
+   * close = closed-bar close only (matches live runtime).
+   */
+  exitMode: MomentumScalpExitMode;
   sideMode: MomentumScalpSideMode;
   barMinutes: number;
   commissionPercent: number;
@@ -76,6 +83,7 @@ const defaults: MomentumScalpConfig = {
   tpPercent: 1.5,
   slPercent: 1.0,
   exitOnOppositeCross: true,
+  exitMode: 'close',
   sideMode: 'both',
   barMinutes: 60,
   commissionPercent: 0.1,
@@ -271,12 +279,17 @@ export const runMomentumScalpBacktest = (
           ? pos.entryPrice * (1 - cfg.slPercent / 100)
           : pos.entryPrice * (1 + cfg.slPercent / 100);
 
-      const hitSl = pos.side === 'long' ? c.low <= sl : c.high >= sl;
-      const hitTp = pos.side === 'long' ? c.high >= tp : c.low <= tp;
+      const useClose = cfg.exitMode === 'close';
+      const hitSl = useClose
+        ? (pos.side === 'long' ? c.close <= sl : c.close >= sl)
+        : (pos.side === 'long' ? c.low <= sl : c.high >= sl);
+      const hitTp = useClose
+        ? (pos.side === 'long' ? c.close >= tp : c.close <= tp)
+        : (pos.side === 'long' ? c.high >= tp : c.low <= tp);
       if (hitSl) {
-        closePos(c, sl, 'sl');
+        closePos(c, useClose ? c.close : sl, 'sl');
       } else if (hitTp) {
-        closePos(c, tp, 'tp');
+        closePos(c, useClose ? c.close : tp, 'tp');
       } else if (cfg.exitOnOppositeCross) {
         const oppLong = pos.side === 'short' && efP <= esP && ef > es;
         const oppShort = pos.side === 'long' && efP >= esP && ef < es;

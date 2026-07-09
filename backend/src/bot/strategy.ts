@@ -233,6 +233,7 @@ export const executeStrategy = async (
         donchianCenter: ms.current,
         zScore: ms.adx,
         fastRsi: ms.plusDi,
+        oppositeCross: ms.oppositeCross,
       };
     } else {
       computedSignalResult = computeSignal(
@@ -249,6 +250,7 @@ export const executeStrategy = async (
   }
 
   const { signal, currentRatio, donchianHigh, donchianLow, donchianCenter, zScore, fastRsi } = computedSignalResult;
+  const momentumOppositeCross = Boolean(computedSignalResult.oppositeCross);
   // ───────────────────────────────────────────────────────────────────────────
 
   const isCtFractal = isCtFractalStrategyType(String(mergedStrategy.strategy_type || ''));
@@ -897,6 +899,7 @@ export const executeStrategy = async (
   if (!closedAction && isMomentumScalp && entryRatio && (state === 'long' || state === 'short')) {
     const msParams = extractMomentumScalpParams(mergedStrategy);
     const { tp, sl } = momentumScalpTpSlPrices(state, entryRatio, msParams);
+    // Live exits on closed-bar close (currentRatio), not intrabar wick — BT must match.
     if (state === 'long') {
       if (currentRatio <= sl) {
         await closeAndRecordExit('stop_loss_long', 'long');
@@ -906,7 +909,7 @@ export const executeStrategy = async (
         await closeAndRecordExit('take_profit_long', 'long');
         closedAction = 'take_profit_long';
         closedResult = `Momentum scalp TP long ${positionLabel}`;
-      } else if (msParams.exitOnOppositeCross && signal === 'short') {
+      } else if (msParams.exitOnOppositeCross && momentumOppositeCross) {
         await closeAndRecordExit('stop_loss_long', 'long');
         closedAction = 'stop_loss_long';
         closedResult = `Momentum scalp cross-exit long ${positionLabel}`;
@@ -920,7 +923,7 @@ export const executeStrategy = async (
         await closeAndRecordExit('take_profit_short', 'short');
         closedAction = 'take_profit_short';
         closedResult = `Momentum scalp TP short ${positionLabel}`;
-      } else if (msParams.exitOnOppositeCross && signal === 'long') {
+      } else if (msParams.exitOnOppositeCross && momentumOppositeCross) {
         await closeAndRecordExit('stop_loss_short', 'short');
         closedAction = 'stop_loss_short';
         closedResult = `Momentum scalp cross-exit short ${positionLabel}`;
