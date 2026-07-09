@@ -202,6 +202,46 @@ const syncRecentTradesForStrategy = async (
       return;
     }
 
+    const orderId = String(trade.orderId || '').trim();
+    if (orderId) {
+      const existing = await db.get(
+        `SELECT id, position_size, actual_price, entry_price, actual_fee
+         FROM live_trade_events
+         WHERE strategy_id = ?
+           AND source_order_id = ?
+           AND trade_type = ?
+           AND COALESCE(event_origin, 'exchange_fill') = 'exchange_fill'
+         ORDER BY id ASC
+         LIMIT 1`,
+        [strategyId, orderId, tradeType],
+      ) as {
+        id?: number;
+        position_size?: number;
+        actual_price?: number;
+        entry_price?: number;
+        actual_fee?: number;
+      } | undefined;
+
+      if (existing?.id) {
+        const oldQty = Math.abs(toFinite(existing.position_size, 0));
+        const addQty = Math.abs(qty);
+        const newQty = oldQty + addQty;
+        const oldPrice = toFinite(existing.actual_price, price);
+        const wPrice = newQty > epsilon
+          ? ((oldQty * oldPrice) + (addQty * price)) / newQty
+          : price;
+        const newFee = toFinite(existing.actual_fee, 0) + fee;
+        await db.run(
+          `UPDATE live_trade_events
+           SET position_size = ?, actual_price = ?, entry_price = ?, actual_fee = ?, actual_time = ?
+           WHERE id = ?`,
+          [newQty, wPrice, wPrice, newFee, timestamp, existing.id],
+        );
+        existingIds.add(sourceTradeId);
+        return;
+      }
+    }
+
     await recordLiveTradeEvent(strategyId, {
       trade_type: tradeType,
       side,
