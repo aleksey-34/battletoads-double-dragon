@@ -159,14 +159,13 @@ for (const interval of INTERVALS) {
                   pf: full.profitFactor,
                   ret: full.totalReturnPercent,
                   dd: full.maxDrawdownPercent,
+                  // summarizeWindow → { ret, trades, netPnl }
                   ep4_trades: ep4.trades,
-                  ep4_ret: ep4.totalReturnPercent,
-                  ep4_dd: ep4.maxDrawdownPercent,
-                  ep4_pf: ep4.profitFactor,
+                  ep4_ret: ep4.ret,
+                  ep4_pnl: ep4.netPnl,
                   recent_trades: recent.trades,
-                  recent_ret: recent.totalReturnPercent,
-                  recent_dd: recent.maxDrawdownPercent,
-                  recent_pf: recent.profitFactor,
+                  recent_ret: recent.ret,
+                  recent_pnl: recent.netPnl,
                   score: (full.profitFactor || 0) * Math.log10(1 + full.tradesCount)
                     * (full.totalReturnPercent > 0 ? 1 : 0.2)
                     / Math.max(1, full.maxDrawdownPercent / 10),
@@ -210,19 +209,19 @@ console.log('\n=== TOP 15 (all) ===');
 console.table(top.slice(0, 15).map((r) => ({
   pair: r.pair, iv: r.interval, ema: `${r.emaFastPeriod}/${r.emaSlowPeriod}`,
   adx: r.adxMin, tp: r.tpPercent, sl: r.slPercent, side: r.sideMode,
-  n: r.trades, pf: Number(r.pf?.toFixed?.(2) ?? r.pf),
-  ret: Number(r.ret?.toFixed?.(1) ?? r.ret),
-  dd: Number(r.dd?.toFixed?.(1) ?? r.dd),
-  ep4: Number(r.ep4_ret?.toFixed?.(1) ?? r.ep4_ret),
+  n: r.trades, pf: Number(Number(r.pf).toFixed(2)),
+  ret: Number(Number(r.ret).toFixed(1)),
+  dd: Number(Number(r.dd).toFixed(1)),
+  ep4: Number(Number(r.ep4_ret).toFixed(1)),
 })));
 
 console.log('\n=== BASELINE 8/21 ADX20 TP2 SL1.2 both ===');
 console.table(baseline.map((r) => ({
   pair: r.pair, iv: r.interval, n: r.trades,
-  pf: Number(r.pf?.toFixed?.(2) ?? r.pf),
-  ret: Number(r.ret?.toFixed?.(1) ?? r.ret),
-  dd: Number(r.dd?.toFixed?.(1) ?? r.dd),
-  recent: Number(r.recent_ret?.toFixed?.(1) ?? r.recent_ret),
+  pf: Number(Number(r.pf).toFixed(2)),
+  ret: Number(Number(r.ret).toFixed(1)),
+  dd: Number(Number(r.dd).toFixed(1)),
+  recent: Number(Number(r.recent_ret).toFixed(1)),
 })));
 
 console.log(`\nwrote ${outPath} (${rows.length} rows)`);
