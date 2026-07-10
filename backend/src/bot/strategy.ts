@@ -1853,8 +1853,6 @@ export const executeStrategy = async (
       apiKeyName,
       mergedStrategy.base_symbol,
       mergedStrategy.quote_symbol,
-      3,
-      350
     );
 
     if (!livePairAfterOpen.basePosition || !livePairAfterOpen.quotePosition || !qtyPlan) {
@@ -1933,8 +1931,6 @@ export const executeStrategy = async (
     const livePositionAfterOpen = await loadSinglePositionForValidation(
       apiKeyName,
       mergedStrategy.base_symbol,
-      3,
-      350
     );
 
     if (!livePositionAfterOpen) {

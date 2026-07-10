@@ -36,11 +36,38 @@ const isRateLimitMessage = (message: string): boolean => {
     || m.includes('too many requests');
 };
 
+/** Drop cached positions after place/close so post-open validation does not see a stale empty snapshot. */
+export const invalidatePositionCache = (apiKeyName: string, symbol?: string): void => {
+  const safe = String(apiKeyName || '').trim();
+  if (!safe) {
+    return;
+  }
+  if (symbol) {
+    positionCache.delete(cacheKeyFor(safe, symbol));
+    positionCache.delete(cacheKeyFor(safe, undefined));
+    positionInflight.delete(cacheKeyFor(safe, symbol));
+    positionInflight.delete(cacheKeyFor(safe, undefined));
+    return;
+  }
+  const prefix = `${safe}:`;
+  for (const key of [...positionCache.keys()]) {
+    if (key.startsWith(prefix)) {
+      positionCache.delete(key);
+    }
+  }
+  for (const key of [...positionInflight.keys()]) {
+    if (key.startsWith(prefix)) {
+      positionInflight.delete(key);
+    }
+  }
+};
+
 export const getCachedPositions = async (
   apiKeyName: string,
   symbol: string | undefined,
   exchangeRaw: string,
   fetcher: () => Promise<any[]>,
+  options?: { forceRefresh?: boolean },
 ): Promise<any[]> => {
   const exchange = String(exchangeRaw || '').toLowerCase();
   const key = cacheKeyFor(apiKeyName, symbol);
@@ -48,7 +75,7 @@ export const getCachedPositions = async (
   const cached = positionCache.get(key);
   const now = Date.now();
 
-  if (cached && now - cached.fetchedAt < ttl) {
+  if (!options?.forceRefresh && cached && now - cached.fetchedAt < ttl) {
     return cached.data;
   }
 

@@ -7,7 +7,7 @@ import { db } from '../utils/database';
 import { createWeexClient } from './weexClient';
 import { readHybridCandles } from './hybridCandleStore';
 import { registerMarketDataRelayKey } from './marketDataCache';
-import { batchPositionsSequential, getCachedPositions } from './positionPollCache';
+import { batchPositionsSequential, getCachedPositions, invalidatePositionCache } from './positionPollCache';
 import {
   clampQtyToParsedMax,
   clampQtyString,
@@ -1536,7 +1536,10 @@ export const placeOrder = async (
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      return await submitWithQty(currentQty);
+      const order = await submitWithQty(currentQty);
+      // Drop stale empty snapshots so post-open validation / OP orphan checks see the new fill.
+      invalidatePositionCache(apiKeyName);
+      return order;
     } catch (error) {
       lastError = error as Error;
       const parsed = parseOrderQtyLimitError(lastError.message);
@@ -2421,15 +2424,22 @@ const fetchPositionsDirect = async (apiKeyName: string, symbol?: string) => {
   return normalized;
 };
 
-export const getPositions = async (apiKeyName: string, symbol?: string) => {
+export const getPositions = async (
+  apiKeyName: string,
+  symbol?: string,
+  options?: { forceRefresh?: boolean },
+) => {
   const exchange = String(getExchangeForApiKey(apiKeyName) || '').toLowerCase();
   return getCachedPositions(
     apiKeyName,
     symbol,
     exchange,
     () => fetchPositionsDirect(apiKeyName, symbol),
+    options,
   );
 };
+
+export { invalidatePositionCache };
 
 export const get24hVolume = async (apiKeyName: string, symbol: string) => {
   const key = `volume_${apiKeyName}_${symbol}`;
@@ -2730,6 +2740,7 @@ export const closePosition = async (
           entry.client.createOrder(ccxtSymbol, 'market', closeSide, amount, undefined, { type: 'spot' })
         );
         logger.info(`Closed spot position via ccxt: ${qty} ${symbol}`);
+        invalidatePositionCache(apiKeyName);
         return order;
       } catch (error) {
         const err = error as Error;
@@ -2774,6 +2785,7 @@ export const closePosition = async (
         const useClosePositionFlag = entry.exchange === 'binance';
         const order = await submitCloseOrder(undefined, useClosePositionFlag);
         logger.info(`Closed position via ccxt: ${qty} ${symbol}`);
+        invalidatePositionCache(apiKeyName);
         return order;
       }
 
@@ -2802,6 +2814,7 @@ export const closePosition = async (
             logger.info(
               `Closed BingX position via ccxt: ${qty} ${symbol} (positionSide=${candidate.side || 'omitted'}, closePosition=${candidate.withClosePosition}, reduceOnly=${candidate.withReduceOnly ?? true})`
             );
+            invalidatePositionCache(apiKeyName);
             return order;
           } catch (error) {
             lastError = error as Error;

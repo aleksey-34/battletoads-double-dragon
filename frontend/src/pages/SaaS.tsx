@@ -315,6 +315,7 @@ type TenantSummary = {
     requested_enabled?: number;
     actual_enabled?: number;
     assigned_api_key_name?: string;
+    execution_api_key_name?: string;
     published_system_name?: string;
   } | null;
   copytradingProfile?: {
@@ -3452,8 +3453,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       if (mode !== 'algofund_client' && mode !== 'dual') {
         return false;
       }
-      return Number(item.algofundProfile?.actual_enabled || 0) === 1
-        && Number(item.algofundProfile?.requested_enabled || 0) === 1;
+      // Include disabled / not-yet-started clients so "Подключить клиентов" can onboard them.
+      // Previously required actual_enabled+requested_enabled=1, which hid new keys like mikitamikado.
+      const hasKey = Boolean(
+        String(item.algofundProfile?.execution_api_key_name || item.algofundProfile?.assigned_api_key_name || item.tenant.assigned_api_key_name || '').trim()
+      );
+      return hasKey || Number(item.algofundProfile?.actual_enabled || 0) === 1;
     }),
     [summary?.tenants],
   );
@@ -14621,10 +14626,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               ...current,
               tenantIds: values.map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0),
             } : current))}
-            options={batchEligibleAlgofundTenants.map((item) => ({
-              value: Number(item.tenant.id),
-              label: `${item.tenant.display_name || item.tenant.slug || `tenant-${item.tenant.id}`} (${item.tenant.slug || item.tenant.id})${item.algofundProfile?.published_system_name ? ` - текущая TS: ${item.algofundProfile.published_system_name}` : ''}`,
-            }))}
+            options={batchEligibleAlgofundTenants.map((item) => {
+              const enabled = Number(item.algofundProfile?.actual_enabled || 0) === 1
+                && Number(item.algofundProfile?.requested_enabled || 0) === 1;
+              const currentTs = item.algofundProfile?.published_system_name
+                ? ` - текущая TS: ${item.algofundProfile.published_system_name}`
+                : (enabled ? '' : ' - не подключён / выключен');
+              return {
+                value: Number(item.tenant.id),
+                label: `${item.tenant.display_name || item.tenant.slug || `tenant-${item.tenant.id}`} (${item.tenant.slug || item.tenant.id})${currentTs}`,
+              };
+            })}
             optionFilterProp="label"
           />
           <Space wrap>

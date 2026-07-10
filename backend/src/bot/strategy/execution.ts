@@ -1,5 +1,5 @@
 import { Strategy } from '../../config/settings';
-import { cancelAllOrders, getPositions } from '../exchange';
+import { cancelAllOrders, getPositions, invalidatePositionCache } from '../exchange';
 import logger from '../../utils/logger';
 import { getStrategySymbols, intervalToMs } from './normalize';
 import { closeAllForSymbol } from './cycle/positionGuards';
@@ -24,13 +24,14 @@ export const loadPairPositionsForValidation = async (
   apiKeyName: string,
   baseSymbol: string,
   quoteSymbol: string,
-  attempts: number = 3,
-  waitMs: number = 300
+  attempts: number = 5,
+  waitMs: number = 500
 ): Promise<{ basePosition: any | null; quotePosition: any | null }> => {
   const safeAttempts = Math.max(1, Math.floor(attempts));
+  invalidatePositionCache(apiKeyName);
 
   for (let attempt = 0; attempt < safeAttempts; attempt += 1) {
-    const positions = await getPositions(apiKeyName);
+    const positions = await getPositions(apiKeyName, undefined, { forceRefresh: attempt === 0 });
 
     const basePosition = positions.find((position: any) => {
       return (
@@ -51,6 +52,7 @@ export const loadPairPositionsForValidation = async (
     }
 
     if (attempt < safeAttempts - 1) {
+      invalidatePositionCache(apiKeyName);
       await sleepMs(waitMs);
     }
   }
@@ -64,13 +66,14 @@ export const loadPairPositionsForValidation = async (
 export const loadSinglePositionForValidation = async (
   apiKeyName: string,
   symbol: string,
-  attempts: number = 3,
-  waitMs: number = 300
+  attempts: number = 5,
+  waitMs: number = 500
 ): Promise<any | null> => {
   const safeAttempts = Math.max(1, Math.floor(attempts));
+  invalidatePositionCache(apiKeyName);
 
   for (let attempt = 0; attempt < safeAttempts; attempt += 1) {
-    const positions = await getPositions(apiKeyName);
+    const positions = await getPositions(apiKeyName, undefined, { forceRefresh: attempt === 0 });
     const position = positions.find((item: any) => {
       return (
         String(item?.symbol || '').toUpperCase() === symbol.toUpperCase()
@@ -83,6 +86,7 @@ export const loadSinglePositionForValidation = async (
     }
 
     if (attempt < safeAttempts - 1) {
+      invalidatePositionCache(apiKeyName);
       await sleepMs(waitMs);
     }
   }
