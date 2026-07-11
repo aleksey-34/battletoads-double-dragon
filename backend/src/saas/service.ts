@@ -4443,7 +4443,15 @@ const markMaterializedRuntimeOrigin = async (
 // the BERAUSDT/OPUSDT cross-account divergence on 2026-05-03.
 const saasArchiveStrategy = async (
   apiKeyName: string,
-  row: { id: number; base_symbol?: string | null; quote_symbol?: string | null; market_mode?: string | null; name?: string | null }
+  row: {
+    id: number;
+    base_symbol?: string | null;
+    quote_symbol?: string | null;
+    market_mode?: string | null;
+    name?: string | null;
+    state?: string | null;
+  },
+  options?: { softOnly?: boolean },
 ): Promise<void> => {
   const strategyId = Number(row.id);
   if (!Number.isFinite(strategyId) || strategyId <= 0) return;
@@ -4454,15 +4462,25 @@ const saasArchiveStrategy = async (
     base_symbol: String(row.base_symbol || ''),
     quote_symbol: String(row.quote_symbol || ''),
   };
-  try {
-    await cancelStrategyWorkingOrders(apiKeyName, strategyShape);
-  } catch (err) {
-    logger.warn(`saasArchiveStrategy: cancelStrategyWorkingOrders failed for #${strategyId} (${apiKeyName}/${symbolsHint}): ${(err as Error).message}`);
-  }
-  try {
-    await closeStrategyExposure(apiKeyName, strategyShape);
-  } catch (err) {
-    logger.warn(`saasArchiveStrategy: closeStrategyExposure failed for #${strategyId} (${apiKeyName}/${symbolsHint}): ${(err as Error).message}`);
+  const state = asString(row.state, 'flat').trim().toLowerCase() || 'flat';
+  // Flat / already-idle orphans: DB-only archive. Exchange cancel on hundreds of
+  // historical SAAS legs (often WEEX -1058 unsupported pairs) made rematerialize hang for hours.
+  const softOnly = options?.softOnly === true || state === 'flat' || state === '' || state === 'idle';
+  if (!softOnly) {
+    try {
+      await cancelStrategyWorkingOrders(apiKeyName, strategyShape);
+    } catch (err) {
+      const msg = asString((err as Error).message, '');
+      // -1058 / unsupported pair: do not block archive; exposure close may also no-op.
+      if (!/-1058|not supported via the API|trade denied|Invalid symbol/i.test(msg)) {
+        logger.warn(`saasArchiveStrategy: cancelStrategyWorkingOrders failed for #${strategyId} (${apiKeyName}/${symbolsHint}): ${msg}`);
+      }
+    }
+    try {
+      await closeStrategyExposure(apiKeyName, strategyShape);
+    } catch (err) {
+      logger.warn(`saasArchiveStrategy: closeStrategyExposure failed for #${strategyId} (${apiKeyName}/${symbolsHint}): ${(err as Error).message}`);
+    }
   }
   try {
     await updateStrategy(apiKeyName, strategyId, { is_active: false }, { source: 'saas_archive' });
@@ -4487,7 +4505,14 @@ const saasArchiveStrategy = async (
     await db.run(
       `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
        VALUES (NULL, 'system', 'saas_archive_strategy', ?, CURRENT_TIMESTAMP)`,
-      [JSON.stringify({ strategyId, apiKeyName, name: row.name || null, symbol: symbolsHint })]
+      [JSON.stringify({
+        strategyId,
+        apiKeyName,
+        name: row.name || null,
+        symbol: symbolsHint,
+        softOnly,
+        priorState: state,
+      })]
     );
   } catch {
     // best-effort audit
@@ -14468,28 +14493,35 @@ const materializeAlgofundSystem = async (
   const _cardCfg = await getCardConfigBySystemName(cardSystemName);
   const resolvedMaxOpenPositions = _cardCfg.maxOpenPositions > 0 ? _cardCfg.maxOpenPositions : 2;
 
-  // ARCHIVE-ORPHANS: strategies on executionApiKeyName that were materialized
-  // by a PREVIOUS published_system_name (different members) keep is_active=1 and
-  // continue trading after a switch_system. They produce zombie positions that
-  // bleed equity in parallel to the newly active TS (root cause of the
-  // 2026-05-04 BERAUSDT/JUPUSDT/INJUSDT zombie outbreak — see
-  // /memories/repo/2026-05-04-zombie-archive.md). Close exposure (cohabitation
-  // guard preserves shared positions) and mark archived BEFORE replacing TS
-  // members.
+  // ARCHIVE-ORPHANS: previous SAAS materializations left is_active=1 legs that
+  // keep trading after switch_system (zombie outbreak 2026-05-04).
+  // Scope to this tenant's SAAS::slug:: rows only — never touch manual/research
+  // strategies on the same API key. Flat orphans = DB soft-archive (no WEEX
+  // cancel storm / -1058 hang). Non-flat orphans still cancel+close first.
   try {
     const newMemberIdSet = new Set<number>(members.map((m) => Number(m.strategy_id)).filter((id) => Number.isFinite(id) && id > 0));
+    const saasPrefix = `SAAS::${tenant.slug}::`;
     const orphanRows = (await db.all(
       `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode, s.state
        FROM strategies s
        JOIN api_keys a ON a.id = s.api_key_id
        WHERE a.name = ?
          AND s.is_active = 1
-         AND s.is_archived = 0`,
-      [executionApiKeyName]
+         AND COALESCE(s.is_archived, 0) = 0
+         AND s.name LIKE ?`,
+      [executionApiKeyName, `${saasPrefix}%`]
     ).catch(() => [])) as Array<{ id: number; name: string; base_symbol: string | null; quote_symbol: string | null; market_mode: string | null; state: string | null }>;
     const orphans = orphanRows.filter((r) => !newMemberIdSet.has(Number(r.id)));
     if (orphans.length > 0) {
-      logger.warn(`Algofund materialize [archive-orphans]: archiving ${orphans.length} stale strategies on ${executionApiKeyName} not in new TS '${getAlgofundClientSystemName(tenant)}' (${members.length} new members)`);
+      const softCount = orphans.filter((r) => {
+        const st = asString(r.state, 'flat').trim().toLowerCase();
+        return !st || st === 'flat' || st === 'idle';
+      }).length;
+      logger.warn(
+        `Algofund materialize [archive-orphans]: archiving ${orphans.length} stale SAAS strategies `
+        + `on ${executionApiKeyName} (${softCount} soft/flat, ${orphans.length - softCount} exchange-touch) `
+        + `not in new TS '${getAlgofundClientSystemName(tenant)}' (${members.length} new members)`,
+      );
       for (const orphan of orphans) {
         await saasArchiveStrategy(executionApiKeyName, orphan);
       }
