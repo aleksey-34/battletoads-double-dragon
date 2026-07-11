@@ -229,9 +229,17 @@ const resolveSnapshotPortfolioLotMultipliers = (
       }
     }
   }
-  return preferRealBacktest
-    ? buildEqualPortfolioLotMultipliers(ids)
-    : buildPortfolioLotMultiplierByStrategyId(offers, weightsByOfferId);
+  // Competition / Boost cards publish with per-leg mult=1.0 (full lotPercentOverride
+  // per strategy, OP-capped). Falling back to 1/N silently crushes Ret ~N× on API rerun
+  // when snapshot omitted multipliers — seen on B3 Boost L32 (10583% → ~57%).
+  if (preferRealBacktest) {
+    const out: Record<number, number> = {};
+    for (const sid of ids) {
+      out[sid] = 1;
+    }
+    return out;
+  }
+  return buildPortfolioLotMultiplierByStrategyId(offers, weightsByOfferId);
 };
 
 const buildPortfolioLotMultiplierByStrategyId = (
