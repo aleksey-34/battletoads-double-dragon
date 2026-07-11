@@ -20,6 +20,7 @@
  *   LIQUIDITY_SCANNER_TOP_UNIVERSE (default 120)
  */
 
+import './utils/preferIpv4';
 import { initDB, getDbFilePath, db } from './utils/database';
 import logger from './utils/logger';
 import { loadSettings } from './config/settings';
