@@ -1,3 +1,4 @@
+import '../utils/preferIpv4';
 import { createHmac } from 'crypto';
 import { ApiKey } from '../config/settings';
 
