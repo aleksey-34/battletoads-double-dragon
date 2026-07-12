@@ -99,6 +99,15 @@ export const extractDcaConfig = (row: any): DcaConfig => ({
   orderType: String(row.dca_order_type || 'market') === 'maker' ? 'maker' : 'market',
 });
 
+/** Avoid ETHUSDT+USDT → ETHUSDTUSDT when base_symbol already includes quote. */
+export const resolveDcaMarketSymbol = (baseSymbol: string, quoteSymbol: string): string => {
+  const base = String(baseSymbol || '').trim().toUpperCase();
+  const quote = String(quoteSymbol || 'USDT').trim().toUpperCase() || 'USDT';
+  if (!base) return quote;
+  if (base.endsWith(quote)) return base;
+  return `${base}${quote}`;
+};
+
 const getCurrentPrice = async (apiKeyName: string, symbol: string): Promise<number> => {
   const candles = await getMarketData(apiKeyName, symbol, '1m', 1, {});
   const last = Array.isArray(candles) ? candles[candles.length - 1] : null;
@@ -110,7 +119,7 @@ const buyOrder = async (
   sizeUsdt: number,
   currentPrice: number,
 ): Promise<number> => {
-  const symbol = `${config.baseSymbol}${config.quoteSymbol}`;
+  const symbol = resolveDcaMarketSymbol(config.baseSymbol, config.quoteSymbol);
   const qty = sizeUsdt / currentPrice;
   const exchangeMarketType: 'spot' | 'swap' = config.marketType === 'spot' ? 'spot' : 'swap';
 
@@ -131,7 +140,7 @@ const buyOrder = async (
 };
 
 const sellQty = async (config: DcaConfig, qty: number, reason: string): Promise<void> => {
-  const symbol = `${config.baseSymbol}${config.quoteSymbol}`;
+  const symbol = resolveDcaMarketSymbol(config.baseSymbol, config.quoteSymbol);
   const exchangeMarketType: 'spot' | 'swap' = config.marketType === 'spot' ? 'spot' : 'swap';
   logger.info(`[dca] strategy ${config.strategyId}: sell ${qty.toFixed(6)} (${reason})`);
   await placeOrder(config.apiKeyName, symbol, 'Sell', String(qty), undefined, { marketType: exchangeMarketType });
@@ -188,7 +197,7 @@ export const executeDca = async (
   const config = extractDcaConfig(row);
   if (!config.baseSymbol || !config.quoteSymbol) throw new Error('dca: base_symbol and quote_symbol required');
 
-  const symbol = `${config.baseSymbol}${config.quoteSymbol}`;
+  const symbol = resolveDcaMarketSymbol(config.baseSymbol, config.quoteSymbol);
   const state: string = String(row.dca_state || 'idle');
   let legs = parseDcaLegs(row.dca_legs_json);
   const legacyTotalQty = Number(row.dca_total_qty || 0);

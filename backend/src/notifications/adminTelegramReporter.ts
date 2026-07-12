@@ -531,6 +531,8 @@ type HealthRow = {
   snap_count: number;
   trades_period: number;
   exchange_fills_24h: number;
+  signals_24h: number;
+  last_error: string | null;
 };
 
 const fetchDuplicateSidGroupsByApiKey = async (apiKeyNames: string[]): Promise<Map<string, number>> => {
@@ -601,7 +603,17 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
        (SELECT COUNT(*) FROM live_trade_events lte JOIN strategies s ON s.id=lte.strategy_id
          WHERE s.api_key_id = a.id
            AND COALESCE(lte.event_origin, 'exchange_fill') = 'exchange_fill'
-           AND lte.actual_time >= (strftime('%s','now','-24 hours') * 1000)) AS exchange_fills_24h
+           AND lte.actual_time >= (strftime('%s','now','-24 hours') * 1000)) AS exchange_fills_24h,
+       (SELECT COUNT(*) FROM live_trade_events lte JOIN strategies s ON s.id=lte.strategy_id
+         WHERE s.api_key_id = a.id
+           AND COALESCE(lte.event_origin, 'strategy_signal') = 'strategy_signal'
+           AND lte.actual_time >= (strftime('%s','now','-24 hours') * 1000)) AS signals_24h,
+       (SELECT s.last_error FROM strategies s
+         WHERE s.api_key_id = a.id
+           AND COALESCE(s.is_active, 0) = 1
+           AND COALESCE(s.last_error, '') != ''
+         ORDER BY COALESCE(s.updated_at, '') DESC
+         LIMIT 1) AS last_error
      FROM algofund_profiles ap
      JOIN tenants t ON t.id = ap.tenant_id
      LEFT JOIN api_keys a ON a.name = COALESCE(NULLIF(ap.execution_api_key_name,''), NULLIF(t.assigned_api_key_name,''), NULLIF(ap.assigned_api_key_name,''))
@@ -661,6 +673,8 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
     snap_count: Math.max(0, Math.floor(toFinite(r.snap_count, 0))),
     trades_period: Math.max(0, Math.floor(toFinite(r.trades_period, 0))),
     exchange_fills_24h: Math.max(0, Math.floor(toFinite(r.exchange_fills_24h, 0))),
+    signals_24h: Math.max(0, Math.floor(toFinite(r.signals_24h, 0))),
+    last_error: r.last_error ? String(r.last_error) : null,
   }));
 };
 
@@ -883,6 +897,7 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
     const ctx = apiKey ? clientCtxByApiKey.get(apiKey) : undefined;
     const tsMs = parseSqliteUtc(r.recorded_at);
     const snapshotAgeMin = tsMs ? (nowMs - tsMs) / 60000 : Number.POSITIVE_INFINITY;
+    const err = String(r.last_error || '');
 
     // Momentum-only + fleet regime silence → не дублируем (см. fleet-алерт ниже).
     if (ctx?.momentumOnly && momentumRegimeSilent) {
@@ -890,6 +905,23 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
     }
     // Stale snapshot >2ч — клиент уже в stale-алерте, не шумим zero-fill.
     if (snapshotAgeMin > 120) {
+      continue;
+    }
+    // BingX/часть WEEX пишут strategy_signal при реальных ордерах, но не exchange_fill —
+    // это дыра телеметрии, не «торговля мертва».
+    if (r.signals_24h > 0) {
+      continue;
+    }
+    if (/permission denied|-1051/i.test(err)) {
+      alerts.push(
+        `🛑 <b>${escapeHtml(label)}</b>: WEEX Permission denied (−1051), 0 fill — почини trade-права API (${escapeHtml(apiKey || '-')})`,
+      );
+      continue;
+    }
+    if (/no available balance/i.test(err)) {
+      alerts.push(
+        `🛑 <b>${escapeHtml(label)}</b>: нет свободного баланса, 0 fill (${escapeHtml(apiKey || '-')})`,
+      );
       continue;
     }
     if (ctx?.bingxPositionSideError) {

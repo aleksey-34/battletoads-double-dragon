@@ -15,14 +15,34 @@ LOG_TAG="[btdd-watchdog]"
 
 log() { echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $LOG_TAG $*"; }
 
+NOTIFY_COOLDOWN_SEC="${BTDD_WATCHDOG_NOTIFY_COOLDOWN_SEC:-3600}"
+STATE_FILE="${BTDD_WATCHDOG_STATE_FILE:-/var/tmp/btdd-watchdog-last-alert}"
+
 notify() {
   local msg="$1"
   log "$msg"
   if [[ -n "$TG_TOKEN" && -n "$TG_CHAT" ]]; then
+    # Real newlines — do NOT use printf '%0A' (bash printf treats %0A as hex-float → "0X0P+0").
     curl -sf -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
       -d "chat_id=${TG_CHAT}" -d "parse_mode=HTML" \
       --data-urlencode "text=${msg}" >/dev/null 2>&1 || true
   fi
+}
+
+should_notify() {
+  local payload="$1"
+  local now last_ts=0 last_payload=""
+  now="$(date +%s)"
+  if [[ -f "$STATE_FILE" ]]; then
+    last_ts="$(head -1 "$STATE_FILE" 2>/dev/null || echo 0)"
+    last_payload="$(tail -n +2 "$STATE_FILE" 2>/dev/null || true)"
+  fi
+  # Same stale-only spam: at most once per cooldown.
+  if [[ "$payload" == "$last_payload" ]] && (( now - last_ts < NOTIFY_COOLDOWN_SEC )); then
+    return 1
+  fi
+  printf '%s\n%s\n' "$now" "$payload" >"$STATE_FILE"
+  return 0
 }
 
 health_ok() {
@@ -78,7 +98,14 @@ if [[ -f "$RAM_CLEANUP" ]]; then
 fi
 
 if [[ ${#alerts[@]} -gt 0 ]]; then
-  notify "🚨 <b>BTDD watchdog</b>%0A$(printf '%s%0A' "${alerts[@]}")"
+  alert_body="$(printf '%s\n' "${alerts[@]}")"
+  full_msg="$(printf '%s\n%s' '🚨 <b>BTDD watchdog</b>' "$alert_body")"
+  if should_notify "$alert_body"; then
+    notify "$full_msg"
+  else
+    log "suppress duplicate alert (cooldown ${NOTIFY_COOLDOWN_SEC}s)"
+  fi
 else
   log "OK"
+  rm -f "$STATE_FILE" 2>/dev/null || true
 fi

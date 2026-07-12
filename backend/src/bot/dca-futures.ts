@@ -32,6 +32,7 @@
 import logger from '../utils/logger';
 import { db } from '../utils/database';
 import { getMarketData, placeOrder, getBalances } from './exchange';
+import { resolveDcaMarketSymbol } from './dca';
 
 export type DcaFuturesConfig = {
   strategyId: number;
@@ -83,7 +84,7 @@ const openOrder = async (
   currentPrice: number,
   direction: DcaFuturesDirection,
 ): Promise<number> => {
-  const symbol = `${config.baseSymbol}${config.quoteSymbol}`;
+  const symbol = resolveDcaMarketSymbol(config.baseSymbol, config.quoteSymbol);
   const qty = sizeUsdt / currentPrice;
   // long → Buy, short → Sell (открытие позиции, reduceOnly=false)
   const side: 'Buy' | 'Sell' = direction === 'long' ? 'Buy' : 'Sell';
@@ -127,7 +128,7 @@ const closePosition = async (
   direction: DcaFuturesDirection,
   reason: string,
 ): Promise<void> => {
-  const symbol = `${config.baseSymbol}${config.quoteSymbol}`;
+  const symbol = resolveDcaMarketSymbol(config.baseSymbol, config.quoteSymbol);
   // Закрытие long → Sell reduceOnly; закрытие short → Buy reduceOnly
   const side: 'Buy' | 'Sell' = direction === 'long' ? 'Sell' : 'Buy';
   logger.info(
@@ -185,7 +186,7 @@ export const executeDcaFutures = async (
     throw new Error('dca-futures: base_symbol and quote_symbol required');
   }
 
-  const symbol = `${config.baseSymbol}${config.quoteSymbol}`;
+  const symbol = resolveDcaMarketSymbol(config.baseSymbol, config.quoteSymbol);
   const state: string = String(row.dcaf_state ?? 'idle');
   const direction: DcaFuturesDirection | null =
     row.dcaf_direction === 'long' || row.dcaf_direction === 'short'
