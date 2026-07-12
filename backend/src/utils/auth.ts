@@ -419,6 +419,23 @@ const ensureTenantProfile = async (tenantId: number, productMode: ProductMode): 
        ON CONFLICT(tenant_id) DO NOTHING`,
       [tenantId]
     );
+    // Beta: unlock TV Alerts + Copytrading profiles as optional flags (not separate tariffs).
+    await db.run(
+      `INSERT INTO tv_alerts_profiles (
+         tenant_id, default_api_key_name, default_exchange, enabled,
+         signal_conflict_mode, global_settings_json, created_at, updated_at
+       ) VALUES (?, '', 'bybit', 1, 'wait_close', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(tenant_id) DO NOTHING`,
+      [tenantId]
+    );
+    await db.run(
+      `INSERT INTO copytrading_profiles (
+         tenant_id, master_api_key_name, master_name, master_tags,
+         tenants_json, copy_algorithm, copy_precision, copy_ratio, copy_enabled, created_at, updated_at
+       ) VALUES (?, '', '', 'copytrading-master', '[]', 'vwap_basic', 'standard', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(tenant_id) DO NOTHING`,
+      [tenantId]
+    );
     return;
   }
   if (productMode === 'tv_alerts_client') {
@@ -452,6 +469,14 @@ const ensureTenantProfile = async (tenantId: number, productMode: ProductMode): 
          created_at,
          updated_at
        ) VALUES (?, '[]', 'medium', 'medium', 0, 0, '', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+       ON CONFLICT(tenant_id) DO NOTHING`,
+      [tenantId]
+    );
+    await db.run(
+      `INSERT INTO tv_alerts_profiles (
+         tenant_id, default_api_key_name, default_exchange, enabled,
+         signal_conflict_mode, global_settings_json, created_at, updated_at
+       ) VALUES (?, '', 'bybit', 1, 'wait_close', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        ON CONFLICT(tenant_id) DO NOTHING`,
       [tenantId]
     );
@@ -620,9 +645,10 @@ export const registerClientUser = async (payload: ClientRegistrationInput, reque
     throw new Error('A user with this email already exists');
   }
 
-  const productMode = normalizeProductMode(payload.productMode);
+  // Self-registration: always dual workspace (no tariff picker). Modes unlocked via LK flags later.
+  const productMode: ProductMode = 'dual';
   const language = normalizeLanguage(payload.preferredLanguage);
-  const requestedPlanCode = String(payload.planCode || '').trim();
+  const requestedPlanCode = String(payload.planCode || 'dual_beta').trim() || 'dual_beta';
   const fallbackName = email.split('@')[0] || 'Client';
   const fullName = normalizeDisplayName(payload.fullName, fallbackName);
   const companyName = normalizeDisplayName(payload.companyName, `${fullName} Workspace`);

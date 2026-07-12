@@ -119,41 +119,42 @@ export default function LandingPage() {
 
         <section id="pricing">
           <h2>Модели оплаты</h2>
-          <p className="sub">Бета сейчас, после запуска — фикс или процент с прибыли.</p>
+          <p className="sub">Сейчас всё бесплатно в beta. Позже — фикс или % с прибыли; режимы останутся опциями в кабинете.</p>
           <div className="pricing">
             <div className="plan featured">
               <span className="badge">Сейчас</span>
-              <h3>Бета</h3>
+              <h3>Beta — $0</h3>
               <p className="hint">Полный доступ без абонплаты</p>
               <p className="price"><span className="strike">$99/мес</span> $0</p>
               <ul>
-                <li>Все режимы, включая TV α</li>
-                <li>Мониторинг и витрина</li>
-                <li>Без комиссии с прибыли</li>
+                <li>Стратегии / витрина Algofund</li>
+                <li>TradingView Alerts</li>
+                <li>Copytrading</li>
+                <li>Без комиссии с прибыли на beta</li>
               </ul>
               <div className="pick">Для старта</div>
             </div>
             <div className="plan">
               <h3>Фикс</h3>
-              <p className="hint">Предсказуемый ежемесячный платёж</p>
+              <p className="hint">После beta — предсказуемый платёж</p>
               <p className="price">$99<span style={{ fontSize: 15, color: 'var(--muted)' }}>/мес</span></p>
               <ul>
                 <li>Не платите много с профита</li>
                 <li>Комиссия с PnL ниже или нулевая</li>
                 <li>Стабильный бюджет</li>
               </ul>
-              <div className="pick">Долгая работа</div>
+              <div className="pick">Позже</div>
             </div>
             <div className="plan">
               <h3>% с прибыли</h3>
-              <p className="hint">Только с новой прибыли (HWM)</p>
+              <p className="hint">После beta — только с новой прибыли (HWM)</p>
               <p className="price">40%</p>
               <ul>
                 <li>Нет абонплаты</li>
                 <li>В минус — комиссия 0</li>
                 <li>Меньше риска на старте</li>
               </ul>
-              <div className="pick">Без фикса в месяц</div>
+              <div className="pick">Позже</div>
             </div>
           </div>
         </section>

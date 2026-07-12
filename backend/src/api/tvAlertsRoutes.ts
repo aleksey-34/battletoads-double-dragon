@@ -19,8 +19,9 @@ const router = Router();
 
 const requireTvAlertsClient = (req: any, res: any, next: () => void) => {
   const mode = String(req?.clientAuth?.user?.productMode || '');
-  if (mode !== 'tv_alerts_client') {
-    return res.status(403).json({ error: 'This workspace is only available for TradingView Alerts clients' });
+  // Beta: dual / strategy workspaces also get TV Alerts cabinet (profile auto-provisioned).
+  if (!['tv_alerts_client', 'dual', 'strategy_client'].includes(mode)) {
+    return res.status(403).json({ error: 'TradingView Alerts is not enabled for this workspace' });
   }
   return next();
 };

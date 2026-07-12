@@ -28,10 +28,15 @@ import {
 } from './types';
 
 const normalizeSymbol = (raw: string, fallback: string): string => {
-  const text = String(raw || '').trim().toUpperCase();
+  let text = String(raw || '').trim().toUpperCase();
   if (!text) {
     return fallback.toUpperCase();
   }
+  // TradingView {{ticker}} often looks like BINANCE:BTCUSDT or WEEX:BTCUSDT.P
+  if (text.includes(':')) {
+    text = text.split(':').pop() || text;
+  }
+  text = text.replace(/\.P$/, '').replace(/PERP$/, '');
   if (text.includes('/')) {
     return text.replace('/', '').replace(':USDT', 'USDT');
   }

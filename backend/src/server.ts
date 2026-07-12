@@ -15,6 +15,24 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
+app.use(
+  '/api/webhooks/tradingview',
+  express.text({ type: ['text/*', 'application/json', '*/*'], limit: '100kb' }),
+  (req, _res, next) => {
+    // TradingView sends text/plain for non-JSON alert messages; JSON when message is valid JSON.
+    if (typeof req.body === 'string') {
+      const trimmed = req.body.trim();
+      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+        try {
+          req.body = JSON.parse(trimmed);
+        } catch {
+          // keep raw string — parseTradingViewPayload handles plain text commands
+        }
+      }
+    }
+    next();
+  },
+);
 app.use(express.json());
 app.use('/api/razgon', (_req, res) => {
   return res.status(404).json({ error: 'Not Found' });

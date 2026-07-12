@@ -1383,7 +1383,7 @@ const copytradingPlans: PlanSeed[] = [
     code: 'copytrading_100',
     title: 'Copytrading 100',
     productMode: 'copytrading_client',
-    priceUsdt: 100,
+    priceUsdt: 0,
     maxDepositTotal: 0,
     riskCapMax: 0,
     maxStrategiesTotal: 0,
@@ -3144,6 +3144,40 @@ export const ensureSaasSeedData = async (): Promise<void> => {
     );
 
     logger.info(`[SaaS] Applied one-time max dual migration: tenants=${migratedTenants}`);
+  }
+
+  // Beta: provision TV + copytrading profiles for all active dual/strategy tenants (optional LK flags).
+  const betaModesFlag = 'saas.migrations.beta_modes_profiles.v1';
+  const betaModesRaw = await getRuntimeFlag(betaModesFlag, '');
+  if (!betaModesRaw) {
+    const tenants = await db.all(
+      `SELECT id FROM tenants WHERE status = 'active' AND product_mode IN ('dual', 'strategy_client')`
+    ) as Array<{ id: number }>;
+    let n = 0;
+    for (const tenant of tenants || []) {
+      const tenantId = Number(tenant.id || 0);
+      if (!tenantId) continue;
+      await db.run(
+        `INSERT INTO tv_alerts_profiles (
+           tenant_id, default_api_key_name, default_exchange, enabled,
+           signal_conflict_mode, global_settings_json, created_at, updated_at
+         ) VALUES (?, '', 'bybit', 1, 'wait_close', '{}', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT(tenant_id) DO NOTHING`,
+        [tenantId]
+      );
+      await db.run(
+        `INSERT INTO copytrading_profiles (
+           tenant_id, master_api_key_name, master_name, master_tags,
+           tenants_json, copy_algorithm, copy_precision, copy_ratio, copy_enabled, created_at, updated_at
+         ) VALUES (?, '', '', 'copytrading-master', '[]', 'vwap_basic', 'standard', 1, 0, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+         ON CONFLICT(tenant_id) DO NOTHING`,
+        [tenantId]
+      );
+      n += 1;
+    }
+    await db.run(`UPDATE plans SET price_usdt = 0, updated_at = CURRENT_TIMESTAMP WHERE code = 'copytrading_100'`);
+    await setRuntimeFlag(betaModesFlag, JSON.stringify({ version: 1, migratedAt: new Date().toISOString(), tenants: n }));
+    logger.info(`[SaaS] Beta modes profiles provisioned: tenants=${n}`);
   }
 };
 

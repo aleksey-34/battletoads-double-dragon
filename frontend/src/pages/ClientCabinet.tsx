@@ -2915,6 +2915,18 @@ const ClientCabinet: React.FC = () => {
         ) : null}
       </Card>
 
+      <Card className="battletoads-card" title="Режимы (beta — бесплатно)" size="small" style={{ marginBottom: 12 }}>
+        <Space wrap>
+          <Tag color="green">Стратегии / витрина</Tag>
+          <Tag color="green">Algofund</Tag>
+          <Button type="link" onClick={() => navigate('/cabinet/tv-alerts')}>TradingView Alerts →</Button>
+          <Tag color="blue">Copytrading — флаг профиля (пока через админа SaaS)</Tag>
+        </Space>
+        <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
+          Тарифы при регистрации отключены. Опции станут платными позже; сейчас всё $0.
+        </Typography.Paragraph>
+      </Card>
+
       <Card className="battletoads-card" title="Тариф и лимиты" size="small">
         <Space wrap style={{ marginBottom: 12 }}>
           <Tag color="blue">Тариф: {activeTariffPlan?.title || '—'}</Tag>

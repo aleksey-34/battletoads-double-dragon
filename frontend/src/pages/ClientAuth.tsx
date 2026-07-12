@@ -23,8 +23,6 @@ type RegisterFormValues = {
   email: string;
   password: string;
   confirmPassword: string;
-  productMode: 'strategy_client' | 'algofund_client' | 'dual' | 'tv_alerts_client';
-  planCode: string;
   showFutures: boolean;
   showSpot: boolean;
   riskDisclaimerAccepted: boolean;
@@ -241,8 +239,8 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
         fullName: values.fullName,
         email: values.email,
         password: values.password,
-        productMode: values.productMode,
-        planCode: values.planCode,
+        productMode: 'dual',
+        planCode: 'dual_beta',
         preferredLanguage: language,
         showFutures: values.showFutures !== false,
         showSpot: values.showSpot !== false,
@@ -355,7 +353,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 <Form<RegisterFormValues>
                   layout="vertical"
                   form={registerForm}
-                  initialValues={{ productMode: 'dual', planCode: 'dual_beta', showFutures: true, showSpot: true, riskDisclaimerAccepted: false }}
+                  initialValues={{ showFutures: true, showSpot: true, riskDisclaimerAccepted: false }}
                   onFinish={handleRegister}
                 >
                   <Form.Item
@@ -382,37 +380,16 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                   >
                     <Input type="email" inputMode="email" autoComplete="email" placeholder="name@company.com" />
                   </Form.Item>
-                  <Form.Item
-                    label={t('client.auth.productMode', 'Workspace type')}
-                    name="productMode"
-                    rules={[{ required: true, message: t('client.auth.productModeRequired', 'Choose workspace type') }]}
-                  >
-                    <Select
-                      options={[
-                        { value: 'strategy_client', label: t('client.auth.productModeStrategy', 'Strategy Client') },
-                        { value: 'algofund_client', label: t('client.auth.productModeAlgofund', 'Algofund Client') },
-                        { value: 'dual', label: t('client.auth.productModeDual', 'Dual: Strategies + Algofund') },
-                        { value: 'tv_alerts_client', label: t('client.auth.productModeTvAlerts', 'TradingView Alerts (no storefront)') },
-                      ]}
-                    />
-                  </Form.Item>
-                  <Form.Item
-                    label={t('client.auth.planCode', 'Тариф')}
-                    name="planCode"
-                    rules={[{ required: true, message: t('client.auth.planCodeRequired', 'Выберите тариф') }]}
-                    extra={t('client.auth.planCodeHint', 'Сейчас все тарифы бесплатны в beta. После beta — фиксированная подписка или 40% с прибыли.')}
-                  >
-                    <Select
-                      options={[
-                        { value: 'dual_beta', label: t('client.auth.planBeta', 'Dual Beta — $0 (сейчас, beta)') },
-                        { value: 'profit_share', label: t('client.auth.planProfitShare', '40% с прибыли (HWM)') },
-                        { value: 'strategy_20', label: t('client.auth.planDualStart', 'Dual Start — $39/мес · до 3 стратегий · депозит до $5k') },
-                        { value: 'strategy_50', label: t('client.auth.planDualPro', 'Dual Pro — $129/мес · до 10 стратегий · до $50k') },
-                        { value: 'strategy_100', label: t('client.auth.planDualScale', 'Dual Scale — $399/мес · до 30 стратегий · до $250k') },
-                        { value: 'tv_alerts_300', label: t('client.auth.planTvAlerts', 'TV Alerts Pro — $300/мес · до 50 алертов') },
-                      ]}
-                    />
-                  </Form.Item>
+                  <Alert
+                    type="info"
+                    showIcon
+                    style={{ marginBottom: 16 }}
+                    message={t('client.auth.betaAccessTitle', 'Beta — всё бесплатно')}
+                    description={t(
+                      'client.auth.betaAccessDesc',
+                      'Стратегии, Algofund, TradingView Alerts и Copytrading доступны в кабинете как опции. Выбор тарифа при регистрации не нужен — тарифы появятся позже.',
+                    )}
+                  />
                   <Form.Item label={t('client.auth.marketVisibility', 'Что показывать в кабинете')} style={{ marginBottom: 8 }}>
                     <Space direction="vertical">
                       <Form.Item name="showFutures" valuePropName="checked" noStyle>
