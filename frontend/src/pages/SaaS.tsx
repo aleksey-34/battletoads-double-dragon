@@ -16385,7 +16385,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                       type="info"
                       showIcon
                       message="Real rerun — risk и веса в движке"
-                      description={`20 стратегий: lot делится по весам (≈1/N). Риск ${adminSweepBacktestRiskScore}/10 и потолок ${adminSweepBacktestRiskScaleMaxPercent}% уменьшают lot в engine (не post-scale). Reinvest ${adminSweepBacktestReinvestPercent}% — при 100% возможен сильный compound; для DD как на витрине ставь 0%.${backtestDrawerCardSnapshot ? ` Карточка сейчас: Ret ${Number(backtestDrawerCardSnapshot.ret || 0).toFixed(2)}% • DD ${Number(backtestDrawerCardSnapshot.dd || 0).toFixed(2)}% — обновится после «Сохранить».` : ''}`}
+                      description={`${adminSweepBacktestResult.selectedOffers.length} стратегий: при Real rerun lot = lot% карточки × multiplier ноги (Boost/competition обычно ×1.0 на ногу, OP режет параллель). Слайдер risk ${adminSweepBacktestRiskScore}/10 на Real rerun лот не масштабирует (только approximate preview). Reinvest ${adminSweepBacktestReinvestPercent}% — при 100% сильный compound; для DD как на витрине ставь 0%.${backtestDrawerCardSnapshot ? ` Карточка сейчас: Ret ${Number(backtestDrawerCardSnapshot.ret || 0).toFixed(2)}% • DD ${Number(backtestDrawerCardSnapshot.dd || 0).toFixed(2)}% — обновится после «Сохранить».` : ''}`}
                     />
                   ) : null}
                   {isAdminSurface ? (
