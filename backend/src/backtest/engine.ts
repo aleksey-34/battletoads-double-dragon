@@ -13,6 +13,11 @@ import {
   parsePortfolioCircuitBreaker,
 } from '../services/portfolioCircuitBreaker';
 import {
+  FatTailSyncConfig,
+  FatTailSyncTracker,
+  parseFatTailSync,
+} from '../services/fatTailSyncCooldown';
+import {
   normalizeOrderBlockEntryGate,
   passesOrderBlockEntryGate,
   type OrderBlockEntryGate,
@@ -167,6 +172,13 @@ export type BacktestRunRequest = {
   autoLotByChannelWidth?: boolean;
   /** Portfolio DD circuit breaker — scales new entry lot during drawdown cooldown. */
   portfolioCircuitBreaker?: PortfolioCircuitBreakerConfig;
+  /** After sync loss day, temporarily cut lot on selected breakout legs. */
+  fatTailSyncCooldown?: FatTailSyncConfig;
+  /**
+   * Research: for Donchian/zz_breakout, replace center-stop with
+   * entry ± fraction*(donchianHigh-donchianLow). 0/undefined = classic center stop.
+   */
+  channelWidthStopFraction?: number;
 };
 
 export type MacroExitRule = {
@@ -299,6 +311,8 @@ type NormalizedBacktestRequest = {
    */
   pairLockSeed: number;
   portfolioCircuitBreaker: PortfolioCircuitBreakerConfig | null;
+  fatTailSyncCooldown: FatTailSyncConfig | null;
+  channelWidthStopFraction: number;
 };
 
 export type BacktestRunListItem = {
@@ -504,6 +518,8 @@ const computeDonchianSignalAtIndex = (
       signal: 'long',
       current: current.close,
       donchianCenter,
+      donchianHigh,
+      donchianLow,
       zScore: null,
     };
   }
@@ -513,6 +529,8 @@ const computeDonchianSignalAtIndex = (
       signal: 'short',
       current: current.close,
       donchianCenter,
+      donchianHigh,
+      donchianLow,
       zScore: null,
     };
   }
@@ -521,6 +539,8 @@ const computeDonchianSignalAtIndex = (
     signal: 'none',
     current: current.close,
     donchianCenter,
+    donchianHigh,
+    donchianLow,
     zScore: null,
   };
 };
@@ -1366,7 +1386,9 @@ type BacktestContext = {
   initialBalance: number;
   autoLotByChannelWidth: boolean;
   portfolioCircuitBreaker: PortfolioCircuitBreakerTracker | null;
-  /** Lot multiplier from portfolio CB for the current event (1.0 = full lot). */
+  fatTailSync: FatTailSyncTracker | null;
+  channelWidthStopFraction: number;
+  /** Lot multiplier from portfolio CB (+ optional fat-tail) for the current event (1.0 = full lot). */
   eventCbLotMult: number;
 };
 
@@ -1507,6 +1529,7 @@ const closePosition = (
     funding: runtime.openTrade.funding,
     reason,
   });
+  ctx.fatTailSync?.recordClose(strategyId, netPnl, exitTime);
 
   runtime.state = 'flat';
   runtime.entryPrice = null;
@@ -2358,6 +2381,13 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     portfolioCircuitBreaker: parsePortfolioCircuitBreaker(
       (raw as { portfolioCircuitBreaker?: unknown }).portfolioCircuitBreaker,
     ),
+    fatTailSyncCooldown: parseFatTailSync(
+      (raw as { fatTailSyncCooldown?: unknown }).fatTailSyncCooldown,
+    ),
+    channelWidthStopFraction: (() => {
+      const n = Number((raw as { channelWidthStopFraction?: unknown }).channelWidthStopFraction);
+      return Number.isFinite(n) && n > 0 ? Math.min(2, n) : 0;
+    })(),
   };
 };
 
@@ -2439,6 +2469,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     initialBalance: request.initialBalance,
     autoLotByChannelWidth: request.autoLotByChannelWidth,
     portfolioCircuitBreaker: PortfolioCircuitBreakerTracker.tryCreate(request.portfolioCircuitBreaker),
+    fatTailSync: FatTailSyncTracker.tryCreate(request.fatTailSyncCooldown),
+    channelWidthStopFraction: request.channelWidthStopFraction,
     eventCbLotMult: 1,
   };
 
@@ -2623,9 +2655,16 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     applyFunding(ctx, runtime);
 
     const equityForCb = portfolioEquity(ctx.cashEquity, runtimes);
-    ctx.eventCbLotMult = ctx.portfolioCircuitBreaker
+    const cbRaw = ctx.portfolioCircuitBreaker
       ? ctx.portfolioCircuitBreaker.update(equityForCb, event.timeMs).lotMultiplier
       : 1;
+    const cbTiered = ctx.portfolioCircuitBreaker
+      ? ctx.portfolioCircuitBreaker.lotMultiplierForStrategyType(strategyType, cbRaw)
+      : 1;
+    const fatMult = ctx.fatTailSync
+      ? ctx.fatTailSync.lotMultiplierFor(strategy, event.timeMs)
+      : 1;
+    ctx.eventCbLotMult = Math.max(0, cbTiered) * Math.max(0, fatMult);
 
     const length = Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 50)));
     const zscoreEntry = normalizeZscoreEntry(strategy.zscore_entry);
@@ -2865,14 +2904,42 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         }
       }
 
-      if (!closedOnCurrentBar && !isZzPivot && state === 'long' && entryPrice && signalPayload.current <= signalPayload.donchianCenter) {
-        closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'stop_loss_long_center');
-        closedOnCurrentBar = true;
+      if (!closedOnCurrentBar && !isZzPivot && state === 'long' && entryPrice) {
+        const hi = Number(signalPayload.donchianHigh);
+        const lo = Number(signalPayload.donchianLow);
+        const frac = ctx.channelWidthStopFraction;
+        let hit = false;
+        let reason = 'stop_loss_long_center';
+        if (frac > 0 && Number.isFinite(hi) && Number.isFinite(lo) && hi > lo) {
+          const stopPx = entryPrice - (hi - lo) * frac;
+          hit = signalPayload.current <= stopPx;
+          reason = `stop_loss_long_chanfrac_${frac}`;
+        } else {
+          hit = signalPayload.current <= signalPayload.donchianCenter;
+        }
+        if (hit) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, reason);
+          closedOnCurrentBar = true;
+        }
       }
 
-      if (!closedOnCurrentBar && !isZzPivot && state === 'short' && entryPrice && signalPayload.current >= signalPayload.donchianCenter) {
-        closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, 'stop_loss_short_center');
-        closedOnCurrentBar = true;
+      if (!closedOnCurrentBar && !isZzPivot && state === 'short' && entryPrice) {
+        const hi = Number(signalPayload.donchianHigh);
+        const lo = Number(signalPayload.donchianLow);
+        const frac = ctx.channelWidthStopFraction;
+        let hit = false;
+        let reason = 'stop_loss_short_center';
+        if (frac > 0 && Number.isFinite(hi) && Number.isFinite(lo) && hi > lo) {
+          const stopPx = entryPrice + (hi - lo) * frac;
+          hit = signalPayload.current >= stopPx;
+          reason = `stop_loss_short_chanfrac_${frac}`;
+        } else {
+          hit = signalPayload.current >= signalPayload.donchianCenter;
+        }
+        if (hit) {
+          closePosition(ctx, runtime, Number(strategy.id), strategy.name, event.timeMs, signalPayload.current, reason);
+          closedOnCurrentBar = true;
+        }
       }
     }
 

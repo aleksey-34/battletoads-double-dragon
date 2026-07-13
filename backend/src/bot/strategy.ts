@@ -1506,7 +1506,11 @@ export const executeStrategy = async (
   let portfolioCbMult = 1.0;
   try {
     const { resolvePortfolioCircuitBreakerLotMultiplier } = await import('./portfolioCircuitBreakerRuntime');
-    portfolioCbMult = await resolvePortfolioCircuitBreakerLotMultiplier(apiKeyName, availableBalance);
+    portfolioCbMult = await resolvePortfolioCircuitBreakerLotMultiplier(
+      apiKeyName,
+      availableBalance,
+      String((mergedStrategy as any)?.strategy_type || strategy?.strategy_type || ''),
+    );
   } catch { /* non-critical */ }
 
   const channelLotMult = Number((mergedStrategy as any).auto_lot_by_channel_width || 0) === 1

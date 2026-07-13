@@ -129,10 +129,11 @@ const getOrCreateTracker = async (
   return tracker;
 };
 
-/** Lot multiplier for new entries (1.0 = no cut). */
+/** Lot multiplier for new entries (1.0 = no cut). Optional strategyType enables tier-CB. */
 export const resolvePortfolioCircuitBreakerLotMultiplier = async (
   apiKeyName: string,
   portfolioEquityUsd: number,
+  strategyType?: string,
 ): Promise<number> => {
   const key = String(apiKeyName || '').trim();
   if (!key) {
@@ -160,7 +161,8 @@ export const resolvePortfolioCircuitBreakerLotMultiplier = async (
     entry.lastUpdateMs = now;
   }
   await persistState(key, tracker.exportState());
-  return update.lotMultiplier > 0 ? update.lotMultiplier : 1;
+  const raw = update.lotMultiplier > 0 ? update.lotMultiplier : 1;
+  return tracker.lotMultiplierForStrategyType(String(strategyType || ''), raw);
 };
 
 /** Called from monitoring loop to keep CB state warm between sparse entries. */

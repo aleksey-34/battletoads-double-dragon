@@ -17,6 +17,11 @@ export type PortfolioCircuitBreakerConfig = {
   lotMult?: number;
   /** Cooldown duration after trigger (default 14). */
   pauseDays?: number;
+  /**
+   * If non-empty, lotMultiplier applies only to these strategy_type values
+   * (e.g. ["zz_breakout"]). Other types keep full lot (1.0) during CB.
+   */
+  applyToStrategyTypes?: string[];
 };
 
 export type PortfolioCircuitBreakerState = {
@@ -90,9 +95,11 @@ export const parsePortfolioCircuitBreaker = (raw: unknown): PortfolioCircuitBrea
 
 export class PortfolioCircuitBreakerTracker {
   private readonly config: NonNullable<ReturnType<typeof normalizePortfolioCircuitBreaker>>;
+  private readonly applyToStrategyTypes: Set<string> | null;
   private cooldownUntilMs = 0;
   private triggerCount = 0;
   private samples: Array<{ timeMs: number; equity: number }> = [];
+  private lastRawLotMultiplier = 1;
 
   constructor(config: PortfolioCircuitBreakerConfig | null | undefined) {
     const normalized = normalizePortfolioCircuitBreaker(config);
@@ -100,6 +107,10 @@ export class PortfolioCircuitBreakerTracker {
       throw new Error('Portfolio circuit breaker config is disabled or invalid');
     }
     this.config = normalized;
+    const rawTypes = Array.isArray(config?.applyToStrategyTypes)
+      ? config.applyToStrategyTypes.map((t) => String(t || '').trim()).filter(Boolean)
+      : [];
+    this.applyToStrategyTypes = rawTypes.length > 0 ? new Set(rawTypes) : null;
   }
 
   static tryCreate(
@@ -110,6 +121,21 @@ export class PortfolioCircuitBreakerTracker {
       return null;
     }
     return new PortfolioCircuitBreakerTracker(config);
+  }
+
+  /**
+   * Effective lot multiplier for a concrete strategy type.
+   * Tier mode: only listed types get the reduced CB lot; others stay at 1.0.
+   */
+  lotMultiplierForStrategyType(strategyType: string, rawLotMultiplier?: number): number {
+    const raw = Number.isFinite(Number(rawLotMultiplier))
+      ? Number(rawLotMultiplier)
+      : this.lastRawLotMultiplier;
+    if (!this.applyToStrategyTypes || this.applyToStrategyTypes.size === 0) {
+      return raw;
+    }
+    const token = String(strategyType || '').trim();
+    return this.applyToStrategyTypes.has(token) ? raw : 1;
   }
 
   restoreState(state: PortfolioCircuitBreakerState | null | undefined): void {
@@ -150,6 +176,7 @@ export class PortfolioCircuitBreakerTracker {
     const safeEquity = Number.isFinite(equity) && equity > 0 ? equity : 0;
     const safeTime = Number.isFinite(timeMs) && timeMs > 0 ? timeMs : Date.now();
     if (safeEquity <= 0) {
+      this.lastRawLotMultiplier = 1;
       return {
         lotMultiplier: 1,
         drawdownPercent: 0,
@@ -178,6 +205,8 @@ export class PortfolioCircuitBreakerTracker {
       triggered = true;
       lotMult = this.config.lotMultiplier;
     }
+
+    this.lastRawLotMultiplier = lotMult;
 
     return {
       lotMultiplier: lotMult,
