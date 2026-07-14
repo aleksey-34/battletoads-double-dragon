@@ -1470,6 +1470,12 @@ body.theme-light .saas-page .ant-statistic-content-value,
   background: rgba(0, 0, 0, 0.12);
 }
 
+.storefront-sparkline {
+  display: block;
+  width: 100%;
+  height: 112px;
+}
+
 .storefront-card__chart-empty {
   min-height: 112px;
   display: flex;
