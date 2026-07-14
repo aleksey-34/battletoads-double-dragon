@@ -496,7 +496,12 @@ router.post('/admin/sweep-backtest-preview', async (req, res) => {
     );
     const payload = buildSweepBacktestPreviewPayload(body);
 
-    if (body?.asyncMode === true) {
+    // Prefer-real / heavy portfolio BT must not block the HTTP worker: always async job.
+    // Callers poll GET .../jobs/:jobId (Real rerun UI already does; legacy sync = opt-in asyncMode:false).
+    const preferReal = body?.preferRealBacktest === true;
+    const useAsync = body?.asyncMode === true || (preferReal && body?.asyncMode !== false);
+
+    if (useAsync) {
       const jobId = startAdminSweepBacktestJob(async () => {
         const data = await previewAdminSweepBacktest(payload);
         const response = await finalizeSweepBacktestPreview(data);
