@@ -41,6 +41,7 @@ import ChartComponent from '../components/ChartComponent';
 import StorefrontGrid from '../components/storefront/StorefrontGrid';
 import StrategyOfferCard from '../components/storefront/StrategyOfferCard';
 import TradingSystemCard from '../components/storefront/TradingSystemCard';
+import EquitySparkline from '../components/storefront/EquitySparkline';
 import { pointsToChartSeries } from '../components/storefront/storefrontMetrics';
 import { useI18n } from '../i18n';
 
@@ -3166,7 +3167,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [algofundTenantDisplayName, setAlgofundTenantDisplayName] = useState('');
   const [algofundTenantStatus, setAlgofundTenantStatus] = useState('active');
   const [algofundTenantPlanCode, setAlgofundTenantPlanCode] = useState('');
-  const [adminTab, setAdminTab] = useState<AdminTabKey>('clients');
+  const [adminTab, setAdminTab] = useState<AdminTabKey>(() => {
+    if (typeof window === 'undefined') {
+      return 'clients';
+    }
+    const requested = String(new URLSearchParams(window.location.search).get('adminTab') || '').trim();
+    if (requested === 'offer-ts' || requested === 'clients' || requested === 'monitoring' || requested === 'create-user') {
+      return requested;
+    }
+    return 'clients';
+  });
   const [createTenantDisplayName, setCreateTenantDisplayName] = useState('');
   const [createTenantProductMode, setCreateTenantProductMode] = useState<ProductMode>('dual');
   const [createTenantPlanCode, setCreateTenantPlanCode] = useState('');
@@ -5799,7 +5809,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   };
 
   useEffect(() => {
-    void loadSummary('light');
+    void loadSummary(resolveSummaryScope());
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAdminSurface]);
 
@@ -12780,7 +12790,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           {offer.pf !== undefined ? <Tag color={metricColor(Number(offer.pf || 0), 'pf')}>PF {formatNumber(offer.pf)}</Tag> : null}
                                         </Space>
                                         {points.length >= 2 ? (
-                                          <ChartComponent data={(() => { const nowSec = Math.floor(Date.now() / 1000); const dayS = 86400; const periodDays = Number((offer as any)?.periodDays || 0) > 0 ? Number((offer as any).periodDays || 0) : (points.length - 1); const totalSpan = Math.max(periodDays, 1) * dayS; const startSec = nowSec - totalSpan; const step = totalSpan / Math.max(points.length - 1, 1); return points.map((value: number, index: number) => ({ time: Math.floor(startSec + index * step), equity: value })); })()} type="line" fixedHeight={120} />
+                                          <EquitySparkline
+                                            points={points.map((value: number, index: number) => ({ time: index, value }))}
+                                            height={120}
+                                          />
                                         ) : (
                                           <Text type="secondary" style={{ fontSize: 12 }}>График не сохранен</Text>
                                         )}
@@ -13597,7 +13610,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             : null}
                                         </Space>
                                         {Array.isArray(item.equityCurve) && item.equityCurve.length > 1 ? (
-                                          <ChartComponent data={item.equityCurve} type="line" fixedHeight={120} />
+                                          <EquitySparkline
+                                            points={(item.equityCurve as Array<{ time?: number; equity?: number; value?: number }>).map((pt, index) => ({
+                                              time: Number(pt.time ?? index),
+                                              value: Number(pt.value ?? pt.equity ?? 0),
+                                            }))}
+                                            height={120}
+                                          />
                                         ) : (
                                           <Text type="secondary" style={{ fontSize: 12 }}>График не сохранен</Text>
                                         )}

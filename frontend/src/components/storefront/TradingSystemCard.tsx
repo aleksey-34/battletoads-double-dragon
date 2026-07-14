@@ -1,6 +1,6 @@
 import React from 'react';
 import { Button, Space, Tag, Tooltip, Typography } from 'antd';
-import ChartComponent from '../ChartComponent';
+import EquitySparkline from './EquitySparkline';
 import {
   formatStorefrontNumber,
   formatStorefrontPercent,
@@ -107,7 +107,7 @@ const TradingSystemCard: React.FC<TradingSystemCardProps> = ({
 
       <div className="storefront-card__chart">
         {hasChart ? (
-          <ChartComponent data={chartSeries} type="line" fixedHeight={112} compact />
+          <EquitySparkline points={chartSeries} height={112} />
         ) : (
           <div className="storefront-card__chart-empty">Бэктест не загружен</div>
         )}
