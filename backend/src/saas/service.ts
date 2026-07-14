@@ -12055,11 +12055,85 @@ export const applyLowLotRecommendation = async (options: {
   return { success: true, changes, changeSummary };
 };
 
+const getLightResearchArtifactsStatus = (): ReturnType<typeof getLatestResearchArtifactsStatus> => {
+  // Filename/mtime only — do not parse multi-MB sweep/catalog JSON on light admin paths.
+  const now = Date.now();
+  const catalogPath = getLatestClientCatalogPath();
+  const sweepPath = getLatestSweepPath();
+  const catalogTsMs = catalogPath ? toArtifactTimestampMs(null, catalogPath) : 0;
+  const sweepTsMs = sweepPath ? toArtifactTimestampMs(null, sweepPath) : 0;
+  const catalogAgeMs = catalogTsMs > 0 ? Math.max(0, now - catalogTsMs) : null;
+  const sweepAgeMs = sweepTsMs > 0 ? Math.max(0, now - sweepTsMs) : null;
+  return {
+    catalogPath,
+    sweepPath,
+    catalogTimestamp: catalogTsMs > 0 ? new Date(catalogTsMs).toISOString() : null,
+    sweepTimestamp: sweepTsMs > 0 ? new Date(sweepTsMs).toISOString() : null,
+    catalogAgeMs,
+    sweepAgeMs,
+    catalogFresh: catalogAgeMs !== null && catalogAgeMs <= SOURCE_ARTIFACT_MAX_AGE_MS,
+    sweepFresh: sweepAgeMs !== null && sweepAgeMs <= SOURCE_ARTIFACT_MAX_AGE_MS,
+  };
+};
+
 export const getSaasAdminSummary = async (options?: {
   includeOfferStore?: boolean;
 }) => {
   await ensureSaasSeedData();
   const includeOfferStore = options?.includeOfferStore !== false;
+
+  // scope=light (clients / auth): skip catalog+sweep JSON + offer-store presets.
+  // Those are loaded on demand when opening offer-ts / storefront surfaces (scope=full).
+  if (!includeOfferStore) {
+    const apiKeys = await getAvailableApiKeyNames();
+    const tenants = await listTenantSummaries({ includeLatestPreview: false });
+    const plans = await listPlans();
+    const algofundRequests = await getAlgofundRequestsAll(200);
+    const [reportSettings, snapshotRefresh] = await Promise.all([
+      getAdminReportSettings(),
+      getOfferStoreSnapshotRefreshState(),
+    ]);
+    const backtestRequestCount = await db.get(
+      `SELECT
+         SUM(CASE WHEN status IN ('pending', 'approved', 'in_sweep') THEN 1 ELSE 0 END) AS pending,
+         COUNT(*) AS total
+       FROM strategy_backtest_pair_requests`
+    ) as { pending?: number; total?: number } | undefined;
+
+    return {
+      sourceFiles: {
+        latestCatalogPath: getLatestClientCatalogPath(),
+        latestSweepPath: getLatestSweepPath(),
+      },
+      sourceArtifactsStatus: getLightResearchArtifactsStatus(),
+      catalog: null,
+      sweepSummary: null,
+      recommendedSets: {
+        balancedBot: [],
+        conservativeBot: [],
+        monoStarter: [],
+        synthStarter: [],
+        premiumMix: [],
+      },
+      tenants,
+      plans,
+      apiKeys,
+      backtestPairRequests: {
+        pending: Number(backtestRequestCount?.pending || 0),
+        total: Number(backtestRequestCount?.total || 0),
+      },
+      algofundRequestQueue: {
+        total: algofundRequests.length,
+        pending: algofundRequests.filter((row) => row.status === 'pending').length,
+        approved: algofundRequests.filter((row) => row.status === 'approved').length,
+        rejected: algofundRequests.filter((row) => row.status === 'rejected').length,
+        items: algofundRequests,
+      },
+      reportSettings,
+      snapshotRefresh,
+    };
+  }
+
   const sourceCatalog = loadLatestClientCatalog();
   const sourceSweep = loadLatestSweep();
   const apiKeys = await getAvailableApiKeyNames();
@@ -12107,7 +12181,7 @@ export const getSaasAdminSummary = async (options?: {
   const plans = await listPlans();
   const algofundRequests = await getAlgofundRequestsAll(200);
   const [offerStore, reportSettings, snapshotRefresh] = await Promise.all([
-    includeOfferStore ? getOfferStoreAdminState() : Promise.resolve(null),
+    getOfferStoreAdminState(),
     getAdminReportSettings(),
     getOfferStoreSnapshotRefreshState(),
   ]);

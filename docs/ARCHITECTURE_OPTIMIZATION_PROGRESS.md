@@ -18,7 +18,7 @@
 | F | Auto-cycle concurrency cap | ✅ `STRATEGY_CYCLE_CONCURRENCY` default 16 | низкий |
 | G | Admin live BT → research queue | 🔄 preferReal всегда async (API job); research DB — позже | средний |
 | H | runtime.db split | ⏳ позже | высокий |
-| I | SaaS.tsx lazy split | ⏳ позже | средний |
+| I | SaaS.tsx lazy split | 🔄 auth ping + slim `scope=light` (clients); tab chunks — след. | средний |
 
 **Принцип:** только move-only рефакторинг без смены логики; после каждого шага — `npm run build` в backend.
 

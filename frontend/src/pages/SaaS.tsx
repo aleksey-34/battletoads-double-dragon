@@ -4897,10 +4897,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       });
       if (requestSeq === summaryRequestSeqRef.current) {
         setSummary((prev) => {
-          if (scope === 'light' && prev?.offerStore && !response.data.offerStore) {
+          if (scope === 'light' && prev) {
             return {
               ...response.data,
-              offerStore: prev.offerStore,
+              // Keep heavier fields if already loaded (tab switches client→offer-ts→clients)
+              offerStore: response.data.offerStore || prev.offerStore,
+              catalog: response.data.catalog ?? prev.catalog,
+              sweepSummary: response.data.sweepSummary ?? prev.sweepSummary,
+              recommendedSets: response.data.catalog
+                ? response.data.recommendedSets
+                : (prev.recommendedSets || response.data.recommendedSets),
             };
           }
           return response.data;
