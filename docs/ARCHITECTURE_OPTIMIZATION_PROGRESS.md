@@ -16,7 +16,7 @@
 | D | Presets client preview | ✅ | средний |
 | E | Offer-store perf (TTL + selective presets) | ✅ ветка `fix/offer-store-perf-jul2026` | средний |
 | F | Auto-cycle concurrency cap | ✅ `STRATEGY_CYCLE_CONCURRENCY` default 16 | низкий |
-| G | Admin live BT → research queue | ⏳ следующий | высокий |
+| G | Admin live BT → research queue | ⏳ asyncMode уже есть, но **в API-процессе**; нужен research worker | высокий |
 | H | runtime.db split | ⏳ позже | высокий |
 | I | SaaS.tsx lazy split | ⏳ позже | средний |
 
