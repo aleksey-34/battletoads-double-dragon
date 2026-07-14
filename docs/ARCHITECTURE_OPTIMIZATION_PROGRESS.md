@@ -11,9 +11,14 @@
 | # | Задача | Статус | Риск |
 |---|--------|--------|------|
 | A | Распил `strategy.ts` → модули + фасад | 🔄 execution (~2050) | низкий |
-| B | Распил `routes.ts` → sub-routers | ✅ client/backtest/admin | низкий |
-| C | Client backtest → async queue (`preview_jobs`) | ✅ | средний |
-| D | Presets вместо live `runBacktest` в SaaS client preview | ✅ default strict | средний |
+| B | Распил `routes.ts` → sub-routers | ✅ | низкий |
+| C | Client backtest → async queue | ✅ | средний |
+| D | Presets client preview | ✅ | средний |
+| E | Offer-store perf (TTL + selective presets) | ✅ ветка `fix/offer-store-perf-jul2026` | средний |
+| F | Auto-cycle concurrency cap | ✅ `STRATEGY_CYCLE_CONCURRENCY` default 16 | низкий |
+| G | Admin live BT → research queue | ⏳ следующий | высокий |
+| H | runtime.db split | ⏳ позже | высокий |
+| I | SaaS.tsx lazy split | ⏳ позже | средний |
 
 **Принцип:** только move-only рефакторинг без смены логики; после каждого шага — `npm run build` в backend.
 

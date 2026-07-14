@@ -6523,6 +6523,8 @@ export const getOfferStoreAdminState = async (options?: {
     }
     return publishedSet.has(offerId) || curatedSet.has(offerId);
   });
+  const presetFetchTotal = presetQueue.length;
+  const presetSkipped = Math.max(0, combinedRawOffers.length - presetFetchTotal);
   const PRESET_CONCURRENCY = 8;
   const runPresetWorker = async () => {
     while (presetQueue.length > 0) {
@@ -6544,8 +6546,14 @@ export const getOfferStoreAdminState = async (options?: {
       }
     }
   };
-  if (presetQueue.length > 0) {
-    await Promise.all(Array.from({ length: Math.min(PRESET_CONCURRENCY, presetQueue.length) }, runPresetWorker));
+  if (presetFetchTotal > 0) {
+    await Promise.all(Array.from({ length: Math.min(PRESET_CONCURRENCY, presetFetchTotal) }, runPresetWorker));
+  }
+  if (presetSkipped > 0 || presetFetchTotal > 0) {
+    logger.info(
+      `offer-store presets: fetch=${presetFetchTotal} skip=${presetSkipped} `
+      + `(published/curated without review equity only)`,
+    );
   }
 
   const existingOfferIds = new Set(combinedRawOffers.map((row) => String(row.offerId || '')));

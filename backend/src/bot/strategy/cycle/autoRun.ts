@@ -8,6 +8,42 @@ import { extractSourceSid, loadExpectedAlgofundSidMap } from './algofundSync';
 import { closeAllForSymbol, countExchangeOpenPositions, normalizeExchangeSymbolKey } from './positionGuards';
 import { isOfflineSymbolMarketDataError, shouldLogOfflineSymbolSkip } from './offlineSymbol';
 
+/** 0 = unlimited (legacy). Default 16 softens exchange 429 / SQLite thrash under dense auto. */
+const resolveCycleConcurrency = (jobCount: number): number => {
+  const raw = Number(process.env.STRATEGY_CYCLE_CONCURRENCY);
+  if (!Number.isFinite(raw) || raw < 0) {
+    return Math.min(16, Math.max(1, jobCount));
+  }
+  if (raw === 0) {
+    return Math.max(1, jobCount);
+  }
+  return Math.max(1, Math.min(Math.floor(raw), Math.max(1, jobCount)));
+};
+
+const mapSettledWithConcurrency = async <T>(
+  items: T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> => {
+  if (items.length === 0) {
+    return;
+  }
+  const safeConcurrency = Math.max(1, Math.min(concurrency, items.length));
+  let nextIndex = 0;
+  const run = async () => {
+    while (nextIndex < items.length) {
+      const current = nextIndex;
+      nextIndex += 1;
+      try {
+        await worker(items[current]);
+      } catch {
+        // executeOne already handles/logs; keep pool alive
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: safeConcurrency }, () => run()));
+};
+
 export const runAutoStrategiesCycle = async () => {
   const { db } = await import('../../../utils/database');
   const { ensureExchangeClientInitialized } = await import('../../exchange');
@@ -418,12 +454,20 @@ export const runAutoStrategiesCycle = async () => {
     }
   };
 
-  await Promise.allSettled(validJobs.map((row) => executeOne(row)));
+  const cycleConcurrency = resolveCycleConcurrency(validJobs.length);
+  if (validJobs.length > cycleConcurrency) {
+    logger.info(
+      `Auto-cycle concurrency cap: ${cycleConcurrency}/${validJobs.length} `
+      + `(STRATEGY_CYCLE_CONCURRENCY=${String(process.env.STRATEGY_CYCLE_CONCURRENCY ?? '16')})`,
+    );
+  }
+  await mapSettledWithConcurrency(validJobs, cycleConcurrency, executeOne);
 
   return {
     total: syncFilteredJobs.length,
     processed,
     failed,
     skippedOffline,
+    concurrency: cycleConcurrency,
   };
 };
