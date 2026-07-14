@@ -78,6 +78,7 @@ require_cmd systemctl
 
 # Проверяем, изменились ли файлы между двумя коммитами в заданной директории.
 # Возвращает 0 (true) если есть изменения, 1 если нет.
+# Always resolve paths from APP_DIR — callers may have cd'd into backend/frontend.
 has_changes_in() {
 	local dir="$1"
 	local old_head="$2"
@@ -86,7 +87,7 @@ has_changes_in() {
 		return 1
 	fi
 	local count
-	count="$(git diff --name-only "$old_head" "$new_head" -- "$dir" | wc -l | tr -d ' ')"
+	count="$(git -C "$APP_DIR" diff --name-only "$old_head" "$new_head" -- "$dir" | wc -l | tr -d ' ')"
 	[[ "$count" -gt 0 ]]
 }
 
@@ -98,7 +99,7 @@ lockfile_changed() {
 	if [[ "$old_head" == "$new_head" ]]; then
 		return 1
 	fi
-	git diff --name-only "$old_head" "$new_head" -- "$dir/package-lock.json" "$dir/package.json" | grep -q .
+	git -C "$APP_DIR" diff --name-only "$old_head" "$new_head" -- "$dir/package-lock.json" "$dir/package.json" | grep -q .
 }
 
 hash_file_or_empty() {
