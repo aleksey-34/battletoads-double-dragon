@@ -456,7 +456,9 @@ const TradingSystems: React.FC = () => {
 
   const loadTenantWorkflow = useCallback(async () => {
     try {
-      const summaryResponse = await axios.get<SaasSummaryLite>('/api/saas/admin/summary');
+      const summaryResponse = await axios.get<SaasSummaryLite>('/api/saas/admin/summary', {
+        params: { scope: 'light' },
+      });
       const tenantsRaw = Array.isArray(summaryResponse.data?.tenants) ? summaryResponse.data.tenants : [];
       const rows = tenantsRaw
         .map((item) => {

@@ -202,6 +202,11 @@ router.get('/partner/monitoring/:apiKeyName', requirePartnerOrAdmin, async (req,
 // All /admin/* routes require platform admin authentication
 router.use('/admin', requirePlatformAdmin);
 
+// Cheap auth probe — do not pull summary/catalog/offer-store.
+router.get('/admin/ping', async (_req, res) => {
+  res.json({ ok: true, role: 'platform_admin' });
+});
+
 router.get('/admin/summary', async (req, res) => {
   try {
     const scope = String(req.query.scope || 'full').trim().toLowerCase();

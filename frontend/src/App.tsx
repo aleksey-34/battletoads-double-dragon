@@ -166,9 +166,7 @@ function AppShell() {
     axios.defaults.headers.common.Authorization = `Bearer ${password}`;
 
     try {
-      await axios.get('/api/saas/admin/summary', {
-        params: { scope: 'light' },
-      });
+      await axios.get('/api/saas/admin/ping');
       setAdminAuthState('ok');
       if (location.pathname === '/login') {
         navigate('/dashboard');
