@@ -1032,6 +1032,8 @@ type PortfolioCircuitBreakerSettings = {
   ddTriggerPercent?: number;
   lotMultiplier?: number;
   pauseDays?: number;
+  /** If set, CB lot cut applies only to these strategy_type values (tier CB). */
+  applyToStrategyTypes?: string[];
 };
 
 type BacktestCardSettings = {
@@ -1184,6 +1186,9 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
     portfolioCircuitBreaker = null;
   } else if (pcbRaw && typeof pcbRaw === 'object') {
     const pcb = pcbRaw as Record<string, unknown>;
+    const applyToRaw = Array.isArray(pcb.applyToStrategyTypes)
+      ? pcb.applyToStrategyTypes.map((t) => String(t || '').trim()).filter(Boolean)
+      : [];
     portfolioCircuitBreaker = {
       enabled: pcb.enabled !== false,
       peakWindowDays: Number.isFinite(Number(pcb.peakWindowDays)) ? Number(pcb.peakWindowDays) : DEFAULT_PORTFOLIO_CB.peakWindowDays,
@@ -1194,6 +1199,7 @@ const normalizeBacktestCardSettings = (raw: unknown): BacktestCardSettings => {
         ? Number(pcb.lotMultiplier ?? pcb.lotMult)
         : DEFAULT_PORTFOLIO_CB.lotMultiplier,
       pauseDays: Number.isFinite(Number(pcb.pauseDays)) ? Number(pcb.pauseDays) : DEFAULT_PORTFOLIO_CB.pauseDays,
+      ...(applyToRaw.length > 0 ? { applyToStrategyTypes: applyToRaw } : {}),
     };
   }
   return {
@@ -3283,6 +3289,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepPortfolioCbLotMult, setAdminSweepPortfolioCbLotMult] = useState(DEFAULT_PORTFOLIO_CB.lotMultiplier ?? 0.5);
   const [adminSweepPortfolioCbPauseDays, setAdminSweepPortfolioCbPauseDays] = useState(DEFAULT_PORTFOLIO_CB.pauseDays ?? 14);
   const [adminSweepPortfolioCbPeakDays, setAdminSweepPortfolioCbPeakDays] = useState(DEFAULT_PORTFOLIO_CB.peakWindowDays ?? 30);
+  const [adminSweepPortfolioCbApplyTo, setAdminSweepPortfolioCbApplyTo] = useState<string[]>([]);
   const [adminSweepLegLotMults, setAdminSweepLegLotMults] = useState<Record<string, number>>({});
   const [adminSweepBacktestAsyncStatus, setAdminSweepBacktestAsyncStatus] = useState('');
   const [adminSweepBacktestDateFrom, setAdminSweepBacktestDateFrom] = useState('');
@@ -7282,12 +7289,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const pcb = settings.portfolioCircuitBreaker;
     if (pcb === null || pcb?.enabled === false) {
       setAdminSweepPortfolioCbEnabled(false);
+      setAdminSweepPortfolioCbApplyTo([]);
     } else if (pcb) {
       setAdminSweepPortfolioCbEnabled(true);
       setAdminSweepPortfolioCbPeakDays(Math.max(1, Math.floor(Number(pcb.peakWindowDays ?? DEFAULT_PORTFOLIO_CB.peakWindowDays ?? 30))));
       setAdminSweepPortfolioCbDd(Math.max(0.5, Number(pcb.ddTriggerPercent ?? DEFAULT_PORTFOLIO_CB.ddTriggerPercent ?? 8)));
       setAdminSweepPortfolioCbLotMult(Math.min(1, Math.max(0, Number(pcb.lotMultiplier ?? DEFAULT_PORTFOLIO_CB.lotMultiplier ?? 0.5))));
       setAdminSweepPortfolioCbPauseDays(Math.max(1, Math.floor(Number(pcb.pauseDays ?? DEFAULT_PORTFOLIO_CB.pauseDays ?? 14))));
+      setAdminSweepPortfolioCbApplyTo(
+        Array.isArray(pcb.applyToStrategyTypes)
+          ? pcb.applyToStrategyTypes.map((t) => String(t || '').trim()).filter(Boolean)
+          : [],
+      );
     }
     setAdminSweepLegLotMults(settings.lotPercentMultiplierByStrategyId || {});
   }, []);
@@ -7401,8 +7414,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       ddTriggerPercent: adminSweepPortfolioCbDd,
       lotMultiplier: adminSweepPortfolioCbLotMult,
       pauseDays: adminSweepPortfolioCbPauseDays,
+      ...(adminSweepPortfolioCbApplyTo.length > 0
+        ? { applyToStrategyTypes: adminSweepPortfolioCbApplyTo }
+        : {}),
     };
   }, [
+    adminSweepPortfolioCbApplyTo,
     adminSweepPortfolioCbDd,
     adminSweepPortfolioCbEnabled,
     adminSweepPortfolioCbLotMult,
@@ -16034,7 +16051,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           </Space>
                         </>
                       ) : null}
-                      <Text type="secondary" style={{ fontSize: 11 }}>CB8: при DD от rolling peak → lot×{adminSweepPortfolioCbLotMult} на {adminSweepPortfolioCbPauseDays}d.</Text>
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        CB8: при DD от rolling peak → lot×{adminSweepPortfolioCbLotMult} на {adminSweepPortfolioCbPauseDays}d
+                        {adminSweepPortfolioCbApplyTo.length > 0
+                          ? ` (tier: только ${adminSweepPortfolioCbApplyTo.join(', ')})`
+                          : ' (все ноги)'}
+                        .
+                      </Text>
                     </Space>
                   </Card>
                 </Col>

@@ -262,10 +262,31 @@ const buildPortfolioLotMultiplierByStrategyId = (
   return out;
 };
 
+/** Merge tier applyTo list from snapshot/card when admin UI payload omits it. */
+const mergePortfolioCircuitBreakerApplyTo = (
+  primary: PortfolioCircuitBreakerConfig,
+  fallback: PortfolioCircuitBreakerConfig | null | undefined,
+): PortfolioCircuitBreakerConfig => {
+  const primaryTypes = Array.isArray(primary.applyToStrategyTypes)
+    ? primary.applyToStrategyTypes.map((t) => String(t || '').trim()).filter(Boolean)
+    : [];
+  if (primaryTypes.length > 0) {
+    return { ...primary, applyToStrategyTypes: primaryTypes };
+  }
+  const fallbackTypes = Array.isArray(fallback?.applyToStrategyTypes)
+    ? fallback.applyToStrategyTypes.map((t) => String(t || '').trim()).filter(Boolean)
+    : [];
+  if (fallbackTypes.length > 0) {
+    return { ...primary, applyToStrategyTypes: fallbackTypes };
+  }
+  return primary;
+};
+
 /** Portfolio CB from admin payload or saved TS snapshot (rerun parity with publish). */
 const resolveSnapshotPortfolioCircuitBreaker = (
   snapshot: TsBacktestSnapshot | null | undefined,
   payloadRaw?: unknown,
+  cardFallback?: PortfolioCircuitBreakerConfig | null,
 ): PortfolioCircuitBreakerConfig | undefined => {
   if (payloadRaw === null) {
     return undefined;
@@ -273,15 +294,26 @@ const resolveSnapshotPortfolioCircuitBreaker = (
   if (payloadRaw && typeof payloadRaw === 'object' && (payloadRaw as PortfolioCircuitBreakerConfig).enabled === false) {
     return undefined;
   }
-  const fromPayload = parsePortfolioCircuitBreaker(payloadRaw);
-  if (fromPayload && fromPayload.enabled !== false) {
-    return fromPayload;
-  }
   const settings = snapshot?.backtestSettings && typeof snapshot.backtestSettings === 'object'
     ? (snapshot.backtestSettings as Record<string, unknown>)
     : {};
   const fromSnapshot = parsePortfolioCircuitBreaker(settings.portfolioCircuitBreaker);
-  return fromSnapshot && fromSnapshot.enabled !== false ? fromSnapshot : undefined;
+  const fromPayload = parsePortfolioCircuitBreaker(payloadRaw);
+  if (fromPayload && fromPayload.enabled !== false) {
+    return mergePortfolioCircuitBreakerApplyTo(
+      fromPayload,
+      fromSnapshot && fromSnapshot.enabled !== false
+        ? fromSnapshot
+        : (cardFallback && cardFallback.enabled !== false ? cardFallback : null),
+    );
+  }
+  if (fromSnapshot && fromSnapshot.enabled !== false) {
+    return mergePortfolioCircuitBreakerApplyTo(
+      fromSnapshot,
+      cardFallback && cardFallback.enabled !== false ? cardFallback : null,
+    );
+  }
+  return undefined;
 };
 
 /** Same lot/reinvest/deposit caps as admin sweep snapshot rerun — for TS+DCA combined preview parity. */
@@ -7962,7 +7994,11 @@ export const previewAdminSweepBacktest = async (payload?: {
   // Lot resolution priority: explicit payload → snapshot → master_cards.metadata_json → 100% (legacy default).
   const cardLotConfig = await getCardConfigBySystemName(asString(payload?.systemName, '').trim());
   const portfolioCircuitBreakerForEngine =
-    resolveSnapshotPortfolioCircuitBreaker(tsSavedSnapshotForPreview, payload?.portfolioCircuitBreaker)
+    resolveSnapshotPortfolioCircuitBreaker(
+      tsSavedSnapshotForPreview,
+      payload?.portfolioCircuitBreaker,
+      cardLotConfig.portfolioCircuitBreaker,
+    )
     ?? (cardLotConfig.portfolioCircuitBreaker && cardLotConfig.portfolioCircuitBreaker.enabled !== false
       ? cardLotConfig.portfolioCircuitBreaker
       : undefined);
