@@ -5293,6 +5293,31 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const pollAdminSweepBacktestJob = async (
+    jobId: string,
+    options?: { timeoutMs?: number; onTick?: (elapsedSec: number) => void },
+  ): Promise<AdminSweepBacktestPreviewResponse> => {
+    const deadline = Date.now() + (options?.timeoutMs ?? 1_800_000);
+    const startedAt = Date.now();
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      options?.onTick?.(Math.round((Date.now() - startedAt) / 1000));
+      const poll = await axios.get<AdminSweepBacktestPreviewResponse & {
+        success?: boolean;
+        status?: string;
+        error?: string;
+      }>(`/api/saas/admin/sweep-backtest-preview/jobs/${jobId}`, { timeout: 60_000 });
+      if (poll.data?.status === 'running') {
+        continue;
+      }
+      if (poll.data?.status === 'error') {
+        throw new Error(String(poll.data?.error || 'Engine rerun failed'));
+      }
+      return poll.data as AdminSweepBacktestPreviewResponse;
+    }
+    throw new Error('Engine rerun timeout (>30 min)');
+  };
+
   const loadRuntimeWindowBacktests = async () => {
     const targetSystemName = String(resolvedReportSystemName || '').trim();
     if (!targetSystemName) {
@@ -5313,11 +5338,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           const dateTo = now.toISOString();
           const dateFromDate = new Date(now.getTime() - window.days * 24 * 60 * 60 * 1000);
           const dateFrom = dateFromDate.toISOString();
-          const response = await axios.post<AdminSweepBacktestPreviewResponse>('/api/saas/admin/sweep-backtest-preview', {
+          const start = await axios.post('/api/saas/admin/sweep-backtest-preview', {
             source: 'runtime_system',
             kind: 'algofund-ts',
             systemName: targetSystemName,
             preferRealBacktest: true,
+            asyncMode: true,
             dateFrom,
             dateTo,
             initialBalance: adminSweepBacktestInitialBalance,
@@ -5327,8 +5353,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             reinvestPercent: adminSweepBacktestReinvestPercent,
             maxOpenPositions: adminSweepBacktestMaxOpenPositions > 0 ? adminSweepBacktestMaxOpenPositions : undefined,
             lotPercentOverride: adminSweepBacktestLotPercentOverride > 0 ? adminSweepBacktestLotPercentOverride : undefined,
-          });
-          return [window.key, response.data] as const;
+          }, { timeout: 120_000 });
+          const jobId = String(start.data?.jobId || '').trim();
+          if (!jobId) {
+            throw new Error(`Window ${window.key}: async jobId missing`);
+          }
+          const data = await pollAdminSweepBacktestJob(jobId, { timeoutMs: 1_800_000 });
+          return [window.key, data] as const;
         })
       );
 

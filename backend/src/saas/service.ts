@@ -3620,9 +3620,19 @@ export const augmentCatalogWithForcedOfferIds = (
   };
 };
 
+let _offerStoreAdminCache: OfferStoreState | null = null;
+let _offerStoreAdminCacheAt = 0;
+const OFFER_STORE_ADMIN_CACHE_TTL_MS = 30_000;
+
+export const clearOfferStoreAdminCache = (): void => {
+  _offerStoreAdminCache = null;
+  _offerStoreAdminCacheAt = 0;
+};
+
 export const clearCatalogAndSweepCache = (): void => {
   _catalogCache = null;
   _catalogCacheAt = 0;
+  clearOfferStoreAdminCache();
 };
 
 export const buildOfferFromSweepRecord = (record: SweepRecord, familyRows: SweepRecord[] = [record]): CatalogOffer => {
@@ -6131,7 +6141,18 @@ export const updateAdminTelegramControls = async (payload: {
   return getAdminTelegramControls();
 };
 
-export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
+export const getOfferStoreAdminState = async (options?: {
+  bypassCache?: boolean;
+}): Promise<OfferStoreState> => {
+  const now = Date.now();
+  if (
+    !options?.bypassCache
+    && _offerStoreAdminCache
+    && (now - _offerStoreAdminCacheAt) < OFFER_STORE_ADMIN_CACHE_TTL_MS
+  ) {
+    return _offerStoreAdminCache;
+  }
+
   const storefrontCatalog = await loadStorefrontCatalogWithFallback();
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();
@@ -6486,13 +6507,25 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     }
   }
 
-  // Batch-fetch equity curves from presets (medium risk, medium freq = default client view)
+  // Presets only where review snapshot has no equity AND offer is storefront-facing
+  // (published/curated). Research-catalog cards keep sweep/snapshot metrics without
+  // fan-out getPreset — that was ~N research.db reads and ~15s admin hangs.
   await initResearchDb();
   const equityByOfferId = new Map<string, number[]>();
   const presetMetricsByOfferId = new Map<string, Record<string, unknown>>();
-  // Limit concurrency to avoid overwhelming SQLite with too many parallel reads
+  const curatedSet = new Set(curatedFromFlagNormalized);
+  const presetQueue = combinedRawOffers.filter((row) => {
+    const offerId = String(row.offerId || '').trim();
+    if (!offerId) return false;
+    const reviewEq = reviewSnapshots[offerId]?.equityPoints;
+    if (Array.isArray(reviewEq) && reviewEq.length > 1) {
+      return false;
+    }
+    return publishedSet.has(offerId) || curatedSet.has(offerId);
+  });
+  const presetFetchTotal = presetQueue.length;
+  const presetSkipped = Math.max(0, combinedRawOffers.length - presetFetchTotal);
   const PRESET_CONCURRENCY = 8;
-  const presetQueue = combinedRawOffers.slice();
   const runPresetWorker = async () => {
     while (presetQueue.length > 0) {
       const row = presetQueue.shift();
@@ -6500,7 +6533,6 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
       try {
         const preset = await getPreset(row.offerId, 'medium', 'medium');
         if (preset && Array.isArray(preset.equity_curve) && preset.equity_curve.length > 0) {
-          // Downsample to at most 80 points to keep response compact
           const full = preset.equity_curve as number[];
           const step = full.length > 80 ? Math.ceil(full.length / 80) : 1;
           const sampled = full.filter((_, idx) => idx % step === 0);
@@ -6514,7 +6546,15 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
       }
     }
   };
-  await Promise.all(Array.from({ length: PRESET_CONCURRENCY }, runPresetWorker));
+  if (presetFetchTotal > 0) {
+    await Promise.all(Array.from({ length: Math.min(PRESET_CONCURRENCY, presetFetchTotal) }, runPresetWorker));
+  }
+  if (presetSkipped > 0 || presetFetchTotal > 0) {
+    logger.info(
+      `offer-store presets: fetch=${presetFetchTotal} skip=${presetSkipped} `
+      + `(published/curated without review equity only)`,
+    );
+  }
 
   const existingOfferIds = new Set(combinedRawOffers.map((row) => String(row.offerId || '')));
   const labelsFromFlag = deriveOfferStoreLabels({
@@ -6566,7 +6606,7 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
     }
   } catch { /* table may not exist yet */ }
 
-  return {
+  const result: OfferStoreState = {
     defaults,
     publishedOfferIds,
     curatedOfferIds,
@@ -6630,6 +6670,10 @@ export const getOfferStoreAdminState = async (): Promise<OfferStoreState> => {
       };
     }),
   };
+
+  _offerStoreAdminCache = result;
+  _offerStoreAdminCacheAt = Date.now();
+  return result;
 };
 
 export const updateOfferStoreAdminState = async (payload: {
@@ -6642,7 +6686,7 @@ export const updateOfferStoreAdminState = async (payload: {
   tsBacktestSnapshotPatch?: Partial<TsBacktestSnapshot> | null;
   tsBacktestSnapshotsPatch?: Record<string, Partial<TsBacktestSnapshot> | null>;
 }) => {
-  const current = await getOfferStoreAdminState();
+  const current = await getOfferStoreAdminState({ bypassCache: true });
   const nextDefaults = normalizeOfferStoreDefaults({
     ...current.defaults,
     ...(payload.defaults || {}),
@@ -6764,7 +6808,8 @@ export const updateOfferStoreAdminState = async (payload: {
     'offer.store.ts_backtest_snapshots': JSON.stringify(nextTsBacktestSnapshots),
   });
 
-  return getOfferStoreAdminState();
+  clearOfferStoreAdminCache();
+  return getOfferStoreAdminState({ bypassCache: true });
 };
 
 
