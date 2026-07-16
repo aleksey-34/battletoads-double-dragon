@@ -13,8 +13,12 @@ export interface OverlayLine {
   id: string;
   color: string;
   lineWidth?: number;
-  /** Use 'left' to render the overlay on a separate left price scale (e.g. percent series next to USD series). */
-  priceScaleId?: 'left' | 'right';
+  /**
+   * Price scale for this overlay.
+   * - 'left' / 'right': shared visible axes
+   * - any other string: private auto-scale (hidden axis) so the line never flattens against other series
+   */
+  priceScaleId?: 'left' | 'right' | string;
   data: Array<{
     time: number;
     value: number;
@@ -568,6 +572,10 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
         continue;
       }
 
+      const requestedScaleId = String(line.priceScaleId || 'right').trim() || 'right';
+      const usePrivateScale = requestedScaleId !== 'left' && requestedScaleId !== 'right';
+      const priceScaleId = usePrivateScale ? `overlay-${line.id}` : requestedScaleId;
+
       let series = overlaySeriesRef.current.get(line.id);
       if (!series) {
         series = chart.addSeries(LineSeries, {
@@ -575,11 +583,19 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
           lineWidth: (line.lineWidth || 2) as any,
           priceLineVisible: false,
           lastValueVisible: false,
-          priceScaleId: line.priceScaleId === 'left' ? 'left' : 'right',
+          priceScaleId,
         });
         overlaySeriesRef.current.set(line.id, series);
-        if (line.priceScaleId === 'left') {
+        if (requestedScaleId === 'left') {
           chart.applyOptions({ leftPriceScale: { visible: !compact, borderVisible: false } });
+        }
+        if (usePrivateScale) {
+          // Own auto-scale per overlay: fills chart height without sharing axis with other series.
+          chart.priceScale(priceScaleId).applyOptions({
+            visible: false,
+            borderVisible: false,
+            scaleMargins: { top: 0.08, bottom: 0.08 },
+          });
         }
       }
 
@@ -595,7 +611,7 @@ const ChartComponent: React.FC<ChartComponentProps> = ({ data, type = 'candlesti
         overlaySeriesRef.current.delete(line.id);
       }
     }
-  }, [overlayLines]);
+  }, [overlayLines, compact]);
 
   useEffect(() => {
     if (!markerPluginRef.current || typeof markerPluginRef.current.setMarkers !== 'function') {

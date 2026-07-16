@@ -92,21 +92,6 @@ const snapshotToPoints = (
     : null;
 }).filter((x): x is LinePoint => x !== null);
 
-const normalizeSeries = (points: LinePoint[]): LinePoint[] => {
-  if (points.length === 0) return [];
-  const values = points.map((p) => p.value);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min;
-  if (!Number.isFinite(span) || span <= 1e-9) {
-    return points.map((p) => ({ time: p.time, value: 50 }));
-  }
-  return points.map((p) => ({
-    time: p.time,
-    value: ((p.value - min) / span) * 100,
-  }));
-};
-
 const toReturnPercentSeries = (points: LinePoint[]): LinePoint[] => {
   if (points.length === 0) return [];
   const base = points[0].value;
@@ -146,7 +131,6 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   const [showPnl, setShowPnl] = useState(false);
   const [showUpnl, setShowUpnl] = useState(false);
   const [showDd, setShowDd] = useState(false);
-  const [independentScale, setIndependentScale] = useState(false);
   const [equityAsReturn, setEquityAsReturn] = useState(true);
 
   const seriesRaw = useMemo(() => ({
@@ -169,20 +153,21 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     return keys;
   }, [showDd, showEquity, showPnl, showUpnl]);
 
-  const useNormalized = independentScale && visibleKeys.length > 1;
+  const multiSeries = visibleKeys.length > 1;
 
   const transformSeries = (key: SeriesKey, raw: LinePoint[]): LinePoint[] => {
-    if (key === 'equity' && equityAsReturn && !useNormalized) {
+    // Single equity series can stay in % return mode for readability.
+    if (key === 'equity' && equityAsReturn) {
       return toReturnPercentSeries(raw);
     }
-    return useNormalized ? normalizeSeries(raw) : raw;
+    return raw;
   };
 
   const primarySeries = useMemo(() => {
     const key = visibleKeys[0];
     if (!key) return [] as LinePoint[];
     return transformSeries(key, seriesRaw[key]);
-  }, [equityAsReturn, seriesRaw, useNormalized, visibleKeys]);
+  }, [equityAsReturn, seriesRaw, visibleKeys]);
 
   const overlayLines = useMemo(() => visibleKeys.slice(1).map((key) => {
     const raw = seriesRaw[key];
@@ -191,10 +176,11 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
       id: key,
       color: SERIES_META[key].color,
       lineWidth: key === 'dd' ? 1 : 2,
-      priceScaleId: key === 'dd' ? 'left' as const : undefined,
+      // Always private auto-scale so overlays never flatten against the primary axis.
+      priceScaleId: `own-${key}`,
       data,
     };
-  }), [equityAsReturn, seriesRaw, useNormalized, visibleKeys]);
+  }), [equityAsReturn, seriesRaw, visibleKeys]);
 
   const latest = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
   const allSelected = showEquity && showPnl && showUpnl && showDd;
@@ -373,13 +359,10 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
         >
           Equity как % доходности за период
         </Checkbox>
-        <Checkbox checked={independentScale} onChange={(e) => setIndependentScale(e.target.checked)}>
-          Свой масштаб для каждой линии (0–100% диапазона)
-        </Checkbox>
       </Space>
-      {useNormalized ? (
+      {multiSeries ? (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-          При нескольких линиях каждая растягивается на свой min–max за период. Абсолютные значения — в тегах выше.
+          У каждой линии свой автомасштаб — форма не схлопывается. Абсолютные значения — в тегах выше.
         </Typography.Text>
       ) : equityAsReturn && showEquity ? (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
