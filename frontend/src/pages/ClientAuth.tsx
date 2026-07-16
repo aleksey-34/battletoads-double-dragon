@@ -355,6 +355,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                   form={registerForm}
                   initialValues={{ showFutures: true, showSpot: true, riskDisclaimerAccepted: false }}
                   onFinish={handleRegister}
+                  scrollToFirstError
                 >
                   <Form.Item
                     label={t('client.auth.companyName', 'Company or workspace name')}

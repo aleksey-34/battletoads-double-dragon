@@ -132,7 +132,7 @@ export default function LandingPage() {
                 <li>Copytrading</li>
                 <li>Без комиссии с прибыли на beta</li>
               </ul>
-              <div className="pick">Для старта</div>
+              <a className="pick pick-cta" href="/client/register">Зарегистрироваться</a>
             </div>
             <div className="plan">
               <h3>Фикс</h3>
