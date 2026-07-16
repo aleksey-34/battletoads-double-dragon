@@ -3,7 +3,13 @@ import {
   Alert, Button, Card, Checkbox, Input, Modal, Progress, Segmented, Space, Spin, Table, Tabs, Tag, Typography, message,
 } from 'antd';
 import axios from 'axios';
-import MonitoringChartPanel, { MonitoringSnapshot, MonitoringTradeMarker } from '../components/MonitoringChartPanel';
+import MonitoringChartPanel, {
+  MonitoringSnapshot,
+  MonitoringTradeMarker,
+  MonitoringPeriodStats,
+  MonitoringTradeRow,
+  ChartPeriodDays,
+} from '../components/MonitoringChartPanel';
 
 type PartnerClient = {
   tenantId: number;
@@ -70,9 +76,11 @@ const PartnerCabinet: React.FC = () => {
   const [data, setData] = useState<{ clients: PartnerClient[]; totals?: Record<string, number> } | null>(null);
   const [chartOpen, setChartOpen] = useState(false);
   const [chartClient, setChartClient] = useState<PartnerClient | null>(null);
-  const [chartDays, setChartDays] = useState(1);
+  const [chartDays, setChartDays] = useState<ChartPeriodDays>(7);
   const [chartLoading, setChartLoading] = useState(false);
   const [chartRaw, setChartRaw] = useState<MonitoringSnapshot[]>([]);
+  const [chartPeriodStats, setChartPeriodStats] = useState<MonitoringPeriodStats | null>(null);
+  const [chartTrades, setChartTrades] = useState<MonitoringTradeRow[]>([]);
   const [chartTradeStats, setChartTradeStats] = useState<{ trades24h: number; lastTradeAt: string | null }>({ trades24h: 0, lastTradeAt: null });
   const [chartTradeMarkers, setChartTradeMarkers] = useState<MonitoringTradeMarker[]>([]);
 
@@ -201,13 +209,19 @@ const PartnerCabinet: React.FC = () => {
     }
   }, [activeTab, loadTradesSummary]);
 
-  const loadChart = async (client: PartnerClient, days: number) => {
+  const loadChart = async (client: PartnerClient, days: ChartPeriodDays) => {
     if (!client.apiKeyName) return;
     setChartLoading(true);
     try {
-      const params: Record<string, number | string> = days > 1 ? { days, includeTrades: '1' } : { limit: 288, includeTrades: '1' };
+      const params: Record<string, number | string> = days === 0
+        ? { all: '1', includeTrades: '1', includeTradesRows: '1' }
+        : days > 1
+          ? { days, includeTrades: '1', includeTradesRows: '1' }
+          : { limit: 288, includeTrades: '1', includeTradesRows: '1' };
       const res = await axios.get(`/api/saas/partner/monitoring/${encodeURIComponent(client.apiKeyName)}`, { params });
       setChartRaw(Array.isArray(res.data?.points) ? res.data.points : []);
+      setChartPeriodStats(res.data?.periodStats || null);
+      setChartTrades(Array.isArray(res.data?.trades) ? res.data.trades : []);
       setChartTradeStats({
         trades24h: Number(res.data?.tradeStats?.trades24h || 0),
         lastTradeAt: res.data?.tradeStats?.lastTradeAt || null,
@@ -215,6 +229,8 @@ const PartnerCabinet: React.FC = () => {
       setChartTradeMarkers(Array.isArray(res.data?.tradeMarkers) ? res.data.tradeMarkers : []);
     } catch {
       setChartRaw([]);
+      setChartPeriodStats(null);
+      setChartTrades([]);
     } finally {
       setChartLoading(false);
     }
@@ -223,8 +239,8 @@ const PartnerCabinet: React.FC = () => {
   const openChart = (client: PartnerClient) => {
     setChartClient(client);
     setChartOpen(true);
-    setChartDays(1);
-    void loadChart(client, 1);
+    setChartDays(7);
+    void loadChart(client, 7);
   };
 
   useEffect(() => {
@@ -458,6 +474,8 @@ const PartnerCabinet: React.FC = () => {
             snapshots={chartRaw}
             chartDays={chartDays}
             onChartDaysChange={setChartDays}
+            periodStats={chartPeriodStats}
+            trades={chartTrades}
             trades24h={chartTradeStats.trades24h}
             lastTradeAt={chartTradeStats.lastTradeAt}
             tradeMarkers={chartTradeMarkers}

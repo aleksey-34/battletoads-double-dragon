@@ -19,7 +19,7 @@ import { getClientPreviewJobPayload } from '../../research/clientPreviewQueue';
 import { getPreset, listOfferIds } from '../../research/presetBuilder';
 import { removeExchangeClient } from '../../bot/exchange';
 import { saveApiKey } from '../../config/settings';
-import { getMonitoringLatest, getMonitoringSnapshots } from '../../bot/monitoring';
+import { getMonitoringBundle, getMonitoringLatest } from '../../bot/monitoring';
 import {
   getAlgofundState,
   listClientCustomTsSystemsState,
@@ -1388,7 +1388,15 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
     const limitRaw = Number.parseInt(String(req.query.limit || '120'), 10);
     const limit = Math.min(500, Math.max(10, Number.isFinite(limitRaw) ? limitRaw : 120));
     const daysRaw = Number.parseInt(String(req.query.days || '0'), 10);
-    const days = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : undefined;
+    const days = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : 0;
+    const allPeriod = String(req.query.all || '0') === '1'
+      || String(req.query.all || '').toLowerCase() === 'true';
+    const includeTrades = String(req.query.includeTrades || '0') === '1'
+      || String(req.query.includeTrades || '').toLowerCase() === 'true';
+    const includeTradesRows = String(req.query.includeTradesRows || '0') === '1'
+      || String(req.query.includeTradesRows || '').toLowerCase() === 'true';
+    const includeTradeMarkers = String(req.query.includeTradeMarkers || '0') === '1'
+      || String(req.query.includeTradeMarkers || '').toLowerCase() === 'true';
 
     const requestedMode = String(req.query.mode || '').trim().toLowerCase();
     const productMode = String(session.user?.productMode || '').trim().toLowerCase();
@@ -1446,14 +1454,26 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
     const loadStream = async (targetApiKeyName: string) => {
       const safeName = String(targetApiKeyName || '').trim();
       if (!safeName) {
-        return { apiKeyName: '', latest: null, points: [] as any[] };
+        return {
+          apiKeyName: '',
+          latest: null,
+          points: [] as any[],
+          periodStats: null,
+          tradeStats: undefined,
+          trades: undefined,
+        };
       }
-      const points = await getMonitoringSnapshots(safeName, limit, days);
-      const latest = points.length > 0 ? points[points.length - 1] : await getMonitoringLatest(safeName);
+      const bundle = await getMonitoringBundle(safeName, {
+        limit,
+        days,
+        all: allPeriod,
+        includeTrades,
+        includeTradesRows,
+        includeTradeMarkers,
+      });
       return {
         apiKeyName: safeName,
-        latest: latest || null,
-        points: points || [],
+        ...bundle,
       };
     };
 
@@ -1468,6 +1488,9 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
       apiKeyName: selectedStream.apiKeyName,
       latest: selectedStream.latest,
       points: selectedStream.points,
+      periodStats: selectedStream.periodStats,
+      tradeStats: selectedStream.tradeStats,
+      trades: selectedStream.trades,
       streams: {
         strategy: strategyStream,
         algofund: algofundStream,

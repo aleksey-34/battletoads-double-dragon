@@ -21,7 +21,13 @@ import {
 } from 'antd';
 import axios from 'axios';
 import { useI18n } from '../i18n';
-import MonitoringChartPanel, { MonitoringSnapshot, MonitoringTradeMarker } from '../components/MonitoringChartPanel';
+import MonitoringChartPanel, {
+  MonitoringSnapshot,
+  MonitoringTradeMarker,
+  MonitoringPeriodStats,
+  MonitoringTradeRow,
+  ChartPeriodDays,
+} from '../components/MonitoringChartPanel';
 
 /* eslint-disable react-hooks/exhaustive-deps */
 
@@ -187,9 +193,11 @@ const Positions: React.FC = () => {
   const [monitorModalOpen, setMonitorModalOpen] = useState(false);
   const [monChartOpen, setMonChartOpen] = useState(false);
   const [monChartKey, setMonChartKey] = useState('');
-  const [monChartDays, setMonChartDays] = useState(1);
+  const [monChartDays, setMonChartDays] = useState<ChartPeriodDays>(7);
   const [monChartLoading, setMonChartLoading] = useState(false);
   const [monChartRaw, setMonChartRaw] = useState<MonitoringSnapshot[]>([]);
+  const [monChartPeriodStats, setMonChartPeriodStats] = useState<MonitoringPeriodStats | null>(null);
+  const [monChartTrades, setMonChartTrades] = useState<MonitoringTradeRow[]>([]);
   const [monChartTradeStats, setMonChartTradeStats] = useState<{ trades24h: number; lastTradeAt: string | null }>({ trades24h: 0, lastTradeAt: null });
   const [monChartTradeMarkers, setMonChartTradeMarkers] = useState<MonitoringTradeMarker[]>([]);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(false);
@@ -860,17 +868,21 @@ const Positions: React.FC = () => {
     void loadMonitoringTable(visibleApiKeys);
   }, [pageTab, visibleApiKeys]);
 
-  const loadMonChart = async (key: string, days: number) => {
+  const loadMonChart = async (key: string, days: ChartPeriodDays) => {
     setMonChartLoading(true);
     try {
-      const params: Record<string, number | string> = days > 1
-        ? { days }
-        : { limit: 288 };
+      const params: Record<string, number | string> = days === 0
+        ? { all: '1', includeTrades: '1', includeTradesRows: '1' }
+        : days > 1
+          ? { days, includeTrades: '1', includeTradesRows: '1' }
+          : { limit: 288, includeTrades: '1', includeTradesRows: '1' };
       const res = await axios.get(
         `/api/monitoring/${encodeURIComponent(key)}`, { params },
       );
       const rows = Array.isArray(res.data?.points) ? res.data.points : [];
       setMonChartRaw(rows);
+      setMonChartPeriodStats(res.data?.periodStats || null);
+      setMonChartTrades(Array.isArray(res.data?.trades) ? res.data.trades : []);
       setMonChartTradeStats({
         trades24h: Number(res.data?.tradeStats?.trades24h || 0),
         lastTradeAt: res.data?.tradeStats?.lastTradeAt || null,
@@ -878,6 +890,8 @@ const Positions: React.FC = () => {
       setMonChartTradeMarkers([]);
     } catch {
       setMonChartRaw([]);
+      setMonChartPeriodStats(null);
+      setMonChartTrades([]);
       setMonChartTradeStats({ trades24h: 0, lastTradeAt: null });
       setMonChartTradeMarkers([]);
     } finally {
@@ -886,8 +900,8 @@ const Positions: React.FC = () => {
   };
 
   const openMonChart = (key: string) => {
-    setMonChartOpen(true); setMonChartKey(key); setMonChartDays(1);
-    void loadMonChart(key, 1);
+    setMonChartOpen(true); setMonChartKey(key); setMonChartDays(7);
+    void loadMonChart(key, 7);
   };
 
   useEffect(() => { if (monChartOpen && monChartKey) void loadMonChart(monChartKey, monChartDays); }, [monChartDays]);
@@ -1383,6 +1397,8 @@ const Positions: React.FC = () => {
           snapshots={monChartRaw}
           chartDays={monChartDays}
           onChartDaysChange={setMonChartDays}
+          periodStats={monChartPeriodStats}
+          trades={monChartTrades}
           trades24h={monChartTradeStats.trades24h}
           lastTradeAt={monChartTradeStats.lastTradeAt}
           tradeMarkers={monChartTradeMarkers}

@@ -1,9 +1,7 @@
 import { runMonitoringCycleForApiKeys } from '../automation/scheduler';
 import {
+  getMonitoringBundle,
   getMonitoringLatest,
-  getMonitoringSnapshots,
-  getMonitoringTradeMarkers,
-  getMonitoringTradeStats,
 } from '../bot/monitoring';
 import { db } from '../utils/database';
 import logger from '../utils/logger';
@@ -59,6 +57,95 @@ type PartnerClientRow = {
   apiKeyName: string;
   publishedSystem: string;
   enabled: boolean;
+  requestedEnabled: boolean;
+};
+
+type ClosedPnlStats = {
+  closedCount: number;
+  avgPnlPercent: number | null;
+  totalPnlUsd: number;
+  winRatePercent: number | null;
+};
+
+const computeClosedPnlForApiKey = async (apiKeyName: string, sinceMs: number): Promise<ClosedPnlStats> => {
+  const strategies = await db.all<{ id?: number }>(
+    `SELECT s.id
+     FROM strategies s
+     JOIN api_keys a ON a.id = s.api_key_id
+     WHERE a.name = ?`,
+    [apiKeyName],
+  ).catch(() => []) as Array<{ id?: number }>;
+  const strategyIds = strategies.map((row) => asNumber(row.id, 0)).filter((id) => id > 0);
+  if (strategyIds.length === 0) {
+    return { closedCount: 0, avgPnlPercent: null, totalPnlUsd: 0, winRatePercent: null };
+  }
+
+  const events = await db.all(
+    `SELECT strategy_id, trade_type, side, entry_price, position_size, actual_price, actual_time, actual_fee, source_symbol
+     FROM live_trade_events
+     WHERE strategy_id IN (${strategyIds.map(() => '?').join(',')})
+       AND actual_time >= ?
+       AND COALESCE(event_origin, CASE WHEN COALESCE(source_trade_id, '') <> '' OR COALESCE(source_order_id, '') <> '' OR ABS(COALESCE(actual_fee, 0)) > 0 THEN 'exchange_fill' ELSE 'strategy_signal' END) = 'exchange_fill'
+     ORDER BY actual_time ASC, id ASC`,
+    [...strategyIds, sinceMs],
+  ).catch(() => []) as Array<Record<string, unknown>>;
+
+  const openByKey = new Map<string, Array<Record<string, unknown>>>();
+  const pnlPercents: number[] = [];
+  let totalPnlUsd = 0;
+  let wins = 0;
+
+  for (const event of events) {
+    const strategyId = asNumber(event.strategy_id, 0);
+    if (strategyId <= 0) continue;
+    const side = asString(event.side, '').toLowerCase();
+    const symbol = asString(event.source_symbol, '');
+    const key = `${strategyId}|${side}|${symbol}`;
+    const tradeType = asString(event.trade_type, '').toLowerCase();
+
+    if (tradeType === 'entry') {
+      const list = openByKey.get(key) || [];
+      list.push(event);
+      openByKey.set(key, list);
+      continue;
+    }
+    if (tradeType !== 'exit') continue;
+
+    const list = openByKey.get(key) || [];
+    const entry = list.shift();
+    openByKey.set(key, list);
+    if (!entry) continue;
+
+    const qty = Math.max(0, asNumber(event.position_size, asNumber(entry.position_size, 0)));
+    const entryPrice = asNumber(entry.actual_price, asNumber(entry.entry_price, 0));
+    const exitPrice = asNumber(event.actual_price, 0);
+    if (qty <= 0 || entryPrice <= 0 || exitPrice <= 0) continue;
+
+    const entryFee = asNumber(entry.actual_fee, 0);
+    const exitFee = asNumber(event.actual_fee, 0);
+    const gross = side === 'short'
+      ? (entryPrice - exitPrice) * qty
+      : (exitPrice - entryPrice) * qty;
+    const pnl = gross - entryFee - exitFee;
+    const notional = entryPrice * qty;
+    if (notional <= 0) continue;
+
+    totalPnlUsd += pnl;
+    pnlPercents.push((pnl / notional) * 100);
+    if (pnl > 0) wins += 1;
+  }
+
+  const closedCount = pnlPercents.length;
+  const avgPnlPercent = closedCount > 0
+    ? Number((pnlPercents.reduce((sum, v) => sum + v, 0) / closedCount).toFixed(3))
+    : null;
+
+  return {
+    closedCount,
+    avgPnlPercent,
+    totalPnlUsd: Number(totalPnlUsd.toFixed(4)),
+    winRatePercent: closedCount > 0 ? Number(((wins / closedCount) * 100).toFixed(1)) : null,
+  };
 };
 
 type PartnerRefreshJob = {
@@ -105,6 +192,7 @@ const loadPartnerClientRows = async (): Promise<PartnerClientRow[]> => {
       apiKeyName: asString(row.execution_api_key_name) || asString(row.assigned_api_key_name),
       publishedSystem: asString(row.published_system_name),
       enabled: asNumber(row.actual_enabled) === 1,
+      requestedEnabled: asNumber(row.requested_enabled, 1) === 1,
     });
   }
   return clients;
@@ -281,20 +369,20 @@ export const getPartnerDashboard = async (options?: { refresh?: boolean }) => {
 
 export const getPartnerMonitoringSeries = async (
   apiKeyName: string,
-  options?: { days?: number; limit?: number },
+  options?: { days?: number; limit?: number; all?: boolean; includeTradesRows?: boolean },
 ) => {
   const days = asNumber(options?.days, 0);
   const limit = asNumber(options?.limit, 288);
-  const points = days > 1
-    ? await getMonitoringSnapshots(apiKeyName, 5000, days).catch(() => [])
-    : await getMonitoringSnapshots(apiKeyName, limit).catch(() => []);
-  const latest = await getMonitoringLatest(apiKeyName).catch(() => null);
-  const tradeStats = await getMonitoringTradeStats(apiKeyName).catch(() => ({ trades24h: 0, lastTradeAt: null }));
-  const sinceMs = days > 1
-    ? Date.now() - days * 86_400_000
-    : Date.now() - 86_400_000;
-  const tradeMarkers = await getMonitoringTradeMarkers(apiKeyName, sinceMs).catch(() => []);
-  return { points, latest, tradeStats, tradeMarkers };
+  const allPeriod = options?.all === true;
+  const includeTradesRows = options?.includeTradesRows === true;
+  return getMonitoringBundle(apiKeyName, {
+    days,
+    limit,
+    all: allPeriod,
+    includeTrades: true,
+    includeTradesRows,
+    includeTradeMarkers: false,
+  });
 };
 
 export type PartnerTradeSummaryRow = {
@@ -302,12 +390,92 @@ export type PartnerTradeSummaryRow = {
   displayName: string;
   apiKeyName: string;
   publishedSystem: string;
+  enabled: boolean;
+  requestedEnabled: boolean;
   tradesCount: number;
   entries: number;
   exits: number;
+  closedCount: number;
+  avgPnlPercent: number | null;
+  totalPnlUsd: number;
+  equityDeltaUsd: number;
   lastTradeAt: string | null;
   deviationPct: number | null;
   isOutlier: boolean;
+};
+
+export type PartnerTsCardSummary = {
+  cardKey: string;
+  displayLabel: string;
+  clients: number;
+  activeClients: number;
+  tradesMedian: number;
+  equityDeltaUsd: number;
+  closedTrades: number;
+  avgPnlPercent: number | null;
+  totalPnlUsd: number;
+  zeroTradeClients: string[];
+};
+
+const partnerTsCardLabel = (publishedSystem: string): { key: string; label: string } => {
+  const ts = String(publishedSystem || '').toLowerCase();
+  if (ts.includes('synth-stable') || ts.includes('b3-jul2026')) {
+    return { key: 'b3-synth-stable', label: 'B3 synth-stable' };
+  }
+  if (ts.includes('tv-momentum') || ts.includes('l400')) {
+    return { key: 'tv-l400', label: 'TV L400 momentum' };
+  }
+  const short = String(publishedSystem || 'unknown').split('::').pop() || 'unknown';
+  return { key: short.slice(0, 48), label: short.slice(0, 40) };
+};
+
+const medianOfValues = (values: number[]): number => {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid];
+};
+
+const buildPartnerTsCardSummaries = (rows: PartnerTradeSummaryRow[]): PartnerTsCardSummary[] => {
+  const groups = new Map<string, PartnerTradeSummaryRow[]>();
+  for (const row of rows) {
+    if (!row.requestedEnabled || !row.enabled) continue;
+    const { key } = partnerTsCardLabel(row.publishedSystem);
+    const list = groups.get(key) || [];
+    list.push(row);
+    groups.set(key, list);
+  }
+
+  const out: PartnerTsCardSummary[] = [];
+  for (const [, group] of groups) {
+    const { label } = partnerTsCardLabel(group[0]?.publishedSystem || '');
+    const tradeCounts = group.map((r) => r.tradesCount);
+    const closedTrades = group.reduce((sum, r) => sum + r.closedCount, 0);
+    const totalPnlUsd = group.reduce((sum, r) => sum + r.totalPnlUsd, 0);
+    const equityDeltaUsd = group.reduce((sum, r) => sum + r.equityDeltaUsd, 0);
+    const pnlPercents = group
+      .map((r) => r.avgPnlPercent)
+      .filter((v): v is number => v !== null && Number.isFinite(v));
+    const avgPnlPercent = pnlPercents.length > 0
+      ? Number((pnlPercents.reduce((sum, v) => sum + v, 0) / pnlPercents.length).toFixed(3))
+      : null;
+    out.push({
+      cardKey: partnerTsCardLabel(group[0]?.publishedSystem || '').key,
+      displayLabel: label,
+      clients: group.length,
+      activeClients: group.filter((r) => r.tradesCount > 0).length,
+      tradesMedian: medianOfValues(tradeCounts),
+      equityDeltaUsd: Number(equityDeltaUsd.toFixed(2)),
+      closedTrades,
+      avgPnlPercent,
+      totalPnlUsd: Number(totalPnlUsd.toFixed(2)),
+      zeroTradeClients: group.filter((r) => r.tradesCount === 0).map((r) => r.displayName),
+    });
+  }
+
+  return out.sort((a, b) => b.clients - a.clients);
 };
 
 export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
@@ -320,9 +488,13 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
     trades: number;
     entries: number;
     exits: number;
+    closedTrades: number;
+    avgPnlPercent: number | null;
+    totalPnlUsd: number;
   };
   rows: PartnerTradeSummaryRow[];
   outliers: PartnerTradeSummaryRow[];
+  cards: PartnerTsCardSummary[];
 }> => {
   const hours = Math.max(1, Math.min(168, Math.floor(periodHours)));
   const sinceMs = Date.now() - hours * 3_600_000;
@@ -337,9 +509,15 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
         displayName: client.displayName,
         apiKeyName: '',
         publishedSystem: client.publishedSystem,
+        enabled: client.enabled,
+        requestedEnabled: client.requestedEnabled,
         tradesCount: 0,
         entries: 0,
         exits: 0,
+        closedCount: 0,
+        avgPnlPercent: null,
+        totalPnlUsd: 0,
+        equityDeltaUsd: 0,
         lastTradeAt: null,
         deviationPct: null,
         isOutlier: false,
@@ -367,14 +545,36 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
     ).catch(() => null);
 
     const tradesCount = Math.max(0, asNumber(stats?.trades_count, 0));
+    const pnl = await computeClosedPnlForApiKey(client.apiKeyName, sinceMs);
+    const eqRow = await db.get<{ equity_start?: number; equity_now?: number }>(
+      `SELECT
+         (SELECT equity_usd FROM monitoring_snapshots ms
+          JOIN api_keys a ON a.id = ms.api_key_id
+          WHERE a.name = ? AND ms.recorded_at >= datetime('now', ?)
+          ORDER BY ms.recorded_at ASC LIMIT 1) AS equity_start,
+         (SELECT equity_usd FROM monitoring_snapshots ms
+          JOIN api_keys a ON a.id = ms.api_key_id
+          WHERE a.name = ?
+          ORDER BY ms.recorded_at DESC LIMIT 1) AS equity_now`,
+      [client.apiKeyName, `-${hours} hours`, client.apiKeyName],
+    ).catch(() => null);
+    const equityDeltaUsd = eqRow
+      ? asNumber(eqRow.equity_now, 0) - asNumber(eqRow.equity_start, asNumber(eqRow.equity_now, 0))
+      : 0;
     rows.push({
       slug: client.slug,
       displayName: client.displayName,
       apiKeyName: client.apiKeyName,
       publishedSystem: client.publishedSystem,
+      enabled: client.enabled,
+      requestedEnabled: client.requestedEnabled,
       tradesCount,
       entries: Math.max(0, asNumber(stats?.entries, 0)),
       exits: Math.max(0, asNumber(stats?.exits, 0)),
+      closedCount: pnl.closedCount,
+      avgPnlPercent: pnl.avgPnlPercent,
+      totalPnlUsd: pnl.totalPnlUsd,
+      equityDeltaUsd: Number(equityDeltaUsd.toFixed(2)),
       lastTradeAt: stats?.last_trade_at
         ? new Date(asNumber(stats.last_trade_at)).toISOString()
         : null,
@@ -385,6 +585,7 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
 
   const bySystem = new Map<string, number[]>();
   for (const row of rows) {
+    if (!row.requestedEnabled || !row.enabled) continue;
     const key = row.publishedSystem || 'unknown';
     const list = bySystem.get(key) || [];
     list.push(row.tradesCount);
@@ -417,12 +618,18 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
     } else {
       row.deviationPct = Math.round(((row.tradesCount - baseline) / baseline) * 100);
     }
-    row.isOutlier = baseline > 0
+    row.isOutlier = row.requestedEnabled && row.enabled && baseline > 0
       ? row.tradesCount < baseline * 0.2 || row.tradesCount > baseline * 2.5
       : false;
   }
 
   const outliers = rows.filter((r) => r.isOutlier && r.apiKeyName);
+  const closedPnlPercents = rows
+    .map((r) => r.avgPnlPercent)
+    .filter((v): v is number => v !== null && Number.isFinite(v));
+  const globalAvgPnlPercent = closedPnlPercents.length > 0
+    ? Number((closedPnlPercents.reduce((sum, v) => sum + v, 0) / closedPnlPercents.length).toFixed(3))
+    : null;
 
   return {
     periodHours: hours,
@@ -434,19 +641,43 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
       trades: rows.reduce((sum, r) => sum + r.tradesCount, 0),
       entries: rows.reduce((sum, r) => sum + r.entries, 0),
       exits: rows.reduce((sum, r) => sum + r.exits, 0),
+      closedTrades: rows.reduce((sum, r) => sum + r.closedCount, 0),
+      avgPnlPercent: globalAvgPnlPercent,
+      totalPnlUsd: Number(rows.reduce((sum, r) => sum + r.totalPnlUsd, 0).toFixed(2)),
     },
     rows: rows.sort((a, b) => b.tradesCount - a.tradesCount),
     outliers,
+    cards: buildPartnerTsCardSummaries(rows),
   };
 };
 
 export const buildPartnerTradesTelegramDigest = async (periodHours = 6): Promise<string> => {
   const summary = await getPartnerTradesSummary(periodHours);
+  const pnlLine = summary.totals.closedTrades > 0 && summary.totals.avgPnlPercent !== null
+    ? ` · закрыто ${summary.totals.closedTrades}, ср. ${summary.totals.avgPnlPercent >= 0 ? '+' : ''}${summary.totals.avgPnlPercent}%/сделку, Σ $${summary.totals.totalPnlUsd}`
+    : '';
+  const disabledCount = summary.rows.filter((r) => !r.requestedEnabled || !r.enabled).length;
   const lines = [
     `📊 <b>Partner trades ${summary.periodHours}h</b>`,
-    `Медиана по системам: <b>${summary.systemMedian}</b> сделок`,
-    `Клиентов: ${summary.rows.length}, активных с сделками: ${summary.rows.filter((r) => r.tradesCount > 0).length}`,
+    `Медиана по системам: <b>${summary.systemMedian}</b> сделок${pnlLine}`,
+    `Клиентов: ${summary.rows.length}, активных с сделками: ${summary.rows.filter((r) => r.tradesCount > 0).length}${disabledCount > 0 ? `, выкл: ${disabledCount}` : ''}`,
   ];
+
+  if (summary.cards.length > 0) {
+    lines.push('', '<b>По карточкам ТС:</b>');
+    for (const card of summary.cards) {
+      const deltaSign = card.equityDeltaUsd >= 0 ? '+' : '';
+      const pnlPart = card.closedTrades > 0 && card.avgPnlPercent !== null
+        ? ` · закр ${card.closedTrades}, ср ${card.avgPnlPercent >= 0 ? '+' : ''}${card.avgPnlPercent}%/сд, Σ $${card.totalPnlUsd}`
+        : '';
+      lines.push(
+        `• <b>${card.displayLabel}</b>: ${card.activeClients}/${card.clients} акт · мед ${card.tradesMedian} · Δ${summary.periodHours}h ${deltaSign}$${card.equityDeltaUsd}${pnlPart}`,
+      );
+      if (card.zeroTradeClients.length > 0) {
+        lines.push(`  без сделок: ${card.zeroTradeClients.slice(0, 6).join(', ')}`);
+      }
+    }
+  }
 
   if (summary.outliers.length > 0) {
     lines.push('', '⚠️ <b>Отклонения:</b>');
@@ -464,7 +695,10 @@ export const buildPartnerTradesTelegramDigest = async (periodHours = 6): Promise
   if (top.length > 0) {
     lines.push('', '<b>Топ активность:</b>');
     for (const row of top) {
-      lines.push(`• ${row.displayName}: ${row.tradesCount} (in ${row.entries} / out ${row.exits})`);
+      const pnlSuffix = row.closedCount > 0 && row.avgPnlPercent !== null
+        ? ` · ${row.avgPnlPercent >= 0 ? '+' : ''}${row.avgPnlPercent}%/сд`
+        : '';
+      lines.push(`• ${row.displayName}: ${row.tradesCount} (in ${row.entries} / out ${row.exits})${pnlSuffix}`);
     }
   }
 

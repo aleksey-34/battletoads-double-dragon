@@ -246,17 +246,87 @@ export const recordMonitoringSnapshot = async (apiKeyName: string) => {
 
 const MAX_CHART_POINTS = 720;
 
+export type MonitoringPeriodStats = {
+  returnPercent: number;
+  pnlUsd: number;
+  startEquityUsd: number;
+  endEquityUsd: number;
+  startAt: string | null;
+  endAt: string | null;
+  pointCount: number;
+};
+
+export type MonitoringTradeRow = {
+  id: number;
+  tradeType: 'entry' | 'exit';
+  side: 'long' | 'short';
+  symbol: string;
+  price: number;
+  size: number;
+  fee: number | null;
+  time: string;
+  strategyId: number | null;
+};
+
+export const computeMonitoringPeriodStats = (points: any[]): MonitoringPeriodStats | null => {
+  if (!Array.isArray(points) || points.length < 1) {
+    return null;
+  }
+
+  const first = points[0];
+  const last = points[points.length - 1];
+  const startEquity = toFiniteNumber(first?.equity_usd, NaN);
+  const endEquity = toFiniteNumber(last?.equity_usd, NaN);
+
+  if (!Number.isFinite(startEquity) || startEquity <= 0 || !Number.isFinite(endEquity)) {
+    return null;
+  }
+
+  const returnPercent = ((endEquity - startEquity) / startEquity) * 100;
+  const pnlUsd = endEquity - startEquity;
+
+  return {
+    returnPercent,
+    pnlUsd,
+    startEquityUsd: startEquity,
+    endEquityUsd: endEquity,
+    startAt: first?.recorded_at ? String(first.recorded_at) : null,
+    endAt: last?.recorded_at ? String(last.recorded_at) : null,
+    pointCount: points.length,
+  };
+};
+
+export type MonitoringQueryOptions = {
+  limit?: number;
+  days?: number;
+  all?: boolean;
+  includeTrades?: boolean;
+  /** Возвращать полный список сделок (и то, что может быть тяжелым по объёму). */
+  includeTradesRows?: boolean;
+  /** Запрашивать маркеры сделок на графике (в UI сейчас используется редко/частично). */
+  includeTradeMarkers?: boolean;
+};
+
 export const getMonitoringSnapshots = async (
   apiKeyName: string,
   limit: number = 240,
-  sinceDays?: number
+  sinceDays?: number,
+  allPeriod: boolean = false,
 ) => {
   const key = await getApiKeyRow(apiKeyName);
 
   let rows: any[];
 
-  if (sinceDays && Number.isFinite(sinceDays) && sinceDays > 0) {
-    const safeDays = Math.min(90, Math.max(1, Math.floor(sinceDays)));
+  if (allPeriod) {
+    rows = await db.all(
+      `SELECT *
+       FROM monitoring_snapshots
+       WHERE api_key_id = ?
+       ORDER BY datetime(recorded_at) ASC`,
+      [key.id],
+    );
+  } else if (sinceDays && Number.isFinite(sinceDays) && sinceDays > 0) {
+    const safeDays = Math.min(365, Math.max(1, Math.floor(sinceDays)));
     rows = await db.all(
       `SELECT *
        FROM monitoring_snapshots
@@ -285,6 +355,144 @@ export const getMonitoringSnapshots = async (
   }
 
   return rows;
+};
+
+export const getMonitoringTrades = async (
+  apiKeyName: string,
+  sinceDays?: number,
+  limit: number = 200,
+): Promise<MonitoringTradeRow[]> => {
+  const key = await getApiKeyRow(apiKeyName);
+  const safeLimit = Math.max(1, Math.min(500, Math.floor(limit)));
+  const params: Array<number> = [key.id];
+  let timeFilter = '';
+
+  if (sinceDays && Number.isFinite(sinceDays) && sinceDays > 0) {
+    const safeDays = Math.max(1, Math.floor(sinceDays));
+    timeFilter = 'AND lte.actual_time >= ?';
+    params.push(Date.now() - safeDays * 86_400_000);
+  }
+
+  params.push(safeLimit);
+
+  const rows = await db.all(
+    `SELECT
+       lte.id,
+       lte.trade_type,
+       lte.side,
+       lte.source_symbol,
+       lte.actual_price,
+       lte.position_size,
+       lte.actual_fee,
+       lte.actual_time,
+       lte.strategy_id,
+       s.base_symbol,
+       s.quote_symbol
+     FROM live_trade_events lte
+     JOIN strategies s ON s.id = lte.strategy_id
+     WHERE s.api_key_id = ?
+       ${timeFilter}
+     ORDER BY lte.actual_time DESC
+     LIMIT ?`,
+    params,
+  ).catch(() => []) as Array<{
+    id?: number;
+    trade_type?: string;
+    side?: string;
+    source_symbol?: string;
+    actual_price?: number;
+    position_size?: number;
+    actual_fee?: number;
+    actual_time?: number;
+    strategy_id?: number;
+    base_symbol?: string;
+    quote_symbol?: string;
+  }>;
+
+  return rows
+    .map((row) => {
+      const tradeType = String(row.trade_type || '').toLowerCase();
+      const side = String(row.side || '').toLowerCase();
+      if (tradeType !== 'entry' && tradeType !== 'exit') {
+        return null;
+      }
+      if (side !== 'long' && side !== 'short') {
+        return null;
+      }
+
+      const symbol = String(row.source_symbol || row.base_symbol || '').trim().toUpperCase();
+      const timeMs = toFiniteNumber(row.actual_time, 0);
+      if (timeMs <= 0) {
+        return null;
+      }
+
+      return {
+        id: toFiniteNumber(row.id, 0),
+        tradeType: tradeType as 'entry' | 'exit',
+        side: side as 'long' | 'short',
+        symbol,
+        price: toFiniteNumber(row.actual_price, 0),
+        size: toFiniteNumber(row.position_size, 0),
+        fee: row.actual_fee != null ? toFiniteNumber(row.actual_fee, 0) : null,
+        time: new Date(timeMs).toISOString(),
+        strategyId: row.strategy_id != null ? toFiniteNumber(row.strategy_id, 0) : null,
+      };
+    })
+    .filter((row): row is MonitoringTradeRow => row !== null);
+};
+
+export const getMonitoringBundle = async (
+  apiKeyName: string,
+  options: MonitoringQueryOptions = {},
+) => {
+  const limit = options.limit ?? 240;
+  const days = options.days ?? 0;
+  const allPeriod = options.all === true;
+  const includeTrades = options.includeTrades === true;
+  const includeTradesRows = options.includeTradesRows === true;
+  const includeTradeMarkers = options.includeTradeMarkers === true;
+
+  const points = allPeriod
+    ? await getMonitoringSnapshots(apiKeyName, limit, undefined, true)
+    : days > 1
+      ? await getMonitoringSnapshots(apiKeyName, 5000, days)
+      : await getMonitoringSnapshots(apiKeyName, limit);
+
+  const latest = points.length > 0
+    ? points[points.length - 1]
+    : await getMonitoringLatest(apiKeyName);
+
+  const periodStats = computeMonitoringPeriodStats(points);
+  const tradeStats = includeTrades
+    ? await getMonitoringTradeStats(apiKeyName).catch(() => ({ trades24h: 0, lastTradeAt: null }))
+    : undefined;
+
+  const sinceMs = allPeriod
+    ? 0
+    : days > 1
+      ? Date.now() - days * 86_400_000
+      : Date.now() - 86_400_000;
+
+  const tradeMarkers = includeTrades && includeTradeMarkers
+    ? await getMonitoringTradeMarkers(apiKeyName, sinceMs).catch(() => [])
+    : undefined;
+
+  const trades = includeTradesRows
+    ? await getMonitoringTrades(
+      apiKeyName,
+      allPeriod ? undefined : (days > 1 ? days : 1),
+      200,
+    ).catch(() => [])
+    : undefined;
+
+  return {
+    points,
+    latest,
+    periodStats,
+    tradeStats,
+    tradeMarkers,
+    trades,
+  };
 };
 
 export const getMonitoringLatest = async (apiKeyName: string) => {

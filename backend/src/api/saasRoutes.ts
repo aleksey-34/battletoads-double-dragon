@@ -191,7 +191,11 @@ router.get('/partner/monitoring/:apiKeyName', requirePartnerOrAdmin, async (req,
     }
     const days = toOptionalNumber(req.query.days);
     const limit = toOptionalNumber(req.query.limit);
-    res.json(await getPartnerMonitoringSeries(apiKeyName, { days, limit }));
+    const includeTradesRows = String(req.query.includeTradesRows || '0') === '1'
+      || String(req.query.includeTradesRows || '').toLowerCase() === 'true';
+    const all = String(req.query.all || '0') === '1'
+      || String(req.query.all || '').toLowerCase() === 'true';
+    res.json(await getPartnerMonitoringSeries(apiKeyName, { days, limit, all, includeTradesRows }));
   } catch (error) {
     const err = error as Error;
     logger.error(`Partner monitoring error: ${err.message}`);

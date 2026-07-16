@@ -51,10 +51,7 @@ import {
   updateTradingSystem,
 } from '../../bot/tradingSystems';
 import {
-  getMonitoringLatest,
-  getMonitoringSnapshots,
-  getMonitoringTradeMarkers,
-  getMonitoringTradeStats,
+  getMonitoringBundle,
   recordMonitoringSnapshot,
 } from '../../bot/monitoring';
 import { loadSettings, saveApiKey, saveRiskSettings, normalizeExchangeName, ApiKey, RiskSettings, Strategy } from '../../config/settings';
@@ -2269,28 +2266,31 @@ adminRouter.get('/monitoring/:apiKeyName', async (req, res) => {
   const limitRaw = Number.parseInt(String(req.query.limit || '240'), 10);
   const limit = Number.isFinite(limitRaw) ? limitRaw : 240;
   const daysRaw = Number.parseInt(String(req.query.days || '0'), 10);
-  const days = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : undefined;
+  const days = Number.isFinite(daysRaw) && daysRaw > 0 ? daysRaw : 0;
+  const allPeriod = String(req.query.all || '0') === '1'
+    || String(req.query.all || '').toLowerCase() === 'true';
+  const includeTrades = String(req.query.includeTrades || '0') === '1'
+    || String(req.query.includeTrades || '').toLowerCase() === 'true';
+  const includeTradesRows = String(req.query.includeTradesRows || '0') === '1'
+    || String(req.query.includeTradesRows || '').toLowerCase() === 'true';
+  const includeTradeMarkers = String(req.query.includeTradeMarkers || '0') === '1'
+    || String(req.query.includeTradeMarkers || '').toLowerCase() === 'true';
 
   try {
     if (capture) {
       await recordMonitoringSnapshot(apiKeyName);
     }
 
-    const points = await getMonitoringSnapshots(apiKeyName, limit, days);
-    const latest = points.length > 0 ? points[points.length - 1] : await getMonitoringLatest(apiKeyName);
-    const includeTrades = String(req.query.includeTrades || '0') === '1'
-      || String(req.query.includeTrades || '').toLowerCase() === 'true';
-    const tradeStats = includeTrades
-      ? await getMonitoringTradeStats(apiKeyName).catch(() => ({ trades24h: 0, lastTradeAt: null }))
-      : undefined;
-    const sinceMs = days && days > 0
-      ? Date.now() - days * 86_400_000
-      : Date.now() - 86_400_000;
-    const tradeMarkers = includeTrades
-      ? await getMonitoringTradeMarkers(apiKeyName, sinceMs).catch(() => [])
-      : undefined;
+    const bundle = await getMonitoringBundle(apiKeyName, {
+      limit,
+      days,
+      all: allPeriod,
+      includeTrades,
+      includeTradesRows,
+      includeTradeMarkers,
+    });
 
-    res.json({ points, latest, tradeStats, tradeMarkers });
+    res.json(bundle);
   } catch (error) {
     const err = error as Error;
     logger.error(`Error loading monitoring data for ${apiKeyName}: ${err.message}`);
