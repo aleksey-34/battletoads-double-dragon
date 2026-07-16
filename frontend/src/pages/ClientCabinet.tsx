@@ -1662,7 +1662,7 @@ const ClientCabinet: React.FC = () => {
       messageApi.success(
         isEditing
           ? 'API ключ обновлён'
-          : 'API ключ сохранён. Теперь выберите его отдельно для потока Стратегий или Алгофонда.'
+          : 'API ключ сохранён. Мониторинг уже может читать баланс; торговля не стартует, пока не назначите ключ на Стратегии/Алгофонд и не нажмёте Старт.'
       );
       await loadWorkspace();
     } catch (error: any) {
@@ -1733,7 +1733,9 @@ const ClientCabinet: React.FC = () => {
   const refreshMonitoring = async (days?: number) => {
     setActionLoading('monitoring-refresh');
     try {
-      const params = days && days > 1 ? { days } : { limit: 288 };
+      const params: Record<string, string | number | boolean> = days && days > 1
+        ? { days, capture: 1 }
+        : { limit: 288, capture: 1 };
       const response = await axios.get<MonitoringPayload>('/api/client/monitoring', { params });
       setMonitoring(response.data);
     } catch (error: any) {
@@ -2906,7 +2908,7 @@ const ClientCabinet: React.FC = () => {
                     {item.usedByStrategy ? <Tag color="blue">поток стратегий</Tag> : null}
                     {item.usedByAlgofund ? <Tag color="purple">поток Алгофонда</Tag> : null}
                     {item.usedByCustomTs ? <Tag color="geekblue">кастом ТС</Tag> : null}
-                    {!item.usedByStrategy && !item.usedByAlgofund && !item.usedByCustomTs ? <Tag>не назначен</Tag> : null}
+                    {!item.usedByStrategy && !item.usedByAlgofund && !item.usedByCustomTs ? <Tag>не назначен на торговлю</Tag> : null}
                   </Space>
                 </List.Item>
               )}

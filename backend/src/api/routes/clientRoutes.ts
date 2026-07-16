@@ -19,7 +19,7 @@ import { getClientPreviewJobPayload } from '../../research/clientPreviewQueue';
 import { getPreset, listOfferIds } from '../../research/presetBuilder';
 import { removeExchangeClient } from '../../bot/exchange';
 import { saveApiKey } from '../../config/settings';
-import { getMonitoringBundle, getMonitoringLatest } from '../../bot/monitoring';
+import { getMonitoringBundle, getMonitoringLatest, recordMonitoringSnapshot } from '../../bot/monitoring';
 import {
   getAlgofundState,
   listClientCustomTsSystemsState,
@@ -933,6 +933,20 @@ router.post('/client/api-key', authenticateClient, async (req, res) => {
       demo,
     });
 
+    // First key becomes the tenant monitoring key (does not start trading).
+    const tenantRow = await db.get(
+      'SELECT assigned_api_key_name FROM tenants WHERE id = ?',
+      [tenantId]
+    ) as { assigned_api_key_name?: string } | undefined;
+    if (!String(tenantRow?.assigned_api_key_name || '').trim()) {
+      await db.run(
+        `UPDATE tenants
+         SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [keyName, tenantId]
+      );
+    }
+
     return res.json({
       success: true,
       keyName,
@@ -1397,10 +1411,12 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
       || String(req.query.includeTradesRows || '').toLowerCase() === 'true';
     const includeTradeMarkers = String(req.query.includeTradeMarkers || '0') === '1'
       || String(req.query.includeTradeMarkers || '').toLowerCase() === 'true';
+    const capture = String(req.query.capture || '0') === '1'
+      || String(req.query.capture || '').toLowerCase() === 'true';
 
     const requestedMode = String(req.query.mode || '').trim().toLowerCase();
     const productMode = String(session.user?.productMode || '').trim().toLowerCase();
-    const [tenant, strategyProfile, algofundProfile, tvAlertsProfile] = await Promise.all([
+    const [tenant, strategyProfile, algofundProfile, tvAlertsProfile, fallbackKey] = await Promise.all([
       db.get(
         'SELECT assigned_api_key_name FROM tenants WHERE id = ?',
         [tenantId]
@@ -1417,24 +1433,32 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
         'SELECT default_api_key_name FROM tv_alerts_profiles WHERE tenant_id = ?',
         [tenantId]
       ) as Promise<{ default_api_key_name?: string } | undefined>,
+      db.get(
+        `SELECT name FROM api_keys
+         WHERE name LIKE ?
+         ORDER BY id DESC
+         LIMIT 1`,
+        [`tenant-${tenantId}-%`]
+      ) as Promise<{ name?: string } | undefined>,
     ]);
 
     const tenantApiKeyName = String(tenant?.assigned_api_key_name || '').trim();
     const strategyApiKeyName = String(strategyProfile?.assigned_api_key_name || '').trim();
     const algofundApiKeyName = String(algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name || '').trim();
     const tvAlertsApiKeyName = String(tvAlertsProfile?.default_api_key_name || '').trim();
+    const fallbackApiKeyName = String(fallbackKey?.name || '').trim();
 
     const resolveApiKeyName = () => {
       if (productMode === 'tv_alerts_client') {
-        return tvAlertsApiKeyName || tenantApiKeyName || strategyApiKeyName || algofundApiKeyName;
+        return tvAlertsApiKeyName || tenantApiKeyName || strategyApiKeyName || algofundApiKeyName || fallbackApiKeyName;
       }
       if (requestedMode === 'algofund') {
-        return algofundApiKeyName || strategyApiKeyName || tenantApiKeyName;
+        return algofundApiKeyName || strategyApiKeyName || tenantApiKeyName || fallbackApiKeyName;
       }
       if (requestedMode === 'strategy') {
-        return strategyApiKeyName || algofundApiKeyName || tenantApiKeyName;
+        return strategyApiKeyName || algofundApiKeyName || tenantApiKeyName || fallbackApiKeyName;
       }
-      return strategyApiKeyName || algofundApiKeyName || tvAlertsApiKeyName || tenantApiKeyName;
+      return strategyApiKeyName || algofundApiKeyName || tvAlertsApiKeyName || tenantApiKeyName || fallbackApiKeyName;
     };
 
     const apiKeyName = resolveApiKeyName();
@@ -1451,7 +1475,17 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
       });
     }
 
-    const loadStream = async (targetApiKeyName: string) => {
+    // Keep tenant assigned for monitoring even if client only saved a key (no trading start).
+    if (!tenantApiKeyName && apiKeyName) {
+      await db.run(
+        `UPDATE tenants
+         SET assigned_api_key_name = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ? AND TRIM(COALESCE(assigned_api_key_name, '')) = ''`,
+        [apiKeyName, tenantId]
+      ).catch(() => undefined);
+    }
+
+    const loadStream = async (targetApiKeyName: string, allowCapture: boolean = false) => {
       const safeName = String(targetApiKeyName || '').trim();
       if (!safeName) {
         return {
@@ -1462,6 +1496,13 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
           tradeStats: undefined,
           trades: undefined,
         };
+      }
+      if (allowCapture && capture) {
+        try {
+          await recordMonitoringSnapshot(safeName);
+        } catch (snapError) {
+          logger.warn(`Client monitoring capture failed for ${safeName}: ${(snapError as Error).message}`);
+        }
       }
       const bundle = await getMonitoringBundle(safeName, {
         limit,
@@ -1478,9 +1519,9 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
     };
 
     const [selectedStream, strategyStream, algofundStream] = await Promise.all([
-      loadStream(apiKeyName),
-      loadStream(strategyApiKeyName),
-      loadStream(algofundApiKeyName),
+      loadStream(apiKeyName, true),
+      loadStream(strategyApiKeyName, false),
+      loadStream(algofundApiKeyName, false),
     ]);
 
     res.json({
