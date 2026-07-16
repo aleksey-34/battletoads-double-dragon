@@ -8,6 +8,7 @@ import { createWeexClient } from './weexClient';
 import { readHybridCandles } from './hybridCandleStore';
 import { registerMarketDataRelayKey } from './marketDataCache';
 import { batchPositionsSequential, getCachedPositions, invalidatePositionCache } from './positionPollCache';
+import { getCachedOpenOrders, invalidateOpenOrdersCache } from './openOrdersPollCache';
 import {
   clampQtyToParsedMax,
   clampQtyString,
@@ -1539,6 +1540,7 @@ export const placeOrder = async (
       const order = await submitWithQty(currentQty);
       // Drop stale empty snapshots so post-open validation / OP orphan checks see the new fill.
       invalidatePositionCache(apiKeyName);
+      invalidateOpenOrdersCache(apiKeyName, symbol);
       return order;
     } catch (error) {
       lastError = error as Error;
@@ -3209,7 +3211,7 @@ export const applySymbolRiskSettings = async (
   };
 };
 
-export const getOpenOrders = async (apiKeyName: string, symbol?: string) => {
+const fetchOpenOrdersDirect = async (apiKeyName: string, symbol?: string) => {
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
 
@@ -3336,6 +3338,25 @@ export const getOpenOrders = async (apiKeyName: string, symbol?: string) => {
   return deduped;
 };
 
+/**
+ * Open orders with short-TTL account-wide reuse. Dense MRS2 mono books (~47)
+ * previously called fetchOpenOrders(symbol) once per strategy each cycle;
+ * siblings now share one snapshot for ~12s (see openOrdersPollCache).
+ */
+export const getOpenOrders = async (
+  apiKeyName: string,
+  symbol?: string,
+  options?: { forceRefresh?: boolean },
+) => {
+  return getCachedOpenOrders(
+    apiKeyName,
+    symbol,
+    () => fetchOpenOrdersDirect(apiKeyName, undefined),
+    (sym) => fetchOpenOrdersDirect(apiKeyName, sym),
+    options,
+  );
+};
+
 export const cancelOrderById = async (apiKeyName: string, symbol: string, orderId: string) => {
   const safeOrderId = String(orderId || '').trim();
   if (!safeOrderId) {
@@ -3346,6 +3367,7 @@ export const cancelOrderById = async (apiKeyName: string, symbol: string, orderI
     const entry = getCcxtClientEntry(apiKeyName);
     const resolvedSymbol = await resolveCcxtSymbol(entry, symbol);
     await entry.limiter.schedule(() => entry.client.cancelOrder(safeOrderId, resolvedSymbol));
+    invalidateOpenOrdersCache(apiKeyName, symbol);
     return { cancelled: true, orderId: safeOrderId };
   }
 

@@ -51,6 +51,7 @@ import {
   buildBalancedQtyPlan,
   buildSingleQtyPlan,
   loadQtyRules,
+  MAX_ENTRY_OVERSIZE_FRACTION,
   MAX_POST_OPEN_SHARE_ERROR,
   validateLiveLegBalance,
 } from './strategy/sizing';
@@ -87,6 +88,14 @@ import { computeSignal } from './strategy/signals';
 import { getCycleSignalCache, makeSignalGroupKey } from './strategy/cycle/cache';
 import { POSITION_ALIGNMENT_EXCLUDED_API_KEYS } from './strategy/cycle/algofundSync';
 import { countExchangeOpenPositions } from './strategy/cycle/positionGuards';
+import {
+  ENTRY_OVERSIZE_COOLDOWN_MS,
+  ENTRY_OVERSIZE_SKIP_ACTION,
+  decideEntryOversizeGate,
+  isEntryOversizeCoolingDown,
+  markEntryOversizeBlocked,
+  shouldLogEntryOversizeBlock,
+} from './strategy/cycle/entryOversizeCooldown';
 import {
   TRAILING_RATIO_EPSILON,
   RESYNC_CONFIRM_MS,
@@ -1134,34 +1143,100 @@ export const executeStrategy = async (
     const isMonoMrs2 = isMrs2
       && String(mergedStrategy.market_mode || '').toLowerCase() === 'mono'
       && (state === 'flat' || Boolean(closedAction));
+    let mrs2OversizeSkipReason: string | null = null;
     if (isMonoMrs2 && parseMrs2PendingLimits(mergedStrategy.mrs2_pending_json)) {
-      try {
-        const px = await getLatestMarketClose(apiKeyName, mergedStrategy.base_symbol);
-        const plan = await buildSingleQtyPlan(
-          apiKeyName,
-          mergedStrategy.base_symbol,
-          px,
-          // Use strategy lot% of equity — same sizing path as entries; totalNotional
-          // is computed later for entries, so approximate from balances here.
-          await (async () => {
-            const equity = extractUsdtBalance(await getBalances(apiKeyName));
-            const lot = Math.max(0.1, Number(mergedStrategy.lot_long_percent || 6));
-            return Math.max(5, equity * (lot / 100));
-          })(),
-        );
-        const synced = await syncMrs2RestingEntryLimits({
-          apiKeyName,
-          symbol: String(mergedStrategy.base_symbol || ''),
-          pendingLevels: parseMrs2PendingLimits(mergedStrategy.mrs2_pending_json),
-          pendingRaw: mergedStrategy.mrs2_pending_json,
-          qty: plan.qty,
-        });
-        if (synced !== (mergedStrategy.mrs2_pending_json || '{}')) {
-          await updateStrategy(apiKeyName, strategyId, { mrs2_pending_json: synced });
-          mergedStrategy.mrs2_pending_json = synced;
+      const cooldown = isEntryOversizeCoolingDown(apiKeyName, strategyId);
+      const cooldownGate = decideEntryOversizeGate({
+        coolingDown: cooldown.active,
+        cooldownReason: cooldown.reason,
+        remainingMs: cooldown.remainingMs,
+        oversize: 0,
+        maxOversizeFraction: MAX_ENTRY_OVERSIZE_FRACTION,
+      });
+      if (cooldownGate.action === 'skip_cooldown') {
+        // Quiet skip: no balances / openOrders / place — cool-down already recorded.
+        mrs2OversizeSkipReason = cooldownGate.reason;
+      } else {
+        try {
+          const px = await getLatestMarketClose(apiKeyName, mergedStrategy.base_symbol);
+          const plan = await buildSingleQtyPlan(
+            apiKeyName,
+            mergedStrategy.base_symbol,
+            px,
+            // Use strategy lot% of equity — same sizing path as entries; totalNotional
+            // is computed later for entries, so approximate from balances here.
+            await (async () => {
+              const equity = extractUsdtBalance(await getBalances(apiKeyName));
+              const lot = Math.max(0.1, Number(mergedStrategy.lot_long_percent || 6));
+              return Math.max(5, equity * (lot / 100));
+            })(),
+          );
+          // Same hard ceiling as market entries: never rest a limit order whose lot is
+          // already >1.5x the target (coarse qty step / minOrderQty on the symbol) —
+          // cool-down so we do not re-scan / re-place every cycle for permanently-too-small accounts.
+          const oversizeGate = decideEntryOversizeGate({
+            coolingDown: false,
+            oversize: plan.oversize,
+            maxOversizeFraction: MAX_ENTRY_OVERSIZE_FRACTION,
+          });
+          if (oversizeGate.action === 'block_oversize') {
+            const blocked = markEntryOversizeBlocked(apiKeyName, strategyId, {
+              oversize: plan.oversize,
+              targetNotional: plan.targetNotional,
+              actualNotional: plan.notional,
+              detail: (
+                `MRS2 resting skip: min-lot ${(plan.oversize * 100).toFixed(1)}% above target `
+                + `(target=${plan.targetNotional.toFixed(2)}, actual=${plan.notional.toFixed(2)})`
+              ),
+            });
+            mrs2OversizeSkipReason = blocked.reason;
+            if (shouldLogEntryOversizeBlock(apiKeyName, strategyId)) {
+              logger.error(
+                `[position-cap] MRS2 resting-limit sync BLOCKED for strategy ${strategyId} (${apiKeyName}): `
+                + `${blocked.reason} — cool-down ${Math.round(ENTRY_OVERSIZE_COOLDOWN_MS / 60_000)}min `
+                + `(${ENTRY_OVERSIZE_SKIP_ACTION})`
+              );
+              try {
+                const { db } = await import('../utils/database');
+                await db.run(
+                  `INSERT INTO strategy_runtime_events
+                   (api_key_name, strategy_id, strategy_name, event_type, message, details_json, resolved_at, created_at)
+                   VALUES (?, ?, ?, 'entry_oversize_blocked', ?, ?, 0, ?)`,
+                  [
+                    apiKeyName,
+                    strategyId,
+                    mergedStrategy.name || mergedStrategy.base_symbol,
+                    blocked.reason,
+                    JSON.stringify({
+                      oversizePercent: (plan.oversize * 100).toFixed(2),
+                      targetNotional: plan.targetNotional,
+                      actualNotional: plan.notional,
+                      path: 'mrs2_resting_sync',
+                      action: ENTRY_OVERSIZE_SKIP_ACTION,
+                    }),
+                    Date.now(),
+                  ]
+                );
+              } catch (eventErr) {
+                logger.warn(`Failed to record MRS2 entry_oversize_blocked event: ${(eventErr as Error).message}`);
+              }
+            }
+          } else {
+            const synced = await syncMrs2RestingEntryLimits({
+              apiKeyName,
+              symbol: String(mergedStrategy.base_symbol || ''),
+              pendingLevels: parseMrs2PendingLimits(mergedStrategy.mrs2_pending_json),
+              pendingRaw: mergedStrategy.mrs2_pending_json,
+              qty: plan.qty,
+            });
+            if (synced !== (mergedStrategy.mrs2_pending_json || '{}')) {
+              await updateStrategy(apiKeyName, strategyId, { mrs2_pending_json: synced });
+              mergedStrategy.mrs2_pending_json = synced;
+            }
+          }
+        } catch (e) {
+          logger.warn(`MRS2 resting-limit sync failed for ${strategyId}: ${(e as Error).message}`);
         }
-      } catch (e) {
-        logger.warn(`MRS2 resting-limit sync failed for ${strategyId}: ${(e as Error).message}`);
       }
     }
 
@@ -1175,13 +1250,19 @@ export const executeStrategy = async (
           }
         : {}),
       last_signal: 'none',
-      last_action: noSignalAction,
-      last_error: null,
+      last_action: mrs2OversizeSkipReason
+        ? `${ENTRY_OVERSIZE_SKIP_ACTION}@${currentRatio}`
+        : noSignalAction,
+      last_error: mrs2OversizeSkipReason,
     });
 
     return returnWithProcessedBar({
-      result: closedResult || noSignalResult,
-      action: closedAction ? `${closedAction}_no_signal` : 'no_signal',
+      result: closedResult || (mrs2OversizeSkipReason
+        ? `MRS2 resting skipped: ${mrs2OversizeSkipReason}`
+        : noSignalResult),
+      action: mrs2OversizeSkipReason
+        ? ENTRY_OVERSIZE_SKIP_ACTION
+        : (closedAction ? `${closedAction}_no_signal` : 'no_signal'),
       strategy: updated,
       currentRatio,
       donchianHigh,
@@ -1585,6 +1666,35 @@ export const executeStrategy = async (
     }
   }
 
+  // Permanent min-lot / qty-step oversize: skip quietly during cool-down (no balances / place spam).
+  {
+    const cooldown = isEntryOversizeCoolingDown(apiKeyName, strategyId);
+    if (cooldown.active) {
+      const updated = await updateStrategy(apiKeyName, strategyId, {
+        ...executionBindingPatch,
+        ...(closedAction
+          ? { state: 'flat' as const, entry_ratio: null, tp_anchor_ratio: null }
+          : {}),
+        last_signal: signal,
+        last_action: closedAction
+          ? `${closedAction}_${ENTRY_OVERSIZE_SKIP_ACTION}@${currentRatio}`
+          : `${ENTRY_OVERSIZE_SKIP_ACTION}@${currentRatio}`,
+        last_error: cooldown.reason,
+      });
+      return returnWithProcessedBar({
+        result: closedResult || `Entry skipped (min-lot oversize cool-down): ${cooldown.reason}`,
+        action: closedAction
+          ? `${closedAction}_${ENTRY_OVERSIZE_SKIP_ACTION}`
+          : ENTRY_OVERSIZE_SKIP_ACTION,
+        strategy: updated,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      });
+    }
+  }
+
   const balances = await getBalances(apiKeyName);
   const availableBalance = extractUsdtBalance(balances);
 
@@ -1809,6 +1919,89 @@ export const executeStrategy = async (
       baseQty = cappedPair.baseQty;
       quoteQty = cappedPair.quoteQty;
     }
+  }
+
+  // ── Hard position-size ceiling (>50% above target = BLOCKED, not just warned) ──
+  // buildSingleQtyPlan/buildBalancedQtyPlan pick the closest achievable exchange lot
+  // to the target notional, but on symbols with a coarse qty step / large minOrderQty,
+  // "closest" can still land far above target. Previously this only emitted a
+  // low_lot_warning telemetry event (informational, after the order was already
+  // placed) — the trade always went through. This gate refuses the entry outright
+  // when the computed lot would exceed MAX_ENTRY_OVERSIZE_FRACTION (1.5x target).
+  const entryOversizeFraction = isMono ? (singleQtyPlan?.oversize ?? 0) : (qtyPlan?.oversize ?? 0);
+  if (entryOversizeFraction > MAX_ENTRY_OVERSIZE_FRACTION) {
+    const oversizeDetail = isMono
+      ? `mono target=${singleQtyPlan?.targetNotional.toFixed(2)} actual=${singleQtyPlan?.notional.toFixed(2)}`
+      : `synth target=${totalNotional.toFixed(2)} actual=${qtyPlan?.totalNotional.toFixed(2)}`;
+    const targetNotionalForCooldown = isMono
+      ? Number(singleQtyPlan?.targetNotional || totalNotional)
+      : Number(totalNotional);
+    const actualNotionalForCooldown = isMono
+      ? Number(singleQtyPlan?.notional || 0)
+      : Number(qtyPlan?.totalNotional || 0);
+    const blocked = markEntryOversizeBlocked(apiKeyName, strategyId, {
+      oversize: entryOversizeFraction,
+      targetNotional: targetNotionalForCooldown,
+      actualNotional: actualNotionalForCooldown,
+      detail: (
+        `Entry blocked: computed lot ${(entryOversizeFraction * 100).toFixed(1)}% above target `
+        + `(cap=${(MAX_ENTRY_OVERSIZE_FRACTION * 100).toFixed(0)}%) — ${oversizeDetail}`
+      ),
+    });
+    if (shouldLogEntryOversizeBlock(apiKeyName, strategyId)) {
+      logger.error(
+        `[position-cap] Entry BLOCKED for strategy ${strategyId} (${apiKeyName}): ${blocked.reason} `
+        + `— cool-down ${Math.round(ENTRY_OVERSIZE_COOLDOWN_MS / 60_000)}min (${ENTRY_OVERSIZE_SKIP_ACTION})`
+      );
+      try {
+        const { db } = await import('../utils/database');
+        await db.run(
+          `INSERT INTO strategy_runtime_events
+           (api_key_name, strategy_id, strategy_name, event_type, message, details_json, resolved_at, created_at)
+           VALUES (?, ?, ?, 'entry_oversize_blocked', ?, ?, 0, ?)`,
+          [
+            apiKeyName,
+            strategyId,
+            mergedStrategy.name || mergedStrategy.base_symbol,
+            blocked.reason,
+            JSON.stringify({
+              oversizePercent: (entryOversizeFraction * 100).toFixed(2),
+              totalNotional,
+              detail: oversizeDetail,
+              path: 'market_entry',
+              action: ENTRY_OVERSIZE_SKIP_ACTION,
+            }),
+            Date.now(),
+          ]
+        );
+      } catch (eventErr) {
+        logger.warn(`Failed to record entry_oversize_blocked event: ${(eventErr as Error).message}`);
+      }
+    }
+
+    const updated = await updateStrategy(apiKeyName, strategyId, {
+      ...executionBindingPatch,
+      ...(closedAction
+        ? { state: 'flat' as const, entry_ratio: null, tp_anchor_ratio: null }
+        : {}),
+      last_signal: signal,
+      last_action: closedAction
+        ? `${closedAction}_${ENTRY_OVERSIZE_SKIP_ACTION}@${currentRatio}`
+        : `${ENTRY_OVERSIZE_SKIP_ACTION}@${currentRatio}`,
+      last_error: blocked.reason,
+    });
+
+    return returnWithProcessedBar({
+      result: closedResult || `Entry blocked: computed lot would exceed ${(MAX_ENTRY_OVERSIZE_FRACTION * 100).toFixed(0)}% oversize cap`,
+      action: closedAction
+        ? `${closedAction}_${ENTRY_OVERSIZE_SKIP_ACTION}`
+        : ENTRY_OVERSIZE_SKIP_ACTION,
+      strategy: updated,
+      currentRatio,
+      donchianHigh,
+      donchianLow,
+      donchianCenter,
+    });
   }
 
   const latestBeforeOpen = normalizeStrategy(await getStrategyRow(apiKeyName, strategyId));

@@ -29,6 +29,67 @@ const priceChanged = (a: number | null | undefined, b: number | null | undefined
   return Math.abs(a - b) / a * 100 >= PRICE_EPS_PCT;
 };
 
+export type OpenOrderLite = {
+  id: string;
+  side: 'Buy' | 'Sell';
+  price: number;
+  orderType: string;
+};
+
+const asOpenOrderLite = (order: any): OpenOrderLite | null => {
+  const id = asOrderId(order);
+  const price = Number(order?.price ?? order?.info?.price ?? 0);
+  if (!id || !Number.isFinite(price) || price <= 0) return null;
+  const sideRaw = String(order?.side || order?.info?.side || '').toLowerCase();
+  const side: 'Buy' | 'Sell' = sideRaw === 'buy' ? 'Buy' : 'Sell';
+  const orderType = String(order?.orderType || order?.type || order?.info?.orderType || '').toLowerCase();
+  return { id, side, price, orderType };
+};
+
+export const normalizeOpenOrders = (open: unknown): OpenOrderLite[] => (
+  (Array.isArray(open) ? open : [])
+    .map(asOpenOrderLite)
+    .filter((o): o is OpenOrderLite => o != null)
+);
+
+/**
+ * Resting entry limits matching `side` at (approximately) `targetPrice`, excluding
+ * market/reduce-type entries. Used to detect MRS2 sticky entry limits that are
+ * genuinely resting on the exchange but are NOT (or no longer) tracked in
+ * mrs2_pending_json — e.g. after a crash between placeOrder() succeeding and the
+ * order id being persisted, or a duplicate placed by an overlapping process.
+ */
+export const findMatchingRestingOrders = (
+  orders: OpenOrderLite[],
+  side: 'Buy' | 'Sell',
+  targetPrice: number,
+): OpenOrderLite[] => {
+  if (!Number.isFinite(targetPrice) || targetPrice <= 0) return [];
+  return orders.filter((o) => (
+    o.side === side
+    && o.orderType !== 'market'
+    && !priceChanged(o.price, targetPrice)
+  ));
+};
+
+/**
+ * Given all resting orders matching a side/price, decide which single order id to
+ * keep (preferring the already-tracked one, else the oldest/lowest-id match) and
+ * which extra duplicate ids must be cancelled. Pure/testable — no exchange calls.
+ */
+export const reconcileRestingDuplicates = (
+  matches: OpenOrderLite[],
+  trackedId: string | null,
+): { keepId: string | null; cancelIds: string[] } => {
+  if (matches.length === 0) {
+    return { keepId: null, cancelIds: [] };
+  }
+  const trackedMatch = trackedId ? matches.find((m) => m.id === trackedId) : undefined;
+  const keep = trackedMatch || matches[0];
+  const cancelIds = matches.filter((m) => m.id !== keep.id).map((m) => m.id);
+  return { keepId: keep.id, cancelIds };
+};
+
 export const parseMrs2PendingWithOrders = (raw: unknown): Mrs2PendingWithOrders | null => {
   if (raw == null) return null;
   let obj: any = raw;
@@ -127,17 +188,60 @@ export const syncMrs2RestingEntryLimits = async (args: {
     next.shortOrderId = null;
   }
 
-  // Optionally verify tracked orders still open.
+  // ── Exchange-side reconciliation (dedup / adopt) ──────────────────────────
+  // A single `mrs2_pending_json` order id is NOT sufficient to guarantee only one
+  // resting order exists on the exchange: a process crash/restart between
+  // placeOrder() succeeding and the id being persisted below, or two overlapping
+  // executeStrategy() invocations (e.g. manual admin run racing the auto-cycle),
+  // can leave an untracked duplicate resting limit on the book. Before trusting
+  // "no tracked id => safe to place a new one", scan live open orders for ANY
+  // resting entry at this side/price: adopt the first as tracked (skip placing a
+  // redundant order) and cancel every extra duplicate found.
+  let openOrders: OpenOrderLite[] = [];
+  let fetchFailed = false;
   try {
-    const open = await getOpenOrders(apiKeyName, symbol);
-    const ids = new Set(
-      (Array.isArray(open) ? open : []).map((o: any) => String(o?.id || o?.orderId || '')).filter(Boolean),
-    );
-    if (next.longOrderId && !ids.has(next.longOrderId)) next.longOrderId = null;
-    if (next.shortOrderId && !ids.has(next.shortOrderId)) next.shortOrderId = null;
+    openOrders = normalizeOpenOrders(await getOpenOrders(apiKeyName, symbol));
   } catch (e) {
+    fetchFailed = true;
     logger.warn(`[mrs2-limits] getOpenOrders ${symbol}: ${(e as Error).message}`);
   }
+
+  if (!fetchFailed) {
+    if (next.longOrderId && !openOrders.some((o) => o.id === next.longOrderId)) {
+      next.longOrderId = null;
+    }
+    if (next.shortOrderId && !openOrders.some((o) => o.id === next.shortOrderId)) {
+      next.shortOrderId = null;
+    }
+
+    if (next.long != null) {
+      const longMatches = findMatchingRestingOrders(openOrders, 'Buy', next.long);
+      const { keepId, cancelIds } = reconcileRestingDuplicates(longMatches, next.longOrderId ?? null);
+      for (const dupId of cancelIds) {
+        logger.warn(`[mrs2-limits] cancelling duplicate resting BUY ${symbol} order id=${dupId} @ ${next.long}`);
+        await safeCancel(apiKeyName, symbol, dupId);
+      }
+      if (keepId && keepId !== next.longOrderId) {
+        logger.warn(`[mrs2-limits] adopting untracked resting BUY ${symbol} order id=${keepId} @ ${next.long} (avoids duplicate placement)`);
+      }
+      next.longOrderId = keepId;
+    }
+    if (next.short != null) {
+      const shortMatches = findMatchingRestingOrders(openOrders, 'Sell', next.short);
+      const { keepId, cancelIds } = reconcileRestingDuplicates(shortMatches, next.shortOrderId ?? null);
+      for (const dupId of cancelIds) {
+        logger.warn(`[mrs2-limits] cancelling duplicate resting SELL ${symbol} order id=${dupId} @ ${next.short}`);
+        await safeCancel(apiKeyName, symbol, dupId);
+      }
+      if (keepId && keepId !== next.shortOrderId) {
+        logger.warn(`[mrs2-limits] adopting untracked resting SELL ${symbol} order id=${keepId} @ ${next.short} (avoids duplicate placement)`);
+      }
+      next.shortOrderId = keepId;
+    }
+  }
+  // If the getOpenOrders fetch itself failed, skip dedup/adoption this cycle and
+  // trust the tracked ids as-is — avoids spuriously re-placing (or losing track of)
+  // orders on a transient API hiccup rather than a real fill/cancel.
 
   if (next.long != null && !next.longOrderId) {
     try {

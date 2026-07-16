@@ -57,6 +57,16 @@ const MAX_OVERSIZE_DEVIATION = 0.2;
 const MAX_TOTAL_DEVIATION = 0.3;
 export const MAX_POST_OPEN_SHARE_ERROR = 0.08;
 
+/**
+ * Hard position-size ceiling: entry is BLOCKED (not just warned) when the best
+ * achievable exchange lot (after qty-step/minQty rounding) would exceed this
+ * fraction above the calculated target notional. E.g. 0.5 == reject any entry
+ * that would open more than 1.5x the intended target size for the instrument.
+ * `oversize` on SingleQtyPlan/BalancedQtyPlan is already the fraction above
+ * target ((actual - target) / target), so this is compared directly against it.
+ */
+export const MAX_ENTRY_OVERSIZE_FRACTION = 0.5;
+
 const decimalPlaces = (value: string): number => {
   const normalized = String(value || '');
   const scientific = normalized.toLowerCase().match(/e-(\d+)$/);
