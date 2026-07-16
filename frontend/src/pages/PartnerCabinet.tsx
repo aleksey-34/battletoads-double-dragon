@@ -10,6 +10,7 @@ import MonitoringChartPanel, {
   MonitoringTradeRow,
   ChartPeriodDays,
 } from '../components/MonitoringChartPanel';
+import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
 
 type PartnerClient = {
   tenantId: number;
@@ -243,6 +244,15 @@ const PartnerCabinet: React.FC = () => {
     void loadChart(client, 7);
   };
 
+  const handleCopyPortfolioLink = async (clientSlug: string) => {
+    const ok = await copyPublicPortfolioLink(clientSlug);
+    if (ok) {
+      message.success('Ссылка на портфолио скопирована');
+    } else {
+      message.error('Не удалось скопировать ссылку');
+    }
+  };
+
   useEffect(() => {
     if (chartOpen && chartClient) void loadChart(chartClient, chartDays);
   }, [chartDays, chartOpen, chartClient]);
@@ -301,10 +311,22 @@ const PartnerCabinet: React.FC = () => {
         )}
       </Space>
     ) },
-    { title: '', width: 110, render: (_: unknown, row: PartnerClient) => (
-      <Button size="small" type="primary" ghost disabled={!row.apiKeyName} onClick={() => openChart(row)}>
-        График
-      </Button>
+    { title: '', width: 250, render: (_: unknown, row: PartnerClient) => (
+      <Space wrap size={[4, 4]}>
+        <Button size="small" type="primary" ghost disabled={!row.apiKeyName} onClick={() => openChart(row)}>
+          График
+        </Button>
+        <Button size="small" onClick={() => void handleCopyPortfolioLink(row.slug)}>
+          Ссылка
+        </Button>
+        <Button
+          size="small"
+          type="link"
+          onClick={() => window.open(buildPublicPortfolioUrl(row.slug), '_blank', 'noopener,noreferrer')}
+        >
+          Открыть
+        </Button>
+      </Space>
     ) },
   ];
 
@@ -466,7 +488,19 @@ const PartnerCabinet: React.FC = () => {
         title={`Мониторинг: ${chartClient?.displayName || chartClient?.slug || '—'}`}
         open={chartOpen}
         onCancel={() => setChartOpen(false)}
-        footer={null}
+        footer={chartClient?.slug ? (
+          <Space wrap>
+            <Button onClick={() => void handleCopyPortfolioLink(chartClient.slug)}>
+              Скопировать public-ссылку
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => window.open(buildPublicPortfolioUrl(chartClient.slug), '_blank', 'noopener,noreferrer')}
+            >
+              Открыть портфолио
+            </Button>
+          </Space>
+        ) : null}
         width={960}
       >
         <Spin spinning={chartLoading}>
@@ -480,6 +514,7 @@ const PartnerCabinet: React.FC = () => {
             lastTradeAt={chartTradeStats.lastTradeAt}
             tradeMarkers={chartTradeMarkers}
             loading={chartLoading}
+            currencyLabel="USD"
           />
         </Spin>
       </Modal>

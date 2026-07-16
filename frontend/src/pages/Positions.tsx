@@ -28,6 +28,7 @@ import MonitoringChartPanel, {
   MonitoringTradeRow,
   ChartPeriodDays,
 } from '../components/MonitoringChartPanel';
+import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
 
 /* eslint-disable react-hooks/exhaustive-deps */
 
@@ -912,6 +913,20 @@ const Positions: React.FC = () => {
 
   const fmtNum = (v: unknown, d = 2) => { const n = Number(v); return Number.isFinite(n) ? n.toFixed(d) : '-'; };
 
+  const monChartTenantSlug = useMemo(
+    () => apiKeys.find((key) => key.name === monChartKey)?.tenantSlug || '',
+    [apiKeys, monChartKey],
+  );
+
+  const handleCopyPortfolioLink = async (slug: string) => {
+    const ok = await copyPublicPortfolioLink(slug);
+    if (ok) {
+      message.success('Ссылка на портфолио скопирована');
+    } else {
+      message.error('Не удалось скопировать ссылку');
+    }
+  };
+
   const monitoringColumns = [
     { title: 'API ключ', dataIndex: 'apiKeyName', render: (v: string, row: AdminMonitoringRow) => (
       <Space direction="vertical" size={0}>
@@ -943,17 +958,26 @@ const Positions: React.FC = () => {
     ) },
     {
       title: '',
-      width: 190,
+      width: 250,
       render: (_: unknown, row: AdminMonitoringRow) => (
-        <Space>
+        <Space wrap size={[4, 4]}>
           <Button size="small" type="primary" ghost onClick={() => openMonChart(row.apiKeyName)}>График</Button>
           {row.tenantSlug ? (
-            <Button
-              size="small"
-              onClick={() => window.open(`/portfolio/${encodeURIComponent(String(row.tenantSlug || ''))}`, '_blank', 'noopener,noreferrer')}
-            >
-              Портфолио
-            </Button>
+            <>
+              <Button
+                size="small"
+                onClick={() => void handleCopyPortfolioLink(String(row.tenantSlug || ''))}
+              >
+                Ссылка
+              </Button>
+              <Button
+                size="small"
+                type="link"
+                onClick={() => window.open(buildPublicPortfolioUrl(String(row.tenantSlug || '')), '_blank', 'noopener,noreferrer')}
+              >
+                Открыть
+              </Button>
+            </>
           ) : null}
         </Space>
       ),
@@ -1408,7 +1432,19 @@ const Positions: React.FC = () => {
         title={`Мониторинг: ${monChartKey || '—'}`}
         open={monChartOpen}
         onCancel={() => setMonChartOpen(false)}
-        footer={null}
+        footer={monChartTenantSlug ? (
+          <Space wrap>
+            <Button onClick={() => void handleCopyPortfolioLink(monChartTenantSlug)}>
+              Скопировать public-ссылку
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => window.open(buildPublicPortfolioUrl(monChartTenantSlug), '_blank', 'noopener,noreferrer')}
+            >
+              Открыть портфолио
+            </Button>
+          </Space>
+        ) : null}
         width={960}
       >
         <MonitoringChartPanel
@@ -1421,6 +1457,7 @@ const Positions: React.FC = () => {
           lastTradeAt={monChartTradeStats.lastTradeAt}
           tradeMarkers={monChartTradeMarkers}
           loading={monChartLoading}
+          currencyLabel="USD"
         />
       </Modal>
     </div>

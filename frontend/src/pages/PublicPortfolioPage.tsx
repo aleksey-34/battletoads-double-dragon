@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Space, Spin, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Space, Spin, Tag, Typography, message } from 'antd';
 import { useParams } from 'react-router-dom';
 import MonitoringChartPanel, {
   ChartPeriodDays,
@@ -7,6 +7,7 @@ import MonitoringChartPanel, {
   MonitoringSnapshot,
   MonitoringTradeRow,
 } from '../components/MonitoringChartPanel';
+import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
 
 type PublicPortfolioPayload = {
   success: boolean;
@@ -58,7 +59,7 @@ const PublicPortfolioPage: React.FC = () => {
       setPayload(json);
     } catch (error) {
       setPayload(null);
-      setErrorText((error as Error)?.message || 'Failed to load portfolio');
+      setErrorText((error as Error)?.message || 'Не удалось загрузить портфель');
     } finally {
       setLoading(false);
     }
@@ -68,16 +69,28 @@ const PublicPortfolioPage: React.FC = () => {
     void load(days);
   }, [slug, days]);
 
+  const portfolioSlug = String(payload?.portfolio?.slug || slug).trim();
+  const publicUrl = portfolioSlug ? buildPublicPortfolioUrl(portfolioSlug) : '';
+
   const title = useMemo(() => {
     const displayName = String(payload?.portfolio?.displayName || '').trim();
-    const safeSlug = String(payload?.portfolio?.slug || slug).trim();
-    return displayName || safeSlug || 'Portfolio';
-  }, [payload?.portfolio?.displayName, payload?.portfolio?.slug, slug]);
+    return displayName || portfolioSlug || 'Portfolio';
+  }, [payload?.portfolio?.displayName, portfolioSlug]);
 
   const rawPoints = payload?.points;
   const rawTrades = payload?.trades;
   const snapshots: MonitoringSnapshot[] = Array.isArray(rawPoints) ? rawPoints : [];
   const trades: MonitoringTradeRow[] = Array.isArray(rawTrades) ? rawTrades : [];
+
+  const handleCopyLink = async () => {
+    if (!portfolioSlug) return;
+    const ok = await copyPublicPortfolioLink(portfolioSlug);
+    if (ok) {
+      message.success('Ссылка скопирована');
+    } else {
+      message.error('Не удалось скопировать ссылку');
+    }
+  };
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--ant-color-bg-base)', padding: 24 }}>
@@ -87,15 +100,12 @@ const PublicPortfolioPage: React.FC = () => {
             <div>
               <Typography.Title level={2} style={{ margin: 0 }}>{title}</Typography.Title>
               <Typography.Text type="secondary">
-                Публичная страница портфеля. Данные кешируются на 1 час и строятся по локальным снимкам мониторинга.
+                Публичная витрина счёта. Данные обновляются из локальных снимков мониторинга, кэш 1 час.
               </Typography.Text>
             </div>
             <Space wrap>
               {payload?.portfolio?.publishedSystemName ? (
                 <Tag color="gold">{payload.portfolio.publishedSystemName}</Tag>
-              ) : null}
-              {payload?.portfolio?.productMode ? (
-                <Tag>{payload.portfolio.productMode}</Tag>
               ) : null}
               {payload?.generatedAt ? (
                 <Tag color="blue">Обновлено: {new Date(payload.generatedAt).toLocaleString('ru-RU')}</Tag>
@@ -105,19 +115,33 @@ const PublicPortfolioPage: React.FC = () => {
 
           <Card>
             <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
-              <Space wrap>
-                <Tag color="purple">Slug: {payload?.portfolio?.slug || slug}</Tag>
-                {payload?.cacheTtlSec ? (
-                  <Tag color="orange">Кэш {Math.round(payload.cacheTtlSec / 60)} мин</Tag>
+              <Space direction="vertical" size={4}>
+                <Space wrap>
+                  <Tag color="purple">Slug: {portfolioSlug || '—'}</Tag>
+                  {payload?.cacheTtlSec ? (
+                    <Tag color="orange">Кэш {Math.round(payload.cacheTtlSec / 60)} мин</Tag>
+                  ) : null}
+                </Space>
+                {publicUrl ? (
+                  <Typography.Text type="secondary" style={{ fontSize: 12, wordBreak: 'break-all' }}>
+                    {publicUrl}
+                  </Typography.Text>
                 ) : null}
               </Space>
-              <Button onClick={() => void load(days)} loading={loading}>Обновить</Button>
+              <Space wrap>
+                <Button onClick={() => void handleCopyLink()} disabled={!portfolioSlug}>
+                  Скопировать ссылку
+                </Button>
+                <Button onClick={() => void load(days)} loading={loading}>
+                  Обновить
+                </Button>
+              </Space>
             </Space>
           </Card>
 
           {errorText ? <Alert type="error" showIcon message={errorText} /> : null}
 
-          <Card bodyStyle={{ padding: 16 }}>
+          <Card styles={{ body: { padding: 16 } }}>
             <Spin spinning={loading}>
               <MonitoringChartPanel
                 snapshots={snapshots}
@@ -132,6 +156,10 @@ const PublicPortfolioPage: React.FC = () => {
               />
             </Spin>
           </Card>
+
+          <Typography.Paragraph type="secondary" style={{ fontSize: 12, marginBottom: 0 }}>
+            Доходность считается по изменению equity за выбранный период. Депозиты и выводы пока не вычитаются.
+          </Typography.Paragraph>
         </Space>
       </div>
     </div>

@@ -140,7 +140,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   lastTradeAt = null,
   tradeMarkers: _tradeMarkers = [],
   loading = false,
-  currencyLabel = 'USDT',
+  currencyLabel = 'USD',
 }) => {
   const [showEquity, setShowEquity] = useState(true);
   const [showPnl, setShowPnl] = useState(false);
@@ -285,15 +285,14 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
       {localPeriodStats ? (
         <Space wrap size={[12, 8]} style={{
           padding: '10px 14px',
-          background: '#f8fafc',
+          background: 'rgba(148, 163, 184, 0.08)',
           borderRadius: 8,
-          border: '1px solid #e2e8f0',
+          border: '1px solid rgba(148, 163, 184, 0.18)',
           width: '100%',
         }}>
           <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-            За период
-            {chartDays === 0 ? ' (всё время)' : ` (${chartDays}д)`}
-            :
+            Доходность за период
+            {chartDays === 0 ? ' (всё время)' : ` · ${chartDays}д`}
           </Typography.Text>
           <Tag
             color={localPeriodStats.returnPercent >= 0 ? 'green' : 'red'}
@@ -306,7 +305,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
             style={{ fontSize: 14, padding: '2px 10px' }}
           >
             {fmtSignedUsd(localPeriodStats.pnlUsd)}
-            {' '}
+            {' · '}
             {currencyLabel}
           </Tag>
           <Typography.Text type="secondary" style={{ fontSize: 11 }}>
@@ -405,7 +404,9 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
       {trades.length > 0 ? (
         <div>
           <Typography.Text strong style={{ display: 'block', marginBottom: 8 }}>
-            Сделки за период ({trades.length})
+            Сделки за период ({trades.length}
+            {trades.length >= 200 ? ', показаны последние 200' : ''}
+            )
           </Typography.Text>
           <Table
             size="small"
