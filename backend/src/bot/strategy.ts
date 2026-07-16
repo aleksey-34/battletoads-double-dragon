@@ -34,6 +34,18 @@ import {
   isMomentumScalpStrategyType,
   momentumScalpTpSlPrices,
 } from './momentumScalpSignal';
+import {
+  evaluateMrs2Bar,
+  extractMrs2Params,
+  isMrs2StrategyType,
+  mrs2WarmupBars,
+  parseMrs2PendingLimits,
+  serializeMrs2PendingLimits,
+} from './mrs2Signal';
+import {
+  cancelMrs2RestingLimits,
+  syncMrs2RestingEntryLimits,
+} from './mrs2LiveOrders';
 import { acquireApiKeyPairEntryLock, acquireSystemEntryLock } from './strategy/mutex';
 import {
   buildBalancedQtyPlan,
@@ -183,7 +195,9 @@ export const executeStrategy = async (
       ? Math.max(signalLength + 110, 220)
       : isMomentumScalpStrategyType(strategyTypeNorm)
         ? Math.max(signalLength + 160, 200)
-        : Math.max(signalLength + 30, 120);
+        : isMrs2StrategyType(strategyTypeNorm)
+          ? Math.max(mrs2WarmupBars(extractMrs2Params(mergedStrategy)) + 40, 80)
+          : Math.max(signalLength + 30, 120);
 
   const candles = await loadStrategyCandles(apiKeyName, mergedStrategy, lookback);
 
@@ -200,7 +214,11 @@ export const executeStrategy = async (
   let computedSignalResult: ComputedSignal;
   const signalGroupKey = makeSignalGroupKey(apiKeyName, mergedStrategy);
   const signalCache = getCycleSignalCache();
-  const cachedSignal = signalCache.get(signalGroupKey);
+  // MRS2 carries per-strategy-row sticky pending state (mrs2_pending_json) into the signal
+  // evaluation itself — sharing a cached result across strategy rows (even with identical
+  // params) would silently apply one row's sticky limits to another. Always recompute fresh.
+  const isMrs2ForSignal = isMrs2StrategyType(strategyTypeNorm);
+  const cachedSignal = isMrs2ForSignal ? undefined : signalCache.get(signalGroupKey);
 
   if (cachedSignal && cachedSignal.evaluatedBarTimeMs === candleContext.evaluatedBarTimeMs) {
     // Re-use cached signal: same bar, same params → same result guaranteed
@@ -235,6 +253,57 @@ export const executeStrategy = async (
         fastRsi: ms.plusDi,
         oppositeCross: ms.oppositeCross,
       };
+    } else if (isMrs2ForSignal) {
+      const mrs2Params = extractMrs2Params(mergedStrategy);
+      const idx = candleContext.candlesForSignal.length - 1;
+      const posSide = (mergedStrategy.state || 'flat') as 'flat' | 'long' | 'short';
+      const entryPx = Number(mergedStrategy.entry_ratio);
+      // Sticky pending: must survive across execution cycles (hamster replace_open_order=false
+      // semantics) — load from mrs2_pending_json and feed back as pendingIn, or every cycle
+      // behaves as if the limit was just placed this bar (losing multi-bar resting entirely).
+      const pendingIn = parseMrs2PendingLimits(mergedStrategy.mrs2_pending_json);
+      const action = evaluateMrs2Bar(
+        candleContext.candlesForSignal,
+        idx,
+        mrs2Params,
+        posSide,
+        Number.isFinite(entryPx) && entryPx > 0 ? entryPx : null,
+        pendingIn,
+      );
+      computedSignalResult = {
+        signal: action.exit ? 'none' : action.signal,
+        currentRatio: action.fillPrice || action.current,
+        donchianHigh: action.levels?.entryShort ?? action.current,
+        donchianLow: action.levels?.entryLong ?? action.current,
+        donchianCenter: action.current,
+        zScore: null,
+        mrs2Exit: action.exit,
+        mrs2ExitPrice: action.exitPrice,
+        mrs2ExitReason: action.exitReason,
+        mrs2FillPrice: action.fillPrice,
+        mrs2Pending: action.pending,
+      };
+      // Persist the updated sticky pending immediately — decoupled from the many
+      // downstream updateStrategy() calls (which don't touch this column) so the
+      // next cycle always sees the latest resting levels regardless of which
+      // branch this cycle's execution takes.
+      const nextPendingJson = serializeMrs2PendingLimits(action.pending);
+      if (nextPendingJson !== (mergedStrategy.mrs2_pending_json || '{}')) {
+        // If levels cleared, drop any resting exchange orders tied to prior pending.
+        if (!action.pending) {
+          try {
+            await cancelMrs2RestingLimits(
+              apiKeyName,
+              String(mergedStrategy.base_symbol || ''),
+              mergedStrategy.mrs2_pending_json,
+            );
+          } catch (e) {
+            logger.warn(`MRS2 cancel resting on clear: ${(e as Error).message}`);
+          }
+        }
+        await updateStrategy(apiKeyName, strategyId, { mrs2_pending_json: nextPendingJson });
+        mergedStrategy.mrs2_pending_json = nextPendingJson;
+      }
     } else {
       computedSignalResult = computeSignal(
         mergedStrategy.strategy_type || 'DD_BattleToads',
@@ -246,7 +315,9 @@ export const executeStrategy = async (
         mergedStrategy.short_enabled
       );
     }
-    signalCache.set(signalGroupKey, { ...computedSignalResult, evaluatedBarTimeMs: candleContext.evaluatedBarTimeMs });
+    if (!isMrs2ForSignal) {
+      signalCache.set(signalGroupKey, { ...computedSignalResult, evaluatedBarTimeMs: candleContext.evaluatedBarTimeMs });
+    }
   }
 
   const { signal, currentRatio, donchianHigh, donchianLow, donchianCenter, zScore, fastRsi } = computedSignalResult;
@@ -255,6 +326,7 @@ export const executeStrategy = async (
 
   const isCtFractal = isCtFractalStrategyType(String(mergedStrategy.strategy_type || ''));
   const isMomentumScalp = isMomentumScalpStrategyType(String(mergedStrategy.strategy_type || ''));
+  const isMrs2 = isMrs2StrategyType(String(mergedStrategy.strategy_type || ''));
   const isStatArb = mergedStrategy.strategy_type === 'stat_arb_zscore' || isCtFractal;
   const isZzPivot = isZzPivotStrategyType(normalizeZzPivotStrategyType(String(mergedStrategy.strategy_type || '')));
   const zscoreExit = normalizeZscoreExit(mergedStrategy.zscore_exit, DEFAULT_STRATEGY.zscore_exit, mergedStrategy.zscore_entry);
@@ -274,7 +346,11 @@ export const executeStrategy = async (
     | 'zscore_stop_short'
     | 'macro_shield_exit_long'
     | 'macro_shield_exit_short'
-    | 'macro_shield_partial';
+    | 'macro_shield_partial'
+    | 'mrs2_ma_exit_long'
+    | 'mrs2_ma_exit_short'
+    | 'mrs2_sl_long'
+    | 'mrs2_sl_short';
   let closedAction: StrategyCloseAction | null = null;
   let closedResult: string | null = null;
   const evaluatedBarTimeMs = candleContext.evaluatedBarTimeMs;
@@ -931,7 +1007,19 @@ export const executeStrategy = async (
     }
   }
 
-  if (!isStatArb && !isMomentumScalp) {
+  if (!closedAction && isMrs2 && computedSignalResult.mrs2Exit && (state === 'long' || state === 'short')) {
+    const raw = String(computedSignalResult.mrs2ExitReason || '');
+    const reason: StrategyCloseAction = (
+      raw === 'mrs2_sl_long' || raw === 'mrs2_sl_short'
+      || raw === 'mrs2_ma_exit_long' || raw === 'mrs2_ma_exit_short'
+    ) ? raw as StrategyCloseAction
+      : (state === 'long' ? 'mrs2_ma_exit_long' : 'mrs2_ma_exit_short');
+    await closeAndRecordExit(reason, state);
+    closedAction = reason;
+    closedResult = `MRS2 exit ${positionLabel} @ ${Number(computedSignalResult.mrs2ExitPrice || currentRatio).toFixed(6)}`;
+  }
+
+  if (!isStatArb && !isMomentumScalp && !isMrs2) {
     const evalBar = candleContext.candlesForSignal[candleContext.candlesForSignal.length - 1];
 
     if (!closedAction && isZzPivot && state === 'long' && evalBar && evalBar.low <= donchianLow) {
@@ -1034,10 +1122,48 @@ export const executeStrategy = async (
   }
 
   if (signal === 'none') {
-    const noSignalResult = isStatArb ? 'No z-score signal' : (isZzPivot ? 'No ZZ pivot signal' : 'No Donchian signal');
+    const noSignalResult = isMrs2
+      ? 'No MRS2 fill (sticky limits may rest)'
+      : (isStatArb ? 'No z-score signal' : (isZzPivot ? 'No ZZ pivot signal' : 'No Donchian signal'));
     const noSignalAction = closedAction
       ? `${closedAction}_then_no_signal@${currentRatio}`
       : `no_signal@${currentRatio}`;
+
+    // Mono MRS2: while flat with sticky pending bands, keep resting limit orders on exchange
+    // so fills can happen between cycles (hamster post_only path). Synthetic = market only.
+    const isMonoMrs2 = isMrs2
+      && String(mergedStrategy.market_mode || '').toLowerCase() === 'mono'
+      && (state === 'flat' || Boolean(closedAction));
+    if (isMonoMrs2 && parseMrs2PendingLimits(mergedStrategy.mrs2_pending_json)) {
+      try {
+        const px = await getLatestMarketClose(apiKeyName, mergedStrategy.base_symbol);
+        const plan = await buildSingleQtyPlan(
+          apiKeyName,
+          mergedStrategy.base_symbol,
+          px,
+          // Use strategy lot% of equity — same sizing path as entries; totalNotional
+          // is computed later for entries, so approximate from balances here.
+          await (async () => {
+            const equity = extractUsdtBalance(await getBalances(apiKeyName));
+            const lot = Math.max(0.1, Number(mergedStrategy.lot_long_percent || 6));
+            return Math.max(5, equity * (lot / 100));
+          })(),
+        );
+        const synced = await syncMrs2RestingEntryLimits({
+          apiKeyName,
+          symbol: String(mergedStrategy.base_symbol || ''),
+          pendingLevels: parseMrs2PendingLimits(mergedStrategy.mrs2_pending_json),
+          pendingRaw: mergedStrategy.mrs2_pending_json,
+          qty: plan.qty,
+        });
+        if (synced !== (mergedStrategy.mrs2_pending_json || '{}')) {
+          await updateStrategy(apiKeyName, strategyId, { mrs2_pending_json: synced });
+          mergedStrategy.mrs2_pending_json = synced;
+        }
+      } catch (e) {
+        logger.warn(`MRS2 resting-limit sync failed for ${strategyId}: ${(e as Error).message}`);
+      }
+    }
 
     const updated = await updateStrategy(apiKeyName, strategyId, {
       ...executionBindingPatch,
@@ -1824,6 +1950,22 @@ export const executeStrategy = async (
   // upstream by closeAndRecordExit (which sets state=flat and triggers cooldown
   // skip on same-side, or proceeds with reverse only after exchange close).
 
+  // MRS2 mono: cancel resting entry limits before market fill (closed-bar touch detected).
+  if (
+    isMrs2
+    && String(mergedStrategy.market_mode || '').toLowerCase() === 'mono'
+  ) {
+    try {
+      await cancelMrs2RestingLimits(
+        apiKeyName,
+        String(mergedStrategy.base_symbol || ''),
+        mergedStrategy.mrs2_pending_json,
+      );
+    } catch (e) {
+      logger.warn(`MRS2 pre-entry cancel resting: ${(e as Error).message}`);
+    }
+  }
+
   const baseOrder = await placeOrder(
     apiKeyName,
     mergedStrategy.base_symbol,
@@ -1977,7 +2119,11 @@ export const executeStrategy = async (
       ? `reopened_${signal}_after_${closedAction}@${currentRatio}`
       : `opened_${signal}@${currentRatio}`,
     last_error: null,
+    ...(isMrs2 ? { mrs2_pending_json: '{}' } : {}),
   });
+  if (isMrs2) {
+    mergedStrategy.mrs2_pending_json = '{}';
+  }
 
   await recordSynthRuntimeEvents(
     'entry',

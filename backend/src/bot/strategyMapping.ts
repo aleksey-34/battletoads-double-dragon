@@ -49,6 +49,25 @@ STATUS: ✅ READY for MONO backtest immediately
 RISK: 🟢 LOW - universal price logic
 */
 
+// ==================== STRATEGY: MRS2 (hamster MA-limit MR) ====================
+/*
+PINESCRIPT / HAMSTER MRS 2:
+  - Entry long limit:  SMA(ohlc4, len) * long_mult  (e.g. 0.95)
+  - Entry short limit: SMA(ohlc4, len) * short_mult (e.g. 1.05)
+  - Exit limits at close MA * mult (~1.0)
+  - distance_filter between open band and close MA (pct)
+  - Fill: limit touch (high/low)
+
+MAPPING:
+  strategy_type: 'MRS2'
+  mrs2_config_json: { maLongLen, maLongMult, maShortLen, maShortMult,
+                      maCloseLongLen, maCloseLongMult, maCloseShortLen, maCloseShortMult,
+                      distanceFilterPct, slLongPct, slShortPct }
+  Fallback remap: price_channel_length, zscore_entry/exit/stop
+
+STATUS: ✅ BT engine + research harness
+*/
+
 // ==================== STRATEGY 2: ZZ pivot (ZZ_Fast / ZZ_Instance) ====================
 /*
 VARIANTS:
@@ -271,6 +290,12 @@ export const BACKTEST_CONFIG = {
       up1: [1, 2, 3],
       mac1: [8, 10, 15],
       sma1: [50, 100, 150],
+    },
+    MRS2: {
+      // Full params in mrs2_config_json; remap fallbacks below
+      ma_long_mult: [0.94, 0.95, 0.96],
+      ma_short_mult: [1.04, 1.05, 1.06],
+      distance_filter: [0.3],
     },
   },
 };

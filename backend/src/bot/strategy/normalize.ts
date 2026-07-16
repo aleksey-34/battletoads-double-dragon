@@ -5,7 +5,7 @@ import { MarketMode, Strategy, StrategyType } from '../../config/settings';
 
 export const normalizeStrategyType = (value: any): StrategyType => {
   const normalized = String(value || '').trim();
-  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'periodic_buy' || normalized === 'dca' || normalized === 'hideep' || normalized === 'CT_Fractal' || normalized === 'momentum_scalp_tv') {
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'periodic_buy' || normalized === 'dca' || normalized === 'hideep' || normalized === 'CT_Fractal' || normalized === 'momentum_scalp_tv' || normalized === 'MRS2') {
     return normalized as StrategyType;
   }
   if (normalized === 'ZZ_Fast' || normalized === 'ZZ_Instance') {
@@ -16,6 +16,9 @@ export const normalizeStrategyType = (value: any): StrategyType => {
   }
   if (normalized === 'ZZ_HAMSTER_ZZ2' || normalized === 'zz_hamster_zz2') {
     return 'ZZ_Instance';
+  }
+  if (normalized === 'mrs2' || normalized === 'mrs2_ma_limit') {
+    return 'MRS2';
   }
   return 'DD_BattleToads';
 };
@@ -96,6 +99,17 @@ export const getTypeAwareStrategyDefaults = (strategyType: StrategyType) => {
       zscore_entry: 21,
       zscore_exit: 20,
       zscore_stop: 1.2,
+    };
+  }
+
+  if (strategyType === 'MRS2') {
+    return {
+      take_profit_percent: 0,
+      price_channel_length: 5,
+      detection_source: 'wick' as const,
+      zscore_entry: 0.95,
+      zscore_exit: 1.05,
+      zscore_stop: 0.3,
     };
   }
 
@@ -217,9 +231,40 @@ export const normalizeStrategy = (row: any): Strategy => {
   const strategyType = normalizeStrategyType(row.strategy_type);
   const marketMode = normalizeMarketMode(row.market_mode);
   const typeDefaults = getTypeAwareStrategyDefaults(strategyType);
-  const zscoreEntry = normalizeZscoreEntry(row.zscore_entry, DEFAULT_STRATEGY.zscore_entry);
-  const zscoreExit = normalizeZscoreExit(row.zscore_exit, DEFAULT_STRATEGY.zscore_exit, zscoreEntry);
-  const zscoreStop = normalizeZscoreStop(row.zscore_stop, DEFAULT_STRATEGY.zscore_stop, zscoreEntry);
+  const mrs2Defaults = strategyType === 'MRS2'
+    ? { zscore_entry: 0.95, zscore_exit: 1.05, zscore_stop: 0.3 }
+    : null;
+  const zscoreEntry = normalizeZscoreEntry(
+    row.zscore_entry,
+    mrs2Defaults?.zscore_entry ?? DEFAULT_STRATEGY.zscore_entry,
+  );
+  // MRS2 remaps zscore_* to MA mults / distance_filter — do NOT clamp exit<entry or stop>entry.
+  const zscoreExit = mrs2Defaults
+    ? Math.max(0, safeNumber(row.zscore_exit, mrs2Defaults.zscore_exit))
+    : normalizeZscoreExit(row.zscore_exit, DEFAULT_STRATEGY.zscore_exit, zscoreEntry);
+  const zscoreStop = mrs2Defaults
+    ? Math.max(0, safeNumber(row.zscore_stop, mrs2Defaults.zscore_stop))
+    : normalizeZscoreStop(row.zscore_stop, DEFAULT_STRATEGY.zscore_stop, zscoreEntry);
+  const mrs2ConfigJson = (() => {
+    const raw = row.mrs2_config_json;
+    if (raw == null) return '{}';
+    if (typeof raw === 'string') return raw.trim() || '{}';
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return '{}';
+    }
+  })();
+  const mrs2PendingJson = (() => {
+    const raw = row.mrs2_pending_json;
+    if (raw == null) return '{}';
+    if (typeof raw === 'string') return raw.trim() || '{}';
+    try {
+      return JSON.stringify(raw);
+    } catch {
+      return '{}';
+    }
+  })();
 
   return {
     id: Number(row.id),
@@ -243,6 +288,8 @@ export const normalizeStrategy = (row: any): Strategy => {
     zscore_entry: zscoreEntry,
     zscore_exit: zscoreExit,
     zscore_stop: zscoreStop,
+    mrs2_config_json: mrs2ConfigJson,
+    mrs2_pending_json: mrs2PendingJson,
     base_symbol: normalizeSymbol(String(row.base_symbol || DEFAULT_STRATEGY.base_symbol)),
     quote_symbol: marketMode === 'mono'
       ? normalizeSymbol(String(row.quote_symbol || ''))

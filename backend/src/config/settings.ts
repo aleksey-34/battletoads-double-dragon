@@ -34,6 +34,7 @@ export type StrategyType =
   | 'ZZ_Instance'
   | 'CT_Fractal'
   | 'momentum_scalp_tv'
+  | 'MRS2'
   | 'periodic_buy'
   | 'dca'
   | 'hideep';
@@ -86,6 +87,10 @@ export interface Strategy {
   lot_long_usdt?: number | null;
   lot_short_usdt?: number | null;
   lot_balance_usdt?: number | null;
+  /** MRS2 limit-MR config JSON (asymmetric MA lens/mults). See mrs2Signal.ts. */
+  mrs2_config_json?: string | null;
+  /** MRS2 sticky pending entry-limit levels persisted between cycles: {long, short}. See mrs2Signal.ts. */
+  mrs2_pending_json?: string | null;
   created_at?: string;
   updated_at?: string;
 }

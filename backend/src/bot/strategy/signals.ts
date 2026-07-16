@@ -14,6 +14,11 @@ import {
   extractMomentumScalpParams,
   isMomentumScalpStrategyType,
 } from '../momentumScalpSignal';
+import {
+  evaluateMrs2Bar,
+  extractMrs2Params,
+  isMrs2StrategyType,
+} from '../mrs2Signal';
 import type { ComputedSignal, ParsedSyntheticCandle, StrategySignal } from './types';
 
 const mean = (values: number[]): number => {
@@ -258,6 +263,25 @@ export const computeSignal = (
       donchianCenter: ms.current,
       zScore: ms.adx,
       fastRsi: ms.plusDi,
+    };
+  }
+
+  if (isMrs2StrategyType(strategyType)) {
+    const params = extractMrs2Params({
+      price_channel_length: length,
+      zscore_entry: zscoreEntry,
+      long_enabled: longEnabled,
+      short_enabled: shortEnabled,
+    } as Strategy);
+    const idx = candles.length - 1;
+    const action = evaluateMrs2Bar(candles, idx, params, 'flat', null);
+    return {
+      signal: action.signal,
+      currentRatio: action.fillPrice || action.current,
+      donchianHigh: action.levels?.entryShort ?? action.current,
+      donchianLow: action.levels?.entryLong ?? action.current,
+      donchianCenter: action.current,
+      zScore: null,
     };
   }
 

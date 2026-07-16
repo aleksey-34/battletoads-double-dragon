@@ -40,6 +40,13 @@ export type ComputedSignal = {
   fastRsi?: number | null;
   /** Momentum scalp: opposite EMA cross while flat/in-position (exit hint). */
   oppositeCross?: boolean;
+  /** MRS2: limit exit touch on current bar. */
+  mrs2Exit?: boolean;
+  mrs2ExitPrice?: number;
+  mrs2ExitReason?: string;
+  /** MRS2: limit entry fill price when signal fires. */
+  mrs2FillPrice?: number;
+  mrs2Pending?: { long: number | null; short: number | null } | null;
 };
 
 export type GetStrategiesOptions = {

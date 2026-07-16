@@ -841,6 +841,10 @@ export const initDB = async () => {
   await ensureColumn('strategies', "dca_rsi_max REAL DEFAULT 45");
   await ensureColumn('strategies', "dca_per_leg_sl INTEGER DEFAULT 0");
   await ensureColumn('strategies', "dca_legs_json TEXT DEFAULT '[]'");
+  await ensureColumn('strategies', "mrs2_config_json TEXT DEFAULT '{}'");
+  // Sticky MRS2 entry-limit levels persisted between execution cycles ({long, short}).
+  // Without this, live MRS2 forgets pending limits every cycle (see ORDERS_AND_SYNTH_MRS.md §2).
+  await ensureColumn('strategies', "mrs2_pending_json TEXT DEFAULT '{}'");
   await ensureColumn('strategies', 'auto_lot_by_channel_width INTEGER DEFAULT 0');
   await ensureColumn('strategies', 'auto_lot_channel_ref_width REAL DEFAULT 5');
   await ensureColumn('strategies', 'auto_lot_channel_mult_min REAL DEFAULT 0.5');

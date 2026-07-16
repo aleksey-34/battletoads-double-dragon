@@ -637,6 +637,9 @@ export const updateStrategy = async (
       pushUpdate('tp_anchor_ratio', safeNumber(patch.tp_anchor_ratio, currentAnchor));
     }
   }
+  if (patch.mrs2_pending_json !== undefined) {
+    pushUpdate('mrs2_pending_json', patch.mrs2_pending_json == null ? '{}' : String(patch.mrs2_pending_json));
+  }
   if (patch.last_signal !== undefined) {
     pushUpdate('last_signal', patch.last_signal ?? null);
   }

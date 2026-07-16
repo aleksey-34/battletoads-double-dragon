@@ -42,6 +42,14 @@ import {
   momentumScalpTpSlPrices,
   type MomentumScalpIndicatorSeries,
 } from '../bot/momentumScalpSignal';
+import {
+  evaluateMrs2Bar,
+  extractMrs2Params,
+  isMrs2StrategyType,
+  mrs2WarmupBars,
+  type Mrs2Params,
+  type Mrs2PendingLimits,
+} from '../bot/mrs2Signal';
 
 export type { OrderBlockEntryGate };
 
@@ -1370,6 +1378,8 @@ type RuntimeStrategy = {
   zzPivotLevelSeries?: ZzPivotLevels[];
   momentumScalpSeries?: MomentumScalpIndicatorSeries;
   momentumScalpParams?: ReturnType<typeof extractMomentumScalpParams>;
+  mrs2Params?: Mrs2Params;
+  mrs2Pending?: Mrs2PendingLimits | null;
 };
 
 type BacktestContext = {
@@ -1935,7 +1945,7 @@ type RuntimeLoadResult = {
 
 const normalizeStrategyType = (value: any): StrategyType => {
   const normalized = String(value || '').trim();
-  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'hideep' || normalized === 'CT_Fractal' || normalized === 'momentum_scalp_tv') {
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'hideep' || normalized === 'CT_Fractal' || normalized === 'momentum_scalp_tv' || normalized === 'MRS2') {
     return normalized;
   }
   if (normalized === 'ZZ_Fast' || normalized === 'ZZ_Instance') {
@@ -1946,6 +1956,9 @@ const normalizeStrategyType = (value: any): StrategyType => {
   }
   if (normalized === 'ZZ_HAMSTER_ZZ2' || normalized === 'zz_hamster_zz2') {
     return 'ZZ_Instance';
+  }
+  if (normalized === 'mrs2' || normalized === 'mrs2_ma_limit') {
+    return 'MRS2';
   }
   return 'DD_BattleToads';
 };
@@ -2112,9 +2125,14 @@ const loadRuntimeStrategies = async (
     const length = Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 50)));
     const strategyTypeForLength = normalizeStrategyType(strategy.strategy_type);
     // HiDeep needs mac1 + sma1Period(100) bars minimum — so effective warmup length is mac1+105
+    const mrs2ParamsForLen = isMrs2StrategyType(strategyTypeForLength)
+      ? extractMrs2Params(strategy)
+      : null;
     const effectiveLength = (strategyTypeForLength === 'hideep' || strategyTypeForLength === 'CT_Fractal')
       ? Math.max(length + 105, 115)
-      : length;
+      : mrs2ParamsForLen
+        ? mrs2WarmupBars(mrs2ParamsForLen)
+        : length;
     const interval = String(strategy.interval || '1h');
     const intervalMs = intervalToMs(interval);
     const warmupBars = Math.max(0, Math.floor(request.warmupBars));
@@ -2282,6 +2300,9 @@ const loadRuntimeStrategies = async (
     const momentumScalpSeries = momentumScalpParams
       ? buildMomentumScalpIndicatorSeries(candles, momentumScalpParams)
       : undefined;
+    const mrs2Params = isMrs2StrategyType(strategyType)
+      ? extractMrs2Params(strategy)
+      : undefined;
 
     runtimes.push({
       strategy,
@@ -2300,6 +2321,8 @@ const loadRuntimeStrategies = async (
       zzPivotLevelSeries,
       momentumScalpSeries,
       momentumScalpParams,
+      mrs2Params,
+      mrs2Pending: null,
     });
   }
 
@@ -2674,11 +2697,98 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     const isStatArb = strategyType === 'stat_arb_zscore' || strategyType === 'CT_Fractal';
     const isCtFractal = strategyType === 'CT_Fractal';
     const isMomentumScalp = isMomentumScalpStrategyType(strategyType);
+    const isMrs2 = isMrs2StrategyType(strategyType);
     const zscoreExit = normalizeZscoreExit(strategy.zscore_exit, zscoreEntry);
     const zscoreStop = normalizeZscoreStop(strategy.zscore_stop, zscoreEntry);
     const state = runtime.state;
     const entryPrice = runtime.entryPrice;
     const takeProfitPercent = Math.max(0, asNumber(strategy.take_profit_percent, 0));
+
+    // MRS2: dedicated limit-fill path (sticky entry limits; exit at close-MA)
+    if (!isClassicDca && isMrs2 && runtime.mrs2Params) {
+      const action = evaluateMrs2Bar(
+        runtime.candles,
+        event.candleIndex,
+        runtime.mrs2Params,
+        state === 'long' || state === 'short' ? state : 'flat',
+        entryPrice,
+        runtime.mrs2Pending ?? null,
+      );
+      runtime.mrs2Pending = action.pending;
+      if (action.exit && (state === 'long' || state === 'short')) {
+        closePosition(
+          ctx,
+          runtime,
+          Number(strategy.id),
+          strategy.name,
+          event.timeMs,
+          action.exitPrice,
+          action.exitReason || 'mrs2_exit',
+        );
+        runtime.mrs2Pending = null;
+        pushEquityPoint(event.timeMs);
+        continue;
+      }
+      if (runtime.state === 'flat' && (action.signal === 'long' || action.signal === 'short')) {
+        if (maxOpenPositions > 0 && countOpenPositions() >= maxOpenPositions) {
+          skippedByPositionLimit++;
+          pushEquityPoint(event.timeMs);
+          continue;
+        }
+        if (request.enablePairLock) {
+          const pairKey = pairKeyByRuntimeIndex[event.strategyIndex];
+          if (isPairLocked(event.strategyIndex, pairKey)) {
+            skippedByPairLock++;
+            pushEquityPoint(event.timeMs);
+            continue;
+          }
+        }
+        const fillPx = Number(action.fillPrice);
+        if (!Number.isFinite(fillPx) || fillPx <= 0) {
+          pushEquityPoint(event.timeMs);
+          continue;
+        }
+        const entrySide = action.signal;
+        const equityNow = portfolioEquity(ctx.cashEquity, runtimes);
+        const availableBalance = portfolioAvailableBalance(ctx.cashEquity, runtimes);
+        const opened = openPosition(
+          ctx,
+          runtime,
+          entrySide,
+          event.timeMs,
+          fillPx,
+          equityNow,
+          1,
+          availableBalance,
+        );
+        runtime.mrs2Pending = null;
+        // Same-bar TP: after limit entry, allow close-MA exit if also touched this bar.
+        if (opened && runtime.entryPrice) {
+          const exitAction = evaluateMrs2Bar(
+            runtime.candles,
+            event.candleIndex,
+            runtime.mrs2Params,
+            entrySide,
+            runtime.entryPrice,
+            null,
+          );
+          if (exitAction.exit) {
+            closePosition(
+              ctx,
+              runtime,
+              Number(strategy.id),
+              strategy.name,
+              event.timeMs,
+              exitAction.exitPrice,
+              exitAction.exitReason || 'mrs2_exit',
+            );
+            runtime.mrs2Pending = null;
+          }
+        }
+      }
+      pushEquityPoint(event.timeMs);
+      continue;
+    }
 
     const signalPayload = computeSignalAtIndex(
       strategyType,
