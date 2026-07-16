@@ -301,7 +301,7 @@ export const getMonitoringTradeFrequency = async (
     params,
   ).catch(() => []) as Array<{ bucket_ts?: string; trade_count?: number }>;
 
-  return rows
+  const mapped = rows
     .map((row) => {
       const ts = Date.parse(String(row.bucket_ts || ''));
       const count = toFiniteNumber(row.trade_count, 0);
@@ -315,6 +315,28 @@ export const getMonitoringTradeFrequency = async (
       };
     })
     .filter((row): row is MonitoringTradeFrequencyPoint => row !== null);
+
+  return fillTradeFrequencyGaps(mapped, useHourly ? 'hour' : 'day');
+};
+
+const fillTradeFrequencyGaps = (
+  points: MonitoringTradeFrequencyPoint[],
+  bucket: 'hour' | 'day',
+): MonitoringTradeFrequencyPoint[] => {
+  if (points.length === 0) return [];
+  const stepSec = bucket === 'hour' ? 3600 : 86_400;
+  const byTime = new Map(points.map((p) => [p.time, p.count]));
+  const start = points[0].time;
+  const end = points[points.length - 1].time;
+  const filled: MonitoringTradeFrequencyPoint[] = [];
+  for (let t = start; t <= end; t += stepSec) {
+    filled.push({
+      time: t,
+      count: byTime.get(t) ?? 0,
+      bucket,
+    });
+  }
+  return filled;
 };
 
 export const computeMonitoringPeriodStats = (points: any[]): MonitoringPeriodStats | null => {

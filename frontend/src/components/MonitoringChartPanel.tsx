@@ -48,7 +48,7 @@ export type MonitoringTradeFrequencyPoint = {
 
 type LinePoint = { time: number; value: number };
 
-type SeriesKey = 'equity' | 'pnl' | 'upnl' | 'dd' | 'freq';
+type SeriesKey = 'equity' | 'pnl' | 'upnl' | 'dd';
 
 /** 0 = весь период счёта */
 export type ChartPeriodDays = 0 | 1 | 7 | 30 | 90;
@@ -58,7 +58,6 @@ const SERIES_META: Record<SeriesKey, { label: string; color: string }> = {
   pnl: { label: 'PnL net', color: '#16a34a' },
   upnl: { label: 'UPNL', color: '#7c3aed' },
   dd: { label: 'DD %', color: '#d97706' },
-  freq: { label: 'Частота сделок', color: '#0891b2' },
 };
 
 const PERIOD_OPTIONS: Array<{ label: string; value: ChartPeriodDays }> = [
@@ -109,6 +108,25 @@ const toReturnPercentSeries = (points: LinePoint[]): LinePoint[] => {
   }));
 };
 
+const buildFrequencyFromTrades = (
+  rows: MonitoringTradeRow[],
+  chartDays: ChartPeriodDays,
+): LinePoint[] => {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const hourly = chartDays === 1;
+  const bucketSec = hourly ? 3600 : 86_400;
+  const counts = new Map<number, number>();
+  for (const row of rows) {
+    const ms = Date.parse(String(row.time || ''));
+    if (!Number.isFinite(ms) || ms <= 0) continue;
+    const bucket = Math.floor(ms / 1000 / bucketSec) * bucketSec;
+    counts.set(bucket, (counts.get(bucket) || 0) + 1);
+  }
+  return Array.from(counts.entries())
+    .map(([time, value]) => ({ time, value }))
+    .sort((a, b) => a.time - b.time);
+};
+
 type MonitoringChartPanelProps = {
   snapshots: MonitoringSnapshot[];
   chartDays: ChartPeriodDays;
@@ -140,29 +158,34 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   const [showPnl, setShowPnl] = useState(false);
   const [showUpnl, setShowUpnl] = useState(false);
   const [showDd, setShowDd] = useState(false);
-  const [showFreq, setShowFreq] = useState(true);
   const [equityAsReturn, setEquityAsReturn] = useState(true);
 
-  const freqPoints = useMemo(
-    () => (Array.isArray(tradeFrequency) ? tradeFrequency : [])
+  const freqPoints = useMemo(() => {
+    const fromApi = (Array.isArray(tradeFrequency) ? tradeFrequency : [])
       .map((row) => {
         const time = Math.floor(Number(row.time) || 0);
         const value = Number(row.count);
         if (time <= 0 || !Number.isFinite(value)) return null;
         return { time, value };
       })
-      .filter((row): row is LinePoint => row !== null),
-    [tradeFrequency],
-  );
+      .filter((row): row is LinePoint => row !== null);
+    if (fromApi.length > 0) return fromApi;
+    return buildFrequencyFromTrades(trades, chartDays);
+  }, [chartDays, tradeFrequency, trades]);
+
+  const freqBucketLabel = tradeFrequency[0]?.bucket === 'hour' || chartDays === 1
+    ? 'час'
+    : 'день';
 
   const freqSummary = useMemo(() => {
     if (freqPoints.length === 0) return null;
+    const nonzero = freqPoints.filter((p) => p.value > 0);
+    const base = nonzero.length > 0 ? nonzero : freqPoints;
     const total = freqPoints.reduce((sum, p) => sum + p.value, 0);
-    const avg = total / freqPoints.length;
+    const avg = base.reduce((sum, p) => sum + p.value, 0) / base.length;
     const peak = Math.max(...freqPoints.map((p) => p.value));
-    const bucket = tradeFrequency[0]?.bucket === 'hour' ? 'час' : 'день';
-    return { total, avg, peak, bucket, buckets: freqPoints.length };
-  }, [freqPoints, tradeFrequency]);
+    return { total, avg, peak, buckets: freqPoints.length };
+  }, [freqPoints]);
 
   const seriesRaw = useMemo(() => ({
     equity: snapshotToPoints(snapshots, (r) => Number(r.equity_usd)),
@@ -173,8 +196,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     }),
     upnl: snapshotToPoints(snapshots, (r) => Number(r.unrealized_pnl)),
     dd: snapshotToPoints(snapshots, (r) => Number(r.drawdown_percent)),
-    freq: freqPoints,
-  }), [freqPoints, snapshots]);
+  }), [snapshots]);
 
   const visibleKeys = useMemo(() => {
     const keys: SeriesKey[] = [];
@@ -182,14 +204,12 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     if (showPnl) keys.push('pnl');
     if (showUpnl) keys.push('upnl');
     if (showDd) keys.push('dd');
-    if (showFreq) keys.push('freq');
     return keys;
-  }, [showDd, showEquity, showFreq, showPnl, showUpnl]);
+  }, [showDd, showEquity, showPnl, showUpnl]);
 
   const multiSeries = visibleKeys.length > 1;
 
   const transformSeries = (key: SeriesKey, raw: LinePoint[]): LinePoint[] => {
-    // Single equity series can stay in % return mode for readability.
     if (key === 'equity' && equityAsReturn) {
       return toReturnPercentSeries(raw);
     }
@@ -208,16 +228,15 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     return {
       id: key,
       color: SERIES_META[key].color,
-      lineWidth: key === 'dd' || key === 'freq' ? 1 : 2,
-      // Always private auto-scale so overlays never flatten against the primary axis.
+      lineWidth: key === 'dd' ? 1 : 2,
       priceScaleId: `own-${key}`,
       data,
     };
   }), [equityAsReturn, seriesRaw, visibleKeys]);
 
   const latest = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
-  const allSelected = showEquity && showPnl && showUpnl && showDd && showFreq;
-  const noneSelected = !showEquity && !showPnl && !showUpnl && !showDd && !showFreq;
+  const allSelected = showEquity && showPnl && showUpnl && showDd;
+  const noneSelected = !showEquity && !showPnl && !showUpnl && !showDd;
 
   const localPeriodStats = useMemo(() => {
     if (periodStats) return periodStats;
@@ -244,7 +263,6 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     setShowPnl(next);
     setShowUpnl(next);
     setShowDd(next);
-    setShowFreq(next);
   };
 
   const onlyOne = (key: SeriesKey) => {
@@ -252,7 +270,6 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     setShowPnl(key === 'pnl');
     setShowUpnl(key === 'upnl');
     setShowDd(key === 'dd');
-    setShowFreq(key === 'freq');
   };
 
   const tradeColumns = [
@@ -354,9 +371,11 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
           <Tag color="orange">DD {fmt(latest.drawdown_percent)}%</Tag>
           {freqSummary ? (
             <Tag color="cyan">
-              Частота: ср. {freqSummary.avg.toFixed(1)}/{freqSummary.bucket}
+              Частота: ср. {freqSummary.avg.toFixed(1)}/{freqBucketLabel}
               {' · '}
               пик {freqSummary.peak}
+              {' · '}
+              всего {freqSummary.total}
             </Tag>
           ) : null}
         </Space>
@@ -374,8 +393,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
                 key === 'equity' ? showEquity
                   : key === 'pnl' ? showPnl
                     : key === 'upnl' ? showUpnl
-                      : key === 'dd' ? showDd
-                        : showFreq
+                      : showDd
               }
               onChange={(e) => {
                 const checked = e.target.checked;
@@ -383,7 +401,6 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
                 if (key === 'pnl') setShowPnl(checked);
                 if (key === 'upnl') setShowUpnl(checked);
                 if (key === 'dd') setShowDd(checked);
-                if (key === 'freq') setShowFreq(checked);
               }}
             >
               <span style={{ color: SERIES_META[key].color }}>●</span>
@@ -432,6 +449,36 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
       ) : (
         <div style={{ padding: 24, textAlign: 'center', color: '#9ca3af' }}>Нет снимков мониторинга</div>
       )}
+
+      <div>
+        <Space wrap style={{ marginBottom: 8, justifyContent: 'space-between', width: '100%' }}>
+          <Typography.Text strong>
+            Частота сделок
+            {freqSummary ? ` · ср. ${freqSummary.avg.toFixed(1)}/${freqBucketLabel}` : ''}
+          </Typography.Text>
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            {chartDays === 1 ? 'по часам' : 'по дням'} · отдельный масштаб
+          </Typography.Text>
+        </Space>
+        {freqPoints.length > 0 ? (
+          <ChartComponent
+            data={freqPoints}
+            type="line"
+            fixedHeight={180}
+          />
+        ) : (
+          <div style={{
+            padding: 16,
+            textAlign: 'center',
+            color: '#9ca3af',
+            border: '1px dashed rgba(148,163,184,0.35)',
+            borderRadius: 8,
+          }}
+          >
+            Нет данных по частоте сделок за период
+          </div>
+        )}
+      </div>
 
       {trades.length > 0 ? (
         <div>
