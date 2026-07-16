@@ -2918,11 +2918,11 @@ const Dashboard: React.FC = () => {
     const warningCount = strategyDiagnostics.filter((row) => row.status === 'warning').length;
     const setTypeOptions: Array<{ value: StrategyKind; label: string }> = [
       { value: 'DD_BattleToads', label: 'DD' },
-      { value: 'zz_breakout', label: 'ZZ' },
+      { value: 'zz_breakout', label: 'ZigZag' },
       { value: 'stat_arb_zscore', label: 'HD' },
     ];
     const strategyTypeLabel = (value: StrategyKind): string => {
-      if (value === 'zz_breakout') return 'ZZ';
+      if (value === 'zz_breakout') return 'ZigZag';
       if (value === 'stat_arb_zscore') return 'HD';
       return 'DD';
     };
@@ -3354,7 +3354,7 @@ const Dashboard: React.FC = () => {
                   </Button>
                   <Tag color="blue">Chart preview is configured once in API key Chart Settings</Tag>
                   <Tag color="green">New set mode: {currentModeLabel} (from chart settings)</Tag>
-                  <Tag color="purple">Type: {strategyTypeLabel(newSetStrategyType)} | Name: set_name | Strategy: DD/ZZ/HD</Tag>
+                  <Tag color="purple">Type: {strategyTypeLabel(newSetStrategyType)} | Name: set_name | Strategy: DD/ZigZag/HD</Tag>
                   <Tag color="cyan">rendered: {visibleStrategies.length}/{totalStrategies}</Tag>
                   {!keyFullLoaded ? <Tag color="gold">light mode: {totalStrategies}/{keyStrategiesTotal}</Tag> : null}
                   {!keyFullLoaded ? (

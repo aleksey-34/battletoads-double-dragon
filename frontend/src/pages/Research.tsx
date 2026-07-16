@@ -1582,7 +1582,7 @@ export default function Research() {
               options={[
                 { label: 'DD_BattleToads (Donchian)', value: 'DD_BattleToads' },
                 { label: 'HiDeep (RSI oversold)', value: 'hideep' },
-                { label: 'ZZ Breakout', value: 'zz_breakout' },
+                { label: 'ZigZag Breakout', value: 'zz_breakout' },
               ]}
             />
           </div>
