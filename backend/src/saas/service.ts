@@ -14987,7 +14987,8 @@ export const getAlgofundState = async (
     }
   }
 
-  // Canonical storefront whitelist: admin and client must use the same system set.
+  // Client LK whitelist = algofundStorefrontSystemNames (may omit personal/admin-only cards).
+  // Admin TS grid uses algofundPublishedSystemNames separately (can include Whale personal).
   if (storefrontSystemSet.size > 0) {
     availableSystems = availableSystems.filter((system) => {
       const systemName = asString(system?.name, '').trim().toUpperCase();

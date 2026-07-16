@@ -1945,20 +1945,33 @@ type RuntimeLoadResult = {
 
 const normalizeStrategyType = (value: any): StrategyType => {
   const normalized = String(value || '').trim();
-  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'hideep' || normalized === 'CT_Fractal' || normalized === 'momentum_scalp_tv' || normalized === 'MRS2') {
+  const lower = normalized.toLowerCase();
+  if (
+    normalized === 'MeanReversion'
+    || normalized === 'MRS2'
+    || lower === 'mrs2'
+    || lower === 'mrs2_ma_limit'
+    || lower === 'meanreversion'
+    || lower === 'mean_reversion'
+  ) {
+    return 'MeanReversion';
+  }
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'hideep' || normalized === 'CT_Fractal' || normalized === 'momentum_scalp_tv') {
     return normalized;
+  }
+  if (lower === 'zigzag' || lower === 'zig_zag') {
+    return 'zz_breakout';
   }
   if (normalized === 'ZZ_Fast' || normalized === 'ZZ_Instance') {
     return normalized;
   }
+  if (lower === 'zigzag_fast') return 'ZZ_Fast';
+  if (lower === 'zigzag_instance') return 'ZZ_Instance';
   if (normalized === 'ZZ_HAMSTER_ZZ6' || normalized === 'zz_hamster_zz6') {
     return 'ZZ_Fast';
   }
   if (normalized === 'ZZ_HAMSTER_ZZ2' || normalized === 'zz_hamster_zz2') {
     return 'ZZ_Instance';
-  }
-  if (normalized === 'mrs2' || normalized === 'mrs2_ma_limit') {
-    return 'MRS2';
   }
   return 'DD_BattleToads';
 };

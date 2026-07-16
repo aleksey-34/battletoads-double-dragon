@@ -59,7 +59,7 @@ PINESCRIPT / HAMSTER MRS 2:
   - Fill: limit touch (high/low)
 
 MAPPING:
-  strategy_type: 'MRS2'
+  strategy_type: 'MeanReversion' (legacy alias: MRS2)
   mrs2_config_json: { maLongLen, maLongMult, maShortLen, maShortMult,
                       maCloseLongLen, maCloseLongMult, maCloseShortLen, maCloseShortMult,
                       distanceFilterPct, slLongPct, slShortPct }
@@ -68,14 +68,14 @@ MAPPING:
 STATUS: ✅ BT engine + research harness
 */
 
-// ==================== STRATEGY 2: ZZ pivot (ZZ_Fast / ZZ_Instance) ====================
+// ==================== STRATEGY 2: ZigZag pivot (ZZ_Fast / ZZ_Instance) ====================
 /*
 VARIANTS:
-  ZZ_Fast: fast pivot len, slow = len × 3, SAR exit at opposite level
-  ZZ_Instance: fast pivot len, slow = len × 2, SAR exit
+  ZigZag Fast (ZZ_Fast): fast pivot len, slow = len × 3, SAR exit at opposite level
+  ZigZag Instance (ZZ_Instance): fast pivot len, slow = len × 2, SAR exit
 
 MAPPING TO BACKEND:
-  strategy_type: 'ZZ_Fast' | 'ZZ_Instance'
+  strategy_type: 'ZZ_Fast' | 'ZZ_Instance' (display: ZigZag)
   market_mode: 'mono' or 'synthetic'
   price_channel_length: pivot fast length (e.g. 3, 5, 6)
   take_profit_percent: 0 (SAR exit only)

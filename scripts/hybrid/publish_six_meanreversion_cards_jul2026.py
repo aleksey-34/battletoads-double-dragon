@@ -249,7 +249,7 @@ def upsert_mrs(conn, api_key_id: int, leg: dict, lot: float, prefix: str) -> int
     if row:
         sid = int(row[0])
         conn.execute(
-            """UPDATE strategies SET strategy_type='MRS2', market_mode='mono', market_type='futures',
+            """UPDATE strategies SET strategy_type='MeanReversion', market_mode='mono', market_type='futures',
                  base_symbol=?, quote_symbol='', interval=?, leverage=?,
                  lot_long_percent=?, lot_short_percent=?, reinvest_percent=?,
                  mrs2_config_json=?, price_channel_length=?, zscore_entry=?, zscore_exit=?,
@@ -267,7 +267,7 @@ def upsert_mrs(conn, api_key_id: int, leg: dict, lot: float, prefix: str) -> int
              take_profit_percent, detection_source, long_enabled, short_enabled, margin_type,
              is_active, display_on_chart, show_settings, show_chart, show_indicators,
              show_positions_on_chart, auto_update, fixed_lot, state
-           ) VALUES (?, ?, 'MRS2', 'mono', 'futures', ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+           ) VALUES (?, ?, 'MeanReversion', 'mono', 'futures', ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
              0, 'wick', 1, 1, 'cross', 0, 1, 1, 1, 1, 1, 1, 0, 'flat')""",
         (name, api_key_id, *args),
     )
@@ -570,8 +570,12 @@ def main() -> None:
             print(f"OK {card['setKey']} id={sid} members={len(b3_members)+len(addon)} ret={ret}% dd={dd}%")
 
         flag_set(conn, "offer.store.ts_backtest_snapshots", snaps)
-        # Whale stays published for owner but list all 6 on storefront as requested
-        flag_set(conn, "offer.store.algofund_storefront_system_names", storefront)
+        # Client LK (storefront) = all non-personal cards.
+        # Admin published list = full pack including Whale personal.
+        client_storefront = [
+            n for n, c in zip(storefront, CARDS) if not c.get("personal")
+        ]
+        flag_set(conn, "offer.store.algofund_storefront_system_names", client_storefront)
         flag_set(conn, "offer.store.algofund_published_system_names", storefront)
         conn.commit()
 

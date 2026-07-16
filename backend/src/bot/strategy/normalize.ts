@@ -5,10 +5,26 @@ import { MarketMode, Strategy, StrategyType } from '../../config/settings';
 
 export const normalizeStrategyType = (value: any): StrategyType => {
   const normalized = String(value || '').trim();
-  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'periodic_buy' || normalized === 'dca' || normalized === 'hideep' || normalized === 'CT_Fractal' || normalized === 'momentum_scalp_tv' || normalized === 'MRS2') {
+  const lower = normalized.toLowerCase();
+  if (
+    normalized === 'MeanReversion'
+    || normalized === 'MRS2'
+    || lower === 'mrs2'
+    || lower === 'mrs2_ma_limit'
+    || lower === 'meanreversion'
+    || lower === 'mean_reversion'
+  ) {
+    return 'MeanReversion';
+  }
+  if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'periodic_buy' || normalized === 'dca' || normalized === 'hideep' || normalized === 'CT_Fractal' || normalized === 'momentum_scalp_tv') {
     return normalized as StrategyType;
   }
-  if (normalized === 'ZZ_Fast' || normalized === 'ZZ_Instance') {
+  if (lower === 'zigzag' || lower === 'zig_zag') {
+    return 'zz_breakout';
+  }
+  if (normalized === 'ZZ_Fast' || normalized === 'ZZ_Instance' || lower === 'zigzag_fast' || lower === 'zigzag_instance') {
+    if (lower === 'zigzag_fast') return 'ZZ_Fast';
+    if (lower === 'zigzag_instance') return 'ZZ_Instance';
     return normalized as StrategyType;
   }
   if (normalized === 'ZZ_HAMSTER_ZZ6' || normalized === 'zz_hamster_zz6') {
@@ -16,9 +32,6 @@ export const normalizeStrategyType = (value: any): StrategyType => {
   }
   if (normalized === 'ZZ_HAMSTER_ZZ2' || normalized === 'zz_hamster_zz2') {
     return 'ZZ_Instance';
-  }
-  if (normalized === 'mrs2' || normalized === 'mrs2_ma_limit') {
-    return 'MRS2';
   }
   return 'DD_BattleToads';
 };
@@ -102,7 +115,7 @@ export const getTypeAwareStrategyDefaults = (strategyType: StrategyType) => {
     };
   }
 
-  if (strategyType === 'MRS2') {
+  if (strategyType === 'MeanReversion' || strategyType === 'MRS2') {
     return {
       take_profit_percent: 0,
       price_channel_length: 5,
@@ -231,7 +244,7 @@ export const normalizeStrategy = (row: any): Strategy => {
   const strategyType = normalizeStrategyType(row.strategy_type);
   const marketMode = normalizeMarketMode(row.market_mode);
   const typeDefaults = getTypeAwareStrategyDefaults(strategyType);
-  const mrs2Defaults = strategyType === 'MRS2'
+  const mrs2Defaults = strategyType === 'MeanReversion' || strategyType === 'MRS2'
     ? { zscore_entry: 0.95, zscore_exit: 1.05, zscore_stop: 0.3 }
     : null;
   const zscoreEntry = normalizeZscoreEntry(

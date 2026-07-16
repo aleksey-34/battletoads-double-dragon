@@ -96,8 +96,19 @@ export const MRS2_DEFAULTS: Mrs2Params = {
 
 export const isMrs2StrategyType = (strategyType: string): boolean => {
   const t = String(strategyType || '').trim();
-  return t === 'MRS2' || t === 'mrs2' || t === 'mrs2_ma_limit';
+  const lower = t.toLowerCase();
+  return (
+    t === 'MeanReversion'
+    || t === 'MRS2'
+    || lower === 'mrs2'
+    || lower === 'mrs2_ma_limit'
+    || lower === 'meanreversion'
+    || lower === 'mean_reversion'
+  );
 };
+
+/** Canonical public name for the former MRS2 engine. */
+export const isMeanReversionStrategyType = isMrs2StrategyType;
 
 const num = (v: unknown, fallback: number): number => {
   const n = Number(v);

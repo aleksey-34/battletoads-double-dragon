@@ -2569,7 +2569,21 @@ const ClientCabinet: React.FC = () => {
                             <Space key={m.strategyId} wrap size={4}>
                               <Tag color="blue">{m.market || '—'}</Tag>
                               <Tag color="purple">{m.interval || '—'}</Tag>
-                              {m.strategyType ? <Tag color="geekblue">{m.strategyType}</Tag> : null}
+                              {m.strategyType ? (
+                                <Tag color="geekblue">
+                                  {(() => {
+                                    const t = String(m.strategyType || '');
+                                    const lower = t.toLowerCase();
+                                    if (t === 'MeanReversion' || t === 'MRS2' || lower.includes('mrs2') || lower.includes('meanreversion')) {
+                                      return 'Mean Reversion';
+                                    }
+                                    if (t === 'ZZ_Fast' || lower === 'zigzag_fast') return 'ZigZag Fast';
+                                    if (t === 'ZZ_Instance' || lower === 'zigzag_instance') return 'ZigZag';
+                                    if (t === 'zz_breakout' || lower.includes('zigzag')) return 'ZigZag';
+                                    return t;
+                                  })()}
+                                </Tag>
+                              ) : null}
                               <Typography.Text type="secondary" style={{ fontSize: 11 }}>
                                 {(m.name || `#${m.strategyId}`).slice(0, 48)}
                               </Typography.Text>
