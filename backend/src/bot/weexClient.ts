@@ -412,29 +412,54 @@ class WeexRestClient {
   }
 
   async fetchBalance(): Promise<any> {
-    // /capi/v3/account/assets was removed by WEEX (returns 404); fall back to v2 which is stable
-    const response = await this.request('GET', '/capi/v2/account/assets', { auth: true });
-    const rows = Array.isArray(response) ? response
-      : Array.isArray(response?.list) ? response.list
-      : Array.isArray(response?.assets) ? response.assets
-      : [];
+    // Elite/Copy Trading keys expose funds on v3 /account/balance (~full wallet).
+    // Regular Futures keys often still answer on v2 /account/assets (can be a tiny residual).
+    // Prefer v3 so Copy/Elite lead accounts are sized correctly; fall back to v2.
+    let rows: any[] = [];
+    let source: 'v3_balance' | 'v2_assets' = 'v3_balance';
+    try {
+      const response = await this.request('GET', '/capi/v3/account/balance', { auth: true });
+      rows = Array.isArray(response) ? response
+        : Array.isArray(response?.list) ? response.list
+        : Array.isArray(response?.data) ? response.data
+        : [];
+    } catch {
+      source = 'v2_assets';
+      const response = await this.request('GET', '/capi/v2/account/assets', { auth: true });
+      rows = Array.isArray(response) ? response
+        : Array.isArray(response?.list) ? response.list
+        : Array.isArray(response?.assets) ? response.assets
+        : [];
+    }
+
     const total: Record<string, number> = {};
     const free: Record<string, number> = {};
+    const used: Record<string, number> = {};
 
     for (const item of rows) {
-      // v3: { asset, balance, available, frozen }; v2 fallback: { coinName, equity, available }
+      // v3 balance: { asset, balance, availableBalance, frozen, unrealizePnl }
+      // v2 assets:   { coinName, equity, available, frozen }
       const coin = String(item?.asset || item?.coinName || item?.coin || '').toUpperCase();
       if (!coin) {
         continue;
       }
-      total[coin] = Number(item?.balance ?? item?.equity ?? 0);
-      free[coin] = Number(item?.available ?? item?.free ?? 0);
+      const wallet = Number(item?.balance ?? item?.equity ?? 0);
+      const available = Number(
+        item?.availableBalance ?? item?.available ?? item?.free ?? wallet,
+      );
+      const frozen = Number(item?.frozen ?? item?.used ?? 0);
+      total[coin] = Number.isFinite(wallet) ? wallet : 0;
+      free[coin] = Number.isFinite(available) ? available : total[coin];
+      if (Number.isFinite(frozen) && frozen > 0) {
+        used[coin] = frozen;
+      }
     }
 
     return {
       total,
       free,
-      info: rows,
+      used,
+      info: { source, rows },
     };
   }
 
