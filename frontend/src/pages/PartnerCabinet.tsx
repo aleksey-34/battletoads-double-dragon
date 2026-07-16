@@ -8,6 +8,7 @@ import MonitoringChartPanel, {
   MonitoringTradeMarker,
   MonitoringPeriodStats,
   MonitoringTradeRow,
+  MonitoringTradeFrequencyPoint,
   ChartPeriodDays,
 } from '../components/MonitoringChartPanel';
 import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
@@ -82,6 +83,7 @@ const PartnerCabinet: React.FC = () => {
   const [chartRaw, setChartRaw] = useState<MonitoringSnapshot[]>([]);
   const [chartPeriodStats, setChartPeriodStats] = useState<MonitoringPeriodStats | null>(null);
   const [chartTrades, setChartTrades] = useState<MonitoringTradeRow[]>([]);
+  const [chartTradeFrequency, setChartTradeFrequency] = useState<MonitoringTradeFrequencyPoint[]>([]);
   const [chartTradeStats, setChartTradeStats] = useState<{ trades24h: number; lastTradeAt: string | null }>({ trades24h: 0, lastTradeAt: null });
   const [chartTradeMarkers, setChartTradeMarkers] = useState<MonitoringTradeMarker[]>([]);
 
@@ -223,6 +225,7 @@ const PartnerCabinet: React.FC = () => {
       setChartRaw(Array.isArray(res.data?.points) ? res.data.points : []);
       setChartPeriodStats(res.data?.periodStats || null);
       setChartTrades(Array.isArray(res.data?.trades) ? res.data.trades : []);
+      setChartTradeFrequency(Array.isArray(res.data?.tradeFrequency) ? res.data.tradeFrequency : []);
       setChartTradeStats({
         trades24h: Number(res.data?.tradeStats?.trades24h || 0),
         lastTradeAt: res.data?.tradeStats?.lastTradeAt || null,
@@ -232,6 +235,7 @@ const PartnerCabinet: React.FC = () => {
       setChartRaw([]);
       setChartPeriodStats(null);
       setChartTrades([]);
+      setChartTradeFrequency([]);
     } finally {
       setChartLoading(false);
     }
@@ -510,6 +514,7 @@ const PartnerCabinet: React.FC = () => {
             onChartDaysChange={setChartDays}
             periodStats={chartPeriodStats}
             trades={chartTrades}
+            tradeFrequency={chartTradeFrequency}
             trades24h={chartTradeStats.trades24h}
             lastTradeAt={chartTradeStats.lastTradeAt}
             tradeMarkers={chartTradeMarkers}

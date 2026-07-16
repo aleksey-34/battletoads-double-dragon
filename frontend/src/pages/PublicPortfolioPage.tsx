@@ -5,6 +5,7 @@ import MonitoringChartPanel, {
   ChartPeriodDays,
   MonitoringPeriodStats,
   MonitoringSnapshot,
+  MonitoringTradeFrequencyPoint,
   MonitoringTradeRow,
 } from '../components/MonitoringChartPanel';
 import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
@@ -24,6 +25,7 @@ type PublicPortfolioPayload = {
   latest?: MonitoringSnapshot | null;
   periodStats?: MonitoringPeriodStats | null;
   trades?: MonitoringTradeRow[];
+  tradeFrequency?: MonitoringTradeFrequencyPoint[];
   tradeStats?: {
     trades24h?: number;
     lastTradeAt?: string | null;
@@ -79,8 +81,10 @@ const PublicPortfolioPage: React.FC = () => {
 
   const rawPoints = payload?.points;
   const rawTrades = payload?.trades;
+  const rawFreq = payload?.tradeFrequency;
   const snapshots: MonitoringSnapshot[] = Array.isArray(rawPoints) ? rawPoints : [];
   const trades: MonitoringTradeRow[] = Array.isArray(rawTrades) ? rawTrades : [];
+  const tradeFrequency: MonitoringTradeFrequencyPoint[] = Array.isArray(rawFreq) ? rawFreq : [];
 
   const handleCopyLink = async () => {
     if (!portfolioSlug) return;
@@ -149,6 +153,7 @@ const PublicPortfolioPage: React.FC = () => {
                 onChartDaysChange={setDays}
                 periodStats={payload?.periodStats || null}
                 trades={trades}
+                tradeFrequency={tradeFrequency}
                 trades24h={Number(payload?.tradeStats?.trades24h || 0)}
                 lastTradeAt={payload?.tradeStats?.lastTradeAt || null}
                 loading={loading}

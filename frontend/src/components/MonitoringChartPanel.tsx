@@ -40,9 +40,15 @@ export type MonitoringTradeRow = {
   strategyId: number | null;
 };
 
+export type MonitoringTradeFrequencyPoint = {
+  time: number;
+  count: number;
+  bucket?: 'hour' | 'day';
+};
+
 type LinePoint = { time: number; value: number };
 
-type SeriesKey = 'equity' | 'pnl' | 'upnl' | 'dd';
+type SeriesKey = 'equity' | 'pnl' | 'upnl' | 'dd' | 'freq';
 
 /** 0 = весь период счёта */
 export type ChartPeriodDays = 0 | 1 | 7 | 30 | 90;
@@ -52,6 +58,7 @@ const SERIES_META: Record<SeriesKey, { label: string; color: string }> = {
   pnl: { label: 'PnL net', color: '#16a34a' },
   upnl: { label: 'UPNL', color: '#7c3aed' },
   dd: { label: 'DD %', color: '#d97706' },
+  freq: { label: 'Частота сделок', color: '#0891b2' },
 };
 
 const PERIOD_OPTIONS: Array<{ label: string; value: ChartPeriodDays }> = [
@@ -108,6 +115,7 @@ type MonitoringChartPanelProps = {
   onChartDaysChange: (days: ChartPeriodDays) => void;
   periodStats?: MonitoringPeriodStats | null;
   trades?: MonitoringTradeRow[];
+  tradeFrequency?: MonitoringTradeFrequencyPoint[];
   trades24h?: number;
   lastTradeAt?: string | null;
   tradeMarkers?: MonitoringTradeMarker[];
@@ -121,6 +129,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   onChartDaysChange,
   periodStats = null,
   trades = [],
+  tradeFrequency = [],
   trades24h = 0,
   lastTradeAt = null,
   tradeMarkers: _tradeMarkers = [],
@@ -131,7 +140,29 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   const [showPnl, setShowPnl] = useState(false);
   const [showUpnl, setShowUpnl] = useState(false);
   const [showDd, setShowDd] = useState(false);
+  const [showFreq, setShowFreq] = useState(true);
   const [equityAsReturn, setEquityAsReturn] = useState(true);
+
+  const freqPoints = useMemo(
+    () => (Array.isArray(tradeFrequency) ? tradeFrequency : [])
+      .map((row) => {
+        const time = Math.floor(Number(row.time) || 0);
+        const value = Number(row.count);
+        if (time <= 0 || !Number.isFinite(value)) return null;
+        return { time, value };
+      })
+      .filter((row): row is LinePoint => row !== null),
+    [tradeFrequency],
+  );
+
+  const freqSummary = useMemo(() => {
+    if (freqPoints.length === 0) return null;
+    const total = freqPoints.reduce((sum, p) => sum + p.value, 0);
+    const avg = total / freqPoints.length;
+    const peak = Math.max(...freqPoints.map((p) => p.value));
+    const bucket = tradeFrequency[0]?.bucket === 'hour' ? 'час' : 'день';
+    return { total, avg, peak, bucket, buckets: freqPoints.length };
+  }, [freqPoints, tradeFrequency]);
 
   const seriesRaw = useMemo(() => ({
     equity: snapshotToPoints(snapshots, (r) => Number(r.equity_usd)),
@@ -142,7 +173,8 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     }),
     upnl: snapshotToPoints(snapshots, (r) => Number(r.unrealized_pnl)),
     dd: snapshotToPoints(snapshots, (r) => Number(r.drawdown_percent)),
-  }), [snapshots]);
+    freq: freqPoints,
+  }), [freqPoints, snapshots]);
 
   const visibleKeys = useMemo(() => {
     const keys: SeriesKey[] = [];
@@ -150,8 +182,9 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     if (showPnl) keys.push('pnl');
     if (showUpnl) keys.push('upnl');
     if (showDd) keys.push('dd');
+    if (showFreq) keys.push('freq');
     return keys;
-  }, [showDd, showEquity, showPnl, showUpnl]);
+  }, [showDd, showEquity, showFreq, showPnl, showUpnl]);
 
   const multiSeries = visibleKeys.length > 1;
 
@@ -175,7 +208,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     return {
       id: key,
       color: SERIES_META[key].color,
-      lineWidth: key === 'dd' ? 1 : 2,
+      lineWidth: key === 'dd' || key === 'freq' ? 1 : 2,
       // Always private auto-scale so overlays never flatten against the primary axis.
       priceScaleId: `own-${key}`,
       data,
@@ -183,8 +216,8 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
   }), [equityAsReturn, seriesRaw, visibleKeys]);
 
   const latest = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
-  const allSelected = showEquity && showPnl && showUpnl && showDd;
-  const noneSelected = !showEquity && !showPnl && !showUpnl && !showDd;
+  const allSelected = showEquity && showPnl && showUpnl && showDd && showFreq;
+  const noneSelected = !showEquity && !showPnl && !showUpnl && !showDd && !showFreq;
 
   const localPeriodStats = useMemo(() => {
     if (periodStats) return periodStats;
@@ -211,6 +244,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     setShowPnl(next);
     setShowUpnl(next);
     setShowDd(next);
+    setShowFreq(next);
   };
 
   const onlyOne = (key: SeriesKey) => {
@@ -218,6 +252,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
     setShowPnl(key === 'pnl');
     setShowUpnl(key === 'upnl');
     setShowDd(key === 'dd');
+    setShowFreq(key === 'freq');
   };
 
   const tradeColumns = [
@@ -317,6 +352,13 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
             PnL ${fmt(latest.pnl_net_usd)}
           </Tag>
           <Tag color="orange">DD {fmt(latest.drawdown_percent)}%</Tag>
+          {freqSummary ? (
+            <Tag color="cyan">
+              Частота: ср. {freqSummary.avg.toFixed(1)}/{freqSummary.bucket}
+              {' · '}
+              пик {freqSummary.peak}
+            </Tag>
+          ) : null}
         </Space>
       ) : null}
 
@@ -328,13 +370,20 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
           {(Object.keys(SERIES_META) as SeriesKey[]).map((key) => (
             <Checkbox
               key={key}
-              checked={key === 'equity' ? showEquity : key === 'pnl' ? showPnl : key === 'upnl' ? showUpnl : showDd}
+              checked={
+                key === 'equity' ? showEquity
+                  : key === 'pnl' ? showPnl
+                    : key === 'upnl' ? showUpnl
+                      : key === 'dd' ? showDd
+                        : showFreq
+              }
               onChange={(e) => {
                 const checked = e.target.checked;
                 if (key === 'equity') setShowEquity(checked);
                 if (key === 'pnl') setShowPnl(checked);
                 if (key === 'upnl') setShowUpnl(checked);
                 if (key === 'dd') setShowDd(checked);
+                if (key === 'freq') setShowFreq(checked);
               }}
             >
               <span style={{ color: SERIES_META[key].color }}>●</span>

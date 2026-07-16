@@ -26,6 +26,7 @@ import MonitoringChartPanel, {
   MonitoringTradeMarker,
   MonitoringPeriodStats,
   MonitoringTradeRow,
+  MonitoringTradeFrequencyPoint,
   ChartPeriodDays,
 } from '../components/MonitoringChartPanel';
 import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
@@ -201,6 +202,7 @@ const Positions: React.FC = () => {
   const [monChartRaw, setMonChartRaw] = useState<MonitoringSnapshot[]>([]);
   const [monChartPeriodStats, setMonChartPeriodStats] = useState<MonitoringPeriodStats | null>(null);
   const [monChartTrades, setMonChartTrades] = useState<MonitoringTradeRow[]>([]);
+  const [monChartTradeFrequency, setMonChartTradeFrequency] = useState<MonitoringTradeFrequencyPoint[]>([]);
   const [monChartTradeStats, setMonChartTradeStats] = useState<{ trades24h: number; lastTradeAt: string | null }>({ trades24h: 0, lastTradeAt: null });
   const [monChartTradeMarkers, setMonChartTradeMarkers] = useState<MonitoringTradeMarker[]>([]);
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState<boolean>(false);
@@ -888,6 +890,7 @@ const Positions: React.FC = () => {
       setMonChartRaw(rows);
       setMonChartPeriodStats(res.data?.periodStats || null);
       setMonChartTrades(Array.isArray(res.data?.trades) ? res.data.trades : []);
+      setMonChartTradeFrequency(Array.isArray(res.data?.tradeFrequency) ? res.data.tradeFrequency : []);
       setMonChartTradeStats({
         trades24h: Number(res.data?.tradeStats?.trades24h || 0),
         lastTradeAt: res.data?.tradeStats?.lastTradeAt || null,
@@ -897,6 +900,7 @@ const Positions: React.FC = () => {
       setMonChartRaw([]);
       setMonChartPeriodStats(null);
       setMonChartTrades([]);
+      setMonChartTradeFrequency([]);
       setMonChartTradeStats({ trades24h: 0, lastTradeAt: null });
       setMonChartTradeMarkers([]);
     } finally {
@@ -1453,6 +1457,7 @@ const Positions: React.FC = () => {
           onChartDaysChange={setMonChartDays}
           periodStats={monChartPeriodStats}
           trades={monChartTrades}
+          tradeFrequency={monChartTradeFrequency}
           trades24h={monChartTradeStats.trades24h}
           lastTradeAt={monChartTradeStats.lastTradeAt}
           tradeMarkers={monChartTradeMarkers}

@@ -256,16 +256,65 @@ export type MonitoringPeriodStats = {
   pointCount: number;
 };
 
-export type MonitoringTradeRow = {
-  id: number;
-  tradeType: 'entry' | 'exit';
-  side: 'long' | 'short';
-  symbol: string;
-  price: number;
-  size: number;
-  fee: number | null;
-  time: string;
-  strategyId: number | null;
+export type MonitoringTradeFrequencyPoint = {
+  time: number;
+  count: number;
+  bucket: 'hour' | 'day';
+};
+
+export const getMonitoringTradeFrequency = async (
+  apiKeyName: string,
+  sinceDays?: number,
+  allPeriod: boolean = false,
+): Promise<MonitoringTradeFrequencyPoint[]> => {
+  const key = await getApiKeyRow(apiKeyName);
+  const useHourly = !allPeriod && (!sinceDays || sinceDays <= 1);
+  const params: Array<number> = [key.id];
+  let timeFilter = '';
+
+  if (!allPeriod) {
+    const safeDays = sinceDays && sinceDays > 1
+      ? Math.min(365, Math.max(1, Math.floor(sinceDays)))
+      : 1;
+    timeFilter = 'AND lte.actual_time >= ?';
+    params.push(Date.now() - safeDays * 86_400_000);
+  }
+
+  // SQLite: actual_time is ms epoch. Bucket in UTC for stable public charts.
+  const bucketExpr = useHourly
+    ? `strftime('%Y-%m-%dT%H:00:00Z', lte.actual_time / 1000, 'unixepoch')`
+    : `strftime('%Y-%m-%dT00:00:00Z', lte.actual_time / 1000, 'unixepoch')`;
+
+  const rows = await db.all(
+    `SELECT
+       ${bucketExpr} AS bucket_ts,
+       COUNT(*) AS trade_count
+     FROM live_trade_events lte
+     JOIN strategies s ON s.id = lte.strategy_id
+     WHERE s.api_key_id = ?
+       AND lte.actual_time IS NOT NULL
+       AND lte.actual_time > 0
+       ${timeFilter}
+     GROUP BY bucket_ts
+     ORDER BY bucket_ts ASC
+     LIMIT 400`,
+    params,
+  ).catch(() => []) as Array<{ bucket_ts?: string; trade_count?: number }>;
+
+  return rows
+    .map((row) => {
+      const ts = Date.parse(String(row.bucket_ts || ''));
+      const count = toFiniteNumber(row.trade_count, 0);
+      if (!Number.isFinite(ts) || ts <= 0 || count < 0) {
+        return null;
+      }
+      return {
+        time: Math.floor(ts / 1000),
+        count,
+        bucket: useHourly ? 'hour' as const : 'day' as const,
+      };
+    })
+    .filter((row): row is MonitoringTradeFrequencyPoint => row !== null);
 };
 
 export const computeMonitoringPeriodStats = (points: any[]): MonitoringPeriodStats | null => {
@@ -355,6 +404,18 @@ export const getMonitoringSnapshots = async (
   }
 
   return rows;
+};
+
+export type MonitoringTradeRow = {
+  id: number;
+  tradeType: 'entry' | 'exit';
+  side: 'long' | 'short';
+  symbol: string;
+  price: number;
+  size: number;
+  fee: number | null;
+  time: string;
+  strategyId: number | null;
 };
 
 export const getMonitoringTrades = async (
@@ -485,6 +546,14 @@ export const getMonitoringBundle = async (
     ).catch(() => [])
     : undefined;
 
+  const tradeFrequency = includeTrades
+    ? await getMonitoringTradeFrequency(
+      apiKeyName,
+      allPeriod ? undefined : (days > 1 ? days : 1),
+      allPeriod,
+    ).catch(() => [])
+    : undefined;
+
   return {
     points,
     latest,
@@ -492,6 +561,7 @@ export const getMonitoringBundle = async (
     tradeStats,
     tradeMarkers,
     trades,
+    tradeFrequency,
   };
 };
 
