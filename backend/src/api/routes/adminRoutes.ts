@@ -189,7 +189,7 @@ adminRouter.get('/api-keys', requirePlatformAdmin, async (req, res) => {
   try {
     const { apiKeys } = await loadSettings();
     const tenantRows = await db.all(
-      `SELECT t.display_name, t.product_mode,
+      `SELECT t.display_name, t.slug, t.product_mode,
               COALESCE(NULLIF(ap.execution_api_key_name,''), ap.assigned_api_key_name, t.assigned_api_key_name, '') AS api_key_name,
               COALESCE(ap.actual_enabled, 0) AS algofund_actual_enabled,
               COALESCE(ap.requested_enabled, 0) AS algofund_requested_enabled
@@ -199,12 +199,14 @@ adminRouter.get('/api-keys', requirePlatformAdmin, async (req, res) => {
     ).catch(() => []) as Array<{
       display_name: string;
       product_mode: string;
+      slug?: string;
       api_key_name: string;
       algofund_actual_enabled: number;
       algofund_requested_enabled: number;
     }>;
     const tenantByApiKey = new Map<string, {
       displayName: string;
+      slug?: string;
       productMode: string;
       algofundActualEnabled: boolean;
       algofundRequestedEnabled: boolean;
@@ -214,6 +216,7 @@ adminRouter.get('/api-keys', requirePlatformAdmin, async (req, res) => {
       if (!key) continue;
       tenantByApiKey.set(key, {
         displayName: row.display_name,
+        slug: row.slug,
         productMode: row.product_mode,
         algofundActualEnabled: Number(row.algofund_actual_enabled || 0) === 1,
         algofundRequestedEnabled: Number(row.algofund_requested_enabled || 0) === 1,
@@ -227,6 +230,7 @@ adminRouter.get('/api-keys', requirePlatformAdmin, async (req, res) => {
       return {
         ...k,
         tenantDisplayName: tenant.displayName,
+        tenantSlug: tenant.slug,
         tenantProductMode: tenant.productMode,
         algofundDematerialized: dematerialized,
       };

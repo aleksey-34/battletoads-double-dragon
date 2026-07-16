@@ -26,6 +26,7 @@ const Logs = lazy(() => import('./pages/Logs'));
 const Research = lazy(() => import('./pages/Research'));
 const SaaS = lazy(() => import('./pages/SaaS'));
 const AdminDocs = lazy(() => import('./pages/AdminDocs'));
+const PublicPortfolioPage = lazy(() => import('./pages/PublicPortfolioPage'));
 
 const { Header, Content, Sider } = Layout;
 
@@ -487,6 +488,7 @@ function AppWithProviders() {
         <Routes>
           <Route path="/" element={<Landing />} />
           <Route path="/landing" element={<Landing />} />
+          <Route path="/portfolio/:slug" element={<PublicPortfolioPage />} />
           <Route path="/whitepaper" element={<Whitepaper />} />
           <Route path="/legal/risks" element={<RiskDisclaimer />} />
           <Route path="*" element={<AppShell />} />

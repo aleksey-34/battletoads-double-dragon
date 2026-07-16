@@ -39,12 +39,14 @@ type ApiKey = {
   exchange: string;
   algofundDematerialized?: boolean;
   tenantDisplayName?: string;
+  tenantSlug?: string;
 };
 
 type AdminMonitoringRow = {
   apiKeyName: string;
   exchange: string;
   tenantLabel: string;
+  tenantSlug?: string;
   equityUsd: number | null;
   unrealizedPnl: number | null;
   pnlNetUsd: number | null;
@@ -834,6 +836,7 @@ const Positions: React.FC = () => {
             apiKeyName: key.name,
             exchange: key.exchange,
             tenantLabel: String(key.tenantDisplayName || '').trim() || 'без привязки',
+            tenantSlug: key.tenantSlug,
             equityUsd: latest?.equity_usd != null ? Number(latest.equity_usd) : null,
             unrealizedPnl: latest?.unrealized_pnl != null ? Number(latest.unrealized_pnl) : null,
             pnlNetUsd: latest?.pnl_net_usd != null ? Number(latest.pnl_net_usd) : null,
@@ -847,6 +850,7 @@ const Positions: React.FC = () => {
             apiKeyName: key.name,
             exchange: key.exchange,
             tenantLabel: String(key.tenantDisplayName || '').trim() || 'без привязки',
+            tenantSlug: key.tenantSlug,
             equityUsd: null,
             unrealizedPnl: null,
             pnlNetUsd: null,
@@ -937,9 +941,23 @@ const Positions: React.FC = () => {
         ) : null}
       </Space>
     ) },
-    { title: '', width: 100, render: (_: unknown, row: AdminMonitoringRow) => (
-      <Button size="small" type="primary" ghost onClick={() => openMonChart(row.apiKeyName)}>График</Button>
-    ) },
+    {
+      title: '',
+      width: 190,
+      render: (_: unknown, row: AdminMonitoringRow) => (
+        <Space>
+          <Button size="small" type="primary" ghost onClick={() => openMonChart(row.apiKeyName)}>График</Button>
+          {row.tenantSlug ? (
+            <Button
+              size="small"
+              onClick={() => window.open(`/portfolio/${encodeURIComponent(String(row.tenantSlug || ''))}`, '_blank', 'noopener,noreferrer')}
+            >
+              Портфолио
+            </Button>
+          ) : null}
+        </Space>
+      ),
+    },
   ];
 
   const shouldShowPositions = viewMode === 'positions' || viewMode === 'all';
