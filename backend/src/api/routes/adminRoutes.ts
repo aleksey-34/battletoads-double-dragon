@@ -344,15 +344,55 @@ adminRouter.get('/admin/docs/content', async (req, res) => {
 
 // Получить последние строки логов
 adminRouter.get('/logs', async (req, res) => {
-  const combinedLogPath = path.join(__dirname, '../../logs/combined.log');
-  const errorLogPath = path.join(__dirname, '../../logs/error.log');
+  // Winston writes relative to process.cwd() (= backend/). Compiled __dirname is dist/api/routes,
+  // so ../../logs points at dist/logs (missing) — prefer cwd, then fall back.
+  const resolveLogPath = (fileName: string): string => {
+    const candidates = [
+      path.join(process.cwd(), 'logs', fileName),
+      path.join(__dirname, '../../../logs', fileName),
+      path.join(__dirname, '../../logs', fileName),
+    ];
+    return candidates.find((p) => fs.existsSync(p)) || candidates[0];
+  };
+  const combinedLogPath = resolveLogPath('combined.log');
+  const errorLogPath = resolveLogPath('error.log');
 
+  /** Tail last N non-empty lines without loading multi-GB log files into memory. */
   const readTailLines = (targetPath: string, maxLines: number): string[] => {
     if (!fs.existsSync(targetPath)) {
       return [];
     }
-    const lines = fs.readFileSync(targetPath, 'utf-8').split('\n').filter((line) => String(line || '').trim());
-    return lines.slice(-Math.max(1, maxLines));
+    const want = Math.max(1, maxLines);
+    const stat = fs.statSync(targetPath);
+    if (stat.size <= 0) return [];
+    const fd = fs.openSync(targetPath, 'r');
+    try {
+      const chunkSize = Math.min(stat.size, Math.max(64 * 1024, want * 512));
+      let position = stat.size;
+      let carry = '';
+      const lines: string[] = [];
+      while (position > 0 && lines.length <= want) {
+        const readSize = Math.min(chunkSize, position);
+        position -= readSize;
+        const buf = Buffer.alloc(readSize);
+        fs.readSync(fd, buf, 0, readSize, position);
+        carry = buf.toString('utf-8') + carry;
+        const parts = carry.split('\n');
+        carry = parts.shift() || '';
+        for (let i = parts.length - 1; i >= 0; i -= 1) {
+          const line = String(parts[i] || '').trim();
+          if (line) lines.push(line);
+          if (lines.length >= want) break;
+        }
+      }
+      if (lines.length < want) {
+        const head = String(carry || '').trim();
+        if (head) lines.push(head);
+      }
+      return lines.reverse().slice(-want);
+    } finally {
+      fs.closeSync(fd);
+    }
   };
 
   try {
