@@ -63,28 +63,41 @@ export const runAutoStrategiesCycle = async () => {
        WHERE ts.max_open_positions > 0 AND ts.is_active = 1`
     )) || [];
 
+    // Aggregate OP/orphan checks per API key — same key can have many TS books
+    // (portfolio B3+MRS). Closing orphans once avoids Bybit "position is zero" spam.
+    const systemsByKey = new Map<string, Array<{ id: number; maxOpen: number }>>();
     for (const sys of systems) {
-      const maxOpen = Number(sys.max_open_positions || 0);
       const apiKeyName = String(sys.api_key_name || '').trim();
-      if (!apiKeyName || maxOpen <= 0) {
-        continue;
-      }
+      const maxOpen = Number(sys.max_open_positions || 0);
+      if (!apiKeyName || maxOpen <= 0) continue;
+      const list = systemsByKey.get(apiKeyName) || [];
+      list.push({ id: Number(sys.id), maxOpen });
+      systemsByKey.set(apiKeyName, list);
+    }
+
+    for (const [apiKeyName, keySystems] of systemsByKey) {
+      const systemIds = keySystems.map((s) => s.id);
+      const maxOpen = Math.max(...keySystems.map((s) => s.maxOpen));
+      const placeholders = systemIds.map(() => '?').join(',');
 
       const openStrategies: any[] = (await db.all(
-        `SELECT s.id AS strategy_id, s.base_symbol, a.name AS api_key_name, s.updated_at
+        `SELECT s.id AS strategy_id, s.base_symbol, a.name AS api_key_name, s.updated_at, tsm.system_id
          FROM strategies s
          JOIN trading_system_members tsm ON tsm.strategy_id = s.id
          JOIN api_keys a ON a.id = s.api_key_id
-         WHERE tsm.system_id = ? AND tsm.is_enabled = 1
+         WHERE tsm.system_id IN (${placeholders}) AND tsm.is_enabled = 1
          AND s.is_active = 1 AND s.state != 'flat'
          AND COALESCE(s.strategy_type, '') NOT IN ('dca', 'dca_futures')
          ORDER BY s.updated_at ASC`,
-        [sys.id]
+        systemIds,
       )) || [];
 
-      if (openStrategies.length > maxOpen) {
-        const excess = openStrategies.slice(maxOpen);
-        logger.warn(`ОП overflow in system ${sys.id}: ${openStrategies.length}/${maxOpen}, closing ${excess.length} excess`);
+      // Per-system overflow: close excess within each book
+      for (const sys of keySystems) {
+        const owned = openStrategies.filter((row) => Number(row.system_id) === sys.id);
+        if (owned.length <= sys.maxOpen) continue;
+        const excess = owned.slice(sys.maxOpen);
+        logger.warn(`ОП overflow in system ${sys.id}: ${owned.length}/${sys.maxOpen}, closing ${excess.length} excess`);
         for (const ex of excess) {
           try {
             await ensureExchangeClientInitialized(ex.api_key_name);
@@ -108,8 +121,8 @@ export const runAutoStrategiesCycle = async () => {
         const exchangeOpen = countExchangeOpenPositions(exchangePositions);
         if (exchangeOpen > maxOpen) {
           logger.warn(
-            `ОП exchange overflow on ${apiKeyName} system ${sys.id}: `
-            + `exchange=${exchangeOpen} db=${openStrategies.length} limit=${maxOpen}`,
+            `ОП exchange overflow on ${apiKeyName}: `
+            + `exchange=${exchangeOpen} db=${openStrategies.length} limit=${maxOpen} systems=${systemIds.join(',')}`,
           );
         }
         for (const row of exchangePositions || []) {
@@ -123,12 +136,16 @@ export const runAutoStrategiesCycle = async () => {
             continue;
           }
           logger.warn(
-            `ОП orphan exchange position on ${apiKeyName}: ${symbol} (no non-flat TS owner in system ${sys.id}) — closing`,
+            `ОП orphan exchange position on ${apiKeyName}: ${symbol} (no non-flat TS owner across systems ${systemIds.join(',')}) — closing`,
           );
-          await closeAllForSymbol(apiKeyName, symbol, { marketType: 'swap' });
+          try {
+            await closeAllForSymbol(apiKeyName, symbol, { marketType: 'swap' });
+          } catch (orphanCloseErr) {
+            logger.warn(`ОП orphan close failed for ${apiKeyName} ${symbol}: ${formatActionError(orphanCloseErr)}`);
+          }
         }
       } catch (orphanErr) {
-        logger.warn(`ОП orphan cleanup failed for system ${sys.id}: ${formatActionError(orphanErr)}`);
+        logger.warn(`ОП orphan cleanup failed for key ${apiKeyName}: ${formatActionError(orphanErr)}`);
       }
     }
   } catch (overflowErr) {

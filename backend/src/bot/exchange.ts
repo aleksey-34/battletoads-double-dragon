@@ -735,6 +735,15 @@ const isBingxNoPositionError = (error: unknown): boolean => {
   return message.includes('101290') || message.includes('Reduce Only order can only decrease');
 };
 
+/** Bybit already-flat: reduce-only close when exchange position is 0 (benign race / stale cache). */
+const isBybitNoPositionError = (error: unknown): boolean => {
+  const message = String((error as any)?.message || error || '').toLowerCase();
+  return message.includes('current position is zero')
+    || message.includes('cannot fix reduce-only order qty')
+    || message.includes('position idx not match position mode')
+    || (message.includes('reduce-only') && message.includes('zero'));
+};
+
 const isBingxPositionSideError = (error: unknown): boolean => {
   const message = String((error as any)?.message || error || '').toLowerCase();
   return message.includes('positionside') || message.includes('position side') || message.includes('109400') || message.includes('both');
@@ -2984,9 +2993,15 @@ export const closePosition = async (
     }
 
     logger.info(`Closed position: ${qty} ${symbol}`);
+    invalidatePositionCache(apiKeyName);
     return close.result;
   } catch (error) {
     const err = error as Error;
+    if (isBybitNoPositionError(error)) {
+      logger.warn(`Bybit close skipped — position already flat: ${err.message}`);
+      invalidatePositionCache(apiKeyName);
+      return;
+    }
     logger.error(`Error closing position: ${err.message}`);
     throw error;
   }

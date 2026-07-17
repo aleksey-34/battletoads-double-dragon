@@ -153,7 +153,14 @@ const buildRuntimeClientLines = async (periodHours: number): Promise<string[]> =
        FROM algofund_profiles ap
        JOIN tenants t ON t.id = ap.tenant_id
        WHERE COALESCE(ap.requested_enabled, 0) = 1
-         AND COALESCE(ap.actual_enabled, 0) = 1
+         AND (
+           COALESCE(ap.actual_enabled, 0) = 1
+           OR TRIM(COALESCE(ap.published_system_name, '')) != ''
+           OR EXISTS (
+             SELECT 1 FROM algofund_active_portfolios aap
+             WHERE aap.profile_id = ap.id AND COALESCE(aap.is_enabled, 1) = 1
+           )
+         )
 
        UNION ALL
 
@@ -521,6 +528,7 @@ type HealthRow = {
   tenant_slug: string | null;
   api_key_name: string | null;
   system_name: string | null;
+  actual_enabled: boolean;
   equity: number;
   equity_start: number;
   equity_delta: number;
@@ -580,6 +588,7 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
        t.slug AS tenant_slug,
        COALESCE(NULLIF(ap.execution_api_key_name,''), NULLIF(t.assigned_api_key_name,''), NULLIF(ap.assigned_api_key_name,'')) AS api_key_name,
        COALESCE(ap.published_system_name,'') AS system_name,
+       COALESCE(ap.actual_enabled,0) AS actual_enabled,
        COALESCE(ms.equity_usd,0)            AS equity,
        COALESCE(ms_start.equity_usd, COALESCE(ms.equity_usd,0)) AS equity_start,
        COALESCE(ms.equity_usd,0) - COALESCE(ms_start.equity_usd, COALESCE(ms.equity_usd,0)) AS equity_delta,
@@ -640,7 +649,15 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
          AND ABS(COALESCE(unrealized_pnl, 0)) < equity_usd * 0.20
        GROUP BY api_key_id
      ) peak ON peak.api_key_id = a.id
-     WHERE COALESCE(ap.requested_enabled,0) = 1 AND COALESCE(ap.actual_enabled,0) = 1
+     WHERE COALESCE(ap.requested_enabled,0) = 1
+       AND (
+         COALESCE(ap.actual_enabled,0) = 1
+         OR TRIM(COALESCE(ap.published_system_name, '')) != ''
+         OR EXISTS (
+           SELECT 1 FROM algofund_active_portfolios aap
+           WHERE aap.profile_id = ap.id AND COALESCE(aap.is_enabled, 1) = 1
+         )
+       )
        -- Skip dematerialized profiles: no active TS published AND no live runtime strategies on the key.
        -- This silences margin/drawdown/desync alerts for keys we no longer manage in runtime
        -- (e.g. profiles that were dematerialized but where positions were intentionally kept on the exchange).
@@ -652,6 +669,10 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
              AND COALESCE(s.is_runtime, 0) = 1
              AND COALESCE(s.is_archived, 0) = 0
          )
+         OR EXISTS (
+           SELECT 1 FROM algofund_active_portfolios aap
+           WHERE aap.profile_id = ap.id AND COALESCE(aap.is_enabled, 1) = 1
+         )
        )
      ORDER BY t.display_name ASC`,
     [`-${periodHours} hours`, `-${periodHours} hours`, `-${periodHours} hours`, `-${periodHours} hours`]
@@ -661,6 +682,7 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
     tenant_slug: r.tenant_slug,
     api_key_name: r.api_key_name,
     system_name: r.system_name,
+    actual_enabled: Number(r.actual_enabled || 0) === 1,
     equity: toFinite(r.equity, 0),
     equity_start: toFinite(r.equity_start, 0),
     equity_delta: toFinite(r.equity_delta, 0),
@@ -831,6 +853,8 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
   const duplicateSidByApiKey = await fetchDuplicateSidGroupsByApiKey(rows.map((r) => r.api_key_name || ''));
   const clientCtxByApiKey = await fetchClientExecutionContexts(rows.map((r) => r.api_key_name || ''));
   const total = rows.length;
+  const enabledCount = rows.filter((r) => r.actual_enabled).length;
+  const disabledCount = total - enabledCount;
   if (total === 0) {
     return { ok: true, text: `<b>📊 BTDD health (${periodHours}h)</b>\nАктивных algofund-клиентов нет.` };
   }
@@ -1019,7 +1043,7 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
   const deltaSign = sumEquityDelta >= 0 ? '+' : '';
   const upnlSign = sumUpnl >= 0 ? '+' : '';
   const stats = [
-    `Клиентов: ${total} · equity: $${sumEquity.toFixed(0)} · Δ${periodHours}h: ${deltaSign}$${sumEquityDelta.toFixed(2)} · uPnL: ${upnlSign}${sumUpnl.toFixed(2)}`,
+    `Клиентов: ${total}${disabledCount > 0 ? ` (вкл ${enabledCount} · выкл ${disabledCount})` : ''} · equity: $${sumEquity.toFixed(0)} · Δ${periodHours}h: ${deltaSign}$${sumEquityDelta.toFixed(2)} · uPnL: ${upnlSign}${sumUpnl.toFixed(2)}`,
     `Сделок за ${periodHours}ч: ${sumTrades} · worst DD: ${worstDd.dd.toFixed(1)}% (${escapeHtml(worstDd.display_name || worstDd.api_key_name || '')})`,
   ].join('\n');
 

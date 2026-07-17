@@ -441,7 +441,8 @@ const medianOfValues = (values: number[]): number => {
 const buildPartnerTsCardSummaries = (rows: PartnerTradeSummaryRow[]): PartnerTsCardSummary[] => {
   const groups = new Map<string, PartnerTradeSummaryRow[]>();
   for (const row of rows) {
-    if (!row.requestedEnabled || !row.enabled) continue;
+    if (!row.requestedEnabled) continue;
+    if (!String(row.publishedSystem || '').trim()) continue;
     const { key } = partnerTsCardLabel(row.publishedSystem);
     const list = groups.get(key) || [];
     list.push(row);
@@ -451,7 +452,8 @@ const buildPartnerTsCardSummaries = (rows: PartnerTradeSummaryRow[]): PartnerTsC
   const out: PartnerTsCardSummary[] = [];
   for (const [, group] of groups) {
     const { label } = partnerTsCardLabel(group[0]?.publishedSystem || '');
-    const tradeCounts = group.map((r) => r.tradesCount);
+    const enabledGroup = group.filter((r) => r.enabled);
+    const tradeCounts = enabledGroup.map((r) => r.tradesCount);
     const closedTrades = group.reduce((sum, r) => sum + r.closedCount, 0);
     const totalPnlUsd = group.reduce((sum, r) => sum + r.totalPnlUsd, 0);
     const equityDeltaUsd = group.reduce((sum, r) => sum + r.equityDeltaUsd, 0);
@@ -465,8 +467,8 @@ const buildPartnerTsCardSummaries = (rows: PartnerTradeSummaryRow[]): PartnerTsC
       cardKey: partnerTsCardLabel(group[0]?.publishedSystem || '').key,
       displayLabel: label,
       clients: group.length,
-      activeClients: group.filter((r) => r.tradesCount > 0).length,
-      tradesMedian: medianOfValues(tradeCounts),
+      activeClients: enabledGroup.filter((r) => r.tradesCount > 0).length,
+      tradesMedian: medianOfValues(tradeCounts.length > 0 ? tradeCounts : group.map((r) => r.tradesCount)),
       equityDeltaUsd: Number(equityDeltaUsd.toFixed(2)),
       closedTrades,
       avgPnlPercent,
