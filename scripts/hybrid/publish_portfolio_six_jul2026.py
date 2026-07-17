@@ -229,7 +229,14 @@ def b3_strategy_ids(conn: sqlite3.Connection) -> list[int]:
            WHERE m.system_id=? AND COALESCE(m.is_enabled,1)=1 ORDER BY s.id""",
         (B3_ID,),
     ).fetchall()
-    return [int(r[0]) for r in rows]
+    ids = [int(r[0]) for r in rows]
+    # Masters are sometimes soft-archived by ops halts; materialize skips archived sources.
+    if ids:
+        conn.execute(
+            f"UPDATE strategies SET is_archived=0, updated_at=? WHERE id IN ({','.join('?' for _ in ids)}) AND COALESCE(is_archived,0)=1",
+            (now(), *ids),
+        )
+    return ids
 
 
 def upsert_portfolio(
