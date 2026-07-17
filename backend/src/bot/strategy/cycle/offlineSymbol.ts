@@ -14,6 +14,11 @@ export const isOfflineSymbolMarketDataError = (errorText: string): boolean => {
   const text = String(errorText || '').toLowerCase();
   return text.includes('market symbol offline on')
     || text.includes('symbol is offline on')
+    || text.includes('not supported via the api')
+    || text.includes('apitradingsymbols')
+    || text.includes('contract not found')
+    || /code["']?\s*[:=]\s*-?1058/.test(text)
+    || /code["']?\s*[:=]\s*-?1054/.test(text)
     || (text.includes('offline currently') && (text.includes('validated symbols') || text.includes('validted')));
 };
 

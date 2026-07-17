@@ -726,3 +726,109 @@ export const createWeexClient = (apiKey: ApiKey): any => {
     passphrase: apiKey.passphrase,
   });
 };
+
+/** Public allowlist of symbols WEEX accepts for API orders (~337). Distinct from exchangeInfo listing. */
+const WEEX_API_TRADING_TTL_MS = 30 * 60 * 1000;
+let weexApiTradingCache: { symbols: Set<string>; fetchedAt: number } | null = null;
+let weexApiTradingInflight: Promise<Set<string>> | null = null;
+
+const collectWeexSymbolKeys = (payload: unknown): Set<string> => {
+  const out = new Set<string>();
+  const walk = (value: unknown, depth = 0): void => {
+    if (value == null || depth > 6) return;
+    if (typeof value === 'string') {
+      const key = toWeexPrivateSymbol(value);
+      if (key.endsWith('USDT') && key.length >= 6 && key.length <= 24) {
+        out.add(key);
+      }
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item, depth + 1);
+      return;
+    }
+    if (typeof value === 'object') {
+      const row = value as Record<string, unknown>;
+      const base = row.baseCoin ?? row.baseAsset;
+      const quote = row.quoteCoin ?? row.quoteAsset;
+      if (base && quote) {
+        const key = toWeexPrivateSymbol(`${base}${quote}`);
+        if (key) out.add(key);
+      }
+      if (row.symbol != null) walk(String(row.symbol), depth + 1);
+      for (const nested of Object.values(row)) walk(nested, depth + 1);
+    }
+  };
+  walk(payload);
+  return out;
+};
+
+/**
+ * Fetch WEEX `/capi/v3/market/apiTradingSymbols` (public).
+ * This is the real order allowlist; `exchangeInfo` / ccxt loadMarkets is much wider and causes -1058.
+ */
+export const getWeexApiTradingSymbols = async (forceRefresh = false): Promise<Set<string>> => {
+  const now = Date.now();
+  if (
+    !forceRefresh
+    && weexApiTradingCache
+    && now - weexApiTradingCache.fetchedAt < WEEX_API_TRADING_TTL_MS
+    && weexApiTradingCache.symbols.size > 0
+  ) {
+    return weexApiTradingCache.symbols;
+  }
+  if (!forceRefresh && weexApiTradingInflight) {
+    return weexApiTradingInflight;
+  }
+
+  weexApiTradingInflight = (async () => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15_000);
+    try {
+      const response = await fetch(`${WEEX_API_BASE}/capi/v3/market/apiTradingSymbols`, {
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'btdd' },
+        signal: controller.signal,
+      });
+      const text = await response.text();
+      let payload: unknown = null;
+      try {
+        payload = text ? JSON.parse(text) : null;
+      } catch {
+        payload = text;
+      }
+      if (!response.ok) {
+        throw new Error(`WEEX apiTradingSymbols failed (${response.status}): ${text.slice(0, 200)}`);
+      }
+      // Endpoint may return a bare string[] or { data: ... }.
+      const data = payload && typeof payload === 'object' && !Array.isArray(payload) && 'data' in (payload as any)
+        ? (payload as any).data
+        : payload;
+      const symbols = collectWeexSymbolKeys(data);
+      if (symbols.size === 0) {
+        throw new Error('WEEX apiTradingSymbols returned empty set');
+      }
+      weexApiTradingCache = { symbols, fetchedAt: Date.now() };
+      return symbols;
+    } finally {
+      clearTimeout(timeoutId);
+      weexApiTradingInflight = null;
+    }
+  })();
+
+  return weexApiTradingInflight;
+};
+
+export const isWeexApiTradableSymbol = async (symbol: string): Promise<boolean> => {
+  const key = toWeexPrivateSymbol(symbol);
+  if (!key) return false;
+  try {
+    const allow = await getWeexApiTradingSymbols();
+    return allow.has(key);
+  } catch {
+    // Fail-open only when the public endpoint is down — avoid blocking all WEEX trading.
+    return true;
+  }
+};
+
+export const toWeexOrderSymbol = toWeexPrivateSymbol;

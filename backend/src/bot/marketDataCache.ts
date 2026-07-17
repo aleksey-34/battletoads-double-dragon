@@ -11,6 +11,10 @@ const candleAutoCache = new Map<string, CandleCacheEntry>();
 const candleAutoInflight = new Map<string, Promise<any[]>>();
 const relayKeysByExchange = new Map<string, string[]>();
 const relayKeyCursor = new Map<string, number>();
+/** Keys that fail auth / are dematerialized — never use for candle relay. */
+const unhealthyRelayKeys = new Set<string>();
+const RELAY_UNHEALTHY_TTL_MS = 6 * 60 * 60 * 1000;
+const unhealthyRelayUntil = new Map<string, number>();
 
 type MarketDataOptions = {
   startMs?: number;
@@ -28,10 +32,36 @@ export const registerMarketDataRelayKey = (exchange: string, apiKeyName: string)
   }
 };
 
+export const markMarketDataRelayKeyUnhealthy = (apiKeyName: string, reason?: string): void => {
+  const key = String(apiKeyName || '').trim();
+  if (!key) return;
+  unhealthyRelayKeys.add(key);
+  unhealthyRelayUntil.set(key, Date.now() + RELAY_UNHEALTHY_TTL_MS);
+  if (reason) {
+    // Lazy require avoided — caller logs; keep this silent to prevent spam.
+  }
+};
+
+const isRelayKeyHealthy = (apiKeyName: string): boolean => {
+  const key = String(apiKeyName || '').trim();
+  if (!key) return false;
+  const until = Number(unhealthyRelayUntil.get(key) || 0);
+  if (until > 0 && until <= Date.now()) {
+    unhealthyRelayUntil.delete(key);
+    unhealthyRelayKeys.delete(key);
+  }
+  return !unhealthyRelayKeys.has(key);
+};
+
 const pickRelayApiKey = (exchange: string, preferredKey: string): string => {
   const ex = String(exchange || '').trim().toLowerCase();
-  const list = relayKeysByExchange.get(ex) || [];
-  if (list.length === 0) return preferredKey;
+  const preferred = String(preferredKey || '').trim();
+  // Prefer the requesting key when healthy — avoids routing healthy clients onto dead ACCESS_KEYs.
+  if (preferred && isRelayKeyHealthy(preferred)) {
+    return preferred;
+  }
+  const list = (relayKeysByExchange.get(ex) || []).filter((k) => isRelayKeyHealthy(k));
+  if (list.length === 0) return preferred || preferredKey;
   if (list.length === 1) return list[0];
   const idx = relayKeyCursor.get(ex) || 0;
   const picked = list[idx % list.length];
@@ -76,6 +106,18 @@ export const getCachedMarketData = async (
       const arr = Array.isArray(data) ? data : [];
       candleAutoCache.set(key, { data: arr, fetchedAt: Date.now() });
       return arr;
+    } catch (error) {
+      const msg = String((error as Error)?.message || error || '');
+      if (/Invalid ACCESS_KEY|无效的ACCESS_KEY|code["']?\s*[:=]\s*-?1044|401/i.test(msg)) {
+        markMarketDataRelayKeyUnhealthy(relayKey, msg);
+        if (relayKey !== apiKeyName && isRelayKeyHealthy(apiKeyName)) {
+          const data = await getMarketData(apiKeyName, symbol, interval, limit, options);
+          const arr = Array.isArray(data) ? data : [];
+          candleAutoCache.set(key, { data: arr, fetchedAt: Date.now() });
+          return arr;
+        }
+      }
+      throw error;
     } finally {
       candleAutoInflight.delete(key);
     }

@@ -15,7 +15,16 @@ import {
   type TradingSystemMemberDraft,
 } from '../bot/tradingSystems';
 import { getMonitoringLatest } from '../bot/monitoring';
-import { getPositions, closeAllPositions, cancelAllOrders, ensureExchangeClientInitialized, getMarketData, getAllSymbols } from '../bot/exchange';
+import {
+  getPositions,
+  closeAllPositions,
+  cancelAllOrders,
+  ensureExchangeClientInitialized,
+  getMarketData,
+  getAllSymbols,
+  getExchangeForApiKey,
+} from '../bot/exchange';
+import { isWeexApiTradableSymbol } from '../bot/weexClient';
 import { Strategy, saveApiKey } from '../config/settings';
 import { db, initDB } from '../utils/database';
 import logger from '../utils/logger';
@@ -17637,6 +17646,17 @@ export const executeCopytradingSession = async (
             addLog(`✗ ${displayName}: qty too small (equity=${followerEquity.toFixed(2)})`);
             followerResults[resultKey] = { status: 'skipped', error: 'qty too small' };
             continue;
+          }
+
+          // WEEX followers: skip pairs outside apiTradingSymbols (same -1058 trap as SaaS materialize).
+          const followerExchange = String(getExchangeForApiKey(keyName) || '').toLowerCase();
+          if (followerExchange === 'weex') {
+            const tradable = await isWeexApiTradableSymbol(sym);
+            if (!tradable) {
+              addLog(`✗ ${displayName}: ${sym} not API-tradable on WEEX (apiTradingSymbols)`);
+              followerResults[resultKey] = { status: 'skipped', error: 'weex apiTradingSymbols deny' };
+              continue;
+            }
           }
 
           addLog(`${displayName}: ${side} ${followerContracts} ${sym} (equityRatio=${equityRatio.toFixed(3)}, copyRatio=${copyRatio})`);

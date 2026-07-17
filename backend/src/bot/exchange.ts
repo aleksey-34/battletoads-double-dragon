@@ -4,7 +4,12 @@ import logger from '../utils/logger';
 import { ApiKey } from '../config/settings';
 import { db } from '../utils/database';
 // weexClient.ts is the legacy custom REST adapter; ccxt ≥4.5.49 has native weex support
-import { createWeexClient } from './weexClient';
+import {
+  createWeexClient,
+  getWeexApiTradingSymbols,
+  isWeexApiTradableSymbol,
+  toWeexOrderSymbol,
+} from './weexClient';
 import { readHybridCandles } from './hybridCandleStore';
 import { registerMarketDataRelayKey } from './marketDataCache';
 import { batchPositionsSequential, getCachedPositions, invalidatePositionCache } from './positionPollCache';
@@ -1110,7 +1115,7 @@ export const getAllSymbols = async (apiKeyName: string) => {
       const markets = await entry.limiter.schedule(() => entry.client.loadMarkets());
       const list = Object.values(markets || {}) as any[];
 
-      const symbols = list
+      let symbols = list
         .filter((market) => {
           const isContract = market?.contract === true || market?.swap === true || market?.future === true;
           const isActive = market?.active !== false;
@@ -1118,6 +1123,21 @@ export const getAllSymbols = async (apiKeyName: string) => {
         })
         .map((market) => toUiSymbol(market?.id || market?.symbol))
         .filter((symbol) => Boolean(symbol));
+
+      // WEEX: exchangeInfo/ccxt markets include hundreds of pairs that reject API orders (-1058).
+      // Materialize / copytrading / selectors must use the real apiTradingSymbols allowlist.
+      if (entry.exchange === 'weex') {
+        try {
+          const apiAllow = await getWeexApiTradingSymbols();
+          if (apiAllow.size > 0) {
+            symbols = symbols.filter((symbol) => apiAllow.has(toWeexOrderSymbol(symbol)));
+          }
+        } catch (allowErr) {
+          logger.warn(
+            `WEEX apiTradingSymbols filter skipped for ${apiKeyName}: ${(allowErr as Error).message}`
+          );
+        }
+      }
 
       const sorted = Array.from(new Set(symbols)).sort();
       setCachedExchangeData(cacheKey, sorted);
@@ -1609,6 +1629,15 @@ export const placeOrder = async (
   throw lastError || new Error(`Failed to place order for ${symbol}`);
 };
 
+const isWeexApiOrderDeniedError = (error: unknown): boolean => {
+  const text = String((error as Error)?.message || error || '');
+  return /code["']?\s*[:=]\s*-?1058/i.test(text)
+    || /code["']?\s*[:=]\s*-?1054/i.test(text)
+    || /not supported via the API/i.test(text)
+    || /Contract not found/i.test(text)
+    || /apiTradingSymbols/i.test(text);
+};
+
 const placeOrderCcxt = async (
   apiKeyName: string,
   symbol: string,
@@ -1636,6 +1665,55 @@ const placeOrderCcxt = async (
           logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on ${entry.exchange}: symbol missing in swap/futures market map`);
           throw new Error(`Market symbol offline on ${entry.exchange}: ${symbol}`);
         }
+      }
+    }
+
+    // WEEX: reject before place when symbol is listed but not API-tradable (-1058),
+    // and route orders through v3 REST (avoids ccxt stale contractId → -1054).
+    if (!isSpot && entry.exchange === 'weex') {
+      if (isOfflineSymbolCached(apiKeyName, symbol)) {
+        throw new Error(`Market symbol offline on weex: ${symbol}`);
+      }
+      const apiOk = await isWeexApiTradableSymbol(symbol);
+      if (!apiOk) {
+        markOfflineSymbol(apiKeyName, symbol);
+        logger.warn(
+          `Market symbol offline for ${apiKeyName}/${symbol} on weex: missing from apiTradingSymbols`
+        );
+        throw new Error(`Market symbol offline on weex: ${symbol}`);
+      }
+
+      try {
+        const row = await db.get('SELECT * FROM api_keys WHERE name = ?', [apiKeyName]);
+        if (!row) {
+          throw new Error(`API key not found: ${apiKeyName}`);
+        }
+        const weexClient = createWeexClient(row as ApiKey);
+        const numericPrice = price ? Number(price) : undefined;
+        const orderType = price && numericPrice && Number.isFinite(numericPrice) ? 'limit' : 'market';
+        const amount = Number(qty);
+        const order = await entry.limiter.schedule(() =>
+          weexClient.createOrder(
+            toWeexOrderSymbol(symbol),
+            orderType,
+            side === 'Buy' ? 'buy' : 'sell',
+            amount,
+            orderType === 'limit' ? numericPrice : undefined,
+            { reduceOnly: Boolean(options?.reduceOnly) },
+          )
+        );
+        logger.info(`Placed WEEX v3 order: ${side} ${qty} ${symbol}`);
+        return order;
+      } catch (error) {
+        if (isWeexApiOrderDeniedError(error)) {
+          markOfflineSymbol(apiKeyName, symbol);
+          logger.warn(
+            `Market symbol offline for ${apiKeyName}/${symbol} on weex: ${(error as Error).message}`
+          );
+          throw new Error(`Market symbol offline on weex: ${symbol}`);
+        }
+        logger.error(`Error placing WEEX v3 order for ${apiKeyName} ${symbol} ${side}: ${(error as Error).message}`);
+        throw error;
       }
     }
 
@@ -1727,6 +1805,11 @@ const placeOrderCcxt = async (
         markOfflineSymbol(apiKeyName, symbol);
         logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on ${entry.exchange}: spot permission error (symbol has no swap market), marking offline`);
         throw new Error(`Market symbol offline on ${entry.exchange}: ${symbol}`);
+      }
+      if (!isSpot && entry.exchange === 'weex' && isWeexApiOrderDeniedError(error)) {
+        markOfflineSymbol(apiKeyName, symbol);
+        logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on weex: ${err.message}`);
+        throw new Error(`Market symbol offline on weex: ${symbol}`);
       }
       logger.error(`Error placing ccxt order for ${apiKeyName} ${symbol} ${side}: ${err.message}`);
       throw error;
