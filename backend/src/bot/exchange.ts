@@ -431,6 +431,10 @@ const markOfflineSymbol = (apiKeyName: string, symbol: string): void => {
   offlineSymbolUntil.set(key, Date.now() + OFFLINE_SYMBOL_CACHE_MS);
 };
 
+const clearOfflineSymbol = (apiKeyName: string, symbol: string): void => {
+  offlineSymbolUntil.delete(buildOfflineSymbolKey(apiKeyName, symbol));
+};
+
 const shouldLogMarketErrorNow = (key: string): boolean => {
   const now = Date.now();
   const until = Number(marketErrorLogUntil.get(key) || 0);
@@ -1227,12 +1231,23 @@ export const getMarketData = async (
     const normalizedSymbol = normalizeSymbolKey(symbol);
 
     if (isOfflineSymbolCached(apiKeyName, symbol)) {
-      throw new Error(`Symbol ${symbol} is offline on ${entry.exchange} (cached)`);
+      // WEEX: ccxt swap maps are incomplete vs apiTradingSymbols — do not trust stale offline cache
+      // when the public allowlist still contains the symbol (false offline blocked entire MRS books).
+      if (entry.exchange === 'weex') {
+        const apiOk = await isWeexApiTradableSymbol(symbol).catch(() => false);
+        if (apiOk) {
+          clearOfflineSymbol(apiKeyName, symbol);
+        } else {
+          throw new Error(`Symbol ${symbol} is offline on ${entry.exchange} (cached)`);
+        }
+      } else {
+        throw new Error(`Symbol ${symbol} is offline on ${entry.exchange} (cached)`);
+      }
     }
 
-    // Fast-path for all CCXT exchanges: if symbol is absent in loaded swap/futures markets,
-    // treat it as offline and skip remote fetches — we never want spot market routing.
-    if (normalizedSymbol) {
+    // Fast-path: if symbol is absent in loaded swap/futures markets, treat as offline.
+    // WEEX exception: ccxt markets lag apiTradingSymbols; candles go through weex-v3 REST anyway.
+    if (normalizedSymbol && entry.exchange !== 'weex') {
       const symbolMap = await ensureCcxtSymbolMap(entry);
       if (!symbolMap.has(normalizedSymbol)) {
         markOfflineSymbol(apiKeyName, symbol);
@@ -1240,6 +1255,16 @@ export const getMarketData = async (
           logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on ${entry.exchange}: symbol missing in swap/futures market map`);
         }
         throw new Error(`Market symbol offline on ${entry.exchange}: ${symbol}`);
+      }
+    }
+    if (normalizedSymbol && entry.exchange === 'weex') {
+      const apiOk = await isWeexApiTradableSymbol(symbol);
+      if (!apiOk) {
+        markOfflineSymbol(apiKeyName, symbol);
+        if (shouldLogMarketErrorNow(marketErrorKey)) {
+          logger.warn(`Market symbol offline for ${apiKeyName}/${symbol} on weex: missing from apiTradingSymbols`);
+        }
+        throw new Error(`Market symbol offline on weex: ${symbol}`);
       }
     }
 
@@ -1654,9 +1679,9 @@ const placeOrderCcxt = async (
     const rawCcxtSymbol = await resolveCcxtSymbol(entry, symbol, isSpot ? 'spot' : 'swap');
     const ccxtSymbol = isSpot ? toSpotCcxtSymbol(rawCcxtSymbol) : rawCcxtSymbol;
 
-    // Fast-path for all CCXT exchanges: if symbol is absent in swap/futures map, treat as offline.
-    // This prevents accidental spot-market routing when the symbol has no futures contract.
-    if (!isSpot) {
+    // Fast-path for CCXT exchanges: if symbol is absent in swap/futures map, treat as offline.
+    // WEEX: skip ccxt map — allowlist is apiTradingSymbols; orders go through v3 REST.
+    if (!isSpot && entry.exchange !== 'weex') {
       const normalizedSymbol = normalizeSymbolKey(symbol);
       if (normalizedSymbol && !isOfflineSymbolCached(apiKeyName, symbol)) {
         const symbolMap = await ensureCcxtSymbolMap(entry);
@@ -1672,7 +1697,12 @@ const placeOrderCcxt = async (
     // and route orders through v3 REST (avoids ccxt stale contractId → -1054).
     if (!isSpot && entry.exchange === 'weex') {
       if (isOfflineSymbolCached(apiKeyName, symbol)) {
-        throw new Error(`Market symbol offline on weex: ${symbol}`);
+        const apiOkCached = await isWeexApiTradableSymbol(symbol).catch(() => false);
+        if (apiOkCached) {
+          clearOfflineSymbol(apiKeyName, symbol);
+        } else {
+          throw new Error(`Market symbol offline on weex: ${symbol}`);
+        }
       }
       const apiOk = await isWeexApiTradableSymbol(symbol);
       if (!apiOk) {
