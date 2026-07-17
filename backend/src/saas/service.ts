@@ -549,16 +549,30 @@ export const getCardConfigBySystemName = async (
 export const applyClientCardStrategyOverrides = async (
   executionApiKeyName: string,
   systemName: string,
+  options?: { strategyIds?: number[] },
 ): Promise<void> => {
   const cfg = await getCardConfigBySystemName(systemName);
+  const scopedIds = (options?.strategyIds || [])
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+  // Multi-TS portfolios share one API key — only touch the book just materialized.
+  if (scopedIds.length === 0) {
+    logger.warn(
+      `applyClientCardStrategyOverrides skipped for ${systemName} on ${executionApiKeyName}: no strategyIds (refusing key-wide lot paint)`,
+    );
+    return;
+  }
+  const idPlaceholders = scopedIds.map(() => '?').join(',');
+
   if (cfg.lotPercent > 0) {
     await db.run(
       `UPDATE strategies
        SET lot_long_percent = ?, lot_short_percent = ?, updated_at = CURRENT_TIMESTAMP
        WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ?)
          AND COALESCE(origin, '') <> 'saas_overlay_legacy'
-         AND COALESCE(strategy_type, '') NOT IN ('dca', 'dca_futures')`,
-      [cfg.lotPercent, cfg.lotPercent, executionApiKeyName],
+         AND COALESCE(strategy_type, '') NOT IN ('dca', 'dca_futures')
+         AND id IN (${idPlaceholders})`,
+      [cfg.lotPercent, cfg.lotPercent, executionApiKeyName, ...scopedIds],
     );
   }
   if (cfg.reinvestPercent > 0) {
@@ -566,8 +580,9 @@ export const applyClientCardStrategyOverrides = async (
       `UPDATE strategies
        SET reinvest_percent = ?, updated_at = CURRENT_TIMESTAMP
        WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ?)
-         AND COALESCE(origin, '') <> 'saas_overlay_legacy'`,
-      [cfg.reinvestPercent, executionApiKeyName],
+         AND COALESCE(origin, '') <> 'saas_overlay_legacy'
+         AND id IN (${idPlaceholders})`,
+      [cfg.reinvestPercent, executionApiKeyName, ...scopedIds],
     );
   }
 };
@@ -14794,7 +14809,9 @@ const materializeAlgofundSystem = async (
     await setTradingSystemActivation(executionApiKeyName, systemId, true, true);
   }
 
-  await applyClientCardStrategyOverrides(executionApiKeyName, cardSystemName).catch((error) => {
+  await applyClientCardStrategyOverrides(executionApiKeyName, cardSystemName, {
+    strategyIds: members.map((m) => Number(m.strategy_id)).filter((id) => id > 0),
+  }).catch((error) => {
     logger.warn(`Algofund materialize card overrides failed for ${tenant.slug}: ${(error as Error).message}`);
   });
 
