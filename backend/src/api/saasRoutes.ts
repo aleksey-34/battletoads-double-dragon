@@ -1531,6 +1531,18 @@ router.post('/strategy-clients/:tenantId/system-profiles/:profileId/activate', a
   }
 });
 
+// Must be registered BEFORE /algofund/:tenantId — otherwise "portfolios" is parsed as tenantId.
+router.get('/algofund/portfolios', async (_req, res) => {
+  try {
+    const data = await listAlgofundPortfolios();
+    res.json({ success: true, portfolios: data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund portfolios list error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 router.get('/algofund/:tenantId', async (req, res) => {
   const tenantId = Number(req.params.tenantId);
   if (!Number.isFinite(tenantId)) {
@@ -1774,17 +1786,6 @@ router.get('/copytrading/:tenantId/report', async (req, res) => {
 });
 
 // ─── Multi-TS Algofund endpoints ──────────────────────────────────────────────
-
-router.get('/algofund/portfolios', async (_req, res) => {
-  try {
-    const data = await listAlgofundPortfolios();
-    res.json({ success: true, portfolios: data });
-  } catch (error) {
-    const err = error as Error;
-    logger.error(`SaaS algofund portfolios list error: ${err.message}`);
-    res.status(500).json({ error: err.message });
-  }
-});
 
 router.put('/algofund/:tenantId/assign-portfolio', async (req, res) => {
   const profileId = Number(req.params.tenantId);
