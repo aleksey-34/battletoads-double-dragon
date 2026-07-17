@@ -4799,13 +4799,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setAdminPortfoliosLoading(true);
     try {
       const response = await axios.get('/api/saas/algofund/portfolios');
+      if (!response.data?.success) {
+        throw new Error(String(response.data?.error || 'portfolios load failed'));
+      }
       setAdminPortfolios(Array.isArray(response.data?.portfolios) ? response.data.portfolios : []);
-    } catch {
+    } catch (error: any) {
       setAdminPortfolios([]);
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось загрузить портфели'));
     } finally {
       setAdminPortfoliosLoading(false);
     }
-  }, [isAdminSurface]);
+  }, [isAdminSurface, messageApi]);
 
   useEffect(() => {
     if (!isAdminSurface) return;
