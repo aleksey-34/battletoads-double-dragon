@@ -75,6 +75,9 @@ import {
   getCopytradingStatus,
   getAlgofundActiveSystems,
   assignAlgofundSystems,
+  assignAlgofundPortfolio,
+  materializeAlgofundPortfolioFull,
+  listAlgofundPortfolios,
   toggleAlgofundSystem,
   removeAlgofundSystemFromProfile,
   deleteTenantById,
@@ -1771,6 +1774,58 @@ router.get('/copytrading/:tenantId/report', async (req, res) => {
 });
 
 // ─── Multi-TS Algofund endpoints ──────────────────────────────────────────────
+
+router.get('/algofund/portfolios', async (_req, res) => {
+  try {
+    const data = await listAlgofundPortfolios();
+    res.json({ success: true, portfolios: data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund portfolios list error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/algofund/:tenantId/assign-portfolio', async (req, res) => {
+  const profileId = Number(req.params.tenantId);
+  if (!Number.isFinite(profileId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const data = await assignAlgofundPortfolio({
+      profileId,
+      portfolioId: req.body?.portfolioId != null ? Number(req.body.portfolioId) : undefined,
+      setKey: req.body?.setKey != null ? String(req.body.setKey) : undefined,
+      replace: req.body?.replace !== false,
+      assignedBy: req.body?.assignedBy === 'client' ? 'client' : 'admin',
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund assign-portfolio error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/algofund/:tenantId/materialize-portfolio', async (req, res) => {
+  const tenantId = Number(req.params.tenantId);
+  if (!Number.isFinite(tenantId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const data = await materializeAlgofundPortfolioFull({
+      tenantId,
+      portfolioId: req.body?.portfolioId != null ? Number(req.body.portfolioId) : undefined,
+      setKey: req.body?.setKey != null ? String(req.body.setKey) : undefined,
+      activate: req.body?.activate !== false,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund materialize-portfolio error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 router.get('/algofund/:tenantId/active-systems', async (req, res) => {
   const profileId = Number(req.params.tenantId);

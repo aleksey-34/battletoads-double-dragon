@@ -35,6 +35,7 @@ import ChartComponent from '../components/ChartComponent';
 import StorefrontGrid from '../components/storefront/StorefrontGrid';
 import StrategyOfferCard from '../components/storefront/StrategyOfferCard';
 import TradingSystemCard from '../components/storefront/TradingSystemCard';
+import PortfolioCard from '../components/storefront/PortfolioCard';
 import { equityPointsToSeries as storefrontEquitySeries } from '../components/storefront/storefrontMetrics';
 import { useI18n } from '../i18n';
 
@@ -268,6 +269,30 @@ type AlgofundState = {
     weight: number;
     isEnabled: boolean;
     assignedBy: 'admin' | 'client';
+  }>;
+  portfolios?: Array<{
+    id: number;
+    setKey: string;
+    displayLabel: string;
+    description?: string;
+    isStorefront?: boolean;
+    isPersonal?: boolean;
+    memberCount?: number;
+    members?: Array<{
+      role: string;
+      systemName: string;
+      weight?: number;
+      op?: number;
+      lot?: number;
+    }>;
+    metadata?: Record<string, unknown>;
+    snapshot?: {
+      ret?: number;
+      dd?: number;
+      capital?: number;
+      curve?: Array<{ t: number; e: number }>;
+      books?: Array<{ key?: string; op?: number; lot?: number }>;
+    };
   }>;
   preview: {
     riskMultiplier: number;
@@ -829,6 +854,8 @@ const ClientCabinet: React.FC = () => {
   });
   const algofundAvailableSystems = Array.isArray(algofundWorkspace?.availableSystems) ? (algofundWorkspace?.availableSystems || []) : [];
   const algofundActiveSystems = Array.isArray(algofundWorkspace?.activeSystems) ? (algofundWorkspace?.activeSystems || []) : [];
+  const algofundPortfolios = (Array.isArray(algofundWorkspace?.portfolios) ? (algofundWorkspace?.portfolios || []) : [])
+    .filter((p) => p && (p.isStorefront !== false || p.isPersonal));
   const enabledAlgofundSystemNames = new Set(
     algofundActiveSystems
       .filter((item) => item && item.isEnabled)
@@ -1587,6 +1614,38 @@ const ClientCabinet: React.FC = () => {
       messageApi.success(t('client.algofund.requestSent', 'Request sent'));
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || t('client.algofund.requestFailed', 'Failed to send request')));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const connectAlgofundPortfolio = async (portfolio: { id: number; setKey: string; displayLabel?: string }) => {
+    const chosenExecutionApiKeyName = String(algofundAssignedApiKeyName || algofundAssignedApiKeyResolved || '').trim();
+    if (clientApiKeys.length > 1 && !chosenExecutionApiKeyName) {
+      messageApi.warning('У вас несколько API-ключей. Выберите ключ для подключения портфеля.');
+      return;
+    }
+    if (!algofundAssignedApiKeyResolved && !chosenExecutionApiKeyName) {
+      messageApi.warning('Сначала назначьте отдельный API-ключ для Алгофонда.');
+      return;
+    }
+    setActionLoading(`algofund-portfolio-${portfolio.id}`);
+    try {
+      const response = await axios.post('/api/client/algofund/connect-portfolio', {
+        portfolioId: Number(portfolio.id),
+        setKey: String(portfolio.setKey || ''),
+        executionApiKeyName: chosenExecutionApiKeyName || undefined,
+      });
+      setWorkspace((current) => {
+        if (!current) return current;
+        return {
+          ...current,
+          algofundState: response.data?.state || current.algofundState,
+        };
+      });
+      messageApi.success(`Портфель «${portfolio.displayLabel || portfolio.setKey}» подключён`);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось подключить портфель'));
     } finally {
       setActionLoading('');
     }
@@ -2416,6 +2475,46 @@ const ClientCabinet: React.FC = () => {
             {renderCapabilities(algofundWorkspace.capabilities)}
           </Card>
           )}
+
+          <Card className="battletoads-card" title={<span className="storefront-title-accent">Портфели (B3 + Mean Reversion)</span>} size="small" style={{ marginBottom: 12 }}>
+            {algofundPortfolios.filter((p) => !p.isPersonal).length === 0 ? (
+              <Empty description="Портфели пока не опубликованы" />
+            ) : (
+              <StorefrontGrid>
+                {algofundPortfolios.filter((p) => !p.isPersonal).map((portfolio) => {
+                  const snap = portfolio.snapshot || {};
+                  const curve = Array.isArray(snap.curve) ? snap.curve : [];
+                  const equityPoints = curve.map((pt) => Number(pt.e)).filter((v) => Number.isFinite(v));
+                  const chartSeries = equityPoints.length > 1
+                    ? storefrontEquitySeries(equityPoints, Math.max(30, Math.round(equityPoints.length / 2)))
+                    : [];
+                  const connected = String(algofundPublishedSystemName || '') === String(portfolio.setKey || '');
+                  const metaMembers = Array.isArray(portfolio.members) ? portfolio.members : [];
+                  return (
+                    <PortfolioCard
+                      key={String(portfolio.id)}
+                      portfolio={{
+                        id: portfolio.id,
+                        setKey: portfolio.setKey,
+                        displayLabel: portfolio.displayLabel,
+                        description: portfolio.description,
+                        isPersonal: portfolio.isPersonal,
+                        memberCount: portfolio.memberCount,
+                        ret: snap.ret,
+                        dd: snap.dd,
+                        capital: snap.capital,
+                        members: metaMembers,
+                      }}
+                      connected={connected}
+                      chartSeries={chartSeries}
+                      connectLoading={actionLoading === `algofund-portfolio-${portfolio.id}`}
+                      onConnect={() => { void connectAlgofundPortfolio(portfolio); }}
+                    />
+                  );
+                })}
+              </StorefrontGrid>
+            )}
+          </Card>
 
           <Card className="battletoads-card" title={<span className="storefront-title-accent">Витрина торговых систем Алгофонда</span>} size="small">
             {algofundAvailableSystems.length === 0 ? (

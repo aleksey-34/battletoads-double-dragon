@@ -618,6 +618,52 @@ export const initDB = async () => {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_algofund_active_systems_profile_name
       ON algofund_active_systems (profile_id, system_name);
 
+    -- Portfolio overlay: named pack of trading systems (B3 + Addon ± ZZ) with capital weights.
+    -- Runtime materialize should enable all member system_names on the client key.
+    CREATE TABLE IF NOT EXISTS algofund_portfolios (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      set_key TEXT NOT NULL UNIQUE,
+      display_label TEXT NOT NULL,
+      description TEXT DEFAULT '',
+      is_storefront BOOLEAN DEFAULT 1,
+      is_personal BOOLEAN DEFAULT 0,
+      metadata_json TEXT DEFAULT '{}',
+      snapshot_json TEXT DEFAULT '{}',
+      is_enabled BOOLEAN DEFAULT 1,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS algofund_portfolio_members (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      portfolio_id INTEGER NOT NULL,
+      system_name TEXT NOT NULL,
+      role TEXT DEFAULT 'addon',
+      capital_weight REAL DEFAULT 1.0,
+      sort_order INTEGER DEFAULT 0,
+      is_enabled BOOLEAN DEFAULT 1,
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (portfolio_id) REFERENCES algofund_portfolios(id) ON DELETE CASCADE,
+      UNIQUE (portfolio_id, system_name)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_algofund_portfolio_members_portfolio
+      ON algofund_portfolio_members (portfolio_id);
+
+    CREATE TABLE IF NOT EXISTS algofund_active_portfolios (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      profile_id INTEGER NOT NULL,
+      portfolio_id INTEGER NOT NULL,
+      is_enabled BOOLEAN DEFAULT 1,
+      assigned_by TEXT DEFAULT 'admin',
+      created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (profile_id) REFERENCES algofund_profiles(id),
+      FOREIGN KEY (portfolio_id) REFERENCES algofund_portfolios(id),
+      UNIQUE (profile_id, portfolio_id)
+    );
+
     CREATE TABLE IF NOT EXISTS strategy_backtest_pair_requests (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       tenant_id INTEGER NOT NULL,

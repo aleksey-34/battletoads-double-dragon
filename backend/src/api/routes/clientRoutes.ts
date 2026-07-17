@@ -22,6 +22,7 @@ import { saveApiKey } from '../../config/settings';
 import { getMonitoringBundle, getMonitoringLatest, recordMonitoringSnapshot } from '../../bot/monitoring';
 import {
   getAlgofundState,
+  materializeAlgofundPortfolioFull,
   listClientCustomTsSystemsState,
   previewClientCustomTsSystemById,
   saveClientCustomTsSystemFromDraft,
@@ -890,6 +891,35 @@ router.post('/client/algofund/request', authenticateClient, async (req, res) => 
   } catch (error) {
     const err = error as Error;
     logger.error(`Client algofund action request error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/client/algofund/connect-portfolio', authenticateClient, async (req, res) => {
+  try {
+    const session = (req as any).clientAuth;
+    if (!session?.user) {
+      return res.status(401).json({ error: 'Unauthorized client session' });
+    }
+    const tenantId = Number(session.user.tenantId);
+    const executionApiKeyName = req.body?.executionApiKeyName ? String(req.body.executionApiKeyName).trim() : '';
+    if (executionApiKeyName && !executionApiKeyName.startsWith(`tenant-${tenantId}-`)) {
+      return res.status(403).json({ error: 'executionApiKeyName is not owned by current tenant' });
+    }
+    if (executionApiKeyName) {
+      await updateAlgofundState(tenantId, { assignedApiKeyName: executionApiKeyName, requestedEnabled: true }).catch(() => null);
+    }
+    const result = await materializeAlgofundPortfolioFull({
+      tenantId,
+      portfolioId: req.body?.portfolioId != null ? Number(req.body.portfolioId) : undefined,
+      setKey: req.body?.setKey != null ? String(req.body.setKey) : undefined,
+      activate: true,
+    });
+    const state = await getAlgofundState(tenantId);
+    res.json({ success: true, ...result, state });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Client algofund connect-portfolio error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

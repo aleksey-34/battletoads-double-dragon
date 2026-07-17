@@ -1,0 +1,516 @@
+{
+  "legs": [
+    {
+      "symbol": "CAKEUSDT",
+      "tf": "6h",
+      "params": {
+        "maLongLen": 5,
+        "maLongMult": 0.95,
+        "maShortLen": 5,
+        "maShortMult": 1.065,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 40
+      },
+      "score": 18.205
+    },
+    {
+      "symbol": "DASHUSDT",
+      "tf": "6h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.95,
+        "maShortLen": 3,
+        "maShortMult": 1.055,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 15.6743
+    },
+    {
+      "symbol": "ZECUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 5,
+        "maLongMult": 0.95,
+        "maShortLen": 5,
+        "maShortMult": 1.065,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 40
+      },
+      "score": 15.0159
+    },
+    {
+      "symbol": "WIFUSDT",
+      "tf": "12h",
+      "params": {
+        "maLongLen": 5,
+        "maLongMult": 0.95,
+        "maShortLen": 5,
+        "maShortMult": 1.065,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 40
+      },
+      "score": 14.112
+    },
+    {
+      "symbol": "XLMUSDT",
+      "tf": "1d",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.95,
+        "maShortLen": 3,
+        "maShortMult": 1.055,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 13.7191
+    },
+    {
+      "symbol": "AEROUSDT",
+      "tf": "2h",
+      "params": {
+        "maLongLen": 4,
+        "maLongMult": 0.95,
+        "maShortLen": 4,
+        "maShortMult": 1.09,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 12.0294
+    },
+    {
+      "symbol": "FETUSDT",
+      "tf": "6h",
+      "params": {
+        "maLongLen": 5,
+        "maLongMult": 0.95,
+        "maShortLen": 5,
+        "maShortMult": 1.065,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 40
+      },
+      "score": 9.835
+    },
+    {
+      "symbol": "STRKUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 4,
+        "maLongMult": 0.95,
+        "maShortLen": 4,
+        "maShortMult": 1.09,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 8.4575
+    },
+    {
+      "symbol": "BERAUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 5,
+        "maLongMult": 0.95,
+        "maShortLen": 5,
+        "maShortMult": 1.065,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 40
+      },
+      "score": 8.1076
+    },
+    {
+      "symbol": "BLURUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.95,
+        "maShortLen": 3,
+        "maShortMult": 1.055,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 7.8967
+    },
+    {
+      "symbol": "TRUMPUSDT",
+      "tf": "2h",
+      "params": {
+        "maLongLen": 4,
+        "maLongMult": 0.95,
+        "maShortLen": 4,
+        "maShortMult": 1.09,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 7.2288
+    },
+    {
+      "symbol": "PENGUUSDT",
+      "tf": "12h",
+      "params": {
+        "maLongLen": 4,
+        "maLongMult": 0.95,
+        "maShortLen": 4,
+        "maShortMult": 1.09,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 6.6
+    },
+    {
+      "symbol": "VIRTUALUSDT",
+      "tf": "2h",
+      "params": {
+        "maLongLen": 5,
+        "maLongMult": 0.95,
+        "maShortLen": 5,
+        "maShortMult": 1.065,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 40
+      },
+      "score": 6.3777
+    },
+    {
+      "symbol": "TAOUSDT",
+      "tf": "6h",
+      "params": {
+        "maLongLen": 5,
+        "maLongMult": 0.95,
+        "maShortLen": 5,
+        "maShortMult": 1.065,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 40
+      },
+      "score": 5.4485
+    },
+    {
+      "symbol": "HBARUSDT",
+      "tf": "12h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.95,
+        "maShortLen": 3,
+        "maShortMult": 1.055,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 5.4069
+    },
+    {
+      "symbol": "FILUSDT",
+      "tf": "2h",
+      "params": {
+        "maLongLen": 4,
+        "maLongMult": 0.95,
+        "maShortLen": 4,
+        "maShortMult": 1.09,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 5.3287
+    },
+    {
+      "symbol": "1000BONKUSDT",
+      "tf": "1d",
+      "params": {
+        "maLongLen": 5,
+        "maLongMult": 0.95,
+        "maShortLen": 5,
+        "maShortMult": 1.065,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 40
+      },
+      "score": 5.1652
+    },
+    {
+      "symbol": "ICPUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.95,
+        "maShortLen": 3,
+        "maShortMult": 1.055,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 4.2387
+    },
+    {
+      "symbol": "MORPHOUSDT",
+      "tf": "2h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.95,
+        "maShortLen": 3,
+        "maShortMult": 1.055,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 4.2325
+    },
+    {
+      "symbol": "KASUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 4,
+        "maLongMult": 0.95,
+        "maShortLen": 4,
+        "maShortMult": 1.09,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 4.0073
+    },
+    {
+      "symbol": "YFIUSDT",
+      "tf": "12h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.95,
+        "maShortLen": 3,
+        "maShortMult": 1.055,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 3.9544
+    },
+    {
+      "symbol": "TRBUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.95,
+        "maShortLen": 3,
+        "maShortMult": 1.055,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 3.7106
+    },
+    {
+      "symbol": "LINKUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 4,
+        "maLongMult": 0.95,
+        "maShortLen": 4,
+        "maShortMult": 1.09,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 2.9254
+    },
+    {
+      "symbol": "AVAXUSDT",
+      "tf": "2h",
+      "params": {
+        "maLongLen": 5,
+        "maLongMult": 0.95,
+        "maShortLen": 5,
+        "maShortMult": 1.065,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 40
+      },
+      "score": 2.8249
+    },
+    {
+      "symbol": "SOLUSDT",
+      "tf": "1d",
+      "params": {
+        "maLongLen": 4,
+        "maLongMult": 0.95,
+        "maShortLen": 4,
+        "maShortMult": 1.09,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 2.8244
+    },
+    {
+      "symbol": "1000PEPEUSDT",
+      "tf": "2h",
+      "params": {
+        "maLongLen": 4,
+        "maLongMult": 0.95,
+        "maShortLen": 4,
+        "maShortMult": 1.09,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 2.7695
+    },
+    {
+      "symbol": "LDOUSDT",
+      "tf": "6h",
+      "params": {
+        "maLongLen": 4,
+        "maLongMult": 0.95,
+        "maShortLen": 4,
+        "maShortMult": 1.09,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 2.7201
+    },
+    {
+      "symbol": "KAITOUSDT",
+      "tf": "2h",
+      "params": {
+        "maLongLen": 5,
+        "maLongMult": 0.95,
+        "maShortLen": 5,
+        "maShortMult": 1.065,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 40
+      },
+      "score": 2.7126
+    },
+    {
+      "symbol": "ETCUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.95,
+        "maShortLen": 3,
+        "maShortMult": 1.055,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 0
+      },
+      "score": 2.0812
+    },
+    {
+      "symbol": "JTOUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 5,
+        "maLongMult": 0.95,
+        "maShortLen": 5,
+        "maShortMult": 1.065,
+        "maCloseLongLen": 5,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 5,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.3,
+        "slLongPct": 40
+      },
+      "score": 1.9067
+    }
+  ],
+  "source": "weex_mrs_engine_wf_postfill",
+  "n": 30
+}

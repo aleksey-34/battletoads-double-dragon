@@ -4341,7 +4341,7 @@ const buildAdjustedPreviewEquity = (
 };
 
 const buildDerivedPreviewCurves = (
-  equityCurve: Array<{ time: number; equity: number }>,
+  equityCurve: Array<{ time: number; equity: number; unrealizedPnl?: number }>,
   initialBalance: number,
   riskScore: number
 ) => {
@@ -4350,6 +4350,7 @@ const buildDerivedPreviewCurves = (
       pnl: [] as Array<{ time: number; value: number }>,
       drawdownPercent: [] as Array<{ time: number; value: number }>,
       marginLoadPercent: [] as Array<{ time: number; value: number }>,
+      unrealizedPnl: [] as Array<{ time: number; value: number }>,
       finalUnrealizedPnl: 0,
       maxMarginLoadPercent: 0,
     };
@@ -4377,7 +4378,14 @@ const buildDerivedPreviewCurves = (
     };
   });
 
-  const finalUnrealizedPnl = pnl.length > 0 ? asNumber(pnl[pnl.length - 1].value, 0) : 0;
+  const unrealizedPnl = equityCurve.map((point) => ({
+    time: asNumber(point.time, Date.now()),
+    value: Number(asNumber((point as { unrealizedPnl?: unknown }).unrealizedPnl, 0).toFixed(4)),
+  }));
+  const hasRealUpnl = unrealizedPnl.some((p) => Math.abs(p.value) > 1e-9);
+  const finalUnrealizedPnl = hasRealUpnl
+    ? asNumber(unrealizedPnl[unrealizedPnl.length - 1]?.value, 0)
+    : (pnl.length > 0 ? asNumber(pnl[pnl.length - 1].value, 0) : 0);
 
   const marginLoadPercent = equityCurve.map((point) => ({
     time: asNumber(point.time, Date.now()),
@@ -4388,6 +4396,7 @@ const buildDerivedPreviewCurves = (
     pnl,
     drawdownPercent,
     marginLoadPercent,
+    unrealizedPnl: hasRealUpnl ? unrealizedPnl : [],
     finalUnrealizedPnl: Number(finalUnrealizedPnl.toFixed(4)),
     maxMarginLoadPercent: 0,
   };
@@ -14394,7 +14403,15 @@ const materializeAlgofundSystem = async (
   tenant: TenantRow,
   plan: PlanRow,
   profile: AlgofundProfileRow,
-  activate: boolean
+  activate: boolean,
+  options?: {
+    sourceSystemNameOverride?: string;
+    clientSystemName?: string;
+    preserveSiblingSystems?: boolean;
+    memberWeightScale?: number;
+    skipProfilePublishUpdate?: boolean;
+    keepStrategyIdsExtra?: number[];
+  },
 ) => {
   const { catalog, sweep } = await loadCatalogAndSweepWithFallback();
   if (!catalog || !sweep) {
@@ -14407,7 +14424,10 @@ const materializeAlgofundSystem = async (
   }
 
   const catalogDraftMembers = catalog.adminTradingSystemDraft?.members || [];
-  const sourceSystemName = asString(profile.published_system_name, '').trim();
+  const sourceSystemName = asString(
+    options?.sourceSystemNameOverride || profile.published_system_name,
+    '',
+  ).trim();
   const sourceSystemApiKeyName = asString(
     getAlgofundPublishedSourceApiKeyName(sourceSystemName)
     || profile.assigned_api_key_name
@@ -14671,7 +14691,7 @@ const materializeAlgofundSystem = async (
   }
 
   const systems = await listTradingSystems(executionApiKeyName);
-  const systemName = getAlgofundClientSystemName(tenant);
+  const systemName = asString(options?.clientSystemName, '').trim() || getAlgofundClientSystemName(tenant);
   const existing = systems.find((item) => asString(item.name) === systemName);
   const uniqueMaterialized = materializedStrategies.filter((row, index, arr) => {
     const strategyId = Number(row.strategyId || 0);
@@ -14681,9 +14701,10 @@ const materializeAlgofundSystem = async (
     return arr.findIndex((item) => Number(item.strategyId || 0) === strategyId) === index;
   });
 
+  const weightScale = Math.max(0.05, Math.min(10, asNumber(options?.memberWeightScale, 1)));
   let members: TradingSystemMemberDraft[] = uniqueMaterialized.map((row, index) => ({
     strategy_id: Number(row.strategyId),
-    weight: Number(((index === 0 ? 1.25 : index === 1 ? 1.1 : 1) * Math.max(0.25, riskMultiplier)).toFixed(4)),
+    weight: Number(((index === 0 ? 1.25 : index === 1 ? 1.1 : 1) * Math.max(0.25, riskMultiplier) * weightScale).toFixed(4)),
     member_role: index < 3 ? 'core' : 'satellite',
     is_enabled: true,
     notes: `algofund ${tenant.slug}`,
@@ -14695,7 +14716,7 @@ const materializeAlgofundSystem = async (
 
   // Resolve maxOpenPositions from master_cards metadata (card override).
   // cardSystemName = published_system_name || local systemName. Fallback: 2
-  const cardSystemName = asString(profile.published_system_name, '').trim() || systemName;
+  const cardSystemName = sourceSystemName || asString(profile.published_system_name, '').trim() || systemName;
   const _cardCfg = await getCardConfigBySystemName(cardSystemName);
   const resolvedMaxOpenPositions = _cardCfg.maxOpenPositions > 0 ? _cardCfg.maxOpenPositions : 2;
 
@@ -14704,32 +14725,39 @@ const materializeAlgofundSystem = async (
   // Scope to this tenant's SAAS::slug:: rows only — never touch manual/research
   // strategies on the same API key. Flat orphans = DB soft-archive (no WEEX
   // cancel storm / -1058 hang). Non-flat orphans still cancel+close first.
+  // When preserveSiblingSystems (portfolio multi-TS), keep extra strategy ids
+  // from sibling books so we do not wipe B3 while materializing MRS (and vice versa).
   try {
     const newMemberIdSet = new Set<number>(members.map((m) => Number(m.strategy_id)).filter((id) => Number.isFinite(id) && id > 0));
-    const saasPrefix = `SAAS::${tenant.slug}::`;
-    const orphanRows = (await db.all(
-      `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode, s.state
-       FROM strategies s
-       JOIN api_keys a ON a.id = s.api_key_id
-       WHERE a.name = ?
-         AND s.is_active = 1
-         AND COALESCE(s.is_archived, 0) = 0
-         AND s.name LIKE ?`,
-      [executionApiKeyName, `${saasPrefix}%`]
-    ).catch(() => [])) as Array<{ id: number; name: string; base_symbol: string | null; quote_symbol: string | null; market_mode: string | null; state: string | null }>;
-    const orphans = orphanRows.filter((r) => !newMemberIdSet.has(Number(r.id)));
-    if (orphans.length > 0) {
-      const softCount = orphans.filter((r) => {
-        const st = asString(r.state, 'flat').trim().toLowerCase();
-        return !st || st === 'flat' || st === 'idle';
-      }).length;
-      logger.warn(
-        `Algofund materialize [archive-orphans]: archiving ${orphans.length} stale SAAS strategies `
-        + `on ${executionApiKeyName} (${softCount} soft/flat, ${orphans.length - softCount} exchange-touch) `
-        + `not in new TS '${getAlgofundClientSystemName(tenant)}' (${members.length} new members)`,
-      );
-      for (const orphan of orphans) {
-        await saasArchiveStrategy(executionApiKeyName, orphan);
+    for (const extraId of options?.keepStrategyIdsExtra || []) {
+      if (Number.isFinite(extraId) && extraId > 0) newMemberIdSet.add(Number(extraId));
+    }
+    if (!options?.preserveSiblingSystems) {
+      const saasPrefix = `SAAS::${tenant.slug}::`;
+      const orphanRows = (await db.all(
+        `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode, s.state
+         FROM strategies s
+         JOIN api_keys a ON a.id = s.api_key_id
+         WHERE a.name = ?
+           AND s.is_active = 1
+           AND COALESCE(s.is_archived, 0) = 0
+           AND s.name LIKE ?`,
+        [executionApiKeyName, `${saasPrefix}%`]
+      ).catch(() => [])) as Array<{ id: number; name: string; base_symbol: string | null; quote_symbol: string | null; market_mode: string | null; state: string | null }>;
+      const orphans = orphanRows.filter((r) => !newMemberIdSet.has(Number(r.id)));
+      if (orphans.length > 0) {
+        const softCount = orphans.filter((r) => {
+          const st = asString(r.state, 'flat').trim().toLowerCase();
+          return !st || st === 'flat' || st === 'idle';
+        }).length;
+        logger.warn(
+          `Algofund materialize [archive-orphans]: archiving ${orphans.length} stale SAAS strategies `
+          + `on ${executionApiKeyName} (${softCount} soft/flat, ${orphans.length - softCount} exchange-touch) `
+          + `not in new TS '${systemName}' (${members.length} new members)`,
+        );
+        for (const orphan of orphans) {
+          await saasArchiveStrategy(executionApiKeyName, orphan);
+        }
       }
     }
   } catch (err) {
@@ -14799,24 +14827,35 @@ const materializeAlgofundSystem = async (
     });
   }
 
-  await db.run(
-    `UPDATE algofund_profiles
-     SET assigned_api_key_name = ?,
-         execution_api_key_name = ?,
-         published_system_name = ?,
-         requested_enabled = ?,
-         actual_enabled = ?,
-         updated_at = CURRENT_TIMESTAMP
-     WHERE tenant_id = ?`,
-    [
-      executionApiKeyName,
-      executionApiKeyName,
-      cardSystemName,
-      shouldActivate ? 1 : Number(profile.requested_enabled || 0),
-      shouldActivate ? 1 : Number(profile.actual_enabled || 0),
-      tenant.id,
-    ]
-  );
+  if (!options?.skipProfilePublishUpdate) {
+    await db.run(
+      `UPDATE algofund_profiles
+       SET assigned_api_key_name = ?,
+           execution_api_key_name = ?,
+           published_system_name = ?,
+           requested_enabled = ?,
+           actual_enabled = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [
+        executionApiKeyName,
+        executionApiKeyName,
+        cardSystemName,
+        shouldActivate ? 1 : Number(profile.requested_enabled || 0),
+        shouldActivate ? 1 : Number(profile.actual_enabled || 0),
+        tenant.id,
+      ]
+    );
+  } else {
+    await db.run(
+      `UPDATE algofund_profiles
+       SET assigned_api_key_name = ?,
+           execution_api_key_name = ?,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = ?`,
+      [executionApiKeyName, executionApiKeyName, tenant.id],
+    );
+  }
 
   return {
     systemId,
@@ -14824,6 +14863,7 @@ const materializeAlgofundSystem = async (
     assignedApiKeyName: executionApiKeyName,
     riskMultiplier,
     strategies: materializedStrategies,
+    strategyIds: members.map((m) => Number(m.strategy_id)).filter((id) => id > 0),
   };
 };
 
@@ -15400,6 +15440,8 @@ export const getAlgofundState = async (
     }
   }
 
+  const portfolios = await listAlgofundPortfolios().catch(() => []);
+
   return {
     tenant,
     plan,
@@ -15412,6 +15454,7 @@ export const getAlgofundState = async (
     engine,
     activeSystems,
     availableSystems,
+    portfolios,
     preview,
     portfolioPassport: buildAlgofundPortfolioPassport(catalog, sweep, period, preview, riskMultiplier),
     requests: await getAlgofundRequestsByTenant(tenantId),
@@ -18299,6 +18342,230 @@ export const assignAlgofundSystems = async (payload: {
   }
 
   return getAlgofundActiveSystems(profileId);
+};
+
+/** Assign all trading systems of an algofund portfolio onto a client profile (multi-TS). */
+export const assignAlgofundPortfolio = async (payload: {
+  profileId: number;
+  portfolioId?: number;
+  setKey?: string;
+  replace?: boolean;
+  assignedBy?: 'admin' | 'client';
+}): Promise<{ portfolioId: number; setKey: string; activeSystems: AlgofundActiveSystem[] }> => {
+  const profileId = await resolveAlgofundProfileId(payload.profileId);
+  const setKey = asString(payload.setKey, '').trim();
+  const portfolio = payload.portfolioId
+    ? await db.get<{ id: number; set_key: string }>(
+      `SELECT id, set_key FROM algofund_portfolios WHERE id = ? AND COALESCE(is_enabled,1)=1`,
+      [payload.portfolioId],
+    )
+    : await db.get<{ id: number; set_key: string }>(
+      `SELECT id, set_key FROM algofund_portfolios WHERE set_key = ? AND COALESCE(is_enabled,1)=1`,
+      [setKey],
+    );
+  if (!portfolio?.id) {
+    throw new Error(`Portfolio not found: id=${payload.portfolioId || ''} setKey=${setKey}`);
+  }
+
+  const members = await db.all(
+    `SELECT system_name, role, capital_weight, is_enabled
+     FROM algofund_portfolio_members
+     WHERE portfolio_id = ? AND COALESCE(is_enabled,1)=1
+     ORDER BY sort_order ASC, id ASC`,
+    [portfolio.id],
+  ) as Array<{ system_name: string; role: string; capital_weight: number; is_enabled: number }>;
+
+  if (!members.length) {
+    throw new Error(`Portfolio ${portfolio.set_key} has no members`);
+  }
+
+  await db.run(
+    `INSERT INTO algofund_active_portfolios (profile_id, portfolio_id, is_enabled, assigned_by, created_at, updated_at)
+     VALUES (?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+     ON CONFLICT (profile_id, portfolio_id) DO UPDATE SET
+       is_enabled = 1,
+       assigned_by = excluded.assigned_by,
+       updated_at = CURRENT_TIMESTAMP`,
+    [profileId, portfolio.id, payload.assignedBy || 'admin'],
+  );
+
+  const systems = members.map((m) => ({
+    systemName: asString(m.system_name, ''),
+    weight: Math.max(0.01, asNumber(m.capital_weight, 1)),
+    isEnabled: true,
+    assignedBy: (payload.assignedBy || 'admin') as 'admin' | 'client',
+  })).filter((s) => s.systemName);
+
+  const activeSystems = await assignAlgofundSystems({
+    profileId,
+    systems,
+    replace: payload.replace !== false,
+  });
+
+  return {
+    portfolioId: Number(portfolio.id),
+    setKey: asString(portfolio.set_key, ''),
+    activeSystems,
+  };
+};
+
+/**
+ * Materialize every portfolio member TS onto the client key as separate
+ * ALGOFUND::{slug}::{role} systems with independent OP. Archives only SAAS
+ * orphans not belonging to any book in the portfolio.
+ */
+export const materializeAlgofundPortfolioFull = async (payload: {
+  tenantId: number;
+  portfolioId?: number;
+  setKey?: string;
+  activate?: boolean;
+}): Promise<{
+  portfolioId: number;
+  setKey: string;
+  systems: Array<{ role: string; systemName: string; systemId: number; strategyCount: number }>;
+  activeSystems: AlgofundActiveSystem[];
+}> => {
+  await ensureSaasSeedData();
+  const tenant = await getTenantById(payload.tenantId);
+  const plan = await getPlanForTenant(payload.tenantId, 'algofund_client');
+  if (!plan) throw new Error('Algofund plan is required to materialize portfolio');
+  const profile = await getAlgofundProfile(payload.tenantId);
+  if (!profile) throw new Error('Algofund profile missing');
+
+  const assigned = await assignAlgofundPortfolio({
+    profileId: payload.tenantId,
+    portfolioId: payload.portfolioId,
+    setKey: payload.setKey,
+    replace: true,
+    assignedBy: 'admin',
+  });
+
+  const members = await db.all(
+    `SELECT system_name, role, capital_weight
+     FROM algofund_portfolio_members
+     WHERE portfolio_id = ? AND COALESCE(is_enabled,1)=1
+     ORDER BY sort_order ASC, id ASC`,
+    [assigned.portfolioId],
+  ) as Array<{ system_name: string; role: string; capital_weight: number }>;
+
+  const keepAll = new Set<number>();
+  const systemsOut: Array<{ role: string; systemName: string; systemId: number; strategyCount: number }> = [];
+
+  for (let i = 0; i < members.length; i += 1) {
+    const member = members[i];
+    const role = asString(member.role, `book${i + 1}`).trim() || `book${i + 1}`;
+    const clientSystemName = `ALGOFUND::${tenant.slug}::${role}`;
+    const result = await materializeAlgofundSystem(
+      tenant,
+      plan,
+      profile,
+      Boolean(payload.activate),
+      {
+        sourceSystemNameOverride: asString(member.system_name, ''),
+        clientSystemName,
+        preserveSiblingSystems: true,
+        memberWeightScale: Math.max(0.05, asNumber(member.capital_weight, 1)),
+        skipProfilePublishUpdate: true,
+        keepStrategyIdsExtra: [...keepAll],
+      },
+    );
+    for (const sid of result.strategyIds || []) keepAll.add(Number(sid));
+    systemsOut.push({
+      role,
+      systemName: result.systemName,
+      systemId: Number(result.systemId),
+      strategyCount: (result.strategyIds || []).length,
+    });
+  }
+
+  // Final orphan sweep: keep union of all portfolio strategy ids
+  const executionApiKeyName = getAlgofundExecutionApiKeyName(tenant, profile);
+  if (executionApiKeyName) {
+    const saasPrefix = `SAAS::${tenant.slug}::`;
+    const orphanRows = (await db.all(
+      `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode, s.state
+       FROM strategies s
+       JOIN api_keys a ON a.id = s.api_key_id
+       WHERE a.name = ?
+         AND s.is_active = 1
+         AND COALESCE(s.is_archived, 0) = 0
+         AND s.name LIKE ?`,
+      [executionApiKeyName, `${saasPrefix}%`],
+    ).catch(() => [])) as Array<{ id: number; name: string; base_symbol: string | null; quote_symbol: string | null; market_mode: string | null; state: string | null }>;
+    for (const orphan of orphanRows) {
+      if (keepAll.has(Number(orphan.id))) continue;
+      await saasArchiveStrategy(executionApiKeyName, orphan).catch(() => {});
+    }
+  }
+
+  await db.run(
+    `UPDATE algofund_profiles
+     SET published_system_name = ?,
+         requested_enabled = ?,
+         actual_enabled = ?,
+         updated_at = CURRENT_TIMESTAMP
+     WHERE tenant_id = ?`,
+    [
+      assigned.setKey,
+      payload.activate ? 1 : Number(profile.requested_enabled || 0),
+      payload.activate ? 1 : Number(profile.actual_enabled || 0),
+      tenant.id,
+    ],
+  );
+
+  return {
+    portfolioId: assigned.portfolioId,
+    setKey: assigned.setKey,
+    systems: systemsOut,
+    activeSystems: assigned.activeSystems,
+  };
+};
+
+export const listAlgofundPortfolios = async (): Promise<Array<Record<string, unknown>>> => {
+  const rows = await db.all(
+    `SELECT p.id, p.set_key, p.display_label, p.description, p.is_storefront, p.is_personal,
+            p.metadata_json, p.snapshot_json, p.is_enabled, p.updated_at,
+            (SELECT COUNT(*) FROM algofund_portfolio_members m WHERE m.portfolio_id=p.id AND COALESCE(m.is_enabled,1)=1) AS member_count
+     FROM algofund_portfolios p
+     WHERE COALESCE(p.is_enabled,1)=1
+     ORDER BY p.is_personal ASC, p.id ASC`,
+  );
+  const out: Array<Record<string, unknown>> = [];
+  for (const r of rows || []) {
+    const members = await db.all(
+      `SELECT role, system_name, capital_weight, sort_order
+       FROM algofund_portfolio_members
+       WHERE portfolio_id = ? AND COALESCE(is_enabled,1)=1
+       ORDER BY sort_order ASC, id ASC`,
+      [Number((r as any).id)],
+    ) as Array<{ role: string; system_name: string; capital_weight: number }>;
+    const metadata = (() => { try { return JSON.parse(String((r as any).metadata_json || '{}')); } catch { return {}; } })() as any;
+    const snapshot = (() => { try { return JSON.parse(String((r as any).snapshot_json || '{}')); } catch { return {}; } })() as any;
+    const books = Array.isArray(metadata?.books) ? metadata.books : [];
+    out.push({
+      id: Number((r as any).id),
+      setKey: asString((r as any).set_key, ''),
+      displayLabel: asString((r as any).display_label, ''),
+      description: asString((r as any).description, ''),
+      isStorefront: Boolean((r as any).is_storefront),
+      isPersonal: Boolean((r as any).is_personal),
+      memberCount: Number((r as any).member_count || 0),
+      metadata,
+      snapshot,
+      members: members.map((m, idx) => {
+        const book = books.find((b: any) => String(b?.key || '') === String(m.role)) || books[idx] || {};
+        return {
+          role: asString(m.role, ''),
+          systemName: asString(m.system_name, ''),
+          weight: asNumber(m.capital_weight, 1),
+          op: book?.op != null ? Number(book.op) : undefined,
+          lot: book?.lot != null ? Number(book.lot) : undefined,
+        };
+      }),
+      updatedAt: asString((r as any).updated_at, ''),
+    });
+  }
+  return out;
 };
 
 export const toggleAlgofundSystem = async (payload: {
