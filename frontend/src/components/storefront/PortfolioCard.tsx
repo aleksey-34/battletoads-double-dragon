@@ -39,9 +39,17 @@ type Props = {
   portfolio: PortfolioCardData;
   connected?: boolean;
   chartSeries?: LinePoint[];
-  connectedClients?: ConnectedClientBadge[];
+  /** Count only — full client list lives in the connect modal (same as TS cards). */
+  clientCount?: number;
+  activeCount?: number;
+  extraBadges?: React.ReactNode;
+  bodyExtra?: React.ReactNode;
   footerExtra?: React.ReactNode;
+  onOpenDetail?: () => void;
+  /** Client cabinet: connect current user to this portfolio. */
   onConnect?: () => void;
+  /** Admin vitrine: open multi-client connect/disconnect modal. */
+  onConnectClients?: () => void;
   connectLoading?: boolean;
 };
 
@@ -49,9 +57,14 @@ const PortfolioCard: React.FC<Props> = ({
   portfolio,
   connected = false,
   chartSeries = [],
-  connectedClients = [],
+  clientCount = 0,
+  activeCount = 0,
+  extraBadges = null,
+  bodyExtra = null,
   footerExtra = null,
+  onOpenDetail,
   onConnect,
+  onConnectClients,
   connectLoading = false,
 }) => {
   const [open, setOpen] = useState(false);
@@ -59,7 +72,8 @@ const PortfolioCard: React.FC<Props> = ({
   const ddTone = metricTone(Number(portfolio.dd || 0), 'drawdown');
   const hasChart = chartSeries.length > 1;
   const members = useMemo(() => portfolio.members || [], [portfolio.members]);
-  const clientList = Array.isArray(connectedClients) ? connectedClients : [];
+  const clients = Math.max(0, Number(clientCount || 0));
+  const actives = Math.max(0, Number(activeCount || 0));
 
   return (
     <>
@@ -76,11 +90,9 @@ const PortfolioCard: React.FC<Props> = ({
             {portfolio.memberCount ? (
               <Tag className="storefront-card__pill">{portfolio.memberCount} книг TS</Tag>
             ) : null}
-            {clientList.length > 0 ? (
-              <Tag color="cyan">clients {clientList.length}</Tag>
-            ) : (
-              <Tag>clients 0</Tag>
-            )}
+            <Tag color={clients > 0 ? 'cyan' : 'default'}>clients {clients}</Tag>
+            <Tag color={actives > 0 ? 'green' : 'default'}>active {actives}</Tag>
+            {extraBadges}
           </div>
         </div>
 
@@ -101,39 +113,48 @@ const PortfolioCard: React.FC<Props> = ({
           </div>
         </div>
 
-        {hasChart ? (
-          <div className="storefront-card__chart">
-            <EquitySparkline points={chartSeries} />
-          </div>
-        ) : null}
+        <div className="storefront-card__chart">
+          {hasChart ? (
+            <EquitySparkline points={chartSeries} height={112} />
+          ) : (
+            <div className="storefront-card__chart-empty">Бэктест не загружен</div>
+          )}
+        </div>
 
-        {clientList.length > 0 ? (
-          <div className="storefront-card__clients">
-            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
-              Клиенты ({clientList.length}):
-            </Typography.Text>
-            <div className="storefront-card__clients-list">
-              {clientList.map((c) => (
-                <Tag
-                  key={c.label}
-                  color={c.active === false ? 'default' : 'cyan'}
-                  style={{ marginInlineEnd: 0 }}
-                >
-                  {c.label}{c.active === false ? ' · off' : ''}
-                </Tag>
-              ))}
-            </div>
-          </div>
-        ) : null}
+        {bodyExtra}
 
         <div className="storefront-card__footer">
-          <Space wrap direction="vertical" style={{ width: '100%' }}>
-            <Space wrap>
+          <Space wrap size={6} direction="vertical" style={{ width: '100%' }}>
+            <Space wrap size={6}>
+              {connected ? <Tag color="success">Подключён</Tag> : null}
               <Button size="small" onClick={() => setOpen(true)}>Состав</Button>
-              {onConnect ? (
-                <Button size="small" type="primary" loading={connectLoading} onClick={onConnect}>
-                  {connected ? 'Подключено' : 'Подключить'}
+              {onOpenDetail ? (
+                <Button size="small" onClick={onOpenDetail}>Бэктест</Button>
+              ) : null}
+              {onConnectClients ? (
+                <Button
+                  size="small"
+                  type="primary"
+                  className="storefront-card__cta"
+                  loading={connectLoading}
+                  onClick={onConnectClients}
+                >
+                  Подключить клиентов
                 </Button>
+              ) : null}
+              {!onConnectClients && onConnect && !connected ? (
+                <Button
+                  size="small"
+                  type="primary"
+                  className="storefront-card__cta"
+                  loading={connectLoading}
+                  onClick={onConnect}
+                >
+                  Подключить
+                </Button>
+              ) : null}
+              {!onConnectClients && onConnect && connected ? (
+                <Tag color="success">Подключено</Tag>
               ) : null}
             </Space>
             {footerExtra}
@@ -179,18 +200,6 @@ const PortfolioCard: React.FC<Props> = ({
             },
           ]}
         />
-        {clientList.length > 0 ? (
-          <div style={{ marginTop: 16 }}>
-            <Typography.Text strong>Подключённые клиенты</Typography.Text>
-            <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-              {clientList.map((c) => (
-                <Tag key={`m-${c.label}`} color={c.active === false ? 'default' : 'cyan'}>
-                  {c.label}{c.active === false ? ' · off' : ''}
-                </Tag>
-              ))}
-            </div>
-          </div>
-        ) : null}
         {hasChart ? (
           <div style={{ marginTop: 16 }}>
             <Typography.Text strong>Total equity (BT)</Typography.Text>

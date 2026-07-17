@@ -18436,10 +18436,66 @@ export const assignAlgofundPortfolio = async (payload: {
     replace: payload.replace !== false,
   });
 
+  // Keep storefront card matching in sync (admin vitrine joins by published_system_name).
+  await db.run(
+    `UPDATE algofund_profiles
+     SET published_system_name = ?, updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`,
+    [asString(portfolio.set_key, ''), profileId],
+  ).catch(() => undefined);
+
   return {
     portfolioId: Number(portfolio.id),
     setKey: asString(portfolio.set_key, ''),
     activeSystems,
+  };
+};
+
+/** Detach a portfolio from a client profile (does not stop trading by itself). */
+export const unassignAlgofundPortfolio = async (payload: {
+  profileId: number;
+  portfolioId?: number;
+  setKey?: string;
+  clearPublished?: boolean;
+}): Promise<{ portfolioId: number; setKey: string }> => {
+  const profileId = await resolveAlgofundProfileId(payload.profileId);
+  const setKey = asString(payload.setKey, '').trim();
+  const portfolio = payload.portfolioId
+    ? await db.get<{ id: number; set_key: string }>(
+      `SELECT id, set_key FROM algofund_portfolios WHERE id = ?`,
+      [payload.portfolioId],
+    )
+    : await db.get<{ id: number; set_key: string }>(
+      `SELECT id, set_key FROM algofund_portfolios WHERE set_key = ?`,
+      [setKey],
+    );
+  if (!portfolio?.id) {
+    throw new Error(`Portfolio not found: id=${payload.portfolioId || ''} setKey=${setKey}`);
+  }
+
+  await db.run(
+    `UPDATE algofund_active_portfolios
+     SET is_enabled = 0, updated_at = CURRENT_TIMESTAMP
+     WHERE profile_id = ? AND portfolio_id = ?`,
+    [profileId, portfolio.id],
+  );
+
+  if (payload.clearPublished !== false) {
+    await db.run(
+      `UPDATE algofund_profiles
+       SET published_system_name = CASE
+             WHEN COALESCE(published_system_name, '') = ? THEN ''
+             ELSE published_system_name
+           END,
+           updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [asString(portfolio.set_key, ''), profileId],
+    ).catch(() => undefined);
+  }
+
+  return {
+    portfolioId: Number(portfolio.id),
+    setKey: asString(portfolio.set_key, ''),
   };
 };
 
@@ -18566,24 +18622,99 @@ export const listAlgofundPortfolios = async (): Promise<Array<Record<string, unk
   );
   const out: Array<Record<string, unknown>> = [];
   for (const r of rows || []) {
+    const portfolioId = Number((r as any).id);
+    const memberCount = Number((r as any).member_count || 0);
     const members = await db.all(
       `SELECT role, system_name, capital_weight, sort_order
        FROM algofund_portfolio_members
        WHERE portfolio_id = ? AND COALESCE(is_enabled,1)=1
        ORDER BY sort_order ASC, id ASC`,
-      [Number((r as any).id)],
+      [portfolioId],
     ) as Array<{ role: string; system_name: string; capital_weight: number }>;
     const metadata = (() => { try { return JSON.parse(String((r as any).metadata_json || '{}')); } catch { return {}; } })() as any;
     const snapshot = (() => { try { return JSON.parse(String((r as any).snapshot_json || '{}')); } catch { return {}; } })() as any;
     const books = Array.isArray(metadata?.books) ? metadata.books : [];
+    const expectedBooks = Math.max(memberCount, members.length, 1);
+    const tenantRows = await db.all(
+      `SELECT t.id AS tenant_id, t.slug, t.display_name, ap.id AS profile_id,
+              ap.actual_enabled, ap.requested_enabled, ap.published_system_name,
+              COALESCE(ap.execution_api_key_name, ap.assigned_api_key_name, t.assigned_api_key_name, '') AS api_key_name
+       FROM algofund_active_portfolios aap
+       JOIN algofund_profiles ap ON ap.id = aap.profile_id
+       JOIN tenants t ON t.id = ap.tenant_id
+       WHERE aap.portfolio_id = ? AND COALESCE(aap.is_enabled, 1) = 1
+       ORDER BY t.slug ASC`,
+      [portfolioId],
+    ).catch(() => []) as Array<{
+      tenant_id: number;
+      slug: string;
+      display_name: string;
+      profile_id: number;
+      actual_enabled: number;
+      requested_enabled: number;
+      published_system_name: string;
+      api_key_name: string;
+    }>;
+
+    const tenants: Array<Record<string, unknown>> = [];
+    let okCount = 0;
+    let partialCount = 0;
+    let errorCount = 0;
+    for (const tr of tenantRows || []) {
+      const slug = asString(tr.slug, '');
+      const booksRow = await db.get<{ cnt: number }>(
+        `SELECT COUNT(*) AS cnt
+         FROM trading_systems
+         WHERE is_active = 1
+           AND name LIKE ?`,
+        [`ALGOFUND::${slug}::%`],
+      ).catch(() => null);
+      const booksFound = Number(booksRow?.cnt || 0);
+      let status: 'ok' | 'partial' | 'error' = 'ok';
+      const issues: string[] = [];
+      if (!asString(tr.api_key_name, '').trim()) {
+        status = 'error';
+        issues.push('missing api key');
+      } else if (booksFound <= 0) {
+        status = 'error';
+        issues.push(`books 0/${expectedBooks}`);
+      } else if (booksFound < expectedBooks) {
+        status = 'partial';
+        issues.push(`books ${booksFound}/${expectedBooks}`);
+      }
+      if (status === 'ok') okCount += 1;
+      else if (status === 'partial') partialCount += 1;
+      else errorCount += 1;
+      tenants.push({
+        tenantId: Number(tr.tenant_id),
+        slug,
+        displayName: asString(tr.display_name, slug),
+        profileId: Number(tr.profile_id),
+        actualEnabled: Number(tr.actual_enabled || 0) === 1,
+        requestedEnabled: Number(tr.requested_enabled || 0) === 1,
+        publishedSystemName: asString(tr.published_system_name, ''),
+        booksFound,
+        booksExpected: expectedBooks,
+        materializationStatus: status,
+        issues,
+      });
+    }
+
+    let aggregateStatus: 'ok' | 'partial' | 'error' | 'empty' = 'empty';
+    if (tenants.length > 0) {
+      if (errorCount > 0) aggregateStatus = 'error';
+      else if (partialCount > 0) aggregateStatus = 'partial';
+      else aggregateStatus = 'ok';
+    }
+
     out.push({
-      id: Number((r as any).id),
+      id: portfolioId,
       setKey: asString((r as any).set_key, ''),
       displayLabel: asString((r as any).display_label, ''),
       description: asString((r as any).description, ''),
       isStorefront: Boolean((r as any).is_storefront),
       isPersonal: Boolean((r as any).is_personal),
-      memberCount: Number((r as any).member_count || 0),
+      memberCount,
       metadata,
       snapshot,
       members: members.map((m, idx) => {
@@ -18596,6 +18727,16 @@ export const listAlgofundPortfolios = async (): Promise<Array<Record<string, unk
           lot: book?.lot != null ? Number(book.lot) : undefined,
         };
       }),
+      tenants,
+      tenantCount: tenants.length,
+      activeCount: tenants.filter((t) => Boolean(t.actualEnabled)).length,
+      materialization: {
+        okCount,
+        partialCount,
+        errorCount,
+        totalClients: tenants.length,
+        aggregateStatus,
+      },
       updatedAt: asString((r as any).updated_at, ''),
     });
   }

@@ -3251,6 +3251,13 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [applyLowLotWorking, setApplyLowLotWorking] = useState(false);
   const [batchTenantIds, setBatchTenantIds] = useState<number[]>([]);
   const [storefrontConnectTarget, setStorefrontConnectTarget] = useState<null | { systemId: number; systemName: string; tenantIds: number[]; originalTenantIds: number[] }>(null);
+  const [storefrontPortfolioConnectTarget, setStorefrontPortfolioConnectTarget] = useState<null | {
+    portfolioId: number;
+    setKey: string;
+    displayLabel: string;
+    tenantIds: number[];
+    originalTenantIds: number[];
+  }>(null);
   const [strategyConnectTarget, setStrategyConnectTarget] = useState<null | { offerId: string; offerTitle: string; tenantIds: number[]; initialTenantIds: number[] }>(null);
   const [batchAlgofundAction, setBatchAlgofundAction] = useState<'start' | 'stop' | 'switch_system'>('start');
   const [batchTargetSystemId, setBatchTargetSystemId] = useState<number | null>(null);
@@ -4819,33 +4826,66 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const adminPortfolioRows = useMemo(() => {
     return (adminPortfolios || []).map((p) => {
       const setKey = String(p.setKey || '');
-      const tenants = batchEligibleAlgofundTenants.filter((tenant) => {
-        const pub = String(tenant.algofundProfile?.published_system_name || '').trim();
-        return pub === setKey;
-      });
+      const apiTenants = Array.isArray(p.tenants) ? p.tenants : [];
+      // Prefer active_portfolios from API (source of truth). Fallback: published_system_name match.
+      const tenantsFromApi = apiTenants
+        .map((row: any) => {
+          const tenantId = Number(row?.tenantId || 0);
+          const summaryRow = batchEligibleAlgofundTenants.find((item) => Number(item.tenant.id) === tenantId)
+            || (summary?.tenants || []).find((item: any) => Number(item?.tenant?.id) === tenantId);
+          if (summaryRow) return summaryRow;
+          return {
+            tenant: {
+              id: tenantId,
+              slug: String(row?.slug || ''),
+              display_name: String(row?.displayName || row?.slug || ''),
+            },
+            algofundProfile: {
+              published_system_name: String(row?.publishedSystemName || setKey),
+              actual_enabled: row?.actualEnabled ? 1 : 0,
+              requested_enabled: row?.requestedEnabled ? 1 : 0,
+            },
+          };
+        })
+        .filter((item: any) => Number(item?.tenant?.id || 0) > 0);
+      const tenants = tenantsFromApi.length > 0
+        ? tenantsFromApi
+        : batchEligibleAlgofundTenants.filter((tenant) => {
+          const pub = String(tenant.algofundProfile?.published_system_name || '').trim();
+          return pub === setKey;
+        });
       const snap = (p.snapshot || {}) as Record<string, any>;
       const curve = Array.isArray(snap.curve) ? snap.curve : [];
       const equityPoints = curve
         .map((pt: any) => Number(pt.e))
         .filter((v: number) => Number.isFinite(v));
+      const materialization = (p.materialization || {}) as Record<string, any>;
       return {
         id: p.id as number | string,
         setKey,
         displayLabel: p.displayLabel,
         description: p.description,
         isPersonal: p.isPersonal,
+        isStorefront: p.isStorefront,
         memberCount: p.memberCount,
         members: p.members,
         tenants,
-        tenantCount: tenants.length,
-        activeCount: tenants.filter((t) => Number(t.algofundProfile?.actual_enabled || 0) === 1).length,
+        tenantCount: Number(p.tenantCount ?? tenants.length),
+        activeCount: Number(p.activeCount ?? tenants.filter((t: any) => Number(t.algofundProfile?.actual_enabled || 0) === 1).length),
+        materialization: {
+          okCount: Number(materialization.okCount || 0),
+          partialCount: Number(materialization.partialCount || 0),
+          errorCount: Number(materialization.errorCount || 0),
+          totalClients: Number(materialization.totalClients || tenants.length),
+          aggregateStatus: String(materialization.aggregateStatus || (tenants.length ? 'ok' : 'empty')),
+        },
+        snap,
         chartSeries: equityPoints.length > 1
           ? storefrontEquitySeries(equityPoints, Math.max(30, Math.round(equityPoints.length / 2)))
           : [],
-        snap,
       };
     });
-  }, [adminPortfolios, batchEligibleAlgofundTenants]);
+  }, [adminPortfolios, batchEligibleAlgofundTenants, summary?.tenants]);
 
   const toConnectedClientBadges = (tenants: any[]) => (
     (tenants || []).map((tenant) => ({
@@ -9874,6 +9914,216 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   };
 
+  const openBacktestDrawerForPortfolio = (row: {
+    setKey: string;
+    displayLabel?: string;
+    memberCount?: number;
+    snap?: Record<string, any>;
+    chartSeries?: Array<{ time: number; value: number }>;
+  }) => {
+    const setKey = String(row.setKey || '').trim();
+    if (!setKey) {
+      messageApi.warning('У портфеля нет setKey');
+      return;
+    }
+    const snap = (row.snap || {}) as Record<string, any>;
+    const capital = Number(snap.capital || 30000);
+    const ret = Number(snap.ret || 0);
+    const dd = Number(snap.dd || 0);
+    const finalEquity = Number(snap.final || (capital * (1 + ret / 100)));
+    const curve = Array.isArray(snap.curve) ? snap.curve : [];
+    const equityPoints = curve
+      .map((pt: any, idx: number) => {
+        const value = Number(pt?.e ?? pt?.equity ?? pt?.value);
+        if (!Number.isFinite(value)) return null;
+        const timeRaw = Number(pt?.t ?? pt?.time ?? 0);
+        return {
+          time: Number.isFinite(timeRaw) && timeRaw > 0 ? timeRaw : idx,
+          equity: value,
+        };
+      })
+      .filter(Boolean) as Array<{ time: number; equity: number }>;
+    const books = Array.isArray(snap.books) ? snap.books : [];
+    const selectedOffers = (books.length > 0 ? books : [{ key: 'portfolio', ret, dd }]).map((book: any, idx: number) => {
+      const bookRet = Number(book?.ret ?? ret);
+      const bookDd = Number(book?.dd ?? dd);
+      return {
+        offerId: `portfolio-book:${String(book?.key || idx)}`,
+        titleRu: String(book?.key || `book-${idx + 1}`),
+        weight: 1,
+        mode: 'mono' as const,
+        market: '',
+        strategyId: 0,
+        strategyName: String(book?.key || `book-${idx + 1}`),
+        strategyType: 'portfolio_book',
+        interval: '',
+        familyInterval: '',
+        score: 0,
+        metricsSource: 'snapshot_only' as const,
+        metrics: {
+          ret: Number(bookRet.toFixed(3)),
+          pf: 0,
+          dd: Number(bookDd.toFixed(3)),
+          wr: 0,
+          trades: 0,
+        },
+        tradesPerDay: 0,
+        periodDays: Math.max(1, equityPoints.length || 90),
+        equityPoints: equityPoints.map((pt) => pt.equity),
+      };
+    });
+
+    backtestRequestSeqRef.current += 1;
+    resetBacktestDrawerDcaState();
+    setSelectedAdminDraftTsSetKey(setKey);
+    setBacktestTsWeightsByOfferId({});
+    setBacktestDrawerContext({
+      kind: 'algofund-ts',
+      title: `Бэктест портфеля: ${String(row.displayLabel || setKey)}`,
+      description: String(snap.method || 'portfolio snapshot (per-book OP, equity sum)'),
+      setKey,
+      systemName: setKey,
+      offerIds: selectedOffers.map((o) => o.offerId),
+    });
+    setAdminSweepBacktestResult({
+      kind: 'algofund-ts',
+      publishMeta: {
+        offerIds: selectedOffers.map((o) => o.offerId),
+        setKey,
+        membersCount: Number(row.memberCount || selectedOffers.length || 0),
+        systemName: setKey,
+      },
+      controls: {
+        riskScore: 5,
+        tradeFrequencyScore: 5,
+        riskLevel: 'medium',
+        tradeFrequencyLevel: 'medium',
+        initialBalance: capital,
+        riskScaleMaxPercent: 100,
+      },
+      selectedOffers,
+      preview: {
+        source: 'portfolio_snapshot',
+        summary: {
+          finalEquity,
+          totalReturnPercent: ret,
+          maxDrawdownPercent: dd,
+          profitFactor: 0,
+          winRatePercent: 0,
+          tradesCount: 0,
+        },
+        equity: equityPoints,
+        curves: null,
+        trades: [],
+      },
+    });
+    setAdminSweepBacktestStale(false);
+    setAdminSweepBacktestError('');
+    setBacktestDrawerVisible(true);
+  };
+
+  const applyStorefrontPortfolioToClients = async () => {
+    const target = storefrontPortfolioConnectTarget;
+    if (!target) return;
+    const portfolioId = Number(target.portfolioId || 0);
+    const setKey = String(target.setKey || '').trim();
+    const selectedTenantIds = Array.from(new Set((target.tenantIds || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+    const originalTenantIds = Array.from(new Set((target.originalTenantIds || []).map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0)));
+    const deselectedTenantIds = originalTenantIds.filter((id) => !selectedTenantIds.includes(id));
+
+    if (!portfolioId || !setKey) {
+      messageApi.warning('Не найден портфель для применения');
+      return;
+    }
+
+    if (deselectedTenantIds.length > 0) {
+      const deselectedNames = (summary?.tenants || [])
+        .filter((row: any) => deselectedTenantIds.includes(Number(row.tenant?.id)))
+        .map((row: any) => row.tenant?.display_name || row.tenant?.slug || `tenant-${row.tenant?.id}`)
+        .join(', ');
+      Modal.confirm({
+        title: `Отключить ${deselectedTenantIds.length} клиент(ов) от портфеля?`,
+        content: (
+          <Space direction="vertical" size={8}>
+            <Text>Клиенты: <Text strong>{deselectedNames || deselectedTenantIds.join(', ')}</Text></Text>
+            <Text>Все открытые позиции будут закрыты, ордера отменены.</Text>
+            <Text type="secondary">Портфель будет снят с дашборда для отключённых клиентов.</Text>
+          </Space>
+        ),
+        okText: 'Отключить и закрыть позиции',
+        okType: 'danger',
+        cancelText: 'Отмена',
+        onOk: () => executeApplyStorefrontPortfolio(portfolioId, setKey, selectedTenantIds, deselectedTenantIds),
+      });
+      return;
+    }
+
+    await executeApplyStorefrontPortfolio(portfolioId, setKey, selectedTenantIds, deselectedTenantIds);
+  };
+
+  const executeApplyStorefrontPortfolio = async (
+    portfolioId: number,
+    setKey: string,
+    selectedTenantIds: number[],
+    deselectedTenantIds: number[],
+  ) => {
+    setActionLoading('apply-storefront-portfolio');
+    try {
+      if (deselectedTenantIds.length > 0) {
+        try {
+          await axios.post('/api/saas/admin/algofund-batch-actions', {
+            tenantIds: deselectedTenantIds,
+            requestType: 'stop',
+            note: `Disconnected from storefront portfolio ${setKey}`,
+            directExecute: true,
+          });
+        } catch (stopError: any) {
+          messageApi.warning(`Ошибка при остановке отключённых клиентов: ${String(stopError?.response?.data?.error || stopError?.message || 'stop failed')}`);
+        }
+        await Promise.all(deselectedTenantIds.map(async (tenantId) => {
+          try {
+            await axios.post(`/api/saas/algofund/${tenantId}/unassign-portfolio`, {
+              portfolioId,
+              setKey,
+              clearPublished: true,
+            });
+          } catch {
+            // best-effort
+          }
+        }));
+      }
+
+      let connected = 0;
+      let failed = 0;
+      const failures: string[] = [];
+      for (const tenantId of selectedTenantIds) {
+        try {
+          await axios.post(`/api/saas/algofund/${tenantId}/materialize-portfolio`, {
+            portfolioId,
+            setKey,
+            activate: true,
+          });
+          connected += 1;
+        } catch (error: any) {
+          failed += 1;
+          failures.push(`tenant ${tenantId}: ${String(error?.response?.data?.error || error?.message || 'failed')}`);
+        }
+      }
+
+      const stopNote = deselectedTenantIds.length > 0 ? ` Отключено: ${deselectedTenantIds.length}.` : '';
+      messageApi.success(`Портфель применён: connected ${connected}, failed ${failed}.${stopNote}`);
+      if (failures.length > 0) {
+        messageApi.warning(`Ошибки: ${failures.slice(0, 3).join('; ')}`);
+      }
+      setStorefrontPortfolioConnectTarget(null);
+      await Promise.all([loadSummary('full'), loadAdminPortfolios()]);
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось применить портфель'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
   const applyStrategyConnectToClients = async () => {
     if (!strategyConnectTarget) return;
     const { offerId, tenantIds, initialTenantIds } = strategyConnectTarget;
@@ -13325,31 +13575,93 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                             <Empty description="Портфели не опубликованы" />
                                           ) : (
                                             <StorefrontGrid>
-                                              {adminPortfolioRows.map((row) => (
-                                                <PortfolioCard
-                                                  key={String(row.id || row.setKey)}
-                                                  portfolio={{
-                                                    id: row.id,
-                                                    setKey: row.setKey,
-                                                    displayLabel: String(row.displayLabel || row.setKey),
-                                                    description: String(row.description || ''),
-                                                    isPersonal: Boolean(row.isPersonal),
-                                                    memberCount: Number(row.memberCount || (row.members || []).length || 0),
-                                                    ret: row.snap?.ret,
-                                                    dd: row.snap?.dd,
-                                                    capital: row.snap?.capital,
-                                                    members: Array.isArray(row.members) ? row.members : [],
-                                                  }}
-                                                  connected={Number(row.activeCount || 0) > 0}
-                                                  chartSeries={row.chartSeries || []}
-                                                  connectedClients={toConnectedClientBadges(row.tenants || [])}
-                                                  footerExtra={(
-                                                    <Text type="secondary" style={{ fontSize: 11 }}>
-                                                      setKey: {row.setKey}
-                                                    </Text>
-                                                  )}
-                                                />
-                                              ))}
+                                              {adminPortfolioRows.map((row) => {
+                                                const audit = row.materialization || {
+                                                  okCount: 0,
+                                                  partialCount: 0,
+                                                  errorCount: 0,
+                                                  totalClients: 0,
+                                                  aggregateStatus: 'empty',
+                                                };
+                                                const totalClients = Number(audit.totalClients || row.tenantCount || 0);
+                                                const materializationBlock = totalClients > 0 ? (() => {
+                                                  const pct = totalClients > 0
+                                                    ? Math.round((Number(audit.okCount || 0) / totalClients) * 100)
+                                                    : 0;
+                                                  const progStatus = audit.aggregateStatus === 'ok'
+                                                    ? 'success'
+                                                    : audit.aggregateStatus === 'partial'
+                                                      ? 'normal'
+                                                      : 'exception';
+                                                  const badgeStatus = audit.aggregateStatus === 'ok'
+                                                    ? 'success'
+                                                    : audit.aggregateStatus === 'partial'
+                                                      ? 'warning'
+                                                      : 'error';
+                                                  return (
+                                                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                                                      <Space wrap>
+                                                        <Badge
+                                                          status={badgeStatus as any}
+                                                          text={`Материализация ${Number(audit.okCount || 0)}/${totalClients}${audit.partialCount ? ` (+${audit.partialCount} частично)` : ''}${audit.errorCount ? ` (${audit.errorCount} ошибок)` : ''}`}
+                                                        />
+                                                      </Space>
+                                                      <Progress percent={pct} size="small" status={progStatus as any} />
+                                                    </Space>
+                                                  );
+                                                })() : null;
+                                                return (
+                                                  <PortfolioCard
+                                                    key={String(row.id || row.setKey)}
+                                                    portfolio={{
+                                                      id: row.id,
+                                                      setKey: row.setKey,
+                                                      displayLabel: String(row.displayLabel || row.setKey),
+                                                      description: String(row.description || ''),
+                                                      isPersonal: Boolean(row.isPersonal),
+                                                      memberCount: Number(row.memberCount || (row.members || []).length || 0),
+                                                      ret: row.snap?.ret,
+                                                      dd: row.snap?.dd,
+                                                      capital: row.snap?.capital,
+                                                      members: Array.isArray(row.members) ? row.members : [],
+                                                    }}
+                                                    connected={Number(row.activeCount || 0) > 0}
+                                                    chartSeries={row.chartSeries || []}
+                                                    clientCount={Number(row.tenantCount || 0)}
+                                                    activeCount={Number(row.activeCount || 0)}
+                                                    extraBadges={(
+                                                      <>
+                                                        {row.isStorefront ? <Tag color="success">published</Tag> : <Tag color="warning">not storefront</Tag>}
+                                                        {row.isPersonal ? <Tag color="purple">personal</Tag> : <Tag color="blue">storefront</Tag>}
+                                                      </>
+                                                    )}
+                                                    bodyExtra={materializationBlock}
+                                                    onOpenDetail={() => openBacktestDrawerForPortfolio(row)}
+                                                    onConnectClients={() => {
+                                                      const initialIds = (row.tenants || [])
+                                                        .map((tenant: any) => Number(tenant?.tenant?.id || 0))
+                                                        .filter((tenantId: number) => Number.isFinite(tenantId) && tenantId > 0);
+                                                      setStorefrontPortfolioConnectTarget({
+                                                        portfolioId: Number(row.id),
+                                                        setKey: String(row.setKey),
+                                                        displayLabel: String(row.displayLabel || row.setKey),
+                                                        tenantIds: initialIds,
+                                                        originalTenantIds: initialIds,
+                                                      });
+                                                    }}
+                                                    footerExtra={(
+                                                      <Space wrap size={6}>
+                                                        <Button size="small" onClick={() => openBacktestDrawerForPortfolio(row)}>
+                                                          Бэктест портфеля
+                                                        </Button>
+                                                        <Text type="secondary" style={{ fontSize: 11 }}>
+                                                          setKey: {row.setKey}
+                                                        </Text>
+                                                      </Space>
+                                                    )}
+                                                  />
+                                                );
+                                              })}
                                             </StorefrontGrid>
                                           )}
                                         </Card>
@@ -14844,6 +15156,96 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           </Space>
           <Text type="secondary">
             Выбрано клиентов: {(storefrontConnectTarget?.tenantIds || []).length}
+          </Text>
+        </Space>
+      </Modal>
+
+      <Modal
+        title={`Подключить клиентов к портфелю: ${storefrontPortfolioConnectTarget?.displayLabel || '—'}`}
+        open={Boolean(storefrontPortfolioConnectTarget)}
+        onCancel={() => setStorefrontPortfolioConnectTarget(null)}
+        onOk={() => void applyStorefrontPortfolioToClients()}
+        okText="Применить портфель"
+        cancelText="Отмена"
+        confirmLoading={actionLoading === 'apply-storefront-portfolio'}
+        width={720}
+      >
+        <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Alert
+            type="info"
+            showIcon
+            message="Подключение и отключение клиентов от портфеля"
+            description="Отмеченные клиенты получат materialize портфеля (B3 + addon на одном ключе). Снятые с галочки — stop + unassign (позиции закрываются)."
+          />
+          {(() => {
+            const current = storefrontPortfolioConnectTarget;
+            if (!current) return null;
+            const toAdd = current.tenantIds.filter((id) => !current.originalTenantIds.includes(id));
+            const toRemove = current.originalTenantIds.filter((id) => !current.tenantIds.includes(id));
+            if (toAdd.length === 0 && toRemove.length === 0) return null;
+            return (
+              <Space wrap>
+                {toAdd.length > 0 ? <Tag color="green">+ подключить: {toAdd.length}</Tag> : null}
+                {toRemove.length > 0 ? <Tag color="red">− отключить: {toRemove.length}</Tag> : null}
+              </Space>
+            );
+          })()}
+          <Select
+            mode="multiple"
+            style={{ width: '100%' }}
+            placeholder="Выберите клиентов Algofund"
+            value={storefrontPortfolioConnectTarget?.tenantIds || []}
+            onChange={(values) => setStorefrontPortfolioConnectTarget((current) => (current ? {
+              ...current,
+              tenantIds: values.map((item) => Number(item)).filter((item) => Number.isFinite(item) && item > 0),
+            } : current))}
+            options={batchEligibleAlgofundTenants.map((item) => {
+              const enabled = Number(item.algofundProfile?.actual_enabled || 0) === 1
+                && Number(item.algofundProfile?.requested_enabled || 0) === 1;
+              const currentTs = item.algofundProfile?.published_system_name
+                ? ` - текущая: ${item.algofundProfile.published_system_name}`
+                : (enabled ? '' : ' - не подключён / выключен');
+              const isConnected = (storefrontPortfolioConnectTarget?.originalTenantIds || []).includes(Number(item.tenant.id));
+              return {
+                value: Number(item.tenant.id),
+                label: `${item.tenant.display_name || item.tenant.slug || `tenant-${item.tenant.id}`} (${item.tenant.slug || item.tenant.id})${isConnected ? ' ✓' : ''}${currentTs}`,
+              };
+            })}
+            optionFilterProp="label"
+          />
+          <Space wrap>
+            <Button
+              size="small"
+              onClick={() => setStorefrontPortfolioConnectTarget((current) => (current ? {
+                ...current,
+                tenantIds: batchEligibleAlgofundTenants.map((item) => Number(item.tenant.id)).filter((item) => Number(item) > 0),
+              } : current))}
+            >
+              Выбрать всех algofund-клиентов
+            </Button>
+            <Button
+              size="small"
+              onClick={() => setStorefrontPortfolioConnectTarget((current) => (current ? {
+                ...current,
+                tenantIds: current.originalTenantIds,
+              } : current))}
+            >
+              Сбросить изменения
+            </Button>
+            <Button
+              size="small"
+              danger
+              onClick={() => setStorefrontPortfolioConnectTarget((current) => (current ? {
+                ...current,
+                tenantIds: [],
+              } : current))}
+            >
+              Отключить всех
+            </Button>
+          </Space>
+          <Text type="secondary">
+            Выбрано клиентов: {(storefrontPortfolioConnectTarget?.tenantIds || []).length}
+            {storefrontPortfolioConnectTarget?.setKey ? ` · ${storefrontPortfolioConnectTarget.setKey}` : ''}
           </Text>
         </Space>
       </Modal>

@@ -76,6 +76,7 @@ import {
   getAlgofundActiveSystems,
   assignAlgofundSystems,
   assignAlgofundPortfolio,
+  unassignAlgofundPortfolio,
   materializeAlgofundPortfolioFull,
   listAlgofundPortfolios,
   toggleAlgofundSystem,
@@ -1824,6 +1825,26 @@ router.post('/algofund/:tenantId/materialize-portfolio', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`SaaS algofund materialize-portfolio error: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/algofund/:tenantId/unassign-portfolio', async (req, res) => {
+  const profileId = Number(req.params.tenantId);
+  if (!Number.isFinite(profileId)) {
+    return res.status(400).json({ error: 'Invalid tenantId' });
+  }
+  try {
+    const data = await unassignAlgofundPortfolio({
+      profileId,
+      portfolioId: req.body?.portfolioId != null ? Number(req.body.portfolioId) : undefined,
+      setKey: req.body?.setKey != null ? String(req.body.setKey) : undefined,
+      clearPublished: req.body?.clearPublished !== false,
+    });
+    res.json({ success: true, ...data });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS algofund unassign-portfolio error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
