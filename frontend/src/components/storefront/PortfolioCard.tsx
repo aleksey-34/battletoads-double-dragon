@@ -30,10 +30,17 @@ export type PortfolioCardData = {
   equityPoints?: number[];
 };
 
+export type ConnectedClientBadge = {
+  label: string;
+  active?: boolean;
+};
+
 type Props = {
   portfolio: PortfolioCardData;
   connected?: boolean;
   chartSeries?: LinePoint[];
+  connectedClients?: ConnectedClientBadge[];
+  footerExtra?: React.ReactNode;
   onConnect?: () => void;
   connectLoading?: boolean;
 };
@@ -42,6 +49,8 @@ const PortfolioCard: React.FC<Props> = ({
   portfolio,
   connected = false,
   chartSeries = [],
+  connectedClients = [],
+  footerExtra = null,
   onConnect,
   connectLoading = false,
 }) => {
@@ -50,10 +59,11 @@ const PortfolioCard: React.FC<Props> = ({
   const ddTone = metricTone(Number(portfolio.dd || 0), 'drawdown');
   const hasChart = chartSeries.length > 1;
   const members = useMemo(() => portfolio.members || [], [portfolio.members]);
+  const clientList = Array.isArray(connectedClients) ? connectedClients : [];
 
   return (
     <>
-      <article className={`storefront-card storefront-card--ts${connected ? ' storefront-card--selected' : ''}`}>
+      <article className={`storefront-card storefront-card--portfolio${connected ? ' storefront-card--selected' : ''}`}>
         <div className="storefront-card__head">
           <div className="storefront-card__title-row">
             <Typography.Text strong className="storefront-card__title">
@@ -61,11 +71,16 @@ const PortfolioCard: React.FC<Props> = ({
             </Typography.Text>
           </div>
           <div className="storefront-card__meta">
-            <Tag className="storefront-card__pill storefront-card__pill--accent">Портфель</Tag>
+            <Tag className="storefront-card__pill storefront-card__pill--portfolio">Портфель</Tag>
             {portfolio.isPersonal ? <Tag className="storefront-card__pill">personal</Tag> : null}
             {portfolio.memberCount ? (
-              <Tag className="storefront-card__pill">{portfolio.memberCount} TS</Tag>
+              <Tag className="storefront-card__pill">{portfolio.memberCount} книг TS</Tag>
             ) : null}
+            {clientList.length > 0 ? (
+              <Tag color="cyan">clients {clientList.length}</Tag>
+            ) : (
+              <Tag>clients 0</Tag>
+            )}
           </div>
         </div>
 
@@ -92,14 +107,36 @@ const PortfolioCard: React.FC<Props> = ({
           </div>
         ) : null}
 
+        {clientList.length > 0 ? (
+          <div className="storefront-card__clients">
+            <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+              Клиенты ({clientList.length}):
+            </Typography.Text>
+            <div className="storefront-card__clients-list">
+              {clientList.map((c) => (
+                <Tag
+                  key={c.label}
+                  color={c.active === false ? 'default' : 'cyan'}
+                  style={{ marginInlineEnd: 0 }}
+                >
+                  {c.label}{c.active === false ? ' · off' : ''}
+                </Tag>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
         <div className="storefront-card__footer">
-          <Space wrap>
-            <Button size="small" onClick={() => setOpen(true)}>Состав</Button>
-            {onConnect ? (
-              <Button size="small" type="primary" loading={connectLoading} onClick={onConnect}>
-                {connected ? 'Подключено' : 'Подключить'}
-              </Button>
-            ) : null}
+          <Space wrap direction="vertical" style={{ width: '100%' }}>
+            <Space wrap>
+              <Button size="small" onClick={() => setOpen(true)}>Состав</Button>
+              {onConnect ? (
+                <Button size="small" type="primary" loading={connectLoading} onClick={onConnect}>
+                  {connected ? 'Подключено' : 'Подключить'}
+                </Button>
+              ) : null}
+            </Space>
+            {footerExtra}
           </Space>
         </div>
       </article>
@@ -142,6 +179,18 @@ const PortfolioCard: React.FC<Props> = ({
             },
           ]}
         />
+        {clientList.length > 0 ? (
+          <div style={{ marginTop: 16 }}>
+            <Typography.Text strong>Подключённые клиенты</Typography.Text>
+            <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {clientList.map((c) => (
+                <Tag key={`m-${c.label}`} color={c.active === false ? 'default' : 'cyan'}>
+                  {c.label}{c.active === false ? ' · off' : ''}
+                </Tag>
+              ))}
+            </div>
+          </div>
+        ) : null}
         {hasChart ? (
           <div style={{ marginTop: 16 }}>
             <Typography.Text strong>Total equity (BT)</Typography.Text>

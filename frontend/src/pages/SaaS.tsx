@@ -41,8 +41,9 @@ import ChartComponent from '../components/ChartComponent';
 import StorefrontGrid from '../components/storefront/StorefrontGrid';
 import StrategyOfferCard from '../components/storefront/StrategyOfferCard';
 import TradingSystemCard from '../components/storefront/TradingSystemCard';
+import PortfolioCard from '../components/storefront/PortfolioCard';
 import EquitySparkline from '../components/storefront/EquitySparkline';
-import { pointsToChartSeries } from '../components/storefront/storefrontMetrics';
+import { equityPointsToSeries as storefrontEquitySeries, pointsToChartSeries } from '../components/storefront/storefrontMetrics';
 import { useI18n } from '../i18n';
 
 const { Paragraph, Text, Title } = Typography;
@@ -3083,6 +3084,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [algofundState, setAlgofundState] = useState<AlgofundState | null>(null);
   const [algofundLoading, setAlgofundLoading] = useState(false);
   const [algofundError, setAlgofundError] = useState('');
+  const [adminPortfolios, setAdminPortfolios] = useState<Array<Record<string, any>>>([]);
+  const [adminPortfoliosLoading, setAdminPortfoliosLoading] = useState(false);
   const [copytradingState, setCopytradingState] = useState<Record<string, any> | null>(null);
   const [copytradingLoading, setCopytradingLoading] = useState(false);
   const [copytradingError, setCopytradingError] = useState('');
@@ -4789,6 +4792,62 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const algofundVitrineActiveSystems = useMemo(
     () => (algofundVitrineMarketTab === 'spot' ? algofundVitrineSystemsSpot : algofundVitrineSystemsFutures),
     [algofundVitrineMarketTab, algofundVitrineSystemsFutures, algofundVitrineSystemsSpot],
+  );
+
+  const loadAdminPortfolios = useCallback(async () => {
+    if (!isAdminSurface) return;
+    setAdminPortfoliosLoading(true);
+    try {
+      const response = await axios.get('/api/saas/algofund/portfolios');
+      setAdminPortfolios(Array.isArray(response.data?.portfolios) ? response.data.portfolios : []);
+    } catch {
+      setAdminPortfolios([]);
+    } finally {
+      setAdminPortfoliosLoading(false);
+    }
+  }, [isAdminSurface]);
+
+  useEffect(() => {
+    if (!isAdminSurface) return;
+    void loadAdminPortfolios();
+  }, [isAdminSurface, loadAdminPortfolios, summary?.tenants?.length]);
+
+  const adminPortfolioRows = useMemo(() => {
+    return (adminPortfolios || []).map((p) => {
+      const setKey = String(p.setKey || '');
+      const tenants = batchEligibleAlgofundTenants.filter((tenant) => {
+        const pub = String(tenant.algofundProfile?.published_system_name || '').trim();
+        return pub === setKey;
+      });
+      const snap = (p.snapshot || {}) as Record<string, any>;
+      const curve = Array.isArray(snap.curve) ? snap.curve : [];
+      const equityPoints = curve
+        .map((pt: any) => Number(pt.e))
+        .filter((v: number) => Number.isFinite(v));
+      return {
+        id: p.id as number | string,
+        setKey,
+        displayLabel: p.displayLabel,
+        description: p.description,
+        isPersonal: p.isPersonal,
+        memberCount: p.memberCount,
+        members: p.members,
+        tenants,
+        tenantCount: tenants.length,
+        activeCount: tenants.filter((t) => Number(t.algofundProfile?.actual_enabled || 0) === 1).length,
+        chartSeries: equityPoints.length > 1
+          ? storefrontEquitySeries(equityPoints, Math.max(30, Math.round(equityPoints.length / 2)))
+          : [],
+        snap,
+      };
+    });
+  }, [adminPortfolios, batchEligibleAlgofundTenants]);
+
+  const toConnectedClientBadges = (tenants: any[]) => (
+    (tenants || []).map((tenant) => ({
+      label: String(tenant?.tenant?.slug || tenant?.tenant?.display_name || tenant?.tenant?.id || '?'),
+      active: Number(tenant?.algofundProfile?.actual_enabled || 0) === 1,
+    }))
   );
 
   useEffect(() => {
@@ -13237,7 +13296,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                       <Alert
                                         type="info"
                                         showIcon
-                                        message="Одобренная витрина торговых систем и текущие TS-офферы."
+                                        message="Витрина: сверху Портфели (несколько TS на ключе), ниже одиночные ТС. На карточке видны slug подключённых клиентов."
                                       />
                                       <Segmented
                                         value={algofundVitrineMarketTab}
@@ -13247,14 +13306,58 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                           { label: `Спот (${algofundVitrineSystemsSpot.length})`, value: 'spot' },
                                         ]}
                                       />
+                                      {algofundVitrineMarketTab === 'futures' ? (
+                                        <Card
+                                          size="small"
+                                          className="battletoads-card"
+                                          title={<span className="storefront-title-accent">Портфели (B3 + addon)</span>}
+                                          extra={(
+                                            <Button size="small" loading={adminPortfoliosLoading} onClick={() => { void loadAdminPortfolios(); }}>
+                                              Обновить
+                                            </Button>
+                                          )}
+                                        >
+                                          {adminPortfolioRows.length === 0 ? (
+                                            <Empty description="Портфели не опубликованы" />
+                                          ) : (
+                                            <StorefrontGrid>
+                                              {adminPortfolioRows.map((row) => (
+                                                <PortfolioCard
+                                                  key={String(row.id || row.setKey)}
+                                                  portfolio={{
+                                                    id: row.id,
+                                                    setKey: row.setKey,
+                                                    displayLabel: String(row.displayLabel || row.setKey),
+                                                    description: String(row.description || ''),
+                                                    isPersonal: Boolean(row.isPersonal),
+                                                    memberCount: Number(row.memberCount || (row.members || []).length || 0),
+                                                    ret: row.snap?.ret,
+                                                    dd: row.snap?.dd,
+                                                    capital: row.snap?.capital,
+                                                    members: Array.isArray(row.members) ? row.members : [],
+                                                  }}
+                                                  connected={Number(row.activeCount || 0) > 0}
+                                                  chartSeries={row.chartSeries || []}
+                                                  connectedClients={toConnectedClientBadges(row.tenants || [])}
+                                                  footerExtra={(
+                                                    <Text type="secondary" style={{ fontSize: 11 }}>
+                                                      setKey: {row.setKey}
+                                                    </Text>
+                                                  )}
+                                                />
+                                              ))}
+                                            </StorefrontGrid>
+                                          )}
+                                        </Card>
+                                      ) : null}
                                       {algofundVitrineActiveSystems.length === 0 ? (
-                                        <Empty description={algofundVitrineMarketTab === 'spot' ? 'Спот-ТС пока нет — появятся после spot-sweep' : 'Витрина пуста: опубликуй ТС и привяжи к algofund-клиентам'} />
+                                        <Empty description={algofundVitrineMarketTab === 'spot' ? 'Спот-ТС пока нет — появятся после spot-sweep' : 'Витрина ТС пуста: опубликуй ТС и привяжи к algofund-клиентам'} />
                                       ) : (
                                         <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                                          <Text strong className="storefront-title-accent">Одиночные ТС</Text>
                                           <Tag color="success">Опубликованные TS: {algofundVitrineActiveSystems.length}</Tag>
                                           <Tag color="default">Неопубликованные TS: {algofundVitrineActiveSystems.filter((row: any) => !row.isPublished).length}</Tag>
-                                          <Text>Витринные TS офферы синхронизированы и доступны в карточках ниже</Text>
-                                          <Text type="secondary">Клиентов с привязанной TS: {algofundTenantsWithPublishedTs.length}</Text>
+                                          <Text type="secondary">Клиентов с привязанной карточкой: {algofundTenantsWithPublishedTs.length}</Text>
                                         </Space>
                                       )}
                                       {algofundVitrineActiveSystems.length > 0 ? (
@@ -13266,8 +13369,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                 value: Number(pt.value ?? pt.equity ?? 0),
                                               }))
                                               : [];
-                                            const audit = materializationAuditBySystem[item.systemName];
-                                            const materializationBlock = audit && Number(item.tenantCount || 0) > 0 ? (() => {
+                                            const connectedClients = toConnectedClientBadges(item.tenants || []);
+                                            const materializationBlock = (() => {
+                                              const audit = materializationAuditBySystem[item.systemName];
+                                              if (!(audit && Number(item.tenantCount || 0) > 0)) return null;
                                               const pct = audit.totalClients > 0
                                                 ? Math.round((audit.okCount / audit.totalClients) * 100)
                                                 : 0;
@@ -13299,7 +13404,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                   <Progress percent={pct} size="small" status={progStatus} />
                                                 </Space>
                                               );
-                                            })() : null;
+                                            })();
                                             return (
                                               <TradingSystemCard
                                                 key={item.systemName}
@@ -13320,6 +13425,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                 }}
                                                 connected={item.activeCount > 0}
                                                 chartSeries={chartSeries}
+                                                connectedClients={connectedClients}
                                                 extraBadges={(
                                                   <>
                                                     {item.isCurated ? <Tag color="blue">curated</Tag> : <Tag color="default">not curated</Tag>}

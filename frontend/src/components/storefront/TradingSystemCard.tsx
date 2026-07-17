@@ -25,11 +25,17 @@ export type TradingSystemCardData = {
   maxPerMarket?: number;
 };
 
+export type ConnectedClientBadge = {
+  label: string;
+  active?: boolean;
+};
+
 type TradingSystemCardProps = {
   system: TradingSystemCardData;
   connected?: boolean;
   riskMultiplier?: number | null;
   chartSeries?: LinePoint[];
+  connectedClients?: ConnectedClientBadge[];
   extraBadges?: React.ReactNode;
   bodyExtra?: React.ReactNode;
   footerExtra?: React.ReactNode;
@@ -43,6 +49,7 @@ const TradingSystemCard: React.FC<TradingSystemCardProps> = ({
   connected = false,
   riskMultiplier = null,
   chartSeries = [],
+  connectedClients = [],
   extraBadges = null,
   bodyExtra = null,
   footerExtra = null,
@@ -56,6 +63,7 @@ const TradingSystemCard: React.FC<TradingSystemCardProps> = ({
   const ddTone = metricTone(Number(system.dd || 0), 'drawdown');
   const pfTone = metricTone(Number(system.pf || 0), 'pf');
   const marketTypeLabel = String(system.marketType || 'futures') === 'spot' ? 'Спот' : 'Фьючерсы';
+  const clientList = Array.isArray(connectedClients) ? connectedClients : [];
 
   return (
     <article className={`storefront-card storefront-card--ts${connected ? ' storefront-card--selected' : ''}`}>
@@ -68,6 +76,7 @@ const TradingSystemCard: React.FC<TradingSystemCardProps> = ({
           </Tooltip>
         </div>
         <div className="storefront-card__meta">
+          <Tag className="storefront-card__pill storefront-card__pill--ts">ТС</Tag>
           <Tag className="storefront-card__pill">{marketTypeLabel}</Tag>
           {system.periodDays ? <Tag className="storefront-card__pill">{Math.round(system.periodDays)}d</Tag> : null}
           {system.membersCount ? (
@@ -112,6 +121,25 @@ const TradingSystemCard: React.FC<TradingSystemCardProps> = ({
           <div className="storefront-card__chart-empty">Бэктест не загружен</div>
         )}
       </div>
+
+      {clientList.length > 0 ? (
+        <div className="storefront-card__clients">
+          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+            Клиенты ({clientList.length}):
+          </Typography.Text>
+          <div className="storefront-card__clients-list">
+            {clientList.map((c) => (
+              <Tag
+                key={c.label}
+                color={c.active === false ? 'default' : 'cyan'}
+                style={{ marginInlineEnd: 0 }}
+              >
+                {c.label}{c.active === false ? ' · off' : ''}
+              </Tag>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {bodyExtra}
 
