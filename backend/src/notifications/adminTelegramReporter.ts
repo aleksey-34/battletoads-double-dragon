@@ -860,10 +860,13 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
   }
 
   const nowMs = Date.now();
-  const sumEquity = rows.reduce((s, r) => s + r.equity, 0);
-  const sumEquityDelta = rows.reduce((s, r) => s + r.equity_delta, 0);
-  const sumUpnl = rows.reduce((s, r) => s + r.upnl, 0);
-  const sumTrades = rows.reduce((s, r) => s + r.trades_period, 0);
+  // Equity/trades stats only over enabled (trading) clients — off assigned stay visible in count footnote.
+  const enabledRows = rows.filter((r) => r.actual_enabled);
+  const statsRows = enabledRows.length > 0 ? enabledRows : rows;
+  const sumEquity = statsRows.reduce((s, r) => s + r.equity, 0);
+  const sumEquityDelta = statsRows.reduce((s, r) => s + r.equity_delta, 0);
+  const sumUpnl = statsRows.reduce((s, r) => s + r.upnl, 0);
+  const sumTrades = statsRows.reduce((s, r) => s + r.trades_period, 0);
 
   const alerts: string[] = [];
 
@@ -1038,12 +1041,12 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
   const headerOk = `✅ <b>BTDD: всё OK</b> (${periodHours}ч)`;
   const headerBad = `🚨 <b>BTDD: алерты ${alerts.length}/${total}</b> (${periodHours}ч)`;
 
-  const worstDd = rows.reduce((w, r) => r.dd > w.dd ? r : w, rows[0]);
-  const worstUpnl = rows.reduce((w, r) => r.upnl < w.upnl ? r : w, rows[0]);
+  const worstDd = statsRows.reduce((w, r) => r.dd > w.dd ? r : w, statsRows[0]);
+  const worstUpnl = statsRows.reduce((w, r) => r.upnl < w.upnl ? r : w, statsRows[0]);
   const deltaSign = sumEquityDelta >= 0 ? '+' : '';
   const upnlSign = sumUpnl >= 0 ? '+' : '';
   const stats = [
-    `Клиентов: ${total}${disabledCount > 0 ? ` (вкл ${enabledCount} · выкл ${disabledCount})` : ''} · equity: $${sumEquity.toFixed(0)} · Δ${periodHours}h: ${deltaSign}$${sumEquityDelta.toFixed(2)} · uPnL: ${upnlSign}${sumUpnl.toFixed(2)}`,
+    `Клиентов: ${enabledCount}${disabledCount > 0 ? ` (+${disabledCount} выкл назначенных)` : ''} · equity: $${sumEquity.toFixed(0)} · Δ${periodHours}h: ${deltaSign}$${sumEquityDelta.toFixed(2)} · uPnL: ${upnlSign}${sumUpnl.toFixed(2)}`,
     `Сделок за ${periodHours}ч: ${sumTrades} · worst DD: ${worstDd.dd.toFixed(1)}% (${escapeHtml(worstDd.display_name || worstDd.api_key_name || '')})`,
   ].join('\n');
 
