@@ -482,13 +482,14 @@ const buildPartnerTsCardSummaries = (rows: PartnerTradeSummaryRow[]): PartnerTsC
       cardKey: partnerTsCardLabel(group[0]?.publishedSystem || '').key,
       displayLabel: label,
       clients: group.length,
-      activeClients: enabledGroup.filter((r) => r.tradesCount > 0).length,
+      // "акт" = enabled on the card (not "had fills in window")
+      activeClients: enabledGroup.length,
       tradesMedian: medianOfValues(tradeCounts.length > 0 ? tradeCounts : group.map((r) => r.tradesCount)),
       equityDeltaUsd: Number(equityDeltaUsd.toFixed(2)),
       closedTrades,
       avgPnlPercent,
       totalPnlUsd: Number(totalPnlUsd.toFixed(2)),
-      zeroTradeClients: group.filter((r) => r.tradesCount === 0).map((r) => r.displayName),
+      zeroTradeClients: enabledGroup.filter((r) => r.tradesCount === 0).map((r) => r.displayName),
     });
   }
 
