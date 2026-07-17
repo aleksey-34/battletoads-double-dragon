@@ -174,7 +174,11 @@ const loadPartnerClientRows = async (): Promise<PartnerClientRow[]> => {
   const rows = await db.all(
     `SELECT t.id, t.slug, t.display_name, t.status,
             ap.published_system_name, ap.actual_enabled, ap.execution_api_key_name,
-            ap.assigned_api_key_name, ap.requested_enabled
+            ap.assigned_api_key_name, ap.requested_enabled,
+            EXISTS (
+              SELECT 1 FROM algofund_active_portfolios aap
+              WHERE aap.profile_id = ap.id AND COALESCE(aap.is_enabled, 1) = 1
+            ) AS has_active_portfolio
      FROM tenants t
      JOIN algofund_profiles ap ON ap.tenant_id = t.id
      WHERE t.status = 'active'
@@ -184,13 +188,20 @@ const loadPartnerClientRows = async (): Promise<PartnerClientRow[]> => {
   const clients: PartnerClientRow[] = [];
   for (const row of rows) {
     const slug = asString(row.slug);
-    if (!isPartnerTenantSlug(slug)) continue;
+    const publishedSystem = asString(row.published_system_name);
+    const hasActivePortfolio = asNumber(row.has_active_portfolio, 0) === 1;
+    // Partner slug prefixes (artursk*) PLUS anyone on a published/active portfolio card,
+    // so storefront portfolio digests show full 11/11 not only artursk*.
+    const include = isPartnerTenantSlug(slug)
+      || publishedSystem.toLowerCase().startsWith('portfolio-')
+      || hasActivePortfolio;
+    if (!include) continue;
     clients.push({
       tenantId: asNumber(row.id),
       slug,
       displayName: asString(row.display_name, slug),
       apiKeyName: asString(row.execution_api_key_name) || asString(row.assigned_api_key_name),
-      publishedSystem: asString(row.published_system_name),
+      publishedSystem,
       enabled: asNumber(row.actual_enabled) === 1,
       requestedEnabled: asNumber(row.requested_enabled, 1) === 1,
     });
@@ -419,6 +430,10 @@ export type PartnerTsCardSummary = {
 
 const partnerTsCardLabel = (publishedSystem: string): { key: string; label: string } => {
   const ts = String(publishedSystem || '').toLowerCase();
+  if (ts.startsWith('portfolio-')) {
+    const short = String(publishedSystem || '').trim();
+    return { key: short.slice(0, 64), label: short.slice(0, 48) };
+  }
   if (ts.includes('synth-stable') || ts.includes('b3-jul2026')) {
     return { key: 'b3-synth-stable', label: 'B3 synth-stable' };
   }
