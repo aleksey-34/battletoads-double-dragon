@@ -4989,9 +4989,15 @@ const upsertTenantStrategies = async (
   records: Array<{ offerId: string; record: SweepRecord; metrics: CatalogMetricSet & { score: number } }>,
   maxDepositTotal: number,
   riskLevel: Level3,
-  activate: boolean
+  activate: boolean,
+  options?: { keepStrategyIds?: number[] },
 ): Promise<StrategyMaterializedRow[]> => {
   let existing = await getExistingTenantStrategies(apiKeyName, tenant.slug);
+  const keepIds = new Set(
+    (options?.keepStrategyIds || [])
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id) && id > 0),
+  );
 
   // Hard guard at materialization stage: if legacy/zombie duplicates exist for the
   // same SID (or exact same strategy name), archive all but the newest row before
@@ -5104,6 +5110,12 @@ const upsertTenantStrategies = async (
         source: 'saas_materialize',
       });
       await markMaterializedRuntimeOrigin(Number(updated.id), 'saas_materialize', 1);
+      await db.run(
+        `UPDATE strategies
+         SET is_archived = 0, is_active = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [activate ? 1 : 0, Number(updated.id)],
+      ).catch(() => null);
       out.push({
         id: updated.id,
         name: updated.name,
@@ -5163,6 +5175,10 @@ const upsertTenantStrategies = async (
 
   for (const row of existing) {
     if (!row.id || desiredNames.has(asString(row.name))) {
+      continue;
+    }
+    // Multi-TS portfolio materialize: do not archive sibling-book SAAS strategies.
+    if (keepIds.has(Number(row.id))) {
       continue;
     }
     await saasArchiveStrategy(apiKeyName, {
@@ -14695,7 +14711,8 @@ const materializeAlgofundSystem = async (
     recordsForMaterialization,
     asNumber(plan.max_deposit_total, 1000),
     riskMultiplier <= 0.85 ? 'low' : riskMultiplier >= 1.4 ? 'high' : 'medium',
-    activate || profile.requested_enabled === 1
+    activate || profile.requested_enabled === 1,
+    { keepStrategyIds: options?.keepStrategyIdsExtra || [] },
   );
 
   if (materializedStrategies.length !== recordsForMaterialization.length) {
