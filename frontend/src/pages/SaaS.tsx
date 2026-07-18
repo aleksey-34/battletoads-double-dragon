@@ -57,6 +57,18 @@ type AdminTabKey = 'offer-ts' | 'clients' | 'monitoring' | 'create-user';
 type SummaryScope = 'light' | 'full';
 type CopytradingUiStatus = 'idle' | 'copying' | 'stopped' | 'saving' | 'error';
 
+type SaasBacktestPortfolioMember = {
+  role: string;
+  systemName: string;
+  op?: number;
+  lot?: number;
+  weight?: number;
+  ret?: number;
+  dd?: number;
+  pf?: number;
+  trades?: number;
+};
+
 type SaasBacktestContext = {
   kind: 'offer' | 'algofund-ts';
   title: string;
@@ -67,6 +79,9 @@ type SaasBacktestContext = {
   offerWeightsById?: Record<string, number>;
   setKey?: string;
   systemName?: string;
+  /** Portfolio stamp path: per-book OP, no single-TS offer composition / API rerun. */
+  portfolioMode?: boolean;
+  portfolioMembers?: SaasBacktestPortfolioMember[];
 };
 
 type AdminSweepBacktestPreviewResponse = {
@@ -7656,6 +7671,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!targetContext) {
       return;
     }
+    if (targetContext.portfolioMode && options?.preferRealBacktest) {
+      const books = (targetContext.portfolioMembers || [])
+        .map((m) => m.role || m.systemName)
+        .filter(Boolean)
+        .join(', ');
+      setAdminSweepBacktestError(
+        `API rerun портфеля целиком не поддерживается (книги: ${books || '—'}). `
+        + 'Открой бэктест отдельной ТС-книги кнопкой ниже — у каждой свой OP/lot и свой состав офферов.',
+      );
+      messageApi.warning('Для портфеля: API rerun делай по каждой книге ТС отдельно');
+      return;
+    }
 
     const requestSeq = ++backtestRequestSeqRef.current;
     setAdminSweepBacktestLoading(true);
@@ -9918,6 +9945,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setKey: string;
     displayLabel?: string;
     memberCount?: number;
+    members?: Array<Record<string, any>>;
     snap?: Record<string, any>;
     chartSeries?: Array<{ time: number; value: number }>;
   }) => {
@@ -9932,6 +9960,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const dd = Number(snap.dd || 0);
     const finalEquity = Number(snap.final || (capital * (1 + ret / 100)));
     const curve = Array.isArray(snap.curve) ? snap.curve : [];
+    const upnlCurveRaw = Array.isArray(snap.upnlCurve) ? snap.upnlCurve : [];
     const equityPoints = curve
       .map((pt: any, idx: number) => {
         const value = Number(pt?.e ?? pt?.equity ?? pt?.value);
@@ -9943,18 +9972,55 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         };
       })
       .filter(Boolean) as Array<{ time: number; equity: number }>;
+    const pnlCurve = equityPoints.map((pt) => ({
+      time: pt.time,
+      equity: Number((pt.equity - capital).toFixed(4)),
+    }));
+    const upnlCurve = upnlCurveRaw
+      .map((pt: any, idx: number) => {
+        const value = Number(pt?.u ?? pt?.upnl ?? pt?.value);
+        if (!Number.isFinite(value)) return null;
+        const timeRaw = Number(pt?.t ?? pt?.time ?? 0);
+        return {
+          time: Number.isFinite(timeRaw) && timeRaw > 0 ? timeRaw : idx,
+          equity: value,
+        };
+      })
+      .filter(Boolean) as Array<{ time: number; equity: number }>;
     const books = Array.isArray(snap.books) ? snap.books : [];
-    const selectedOffers = (books.length > 0 ? books : [{ key: 'portfolio', ret, dd }]).map((book: any, idx: number) => {
-      const bookRet = Number(book?.ret ?? ret);
-      const bookDd = Number(book?.dd ?? dd);
+    const metaBooks = Array.isArray((snap as any).metadata?.books)
+      ? (snap as any).metadata.books
+      : [];
+    const rowMembers = Array.isArray(row.members) ? row.members : [];
+    const portfolioMembers: SaasBacktestPortfolioMember[] = (rowMembers.length > 0 ? rowMembers : books).map((item: any, idx: number) => {
+      const role = String(item?.role || item?.key || `book${idx + 1}`);
+      const book = books.find((b: any) => String(b?.key || '') === role) || books[idx] || {};
+      const meta = metaBooks.find((b: any) => String(b?.key || '') === role) || {};
       return {
-        offerId: `portfolio-book:${String(book?.key || idx)}`,
-        titleRu: String(book?.key || `book-${idx + 1}`),
-        weight: 1,
+        role,
+        systemName: String(item?.systemName || item?.system_name || ''),
+        op: item?.op != null ? Number(item.op) : (meta?.op != null ? Number(meta.op) : (book?.op != null ? Number(book.op) : undefined)),
+        lot: item?.lot != null ? Number(item.lot) : (meta?.lot != null ? Number(meta.lot) : (book?.lot != null ? Number(book.lot) : undefined)),
+        weight: item?.weight != null ? Number(item.weight) : undefined,
+        ret: book?.ret != null ? Number(book.ret) : undefined,
+        dd: book?.dd != null ? Number(book.dd) : undefined,
+        pf: book?.pf != null ? Number(book.pf) : undefined,
+        trades: book?.trades != null ? Number(book.trades) : undefined,
+      };
+    });
+    const selectedOffers = portfolioMembers.map((member, idx) => {
+      const bookRet = Number(member.ret ?? ret);
+      const bookDd = Number(member.dd ?? dd);
+      const bookPf = Number(member.pf ?? 0);
+      const bookTrades = Math.max(0, Math.floor(Number(member.trades ?? 0)));
+      return {
+        offerId: `portfolio-book:${member.role || idx}`,
+        titleRu: `${member.role}${member.op != null ? ` · OP ${member.op}` : ''}${member.lot != null ? ` · lot ${member.lot}%` : ''}`,
+        weight: Number(member.weight || 1),
         mode: 'mono' as const,
         market: '',
         strategyId: 0,
-        strategyName: String(book?.key || `book-${idx + 1}`),
+        strategyName: member.systemName || member.role,
         strategyType: 'portfolio_book',
         interval: '',
         familyInterval: '',
@@ -9962,21 +10028,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         metricsSource: 'snapshot_only' as const,
         metrics: {
           ret: Number(bookRet.toFixed(3)),
-          pf: 0,
+          pf: Number(bookPf.toFixed(3)),
           dd: Number(bookDd.toFixed(3)),
           wr: 0,
-          trades: 0,
+          trades: bookTrades,
         },
         tradesPerDay: 0,
         periodDays: Math.max(1, equityPoints.length || 90),
         equityPoints: equityPoints.map((pt) => pt.equity),
       };
     });
+    const totalTrades = selectedOffers.reduce((sum, o) => sum + Number(o.metrics.trades || 0), 0);
 
     backtestRequestSeqRef.current += 1;
     resetBacktestDrawerDcaState();
     setSelectedAdminDraftTsSetKey(setKey);
     setBacktestTsWeightsByOfferId({});
+    setAdminSweepBacktestInitialBalance(capital);
+    setAdminSweepBacktestMaxOpenPositions(0);
     setBacktestDrawerContext({
       kind: 'algofund-ts',
       title: `Бэктест портфеля: ${String(row.displayLabel || setKey)}`,
@@ -9984,6 +10053,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       setKey,
       systemName: setKey,
       offerIds: selectedOffers.map((o) => o.offerId),
+      portfolioMode: true,
+      portfolioMembers,
     });
     setAdminSweepBacktestResult({
       kind: 'algofund-ts',
@@ -10010,10 +10081,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           maxDrawdownPercent: dd,
           profitFactor: 0,
           winRatePercent: 0,
-          tradesCount: 0,
+          tradesCount: totalTrades,
         },
         equity: equityPoints,
-        curves: null,
+        curves: {
+          pnl: pnlCurve,
+          unrealizedPnl: upnlCurve,
+          drawdownPercent: [],
+          marginLoadPercent: [],
+        },
         trades: [],
       },
     });
@@ -13636,7 +13712,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                       </>
                                                     )}
                                                     bodyExtra={materializationBlock}
-                                                    onOpenDetail={() => openBacktestDrawerForPortfolio(row)}
+                                                    onOpenDetail={() => openBacktestDrawerForPortfolio({
+                                                      ...row,
+                                                      members: Array.isArray(row.members) ? row.members : [],
+                                                    })}
                                                     onConnectClients={() => {
                                                       const initialIds = (row.tenants || [])
                                                         .map((tenant: any) => Number(tenant?.tenant?.id || 0))
@@ -13651,7 +13730,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                                     }}
                                                     footerExtra={(
                                                       <Space wrap size={6}>
-                                                        <Button size="small" onClick={() => openBacktestDrawerForPortfolio(row)}>
+                                                        <Button size="small" onClick={() => openBacktestDrawerForPortfolio({
+                                                          ...row,
+                                                          members: Array.isArray(row.members) ? row.members : [],
+                                                        })}>
                                                           Бэктест портфеля
                                                         </Button>
                                                         <Text type="secondary" style={{ fontSize: 11 }}>
@@ -15902,12 +15984,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Button
                     size="small"
                     loading={adminSweepBacktestLoading}
+                    disabled={Boolean(backtestDrawerContext?.portfolioMode)}
                     onClick={() => {
+                      if (backtestDrawerContext?.portfolioMode) {
+                        messageApi.info('Для портфеля открой книгу ТС и жми API rerun там');
+                        return;
+                      }
                       cancelBacktestDebounce();
                       void runFullCardTruthRerun(undefined, { preferRealBacktest: true });
                     }}
                   >
-                    API rerun (реальный)
+                    {backtestDrawerContext?.portfolioMode ? 'API rerun — только по книге ТС' : 'API rerun (реальный)'}
                   </Button>
                   {backtestDrawerContext.kind === 'offer' ? (
                     <Button
@@ -16330,8 +16417,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               <Alert
                 type="info"
                 showIcon
-                message="Что влияет на real rerun (API rerun)"
-                description={(
+                message={backtestDrawerContext.portfolioMode
+                  ? 'Портфель: stamp equity (per-book OP → sum). API rerun — только по отдельной книге ТС'
+                  : 'Что влияет на real rerun (API rerun)'}
+                description={backtestDrawerContext.portfolioMode ? (
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    <li>Общий Max OP на портфель <strong>не используется</strong> — у каждой книги свой OP/lot</li>
+                    <li>Кнопка <strong>Бэктест ТС</strong> в таблице книг открывает полный бэктест этой ТС</li>
+                    <li>UPNL на чарте — из stamp <code>upnlCurve</code> (если есть)</li>
+                    <li>Добавление/удаление книг в live-портфель — через publish members, не оффер-селект</li>
+                  </ul>
+                ) : (
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
                     <li><strong>Риск</strong> — масштаб PnL/DD после движка</li>
                     <li><strong>Макс. ОП</strong> — лимит одновременных позиций (сильно влияет на trades)</li>
@@ -16462,7 +16558,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   </Card>
                 </Col>
               )}
-              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
+              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && !backtestDrawerContext?.portfolioMode && (
                 <Col xs={24} md={12} lg={4}>
                   <Card size="small" title="Макс. ОП">
                     <InputNumber
@@ -16487,6 +16583,24 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   </Card>
                 </Col>
               )}
+              {isAdminSurface && backtestDrawerContext?.portfolioMode ? (
+                <Col xs={24} md={12} lg={8}>
+                  <Card size="small" title="ОП / lot по книгам">
+                    <Space direction="vertical" size={4} style={{ width: '100%' }}>
+                      {(backtestDrawerContext.portfolioMembers || []).map((m) => (
+                        <Text key={m.role} style={{ fontSize: 12 }}>
+                          <Text strong>{m.role}</Text>
+                          {`: OP ${m.op ?? '—'} · lot ${m.lot ?? '—'}%`}
+                          {m.systemName ? <Text type="secondary">{` · ${m.systemName.split('::').pop()}`}</Text> : null}
+                        </Text>
+                      ))}
+                      <Text type="secondary" style={{ fontSize: 11 }}>
+                        Общий Max OP на портфель не применяется — у каждой книги свой лимит (как в live materialize).
+                      </Text>
+                    </Space>
+                  </Card>
+                </Col>
+              ) : null}
               {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
                 <Col xs={24} md={12} lg={4}>
                   <Card size="small" title="Лот, %">
@@ -17203,21 +17317,32 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
                   {isAdminSurface && (
                   <Row gutter={[12, 12]}>
-                    <Col xs={24} md={8}>
-                      <Card size="small" title="График P/L">
-                        {effectivePnlCurve.length > 0 ? (
-                          <ChartComponent data={effectivePnlCurve.map((point) => ({ time: point.time, equity: point.value }))} type="line" />
+                    <Col xs={24} md={16}>
+                      <Card size="small" title="PnL + UPNL (один чарт)">
+                        {effectivePnlCurve.length > 0 || effectiveUpnlCurve.length > 0 ? (
+                          <Space direction="vertical" size={6} style={{ width: '100%' }}>
+                            <Space wrap size={8}>
+                              <Tag color="blue">PnL (closed / equity−capital)</Tag>
+                              <Tag color="orange">UPNL (открытые позы)</Tag>
+                            </Space>
+                            <ChartComponent
+                              data={(effectivePnlCurve.length > 0 ? effectivePnlCurve : effectiveUpnlCurve).map((point) => ({
+                                time: point.time,
+                                equity: point.value,
+                              }))}
+                              type="line"
+                              fixedHeight={220}
+                              overlayLines={effectiveUpnlCurve.length > 0 && effectivePnlCurve.length > 0 ? [{
+                                id: 'upnl',
+                                color: '#fa8c16',
+                                lineWidth: 2,
+                                priceScaleId: 'right',
+                                data: effectiveUpnlCurve.map((point) => ({ time: point.time, value: point.value })),
+                              }] : []}
+                            />
+                          </Space>
                         ) : (
-                          <Empty description="Нет данных P/L" />
-                        )}
-                      </Card>
-                    </Col>
-                    <Col xs={24} md={8}>
-                      <Card size="small" title="График UPNL (открытые позы)">
-                        {effectiveUpnlCurve.length > 0 ? (
-                          <ChartComponent data={effectiveUpnlCurve.map((point) => ({ time: point.time, equity: point.value }))} type="line" />
-                        ) : (
-                          <Empty description="Нет UPNL — нужен real rerun" />
+                          <Empty description="Нет PnL/UPNL — для портфеля берётся stamp upnlCurve; для ТС нужен real rerun" />
                         )}
                       </Card>
                     </Col>
@@ -17233,7 +17358,85 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   </Row>
                   )}
 
-                  {isAdminSurface && backtestDrawerContext.kind === 'algofund-ts' ? (
+                  {isAdminSurface && backtestDrawerContext.kind === 'algofund-ts' && backtestDrawerContext.portfolioMode ? (
+                    <Card size="small" title="Книги портфеля (TS) — OP/lot и бэктест">
+                      <Alert
+                        type="info"
+                        showIcon
+                        style={{ marginBottom: 12 }}
+                        message="Портфель = независимые книги на одном ключе"
+                        description="Каждая книга — своя ТС со своим OP/lot. Добавление/удаление книг в live-портфель — через publish/members (не через оффер-селект ниже). Здесь можно открыть бэктест конкретной книги."
+                      />
+                      <Table
+                        size="small"
+                        pagination={false}
+                        rowKey={(r) => String(r.role)}
+                        dataSource={backtestDrawerContext.portfolioMembers || []}
+                        columns={[
+                          {
+                            title: 'Книга',
+                            dataIndex: 'role',
+                            width: 90,
+                            render: (v: string) => <Text strong>{v}</Text>,
+                          },
+                          {
+                            title: 'Trading system',
+                            dataIndex: 'systemName',
+                            ellipsis: true,
+                            render: (v: string) => <Text type="secondary" style={{ fontSize: 11 }}>{v || '—'}</Text>,
+                          },
+                          {
+                            title: 'OP',
+                            dataIndex: 'op',
+                            width: 60,
+                            render: (v: number) => (v != null ? v : '—'),
+                          },
+                          {
+                            title: 'Lot%',
+                            dataIndex: 'lot',
+                            width: 70,
+                            render: (v: number) => (v != null ? v : '—'),
+                          },
+                          {
+                            title: 'Метрики stamp',
+                            key: 'metrics',
+                            render: (_: unknown, r: SaasBacktestPortfolioMember) => (
+                              <Space wrap size={4}>
+                                <Tag color="green">Ret {Number(r.ret || 0).toFixed(1)}%</Tag>
+                                <Tag color="red">DD {Number(r.dd || 0).toFixed(1)}%</Tag>
+                                <Tag color="orange">PF {Number(r.pf || 0).toFixed(2)}</Tag>
+                                <Tag>trades {Number(r.trades || 0)}</Tag>
+                              </Space>
+                            ),
+                          },
+                          {
+                            title: 'Действия',
+                            key: 'actions',
+                            width: 160,
+                            render: (_: unknown, r: SaasBacktestPortfolioMember) => (
+                              <Button
+                                size="small"
+                                type="primary"
+                                disabled={!String(r.systemName || '').trim()}
+                                onClick={() => {
+                                  const systemName = String(r.systemName || '').trim();
+                                  if (!systemName) {
+                                    messageApi.warning('У книги нет systemName');
+                                    return;
+                                  }
+                                  openBacktestDrawerForStorefrontTs(systemName);
+                                }}
+                              >
+                                Бэктест ТС
+                              </Button>
+                            ),
+                          },
+                        ]}
+                      />
+                    </Card>
+                  ) : null}
+
+                  {isAdminSurface && backtestDrawerContext.kind === 'algofund-ts' && !backtestDrawerContext.portfolioMode ? (
                     <Card size="small" title="Состав ТС в backtest (пары и веса)">
                       {(() => {
                         const idsFromResult = (adminSweepBacktestResult.selectedOffers || [])
