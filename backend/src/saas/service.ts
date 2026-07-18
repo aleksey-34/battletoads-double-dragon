@@ -7591,6 +7591,9 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
     autoLotByChannelWidth?: boolean;
     portfolioCircuitBreaker?: PortfolioCircuitBreakerConfig | null;
     lotPercentMultiplierByStrategyId?: Record<string, number>;
+    /** Scale every book's recipe lot (1 = unchanged, 1.5 = +50% lot on all books). */
+    portfolioLotMult?: number;
+    lotPercentOverride?: number;
   };
   sweep: any;
   catalog: any;
@@ -7763,6 +7766,11 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
   const slippagePercent = Math.max(0, asNumber(payload?.slippagePercent, asNumber(sweep?.config?.slippagePercent, 0.05)));
   const fundingRatePercent = asNumber(payload?.fundingRatePercent, asNumber(sweep?.config?.fundingRatePercent, 0));
   const partialTpPct = Math.max(0, asNumber(payload?.partialTpPct, 0));
+  // Portfolio-wide lot scale: recipe lot × mult (keeps relative book lots).
+  const portfolioLotMult = Math.max(
+    0.05,
+    Math.min(10, asNumber(payload?.portfolioLotMult, 1) || 1),
+  );
 
   // Prefer explicit UI dates; else stamp curve window; else sweep defaults.
   // Stamp curve `t` is unix seconds (research combineBooks); engine uses ms.
@@ -7804,6 +7812,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
     capital: number;
     op: number;
     lot: number;
+    lotEffective: number;
     reinvest: number;
     strategyIds: number[];
     systemName: string;
@@ -7815,6 +7824,9 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
 
   const bookRuns: BookRunResult[] = [];
   for (const book of bookPlans) {
+    const lotEffective = book.lot > 0
+      ? Number(Math.min(500, Math.max(0.05, book.lot * portfolioLotMult)).toFixed(4))
+      : 0;
     const result = await runBacktest({
       apiKeyName: preferredApiKey,
       mode: 'portfolio',
@@ -7830,7 +7842,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       ...(rerunWindow.dateTo ? { dateTo: rerunWindow.dateTo } : {}),
       // Independent OP for this book only — never a shared portfolio OP pool.
       maxOpenPositions: book.op > 0 ? book.op : 0,
-      ...(book.lot > 0 ? { lotPercentOverride: book.lot } : {}),
+      ...(lotEffective > 0 ? { lotPercentOverride: lotEffective } : {}),
       ...(partialTpPct > 0 ? { partialTpPct } : {}),
       // Pair-lock only inside the book (separate run ⇒ no cross-book OP/pair competition).
       enablePairLock: payload?.enablePairLock !== false,
@@ -7860,6 +7872,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       capital: book.capital,
       op: book.op,
       lot: book.lot,
+      lotEffective,
       reinvest: book.reinvest,
       strategyIds: book.strategyIds,
       systemName: book.systemName,
@@ -7906,7 +7919,9 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
     const bookEquity = book.series.map((p) => Number(p.e.toFixed(4)));
     return {
       offerId: `portfolio-book:${book.role}`,
-      titleRu: `${book.role} · OP ${book.op || '—'} · lot ${book.lot || '—'}% · cap $${book.capital} · ri ${book.reinvest}`,
+      titleRu: `${book.role} · OP ${book.op || '—'} · lot ${book.lotEffective || book.lot || '—'}%`
+        + (portfolioLotMult !== 1 && book.lot > 0 ? ` (×${portfolioLotMult})` : '')
+        + ` · cap $${book.capital} · ri ${book.reinvest}`,
       weight: book.weight,
       mode: 'mono' as const,
       market: '',
@@ -7937,11 +7952,13 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       membersCount: bookPlans.length,
       offerIds: selectedOffers.map((o) => o.offerId),
       method: 'per_book_OP_then_equity_sum',
+      portfolioLotMult,
       books: bookRuns.map((b) => ({
         role: b.role,
         systemName: b.systemName,
         op: b.op,
         lot: b.lot,
+        lotEffective: b.lotEffective,
         capital: b.capital,
         reinvest: b.reinvest,
         strategyCount: b.strategyIds.length,
@@ -7958,6 +7975,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       initialBalance: combined.capital,
       riskScaleMaxPercent: 100,
       reinvestPercent: Math.max(...bookPlans.map((b) => b.reinvest), 0),
+      portfolioLotMult,
     },
     period: {
       dateFrom: rerunWindow.dateFrom || null,
@@ -8018,12 +8036,14 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       riskScaleMaxPercent: 100,
       freqLevel: tradeFrequencyLevel,
       method: 'per_book_OP_then_equity_sum',
+      portfolioLotMult,
       skippedByPositionLimit,
       books: bookRuns.map((b) => ({
         role: b.role,
         capital: b.capital,
         op: b.op,
         lot: b.lot,
+        lotEffective: b.lotEffective,
         reinvest: b.reinvest,
         ret: asNumber(b.summary.totalReturnPercent, 0),
         dd: asNumber(b.summary.maxDrawdownPercent, 0),
@@ -8072,7 +8092,7 @@ export const previewAdminSweepBacktest = async (payload?: {
   macroShield?: boolean;
   portfolioCircuitBreaker?: PortfolioCircuitBreakerConfig | null;
   lotPercentMultiplierByStrategyId?: Record<string, number>;
-  /** Multi-TS portfolio shared-margin rerun (one event stream, per-book OP). */
+  /** Multi-book portfolio independent rerun (per-book OP → equity sum). */
   portfolioMode?: boolean;
   portfolioMembers?: Array<{
     role?: string;
@@ -8081,6 +8101,8 @@ export const previewAdminSweepBacktest = async (payload?: {
     lot?: number;
     weight?: number;
   }>;
+  /** Scale every portfolio book's recipe lot (default 1). */
+  portfolioLotMult?: number;
 }) => {
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();

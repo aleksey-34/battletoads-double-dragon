@@ -480,6 +480,11 @@ const buildSweepBacktestPreviewPayload = (body: Record<string, unknown>) => {
         weight: toOptionalNumber(item?.weight),
       }))
       : undefined,
+    portfolioLotMult: (() => {
+      const n = toOptionalNumber(body?.portfolioLotMult);
+      if (n == null || !Number.isFinite(n)) return undefined;
+      return Math.max(0.05, Math.min(10, n));
+    })(),
   };
 };
 

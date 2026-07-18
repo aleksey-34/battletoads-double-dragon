@@ -3314,6 +3314,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestRiskScaleMaxPercent, setAdminSweepBacktestRiskScaleMaxPercent] = useState(DEFAULT_BACKTEST_SETTINGS.riskScaleMaxPercent);
   const [adminSweepBacktestMaxOpenPositions, setAdminSweepBacktestMaxOpenPositions] = useState(DEFAULT_BACKTEST_SETTINGS.maxOpenPositions);
   const [adminSweepBacktestLotPercentOverride, setAdminSweepBacktestLotPercentOverride] = useState(DEFAULT_BACKTEST_SETTINGS.lotPercentOverride);
+  /** Portfolio-wide scale of each book's recipe lot (1 = unchanged). */
+  const [adminSweepPortfolioLotMult, setAdminSweepPortfolioLotMult] = useState(1);
   const [adminSweepBacktestPartialTpPct, setAdminSweepBacktestPartialTpPct] = useState(DEFAULT_BACKTEST_SETTINGS.partialTpPct);
   const [adminSweepBacktestCommissionPercent, setAdminSweepBacktestCommissionPercent] = useState(DEFAULT_BACKTEST_SETTINGS.commissionPercent);
   const [adminSweepBacktestSlippagePercent, setAdminSweepBacktestSlippagePercent] = useState(DEFAULT_BACKTEST_SETTINGS.slippagePercent);
@@ -7722,19 +7724,19 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const preferReal = options?.preferRealBacktest === true;
     const portfolioCircuitBreaker = buildPortfolioCbPayload();
     const lotPercentMultiplierByStrategyId = buildLegMultPayload();
-    const isPortfolioSharedMarginRerun = Boolean(targetContext.portfolioMode && preferReal);
+    const isPortfolioIndependentBooksRerun = Boolean(targetContext.portfolioMode && preferReal);
     const requestBody = {
       kind: targetContext.kind,
       setKey: targetContext.setKey,
       systemName: targetContext.systemName,
       offerId: targetContext.offerId,
-      // Fake portfolio-book:* ids must not go into real rerun (engine resolves offer strategies).
-      offerIds: isPortfolioSharedMarginRerun
+      // Fake portfolio-book:* ids must not go into real rerun.
+      offerIds: isPortfolioIndependentBooksRerun
         ? undefined
         : (targetContext.kind === 'algofund-ts'
           ? (contextOfferIds.length > 0 ? contextOfferIds : undefined)
           : targetContext.offerIds),
-      offerWeightsById: isPortfolioSharedMarginRerun
+      offerWeightsById: isPortfolioIndependentBooksRerun
         ? undefined
         : (targetContext.kind === 'algofund-ts'
           ? normalizeBacktestTsWeights(
@@ -7749,8 +7751,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       reinvestPercent: Number.isFinite(Number(options?.settingsOverride?.reinvestPercent))
         ? Math.min(100, Math.max(0, Number(options?.settingsOverride?.reinvestPercent)))
         : adminSweepBacktestReinvestPercent,
-      // Portfolio shared-margin: per-book OP in engine; global Max OP unused (0).
-      maxOpenPositions: isPortfolioSharedMarginRerun
+      // Portfolio: each book has its own OP in recipe; global Max OP unused.
+      maxOpenPositions: isPortfolioIndependentBooksRerun
         ? undefined
         : (effectiveMaxOpenPositions > 0 ? effectiveMaxOpenPositions : undefined),
       lotPercentOverride: effectiveLotPercentOverride > 0 ? effectiveLotPercentOverride : undefined,
@@ -7777,6 +7779,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           lot: m.lot,
           weight: m.weight,
         }))
+        : undefined,
+      portfolioLotMult: targetContext.portfolioMode
+        ? Math.max(0.05, Math.min(10, Number(adminSweepPortfolioLotMult) || 1))
         : undefined,
     };
     try {
@@ -10052,6 +10057,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setBacktestTsWeightsByOfferId({});
     setAdminSweepBacktestInitialBalance(capital);
     setAdminSweepBacktestMaxOpenPositions(0);
+    setAdminSweepPortfolioLotMult(1);
+    setAdminSweepBacktestLotPercentOverride(0);
     setBacktestDrawerContext({
       kind: 'algofund-ts',
       title: `Бэктест портфеля: ${String(row.displayLabel || setKey)}`,
@@ -16426,9 +16433,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 description={backtestDrawerContext.portfolioMode ? (
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
                     <li><strong>API rerun</strong> — каждая книга отдельно (свой OP/lot/capital/reinvest), без конкуренции за OP</li>
-                    <li>Итог = сумма equity кривых (как stamp / research), сделки всех книг в одном списке</li>
+                    <li><strong>Множитель лота ×</strong> — масштабирует recipe lot всех книг (1.5 = +50% к B3 и MRS)</li>
+                    <li>Итог = сумма equity кривых; сделки всех книг в одном списке</li>
                     <li>Кнопка <strong>Бэктест ТС</strong> — только одна книга</li>
-                    <li>До API rerun чарт = stamp; после — свежий engine sum</li>
                   </ul>
                 ) : (
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
@@ -16590,21 +16597,53 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 <Col xs={24} md={12} lg={8}>
                   <Card size="small" title="ОП / lot по книгам">
                     <Space direction="vertical" size={4} style={{ width: '100%' }}>
-                      {(backtestDrawerContext.portfolioMembers || []).map((m) => (
-                        <Text key={m.role} style={{ fontSize: 12 }}>
-                          <Text strong>{m.role}</Text>
-                          {`: OP ${m.op ?? '—'} · lot ${m.lot ?? '—'}%`}
-                          {m.systemName ? <Text type="secondary">{` · ${m.systemName.split('::').pop()}`}</Text> : null}
-                        </Text>
-                      ))}
+                      {(backtestDrawerContext.portfolioMembers || []).map((m) => {
+                        const baseLot = m.lot != null ? Number(m.lot) : NaN;
+                        const effLot = Number.isFinite(baseLot)
+                          ? Number((baseLot * Math.max(0.05, Math.min(10, adminSweepPortfolioLotMult || 1))).toFixed(2))
+                          : null;
+                        return (
+                          <Text key={m.role} style={{ fontSize: 12 }}>
+                            <Text strong>{m.role}</Text>
+                            {`: OP ${m.op ?? '—'}`}
+                            {effLot != null
+                              ? ` · lot ${effLot}%${adminSweepPortfolioLotMult !== 1 ? ` (база ${baseLot}×${adminSweepPortfolioLotMult})` : ''}`
+                              : ' · lot —'}
+                            {m.systemName ? <Text type="secondary">{` · ${m.systemName.split('::').pop()}`}</Text> : null}
+                          </Text>
+                        );
+                      })}
                       <Text type="secondary" style={{ fontSize: 11 }}>
-                        Общий Max OP на портфель не применяется — у каждой книги свой лимит (как в live materialize).
+                        OP у книг независимые. Множитель лота масштабирует recipe lot всех книг сразу.
                       </Text>
                     </Space>
                   </Card>
                 </Col>
               ) : null}
-              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && (
+              {isAdminSurface && backtestDrawerContext?.portfolioMode ? (
+                <Col xs={24} md={12} lg={4}>
+                  <Card size="small" title="Множитель лота ×">
+                    <InputNumber
+                      min={0.05}
+                      max={10}
+                      step={0.1}
+                      style={{ width: '100%' }}
+                      value={adminSweepPortfolioLotMult}
+                      onChange={(value) => {
+                        const next = Math.max(0.05, Math.min(10, Number(value || 1)));
+                        setAdminSweepPortfolioLotMult(next);
+                        setAdminSweepBacktestStale(true);
+                      }}
+                    />
+                    <Text type="secondary" style={{ fontSize: 11 }}>
+                      {adminSweepPortfolioLotMult === 1
+                        ? '1 = recipe lots (B3/MRS как в метаданных)'
+                        : `×${adminSweepPortfolioLotMult} на lot каждой книги → API rerun`}
+                    </Text>
+                  </Card>
+                </Col>
+              ) : null}
+              {isAdminSurface && backtestDrawerContext?.kind === 'algofund-ts' && !backtestDrawerContext?.portfolioMode && (
                 <Col xs={24} md={12} lg={4}>
                   <Card size="small" title="Лот, %">
                     <InputNumber
