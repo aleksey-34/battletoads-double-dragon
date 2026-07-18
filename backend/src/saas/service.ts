@@ -7525,9 +7525,53 @@ const configureDcaScratchForSymbol = async (
   );
 };
 
+/** Sum independent book equity curves on a union timeline (research dual-OP portfolio model). */
+const combinePortfolioBookEquityCurves = (
+  books: Array<{
+    role: string;
+    initial: number;
+    series: Array<{ t: number; e: number; u: number | null }>;
+  }>,
+) => {
+  const maps = books.map((b) => new Map(b.series.map((p) => [p.t, p])));
+  const times = [...new Set(books.flatMap((b) => b.series.map((p) => p.t)))].sort((a, b) => a - b);
+  const last = books.map((b) => b.initial);
+  const lastU = books.map(() => 0);
+  let peak = books.reduce((sum, b) => sum + b.initial, 0);
+  let maxDd = 0;
+  const curve: Array<{ time: number; equity: number; unrealizedPnl: number }> = [];
+  for (const t of times) {
+    let eq = 0;
+    let up = 0;
+    for (let i = 0; i < books.length; i += 1) {
+      const p = maps[i].get(t);
+      if (p) {
+        last[i] = p.e;
+        if (p.u != null) lastU[i] = p.u;
+      }
+      eq += last[i];
+      up += lastU[i];
+    }
+    if (eq > peak) peak = eq;
+    const dd = peak > 0 ? ((peak - eq) / peak) * 100 : 0;
+    if (dd > maxDd) maxDd = dd;
+    curve.push({ time: t, equity: eq, unrealizedPnl: up });
+  }
+  const capital = books.reduce((sum, b) => sum + b.initial, 0);
+  const final = curve.length ? curve[curve.length - 1].equity : capital;
+  return {
+    capital,
+    final: Number(final.toFixed(4)),
+    ret: Number((((final / Math.max(1e-9, capital)) - 1) * 100).toFixed(3)),
+    dd: Number(maxDd.toFixed(3)),
+    curve,
+  };
+};
+
 /**
- * Real API rerun for algofund portfolios: one shared-margin event stream across all books,
- * with independent maxOpenPositions per book (matches live ALGOFUND::{slug}::{role} OP).
+ * Real API rerun for algofund portfolios — same model as research stamp:
+ * each book is an independent engine run (own OP / lot / capital sleeve / reinvest),
+ * then equity curves are summed. Books do NOT share an OP pool and do not compete.
  */
 const previewAdminPortfolioSharedMarginRerun = async (args: {
   payload?: {
@@ -7589,7 +7633,11 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
   })() as { books?: Array<Record<string, unknown>> };
   const snapshot = (() => {
     try { return JSON.parse(String(portfolioRow.snapshot_json || '{}')); } catch { return {}; }
-  })() as { capital?: number; books?: Array<Record<string, unknown>> };
+  })() as {
+    capital?: number;
+    books?: Array<Record<string, unknown>>;
+    curve?: Array<{ t?: number; e?: number }>;
+  };
 
   const dbMembers = await db.all(
     `SELECT role, system_name, capital_weight
@@ -7601,6 +7649,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
 
   const payloadMembers = Array.isArray(payload?.portfolioMembers) ? payload!.portfolioMembers! : [];
   const booksMeta = Array.isArray(metadata?.books) ? metadata.books : [];
+  const snapshotCapital = Math.max(100, asNumber(snapshot.capital, initialBalance));
 
   type BookPlan = {
     role: string;
@@ -7608,6 +7657,8 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
     op: number;
     lot: number;
     weight: number;
+    capital: number;
+    reinvest: number;
     strategyIds: number[];
   };
 
@@ -7624,6 +7675,11 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       weight: asNumber(m.weight, 1),
     }));
 
+  const weightSum = Math.max(
+    0.01,
+    memberSource.reduce((sum, m) => sum + Math.max(0.01, asNumber(m.weight, 1)), 0),
+  );
+
   for (let i = 0; i < memberSource.length; i += 1) {
     const src = memberSource[i];
     const role = src.role || `book${i + 1}`;
@@ -7638,6 +7694,27 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       Math.floor(asNumber(fromPayload?.op, asNumber(meta?.op, 0))),
     );
     const lot = Math.max(0, asNumber(fromPayload?.lot, asNumber(meta?.lot, 0)));
+    const weight = Math.max(0.01, asNumber(src.weight, 1));
+    const capitalFromMeta = asNumber(meta?.initial, 0);
+    const capital = Math.max(
+      100,
+      capitalFromMeta > 0
+        ? capitalFromMeta
+        : Math.round(snapshotCapital * (weight / weightSum)),
+    );
+    // Book reinvest from recipe meta (e.g. MRS ri:100); payload overrides only when explicitly >0.
+    const reinvest = Math.max(
+      0,
+      Math.min(
+        100,
+        asNumber(
+          payload?.reinvestPercent != null && asNumber(payload.reinvestPercent, 0) > 0
+            ? payload.reinvestPercent
+            : asNumber(meta?.ri, asNumber(meta?.reinvest, 0)),
+          0,
+        ),
+      ),
+    );
     const targets = await resolveAlgofundSystemTargets({ systemName }).catch(() => []);
     const target = targets[0];
     if (!target?.systemId) {
@@ -7660,7 +7737,9 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       systemName,
       op,
       lot,
-      weight: Math.max(0.01, asNumber(src.weight, 1)),
+      weight,
+      capital,
+      reinvest,
       strategyIds,
     });
   }
@@ -7669,20 +7748,6 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
     throw new Error(`Portfolio ${setKey} has no books to backtest`);
   }
 
-  const allStrategyIds = Array.from(new Set(bookPlans.flatMap((b) => b.strategyIds)));
-  const bookKeyByStrategyId: Record<string, string> = {};
-  const maxOpenPositionsByBook: Record<string, number> = {};
-  const lotPercentMultiplierByStrategyId: Record<string, number> = {
-    ...(payload?.lotPercentMultiplierByStrategyId || {}),
-  };
-  for (const book of bookPlans) {
-    if (book.op > 0) maxOpenPositionsByBook[book.role] = book.op;
-    for (const sid of book.strategyIds) {
-      bookKeyByStrategyId[String(sid)] = book.role;
-    }
-  }
-
-  // Prefer strategies' host API key (portfolio masters share one key, e.g. BTDD_D1).
   const firstTarget = await resolveAlgofundSystemTargets({ systemName: bookPlans[0].systemName });
   const preferredApiKey = asString(payload?.rerunApiKeyName, '')
     || asString(firstTarget[0]?.apiKeyName, '')
@@ -7691,24 +7756,26 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
     || asString(catalog?.apiKeyName, '')
     || asString((await getAvailableApiKeyNames())[0], '');
   if (!preferredApiKey) {
-    throw new Error('No API key available for portfolio shared-margin rerun');
+    throw new Error('No API key available for portfolio independent-book rerun');
   }
 
-  const capital = Math.max(
-    100,
-    asNumber(snapshot.capital, initialBalance),
-  );
   const commissionPercent = Math.max(0, asNumber(payload?.commissionPercent, asNumber(sweep?.config?.commissionPercent, 0.1)));
   const slippagePercent = Math.max(0, asNumber(payload?.slippagePercent, asNumber(sweep?.config?.slippagePercent, 0.05)));
   const fundingRatePercent = asNumber(payload?.fundingRatePercent, asNumber(sweep?.config?.fundingRatePercent, 0));
-  const reinvestPercent = Math.max(0, Math.min(100, asNumber(payload?.reinvestPercent, 0)));
   const partialTpPct = Math.max(0, asNumber(payload?.partialTpPct, 0));
+  const totalCapital = bookPlans.reduce((sum, b) => sum + b.capital, 0);
 
+  // Prefer explicit UI dates; else stamp curve window; else sweep defaults.
+  const snapCurve = Array.isArray(snapshot.curve) ? snapshot.curve : [];
+  const snapFromMs = snapCurve.length > 0 ? asNumber(snapCurve[0]?.t, 0) : 0;
+  const snapToMs = snapCurve.length > 0 ? asNumber(snapCurve[snapCurve.length - 1]?.t, 0) : 0;
+  const snapFromYmd = snapFromMs > 0 ? msToYmd(snapFromMs) : '';
+  const snapToYmd = snapToMs > 0 ? msToYmd(snapToMs) : '';
   const rerunWindow = resolveAdminPreviewRerunWindow(
     sweep,
     null,
-    asString(payload?.dateFrom, asString(sweep?.config?.dateFrom, '').slice(0, 10)),
-    asString(payload?.dateTo, ''),
+    asString(payload?.dateFrom, snapFromYmd || asString(sweep?.config?.dateFrom, '').slice(0, 10)),
+    asString(payload?.dateTo, snapToYmd || ''),
     {
       bars: Math.max(0, Math.floor(asNumber(payload?.backtestBars, 0))) || undefined,
       warmupBars: Math.max(0, Math.floor(asNumber(payload?.warmupBars, 0))) || undefined,
@@ -7717,77 +7784,135 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
 
   await ensureExchangeClientInitialized(preferredApiKey);
 
-  // Optional lot override: if book.lot set, scale relative to each strategy's DB lot.
-  if (bookPlans.some((b) => b.lot > 0)) {
-    const strategies = await db.all(
-      `SELECT id, lot_long_percent FROM strategies WHERE id IN (${allStrategyIds.map(() => '?').join(',')})`,
-      allStrategyIds,
-    ) as Array<{ id: number; lot_long_percent: number }>;
-    const lotById = new Map(strategies.map((s) => [Number(s.id), asNumber(s.lot_long_percent, 0)]));
-    for (const book of bookPlans) {
-      if (!(book.lot > 0)) continue;
-      for (const sid of book.strategyIds) {
-        const baseLot = Math.max(0.01, lotById.get(sid) || book.lot);
-        lotPercentMultiplierByStrategyId[String(sid)] = Number((book.lot / baseLot).toFixed(6));
-      }
-    }
+  type BookRunResult = {
+    role: string;
+    capital: number;
+    op: number;
+    lot: number;
+    reinvest: number;
+    strategyIds: number[];
+    systemName: string;
+    weight: number;
+    summary: Record<string, unknown>;
+    series: Array<{ t: number; e: number; u: number | null }>;
+    trades: Array<Record<string, unknown>>;
+  };
+
+  const bookRuns: BookRunResult[] = [];
+  for (const book of bookPlans) {
+    const result = await runBacktest({
+      apiKeyName: preferredApiKey,
+      mode: 'portfolio',
+      strategyIds: book.strategyIds,
+      bars: rerunWindow.bars,
+      warmupBars: rerunWindow.warmupBars,
+      skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
+      initialBalance: book.capital,
+      commissionPercent,
+      slippagePercent,
+      fundingRatePercent,
+      dateFrom: rerunWindow.dateFrom,
+      ...(rerunWindow.dateTo ? { dateTo: rerunWindow.dateTo } : {}),
+      // Independent OP for this book only — never a shared portfolio OP pool.
+      maxOpenPositions: book.op > 0 ? book.op : 0,
+      ...(book.lot > 0 ? { lotPercentOverride: book.lot } : {}),
+      ...(partialTpPct > 0 ? { partialTpPct } : {}),
+      // Pair-lock only inside the book (separate run ⇒ no cross-book OP/pair competition).
+      enablePairLock: payload?.enablePairLock !== false,
+      ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
+      // Match research portfolio recipe: allow deposit growth under reinvest.
+      maxDepositOverride: book.reinvest > 0 ? book.capital * 50 : 0,
+      reinvestPercentOverride: book.reinvest,
+      ...(payload?.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),
+      ...(payload?.portfolioCircuitBreaker
+        ? { portfolioCircuitBreaker: payload.portfolioCircuitBreaker }
+        : {}),
+    });
+
+    const series = (result.equityCurve || []).map((pt) => {
+      const t = asNumber(pt.time, 0);
+      const e = asNumber(pt.equity, book.capital);
+      const uRaw = Number((pt as { unrealizedPnl?: unknown }).unrealizedPnl);
+      return {
+        t,
+        e,
+        u: Number.isFinite(uRaw) ? uRaw : null,
+      };
+    }).filter((p) => p.t > 0 && Number.isFinite(p.e));
+
+    bookRuns.push({
+      role: book.role,
+      capital: book.capital,
+      op: book.op,
+      lot: book.lot,
+      reinvest: book.reinvest,
+      strategyIds: book.strategyIds,
+      systemName: book.systemName,
+      weight: book.weight,
+      summary: result.summary as unknown as Record<string, unknown>,
+      series,
+      trades: (result.trades || []).map((tr) => ({
+        ...(tr as unknown as Record<string, unknown>),
+        portfolioBook: book.role,
+      })),
+    });
   }
 
-  const result = await runBacktest({
-    apiKeyName: preferredApiKey,
-    mode: 'portfolio',
-    strategyIds: allStrategyIds,
-    bars: rerunWindow.bars,
-    warmupBars: rerunWindow.warmupBars,
-    skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
-    initialBalance: capital,
-    commissionPercent,
-    slippagePercent,
-    fundingRatePercent,
-    dateFrom: rerunWindow.dateFrom,
-    ...(rerunWindow.dateTo ? { dateTo: rerunWindow.dateTo } : {}),
-    maxOpenPositions: 0, // per-book OP only
-    maxOpenPositionsByBook,
-    bookKeyByStrategyId,
-    ...(partialTpPct > 0 ? { partialTpPct } : {}),
-    enablePairLock: payload?.enablePairLock !== false,
-    ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
-    maxDepositOverride: resolveAdminPreviewMaxDepositOverride(reinvestPercent, capital),
-    reinvestPercentOverride: reinvestPercent,
-    ...(Object.keys(lotPercentMultiplierByStrategyId).length > 0
-      ? { lotPercentMultiplierByStrategyId }
-      : {}),
-    ...(payload?.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),
-    ...(payload?.portfolioCircuitBreaker
-      ? { portfolioCircuitBreaker: payload.portfolioCircuitBreaker }
-      : {}),
-  });
+  const combined = combinePortfolioBookEquityCurves(
+    bookRuns.map((b) => ({ role: b.role, initial: b.capital, series: b.series })),
+  );
+  const rerunMetrics = summarizeRealRerunEquityCurve(combined.curve, combined.capital);
+  const allTrades = bookRuns
+    .flatMap((b) => b.trades)
+    .sort((a, b) => asNumber(a.exitTime ?? a.entryTime, 0) - asNumber(b.exitTime ?? b.entryTime, 0));
+  const wins = allTrades.filter((t) => asNumber(t.netPnl, 0) > 0).length;
+  const grossProfit = allTrades.reduce((s, t) => s + Math.max(0, asNumber(t.netPnl, 0)), 0);
+  const grossLoss = allTrades.reduce((s, t) => s + Math.abs(Math.min(0, asNumber(t.netPnl, 0))), 0);
+  const tradesCount = allTrades.length;
+  const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 99 : 0);
+  const winRatePercent = tradesCount > 0 ? (wins / tradesCount) * 100 : 0;
+  const actualStartMs = Math.min(
+    ...bookRuns.map((b) => asNumber(b.summary.actualDataStartMs, Number.POSITIVE_INFINITY)),
+  );
+  const actualEndMs = Math.max(
+    ...bookRuns.map((b) => asNumber(b.summary.actualDataEndMs, 0)),
+  );
+  const skippedByPositionLimit = bookRuns.reduce(
+    (s, b) => s + asNumber(b.summary.skippedByPositionLimit, 0),
+    0,
+  );
+  const allStrategyIds = Array.from(new Set(bookPlans.flatMap((b) => b.strategyIds)));
 
-  const rerunMetrics = summarizeRealRerunEquityCurve(result.equityCurve, capital);
-  const summaryAny = result.summary as Record<string, unknown>;
-  const selectedOffers = bookPlans.map((book) => ({
-    offerId: `portfolio-book:${book.role}`,
-    titleRu: `${book.role} · OP ${book.op || '—'} · lot ${book.lot || '—'}% · ${book.strategyIds.length} strat`,
-    weight: book.weight,
-    mode: 'mono' as const,
-    market: '',
-    familyType: '',
-    familyMode: 'mono' as const,
-    familyInterval: asString(period?.interval, '4h'),
-    strategyId: book.strategyIds[0] || 0,
-    strategyName: book.systemName,
-    score: 0,
-    metrics: {
-      ret: Number(asNumber(rerunMetrics.totalReturnPercent, 0).toFixed(3)),
-      pf: Number(asNumber(result.summary.profitFactor, 0).toFixed(3)),
-      dd: Number(asNumber(rerunMetrics.maxDrawdownPercent, 0).toFixed(3)),
-      wr: Number(asNumber(result.summary.winRatePercent, 0).toFixed(3)),
-      trades: Math.max(0, Math.floor(asNumber(result.summary.tradesCount, 0))),
-    },
-    tradesPerDay: Number((asNumber(result.summary.tradesCount, 0) / Math.max(1, periodDays)).toFixed(3)),
-    periodDays,
-    equityPoints: (rerunMetrics.equity || []).map((p: { equity?: number }) => Number(asNumber(p.equity, 0).toFixed(4))),
-  }));
+  const selectedOffers = bookRuns.map((book) => {
+    const bookRet = asNumber(book.summary.totalReturnPercent, 0);
+    const bookDd = asNumber(book.summary.maxDrawdownPercent, 0);
+    const bookPf = asNumber(book.summary.profitFactor, 0);
+    const bookTrades = Math.max(0, Math.floor(asNumber(book.summary.tradesCount, 0)));
+    const bookEquity = book.series.map((p) => Number(p.e.toFixed(4)));
+    return {
+      offerId: `portfolio-book:${book.role}`,
+      titleRu: `${book.role} · OP ${book.op || '—'} · lot ${book.lot || '—'}% · cap $${book.capital} · ri ${book.reinvest}`,
+      weight: book.weight,
+      mode: 'mono' as const,
+      market: '',
+      familyType: '',
+      familyMode: 'mono' as const,
+      familyInterval: asString(period?.interval, '4h'),
+      strategyId: book.strategyIds[0] || 0,
+      strategyName: book.systemName,
+      score: 0,
+      metrics: {
+        ret: Number(bookRet.toFixed(3)),
+        pf: Number(bookPf.toFixed(3)),
+        dd: Number(bookDd.toFixed(3)),
+        wr: Number(asNumber(book.summary.winRatePercent, 0).toFixed(3)),
+        trades: bookTrades,
+      },
+      tradesPerDay: Number((bookTrades / Math.max(1, periodDays)).toFixed(3)),
+      periodDays,
+      equityPoints: bookEquity,
+    };
+  });
 
   return {
     kind: 'algofund-ts' as const,
@@ -7796,13 +7921,18 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       systemName: setKey,
       membersCount: bookPlans.length,
       offerIds: selectedOffers.map((o) => o.offerId),
-      method: 'shared_margin_trade_merge_per_book_op',
-      books: bookPlans.map((b) => ({
+      method: 'per_book_OP_then_equity_sum',
+      books: bookRuns.map((b) => ({
         role: b.role,
         systemName: b.systemName,
         op: b.op,
         lot: b.lot,
+        capital: b.capital,
+        reinvest: b.reinvest,
         strategyCount: b.strategyIds.length,
+        ret: asNumber(b.summary.totalReturnPercent, 0),
+        dd: asNumber(b.summary.maxDrawdownPercent, 0),
+        trades: asNumber(b.summary.tradesCount, 0),
       })),
     },
     controls: {
@@ -7810,48 +7940,58 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       tradeFrequencyScore,
       riskLevel,
       tradeFrequencyLevel,
-      initialBalance: capital,
+      initialBalance: combined.capital,
       riskScaleMaxPercent: 100,
-      reinvestPercent,
+      reinvestPercent: Math.max(...bookPlans.map((b) => b.reinvest), 0),
     },
     period: {
       dateFrom: rerunWindow.dateFrom || null,
       dateTo: rerunWindow.dateTo || null,
       interval: asString(period?.interval, asString(sweep?.config?.interval, '4h')),
-      actualDateFrom: msToYmd(Number(summaryAny.actualDataStartMs)),
-      actualDateTo: msToYmd(Number(summaryAny.actualDataEndMs)),
+      actualDateFrom: Number.isFinite(actualStartMs) ? msToYmd(actualStartMs) : null,
+      actualDateTo: actualEndMs > 0 ? msToYmd(actualEndMs) : null,
     },
     sweepApiKeyName: preferredApiKey,
     selectedOffers,
     preview: {
-      source: 'admin_portfolio_shared_margin_rerun',
+      source: 'admin_portfolio_independent_books_rerun',
       summary: {
-        ...result.summary,
+        mode: 'portfolio',
+        apiKeyName: preferredApiKey,
+        strategyIds: allStrategyIds,
+        initialBalance: combined.capital,
         finalEquity: rerunMetrics.finalEquity,
         totalReturnPercent: rerunMetrics.totalReturnPercent,
         maxDrawdownPercent: rerunMetrics.maxDrawdownPercent,
         unrealizedPnl: rerunMetrics.unrealizedPnl,
-        netProfit: Number((rerunMetrics.finalEquity - capital).toFixed(4)),
+        netProfit: Number((rerunMetrics.finalEquity - combined.capital).toFixed(4)),
         marginLoadPercent: 0,
+        tradesCount,
+        winRatePercent: Number(winRatePercent.toFixed(3)),
+        profitFactor: Number(profitFactor.toFixed(3)),
+        grossProfit: Number(grossProfit.toFixed(4)),
+        grossLoss: Number(grossLoss.toFixed(4)),
+        skippedByPositionLimit,
       },
-      equity: rerunMetrics.equity || sanitizeEquityCurveForMetrics(result.equityCurve, capital),
+      equity: rerunMetrics.equity || sanitizeEquityCurveForMetrics(combined.curve, combined.capital),
       curves: {
         pnl: rerunMetrics.curves.pnl,
         drawdownPercent: rerunMetrics.curves.drawdownPercent,
         marginLoadPercent: rerunMetrics.curves.marginLoadPercent,
-        unrealizedPnl: (result.equityCurve || [])
+        unrealizedPnl: combined.curve
           .filter((point) => Number.isFinite(Number(point.unrealizedPnl)))
           .map((point) => ({
             time: asNumber(point.time, 0),
             value: Number(asNumber(point.unrealizedPnl, 0).toFixed(4)),
           })),
       },
-      trades: result.trades,
+      trades: allTrades,
       strictPresetMode: false,
       riskApproximated: false,
-      reinvestAppliedInEngine: reinvestPercent > 0,
-      portfolioSharedMargin: true,
+      reinvestAppliedInEngine: bookPlans.some((b) => b.reinvest > 0),
+      portfolioSharedMargin: false,
       portfolioPerBookOp: true,
+      portfolioIndependentBooks: true,
     },
     rerun: {
       requested: true,
@@ -7862,8 +8002,18 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       riskMul: 1,
       riskScaleMaxPercent: 100,
       freqLevel: tradeFrequencyLevel,
-      method: 'shared_margin_trade_merge_per_book_op',
-      skippedByPositionLimit: asNumber(summaryAny.skippedByPositionLimit, 0),
+      method: 'per_book_OP_then_equity_sum',
+      skippedByPositionLimit,
+      books: bookRuns.map((b) => ({
+        role: b.role,
+        capital: b.capital,
+        op: b.op,
+        lot: b.lot,
+        reinvest: b.reinvest,
+        ret: asNumber(b.summary.totalReturnPercent, 0),
+        dd: asNumber(b.summary.maxDrawdownPercent, 0),
+        trades: asNumber(b.summary.tradesCount, 0),
+      })),
     },
   };
 };

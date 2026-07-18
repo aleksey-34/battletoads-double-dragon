@@ -79,7 +79,7 @@ type SaasBacktestContext = {
   offerWeightsById?: Record<string, number>;
   setKey?: string;
   systemName?: string;
-  /** Multi-book portfolio: shared-margin API rerun + stamp equity-sum fallback. */
+  /** Multi-book portfolio: independent per-book API rerun (equity sum) + stamp fallback. */
   portfolioMode?: boolean;
   portfolioMembers?: SaasBacktestPortfolioMember[];
 };
@@ -15996,7 +15996,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     }}
                   >
                     {backtestDrawerContext?.portfolioMode
-                      ? 'API rerun портфеля (shared margin)'
+                      ? 'API rerun портфеля (книги независимо)'
                       : 'API rerun (реальный)'}
                   </Button>
                   {backtestDrawerContext.kind === 'offer' ? (
@@ -16421,14 +16421,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 type="info"
                 showIcon
                 message={backtestDrawerContext.portfolioMode
-                  ? 'Портфель: stamp equity (sum) или API rerun (shared margin + per-book OP)'
+                  ? 'Портфель: независимые книги (свой OP) → сумма equity'
                   : 'Что влияет на real rerun (API rerun)'}
                 description={backtestDrawerContext.portfolioMode ? (
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
-                    <li><strong>API rerun портфеля</strong> — один event stream, общая маржа, сделки всех книг, OP/lot по книге</li>
-                    <li>Общий Max OP на портфель <strong>не используется</strong> — лимиты из таблицы книг</li>
-                    <li>Кнопка <strong>Бэктест ТС</strong> — отдельный rerun одной книги (без shared margin)</li>
-                    <li>До API rerun чарт = stamp equity/UPNL; после — engine curves + trades</li>
+                    <li><strong>API rerun</strong> — каждая книга отдельно (свой OP/lot/capital/reinvest), без конкуренции за OP</li>
+                    <li>Итог = сумма equity кривых (как stamp / research), сделки всех книг в одном списке</li>
+                    <li>Кнопка <strong>Бэктест ТС</strong> — только одна книга</li>
+                    <li>До API rerun чарт = stamp; после — свежий engine sum</li>
                   </ul>
                 ) : (
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
@@ -17367,8 +17367,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         type="info"
                         showIcon
                         style={{ marginBottom: 12 }}
-                        message="Портфель = книги на одном ключе + shared-margin API rerun"
-                        description="API rerun портфеля гоняет все книги одним stream (общая маржа, OP/lot по книге). «Бэктест ТС» — отдельный rerun одной книги. Live members — через publish, не оффер-селект."
+                        message="Портфель = независимые книги (свой OP), итог = сумма equity"
+                        description="API rerun гоняет каждую книгу отдельно со своим OP/lot/capital — книги не конкурируют за OP. «Бэктест ТС» — одна книга. Live members — через publish."
                       />
                       <Table
                         size="small"
