@@ -7763,19 +7763,34 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
   const slippagePercent = Math.max(0, asNumber(payload?.slippagePercent, asNumber(sweep?.config?.slippagePercent, 0.05)));
   const fundingRatePercent = asNumber(payload?.fundingRatePercent, asNumber(sweep?.config?.fundingRatePercent, 0));
   const partialTpPct = Math.max(0, asNumber(payload?.partialTpPct, 0));
-  const totalCapital = bookPlans.reduce((sum, b) => sum + b.capital, 0);
 
   // Prefer explicit UI dates; else stamp curve window; else sweep defaults.
+  // Stamp curve `t` is unix seconds (research combineBooks); engine uses ms.
+  const snapCurveTsToMs = (raw: number): number => {
+    const t = asNumber(raw, 0);
+    if (!(t > 0)) return 0;
+    return t < 1e12 ? t * 1000 : t;
+  };
+  const saneYmd = (raw: string): string => {
+    const ymd = String(raw || '').trim().slice(0, 10);
+    // Reject epoch-corruption leftovers (e.g. 1970-01-20 from seconds-as-ms).
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd) || ymd < '2018-01-01') return '';
+    return ymd;
+  };
   const snapCurve = Array.isArray(snapshot.curve) ? snapshot.curve : [];
-  const snapFromMs = snapCurve.length > 0 ? asNumber(snapCurve[0]?.t, 0) : 0;
-  const snapToMs = snapCurve.length > 0 ? asNumber(snapCurve[snapCurve.length - 1]?.t, 0) : 0;
-  const snapFromYmd = snapFromMs > 0 ? msToYmd(snapFromMs) : '';
-  const snapToYmd = snapToMs > 0 ? msToYmd(snapToMs) : '';
+  const snapFromMs = snapCurve.length > 0 ? snapCurveTsToMs(asNumber(snapCurve[0]?.t, 0)) : 0;
+  const snapToMs = snapCurve.length > 0
+    ? snapCurveTsToMs(asNumber(snapCurve[snapCurve.length - 1]?.t, 0))
+    : 0;
+  const snapFromYmd = snapFromMs > 0 ? (msToYmd(snapFromMs) || '') : '';
+  const snapToYmd = snapToMs > 0 ? (msToYmd(snapToMs) || '') : '';
   const rerunWindow = resolveAdminPreviewRerunWindow(
     sweep,
     null,
-    asString(payload?.dateFrom, snapFromYmd || asString(sweep?.config?.dateFrom, '').slice(0, 10)),
-    asString(payload?.dateTo, snapToYmd || ''),
+    saneYmd(asString(payload?.dateFrom, ''))
+      || saneYmd(snapFromYmd)
+      || saneYmd(asString(sweep?.config?.dateFrom, '').slice(0, 10)),
+    saneYmd(asString(payload?.dateTo, '')) || saneYmd(snapToYmd),
     {
       bars: Math.max(0, Math.floor(asNumber(payload?.backtestBars, 0))) || undefined,
       warmupBars: Math.max(0, Math.floor(asNumber(payload?.warmupBars, 0))) || undefined,
