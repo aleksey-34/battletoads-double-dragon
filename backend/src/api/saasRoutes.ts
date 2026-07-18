@@ -468,6 +468,18 @@ const buildSweepBacktestPreviewPayload = (body: Record<string, unknown>) => {
         ? body.portfolioCircuitBreaker as import('../services/portfolioCircuitBreaker').PortfolioCircuitBreakerConfig
         : undefined),
     lotPercentMultiplierByStrategyId: parseLotMultByStrategyBody(body?.lotPercentMultiplierByStrategyId),
+    portfolioMode: body?.portfolioMode === true,
+    portfolioMembers: Array.isArray(body?.portfolioMembers)
+      ? (body.portfolioMembers as Array<Record<string, unknown>>).map((item) => ({
+        role: item?.role != null ? String(item.role) : undefined,
+        systemName: item?.systemName != null
+          ? String(item.systemName)
+          : (item?.system_name != null ? String(item.system_name) : undefined),
+        op: toOptionalNumber(item?.op),
+        lot: toOptionalNumber(item?.lot),
+        weight: toOptionalNumber(item?.weight),
+      }))
+      : undefined,
   };
 };
 

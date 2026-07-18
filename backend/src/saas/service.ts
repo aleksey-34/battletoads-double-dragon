@@ -7525,6 +7525,349 @@ const configureDcaScratchForSymbol = async (
   );
 };
 
+/**
+ * Real API rerun for algofund portfolios: one shared-margin event stream across all books,
+ * with independent maxOpenPositions per book (matches live ALGOFUND::{slug}::{role} OP).
+ */
+const previewAdminPortfolioSharedMarginRerun = async (args: {
+  payload?: {
+    portfolioMembers?: Array<{ role?: string; systemName?: string; op?: number; lot?: number; weight?: number }>;
+    rerunApiKeyName?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    backtestBars?: number;
+    warmupBars?: number;
+    commissionPercent?: number;
+    slippagePercent?: number;
+    fundingRatePercent?: number;
+    reinvestPercent?: number;
+    partialTpPct?: number;
+    enablePairLock?: boolean;
+    pairLockSeed?: number;
+    autoLotByChannelWidth?: boolean;
+    portfolioCircuitBreaker?: PortfolioCircuitBreakerConfig | null;
+    lotPercentMultiplierByStrategyId?: Record<string, number>;
+  };
+  sweep: any;
+  catalog: any;
+  period: any;
+  periodDays: number;
+  initialBalance: number;
+  riskScore: number;
+  tradeFrequencyScore: number;
+  riskLevel: Level3;
+  tradeFrequencyLevel: Level3;
+  setKey: string;
+}) => {
+  const {
+    payload,
+    sweep,
+    catalog,
+    period,
+    periodDays,
+    initialBalance,
+    riskScore,
+    tradeFrequencyScore,
+    riskLevel,
+    tradeFrequencyLevel,
+    setKey,
+  } = args;
+
+  const portfolioRow = await db.get(
+    `SELECT id, set_key, metadata_json, snapshot_json
+     FROM algofund_portfolios
+     WHERE set_key = ? AND COALESCE(is_enabled,1)=1
+     LIMIT 1`,
+    [setKey],
+  ) as { id: number; set_key: string; metadata_json: string; snapshot_json: string } | undefined;
+  if (!portfolioRow?.id) {
+    throw new Error(`Portfolio not found for setKey=${setKey}`);
+  }
+
+  const metadata = (() => {
+    try { return JSON.parse(String(portfolioRow.metadata_json || '{}')); } catch { return {}; }
+  })() as { books?: Array<Record<string, unknown>> };
+  const snapshot = (() => {
+    try { return JSON.parse(String(portfolioRow.snapshot_json || '{}')); } catch { return {}; }
+  })() as { capital?: number; books?: Array<Record<string, unknown>> };
+
+  const dbMembers = await db.all(
+    `SELECT role, system_name, capital_weight
+     FROM algofund_portfolio_members
+     WHERE portfolio_id = ? AND COALESCE(is_enabled,1)=1
+     ORDER BY sort_order ASC, id ASC`,
+    [portfolioRow.id],
+  ) as Array<{ role: string; system_name: string; capital_weight: number }>;
+
+  const payloadMembers = Array.isArray(payload?.portfolioMembers) ? payload!.portfolioMembers! : [];
+  const booksMeta = Array.isArray(metadata?.books) ? metadata.books : [];
+
+  type BookPlan = {
+    role: string;
+    systemName: string;
+    op: number;
+    lot: number;
+    weight: number;
+    strategyIds: number[];
+  };
+
+  const bookPlans: BookPlan[] = [];
+  const memberSource = dbMembers.length > 0
+    ? dbMembers.map((m) => ({
+      role: asString(m.role, ''),
+      systemName: asString(m.system_name, ''),
+      weight: asNumber(m.capital_weight, 1),
+    }))
+    : payloadMembers.map((m) => ({
+      role: asString(m.role, ''),
+      systemName: asString(m.systemName, ''),
+      weight: asNumber(m.weight, 1),
+    }));
+
+  for (let i = 0; i < memberSource.length; i += 1) {
+    const src = memberSource[i];
+    const role = src.role || `book${i + 1}`;
+    const systemName = src.systemName;
+    if (!systemName) {
+      throw new Error(`Portfolio ${setKey}: book ${role} has empty systemName`);
+    }
+    const meta = booksMeta.find((b) => asString(b?.key, '') === role) || booksMeta[i] || {};
+    const fromPayload = payloadMembers.find((m) => asString(m.role, '') === role);
+    const op = Math.max(
+      0,
+      Math.floor(asNumber(fromPayload?.op, asNumber(meta?.op, 0))),
+    );
+    const lot = Math.max(0, asNumber(fromPayload?.lot, asNumber(meta?.lot, 0)));
+    const targets = await resolveAlgofundSystemTargets({ systemName }).catch(() => []);
+    const target = targets[0];
+    if (!target?.systemId) {
+      throw new Error(`Portfolio ${setKey}: trading system not found for book ${role}: ${systemName}`);
+    }
+    const memberRows = await db.all(
+      `SELECT strategy_id
+       FROM trading_system_members
+       WHERE system_id = ? AND COALESCE(is_enabled, 1) = 1`,
+      [target.systemId],
+    ) as Array<{ strategy_id: number }>;
+    const strategyIds = (memberRows || [])
+      .map((r) => Number(r.strategy_id))
+      .filter((id) => Number.isFinite(id) && id > 0);
+    if (strategyIds.length === 0) {
+      throw new Error(`Portfolio ${setKey}: book ${role} (${systemName}) has no enabled members`);
+    }
+    bookPlans.push({
+      role,
+      systemName,
+      op,
+      lot,
+      weight: Math.max(0.01, asNumber(src.weight, 1)),
+      strategyIds,
+    });
+  }
+
+  if (bookPlans.length === 0) {
+    throw new Error(`Portfolio ${setKey} has no books to backtest`);
+  }
+
+  const allStrategyIds = Array.from(new Set(bookPlans.flatMap((b) => b.strategyIds)));
+  const bookKeyByStrategyId: Record<string, string> = {};
+  const maxOpenPositionsByBook: Record<string, number> = {};
+  const lotPercentMultiplierByStrategyId: Record<string, number> = {
+    ...(payload?.lotPercentMultiplierByStrategyId || {}),
+  };
+  for (const book of bookPlans) {
+    if (book.op > 0) maxOpenPositionsByBook[book.role] = book.op;
+    for (const sid of book.strategyIds) {
+      bookKeyByStrategyId[String(sid)] = book.role;
+    }
+  }
+
+  // Prefer strategies' host API key (portfolio masters share one key, e.g. BTDD_D1).
+  const firstTarget = await resolveAlgofundSystemTargets({ systemName: bookPlans[0].systemName });
+  const preferredApiKey = asString(payload?.rerunApiKeyName, '')
+    || asString(firstTarget[0]?.apiKeyName, '')
+    || asString(sweep?.apiKeyName, '')
+    || asString((sweep?.config || {})?.apiKeyName, '')
+    || asString(catalog?.apiKeyName, '')
+    || asString((await getAvailableApiKeyNames())[0], '');
+  if (!preferredApiKey) {
+    throw new Error('No API key available for portfolio shared-margin rerun');
+  }
+
+  const capital = Math.max(
+    100,
+    asNumber(snapshot.capital, initialBalance),
+  );
+  const commissionPercent = Math.max(0, asNumber(payload?.commissionPercent, asNumber(sweep?.config?.commissionPercent, 0.1)));
+  const slippagePercent = Math.max(0, asNumber(payload?.slippagePercent, asNumber(sweep?.config?.slippagePercent, 0.05)));
+  const fundingRatePercent = asNumber(payload?.fundingRatePercent, asNumber(sweep?.config?.fundingRatePercent, 0));
+  const reinvestPercent = Math.max(0, Math.min(100, asNumber(payload?.reinvestPercent, 0)));
+  const partialTpPct = Math.max(0, asNumber(payload?.partialTpPct, 0));
+
+  const rerunWindow = resolveAdminPreviewRerunWindow(
+    sweep,
+    null,
+    asString(payload?.dateFrom, asString(sweep?.config?.dateFrom, '').slice(0, 10)),
+    asString(payload?.dateTo, ''),
+    {
+      bars: Math.max(0, Math.floor(asNumber(payload?.backtestBars, 0))) || undefined,
+      warmupBars: Math.max(0, Math.floor(asNumber(payload?.warmupBars, 0))) || undefined,
+    },
+  );
+
+  await ensureExchangeClientInitialized(preferredApiKey);
+
+  // Optional lot override: if book.lot set, scale relative to each strategy's DB lot.
+  if (bookPlans.some((b) => b.lot > 0)) {
+    const strategies = await db.all(
+      `SELECT id, lot_long_percent FROM strategies WHERE id IN (${allStrategyIds.map(() => '?').join(',')})`,
+      allStrategyIds,
+    ) as Array<{ id: number; lot_long_percent: number }>;
+    const lotById = new Map(strategies.map((s) => [Number(s.id), asNumber(s.lot_long_percent, 0)]));
+    for (const book of bookPlans) {
+      if (!(book.lot > 0)) continue;
+      for (const sid of book.strategyIds) {
+        const baseLot = Math.max(0.01, lotById.get(sid) || book.lot);
+        lotPercentMultiplierByStrategyId[String(sid)] = Number((book.lot / baseLot).toFixed(6));
+      }
+    }
+  }
+
+  const result = await runBacktest({
+    apiKeyName: preferredApiKey,
+    mode: 'portfolio',
+    strategyIds: allStrategyIds,
+    bars: rerunWindow.bars,
+    warmupBars: rerunWindow.warmupBars,
+    skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
+    initialBalance: capital,
+    commissionPercent,
+    slippagePercent,
+    fundingRatePercent,
+    dateFrom: rerunWindow.dateFrom,
+    ...(rerunWindow.dateTo ? { dateTo: rerunWindow.dateTo } : {}),
+    maxOpenPositions: 0, // per-book OP only
+    maxOpenPositionsByBook,
+    bookKeyByStrategyId,
+    ...(partialTpPct > 0 ? { partialTpPct } : {}),
+    enablePairLock: payload?.enablePairLock !== false,
+    ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
+    maxDepositOverride: resolveAdminPreviewMaxDepositOverride(reinvestPercent, capital),
+    reinvestPercentOverride: reinvestPercent,
+    ...(Object.keys(lotPercentMultiplierByStrategyId).length > 0
+      ? { lotPercentMultiplierByStrategyId }
+      : {}),
+    ...(payload?.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),
+    ...(payload?.portfolioCircuitBreaker
+      ? { portfolioCircuitBreaker: payload.portfolioCircuitBreaker }
+      : {}),
+  });
+
+  const rerunMetrics = summarizeRealRerunEquityCurve(result.equityCurve, capital);
+  const summaryAny = result.summary as Record<string, unknown>;
+  const selectedOffers = bookPlans.map((book) => ({
+    offerId: `portfolio-book:${book.role}`,
+    titleRu: `${book.role} · OP ${book.op || '—'} · lot ${book.lot || '—'}% · ${book.strategyIds.length} strat`,
+    weight: book.weight,
+    mode: 'mono' as const,
+    market: '',
+    familyType: '',
+    familyMode: 'mono' as const,
+    familyInterval: asString(period?.interval, '4h'),
+    strategyId: book.strategyIds[0] || 0,
+    strategyName: book.systemName,
+    score: 0,
+    metrics: {
+      ret: Number(asNumber(rerunMetrics.totalReturnPercent, 0).toFixed(3)),
+      pf: Number(asNumber(result.summary.profitFactor, 0).toFixed(3)),
+      dd: Number(asNumber(rerunMetrics.maxDrawdownPercent, 0).toFixed(3)),
+      wr: Number(asNumber(result.summary.winRatePercent, 0).toFixed(3)),
+      trades: Math.max(0, Math.floor(asNumber(result.summary.tradesCount, 0))),
+    },
+    tradesPerDay: Number((asNumber(result.summary.tradesCount, 0) / Math.max(1, periodDays)).toFixed(3)),
+    periodDays,
+    equityPoints: (rerunMetrics.equity || []).map((p: { equity?: number }) => Number(asNumber(p.equity, 0).toFixed(4))),
+  }));
+
+  return {
+    kind: 'algofund-ts' as const,
+    publishMeta: {
+      setKey,
+      systemName: setKey,
+      membersCount: bookPlans.length,
+      offerIds: selectedOffers.map((o) => o.offerId),
+      method: 'shared_margin_trade_merge_per_book_op',
+      books: bookPlans.map((b) => ({
+        role: b.role,
+        systemName: b.systemName,
+        op: b.op,
+        lot: b.lot,
+        strategyCount: b.strategyIds.length,
+      })),
+    },
+    controls: {
+      riskScore,
+      tradeFrequencyScore,
+      riskLevel,
+      tradeFrequencyLevel,
+      initialBalance: capital,
+      riskScaleMaxPercent: 100,
+      reinvestPercent,
+    },
+    period: {
+      dateFrom: rerunWindow.dateFrom || null,
+      dateTo: rerunWindow.dateTo || null,
+      interval: asString(period?.interval, asString(sweep?.config?.interval, '4h')),
+      actualDateFrom: msToYmd(Number(summaryAny.actualDataStartMs)),
+      actualDateTo: msToYmd(Number(summaryAny.actualDataEndMs)),
+    },
+    sweepApiKeyName: preferredApiKey,
+    selectedOffers,
+    preview: {
+      source: 'admin_portfolio_shared_margin_rerun',
+      summary: {
+        ...result.summary,
+        finalEquity: rerunMetrics.finalEquity,
+        totalReturnPercent: rerunMetrics.totalReturnPercent,
+        maxDrawdownPercent: rerunMetrics.maxDrawdownPercent,
+        unrealizedPnl: rerunMetrics.unrealizedPnl,
+        netProfit: Number((rerunMetrics.finalEquity - capital).toFixed(4)),
+        marginLoadPercent: 0,
+      },
+      equity: rerunMetrics.equity || sanitizeEquityCurveForMetrics(result.equityCurve, capital),
+      curves: {
+        pnl: rerunMetrics.curves.pnl,
+        drawdownPercent: rerunMetrics.curves.drawdownPercent,
+        marginLoadPercent: rerunMetrics.curves.marginLoadPercent,
+        unrealizedPnl: (result.equityCurve || [])
+          .filter((point) => Number.isFinite(Number(point.unrealizedPnl)))
+          .map((point) => ({
+            time: asNumber(point.time, 0),
+            value: Number(asNumber(point.unrealizedPnl, 0).toFixed(4)),
+          })),
+      },
+      trades: result.trades,
+      strictPresetMode: false,
+      riskApproximated: false,
+      reinvestAppliedInEngine: reinvestPercent > 0,
+      portfolioSharedMargin: true,
+      portfolioPerBookOp: true,
+    },
+    rerun: {
+      requested: true,
+      executed: true,
+      apiKeyName: preferredApiKey,
+      strategyIds: allStrategyIds,
+      tsMembersCount: bookPlans.length,
+      riskMul: 1,
+      riskScaleMaxPercent: 100,
+      freqLevel: tradeFrequencyLevel,
+      method: 'shared_margin_trade_merge_per_book_op',
+      skippedByPositionLimit: asNumber(summaryAny.skippedByPositionLimit, 0),
+    },
+  };
+};
+
 export const previewAdminSweepBacktest = async (payload?: {
   kind?: 'offer' | 'algofund-ts';
   setKey?: string;
@@ -7564,6 +7907,15 @@ export const previewAdminSweepBacktest = async (payload?: {
   macroShield?: boolean;
   portfolioCircuitBreaker?: PortfolioCircuitBreakerConfig | null;
   lotPercentMultiplierByStrategyId?: Record<string, number>;
+  /** Multi-TS portfolio shared-margin rerun (one event stream, per-book OP). */
+  portfolioMode?: boolean;
+  portfolioMembers?: Array<{
+    role?: string;
+    systemName?: string;
+    op?: number;
+    lot?: number;
+    weight?: number;
+  }>;
 }) => {
   const { catalog: sourceCatalog, sweep } = await loadCatalogAndSweepWithFallback();
   const apiKeys = await getAvailableApiKeyNames();
@@ -7581,10 +7933,32 @@ export const previewAdminSweepBacktest = async (payload?: {
   const riskLevel = preferenceScoreToLevel(riskScore);
   const tradeFrequencyLevel = preferenceScoreToLevel(tradeFrequencyScore);
   const requestedSystemName = asString(payload?.systemName, '').trim();
+  const requestedSetKey = asString(payload?.setKey, '').trim();
   const isCloudSystem = /::cloud-/i.test(requestedSystemName) || /^cloud/i.test(requestedSystemName);
   const sweepEvaluatedRows: SweepRecord[] = Array.isArray(sweep?.evaluated)
     ? sweep.evaluated.filter((item): item is SweepRecord => Boolean(item && Number(item.strategyId || 0) > 0))
     : [];
+
+  // ── Portfolio shared-margin API rerun (all books, one trade stream, per-book OP) ──
+  if (
+    kind === 'algofund-ts'
+    && payload?.preferRealBacktest === true
+    && (payload?.portfolioMode === true || requestedSetKey.toLowerCase().startsWith('portfolio-'))
+  ) {
+    return previewAdminPortfolioSharedMarginRerun({
+      payload,
+      sweep,
+      catalog,
+      period,
+      periodDays,
+      initialBalance,
+      riskScore,
+      tradeFrequencyScore,
+      riskLevel,
+      tradeFrequencyLevel,
+      setKey: requestedSetKey || requestedSystemName,
+    });
+  }
 
   let offerIds: string[] = [];
   if (kind === 'offer') {

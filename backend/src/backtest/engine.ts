@@ -152,6 +152,21 @@ export type BacktestRunRequest = {
   slippagePercent?: number;
   fundingRatePercent?: number;
   maxOpenPositions?: number;
+  /**
+   * Per-book OP for multi-TS portfolio reruns (shared margin / one event stream).
+   * bookKey → max concurrent open positions among strategies tagged with that book.
+   * When set, each book is limited independently; global maxOpenPositions (if >0) still applies as a hard cap.
+   */
+  maxOpenPositionsByBook?: Record<string, number>;
+  /** strategyId → bookKey (role) for maxOpenPositionsByBook accounting. */
+  bookKeyByStrategyId?: Record<string | number, string>;
+  /**
+   * When true (default), same-symbol opposite-side entries are pair-locked in portfolio mode.
+   * Passed through from admin preview; also accepted via cast for older callers.
+   */
+  enablePairLock?: boolean;
+  /** Seed for pair-lock tie-break RNG. */
+  pairLockSeed?: number;
   /** Override max_deposit on all strategies (scales position sizing to match initialBalance). */
   maxDepositOverride?: number;
   /** Override lot_long_percent / lot_short_percent on all strategies. */
@@ -297,6 +312,8 @@ type NormalizedBacktestRequest = {
   slippagePercent: number;
   fundingRatePercent: number;
   maxOpenPositions: number;
+  maxOpenPositionsByBook: Map<string, number>;
+  bookKeyByStrategyId: Map<number, string>;
   maxDepositOverride: number;
   lotPercentOverride: number;
   lotPercentMultiplierByStrategyId: Map<number, number>;
@@ -2354,6 +2371,30 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
   const slippagePercent = clamp(asNumber(raw.slippagePercent, 0.05), 0, 5);
   const fundingRatePercent = clamp(asNumber(raw.fundingRatePercent, 0), -5, 5);
   const maxOpenPositions = Math.max(0, Math.floor(asNumber(raw.maxOpenPositions, 0)));
+  const maxOpenPositionsByBook = (() => {
+    const map = new Map<string, number>();
+    const src = raw.maxOpenPositionsByBook;
+    if (src && typeof src === 'object') {
+      for (const [key, value] of Object.entries(src)) {
+        const book = String(key || '').trim();
+        const lim = Math.max(0, Math.floor(Number(value)));
+        if (book && Number.isFinite(lim)) map.set(book, lim);
+      }
+    }
+    return map;
+  })();
+  const bookKeyByStrategyId = (() => {
+    const map = new Map<number, string>();
+    const src = raw.bookKeyByStrategyId;
+    if (src && typeof src === 'object') {
+      for (const [key, value] of Object.entries(src)) {
+        const sid = Number(key);
+        const book = String(value || '').trim();
+        if (Number.isFinite(sid) && sid > 0 && book) map.set(sid, book);
+      }
+    }
+    return map;
+  })();
   const partialTpPct = Math.max(0, asNumber(raw.partialTpPct, 0));
   const dateFromMs = parseTimestampMs(raw.dateFrom);
   const dateToMs = parseDateToMs(raw.dateTo);
@@ -2382,6 +2423,8 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     slippagePercent,
     fundingRatePercent,
     maxOpenPositions,
+    maxOpenPositionsByBook,
+    bookKeyByStrategyId,
     maxDepositOverride: Math.max(0, asNumber(raw.maxDepositOverride, 0)),
     lotPercentOverride: Math.max(0, asNumber(raw.lotPercentOverride, 0)),
     lotPercentMultiplierByStrategyId: (() => {
@@ -2511,6 +2554,11 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
   };
 
   const maxOpenPositions = request.maxOpenPositions;
+  const maxOpenPositionsByBook = request.maxOpenPositionsByBook;
+  const bookKeyByRuntimeIndex: Array<string | null> = runtimes.map((rt) => {
+    const sid = Number(rt.strategy.id);
+    return request.bookKeyByStrategyId.get(sid) || null;
+  });
   const partialTpPct = request.partialTpPct;
   const macroOverlay = request.macroExitOverlay;
   const anchorCandleCache = new Map<string, ParsedCandle[]>();
@@ -2642,6 +2690,30 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     return runtimes.filter((rt) => rt.state !== 'flat' && countsTowardOpLimit(rt)).length;
   };
 
+  const countOpenPositionsInBook = (bookKey: string): number => {
+    return runtimes.filter((rt, idx) => (
+      rt.state !== 'flat'
+      && countsTowardOpLimit(rt)
+      && bookKeyByRuntimeIndex[idx] === bookKey
+    )).length;
+  };
+
+  /** Shared-margin portfolio: per-book OP first, then optional global OP hard cap. */
+  const canOpenNewPosition = (strategyIndex: number): boolean => {
+    const bookKey = bookKeyByRuntimeIndex[strategyIndex];
+    if (bookKey && maxOpenPositionsByBook.has(bookKey)) {
+      const bookLimit = Number(maxOpenPositionsByBook.get(bookKey) || 0);
+      if (bookLimit > 0 && countOpenPositionsInBook(bookKey) >= bookLimit) {
+        return false;
+      }
+    }
+    if (maxOpenPositions > 0 && countOpenPositions() >= maxOpenPositions) {
+      return false;
+    }
+    // If neither global nor book OP is set, unlimited.
+    return true;
+  };
+
   const isPairLocked = (selfIndex: number, pairKey: string): boolean => {
     if (!pairKey) return false;
     for (let i = 0; i < runtimes.length; i++) {
@@ -2743,7 +2815,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         continue;
       }
       if (runtime.state === 'flat' && (action.signal === 'long' || action.signal === 'short')) {
-        if (maxOpenPositions > 0 && countOpenPositions() >= maxOpenPositions) {
+        if (!canOpenNewPosition(event.strategyIndex)) {
           skippedByPositionLimit++;
           pushEquityPoint(event.timeMs);
           continue;
@@ -3160,8 +3232,8 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
       }
     }
 
-    // Position Limiter (ОП): skip entry if max open positions reached
-    if (runtime.state === 'flat' && maxOpenPositions > 0 && countOpenPositions() >= maxOpenPositions) {
+    // Position Limiter (ОП): per-book and/or global max open positions
+    if (runtime.state === 'flat' && !canOpenNewPosition(event.strategyIndex)) {
       skippedByPositionLimit++;
       pushEquityPoint(event.timeMs);
       continue;

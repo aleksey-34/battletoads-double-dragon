@@ -79,7 +79,7 @@ type SaasBacktestContext = {
   offerWeightsById?: Record<string, number>;
   setKey?: string;
   systemName?: string;
-  /** Portfolio stamp path: per-book OP, no single-TS offer composition / API rerun. */
+  /** Multi-book portfolio: shared-margin API rerun + stamp equity-sum fallback. */
   portfolioMode?: boolean;
   portfolioMembers?: SaasBacktestPortfolioMember[];
 };
@@ -7671,19 +7671,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     if (!targetContext) {
       return;
     }
-    if (targetContext.portfolioMode && options?.preferRealBacktest) {
-      const books = (targetContext.portfolioMembers || [])
-        .map((m) => m.role || m.systemName)
-        .filter(Boolean)
-        .join(', ');
-      setAdminSweepBacktestError(
-        `API rerun портфеля целиком не поддерживается (книги: ${books || '—'}). `
-        + 'Открой бэктест отдельной ТС-книги кнопкой ниже — у каждой свой OP/lot и свой состав офферов.',
-      );
-      messageApi.warning('Для портфеля: API rerun делай по каждой книге ТС отдельно');
-      return;
-    }
-
     const requestSeq = ++backtestRequestSeqRef.current;
     setAdminSweepBacktestLoading(true);
     setAdminSweepBacktestStale(false);
@@ -7735,20 +7722,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     const preferReal = options?.preferRealBacktest === true;
     const portfolioCircuitBreaker = buildPortfolioCbPayload();
     const lotPercentMultiplierByStrategyId = buildLegMultPayload();
+    const isPortfolioSharedMarginRerun = Boolean(targetContext.portfolioMode && preferReal);
     const requestBody = {
       kind: targetContext.kind,
       setKey: targetContext.setKey,
       systemName: targetContext.systemName,
       offerId: targetContext.offerId,
-      offerIds: targetContext.kind === 'algofund-ts'
-        ? (contextOfferIds.length > 0 ? contextOfferIds : undefined)
-        : targetContext.offerIds,
-      offerWeightsById: targetContext.kind === 'algofund-ts'
-        ? normalizeBacktestTsWeights(
-          Array.from(new Set((targetContext.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean))),
-          backtestTsWeightsByOfferId,
-        )
-        : undefined,
+      // Fake portfolio-book:* ids must not go into real rerun (engine resolves offer strategies).
+      offerIds: isPortfolioSharedMarginRerun
+        ? undefined
+        : (targetContext.kind === 'algofund-ts'
+          ? (contextOfferIds.length > 0 ? contextOfferIds : undefined)
+          : targetContext.offerIds),
+      offerWeightsById: isPortfolioSharedMarginRerun
+        ? undefined
+        : (targetContext.kind === 'algofund-ts'
+          ? normalizeBacktestTsWeights(
+            Array.from(new Set((targetContext.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean))),
+            backtestTsWeightsByOfferId,
+          )
+          : undefined),
       riskScore: effectiveRiskScore,
       tradeFrequencyScore: effectiveTradeFrequencyScore,
       initialBalance: effectiveInitialBalance,
@@ -7756,7 +7749,10 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       reinvestPercent: Number.isFinite(Number(options?.settingsOverride?.reinvestPercent))
         ? Math.min(100, Math.max(0, Number(options?.settingsOverride?.reinvestPercent)))
         : adminSweepBacktestReinvestPercent,
-      maxOpenPositions: effectiveMaxOpenPositions > 0 ? effectiveMaxOpenPositions : undefined,
+      // Portfolio shared-margin: per-book OP in engine; global Max OP unused (0).
+      maxOpenPositions: isPortfolioSharedMarginRerun
+        ? undefined
+        : (effectiveMaxOpenPositions > 0 ? effectiveMaxOpenPositions : undefined),
       lotPercentOverride: effectiveLotPercentOverride > 0 ? effectiveLotPercentOverride : undefined,
       partialTpPct: effectivePartialTpPct > 0 ? effectivePartialTpPct : undefined,
       commissionPercent: Number.isFinite(effectiveCommissionPercent) ? effectiveCommissionPercent : undefined,
@@ -7772,6 +7768,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       macroShield: tsDcaExitOverlayEnabled,
       portfolioCircuitBreaker,
       lotPercentMultiplierByStrategyId,
+      portfolioMode: Boolean(targetContext.portfolioMode),
+      portfolioMembers: targetContext.portfolioMode
+        ? (targetContext.portfolioMembers || []).map((m) => ({
+          role: m.role,
+          systemName: m.systemName,
+          op: m.op,
+          lot: m.lot,
+          weight: m.weight,
+        }))
+        : undefined,
     };
     try {
       let response: { data: AdminSweepBacktestPreviewResponse & { success?: boolean } } | undefined;
@@ -15984,17 +15990,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                   <Button
                     size="small"
                     loading={adminSweepBacktestLoading}
-                    disabled={Boolean(backtestDrawerContext?.portfolioMode)}
                     onClick={() => {
-                      if (backtestDrawerContext?.portfolioMode) {
-                        messageApi.info('Для портфеля открой книгу ТС и жми API rerun там');
-                        return;
-                      }
                       cancelBacktestDebounce();
                       void runFullCardTruthRerun(undefined, { preferRealBacktest: true });
                     }}
                   >
-                    {backtestDrawerContext?.portfolioMode ? 'API rerun — только по книге ТС' : 'API rerun (реальный)'}
+                    {backtestDrawerContext?.portfolioMode
+                      ? 'API rerun портфеля (shared margin)'
+                      : 'API rerun (реальный)'}
                   </Button>
                   {backtestDrawerContext.kind === 'offer' ? (
                     <Button
@@ -16418,14 +16421,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 type="info"
                 showIcon
                 message={backtestDrawerContext.portfolioMode
-                  ? 'Портфель: stamp equity (per-book OP → sum). API rerun — только по отдельной книге ТС'
+                  ? 'Портфель: stamp equity (sum) или API rerun (shared margin + per-book OP)'
                   : 'Что влияет на real rerun (API rerun)'}
                 description={backtestDrawerContext.portfolioMode ? (
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
-                    <li>Общий Max OP на портфель <strong>не используется</strong> — у каждой книги свой OP/lot</li>
-                    <li>Кнопка <strong>Бэктест ТС</strong> в таблице книг открывает полный бэктест этой ТС</li>
-                    <li>UPNL на чарте — из stamp <code>upnlCurve</code> (если есть)</li>
-                    <li>Добавление/удаление книг в live-портфель — через publish members, не оффер-селект</li>
+                    <li><strong>API rerun портфеля</strong> — один event stream, общая маржа, сделки всех книг, OP/lot по книге</li>
+                    <li>Общий Max OP на портфель <strong>не используется</strong> — лимиты из таблицы книг</li>
+                    <li>Кнопка <strong>Бэктест ТС</strong> — отдельный rerun одной книги (без shared margin)</li>
+                    <li>До API rerun чарт = stamp equity/UPNL; после — engine curves + trades</li>
                   </ul>
                 ) : (
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
@@ -17364,8 +17367,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         type="info"
                         showIcon
                         style={{ marginBottom: 12 }}
-                        message="Портфель = независимые книги на одном ключе"
-                        description="Каждая книга — своя ТС со своим OP/lot. Добавление/удаление книг в live-портфель — через publish/members (не через оффер-селект ниже). Здесь можно открыть бэктест конкретной книги."
+                        message="Портфель = книги на одном ключе + shared-margin API rerun"
+                        description="API rerun портфеля гоняет все книги одним stream (общая маржа, OP/lot по книге). «Бэктест ТС» — отдельный rerun одной книги. Live members — через publish, не оффер-селект."
                       />
                       <Table
                         size="small"
