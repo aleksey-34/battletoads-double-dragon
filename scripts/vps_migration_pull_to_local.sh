@@ -46,20 +46,25 @@ REMOTE
 log "Creating consistent SQLite backup on VPS and streaming gzip (may take 30-90 min for ~20GB)..."
 log "Log: $DEST/logs/db_pull.log"
 
-ssh "$SSH_HOST" "REMOTE_BACKEND='$REMOTE_BACKEND' bash -s" <<'REMOTE' 2> "$DEST/logs/db_pull.stderr" | gzip -1 > "$DEST/db/database.db.gz"
+# Prefer deploy auto-backup on VPS (avoids duplicating 20GB in /tmp)
+REMOTE_BACKUP="$(ssh "$SSH_HOST" "ls -1t $REMOTE_APP/backups/db/database_*.db 2>/dev/null | head -1" || true)"
+if [[ -n "$REMOTE_BACKUP" ]]; then
+  log "Using existing VPS backup: $REMOTE_BACKUP"
+  ssh "$SSH_HOST" "gzip -c '$REMOTE_BACKUP'" > "$DEST/db/database.db.gz"
+else
+  log "No deploy backup found — online sqlite .backup stream..."
+  ssh "$SSH_HOST" "REMOTE_BACKEND='$REMOTE_BACKEND' BACKUP='$REMOTE_APP/backups/migration/.live_backup.db' bash -s" <<'REMOTE' 2> "$DEST/logs/db_pull.stderr" | gzip -1 > "$DEST/db/database.db.gz"
 set -euo pipefail
-BACKUP="/tmp/btdd_migration_backup_$$.db"
-cleanup() { rm -f "$BACKUP" "${BACKUP}-wal" "${BACKUP}-shm" 2>/dev/null || true; }
-trap cleanup EXIT
+mkdir -p "$(dirname "$BACKUP")"
+rm -f "$BACKUP" "${BACKUP}-wal" "${BACKUP}-shm"
 echo "[remote] sqlite3 backup start $(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
 sqlite3 "$REMOTE_BACKEND/database.db" ".backup '$BACKUP'"
 echo "[remote] backup size: $(du -h "$BACKUP" | awk '{print $1}')" >&2
-echo "[remote] streaming gzip..." >&2
 cat "$BACKUP"
+rm -f "$BACKUP" "${BACKUP}-wal" "${BACKUP}-shm"
 echo "[remote] done $(date -u +%Y-%m-%dT%H:%M:%SZ)" >&2
 REMOTE
-
-tee "$DEST/logs/db_pull.log" < "$DEST/logs/db_pull.stderr" >/dev/null 2>&1 || true
+fi
 
 log "database.db.gz size: $(du -h "$DEST/db/database.db.gz" | awk '{print $1}')"
 
