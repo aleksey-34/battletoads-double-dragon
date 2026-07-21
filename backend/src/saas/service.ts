@@ -15824,9 +15824,15 @@ export const getAlgofundState = async (
   const activeSystems = await getAlgofundActiveSystems(profile.id).catch(() => []);
 
   const engine = await getAlgofundEngineState(tenant, profile);
-  const effectiveStorefrontSystemName = asString(profile.published_system_name, '').trim().toUpperCase().startsWith('ALGOFUND_MASTER::')
-    ? asString(profile.published_system_name, '').trim()
-    : (engine?.systemName || profile.published_system_name);
+  const publishedNow = asString(profile.published_system_name, '').trim();
+  const publishedUpper = publishedNow.toUpperCase();
+  // Preserve storefront portfolio keys and master card names — engine.systemName is
+  // ALGOFUND::{slug} / ::{role} and must not overwrite portfolio-* publish binding.
+  const preservePublishedName = publishedUpper.startsWith('ALGOFUND_MASTER::')
+    || publishedNow.toLowerCase().startsWith('portfolio-');
+  const effectiveStorefrontSystemName = preservePublishedName
+    ? publishedNow
+    : (engine?.systemName || publishedNow);
   const effectiveProfile: AlgofundProfileRow = {
     ...profile,
     actual_enabled: engine ? (engine.isActive ? 1 : 0) : profile.actual_enabled,
