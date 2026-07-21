@@ -38,15 +38,33 @@
 | **Deploy key** | `/home/ubuntu/.ssh/id_ed25519_btdd_deploy` | Git pull на VPS |
 | **Nginx root** | `/var/www/battletoads-double-dragon/` | Можно пересобрать из git, но быстрее rsync |
 
-### Локальные копии БД (на этой машине)
+### Локальные копии на dev-машине (уже есть)
 
-| Файл | Размер | Комментарий |
-|------|--------|-------------|
-| `backend/database.db` | ~504 MB | Актуальная локальная копия |
-| `backend/database.db.vps_snapshot` | ~2.5 GB | Снимок с VPS (июл 2026) |
-| `backend/database.db.vps_full` | ~22 GB | Полный дамп (тяжёлый) |
+| Путь | Размер | Дата | Назначение |
+|------|--------|------|------------|
+| `backups/migration/prod_*` | см. README внутри | свежий pull | **Основной restore-бандл** |
+| `backend/database.db.vps_full` | ~22 GB | 2026-07-14 | Полный дамп prod (fallback) |
+| `backend/database.db.vps_snapshot` | ~2.5 GB | 2026-07-02 | Урезанный снимок |
+| `backend/database.db` | ~504 MB | 2026-07-16 | Локальная dev-копия (не prod) |
+| `backups/migration/btdd_migration_*.tar.gz` | ~98 MB | 2026-07-21 | Локальный .env+dev db (не prod 20GB) |
 
-Если старый VPS недоступен — **минимум для восстановления prod**: `database.db` + `.env` + `.auth-password.json`.
+### Скачать свежий prod с VPS (с локальной машины)
+
+```bash
+chmod +x scripts/vps_migration_pull_to_local.sh
+bash scripts/vps_migration_pull_to_local.sh btdd
+# → backups/migration/prod_YYYYMMDDTHHMMSSZ/
+```
+
+### Поднять на новом VPS одной командой
+
+```bash
+# Скопировать bundle на новый сервер:
+scp -r backups/migration/prod_YYYYMMDDTHHMMSSZ root@NEW_IP:/tmp/btdd_bundle
+
+# На новом VPS:
+bash /opt/battletoads-double-dragon/scripts/vps_bootstrap_new_server.sh --bundle /tmp/btdd_bundle
+```
 
 ---
 
