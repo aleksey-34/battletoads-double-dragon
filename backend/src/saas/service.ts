@@ -5031,7 +5031,10 @@ const upsertTenantStrategies = async (
   for (const group of nameGroups.values()) collectArchiveCandidates(group);
 
   if (duplicateArchiveIds.size > 0) {
+    let archivedDupes = 0;
     for (const id of duplicateArchiveIds) {
+      // Never archive sibling-book legs kept across multi-TS portfolio materialize.
+      if (keepIds.has(id)) continue;
       const row = existing.find((item) => Number(item.id || 0) === id);
       if (!row) continue;
       await saasArchiveStrategy(apiKeyName, {
@@ -5041,8 +5044,11 @@ const upsertTenantStrategies = async (
         market_mode: (row as any).market_mode ?? null,
         name: asString(row.name),
       });
+      archivedDupes += 1;
     }
-    logger.warn(`[upsertTenantStrategies] archived duplicate tenant strategies for ${tenant.slug}/${apiKeyName}: ${duplicateArchiveIds.size}`);
+    if (archivedDupes > 0) {
+      logger.warn(`[upsertTenantStrategies] archived duplicate tenant strategies for ${tenant.slug}/${apiKeyName}: ${archivedDupes}`);
+    }
     existing = await getExistingTenantStrategies(apiKeyName, tenant.slug);
   }
 
@@ -19138,6 +19144,23 @@ export const materializeAlgofundPortfolioFull = async (payload: {
   // Final orphan sweep: keep union of all portfolio strategy ids
   const executionApiKeyName = getAlgofundExecutionApiKeyName(tenant, profile);
   if (executionApiKeyName) {
+    // Also keep every member currently attached to ALGOFUND::{slug}::* books —
+    // belt-and-suspenders if a book returned empty strategyIds mid-loop.
+    const bookMemberRows = (await db.all(
+      `SELECT tsm.strategy_id AS strategy_id
+       FROM trading_system_members tsm
+       JOIN trading_systems ts ON ts.id = tsm.system_id
+       JOIN api_keys a ON a.id = ts.api_key_id
+       WHERE a.name = ?
+         AND ts.name LIKE ?
+         AND COALESCE(tsm.is_enabled, 1) = 1`,
+      [executionApiKeyName, `ALGOFUND::${tenant.slug}::%`],
+    ).catch(() => [])) as Array<{ strategy_id: number }>;
+    for (const row of bookMemberRows) {
+      const sid = Number(row.strategy_id || 0);
+      if (sid > 0) keepAll.add(sid);
+    }
+
     const saasPrefix = `SAAS::${tenant.slug}::`;
     const orphanRows = (await db.all(
       `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode, s.state
@@ -19153,6 +19176,32 @@ export const materializeAlgofundPortfolioFull = async (payload: {
       if (keepAll.has(Number(orphan.id))) continue;
       await saasArchiveStrategy(executionApiKeyName, orphan).catch(() => {});
     }
+
+    // Hard guarantee: every portfolio book leg is runtime-active after materialize.
+    // Fixes the Jul-17 cutover failure mode (B3 archived while MRS was applied) and
+    // any partial-archive leftover (origin=saas_archived / is_runtime=0 / is_archived=0).
+    const keepIds = [...keepAll].filter((id) => Number.isFinite(id) && id > 0);
+    if (keepIds.length > 0 && payload.activate !== false) {
+      const placeholders = keepIds.map(() => '?').join(',');
+      await db.run(
+        `UPDATE strategies
+         SET is_runtime = 1,
+             is_archived = 0,
+             is_active = 1,
+             auto_update = 1,
+             origin = 'saas_materialize',
+             updated_at = CURRENT_TIMESTAMP
+         WHERE id IN (${placeholders})`,
+        keepIds,
+      ).catch((error) => {
+        logger.warn(
+          `Algofund portfolio materialize: failed to reactivate ${keepIds.length} book legs for ${tenant.slug}: ${(error as Error).message}`,
+        );
+      });
+      logger.warn(
+        `Algofund portfolio materialize: ensured runtime on ${keepIds.length} legs across ${systemsOut.length} books for ${tenant.slug}`,
+      );
+    }
   }
 
   await db.run(
@@ -19164,8 +19213,8 @@ export const materializeAlgofundPortfolioFull = async (payload: {
      WHERE tenant_id = ?`,
     [
       assigned.setKey,
-      payload.activate ? 1 : Number(profile.requested_enabled || 0),
-      payload.activate ? 1 : Number(profile.actual_enabled || 0),
+      payload.activate !== false ? 1 : Number(profile.requested_enabled || 0),
+      payload.activate !== false ? 1 : Number(profile.actual_enabled || 0),
       tenant.id,
     ],
   );
