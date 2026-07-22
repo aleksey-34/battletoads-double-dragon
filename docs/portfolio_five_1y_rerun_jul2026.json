@@ -4037,7 +4037,7 @@
     {
       "setKey": "portfolio-triple-zz-jul2026",
       "label": "portfolio-triple-zz-jul2026",
-      "displayLabel": "Portfolio Triple (+ZigZag)",
+      "displayLabel": "Portfolio Triple",
       "method": "per_book_OP_then_equity_sum",
       "source": "admin_portfolio_independent_books_rerun",
       "dateFrom": "2025-08-07",

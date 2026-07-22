@@ -397,7 +397,7 @@ def main() -> None:
         ak,
         8,
         {
-            "displayLabel": "ZigZag top5",
+            "displayLabel": "Breakout top5",
             "lotPercentOverride": 6,
             "reinvestPercentOverride": 100,
             "maxOpenPositions": 8,

@@ -88,14 +88,14 @@ CARDS = [
     {
         "setKey": "b3-meanreversion-zigzag-triple-jul2026",
         "oldKey": None,
-        "label": "B3 + Mean Reversion + ZigZag Triple",
+        "label": "B3 + Mean Reversion Triple",
         "risk": "medium-high",
         "op": 16,
         "lot": 6,
         "mrsTop": 20,
         "hamZzTop": 5,
         "resultId": "card5_b3_mrs2_hamzz_triple_jul2026",
-        "desc": "Тройка: B3 + Mean Reversion top20 + компактный ZigZag рукав.",
+        "desc": "Тройка: B3 + Mean Reversion top20 + компактный breakout-рукав.",
     },
     {
         "setKey": "b3-meanreversion-whale-personal-jul2026",
