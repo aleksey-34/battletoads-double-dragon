@@ -2865,9 +2865,24 @@ export const loadCatalogAndSweepWithFallback = async (): Promise<{ catalog: Cata
   }
 
   const sourceStatus = getLatestResearchArtifactsStatus();
-  const sourceCatalog = sourceStatus.catalogFresh ? loadLatestClientCatalog() : null;
+  // Prefer fresh research artifacts; if daily refresh slipped past 36h, still use
+  // on-disk catalog/sweep so portfolio materialize / connect is not blocked.
+  const diskCatalog = loadLatestClientCatalog();
   const diskSweep = loadLatestSweep();
-  const sourceSweep = sourceStatus.sweepFresh ? diskSweep : null;
+  if (!sourceStatus.catalogFresh && diskCatalog) {
+    logger.warn(
+      `loadCatalogAndSweepWithFallback: using stale client catalog `
+      + `(ageMs=${sourceStatus.catalogAgeMs ?? 'n/a'}, path=${sourceStatus.catalogPath || 'n/a'})`,
+    );
+  }
+  if (!sourceStatus.sweepFresh && diskSweep) {
+    logger.warn(
+      `loadCatalogAndSweepWithFallback: using stale historical sweep `
+      + `(ageMs=${sourceStatus.sweepAgeMs ?? 'n/a'}, path=${sourceStatus.sweepPath || 'n/a'})`,
+    );
+  }
+  const sourceCatalog = sourceStatus.catalogFresh ? diskCatalog : (diskCatalog || null);
+  const sourceSweep = sourceStatus.sweepFresh ? diskSweep : (diskSweep || null);
   const fallbackCatalog = await buildFallbackCatalogFromPresets(sourceCatalog, []);
   const sourceCatalogHasOffers = catalogHasOffers(sourceCatalog);
   const catalog = sourceCatalogHasOffers
@@ -15012,7 +15027,10 @@ const materializeAlgofundSystem = async (
   },
 ) => {
   const { catalog, sweep } = await loadCatalogAndSweepWithFallback();
-  if (!catalog || !sweep) {
+  // Portfolio materialize resolves members from master_card / trading_system_members
+  // and can rebuild params via DB fallback — only hard-fail when neither disk nor
+  // DB fallback can produce a sweep shell for non-portfolio single-card flows.
+  if (!catalog && !sweep && !asString(options?.sourceSystemNameOverride, '').trim()) {
     throw new Error('Catalog or sweep data unavailable (results and fallback sources are missing).');
   }
 
@@ -15021,7 +15039,7 @@ const materializeAlgofundSystem = async (
     throw new Error('Assign an API key to this algofund client first');
   }
 
-  const catalogDraftMembers = catalog.adminTradingSystemDraft?.members || [];
+  const catalogDraftMembers = catalog?.adminTradingSystemDraft?.members || [];
   const sourceSystemName = asString(
     options?.sourceSystemNameOverride || profile.published_system_name,
     '',
@@ -15272,11 +15290,15 @@ const materializeAlgofundSystem = async (
     });
   }
 
+  const depositCapOverride = asNumber((tenant as TenantRow).deposit_cap_override, 0);
+  const materializeMaxDeposit = depositCapOverride > 0
+    ? depositCapOverride
+    : asNumber(plan.max_deposit_total, 1000);
   const materializedStrategies = await upsertTenantStrategies(
     tenant,
     executionApiKeyName,
     recordsForMaterialization,
-    asNumber(plan.max_deposit_total, 1000),
+    materializeMaxDeposit,
     riskMultiplier <= 0.85 ? 'low' : riskMultiplier >= 1.4 ? 'high' : 'medium',
     activate || profile.requested_enabled === 1,
     { keepStrategyIds: options?.keepStrategyIdsExtra || [] },

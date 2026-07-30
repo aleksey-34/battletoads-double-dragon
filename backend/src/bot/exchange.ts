@@ -2873,6 +2873,60 @@ export const closePosition = async (
       }
     }
 
+    // WEEX: close via v3 REST + apiTradingSymbols gate (same as placeOrder).
+    // ccxt close hits pairs that are listed but not API-tradable → -1058 spam.
+    if (entry.exchange === 'weex') {
+      if (isOfflineSymbolCached(apiKeyName, symbol)) {
+        const apiOkCached = await isWeexApiTradableSymbol(symbol).catch(() => false);
+        if (apiOkCached) {
+          clearOfflineSymbol(apiKeyName, symbol);
+        } else {
+          logger.warn(
+            `WEEX close skipped — symbol offline (not API-tradable): ${apiKeyName}/${symbol}`
+          );
+          return;
+        }
+      }
+      const apiOk = await isWeexApiTradableSymbol(symbol).catch(() => false);
+      if (!apiOk) {
+        markOfflineSymbol(apiKeyName, symbol);
+        logger.warn(
+          `WEEX close skipped — missing from apiTradingSymbols: ${apiKeyName}/${symbol}`
+        );
+        return;
+      }
+      try {
+        const row = await db.get('SELECT * FROM api_keys WHERE name = ?', [apiKeyName]);
+        if (!row) {
+          throw new Error(`API key not found: ${apiKeyName}`);
+        }
+        const weexClient = createWeexClient(row as ApiKey);
+        const order = await entry.limiter.schedule(() =>
+          weexClient.createOrder(
+            toWeexOrderSymbol(symbol),
+            'market',
+            closeSide,
+            amount,
+            undefined,
+            { reduceOnly: true },
+          )
+        );
+        logger.info(`Closed WEEX v3 position: ${qty} ${symbol}`);
+        invalidatePositionCache(apiKeyName);
+        return order;
+      } catch (error) {
+        if (isWeexApiOrderDeniedError(error)) {
+          markOfflineSymbol(apiKeyName, symbol);
+          logger.warn(
+            `WEEX close skipped — pair not API-supported (-1058/-1054): ${apiKeyName}/${symbol}: ${(error as Error).message}`
+          );
+          return;
+        }
+        logger.error(`Error closing WEEX v3 position for ${apiKeyName} ${symbol}: ${(error as Error).message}`);
+        throw error;
+      }
+    }
+
     try {
       await tryEnsureBingxOneWayMode(apiKeyName, entry, ccxtSymbol);
 
@@ -2968,6 +3022,13 @@ export const closePosition = async (
       const err = error as Error;
       if (isBingxNoPositionError(error)) {
         logger.warn(`BingX close skipped — position already closed or does not exist (101290): ${err.message}`);
+        return;
+      }
+      if (isWeexApiOrderDeniedError(error)) {
+        markOfflineSymbol(apiKeyName, symbol);
+        logger.warn(
+          `WEEX close skipped — pair not API-supported: ${apiKeyName}/${symbol}: ${err.message}`
+        );
         return;
       }
       logger.error(`Error closing position via ccxt: ${err.message}`);
