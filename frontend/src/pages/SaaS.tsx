@@ -10937,7 +10937,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const algofundEnginePending = Boolean(algofundState?.profile?.requested_enabled) && !algofundEngineRunning;
   const algofundEngineBlockedReason = String(algofundState?.preview?.blockedReason || '').trim();
   const monitoringRows = (summary?.tenants || [])
-    .filter((row) => monitoringModeFilter === 'all' || row.tenant.product_mode === monitoringModeFilter)
+    .filter((row) => {
+      const status = String(row.tenant?.status || 'active').toLowerCase();
+      // Hide suspended/archived shells (e.g. merged duplicate API tenants showing Eq $0).
+      if (status === 'suspended' || status === 'archived' || status === 'deleted') return false;
+      return monitoringModeFilter === 'all' || row.tenant.product_mode === monitoringModeFilter;
+    })
     .map((row) => {
       const profile = (row.tenant.product_mode === 'strategy_client' || row.tenant.product_mode === 'dual') ? row.strategyProfile : row.algofundProfile;
       const requestedEnabled = Number(profile?.requested_enabled || 0) === 1;

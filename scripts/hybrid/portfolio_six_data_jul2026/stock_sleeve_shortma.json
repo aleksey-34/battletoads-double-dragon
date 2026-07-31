@@ -1,0 +1,230 @@
+{
+  "generatedAt": "2026-07-31T06:42:49.207Z",
+  "systemName": "ALGOFUND_MASTER::BTDD_D1::addon-mrs-weex-stocks-shortma-jul2026",
+  "op": 6,
+  "lot": 15,
+  "ri": 100,
+  "capitalWeight": 0.5,
+  "initial": 5000,
+  "window": {
+    "from": "2026-03-19",
+    "to": "2026-07-30"
+  },
+  "legs": [
+    {
+      "symbol": "MUUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.998,
+        "maShortLen": 3,
+        "maShortMult": 1.002,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.1,
+        "slLongPct": 0,
+        "_shiftPct": 0.2
+      },
+      "full": {
+        "ret": 12.25,
+        "dd": 3.13,
+        "pf": 1.522,
+        "trades": 139
+      },
+      "score": 16.57
+    },
+    {
+      "symbol": "SOXLUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 2,
+        "maLongMult": 0.998,
+        "maShortLen": 2,
+        "maShortMult": 1.002,
+        "maCloseLongLen": 2,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 2,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.1,
+        "slLongPct": 0,
+        "_shiftPct": 0.2
+      },
+      "full": {
+        "ret": 12.22,
+        "dd": 4.71,
+        "pf": 1.553,
+        "trades": 68
+      },
+      "score": 15.969
+    },
+    {
+      "symbol": "IBMUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.998,
+        "maShortLen": 3,
+        "maShortMult": 1.002,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.1,
+        "slLongPct": 0,
+        "_shiftPct": 0.2
+      },
+      "full": {
+        "ret": 5.23,
+        "dd": 1.66,
+        "pf": 2.217,
+        "trades": 57
+      },
+      "score": 9.809
+    },
+    {
+      "symbol": "AMZNUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.998,
+        "maShortLen": 3,
+        "maShortMult": 1.002,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.1,
+        "slLongPct": 0,
+        "_shiftPct": 0.2
+      },
+      "full": {
+        "ret": 3.98,
+        "dd": 1.55,
+        "pf": 1.386,
+        "trades": 187
+      },
+      "score": 5.194
+    },
+    {
+      "symbol": "INTCUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.998,
+        "maShortLen": 3,
+        "maShortMult": 1.002,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.1,
+        "slLongPct": 0,
+        "_shiftPct": 0.2
+      },
+      "full": {
+        "ret": 4.32,
+        "dd": 3.16,
+        "pf": 1.285,
+        "trades": 105
+      },
+      "score": 4.928
+    },
+    {
+      "symbol": "TSLAUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.998,
+        "maShortLen": 3,
+        "maShortMult": 1.002,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.1,
+        "slLongPct": 0,
+        "_shiftPct": 0.2
+      },
+      "full": {
+        "ret": 2.03,
+        "dd": 3.16,
+        "pf": 1.135,
+        "trades": 190
+      },
+      "score": 2.045
+    },
+    {
+      "symbol": "RIVNUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 3,
+        "maLongMult": 0.998,
+        "maShortLen": 3,
+        "maShortMult": 1.002,
+        "maCloseLongLen": 3,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 3,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.1,
+        "slLongPct": 0,
+        "_shiftPct": 0.2
+      },
+      "full": {
+        "ret": 0.52,
+        "dd": 2.9,
+        "pf": 1.058,
+        "trades": 51
+      },
+      "score": 0.493
+    },
+    {
+      "symbol": "BABAUSDT",
+      "tf": "4h",
+      "params": {
+        "maLongLen": 2,
+        "maLongMult": 0.998,
+        "maShortLen": 2,
+        "maShortMult": 1.002,
+        "maCloseLongLen": 2,
+        "maCloseLongMult": 1,
+        "maCloseShortLen": 2,
+        "maCloseShortMult": 1,
+        "distanceFilterPct": 0.1,
+        "slLongPct": 0,
+        "_shiftPct": 0.2
+      },
+      "full": {
+        "ret": 0.38,
+        "dd": 1.16,
+        "pf": 1.113,
+        "trades": 55
+      },
+      "score": 0.404
+    }
+  ],
+  "book": {
+    "ret": 47.15,
+    "dd": 8.71,
+    "pf": 1.434,
+    "trades": 743,
+    "final": 7357.75,
+    "skippedOP": 116
+  },
+  "dumpStress": {
+    "spx30d": {
+      "ret": -37.76,
+      "from": "2026-05-11",
+      "to": "2026-06-10"
+    },
+    "sleeve": {
+      "ret": 8.97,
+      "dd": 7.8,
+      "pf": 1.425,
+      "trades": 146,
+      "final": 5448.47,
+      "skippedOP": 0
+    }
+  }
+}

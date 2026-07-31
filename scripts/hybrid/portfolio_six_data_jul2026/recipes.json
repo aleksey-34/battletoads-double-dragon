@@ -11,6 +11,16 @@
     "setKey": "portfolio-b3-core-shared-jul2026"
   },
   "mrsSource": "results/hamster_compound_system89_jul2026/weex_mrs_engine_wf_postfill.json",
+  "sharedStocks": {
+    "setKey": "addon-mrs-weex-stocks-shortma-jul2026",
+    "systemName": "ALGOFUND_MASTER::BTDD_D1::addon-mrs-weex-stocks-shortma-jul2026",
+    "op": 6,
+    "lot": 15,
+    "ri": 100,
+    "capitalWeight": 0.5,
+    "initial": 5000,
+    "note": "WEEX API-tradable equities, short-MA len 2-3 + shift 0.2-0.5%. Own OP book; B3 remains trend sleeve."
+  },
   "portfolios": [
     {
       "id": "P1",
@@ -30,6 +40,11 @@
           "lot": 6,
           "ri": 100,
           "initial": 10000
+        },
+        {
+          "key": "stocks",
+          "ref": "sharedStocks",
+          "initial": 5000
         }
       ]
     },
@@ -51,6 +66,11 @@
           "lot": 6,
           "ri": 100,
           "initial": 10000
+        },
+        {
+          "key": "stocks",
+          "ref": "sharedStocks",
+          "initial": 5000
         }
       ]
     },
@@ -72,6 +92,11 @@
           "lot": 8,
           "ri": 100,
           "initial": 20000
+        },
+        {
+          "key": "stocks",
+          "ref": "sharedStocks",
+          "initial": 5000
         }
       ]
     },
@@ -93,6 +118,11 @@
           "lot": 7,
           "ri": 100,
           "initial": 12000
+        },
+        {
+          "key": "stocks",
+          "ref": "sharedStocks",
+          "initial": 5000
         }
       ]
     },
@@ -122,6 +152,11 @@
           "lot": 6,
           "ri": 100,
           "initial": 5000
+        },
+        {
+          "key": "stocks",
+          "ref": "sharedStocks",
+          "initial": 5000
         }
       ]
     },
@@ -145,6 +180,11 @@
           "lot": 10,
           "ri": 100,
           "initial": 20000
+        },
+        {
+          "key": "stocks",
+          "ref": "sharedStocks",
+          "initial": 5000
         }
       ]
     }
