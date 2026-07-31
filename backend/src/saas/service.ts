@@ -15331,8 +15331,53 @@ const materializeAlgofundSystem = async (
     notes: `algofund ${tenant.slug}`,
   }));
   members = await filterRunnableTradingSystemMembers(executionApiKeyName, members);
+  // Soft-skip empty books (e.g. WEEX stocks on BingX): log reasons and let sibling
+  // portfolio books keep running. Single-card materialize still hard-fails.
   if (members.length === 0) {
-    throw new Error(`Algofund materialize produced no runnable members for ${tenant.slug}`);
+    const pairSkipped = Math.max(0, recordsForMaterialization.length - materializedStrategies.length);
+    const reason = recordsForMaterialization.length > 0
+      ? `0/${recordsForMaterialization.length} legs runnable after upsert `
+        + `(pair/exchange skipped≈${pairSkipped}; see saas_materialize_pair_unavailable audit)`
+      : 'draft members empty after archived-master / catalog filters';
+    logger.warn(
+      `Algofund materialize: ${tenant.slug} book '${systemName}' skipped — ${reason}`
+      + (sourceSystemName ? ` (source=${sourceSystemName})` : ''),
+    );
+    let systemId = Number(existing?.id || 0);
+    if (systemId > 0) {
+      try {
+        await replaceTradingSystemMembers(executionApiKeyName, systemId, []);
+        await setTradingSystemActivation(executionApiKeyName, systemId, false, false).catch(() => {});
+      } catch (err) {
+        logger.warn(
+          `Algofund materialize: failed to clear empty book TS ${systemName} for ${tenant.slug}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    // Portfolio multi-book path uses skipProfilePublishUpdate — return empty, don't abort siblings.
+    if (options?.skipProfilePublishUpdate || options?.preserveSiblingSystems) {
+      await db.run(
+        `UPDATE algofund_profiles
+         SET assigned_api_key_name = ?,
+             execution_api_key_name = ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ?`,
+        [executionApiKeyName, executionApiKeyName, tenant.id],
+      ).catch(() => {});
+      return {
+        systemId,
+        systemName,
+        assignedApiKeyName: executionApiKeyName,
+        riskMultiplier,
+        strategies: materializedStrategies,
+        strategyIds: [] as number[],
+        skipped: true,
+        skipReason: reason,
+      };
+    }
+
+    throw new Error(`Algofund materialize produced no runnable members for ${tenant.slug}: ${reason}`);
   }
 
   // Resolve maxOpenPositions from master_cards metadata (card override).
@@ -19107,7 +19152,15 @@ export const materializeAlgofundPortfolioFull = async (payload: {
 }): Promise<{
   portfolioId: number;
   setKey: string;
-  systems: Array<{ role: string; systemName: string; systemId: number; strategyCount: number }>;
+  systems: Array<{
+    role: string;
+    systemName: string;
+    systemId: number;
+    strategyCount: number;
+    skipped?: boolean;
+    skipReason?: string;
+  }>;
+  skippedBooks: Array<{ role: string; systemName: string; reason: string }>;
   activeSystems: AlgofundActiveSystem[];
 }> => {
   await ensureSaasSeedData();
@@ -19134,33 +19187,88 @@ export const materializeAlgofundPortfolioFull = async (payload: {
   ) as Array<{ system_name: string; role: string; capital_weight: number }>;
 
   const keepAll = new Set<number>();
-  const systemsOut: Array<{ role: string; systemName: string; systemId: number; strategyCount: number }> = [];
+  const systemsOut: Array<{
+    role: string;
+    systemName: string;
+    systemId: number;
+    strategyCount: number;
+    skipped?: boolean;
+    skipReason?: string;
+  }> = [];
+  const skippedBooks: Array<{ role: string; systemName: string; reason: string }> = [];
 
   for (let i = 0; i < members.length; i += 1) {
     const member = members[i];
     const role = asString(member.role, `book${i + 1}`).trim() || `book${i + 1}`;
     const clientSystemName = `ALGOFUND::${tenant.slug}::${role}`;
-    const result = await materializeAlgofundSystem(
-      tenant,
-      plan,
-      profile,
-      Boolean(payload.activate),
-      {
-        sourceSystemNameOverride: asString(member.system_name, ''),
-        clientSystemName,
-        preserveSiblingSystems: true,
-        memberWeightScale: Math.max(0.05, asNumber(member.capital_weight, 1)),
-        skipProfilePublishUpdate: true,
-        keepStrategyIdsExtra: [...keepAll],
-      },
+    const sourceName = asString(member.system_name, '');
+    try {
+      const result = await materializeAlgofundSystem(
+        tenant,
+        plan,
+        profile,
+        Boolean(payload.activate),
+        {
+          sourceSystemNameOverride: sourceName,
+          clientSystemName,
+          preserveSiblingSystems: true,
+          memberWeightScale: Math.max(0.05, asNumber(member.capital_weight, 1)),
+          skipProfilePublishUpdate: true,
+          keepStrategyIdsExtra: [...keepAll],
+        },
+      );
+      const strategyCount = (result.strategyIds || []).length;
+      const skipped = Boolean(
+        (result as { skipped?: boolean }).skipped
+        || (result as { skippedEmpty?: boolean }).skippedEmpty,
+      ) || strategyCount === 0;
+      const skipReason = asString((result as { skipReason?: string }).skipReason, '').trim()
+        || (skipped ? 'no runnable members after exchange/create filters' : '');
+      for (const sid of result.strategyIds || []) keepAll.add(Number(sid));
+      systemsOut.push({
+        role,
+        systemName: result.systemName,
+        systemId: Number(result.systemId),
+        strategyCount,
+        ...(skipped ? { skipped: true, skipReason } : {}),
+      });
+      if (skipped) {
+        skippedBooks.push({ role, systemName: result.systemName || clientSystemName, reason: skipReason });
+        logger.warn(
+          `Algofund portfolio materialize: skipped book role=${role} for ${tenant.slug}: ${skipReason}`,
+        );
+      }
+    } catch (error) {
+      const reason = (error as Error).message || String(error);
+      skippedBooks.push({ role, systemName: clientSystemName, reason });
+      systemsOut.push({
+        role,
+        systemName: clientSystemName,
+        systemId: 0,
+        strategyCount: 0,
+        skipped: true,
+        skipReason: reason,
+      });
+      logger.warn(
+        `Algofund portfolio materialize: book role=${role} failed for ${tenant.slug}, continuing with other books: ${reason}`,
+      );
+    }
+  }
+
+  const runnableBooks = systemsOut.filter((s) => Number(s.strategyCount || 0) > 0);
+  if (runnableBooks.length === 0) {
+    throw new Error(
+      `Algofund portfolio materialize produced no runnable books for ${tenant.slug}`
+      + (skippedBooks.length
+        ? `: ${skippedBooks.map((b) => `${b.role}(${b.reason})`).join('; ')}`
+        : ''),
     );
-    for (const sid of result.strategyIds || []) keepAll.add(Number(sid));
-    systemsOut.push({
-      role,
-      systemName: result.systemName,
-      systemId: Number(result.systemId),
-      strategyCount: (result.strategyIds || []).length,
-    });
+  }
+  if (skippedBooks.length > 0) {
+    logger.warn(
+      `Algofund portfolio materialize: ${tenant.slug} started ${runnableBooks.length}/${systemsOut.length} books; `
+      + `skipped: ${skippedBooks.map((b) => `${b.role}=${b.reason}`).join(' | ')}`,
+    );
   }
 
   // Final orphan sweep: keep union of all portfolio strategy ids
@@ -19245,6 +19353,7 @@ export const materializeAlgofundPortfolioFull = async (payload: {
     portfolioId: assigned.portfolioId,
     setKey: assigned.setKey,
     systems: systemsOut,
+    skippedBooks,
     activeSystems: assigned.activeSystems,
   };
 };
