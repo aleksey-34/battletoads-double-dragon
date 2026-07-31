@@ -5962,6 +5962,15 @@ const ensurePublishedSourceSystem = async (
       });
 
       apiKeyName = inlineName;
+      // Eager init in this process so materialize / balances / symbols do not fall through
+      // to the Bybit path (WEEX/CCXT keys otherwise look "uninitialized").
+      try {
+        await ensureExchangeClientInitialized(inlineName);
+      } catch (initErr) {
+        logger.warn(
+          `[SaaS] Inline API key saved but exchange client init failed for ${inlineName}: ${(initErr as Error).message}`
+        );
+      }
       logger.info(`[SaaS] Created inline API key for tenant creation: ${inlineName}`);
     }
 

@@ -1121,6 +1121,8 @@ export const getAllSymbols = async (apiKeyName: string) => {
     return cached;
   }
 
+  await ensureExchangeClientInitialized(apiKeyName);
+
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
 
@@ -1579,6 +1581,8 @@ export const placeOrder = async (
   price?: string,
   options?: OrderOptions
 ) => {
+  await ensureExchangeClientInitialized(apiKeyName);
+
   const submitWithQty = async (qtyToSubmit: string) => {
     if (ccxtClients[apiKeyName]) {
       return placeOrderCcxt(apiKeyName, symbol, side, qtyToSubmit, price, options);
@@ -1665,8 +1669,11 @@ export const placeOrder = async (
 
 const isWeexApiOrderDeniedError = (error: unknown): boolean => {
   const text = String((error as Error)?.message || error || '');
+  // Precision / min-qty / stepSize are client-side validation issues — never mark the pair offline.
+  if (/stepSize|min limit|minOrder|order price must|order size|FAILED_PRECONDITION|INVALID_ARGUMENT/i.test(text)) {
+    return false;
+  }
   return /code["']?\s*[:=]\s*-?1058/i.test(text)
-    || /code["']?\s*[:=]\s*-?1054/i.test(text)
     || /not supported via the API/i.test(text)
     || /Contract not found/i.test(text)
     || /apiTradingSymbols/i.test(text);
@@ -1934,6 +1941,7 @@ export const getOrderStatus = async (apiKeyName: string, orderId: string) => {
 
 export const getBalances = async (apiKeyName: string) => {
   logger.info(`Fetching balances for ${apiKeyName}`);
+  await ensureExchangeClientInitialized(apiKeyName);
 
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
@@ -2158,6 +2166,8 @@ export const getBalances = async (apiKeyName: string) => {
 };
 
 const fetchPositionsDirect = async (apiKeyName: string, symbol?: string) => {
+  await ensureExchangeClientInitialized(apiKeyName);
+
   if (ccxtClients[apiKeyName]) {
     const entry = getCcxtClientEntry(apiKeyName);
 

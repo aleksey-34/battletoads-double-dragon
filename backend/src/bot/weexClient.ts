@@ -25,6 +25,30 @@ const firstPositiveNumber = (...values: unknown[]): number | null => {
   return null;
 };
 
+/** WEEX may return tick as 0.0001 or as decimal-places count (4 → 0.0001). */
+const stepFromPrecisionField = (raw: unknown, fallback: number): number => {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  if (Number.isInteger(n) && n >= 1 && n <= 16) {
+    return Math.pow(10, -n);
+  }
+  return n;
+};
+
+const countStepDecimals = (step: number): number => {
+  if (!Number.isFinite(step) || step <= 0) return 0;
+  const normalized = step.toFixed(16).replace(/0+$/, '');
+  const dot = normalized.indexOf('.');
+  return dot >= 0 ? Math.min(16, normalized.length - dot - 1) : 0;
+};
+
+const formatToStep = (value: number, step: number): string => {
+  if (!Number.isFinite(value)) return '0';
+  const safeStep = Number.isFinite(step) && step > 0 ? step : 0.0001;
+  const rounded = Math.round(value / safeStep) * safeStep;
+  return rounded.toFixed(countStepDecimals(safeStep));
+};
+
 const toWeexPrivateSymbol = (value: unknown): string => {
   const normalized = normalizeSymbolKey(value).replace(/^CMT/, '');
   // CCXT swap symbols (e.g. SUI/USDT:USDT) normalize to SUIUSDTUSDT; collapse duplicate settle suffix.
@@ -267,7 +291,10 @@ class WeexRestClient {
       const ccxtSymbol = toWeexCcxtSymbol(rawSymbol);
       const minAmount = firstPositiveNumber(item?.minOrderSize);
       const maxAmount = firstPositiveNumber(item?.marketOpenLimitSize, item?.maxOrderSize, item?.maxPositionSize);
-      const pricePrecision = firstPositiveNumber(item?.pricePrecision, item?.pricePlace, 0.1) ?? 0.1;
+      const pricePrecision = stepFromPrecisionField(
+        firstPositiveNumber(item?.pricePrecision, item?.pricePlace, item?.tickSize, item?.priceStep),
+        0.0001,
+      );
       // WEEX stepSize may come as explicit field, or as sizeMultiplier, or as
       // contractSize. quantityPrecision is decimal-places count (0 = integer),
       // NOT the step itself.  Derive step from explicit fields first.
@@ -542,20 +569,42 @@ class WeexRestClient {
         ? (isReduceOnly ? 'SHORT' : 'LONG')
         : (isReduceOnly ? 'LONG' : 'SHORT');
 
+    const markets = await this.loadMarkets().catch(() => ({} as Record<string, any>));
+    const market = markets[toWeexCcxtSymbol(rawSymbol)] || markets[toWeexCcxtSymbol(symbol)];
+    const amountStep = stepFromPrecisionField(market?.precision?.amount, 0.001);
+    const priceStep = stepFromPrecisionField(market?.precision?.price, 0.0001);
+    const minAmount = firstPositiveNumber(market?.limits?.amount?.min) ?? amountStep;
+    let qty = Number(amount);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      throw new Error(`WEEX invalid order quantity for ${rawSymbol}: ${amount}`);
+    }
+    qty = Number(formatToStep(qty, amountStep));
+    if (qty < minAmount) {
+      throw new Error(
+        `WEEX order size ${qty} < min limit ${minAmount} for contract ${rawSymbol}`
+      );
+    }
+
     const body: Record<string, unknown> = {
       symbol: rawSymbol,
       side: sideUpper,
       positionSide,
       type: typeUpper,
-      quantity: String(amount),
+      quantity: formatToStep(qty, amountStep),
       newClientOrderId: String(params?.newClientOrderId || `btdd-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
       reduceOnly: isReduceOnly || undefined,
     };
 
+    let roundedPrice = price;
     if (typeUpper === 'LIMIT') {
       body.timeInForce = String(params?.timeInForce || 'GTC').toUpperCase();
       if (price !== undefined) {
-        body.price = String(price);
+        if (!Number.isFinite(price) || price <= 0) {
+          throw new Error(`WEEX invalid limit price for ${rawSymbol}: ${price}`);
+        }
+        const priceStr = formatToStep(price, priceStep);
+        roundedPrice = Number(priceStr);
+        body.price = priceStr;
       }
     }
 
@@ -574,8 +623,8 @@ class WeexRestClient {
       symbol: toWeexCcxtSymbol(rawSymbol),
       side: sideUpper.toLowerCase(),
       type: typeUpper.toLowerCase(),
-      amount,
-      price,
+      amount: qty,
+      price: roundedPrice,
       status: response?.success === false ? 'rejected' : 'open',
       reduceOnly: isReduceOnly,
       info: {

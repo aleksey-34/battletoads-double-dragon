@@ -2022,6 +2022,7 @@ adminRouter.get('/balances/:apiKeyName', async (req, res) => {
   const { apiKeyName } = req.params;
   logger.info(`Balances request for key: ${apiKeyName}`);
   try {
+    try { await ensureExchangeClientInitialized(apiKeyName); } catch { /* getBalances will surface a clear error */ }
     const balances = await getBalances(apiKeyName);
     logger.info(`Balances response for ${apiKeyName}: ${balances.length} items`);
     res.json(balances);

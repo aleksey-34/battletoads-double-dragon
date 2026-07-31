@@ -17,7 +17,7 @@ import logger from '../../utils/logger';
 import { initResearchDb } from '../../research/db';
 import { getClientPreviewJobPayload } from '../../research/clientPreviewQueue';
 import { getPreset, listOfferIds } from '../../research/presetBuilder';
-import { removeExchangeClient } from '../../bot/exchange';
+import { ensureExchangeClientInitialized, removeExchangeClient } from '../../bot/exchange';
 import { saveApiKey } from '../../config/settings';
 import { getMonitoringBundle, getMonitoringLatest, recordMonitoringSnapshot } from '../../bot/monitoring';
 import {
@@ -963,6 +963,12 @@ router.post('/client/api-key', authenticateClient, async (req, res) => {
       demo,
     });
 
+    try {
+      await ensureExchangeClientInitialized(keyName);
+    } catch (initErr) {
+      logger.warn(`Client api key saved but exchange init failed for ${keyName}: ${(initErr as Error).message}`);
+    }
+
     // First key becomes the tenant monitoring key (does not start trading).
     const tenantRow = await db.get(
       'SELECT assigned_api_key_name FROM tenants WHERE id = ?',
@@ -1107,6 +1113,11 @@ router.patch('/client/api-keys/:id', authenticateClient, async (req, res) => {
       [exchange, apiKey, secret, passphrase, testnet ? 1 : 0, demo ? 1 : 0, apiKeyId]
     );
     removeExchangeClient(keyName);
+    try {
+      await ensureExchangeClientInitialized(keyName);
+    } catch (initErr) {
+      logger.warn(`Client api key updated but exchange re-init failed for ${keyName}: ${(initErr as Error).message}`);
+    }
 
     await db.run(
       `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
