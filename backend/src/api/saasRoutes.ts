@@ -93,6 +93,7 @@ import {
   getAdminSweepBacktestJob,
   startAdminSweepBacktestJob,
 } from '../saas/adminSweepBacktestJobService';
+import { probePortfolioCandleCoverage } from '../saas/portfolioCandleCoverage';
 
 type OfferStoreLabel = 'research_catalog' | 'runtime_snapshot' | 'fallback_preset';
 
@@ -582,6 +583,29 @@ router.get('/admin/sweep-backtest-preview/jobs/:jobId', async (req, res) => {
     const err = error as Error;
     logger.error(`SaaS sweep backtest job poll error: ${err.message}`);
     res.status(500).json({ error: err.message });
+  }
+});
+
+/** Preflight: hybrid candle coverage for TS / portfolio books before Real BT. */
+router.post('/admin/portfolio-bt/coverage', async (req, res) => {
+  try {
+    const body = (req.body && typeof req.body === 'object') ? req.body as Record<string, unknown> : {};
+    const systemNames = Array.isArray(body.systemNames)
+      ? body.systemNames.map((x) => String(x || '').trim()).filter(Boolean)
+      : undefined;
+    const report = await probePortfolioCandleCoverage({
+      systemName: String(body.systemName || '').trim() || undefined,
+      systemNames,
+      setKey: String(body.setKey || '').trim() || undefined,
+      dateFrom: String(body.dateFrom || '').trim() || undefined,
+      dateTo: String(body.dateTo || '').trim() || undefined,
+      warmupBars: body.warmupBars !== undefined ? Number(body.warmupBars) : undefined,
+    });
+    res.json({ success: true, ...report });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`SaaS portfolio-bt coverage error: ${err.message}`);
+    res.status(400).json({ error: err.message });
   }
 });
 

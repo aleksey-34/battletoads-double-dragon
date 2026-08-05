@@ -3331,6 +3331,15 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   const [adminSweepBacktestAsyncStatus, setAdminSweepBacktestAsyncStatus] = useState('');
   const [adminSweepBacktestDateFrom, setAdminSweepBacktestDateFrom] = useState('');
   const [adminSweepBacktestDateTo, setAdminSweepBacktestDateTo] = useState('');
+  const [portfolioCandleCoverage, setPortfolioCandleCoverage] = useState<{
+    ok?: boolean;
+    hybridReady?: boolean;
+    canAttemptLiveBt?: boolean;
+    hint?: string;
+    summary?: { total: number; ok: number; short: number; missing: number };
+    legs?: Array<{ symbol: string; interval: string; status: string; hybridBars: number; detail?: string }>;
+  } | null>(null);
+  const [portfolioCandleCoverageLoading, setPortfolioCandleCoverageLoading] = useState(false);
   const [tsDcaPickLoading, setTsDcaPickLoading] = useState(false);
   const [tsDcaApplyLoading, setTsDcaApplyLoading] = useState(false);
   const [tsDcaResearchResult, setTsDcaResearchResult] = useState<{
@@ -8129,6 +8138,60 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     } finally {
       setActionLoading('');
     }
+  };
+
+  const checkPortfolioCandleCoverage = async () => {
+    if (!isAdminSurface || !backtestDrawerContext) {
+      messageApi.warning('Открой карточку ТС / портфеля в админке');
+      return;
+    }
+    const systemName = String(backtestDrawerContext.systemName || '').trim();
+    const setKey = String((backtestDrawerContext as { setKey?: string }).setKey || '').trim();
+    const memberNames = Array.isArray(backtestDrawerContext.portfolioMembers)
+      ? backtestDrawerContext.portfolioMembers
+        .map((m) => String(m?.systemName || '').trim())
+        .filter(Boolean)
+      : [];
+    if (!systemName && !setKey && memberNames.length === 0) {
+      messageApi.warning('Нет systemName / setKey для проверки свечей');
+      return;
+    }
+    const dateFrom = String(adminSweepBacktestDateFrom || '').trim() || '2024-06-01';
+    const dateTo = String(adminSweepBacktestDateTo || '').trim() || new Date().toISOString().slice(0, 10);
+    setPortfolioCandleCoverageLoading(true);
+    try {
+      const response = await axios.post('/api/saas/admin/portfolio-bt/coverage', {
+        systemName: systemName || undefined,
+        systemNames: memberNames.length ? memberNames : undefined,
+        setKey: setKey || undefined,
+        dateFrom,
+        dateTo,
+        warmupBars: 120,
+      }, { timeout: 120_000 });
+      const data = response.data || {};
+      setPortfolioCandleCoverage(data);
+      const s = data.summary || {};
+      if (data.hybridReady) {
+        messageApi.success(`Свечи OK: ${s.ok || 0}/${s.total || 0} legs в hybrid`);
+      } else {
+        messageApi.warning(
+          `Hybrid gaps: missing=${s.missing || 0}, short=${s.short || 0}. `
+          + `${data.canAttemptLiveBt ? 'Real BT всё ещё можно пробовать (live fetch).' : ''}`,
+        );
+      }
+    } catch (error: any) {
+      setPortfolioCandleCoverage(null);
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось проверить свечи'));
+    } finally {
+      setPortfolioCandleCoverageLoading(false);
+    }
+  };
+
+  const runPeriodRealBtThenOfferStampHint = async () => {
+    await checkPortfolioCandleCoverage();
+    cancelBacktestDebounce();
+    await runFullCardTruthRerun(undefined, { preferRealBacktest: true });
+    messageApi.info('После завершения Real BT нажми «Сохранить», чтобы заштамповать метрики на витрину');
   };
 
   const saveOfferReviewSnapshotFromBacktest = async () => {
@@ -16866,7 +16929,47 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                           setAdminSweepBacktestStale(true);
                           scheduleBacktestDebounce();
                         }}>Полная глубина sweep</Button>
+                        <Button
+                          size="small"
+                          loading={portfolioCandleCoverageLoading}
+                          onClick={() => { void checkPortfolioCandleCoverage(); }}
+                        >
+                          Проверить свечи
+                        </Button>
+                        <Button
+                          size="small"
+                          type="primary"
+                          loading={adminSweepBacktestLoading || portfolioCandleCoverageLoading}
+                          onClick={() => { void runPeriodRealBtThenOfferStampHint(); }}
+                        >
+                          Real BT за период
+                        </Button>
                       </Space>
+                      {portfolioCandleCoverage ? (
+                        <Alert
+                          type={portfolioCandleCoverage.hybridReady ? 'success' : 'warning'}
+                          showIcon
+                          style={{ marginTop: 6 }}
+                          message={
+                            portfolioCandleCoverage.hybridReady
+                              ? 'Hybrid покрытие достаточное'
+                              : `Hybrid gaps: missing=${portfolioCandleCoverage.summary?.missing ?? '—'} short=${portfolioCandleCoverage.summary?.short ?? '—'}`
+                          }
+                          description={(
+                            <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                              <Text style={{ fontSize: 12 }}>{portfolioCandleCoverage.hint}</Text>
+                              {!portfolioCandleCoverage.hybridReady ? (
+                                <Text type="secondary" style={{ fontSize: 11 }}>
+                                  Экспорт: scripts/hybrid/export_portfolio_books_candles.sh
+                                  {portfolioCandleCoverage.legs?.filter((l) => l.status !== 'ok').slice(0, 8).map((l) => (
+                                    ` · ${l.symbol}|${l.interval}(${l.status})`
+                                  )).join('') || ''}
+                                </Text>
+                              ) : null}
+                            </Space>
+                          )}
+                        />
+                      ) : null}
                       <Text type="secondary">Пустые даты → real rerun по полному диапазону sweep/карточки.</Text>
                     </Space>
                   </Card>
