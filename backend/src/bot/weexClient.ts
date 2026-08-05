@@ -301,7 +301,10 @@ class WeexRestClient {
       const explicitStep = firstPositiveNumber(item?.stepSize, item?.sizeMultiplier, item?.volumeStep, item?.contractSize);
       const decimalPlacesStep = (() => {
         const dp = Number(item?.quantityPrecision ?? item?.baseAssetPrecision);
-        return Number.isFinite(dp) && dp >= 0 ? Math.pow(10, -dp) : null;
+        // WEEX: negative quantityPrecision means lot in powers of 10 (e.g. -2 → step 100).
+        // Math.pow(10, -dp) covers both: 1 → 0.1, -2 → 100.
+        if (!Number.isFinite(dp) || dp > 16 || dp < -8) return null;
+        return Math.pow(10, -dp);
       })();
       const amountPrecision = explicitStep ?? decimalPlacesStep ?? firstPositiveNumber(item?.size_increment, minAmount) ?? 0.001;
       const maxLeverage = firstPositiveNumber(item?.maxLeverage);

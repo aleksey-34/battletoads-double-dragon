@@ -74,6 +74,7 @@ export const scaleQtyString = (qty: string, factor: number, rules: QtyRulesLite)
 
 export type ParsedOrderLimitError =
   | { type: 'max_qty'; maxQty: number; orderQty?: number }
+  | { type: 'min_qty'; minQty: number; orderQty?: number }
   | { type: 'risk_tier'; suggestedLeverage: number };
 
 export const parseOrderQtyLimitError = (message: string): ParsedOrderLimitError | null => {
@@ -87,6 +88,23 @@ export const parseOrderQtyLimitError = (message: string): ParsedOrderLimitError 
     const orderQty = orderQtyMatch ? Number(orderQtyMatch[1]) : undefined;
     if (Number.isFinite(maxQty) && maxQty > 0) {
       return { type: 'max_qty', maxQty, orderQty };
+    }
+  }
+
+  // WEEX: FAILED_PRECONDITION: Trader order size: 0.1 < min limit: 0.2 for contract ZEC/USDT
+  // (exchangeInfo minOrderSize is often stale vs live matching engine)
+  const minLimitMatch = text.match(
+    /order size:\s*([0-9]+(?:\.[0-9]+)?)\s*<\s*min limit:\s*([0-9]+(?:\.[0-9]+)?)/i
+  );
+  if (minLimitMatch) {
+    const orderQty = Number(minLimitMatch[1]);
+    const minQty = Number(minLimitMatch[2]);
+    if (Number.isFinite(minQty) && minQty > 0) {
+      return {
+        type: 'min_qty',
+        minQty,
+        orderQty: Number.isFinite(orderQty) && orderQty > 0 ? orderQty : undefined,
+      };
     }
   }
 

@@ -1191,7 +1191,7 @@ export const executeStrategy = async (
             });
             mrs2OversizeSkipReason = blocked.reason;
             if (shouldLogEntryOversizeBlock(apiKeyName, strategyId)) {
-              logger.error(
+              logger.warn(
                 `[position-cap] MRS2 resting-limit sync BLOCKED for strategy ${strategyId} (${apiKeyName}): `
                 + `${blocked.reason} — cool-down ${Math.round(ENTRY_OVERSIZE_COOLDOWN_MS / 60_000)}min `
                 + `(${ENTRY_OVERSIZE_SKIP_ACTION})`
@@ -1949,7 +1949,7 @@ export const executeStrategy = async (
       ),
     });
     if (shouldLogEntryOversizeBlock(apiKeyName, strategyId)) {
-      logger.error(
+      logger.warn(
         `[position-cap] Entry BLOCKED for strategy ${strategyId} (${apiKeyName}): ${blocked.reason} `
         + `— cool-down ${Math.round(ENTRY_OVERSIZE_COOLDOWN_MS / 60_000)}min (${ENTRY_OVERSIZE_SKIP_ACTION})`
       );

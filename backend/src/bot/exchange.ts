@@ -1630,6 +1630,26 @@ export const placeOrder = async (
         continue;
       }
 
+      if (parsed.type === 'min_qty') {
+        const currentNum = Number.parseFloat(String(currentQty || '0'));
+        const bumped = Math.max(
+          Number.isFinite(currentNum) ? currentNum : 0,
+          parsed.minQty,
+        );
+        const nextQty = rules
+          ? clampQtyString(String(bumped), { ...rules, minQty: Math.max(rules.minQty, parsed.minQty) })
+          : String(bumped);
+        if (nextQty === currentQty || Number(nextQty) < parsed.minQty) {
+          throw error;
+        }
+        logger.warn(
+          `[qty-min-retry] ${apiKeyName} ${symbol} ${side}: ${currentQty} → ${nextQty} `
+          + `(exchange min_qty=${parsed.minQty})`
+        );
+        currentQty = nextQty;
+        continue;
+      }
+
       if (parsed.type === 'risk_tier') {
         try {
           await applySymbolRiskSettings(
