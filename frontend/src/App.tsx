@@ -185,6 +185,7 @@ function AppShell() {
 
   const checkClientAuth = async () => {
     const token = localStorage.getItem(CLIENT_SESSION_STORAGE_KEY);
+    const switchAccount = new URLSearchParams(location.search).get('switch') === '1';
 
     if (!token) {
       setClientAuthState('missing');
@@ -194,16 +195,20 @@ function AppShell() {
       return;
     }
 
+    // Prevent /cabinet bounce to login while /me is in-flight after register/login.
+    setClientAuthState('checking');
     setAuthCheckLoading(true);
     try {
-      await axios.get('/api/auth/client/me', {
+      const response = await axios.get('/api/auth/client/me', {
         headers: {
           Authorization: `Bearer ${token}`,
         },
       });
 
       setClientAuthState('ok');
-      // Do not auto-redirect from /client/login or /client/register — user may switch account or use admin login.
+      if (isClientAuthRoute && !switchAccount) {
+        navigate(String(response?.data?.workspaceRoute || '/cabinet'), { replace: true });
+      }
     } catch (error: any) {
       if (Number(error?.response?.status || 0) === 401) {
         setClientAuthState('invalid');

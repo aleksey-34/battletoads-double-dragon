@@ -75,6 +75,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
       return;
     }
 
+    const switchAccount = searchParams.get('switch') === '1';
     const token = localStorage.getItem(CLIENT_SESSION_STORAGE_KEY);
     if (!token) {
       setExistingSession(null);
@@ -90,12 +91,17 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
           return;
         }
         const user = response?.data?.user;
+        const workspaceRoute = String(response?.data?.workspaceRoute || '/cabinet');
         setExistingSession({
           email: String(user?.email || ''),
           tenantDisplayName: String(user?.tenantDisplayName || ''),
           productMode: String(user?.productMode || ''),
-          workspaceRoute: String(response?.data?.workspaceRoute || '/cabinet'),
+          workspaceRoute,
         });
+        // Already logged in → go to cabinet unless user explicitly wants to switch account.
+        if (!switchAccount) {
+          navigate(workspaceRoute, { replace: true });
+        }
       } catch {
         if (!cancelled) {
           clearClientSessionToken();
@@ -109,7 +115,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
     return () => {
       cancelled = true;
     };
-  }, [searchParams]);
+  }, [navigate, searchParams]);
 
   useEffect(() => {
     const token = String(searchParams.get('token') || '').trim();
@@ -182,11 +188,12 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
     setExistingSession(null);
     loginForm.resetFields();
     registerForm.resetFields();
+    navigate('/client/login?switch=1', { replace: true });
     messageApi.info(t('client.auth.sessionCleared', 'Session cleared. Sign in with another account.'));
   };
 
   const handleContinueExistingSession = () => {
-    navigate(existingSession?.workspaceRoute || '/cabinet');
+    navigate(existingSession?.workspaceRoute || '/cabinet', { replace: true });
   };
 
   const handleOpenAdminLogin = () => {
@@ -212,7 +219,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
 
       saveClientSessionToken(token);
       messageApi.success(t('client.auth.loginSuccess', 'Client login successful'));
-      navigate(String(response?.data?.workspaceRoute || '/cabinet'));
+      navigate(String(response?.data?.workspaceRoute || '/cabinet'), { replace: true });
     } catch (error: any) {
       setErrorText(String(error?.response?.data?.error || error?.message || t('client.auth.loginFailed', 'Login failed')));
     } finally {
@@ -245,7 +252,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
 
       saveClientSessionToken(token);
       messageApi.success(t('client.auth.registerSuccess', 'Account created. Welcome to your cabinet.'));
-      navigate(String(response?.data?.workspaceRoute || '/cabinet'));
+      navigate(String(response?.data?.workspaceRoute || '/cabinet'), { replace: true });
     } catch (error: any) {
       setErrorText(String(error?.response?.data?.error || error?.message || t('client.auth.registerFailed', 'Registration failed')));
     } finally {
@@ -268,21 +275,6 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
         <Space direction="vertical" size={12} style={{ width: '100%' }}>
           {magicLinkMode === 'idle' && (
             <>
-              <Space wrap>
-                <Button type={mode === 'login' ? 'primary' : 'default'} onClick={() => setMode('login')}>
-                  {t('client.auth.loginTab', 'Login')}
-                </Button>
-                <Button type={mode === 'register' ? 'primary' : 'default'} onClick={() => setMode('register')}>
-                  {t('client.auth.registerTab', 'Register')}
-                </Button>
-                <Button type="link" onClick={handleOpenAdminLogin}>
-                  {t('client.auth.adminLogin', 'Admin login')}
-                </Button>
-                <Button type="link" onClick={() => { window.location.href = '/partner/login'; }}>
-                  Кабинет партнёра
-                </Button>
-              </Space>
-
               {existingSession ? (
                 <Alert
                   type="info"
@@ -312,7 +304,22 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                     </Space>
                   )}
                 />
-              ) : null}
+              ) : (
+                <>
+              <Space wrap>
+                <Button type={mode === 'login' ? 'primary' : 'default'} onClick={() => setMode('login')}>
+                  {t('client.auth.loginTab', 'Login')}
+                </Button>
+                <Button type={mode === 'register' ? 'primary' : 'default'} onClick={() => setMode('register')}>
+                  {t('client.auth.registerTab', 'Register')}
+                </Button>
+                <Button type="link" onClick={handleOpenAdminLogin}>
+                  {t('client.auth.adminLogin', 'Admin login')}
+                </Button>
+                <Button type="link" onClick={() => { window.location.href = '/partner/login'; }}>
+                  Кабинет партнёра
+                </Button>
+              </Space>
 
               {errorText ? <Alert type="error" showIcon message={errorText} /> : null}
 
@@ -449,6 +456,8 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                   </Form.Item>
                 </Form>
               )}
+                </>
+              )}
             </>
           )}
 
@@ -523,7 +532,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
             </div>
           )}
 
-          {magicLinkMode === 'idle' && (
+          {magicLinkMode === 'idle' && !existingSession && (
             <>
               <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
                 {t('client.auth.helpText', 'After login you are redirected to your own workspace automatically.')}
