@@ -32,6 +32,13 @@ import {
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import ChartComponent from '../components/ChartComponent';
+import MonitoringChartPanel, {
+  ChartPeriodDays,
+  MonitoringPeriodStats,
+  MonitoringSnapshot,
+  MonitoringTradeFrequencyPoint,
+  MonitoringTradeRow,
+} from '../components/MonitoringChartPanel';
 import StorefrontGrid from '../components/storefront/StorefrontGrid';
 import StrategyOfferCard from '../components/storefront/StrategyOfferCard';
 import TradingSystemCard from '../components/storefront/TradingSystemCard';
@@ -401,28 +408,31 @@ type MonitoringPayload = {
   latest: {
     equity_usd?: number;
     drawdown_pct?: number;
+    drawdown_percent?: number;
     unrealized_pnl_usd?: number;
+    unrealized_pnl?: number;
     margin_usage_pct?: number;
     ts?: string;
-  } | null;
-  points: Array<{
-    ts?: string;
     recorded_at?: string;
-    equity_usd?: number;
-    equity?: number;
-    value?: number;
-    time?: number;
-  }>;
+  } | null;
+  points: MonitoringSnapshot[];
+  periodStats?: MonitoringPeriodStats | null;
+  tradeStats?: {
+    trades24h?: number;
+    lastTradeAt?: string | null;
+  };
+  trades?: MonitoringTradeRow[];
+  tradeFrequency?: MonitoringTradeFrequencyPoint[];
   streams?: {
     strategy?: {
       apiKeyName?: string;
       latest?: Record<string, unknown> | null;
-      points?: Array<Record<string, unknown>>;
+      points?: MonitoringSnapshot[];
     };
     algofund?: {
       apiKeyName?: string;
       latest?: Record<string, unknown> | null;
-      points?: Array<Record<string, unknown>>;
+      points?: MonitoringSnapshot[];
     };
   };
 };
@@ -732,7 +742,7 @@ const ClientCabinet: React.FC = () => {
   const [targetPlanCode, setTargetPlanCode] = useState('');
   const [tariffNote, setTariffNote] = useState('');
   const [monitoring, setMonitoring] = useState<MonitoringPayload | null>(null);
-  const [monitoringDays, setMonitoringDays] = useState(1);
+  const [monitoringDays, setMonitoringDays] = useState<ChartPeriodDays>(7);
   const [monitoringModalVisible, setMonitoringModalVisible] = useState(false);
   const [publicDescriptionDraft, setPublicDescriptionDraft] = useState('');
   const [nickDraft, setNickDraft] = useState('');
@@ -875,10 +885,30 @@ const ClientCabinet: React.FC = () => {
   };
   const monitoringSeries = useMemo(
     () => toLineSeriesData((monitoring?.points || []).map((point) => ({
-      time: point.time ?? point.ts ?? point.recorded_at,
-      equity: point.equity_usd ?? point.equity ?? point.value,
+      time: (point as any).time ?? (point as any).ts ?? point.recorded_at,
+      equity: point.equity_usd ?? (point as any).equity ?? (point as any).value,
     }))),
     [monitoring]
+  );
+
+  const friendlyExchangeLabel = (apiKeyName: string): string => {
+    const name = String(apiKeyName || '').trim();
+    if (!name) return '';
+    const known = clientApiKeys.find((item) => item.name === name);
+    if (known?.exchange) {
+      return String(known.exchange).toUpperCase();
+    }
+    const match = name.match(/-(bybit|binance|bingx|bitget|weex|mexc)-/i);
+    return match ? String(match[1]).toUpperCase() : 'API';
+  };
+
+  const strategyMonitorKey = String(monitoring?.streams?.strategy?.apiKeyName || '').trim();
+  const algofundMonitorKey = String(monitoring?.streams?.algofund?.apiKeyName || '').trim();
+  const activeMonitorKey = String(monitoring?.apiKeyName || '').trim();
+  const showSeparateStreamTags = Boolean(
+    strategyMonitorKey
+    && algofundMonitorKey
+    && strategyMonitorKey !== algofundMonitorKey
   );
 
   const strategyStorefrontOffers = useMemo(() => {
@@ -1887,12 +1917,15 @@ const ClientCabinet: React.FC = () => {
     }
   };
 
-  const refreshMonitoring = async (days?: number) => {
+  const refreshMonitoring = async (days?: ChartPeriodDays) => {
+    const nextDays = days ?? monitoringDays;
     setActionLoading('monitoring-refresh');
     try {
-      const params: Record<string, string | number | boolean> = days && days > 1
-        ? { days, capture: 1 }
-        : { limit: 288, capture: 1 };
+      const params: Record<string, string | number | boolean> = nextDays === 0
+        ? { all: 1, includeTrades: 1, includeTradesRows: 1, capture: 1 }
+        : nextDays > 1
+          ? { days: nextDays, includeTrades: 1, includeTradesRows: 1, capture: 1 }
+          : { limit: 288, includeTrades: 1, includeTradesRows: 1, capture: 1 };
       const response = await axios.get<MonitoringPayload>('/api/client/monitoring', { params });
       setMonitoring(response.data);
     } catch (error: any) {
@@ -2912,7 +2945,7 @@ const ClientCabinet: React.FC = () => {
               />
             </div>
             <div>
-              <Typography.Text strong>Описание для публичной ссылки</Typography.Text>
+              <Typography.Text strong>Описание мониторинга</Typography.Text>
               <Input.TextArea
                 style={{ marginTop: 6 }}
                 value={publicDescriptionDraft}
@@ -2927,11 +2960,6 @@ const ClientCabinet: React.FC = () => {
               <Button type="primary" loading={actionLoading === 'profile'} onClick={() => void saveClientProfile()}>
                 Сохранить профиль
               </Button>
-              {!onboardingCompleted ? (
-                <Button loading={actionLoading === 'onboarding'} onClick={() => void markOnboardingCompleted()}>
-                  Отметить onboarding пройденным
-                </Button>
-              ) : null}
             </Space>
           </Space>
         </div>
@@ -2957,7 +2985,9 @@ const ClientCabinet: React.FC = () => {
               </Button>
             ) : null}
             {monitoring?.latest?.equity_usd != null ? <Tag color="blue">Капитал: {formatMoney(monitoring.latest.equity_usd)}</Tag> : null}
-            {monitoring?.latest?.drawdown_pct != null ? <Tag color="orange">DD: {formatPercent(monitoring.latest.drawdown_pct)}</Tag> : null}
+            {(monitoring?.latest?.drawdown_pct ?? monitoring?.latest?.drawdown_percent) != null ? (
+              <Tag color="orange">DD: {formatPercent(monitoring?.latest?.drawdown_pct ?? monitoring?.latest?.drawdown_percent)}</Tag>
+            ) : null}
           </Space>
           {String(workspace?.publicDescription || publicDescriptionDraft || '').trim() ? (
             <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
@@ -2965,7 +2995,7 @@ const ClientCabinet: React.FC = () => {
             </Typography.Paragraph>
           ) : (
             <Typography.Text type="secondary">
-              Добавьте описание выше — оно появится на публичной странице мониторинга.
+              Добавьте описание мониторинга выше — оно появится на публичной странице.
             </Typography.Text>
           )}
         </Space>
@@ -2975,51 +3005,52 @@ const ClientCabinet: React.FC = () => {
         title="Мониторинг счёта"
         open={monitoringModalVisible}
         onCancel={() => setMonitoringModalVisible(false)}
-        footer={null}
-        width={720}
+        footer={clientUser?.tenantSlug ? (
+          <Space wrap>
+            <Button onClick={() => void copyMonitoringShareLink()}>
+              Скопировать публичную ссылку
+            </Button>
+            <Button
+              type="primary"
+              onClick={() => window.open(buildPublicPortfolioUrl(clientUser.tenantSlug), '_blank', 'noopener,noreferrer')}
+            >
+              Открыть публичную страницу
+            </Button>
+          </Space>
+        ) : null}
+        width={960}
       >
-        <Space wrap style={{ marginBottom: 12 }}>
-          <Segmented
-            size="small"
-            options={[
-              { label: '1д', value: 1 },
-              { label: '7д', value: 7 },
-              { label: '30д', value: 30 },
-              { label: '60д', value: 60 },
-            ]}
-            value={monitoringDays}
-            onChange={(v) => {
-              const d = Number(v);
-              setMonitoringDays(d);
-              void refreshMonitoring(d);
-            }}
-          />
-          <Button size="small" loading={actionLoading === 'monitoring-refresh'} onClick={() => void refreshMonitoring(monitoringDays)}>Обновить</Button>
+        <Space wrap style={{ marginBottom: 10 }}>
+          {activeMonitorKey ? (
+            <Tag color="blue">Счёт: {friendlyExchangeLabel(activeMonitorKey)}</Tag>
+          ) : null}
+          {showSeparateStreamTags ? (
+            <>
+              <Tag color="geekblue">Стратегии: {friendlyExchangeLabel(strategyMonitorKey)}</Tag>
+              <Tag color="purple">Алгофонд: {friendlyExchangeLabel(algofundMonitorKey)}</Tag>
+            </>
+          ) : null}
+          {String(workspace?.publicDescription || publicDescriptionDraft || '').trim() ? (
+            <Typography.Text type="secondary" style={{ maxWidth: 520 }}>
+              {String(workspace?.publicDescription || publicDescriptionDraft || '').trim()}
+            </Typography.Text>
+          ) : null}
         </Space>
-        <Row gutter={[12, 12]} style={{ marginBottom: 12 }}>
-          <Col xs={12} sm={6}>
-            <Statistic title="Капитал" value={formatMoney(monitoring?.latest?.equity_usd)} precision={0} />
-          </Col>
-          <Col xs={12} sm={6}>
-            <Statistic title="Просадка" value={formatPercent(monitoring?.latest?.drawdown_pct)} />
-          </Col>
-          <Col xs={12} sm={6}>
-            <Statistic title="Нереал. P/L" value={formatMoney(monitoring?.latest?.unrealized_pnl_usd)} />
-          </Col>
-          <Col xs={12} sm={6}>
-            <Statistic title="Загрузка маржи" value={formatPercent(monitoring?.latest?.margin_usage_pct)} />
-          </Col>
-        </Row>
-        <Space wrap style={{ marginBottom: 8 }}>
-          {monitoring?.apiKeyName ? <Tag color="blue">Активный API: {monitoring.apiKeyName}</Tag> : null}
-          {monitoring?.streams?.strategy?.apiKeyName ? <Tag color="geekblue">Стратегии: {monitoring.streams.strategy.apiKeyName}</Tag> : null}
-          {monitoring?.streams?.algofund?.apiKeyName ? <Tag color="purple">Алгофонд: {monitoring.streams.algofund.apiKeyName}</Tag> : null}
-        </Space>
-        {monitoringSeries.length > 0 ? (
-          <ChartComponent data={monitoringSeries} type="line" />
-        ) : (
-          <Empty description="Нет данных мониторинга" />
-        )}
+        <MonitoringChartPanel
+          snapshots={Array.isArray(monitoring?.points) ? (monitoring?.points || []) : []}
+          chartDays={monitoringDays}
+          onChartDaysChange={(nextDays) => {
+            setMonitoringDays(nextDays);
+            void refreshMonitoring(nextDays);
+          }}
+          periodStats={monitoring?.periodStats || null}
+          trades={Array.isArray(monitoring?.trades) ? (monitoring?.trades || []) : []}
+          tradeFrequency={Array.isArray(monitoring?.tradeFrequency) ? (monitoring?.tradeFrequency || []) : []}
+          trades24h={Number(monitoring?.tradeStats?.trades24h || 0)}
+          lastTradeAt={monitoring?.tradeStats?.lastTradeAt || null}
+          loading={actionLoading === 'monitoring-refresh'}
+          currencyLabel="USD"
+        />
       </Modal>
 
       <Card id="client-api-keys-card" className="battletoads-card" title="API ключи биржи" size="small">
@@ -3181,74 +3212,17 @@ const ClientCabinet: React.FC = () => {
       <Card className="battletoads-card" title="Тариф и лимиты" size="small">
         <Space wrap style={{ marginBottom: 12 }}>
           <Tag color="blue">Тариф: {activeTariffPlan?.title || '—'}</Tag>
-          <Tag color="green">Цена: {activeTariffPlan?.original_price_usdt ? <><s style={{ opacity: 0.5 }}>{formatMoney(activeTariffPlan.original_price_usdt)}</s>{' '}</> : null}{formatMoney(activeTariffPlan?.price_usdt)}/мес</Tag>
+          <Tag color="green">Цена: {formatMoney(0)}/мес (beta)</Tag>
           <Tag color="cyan">Макс. депозит: {formatMoney(activeTariffPlan?.max_deposit_total)}</Tag>
           <Tag color="purple">Риск-кап: {formatNumber(activeTariffPlan?.risk_cap_max)}</Tag>
           {activeTariffPlan?.allow_ts_start_stop_requests ? <Tag color="success">Старт/Стоп: вкл</Tag> : null}
-          {isDualTariff ? <Tag color="geekblue">Поток: {tariffModeFilter === 'strategy_client' ? 'Стратегии' : '% с профита'}</Tag> : null}
         </Space>
-
-        {isDualTariff ? (
-          <Segmented
-            style={{ marginBottom: 12 }}
-            options={[
-              { label: 'Стратегии', value: 'strategy_client' },
-              { label: '% с профита', value: 'algofund_client' },
-            ]}
-            value={tariffModeFilter}
-            onChange={(value) => {
-              setTariffModeFilter(value as 'strategy_client' | 'algofund_client');
-              setTargetPlanCode('');
-            }}
-          />
-        ) : null}
-
-        <Typography.Text strong>Запросить смену тарифа</Typography.Text>
-        <Row gutter={[8, 8]} style={{ marginTop: 8 }}>
-          <Col xs={24} sm={12}>
-            <Select
-              style={{ width: '100%' }}
-              placeholder="Выберите тариф"
-              value={targetPlanCode || undefined}
-              onChange={setTargetPlanCode}
-              options={selectableTariffPlans.map((plan) => ({
-                value: plan.code,
-                label: `${plan.title} (${plan.original_price_usdt ? `${formatMoney(plan.original_price_usdt)} → ` : ''}${formatMoney(plan.price_usdt)}/мес — до ${formatMoney(plan.max_deposit_total)})`,
-              }))}
-            />
-          </Col>
-          <Col xs={24} sm={12}>
-            <Input
-              placeholder="Комментарий (необязательно)"
-              value={tariffNote}
-              onChange={(e) => setTariffNote(e.target.value)}
-            />
-          </Col>
-        </Row>
-        <Button type="primary" style={{ marginTop: 8 }} loading={actionLoading === 'tariff-request'} onClick={() => void sendTariffRequest()}>
-          Отправить заявку на смену тарифа
-        </Button>
-
-        {(tariff?.requests || []).length > 0 ? (
-          <>
-            <Divider style={{ margin: '12px 0' }} />
-            <Typography.Text type="secondary">Последние заявки:</Typography.Text>
-            <List
-              size="small"
-              style={{ marginTop: 8 }}
-              dataSource={tariff?.requests || []}
-              renderItem={(item) => (
-                <List.Item>
-                  <Space wrap>
-                    <Tag color="blue">#{item.id}</Tag>
-                    <Typography.Text>{item.payload?.targetPlanTitle || item.payload?.targetPlanCode || '—'}</Typography.Text>
-                    <Typography.Text type="secondary">{item.createdAt}</Typography.Text>
-                  </Space>
-                </List.Item>
-              )}
-            />
-          </>
-        ) : null}
+        <Alert
+          type="info"
+          showIcon
+          message="Смена тарифа временно отключена"
+          description="Пока beta — всё бесплатно ($0). Заявки на смену тарифа появятся позже."
+        />
       </Card>
 
       {/* — Поддержка и обращения — */}

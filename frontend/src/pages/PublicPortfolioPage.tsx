@@ -112,7 +112,7 @@ const PublicPortfolioPage: React.FC = () => {
                 </Typography.Paragraph>
               ) : null}
               <Typography.Text type="secondary">
-                Публичная витрина счёта. Данные обновляются из локальных снимков мониторинга, кэш 1 час.
+                Публичный мониторинг счёта. Описание кабинета показывается выше, если задано владельцем.
               </Typography.Text>
             </div>
             <Space wrap>
