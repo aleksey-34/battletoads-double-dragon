@@ -1318,6 +1318,10 @@ const ClientCabinet: React.FC = () => {
       return;
     }
 
+    if (requestedEnabled === undefined && strategyOfferIds.length > 0 && !ensureStrategyConnectReady()) {
+      return;
+    }
+
     if (strategyAssignedApiKey && algofundAssignedApiKeyResolved && strategyAssignedApiKey === algofundAssignedApiKeyResolved) {
       messageApi.warning('Для потоков Стратегий и Алгофонда нужны разные API-ключи. Выберите отдельный ключ для Стратегий.');
       return;
