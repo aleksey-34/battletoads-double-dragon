@@ -15883,6 +15883,38 @@ export const getAlgofundState = async (
     return showFuturesSystems;
   });
 
+  // Collapse duplicate storefront cards that share the same display label
+  // (legacy short snapshot keys + renamed mrs2 aliases with identical metrics).
+  {
+    const scoreSystem = (system: any): number => {
+      const name = asString(system?.name, '').trim().toUpperCase();
+      let score = 0;
+      if (Number(system?.id || 0) > 0 && Number(system?.id || 0) < 900000) score += 40;
+      if (name.startsWith('ALGOFUND_MASTER::')) score += 30;
+      if (name.startsWith('CLOUD')) score += 20;
+      if (name.includes('MEANREVERSION') && !name.includes('MRS2')) score += 8;
+      if (system?.backtestSnapshot) score += 5;
+      if (system?.isActive) score += 3;
+      score += Math.min(10, asString(system?.name, '').length / 20);
+      return score;
+    };
+    const byLabel = new Map<string, any>();
+    for (const system of availableSystems) {
+      const label = asString(
+        (system as any)?.displayLabel
+          || (system as any)?.backtestSnapshot?.displayLabel
+          || system?.name,
+        '',
+      ).trim().toLowerCase();
+      if (!label) continue;
+      const prev = byLabel.get(label);
+      if (!prev || scoreSystem(system) > scoreSystem(prev)) {
+        byLabel.set(label, system);
+      }
+    }
+    availableSystems = Array.from(byLabel.values());
+  }
+
   // Browse-only mode: no plan or profile — return systems with snapshots but no controls
   if (!plan || !profile) {
     return {

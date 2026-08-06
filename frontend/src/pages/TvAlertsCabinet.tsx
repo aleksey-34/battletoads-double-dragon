@@ -177,6 +177,7 @@ const TvAlertsCabinet: React.FC = () => {
   const [apiKeys, setApiKeys] = useState<ApiKeyRow[]>([]);
   const [alertModalOpen, setAlertModalOpen] = useState(false);
   const [editingAlert, setEditingAlert] = useState<TvAlert | null>(null);
+  const [setupGuideAlert, setSetupGuideAlert] = useState<TvAlert | null>(null);
   const [terminalAlertId, setTerminalAlertId] = useState<number | null>(null);
   const [monitoringModalVisible, setMonitoringModalVisible] = useState(false);
   const [monitoring, setMonitoring] = useState<MonitoringPayload | null>(null);
@@ -249,8 +250,47 @@ const TvAlertsCabinet: React.FC = () => {
     }
   };
 
+  /** Ready-to-paste TradingView alert message (Message field). */
+  const buildTvAlertMessage = (symbol?: string): string => {
+    const safeSymbol = String(symbol || '').trim().toUpperCase();
+    return `{
+  "action": "{{strategy.order.action}}",
+  "symbol": "${safeSymbol || '{{ticker}}'}",
+  "price": {{close}}
+}`;
+  };
+
+  const normalizeAlertFromApi = (raw: any, fallbackSymbol?: string): TvAlert | null => {
+    if (!raw) return null;
+    const webhookUrl = String(raw.webhookUrl || '').trim();
+    if (!webhookUrl) return null;
+    let config: TvAlert['config'] = {};
+    try {
+      config = typeof raw.config_json === 'string'
+        ? JSON.parse(raw.config_json || '{}')
+        : (raw.config || {});
+    } catch {
+      config = raw.config || {};
+    }
+    return {
+      id: Number(raw.id || 0),
+      name: String(raw.name || ''),
+      slug: String(raw.slug || ''),
+      symbol: String(raw.symbol || fallbackSymbol || ''),
+      exchange: String(raw.exchange || ''),
+      apiKeyName: String(raw.apiKeyName || raw.api_key_name || ''),
+      enabled: Boolean(raw.enabled),
+      lotMode: (raw.lotMode || raw.lot_mode || 'usdt') as TvAlert['lotMode'],
+      lotValue: Number(raw.lotValue ?? raw.lot_value ?? 0),
+      leverage: Number(raw.leverage || 1),
+      config,
+      webhookUrl,
+    };
+  };
+
   const openCreateAlert = () => {
     setEditingAlert(null);
+    setSetupGuideAlert(null);
     alertForm.resetFields();
     alertForm.setFieldsValue({
       lotMode: 'usdt',
@@ -268,6 +308,7 @@ const TvAlertsCabinet: React.FC = () => {
 
   const openEditAlert = (alert: TvAlert) => {
     setEditingAlert(alert);
+    setSetupGuideAlert(null);
     alertForm.setFieldsValue({
       name: alert.name,
       symbol: alert.symbol,
@@ -303,15 +344,20 @@ const TvAlertsCabinet: React.FC = () => {
     };
 
     try {
-      if (editingAlert) {
-        await axios.patch(`/api/client/tv-alerts/${editingAlert.id}`, payload);
-        messageApi.success(t('tvAlerts.alertUpdated', 'Alert updated'));
-      } else {
-        await axios.post('/api/client/tv-alerts', payload);
-        messageApi.success(t('tvAlerts.alertCreated', 'Alert created'));
-      }
+      const response = editingAlert
+        ? await axios.patch(`/api/client/tv-alerts/${editingAlert.id}`, payload)
+        : await axios.post('/api/client/tv-alerts', payload);
+      messageApi.success(
+        editingAlert
+          ? t('tvAlerts.alertUpdated', 'Alert updated')
+          : t('tvAlerts.alertCreated', 'Alert created'),
+      );
       setAlertModalOpen(false);
       await loadWorkspace();
+      const guide = normalizeAlertFromApi(response.data?.alert, payload.symbol);
+      if (guide) {
+        setSetupGuideAlert(guide);
+      }
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message));
     }
@@ -384,9 +430,20 @@ const TvAlertsCabinet: React.FC = () => {
       title: t('tvAlerts.colWebhook', 'Webhook'),
       key: 'webhook',
       render: (_: unknown, row: TvAlert) => (
-        <Button size="small" icon={<CopyOutlined />} onClick={() => void copyText(row.webhookUrl)}>
-          URL
-        </Button>
+        <Space wrap>
+          <Button size="small" icon={<CopyOutlined />} onClick={() => void copyText(row.webhookUrl)}>
+            URL
+          </Button>
+          <Button
+            size="small"
+            onClick={() => void copyText(buildTvAlertMessage(row.symbol))}
+          >
+            {t('tvAlerts.copyMessage', 'Текст алерта')}
+          </Button>
+          <Button size="small" type="link" onClick={() => setSetupGuideAlert(row)}>
+            {t('tvAlerts.setupGuide', 'Инструкция')}
+          </Button>
+        </Space>
       ),
     },
     {
@@ -403,12 +460,6 @@ const TvAlertsCabinet: React.FC = () => {
       ),
     },
   ], [t]);
-
-  const tvAlertJsonExample = `{
-  "action": "{{strategy.order.action}}",
-  "symbol": "{{ticker}}",
-  "price": {{close}}
-}`;
 
   return (
     <div className="battletoads-page-shell">
@@ -597,17 +648,23 @@ const TvAlertsCabinet: React.FC = () => {
               key: 'docs',
               label: t('tvAlerts.tabDocs', 'TradingView'),
               children: (
-                <Card title={t('tvAlerts.tvPayload', 'Recommended alert message (JSON)')}>
+                <Card title={t('tvAlerts.tvPayload', 'Текст алерта для TradingView')}>
                   <Typography.Paragraph>
-                    {t('tvAlerts.tvPayloadHint', 'Paste into TradingView alert → Notifications → Webhook URL. Use the URL from your alert card.')}
+                    {t(
+                      'tvAlerts.tvPayloadHint',
+                      'В TradingView: Create Alert → Notifications → Webhook URL (из карточки алерта) + Message (JSON ниже). Мы генерируем текст сами — скопируйте и вставьте.',
+                    )}
                   </Typography.Paragraph>
-                  <Input.TextArea rows={6} value={tvAlertJsonExample} readOnly />
+                  <Input.TextArea rows={6} value={buildTvAlertMessage()} readOnly />
                   <Divider />
                   <Typography.Paragraph>
-                    {t('tvAlerts.tvActions', 'Supported actions: long, short, close, close_long, close_short. Plain text like "buy BTCUSDT" also works.')}
+                    {t(
+                      'tvAlerts.tvActions',
+                      'Поддерживаемые action: long/buy, short/sell, close, close_long, close_short. Для Strategy Alert поле {{strategy.order.action}} даёт buy/sell — это нормально.',
+                    )}
                   </Typography.Paragraph>
-                  <Button onClick={() => void copyText(tvAlertJsonExample)} icon={<CopyOutlined />}>
-                    {t('tvAlerts.copyJson', 'Copy JSON template')}
+                  <Button onClick={() => void copyText(buildTvAlertMessage())} icon={<CopyOutlined />}>
+                    {t('tvAlerts.copyJson', 'Скопировать JSON')}
                   </Button>
                 </Card>
               ),
@@ -809,6 +866,65 @@ const TvAlertsCabinet: React.FC = () => {
           <Button danger onClick={() => void runTerminal('close_all')}>Close all</Button>
           <Button onClick={() => void runTerminal('cancel_orders')}>Cancel orders</Button>
         </Space>
+      </Modal>
+
+      <Modal
+        title={t('tvAlerts.setupTitle', 'Вставка в TradingView')}
+        open={!!setupGuideAlert}
+        onCancel={() => setSetupGuideAlert(null)}
+        footer={(
+          <Button type="primary" onClick={() => setSetupGuideAlert(null)}>
+            {t('action.close', 'Закрыть')}
+          </Button>
+        )}
+        width={720}
+      >
+        {setupGuideAlert ? (
+          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              message={t('tvAlerts.setupStepsTitle', 'Два поля в алерте TradingView')}
+              description={t(
+                'tvAlerts.setupStepsBody',
+                '1) Webhook URL — куда слать сигнал. 2) Message — JSON-текст, который мы сгенерировали ниже.',
+              )}
+            />
+            <div>
+              <Typography.Text strong>Webhook URL</Typography.Text>
+              <Input.TextArea
+                style={{ marginTop: 6 }}
+                rows={2}
+                readOnly
+                value={setupGuideAlert.webhookUrl}
+              />
+              <Button
+                style={{ marginTop: 8 }}
+                icon={<CopyOutlined />}
+                onClick={() => void copyText(setupGuideAlert.webhookUrl)}
+              >
+                Скопировать URL
+              </Button>
+            </div>
+            <div>
+              <Typography.Text strong>Message (текст алерта)</Typography.Text>
+              <Input.TextArea
+                style={{ marginTop: 6 }}
+                rows={6}
+                readOnly
+                value={buildTvAlertMessage(setupGuideAlert.symbol)}
+              />
+              <Button
+                style={{ marginTop: 8 }}
+                type="primary"
+                icon={<CopyOutlined />}
+                onClick={() => void copyText(buildTvAlertMessage(setupGuideAlert.symbol))}
+              >
+                Скопировать текст алерта
+              </Button>
+            </div>
+          </Space>
+        ) : null}
       </Modal>
 
       <div style={{ marginTop: 24 }}>

@@ -3074,6 +3074,34 @@ const ClientCabinet: React.FC = () => {
         width={960}
       >
         <Space direction="vertical" size={12} style={{ width: '100%', marginBottom: 12 }}>
+          {clientUser?.tenantSlug ? (
+            <Alert
+              type="info"
+              showIcon
+              message="Публичная ссылка"
+              description={(
+                <Space direction="vertical" size={8} style={{ width: '100%' }}>
+                  <Typography.Paragraph copyable={{ text: buildPublicPortfolioUrl(clientUser.tenantSlug) }} style={{ marginBottom: 0, wordBreak: 'break-all' }}>
+                    {buildPublicPortfolioUrl(clientUser.tenantSlug)}
+                  </Typography.Paragraph>
+                  <Space wrap>
+                    <Button size="small" onClick={() => void copyMonitoringShareLink()}>
+                      Скопировать
+                    </Button>
+                    <Button
+                      size="small"
+                      type="primary"
+                      onClick={() => window.open(buildPublicPortfolioUrl(clientUser.tenantSlug), '_blank', 'noopener,noreferrer')}
+                    >
+                      Открыть
+                    </Button>
+                  </Space>
+                </Space>
+              )}
+            />
+          ) : (
+            <Alert type="warning" showIcon message="Публичная ссылка недоступна: у кабинета нет slug" />
+          )}
           <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
             <Space wrap>
               <Typography.Text strong>API-ключ:</Typography.Text>
