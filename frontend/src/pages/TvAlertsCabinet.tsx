@@ -264,13 +264,18 @@ const TvAlertsCabinet: React.FC = () => {
     if (!raw) return null;
     const webhookUrl = String(raw.webhookUrl || '').trim();
     if (!webhookUrl) return null;
-    let config: TvAlert['config'] = {};
+    let config: TvAlert['config'] = { exitLegs: [] };
     try {
-      config = typeof raw.config_json === 'string'
+      const parsed = typeof raw.config_json === 'string'
         ? JSON.parse(raw.config_json || '{}')
         : (raw.config || {});
+      config = {
+        exitLegs: Array.isArray(parsed?.exitLegs) ? parsed.exitLegs : [],
+        marketType: parsed?.marketType,
+        closeOnOppositeSignal: parsed?.closeOnOppositeSignal,
+      };
     } catch {
-      config = raw.config || {};
+      config = { exitLegs: [] };
     }
     return {
       id: Number(raw.id || 0),
