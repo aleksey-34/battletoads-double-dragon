@@ -740,7 +740,7 @@ const ClientCabinet: React.FC = () => {
   const [errorText, setErrorText] = useState('');
   const [actionLoading, setActionLoading] = useState('');
   const [apiKeyDraft, setApiKeyDraft] = useState<ClientApiKeyDraft>({
-    exchange: 'bybit',
+    exchange: 'weex',
     apiKey: '',
     secret: '',
     passphrase: '',
@@ -1770,7 +1770,7 @@ const ClientCabinet: React.FC = () => {
 
   const resetApiKeyDraft = () => {
     setApiKeyDraft({
-      exchange: 'bybit',
+      exchange: 'weex',
       apiKey: '',
       secret: '',
       passphrase: '',
@@ -1833,7 +1833,7 @@ const ClientCabinet: React.FC = () => {
     setEditingApiKeyId(item.id);
     setEditingApiKeyName(item.name);
     setApiKeyDraft({
-      exchange: item.exchange || 'bybit',
+      exchange: item.exchange || 'weex',
       apiKey: '',
       secret: '',
       passphrase: '',
@@ -3075,14 +3075,14 @@ const ClientCabinet: React.FC = () => {
           <Col xs={24} sm={8}>
             <Select
               style={{ width: '100%' }}
-              value={apiKeyDraft.exchange || 'bybit'}
-              onChange={(value) => setApiKeyDraft((cur) => ({ ...cur, exchange: String(value || 'bybit').trim().toLowerCase() || 'bybit' }))}
+              value={apiKeyDraft.exchange || 'weex'}
+              onChange={(value) => setApiKeyDraft((cur) => ({ ...cur, exchange: String(value || 'weex').trim().toLowerCase() || 'weex' }))}
               options={[
+                { value: 'weex', label: 'WEEX Futures' },
                 { value: 'bybit', label: 'Bybit Futures' },
                 { value: 'binance', label: 'Binance Futures' },
                 { value: 'bingx', label: 'BingX Futures' },
                 { value: 'bitget', label: 'Bitget Futures' },
-                { value: 'weex', label: 'WEEX Futures' },
                 { value: 'mexc', label: 'MEXC Futures' },
               ]}
             />
