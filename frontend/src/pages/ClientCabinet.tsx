@@ -1279,6 +1279,39 @@ const ClientCabinet: React.FC = () => {
     }
   };
 
+  const goToApiKeysSettings = () => {
+    setActiveTabKey('settings');
+    setTimeout(() => {
+      const node = document.getElementById('client-api-keys-card');
+      if (node) node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 60);
+  };
+
+  const ensureStrategyConnectReady = (): boolean => {
+    if (clientApiKeys.length === 0) {
+      messageApi.warning('Сначала добавьте API-ключ биржи');
+      goToApiKeysSettings();
+      return false;
+    }
+    if (!strategyAssignedApiKey) {
+      messageApi.warning('Сначала назначьте API-ключ для потока стратегий (ниже в «Статус торговли»)');
+      return false;
+    }
+    return true;
+  };
+
+  const toggleStrategyOfferInPortfolio = (offerId: string, connect: boolean) => {
+    if (connect && !ensureStrategyConnectReady()) {
+      return;
+    }
+    setStrategyOfferIds((current) => {
+      if (connect) {
+        return current.includes(offerId) ? current : [...current, offerId];
+      }
+      return current.filter((id) => id !== offerId);
+    });
+  };
+
   const saveStrategyProfile = async (requestedEnabled?: boolean) => {
     if (isStrategySelectionOverLimit) {
       messageApi.warning(`Лимит тарифа: можно выбрать до ${strategyMaxAllowed} стратегий. Сейчас выбрано ${strategyOfferIds.length}.`);
@@ -1896,13 +1929,7 @@ const ClientCabinet: React.FC = () => {
                   <Button
                     type="link"
                     style={{ padding: 0, height: 'auto' }}
-                    onClick={() => {
-                      setActiveTabKey('settings');
-                      setTimeout(() => {
-                        const node = document.getElementById('client-api-keys-card');
-                        if (node) node.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                      }, 60);
-                    }}
+                    onClick={goToApiKeysSettings}
                   >
                     Перейти в раздел «API ключи»
                   </Button>
@@ -1991,15 +2018,11 @@ const ClientCabinet: React.FC = () => {
                         portfolioMode={Boolean(strategyWorkspace.capabilities?.settings)}
                         chartSeries={chartSeries}
                         onToggleSelect={(checked) => {
-                          if (checked) {
-                            setStrategyOfferIds((current) => current.includes(offer.offerId) ? current : [...current, offer.offerId]);
-                          } else {
-                            setStrategyOfferIds((current) => current.filter((id) => id !== offer.offerId));
-                          }
+                          toggleStrategyOfferInPortfolio(offer.offerId, checked);
                         }}
                         onOpenDetail={() => setStrategyOfferDetail(offer.offerId)}
                         onConnect={() => {
-                          setStrategyOfferIds((current) => [...current, offer.offerId]);
+                          toggleStrategyOfferInPortfolio(offer.offerId, true);
                         }}
                       />
                     );
@@ -2119,14 +2142,10 @@ const ClientCabinet: React.FC = () => {
                         type={isSelected ? 'default' : 'primary'}
                         danger={isSelected}
                         onClick={() => {
-                          setStrategyOfferIds((current) =>
-                            isSelected
-                              ? current.filter((id) => id !== offer.offerId)
-                              : [...current, offer.offerId]
-                          );
+                          toggleStrategyOfferInPortfolio(offer.offerId, !isSelected);
                         }}
                       >
-                        {isSelected ? 'Убрать из портфеля' : 'Добавить в портфель'}
+                        {isSelected ? 'Отключить' : 'Подключить'}
                       </Button>
                     </>
                   ) : (

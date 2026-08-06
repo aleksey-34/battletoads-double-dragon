@@ -118,6 +118,18 @@ const StrategyOfferCard: React.FC<StrategyOfferCardProps> = ({
                 Подключить
               </Button>
             ) : null}
+            {portfolioMode && selected ? (
+              <Button
+                size="small"
+                danger
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleSelect?.(false);
+                }}
+              >
+                Отключить
+              </Button>
+            ) : null}
           </Space>
           {footerExtra}
         </Space>
