@@ -149,6 +149,24 @@ const isValidEmail = (value: string): boolean => {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 };
 
+const GUEST_EMAIL_DOMAIN = 'guest.local';
+
+const isGuestEmail = (value: string): boolean => {
+  const email = normalizeEmail(value);
+  return email.endsWith(`@${GUEST_EMAIL_DOMAIN}`);
+};
+
+const allocateGuestEmail = async (): Promise<string> => {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const email = `guest.${randomBytes(4).toString('hex')}@${GUEST_EMAIL_DOMAIN}`;
+    const existing = await fetchClientUserByEmail(email);
+    if (!existing) {
+      return email;
+    }
+  }
+  throw new Error('Unable to allocate guest login');
+};
+
 const normalizeLanguage = (value: unknown): string => {
   const text = String(value || '').trim().toLowerCase();
   if (text === 'ru' || text === 'tr') {
@@ -186,9 +204,11 @@ const getBearerToken = (req: any): string => {
 };
 
 const buildClientAuthUser = (row: ClientUserWithTenantRow): ClientAuthUser => {
+  const rawEmail = String(row.email || '').toLowerCase();
   return {
     id: Number(row.user_id),
-    email: String(row.email || '').toLowerCase(),
+    // Guest accounts keep a synthetic email in DB for uniqueness, but never expose it to UI/API clients.
+    email: isGuestEmail(rawEmail) ? '' : rawEmail,
     fullName: String(row.full_name || ''),
     preferredLanguage: String(row.preferred_language || 'en') || 'en',
     onboardingCompletedAt: row.onboarding_completed_at || null,
@@ -244,6 +264,40 @@ const fetchClientUserByEmail = async (email: string): Promise<(ClientUserWithTen
      WHERE lower(cu.email) = lower(?)
      LIMIT 1`,
     [email]
+  );
+
+  return (row || null) as (ClientUserWithTenantRow & { password_hash: string }) | null;
+};
+
+const fetchClientUserByTenantSlug = async (
+  slug: string
+): Promise<(ClientUserWithTenantRow & { password_hash: string }) | null> => {
+  const normalized = createSlug(String(slug || '').trim());
+  if (!normalized) {
+    return null;
+  }
+
+  const row = await db.get(
+    `SELECT
+       cu.id AS user_id,
+       cu.tenant_id,
+       cu.email,
+       cu.password_hash,
+       cu.full_name,
+       cu.preferred_language,
+       cu.onboarding_completed_at,
+       cu.status AS user_status,
+       t.slug AS tenant_slug,
+       t.display_name AS tenant_display_name,
+       t.status AS tenant_status,
+       t.product_mode
+     FROM client_users cu
+     JOIN tenants t ON t.id = cu.tenant_id
+     WHERE lower(t.slug) = lower(?)
+       AND cu.status = 'active'
+     ORDER BY cu.id ASC
+     LIMIT 1`,
+    [normalized]
   );
 
   return (row || null) as (ClientUserWithTenantRow & { password_hash: string }) | null;
@@ -620,10 +674,10 @@ const bootstrapDashboardPasswordFromEnv = (): void => {
 bootstrapDashboardPasswordFromEnv();
 
 export const registerClientUser = async (payload: ClientRegistrationInput, requestMeta?: SessionRequestMeta): Promise<ClientAuthPayload> => {
-  const email = normalizeEmail(payload.email);
+  const requestedEmail = normalizeEmail(payload.email);
   const password = String(payload.password || '');
 
-  if (!isValidEmail(email)) {
+  if (requestedEmail && !isValidEmail(requestedEmail)) {
     throw new Error('Please provide a valid email');
   }
 
@@ -640,16 +694,22 @@ export const registerClientUser = async (payload: ClientRegistrationInput, reque
     throw new Error('Risk disclosure version is outdated. Please refresh the page and accept the current version');
   }
 
-  const existingByEmail = await fetchClientUserByEmail(email);
-  if (existingByEmail) {
-    throw new Error('A user with this email already exists');
+  const email = requestedEmail || await allocateGuestEmail();
+
+  if (requestedEmail) {
+    const existingByEmail = await fetchClientUserByEmail(requestedEmail);
+    if (existingByEmail) {
+      throw new Error('A user with this email already exists');
+    }
   }
 
   // Self-registration: always dual workspace (no tariff picker). Modes unlocked via LK flags later.
   const productMode: ProductMode = 'dual';
   const language = normalizeLanguage(payload.preferredLanguage);
   const requestedPlanCode = String(payload.planCode || 'dual_beta').trim() || 'dual_beta';
-  const fallbackName = email.split('@')[0] || 'Client';
+  const fallbackName = requestedEmail
+    ? (requestedEmail.split('@')[0] || 'Client')
+    : 'Guest';
   const fullName = normalizeDisplayName(payload.fullName, fallbackName);
   const companyName = normalizeDisplayName(payload.companyName, `${fullName} Workspace`);
 
@@ -741,18 +801,24 @@ export const registerClientUser = async (payload: ClientRegistrationInput, reque
 };
 
 export const loginClientUser = async (payload: ClientLoginInput, requestMeta?: SessionRequestMeta): Promise<ClientAuthPayload> => {
-  const email = normalizeEmail(payload.email);
+  const login = String(payload.email || '').trim().toLowerCase();
   const password = String(payload.password || '');
 
-  if (!isValidEmail(email)) {
-    throw new Error('Please provide a valid email');
+  if (!login) {
+    throw new Error('Email or cabinet login is required');
   }
 
   if (!password) {
     throw new Error('Password is required');
   }
 
-  const user = await fetchClientUserByEmail(email);
+  let user: (ClientUserWithTenantRow & { password_hash: string }) | null = null;
+  if (isValidEmail(login)) {
+    user = await fetchClientUserByEmail(login);
+  }
+  if (!user) {
+    user = await fetchClientUserByTenantSlug(login);
+  }
   if (!user) {
     throw new Error('Invalid email or password');
   }

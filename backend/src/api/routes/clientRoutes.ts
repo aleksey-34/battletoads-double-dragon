@@ -80,8 +80,8 @@ router.post('/auth/client/register', async (req, res) => {
 
     // Async notification — don't block response
     notifyAdminNewUser({
-      email: String(req.body?.email || ''),
-      displayName: String(req.body?.fullName || req.body?.companyName || ''),
+      email: String(req.body?.email || '').trim() || `guest/${result.user?.tenantSlug || 'unknown'}`,
+      displayName: String(req.body?.fullName || req.body?.companyName || result.user?.tenantDisplayName || ''),
       productMode: String(req.body?.productMode || 'strategy_client'),
       planCode: 'auto (self-registration)',
     }).catch(() => {});

@@ -20,7 +20,7 @@ type LoginFormValues = {
 type RegisterFormValues = {
   companyName: string;
   fullName: string;
-  email: string;
+  email?: string;
   password: string;
   confirmPassword: string;
   showFutures: boolean;
@@ -237,7 +237,7 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
       const response = await axios.post('/api/auth/client/register', {
         companyName: values.companyName,
         fullName: values.fullName,
-        email: values.email,
+        email: String(values.email || '').trim() || undefined,
         password: values.password,
         productMode: 'dual',
         planCode: 'dual_beta',
@@ -301,8 +301,12 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                   description={(
                     <Space direction="vertical" size={8} style={{ width: '100%' }}>
                       <Typography.Text>
-                        {existingSession.email}
-                        {existingSession.tenantDisplayName ? ` · ${existingSession.tenantDisplayName}` : ''}
+                        {existingSession.email
+                          || existingSession.tenantDisplayName
+                          || t('client.auth.guestSession', 'Гостевой кабинет')}
+                        {existingSession.email && existingSession.tenantDisplayName
+                          ? ` · ${existingSession.tenantDisplayName}`
+                          : ''}
                       </Typography.Text>
                       <Space wrap>
                         <Button type="primary" size="small" onClick={handleContinueExistingSession}>
@@ -325,14 +329,16 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
               {mode === 'login' && (
                 <Form<LoginFormValues> layout="vertical" form={loginForm} onFinish={handleLogin}>
                   <Form.Item
-                    label={t('client.auth.email', 'Email')}
+                    label={t('client.auth.loginId', 'Email или логин кабинета')}
                     name="email"
                     rules={[
-                      { required: true, message: t('client.auth.emailRequired', 'Email is required') },
-                      { type: 'email', message: t('client.auth.emailInvalid', 'Enter valid email') },
+                      { required: true, message: t('client.auth.loginIdRequired', 'Укажите email или slug кабинета') },
                     ]}
                   >
-                    <Input type="email" inputMode="email" autoComplete="email" placeholder="name@company.com" />
+                    <Input
+                      autoComplete="username"
+                      placeholder={t('client.auth.loginIdPlaceholder', 'name@company.com или my-cabinet')}
+                    />
                   </Form.Item>
                   <Form.Item
                     label={t('client.auth.password', 'Password')}
@@ -372,14 +378,29 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                     <Input placeholder={t('client.auth.fullNamePlaceholder', 'John Smith')} />
                   </Form.Item>
                   <Form.Item
-                    label={t('client.auth.email', 'Email')}
+                    label={t('client.auth.emailOptional', 'Email (необязательно)')}
                     name="email"
                     rules={[
-                      { required: true, message: t('client.auth.emailRequired', 'Email is required') },
-                      { type: 'email', message: t('client.auth.emailInvalid', 'Enter valid email') },
+                      {
+                        validator: (_, value) => {
+                          const text = String(value || '').trim();
+                          if (!text) {
+                            return Promise.resolve();
+                          }
+                          if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(text)) {
+                            return Promise.reject(new Error(t('client.auth.emailInvalid', 'Enter valid email')));
+                          }
+                          return Promise.resolve();
+                        },
+                      },
                     ]}
                   >
-                    <Input type="email" inputMode="email" autoComplete="email" placeholder="name@company.com" />
+                    <Input
+                      type="email"
+                      inputMode="email"
+                      autoComplete="email"
+                      placeholder={t('client.auth.emailOptionalPlaceholder', 'можно не указывать на демо / стриме')}
+                    />
                   </Form.Item>
                   <Alert
                     type="info"

@@ -2799,8 +2799,10 @@ const ClientCabinet: React.FC = () => {
           bordered
           labelStyle={{ minWidth: 130, fontWeight: 600 }}
         >
-          <Descriptions.Item label="Email">
-            <span style={{ wordBreak: 'break-all' }}>{clientUser?.email || '—'}</span>
+          <Descriptions.Item label="Email / логин">
+            <span style={{ wordBreak: 'break-all' }}>
+              {clientUser?.email || (clientUser?.tenantSlug ? `slug: ${clientUser.tenantSlug}` : '—')}
+            </span>
           </Descriptions.Item>
           <Descriptions.Item label="Имя">{clientUser?.fullName || '—'}</Descriptions.Item>
           <Descriptions.Item label="Tenant">{clientUser?.tenantDisplayName || '—'}</Descriptions.Item>
@@ -3187,7 +3189,10 @@ const ClientCabinet: React.FC = () => {
         <div>
           <Typography.Title level={3} className="client-cabinet-hero__title">Личный кабинет</Typography.Title>
           <Typography.Text type="secondary" style={{ wordBreak: 'break-all' }}>
-            {clientUser?.email || '—'}{clientUser?.tenantDisplayName ? ` · ${clientUser.tenantDisplayName}` : ''}
+            {clientUser?.email
+              || (clientUser?.tenantSlug ? `логин: ${clientUser.tenantSlug}` : '')
+              || '—'}
+            {clientUser?.tenantDisplayName ? ` · ${clientUser.tenantDisplayName}` : ''}
           </Typography.Text>
         </div>
         <Space wrap>

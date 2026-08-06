@@ -48,7 +48,7 @@ export const resolveClientAuthErrorStatus = (message: string): number => {
     return 403;
   }
 
-  if (normalized.includes('valid email') || normalized.includes('already exists') || normalized.includes('password') || normalized.includes('risk disclosure')) {
+  if (normalized.includes('valid email') || normalized.includes('cabinet login') || normalized.includes('already exists') || normalized.includes('password') || normalized.includes('risk disclosure')) {
     return 400;
   }
 
