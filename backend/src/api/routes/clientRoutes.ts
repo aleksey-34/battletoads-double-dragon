@@ -13,6 +13,7 @@ import {
   revokeClientSession,
 } from '../../utils/auth';
 import { notifyAdminNewUser } from '../../notifications/adminTelegramReporter';
+import { invalidatePublicPortfolioCacheForSlug } from '../../saas/publicPortfolioCache';
 import logger from '../../utils/logger';
 import { initResearchDb } from '../../research/db';
 import { getClientPreviewJobPayload } from '../../research/clientPreviewQueue';
@@ -346,9 +347,19 @@ router.get('/client/workspace', authenticateClient, async (req, res) => {
     const tenantId = Number(session.user.tenantId);
     const productMode = session.user.productMode;
 
-    const [strategyResult, algofundResult] = await Promise.allSettled([
-      getStrategyClientState(tenantId),
-      getAlgofundState(tenantId, toOptionalNumber(req.query.riskMultiplier), false),
+    const [strategyResult, algofundResult, tenantRow] = await Promise.all([
+      getStrategyClientState(tenantId).then(
+        (value) => ({ status: 'fulfilled' as const, value }),
+        (reason) => ({ status: 'rejected' as const, reason }),
+      ),
+      getAlgofundState(tenantId, toOptionalNumber(req.query.riskMultiplier), false).then(
+        (value) => ({ status: 'fulfilled' as const, value }),
+        (reason) => ({ status: 'rejected' as const, reason }),
+      ),
+      db.get(
+        'SELECT client_preferences_json FROM tenants WHERE id = ? LIMIT 1',
+        [tenantId]
+      ) as Promise<{ client_preferences_json?: string } | undefined>,
     ]);
 
     if (strategyResult.status === 'rejected') {
@@ -358,10 +369,19 @@ router.get('/client/workspace', authenticateClient, async (req, res) => {
       logger.warn(`Client workspace algofund state unavailable for tenant ${tenantId}: ${algofundResult.reason instanceof Error ? algofundResult.reason.message : String(algofundResult.reason)}`);
     }
 
+    let publicDescription = '';
+    try {
+      const prefs = JSON.parse(String(tenantRow?.client_preferences_json || '{}'));
+      publicDescription = String(prefs?.publicDescription || '').trim().slice(0, 500);
+    } catch {
+      publicDescription = '';
+    }
+
     return res.json({
       success: true,
       auth: getClientAuthPayloadFromSession(session),
       productMode,
+      publicDescription,
       strategyState: strategyResult.status === 'fulfilled' ? strategyResult.value : null,
       algofundState: algofundResult.status === 'fulfilled' ? algofundResult.value : null,
     });
@@ -529,32 +549,94 @@ router.patch('/client/profile', authenticateClient, async (req, res) => {
       return res.status(401).json({ error: 'Unauthorized client session' });
     }
 
-    const displayNameRaw = String(req.body?.displayName || '').trim();
-    if (!displayNameRaw) {
-      return res.status(400).json({ error: 'displayName is required' });
+    const displayNameProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'displayName');
+    const descriptionProvided = Object.prototype.hasOwnProperty.call(req.body || {}, 'publicDescription');
+    if (!displayNameProvided && !descriptionProvided) {
+      return res.status(400).json({ error: 'displayName or publicDescription is required' });
     }
-    if (displayNameRaw.length > 80) {
-      return res.status(400).json({ error: 'displayName must be 80 characters or less' });
+
+    const displayNameRaw = displayNameProvided ? String(req.body?.displayName || '').trim() : '';
+    if (displayNameProvided) {
+      if (!displayNameRaw) {
+        return res.status(400).json({ error: 'displayName is required' });
+      }
+      if (displayNameRaw.length > 80) {
+        return res.status(400).json({ error: 'displayName must be 80 characters or less' });
+      }
     }
+
+    const publicDescriptionRaw = descriptionProvided
+      ? String(req.body?.publicDescription || '').trim().slice(0, 500)
+      : undefined;
 
     const tenantId = Number(session.user.tenantId);
+    const tenant = await db.get(
+      'SELECT slug, display_name, client_preferences_json FROM tenants WHERE id = ? LIMIT 1',
+      [tenantId]
+    ) as { slug?: string; display_name?: string; client_preferences_json?: string } | undefined;
 
-    const result = await db.run(
-      `UPDATE tenants SET display_name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
-      [displayNameRaw, tenantId]
-    );
-
-    if (!result?.changes) {
+    if (!tenant) {
       return res.status(404).json({ error: 'Tenant not found' });
+    }
+
+    let nextPrefs: Record<string, unknown> = {};
+    try {
+      nextPrefs = JSON.parse(String(tenant.client_preferences_json || '{}')) || {};
+    } catch {
+      nextPrefs = {};
+    }
+    if (typeof nextPrefs !== 'object' || nextPrefs === null || Array.isArray(nextPrefs)) {
+      nextPrefs = {};
+    }
+
+    if (publicDescriptionRaw !== undefined) {
+      if (publicDescriptionRaw) {
+        nextPrefs.publicDescription = publicDescriptionRaw;
+      } else {
+        delete nextPrefs.publicDescription;
+      }
+    }
+
+    if (displayNameProvided) {
+      await db.run(
+        `UPDATE tenants
+         SET display_name = ?, client_preferences_json = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [displayNameRaw, JSON.stringify(nextPrefs), tenantId]
+      );
+      await db.run(
+        `UPDATE client_users
+         SET full_name = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ? AND status = 'active'`,
+        [displayNameRaw, tenantId]
+      );
+    } else {
+      await db.run(
+        `UPDATE tenants
+         SET client_preferences_json = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE id = ?`,
+        [JSON.stringify(nextPrefs), tenantId]
+      );
     }
 
     await db.run(
       `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
-       VALUES (?, 'client', 'client_display_name_change', ?, CURRENT_TIMESTAMP)`,
-      [tenantId, JSON.stringify({ displayName: displayNameRaw })]
+       VALUES (?, 'client', 'client_profile_update', ?, CURRENT_TIMESTAMP)`,
+      [tenantId, JSON.stringify({
+        displayName: displayNameProvided ? displayNameRaw : undefined,
+        publicDescription: publicDescriptionRaw,
+      })]
     );
 
-    res.json({ success: true, displayName: displayNameRaw });
+    invalidatePublicPortfolioCacheForSlug(String(tenant.slug || ''));
+
+    res.json({
+      success: true,
+      displayName: displayNameProvided ? displayNameRaw : String(tenant.display_name || ''),
+      publicDescription: publicDescriptionRaw !== undefined
+        ? publicDescriptionRaw
+        : String((nextPrefs as { publicDescription?: string }).publicDescription || ''),
+    });
   } catch (error) {
     const err = error as Error;
     logger.error(`Client profile update error: ${err.message}`);

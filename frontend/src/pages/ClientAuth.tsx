@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Alert, Button, Card, Checkbox, Form, Input, Select, Space, Spin, Typography, message } from 'antd';
+import { Alert, Button, Card, Checkbox, Form, Input, Space, Spin, Typography, message } from 'antd';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useI18n } from '../i18n';
 import RiskDisclaimerModal from '../components/RiskDisclaimerModal';
@@ -18,13 +18,10 @@ type LoginFormValues = {
 };
 
 type RegisterFormValues = {
-  companyName: string;
   fullName: string;
   email?: string;
   password: string;
   confirmPassword: string;
-  showFutures: boolean;
-  showSpot: boolean;
   riskDisclaimerAccepted: boolean;
 };
 
@@ -227,23 +224,16 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
     setLoading(true);
     setErrorText('');
 
-    if (values.showFutures === false && values.showSpot === false) {
-      setErrorText(t('client.auth.marketVisibilityRequired', 'Выберите хотя бы один рынок: фьючерсы или спот'));
-      setLoading(false);
-      return;
-    }
-
     try {
       const response = await axios.post('/api/auth/client/register', {
-        companyName: values.companyName,
         fullName: values.fullName,
         email: String(values.email || '').trim() || undefined,
         password: values.password,
         productMode: 'dual',
         planCode: 'dual_beta',
         preferredLanguage: language,
-        showFutures: values.showFutures !== false,
-        showSpot: values.showSpot !== false,
+        showFutures: true,
+        showSpot: true,
         riskDisclaimerAccepted: values.riskDisclaimerAccepted === true,
         riskDisclaimerVersion: RISK_DISCLAIMER_VERSION,
       });
@@ -359,23 +349,16 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                 <Form<RegisterFormValues>
                   layout="vertical"
                   form={registerForm}
-                  initialValues={{ showFutures: true, showSpot: true, riskDisclaimerAccepted: false }}
+                  initialValues={{ riskDisclaimerAccepted: false }}
                   onFinish={handleRegister}
                   scrollToFirstError
                 >
                   <Form.Item
-                    label={t('client.auth.companyName', 'Company or workspace name')}
-                    name="companyName"
-                    rules={[{ required: true, message: t('client.auth.companyNameRequired', 'Company/workspace name is required') }]}
-                  >
-                    <Input placeholder={t('client.auth.companyNamePlaceholder', 'Acme Trading Desk')} />
-                  </Form.Item>
-                  <Form.Item
-                    label={t('client.auth.fullName', 'Full name')}
+                    label={t('client.auth.nickName', 'Имя / Ник')}
                     name="fullName"
-                    rules={[{ required: true, message: t('client.auth.fullNameRequired', 'Full name is required') }]}
+                    rules={[{ required: true, message: t('client.auth.nickNameRequired', 'Укажите имя или ник') }]}
                   >
-                    <Input placeholder={t('client.auth.fullNamePlaceholder', 'John Smith')} />
+                    <Input placeholder={t('client.auth.nickNamePlaceholder', 'Например: Alex')} autoComplete="nickname" />
                   </Form.Item>
                   <Form.Item
                     label={t('client.auth.emailOptional', 'Email (необязательно)')}
@@ -401,26 +384,6 @@ const ClientAuth: React.FC<ClientAuthProps> = ({ initialMode = 'login' }) => {
                       autoComplete="email"
                       placeholder={t('client.auth.emailOptionalPlaceholder', 'можно не указывать на демо / стриме')}
                     />
-                  </Form.Item>
-                  <Alert
-                    type="info"
-                    showIcon
-                    style={{ marginBottom: 16 }}
-                    message={t('client.auth.betaAccessTitle', 'Beta — всё бесплатно')}
-                    description={t(
-                      'client.auth.betaAccessDesc',
-                      'Стратегии, Algofund, TradingView Alerts и Copytrading доступны в кабинете как опции. Выбор тарифа при регистрации не нужен — тарифы появятся позже.',
-                    )}
-                  />
-                  <Form.Item label={t('client.auth.marketVisibility', 'Что показывать в кабинете')} style={{ marginBottom: 8 }}>
-                    <Space direction="vertical">
-                      <Form.Item name="showFutures" valuePropName="checked" noStyle>
-                        <Checkbox>{t('client.auth.showFutures', 'Фьючерсы')}</Checkbox>
-                      </Form.Item>
-                      <Form.Item name="showSpot" valuePropName="checked" noStyle>
-                        <Checkbox>{t('client.auth.showSpot', 'Спот')}</Checkbox>
-                      </Form.Item>
-                    </Space>
                   </Form.Item>
                   <Form.Item
                     label={t('client.auth.password', 'Password')}

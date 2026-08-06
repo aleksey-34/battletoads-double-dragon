@@ -14,14 +14,26 @@ import clientRoutes from './routes/clientRoutes';
 import backtestRoutes from './routes/backtestRoutes';
 import adminRoutes from './routes/adminRoutes';
 import { getMonitoringBundle } from '../bot/monitoring';
+import {
+  getPublicPortfolioCache,
+  getPublicPortfolioCacheTtlMs,
+  setPublicPortfolioCache,
+} from '../saas/publicPortfolioCache';
 import { db } from '../utils/database';
 import logger from '../utils/logger';
 
 const router = Router();
 
 const landingDemoPath = path.resolve(__dirname, '../../../docs/landing-demo-trades.json');
-const PUBLIC_PORTFOLIO_CACHE_TTL_MS = 3_600_000;
-const publicPortfolioCache = new Map<string, { expiresAt: number; payload: unknown }>();
+
+const parsePublicDescription = (raw: unknown): string => {
+  try {
+    const prefs = typeof raw === 'string' ? JSON.parse(raw || '{}') : (raw || {});
+    return String((prefs as { publicDescription?: unknown })?.publicDescription || '').trim().slice(0, 500);
+  } catch {
+    return '';
+  }
+};
 
 // Legacy hard-stubs: Razgon and Synctrade APIs were removed.
 router.use('/razgon', (_req, res) => {
@@ -58,9 +70,8 @@ router.get('/public/portfolio/:slug', async (req, res) => {
     const allPeriod = String(req.query.all || '0') === '1'
       || String(req.query.all || '').toLowerCase() === 'true';
     const cacheKey = `${slug}|days=${days}|all=${allPeriod ? 1 : 0}`;
-    const now = Date.now();
-    const cached = publicPortfolioCache.get(cacheKey);
-    if (cached && cached.expiresAt > now) {
+    const cached = getPublicPortfolioCache(cacheKey);
+    if (cached) {
       res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=300');
       return res.json(cached.payload);
     }
@@ -71,6 +82,7 @@ router.get('/public/portfolio/:slug', async (req, res) => {
          t.slug,
          t.display_name,
          t.product_mode,
+         t.client_preferences_json,
          COALESCE(
            NULLIF(ap.execution_api_key_name, ''),
            NULLIF(ap.assigned_api_key_name, ''),
@@ -91,6 +103,7 @@ router.get('/public/portfolio/:slug', async (req, res) => {
       slug?: string;
       display_name?: string;
       product_mode?: string;
+      client_preferences_json?: string;
       api_key_name?: string;
       published_system_name?: string;
     } | undefined;
@@ -116,10 +129,11 @@ router.get('/public/portfolio/:slug', async (req, res) => {
     const payload = {
       success: true,
       generatedAt: new Date().toISOString(),
-      cacheTtlSec: Math.floor(PUBLIC_PORTFOLIO_CACHE_TTL_MS / 1000),
+      cacheTtlSec: Math.floor(getPublicPortfolioCacheTtlMs() / 1000),
       portfolio: {
         slug: String(tenant.slug || slug),
         displayName: String(tenant.display_name || slug),
+        description: parsePublicDescription(tenant.client_preferences_json),
         productMode: String(tenant.product_mode || ''),
         publishedSystemName: String(tenant.published_system_name || ''),
         apiKeyName,
@@ -127,10 +141,7 @@ router.get('/public/portfolio/:slug', async (req, res) => {
       ...monitoring,
     };
 
-    publicPortfolioCache.set(cacheKey, {
-      expiresAt: now + PUBLIC_PORTFOLIO_CACHE_TTL_MS,
-      payload,
-    });
+    setPublicPortfolioCache(cacheKey, payload);
 
     res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=300');
     res.json(payload);

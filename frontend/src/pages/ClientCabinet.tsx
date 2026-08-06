@@ -38,6 +38,7 @@ import TradingSystemCard from '../components/storefront/TradingSystemCard';
 import PortfolioCard from '../components/storefront/PortfolioCard';
 import { equityPointsToSeries as storefrontEquitySeries } from '../components/storefront/storefrontMetrics';
 import { useI18n } from '../i18n';
+import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
 
 type ProductMode = 'strategy_client' | 'algofund_client' | 'dual';
 type Level3 = 'low' | 'medium' | 'high';
@@ -441,6 +442,7 @@ type ClientAuthUser = {
 type WorkspacePayload = {
   success: boolean;
   productMode: ProductMode;
+  publicDescription?: string;
   auth: {
     token: string;
     expiresAt: string;
@@ -732,6 +734,8 @@ const ClientCabinet: React.FC = () => {
   const [monitoring, setMonitoring] = useState<MonitoringPayload | null>(null);
   const [monitoringDays, setMonitoringDays] = useState(1);
   const [monitoringModalVisible, setMonitoringModalVisible] = useState(false);
+  const [publicDescriptionDraft, setPublicDescriptionDraft] = useState('');
+  const [nickDraft, setNickDraft] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorText, setErrorText] = useState('');
   const [actionLoading, setActionLoading] = useState('');
@@ -1138,6 +1142,12 @@ const ClientCabinet: React.FC = () => {
       }
 
       setWorkspace(workspaceResponse.data);
+      setPublicDescriptionDraft(String(workspaceResponse.data?.publicDescription || ''));
+      setNickDraft(String(
+        workspaceResponse.data?.auth?.user?.tenantDisplayName
+        || workspaceResponse.data?.auth?.user?.fullName
+        || '',
+      ));
       setGuides(Array.isArray(guidesResponse.data?.guides) ? guidesResponse.data.guides : []);
 
       const [strategyResponse, algofundResponse, apiKeysResponse, tariffResponse, monitoringResponse] = await Promise.allSettled([
@@ -1215,6 +1225,57 @@ const ClientCabinet: React.FC = () => {
       messageApi.error(String(error?.response?.data?.error || error?.message || t('client.onboarding.completeFailed', 'Failed to mark onboarding complete')));
     } finally {
       setActionLoading('');
+    }
+  };
+
+  const saveClientProfile = async () => {
+    const nextNick = String(nickDraft || '').trim();
+    if (!nextNick) {
+      messageApi.warning('Укажите имя / ник');
+      return;
+    }
+    setActionLoading('profile');
+    try {
+      const response = await axios.patch<{ success: boolean; displayName?: string; publicDescription?: string }>('/api/client/profile', {
+        displayName: nextNick,
+        publicDescription: String(publicDescriptionDraft || '').trim(),
+      });
+      setNickDraft(String(response.data?.displayName || nextNick));
+      setPublicDescriptionDraft(String(response.data?.publicDescription || ''));
+      setWorkspace((current) => {
+        if (!current?.auth?.user) return current;
+        return {
+          ...current,
+          publicDescription: String(response.data?.publicDescription || ''),
+          auth: {
+            ...current.auth,
+            user: {
+              ...current.auth.user,
+              fullName: String(response.data?.displayName || nextNick),
+              tenantDisplayName: String(response.data?.displayName || nextNick),
+            },
+          },
+        };
+      });
+      messageApi.success('Профиль сохранён');
+    } catch (error: any) {
+      messageApi.error(String(error?.response?.data?.error || error?.message || 'Не удалось сохранить профиль'));
+    } finally {
+      setActionLoading('');
+    }
+  };
+
+  const copyMonitoringShareLink = async () => {
+    const slug = String(clientUser?.tenantSlug || '').trim();
+    if (!slug) {
+      messageApi.warning('Slug кабинета ещё не готов');
+      return;
+    }
+    const ok = await copyPublicPortfolioLink(slug);
+    if (ok) {
+      messageApi.success('Публичная ссылка скопирована');
+    } else {
+      messageApi.error('Не удалось скопировать ссылку');
     }
   };
 
@@ -2804,8 +2865,7 @@ const ClientCabinet: React.FC = () => {
               {clientUser?.email || (clientUser?.tenantSlug ? `slug: ${clientUser.tenantSlug}` : '—')}
             </span>
           </Descriptions.Item>
-          <Descriptions.Item label="Имя">{clientUser?.fullName || '—'}</Descriptions.Item>
-          <Descriptions.Item label="Tenant">{clientUser?.tenantDisplayName || '—'}</Descriptions.Item>
+          <Descriptions.Item label="Имя / Ник">{clientUser?.tenantDisplayName || clientUser?.fullName || '—'}</Descriptions.Item>
           <Descriptions.Item label="Slug">{clientUser?.tenantSlug || '—'}</Descriptions.Item>
           <Descriptions.Item label="Режим">
             {workspace?.productMode === 'dual'
@@ -2816,24 +2876,75 @@ const ClientCabinet: React.FC = () => {
           </Descriptions.Item>
           <Descriptions.Item label="Статус">{clientUser?.tenantStatus || '—'}</Descriptions.Item>
         </Descriptions>
-        <div style={{ marginTop: 8 }}>
-          <Space wrap>
-            {!onboardingCompleted ? (
-              <Button loading={actionLoading === 'onboarding'} onClick={() => void markOnboardingCompleted()}>
-                Отметить onboarding пройденным
+        <div style={{ marginTop: 12 }}>
+          <Space direction="vertical" size={10} style={{ width: '100%' }}>
+            <div>
+              <Typography.Text strong>Имя / Ник</Typography.Text>
+              <Input
+                style={{ marginTop: 6 }}
+                value={nickDraft}
+                maxLength={80}
+                onChange={(event) => setNickDraft(event.target.value)}
+                placeholder="Как показывать кабинет"
+              />
+            </div>
+            <div>
+              <Typography.Text strong>Описание для публичной ссылки</Typography.Text>
+              <Input.TextArea
+                style={{ marginTop: 6 }}
+                value={publicDescriptionDraft}
+                maxLength={500}
+                showCount
+                rows={3}
+                onChange={(event) => setPublicDescriptionDraft(event.target.value)}
+                placeholder="Коротко: стиль торговли, риск, комментарий для зрителей"
+              />
+            </div>
+            <Space wrap>
+              <Button type="primary" loading={actionLoading === 'profile'} onClick={() => void saveClientProfile()}>
+                Сохранить профиль
               </Button>
-            ) : null}
+              {!onboardingCompleted ? (
+                <Button loading={actionLoading === 'onboarding'} onClick={() => void markOnboardingCompleted()}>
+                  Отметить onboarding пройденным
+                </Button>
+              ) : null}
+            </Space>
           </Space>
         </div>
       </Card>
 
       <Card className="battletoads-card" title="Мониторинг счёта" size="small">
-        <Space wrap>
-          <Button type="primary" onClick={() => { setMonitoringModalVisible(true); void refreshMonitoring(monitoringDays); }}>
-            Открыть мониторинг
-          </Button>
-          {monitoring?.latest?.equity_usd != null ? <Tag color="blue">Капитал: {formatMoney(monitoring.latest.equity_usd)}</Tag> : null}
-          {monitoring?.latest?.drawdown_pct != null ? <Tag color="orange">DD: {formatPercent(monitoring.latest.drawdown_pct)}</Tag> : null}
+        <Space direction="vertical" size={10} style={{ width: '100%' }}>
+          <Space wrap>
+            <Button type="primary" onClick={() => { setMonitoringModalVisible(true); void refreshMonitoring(monitoringDays); }}>
+              Открыть мониторинг
+            </Button>
+            <Button onClick={() => void copyMonitoringShareLink()}>
+              Скопировать публичную ссылку
+            </Button>
+            {clientUser?.tenantSlug ? (
+              <Button
+                type="link"
+                href={buildPublicPortfolioUrl(clientUser.tenantSlug)}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Открыть /portfolio/{clientUser.tenantSlug}
+              </Button>
+            ) : null}
+            {monitoring?.latest?.equity_usd != null ? <Tag color="blue">Капитал: {formatMoney(monitoring.latest.equity_usd)}</Tag> : null}
+            {monitoring?.latest?.drawdown_pct != null ? <Tag color="orange">DD: {formatPercent(monitoring.latest.drawdown_pct)}</Tag> : null}
+          </Space>
+          {String(workspace?.publicDescription || publicDescriptionDraft || '').trim() ? (
+            <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
+              {String(workspace?.publicDescription || publicDescriptionDraft || '').trim()}
+            </Typography.Paragraph>
+          ) : (
+            <Typography.Text type="secondary">
+              Добавьте описание выше — оно появится на публичной странице мониторинга.
+            </Typography.Text>
+          )}
         </Space>
       </Card>
 
@@ -3189,10 +3300,8 @@ const ClientCabinet: React.FC = () => {
         <div>
           <Typography.Title level={3} className="client-cabinet-hero__title">Личный кабинет</Typography.Title>
           <Typography.Text type="secondary" style={{ wordBreak: 'break-all' }}>
-            {clientUser?.email
-              || (clientUser?.tenantSlug ? `логин: ${clientUser.tenantSlug}` : '')
-              || '—'}
-            {clientUser?.tenantDisplayName ? ` · ${clientUser.tenantDisplayName}` : ''}
+            {clientUser?.tenantDisplayName || clientUser?.fullName || clientUser?.email || (clientUser?.tenantSlug ? `логин: ${clientUser.tenantSlug}` : '') || '—'}
+            {clientUser?.tenantSlug ? ` · ${clientUser.tenantSlug}` : ''}
           </Typography.Text>
         </div>
         <Space wrap>

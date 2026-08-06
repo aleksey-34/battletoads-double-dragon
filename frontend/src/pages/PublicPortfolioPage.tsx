@@ -17,6 +17,7 @@ type PublicPortfolioPayload = {
   portfolio?: {
     slug?: string;
     displayName?: string;
+    description?: string;
     productMode?: string;
     publishedSystemName?: string;
     apiKeyName?: string;
@@ -79,6 +80,8 @@ const PublicPortfolioPage: React.FC = () => {
     return displayName || portfolioSlug || 'Portfolio';
   }, [payload?.portfolio?.displayName, portfolioSlug]);
 
+  const description = String(payload?.portfolio?.description || '').trim();
+
   const rawPoints = payload?.points;
   const rawTrades = payload?.trades;
   const rawFreq = payload?.tradeFrequency;
@@ -103,6 +106,11 @@ const PublicPortfolioPage: React.FC = () => {
           <Space style={{ justifyContent: 'space-between', width: '100%' }} wrap>
             <div>
               <Typography.Title level={2} style={{ margin: 0 }}>{title}</Typography.Title>
+              {description ? (
+                <Typography.Paragraph style={{ marginTop: 8, marginBottom: 4, whiteSpace: 'pre-wrap' }}>
+                  {description}
+                </Typography.Paragraph>
+              ) : null}
               <Typography.Text type="secondary">
                 Публичная витрина счёта. Данные обновляются из локальных снимков мониторинга, кэш 1 час.
               </Typography.Text>

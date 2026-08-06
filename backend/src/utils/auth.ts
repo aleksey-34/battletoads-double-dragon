@@ -707,15 +707,18 @@ export const registerClientUser = async (payload: ClientRegistrationInput, reque
   const productMode: ProductMode = 'dual';
   const language = normalizeLanguage(payload.preferredLanguage);
   const requestedPlanCode = String(payload.planCode || 'dual_beta').trim() || 'dual_beta';
-  const fallbackName = requestedEmail
-    ? (requestedEmail.split('@')[0] || 'Client')
-    : 'Guest';
-  const fullName = normalizeDisplayName(payload.fullName, fallbackName);
-  const companyName = normalizeDisplayName(payload.companyName, `${fullName} Workspace`);
+  const nickRaw = String(payload.fullName || payload.companyName || '').trim();
+  if (!nickRaw) {
+    throw new Error('Name or nick is required');
+  }
+  // Single public identity: nick/name drives both user full_name and tenant display_name/slug.
+  const nick = normalizeDisplayName(nickRaw, 'Guest');
+  const fullName = nick;
+  const companyName = nick;
 
   await db.exec('BEGIN');
   try {
-    const tenantSlug = await ensureUniqueTenantSlug(companyName);
+    const tenantSlug = await ensureUniqueTenantSlug(nick);
     const clientPreferences = JSON.stringify({
       showFutures: payload.showFutures !== false,
       showSpot: payload.showSpot !== false,
