@@ -405,6 +405,7 @@ type TariffPayload = {
 type MonitoringPayload = {
   success: boolean;
   apiKeyName: string;
+  availableKeys?: Array<{ name: string; exchange: string }>;
   latest: {
     equity_usd?: number;
     drawdown_pct?: number;
@@ -744,6 +745,7 @@ const ClientCabinet: React.FC = () => {
   const [monitoring, setMonitoring] = useState<MonitoringPayload | null>(null);
   const [monitoringDays, setMonitoringDays] = useState<ChartPeriodDays>(7);
   const [monitoringModalVisible, setMonitoringModalVisible] = useState(false);
+  const [monitoringApiKeyName, setMonitoringApiKeyName] = useState('');
   const [publicDescriptionDraft, setPublicDescriptionDraft] = useState('');
   const [nickDraft, setNickDraft] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1917,8 +1919,9 @@ const ClientCabinet: React.FC = () => {
     }
   };
 
-  const refreshMonitoring = async (days?: ChartPeriodDays) => {
+  const refreshMonitoring = async (days?: ChartPeriodDays, apiKeyNameOverride?: string) => {
     const nextDays = days ?? monitoringDays;
+    const nextKey = String(apiKeyNameOverride ?? monitoringApiKeyName ?? '').trim();
     setActionLoading('monitoring-refresh');
     try {
       const params: Record<string, string | number | boolean> = nextDays === 0
@@ -1926,14 +1929,64 @@ const ClientCabinet: React.FC = () => {
         : nextDays > 1
           ? { days: nextDays, includeTrades: 1, includeTradesRows: 1, capture: 1 }
           : { limit: 288, includeTrades: 1, includeTradesRows: 1, capture: 1 };
+      if (nextKey) {
+        params.apiKeyName = nextKey;
+      }
       const response = await axios.get<MonitoringPayload>('/api/client/monitoring', { params });
       setMonitoring(response.data);
+      const resolvedKey = String(response.data?.apiKeyName || nextKey || '').trim();
+      if (resolvedKey) {
+        setMonitoringApiKeyName(resolvedKey);
+      }
     } catch (error: any) {
       messageApi.error(String(error?.response?.data?.error || error?.message || t('client.monitoring.loadFailed', 'Failed to load monitoring')));
     } finally {
       setActionLoading('');
     }
   };
+
+  const openMonitoringModal = (preferredKey?: string) => {
+    const fallbackKey = String(
+      preferredKey
+      || monitoringApiKeyName
+      || strategyAssignedApiKey
+      || algofundAssignedApiKeyResolved
+      || clientApiKeys[0]?.name
+      || '',
+    ).trim();
+    if (fallbackKey) {
+      setMonitoringApiKeyName(fallbackKey);
+    }
+    setMonitoringModalVisible(true);
+    void refreshMonitoring(monitoringDays, fallbackKey || undefined);
+  };
+
+  const monitoringKeyOptions = useMemo(() => {
+    const fromApi = Array.isArray(monitoring?.availableKeys) ? monitoring!.availableKeys! : [];
+    const merged = new Map<string, { name: string; exchange: string; role?: string }>();
+    for (const item of clientApiKeys) {
+      const name = String(item.name || '').trim();
+      if (!name) continue;
+      const roles: string[] = [];
+      if (item.usedByStrategy) roles.push('стратегии');
+      if (item.usedByAlgofund) roles.push('алгофонд');
+      if (item.usedByCustomTs) roles.push('кастом ТС');
+      merged.set(name, {
+        name,
+        exchange: String(item.exchange || '').toUpperCase() || friendlyExchangeLabel(name),
+        role: roles.join(' · '),
+      });
+    }
+    for (const item of fromApi) {
+      const name = String(item.name || '').trim();
+      if (!name || merged.has(name)) continue;
+      merged.set(name, {
+        name,
+        exchange: String(item.exchange || '').toUpperCase() || friendlyExchangeLabel(name),
+      });
+    }
+    return Array.from(merged.values());
+  }, [clientApiKeys, monitoring?.availableKeys]);
 
   const renderCapabilities = (capabilities?: TenantCapabilities) => {
     if (!capabilities) return null;
@@ -2968,7 +3021,7 @@ const ClientCabinet: React.FC = () => {
       <Card className="battletoads-card" title="Мониторинг счёта" size="small">
         <Space direction="vertical" size={10} style={{ width: '100%' }}>
           <Space wrap>
-            <Button type="primary" onClick={() => { setMonitoringModalVisible(true); void refreshMonitoring(monitoringDays); }}>
+            <Button type="primary" onClick={() => openMonitoringModal()}>
               Открыть мониторинг
             </Button>
             <Button onClick={() => void copyMonitoringShareLink()}>
@@ -3020,28 +3073,61 @@ const ClientCabinet: React.FC = () => {
         ) : null}
         width={960}
       >
-        <Space wrap style={{ marginBottom: 10 }}>
-          {activeMonitorKey ? (
-            <Tag color="blue">Счёт: {friendlyExchangeLabel(activeMonitorKey)}</Tag>
-          ) : null}
-          {showSeparateStreamTags ? (
-            <>
-              <Tag color="geekblue">Стратегии: {friendlyExchangeLabel(strategyMonitorKey)}</Tag>
-              <Tag color="purple">Алгофонд: {friendlyExchangeLabel(algofundMonitorKey)}</Tag>
-            </>
-          ) : null}
-          {String(workspace?.publicDescription || publicDescriptionDraft || '').trim() ? (
-            <Typography.Text type="secondary" style={{ maxWidth: 520 }}>
-              {String(workspace?.publicDescription || publicDescriptionDraft || '').trim()}
-            </Typography.Text>
-          ) : null}
+        <Space direction="vertical" size={12} style={{ width: '100%', marginBottom: 12 }}>
+          <Space wrap style={{ width: '100%', justifyContent: 'space-between' }}>
+            <Space wrap>
+              <Typography.Text strong>API-ключ:</Typography.Text>
+              <Select
+                style={{ minWidth: 280 }}
+                value={monitoringApiKeyName || undefined}
+                placeholder="Выберите API-ключ"
+                options={monitoringKeyOptions.map((item) => ({
+                  value: item.name,
+                  label: `${item.exchange}${item.role ? ` · ${item.role}` : ''}`,
+                }))}
+                onChange={(value) => {
+                  const nextKey = String(value || '').trim();
+                  setMonitoringApiKeyName(nextKey);
+                  void refreshMonitoring(monitoringDays, nextKey);
+                }}
+              />
+              {activeMonitorKey ? (
+                <Tag color="blue">{friendlyExchangeLabel(activeMonitorKey)}</Tag>
+              ) : null}
+            </Space>
+            <Button size="small" loading={actionLoading === 'monitoring-refresh'} onClick={() => void refreshMonitoring(monitoringDays, monitoringApiKeyName)}>
+              Обновить
+            </Button>
+          </Space>
+
+          <div>
+            <Typography.Text strong>Описание мониторинга</Typography.Text>
+            <Input.TextArea
+              style={{ marginTop: 6 }}
+              value={publicDescriptionDraft}
+              maxLength={500}
+              showCount
+              rows={2}
+              onChange={(event) => setPublicDescriptionDraft(event.target.value)}
+              placeholder="Коротко: стиль торговли, риск, комментарий для зрителей"
+            />
+            <Button
+              size="small"
+              type="link"
+              style={{ paddingLeft: 0, marginTop: 4 }}
+              loading={actionLoading === 'profile'}
+              onClick={() => void saveClientProfile()}
+            >
+              Сохранить описание
+            </Button>
+          </div>
         </Space>
         <MonitoringChartPanel
           snapshots={Array.isArray(monitoring?.points) ? (monitoring?.points || []) : []}
           chartDays={monitoringDays}
           onChartDaysChange={(nextDays) => {
             setMonitoringDays(nextDays);
-            void refreshMonitoring(nextDays);
+            void refreshMonitoring(nextDays, monitoringApiKeyName);
           }}
           periodStats={monitoring?.periodStats || null}
           trades={Array.isArray(monitoring?.trades) ? (monitoring?.trades || []) : []}

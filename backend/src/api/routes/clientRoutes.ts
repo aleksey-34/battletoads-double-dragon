@@ -1537,9 +1537,10 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
     const capture = String(req.query.capture || '0') === '1'
       || String(req.query.capture || '').toLowerCase() === 'true';
 
+    const requestedApiKeyName = String(req.query.apiKeyName || req.query.key || '').trim();
     const requestedMode = String(req.query.mode || '').trim().toLowerCase();
     const productMode = String(session.user?.productMode || '').trim().toLowerCase();
-    const [tenant, strategyProfile, algofundProfile, tvAlertsProfile, fallbackKey] = await Promise.all([
+    const [tenant, strategyProfile, algofundProfile, tvAlertsProfile, tenantKeys] = await Promise.all([
       db.get(
         'SELECT assigned_api_key_name FROM tenants WHERE id = ?',
         [tenantId]
@@ -1556,22 +1557,34 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
         'SELECT default_api_key_name FROM tv_alerts_profiles WHERE tenant_id = ?',
         [tenantId]
       ) as Promise<{ default_api_key_name?: string } | undefined>,
-      db.get(
-        `SELECT name FROM api_keys
+      db.all(
+        `SELECT name, exchange FROM api_keys
          WHERE name LIKE ?
-         ORDER BY id DESC
-         LIMIT 1`,
+         ORDER BY id DESC`,
         [`tenant-${tenantId}-%`]
-      ) as Promise<{ name?: string } | undefined>,
+      ) as Promise<Array<{ name?: string; exchange?: string }>>,
     ]);
 
     const tenantApiKeyName = String(tenant?.assigned_api_key_name || '').trim();
     const strategyApiKeyName = String(strategyProfile?.assigned_api_key_name || '').trim();
     const algofundApiKeyName = String(algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name || '').trim();
     const tvAlertsApiKeyName = String(tvAlertsProfile?.default_api_key_name || '').trim();
-    const fallbackApiKeyName = String(fallbackKey?.name || '').trim();
+    const ownedKeys = (tenantKeys || [])
+      .map((row) => ({
+        name: String(row.name || '').trim(),
+        exchange: String(row.exchange || '').trim().toLowerCase(),
+      }))
+      .filter((row) => Boolean(row.name));
+    const ownedKeyNames = new Set(ownedKeys.map((row) => row.name));
+    const fallbackApiKeyName = ownedKeys[0]?.name || '';
 
     const resolveApiKeyName = () => {
+      if (requestedApiKeyName) {
+        if (!ownedKeyNames.has(requestedApiKeyName)) {
+          throw new Error('API key is not owned by current tenant');
+        }
+        return requestedApiKeyName;
+      }
       if (productMode === 'tv_alerts_client') {
         return tvAlertsApiKeyName || tenantApiKeyName || strategyApiKeyName || algofundApiKeyName || fallbackApiKeyName;
       }
@@ -1584,11 +1597,18 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
       return strategyApiKeyName || algofundApiKeyName || tvAlertsApiKeyName || tenantApiKeyName || fallbackApiKeyName;
     };
 
-    const apiKeyName = resolveApiKeyName();
+    let apiKeyName = '';
+    try {
+      apiKeyName = resolveApiKeyName();
+    } catch (resolveError) {
+      const err = resolveError as Error;
+      return res.status(403).json({ error: err.message });
+    }
     if (!apiKeyName) {
       return res.json({
         success: true,
         apiKeyName: '',
+        availableKeys: ownedKeys,
         latest: null,
         points: [],
         streams: {
@@ -1650,11 +1670,13 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
     res.json({
       success: true,
       apiKeyName: selectedStream.apiKeyName,
+      availableKeys: ownedKeys,
       latest: selectedStream.latest,
       points: selectedStream.points,
       periodStats: selectedStream.periodStats,
       tradeStats: selectedStream.tradeStats,
       trades: selectedStream.trades,
+      tradeFrequency: (selectedStream as any).tradeFrequency,
       streams: {
         strategy: strategyStream,
         algofund: algofundStream,
