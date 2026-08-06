@@ -812,6 +812,7 @@ const TvAlertsCabinet: React.FC = () => {
       </Modal>
 
       <div style={{ marginTop: 24 }}>
+        <Button type="link" onClick={() => navigate('/cabinet')}>← В кабинет</Button>
         <Button type="link" onClick={() => navigate('/client/login')}>{t('action.logout', 'Logout')}</Button>
       </div>
     </div>

@@ -693,7 +693,7 @@ const tsDisplayName = (systemName: string): string => {
 const capabilityTag = (label: string, enabled: boolean) => <Tag color={enabled ? 'success' : 'default'}>{label}: {enabled ? 'on' : 'off'}</Tag>;
 
 const CLIENT_STOREFRONT_PAGE_SIZE = 24;
-type ClientCabinetTabKey = 'strategy' | 'algofund' | 'custom-ts' | 'settings';
+type ClientCabinetTabKey = 'strategy' | 'algofund' | 'custom-ts' | 'tv-alerts' | 'settings';
 
 type ClientPreviewJobResponse = {
   status: string;
@@ -2646,7 +2646,7 @@ const ClientCabinet: React.FC = () => {
           </Card>
           )}
 
-          <Card className="battletoads-card" title={<span className="storefront-title-accent">Портфели (B3 + Mean Reversion)</span>} size="small" style={{ marginBottom: 12 }}>
+          <Card className="battletoads-card" title={<span className="storefront-title-accent">Портфели (несколько торговых систем вместе)</span>} size="small" style={{ marginBottom: 12 }}>
             {algofundPortfolios.filter((p) => !p.isPersonal).length === 0 ? (
               <Empty description="Портфели пока не опубликованы" />
             ) : (
@@ -3287,8 +3287,13 @@ const ClientCabinet: React.FC = () => {
         <Space wrap>
           <Tag color="green">Стратегии / витрина</Tag>
           <Tag color="green">Algofund</Tag>
-          <Button type="link" onClick={() => navigate('/cabinet/tv-alerts')}>TradingView Alerts →</Button>
+          <Tag color="green">TradingView Alerts</Tag>
           <Tag color="blue">Copytrading — флаг профиля (пока через админа SaaS)</Tag>
+        </Space>
+        <Space wrap style={{ marginTop: 10 }}>
+          <Button type="primary" onClick={() => navigate('/cabinet/tv-alerts')}>
+            Открыть TradingView Alerts
+          </Button>
         </Space>
         <Typography.Paragraph type="secondary" style={{ marginTop: 8, marginBottom: 0 }}>
           Тарифы при регистрации отключены. Опции станут платными позже; сейчас всё $0.
@@ -3399,7 +3404,13 @@ const ClientCabinet: React.FC = () => {
         {workspace ? (
           <Tabs
             activeKey={activeTabKey}
-            onChange={(key) => setActiveTabKey((key as ClientCabinetTabKey) || 'strategy')}
+            onChange={(key) => {
+              if (key === 'tv-alerts') {
+                navigate('/cabinet/tv-alerts');
+                return;
+              }
+              setActiveTabKey((key as ClientCabinetTabKey) || 'strategy');
+            }}
             items={[
               {
                 key: 'strategy',
@@ -3416,6 +3427,27 @@ const ClientCabinet: React.FC = () => {
                 label: 'Кастом ТС',
                 children: customTsTabContent,
               }] : []),
+              {
+                key: 'tv-alerts',
+                label: 'TradingView Alerts',
+                children: (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="TradingView Alerts"
+                    description={(
+                      <Space direction="vertical" size={8}>
+                        <Typography.Text>
+                          Отдельный кабинет для webhook-алертов TradingView: привязка API-ключа, создание сигналов и терминал.
+                        </Typography.Text>
+                        <Button type="primary" onClick={() => navigate('/cabinet/tv-alerts')}>
+                          Открыть TradingView Alerts
+                        </Button>
+                      </Space>
+                    )}
+                  />
+                ),
+              },
               {
                 key: 'settings',
                 label: 'Настройки и мониторинг',
