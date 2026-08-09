@@ -7889,9 +7889,10 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
     const maxOpenPositionsByBook: Record<string, number> = {};
     const bookKeyByStrategyId: Record<string, string> = {};
     const lotPercentMultiplierByStrategyId: Record<string, number> = {};
-    let maxReinvest = 0;
+    const reinvestPercentByStrategyId: Record<string, number> = {};
+    let anyReinvest = false;
     for (const book of bookPlans) {
-      maxReinvest = Math.max(maxReinvest, book.reinvest);
+      if (book.reinvest > 0) anyReinvest = true;
       if (book.op > 0) maxOpenPositionsByBook[book.role] = book.op;
       const lotEffective = book.lot > 0
         ? Number(Math.min(500, Math.max(0.05, book.lot * portfolioLotMult)).toFixed(4))
@@ -7899,6 +7900,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       for (const sid of book.strategyIds) {
         bookKeyByStrategyId[String(sid)] = book.role;
         if (lotEffective > 0) lotPercentMultiplierByStrategyId[String(sid)] = lotEffective;
+        reinvestPercentByStrategyId[String(sid)] = book.reinvest;
       }
     }
 
@@ -7924,8 +7926,9 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
         : {}),
       enablePairLock: payload?.enablePairLock !== false,
       ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
-      maxDepositOverride: maxReinvest > 0 ? sharedDeposit * 50 : 0,
-      reinvestPercentOverride: maxReinvest,
+      // Per-book ri (not Math.max across books). Soft max_deposit ceiling when any book compounds.
+      maxDepositOverride: anyReinvest ? sharedDeposit * 50 : 0,
+      reinvestPercentByStrategyId,
       ...(payload?.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),
       ...(payload?.portfolioCircuitBreaker
         ? { portfolioCircuitBreaker: payload.portfolioCircuitBreaker }
@@ -8027,7 +8030,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
         tradeFrequencyLevel,
         initialBalance: sharedDeposit,
         riskScaleMaxPercent: 100,
-        reinvestPercent: maxReinvest,
+        reinvestPercent: Math.max(...bookPlans.map((b) => b.reinvest), 0),
         portfolioLotMult,
       },
       period: {
@@ -8077,7 +8080,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
         trades: sharedTrades,
         strictPresetMode: false,
         riskApproximated: false,
-        reinvestAppliedInEngine: maxReinvest > 0,
+        reinvestAppliedInEngine: anyReinvest,
         portfolioSharedMargin: true,
         portfolioPerBookOp: true,
         portfolioIndependentBooks: false,

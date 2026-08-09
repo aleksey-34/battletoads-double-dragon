@@ -77,7 +77,8 @@ export const runAutoStrategiesCycle = async () => {
 
     for (const [apiKeyName, keySystems] of systemsByKey) {
       const systemIds = keySystems.map((s) => s.id);
-      const maxOpen = Math.max(...keySystems.map((s) => s.maxOpen));
+      // Exchange-level ceiling = sum of per-book OPs on this key (portfolio books share wallet).
+      const maxOpen = keySystems.reduce((sum, s) => sum + s.maxOpen, 0);
       const placeholders = systemIds.map(() => '?').join(',');
 
       const openStrategies: any[] = (await db.all(

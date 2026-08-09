@@ -58,22 +58,23 @@ export const getStrategyRow = async (apiKeyName: string, strategyId: number): Pr
   return row;
 };
 
-export const extractUsdtBalance = (balances: any[]): number => {
+export const extractUsdtBalanceParts = (
+  balances: any[],
+): { freeMargin: number; walletEquity: number } => {
   const list = Array.isArray(balances) ? balances : [];
   const usdt = list.find((item: any) => String(item?.coin || '').toUpperCase() === 'USDT');
 
   if (usdt) {
-    const wallet = Number.parseFloat(String(usdt.walletBalance ?? '0'));
-    const available = Number.parseFloat(String(usdt.availableBalance ?? '0'));
-    // Use availableBalance (free margin) for lot sizing — walletBalance may
-    // include unrealised PnL / locked margin causing orders larger than the
-    // exchange will accept. Fall back to walletBalance only when available is
-    // missing or zero.
-    const fromUsdt = Number.isFinite(available) && available > 0 ? available
-      : Number.isFinite(wallet) && wallet > 0 ? wallet
-      : 0;
-    if (Number.isFinite(fromUsdt) && fromUsdt > 0) {
-      return fromUsdt;
+    const wallet = Number.parseFloat(String(usdt.walletBalance ?? usdt.equity ?? usdt.balance ?? '0'));
+    const available = Number.parseFloat(String(usdt.availableBalance ?? usdt.available ?? usdt.free ?? '0'));
+    const freeMargin = Number.isFinite(available) && available > 0
+      ? available
+      : (Number.isFinite(wallet) && wallet > 0 ? wallet : 0);
+    const walletEquity = Number.isFinite(wallet) && wallet > 0
+      ? wallet
+      : freeMargin;
+    if (freeMargin > 0 || walletEquity > 0) {
+      return { freeMargin, walletEquity };
     }
   }
 
@@ -81,49 +82,83 @@ export const extractUsdtBalance = (balances: any[]): number => {
     .map((item: any) => Number.parseFloat(String(item?.usdValue ?? '0')))
     .filter((value: number) => Number.isFinite(value) && value > 0)
     .reduce((acc: number, value: number) => acc + value, 0);
-
-  return Number.isFinite(fallbackUsd) && fallbackUsd > 0 ? fallbackUsd : 0;
+  const safe = Number.isFinite(fallbackUsd) && fallbackUsd > 0 ? fallbackUsd : 0;
+  return { freeMargin: safe, walletEquity: safe };
 };
 
+/** Free margin (availableBalance). Prefer this for exchange accept checks. */
+export const extractUsdtBalance = (balances: any[]): number => (
+  extractUsdtBalanceParts(balances).freeMargin
+);
+
+/**
+ * Live sizing aligned with backtest compound semantics:
+ *   base = baseline + max(0, equity − baseline) × (reinvest%/100)
+ *   notional = base × lot% × risk, then capped by free margin
+ *
+ * `max_deposit` is the compound baseline (and soft ceiling when reinvest=0).
+ * Growth above baseline is allowed when reinvest>0; free margin is the hard cap.
+ * Legacy `×(1+reinvest%)` multiplier is removed — it double-counted vs BT.
+ */
 export const computeSignalTotalNotional = (
   strategy: Pick<Strategy, 'max_deposit' | 'fixed_lot' | 'reinvest_percent' | 'lot_long_percent' | 'lot_short_percent' | 'leverage'>,
   availableBalance: number,
   signal: 'long' | 'short',
   riskMultiplier = 1.0,
+  options?: { walletEquity?: number; sizingBaseline?: number },
 ): number => {
-  const safeAvailable = Number.isFinite(availableBalance) && availableBalance > 0 ? availableBalance : 0;
+  const freeMargin = Number.isFinite(availableBalance) && availableBalance > 0 ? availableBalance : 0;
+  const walletEquity = Number.isFinite(options?.walletEquity) && (options!.walletEquity as number) > 0
+    ? (options!.walletEquity as number)
+    : freeMargin;
   const safeRiskMultiplier = Number.isFinite(riskMultiplier) && riskMultiplier > 0 ? riskMultiplier : 1.0;
-
-  const cappedBalance = strategy.max_deposit > 0
-    ? Math.min(safeAvailable, strategy.max_deposit)
-    : safeAvailable;
 
   const lotPercent = signal === 'long' ? strategy.lot_long_percent : strategy.lot_short_percent;
   const lotFraction = Math.max(0, lotPercent) / 100;
-  const reinvestFactor = strategy.fixed_lot ? 1 : 1 + Math.max(0, strategy.reinvest_percent) / 100;
+  const reinvestShare = strategy.fixed_lot
+    ? 0
+    : Math.max(0, Math.min(1, Math.max(0, strategy.reinvest_percent) / 100));
 
-  const baseCapital = strategy.fixed_lot
-    ? (strategy.max_deposit > 0 ? strategy.max_deposit : cappedBalance)
-    : cappedBalance;
+  const baselineFromOpts = Number(options?.sizingBaseline);
+  const maxDeposit = Number(strategy.max_deposit);
+  const baseline = Number.isFinite(baselineFromOpts) && baselineFromOpts > 0
+    ? baselineFromOpts
+    : (Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : walletEquity);
 
-  // Notional = capital × lot_fraction × risk_multiplier. Leverage is an exchange margin setting only,
-  // NOT a position-size multiplier. Position weight is controlled via lot_percent/max_deposit.
-  const totalNotional = baseCapital * lotFraction * reinvestFactor * safeRiskMultiplier;
+  let equityBase: number;
+  if (strategy.fixed_lot) {
+    equityBase = Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : freeMargin;
+  } else {
+    // Match BT: initial + max(0, equity − initial) × reinvestShare
+    equityBase = baseline + Math.max(0, walletEquity - baseline) * reinvestShare;
+    // When reinvest is 0, stay on baseline (do not float with free margin alone).
+    // Soft ceiling: never size the compound base above wallet equity.
+    equityBase = Math.min(equityBase, Math.max(walletEquity, baseline));
+  }
 
-  // Safety telemetry: notional must not exceed real equity unless fixed_lot is explicitly on
-  // (fixed_lot is the opt-in "treat max_deposit as virtual capital" mode for risk experiments).
-  // For default (fixed_lot=0) configs this should never trigger because baseCapital = min(equity, max_deposit).
+  let baseCapital = equityBase;
+  // Hard risk ceiling only when reinvest is off — with reinvest>0, max_deposit is the
+  // baseline budget and free margin is the live accept cap (BT uses deposit×50 override).
+  if (!strategy.fixed_lot && reinvestShare <= 0 && Number.isFinite(maxDeposit) && maxDeposit > 0) {
+    baseCapital = Math.min(baseCapital, maxDeposit);
+  }
+
+  let totalNotional = baseCapital * lotFraction * safeRiskMultiplier;
+  if (freeMargin > 0) {
+    totalNotional = Math.min(totalNotional, freeMargin);
+  }
+
   if (
     Number.isFinite(totalNotional) &&
     totalNotional > 0 &&
-    safeAvailable > 0 &&
-    totalNotional > safeAvailable * 1.001 &&
+    freeMargin > 0 &&
+    totalNotional > freeMargin * 1.001 &&
     !strategy.fixed_lot
   ) {
     logger.warn(
-      `[sizing-guard] computed notional=${totalNotional.toFixed(2)} exceeds available equity=${safeAvailable.toFixed(2)} ` +
-      `(max_deposit=${strategy.max_deposit}, lot=${(lotFraction * 100).toFixed(2)}%, reinvest=${strategy.reinvest_percent}%, fixed_lot=false). ` +
-      `This indicates a sizing-formula regression — please investigate.`
+      `[sizing-guard] computed notional=${totalNotional.toFixed(2)} exceeds free margin=${freeMargin.toFixed(2)} ` +
+      `(max_deposit=${strategy.max_deposit}, lot=${(lotFraction * 100).toFixed(2)}%, reinvest=${strategy.reinvest_percent}%, ` +
+      `equity=${walletEquity.toFixed(2)}, baseline=${baseline.toFixed(2)}).`,
     );
   }
 
@@ -175,15 +210,18 @@ export const getStrategies = async (apiKeyName: string, options?: GetStrategiesO
 
   let availableBalance: number | null = null;
 
+  let walletEquity: number | null = null;
   try {
     const balances = await getBalances(apiKeyName);
-    availableBalance = extractUsdtBalance(balances);
+    const parts = extractUsdtBalanceParts(balances);
+    availableBalance = parts.freeMargin;
+    walletEquity = parts.walletEquity;
   } catch (error) {
     logger.warn(`Could not compute lot preview balance for ${apiKeyName}: ${formatActionError(error)}`);
   }
 
   return normalized.map((strategy) => {
-    if (availableBalance === null) {
+    if (availableBalance === null || walletEquity === null) {
       return {
         ...strategy,
         lot_long_usdt: null,
@@ -192,11 +230,12 @@ export const getStrategies = async (apiKeyName: string, options?: GetStrategiesO
       };
     }
 
+    const sizingOpts = { walletEquity };
     return {
       ...strategy,
-      lot_long_usdt: computeSignalTotalNotional(strategy, availableBalance, 'long'),
-      lot_short_usdt: computeSignalTotalNotional(strategy, availableBalance, 'short'),
-      lot_balance_usdt: availableBalance,
+      lot_long_usdt: computeSignalTotalNotional(strategy, availableBalance, 'long', 1, sizingOpts),
+      lot_short_usdt: computeSignalTotalNotional(strategy, availableBalance, 'short', 1, sizingOpts),
+      lot_balance_usdt: walletEquity,
     };
   });
 };
@@ -284,13 +323,14 @@ export const getStrategyById = async (
 
   try {
     const balances = await getBalances(apiKeyName);
-    const availableBalance = extractUsdtBalance(balances);
+    const parts = extractUsdtBalanceParts(balances);
+    const sizingOpts = { walletEquity: parts.walletEquity };
 
     return {
       ...normalized,
-      lot_long_usdt: computeSignalTotalNotional(normalized, availableBalance, 'long'),
-      lot_short_usdt: computeSignalTotalNotional(normalized, availableBalance, 'short'),
-      lot_balance_usdt: availableBalance,
+      lot_long_usdt: computeSignalTotalNotional(normalized, parts.freeMargin, 'long', 1, sizingOpts),
+      lot_short_usdt: computeSignalTotalNotional(normalized, parts.freeMargin, 'short', 1, sizingOpts),
+      lot_balance_usdt: parts.walletEquity,
     };
   } catch (error) {
     logger.warn(`Could not compute lot preview for strategy ${strategyId} (${apiKeyName}): ${formatActionError(error)}`);

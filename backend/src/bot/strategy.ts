@@ -129,6 +129,7 @@ import {
   getApiKeyId,
   computeSignalTotalNotional,
   extractUsdtBalance,
+  extractUsdtBalanceParts,
 } from './strategy/crud';
 export type { StrategySummary } from './strategy/types';
 export {
@@ -1572,6 +1573,19 @@ export const executeStrategy = async (
       releaseSystemLock = await acquireSystemEntryLock(Number(systemRow.system_id));
 
       const maxOpen = systemRow.max_open_positions;
+      // Portfolio books on one API key: exchange OP ceiling = SUM of active TS OPs
+      // (not Math.max). Per-book DB gate below still uses this book's maxOpen.
+      const portfolioOpRow: any = await db.get(
+        `SELECT COALESCE(SUM(ts.max_open_positions), 0) AS portfolio_max_open
+         FROM trading_systems ts
+         JOIN api_keys ak ON ak.id = ts.api_key_id
+         WHERE ak.name = ? AND ts.is_active = 1 AND ts.max_open_positions > 0`,
+        [apiKeyName],
+      );
+      const portfolioMaxOpen = Math.max(
+        maxOpen,
+        Number(portfolioOpRow?.portfolio_max_open || 0),
+      );
       const openCount: any = await db.get(
         `SELECT COUNT(*) AS cnt FROM strategies s
          JOIN trading_system_members tsm ON tsm.strategy_id = s.id
@@ -1592,10 +1606,10 @@ export const executeStrategy = async (
         logger.warn(`ОП exchange count failed for ${apiKeyName}: ${formatActionError(exchangeCountErr)}`);
       }
 
-      if (exchangeOpen > maxOpen) {
+      if (exchangeOpen > portfolioMaxOpen) {
         logger.info(
-          `ОП exchange limit: ${exchangeOpen}/${maxOpen} live positions on ${apiKeyName}, `
-          + `skipping entry for strategy ${strategyId} (db=${currentOpen})`,
+          `ОП exchange limit: ${exchangeOpen}/${portfolioMaxOpen} live positions on ${apiKeyName} `
+          + `(book OP=${maxOpen}), skipping entry for strategy ${strategyId} (db=${currentOpen})`,
         );
         const updated = await updateStrategy(apiKeyName, strategyId, {
           ...executionBindingPatch,
@@ -1609,7 +1623,7 @@ export const executeStrategy = async (
           last_error: null,
         });
         return returnWithProcessedBar({
-          result: `ОП exchange limit reached (${exchangeOpen}/${maxOpen}), entry skipped`,
+          result: `ОП exchange limit reached (${exchangeOpen}/${portfolioMaxOpen}), entry skipped`,
           action: closedAction ? `${closedAction}_exchange_op_skip` : 'exchange_op_skip',
           strategy: updated,
           currentRatio,
@@ -1719,9 +1733,11 @@ export const executeStrategy = async (
   }
 
   const balances = await getBalances(apiKeyName);
-  const availableBalance = extractUsdtBalance(balances);
+  const balanceParts = extractUsdtBalanceParts(balances);
+  const availableBalance = balanceParts.freeMargin;
+  const walletEquity = balanceParts.walletEquity;
 
-  if (availableBalance <= 0) {
+  if (availableBalance <= 0 && walletEquity <= 0) {
     if (closedAction) {
       const updated = await updateStrategy(apiKeyName, strategyId, {
         ...executionBindingPatch,
@@ -1767,7 +1783,7 @@ export const executeStrategy = async (
     const { resolvePortfolioCircuitBreakerLotMultiplier } = await import('./portfolioCircuitBreakerRuntime');
     portfolioCbMult = await resolvePortfolioCircuitBreakerLotMultiplier(
       apiKeyName,
-      availableBalance,
+      Math.max(availableBalance, walletEquity),
       String((mergedStrategy as any)?.strategy_type || strategy?.strategy_type || ''),
     );
   } catch { /* non-critical */ }
@@ -1780,6 +1796,7 @@ export const executeStrategy = async (
     availableBalance,
     signal,
     riskMultiplier * portfolioCbMult,
+    { walletEquity },
   ) * channelLotMult;
 
   if (!Number.isFinite(totalNotional) || totalNotional <= 0) {

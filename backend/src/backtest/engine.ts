@@ -182,6 +182,12 @@ export type BacktestRunRequest = {
   /** Override reinvest_percent on all strategies (0..100). Use -1 / undefined to keep per-strategy DB value. */
   reinvestPercentOverride?: number;
   /**
+   * Per-strategy reinvest % (0..100). Used by shared-margin portfolio BT so each book
+   * keeps its own ri instead of forcing Math.max across books. Ignored when
+   * reinvestPercentOverride >= 0.
+   */
+  reinvestPercentByStrategyId?: Record<string | number, number>;
+  /**
    * Partial take-profit: when a position reaches this PnL% threshold, close 50%
    * at market and set break-even anchor on the remainder (0 = disabled).
    */
@@ -319,6 +325,7 @@ type NormalizedBacktestRequest = {
   lotPercentOverride: number;
   lotPercentMultiplierByStrategyId: Map<number, number>;
   reinvestPercentOverride: number;
+  reinvestPercentByStrategyId: Map<number, number>;
   partialTpPct: number;
   macroExitOverlay: MacroExitOverlay | null;
   statArbEntryGate: StatArbEntryGate | null;
@@ -375,6 +382,22 @@ const clamp = (value: number, min: number, max: number): number => {
 const clampReinvestShare = (reinvestPercent: number): number => {
   const safe = Number.isFinite(reinvestPercent) ? reinvestPercent : 0;
   return Math.min(1, Math.max(0, safe / 100));
+};
+
+/** Global override wins; else per-strategy map; else strategy.reinvest_percent from DB. */
+const resolveReinvestShare = (
+  ctx: Pick<BacktestContext, 'reinvestPercentOverride' | 'reinvestPercentByStrategyId'>,
+  strategy: { id?: number | string; reinvest_percent?: number; fixed_lot?: number | boolean },
+): number => {
+  if (strategy.fixed_lot) return 0;
+  if (ctx.reinvestPercentOverride >= 0) {
+    return clampReinvestShare(ctx.reinvestPercentOverride);
+  }
+  const sid = Number(strategy.id);
+  if (Number.isFinite(sid) && ctx.reinvestPercentByStrategyId.has(sid)) {
+    return clampReinvestShare(ctx.reinvestPercentByStrategyId.get(sid) as number);
+  }
+  return clampReinvestShare(asNumber(strategy.reinvest_percent, 0));
 };
 
 const parseTimestampMs = (value: any): number | null => {
@@ -1269,13 +1292,7 @@ const resolveDcaDepositEquity = (
   const maxDeposit = ctx.maxDepositOverride > 0
     ? ctx.maxDepositOverride
     : asNumber(strategy.max_deposit, 0);
-  const reinvestShare = strategy.fixed_lot
-    ? 0
-    : clampReinvestShare(
-      ctx.reinvestPercentOverride >= 0
-        ? ctx.reinvestPercentOverride
-        : asNumber(strategy.reinvest_percent, 0),
-    );
+  const reinvestShare = resolveReinvestShare(ctx, strategy);
   const equityBaseRaw = ctx.initialBalance
     + Math.max(0, portfolioEquityNow - ctx.initialBalance) * reinvestShare;
   return maxDeposit > 0 ? Math.min(equityBaseRaw, maxDeposit) : equityBaseRaw;
@@ -1509,6 +1526,7 @@ type BacktestContext = {
   lotPercentOverride: number;
   lotPercentMultiplierByStrategyId: Map<number, number>;
   reinvestPercentOverride: number;
+  reinvestPercentByStrategyId: Map<number, number>;
   initialBalance: number;
   autoLotByChannelWidth: boolean;
   portfolioCircuitBreaker: PortfolioCircuitBreakerTracker | null;
@@ -1813,13 +1831,7 @@ const openPosition = (
   // multiplied by `1 + reinvest/100` on top — so reinvest_percent had no effect
   // when 0 (already compounded) and double-inflated lots when >0 (compound + bonus).
   // Result: every backtest showed compounded growth regardless of the setting.
-  const reinvestShare = strategy.fixed_lot
-    ? 0
-    : clampReinvestShare(
-        ctx.reinvestPercentOverride >= 0
-          ? ctx.reinvestPercentOverride
-          : asNumber(strategy.reinvest_percent, 0),
-      );
+  const reinvestShare = resolveReinvestShare(ctx, strategy);
   const equityBaseRaw = strategy.fixed_lot
     ? (maxDeposit > 0 ? maxDeposit : ctx.initialBalance)
     : ctx.initialBalance + Math.max(0, portfolioEquityNow - ctx.initialBalance) * reinvestShare;
@@ -2569,6 +2581,20 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
       const n = Number(v);
       return Number.isFinite(n) && n >= 0 ? Math.min(100, n) : -1;
     })(),
+    reinvestPercentByStrategyId: (() => {
+      const map = new Map<number, number>();
+      const src = (raw as { reinvestPercentByStrategyId?: unknown })?.reinvestPercentByStrategyId;
+      if (src && typeof src === 'object') {
+        for (const [key, value] of Object.entries(src as Record<string, unknown>)) {
+          const sid = Number(key);
+          const n = Number(value);
+          if (Number.isFinite(sid) && sid > 0 && Number.isFinite(n) && n >= 0) {
+            map.set(sid, Math.min(100, n));
+          }
+        }
+      }
+      return map;
+    })(),
     partialTpPct,
     macroExitOverlay: normalizeMacroExitOverlay(raw.macroExitOverlay),
     statArbEntryGate: normalizeStatArbEntryGate((raw as { statArbEntryGate?: unknown }).statArbEntryGate),
@@ -2668,6 +2694,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     lotPercentOverride: request.lotPercentOverride,
     lotPercentMultiplierByStrategyId: request.lotPercentMultiplierByStrategyId,
     reinvestPercentOverride: request.reinvestPercentOverride,
+    reinvestPercentByStrategyId: request.reinvestPercentByStrategyId,
     initialBalance: request.initialBalance,
     autoLotByChannelWidth: request.autoLotByChannelWidth,
     portfolioCircuitBreaker: PortfolioCircuitBreakerTracker.tryCreate(request.portfolioCircuitBreaker),

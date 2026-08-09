@@ -42,41 +42,60 @@ export function computeChannelWidthLotMultiplier(
 // ── Notional Calculation ─────────────────────────────────────────────────────
 
 /**
- * Compute total notional for a signal given strategy, available balance, and risk multiplier.
- * @param strategy - merged strategy object with lot_percent, max_deposit, fixed_lot, reinvest_percent
- * @param availableBalance - available equity/free balance
- * @param signal - 'long' | 'short'
- * @param riskMultiplier - personal risk multiplier from algofund_profiles (default 1.0)
+ * Compute total notional for a signal — same compound reinvest model as live BT:
+ *   base = baseline + max(0, equity − baseline) × (reinvest%/100)
+ *   notional = base × lot% × risk, capped by free margin
  */
 export function computeSignalTotalNotional(
   strategy: any,
   availableBalance: number,
   signal: string,
   riskMultiplier: number = 1.0,
+  options?: { walletEquity?: number; sizingBaseline?: number },
 ): number {
-  const safeAvailable = Number.isFinite(availableBalance) && availableBalance > 0 ? availableBalance : 0;
+  const freeMargin = Number.isFinite(availableBalance) && availableBalance > 0 ? availableBalance : 0;
+  const walletEquity = Number.isFinite(options?.walletEquity) && (options!.walletEquity as number) > 0
+    ? (options!.walletEquity as number)
+    : freeMargin;
   const safeRiskMultiplier = Number.isFinite(riskMultiplier) && riskMultiplier > 0 ? riskMultiplier : 1.0;
-  const cappedBalance = strategy.max_deposit > 0
-    ? Math.min(safeAvailable, strategy.max_deposit)
-    : safeAvailable;
   const lotPercent = signal === 'long' ? strategy.lot_long_percent : strategy.lot_short_percent;
   const lotFraction = Math.max(0, lotPercent) / 100;
-  const reinvestFactor = strategy.fixed_lot ? 1 : 1 + Math.max(0, strategy.reinvest_percent) / 100;
-  const baseCapital = strategy.fixed_lot
-    ? (strategy.max_deposit > 0 ? strategy.max_deposit : cappedBalance)
-    : cappedBalance;
-  const totalNotional = baseCapital * lotFraction * reinvestFactor * safeRiskMultiplier;
+  const reinvestShare = strategy.fixed_lot
+    ? 0
+    : Math.max(0, Math.min(1, Math.max(0, strategy.reinvest_percent) / 100));
+  const baselineFromOpts = Number(options?.sizingBaseline);
+  const maxDeposit = Number(strategy.max_deposit);
+  const baseline = Number.isFinite(baselineFromOpts) && baselineFromOpts > 0
+    ? baselineFromOpts
+    : (Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : walletEquity);
 
-  // Safety telemetry
+  let equityBase: number;
+  if (strategy.fixed_lot) {
+    equityBase = Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : freeMargin;
+  } else {
+    equityBase = baseline + Math.max(0, walletEquity - baseline) * reinvestShare;
+    equityBase = Math.min(equityBase, Math.max(walletEquity, baseline));
+  }
+
+  let baseCapital = equityBase;
+  if (!strategy.fixed_lot && reinvestShare <= 0 && Number.isFinite(maxDeposit) && maxDeposit > 0) {
+    baseCapital = Math.min(baseCapital, maxDeposit);
+  }
+
+  let totalNotional = baseCapital * lotFraction * safeRiskMultiplier;
+  if (freeMargin > 0) {
+    totalNotional = Math.min(totalNotional, freeMargin);
+  }
+
   if (
     Number.isFinite(totalNotional) &&
     totalNotional > 0 &&
-    safeAvailable > 0 &&
-    totalNotional > safeAvailable * 1.001 &&
+    freeMargin > 0 &&
+    totalNotional > freeMargin * 1.001 &&
     !strategy.fixed_lot
   ) {
     logger.warn(
-      `[sizing-guard] computed notional=${totalNotional.toFixed(2)} exceeds available equity=${safeAvailable.toFixed(2)} ` +
+      `[sizing-guard] computed notional=${totalNotional.toFixed(2)} exceeds free margin=${freeMargin.toFixed(2)} ` +
         `(max_deposit=${strategy.max_deposit}, lot=${(lotFraction * 100).toFixed(2)}%, reinvest=${strategy.reinvest_percent}%, fixed_lot=false). ` +
         `This indicates a sizing-formula regression — please investigate.`,
     );
