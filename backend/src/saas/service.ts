@@ -7742,8 +7742,10 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
     );
     const lot = Math.max(0, asNumber(fromPayload?.lot, asNumber(meta?.lot, 0)));
     const weight = Math.max(0.01, asNumber(src.weight, 1));
+    // Book meta.initial / weight are RISK allocation hints (lot scaling), NOT additive
+    // cash deposits. Client funds one snapshot.capital; adding a TS must not inflate it.
     const capitalFromMeta = asNumber(meta?.initial, 0);
-    const capital = Math.max(
+    const capitalShare = Math.max(
       100,
       capitalFromMeta > 0
         ? capitalFromMeta
@@ -7785,7 +7787,8 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       op,
       lot,
       weight,
-      capital,
+      /** Display/risk-share hint only — NOT summed into the client deposit. */
+      capital: capitalShare,
       reinvest,
       strategyIds,
     });
@@ -7794,6 +7797,9 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
   if (bookPlans.length === 0) {
     throw new Error(`Portfolio ${setKey} has no books to backtest`);
   }
+
+  // ONE funded deposit for the whole portfolio (live wallet semantics).
+  const sharedDeposit = Math.max(100, snapshotCapital);
 
   const firstTarget = await resolveAlgofundSystemTargets({ systemName: bookPlans[0].systemName });
   const preferredApiKey = asString(payload?.rerunApiKeyName, '')
@@ -7883,10 +7889,8 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
     const maxOpenPositionsByBook: Record<string, number> = {};
     const bookKeyByStrategyId: Record<string, string> = {};
     const lotPercentMultiplierByStrategyId: Record<string, number> = {};
-    let totalCapital = 0;
     let maxReinvest = 0;
     for (const book of bookPlans) {
-      totalCapital += book.capital;
       maxReinvest = Math.max(maxReinvest, book.reinvest);
       if (book.op > 0) maxOpenPositionsByBook[book.role] = book.op;
       const lotEffective = book.lot > 0
@@ -7897,7 +7901,6 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
         if (lotEffective > 0) lotPercentMultiplierByStrategyId[String(sid)] = lotEffective;
       }
     }
-    totalCapital = Math.max(100, totalCapital);
 
     const sharedResult = await runBacktest({
       apiKeyName: preferredApiKey,
@@ -7906,7 +7909,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       bars: rerunWindow.bars,
       warmupBars: rerunWindow.warmupBars,
       skipMissingSymbols: sweep?.config?.skipMissingSymbols !== false,
-      initialBalance: totalCapital,
+      initialBalance: sharedDeposit,
       commissionPercent,
       slippagePercent,
       fundingRatePercent,
@@ -7921,7 +7924,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
         : {}),
       enablePairLock: payload?.enablePairLock !== false,
       ...(payload?.pairLockSeed !== undefined ? { pairLockSeed: payload.pairLockSeed } : {}),
-      maxDepositOverride: maxReinvest > 0 ? totalCapital * 50 : 0,
+      maxDepositOverride: maxReinvest > 0 ? sharedDeposit * 50 : 0,
       reinvestPercentOverride: maxReinvest,
       ...(payload?.autoLotByChannelWidth === true ? { autoLotByChannelWidth: true } : {}),
       ...(payload?.portfolioCircuitBreaker
@@ -7932,7 +7935,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
     const sharedSummary = (sharedResult.summary || {}) as Record<string, unknown>;
     const sharedSeries = (sharedResult.equityCurve || []).map((pt) => {
       const t = asNumber(pt.time, 0);
-      const e = asNumber(pt.equity, totalCapital);
+      const e = asNumber(pt.equity, sharedDeposit);
       const uRaw = Number((pt as { unrealizedPnl?: unknown }).unrealizedPnl);
       return { t, e, u: Number.isFinite(uRaw) ? uRaw : null };
     }).filter((p) => p.t > 0 && Number.isFinite(p.e));
@@ -7948,10 +7951,10 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
     const skippedByPositionLimit = asNumber(sharedSummary.skippedByPositionLimit, 0);
     const actualStartMs = asNumber(sharedSummary.actualDataStartMs, 0);
     const actualEndMs = asNumber(sharedSummary.actualDataEndMs, 0);
-    const finalEquity = asNumber(sharedSummary.finalEquity, asNumber(sharedSummary.finalBalance, totalCapital));
+    const finalEquity = asNumber(sharedSummary.finalEquity, asNumber(sharedSummary.finalBalance, sharedDeposit));
     const totalReturnPercent = asNumber(
       sharedSummary.totalReturnPercent,
-      totalCapital > 0 ? ((finalEquity - totalCapital) / totalCapital) * 100 : 0,
+      sharedDeposit > 0 ? ((finalEquity - sharedDeposit) / sharedDeposit) * 100 : 0,
     );
     const maxDrawdownPercent = asNumber(sharedSummary.maxDrawdownPercent, 0);
 
@@ -7989,7 +7992,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
     const equityForMetrics = sharedSeries.map((p) => ({ time: p.t, equity: p.e, unrealizedPnl: p.u }));
     const rerunMetrics = summarizeRealRerunEquityCurve(
       equityForMetrics.map((p) => ({ time: p.time, equity: p.equity, unrealizedPnl: p.unrealizedPnl ?? undefined })),
-      totalCapital,
+      sharedDeposit,
     );
 
     return {
@@ -7999,7 +8002,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
         systemName: setKey,
         membersCount: bookPlans.length,
         offerIds: selectedOffers.map((o) => o.offerId),
-        method: 'shared_margin_per_book_OP',
+        method: 'shared_deposit_one_wallet_per_book_OP',
         portfolioLotMult,
         books: bookPlans.map((b) => ({
           role: b.role,
@@ -8022,7 +8025,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
         tradeFrequencyScore,
         riskLevel,
         tradeFrequencyLevel,
-        initialBalance: totalCapital,
+        initialBalance: sharedDeposit,
         riskScaleMaxPercent: 100,
         reinvestPercent: maxReinvest,
         portfolioLotMult,
@@ -8042,12 +8045,12 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
           mode: 'portfolio',
           apiKeyName: preferredApiKey,
           strategyIds: allStrategyIds,
-          initialBalance: totalCapital,
+          initialBalance: sharedDeposit,
           finalEquity: Number(finalEquity.toFixed(4)),
           totalReturnPercent: Number(totalReturnPercent.toFixed(3)),
           maxDrawdownPercent: Number(maxDrawdownPercent.toFixed(3)),
           unrealizedPnl: rerunMetrics.unrealizedPnl,
-          netProfit: Number((finalEquity - totalCapital).toFixed(4)),
+          netProfit: Number((finalEquity - sharedDeposit).toFixed(4)),
           marginLoadPercent: asNumber(sharedSummary.marginLoadPercent, 0),
           tradesCount,
           winRatePercent: Number(winRatePercent.toFixed(3)),
@@ -8058,7 +8061,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
         },
         equity: rerunMetrics.equity || sanitizeEquityCurveForMetrics(
           equityForMetrics.map((p) => ({ time: p.time, equity: p.equity })),
-          totalCapital,
+          sharedDeposit,
         ),
         curves: {
           pnl: rerunMetrics.curves.pnl,
@@ -8088,7 +8091,7 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
         riskMul: 1,
         riskScaleMaxPercent: 100,
         freqLevel: tradeFrequencyLevel,
-        method: 'shared_margin_per_book_OP',
+        method: 'shared_deposit_one_wallet_per_book_OP',
         portfolioLotMult,
         skippedByPositionLimit,
       },

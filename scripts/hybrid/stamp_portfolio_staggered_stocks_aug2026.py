@@ -52,7 +52,8 @@ STAGGERED_JOIN = {
     "artifact": "results/stocks_hf_research_aug2026/staggered_portfolio_bt.json",
 }
 
-# Capital once the 5k stocks book is funded (b3 + mrs [+ zz] + 5000).
+# Shared-deposit model: adding stocks does NOT bump client capital.
+# `with-stocks` mode is legacy/wrong (additive cash) — kept only for forensics.
 CAPITAL_WITH_STOCKS = {
     "portfolio-conservative-jul2026": 25000,
     "portfolio-balanced-jul2026": 25000,
@@ -103,9 +104,9 @@ def main() -> None:
         choices=["keep", "with-stocks", "core"],
         default="keep",
         help=(
-            "keep (default): leave snapshot.capital alone; "
-            "with-stocks: set to b3+mrs(+zz)+5000; "
-            "core: set to the capital the stamped ret%% was actually computed on"
+            "keep (default): leave snapshot.capital alone — correct shared-deposit model; "
+            "with-stocks: LEGACY WRONG additive cash (b3+mrs+5k); "
+            "core: set to sum of non-stocks book initials"
         ),
     )
     args = ap.parse_args()
@@ -131,7 +132,12 @@ def main() -> None:
 
         meta["books"] = ensure_stocks_book(before_books)
         meta["stocksJoin"] = {**STAGGERED_JOIN, "updatedAt": now()}
-        meta["targetCapitalWithStocks"] = CAPITAL_WITH_STOCKS.get(sk)
+        meta["targetCapitalWithStocks"] = None  # shared deposit: no capital bump
+        meta["sharedDepositModel"] = {
+            "rule": "one_client_deposit",
+            "note": "Adding a TS/book allocates OP/lot/weight on the same snapshot.capital; it does not add cash.",
+            "updatedAt": now(),
+        }
 
         # The stamped ret/dd/curve predate the stocks book. Record that instead of
         # silently letting a bumped capital imply the sleeve was in the backtest.
