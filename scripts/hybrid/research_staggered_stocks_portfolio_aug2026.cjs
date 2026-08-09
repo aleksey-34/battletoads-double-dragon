@@ -244,7 +244,14 @@ const main = async () => {
   await database.initDB();
   const db = database.db;
 
-  const only = (process.env.PORTFOLIOS || 'portfolio-conservative-jul2026,portfolio-balanced-jul2026,portfolio-aggressive-jul2026')
+  const only = (process.env.PORTFOLIOS || [
+    'portfolio-conservative-jul2026',
+    'portfolio-balanced-jul2026',
+    'portfolio-aggressive-jul2026',
+    'portfolio-quality-tilt-jul2026',
+    'portfolio-triple-zz-jul2026',
+    'portfolio-whale-personal-jul2026',
+  ].join(','))
     .split(',').map((s) => s.trim()).filter(Boolean);
   const targets = recipes.portfolios.filter((p) => only.includes(p.setKey));
   if (!targets.length) throw new Error('no portfolios matched PORTFOLIOS filter');
@@ -264,6 +271,29 @@ const main = async () => {
   const stockIds = stockRows.filter((r) => hasCandle(MERGED, '4h', r.base_symbol)).map((r) => Number(r.id));
   console.log(`B3 ids=${b3Ids.length} durable=${durable.length} stockLegs=${stockIds.length}`);
   if (stockIds.length !== 8) console.warn(`WARN expected 8 stock legs, got ${stockIds.length}`);
+
+  const zzLegs = (recipes.universes.ham_zz_top5_weex && recipes.universes.ham_zz_top5_weex.legs) || [];
+  const zzIds = [];
+  for (const z of zzLegs) {
+    let row = await db.get(
+      `SELECT s.id FROM strategies s JOIN api_keys a ON a.id=s.api_key_id
+       WHERE a.name=? AND s.base_symbol=? AND s.interval=? AND s.name LIKE 'FIVECARDFULL::ZZ%'
+       ORDER BY s.id DESC LIMIT 1`,
+      [KEY, z.symbol, z.tf],
+    );
+    if (!row?.id) {
+      row = await db.get(
+        `SELECT s.id FROM strategies s JOIN api_keys a ON a.id=s.api_key_id
+         WHERE a.name=? AND s.base_symbol=? AND s.interval=?
+           AND s.strategy_type IN ('ZZ_Fast','ZZ_Instance','zz_breakout')
+         ORDER BY s.id LIMIT 1`,
+        [KEY, z.symbol, z.tf],
+      );
+    }
+    if (row?.id && hasCandle(MERGED, z.tf, z.symbol)) zzIds.push(Number(row.id));
+    else console.warn(`WARN ZZ missing ${z.symbol}:${z.tf}`);
+  }
+  console.log(`ZZ ids=${zzIds.length}/${zzLegs.length}`);
 
   const mrsCache = new Map();
   const mrsCoverage = {};
@@ -327,6 +357,21 @@ const main = async () => {
           const m = sum(r, book.initial);
           console.log(`  MRS n=${ids.length} OP${book.op}: ret=${m.ret}% dd=${m.dd}%`);
           coreBooks.push({ key: 'mrs', n: ids.length, initial: book.initial, op: book.op, lot: book.lot, ...m, series: equitySeries(r.equityCurve || []) });
+        } else if (book.key === 'zz') {
+          if (!zzIds.length) {
+            console.warn('  ZZ skipped — no ids');
+            continue;
+          }
+          const r = await runBook(runBacktest, zzIds, {
+            from: w.from, to: w.to, initial: book.initial,
+            lot: book.lot, ri: book.ri, op: book.op, comm: 0.1, slip: 0.05, cb: null,
+          });
+          const m = sum(r, book.initial);
+          console.log(`  ZZ n=${zzIds.length} OP${book.op}: ret=${m.ret}% dd=${m.dd}%`);
+          coreBooks.push({ key: 'zz', n: zzIds.length, initial: book.initial, op: book.op, lot: book.lot, ...m, series: equitySeries(r.equityCurve || []) });
+        } else if (book.key === 'stocks') {
+          // stocks joined later via stockRuns / combineStaggered
+          continue;
         }
       }
       const core = combineStaggered(coreBooks);

@@ -239,9 +239,19 @@ export const syncMrs2RestingEntryLimits = async (args: {
       next.shortOrderId = keepId;
     }
   }
-  // If the getOpenOrders fetch itself failed, skip dedup/adoption this cycle and
-  // trust the tracked ids as-is — avoids spuriously re-placing (or losing track of)
-  // orders on a transient API hiccup rather than a real fill/cancel.
+  // If the getOpenOrders fetch itself failed, skip dedup/adoption AND skip
+  // placing new limits when we have no tracked id. Placing blind on an API
+  // hiccup is how duplicate resting buys accumulate into oversize exposure.
+  // With a tracked id we leave it alone until the next successful book scan.
+  if (fetchFailed) {
+    if ((next.long != null && !next.longOrderId) || (next.short != null && !next.shortOrderId)) {
+      logger.warn(
+        `[mrs2-limits] getOpenOrders failed for ${symbol} — refusing to place new resting limits `
+        + `without book visibility (fail-closed; tracked long=${next.longOrderId || '-'} short=${next.shortOrderId || '-'})`,
+      );
+    }
+    return serializeMrs2PendingWithOrders(next);
+  }
 
   if (next.long != null && !next.longOrderId) {
     try {

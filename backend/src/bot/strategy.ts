@@ -40,11 +40,13 @@ import {
   isMrs2StrategyType,
   mrs2WarmupBars,
   parseMrs2PendingLimits,
-  serializeMrs2PendingLimits,
 } from './mrs2Signal';
 import {
   cancelMrs2RestingLimits,
+  parseMrs2PendingWithOrders,
+  serializeMrs2PendingWithOrders,
   syncMrs2RestingEntryLimits,
+  type Mrs2PendingWithOrders,
 } from './mrs2LiveOrders';
 import { acquireApiKeyPairEntryLock, acquireSystemEntryLock } from './strategy/mutex';
 import {
@@ -296,7 +298,28 @@ export const executeStrategy = async (
       // downstream updateStrategy() calls (which don't touch this column) so the
       // next cycle always sees the latest resting levels regardless of which
       // branch this cycle's execution takes.
-      const nextPendingJson = serializeMrs2PendingLimits(action.pending);
+      // Persist sticky pending; preserve resting order IDs when levels are unchanged
+      // so a later getOpenOrders failure cannot blind-re-place duplicates.
+      const prevPending = parseMrs2PendingWithOrders(mergedStrategy.mrs2_pending_json);
+      const nextPending: Mrs2PendingWithOrders | null = action.pending
+        ? {
+          long: action.pending.long ?? null,
+          short: action.pending.short ?? null,
+          longOrderId: (
+            prevPending
+            && action.pending.long != null
+            && prevPending.long != null
+            && Math.abs(action.pending.long - prevPending.long) / prevPending.long * 100 < 0.05
+          ) ? (prevPending.longOrderId ?? null) : null,
+          shortOrderId: (
+            prevPending
+            && action.pending.short != null
+            && prevPending.short != null
+            && Math.abs(action.pending.short - prevPending.short) / prevPending.short * 100 < 0.05
+          ) ? (prevPending.shortOrderId ?? null) : null,
+        }
+        : null;
+      const nextPendingJson = serializeMrs2PendingWithOrders(nextPending);
       if (nextPendingJson !== (mergedStrategy.mrs2_pending_json || '{}')) {
         // If levels cleared, drop any resting exchange orders tied to prior pending.
         if (!action.pending) {
