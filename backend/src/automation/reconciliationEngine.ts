@@ -45,6 +45,7 @@ type TradeRow = {
   fee: string;
   realizedPnl: string;
   timestamp: string;
+  isMaker?: boolean;
 };
 
 type StrategyTradeBinding = {
@@ -203,6 +204,7 @@ const syncRecentTradesForStrategy = async (
     }
 
     const orderId = String(trade.orderId || '').trim();
+    const isMaker = trade.isMaker === true;
     if (orderId) {
       const existing = await db.get(
         `SELECT id, position_size, actual_price, entry_price, actual_fee
@@ -233,9 +235,10 @@ const syncRecentTradesForStrategy = async (
         const newFee = toFinite(existing.actual_fee, 0) + fee;
         await db.run(
           `UPDATE live_trade_events
-           SET position_size = ?, actual_price = ?, entry_price = ?, actual_fee = ?, actual_time = ?
+           SET position_size = ?, actual_price = ?, entry_price = ?, actual_fee = ?, actual_time = ?,
+               is_maker = COALESCE(is_maker, ?)
            WHERE id = ?`,
-          [newQty, wPrice, wPrice, newFee, timestamp, existing.id],
+          [newQty, wPrice, wPrice, newFee, timestamp, isMaker ? 1 : 0, existing.id],
         );
         existingIds.add(sourceTradeId);
         return;
@@ -258,7 +261,15 @@ const syncRecentTradesForStrategy = async (
       source_trade_id: sourceTradeId,
       source_order_id: String(trade.orderId || '').trim(),
       source_symbol: String(trade.symbol || '').trim(),
+      is_maker: isMaker,
     });
+
+    if (isMaker) {
+      logger.info(
+        `[mrs2-maker-fill] strategy=${strategyId} ${tradeType} ${side} `
+        + `${String(trade.symbol || '')} @ ${price} qty=${qty} fee=${fee} order=${orderId || '-'}`,
+      );
+    }
 
     inserted += 1;
     existingIds.add(sourceTradeId);

@@ -917,6 +917,7 @@ export const initDB = async () => {
   await ensureColumn('live_trade_events', 'source_trade_id TEXT');
   await ensureColumn('live_trade_events', 'source_order_id TEXT');
   await ensureColumn('live_trade_events', 'source_symbol TEXT');
+  await ensureColumn('live_trade_events', 'is_maker INTEGER');
   await ensureColumn('algofund_start_stop_requests', "request_payload_json TEXT DEFAULT '{}'");
   await ensureColumn('strategy_client_profiles', 'active_system_profile_id INTEGER');
   await ensureColumn('tenants', "client_preferences_json TEXT DEFAULT '{}'");

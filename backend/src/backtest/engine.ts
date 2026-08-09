@@ -50,6 +50,7 @@ import {
   type Mrs2Params,
   type Mrs2PendingLimits,
 } from '../bot/mrs2Signal';
+import { readHybridCandles } from '../bot/hybridCandleStore';
 
 export type { OrderBlockEntryGate };
 
@@ -496,6 +497,103 @@ const parseCandle = (item: any): ParsedCandle | null => {
     low,
     close,
   };
+};
+
+/**
+ * How a MeanReversion/MRS2 limit entry and its close-MA exit are allowed to book
+ * inside the same bar.
+ *
+ * Default is `block` (live-closer): live never entry→exit in one cycle.
+ * Legacy optimistic OHLC (`allow`) must be opted in via env — that mode assumed
+ * entry-first ordering OHLC cannot confirm and inflated July/Aug research stamps.
+ *
+ * `MRS2_BT_SAME_BAR_EXIT`:
+ *   block        — never exit on the entry bar (default; position is carried)
+ *   allow        — legacy optimistic behaviour (research only)
+ *   path         — consult finer sub-bars (`MRS2_BT_SUBBAR_INTERVAL`) and only
+ *                  exit when a sub-bar touching the entry precedes one touching
+ *                  the exit; anything unresolvable is carried (lower bound)
+ *   path_lenient — same, but ordering that is ambiguous inside a single sub-bar
+ *                  or lacks sub-bars altogether is resolved in the trade's
+ *                  favour (upper bound)
+ */
+type Mrs2SameBarExitMode = 'allow' | 'block' | 'path' | 'path_lenient';
+
+const resolveMrs2SameBarExitMode = (): Mrs2SameBarExitMode => {
+  const raw = String(process.env.MRS2_BT_SAME_BAR_EXIT || '').trim().toLowerCase();
+  if (raw === 'allow' || raw === 'on' || raw === '1' || raw === 'true' || raw === 'legacy') return 'allow';
+  if (raw === 'path') return 'path';
+  if (raw === 'path_lenient' || raw === 'pathlenient') return 'path_lenient';
+  // unset / block / off / false / 0 → block (live-parity default)
+  return 'block';
+};
+
+type Mrs2SubBarIndex = {
+  /** Sub-bars grouped by parent-bar bucket start (epoch-aligned). */
+  byBucket: Map<number, ParsedCandle[]>;
+  parentMs: number;
+  /** Sub-bars a complete parent bar must contain for the path to be trusted. */
+  expectedPerBucket: number;
+};
+
+const loadMrs2SubBarIndex = (
+  symbol: string,
+  parentInterval: string,
+): Mrs2SubBarIndex | undefined => {
+  const subInterval = String(process.env.MRS2_BT_SUBBAR_INTERVAL || '').trim();
+  if (!subInterval) return undefined;
+  const parentMs = intervalToMs(parentInterval);
+  const subMs = intervalToMs(subInterval);
+  if (!(parentMs > 0) || !(subMs > 0) || subMs >= parentMs) return undefined;
+  const rows = readHybridCandles(symbol, subInterval);
+  if (!rows || rows.length === 0) return undefined;
+  const byBucket = new Map<number, ParsedCandle[]>();
+  for (const row of rows) {
+    const candle = parseCandle(row);
+    if (!candle) continue;
+    const bucket = Math.floor(candle.timeMs / parentMs) * parentMs;
+    const list = byBucket.get(bucket);
+    if (list) list.push(candle);
+    else byBucket.set(bucket, [candle]);
+  }
+  for (const list of byBucket.values()) list.sort((a, b) => a.timeMs - b.timeMs);
+  return { byBucket, parentMs, expectedPerBucket: Math.round(parentMs / subMs) };
+};
+
+/**
+ * Did the sub-bar path put the entry fill before the exit limit became
+ * reachable? `lenient` decides the ambiguous cases — missing/partial sub-bars
+ * and both levels inside one sub-bar — in the trade's favour, which brackets
+ * the strict answer from above. Exit-reached-first is always a rejection.
+ */
+const mrs2SameBarExitConfirmed = (
+  index: Mrs2SubBarIndex | undefined,
+  parentTimeMs: number,
+  side: 'long' | 'short',
+  entryPrice: number,
+  exitPrice: number,
+  lenient: boolean,
+): boolean => {
+  if (!index) return lenient;
+  const bucket = Math.floor(parentTimeMs / index.parentMs) * index.parentMs;
+  const subBars = index.byBucket.get(bucket);
+  if (!subBars || subBars.length < index.expectedPerBucket) return lenient;
+  const exitReached = (candle: ParsedCandle): boolean => (
+    side === 'long' ? candle.high >= exitPrice : candle.low <= exitPrice
+  );
+  for (let i = 0; i < subBars.length; i += 1) {
+    const candle = subBars[i];
+    const entryReached = candle.low <= entryPrice && entryPrice <= candle.high;
+    if (entryReached && exitReached(candle)) return lenient;
+    if (entryReached) {
+      for (let j = i + 1; j < subBars.length; j += 1) {
+        if (exitReached(subBars[j])) return true;
+      }
+      return false;
+    }
+    if (exitReached(candle)) return false;
+  }
+  return false;
 };
 
 type BacktestSignalPayload = {
@@ -1397,6 +1495,7 @@ type RuntimeStrategy = {
   momentumScalpParams?: ReturnType<typeof extractMomentumScalpParams>;
   mrs2Params?: Mrs2Params;
   mrs2Pending?: Mrs2PendingLimits | null;
+  mrs2SubBars?: Mrs2SubBarIndex;
 };
 
 type BacktestContext = {
@@ -1976,6 +2075,9 @@ const normalizeStrategyType = (value: any): StrategyType => {
   if (normalized === 'stat_arb_zscore' || normalized === 'zz_breakout' || normalized === 'hideep' || normalized === 'CT_Fractal' || normalized === 'momentum_scalp_tv') {
     return normalized;
   }
+  if (normalized === 'periodic_buy' || normalized === 'dca') {
+    return normalized as StrategyType;
+  }
   if (lower === 'zigzag' || lower === 'zig_zag') {
     return 'zz_breakout';
   }
@@ -1990,7 +2092,22 @@ const normalizeStrategyType = (value: any): StrategyType => {
   if (normalized === 'ZZ_HAMSTER_ZZ2' || normalized === 'zz_hamster_zz2') {
     return 'ZZ_Instance';
   }
-  return 'DD_BattleToads';
+  // Explicit DD aliases only — never silently map unknown types to DD
+  // (July 2026 stamp bug: MeanReversion → DD_BattleToads via this fallthrough).
+  if (
+    !normalized
+    || normalized === 'DD_BattleToads'
+    || lower === 'dd_battletoads'
+    || lower === 'battletoads'
+    || lower === 'double_dragon'
+    || lower === 'doubledragon'
+  ) {
+    return 'DD_BattleToads';
+  }
+  throw new Error(
+    `Unknown strategy_type "${normalized}" — refuse silent DD fallback. `
+    + 'Use an explicit known type (MeanReversion, DD_BattleToads, zz_breakout, …).',
+  );
 };
 
 const normalizeMarketMode = (value: any): MarketMode => {
@@ -2333,6 +2450,10 @@ const loadRuntimeStrategies = async (
     const mrs2Params = isMrs2StrategyType(strategyType)
       ? extractMrs2Params(strategy)
       : undefined;
+    const sameBarExitMode = resolveMrs2SameBarExitMode();
+    const mrs2SubBars = mrs2Params && (sameBarExitMode === 'path' || sameBarExitMode === 'path_lenient')
+      ? loadMrs2SubBarIndex(strategy.base_symbol, interval)
+      : undefined;
 
     runtimes.push({
       strategy,
@@ -2353,6 +2474,7 @@ const loadRuntimeStrategies = async (
       momentumScalpParams,
       mrs2Params,
       mrs2Pending: null,
+      mrs2SubBars,
     });
   }
 
@@ -2512,6 +2634,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     throw new Error('apiKeyName is required');
   }
 
+  const mrs2SameBarExitMode = resolveMrs2SameBarExitMode();
   const strategies = await pickStrategiesForRequest(request);
   const runtimeLoad = await loadRuntimeStrategies(request, strategies);
   const runtimes = runtimeLoad.runtimes;
@@ -2848,7 +2971,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
         );
         runtime.mrs2Pending = null;
         // Same-bar TP: after limit entry, allow close-MA exit if also touched this bar.
-        if (opened && runtime.entryPrice) {
+        if (opened && runtime.entryPrice && mrs2SameBarExitMode !== 'block') {
           const exitAction = evaluateMrs2Bar(
             runtime.candles,
             event.candleIndex,
@@ -2857,7 +2980,18 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
             runtime.entryPrice,
             null,
           );
-          if (exitAction.exit) {
+          const sameBarExitAllowed = exitAction.exit && (
+            mrs2SameBarExitMode === 'allow'
+            || mrs2SameBarExitConfirmed(
+              runtime.mrs2SubBars,
+              event.timeMs,
+              entrySide,
+              runtime.entryPrice,
+              exitAction.exitPrice,
+              mrs2SameBarExitMode === 'path_lenient',
+            )
+          );
+          if (sameBarExitAllowed) {
             closePosition(
               ctx,
               runtime,

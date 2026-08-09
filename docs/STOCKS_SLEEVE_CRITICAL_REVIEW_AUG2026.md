@@ -3,9 +3,23 @@
 **Date:** 2026-08-09
 **Scope:** `addon-mrs-weex-stocks-shortma-jul2026` research → vitrine stamp gap.
 **Verdict:** the sleeve is **published to live clients but not stamped on the storefront**, the
-headline `+47.15%` is an **in-sample, capital-concentrated, zero-slippage** number, and the
-"dump stress vs SPX −37.76%" benchmark is **measured against a memecoin, not the S&P 500**.
-Do **not** update the vitrine stamp with these numbers as-is.
+headline `+47.15%` is **void**, and path-accurate fills (2026-08-09) put the book at
+**C −65% / lenient −21% / taker −16%** with only **13%** confirmed entry-first same-bar trips
+(`results/stocks_hf_research_aug2026/path_accurate_rebaseline.md`). The
+"dump stress vs SPX −37.76%" benchmark is **a memecoin, not the S&P 500**.
+**Do not stamp.** Live MRS2 params were repaired; that does not make the BT edge real.
+
+**Additional blocker (staggered portfolio rerun, 2026-08-09):** B3 still matches the July
+vitrine to the decimal (`630.81% / 22.95%`), but the **MRS book returns 2.4×–7.3× more** on
+the same candles/recipe (`staggered_portfolio_bt.md` / `stamp_candidate_aug2026.json`).
+
+**Root cause (proven 2026-08-09):** July “MRS” stamp was **not MeanReversion**. Scripts wrote
+`strategy_type='MeanReversion'`, but the engine build that stamped only recognized `MRS2`, so
+unknown types fell through to **`DD_BattleToads`**. Forced-DD on the same legs reproduces July
+MRS book returns to the decimal (1899.17 / 2068.9 / 6645.95). Current engine runs real MRS2 →
+higher numbers. **Do not treat July MRS as a MeanReversion reproducibility target.**
+Stocks on the join window alone are already **−2.08% maker / −5.27% taker**. `booksMeta`
+already includes stocks + `joinDate=2026-06-17`; snapshot capital left at core 20k/30k.
 
 No production state was changed by this review. All VPS queries were `sqlite3 -readonly`.
 

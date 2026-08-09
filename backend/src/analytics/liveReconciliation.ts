@@ -31,6 +31,8 @@ export type LiveTradeEvent = {
   source_trade_id?: string;
   source_order_id?: string;
   source_symbol?: string;
+  /** Exchange maker flag when known (resting limit fill). */
+  is_maker?: boolean;
   
   // Если есть backtest для сравнения
   backtest_predicted_price?: number;
@@ -124,12 +126,13 @@ export async function recordLiveTradeEvent(
   event: Omit<LiveTradeEvent, 'id' | 'strategy_id'>
 ): Promise<LiveTradeEvent> {
   const eventOrigin = inferLiveTradeEventOrigin(event as unknown as Record<string, unknown>);
+  const isMaker = event.is_maker === true ? 1 : (event.is_maker === false ? 0 : null);
   const result = await db.run(
     `INSERT INTO live_trade_events (
       strategy_id, trade_type, side, event_origin, entry_time, entry_price, 
       position_size, actual_price, actual_time, actual_fee, slippage_percent,
-      source_trade_id, source_order_id, source_symbol
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      source_trade_id, source_order_id, source_symbol, is_maker
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       strategyId,
       event.trade_type,
@@ -145,6 +148,7 @@ export async function recordLiveTradeEvent(
       event.source_trade_id || null,
       event.source_order_id || null,
       event.source_symbol || null,
+      isMaker,
     ]
   );
 

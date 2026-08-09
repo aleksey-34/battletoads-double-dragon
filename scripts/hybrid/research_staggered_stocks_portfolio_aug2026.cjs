@@ -24,10 +24,13 @@ const OUT_DIR = path.join(REPO, 'results/stocks_hf_research_aug2026');
 const OUT = path.join(OUT_DIR, 'staggered_portfolio_bt.json');
 const OUT_MD = path.join(OUT_DIR, 'staggered_portfolio_bt.md');
 
-const FLAT_BUNDLE = path.join(REPO, 'results/hybrid_candle_bundle_flat_comp');
-const HAM_BUNDLE = path.join(REPO, 'results/hybrid_candle_bundle_hamster89');
+// b3_hamster89_merged is the bundle the July stamp ran on and holds MRS legs that are
+// in neither flat_comp nor hamster89 — merge it first or the MRS universe silently shrinks.
+const CRYPTO_MERGED = path.join(REPO, 'results/hybrid_candle_bundle_b3_hamster89_merged');
 const STOCK_BUNDLE = path.join(REPO, 'results/hybrid_candle_bundle_weex_stocks');
-const MERGED = path.join(REPO, 'results/hybrid_candle_bundle_b3_hamster89_stocks_merged');
+// Built fresh from CRYPTO_MERGED + stocks only. Reusing the older *_stocks_merged dir
+// mixes in candle files of another vintage and silently changes the crypto books.
+const MERGED = path.join(REPO, 'results/hybrid_candle_bundle_staggered_aug2026');
 
 process.env.HYBRID_QUIET = '1';
 process.env.LOG_CONSOLE_LEVEL = 'error';
@@ -54,6 +57,17 @@ const STOCK_COSTS = [
   { tag: 'taker_stress', comm: 0.1, slip: 0.02 },
 ];
 
+/**
+ * Book figures stamped into algofund_portfolios in July 2026 (window 2024-03-17..2026-07-15).
+ * Rerunning the same recipe on the current engine should land near these; where it does not,
+ * the live vitrine number is stale and must not be re-used.
+ */
+const JULY_STAMP = {
+  'portfolio-conservative-jul2026': { total: { ret: 1264.99, dd: 16.47 }, b3: { ret: 630.81, dd: 22.95 }, mrs: { ret: 1899.17, dd: 16.13 } },
+  'portfolio-balanced-jul2026': { total: { ret: 1349.85, dd: 17.41 }, b3: { ret: 630.81, dd: 22.95 }, mrs: { ret: 2068.9, dd: 23.78 } },
+  'portfolio-aggressive-jul2026': { total: { ret: 4640.9, dd: 29.2 }, b3: { ret: 630.81, dd: 22.95 }, mrs: { ret: 6645.95, dd: 34.13 } },
+};
+
 const TIER_CB = {
   enabled: true, peakWindowDays: 30, ddTriggerPercent: 8,
   lotMultiplier: 0.5, pauseDays: 14, applyToStrategyTypes: ['zz_breakout'],
@@ -65,7 +79,7 @@ const toSec = (d) => Math.floor(new Date(`${d}T00:00:00Z`).getTime() / 1000);
 
 const ensureMerged = () => {
   ensureDir(MERGED);
-  for (const src of [FLAT_BUNDLE, HAM_BUNDLE, STOCK_BUNDLE]) {
+  for (const src of [CRYPTO_MERGED, STOCK_BUNDLE]) {
     if (!fs.existsSync(src)) continue;
     for (const iv of fs.readdirSync(src)) {
       const d = path.join(src, iv);
@@ -252,13 +266,17 @@ const main = async () => {
   if (stockIds.length !== 8) console.warn(`WARN expected 8 stock legs, got ${stockIds.length}`);
 
   const mrsCache = new Map();
+  const mrsCoverage = {};
   for (const n of [20, 25, 30]) {
     const ids = [];
+    const missing = [];
     for (const leg of durable.slice(0, n)) {
-      if (!hasCandle(MERGED, leg.tf, leg.symbol)) continue;
+      if (!hasCandle(MERGED, leg.tf, leg.symbol)) { missing.push(`${leg.symbol}:${leg.tf}`); continue; }
       ids.push(await upsertMrs(db, leg, `N${n}`));
     }
     mrsCache.set(n, ids);
+    mrsCoverage[`top${n}`] = { requested: n, resolved: ids.length, missing };
+    if (ids.length < n) console.warn(`WARN MRS N=${n} resolved only ${ids.length} legs — missing candles: ${missing.join(' ')}`);
     console.log(`MRS N=${n} upserted ${ids.length}`);
   }
 
@@ -331,6 +349,22 @@ const main = async () => {
         console.log(`  +STOCKS(${c.tag}): ret=${withStocks.ret}% dd=${withStocks.dd}% cap=$${withStocks.capital} (Δret ${variants[c.tag].deltaRet})`);
       }
 
+      let repro = null;
+      if (w.tag === 'full' && JULY_STAMP[pf.setKey]) {
+        const j = JULY_STAMP[pf.setKey];
+        const pick = (k) => coreBooks.find((b) => b.key === k);
+        const cmp = (now, then) => (now && then
+          ? { july: then.ret, now: now.ret, ratio: +(now.ret / then.ret).toFixed(2) }
+          : null);
+        repro = {
+          note: 'Same recipe, same B3 candles, current engine vs July stamp.',
+          b3: cmp(pick('b3'), j.b3),
+          mrs: cmp(pick('mrs'), j.mrs),
+          total: { july: j.total.ret, now: core.ret, ratio: +(core.ret / j.total.ret).toFixed(2) },
+        };
+        console.log(`  REPRO vs July: b3 x${repro.b3.ratio} | mrs x${repro.mrs.ratio} | total x${repro.total.ratio}`);
+      }
+
       results.push({
         window: w.tag,
         from: w.from,
@@ -348,6 +382,7 @@ const main = async () => {
           curve: downsample(core.curve),
         },
         withStocks: variants,
+        reproVsJulyStamp: repro,
         method: 'per_book_equity_sum_with_delayed_join',
       });
     }
@@ -363,6 +398,7 @@ const main = async () => {
     stocksJoin: STOCKS_JOIN,
     stocksParticipationDays: stocksDays,
     stocksLegs: stockIds.length,
+    mrsCoverage,
     stocksConfig: { op: STOCK_OP, lot: STOCK_LOT, ri: STOCK_RI, initial: STOCK_INITIAL, tf: '4h', shiftPct: 0.2, source: STOCK_LEG_PATTERN },
     costModel: { b3: 'comm 0.1 / slip 0.05', mrs: 'comm 0.036 / slip 0', stocks: STOCK_COSTS },
     caveats: [
@@ -400,6 +436,17 @@ const main = async () => {
     '',
     ...header,
     ...rows('short'),
+    '',
+    '## Reproducibility vs the live July stamp',
+    '',
+    '| Portfolio | B3 July → now | MRS July → now | Total July → now |',
+    '|---|---|---|---|',
+    ...results.filter((r) => r.window === 'full' && r.reproVsJulyStamp).map((r) => {
+      const x = r.reproVsJulyStamp;
+      return `| ${r.label} | ${x.b3.july} → ${x.b3.now} (x${x.b3.ratio}) | ${x.mrs.july} → ${x.mrs.now} (x${x.mrs.ratio}) | ${x.total.july} → ${x.total.now} (x${x.total.ratio}) |`;
+    }),
+    '',
+    'B3 reproduces the stamped figure exactly on the same candles, so the candle set and the equity-sum method are sound. The MRS book does not reproduce — it now returns several times more. Until that gap is explained, **no portfolio total from this run belongs on the vitrine**, with or without stocks.',
     '',
     '## How to read this',
     '',
