@@ -1212,6 +1212,8 @@ export type SweepRecord = {
   zscoreEntry: number;
   zscoreExit: number;
   zscoreStop: number;
+  /** Preferred MeanReversion/MRS2 full config; materialize must copy this through. */
+  mrs2ConfigJson?: string | null;
   totalReturnPercent: number;
   maxDrawdownPercent: number;
   winRatePercent: number;
@@ -4135,7 +4137,8 @@ const buildSweepRecordFallbackByStrategyId = async (strategyId: number): Promise
        s.detection_source,
        s.zscore_entry,
        s.zscore_exit,
-       s.zscore_stop
+       s.zscore_stop,
+       s.mrs2_config_json
      FROM strategies s
      WHERE s.id = ?`,
     [id]
@@ -4152,6 +4155,10 @@ const buildSweepRecordFallbackByStrategyId = async (strategyId: number): Promise
   const market = marketMode === 'mono'
     ? (baseSymbol || 'BTCUSDT')
     : `${baseSymbol || 'BTCUSDT'}/${quoteSymbol || 'ETHUSDT'}`;
+  const mrs2Raw = row.mrs2_config_json;
+  const mrs2ConfigJson = typeof mrs2Raw === 'string'
+    ? (mrs2Raw.trim() || '{}')
+    : (mrs2Raw == null ? '{}' : JSON.stringify(mrs2Raw));
 
   return {
     strategyId: id,
@@ -4166,6 +4173,7 @@ const buildSweepRecordFallbackByStrategyId = async (strategyId: number): Promise
     zscoreEntry: asNumber(row.zscore_entry, 2),
     zscoreExit: asNumber(row.zscore_exit, 0.5),
     zscoreStop: asNumber(row.zscore_stop, 3),
+    mrs2ConfigJson,
     totalReturnPercent: 0,
     maxDrawdownPercent: 0,
     winRatePercent: 0,
@@ -4927,6 +4935,7 @@ const buildStrategyDraftFromRecord = (
     zscore_entry: asNumber(record.zscoreEntry, 2),
     zscore_exit: asNumber(record.zscoreExit, 0.5),
     zscore_stop: asNumber(record.zscoreStop, 3),
+    mrs2_config_json: asString(record.mrs2ConfigJson, '{}') || '{}',
     base_symbol: baseSymbol,
     quote_symbol: record.marketMode === 'mono' ? '' : asString(quoteSymbol, 'ETHUSDT'),
     interval: asString(record.interval, '4h'),

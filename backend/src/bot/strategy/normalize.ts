@@ -53,6 +53,26 @@ export const normalizeZscoreStop = (value: any, fallback: number, entry: number)
   return Math.max(entry + 0.05, safeNumber(value, fallback));
 };
 
+/** MeanReversion/MRS2 remap zscore_* to MA mults / distance — never DD-clamp exit<entry / stop>entry. */
+export const isMrs2StrategyType = (strategyType: any): boolean => {
+  const t = String(strategyType || '');
+  return t === 'MeanReversion' || t === 'MRS2';
+};
+
+export const normalizeMrs2ZscoreBand = (value: any, fallback: number): number => {
+  return Math.max(0, safeNumber(value, fallback));
+};
+
+export const normalizeMrs2ConfigJson = (raw: any): string => {
+  if (raw == null) return '{}';
+  if (typeof raw === 'string') return raw.trim() || '{}';
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return '{}';
+  }
+};
+
 export const DEFAULT_STRATEGY: Omit<Strategy, 'api_key_id' | 'id'> = {
   name: 'DD_BattleToads',
   strategy_type: 'DD_BattleToads',

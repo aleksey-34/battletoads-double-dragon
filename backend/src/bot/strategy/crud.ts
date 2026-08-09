@@ -16,6 +16,9 @@ import {
   normalizeZscoreEntry,
   normalizeZscoreExit,
   normalizeZscoreStop,
+  isMrs2StrategyType,
+  normalizeMrs2ZscoreBand,
+  normalizeMrs2ConfigJson,
   safeBoolean,
   safeNumber,
   validateStrategyBinding,
@@ -332,9 +335,19 @@ export const createStrategy = async (
   const strategyType = normalizeStrategyType(draft.strategy_type || DEFAULT_STRATEGY.strategy_type);
   const marketMode = normalizeMarketMode(draft.market_mode || DEFAULT_STRATEGY.market_mode);
   const typeDefaults = getTypeAwareStrategyDefaults(strategyType);
-  const zscoreEntry = normalizeZscoreEntry(draft.zscore_entry, DEFAULT_STRATEGY.zscore_entry);
-  const zscoreExit = normalizeZscoreExit(draft.zscore_exit, DEFAULT_STRATEGY.zscore_exit, zscoreEntry);
-  const zscoreStop = normalizeZscoreStop(draft.zscore_stop, DEFAULT_STRATEGY.zscore_stop, zscoreEntry);
+  const mrs2Type = isMrs2StrategyType(strategyType);
+  const mrs2Defaults = mrs2Type ? { zscore_entry: 0.95, zscore_exit: 1.05, zscore_stop: 0.3 } : null;
+  const zscoreEntry = normalizeZscoreEntry(
+    draft.zscore_entry,
+    mrs2Defaults?.zscore_entry ?? DEFAULT_STRATEGY.zscore_entry,
+  );
+  const zscoreExit = mrs2Type
+    ? normalizeMrs2ZscoreBand(draft.zscore_exit, mrs2Defaults!.zscore_exit)
+    : normalizeZscoreExit(draft.zscore_exit, DEFAULT_STRATEGY.zscore_exit, zscoreEntry);
+  const zscoreStop = mrs2Type
+    ? normalizeMrs2ZscoreBand(draft.zscore_stop, mrs2Defaults!.zscore_stop)
+    : normalizeZscoreStop(draft.zscore_stop, DEFAULT_STRATEGY.zscore_stop, zscoreEntry);
+  const mrs2ConfigJson = normalizeMrs2ConfigJson((draft as any).mrs2_config_json);
   const baseSymbol = normalizeSymbol(String(draft.base_symbol || DEFAULT_STRATEGY.base_symbol));
   const quoteSymbol = marketMode === 'mono'
     ? normalizeSymbol(String(draft.quote_symbol || ''))
@@ -363,6 +376,7 @@ export const createStrategy = async (
     zscore_entry: zscoreEntry,
     zscore_exit: zscoreExit,
     zscore_stop: zscoreStop,
+    mrs2_config_json: mrs2ConfigJson,
     base_symbol: baseSymbol,
     quote_symbol: quoteSymbol,
     interval: String(draft.interval || DEFAULT_STRATEGY.interval).trim() || DEFAULT_STRATEGY.interval,
@@ -408,6 +422,7 @@ export const createStrategy = async (
       zscore_entry,
       zscore_exit,
       zscore_stop,
+      mrs2_config_json,
       base_symbol,
       quote_symbol,
       interval,
@@ -431,7 +446,7 @@ export const createStrategy = async (
       created_at,
       updated_at
     ) VALUES (
-      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
       CURRENT_TIMESTAMP, CURRENT_TIMESTAMP
     )`,
     [
@@ -454,6 +469,7 @@ export const createStrategy = async (
       strategy.zscore_entry,
       strategy.zscore_exit,
       strategy.zscore_stop,
+      strategy.mrs2_config_json || '{}',
       strategy.base_symbol,
       strategy.quote_symbol,
       strategy.interval,
@@ -560,19 +576,49 @@ export const updateStrategy = async (
     pushUpdate('detection_source', nextDetection);
   }
   if (patch.zscore_entry !== undefined) {
+    const nextType = patch.strategy_type !== undefined
+      ? normalizeStrategyType(patch.strategy_type)
+      : existing.strategy_type;
+    const mrs2Type = isMrs2StrategyType(nextType);
     const nextEntry = normalizeZscoreEntry(patch.zscore_entry, existing.zscore_entry);
     const exitSource = patch.zscore_exit !== undefined ? patch.zscore_exit : existing.zscore_exit;
     const stopSource = patch.zscore_stop !== undefined ? patch.zscore_stop : existing.zscore_stop;
     pushUpdate('zscore_entry', nextEntry);
-    pushUpdate('zscore_exit', normalizeZscoreExit(exitSource, existing.zscore_exit, nextEntry));
-    pushUpdate('zscore_stop', normalizeZscoreStop(stopSource, existing.zscore_stop, nextEntry));
+    pushUpdate(
+      'zscore_exit',
+      mrs2Type
+        ? normalizeMrs2ZscoreBand(exitSource, existing.zscore_exit)
+        : normalizeZscoreExit(exitSource, existing.zscore_exit, nextEntry),
+    );
+    pushUpdate(
+      'zscore_stop',
+      mrs2Type
+        ? normalizeMrs2ZscoreBand(stopSource, existing.zscore_stop)
+        : normalizeZscoreStop(stopSource, existing.zscore_stop, nextEntry),
+    );
   } else {
+    const mrs2Type = isMrs2StrategyType(
+      patch.strategy_type !== undefined ? normalizeStrategyType(patch.strategy_type) : existing.strategy_type,
+    );
     if (patch.zscore_exit !== undefined) {
-      pushUpdate('zscore_exit', normalizeZscoreExit(patch.zscore_exit, existing.zscore_exit, existing.zscore_entry));
+      pushUpdate(
+        'zscore_exit',
+        mrs2Type
+          ? normalizeMrs2ZscoreBand(patch.zscore_exit, existing.zscore_exit)
+          : normalizeZscoreExit(patch.zscore_exit, existing.zscore_exit, existing.zscore_entry),
+      );
     }
     if (patch.zscore_stop !== undefined) {
-      pushUpdate('zscore_stop', normalizeZscoreStop(patch.zscore_stop, existing.zscore_stop, existing.zscore_entry));
+      pushUpdate(
+        'zscore_stop',
+        mrs2Type
+          ? normalizeMrs2ZscoreBand(patch.zscore_stop, existing.zscore_stop)
+          : normalizeZscoreStop(patch.zscore_stop, existing.zscore_stop, existing.zscore_entry),
+      );
     }
+  }
+  if ((patch as any).mrs2_config_json !== undefined) {
+    pushUpdate('mrs2_config_json', normalizeMrs2ConfigJson((patch as any).mrs2_config_json));
   }
   if (patch.base_symbol !== undefined) {
     pushUpdate('base_symbol', normalizeSymbol(String(patch.base_symbol)));
@@ -948,6 +994,7 @@ export const copyStrategyBlock = async (
       zscore_entry: source.zscore_entry,
       zscore_exit: source.zscore_exit,
       zscore_stop: source.zscore_stop,
+      mrs2_config_json: (source as any).mrs2_config_json || '{}',
       base_symbol: targetBase,
       quote_symbol: targetQuote,
       interval: source.interval,
