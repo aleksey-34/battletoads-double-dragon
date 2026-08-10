@@ -74,9 +74,10 @@ def sync_storefront(conn: sqlite3.Connection, dry: bool) -> list[str]:
     return names
 
 
-def find_clients(conn: sqlite3.Connection) -> list[dict]:
+def find_clients(conn: sqlite3.Connection, include_disabled: bool = False) -> list[dict]:
+    enabled_clause = "" if include_disabled else "AND COALESCE(ap.actual_enabled,0)=1"
     rows = conn.execute(
-        """
+        f"""
         SELECT t.id AS tenant_id, t.slug, ap.published_system_name, ap.actual_enabled,
                p.id AS portfolio_id, p.set_key
         FROM algofund_active_portfolios aap
@@ -84,7 +85,7 @@ def find_clients(conn: sqlite3.Connection) -> list[dict]:
         JOIN tenants t ON t.id = ap.tenant_id
         JOIN algofund_portfolios p ON p.id = aap.portfolio_id
         WHERE COALESCE(aap.is_enabled,1)=1
-          AND COALESCE(ap.actual_enabled,0)=1
+          {enabled_clause}
         ORDER BY p.set_key, t.slug
         """
     ).fetchall()
@@ -94,6 +95,7 @@ def find_clients(conn: sqlite3.Connection) -> list[dict]:
             "tenantId": int(r[0]),
             "slug": str(r[1]),
             "published": str(r[2] or ""),
+            "actualEnabled": int(r[3] or 0),
             "portfolioId": int(r[4]),
             "setKey": str(r[5]),
         })
@@ -141,6 +143,8 @@ def main() -> None:
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--yes", action="store_true")
     ap.add_argument("--skip-storefront", action="store_true")
+    ap.add_argument("--include-disabled", action="store_true",
+                    help="Also rematerialize assigned-but-disabled clients with activate=false (orphan cleanup)")
     ap.add_argument("--only-slug", action="append", default=[])
     args = ap.parse_args()
     if not args.dry_run and not args.run:
@@ -152,13 +156,14 @@ def main() -> None:
     if not args.skip_storefront:
         sync_storefront(conn, dry=args.dry_run)
 
-    clients = find_clients(conn)
+    clients = find_clients(conn, include_disabled=args.include_disabled)
     if args.only_slug:
         want = set(args.only_slug)
         clients = [c for c in clients if c["slug"] in want]
     print(f"clients to rematerialize: {len(clients)}")
     for c in clients:
-        print(f"  {c['tenantId']} {c['slug']} → {c['setKey']} (pub={c['published']})")
+        act = "ON" if c.get("actualEnabled") else "OFF→activate=false"
+        print(f"  {c['tenantId']} {c['slug']} → {c['setKey']} ({act}, pub={c['published']})")
 
     if args.dry_run:
         print("dry-run done")
@@ -167,12 +172,13 @@ def main() -> None:
     ok = 0
     fail = 0
     for c in clients:
-        print(f"\n=== materialize {c['slug']} → {c['setKey']} ===", flush=True)
+        activate = bool(c.get("actualEnabled"))
+        print(f"\n=== materialize {c['slug']} → {c['setKey']} activate={activate} ===", flush=True)
         t0 = time.time()
         try:
             data = api_post(
                 f"/api/saas/algofund/{c['tenantId']}/materialize-portfolio",
-                {"setKey": c["setKey"], "portfolioId": c["portfolioId"], "activate": True},
+                {"setKey": c["setKey"], "portfolioId": c["portfolioId"], "activate": activate},
                 timeout=1200,
             )
             systems = data.get("systems") or []

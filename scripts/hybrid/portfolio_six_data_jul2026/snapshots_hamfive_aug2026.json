@@ -1,0 +1,80 @@
+{
+  "P1": {
+    "ret": 5326.39,
+    "dd": 29.58,
+    "pf": 1.423,
+    "trades": 4191,
+    "retNoStocks": 5344.89,
+    "ddNoStocks": 27.76,
+    "capital": 20000,
+    "method": "shared_deposit_hamfive_stocks_zz",
+    "dateFrom": "2024-03-17",
+    "dateTo": "2026-07-16",
+    "character": "thin HAM4+FIVE4 + stocksZZ"
+  },
+  "P2": {
+    "ret": 18309.21,
+    "dd": 37.73,
+    "pf": 1.726,
+    "trades": 4867,
+    "retNoStocks": 17233.39,
+    "ddNoStocks": 40.52,
+    "capital": 20000,
+    "method": "shared_deposit_hamfive_stocks_zz",
+    "dateFrom": "2024-03-17",
+    "dateTo": "2026-07-16",
+    "character": "full HAM8+FIVE7 + stocksZZ"
+  },
+  "P3": {
+    "ret": 22094.46,
+    "dd": 40.6,
+    "pf": 1.726,
+    "trades": 4867,
+    "retNoStocks": 22139.71,
+    "ddNoStocks": 41.29,
+    "capital": 25000,
+    "method": "shared_deposit_hamfive_stocks_zz",
+    "dateFrom": "2024-03-17",
+    "dateTo": "2026-07-16",
+    "character": "same modules, more HAM/FIVE gas + stocksZZ"
+  },
+  "P4": {
+    "ret": 3329.72,
+    "dd": 26.17,
+    "pf": 1.386,
+    "trades": 3991,
+    "retNoStocks": 3046.1,
+    "ddNoStocks": 29.26,
+    "capital": 20000,
+    "method": "shared_deposit_hamfive_stocks_zz",
+    "dateFrom": "2024-03-17",
+    "dateTo": "2026-07-16",
+    "character": "QUALITY cut HAM3+FIVE3 tighter OP/lot"
+  },
+  "P5": {
+    "ret": 18399.28,
+    "dd": 37.61,
+    "pf": 1.727,
+    "trades": 4876,
+    "retNoStocks": 17233.39,
+    "ddNoStocks": 40.52,
+    "capital": 20000,
+    "method": "shared_deposit_hamfive_stocks_zz",
+    "dateFrom": "2024-03-17",
+    "dateTo": "2026-07-16",
+    "character": "balanced + stocksZZ OP8 as 3rd sleeve"
+  },
+  "P6": {
+    "ret": 26081.57,
+    "dd": 39.2,
+    "pf": 1.756,
+    "trades": 4876,
+    "retNoStocks": 25355.6,
+    "ddNoStocks": 40.68,
+    "capital": 28000,
+    "method": "shared_deposit_hamfive_stocks_zz",
+    "dateFrom": "2024-03-17",
+    "dateTo": "2026-07-16",
+    "character": "max OP/lot + stocksZZ"
+  }
+}
