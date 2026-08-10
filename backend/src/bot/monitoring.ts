@@ -600,6 +600,53 @@ export const getMonitoringLatest = async (apiKeyName: string) => {
   return row || null;
 };
 
+/**
+ * Latest snapshot per API key in one query (admin monitoring table).
+ * Avoids N× getMonitoringBundle(includeTrades) which timed out and showed $0.00.
+ */
+export const getMonitoringLatestBatch = async (
+  apiKeyNames: string[],
+): Promise<Record<string, any>> => {
+  const names = [...new Set(
+    (Array.isArray(apiKeyNames) ? apiKeyNames : [])
+      .map((n) => String(n || '').trim())
+      .filter(Boolean),
+  )];
+  if (names.length === 0) return {};
+
+  const placeholders = names.map(() => '?').join(',');
+  const rows = await db.all(
+    `SELECT a.name AS api_key_name, ms.*
+     FROM api_keys a
+     LEFT JOIN monitoring_snapshots ms
+       ON ms.id = (
+         SELECT ms2.id
+         FROM monitoring_snapshots ms2
+         WHERE ms2.api_key_id = a.id
+         ORDER BY datetime(ms2.recorded_at) DESC
+         LIMIT 1
+       )
+     WHERE a.name IN (${placeholders})`,
+    names,
+  ).catch(() => []) as Array<Record<string, unknown>>;
+
+  const out: Record<string, any> = {};
+  for (const row of rows || []) {
+    const name = String(row.api_key_name || '').trim();
+    if (!name) continue;
+    if (row.id == null && row.equity_usd == null && row.recorded_at == null) {
+      out[name] = null;
+      continue;
+    }
+    const { api_key_name: _drop, ...snapshot } = row;
+    out[name] = snapshot;
+  }
+  for (const name of names) {
+    if (!(name in out)) out[name] = null;
+  }
+  return out;
+};
+
 export type MonitoringTradeMarker = {
   time: number;
   tradeType: 'entry' | 'exit';

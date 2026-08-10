@@ -1852,11 +1852,21 @@ router.post('/algofund/:tenantId/unassign-portfolio', async (req, res) => {
     return res.status(400).json({ error: 'Invalid tenantId' });
   }
   try {
+    const parseFlag = (raw: unknown): boolean | undefined => {
+      if (raw === undefined || raw === null || raw === '') return undefined;
+      const s = String(raw).trim().toLowerCase();
+      if (s === 'false' || s === '0' || s === 'no') return false;
+      if (s === 'true' || s === '1' || s === 'yes') return true;
+      return undefined;
+    };
     const data = await unassignAlgofundPortfolio({
       profileId,
       portfolioId: req.body?.portfolioId != null ? Number(req.body.portfolioId) : undefined,
       setKey: req.body?.setKey != null ? String(req.body.setKey) : undefined,
       clearPublished: req.body?.clearPublished !== false,
+      cancelOrders: parseFlag(req.body?.cancelOrders),
+      closePositions: parseFlag(req.body?.closePositions),
+      archiveRuntime: parseFlag(req.body?.archiveRuntime),
     });
     res.json({ success: true, ...data });
   } catch (error) {

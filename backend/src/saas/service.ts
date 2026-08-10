@@ -1451,6 +1451,7 @@ const copytradingPlans: PlanSeed[] = [
       copyTenantLimit: 5,
       copyAlgorithm: 'vwap_basic',
       copyPrecision: 'standard',
+      monitoring: true,
     },
   },
 ];
@@ -1619,7 +1620,8 @@ const resolvePlanCapabilities = (plan: PlanRow | null): TenantCapabilities => {
   }
 
   const features = getPlanFeatures(plan);
-  const defaultMonitoring = asNumber(plan.price_usdt, 0) >= 20;
+  const defaultMonitoring = asNumber(plan.price_usdt, 0) >= 20
+    || plan.product_mode === 'copytrading_client';
   const defaultBacktest = plan.product_mode === 'strategy_client'
     ? asNumber(plan.max_strategies_total, 0) >= 3
     : asNumber(plan.price_usdt, 0) >= 50;
@@ -4591,7 +4593,7 @@ const saasArchiveStrategy = async (
     name?: string | null;
     state?: string | null;
   },
-  options?: { softOnly?: boolean },
+  options?: { softOnly?: boolean; skipCancel?: boolean },
 ): Promise<void> => {
   const strategyId = Number(row.id);
   if (!Number.isFinite(strategyId) || strategyId <= 0) return;
@@ -4603,19 +4605,23 @@ const saasArchiveStrategy = async (
     quote_symbol: String(row.quote_symbol || ''),
   };
   const state = asString(row.state, 'flat').trim().toLowerCase() || 'flat';
-  // Flat / already-idle orphans: DB-only archive. Exchange cancel on hundreds of
-  // historical SAAS legs (often WEEX -1058 unsupported pairs) made rematerialize hang for hours.
+  // Flat / idle orphans: skip position close (avoids WEEX -1058 storms on hundreds of
+  // historical legs during remat). ALWAYS cancel resting limits unless skipCancel —
+  // MRS/MRS2 can be flat while buy/sell limits still occupy margin (Aug 2026 remat incident).
   const softOnly = options?.softOnly === true || state === 'flat' || state === '' || state === 'idle';
-  if (!softOnly) {
+  const skipCancel = options?.skipCancel === true;
+  if (!skipCancel) {
     try {
       await cancelStrategyWorkingOrders(apiKeyName, strategyShape);
     } catch (err) {
       const msg = asString((err as Error).message, '');
-      // -1058 / unsupported pair: do not block archive; exposure close may also no-op.
+      // -1058 / unsupported pair: do not block archive.
       if (!/-1058|not supported via the API|trade denied|Invalid symbol/i.test(msg)) {
         logger.warn(`saasArchiveStrategy: cancelStrategyWorkingOrders failed for #${strategyId} (${apiKeyName}/${symbolsHint}): ${msg}`);
       }
     }
+  }
+  if (!softOnly) {
     try {
       await closeStrategyExposure(apiKeyName, strategyShape);
     } catch (err) {
@@ -13241,9 +13247,10 @@ const listTenantSummaries = async (options?: {
         ? (strategyProfile?.assigned_api_key_name || algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name)
         : tenant.product_mode === 'algofund_client'
           ? (algofundProfile?.execution_api_key_name || algofundProfile?.assigned_api_key_name)
-          : Number(copytradingProfile?.copy_enabled || 0) === 1
-              ? copytradingProfile?.master_api_key_name
-              : '',
+          : tenant.product_mode === 'copytrading_client'
+            // Follower equity lives on the tenant's own key — never the lead master.
+            ? tenant.assigned_api_key_name
+            : '',
       tenant.assigned_api_key_name
     ).trim();
     const monitoring = capabilities.monitoring && effectiveMonitoringApiKeyName
@@ -15647,8 +15654,8 @@ const materializeAlgofundSystem = async (
   // ARCHIVE-ORPHANS: previous SAAS materializations left is_active=1 legs that
   // keep trading after switch_system (zombie outbreak 2026-05-04).
   // Scope to this tenant's SAAS::slug:: rows only — never touch manual/research
-  // strategies on the same API key. Flat orphans = DB soft-archive (no WEEX
-  // cancel storm / -1058 hang). Non-flat orphans still cancel+close first.
+  // strategies on the same API key. Flat orphans cancel resting orders but skip
+  // position close (WEEX -1058 hang risk). Non-flat also close exposure.
   // When preserveSiblingSystems (portfolio multi-TS), keep extra strategy ids
   // from sibling books so we do not wipe B3 while materializing MRS (and vice versa).
   try {
@@ -15679,6 +15686,7 @@ const materializeAlgofundSystem = async (
           + `on ${executionApiKeyName} (${softCount} soft/flat, ${orphans.length - softCount} exchange-touch) `
           + `not in new TS '${systemName}' (${members.length} new members)`,
         );
+        await ensureExchangeClientInitialized(executionApiKeyName).catch(() => {});
         for (const orphan of orphans) {
           await saasArchiveStrategy(executionApiKeyName, orphan);
         }
@@ -19387,9 +19395,18 @@ export const unassignAlgofundPortfolio = async (payload: {
   portfolioId?: number;
   setKey?: string;
   clearPublished?: boolean;
+  /** Default true — demat must free margin from resting limits. */
+  cancelOrders?: boolean;
+  /** Default false — keep exchange positions unless caller opts in. */
+  closePositions?: boolean;
+  /** Default true — archive runtime strategies / books for this profile key. */
+  archiveRuntime?: boolean;
 }): Promise<{ portfolioId: number; setKey: string }> => {
   const profileId = await resolveAlgofundProfileId(payload.profileId);
   const setKey = asString(payload.setKey, '').trim();
+  const shouldCancelOrders = payload.cancelOrders !== false;
+  const shouldClosePositions = payload.closePositions === true;
+  const shouldArchiveRuntime = payload.archiveRuntime !== false;
   const portfolio = payload.portfolioId
     ? await db.get<{ id: number; set_key: string }>(
       `SELECT id, set_key FROM algofund_portfolios WHERE id = ?`,
@@ -19417,10 +19434,62 @@ export const unassignAlgofundPortfolio = async (payload: {
              WHEN COALESCE(published_system_name, '') = ? THEN ''
              ELSE published_system_name
            END,
+           requested_enabled = 0,
+           actual_enabled = 0,
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
       [asString(portfolio.set_key, ''), profileId],
     ).catch(() => undefined);
+  }
+
+  const profileRow = await db.get(
+    `SELECT COALESCE(ap.execution_api_key_name, ap.assigned_api_key_name, t.assigned_api_key_name, '') AS api_key_name,
+            COALESCE(t.slug, '') AS slug
+     FROM algofund_profiles ap
+     JOIN tenants t ON t.id = ap.tenant_id
+     WHERE ap.id = ?`,
+    [profileId],
+  ) as { api_key_name?: string; slug?: string } | undefined;
+  const apiKeyName = asString(profileRow?.api_key_name, '').trim();
+  const slug = asString(profileRow?.slug, '').trim();
+
+  if (apiKeyName && shouldArchiveRuntime) {
+    await db.run(
+      `UPDATE strategies
+       SET is_active = 0, is_runtime = 0, is_archived = 1, auto_update = 0, updated_at = CURRENT_TIMESTAMP
+       WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ? LIMIT 1)
+         AND COALESCE(is_runtime, 0) = 1`,
+      [apiKeyName],
+    ).catch(() => undefined);
+    if (slug) {
+      await db.run(
+        `UPDATE trading_systems
+         SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+         WHERE api_key_id = (SELECT id FROM api_keys WHERE name = ? LIMIT 1)
+           AND name LIKE ?`,
+        [apiKeyName, `ALGOFUND::${slug}::%`],
+      ).catch(() => undefined);
+    }
+  }
+
+  if (apiKeyName && (shouldCancelOrders || shouldClosePositions)) {
+    await ensureExchangeClientInitialized(apiKeyName).catch(() => {});
+    if (shouldCancelOrders) {
+      try {
+        await cancelAllOrders(apiKeyName);
+        logger.info(`[unassignAlgofundPortfolio] cancelAllOrders for ${apiKeyName} (profile ${profileId})`);
+      } catch (e) {
+        logger.warn(`[unassignAlgofundPortfolio] cancelAllOrders for ${apiKeyName}: ${(e as Error).message}`);
+      }
+    }
+    if (shouldClosePositions) {
+      try {
+        await closeAllPositions(apiKeyName);
+        logger.info(`[unassignAlgofundPortfolio] closeAllPositions for ${apiKeyName} (profile ${profileId})`);
+      } catch (e) {
+        logger.warn(`[unassignAlgofundPortfolio] closeAllPositions for ${apiKeyName}: ${(e as Error).message}`);
+      }
+    }
   }
 
   return {
@@ -19605,6 +19674,9 @@ export const materializeAlgofundPortfolioFull = async (payload: {
         + `(role=${role} not in [${[...allowedRoles].join(',')}]) `
         + `with ${staleMembers.length} strategies for ${tenant.slug}`,
       );
+      if (staleMembers.length > 0) {
+        await ensureExchangeClientInitialized(executionApiKeyName).catch(() => {});
+      }
       for (const stale of staleMembers) {
         await saasArchiveStrategy(executionApiKeyName, stale).catch(() => {});
       }
@@ -19673,6 +19745,22 @@ export const materializeAlgofundPortfolioFull = async (payload: {
       });
       logger.warn(
         `Algofund portfolio materialize: ensured runtime on ${keepIds.length} legs across ${systemsOut.length} books for ${tenant.slug}`,
+      );
+    }
+
+    // Hard guarantee after remat: wipe ALL resting limits on the key.
+    // Per-leg cancel above can miss symbol-format mismatches / retired MRS books
+    // that left dozens of buy/sell limits eating margin (Aug 2026). Runtime cycle
+    // re-places needed MRS2 limits on the next tick.
+    try {
+      await ensureExchangeClientInitialized(executionApiKeyName);
+      await cancelAllOrders(executionApiKeyName);
+      logger.info(
+        `Algofund portfolio materialize: cancelAllOrders on ${executionApiKeyName} after remat for ${tenant.slug}`,
+      );
+    } catch (e) {
+      logger.warn(
+        `Algofund portfolio materialize: cancelAllOrders failed for ${executionApiKeyName} (${tenant.slug}): ${(e as Error).message}`,
       );
     }
   }
@@ -19933,6 +20021,44 @@ export const removeAlgofundSystemFromProfile = async (payload: {
           [profileId]
         ) as { cnt: number } | undefined;
 
+        // Partial demat: archive legs of the removed TS and cancel their resting orders
+        // (even while sibling books stay live). Full wipe below when nothing remains.
+        const memberRows = (await db.all(
+          `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode, s.state
+           FROM trading_systems ts
+           JOIN api_keys a ON a.id = ts.api_key_id
+           JOIN trading_system_members tsm ON tsm.system_id = ts.id
+           JOIN strategies s ON s.id = tsm.strategy_id
+           WHERE a.name = ?
+             AND (ts.name = ? OR ts.name LIKE ?)
+             AND COALESCE(s.is_archived, 0) = 0`,
+          [apiKeyName, systemName, `%::${systemName}`],
+        ).catch(() => [])) as Array<{
+          id: number;
+          name: string;
+          base_symbol: string | null;
+          quote_symbol: string | null;
+          market_mode: string | null;
+          state: string | null;
+        }>;
+        if (memberRows.length > 0) {
+          if (shouldCancelOrders || shouldClosePositions) {
+            await ensureExchangeClientInitialized(apiKeyName).catch(() => {});
+          }
+          for (const member of memberRows) {
+            // softOnly skips position close when caller did not request it;
+            // skipCancel honours explicit cancelOrders=false from demat UI.
+            await saasArchiveStrategy(apiKeyName, member, {
+              softOnly: !shouldClosePositions,
+              skipCancel: !shouldCancelOrders,
+            }).catch(() => {});
+          }
+          logger.info(
+            `[removeAlgofundSystemFromProfile] archived ${memberRows.length} legs for "${systemName}" on ${apiKeyName}`
+            + ` (cancel=${shouldCancelOrders} close=${shouldClosePositions})`,
+          );
+        }
+
         if (Number(remainingEnabled?.cnt || 0) === 0) {
           // No systems left — fully demote runtime strategies (archive them so the
           // dashboard "sets" counter goes to 0 and the connect-modal stops listing
@@ -19952,7 +20078,7 @@ export const removeAlgofundSystemFromProfile = async (payload: {
           logger.info(`[removeAlgofundSystemFromProfile] No systems remain for ${apiKeyName}: archived ${(archived as any)?.changes || 0} runtime strategies`);
 
           // Clear published_system_name so this tenant disappears from the
-          // connect-clients modal that lists tenants currently bound to the TS.
+          // connect-modal that lists tenants currently bound to the TS.
           try {
             await db.run(
               `UPDATE algofund_profiles

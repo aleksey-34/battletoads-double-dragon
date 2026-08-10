@@ -30,6 +30,11 @@ import MonitoringChartPanel, {
   ChartPeriodDays,
 } from '../components/MonitoringChartPanel';
 import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
+import {
+  groupMonitoringByAccount,
+  type MonitoringAccountGroupRow,
+  type MonitoringLeafMetrics,
+} from '../utils/monitoringAccountGroups';
 
 /* eslint-disable react-hooks/exhaustive-deps */
 
@@ -44,19 +49,7 @@ type ApiKey = {
   tenantSlug?: string;
 };
 
-type AdminMonitoringRow = {
-  apiKeyName: string;
-  exchange: string;
-  tenantLabel: string;
-  tenantSlug?: string;
-  equityUsd: number | null;
-  unrealizedPnl: number | null;
-  pnlNetUsd: number | null;
-  drawdownPercent: number | null;
-  recordedAt: string | null;
-  trades24h: number;
-  lastTradeAt: string | null;
-};
+type AdminMonitoringRow = MonitoringLeafMetrics;
 
 type BalanceRow = {
   coin: string;
@@ -828,42 +821,74 @@ const Positions: React.FC = () => {
   const loadMonitoringTable = async (keys: ApiKey[]) => {
     setMonitoringTableLoading(true);
     try {
-      const rows = await Promise.all(keys.map(async (key): Promise<AdminMonitoringRow> => {
-        try {
-          const res = await axios.get(`/api/monitoring/${encodeURIComponent(key.name)}`, {
-            params: { limit: 1, includeTrades: '1' },
-            timeout: 20_000,
-          });
-          const latest = res.data?.latest || null;
-          return {
-            apiKeyName: key.name,
-            exchange: key.exchange,
-            tenantLabel: String(key.tenantDisplayName || '').trim() || 'без привязки',
-            tenantSlug: key.tenantSlug,
-            equityUsd: latest?.equity_usd != null ? Number(latest.equity_usd) : null,
-            unrealizedPnl: latest?.unrealized_pnl != null ? Number(latest.unrealized_pnl) : null,
-            pnlNetUsd: latest?.pnl_net_usd != null ? Number(latest.pnl_net_usd) : null,
-            drawdownPercent: latest?.drawdown_percent != null ? Number(latest.drawdown_percent) : null,
-            recordedAt: latest?.recorded_at || null,
-            trades24h: Number(res.data?.tradeStats?.trades24h || 0),
-            lastTradeAt: res.data?.tradeStats?.lastTradeAt || null,
-          };
-        } catch {
-          return {
-            apiKeyName: key.name,
-            exchange: key.exchange,
-            tenantLabel: String(key.tenantDisplayName || '').trim() || 'без привязки',
-            tenantSlug: key.tenantSlug,
-            equityUsd: null,
-            unrealizedPnl: null,
-            pnlNetUsd: null,
-            drawdownPercent: null,
-            recordedAt: null,
-            trades24h: 0,
-            lastTradeAt: null,
-          };
-        }
-      }));
+      const names = keys.map((k) => k.name).filter(Boolean);
+      const byName = new Map(keys.map((k) => [k.name, k]));
+      let summaryRows: Array<{
+        apiKeyName: string;
+        latest: Record<string, unknown> | null;
+        tradeStats?: { trades24h?: number; lastTradeAt?: string | null };
+      }> = [];
+
+      try {
+        const res = await axios.get('/api/monitoring-summary', {
+          params: {
+            keys: names.join(','),
+            includeTrades: '1',
+          },
+          timeout: 60_000,
+        });
+        summaryRows = Array.isArray(res.data?.rows) ? res.data.rows : [];
+      } catch {
+        // Fallback: per-key latest only (no trades) with limited concurrency.
+        const concurrency = 6;
+        const queue = [...names];
+        const collected: typeof summaryRows = [];
+        const workers = Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+          while (queue.length) {
+            const name = queue.shift();
+            if (!name) break;
+            try {
+              const res = await axios.get(`/api/monitoring/${encodeURIComponent(name)}`, {
+                params: { limit: 1 },
+                timeout: 15_000,
+              });
+              const latest = res.data?.latest || (Array.isArray(res.data?.points) ? res.data.points[res.data.points.length - 1] : null) || null;
+              collected.push({ apiKeyName: name, latest, tradeStats: { trades24h: 0, lastTradeAt: null } });
+            } catch (err: any) {
+              collected.push({
+                apiKeyName: name,
+                latest: null,
+                tradeStats: { trades24h: 0, lastTradeAt: null },
+              });
+              console.warn(`monitoring load failed for ${name}:`, err?.message || err);
+            }
+          }
+        });
+        await Promise.all(workers);
+        summaryRows = collected;
+      }
+
+      const summaryByName = new Map(summaryRows.map((r) => [r.apiKeyName, r]));
+      const rows: AdminMonitoringRow[] = names.map((name) => {
+        const key = byName.get(name)!;
+        const summary = summaryByName.get(name);
+        const latest = summary?.latest || null;
+        const hasEquity = latest?.equity_usd != null && Number.isFinite(Number(latest.equity_usd));
+        return {
+          apiKeyName: name,
+          exchange: key.exchange,
+          tenantLabel: String(key.tenantDisplayName || '').trim() || 'без привязки',
+          tenantSlug: key.tenantSlug,
+          equityUsd: hasEquity ? Number(latest!.equity_usd) : null,
+          unrealizedPnl: latest?.unrealized_pnl != null ? Number(latest.unrealized_pnl) : null,
+          pnlNetUsd: latest?.pnl_net_usd != null ? Number(latest.pnl_net_usd) : null,
+          drawdownPercent: latest?.drawdown_percent != null ? Number(latest.drawdown_percent) : null,
+          recordedAt: latest?.recorded_at ? String(latest.recorded_at) : null,
+          trades24h: Number(summary?.tradeStats?.trades24h || 0),
+          lastTradeAt: summary?.tradeStats?.lastTradeAt || null,
+          loadError: !latest ? 'нет снимка' : null,
+        };
+      });
       setMonitoringRows(rows);
     } finally {
       setMonitoringTableLoading(false);
@@ -915,7 +940,16 @@ const Positions: React.FC = () => {
 
   useEffect(() => { if (monChartOpen && monChartKey) void loadMonChart(monChartKey, monChartDays); }, [monChartDays]);
 
-  const fmtNum = (v: unknown, d = 2) => { const n = Number(v); return Number.isFinite(n) ? n.toFixed(d) : '-'; };
+  const fmtNum = (v: unknown, d = 2) => {
+    if (v == null || v === '') return '—';
+    const n = Number(v);
+    return Number.isFinite(n) ? n.toFixed(d) : '—';
+  };
+
+  const monitoringAccountRows = useMemo(
+    () => groupMonitoringByAccount(monitoringRows),
+    [monitoringRows],
+  );
 
   const monChartTenantSlug = useMemo(
     () => apiKeys.find((key) => key.name === monChartKey)?.tenantSlug || '',
@@ -932,59 +966,105 @@ const Positions: React.FC = () => {
   };
 
   const monitoringColumns = [
-    { title: 'API ключ', dataIndex: 'apiKeyName', render: (v: string, row: AdminMonitoringRow) => (
-      <Space direction="vertical" size={0}>
-        <strong>{v}</strong>
-        <span style={{ fontSize: 11, color: '#6b7280' }}>{row.exchange}</span>
-      </Space>
-    ) },
-    { title: 'Клиент', dataIndex: 'tenantLabel' },
-    { title: 'Equity', render: (_: unknown, row: AdminMonitoringRow) => `$${fmtNum(row.equityUsd)}` },
-    { title: 'UPNL', render: (_: unknown, row: AdminMonitoringRow) => {
-      const v = Number(row.unrealizedPnl || 0);
-      return <span style={{ color: v >= 0 ? '#16a34a' : '#dc2626' }}>${fmtNum(v)}</span>;
-    } },
-    { title: 'PnL net', render: (_: unknown, row: AdminMonitoringRow) => {
-      if (row.pnlNetUsd == null) return '—';
-      const v = Number(row.pnlNetUsd);
-      return <span style={{ color: v >= 0 ? '#16a34a' : '#dc2626' }}>${fmtNum(v)}</span>;
-    } },
-    { title: 'DD %', render: (_: unknown, row: AdminMonitoringRow) => `${fmtNum(row.drawdownPercent)}%` },
-    { title: 'Сделки 24ч', render: (_: unknown, row: AdminMonitoringRow) => (
-      <Space direction="vertical" size={0}>
-        <span>{row.trades24h}</span>
-        {row.lastTradeAt ? (
-          <span style={{ fontSize: 10, color: '#9ca3af' }}>
-            {new Date(row.lastTradeAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-          </span>
-        ) : null}
-      </Space>
-    ) },
     {
-      title: '',
-      width: 250,
-      render: (_: unknown, row: AdminMonitoringRow) => (
-        <Space wrap size={[4, 4]}>
-          <Button size="small" type="primary" ghost onClick={() => openMonChart(row.apiKeyName)}>График</Button>
-          {row.tenantSlug ? (
-            <>
-              <Button
-                size="small"
-                onClick={() => void handleCopyPortfolioLink(String(row.tenantSlug || ''))}
-              >
-                Ссылка
-              </Button>
-              <Button
-                size="small"
-                type="link"
-                onClick={() => window.open(buildPublicPortfolioUrl(String(row.tenantSlug || '')), '_blank', 'noopener,noreferrer')}
-              >
-                Открыть
-              </Button>
-            </>
+      title: 'Аккаунт / API',
+      dataIndex: 'accountLabel',
+      render: (_: unknown, row: MonitoringAccountGroupRow) => {
+        if (row.rowKind === 'account') {
+          return (
+            <Space direction="vertical" size={0}>
+              <strong>{row.accountLabel}</strong>
+              <span style={{ fontSize: 11, color: '#6b7280' }}>
+                {row.keyCount > 1
+                  ? `${row.keyCount} API · ${row.exchange}`
+                  : `${row.apiKeyName} · ${row.exchange}`}
+              </span>
+            </Space>
+          );
+        }
+        return (
+          <Space direction="vertical" size={0}>
+            <span style={{ fontFamily: 'monospace' }}>{row.apiKeyName}</span>
+            <span style={{ fontSize: 11, color: '#6b7280' }}>{row.exchange}</span>
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Equity',
+      render: (_: unknown, row: MonitoringAccountGroupRow) => (
+        <span title={row.loadError || undefined}>
+          {row.equityUsd == null ? '—' : `$${fmtNum(row.equityUsd)}`}
+        </span>
+      ),
+    },
+    {
+      title: 'UPNL',
+      render: (_: unknown, row: MonitoringAccountGroupRow) => {
+        if (row.unrealizedPnl == null) return '—';
+        const v = Number(row.unrealizedPnl || 0);
+        return <span style={{ color: v >= 0 ? '#16a34a' : '#dc2626' }}>${fmtNum(v)}</span>;
+      },
+    },
+    {
+      title: 'PnL net',
+      render: (_: unknown, row: MonitoringAccountGroupRow) => {
+        if (row.pnlNetUsd == null) return '—';
+        const v = Number(row.pnlNetUsd);
+        return <span style={{ color: v >= 0 ? '#16a34a' : '#dc2626' }}>${fmtNum(v)}</span>;
+      },
+    },
+    {
+      title: 'DD %',
+      render: (_: unknown, row: MonitoringAccountGroupRow) => (
+        row.drawdownPercent == null ? '—' : `${fmtNum(row.drawdownPercent)}%`
+      ),
+    },
+    {
+      title: 'Сделки 24ч',
+      render: (_: unknown, row: MonitoringAccountGroupRow) => (
+        <Space direction="vertical" size={0}>
+          <span>{row.trades24h}</span>
+          {row.lastTradeAt ? (
+            <span style={{ fontSize: 10, color: '#9ca3af' }}>
+              {new Date(row.lastTradeAt).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+            </span>
           ) : null}
         </Space>
       ),
+    },
+    {
+      title: '',
+      width: 250,
+      render: (_: unknown, row: MonitoringAccountGroupRow) => {
+        const chartKey = row.rowKind === 'apiKey' || row.keyCount === 1
+          ? (row.rowKind === 'apiKey' ? row.apiKeyName : row.children?.[0]?.apiKeyName || row.apiKeyName)
+          : '';
+        return (
+          <Space wrap size={[4, 4]}>
+            {chartKey ? (
+              <Button size="small" type="primary" ghost onClick={() => openMonChart(chartKey)}>График</Button>
+            ) : null}
+            {row.tenantSlug ? (
+              <>
+                <Button
+                  size="small"
+                  onClick={() => void handleCopyPortfolioLink(String(row.tenantSlug || ''))}
+                >
+                  Ссылка
+                </Button>
+                <Button
+                  size="small"
+                  type="link"
+                  onClick={() => window.open(buildPublicPortfolioUrl(String(row.tenantSlug || '')), '_blank', 'noopener,noreferrer')}
+                >
+                  Открыть
+                </Button>
+              </>
+            ) : null}
+          </Space>
+        );
+      },
     },
   ];
 
@@ -1036,11 +1116,15 @@ const Positions: React.FC = () => {
           ) : null}
           <Spin spinning={monitoringTableLoading || apiKeysLoading}>
             <Table
-              rowKey="apiKeyName"
+              rowKey="key"
               size="small"
               pagination={{ pageSize: 20 }}
-              dataSource={monitoringRows}
+              dataSource={monitoringAccountRows}
               columns={monitoringColumns}
+              expandable={{
+                defaultExpandAllRows: false,
+                rowExpandable: (row) => Array.isArray(row.children) && row.children.length > 0,
+              }}
               locale={{ emptyText: <Empty description={monitoringEmptyDescription} /> }}
             />
           </Spin>

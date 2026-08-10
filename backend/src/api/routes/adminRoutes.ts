@@ -52,6 +52,8 @@ import {
 } from '../../bot/tradingSystems';
 import {
   getMonitoringBundle,
+  getMonitoringLatestBatch,
+  getMonitoringTradeStats,
   recordMonitoringSnapshot,
 } from '../../bot/monitoring';
 import { loadSettings, saveApiKey, saveRiskSettings, normalizeExchangeName, ApiKey, RiskSettings, Strategy } from '../../config/settings';
@@ -2301,6 +2303,51 @@ adminRouter.post('/monitoring/:apiKeyName/snapshot', async (req, res) => {
   } catch (error) {
     const err = error as Error;
     logger.error(`Error recording monitoring snapshot for ${apiKeyName}: ${err.message}`);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/** Bulk latest snapshots for admin monitoring table (one SQL, optional trade stats). */
+adminRouter.get('/monitoring-summary', requirePlatformAdmin, async (req, res) => {
+  try {
+    const rawKeys = String(req.query.keys || '').trim();
+    const fromBody = Array.isArray(req.body?.keys) ? req.body.keys : [];
+    const names = [
+      ...rawKeys.split(',').map((s) => s.trim()).filter(Boolean),
+      ...fromBody.map((s: unknown) => String(s || '').trim()).filter(Boolean),
+    ];
+    const unique = [...new Set(names)];
+    if (unique.length === 0) {
+      return res.json({ success: true, rows: [] });
+    }
+    if (unique.length > 500) {
+      return res.status(400).json({ error: 'Too many keys (max 500)' });
+    }
+
+    const includeTrades = String(req.query.includeTrades || '0') === '1'
+      || String(req.query.includeTrades || '').toLowerCase() === 'true';
+
+    const latestByKey = await getMonitoringLatestBatch(unique);
+    const rows = await Promise.all(unique.map(async (apiKeyName) => {
+      const latest = latestByKey[apiKeyName] || null;
+      let tradeStats = { trades24h: 0, lastTradeAt: null as string | null };
+      if (includeTrades) {
+        tradeStats = await getMonitoringTradeStats(apiKeyName).catch(() => ({
+          trades24h: 0,
+          lastTradeAt: null,
+        }));
+      }
+      return {
+        apiKeyName,
+        latest,
+        tradeStats,
+      };
+    }));
+
+    res.json({ success: true, rows });
+  } catch (error) {
+    const err = error as Error;
+    logger.error(`Error loading monitoring-summary: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });

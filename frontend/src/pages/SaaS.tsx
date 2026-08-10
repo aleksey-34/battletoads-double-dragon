@@ -337,6 +337,7 @@ type TenantSummary = {
   } | null;
   copytradingProfile?: {
     master_api_key_name?: string;
+    copy_enabled?: number;
     requested_enabled?: number;
     actual_enabled?: number;
   } | null;
@@ -3418,7 +3419,8 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
   // Per-row dematerialize confirmation modal (algofund active-systems "Убрать")
   const [dematSystemConfirm, setDematSystemConfirm] = useState<{ systemName: string } | null>(null);
   const [dematClosePositions, setDematClosePositions] = useState(false);
-  const [dematCancelOrders, setDematCancelOrders] = useState(false);
+  // Default ON: demat without cancel left MRS limits eating margin (Aug 2026).
+  const [dematCancelOrders, setDematCancelOrders] = useState(true);
   const [dematSubmitting, setDematSubmitting] = useState(false);
   const [selectedAdminDraftTsOfferIds, setSelectedAdminDraftTsOfferIds] = useState<string[]>([]);
   const [selectedAdminDraftTsSetKey, setSelectedAdminDraftTsSetKey] = useState('');
@@ -10521,9 +10523,22 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         const key = row.tenant.product_mode === 'strategy_client'
           ? row.strategyProfile?.assigned_api_key_name || row.tenant.assigned_api_key_name || ''
           : row.tenant.product_mode === 'algofund_client'
-            ? row.algofundProfile?.assigned_api_key_name || row.tenant.assigned_api_key_name || ''
-            : row.copytradingProfile?.master_api_key_name || row.tenant.assigned_api_key_name || '';
-        return key ? <Text style={{ fontSize: 11 }}>{key}</Text> : <Text type="secondary">—</Text>;
+            ? row.algofundProfile?.execution_api_key_name || row.algofundProfile?.assigned_api_key_name || row.tenant.assigned_api_key_name || ''
+            : row.tenant.product_mode === 'copytrading_client'
+              ? row.tenant.assigned_api_key_name || ''
+              : row.tenant.assigned_api_key_name
+                || row.strategyProfile?.assigned_api_key_name
+                || row.algofundProfile?.assigned_api_key_name
+                || '';
+        return key ? (
+          <Space direction="vertical" size={0}>
+            <Text style={{ fontSize: 11 }}>{key}</Text>
+            {row.tenant.product_mode === 'copytrading_client' && row.copytradingProfile?.master_api_key_name
+              && String(row.copytradingProfile.master_api_key_name) !== key ? (
+              <Text type="secondary" style={{ fontSize: 10 }}>lead: {String(row.copytradingProfile.master_api_key_name)}</Text>
+            ) : null}
+          </Space>
+        ) : <Text type="secondary">—</Text>;
       },
     },
     {
@@ -10944,10 +10959,20 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       return monitoringModeFilter === 'all' || row.tenant.product_mode === monitoringModeFilter;
     })
     .map((row) => {
-      const profile = (row.tenant.product_mode === 'strategy_client' || row.tenant.product_mode === 'dual') ? row.strategyProfile : row.algofundProfile;
-      const requestedEnabled = Number(profile?.requested_enabled || 0) === 1;
-      const actualEnabled = Number(profile?.actual_enabled || 0) === 1;
-      const apiKeyName = String(profile?.assigned_api_key_name || row.tenant.assigned_api_key_name || '').trim();
+      const profile = (row.tenant.product_mode === 'strategy_client' || row.tenant.product_mode === 'dual')
+        ? row.strategyProfile
+        : row.tenant.product_mode === 'algofund_client'
+          ? row.algofundProfile
+          : null;
+      const requestedEnabled = Number(profile?.requested_enabled || 0) === 1
+        || (row.tenant.product_mode === 'copytrading_client' && Number(row.copytradingProfile?.copy_enabled || 0) === 1);
+      const actualEnabled = Number(profile?.actual_enabled || 0) === 1
+        || (row.tenant.product_mode === 'copytrading_client' && Number(row.copytradingProfile?.copy_enabled || 0) === 1);
+      const apiKeyName = String(
+        row.tenant.product_mode === 'copytrading_client'
+          ? (row.tenant.assigned_api_key_name || '')
+          : (profile?.assigned_api_key_name || row.algofundProfile?.execution_api_key_name || row.tenant.assigned_api_key_name || ''),
+      ).trim();
       const systems = monitoringSystemsByApiKey[apiKeyName] || [];
       const positionsDigest = monitoringPositionsByApiKey[apiKeyName] || { openCount: 0, symbols: [] };
       const strategiesDigest = monitoringStrategiesByApiKey[apiKeyName] || { total: 0, active: 0, activeAuto: 0, withLastError: 0 };
@@ -11068,14 +11093,23 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
 
   const monitoringColumns: ColumnsType<(typeof monitoringRows)[number]> = [
     {
-      title: 'Client',
+      title: 'Аккаунт / API',
       key: 'tenant',
       width: 240,
-      render: (_, row) => (
-        <Space direction="vertical" size={0}>
-          <Text strong>{row.tenant.display_name}</Text>
-          <Text type="secondary">{row.tenant.slug}</Text>
-        </Space>
+      render: (_, row: any) => (
+        row._isApiLeaf ? (
+          <Space direction="vertical" size={0}>
+            <Text code style={{ fontSize: 12 }}>{row.apiKeyName || '—'}</Text>
+            <Text type="secondary" style={{ fontSize: 11 }}>API ключ</Text>
+          </Space>
+        ) : (
+          <Space direction="vertical" size={0}>
+            <Text strong>{row.tenant.display_name}</Text>
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              {row.apiKeyName ? `API: ${row.apiKeyName}` : row.tenant.slug}
+            </Text>
+          </Space>
+        )
       ),
     },
     {
@@ -11093,12 +11127,6 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
           ? <Tooltip title={row.publishedSystemName || undefined}><Tag color="geekblue">{row.tsCardLabel}</Tag></Tooltip>
           : <Tag color="default">—</Tag>
       ),
-    },
-    {
-      title: copy.apiKey,
-      key: 'apiKey',
-      width: 170,
-      render: (_, row) => row.apiKeyName || '—',
     },
     {
       title: 'Включить торговлю',
@@ -11142,7 +11170,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       render: (_, row) => {
         const options = row.systems.map((system) => ({
           value: Number(system.id),
-          label: `${system.name}${system.is_active ? ' [active]' : ''} В· PnL ${formatMoney(system.metrics?.unrealized_pnl)} В· DD ${formatPercent(system.metrics?.drawdown_percent)}`,
+          label: `${system.name}${system.is_active ? ' [active]' : ''} · PnL ${formatMoney(system.metrics?.unrealized_pnl)} · DD ${formatPercent(system.metrics?.drawdown_percent)}`,
         }));
 
         return (
@@ -11195,6 +11223,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
       render: (_, row) => row.logNotes.length > 0 ? row.logNotes.join(' | ') : '—',
     },
   ];
+
+  const monitoringTreeRows = useMemo(
+    () => monitoringRows.map((row) => {
+      const apiKeyName = String(row.apiKeyName || '').trim();
+      return {
+        ...row,
+        key: `tenant-${row.tenant.id}`,
+        children: apiKeyName
+          ? [{
+            ...row,
+            key: `api-${row.tenant.id}-${apiKeyName}`,
+            // leaf marker for expandable table
+            children: undefined as undefined,
+            _isApiLeaf: true,
+          }]
+          : undefined,
+      };
+    }),
+    [monitoringRows],
+  );
 
   return (
     <div className="saas-page">
@@ -12541,6 +12589,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   { value: 'all', label: 'Все режимы' },
                                   { value: 'strategy_client', label: 'Strategy Client' },
                                   { value: 'algofund_client', label: 'Algofund' },
+                                  { value: 'copytrading_client', label: 'Copytrading' },
                                   { value: 'dual', label: 'Dual' },
                                 ]}
                               />
@@ -12697,11 +12746,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               </Col>
                             </Row>
 
-                            <Alert
-                              type="info"
-                              showIcon
-                              message="Операционные таблицы перенесены во вкладку Клиенты"
-                              description="Здесь оставлены только настройки и отчёты SaaS/Telegram/аналитики."
+                            <Table
+                              rowKey="key"
+                              size="small"
+                              pagination={{ pageSize: 12, showSizeChanger: false }}
+                              scroll={{ x: 1600 }}
+                              dataSource={monitoringTreeRows}
+                              columns={monitoringColumns}
+                              expandable={{
+                                defaultExpandAllRows: false,
+                                rowExpandable: (row: any) => Array.isArray(row.children) && row.children.length > 0,
+                              }}
                             />
                           </Space>
                         </Card>

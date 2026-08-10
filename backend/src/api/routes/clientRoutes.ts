@@ -1575,6 +1575,13 @@ router.get('/client/monitoring', authenticateClient, async (req, res) => {
         exchange: String(row.exchange || '').trim().toLowerCase(),
       }))
       .filter((row) => Boolean(row.name));
+    // Elite/copy keys are often named Copy_Alex1 / arcopy1 — not tenant-{id}-*.
+    // Still expose assigned keys so the client monitoring picker and streams work.
+    for (const name of [tenantApiKeyName, strategyApiKeyName, algofundApiKeyName, tvAlertsApiKeyName]) {
+      if (!name) continue;
+      if (ownedKeys.some((k) => k.name === name)) continue;
+      ownedKeys.push({ name, exchange: '' });
+    }
     const ownedKeyNames = new Set(ownedKeys.map((row) => row.name));
     const fallbackApiKeyName = ownedKeys[0]?.name || '';
 
