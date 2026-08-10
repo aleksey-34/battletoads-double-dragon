@@ -74,11 +74,11 @@ export function computeSignalTotalNotional(
     equityBase = Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : freeMargin;
   } else {
     equityBase = baseline + Math.max(0, walletEquity - baseline) * reinvestShare;
-    equityBase = Math.min(equityBase, Math.max(walletEquity, baseline));
+    equityBase = Math.min(equityBase, walletEquity);
   }
 
   let baseCapital = equityBase;
-  if (!strategy.fixed_lot && reinvestShare <= 0 && Number.isFinite(maxDeposit) && maxDeposit > 0) {
+  if (!strategy.fixed_lot && Number.isFinite(maxDeposit) && maxDeposit > 0) {
     baseCapital = Math.min(baseCapital, maxDeposit);
   }
 

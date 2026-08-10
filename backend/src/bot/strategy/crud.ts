@@ -131,15 +131,15 @@ export const computeSignalTotalNotional = (
   } else {
     // Match BT: initial + max(0, equity − initial) × reinvestShare
     equityBase = baseline + Math.max(0, walletEquity - baseline) * reinvestShare;
-    // When reinvest is 0, stay on baseline (do not float with free margin alone).
-    // Soft ceiling: never size the compound base above wallet equity.
-    equityBase = Math.min(equityBase, Math.max(walletEquity, baseline));
+    // Live safety: never invent capital above wallet equity.
+    // max_deposit is often a soft research ceiling (5k/250k), NOT the client deposit;
+    // without this clamp, lot% of max_deposit blows up accounts whose equity ≪ max_deposit.
+    equityBase = Math.min(equityBase, walletEquity);
   }
 
   let baseCapital = equityBase;
-  // Hard risk ceiling only when reinvest is off — with reinvest>0, max_deposit is the
-  // baseline budget and free margin is the live accept cap (BT uses deposit×50 override).
-  if (!strategy.fixed_lot && reinvestShare <= 0 && Number.isFinite(maxDeposit) && maxDeposit > 0) {
+  // Soft ceiling: max_deposit caps the compound base. Free margin remains the exchange accept cap.
+  if (!strategy.fixed_lot && Number.isFinite(maxDeposit) && maxDeposit > 0) {
     baseCapital = Math.min(baseCapital, maxDeposit);
   }
 

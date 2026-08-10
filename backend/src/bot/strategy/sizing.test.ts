@@ -14,7 +14,7 @@ describe('compound reinvest sizing (live ↔ BT)', () => {
     leverage: 10,
   };
 
-  it('ri=0 sizes off baseline only (not free margin float)', () => {
+  it('ri=0 sizes off min(baseline, equity) — never invents capital above wallet', () => {
     const n = computeSignalTotalNotional(
       { ...base, reinvest_percent: 0 },
       8000, // free margin
@@ -22,8 +22,20 @@ describe('compound reinvest sizing (live ↔ BT)', () => {
       1,
       { walletEquity: 12000 },
     );
-    // base = 5000, ×10% = 500; free margin does not inflate
+    // baseline 5000, equity 12k, ri=0 → base stays 5000; ×10% = 500
     assert.equal(n, 500);
+  });
+
+  it('when max_deposit ≫ equity, sizes off equity (not max_deposit)', () => {
+    const n = computeSignalTotalNotional(
+      { ...base, reinvest_percent: 82, max_deposit: 5000 },
+      800,
+      'long',
+      1,
+      { walletEquity: 900 },
+    );
+    // Must NOT be 5000×10%=500; equity base 900×10%=90, free margin 800 keeps 90
+    assert.equal(n, 90);
   });
 
   it('ri=100 compounds off wallet equity, capped by free margin', () => {
@@ -34,20 +46,20 @@ describe('compound reinvest sizing (live ↔ BT)', () => {
       1,
       { walletEquity: 12000 },
     );
-    // equityBase = 12000, ×10% = 1200, freeMargin cap → 4000 keeps 1200
-    assert.equal(n, 1200);
+    // equityBase = min(12000, 12000)=12000 but soft-capped by max_deposit 5000 → 500
+    assert.equal(n, 500);
   });
 
-  it('ri=50 partial compound: baseline + half of profit', () => {
+  it('ri=50 partial compound above baseline, never above equity, soft-capped by max_deposit', () => {
     const n = computeSignalTotalNotional(
-      { ...base, reinvest_percent: 50 },
+      { ...base, reinvest_percent: 50, max_deposit: 5000 },
       50_000,
       'long',
       1,
       { walletEquity: 9000 },
     );
-    // base = 5000 + (9000-5000)*0.5 = 7000; ×10% = 700
-    assert.equal(n, 700);
+    // base = 5000 + (9000-5000)*0.5 = 7000; min(equity, max_deposit)=5000; ×10% = 500
+    assert.equal(n, 500);
   });
 
   it('does not apply legacy ×(1+ri%) multiplier', () => {
@@ -64,7 +76,7 @@ describe('compound reinvest sizing (live ↔ BT)', () => {
 
   it('hard-caps notional by free margin when compound would exceed it', () => {
     const n = computeSignalTotalNotional(
-      { ...base, reinvest_percent: 100 },
+      { ...base, reinvest_percent: 100, max_deposit: 50_000 },
       50,
       'long',
       1,
