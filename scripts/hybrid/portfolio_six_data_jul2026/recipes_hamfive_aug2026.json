@@ -1,7 +1,8 @@
 {
-  "generatedAt": "2026-08-10T09:00:00Z",
-  "status": "STAMP candidate — replaces jul2026 MRS books with HAM+FIVECARD+stocksZZ",
-  "note": "Keep live set_key names so algofund_active_portfolios keep working. Fat MRS removed. Stocks = ZZ 4h L30 everywhere.",
+  "generatedAt": "2026-08-10T09:43:15.074Z",
+  "status": "STAMP — WEEX apiTradingSymbols filtered HAM/FIVE",
+  "note": "HAM/FIVE rebuilt for live WEEX allowlist. P4 = FIVE-heavy quality tilt (not thin cut).",
+  "weexAllowlistN": 223,
   "sharedB3": {
     "systemIdSource": 205,
     "setKey": "portfolio-b3-core-shared-jul2026",
@@ -12,31 +13,79 @@
     "tierCbOnZzBreakout": true
   },
   "universes": {
-    "ham_zz_flat8": {
+    "ham_zz_weex8": {
       "from": "ham",
-      "ids": [254951, 254936, 254940, 254945, 254949, 254938, 254948, 254933]
+      "ids": [
+        254962,
+        254936,
+        254940,
+        254945,
+        254946,
+        254960,
+        254953,
+        254934
+      ],
+      "symbols": [
+        "ENAUSDT",
+        "TAOUSDT",
+        "THETAUSDT",
+        "ZECUSDT",
+        "HUSDT",
+        "HOMEUSDT",
+        "1000PEPEUSDT",
+        "PAXGUSDT"
+      ]
     },
-    "ham_zz_top4q": {
+    "ham_zz_weex4": {
       "from": "ham",
-      "ids": [254951, 254936, 254940, 254945]
+      "ids": [
+        254962,
+        254936,
+        254940,
+        254945
+      ],
+      "symbols": [
+        "ENAUSDT",
+        "TAOUSDT",
+        "THETAUSDT",
+        "ZECUSDT"
+      ]
     },
-    "ham_zz_top3q": {
-      "from": "ham",
-      "ids": [254951, 254936, 254940],
-      "note": "Quality: CLO/TAO/THETA — drop ZEC extra_trend"
-    },
-    "fivecard_flat7": {
+    "five_weex7": {
       "from": "five",
-      "ids": [255317, 255323, 255343, 255339, 255318, 255319, 255337]
+      "ids": [
+        255343,
+        255460,
+        256038,
+        255458,
+        255479,
+        255319,
+        255302
+      ],
+      "symbols": [
+        "MANTAUSDT",
+        "JUPUSDT",
+        "KASUSDT",
+        "JTOUSDT",
+        "APTUSDT",
+        "ETHFIUSDT",
+        "LYNUSDT"
+      ]
     },
-    "fivecard_top4q": {
+    "five_weex4": {
       "from": "five",
-      "ids": [255323, 255317, 255343, 255339]
-    },
-    "fivecard_top3q": {
-      "from": "five",
-      "ids": [255323, 255317, 255343],
-      "note": "Quality: AEVO/HANA/MANTA — drop ACE"
+      "ids": [
+        255343,
+        255460,
+        256038,
+        255458
+      ],
+      "symbols": [
+        "MANTAUSDT",
+        "JUPUSDT",
+        "KASUSDT",
+        "JTOUSDT"
+      ]
     },
     "stocks_zz_4h_l30": {
       "from": "stocks",
@@ -44,8 +93,18 @@
       "lot": 15,
       "ri": 100,
       "apiSymbols": [
-        "AMZNUSDT", "AVGOUSDT", "BABAUSDT", "IBMUSDT", "INTCUSDT", "MUUSDT",
-        "NVDAUSDT", "RIVNUSDT", "SOXLUSDT", "SPXUSDT", "TSLAUSDT", "UBERUSDT"
+        "AMZNUSDT",
+        "AVGOUSDT",
+        "BABAUSDT",
+        "IBMUSDT",
+        "INTCUSDT",
+        "MUUSDT",
+        "NVDAUSDT",
+        "RIVNUSDT",
+        "SOXLUSDT",
+        "SPXUSDT",
+        "TSLAUSDT",
+        "UBERUSDT"
       ]
     }
   },
@@ -55,12 +114,41 @@
       "setKey": "portfolio-conservative-jul2026",
       "label": "Portfolio Conservative",
       "storefront": true,
-      "character": "thin HAM4+FIVE4 + stocksZZ",
+      "personal": false,
+      "character": "WEEX HAM4+FIVE4 thin OP/lot + stocksZZ",
       "books": [
-        { "key": "b3", "ref": "sharedB3", "initial": 10000 },
-        { "key": "ham", "universe": "ham_zz_top4q", "op": 8, "lot": 10, "ri": 100, "initial": 5000, "tsTag": "ham-top4-op8-lot10" },
-        { "key": "five", "universe": "fivecard_top4q", "op": 6, "lot": 8, "ri": 100, "initial": 5000, "tsTag": "five-top4-op6-lot8" },
-        { "key": "stocks", "universe": "stocks_zz_4h_l30", "op": 6, "lot": 15, "ri": 100, "initial": 0, "tsTag": "stocks-zz-4h-l30" }
+        {
+          "key": "b3",
+          "ref": "sharedB3",
+          "initial": 10000
+        },
+        {
+          "key": "ham",
+          "universe": "ham_zz_weex4",
+          "op": 8,
+          "lot": 10,
+          "ri": 100,
+          "initial": 5000,
+          "tsTag": "ham-ham_zz_weex4-op8-lot10"
+        },
+        {
+          "key": "five",
+          "universe": "five_weex4",
+          "op": 6,
+          "lot": 8,
+          "ri": 100,
+          "initial": 5000,
+          "tsTag": "five-five_weex4-op6-lot8"
+        },
+        {
+          "key": "stocks",
+          "universe": "stocks_zz_4h_l30",
+          "op": 6,
+          "lot": 15,
+          "ri": 100,
+          "initial": 0,
+          "tsTag": "stocks-zz-4h-l30"
+        }
       ]
     },
     {
@@ -68,12 +156,41 @@
       "setKey": "portfolio-balanced-jul2026",
       "label": "Portfolio Balanced",
       "storefront": true,
-      "character": "full HAM8+FIVE7 + stocksZZ",
+      "personal": false,
+      "character": "WEEX HAM8+FIVE7 + stocksZZ",
       "books": [
-        { "key": "b3", "ref": "sharedB3", "initial": 10000 },
-        { "key": "ham", "universe": "ham_zz_flat8", "op": 10, "lot": 12, "ri": 100, "initial": 6000, "tsTag": "ham-flat8-op10-lot12" },
-        { "key": "five", "universe": "fivecard_flat7", "op": 8, "lot": 10, "ri": 100, "initial": 4000, "tsTag": "five-flat7-op8-lot10" },
-        { "key": "stocks", "universe": "stocks_zz_4h_l30", "op": 6, "lot": 15, "ri": 100, "initial": 0, "tsTag": "stocks-zz-4h-l30" }
+        {
+          "key": "b3",
+          "ref": "sharedB3",
+          "initial": 10000
+        },
+        {
+          "key": "ham",
+          "universe": "ham_zz_weex8",
+          "op": 10,
+          "lot": 12,
+          "ri": 100,
+          "initial": 6000,
+          "tsTag": "ham-ham_zz_weex8-op10-lot12"
+        },
+        {
+          "key": "five",
+          "universe": "five_weex7",
+          "op": 8,
+          "lot": 10,
+          "ri": 100,
+          "initial": 4000,
+          "tsTag": "five-five_weex7-op8-lot10"
+        },
+        {
+          "key": "stocks",
+          "universe": "stocks_zz_4h_l30",
+          "op": 6,
+          "lot": 15,
+          "ri": 100,
+          "initial": 0,
+          "tsTag": "stocks-zz-4h-l30"
+        }
       ]
     },
     {
@@ -81,12 +198,41 @@
       "setKey": "portfolio-aggressive-jul2026",
       "label": "Portfolio Aggressive",
       "storefront": true,
-      "character": "same modules, more HAM/FIVE gas + stocksZZ",
+      "personal": false,
+      "character": "WEEX modules, more gas + stocksZZ",
       "books": [
-        { "key": "b3", "ref": "sharedB3", "initial": 10000 },
-        { "key": "ham", "universe": "ham_zz_flat8", "op": 14, "lot": 16, "ri": 100, "initial": 10000, "tsTag": "ham-flat8-op14-lot16" },
-        { "key": "five", "universe": "fivecard_flat7", "op": 10, "lot": 12, "ri": 100, "initial": 5000, "tsTag": "five-flat7-op10-lot12" },
-        { "key": "stocks", "universe": "stocks_zz_4h_l30", "op": 6, "lot": 15, "ri": 100, "initial": 0, "tsTag": "stocks-zz-4h-l30" }
+        {
+          "key": "b3",
+          "ref": "sharedB3",
+          "initial": 10000
+        },
+        {
+          "key": "ham",
+          "universe": "ham_zz_weex8",
+          "op": 14,
+          "lot": 16,
+          "ri": 100,
+          "initial": 10000,
+          "tsTag": "ham-ham_zz_weex8-op14-lot16"
+        },
+        {
+          "key": "five",
+          "universe": "five_weex7",
+          "op": 10,
+          "lot": 12,
+          "ri": 100,
+          "initial": 5000,
+          "tsTag": "five-five_weex7-op10-lot12"
+        },
+        {
+          "key": "stocks",
+          "universe": "stocks_zz_4h_l30",
+          "op": 6,
+          "lot": 15,
+          "ri": 100,
+          "initial": 0,
+          "tsTag": "stocks-zz-4h-l30"
+        }
       ]
     },
     {
@@ -94,12 +240,41 @@
       "setKey": "portfolio-quality-tilt-jul2026",
       "label": "Portfolio Quality Tilt",
       "storefront": true,
-      "character": "QUALITY cut: HAM3+FIVE3 only (no extra_trend tails), tighter OP/lot vs Conserv",
+      "personal": false,
+      "character": "QUALITY: full WEEX set, FIVE-heavy lot (trueComp), HAM quieter OP vs Balanced",
       "books": [
-        { "key": "b3", "ref": "sharedB3", "initial": 10000 },
-        { "key": "ham", "universe": "ham_zz_top3q", "op": 6, "lot": 8, "ri": 100, "initial": 5000, "tsTag": "ham-top3q-op6-lot8" },
-        { "key": "five", "universe": "fivecard_top3q", "op": 5, "lot": 7, "ri": 100, "initial": 5000, "tsTag": "five-top3q-op5-lot7" },
-        { "key": "stocks", "universe": "stocks_zz_4h_l30", "op": 6, "lot": 15, "ri": 100, "initial": 0, "tsTag": "stocks-zz-4h-l30" }
+        {
+          "key": "b3",
+          "ref": "sharedB3",
+          "initial": 10000
+        },
+        {
+          "key": "ham",
+          "universe": "ham_zz_weex8",
+          "op": 8,
+          "lot": 10,
+          "ri": 100,
+          "initial": 5000,
+          "tsTag": "ham-ham_zz_weex8-op8-lot10"
+        },
+        {
+          "key": "five",
+          "universe": "five_weex7",
+          "op": 10,
+          "lot": 14,
+          "ri": 100,
+          "initial": 7000,
+          "tsTag": "five-five_weex7-op10-lot14"
+        },
+        {
+          "key": "stocks",
+          "universe": "stocks_zz_4h_l30",
+          "op": 6,
+          "lot": 15,
+          "ri": 100,
+          "initial": 0,
+          "tsTag": "stocks-zz-4h-l30"
+        }
       ]
     },
     {
@@ -107,12 +282,41 @@
       "setKey": "portfolio-triple-zz-jul2026",
       "label": "Portfolio Triple",
       "storefront": true,
-      "character": "balanced modules + stocksZZ as explicit 3rd sleeve (same knobs as P2)",
+      "personal": false,
+      "character": "balanced WEEX + stocksZZ OP8",
       "books": [
-        { "key": "b3", "ref": "sharedB3", "initial": 10000 },
-        { "key": "ham", "universe": "ham_zz_flat8", "op": 10, "lot": 12, "ri": 100, "initial": 6000, "tsTag": "ham-flat8-op10-lot12" },
-        { "key": "five", "universe": "fivecard_flat7", "op": 8, "lot": 10, "ri": 100, "initial": 4000, "tsTag": "five-flat7-op8-lot10" },
-        { "key": "stocks", "universe": "stocks_zz_4h_l30", "op": 8, "lot": 15, "ri": 100, "initial": 0, "tsTag": "stocks-zz-4h-l30-op8" }
+        {
+          "key": "b3",
+          "ref": "sharedB3",
+          "initial": 10000
+        },
+        {
+          "key": "ham",
+          "universe": "ham_zz_weex8",
+          "op": 10,
+          "lot": 12,
+          "ri": 100,
+          "initial": 6000,
+          "tsTag": "ham-ham_zz_weex8-op10-lot12"
+        },
+        {
+          "key": "five",
+          "universe": "five_weex7",
+          "op": 8,
+          "lot": 10,
+          "ri": 100,
+          "initial": 4000,
+          "tsTag": "five-five_weex7-op8-lot10"
+        },
+        {
+          "key": "stocks",
+          "universe": "stocks_zz_4h_l30",
+          "op": 8,
+          "lot": 15,
+          "ri": 100,
+          "initial": 0,
+          "tsTag": "stocks-zz-4h-l30-op8"
+        }
       ]
     },
     {
@@ -121,18 +325,49 @@
       "label": "Portfolio Whale (personal)",
       "storefront": false,
       "personal": true,
-      "character": "max OP/lot + stocksZZ",
+      "character": "max OP/lot WEEX + stocksZZ",
       "books": [
-        { "key": "b3", "ref": "sharedB3", "initial": 10000 },
-        { "key": "ham", "universe": "ham_zz_flat8", "op": 16, "lot": 18, "ri": 100, "initial": 12000, "tsTag": "ham-flat8-op16-lot18" },
-        { "key": "five", "universe": "fivecard_flat7", "op": 12, "lot": 14, "ri": 100, "initial": 6000, "tsTag": "five-flat7-op12-lot14" },
-        { "key": "stocks", "universe": "stocks_zz_4h_l30", "op": 8, "lot": 15, "ri": 100, "initial": 0, "tsTag": "stocks-zz-4h-l30-op8" }
+        {
+          "key": "b3",
+          "ref": "sharedB3",
+          "initial": 10000
+        },
+        {
+          "key": "ham",
+          "universe": "ham_zz_weex8",
+          "op": 16,
+          "lot": 18,
+          "ri": 100,
+          "initial": 12000,
+          "tsTag": "ham-ham_zz_weex8-op16-lot18"
+        },
+        {
+          "key": "five",
+          "universe": "five_weex7",
+          "op": 12,
+          "lot": 14,
+          "ri": 100,
+          "initial": 6000,
+          "tsTag": "five-five_weex7-op12-lot14"
+        },
+        {
+          "key": "stocks",
+          "universe": "stocks_zz_4h_l30",
+          "op": 8,
+          "lot": 15,
+          "ri": 100,
+          "initial": 0,
+          "tsTag": "stocks-zz-4h-l30-op8"
+        }
       ]
     }
   ],
   "retireMasterPrefixes": [
     "ALGOFUND_MASTER::BTDD_D1::addon-mrs-wf-",
     "ALGOFUND_MASTER::BTDD_D1::addon-zz-top5-jul2026",
-    "ALGOFUND_MASTER::BTDD_D1::addon-mrs-weex-stocks-shortma-jul2026"
+    "ALGOFUND_MASTER::BTDD_D1::addon-mrs-weex-stocks-shortma-jul2026",
+    "ALGOFUND_MASTER::BTDD_D1::addon-ham-",
+    "ALGOFUND_MASTER::BTDD_D1::addon-five-",
+    "ALGOFUND_MASTER::BTDD_D1::addon-stocks-zz-"
   ]
 }
