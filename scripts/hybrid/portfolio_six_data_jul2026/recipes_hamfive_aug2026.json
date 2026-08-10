@@ -1,7 +1,7 @@
 {
   "generatedAt": "2026-08-10T09:43:15.074Z",
-  "status": "STAMP — WEEX apiTradingSymbols filtered HAM/FIVE",
-  "note": "HAM/FIVE rebuilt for live WEEX allowlist. P4 = FIVE-heavy quality tilt (not thin cut).",
+  "status": "STAMP \u2014 WEEX apiTradingSymbols filtered HAM/FIVE",
+  "note": "HAM/FIVE rebuilt for live WEEX allowlist. P4 = FIVE-heavy quality tilt (not thin cut). LYNUSDT dropped (WEEX contract broken).",
   "weexAllowlistN": 223,
   "sharedB3": {
     "systemIdSource": 205,
@@ -59,8 +59,7 @@
         256038,
         255458,
         255479,
-        255319,
-        255302
+        255319
       ],
       "symbols": [
         "MANTAUSDT",
@@ -68,8 +67,7 @@
         "KASUSDT",
         "JTOUSDT",
         "APTUSDT",
-        "ETHFIUSDT",
-        "LYNUSDT"
+        "ETHFIUSDT"
       ]
     },
     "five_weex4": {

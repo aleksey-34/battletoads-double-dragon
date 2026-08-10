@@ -281,26 +281,6 @@
       "detection_source": "wick",
       "market_mode": "mono",
       "market_type": "futures"
-    },
-    {
-      "id": 255302,
-      "name": "FIVECARD::MRS2::LYNUSDT::3h::set_OAbnH",
-      "strategy_type": "MRS2",
-      "base_symbol": "LYNUSDT",
-      "quote_symbol": "",
-      "interval": "3h",
-      "price_channel_length": 4,
-      "zscore_entry": 0.94,
-      "zscore_exit": 1.05,
-      "zscore_stop": 0.3,
-      "mrs2_config_json": "{\"maLongLen\":4,\"maLongMult\":0.94,\"maShortLen\":4,\"maShortMult\":1.05,\"maCloseLongLen\":3,\"maCloseLongMult\":1,\"maCloseShortLen\":3,\"maCloseShortMult\":1,\"distanceFilterPct\":0.3,\"slLongPct\":0,\"slShortPct\":0}",
-      "lot_long_percent": 6,
-      "lot_short_percent": 6,
-      "leverage": 20,
-      "take_profit_percent": 0,
-      "detection_source": "wick",
-      "market_mode": "mono",
-      "market_type": "futures"
     }
   ],
   "stocks": [
