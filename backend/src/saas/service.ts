@@ -1620,8 +1620,9 @@ const resolvePlanCapabilities = (plan: PlanRow | null): TenantCapabilities => {
   }
 
   const features = getPlanFeatures(plan);
-  const defaultMonitoring = asNumber(plan.price_usdt, 0) >= 20
-    || plan.product_mode === 'copytrading_client';
+  // Admin SaaS + client cabinets need equity even on $0/beta plans.
+  // Explicit features.monitoring=false still disables (client product gate).
+  const defaultMonitoring = true;
   const defaultBacktest = plan.product_mode === 'strategy_client'
     ? asNumber(plan.max_strategies_total, 0) >= 3
     : asNumber(plan.price_usdt, 0) >= 50;
@@ -13253,7 +13254,10 @@ const listTenantSummaries = async (options?: {
             : '',
       tenant.assigned_api_key_name
     ).trim();
-    const monitoring = capabilities.monitoring && effectiveMonitoringApiKeyName
+    // Admin client table: always attach latest snapshot when a key exists.
+    // Do not gate on plan capabilities.monitoring — $0 dual plans were showing
+    // "no data" while Positions already had ~$900 equity (Aug 2026).
+    const monitoring = effectiveMonitoringApiKeyName
       ? await getMonitoringLatest(effectiveMonitoringApiKeyName).catch(() => null)
       : null;
     out.push({
