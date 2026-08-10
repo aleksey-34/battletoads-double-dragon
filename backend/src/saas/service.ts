@@ -19561,22 +19561,75 @@ export const materializeAlgofundPortfolioFull = async (payload: {
     );
   }
 
-  // Final orphan sweep: keep union of all portfolio strategy ids
+  // Final orphan sweep: keep only legs that belong to CURRENT portfolio roles.
+  // Previous cutovers left sibling books (e.g. ::mrs / ::zz) alive because
+  // preserveSiblingSystems skips per-book archive; without retiring obsolete
+  // roles those TS keep trading forever.
   const executionApiKeyName = getAlgofundExecutionApiKeyName(tenant, profile);
+  const allowedRoles = new Set(
+    members.map((m) => asString(m.role, '').trim()).filter(Boolean),
+  );
   if (executionApiKeyName) {
-    // Also keep every member currently attached to ALGOFUND::{slug}::* books —
-    // belt-and-suspenders if a book returned empty strategyIds mid-loop.
+    const prefix = `ALGOFUND::${tenant.slug}::`;
+    const siblingRows = (await db.all(
+      `SELECT ts.id AS system_id, ts.name AS system_name
+       FROM trading_systems ts
+       JOIN api_keys a ON a.id = ts.api_key_id
+       WHERE a.name = ?
+         AND ts.name LIKE ?`,
+      [executionApiKeyName, `${prefix}%`],
+    ).catch(() => [])) as Array<{ system_id: number; system_name: string }>;
+
+    for (const row of siblingRows) {
+      const name = asString(row.system_name, '');
+      if (!name.startsWith(prefix)) continue;
+      const role = name.slice(prefix.length).trim();
+      if (!role || allowedRoles.has(role)) continue;
+      const staleMembers = (await db.all(
+        `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode, s.state
+         FROM trading_system_members tsm
+         JOIN strategies s ON s.id = tsm.strategy_id
+         WHERE tsm.system_id = ?
+           AND COALESCE(s.is_archived, 0) = 0`,
+        [Number(row.system_id)],
+      ).catch(() => [])) as Array<{
+        id: number;
+        name: string;
+        base_symbol: string | null;
+        quote_symbol: string | null;
+        market_mode: string | null;
+        state: string | null;
+      }>;
+      logger.warn(
+        `Algofund portfolio materialize: retiring obsolete book ${name} `
+        + `(role=${role} not in [${[...allowedRoles].join(',')}]) `
+        + `with ${staleMembers.length} strategies for ${tenant.slug}`,
+      );
+      for (const stale of staleMembers) {
+        await saasArchiveStrategy(executionApiKeyName, stale).catch(() => {});
+      }
+      await db.run(`DELETE FROM trading_system_members WHERE system_id = ?`, [Number(row.system_id)]).catch(() => {});
+      await db.run(
+        `UPDATE trading_systems SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+        [Number(row.system_id)],
+      ).catch(() => {});
+    }
+
+    // Keep only members of allowed-role books (not retired siblings).
     const bookMemberRows = (await db.all(
-      `SELECT tsm.strategy_id AS strategy_id
+      `SELECT tsm.strategy_id AS strategy_id, ts.name AS system_name
        FROM trading_system_members tsm
        JOIN trading_systems ts ON ts.id = tsm.system_id
        JOIN api_keys a ON a.id = ts.api_key_id
        WHERE a.name = ?
          AND ts.name LIKE ?
          AND COALESCE(tsm.is_enabled, 1) = 1`,
-      [executionApiKeyName, `ALGOFUND::${tenant.slug}::%`],
-    ).catch(() => [])) as Array<{ strategy_id: number }>;
+      [executionApiKeyName, `${prefix}%`],
+    ).catch(() => [])) as Array<{ strategy_id: number; system_name: string }>;
     for (const row of bookMemberRows) {
+      const name = asString(row.system_name, '');
+      const role = name.startsWith(prefix) ? name.slice(prefix.length).trim() : '';
+      if (!role || !allowedRoles.has(role)) continue;
       const sid = Number(row.strategy_id || 0);
       if (sid > 0) keepAll.add(sid);
     }
