@@ -29,6 +29,7 @@ import { runAutoStrategiesCycle } from './bot/strategy';
 import { runLiquidityScanCycle, runMonitoringCycle, runReconciliationCycle } from './automation/scheduler';
 import { startAdminTelegramReporter } from './notifications/adminTelegramReporter';
 import { runTvAlertsMonitorCycle } from './tvAlerts/engine';
+import { startWeexDelistWatchdog } from './bot/weexDelistWatchdog';
 
 const parseBool = (value: unknown, fallback = false): boolean => {
   if (value === undefined || value === null || value === '') {
@@ -211,6 +212,12 @@ const startRuntime = async () => {
     }
   }, tvAlertsMonitorSec * 1000);
   logger.info(`[runtime] TV alerts trailing monitor: every ${tvAlertsMonitorSec}s`);
+
+  try {
+    await startWeexDelistWatchdog();
+  } catch (e) {
+    logger.warn('[runtime] WEEX delist watchdog failed to start: ' + (e as Error).message);
+  }
 
   if (!autoCycleEnabled && !monitoringCycleEnabled && !reconciliationCycleEnabled && !liquidityScanCycleEnabled) {
     logger.warn('[runtime] All runtime cycles are disabled by flags; waiting for explicit enable');

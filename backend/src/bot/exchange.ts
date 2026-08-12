@@ -10,6 +10,12 @@ import {
   isWeexApiTradableSymbol,
   toWeexOrderSymbol,
 } from './weexClient';
+import { isWeexCopyBlockedStock, isWeexCopyLikeKey, isWeexStockSymbol } from './weexKeyUtils';
+import { isWeexDelistBlockingSymbolSync } from './weexDelistState';
+import {
+  shouldLogWeexCopyStockSkip,
+  shouldLogWeexDelistSkip,
+} from './strategy/cycle/offlineSymbol';
 import { readHybridCandles } from './hybridCandleStore';
 import { registerMarketDataRelayKey } from './marketDataCache';
 import { batchPositionsSequential, getCachedPositions, invalidatePositionCache } from './positionPollCache';
@@ -1687,17 +1693,22 @@ export const placeOrder = async (
   throw lastError || new Error(`Failed to place order for ${symbol}`);
 };
 
-const isWeexApiOrderDeniedError = (error: unknown): boolean => {
+const isWeexApiPermissionDenied = (error: unknown): boolean => {
   const text = String((error as Error)?.message || error || '');
-  // Precision / min-qty / stepSize are client-side validation issues — never mark the pair offline.
   if (/stepSize|min limit|minOrder|order price must|order size|FAILED_PRECONDITION|INVALID_ARGUMENT/i.test(text)) {
     return false;
   }
   return /code["']?\s*[:=]\s*-?1058/i.test(text)
     || /not supported via the API/i.test(text)
-    || /Contract not found/i.test(text)
     || /apiTradingSymbols/i.test(text);
 };
+
+const isWeexContractNotFound = (error: unknown): boolean =>
+  /Contract not found/i.test(String((error as Error)?.message || error || ''))
+  || /code["']?\s*[:=]\s*-?1054/i.test(String((error as Error)?.message || error || ''));
+
+const isWeexApiOrderDeniedError = (error: unknown): boolean =>
+  isWeexApiPermissionDenied(error) || isWeexContractNotFound(error);
 
 const placeOrderCcxt = async (
   apiKeyName: string,
@@ -1732,6 +1743,20 @@ const placeOrderCcxt = async (
     // WEEX: reject before place when symbol is listed but not API-tradable (-1058),
     // and route orders through v3 REST (avoids ccxt stale contractId → -1054).
     if (!isSpot && entry.exchange === 'weex') {
+      if (isWeexDelistBlockingSymbolSync(symbol)) {
+        markOfflineSymbol(apiKeyName, symbol);
+        if (shouldLogWeexDelistSkip(symbol)) {
+          logger.warn(`WEEX delist-blocked symbol skipped: ${apiKeyName}/${symbol}`);
+        }
+        throw new Error(`Market symbol offline on weex: ${symbol}`);
+      }
+      if (isWeexCopyBlockedStock(apiKeyName, symbol)) {
+        markOfflineSymbol(apiKeyName, symbol);
+        if (shouldLogWeexCopyStockSkip(apiKeyName, symbol)) {
+          logger.info(`[weex-copy-stocks] skip non-SPX ${apiKeyName}/${symbol}`);
+        }
+        throw new Error(`Market symbol offline on weex: ${symbol}`);
+      }
       if (isOfflineSymbolCached(apiKeyName, symbol)) {
         const apiOkCached = await isWeexApiTradableSymbol(symbol).catch(() => false);
         if (apiOkCached) {
@@ -1773,9 +1798,21 @@ const placeOrderCcxt = async (
       } catch (error) {
         if (isWeexApiOrderDeniedError(error)) {
           markOfflineSymbol(apiKeyName, symbol);
-          logger.warn(
-            `Market symbol offline for ${apiKeyName}/${symbol} on weex: ${(error as Error).message}`
-          );
+          const quietCopyStock = isWeexCopyLikeKey(apiKeyName) && isWeexStockSymbol(symbol);
+          const quietDelist = isWeexDelistBlockingSymbolSync(symbol);
+          if (quietCopyStock) {
+            if (shouldLogWeexCopyStockSkip(apiKeyName, symbol)) {
+              logger.info(`[weex-copy-stocks] order denied ${apiKeyName}/${symbol}`);
+            }
+          } else if (quietDelist) {
+            if (shouldLogWeexDelistSkip(symbol)) {
+              logger.warn(`WEEX delist-blocked order denied: ${apiKeyName}/${symbol}`);
+            }
+          } else if (!(isWeexContractNotFound(error) && isWeexCopyLikeKey(apiKeyName) && isWeexStockSymbol(symbol))) {
+            logger.warn(
+              `Market symbol offline for ${apiKeyName}/${symbol} on weex: ${(error as Error).message}`
+            );
+          }
           throw new Error(`Market symbol offline on weex: ${symbol}`);
         }
         logger.error(`Error placing WEEX v3 order for ${apiKeyName} ${symbol} ${side}: ${(error as Error).message}`);
@@ -2906,6 +2943,12 @@ export const closePosition = async (
     // WEEX: close via v3 REST + apiTradingSymbols gate (same as placeOrder).
     // ccxt close hits pairs that are listed but not API-tradable → -1058 spam.
     if (entry.exchange === 'weex') {
+      if (isWeexDelistBlockingSymbolSync(symbol)) {
+        if (shouldLogWeexDelistSkip(symbol)) {
+          logger.warn(`WEEX close skipped — API-delist blocked: ${apiKeyName}/${symbol}`);
+        }
+        return;
+      }
       if (isOfflineSymbolCached(apiKeyName, symbol)) {
         const apiOkCached = await isWeexApiTradableSymbol(symbol).catch(() => false);
         if (apiOkCached) {
@@ -2920,9 +2963,11 @@ export const closePosition = async (
       const apiOk = await isWeexApiTradableSymbol(symbol).catch(() => false);
       if (!apiOk) {
         markOfflineSymbol(apiKeyName, symbol);
-        logger.warn(
-          `WEEX close skipped — missing from apiTradingSymbols: ${apiKeyName}/${symbol}`
-        );
+        if (shouldLogWeexDelistSkip(symbol)) {
+          logger.warn(
+            `WEEX close skipped — missing from apiTradingSymbols: ${apiKeyName}/${symbol}`
+          );
+        }
         return;
       }
       try {
@@ -2947,9 +2992,11 @@ export const closePosition = async (
       } catch (error) {
         if (isWeexApiOrderDeniedError(error)) {
           markOfflineSymbol(apiKeyName, symbol);
-          logger.warn(
-            `WEEX close skipped — pair not API-supported (-1058/-1054): ${apiKeyName}/${symbol}: ${(error as Error).message}`
-          );
+          if (shouldLogWeexDelistSkip(symbol)) {
+            logger.warn(
+              `WEEX close skipped — pair not API-supported (-1058/-1054): ${apiKeyName}/${symbol}: ${(error as Error).message}`
+            );
+          }
           return;
         }
         logger.error(`Error closing WEEX v3 position for ${apiKeyName} ${symbol}: ${(error as Error).message}`);

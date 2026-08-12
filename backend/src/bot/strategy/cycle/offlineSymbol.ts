@@ -1,5 +1,9 @@
 const OFFLINE_SYMBOL_LOG_COOLDOWN_MS = 5 * 60 * 1000;
+const WEEX_COPY_STOCK_LOG_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+const WEEX_DELIST_SKIP_LOG_COOLDOWN_MS = 6 * 60 * 60 * 1000;
 const offlineSymbolLogCooldown = new Map<string, number>();
+const weexCopyStockLogCooldown = new Map<string, number>();
+const weexDelistSkipLogCooldown = new Map<string, number>();
 
 setInterval(() => {
   const now = Date.now();
@@ -30,5 +34,23 @@ export const shouldLogOfflineSymbolSkip = (apiKeyName: string, strategyId: numbe
     return false;
   }
   offlineSymbolLogCooldown.set(key, now + OFFLINE_SYMBOL_LOG_COOLDOWN_MS);
+  return true;
+};
+
+export const shouldLogWeexCopyStockSkip = (apiKeyName: string, symbol: string): boolean => {
+  const key = `${apiKeyName}:${String(symbol || '').toUpperCase()}`;
+  const now = Date.now();
+  const until = Number(weexCopyStockLogCooldown.get(key) || 0);
+  if (until > now) return false;
+  weexCopyStockLogCooldown.set(key, now + WEEX_COPY_STOCK_LOG_COOLDOWN_MS);
+  return true;
+};
+
+export const shouldLogWeexDelistSkip = (symbol: string): boolean => {
+  const key = String(symbol || '').toUpperCase();
+  const now = Date.now();
+  const until = Number(weexDelistSkipLogCooldown.get(key) || 0);
+  if (until > now) return false;
+  weexDelistSkipLogCooldown.set(key, now + WEEX_DELIST_SKIP_LOG_COOLDOWN_MS);
   return true;
 };

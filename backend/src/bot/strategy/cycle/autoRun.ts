@@ -6,7 +6,8 @@ import { formatActionError } from '../crud';
 import { resetCycleSignalCache } from './cache';
 import { extractSourceSid, loadExpectedAlgofundSidMap } from './algofundSync';
 import { closeAllForSymbol, countExchangeOpenPositions, normalizeExchangeSymbolKey } from './positionGuards';
-import { isOfflineSymbolMarketDataError, shouldLogOfflineSymbolSkip } from './offlineSymbol';
+import { isOfflineSymbolMarketDataError, shouldLogOfflineSymbolSkip, shouldLogWeexDelistSkip } from './offlineSymbol';
+import { isWeexDelistBlockingSymbolSync } from '../../weexDelistState';
 
 /** 0 = unlimited (legacy). Default 16 softens exchange 429 / SQLite thrash under dense auto. */
 const resolveCycleConcurrency = (jobCount: number): number => {
@@ -134,6 +135,14 @@ export const runAutoStrategiesCycle = async () => {
           const symbol = String(row?.symbol || '').trim();
           const symbolKey = normalizeExchangeSymbolKey(symbol);
           if (!symbolKey || ownedSymbols.has(symbolKey)) {
+            continue;
+          }
+          if (isWeexDelistBlockingSymbolSync(symbolKey)) {
+            if (shouldLogWeexDelistSkip(symbolKey)) {
+              logger.warn(
+                `ОП orphan stuck (WEEX API-delist — manual close): ${apiKeyName}/${symbol}`,
+              );
+            }
             continue;
           }
           logger.warn(

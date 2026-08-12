@@ -883,4 +883,24 @@ export const isWeexApiTradableSymbol = async (symbol: string): Promise<boolean> 
   }
 };
 
+export type WeexAllowlistSnapshot =
+  | { ok: true; symbols: Set<string> }
+  | { ok: false; error: string };
+
+/** For delist watchdog — never fail-open; reject undersized/truncated lists. */
+export const getWeexApiTradingSymbolsStrict = async (
+  forceRefresh = true,
+  minSize = 50,
+): Promise<WeexAllowlistSnapshot> => {
+  try {
+    const symbols = await getWeexApiTradingSymbols(forceRefresh);
+    if (symbols.size < minSize) {
+      return { ok: false, error: `allowlist too small (${symbols.size} < ${minSize})` };
+    }
+    return { ok: true, symbols };
+  } catch (error) {
+    return { ok: false, error: (error as Error).message || String(error) };
+  }
+};
+
 export const toWeexOrderSymbol = toWeexPrivateSymbol;
