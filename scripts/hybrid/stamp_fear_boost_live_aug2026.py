@@ -147,6 +147,21 @@ def main() -> None:
                     int(row["id"]),
                 ),
             )
+            # published_system_name on live clients is the set_key, not the master TS name.
+            alias_code = f"CARD::{set_key.upper()}"
+            alias_blob = json.dumps(patch_meta({"displayLabel": set_key, "pack": "hamfive_aug2026"}), ensure_ascii=False)
+            existing = conn.execute("SELECT id FROM master_cards WHERE code=?", (alias_code,)).fetchone()
+            if existing:
+                conn.execute(
+                    "UPDATE master_cards SET metadata_json=?, is_active=1, updated_at=? WHERE code=?",
+                    (alias_blob, now(), alias_code),
+                )
+            else:
+                conn.execute(
+                    """INSERT INTO master_cards (code, name, description, is_active, metadata_json, created_at, updated_at)
+                       VALUES (?,?,?,1,?,?,?)""",
+                    (alias_code, set_key, "hamfive fear+cb alias", alias_blob, now(), now()),
+                )
 
     ri_before = conn.execute(
         """SELECT
