@@ -1788,6 +1788,15 @@ export const executeStrategy = async (
     );
   } catch { /* non-critical */ }
 
+  let fearBoostMult = 1.0;
+  try {
+    const { resolveFearBoostLotMultiplier } = await import('./fearBoostRuntime');
+    fearBoostMult = await resolveFearBoostLotMultiplier(
+      apiKeyName,
+      String((mergedStrategy as any)?.strategy_type || strategy?.strategy_type || ''),
+    );
+  } catch { /* non-critical */ }
+
   const channelLotMult = Number((mergedStrategy as any).auto_lot_by_channel_width || 0) === 1
     ? computeChannelWidthLotMultiplier(donchianHigh, donchianLow, donchianCenter, mergedStrategy as any)
     : 1;
@@ -1795,7 +1804,7 @@ export const executeStrategy = async (
     mergedStrategy,
     availableBalance,
     signal,
-    riskMultiplier * portfolioCbMult,
+    riskMultiplier * portfolioCbMult * fearBoostMult,
     { walletEquity },
   ) * channelLotMult;
 

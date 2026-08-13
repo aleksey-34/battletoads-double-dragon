@@ -391,6 +391,22 @@ def main() -> None:
             "role": "b3_core",
             "tierCbOnZzBreakout": True,
             "pack": "hamfive_aug2026",
+            "portfolioCircuitBreaker": {
+                "enabled": True,
+                "peakWindowDays": 30,
+                "ddTriggerPercent": 8,
+                "lotMultiplier": 0.5,
+                "pauseDays": 14,
+                "applyToStrategyTypes": ["zz_breakout"],
+            },
+            "fearBoost": {
+                "enabled": True,
+                "lotMultiplier": 1.25,
+                "holdDays": 2,
+                "btcDailyReturnLte": -0.03,
+                "spxDailyReturnLte": -0.015,
+                "vixDailyChangeGte": 0.15,
+            },
         },
     )
     replace_members(conn, b3_sid, b3_ids, "core")
@@ -431,6 +447,22 @@ def main() -> None:
                     "role": f"{role}_addon",
                     "universe": uni,
                     "pack": "hamfive_aug2026",
+                    "portfolioCircuitBreaker": {
+                        "enabled": True,
+                        "peakWindowDays": 30,
+                        "ddTriggerPercent": 8,
+                        "lotMultiplier": 0.5,
+                        "pauseDays": 14,
+                        "applyToStrategyTypes": ["zz_breakout"],
+                    },
+                    "fearBoost": {
+                        "enabled": True,
+                        "lotMultiplier": 1.25,
+                        "holdDays": 2,
+                        "btcDailyReturnLte": -0.03,
+                        "spxDailyReturnLte": -0.015,
+                        "vixDailyChangeGte": 0.15,
+                    },
                 },
             )
             replace_members(conn, sid, sids, "addon")
@@ -476,7 +508,12 @@ def main() -> None:
             "books": meta_books,
             "character": pf.get("character"),
             "pack": "hamfive_aug2026",
-            "bt": {k: snap.get(k) for k in ("ret", "dd", "capital", "method", "retNoStocks", "ddNoStocks")},
+            "bt": {k: snap.get(k) for k in ("ret", "dd", "capital", "method", "retNoStocks", "ddNoStocks", "overlay", "ri")},
+            "fearBoost": {
+                "enabled": True,
+                "lotMultiplier": 1.25,
+                "holdDays": 2,
+            },
         }
         desc = str(
             pf.get("character")
