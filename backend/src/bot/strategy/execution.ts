@@ -12,7 +12,33 @@ export const resyncPendingFlatByStrategy = new Map<number, PendingFlatEntry>();
 export const BAR_CLOSE_FRESHNESS_MS = 1500;
 export const TRAILING_RATIO_EPSILON = 1e-12;
 
-export const processedClosedBarByStrategy = new Map<string, number>();
+export {
+  processedClosedBarByStrategy,
+  closedBarDedupeKey,
+  clearProcessedClosedBarMemory,
+  hydrateProcessedClosedBarMemory,
+  rememberProcessedClosedBar,
+  isClosedBarAlreadyProcessed,
+} from './closedBarDedupe';
+
+/** Monotonic persist — never rewind if a newer bar was already stored. */
+export const persistProcessedClosedBar = async (strategyId: number, barTimeMs: number): Promise<void> => {
+  const id = Number(strategyId);
+  const n = Number(barTimeMs) || 0;
+  if (!Number.isFinite(id) || id <= 0 || n <= 0) return;
+  try {
+    const { db } = await import('../../utils/database');
+    await db.run(
+      `UPDATE strategies
+       SET last_processed_bar_ms = ?
+       WHERE id = ?
+         AND COALESCE(last_processed_bar_ms, 0) < ?`,
+      [n, id, n],
+    );
+  } catch (error) {
+    logger.warn(`persistProcessedClosedBar failed for ${id}: ${(error as Error).message}`);
+  }
+};
 
 export const partialTpTriggeredByStrategy = new Map<number, boolean>();
 

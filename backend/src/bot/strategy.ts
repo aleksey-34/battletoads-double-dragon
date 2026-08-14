@@ -108,7 +108,11 @@ import {
   loadPairPositionsForValidation,
   loadSinglePositionForValidation,
   partialTpTriggeredByStrategy,
-  processedClosedBarByStrategy,
+  persistProcessedClosedBar,
+  hydrateProcessedClosedBarMemory,
+  isClosedBarAlreadyProcessed,
+  rememberProcessedClosedBar,
+  closedBarDedupeKey,
   resyncPendingFlatByStrategy,
   resolveExecutionCandleContext,
 } from './strategy/execution';
@@ -388,18 +392,26 @@ export const executeStrategy = async (
   let closedResult: string | null = null;
   const evaluatedBarTimeMs = candleContext.evaluatedBarTimeMs;
   const evaluatedBarIso = new Date(evaluatedBarTimeMs).toISOString();
-  const processedBarCacheKey = `${apiKeyName}:${strategyId}`;
+  const processedBarCacheKey = closedBarDedupeKey(apiKeyName, strategyId);
+  if (dedupeClosedBar) {
+    hydrateProcessedClosedBarMemory(
+      processedBarCacheKey,
+      Number(mergedStrategy.last_processed_bar_ms || 0),
+    );
+  }
 
   const markProcessedBar = (): void => {
     if (!dedupeClosedBar) {
       return;
     }
-
-    processedClosedBarByStrategy.set(processedBarCacheKey, evaluatedBarTimeMs);
+    rememberProcessedClosedBar(processedBarCacheKey, evaluatedBarTimeMs);
   };
 
-  const returnWithProcessedBar = <T>(payload: T): T => {
+  const returnWithProcessedBar = async <T>(payload: T): Promise<T> => {
     markProcessedBar();
+    if (dedupeClosedBar) {
+      await persistProcessedClosedBar(strategyId, evaluatedBarTimeMs);
+    }
     return payload;
   };
 
@@ -906,19 +918,16 @@ export const executeStrategy = async (
     }
   }
 
-  if (dedupeClosedBar) {
-    const lastProcessedBarTimeMs = processedClosedBarByStrategy.get(processedBarCacheKey);
-    if (lastProcessedBarTimeMs === evaluatedBarTimeMs) {
-      return {
-        result: `Bar ${evaluatedBarIso} already processed`,
-        action: 'bar_already_processed',
-        executionSource,
-        currentRatio,
-        donchianHigh,
-        donchianLow,
-        donchianCenter,
-      };
-    }
+  if (dedupeClosedBar && isClosedBarAlreadyProcessed(processedBarCacheKey, evaluatedBarTimeMs)) {
+    return {
+      result: `Bar ${evaluatedBarIso} already processed`,
+      action: 'bar_already_processed',
+      executionSource,
+      currentRatio,
+      donchianHigh,
+      donchianLow,
+      donchianCenter,
+    };
   }
 
   const strategyType = String(mergedStrategy.strategy_type || '');

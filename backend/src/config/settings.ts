@@ -85,6 +85,8 @@ export interface Strategy {
   tp_anchor_ratio?: number | null;
   last_signal?: string | null;
   last_action?: string | null;
+  /** Closed-bar auto-cycle watermark (ms). Survives runtime restart. */
+  last_processed_bar_ms?: number | null;
   partial_tp_pct?: number;
   /** Inverse Donchian/channel-width lot scaling (0/1). */
   auto_lot_by_channel_width?: number | boolean;

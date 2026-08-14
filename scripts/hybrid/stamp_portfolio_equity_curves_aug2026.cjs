@@ -26,8 +26,14 @@ if (!process.env.MRS2_BT_SAME_BAR_EXIT) process.env.MRS2_BT_SAME_BAR_EXIT = 'blo
 
 const KEY = 'BTDD_D1';
 const B3 = 205;
-const DATE_FROM = '2024-03-17';
-const DATE_TO = '2026-07-16';
+const DATE_FROM = process.env.DATE_FROM || '2024-03-17';
+const LIVE_FROM = process.env.LIVE_FROM || '2026-07-30';
+const yesterdayUtc = () => {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+};
+const DATE_TO = process.env.DATE_TO || yesterdayUtc();
 const TIER_CB = {
   enabled: true, peakWindowDays: 30, ddTriggerPercent: 8,
   lotMultiplier: 0.5, pauseDays: 14, applyToStrategyTypes: ['zz_breakout'],
@@ -47,12 +53,33 @@ const ensureMerged = () => {
       ensureDir(outIv);
       for (const f of fs.readdirSync(d).filter((x) => x.endsWith('.json'))) {
         const dst = path.join(outIv, f);
-        if (fs.existsSync(dst)) continue;
+        try { fs.unlinkSync(dst); } catch { /* missing */ }
         try { fs.symlinkSync(path.join(d, f), dst); }
         catch { fs.copyFileSync(path.join(d, f), dst); }
       }
     }
   }
+};
+
+const windowRet = (curve, fromDate, toDate) => {
+  const fromSec = Date.parse(`${fromDate}T00:00:00Z`) / 1000;
+  const toSec = Date.parse(`${toDate}T23:59:59Z`) / 1000;
+  if (!Array.isArray(curve) || !curve.length) return null;
+  const pts = curve
+    .map((p) => ({ t: Number(p.t ?? p.time), e: Number(p.e ?? p.equity) }))
+    .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.e))
+    .sort((a, b) => a.t - b.t);
+  const start = pts.find((p) => p.t >= fromSec) || pts[0];
+  const inWin = pts.filter((p) => p.t >= fromSec && p.t <= toSec);
+  const end = inWin.length ? inWin[inWin.length - 1] : start;
+  if (!start || !end || start.e <= 0) return null;
+  return {
+    dateFrom: fromDate,
+    dateTo: toDate,
+    startEq: +start.e.toFixed(2),
+    endEq: +end.e.toFixed(2),
+    ret: +((end.e / start.e - 1) * 100).toFixed(2),
+  };
 };
 
 const downsampleCurve = (curve, maxPts = 120) => {
@@ -181,7 +208,9 @@ const downsampleCurve = (curve, maxPts = 120) => {
       researchLotSchedule: fearBoost,
     });
     const s = r.summary || {};
-    const curve = downsampleCurve(r.equityCurve || [], 120);
+    const rawCurve = r.equityCurve || [];
+    const curve = downsampleCurve(rawCurve, 120);
+    const liveWindow = windowRet(rawCurve, LIVE_FROM, DATE_TO);
     const prev = snaps[pf.id] || {};
     snaps[pf.id] = {
       ...prev,
@@ -193,9 +222,10 @@ const downsampleCurve = (curve, maxPts = 120) => {
       method: 'hamfive_cb_fear_union_ri100',
       dateFrom: DATE_FROM,
       dateTo: DATE_TO,
+      liveWindow,
       curve,
     };
-    console.log(`  ${pf.id}: ret=${snaps[pf.id].ret} dd=${snaps[pf.id].dd} curve=${curve.length}`);
+    console.log(`  ${pf.id}: ret=${snaps[pf.id].ret} dd=${snaps[pf.id].dd} curve=${curve.length} liveWin=${liveWindow ? liveWindow.ret : 'n/a'}%`);
   }
 
   fs.writeFileSync(SNAPS, JSON.stringify(snaps, null, 2));

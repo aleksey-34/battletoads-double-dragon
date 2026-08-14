@@ -847,6 +847,7 @@ export const initDB = async () => {
   await ensureColumn('strategies', 'tp_anchor_ratio REAL');
   await ensureColumn('strategies', 'last_signal TEXT');
   await ensureColumn('strategies', 'last_action TEXT');
+  await ensureColumn('strategies', 'last_processed_bar_ms INTEGER DEFAULT 0');
   await ensureColumn('strategies', 'last_error TEXT');
   await ensureColumn('strategies', 'created_at TEXT DEFAULT CURRENT_TIMESTAMP');
   await ensureColumn('strategies', 'updated_at TEXT DEFAULT CURRENT_TIMESTAMP');

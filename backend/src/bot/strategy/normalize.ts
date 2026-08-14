@@ -111,6 +111,7 @@ export const DEFAULT_STRATEGY: Omit<Strategy, 'api_key_id' | 'id'> = {
   tp_anchor_ratio: null,
   last_signal: null,
   last_action: null,
+  last_processed_bar_ms: 0,
   partial_tp_pct: 0,
   last_error: null,
 };
@@ -344,6 +345,7 @@ export const normalizeStrategy = (row: any): Strategy => {
     tp_anchor_ratio: row.tp_anchor_ratio === null || row.tp_anchor_ratio === undefined ? null : safeNumber(row.tp_anchor_ratio, 0),
     last_signal: row.last_signal === undefined ? null : row.last_signal,
     last_action: row.last_action === undefined ? null : row.last_action,
+    last_processed_bar_ms: Math.max(0, Math.floor(Number(row.last_processed_bar_ms) || 0)),
     partial_tp_pct: safeNumber(row.partial_tp_pct, DEFAULT_STRATEGY.partial_tp_pct ?? 0),
     auto_lot_by_channel_width: Number(row.auto_lot_by_channel_width || 0) === 1 ? 1 : 0,
     auto_lot_channel_ref_width: Math.max(0.5, safeNumber(row.auto_lot_channel_ref_width, 5)),
