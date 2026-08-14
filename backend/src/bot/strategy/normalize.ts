@@ -345,6 +345,13 @@ export const normalizeStrategy = (row: any): Strategy => {
     last_signal: row.last_signal === undefined ? null : row.last_signal,
     last_action: row.last_action === undefined ? null : row.last_action,
     partial_tp_pct: safeNumber(row.partial_tp_pct, DEFAULT_STRATEGY.partial_tp_pct ?? 0),
+    auto_lot_by_channel_width: Number(row.auto_lot_by_channel_width || 0) === 1 ? 1 : 0,
+    auto_lot_channel_ref_width: Math.max(0.5, safeNumber(row.auto_lot_channel_ref_width, 5)),
+    auto_lot_channel_mult_min: Math.max(0.1, safeNumber(row.auto_lot_channel_mult_min, 0.5)),
+    auto_lot_channel_mult_max: Math.max(
+      0.1,
+      safeNumber(row.auto_lot_channel_mult_max, 2),
+    ),
     last_error: row.last_error === undefined ? null : row.last_error,
     created_at: row.created_at,
     updated_at: row.updated_at,

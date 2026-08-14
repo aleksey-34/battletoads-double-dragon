@@ -86,6 +86,11 @@ export interface Strategy {
   last_signal?: string | null;
   last_action?: string | null;
   partial_tp_pct?: number;
+  /** Inverse Donchian/channel-width lot scaling (0/1). */
+  auto_lot_by_channel_width?: number | boolean;
+  auto_lot_channel_ref_width?: number;
+  auto_lot_channel_mult_min?: number;
+  auto_lot_channel_mult_max?: number;
   last_error?: string | null;
   lot_long_usdt?: number | null;
   lot_short_usdt?: number | null;

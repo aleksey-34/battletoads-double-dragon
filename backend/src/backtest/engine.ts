@@ -18,6 +18,11 @@ import {
   parseFatTailSync,
 } from '../services/fatTailSyncCooldown';
 import {
+  ResearchLotScheduleConfig,
+  ResearchLotScheduleTracker,
+  parseResearchLotSchedule,
+} from '../services/researchLotSchedule';
+import {
   normalizeOrderBlockEntryGate,
   passesOrderBlockEntryGate,
   type OrderBlockEntryGate,
@@ -205,6 +210,11 @@ export type BacktestRunRequest = {
   /** After sync loss day, temporarily cut lot on selected breakout legs. */
   fatTailSyncCooldown?: FatTailSyncConfig;
   /**
+   * Research-only: scale new entry lots on precomputed UTC days
+   * (e.g. lag-1 boost after BTC/SPX dump / VIX spike).
+   */
+  researchLotSchedule?: ResearchLotScheduleConfig;
+  /**
    * Research: for Donchian/zz_breakout, replace center-stop with
    * entry ± fraction*(donchianHigh-donchianLow). 0/undefined = classic center stop.
    */
@@ -345,6 +355,7 @@ type NormalizedBacktestRequest = {
   pairLockSeed: number;
   portfolioCircuitBreaker: PortfolioCircuitBreakerConfig | null;
   fatTailSyncCooldown: FatTailSyncConfig | null;
+  researchLotSchedule: ResearchLotScheduleConfig | null;
   channelWidthStopFraction: number;
 };
 
@@ -1469,10 +1480,25 @@ const resolveAutoLotChannelWidthMult = (
   if (!enabled) {
     return 1;
   }
+  // Prefer signal payload levels when they form a real span.
+  // ZZ_Fast/Instance put pivot levelLong/levelShort into donchianHigh/Low (live parity).
+  // zz_breakout / Donchian signals already put channel bounds there.
+  const payloadHi = Number(signalPayload.donchianHigh);
+  const payloadLo = Number(signalPayload.donchianLow);
+  const payloadMid = Number(signalPayload.donchianCenter);
+  if (
+    Number.isFinite(payloadHi)
+    && Number.isFinite(payloadLo)
+    && payloadHi > payloadLo
+    && Number.isFinite(payloadMid)
+    && payloadMid > 0
+  ) {
+    return computeChannelWidthLotMultiplier(payloadHi, payloadLo, payloadMid, strategy as any);
+  }
+  // Fallback: rebuild Donchian from prior bars (legacy / incomplete payloads).
   const high = signalPayload.donchianCenter > 0
     ? signalPayload.donchianCenter + (signalPayload.current - signalPayload.donchianCenter)
     : signalPayload.current;
-  // Reconstruct approximate channel bounds from center when only center is in payload
   const length = Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 50)));
   if (candleIndex >= length && candleIndex < runtime.candles.length) {
     const window = runtime.candles.slice(candleIndex - length, candleIndex);
@@ -1531,8 +1557,9 @@ type BacktestContext = {
   autoLotByChannelWidth: boolean;
   portfolioCircuitBreaker: PortfolioCircuitBreakerTracker | null;
   fatTailSync: FatTailSyncTracker | null;
+  researchLotSchedule: ResearchLotScheduleTracker | null;
   channelWidthStopFraction: number;
-  /** Lot multiplier from portfolio CB (+ optional fat-tail) for the current event (1.0 = full lot). */
+  /** Lot multiplier from portfolio CB (+ optional fat-tail / research schedule) for the current event (1.0 = full lot). */
   eventCbLotMult: number;
 };
 
@@ -2611,6 +2638,9 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
     fatTailSyncCooldown: parseFatTailSync(
       (raw as { fatTailSyncCooldown?: unknown }).fatTailSyncCooldown,
     ),
+    researchLotSchedule: parseResearchLotSchedule(
+      (raw as { researchLotSchedule?: unknown }).researchLotSchedule,
+    ),
     channelWidthStopFraction: (() => {
       const n = Number((raw as { channelWidthStopFraction?: unknown }).channelWidthStopFraction);
       return Number.isFinite(n) && n > 0 ? Math.min(2, n) : 0;
@@ -2699,6 +2729,7 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     autoLotByChannelWidth: request.autoLotByChannelWidth,
     portfolioCircuitBreaker: PortfolioCircuitBreakerTracker.tryCreate(request.portfolioCircuitBreaker),
     fatTailSync: FatTailSyncTracker.tryCreate(request.fatTailSyncCooldown),
+    researchLotSchedule: ResearchLotScheduleTracker.tryCreate(request.researchLotSchedule),
     channelWidthStopFraction: request.channelWidthStopFraction,
     eventCbLotMult: 1,
   };
@@ -2922,7 +2953,10 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
     const fatMult = ctx.fatTailSync
       ? ctx.fatTailSync.lotMultiplierFor(strategy, event.timeMs)
       : 1;
-    ctx.eventCbLotMult = Math.max(0, cbTiered) * Math.max(0, fatMult);
+    const researchMult = ctx.researchLotSchedule
+      ? ctx.researchLotSchedule.lotMultiplierFor(strategy, event.timeMs)
+      : 1;
+    ctx.eventCbLotMult = Math.max(0, cbTiered) * Math.max(0, fatMult) * Math.max(0, researchMult);
 
     const length = Math.max(2, Math.floor(asNumber(strategy.price_channel_length, 50)));
     const zscoreEntry = normalizeZscoreEntry(strategy.zscore_entry);

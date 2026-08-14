@@ -64,6 +64,7 @@ type ClosedPnlStats = {
   closedCount: number;
   avgPnlPercent: number | null;
   totalPnlUsd: number;
+  totalVolumeUsd: number;
   winRatePercent: number | null;
 };
 
@@ -77,7 +78,7 @@ const computeClosedPnlForApiKey = async (apiKeyName: string, sinceMs: number): P
   ).catch(() => []) as Array<{ id?: number }>;
   const strategyIds = strategies.map((row) => asNumber(row.id, 0)).filter((id) => id > 0);
   if (strategyIds.length === 0) {
-    return { closedCount: 0, avgPnlPercent: null, totalPnlUsd: 0, winRatePercent: null };
+    return { closedCount: 0, avgPnlPercent: null, totalPnlUsd: 0, totalVolumeUsd: 0, winRatePercent: null };
   }
 
   const events = await db.all(
@@ -93,6 +94,7 @@ const computeClosedPnlForApiKey = async (apiKeyName: string, sinceMs: number): P
   const openByKey = new Map<string, Array<Record<string, unknown>>>();
   const pnlPercents: number[] = [];
   let totalPnlUsd = 0;
+  let totalVolumeUsd = 0;
   let wins = 0;
 
   for (const event of events) {
@@ -131,6 +133,7 @@ const computeClosedPnlForApiKey = async (apiKeyName: string, sinceMs: number): P
     if (notional <= 0) continue;
 
     totalPnlUsd += pnl;
+    totalVolumeUsd += notional;
     pnlPercents.push((pnl / notional) * 100);
     if (pnl > 0) wins += 1;
   }
@@ -144,6 +147,7 @@ const computeClosedPnlForApiKey = async (apiKeyName: string, sinceMs: number): P
     closedCount,
     avgPnlPercent,
     totalPnlUsd: Number(totalPnlUsd.toFixed(4)),
+    totalVolumeUsd: Number(totalVolumeUsd.toFixed(2)),
     winRatePercent: closedCount > 0 ? Number(((wins / closedCount) * 100).toFixed(1)) : null,
   };
 };
@@ -409,6 +413,7 @@ export type PartnerTradeSummaryRow = {
   closedCount: number;
   avgPnlPercent: number | null;
   totalPnlUsd: number;
+  totalVolumeUsd: number;
   equityDeltaUsd: number;
   lastTradeAt: string | null;
   deviationPct: number | null;
@@ -425,6 +430,7 @@ export type PartnerTsCardSummary = {
   closedTrades: number;
   avgPnlPercent: number | null;
   totalPnlUsd: number;
+  totalVolumeUsd: number;
   zeroTradeClients: string[];
 };
 
@@ -471,6 +477,7 @@ const buildPartnerTsCardSummaries = (rows: PartnerTradeSummaryRow[]): PartnerTsC
     const tradeCounts = enabledGroup.map((r) => r.tradesCount);
     const closedTrades = group.reduce((sum, r) => sum + r.closedCount, 0);
     const totalPnlUsd = group.reduce((sum, r) => sum + r.totalPnlUsd, 0);
+    const totalVolumeUsd = group.reduce((sum, r) => sum + r.totalVolumeUsd, 0);
     const equityDeltaUsd = group.reduce((sum, r) => sum + r.equityDeltaUsd, 0);
     const pnlPercents = group
       .map((r) => r.avgPnlPercent)
@@ -489,6 +496,7 @@ const buildPartnerTsCardSummaries = (rows: PartnerTradeSummaryRow[]): PartnerTsC
       closedTrades,
       avgPnlPercent,
       totalPnlUsd: Number(totalPnlUsd.toFixed(2)),
+      totalVolumeUsd: Number(totalVolumeUsd.toFixed(0)),
       zeroTradeClients: enabledGroup.filter((r) => r.tradesCount === 0).map((r) => r.displayName),
     });
   }
@@ -503,12 +511,16 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
   totals: {
     clients: number;
     withTrades: number;
+    enabled: number;
+    disabled: number;
     trades: number;
     entries: number;
     exits: number;
     closedTrades: number;
     avgPnlPercent: number | null;
     totalPnlUsd: number;
+    totalVolumeUsd: number;
+    equityDeltaUsd: number;
   };
   rows: PartnerTradeSummaryRow[];
   outliers: PartnerTradeSummaryRow[];
@@ -535,6 +547,7 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
         closedCount: 0,
         avgPnlPercent: null,
         totalPnlUsd: 0,
+        totalVolumeUsd: 0,
         equityDeltaUsd: 0,
         lastTradeAt: null,
         deviationPct: null,
@@ -592,6 +605,7 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
       closedCount: pnl.closedCount,
       avgPnlPercent: pnl.avgPnlPercent,
       totalPnlUsd: pnl.totalPnlUsd,
+      totalVolumeUsd: pnl.totalVolumeUsd,
       equityDeltaUsd: Number(equityDeltaUsd.toFixed(2)),
       lastTradeAt: stats?.last_trade_at
         ? new Date(asNumber(stats.last_trade_at)).toISOString()
@@ -656,12 +670,16 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
     totals: {
       clients: rows.length,
       withTrades: rows.filter((r) => r.tradesCount > 0).length,
+      enabled: rows.filter((r) => r.requestedEnabled && r.enabled).length,
+      disabled: rows.filter((r) => !r.requestedEnabled || !r.enabled).length,
       trades: rows.reduce((sum, r) => sum + r.tradesCount, 0),
       entries: rows.reduce((sum, r) => sum + r.entries, 0),
       exits: rows.reduce((sum, r) => sum + r.exits, 0),
       closedTrades: rows.reduce((sum, r) => sum + r.closedCount, 0),
       avgPnlPercent: globalAvgPnlPercent,
       totalPnlUsd: Number(rows.reduce((sum, r) => sum + r.totalPnlUsd, 0).toFixed(2)),
+      totalVolumeUsd: Number(rows.reduce((sum, r) => sum + r.totalVolumeUsd, 0).toFixed(0)),
+      equityDeltaUsd: Number(rows.reduce((sum, r) => sum + r.equityDeltaUsd, 0).toFixed(2)),
     },
     rows: rows.sort((a, b) => b.tradesCount - a.tradesCount),
     outliers,
@@ -669,54 +687,65 @@ export const getPartnerTradesSummary = async (periodHours = 6): Promise<{
   };
 };
 
+const fmtUsd = (n: number, digits = 0): string => {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '$0';
+  const abs = Math.abs(v);
+  const body = abs >= 1000
+    ? `${(abs / 1000).toFixed(abs >= 10000 ? 0 : 1)}k`
+    : abs.toFixed(digits);
+  return `${v < 0 ? '-' : ''}$${body}`;
+};
+
 export const buildPartnerTradesTelegramDigest = async (periodHours = 6): Promise<string> => {
   const summary = await getPartnerTradesSummary(periodHours);
-  const pnlLine = summary.totals.closedTrades > 0 && summary.totals.avgPnlPercent !== null
-    ? ` · закрыто ${summary.totals.closedTrades}, ср. ${summary.totals.avgPnlPercent >= 0 ? '+' : ''}${summary.totals.avgPnlPercent}%/сделку, Σ $${summary.totals.totalPnlUsd}`
-    : '';
-  const disabledCount = summary.rows.filter((r) => !r.requestedEnabled || !r.enabled).length;
+  const t = summary.totals;
+  const eqSign = t.equityDeltaUsd >= 0 ? '+' : '';
+  const pnlSign = t.totalPnlUsd >= 0 ? '+' : '';
   const lines = [
-    `📊 <b>Partner trades ${summary.periodHours}h</b>`,
-    `Медиана по системам: <b>${summary.systemMedian}</b> сделок${pnlLine}`,
-    `Клиентов: ${summary.rows.length}, активных с сделками: ${summary.rows.filter((r) => r.tradesCount > 0).length}${disabledCount > 0 ? `, выкл: ${disabledCount}` : ''}`,
+    `📊 <b>Partner ${summary.periodHours}h</b>`,
+    `Equity Δ ${eqSign}${fmtUsd(t.equityDeltaUsd, 0)} · closed PnL ${pnlSign}${fmtUsd(t.totalPnlUsd, 2)} · vol ${fmtUsd(t.totalVolumeUsd)}`,
+    `События ${t.trades} (in ${t.entries}/out ${t.exits}) · закрыто ${t.closedTrades}`
+      + (t.avgPnlPercent != null ? ` · ср ${t.avgPnlPercent >= 0 ? '+' : ''}${t.avgPnlPercent}%/сд` : ''),
+    `Клиенты: ${t.enabled} вкл / ${t.disabled} выкл · с сделками ${t.withTrades} · мед ${summary.systemMedian}`,
   ];
 
   if (summary.cards.length > 0) {
-    lines.push('', '<b>По карточкам ТС:</b>');
+    lines.push('', '<b>Портфели:</b>');
     for (const card of summary.cards) {
-      const deltaSign = card.equityDeltaUsd >= 0 ? '+' : '';
-      const pnlPart = card.closedTrades > 0 && card.avgPnlPercent !== null
-        ? ` · закр ${card.closedTrades}, ср ${card.avgPnlPercent >= 0 ? '+' : ''}${card.avgPnlPercent}%/сд, Σ $${card.totalPnlUsd}`
+      const short = card.displayLabel
+        .replace(/^portfolio-/, '')
+        .replace(/-jul2026$/, '');
+      const dSign = card.equityDeltaUsd >= 0 ? '+' : '';
+      const vol = card.totalVolumeUsd > 0 ? ` · vol ${fmtUsd(card.totalVolumeUsd)}` : '';
+      const closed = card.closedTrades > 0
+        ? ` · ${card.closedTrades}cls ${card.totalPnlUsd >= 0 ? '+' : ''}${fmtUsd(card.totalPnlUsd, 2)}`
         : '';
       lines.push(
-        `• <b>${card.displayLabel}</b>: ${card.activeClients}/${card.clients} акт · мед ${card.tradesMedian} · Δ${summary.periodHours}h ${deltaSign}$${card.equityDeltaUsd}${pnlPart}`,
+        `• <b>${short}</b> ${card.activeClients}/${card.clients} · Δ${dSign}${fmtUsd(card.equityDeltaUsd, 0)}${closed}${vol}`,
       );
-      if (card.zeroTradeClients.length > 0) {
-        lines.push(`  без сделок: ${card.zeroTradeClients.slice(0, 6).join(', ')}`);
-      }
     }
   }
 
   if (summary.outliers.length > 0) {
     lines.push('', '⚠️ <b>Отклонения:</b>');
-    for (const row of summary.outliers.slice(0, 12)) {
+    for (const row of summary.outliers.slice(0, 8)) {
       const sign = (row.deviationPct ?? 0) >= 0 ? '+' : '';
-      lines.push(
-        `• ${row.displayName}: <b>${row.tradesCount}</b> (${sign}${row.deviationPct}% vs median)`,
-      );
+      lines.push(`• ${row.displayName}: ${row.tradesCount} (${sign}${row.deviationPct}% vs med)`);
     }
-  } else {
-    lines.push('', '✅ Сильных отклонений нет');
   }
 
-  const top = summary.rows.filter((r) => r.tradesCount > 0).slice(0, 8);
+  const top = summary.rows.filter((r) => r.enabled && r.tradesCount > 0).slice(0, 6);
   if (top.length > 0) {
-    lines.push('', '<b>Топ активность:</b>');
+    lines.push('', '<b>Топ:</b>');
     for (const row of top) {
-      const pnlSuffix = row.closedCount > 0 && row.avgPnlPercent !== null
-        ? ` · ${row.avgPnlPercent >= 0 ? '+' : ''}${row.avgPnlPercent}%/сд`
+      const dSign = row.equityDeltaUsd >= 0 ? '+' : '';
+      const pnl = row.closedCount > 0
+        ? ` · ${row.totalPnlUsd >= 0 ? '+' : ''}${fmtUsd(row.totalPnlUsd, 2)} / vol ${fmtUsd(row.totalVolumeUsd)}`
         : '';
-      lines.push(`• ${row.displayName}: ${row.tradesCount} (in ${row.entries} / out ${row.exits})${pnlSuffix}`);
+      lines.push(
+        `• ${row.displayName}: ${row.tradesCount}ev Δ${dSign}${fmtUsd(row.equityDeltaUsd, 0)}${pnl}`,
+      );
     }
   }
 

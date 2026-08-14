@@ -6,6 +6,7 @@ import {
   formatStorefrontPercent,
   LinePoint,
   metricTone,
+  syntheticEquitySeriesFromMetrics,
 } from './storefrontMetrics';
 
 export type PortfolioMemberView = {
@@ -70,7 +71,20 @@ const PortfolioCard: React.FC<Props> = ({
   const [open, setOpen] = useState(false);
   const retTone = metricTone(Number(portfolio.ret || 0), 'return');
   const ddTone = metricTone(Number(portfolio.dd || 0), 'drawdown');
-  const hasChart = chartSeries.length > 1;
+  const hasMetrics = Number.isFinite(Number(portfolio.ret)) || Number.isFinite(Number(portfolio.dd));
+  const resolvedSeries = useMemo(() => {
+    if (Array.isArray(chartSeries) && chartSeries.length > 1) return chartSeries;
+    if (!hasMetrics) return [] as LinePoint[];
+    return syntheticEquitySeriesFromMetrics({
+      capital: portfolio.capital,
+      ret: portfolio.ret,
+      dd: portfolio.dd,
+      periodDays: 850,
+      points: 64,
+    });
+  }, [chartSeries, hasMetrics, portfolio.capital, portfolio.ret, portfolio.dd]);
+  const hasChart = resolvedSeries.length > 1;
+  const chartIsSynthetic = hasChart && !(Array.isArray(chartSeries) && chartSeries.length > 1);
   const members = useMemo(() => portfolio.members || [], [portfolio.members]);
   const clients = Math.max(0, Number(clientCount || 0));
   const actives = Math.max(0, Number(activeCount || 0));
@@ -115,9 +129,18 @@ const PortfolioCard: React.FC<Props> = ({
 
         <div className="storefront-card__chart">
           {hasChart ? (
-            <EquitySparkline points={chartSeries} height={112} />
+            <>
+              <EquitySparkline points={resolvedSeries} height={112} />
+              {chartIsSynthetic ? (
+                <div className="storefront-card__chart-note" style={{ fontSize: 10, opacity: 0.55, marginTop: 2 }}>
+                  кривая approx по Ret/DD
+                </div>
+              ) : null}
+            </>
           ) : (
-            <div className="storefront-card__chart-empty">Бэктест не загружен</div>
+            <div className="storefront-card__chart-empty">
+              {hasMetrics ? 'Кривая BT не сохранена' : 'Бэктест не загружен'}
+            </div>
           )}
         </div>
 
@@ -202,9 +225,11 @@ const PortfolioCard: React.FC<Props> = ({
         />
         {hasChart ? (
           <div style={{ marginTop: 16 }}>
-            <Typography.Text strong>Total equity (BT)</Typography.Text>
+            <Typography.Text strong>
+              Total equity (BT){chartIsSynthetic ? ' · approx' : ''}
+            </Typography.Text>
             <div style={{ marginTop: 8 }}>
-              <EquitySparkline points={chartSeries} height={120} />
+              <EquitySparkline points={resolvedSeries} height={120} />
             </div>
           </div>
         ) : null}

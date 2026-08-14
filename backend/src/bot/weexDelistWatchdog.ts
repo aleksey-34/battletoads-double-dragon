@@ -76,11 +76,11 @@ const loadWatchedSymbols = async (): Promise<Set<string>> => {
     if (sym) out.add(sym);
   }
 
+  // api_keys has no `enabled` column — any weex key is a candidate.
   const keys = await db.all(`
     SELECT DISTINCT a.name AS name
     FROM api_keys a
     WHERE a.exchange = 'weex'
-      AND COALESCE(a.enabled, 1) = 1
   `) || [];
   for (const row of keys) {
     const name = String(row?.name || '').trim();
@@ -154,7 +154,7 @@ const attemptEmergencyClose = async (symbol: string): Promise<{ openKeys: string
   const keys = await db.all(`
     SELECT DISTINCT a.name AS name
     FROM api_keys a
-    WHERE a.exchange = 'weex' AND COALESCE(a.enabled, 1) = 1
+    WHERE a.exchange = 'weex'
   `) || [];
 
   for (const row of keys) {

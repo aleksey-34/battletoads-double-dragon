@@ -137,12 +137,14 @@ def main() -> None:
                 meta = {}
             meta = patch_meta(meta)
             meta["bt"] = {k: snap.get(k) for k in ("ret", "dd", "capital", "method", "retNoStocks", "ddNoStocks", "overlay", "ri")}
+            # Keep full snap (incl. equity curve) for storefront sparkline.
+            snap_out = dict(snap)
             conn.execute(
                 """UPDATE algofund_portfolios
                    SET metadata_json=?, snapshot_json=?, updated_at=? WHERE id=?""",
                 (
                     json.dumps(meta, ensure_ascii=False),
-                    json.dumps(snap, ensure_ascii=False),
+                    json.dumps(snap_out, ensure_ascii=False),
                     now(),
                     int(row["id"]),
                 ),
