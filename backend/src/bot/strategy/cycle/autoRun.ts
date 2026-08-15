@@ -438,11 +438,31 @@ export const runAutoStrategiesCycle = async () => {
           logger.warn(`Auto-cycle strategy ${strategyId} (${apiKeyName}) skipped: offline symbol on exchange (${errorText})`);
         }
 
+        // Ghost-delist / copy-blocked / Contract not found: do not leave is_active=1 zombies
+        // (remat only filters allowlist membership; cycle previously only skipped forever).
+        const hardOffline = /contract not found|market symbol offline|not supported via the api|code["']?\s*[:=]\s*-?1054/i
+          .test(errorText);
         try {
-          await updateStrategy(apiKeyName, strategyId, {
-            last_action: 'auto_cycle_skipped_offline_symbol',
-            last_error: errorText,
-          });
+          if (hardOffline) {
+            await db.run(
+              `UPDATE strategies
+               SET is_active = 0,
+                   is_archived = 1,
+                   auto_update = 0,
+                   is_runtime = 0,
+                   last_action = 'offline_symbol_archived',
+                   last_error = ?,
+                   updated_at = CURRENT_TIMESTAMP
+               WHERE id = ? AND COALESCE(is_archived, 0) = 0`,
+              [errorText.slice(0, 500), strategyId],
+            );
+            logger.warn(`Auto-cycle strategy ${strategyId} (${apiKeyName}) archived: hard offline symbol`);
+          } else {
+            await updateStrategy(apiKeyName, strategyId, {
+              last_action: 'auto_cycle_skipped_offline_symbol',
+              last_error: errorText,
+            });
+          }
         } catch (persistError) {
           logger.warn(
             `Auto-cycle strategy ${strategyId} (${apiKeyName}) failed to persist offline-skip state: ${formatActionError(persistError)}`

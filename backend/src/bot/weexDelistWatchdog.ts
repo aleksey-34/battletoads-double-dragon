@@ -240,14 +240,16 @@ const runCopyStockHealthProbe = async (): Promise<void> => {
   if (now - lastCopyStockHealthAt < COPY_STOCK_HEALTH_MS) return;
   lastCopyStockHealthAt = now;
 
+  // api_keys has no `enabled` column — filter by name only (same as loadWatchedSymbols).
   const copyKeys = await db.all(`
     SELECT name FROM api_keys
-    WHERE exchange = 'weex' AND COALESCE(enabled, 1) = 1
+    WHERE exchange = 'weex'
       AND (LOWER(name) LIKE 'copy_%' OR LOWER(name) LIKE 'arcopy%' OR LOWER(name) LIKE 'icopy%')
   `) || [];
   if (!copyKeys.length) return;
 
   const summary: Record<string, string> = {};
+  const deadSyms: string[] = [];
   for (const row of copyKeys) {
     const apiKeyName = String(row?.name || '').trim();
     if (!apiKeyName) continue;
@@ -263,8 +265,10 @@ const runCopyStockHealthProbe = async (): Promise<void> => {
           summary[sym] = 'unexpected_open';
         } catch (e) {
           const msg = String((e as Error).message || e);
-          if (/Contract not found/i.test(msg)) summary[sym] = 'copy_dead';
-          else if (/min limit|Trader order size/i.test(msg)) summary[sym] = 'ok_min';
+          if (/Contract not found/i.test(msg)) {
+            summary[sym] = 'copy_dead';
+            deadSyms.push(sym);
+          } else if (/min limit|Trader order size/i.test(msg)) summary[sym] = 'ok_min';
           else if (/not supported via the API|-1058/i.test(msg)) summary[sym] = 'not_api';
           else summary[sym] = 'other';
         }
@@ -273,6 +277,16 @@ const runCopyStockHealthProbe = async (): Promise<void> => {
       summary._key = 'init_fail';
     }
     break; // one representative copy key is enough
+  }
+  // Soft-archive stock legs that are dead for copy (and personal keys sharing the contract).
+  for (const sym of [...new Set(deadSyms)]) {
+    if (DRY_RUN) continue;
+    try {
+      const n = await archiveWeexSymbolStrategies(sym);
+      if (n > 0) summary[`${sym}_archived`] = String(n);
+    } catch (e) {
+      logger.warn(`[weex-copy-stocks] archive ${sym} failed: ${(e as Error).message}`);
+    }
   }
   logger.info(`[weex-copy-stocks] health ${JSON.stringify(summary)}`);
 };

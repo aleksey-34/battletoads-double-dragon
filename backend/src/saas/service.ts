@@ -25,6 +25,7 @@ import {
   getExchangeForApiKey,
 } from '../bot/exchange';
 import { isWeexApiTradableSymbol } from '../bot/weexClient';
+import { isWeexCopyBlockedStock } from '../bot/weexKeyUtils';
 import { Strategy, saveApiKey } from '../config/settings';
 import { db, initDB } from '../utils/database';
 import logger from '../utils/logger';
@@ -4638,8 +4639,10 @@ const saasArchiveStrategy = async (
     await db.run(
       `UPDATE strategies
        SET state = 'flat',
+           is_active = 0,
            is_archived = 1,
            is_runtime = 0,
+           auto_update = 0,
            origin = 'saas_archived',
            updated_at = CURRENT_TIMESTAMP
        WHERE id = ?`,
@@ -5100,22 +5103,23 @@ const upsertTenantStrategies = async (
   }
 
   for (const item of records) {
+    const parsedForPolicy = parseSweepMarketLegs({
+      marketMode: item.record.marketMode,
+      market: item.record.market,
+    });
+
     // Skip pairs not available on the client's exchange (Cloud multi-exchange support)
     if (availableSymbols) {
-      const parsed = parseSweepMarketLegs({
-        marketMode: item.record.marketMode,
-        market: item.record.market,
-      });
-      if (parsed.label && !isMarketAvailableOnExchange(availableSymbols, {
+      if (parsedForPolicy.label && !isMarketAvailableOnExchange(availableSymbols, {
         marketMode: item.record.marketMode,
         market: item.record.market,
       })) {
-        const missingLegs = parsed.marketMode === 'synthetic' && parsed.quote
-          ? [parsed.base, parsed.quote].filter((leg) => !availableSymbols!.has(leg))
-          : [parsed.base].filter((leg) => !availableSymbols!.has(leg));
+        const missingLegs = parsedForPolicy.marketMode === 'synthetic' && parsedForPolicy.quote
+          ? [parsedForPolicy.base, parsedForPolicy.quote].filter((leg) => !availableSymbols!.has(leg))
+          : [parsedForPolicy.base].filter((leg) => !availableSymbols!.has(leg));
         logger.info(
-          `[upsertTenantStrategies] Skipping ${parsed.label} for ${apiKeyName}: `
-          + `pair not available on client exchange (missing: ${missingLegs.join(', ') || parsed.label})`
+          `[upsertTenantStrategies] Skipping ${parsedForPolicy.label} for ${apiKeyName}: `
+          + `pair not available on client exchange (missing: ${missingLegs.join(', ') || parsedForPolicy.label})`
         );
         await db.run(
           `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
@@ -5124,7 +5128,7 @@ const upsertTenantStrategies = async (
             tenant.id,
             JSON.stringify({
               apiKeyName,
-              market: parsed.label,
+              market: parsedForPolicy.label,
               missingLegs,
               offerId: item.offerId,
               strategyType: item.record.strategyType,
@@ -5134,6 +5138,36 @@ const upsertTenantStrategies = async (
         );
         continue;
       }
+    }
+
+    // Copy Elite: only SPX among stock sleeve — keep out of desiredNames so remat archives leftovers.
+    if (
+      parsedForPolicy.base
+      && (
+        isWeexCopyBlockedStock(apiKeyName, parsedForPolicy.base)
+        || (parsedForPolicy.quote && isWeexCopyBlockedStock(apiKeyName, parsedForPolicy.quote))
+      )
+    ) {
+      logger.info(
+        `[upsertTenantStrategies] Skipping ${parsedForPolicy.label || parsedForPolicy.base} for ${apiKeyName}: `
+        + `WEEX copy policy blocks non-SPX stock`
+      );
+      await db.run(
+        `INSERT INTO saas_audit_log (tenant_id, actor_mode, action, payload_json, created_at)
+         VALUES (?, 'system', 'saas_materialize_copy_stock_blocked', ?, CURRENT_TIMESTAMP)`,
+        [
+          tenant.id,
+          JSON.stringify({
+            apiKeyName,
+            market: parsedForPolicy.label,
+            base: parsedForPolicy.base,
+            quote: parsedForPolicy.quote || null,
+            offerId: item.offerId,
+            strategyType: item.record.strategyType,
+          }),
+        ]
+      ).catch(() => {});
+      continue;
     }
 
     const desiredName = prefixStrategyName(tenant, item.record);
