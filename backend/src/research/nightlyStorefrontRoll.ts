@@ -344,17 +344,85 @@ const stampPortfolios = async (opts: {
   const hasCandle = (iv: string, sym: string): boolean =>
     fs.existsSync(path.join(opts.mergedBundle, String(iv).toLowerCase(), `${String(sym).toUpperCase()}.json`));
 
+  // Recipe IDs are from the laptop stamp DB and drift on VPS. Resolve live BTDD_D1
+  // strategies by (symbol, interval, strategy_type) from hamfive_legs_aug2026.json.
+  const legsPath = path.join(path.dirname(opts.recipePath), 'hamfive_legs_aug2026.json');
+  const legsDoc = fs.existsSync(legsPath)
+    ? JSON.parse(fs.readFileSync(legsPath, 'utf8'))
+    : { ham: [], five: [], stocks: [] };
+  const legsBySym = new Map<string, any>();
+  for (const group of ['ham', 'five', 'stocks']) {
+    for (const leg of legsDoc[group] || []) {
+      const sym = String(leg?.base_symbol || '').toUpperCase();
+      if (sym) legsBySym.set(`${group}|${sym}`, leg);
+    }
+  }
+
+  const resolveLiveId = async (leg: any): Promise<number | null> => {
+    const sym = String(leg?.base_symbol || '').toUpperCase();
+    const interval = String(leg?.interval || '').trim();
+    const stype = String(leg?.strategy_type || '').trim();
+    if (!sym || !interval) return null;
+    if (!hasCandle(interval, sym)) return null;
+    const row = await db.get(
+      `SELECT s.id
+       FROM strategies s
+       JOIN api_keys a ON a.id = s.api_key_id
+       WHERE a.name = ?
+         AND UPPER(REPLACE(REPLACE(COALESCE(s.base_symbol,''),'/',''),'-','')) = ?
+         AND LOWER(COALESCE(s.interval,'')) = LOWER(?)
+         AND (
+           ? = '' OR LOWER(COALESCE(s.strategy_type,'')) = LOWER(?)
+           OR LOWER(COALESCE(s.name,'')) LIKE '%' || LOWER(?) || '%'
+         )
+       ORDER BY COALESCE(s.is_archived, 0) ASC,
+                COALESCE(s.is_active, 0) DESC,
+                s.id DESC
+       LIMIT 1`,
+      [opts.apiKeyName, sym, interval, stype, stype, stype],
+    ) as { id?: number } | undefined;
+    const id = Number(row?.id || 0);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  };
+
   const uniCache: Record<string, number[]> = {};
   for (const [key, u] of Object.entries(recipes.universes || {}) as Array<[string, any]>) {
-    if (!u?.ids) { uniCache[key] = []; continue; }
+    const from = String(u?.from || '').trim().toLowerCase() || 'ham';
+    const symbols: string[] = (u?.symbols || u?.apiSymbols || []).map((s: any) => String(s).toUpperCase());
     const out: number[] = [];
-    for (const id of u.ids) {
-      const row = await db.get('SELECT id, interval, base_symbol FROM strategies WHERE id = ?', [id]) as any;
-      if (!row) continue;
-      if (!hasCandle(row.interval, row.base_symbol)) continue;
-      out.push(Number(row.id));
+    const seen = new Set<number>();
+
+    // 1) Prefer legs catalog matched by universe symbols.
+    for (const sym of symbols) {
+      const leg = legsBySym.get(`${from}|${sym}`);
+      if (!leg) continue;
+      const id = await resolveLiveId(leg);
+      if (id && !seen.has(id)) {
+        seen.add(id);
+        out.push(id);
+      }
     }
+
+    // 2) Fallback: recipe ids if they still point at the right symbol on this DB.
+    for (const id of (u?.ids || [])) {
+      const sid = Number(id);
+      if (!Number.isFinite(sid) || sid <= 0 || seen.has(sid)) continue;
+      const row = await db.get(
+        `SELECT s.id, s.base_symbol, s.interval
+         FROM strategies s JOIN api_keys a ON a.id = s.api_key_id
+         WHERE s.id = ? AND a.name = ?`,
+        [sid, opts.apiKeyName],
+      ) as any;
+      if (!row) continue;
+      const sym = String(row.base_symbol || '').toUpperCase();
+      if (symbols.length && !symbols.includes(sym)) continue;
+      if (!hasCandle(row.interval, sym)) continue;
+      seen.add(sid);
+      out.push(sid);
+    }
+
     uniCache[key] = out;
+    logger.info(`[nightlyStorefrontRoll] universe ${key} resolved=${out.length}/${symbols.length || (u?.ids || []).length}`);
   }
 
   const tierCb = {
