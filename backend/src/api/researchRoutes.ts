@@ -944,10 +944,12 @@ router.get('/scheduler', async (_req, res) => {
   }
 });
 
+const SCHEDULER_RUNNABLE_KEYS = new Set(['daily_incremental_sweep', 'nightly_storefront_roll']);
+
 router.patch('/scheduler/:jobKey', async (req, res) => {
   try {
     const jobKey = String(req.params.jobKey || '');
-    if (jobKey !== 'daily_incremental_sweep') {
+    if (!SCHEDULER_RUNNABLE_KEYS.has(jobKey)) {
       return res.status(400).json({ error: `Unsupported scheduler job key: ${jobKey}` });
     }
 
@@ -957,7 +959,7 @@ router.patch('/scheduler/:jobKey', async (req, res) => {
       minuteUtc?: number;
     };
 
-    const updated = await updateSchedulerJob('daily_incremental_sweep', {
+    const updated = await updateSchedulerJob(jobKey as 'daily_incremental_sweep' | 'nightly_storefront_roll', {
       is_enabled: body.isEnabled,
       hour_utc: body.hourUtc,
       minute_utc: body.minuteUtc,
@@ -973,11 +975,11 @@ router.patch('/scheduler/:jobKey', async (req, res) => {
 router.post('/scheduler/:jobKey/run-now', async (req, res) => {
   try {
     const jobKey = String(req.params.jobKey || '');
-    if (jobKey !== 'daily_incremental_sweep') {
+    if (!SCHEDULER_RUNNABLE_KEYS.has(jobKey)) {
       return res.status(400).json({ error: `Unsupported scheduler job key: ${jobKey}` });
     }
 
-    const result = await runSchedulerJobNow('daily_incremental_sweep');
+    const result = await runSchedulerJobNow(jobKey as 'daily_incremental_sweep' | 'nightly_storefront_roll');
     res.json({ success: true, ...result });
   } catch (err) {
     const error = err as Error;

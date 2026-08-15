@@ -7,7 +7,7 @@ import { getResearchDb, getResearchDbFilePath } from './db';
 import { importSweepCandidates, registerSweepRun } from './profileService';
 import { startFullHistoricalSweepJob } from './fullHistoricalSweepService';
 
-type SchedulerJobKey = 'daily_incremental_sweep' | 'bt_rt_daily_snapshot';
+type SchedulerJobKey = 'daily_incremental_sweep' | 'bt_rt_daily_snapshot' | 'nightly_storefront_roll';
 type SchedulerStatus = 'idle' | 'running' | 'done' | 'failed' | 'skipped';
 type SweepRunMode = 'light' | 'heavy';
 
@@ -72,6 +72,13 @@ const DEFAULT_JOBS: Array<{ job_key: SchedulerJobKey; title: string; hour_utc: n
     minute_utc: 15,
   },
   {
+    // After daily sweep: roll candles → re-stamp hamfive cards → refresh offer snapshots.
+    job_key: 'nightly_storefront_roll',
+    title: 'Nightly storefront candle roll + card stamp',
+    hour_utc: 4,
+    minute_utc: 0,
+  },
+  {
     job_key: 'bt_rt_daily_snapshot',
     title: 'Daily BT vs RT snapshot',
     hour_utc: 23,
@@ -101,6 +108,7 @@ export const ensureDefaultSchedulerJobs = async (): Promise<void> => {
   const db = getResearchDb();
 
   for (const item of DEFAULT_JOBS) {
+    // Only BT/RT monitor stays force-disabled; nightly storefront roll is on by default.
     const enabled = item.job_key === 'bt_rt_daily_snapshot' ? 0 : 1;
     await db.run(
       `INSERT OR IGNORE INTO research_scheduler_jobs
@@ -111,10 +119,20 @@ export const ensureDefaultSchedulerJobs = async (): Promise<void> => {
 
     await db.run(
       `UPDATE research_scheduler_jobs
-       SET is_enabled = CASE WHEN job_key = 'bt_rt_daily_snapshot' THEN 0 ELSE is_enabled END,
-           next_run_at = COALESCE(next_run_at, ?), updated_at = CURRENT_TIMESTAMP
+       SET title = ?,
+           is_enabled = CASE WHEN job_key = 'bt_rt_daily_snapshot' THEN 0 ELSE is_enabled END,
+           hour_utc = COALESCE(hour_utc, ?),
+           minute_utc = COALESCE(minute_utc, ?),
+           next_run_at = COALESCE(next_run_at, ?),
+           updated_at = CURRENT_TIMESTAMP
        WHERE job_key = ?`,
-      [computeNextDailyRunAtUtc(item.hour_utc, item.minute_utc), item.job_key]
+      [
+        item.title,
+        item.hour_utc,
+        item.minute_utc,
+        computeNextDailyRunAtUtc(item.hour_utc, item.minute_utc),
+        item.job_key,
+      ]
     );
   }
 };
@@ -890,6 +908,12 @@ export const startDailySweepGapBackfillJob = async (maxDays: number = 30, modeIn
 const runSchedulerJobByKey = async (jobKey: SchedulerJobKey): Promise<{ status: SchedulerStatus; details: Record<string, unknown> }> => {
   if (jobKey === 'daily_incremental_sweep') {
     return runDailyIncrementalSweep();
+  }
+
+  if (jobKey === 'nightly_storefront_roll') {
+    const { runNightlyStorefrontRoll } = await import('./nightlyStorefrontRoll');
+    const result = await runNightlyStorefrontRoll();
+    return { status: result.status, details: result.details };
   }
 
   if (jobKey === 'bt_rt_daily_snapshot') {
