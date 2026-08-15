@@ -91,6 +91,13 @@ type AdminSweepBacktestPreviewResponse = {
     setKey?: string;
     membersCount?: number;
     systemName?: string;
+    books?: Array<{
+      role?: string;
+      pf?: number;
+      trades?: number;
+      ret?: number;
+      dd?: number;
+    }>;
   };
   controls: {
     riskScore: number;
@@ -111,13 +118,14 @@ type AdminSweepBacktestPreviewResponse = {
     strategyId: number;
     strategyName: string;
     score: number;
-    metricsSource?: 'offer_store' | 'snapshot_only';
+    metricsSource?: 'offer_store' | 'snapshot_only' | 'shared_margin_book';
     metrics: {
       ret: number;
       pf: number;
       dd: number;
       wr: number;
       trades: number;
+      pnl?: number;
     };
     tradesPerDay: number;
     periodDays: number;
@@ -1021,6 +1029,13 @@ type AdminPublishResponse = {
     setKey?: string;
     membersCount?: number;
     systemName?: string;
+    books?: Array<{
+      role?: string;
+      pf?: number;
+      trades?: number;
+      ret?: number;
+      dd?: number;
+    }>;
   };
 };
 
@@ -17471,10 +17486,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         pagination={false}
                         rowKey={(r) => String(r.role)}
                         dataSource={(backtestDrawerContext.portfolioMembers || []).map((member) => {
-                          const rerunBooks = Array.isArray((adminSweepBacktestResult as { publishMeta?: { books?: any[] } })?.publishMeta?.books)
-                            ? (adminSweepBacktestResult.publishMeta?.books || [])
-                            : [];
-                          const hit = rerunBooks.find((b: any) => String(b?.role || '') === String(member.role || ''));
+                          const books = adminSweepBacktestResult?.publishMeta?.books;
+                          const rerunBooks = Array.isArray(books) ? books : [];
+                          const hit = rerunBooks.find((b) => String(b?.role || '') === String(member.role || ''));
                           return hit ? {
                             ...member,
                             pf: hit.pf ?? member.pf,
