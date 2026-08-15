@@ -79,7 +79,7 @@ type SaasBacktestContext = {
   offerWeightsById?: Record<string, number>;
   setKey?: string;
   systemName?: string;
-  /** Multi-book portfolio: independent per-book API rerun (equity sum) + stamp fallback. */
+  /** Multi-book portfolio: shared-margin API rerun (one wallet, per-book OP) + stamp fallback. */
   portfolioMode?: boolean;
   portfolioMembers?: SaasBacktestPortfolioMember[];
 };
@@ -10015,21 +10015,18 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         op: item?.op != null ? Number(item.op) : (meta?.op != null ? Number(meta.op) : (book?.op != null ? Number(book.op) : undefined)),
         lot: item?.lot != null ? Number(item.lot) : (meta?.lot != null ? Number(meta.lot) : (book?.lot != null ? Number(book.lot) : undefined)),
         weight: item?.weight != null ? Number(item.weight) : undefined,
-        ret: book?.ret != null ? Number(book.ret) : undefined,
-        dd: book?.dd != null ? Number(book.dd) : undefined,
-        pf: book?.pf != null ? Number(book.pf) : undefined,
+        ret: book?.ret != null && Number.isFinite(Number(book.ret)) ? Number(book.ret) : undefined,
+        dd: book?.dd != null && Number.isFinite(Number(book.dd)) ? Number(book.dd) : undefined,
+        pf: book?.pf != null && Number.isFinite(Number(book.pf)) ? Number(book.pf) : undefined,
         trades: book?.trades != null ? Number(book.trades) : undefined,
       };
     });
     const selectedOffers = portfolioMembers.map((member, idx) => {
-      const bookRet = Number(member.ret ?? ret);
-      const bookDd = Number(member.dd ?? dd);
-      const bookPf = Number(member.pf ?? 0);
-      const bookTrades = Math.max(0, Math.floor(Number(member.trades ?? 0)));
+      const hasBookStamp = Number.isFinite(Number(member.ret)) || Number(member.trades || 0) > 0;
       return {
         offerId: `portfolio-book:${member.role || idx}`,
         titleRu: `${member.role}${member.op != null ? ` · OP ${member.op}` : ''}${member.lot != null ? ` · lot ${member.lot}%` : ''}`,
-        weight: Number(member.weight || 1),
+        weight: Number(member.weight || 0),
         mode: 'mono' as const,
         market: '',
         strategyId: 0,
@@ -10038,17 +10035,17 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
         interval: '',
         familyInterval: '',
         score: 0,
-        metricsSource: 'snapshot_only' as const,
+        metricsSource: hasBookStamp ? 'snapshot_only' as const : 'shared_margin_book' as const,
         metrics: {
-          ret: Number(bookRet.toFixed(3)),
-          pf: Number(bookPf.toFixed(3)),
-          dd: Number(bookDd.toFixed(3)),
+          ret: hasBookStamp && Number.isFinite(Number(member.ret)) ? Number(Number(member.ret).toFixed(3)) : Number.NaN,
+          pf: Number.isFinite(Number(member.pf)) ? Number(Number(member.pf).toFixed(3)) : Number.NaN,
+          dd: hasBookStamp && Number.isFinite(Number(member.dd)) ? Number(Number(member.dd).toFixed(3)) : Number.NaN,
           wr: 0,
-          trades: bookTrades,
+          trades: Math.max(0, Math.floor(Number(member.trades || 0))),
         },
         tradesPerDay: 0,
         periodDays: Math.max(1, equityPoints.length || 90),
-        equityPoints: equityPoints.map((pt) => pt.equity),
+        equityPoints: [],
       };
     });
     const totalTrades = selectedOffers.reduce((sum, o) => sum + Number(o.metrics.trades || 0), 0);
@@ -10064,7 +10061,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     setBacktestDrawerContext({
       kind: 'algofund-ts',
       title: `Бэктест портфеля: ${String(row.displayLabel || setKey)}`,
-      description: String(snap.method || 'portfolio snapshot (per-book OP, equity sum)'),
+      description: String(snap.method || 'portfolio snapshot (shared wallet, per-book OP)'),
       setKey,
       systemName: setKey,
       offerIds: selectedOffers.map((o) => o.offerId),
@@ -16063,7 +16060,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     }}
                   >
                     {backtestDrawerContext?.portfolioMode
-                      ? 'API rerun портфеля (книги независимо)'
+                      ? 'API rerun портфеля (один депозит, OP по книгам)'
                       : 'API rerun (реальный)'}
                   </Button>
                   {backtestDrawerContext.kind === 'offer' ? (
@@ -16488,14 +16485,14 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                 type="info"
                 showIcon
                 message={backtestDrawerContext.portfolioMode
-                  ? 'Портфель: независимые книги (свой OP) → сумма equity'
+                  ? 'Портфель: один депозит / один поток, OP отдельно по книгам (как live)'
                   : 'Что влияет на real rerun (API rerun)'}
                 description={backtestDrawerContext.portfolioMode ? (
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
-                    <li><strong>API rerun</strong> — каждая книга отдельно (свой OP/lot/capital/reinvest), без конкуренции за OP</li>
-                    <li><strong>Множитель лота ×</strong> — масштабирует recipe lot всех книг (1.5 = +50% к B3 и MRS)</li>
-                    <li>Итог = сумма equity кривых; сделки всех книг в одном списке</li>
-                    <li>Кнопка <strong>Бэктест ТС</strong> — только одна книга</li>
+                    <li><strong>API rerun</strong> — один backtest на все книги: общий cash, CB/fear/reinvest, pair-lock. У каждой книги свой OP и lot%</li>
+                    <li>Книги <strong>не</strong> гоняются по отдельности и не суммируются как независимые симуляции</li>
+                    <li>Ret/DD/сделки в шапке — итог портфеля. В таблице книг — только вклад сделок этой книги</li>
+                    <li>Кнопка <strong>Бэктест ТС</strong> — изолированный прогон одной книги (для отладки, не live-модель)</li>
                   </ul>
                 ) : (
                   <ul style={{ margin: 0, paddingLeft: 18 }}>
@@ -16674,7 +16671,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         );
                       })}
                       <Text type="secondary" style={{ fontSize: 11 }}>
-                        OP у книг независимые. Множитель лота масштабирует recipe lot всех книг сразу.
+                        OP-потолок у каждой книги свой. Депозит, CB и fear — общие.
                       </Text>
                     </Space>
                   </Card>
@@ -17466,14 +17463,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         type="info"
                         showIcon
                         style={{ marginBottom: 12 }}
-                        message="Портфель = независимые книги (свой OP), итог = сумма equity"
-                        description="API rerun гоняет каждую книгу отдельно со своим OP/lot/capital — книги не конкурируют за OP. «Бэктест ТС» — одна книга. Live members — через publish."
+                        message="Портфель = один кошелёк, OP по книгам (как live)"
+                        description="API rerun — shared-margin: общий депозит и слои РМ/ММ, у каждой книги свой потолок OP/lot. «Метрики stamp» по книгам пустые, если snapshot без per-book кривых. Цифры Ret/DD после rerun — в шапке, не клонируются в каждую книгу. «Бэктест ТС» — изолированная книга (не live-модель)."
                       />
                       <Table
                         size="small"
                         pagination={false}
                         rowKey={(r) => String(r.role)}
-                        dataSource={backtestDrawerContext.portfolioMembers || []}
+                        dataSource={(backtestDrawerContext.portfolioMembers || []).map((member) => {
+                          const rerunBooks = Array.isArray((adminSweepBacktestResult as { publishMeta?: { books?: any[] } })?.publishMeta?.books)
+                            ? (adminSweepBacktestResult.publishMeta?.books || [])
+                            : [];
+                          const hit = rerunBooks.find((b: any) => String(b?.role || '') === String(member.role || ''));
+                          return hit ? {
+                            ...member,
+                            pf: hit.pf ?? member.pf,
+                            trades: hit.trades ?? member.trades,
+                            ret: hit.ret ?? member.ret,
+                            dd: hit.dd ?? member.dd,
+                          } : member;
+                        })}
                         columns={[
                           {
                             title: 'Книга',
@@ -17500,16 +17509,25 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             render: (v: number) => (v != null ? v : '—'),
                           },
                           {
-                            title: 'Метрики stamp',
+                            title: 'Метрики книги',
                             key: 'metrics',
-                            render: (_: unknown, r: SaasBacktestPortfolioMember) => (
-                              <Space wrap size={4}>
-                                <Tag color="green">Ret {Number(r.ret || 0).toFixed(1)}%</Tag>
-                                <Tag color="red">DD {Number(r.dd || 0).toFixed(1)}%</Tag>
-                                <Tag color="orange">PF {Number(r.pf || 0).toFixed(2)}</Tag>
-                                <Tag>trades {Number(r.trades || 0)}</Tag>
-                              </Space>
-                            ),
+                            render: (_: unknown, r: SaasBacktestPortfolioMember) => {
+                              const hasRet = Number.isFinite(Number(r.ret));
+                              const hasDd = Number.isFinite(Number(r.dd));
+                              const hasPf = Number.isFinite(Number(r.pf)) && Number(r.pf) > 0;
+                              const hasTrades = Number(r.trades || 0) > 0;
+                              if (!hasRet && !hasDd && !hasPf && !hasTrades) {
+                                return <Text type="secondary">нет per-book stamp — итог портфеля в шапке</Text>;
+                              }
+                              return (
+                                <Space wrap size={4}>
+                                  {hasRet ? <Tag color="green">Ret {Number(r.ret).toFixed(1)}%</Tag> : null}
+                                  {hasDd ? <Tag color="red">DD {Number(r.dd).toFixed(1)}%</Tag> : null}
+                                  {hasPf ? <Tag color="orange">PF {Number(r.pf).toFixed(2)}</Tag> : null}
+                                  {hasTrades ? <Tag>trades {Number(r.trades)}</Tag> : <Tag>trades 0</Tag>}
+                                </Space>
+                              );
+                            },
                           },
                           {
                             title: 'Действия',
@@ -17615,7 +17633,16 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                             || '',
                           ).trim() || '—';
                           const metrics = row.metrics || {};
-                          const hasOfferMetrics = hasFiniteOfferMetrics(metrics);
+                          const isPortfolioBook = String(row.offerId || '').startsWith('portfolio-book:')
+                            || String(row.metricsSource || '') === 'shared_margin_book';
+                          const hasRet = Number.isFinite(Number(metrics.ret));
+                          const hasDd = Number.isFinite(Number(metrics.dd));
+                          const hasPf = Number.isFinite(Number(metrics.pf));
+                          const hasTrades = Number(metrics.trades) > 0;
+                          const hasPnl = Number.isFinite(Number((metrics as { pnl?: number }).pnl));
+                          const hasOfferMetrics = isPortfolioBook
+                            ? (hasTrades || hasPf || hasPnl)
+                            : hasFiniteOfferMetrics(metrics);
                           return (
                             <Space direction="vertical" size={2}>
                               <Text strong>{row.titleRu}</Text>
@@ -17627,18 +17654,37 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                               </Text>
                               {hasOfferMetrics ? (
                                 <Space wrap size={4}>
-                                  <Tag color={metricColor(Number(metrics.ret || 0), 'return')}>
-                                    Ret {formatPercent(metrics.ret)}
-                                  </Tag>
-                                  <Tag color={metricColor(Number(metrics.dd || 0), 'drawdown')}>
-                                    DD {formatPercent(metrics.dd)}
-                                  </Tag>
-                                  <Tag color={metricColor(Number(metrics.pf || 0), 'pf')}>
-                                    PF {formatNumber(metrics.pf)}
-                                  </Tag>
+                                  {isPortfolioBook ? (
+                                    <>
+                                      <Tag>trades {Number(metrics.trades || 0)}</Tag>
+                                      {hasPnl ? <Tag color="green">PnL {formatNumber((metrics as { pnl?: number }).pnl)} USDT</Tag> : null}
+                                      {hasPf ? <Tag color="orange">PF {formatNumber(metrics.pf)}</Tag> : null}
+                                      {Number(metrics.wr) > 0 ? <Tag>WR {formatPercent(metrics.wr)}</Tag> : null}
+                                    </>
+                                  ) : (
+                                    <>
+                                      {hasRet ? (
+                                        <Tag color={metricColor(Number(metrics.ret || 0), 'return')}>
+                                          Ret {formatPercent(metrics.ret)}
+                                        </Tag>
+                                      ) : null}
+                                      {hasDd ? (
+                                        <Tag color={metricColor(Number(metrics.dd || 0), 'drawdown')}>
+                                          DD {formatPercent(metrics.dd)}
+                                        </Tag>
+                                      ) : null}
+                                      {hasPf ? (
+                                        <Tag color={metricColor(Number(metrics.pf || 0), 'pf')}>
+                                          PF {formatNumber(metrics.pf)}
+                                        </Tag>
+                                      ) : null}
+                                    </>
+                                  )}
                                 </Space>
                               ) : (
-                                <Text type="secondary" style={{ fontSize: 12 }}>метрики оффера: n/a</Text>
+                                <Text type="secondary" style={{ fontSize: 12 }}>
+                                  {isPortfolioBook ? 'вклад книги: n/a до API rerun' : 'метрики оффера: n/a'}
+                                </Text>
                               )}
                             </Space>
                           );
@@ -17650,6 +17696,12 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                         width: 240,
                         render: (_, row: any) => {
                           const offerId = String(row?.offerId || '').trim();
+                          if (backtestDrawerContext.portfolioMode || offerId.startsWith('portfolio-book:')) {
+                            const sleeve = Number(row?.weight || 0);
+                            return sleeve > 0
+                              ? <Tag>{formatNumber(sleeve * 100, 1)}% cap</Tag>
+                              : <Text type="secondary">sleeve</Text>;
+                          }
                           const activeOfferIds = Array.from(new Set((backtestDrawerContext?.offerIds || []).map((item) => String(item || '').trim()).filter(Boolean)));
                           const normalizedWeights = normalizeBacktestTsWeights(activeOfferIds, backtestTsWeightsByOfferId);
                           const weight = Number(normalizedWeights[offerId] ?? row?.weight ?? 0);

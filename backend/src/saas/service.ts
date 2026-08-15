@@ -7648,10 +7648,29 @@ const combinePortfolioBookEquityCurves = (
   };
 };
 
+const summarizeTradesForBook = (trades: Array<Record<string, unknown>>): {
+  trades: number;
+  pnl: number;
+  pf: number;
+  wr: number;
+} => {
+  const n = trades.length;
+  const pnl = trades.reduce((sum, t) => sum + asNumber(t.netPnl, 0), 0);
+  const grossProfit = trades.reduce((sum, t) => sum + Math.max(0, asNumber(t.netPnl, 0)), 0);
+  const grossLoss = trades.reduce((sum, t) => sum + Math.abs(Math.min(0, asNumber(t.netPnl, 0))), 0);
+  const wins = trades.filter((t) => asNumber(t.netPnl, 0) > 0).length;
+  return {
+    trades: n,
+    pnl: Number(pnl.toFixed(4)),
+    pf: Number((grossLoss > 0 ? grossProfit / grossLoss : (grossProfit > 0 ? 99 : 0)).toFixed(3)),
+    wr: Number((n > 0 ? (wins / n) * 100 : 0).toFixed(3)),
+  };
+};
+
 /**
- * Real API rerun for algofund portfolios — same model as research stamp:
- * each book is an independent engine run (own OP / lot / capital sleeve / reinvest),
- * then equity curves are summed. Books do NOT share an OP pool and do not compete.
+ * Real API rerun for algofund portfolios.
+ * Default `shared_margin`: one event stream / one wallet (live-like), per-book OP caps.
+ * `equity_sum` is a research-only independent-book fallback.
  */
 const previewAdminPortfolioSharedMarginRerun = async (args: {
   payload?: {
@@ -8006,12 +8025,16 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
       const lotEffective = book.lot > 0
         ? Number(Math.min(500, Math.max(0.05, book.lot * portfolioLotMult)).toFixed(4))
         : 0;
+      const idSet = new Set(book.strategyIds);
+      const bookTrades = sharedTrades.filter((t) => idSet.has(asNumber(t.strategyId, 0)));
+      const bookStats = summarizeTradesForBook(bookTrades);
+      const sleeveWeight = sharedDeposit > 0 ? book.capital / sharedDeposit : book.weight;
       return {
         offerId: `portfolio-book:${book.role}`,
         titleRu: `${book.role} · OP ${book.op || '—'} · lot ${lotEffective || book.lot || '—'}%`
           + (portfolioLotMult !== 1 && book.lot > 0 ? ` (×${portfolioLotMult})` : '')
-          + ` · cap $${book.capital} · ri ${book.reinvest} · shared-margin`,
-        weight: book.weight,
+          + ` · cap $${book.capital} · ri ${book.reinvest} · вклад в shared-margin`,
+        weight: sleeveWeight,
         mode: 'mono' as const,
         market: '',
         familyType: '',
@@ -8020,16 +8043,19 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
         strategyId: book.strategyIds[0] || 0,
         strategyName: book.systemName,
         score: 0,
+        metricsSource: 'shared_margin_book',
         metrics: {
-          ret: Number(totalReturnPercent.toFixed(3)),
-          pf: Number(profitFactor.toFixed(3)),
-          dd: Number(maxDrawdownPercent.toFixed(3)),
-          wr: Number(winRatePercent.toFixed(3)),
-          trades: tradesCount,
-        },
-        tradesPerDay: Number((tradesCount / Math.max(1, periodDays)).toFixed(3)),
+          // Attribution only. Portfolio ret/dd live in the header, not cloned here.
+          ret: null,
+          pf: bookStats.pf,
+          dd: null,
+          wr: bookStats.wr,
+          trades: bookStats.trades,
+          pnl: bookStats.pnl,
+        } as any,
+        tradesPerDay: Number((bookStats.trades / Math.max(1, periodDays)).toFixed(3)),
         periodDays,
-        equityPoints: sharedSeries.map((p) => Number(p.e.toFixed(4))),
+        equityPoints: [],
       };
     });
 
@@ -8048,21 +8074,30 @@ const previewAdminPortfolioSharedMarginRerun = async (args: {
         offerIds: selectedOffers.map((o) => o.offerId),
         method: 'shared_deposit_one_wallet_per_book_OP',
         portfolioLotMult,
-        books: bookPlans.map((b) => ({
-          role: b.role,
-          systemName: b.systemName,
-          op: b.op,
-          lot: b.lot,
-          lotEffective: b.lot > 0
-            ? Number(Math.min(500, Math.max(0.05, b.lot * portfolioLotMult)).toFixed(4))
-            : 0,
-          capital: b.capital,
-          reinvest: b.reinvest,
-          strategyCount: b.strategyIds.length,
-          ret: null,
-          dd: null,
-          trades: null,
-        })),
+        books: bookPlans.map((b) => {
+          const idSet = new Set(b.strategyIds);
+          const bookStats = summarizeTradesForBook(
+            sharedTrades.filter((t) => idSet.has(asNumber(t.strategyId, 0))),
+          );
+          return {
+            role: b.role,
+            systemName: b.systemName,
+            op: b.op,
+            lot: b.lot,
+            lotEffective: b.lot > 0
+              ? Number(Math.min(500, Math.max(0.05, b.lot * portfolioLotMult)).toFixed(4))
+              : 0,
+            capital: b.capital,
+            reinvest: b.reinvest,
+            strategyCount: b.strategyIds.length,
+            ret: null,
+            dd: null,
+            pf: bookStats.pf,
+            trades: bookStats.trades,
+            pnl: bookStats.pnl,
+            wr: bookStats.wr,
+          };
+        }),
       },
       controls: {
         riskScore,
