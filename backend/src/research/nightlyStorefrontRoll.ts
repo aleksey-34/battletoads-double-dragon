@@ -51,12 +51,19 @@ const listBundleFiles = (bundleRoot: string): Array<{ interval: string; symbol: 
   if (!fs.existsSync(bundleRoot)) return out;
   for (const iv of fs.readdirSync(bundleRoot)) {
     const dir = path.join(bundleRoot, iv);
-    if (!fs.statSync(dir).isDirectory()) continue;
+    let st: fs.Stats;
+    try { st = fs.lstatSync(dir); } catch { continue; }
+    if (!st.isDirectory()) continue;
     for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.json') && x !== 'manifest.json')) {
+      const file = path.join(dir, f);
+      try {
+        const lst = fs.lstatSync(file);
+        if (lst.isSymbolicLink() && !fs.existsSync(file)) continue; // dangling
+      } catch { continue; }
       out.push({
         interval: iv,
         symbol: f.replace(/\.json$/i, '').toUpperCase(),
-        file: path.join(dir, f),
+        file,
       });
     }
   }
