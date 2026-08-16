@@ -719,41 +719,80 @@ const formatUsdCompact = (value: number): string => {
   return `$${n.toFixed(2)}`;
 };
 
-const buildAumBreakdownLines = (statsRows: HealthRow[]): string[] => {
+const formatSignedUsd = (value: number): string => {
+  const n = toFinite(value, 0);
+  return `${n >= 0 ? '+' : ''}$${n.toFixed(2)}`;
+};
+
+const formatSignedPlain = (value: number): string => {
+  const n = toFinite(value, 0);
+  return `${n >= 0 ? '+' : ''}${n.toFixed(2)}`;
+};
+
+const sumRows = (rows: HealthRow[]): { n: number; equity: number; delta: number; upnl: number } => ({
+  n: rows.length,
+  equity: rows.reduce((s, r) => s + r.equity, 0),
+  delta: rows.reduce((s, r) => s + r.equity_delta, 0),
+  upnl: rows.reduce((s, r) => s + r.upnl, 0),
+});
+
+const formatGroupTotals = (periodHours: number, rows: HealthRow[]): string => {
+  const g = sumRows(rows);
+  return `${formatUsdCompact(g.equity)} · Δ${periodHours}h: ${formatSignedUsd(g.delta)} · uPnL: ${formatSignedPlain(g.upnl)}`;
+};
+
+const formatMemberLine = (row: HealthRow, periodHours: number): string => {
+  const name = escapeHtml(String(row.display_name || row.api_key_name || '?'));
+  return `  ${name}: ${formatUsdCompact(row.equity)} · Δ${periodHours}h: ${formatSignedUsd(row.equity_delta)} · uPnL: ${formatSignedPlain(row.upnl)}`;
+};
+
+const sortByEquityDesc = (rows: HealthRow[]): HealthRow[] =>
+  [...rows].sort((a, b) => b.equity - a.equity);
+
+const GROUP_RULE = '────────';
+
+const buildAumBreakdownLines = (statsRows: HealthRow[], periodHours: number): string[] => {
   if (statsRows.length === 0) return [];
 
-  const copyRows = statsRows.filter(isCopyTradingRow);
-  const clientRows = statsRows.filter((r) => !isCopyTradingRow(r));
+  const copyRows = sortByEquityDesc(statsRows.filter(isCopyTradingRow));
+  const clientRows = sortByEquityDesc(statsRows.filter((r) => !isCopyTradingRow(r)));
 
-  const byExchange = (list: HealthRow[]): Array<[string, number, number]> => {
-    const map = new Map<string, { equity: number; n: number }>();
-    for (const r of list) {
+  const byExchange = (): Array<{ ex: string; rows: HealthRow[] }> => {
+    const map = new Map<string, HealthRow[]>();
+    for (const r of statsRows) {
       const ex = r.exchange || 'unknown';
-      const cur = map.get(ex) || { equity: 0, n: 0 };
-      cur.equity += r.equity;
-      cur.n += 1;
+      const cur = map.get(ex) || [];
+      cur.push(r);
       map.set(ex, cur);
     }
     return Array.from(map.entries())
-      .map(([ex, v]) => [ex, v.equity, v.n] as [string, number, number])
-      .sort((a, b) => b[1] - a[1]);
+      .map(([ex, rows]) => ({ ex, rows }))
+      .sort((a, b) => sumRows(b.rows).equity - sumRows(a.rows).equity);
+  };
+
+  const pushGroup = (lines: string[], title: string, rows: HealthRow[], withMembers: boolean) => {
+    if (rows.length === 0) return;
+    lines.push(GROUP_RULE);
+    lines.push(`<b>${title} (${rows.length})</b>`);
+    lines.push(formatGroupTotals(periodHours, rows));
+    if (withMembers) {
+      for (const row of rows) {
+        lines.push(formatMemberLine(row, periodHours));
+      }
+    }
   };
 
   const lines: string[] = [];
-  const copyEq = copyRows.reduce((s, r) => s + r.equity, 0);
-  const clientEq = clientRows.reduce((s, r) => s + r.equity, 0);
+  pushGroup(lines, 'Копитрейдеры', copyRows, true);
+  pushGroup(lines, 'Клиенты', clientRows, true);
 
-  lines.push(
-    `AUM copy (${copyRows.length}): ${formatUsdCompact(copyEq)}`
-    + (copyRows.length
-      ? ` — ${copyRows.map((r) => `${escapeHtml(String(r.display_name || r.api_key_name || '?'))} ${formatUsdCompact(r.equity)}`).join(', ')}`
-      : ''),
-  );
-  lines.push(`AUM clients (${clientRows.length}): ${formatUsdCompact(clientEq)}`);
-
-  const exParts = byExchange(statsRows).map(([ex, eq, n]) => `${ex} ${formatUsdCompact(eq)} (n=${n})`);
-  if (exParts.length) {
-    lines.push(`AUM by exchange: ${exParts.join(' · ')}`);
+  const exchanges = byExchange();
+  if (exchanges.length > 0) {
+    lines.push(GROUP_RULE);
+    lines.push(`<b>По биржам (${exchanges.length})</b>`);
+    for (const { ex, rows } of exchanges) {
+      lines.push(`  ${escapeHtml(ex)} (n=${rows.length}): ${formatGroupTotals(periodHours, rows)}`);
+    }
   }
 
   return lines;
@@ -1104,10 +1143,11 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
   const worstUpnl = statsRows.reduce((w, r) => r.upnl < w.upnl ? r : w, statsRows[0]);
   const deltaSign = sumEquityDelta >= 0 ? '+' : '';
   const upnlSign = sumUpnl >= 0 ? '+' : '';
-  const aumLines = buildAumBreakdownLines(statsRows);
+  const aumLines = buildAumBreakdownLines(statsRows, periodHours);
   const stats = [
-    `Клиентов: ${enabledCount}${disabledCount > 0 ? ` (+${disabledCount} выкл назначенных)` : ''} · equity: $${sumEquity.toFixed(0)} · Δ${periodHours}h: ${deltaSign}$${sumEquityDelta.toFixed(2)} · uPnL: ${upnlSign}${sumUpnl.toFixed(2)}`,
+    `Всего: ${enabledCount}${disabledCount > 0 ? ` (+${disabledCount} выкл назначенных)` : ''} · equity: $${sumEquity.toFixed(0)} · Δ${periodHours}h: ${deltaSign}$${sumEquityDelta.toFixed(2)} · uPnL: ${upnlSign}${sumUpnl.toFixed(2)}`,
     ...aumLines,
+    GROUP_RULE,
     `Сделок за ${periodHours}ч: ${sumTrades} · worst DD: ${worstDd.dd.toFixed(1)}% (${escapeHtml(worstDd.display_name || worstDd.api_key_name || '')})`,
   ].join('\n');
 
