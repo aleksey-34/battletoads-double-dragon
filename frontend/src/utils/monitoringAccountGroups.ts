@@ -40,6 +40,31 @@ export const namesLookSame = (account: string, apiKey: string): boolean => {
   return a === k || a.includes(k) || k.includes(a);
 };
 
+/** Demo copy-trading fleet (admin grouping). Keys may lack tenantDisplayName. */
+export const COPY_TRADING_ALIASES: Array<{ label: string; keys: string[] }> = [
+  { label: 'icopy1', keys: ['icopy1-api', 'icopy1'] },
+  { label: 'ARcopy1', keys: ['arcopy1', 'ARcopy1'] },
+  { label: 'Acopy1', keys: ['Copy_Alex1', 'Acopy1', 'acopy1'] },
+];
+
+const copyAliasByKey = new Map<string, string>();
+for (const alias of COPY_TRADING_ALIASES) {
+  for (const key of alias.keys) {
+    copyAliasByKey.set(normToken(key), alias.label);
+  }
+}
+
+export const resolveCopyTradingLabel = (apiKeyName: string, displayName?: string): string | null => {
+  const fromKey = copyAliasByKey.get(normToken(apiKeyName));
+  if (fromKey) return fromKey;
+  const fromName = copyAliasByKey.get(normToken(displayName || ''));
+  return fromName || null;
+};
+
+export const isCopyTradingKey = (apiKeyName: string, displayName?: string): boolean => {
+  return Boolean(resolveCopyTradingLabel(apiKeyName, displayName));
+};
+
 const sumNullable = (values: Array<number | null | undefined>): number | null => {
   let sum = 0;
   let any = false;
@@ -82,13 +107,16 @@ export const groupMonitoringByAccount = (
   const groups = new Map<string, MonitoringLeafMetrics[]>();
 
   for (const leaf of leaves) {
+    const copyLabel = resolveCopyTradingLabel(leaf.apiKeyName, leaf.tenantLabel);
     const slug = String(leaf.tenantSlug || '').trim();
     const label = String(leaf.tenantLabel || '').trim();
-    const groupKey = slug
-      ? `slug:${slug}`
-      : label && label !== 'без привязки'
-        ? `label:${normToken(label)}`
-        : `key:${leaf.apiKeyName}`;
+    const groupKey = copyLabel
+      ? `copy:${normToken(copyLabel)}`
+      : slug
+        ? `slug:${slug}`
+        : label && label !== 'без привязки'
+          ? `label:${normToken(label)}`
+          : `key:${leaf.apiKeyName}`;
     const bucket = groups.get(groupKey) || [];
     bucket.push(leaf);
     groups.set(groupKey, bucket);
@@ -98,9 +126,11 @@ export const groupMonitoringByAccount = (
   for (const [groupKey, members] of Array.from(groups.entries())) {
     const sorted = [...members].sort((a, b) => a.apiKeyName.localeCompare(b.apiKeyName));
     const first = sorted[0];
-    const accountLabel = String(first.tenantLabel || '').trim() && first.tenantLabel !== 'без привязки'
-      ? first.tenantLabel
-      : first.apiKeyName;
+    const copyLabel = resolveCopyTradingLabel(first.apiKeyName, first.tenantLabel);
+    const accountLabel = copyLabel
+      || (String(first.tenantLabel || '').trim() && first.tenantLabel !== 'без привязки'
+        ? first.tenantLabel
+        : first.apiKeyName);
     const exchanges = Array.from(new Set(sorted.map((m) => m.exchange).filter(Boolean)));
     const children: MonitoringAccountGroupRow[] = sorted.map((m) => ({
       ...m,

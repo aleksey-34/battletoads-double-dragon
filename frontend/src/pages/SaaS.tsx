@@ -7674,12 +7674,9 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
     }
   }, []);
 
-  const scheduleBacktestDebounce = useCallback((settingsPatch?: Partial<BacktestCardSettings>) => {
+  // Parameter changes only mark the result stale. User must click «API rerun».
+  const scheduleBacktestDebounce = useCallback((_settingsPatch?: Partial<BacktestCardSettings>) => {
     cancelBacktestDebounce();
-    backtestDebounceRef.current = setTimeout(() => {
-      backtestDebounceRef.current = null;
-      void runAdminSweepBacktestPreviewRef.current(settingsPatch);
-    }, 700);
   }, [cancelBacktestDebounce]);
 
   const runAdminSweepBacktestPreview = async (
@@ -15974,7 +15971,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
               <Alert
                 type="info"
                 showIcon
-                message="Слайдеры → real rerun на полной глубине sweep (как при historical sweep). Окно 90d на карточке — только подпись; кастомные даты — если меняешь поля dateFrom/dateTo или кнопки 7d/14d/30d/90d."
+                message="Слайдеры помечают результат устаревшим. API rerun не стартует сам — нажми мигающую кнопку, когда готов."
               />
             ) : null}
             {(adminSweepBacktestLoading || tsDcaPickLoading || tsDcaCombinedLoading || tsDcaResearchServerRunning) ? (
@@ -16066,18 +16063,26 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                     onChange={(value) => setAdminSweepBacktestRerunApiKey(String(value || ''))}
                     options={apiKeyOptions}
                   />
-                  <Button
-                    size="small"
-                    loading={adminSweepBacktestLoading}
-                    onClick={() => {
-                      cancelBacktestDebounce();
-                      void runFullCardTruthRerun(undefined, { preferRealBacktest: true });
-                    }}
+                  <Tooltip
+                    title={adminSweepBacktestStale && !adminSweepBacktestLoading
+                      ? 'Параметры изменились — нужен API rerun'
+                      : undefined}
                   >
-                    {backtestDrawerContext?.portfolioMode
-                      ? 'API rerun портфеля (один депозит, OP по книгам)'
-                      : 'API rerun (реальный)'}
-                  </Button>
+                    <Button
+                      size="small"
+                      type={adminSweepBacktestStale && !adminSweepBacktestLoading ? 'primary' : 'default'}
+                      className={adminSweepBacktestStale && !adminSweepBacktestLoading ? 'btdd-rerun-pulse' : undefined}
+                      loading={adminSweepBacktestLoading}
+                      onClick={() => {
+                        cancelBacktestDebounce();
+                        void runFullCardTruthRerun(undefined, { preferRealBacktest: true });
+                      }}
+                    >
+                      {backtestDrawerContext?.portfolioMode
+                        ? 'API rerun портфеля (один депозит, OP по книгам)'
+                        : 'API rerun (реальный)'}
+                    </Button>
+                  </Tooltip>
                   {backtestDrawerContext.kind === 'offer' ? (
                     <Button
                       size="small"
@@ -17011,7 +17016,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
             </Row>
 
             {adminSweepBacktestResult ? (
-              <Card size="small" title={adminSweepBacktestStale ? <Space><Tag color="orange">⟳ Пересчёт запущен...</Tag><span>Результат sweep backtest</span></Space> : <Tooltip title="Комиссия: 0.1% на сделку (вход + выход) • Проскальзывание: 0.05% • Направленный слиппедж (лонг-вход дороже, шорт-вход дешевле) • Прошлые результаты не гарантируют будущую доходность"><span style={{ cursor: 'help' }}>Результат sweep backtest ⓘ</span></Tooltip>}>
+              <Card size="small" title={adminSweepBacktestStale ? <Space><Tag color="orange">⟳ Ждёт API rerun</Tag><span>Результат sweep backtest</span></Space> : <Tooltip title="Комиссия: 0.1% на сделку (вход + выход) • Проскальзывание: 0.05% • Направленный слиппедж (лонг-вход дороже, шорт-вход дешевле) • Прошлые результаты не гарантируют будущую доходность"><span style={{ cursor: 'help' }}>Результат sweep backtest ⓘ</span></Tooltip>}>
                 <Space direction="vertical" size={12} style={{ width: '100%' }}>
                   {(() => {
                     const rawEquitySeries = toLineSeriesData(adminSweepBacktestResult.preview?.equity || []);

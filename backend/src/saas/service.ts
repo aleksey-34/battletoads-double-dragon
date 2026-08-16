@@ -15324,6 +15324,18 @@ const pruneArchivedMasterCardMembers = async (cardId: number): Promise<number> =
   return Number((result as { changes?: number })?.changes || 0);
 };
 
+const isAlgofundRoleBookName = (tenant: TenantRow, systemName: string): boolean => {
+  const legacy = getAlgofundClientSystemName(tenant);
+  const name = asString(systemName);
+  return name.startsWith(`${legacy}::`);
+};
+
+const isAlgofundClientBookName = (tenant: TenantRow, systemName: string): boolean => {
+  const legacy = getAlgofundClientSystemName(tenant);
+  const name = asString(systemName);
+  return name === legacy || name.startsWith(`${legacy}::`);
+};
+
 const getAlgofundEngineState = async (
   tenant: TenantRow,
   profile: AlgofundProfileRow
@@ -15333,8 +15345,26 @@ const getAlgofundEngineState = async (
     return null;
   }
 
+  const systems = await listTradingSystems(apiKeyName, { skipMetrics: true }).catch(() => []);
+  const roleBooks = systems.filter((item) => isAlgofundRoleBookName(tenant, asString(item.name)));
+  const activeRoleBooks = roleBooks.filter((item) => Boolean(item.is_active));
+
+  // Storefront portfolio remat publishes ALGOFUND::{slug}::{role} books.
+  // Do not fall back to leftover ALGOFUND::{slug} (often halted) — that clobbered actual_enabled.
+  if (roleBooks.length > 0) {
+    const pick = activeRoleBooks[0] || roleBooks[0];
+    if (!pick?.id) {
+      return null;
+    }
+    return {
+      apiKeyName,
+      systemId: Number(pick.id),
+      systemName: asString(pick.name),
+      isActive: activeRoleBooks.length > 0,
+    };
+  }
+
   const preferredSystemName = asString(profile.published_system_name || getAlgofundClientSystemName(tenant));
-  const systems = await listTradingSystems(apiKeyName);
   const existing = systems.find((item) => asString(item.name) === preferredSystemName)
     || systems.find((item) => asString(item.name) === getAlgofundClientSystemName(tenant));
 
@@ -16829,10 +16859,10 @@ const applyApprovedAlgofundAction = async (params: {
     }
   } else if (row.request_type === 'stop') {
     const algofundApiKey = getAlgofundExecutionApiKeyName(tenant, profile);
-    const systems = algofundApiKey ? await listTradingSystems(algofundApiKey) : [];
-    const existing = systems.find((item) => asString(item.name) === getAlgofundClientSystemName(tenant));
-    if (existing?.id) {
-      await setTradingSystemActivation(algofundApiKey, Number(existing.id), false, true);
+    const systems = algofundApiKey ? await listTradingSystems(algofundApiKey, { skipMetrics: true }) : [];
+    for (const item of systems) {
+      if (!item?.id || !isAlgofundClientBookName(tenant, asString(item.name))) continue;
+      await setTradingSystemActivation(algofundApiKey, Number(item.id), false, true);
     }
     if (algofundApiKey) {
       try {
@@ -19713,20 +19743,22 @@ export const materializeAlgofundPortfolioFull = async (payload: {
   );
   if (executionApiKeyName) {
     const prefix = `ALGOFUND::${tenant.slug}::`;
+    const leftoverLegacyName = `ALGOFUND::${tenant.slug}`;
     const siblingRows = (await db.all(
       `SELECT ts.id AS system_id, ts.name AS system_name
        FROM trading_systems ts
        JOIN api_keys a ON a.id = ts.api_key_id
        WHERE a.name = ?
-         AND ts.name LIKE ?`,
-      [executionApiKeyName, `${prefix}%`],
+         AND (ts.name LIKE ? OR ts.name = ?)`,
+      [executionApiKeyName, `${prefix}%`, leftoverLegacyName],
     ).catch(() => [])) as Array<{ system_id: number; system_name: string }>;
 
     for (const row of siblingRows) {
       const name = asString(row.system_name, '');
-      if (!name.startsWith(prefix)) continue;
-      const role = name.slice(prefix.length).trim();
-      if (!role || allowedRoles.has(role)) continue;
+      const isLegacyLeftover = name === leftoverLegacyName;
+      if (!name.startsWith(prefix) && !isLegacyLeftover) continue;
+      const role = name.startsWith(prefix) ? name.slice(prefix.length).trim() : '';
+      if (!isLegacyLeftover && (!role || allowedRoles.has(role))) continue;
       const staleMembers = (await db.all(
         `SELECT s.id, s.name, s.base_symbol, s.quote_symbol, s.market_mode, s.state
          FROM trading_system_members tsm

@@ -523,11 +523,15 @@ const trimTelegramText = (value: string, maxLen = 3900): string => {
 
 // ── Health summary (default periodic report) ────────────────────────────────
 
+/** Demo copy-trading fleet — report AUM separately from client books. */
+const COPY_TRADING_API_KEYS = new Set(['icopy1-api', 'arcopy1', 'Copy_Alex1']);
+
 type HealthRow = {
   display_name: string | null;
   tenant_slug: string | null;
   api_key_name: string | null;
   system_name: string | null;
+  exchange: string;
   actual_enabled: boolean;
   equity: number;
   equity_start: number;
@@ -588,6 +592,7 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
        t.slug AS tenant_slug,
        COALESCE(NULLIF(ap.execution_api_key_name,''), NULLIF(t.assigned_api_key_name,''), NULLIF(ap.assigned_api_key_name,'')) AS api_key_name,
        COALESCE(ap.published_system_name,'') AS system_name,
+       COALESCE(NULLIF(LOWER(a.exchange), ''), 'unknown') AS exchange,
        COALESCE(ap.actual_enabled,0) AS actual_enabled,
        COALESCE(ms.equity_usd,0)            AS equity,
        COALESCE(ms_start.equity_usd, COALESCE(ms.equity_usd,0)) AS equity_start,
@@ -682,6 +687,7 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
     tenant_slug: r.tenant_slug,
     api_key_name: r.api_key_name,
     system_name: r.system_name,
+    exchange: String(r.exchange || 'unknown').trim().toLowerCase() || 'unknown',
     actual_enabled: Number(r.actual_enabled || 0) === 1,
     equity: toFinite(r.equity, 0),
     equity_start: toFinite(r.equity_start, 0),
@@ -698,6 +704,59 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
     signals_24h: Math.max(0, Math.floor(toFinite(r.signals_24h, 0))),
     last_error: r.last_error ? String(r.last_error) : null,
   }));
+};
+
+const isCopyTradingRow = (row: HealthRow): boolean => {
+  const key = String(row.api_key_name || '').trim();
+  if (COPY_TRADING_API_KEYS.has(key)) return true;
+  const name = String(row.display_name || '').trim().toLowerCase();
+  return name === 'icopy1' || name === 'arcopy1' || name === 'acopy1';
+};
+
+const formatUsdCompact = (value: number): string => {
+  const n = toFinite(value, 0);
+  if (Math.abs(n) >= 1000) return `$${n.toFixed(0)}`;
+  return `$${n.toFixed(2)}`;
+};
+
+const buildAumBreakdownLines = (statsRows: HealthRow[]): string[] => {
+  if (statsRows.length === 0) return [];
+
+  const copyRows = statsRows.filter(isCopyTradingRow);
+  const clientRows = statsRows.filter((r) => !isCopyTradingRow(r));
+
+  const byExchange = (list: HealthRow[]): Array<[string, number, number]> => {
+    const map = new Map<string, { equity: number; n: number }>();
+    for (const r of list) {
+      const ex = r.exchange || 'unknown';
+      const cur = map.get(ex) || { equity: 0, n: 0 };
+      cur.equity += r.equity;
+      cur.n += 1;
+      map.set(ex, cur);
+    }
+    return Array.from(map.entries())
+      .map(([ex, v]) => [ex, v.equity, v.n] as [string, number, number])
+      .sort((a, b) => b[1] - a[1]);
+  };
+
+  const lines: string[] = [];
+  const copyEq = copyRows.reduce((s, r) => s + r.equity, 0);
+  const clientEq = clientRows.reduce((s, r) => s + r.equity, 0);
+
+  lines.push(
+    `AUM copy (${copyRows.length}): ${formatUsdCompact(copyEq)}`
+    + (copyRows.length
+      ? ` — ${copyRows.map((r) => `${escapeHtml(String(r.display_name || r.api_key_name || '?'))} ${formatUsdCompact(r.equity)}`).join(', ')}`
+      : ''),
+  );
+  lines.push(`AUM clients (${clientRows.length}): ${formatUsdCompact(clientEq)}`);
+
+  const exParts = byExchange(statsRows).map(([ex, eq, n]) => `${ex} ${formatUsdCompact(eq)} (n=${n})`);
+  if (exParts.length) {
+    lines.push(`AUM by exchange: ${exParts.join(' · ')}`);
+  }
+
+  return lines;
 };
 
 const HEALTH_THRESHOLDS = {
@@ -1045,8 +1104,10 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
   const worstUpnl = statsRows.reduce((w, r) => r.upnl < w.upnl ? r : w, statsRows[0]);
   const deltaSign = sumEquityDelta >= 0 ? '+' : '';
   const upnlSign = sumUpnl >= 0 ? '+' : '';
+  const aumLines = buildAumBreakdownLines(statsRows);
   const stats = [
     `Клиентов: ${enabledCount}${disabledCount > 0 ? ` (+${disabledCount} выкл назначенных)` : ''} · equity: $${sumEquity.toFixed(0)} · Δ${periodHours}h: ${deltaSign}$${sumEquityDelta.toFixed(2)} · uPnL: ${upnlSign}${sumUpnl.toFixed(2)}`,
+    ...aumLines,
     `Сделок за ${periodHours}ч: ${sumTrades} · worst DD: ${worstDd.dd.toFixed(1)}% (${escapeHtml(worstDd.display_name || worstDd.api_key_name || '')})`,
   ].join('\n');
 

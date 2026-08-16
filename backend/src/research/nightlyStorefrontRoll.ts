@@ -435,7 +435,8 @@ const stampPortfolios = async (opts: {
   };
 
   const cards: Array<{ id: string; ret: number; dd: number; liveWin: number | null }> = [];
-  for (const pf of (recipes.portfolios || []).filter((p: any) => p.storefront)) {
+  // Stamp every recipe portfolio that lives in DB (vitrine P1–P5 + whale-personal P6).
+  for (const pf of (recipes.portfolios || [])) {
     const ids: number[] = [];
     const maxOpenPositionsByBook: Record<string, number> = {};
     const bookKeyByStrategyId: Record<string, string> = {};

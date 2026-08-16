@@ -32,6 +32,7 @@ import MonitoringChartPanel, {
 import { buildPublicPortfolioUrl, copyPublicPortfolioLink } from '../utils/portfolioLinks';
 import {
   groupMonitoringByAccount,
+  isCopyTradingKey,
   type MonitoringAccountGroupRow,
   type MonitoringLeafMetrics,
 } from '../utils/monitoringAccountGroups';
@@ -177,6 +178,8 @@ const Positions: React.FC = () => {
   const [positionErrorByKey, setPositionErrorByKey] = useState<{ [key: string]: string }>({});
   const [hideDematerializedKeys, setHideDematerializedKeys] = useState(true);
   const [hideUnboundKeys, setHideUnboundKeys] = useState(true);
+  const [hideBelow1Usdt, setHideBelow1Usdt] = useState(true);
+  const [copyTradersOnly, setCopyTradersOnly] = useState(false);
   const [pageTab, setPageTab] = useState<PageTab>('monitoring');
   const [monitoringRows, setMonitoringRows] = useState<AdminMonitoringRow[]>([]);
   const [monitoringTableLoading, setMonitoringTableLoading] = useState(false);
@@ -296,10 +299,12 @@ const Positions: React.FC = () => {
   const visibleApiKeys = useMemo(
     () => apiKeys.filter((k) => {
       if (hideDematerializedKeys && k.algofundDematerialized) return false;
-      if (hideUnboundKeys && !String(k.tenantDisplayName || '').trim()) return false;
+      const copy = isCopyTradingKey(k.name, k.tenantDisplayName);
+      if (hideUnboundKeys && !String(k.tenantDisplayName || '').trim() && !copy) return false;
+      if (copyTradersOnly && !copy) return false;
       return true;
     }),
-    [apiKeys, hideDematerializedKeys, hideUnboundKeys],
+    [apiKeys, hideDematerializedKeys, hideUnboundKeys, copyTradersOnly],
   );
 
   const apiKeysByExchange = useMemo(() => {
@@ -804,7 +809,7 @@ const Positions: React.FC = () => {
       return 'API-ключи не найдены. Добавьте ключи в настройках.';
     }
     if (visibleApiKeys.length === 0) {
-      return `Все ${apiKeys.length} ключ(ей) скрыты фильтрами. Снимите галочки «Скрыть ключи без привязки» / «Скрыть дематериализованные».`;
+      return `Все ${apiKeys.length} ключ(ей) скрыты фильтрами. Снимите галочки «Скрыть ключи без привязки» / «Скрыть дематериализованные» / «Баланс > 1 USDT» / «Копитрейдеры».`;
     }
     if (monitoringRows.length === 0) {
       return 'Нет снимков мониторинга. Нажмите «Обновить сводку» или дождитесь планового снимка.';
@@ -947,8 +952,21 @@ const Positions: React.FC = () => {
   };
 
   const monitoringAccountRows = useMemo(
-    () => groupMonitoringByAccount(monitoringRows),
-    [monitoringRows],
+    () => {
+      const exchange = activeExchangeTab;
+      let rows = monitoringRows;
+      if (exchange) {
+        rows = rows.filter((r) => canonicalExchangeLabel(r.exchange || '') === exchange);
+      }
+      if (copyTradersOnly) {
+        rows = rows.filter((r) => isCopyTradingKey(r.apiKeyName, r.tenantLabel));
+      }
+      if (hideBelow1Usdt) {
+        rows = rows.filter((r) => r.equityUsd == null || Number(r.equityUsd) > 1);
+      }
+      return groupMonitoringByAccount(rows);
+    },
+    [monitoringRows, activeExchangeTab, copyTradersOnly, hideBelow1Usdt],
   );
 
   const monChartTenantSlug = useMemo(
@@ -1096,6 +1114,12 @@ const Positions: React.FC = () => {
             <Checkbox checked={hideDematerializedKeys} onChange={(e) => setHideDematerializedKeys(e.target.checked)}>
               Скрыть дематериализованные ключи
             </Checkbox>
+            <Checkbox checked={hideBelow1Usdt} onChange={(e) => setHideBelow1Usdt(e.target.checked)}>
+              Баланс {'>'} 1 USDT
+            </Checkbox>
+            <Checkbox checked={copyTradersOnly} onChange={(e) => setCopyTradersOnly(e.target.checked)}>
+              Копитрейдеры
+            </Checkbox>
           </Space>
           {apiKeysError ? (
             <Alert
@@ -1115,17 +1139,28 @@ const Positions: React.FC = () => {
             />
           ) : null}
           <Spin spinning={monitoringTableLoading || apiKeysLoading}>
-            <Table
-              rowKey="key"
-              size="small"
-              pagination={{ pageSize: 20 }}
-              dataSource={monitoringAccountRows}
-              columns={monitoringColumns}
-              expandable={{
-                defaultExpandAllRows: false,
-                rowExpandable: (row) => Array.isArray(row.children) && row.children.length > 0,
-              }}
-              locale={{ emptyText: <Empty description={monitoringEmptyDescription} /> }}
+            <Tabs
+              type="card"
+              activeKey={activeExchangeTab || undefined}
+              onChange={(key) => setActiveExchangeTab(key)}
+              items={Object.entries(apiKeysByExchange).map(([exchange, keys]) => ({
+                key: exchange,
+                label: `${exchange} (${keys.length})`,
+                children: (
+                  <Table
+                    rowKey="key"
+                    size="small"
+                    pagination={{ pageSize: 20 }}
+                    dataSource={monitoringAccountRows}
+                    columns={monitoringColumns}
+                    expandable={{
+                      defaultExpandAllRows: false,
+                      rowExpandable: (row) => Array.isArray(row.children) && row.children.length > 0,
+                    }}
+                    locale={{ emptyText: <Empty description={monitoringEmptyDescription} /> }}
+                  />
+                ),
+              }))}
             />
           </Spin>
         </>
@@ -1157,8 +1192,11 @@ const Positions: React.FC = () => {
         <Checkbox checked={hideDematerializedKeys} onChange={(e) => setHideDematerializedKeys(e.target.checked)}>
           Скрыть дематериализованные ключи
         </Checkbox>
-        <Checkbox checked={hideUnboundKeys} onChange={(e) => setHideUnboundKeys(e.target.checked)}>
-          Скрыть ключи без привязки
+        <Checkbox checked={hideBelow1Usdt} onChange={(e) => setHideBelow1Usdt(e.target.checked)}>
+          Баланс {'>'} 1 USDT
+        </Checkbox>
+        <Checkbox checked={copyTradersOnly} onChange={(e) => setCopyTradersOnly(e.target.checked)}>
+          Копитрейдеры
         </Checkbox>
       </Space>
 
@@ -1220,7 +1258,22 @@ const Positions: React.FC = () => {
         label: `${exchange} (${keys.length})`,
         children: (
           <Space direction="vertical" style={{ width: '100%' }}>
-            {keys.map((key) => {
+            {keys.filter((key) => {
+              if (copyTradersOnly && !isCopyTradingKey(key.name, key.tenantDisplayName)) return false;
+              if (!hideBelow1Usdt) return true;
+              if (balanceErrorByKey[key.name]) return true;
+              const balancesLoading = Boolean(loadingByKey[`balances:${key.name}`]);
+              if (balancesLoading || !loadedKeys.has(key.name)) return true;
+              const totalUsd = (balancesByKey[key.name] || []).reduce((sum, item) => sum + toNumber(item.usdValue), 0);
+              if (totalUsd > 1) return true;
+              const mon = monitoringRows.find((r) => r.apiKeyName === key.name);
+              if (mon?.equityUsd != null) return Number(mon.equityUsd) > 1;
+              return totalUsd > 1;
+            }).sort((a, b) => {
+              const ac = Number(isCopyTradingKey(a.name, a.tenantDisplayName));
+              const bc = Number(isCopyTradingKey(b.name, b.tenantDisplayName));
+              return bc - ac;
+            }).map((key) => {
               const manualDraft = manualOrderDraftByKey[key.name] || {
                 symbol: 'BTCUSDT',
                 side: 'Buy' as const,
@@ -1254,7 +1307,12 @@ const Positions: React.FC = () => {
                   className="battletoads-card"
                   key={key.id}
                   type="inner"
-                  title={`${key.name}`}
+                  title={
+                    <Space>
+                      {key.name}
+                      {isCopyTradingKey(key.name, key.tenantDisplayName) ? <Tag color="purple">copy</Tag> : null}
+                    </Space>
+                  }
                   size="small"
                   style={{ width: '100%' }}
                   bodyStyle={{ padding: 10 }}
