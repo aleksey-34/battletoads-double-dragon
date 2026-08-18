@@ -142,6 +142,108 @@ const windowRet = (curve: any[], fromDate: string, toDate: string) => {
   };
 };
 
+const COPY_FAIR_IDS = new Set(['P1', 'P2', 'P3']);
+const COPY_FAIR_API_KEY: Record<string, string> = {
+  P1: 'Copy_Alex1',
+  P2: 'icopy1-api',
+  P3: 'arcopy1',
+};
+const liveFixFrom = (): string => process.env.LIVE_FIX_FROM || '2026-08-10';
+const FAIR_COPY_CAPITAL = 1000;
+
+const summarizeBtTrades = (
+  trades: Array<{ strategyId?: number; netPnl?: number; notional?: number }>,
+  idToSym: Map<number, string>,
+): { n: number; avgNotional: number; bySym: Record<string, { n: number; pnl: number; vol: number }> } => {
+  const bySym: Record<string, { n: number; pnl: number; vol: number }> = {};
+  let vol = 0;
+  for (const t of trades || []) {
+    const sid = Number(t.strategyId || 0);
+    const sym = idToSym.get(sid) || '?';
+    const ntl = Math.abs(Number(t.notional || 0));
+    const pnl = Number(t.netPnl || 0);
+    vol += ntl;
+    const cur = bySym[sym] || { n: 0, pnl: 0, vol: 0 };
+    cur.n += 1;
+    cur.pnl += pnl;
+    cur.vol += ntl;
+    bySym[sym] = cur;
+  }
+  const n = (trades || []).length;
+  return { n, avgNotional: n > 0 ? vol / n : 0, bySym };
+};
+
+const fetchLiveEntryStats = async (apiKeyName: string, fromDate: string, toDate: string) => {
+  const rows = await db.all(
+    `SELECT UPPER(REPLACE(REPLACE(COALESCE(lte.source_symbol, s.base_symbol, ''), '/', ''), '-', '')) AS sym,
+            COUNT(*) AS n,
+            SUM(ABS(COALESCE(lte.actual_price, 0) * COALESCE(lte.position_size, 0))) AS vol
+     FROM live_trade_events lte
+     JOIN strategies s ON s.id = lte.strategy_id
+     JOIN api_keys a ON a.id = s.api_key_id
+     WHERE a.name = ?
+       AND COALESCE(lte.trade_type, '') = 'entry'
+       AND COALESCE(lte.event_origin, 'exchange_fill') = 'exchange_fill'
+       AND lte.actual_time >= (strftime('%s', ?) * 1000)
+       AND lte.actual_time <  (strftime('%s', ?) * 1000)
+     GROUP BY 1`,
+    [apiKeyName, `${fromDate} 00:00:00`, `${toDate} 23:59:59`],
+  ) as Array<{ sym?: string; n?: number; vol?: number }>;
+  const bySym: Record<string, { n: number; vol: number }> = {};
+  let n = 0;
+  let vol = 0;
+  for (const r of rows || []) {
+    const sym = String(r.sym || '?').toUpperCase();
+    const cn = Math.max(0, Math.floor(Number(r.n || 0)));
+    const cv = Math.max(0, Number(r.vol || 0));
+    bySym[sym] = { n: cn, vol: cv };
+    n += cn;
+    vol += cv;
+  }
+  return { n, vol, avgNotional: n > 0 ? vol / n : 0, bySym };
+};
+
+const packFairRun = (
+  r: { summary?: any; equityCurve?: any[]; trades?: any[] },
+  fromDate: string,
+  toDate: string,
+  capital: number,
+  idToSym: Map<number, string>,
+) => {
+  const s = r.summary || {};
+  const trades = summarizeBtTrades(r.trades || [], idToSym);
+  return {
+    dateFrom: fromDate,
+    dateTo: toDate,
+    capital,
+    ret: +Number(s.totalReturnPercent || 0).toFixed(2),
+    dd: +Number(s.maxDrawdownPercent || 0).toFixed(2),
+    trades: trades.n,
+    avgNotional: +trades.avgNotional.toFixed(2),
+    skippedOp: Number(s.skippedByPositionLimit || 0),
+    skippedPair: Number(s.skippedByPairLock || 0),
+    bySym: trades.bySym,
+  };
+};
+
+const tradeDriftVsLive = (
+  bt: { trades: number; bySym: Record<string, { n: number }> },
+  live: { n: number; bySym: Record<string, { n: number }> },
+): { freqX: number | null; hot: Array<{ sym: string; bt: number; live: number }> } => {
+  const freqX = bt.trades > 0 ? +(live.n / bt.trades).toFixed(2) : null;
+  const hot: Array<{ sym: string; bt: number; live: number }> = [];
+  const syms = new Set([...Object.keys(bt.bySym || {}), ...Object.keys(live.bySym || {})]);
+  for (const sym of syms) {
+    const b = bt.bySym?.[sym]?.n || 0;
+    const l = live.bySym?.[sym]?.n || 0;
+    if (l >= 8 && (b === 0 || l > b * 2)) {
+      hot.push({ sym, bt: b, live: l });
+    }
+  }
+  hot.sort((a, c) => (c.live - c.bt) - (a.live - a.bt));
+  return { freqX, hot: hot.slice(0, 6) };
+};
+
 const collectHamfiveSymbols = (recipe: any): Set<string> => {
   const out = new Set<string>();
   for (const u of Object.values(recipe?.universes || {}) as any[]) {
@@ -288,6 +390,9 @@ const applySnapshotsToDb = async (snapsPath: string, recipePath: string): Promis
       dateFrom: snap.dateFrom,
       dateTo: snap.dateTo,
       liveWindow: snap.liveWindow,
+      fairLive: snap.fairLive || null,
+      fairSinceFix: snap.fairSinceFix || null,
+      tradeDrift: snap.tradeDrift || null,
     };
     await db.run(
       `UPDATE algofund_portfolios
@@ -501,7 +606,7 @@ const stampPortfolios = async (opts: {
     const curve = downsampleCurve(rawCurve, 120);
     const liveWindow = windowRet(rawCurve, opts.liveFrom, opts.dateTo);
     const prev = snaps[pf.id] || {};
-    snaps[pf.id] = {
+    const next: Record<string, unknown> = {
       ...prev,
       ret: +Number(s.totalReturnPercent || prev.ret || 0).toFixed(2),
       dd: +Number(s.maxDrawdownPercent || prev.dd || 0).toFixed(2),
@@ -514,10 +619,61 @@ const stampPortfolios = async (opts: {
       liveWindow,
       curve,
     };
+
+    if (COPY_FAIR_IDS.has(String(pf.id))) {
+      const idToSym = new Map<number, string>();
+      for (const sid of uniqIds) {
+        const row = await db.get('SELECT base_symbol FROM strategies WHERE id = ?', [sid]) as { base_symbol?: string } | undefined;
+        idToSym.set(sid, String(row?.base_symbol || '').replace('/', '').replace('-', '').toUpperCase());
+      }
+      const fairCommon = {
+        apiKeyName: opts.apiKeyName,
+        mode: 'portfolio' as const,
+        strategyIds: uniqIds,
+        dateTo: opts.dateTo,
+        bars: 4000,
+        warmupBars: 120,
+        skipMissingSymbols: true,
+        initialBalance: FAIR_COPY_CAPITAL,
+        commissionPercent: 0.1,
+        slippagePercent: 0.05,
+        maxOpenPositions: 0,
+        maxOpenPositionsByBook,
+        bookKeyByStrategyId,
+        lotPercentOverride: 2,
+        lotPercentMultiplierByStrategyId,
+        enablePairLock: true,
+        maxDepositOverride: maxRi > 0 ? FAIR_COPY_CAPITAL * 50 : 0,
+        reinvestPercentOverride: maxRi,
+        portfolioCircuitBreaker: tierCb as any,
+        researchLotSchedule: fearBoost as any,
+      };
+      const copyKey = COPY_FAIR_API_KEY[String(pf.id)];
+      const fixFrom = liveFixFrom();
+      logger.info(`[nightlyStorefrontRoll] fair BT ${pf.id} $1000 ${opts.liveFrom}..${opts.dateTo} + since ${fixFrom}`);
+      const fairFull = await runBacktest({ ...fairCommon, dateFrom: opts.liveFrom } as any);
+      const fairFix = await runBacktest({ ...fairCommon, dateFrom: fixFrom } as any);
+      const fairLive = packFairRun(fairFull, opts.liveFrom, opts.dateTo, FAIR_COPY_CAPITAL, idToSym);
+      const fairSinceFix = packFairRun(fairFix, fixFrom, opts.dateTo, FAIR_COPY_CAPITAL, idToSym);
+      next.fairLive = fairLive;
+      next.fairSinceFix = fairSinceFix;
+      if (copyKey) {
+        const liveFull = await fetchLiveEntryStats(copyKey, opts.liveFrom, opts.dateTo);
+        const liveFix = await fetchLiveEntryStats(copyKey, fixFrom, opts.dateTo);
+        next.tradeDrift = {
+          full: tradeDriftVsLive(fairLive, liveFull),
+          sinceFix: tradeDriftVsLive(fairSinceFix, liveFix),
+          liveFull: { n: liveFull.n, avgNotional: +liveFull.avgNotional.toFixed(2) },
+          liveSinceFix: { n: liveFix.n, avgNotional: +liveFix.avgNotional.toFixed(2) },
+        };
+      }
+    }
+
+    snaps[pf.id] = next;
     cards.push({
       id: String(pf.id),
-      ret: snaps[pf.id].ret,
-      dd: snaps[pf.id].dd,
+      ret: Number(next.ret),
+      dd: Number(next.dd),
       liveWin: liveWindow ? liveWindow.ret : null,
     });
   }

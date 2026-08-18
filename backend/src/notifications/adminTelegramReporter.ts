@@ -840,12 +840,12 @@ const buildAumBreakdownLines = (statsRows: HealthRow[], periodHours: number): st
   return lines;
 };
 
-const COPY_BT_COMPARE: Array<{ setKey: string; short: string; apiKeyName: string }> = [
-  { setKey: 'portfolio-conservative-jul2026', short: 'P1 cons', apiKeyName: 'Copy_Alex1' },
-  { setKey: 'portfolio-balanced-jul2026', short: 'P2 bal', apiKeyName: 'icopy1-api' },
-  { setKey: 'portfolio-aggressive-jul2026', short: 'P3 aggr', apiKeyName: 'arcopy1' },
-  { setKey: 'portfolio-whale-personal-jul2026', short: 'P6 whale', apiKeyName: 'BTDD_D1' },
+const COPY_BT_COMPARE: Array<{ setKey: string; short: string; apiKeyName: string; pid: string }> = [
+  { setKey: 'portfolio-conservative-jul2026', short: 'P1 cons', apiKeyName: 'Copy_Alex1', pid: 'P1' },
+  { setKey: 'portfolio-balanced-jul2026', short: 'P2 bal', apiKeyName: 'icopy1-api', pid: 'P2' },
+  { setKey: 'portfolio-aggressive-jul2026', short: 'P3 aggr', apiKeyName: 'arcopy1', pid: 'P3' },
 ];
+const LIVE_FIX_DAY = '2026-08-10';
 
 const equityOnDate = async (apiKeyName: string, day: string, edge: 'start' | 'end'): Promise<number | null> => {
   const row = await db.get(
@@ -866,50 +866,56 @@ const equityOnDate = async (apiKeyName: string, day: string, edge: 'start' | 'en
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
+const retBetween = (start: number | null, end: number | null): number | null => {
+  if (!start || !end || start <= 0) return null;
+  return (end / start - 1) * 100;
+};
+
 const buildBtVsLiveLines = async (): Promise<string[]> => {
   const lines: string[] = [];
-  let windowLabel = '';
   for (const item of COPY_BT_COMPARE) {
     const row = await db.get(
-      `SELECT snapshot_json, metadata_json FROM algofund_portfolios WHERE set_key = ?`,
+      `SELECT snapshot_json FROM algofund_portfolios WHERE set_key = ?`,
       [item.setKey],
-    ) as { snapshot_json?: string; metadata_json?: string } | undefined;
-    let liveWindow: { dateFrom?: string; dateTo?: string; ret?: number } | null = null;
-    try {
-      const snap = JSON.parse(String(row?.snapshot_json || '{}'));
-      liveWindow = snap?.liveWindow || null;
-    } catch {
-      liveWindow = null;
-    }
-    if (!liveWindow) {
-      try {
-        const meta = JSON.parse(String(row?.metadata_json || '{}'));
-        liveWindow = (meta?.bt && meta.bt.liveWindow) || null;
-      } catch {
-        liveWindow = null;
-      }
-    }
-    const dateFrom = String(liveWindow?.dateFrom || '').slice(0, 10);
-    const dateTo = String(liveWindow?.dateTo || '').slice(0, 10);
-    const btRet = liveWindow && Number.isFinite(Number(liveWindow.ret)) ? Number(liveWindow.ret) : null;
-    if (!dateFrom || !dateTo || btRet == null) continue;
-    if (!windowLabel) windowLabel = `${dateFrom}→${dateTo}`;
+    ) as { snapshot_json?: string } | undefined;
+    let snap: any = {};
+    try { snap = JSON.parse(String(row?.snapshot_json || '{}')); } catch { snap = {}; }
+    const fair = snap.fairSinceFix || snap.fairLive;
+    const drift = snap.tradeDrift?.sinceFix || snap.tradeDrift?.full;
+    const liveStats = snap.tradeDrift?.liveSinceFix || snap.tradeDrift?.liveFull;
+    const dateFrom = String(fair?.dateFrom || LIVE_FIX_DAY).slice(0, 10);
+    const dateTo = String(fair?.dateTo || '').slice(0, 10);
     const startEq = await equityOnDate(item.apiKeyName, dateFrom, 'start');
-    const endEq = await equityOnDate(item.apiKeyName, dateTo, 'end');
-    if (!startEq || !endEq) {
-      lines.push(`  ${item.short}: BT ${formatSignedPlain(btRet)}% · live нет снимков ${escapeHtml(item.apiKeyName)}`);
-      continue;
-    }
-    const liveRet = (endEq / startEq - 1) * 100;
-    const gap = liveRet - btRet;
+    const endEq = dateTo ? await equityOnDate(item.apiKeyName, dateTo, 'end') : null;
+    const preEnd = await equityOnDate(item.apiKeyName, '2026-08-09', 'end');
+    const preStart = await equityOnDate(item.apiKeyName, '2026-07-30', 'start')
+      || await equityOnDate(item.apiKeyName, '2026-07-31', 'start');
+    const liveRet = retBetween(startEq, endEq);
+    const preRet = retBetween(preStart, preEnd);
+    const btRet = fair && Number.isFinite(Number(fair.ret)) ? Number(fair.ret) : null;
+    if (btRet == null && liveRet == null) continue;
+    const gap = btRet != null && liveRet != null ? liveRet - btRet : null;
+    const freq = drift?.freqX != null ? Number(drift.freqX) : null;
+    const hot = Array.isArray(drift?.hot) ? drift.hot.slice(0, 3) : [];
+    const over = freq != null && freq > 2.5;
     lines.push(
-      `  ${item.short}: BT ${formatSignedPlain(btRet)}% · live ${formatSignedPlain(liveRet)}% · gap ${formatSignedPlain(gap)} п.п.`,
+      `  ${item.short} $1k ${escapeHtml(dateFrom)}→${escapeHtml(dateTo || '?')}: `
+      + `BT ${btRet == null ? 'n/a' : `${formatSignedPlain(btRet)}% / ${fair.trades}tr`} · `
+      + `live ${liveRet == null ? 'n/a' : `${formatSignedPlain(liveRet)}% / ${liveStats?.n ?? '?'}ent`}`
+      + (gap == null ? '' : ` · gap ${formatSignedPlain(gap)} п.п.`)
+      + (freq == null ? '' : ` · freq ${freq.toFixed(1)}×${over ? ' ⚠' : ''}`),
     );
+    if (preRet != null) {
+      lines.push(`    до фикса 10.08: live ${formatSignedPlain(preRet)}% (лоты от max_deposit)`);
+    }
+    if (hot.length) {
+      lines.push(`    лишние входы: ${hot.map((h: any) => `${h.sym} live ${h.live}/BT ${h.bt}`).join(', ')}`);
+    }
   }
   if (lines.length === 0) return [];
   return [
     GROUP_RULE,
-    `<b>BT vs live</b> (${escapeHtml(windowLabel)}) — ночной штамп hamfive, без stocks`,
+    '<b>BT vs live</b> — fair $1000, то же окно (не кривая с 2024 на миллионах)',
     ...lines,
   ];
 };
