@@ -12292,7 +12292,7 @@ const SaaS: React.FC<SaaSProps> = ({ initialTab = 'admin', surfaceMode = 'admin'
                                   }}
                                   style={{ width: 70 }}
                                 />
-                                <Text type="secondary">Алерты — мгновенно (cooldown 60 мин)</Text>
+                                <Text type="secondary">Только ЧС (маржа/DD/ключ/исполнение), cooldown 60 мин. Heartbeat — по часам слева.</Text>
                                 <Divider type="vertical" />
                                 <Text>Reconciliation cycle</Text>
                                 <Switch

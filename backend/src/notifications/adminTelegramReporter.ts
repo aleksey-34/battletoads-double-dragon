@@ -542,6 +542,8 @@ type HealthRow = {
   recorded_at: string | null;
   snap_count: number;
   trades_period: number;
+  fills_period: number;
+  volume_period: number;
   exchange_fills_24h: number;
   signals_24h: number;
   last_error: string | null;
@@ -617,6 +619,16 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
        (SELECT COUNT(*) FROM live_trade_events lte JOIN strategies s ON s.id=lte.strategy_id
          WHERE s.api_key_id = a.id
            AND COALESCE(lte.event_origin, 'exchange_fill') = 'exchange_fill'
+           AND lte.actual_time >= (strftime('%s','now', ?) * 1000)) AS fills_period,
+       (SELECT COALESCE(SUM(ABS(COALESCE(lte.actual_price, 0) * COALESCE(lte.position_size, 0))), 0)
+          FROM live_trade_events lte JOIN strategies s ON s.id=lte.strategy_id
+         WHERE s.api_key_id = a.id
+           AND COALESCE(lte.event_origin, 'exchange_fill') = 'exchange_fill'
+           AND COALESCE(lte.trade_type, '') = 'entry'
+           AND lte.actual_time >= (strftime('%s','now', ?) * 1000)) AS volume_period,
+       (SELECT COUNT(*) FROM live_trade_events lte JOIN strategies s ON s.id=lte.strategy_id
+         WHERE s.api_key_id = a.id
+           AND COALESCE(lte.event_origin, 'exchange_fill') = 'exchange_fill'
            AND lte.actual_time >= (strftime('%s','now','-24 hours') * 1000)) AS exchange_fills_24h,
        (SELECT COUNT(*) FROM live_trade_events lte JOIN strategies s ON s.id=lte.strategy_id
          WHERE s.api_key_id = a.id
@@ -680,7 +692,14 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
          )
        )
      ORDER BY t.display_name ASC`,
-    [`-${periodHours} hours`, `-${periodHours} hours`, `-${periodHours} hours`, `-${periodHours} hours`]
+    [
+      `-${periodHours} hours`,
+      `-${periodHours} hours`,
+      `-${periodHours} hours`,
+      `-${periodHours} hours`,
+      `-${periodHours} hours`,
+      `-${periodHours} hours`,
+    ]
   ) as any[];
   return (rows || []).map((r) => ({
     display_name: r.display_name,
@@ -700,6 +719,8 @@ const fetchHealthRows = async (periodHours: number): Promise<HealthRow[]> => {
     recorded_at: r.recorded_at,
     snap_count: Math.max(0, Math.floor(toFinite(r.snap_count, 0))),
     trades_period: Math.max(0, Math.floor(toFinite(r.trades_period, 0))),
+    fills_period: Math.max(0, Math.floor(toFinite(r.fills_period, 0))),
+    volume_period: Math.max(0, toFinite(r.volume_period, 0)),
     exchange_fills_24h: Math.max(0, Math.floor(toFinite(r.exchange_fills_24h, 0))),
     signals_24h: Math.max(0, Math.floor(toFinite(r.signals_24h, 0))),
     last_error: r.last_error ? String(r.last_error) : null,
@@ -729,16 +750,31 @@ const formatSignedPlain = (value: number): string => {
   return `${n >= 0 ? '+' : ''}${n.toFixed(2)}`;
 };
 
-const sumRows = (rows: HealthRow[]): { n: number; equity: number; delta: number; upnl: number } => ({
+const sumRows = (rows: HealthRow[]): {
+  n: number;
+  equity: number;
+  delta: number;
+  upnl: number;
+  fills: number;
+  volume: number;
+} => ({
   n: rows.length,
   equity: rows.reduce((s, r) => s + r.equity, 0),
   delta: rows.reduce((s, r) => s + r.equity_delta, 0),
   upnl: rows.reduce((s, r) => s + r.upnl, 0),
+  fills: rows.reduce((s, r) => s + r.fills_period, 0),
+  volume: rows.reduce((s, r) => s + r.volume_period, 0),
 });
+
+const formatAvgFills = (fills: number, n: number): string => {
+  if (n <= 0) return '0';
+  const avg = fills / n;
+  return avg >= 10 ? avg.toFixed(0) : avg.toFixed(1);
+};
 
 const formatGroupTotals = (periodHours: number, rows: HealthRow[]): string => {
   const g = sumRows(rows);
-  return `${formatUsdCompact(g.equity)} · Δ${periodHours}h: ${formatSignedUsd(g.delta)} · uPnL: ${formatSignedPlain(g.upnl)}`;
+  return `${formatUsdCompact(g.equity)} · Δ${periodHours}h: ${formatSignedUsd(g.delta)} · uPnL: ${formatSignedPlain(g.upnl)} · fill ${g.fills} (ср ${formatAvgFills(g.fills, g.n)}) · vol ${formatUsdCompact(g.volume)}`;
 };
 
 const formatMemberLine = (row: HealthRow, periodHours: number): string => {
@@ -791,11 +827,25 @@ const buildAumBreakdownLines = (statsRows: HealthRow[], periodHours: number): st
     lines.push(GROUP_RULE);
     lines.push(`<b>По биржам (${exchanges.length})</b>`);
     for (const { ex, rows } of exchanges) {
-      lines.push(`  ${escapeHtml(ex)} (n=${rows.length}): ${formatGroupTotals(periodHours, rows)}`);
+      const g = sumRows(rows);
+      lines.push(
+        `  ${escapeHtml(ex)} (n=${rows.length}): ${formatUsdCompact(g.equity)} · Δ${periodHours}h: ${formatSignedUsd(g.delta)} · uPnL: ${formatSignedPlain(g.upnl)}`
+      );
+      lines.push(
+        `    fill ${g.fills} (ср ${formatAvgFills(g.fills, g.n)}/портфель) · объем ${formatUsdCompact(g.volume)}`
+      );
     }
   }
 
   return lines;
+};
+
+const isEmergencyHealthAlert = (text: string): boolean => {
+  const t = String(text || '');
+  if (/desync|CT churn|momentum-only|Momentum fleet|snapshot устарел/i.test(t)) {
+    return false;
+  }
+  return /🛑|загрузка маржи|просадка |нет ни одного snapshot|дублей SID|agreement|Permission denied|нет свободного баланса|BingX execution/i.test(t);
 };
 
 const HEALTH_THRESHOLDS = {
@@ -946,7 +996,7 @@ const fetchMomentumFleetStats = async (): Promise<MomentumFleetStats> => {
   };
 };
 
-const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; text: string }> => {
+const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; text: string; alertKey: string }> => {
   const rows = await fetchHealthRows(periodHours);
   const duplicateSidByApiKey = await fetchDuplicateSidGroupsByApiKey(rows.map((r) => r.api_key_name || ''));
   const clientCtxByApiKey = await fetchClientExecutionContexts(rows.map((r) => r.api_key_name || ''));
@@ -954,7 +1004,7 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
   const enabledCount = rows.filter((r) => r.actual_enabled).length;
   const disabledCount = total - enabledCount;
   if (total === 0) {
-    return { ok: true, text: `<b>📊 BTDD health (${periodHours}h)</b>\nАктивных algofund-клиентов нет.` };
+    return { ok: true, text: `<b>📊 BTDD health (${periodHours}h)</b>\nАктивных algofund-клиентов нет.`, alertKey: 'ok' };
   }
 
   const nowMs = Date.now();
@@ -964,7 +1014,6 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
   const sumEquity = statsRows.reduce((s, r) => s + r.equity, 0);
   const sumEquityDelta = statsRows.reduce((s, r) => s + r.equity_delta, 0);
   const sumUpnl = statsRows.reduce((s, r) => s + r.upnl, 0);
-  const sumTrades = statsRows.reduce((s, r) => s + r.trades_period, 0);
 
   const alerts: string[] = [];
 
@@ -1049,6 +1098,12 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
       );
       continue;
     }
+    if (/sign the required agreement/i.test(err)) {
+      alerts.push(
+        `🛑 <b>${escapeHtml(label)}</b>: Bybit demo — нужно подписать agreement по контракту (${escapeHtml(apiKey || '-')})`,
+      );
+      continue;
+    }
     if (ctx?.bingxPositionSideError) {
       alerts.push(
         `🛑 <b>${escapeHtml(label)}</b>: BingX execution bug — one-way/positionSide (0 fill за 24ч, ${escapeHtml(apiKey || '-')})`,
@@ -1120,6 +1175,16 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
     }
   }
 
+  // 7b. Bybit demo agreement — even if other fills exist (stocks book on BTDD_D1).
+  for (const r of rows) {
+    if (!r.actual_enabled) continue;
+    if (!/sign the required agreement/i.test(String(r.last_error || ''))) continue;
+    const label = r.display_name || r.tenant_slug || r.api_key_name || 'client';
+    alerts.push(
+      `🛑 <b>${escapeHtml(label)}</b>: Bybit demo — нужно подписать agreement по контракту (${escapeHtml(r.api_key_name || '-')})`,
+    );
+  }
+
   // 8. CT churn: >1.5 synth cycles/client/day (proxy: CT entries/24h).
   const ctHotClients = rows
     .map((r) => {
@@ -1140,7 +1205,8 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
   const headerBad = `🚨 <b>BTDD: алерты ${alerts.length}/${total}</b> (${periodHours}ч)`;
 
   const worstDd = statsRows.reduce((w, r) => r.dd > w.dd ? r : w, statsRows[0]);
-  const worstUpnl = statsRows.reduce((w, r) => r.upnl < w.upnl ? r : w, statsRows[0]);
+  const fillsTotal = statsRows.reduce((s, r) => s + r.fills_period, 0);
+  const volumeTotal = statsRows.reduce((s, r) => s + r.volume_period, 0);
   const deltaSign = sumEquityDelta >= 0 ? '+' : '';
   const upnlSign = sumUpnl >= 0 ? '+' : '';
   const aumLines = buildAumBreakdownLines(statsRows, periodHours);
@@ -1148,16 +1214,25 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
     `Всего: ${enabledCount}${disabledCount > 0 ? ` (+${disabledCount} выкл назначенных)` : ''} · equity: $${sumEquity.toFixed(0)} · Δ${periodHours}h: ${deltaSign}$${sumEquityDelta.toFixed(2)} · uPnL: ${upnlSign}${sumUpnl.toFixed(2)}`,
     ...aumLines,
     GROUP_RULE,
-    `Сделок за ${periodHours}ч: ${sumTrades} · worst DD: ${worstDd.dd.toFixed(1)}% (${escapeHtml(worstDd.display_name || worstDd.api_key_name || '')})`,
+    `Сделок (fill) за ${periodHours}ч: ${fillsTotal} · ср. на портфель: ${formatAvgFills(fillsTotal, statsRows.length)} · объем: ${formatUsdCompact(volumeTotal)} · worst DD: ${worstDd.dd.toFixed(1)}% (${escapeHtml(worstDd.display_name || worstDd.api_key_name || '')})`,
   ].join('\n');
 
-  if (alerts.length === 0) {
-    return { ok: true, text: `${headerOk}\n${stats}` };
+  const emergencyAlerts = alerts.filter(isEmergencyHealthAlert);
+  const shownSource = emergencyAlerts.length > 0 ? emergencyAlerts : alerts;
+  const shown = shownSource.slice(0, 25);
+  const more = shownSource.length > shown.length ? `\n<i>...+${shownSource.length - shown.length} ещё</i>` : '';
+
+  if (emergencyAlerts.length === 0) {
+    const noiseNote = alerts.length > 0
+      ? `\n<i>шум ${alerts.length} (desync/stale/churn) — в heartbeat, не каждые 10 мин</i>`
+      : '';
+    return { ok: true, text: `${headerOk}\n${stats}${noiseNote}`, alertKey: 'ok' };
   }
-  // limit to 25 alerts to fit Telegram
-  const shown = alerts.slice(0, 25);
-  const more = alerts.length > shown.length ? `\n<i>...+${alerts.length - shown.length} ещё</i>` : '';
-  return { ok: false, text: `${headerBad}\n${stats}\n\n${shown.join('\n')}${more}` };
+  return {
+    ok: false,
+    text: `${headerBad}\n${stats}\n\n${shown.join('\n')}${more}`,
+    alertKey: shown.map((line) => line.replace(/[0-9]+(\.[0-9]+)?/g, '#')).join('|'),
+  };
 };
 
 const sendHealthSummary = async (periodHours: number): Promise<void> => {
@@ -1294,7 +1369,7 @@ type WatchdogState = {
   lastAlertAtMs: number;
 };
 
-const WATCHDOG_COOLDOWN_MS = 10 * 60_000; // 10 min between repeated alerts
+const WATCHDOG_COOLDOWN_MS = 60 * 60_000; // 60 min between watchdog pings
 const watchdogState: WatchdogState = { lastAlertAtMs: 0 };
 
 const isWatchdogEnabledDb = async (): Promise<boolean> => {
@@ -1352,7 +1427,7 @@ export const notifyAdminNewUser = async (info: {
 /**
  * Checks for recent rate-limit bursts and API/runtime failure spikes.
  * Sends an immediate Telegram alert if thresholds are exceeded.
- * Hard cooldown 10 min to avoid spam.
+ * Hard cooldown 60 min to avoid spam.
  */
 export const sendWatchdogAlertIfNeeded = async (): Promise<void> => {
   if (!isEnabled()) {
@@ -1416,7 +1491,7 @@ export const sendWatchdogAlertIfNeeded = async (): Promise<void> => {
 
   watchdogState.lastAlertAtMs = Date.now();
   const dateStr = new Date().toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
-  const text = `⚠️ <b>BTDD Watchdog Alert</b> (${escapeHtml(dateStr)})\n\n${alerts.join('\n')}\n\n<i>Следующий алерт не раньше чем через 10 мин</i>`;
+  const text = `⚠️ <b>BTDD Watchdog Alert</b> (${escapeHtml(dateStr)})\n\n${alerts.join('\n')}\n\n<i>Следующий алерт не раньше чем через 60 мин</i>`;
   try {
     await sendTelegramMessage(text);
     logger.info(`[tg-watchdog] Alert sent: ${alerts.join('; ')}`);
@@ -1499,15 +1574,15 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
       const summary = await buildHealthSummary(reportHours);
 
       if (!summary.ok) {
-        // Алерт: шлём моментально. Дедуп: тот же набор не чаще ALERT_REPEAT_MS.
-        const hash = hashAlertText(summary.text);
+        // Чрезвычайное: шлём сразу. Дедуп по стабильному ключу (без плавающих $/%), не чаще часа.
+        const hash = summary.alertKey || hashAlertText(summary.text);
         const sameAsLast = hash === alertState.lastHash;
         const cooledDown = nowMs - alertState.lastSentMs >= ALERT_REPEAT_MS;
         if (!sameAsLast || cooledDown) {
           await sendTelegramMessage(trimTelegramText(summary.text));
           alertState.lastHash = hash;
           alertState.lastSentMs = nowMs;
-          state.lastReportAtMs = nowMs; // алерт заменяет ближайший heartbeat
+          state.lastReportAtMs = nowMs;
         }
       } else if (heartbeatDue) {
         // Всё ОК — короткий heartbeat по расписанию.
@@ -1539,5 +1614,5 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
     void runTick();
   }, pollMinutes * 60_000);
 
-  logger.info(`[tg-admin] Started: heartbeat=DB-flag (default 24h), poll=${pollMinutes}m, alerts=immediate (cooldown 60m)`);
+  logger.info(`[tg-admin] Started: heartbeat=DB-flag (default 24h), poll=${pollMinutes}m, emergencies=immediate (cooldown 60m, stable key)`);
 };
