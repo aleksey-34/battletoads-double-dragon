@@ -192,7 +192,7 @@ export const extractMrs2Params = (strategy: Partial<Strategy> & { mrs2_config_js
 /**
  * Parse sticky pending entry-limit levels persisted in `strategies.mrs2_pending_json`.
  * Must be passed as the `pendingIn` arg to `evaluateMrs2Bar` every live cycle — otherwise
- * multi-bar resting limits are forgotten (see ORDERS_AND_SYNTH_MRS.md §2 code-gap #1).
+ * sticky bands are forgotten across bars (BT and live both keep virtual pending).
  */
 export const parseMrs2PendingLimits = (raw: unknown): Mrs2PendingLimits | null => {
   if (raw == null) return null;

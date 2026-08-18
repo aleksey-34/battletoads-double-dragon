@@ -43,9 +43,8 @@ import {
 } from './mrs2Signal';
 import {
   cancelMrs2RestingLimits,
-  parseMrs2PendingWithOrders,
+  clearMrs2ExchangeRestingLimits,
   serializeMrs2PendingWithOrders,
-  syncMrs2RestingEntryLimits,
   type Mrs2PendingWithOrders,
 } from './mrs2LiveOrders';
 import { acquireApiKeyPairEntryLock, acquireSystemEntryLock } from './strategy/mutex';
@@ -299,45 +298,37 @@ export const executeStrategy = async (
         mrs2FillPrice: action.fillPrice,
         mrs2Pending: action.pending,
       };
-      // Persist the updated sticky pending immediately — decoupled from the many
-      // downstream updateStrategy() calls (which don't touch this column) so the
-      // next cycle always sees the latest resting levels regardless of which
-      // branch this cycle's execution takes.
-      // Persist sticky pending; preserve resting order IDs when levels are unchanged
-      // so a later getOpenOrders failure cannot blind-re-place duplicates.
-      const prevPending = parseMrs2PendingWithOrders(mergedStrategy.mrs2_pending_json);
+      // Sticky bands stay in JSON (BT virtual pending). Live must NOT rest
+      // exchange limits intra-bar — cancel leftovers, persist levels without order ids.
       const nextPending: Mrs2PendingWithOrders | null = action.pending
         ? {
           long: action.pending.long ?? null,
           short: action.pending.short ?? null,
-          longOrderId: (
-            prevPending
-            && action.pending.long != null
-            && prevPending.long != null
-            && Math.abs(action.pending.long - prevPending.long) / prevPending.long * 100 < 0.05
-          ) ? (prevPending.longOrderId ?? null) : null,
-          shortOrderId: (
-            prevPending
-            && action.pending.short != null
-            && prevPending.short != null
-            && Math.abs(action.pending.short - prevPending.short) / prevPending.short * 100 < 0.05
-          ) ? (prevPending.shortOrderId ?? null) : null,
+          longOrderId: null,
+          shortOrderId: null,
         }
         : null;
       const nextPendingJson = serializeMrs2PendingWithOrders(nextPending);
-      if (nextPendingJson !== (mergedStrategy.mrs2_pending_json || '{}')) {
-        // If levels cleared, drop any resting exchange orders tied to prior pending.
-        if (!action.pending) {
-          try {
-            await cancelMrs2RestingLimits(
-              apiKeyName,
-              String(mergedStrategy.base_symbol || ''),
-              mergedStrategy.mrs2_pending_json,
-            );
-          } catch (e) {
-            logger.warn(`MRS2 cancel resting on clear: ${(e as Error).message}`);
+      if (String(mergedStrategy.market_mode || '').toLowerCase() === 'mono') {
+        try {
+          const cleared = await clearMrs2ExchangeRestingLimits({
+            apiKeyName,
+            symbol: String(mergedStrategy.base_symbol || ''),
+            pendingLevels: action.pending,
+            pendingRaw: mergedStrategy.mrs2_pending_json,
+          });
+          if (cleared !== (mergedStrategy.mrs2_pending_json || '{}')) {
+            await updateStrategy(apiKeyName, strategyId, { mrs2_pending_json: cleared });
+            mergedStrategy.mrs2_pending_json = cleared;
+          }
+        } catch (e) {
+          logger.warn(`MRS2 BT-parity clear resting failed for ${strategyId}: ${(e as Error).message}`);
+          if (nextPendingJson !== (mergedStrategy.mrs2_pending_json || '{}')) {
+            await updateStrategy(apiKeyName, strategyId, { mrs2_pending_json: nextPendingJson });
+            mergedStrategy.mrs2_pending_json = nextPendingJson;
           }
         }
+      } else if (nextPendingJson !== (mergedStrategy.mrs2_pending_json || '{}')) {
         await updateStrategy(apiKeyName, strategyId, { mrs2_pending_json: nextPendingJson });
         mergedStrategy.mrs2_pending_json = nextPendingJson;
       }
@@ -1184,113 +1175,11 @@ export const executeStrategy = async (
 
   if (signal === 'none') {
     const noSignalResult = isMrs2
-      ? 'No MRS2 fill (sticky limits may rest)'
+      ? 'No MRS2 fill on closed bar'
       : (isStatArb ? 'No z-score signal' : (isZzPivot ? 'No ZZ pivot signal' : 'No Donchian signal'));
     const noSignalAction = closedAction
       ? `${closedAction}_then_no_signal@${currentRatio}`
       : `no_signal@${currentRatio}`;
-
-    // Mono MRS2: while flat with sticky pending bands, keep resting limit orders on exchange
-    // so fills can happen between cycles (hamster post_only path). Synthetic = market only.
-    const isMonoMrs2 = isMrs2
-      && String(mergedStrategy.market_mode || '').toLowerCase() === 'mono'
-      && (state === 'flat' || Boolean(closedAction));
-    let mrs2OversizeSkipReason: string | null = null;
-    if (isMonoMrs2 && parseMrs2PendingLimits(mergedStrategy.mrs2_pending_json)) {
-      const cooldown = isEntryOversizeCoolingDown(apiKeyName, strategyId);
-      const cooldownGate = decideEntryOversizeGate({
-        coolingDown: cooldown.active,
-        cooldownReason: cooldown.reason,
-        remainingMs: cooldown.remainingMs,
-        oversize: 0,
-        maxOversizeFraction: MAX_ENTRY_OVERSIZE_FRACTION,
-      });
-      if (cooldownGate.action === 'skip_cooldown') {
-        // Quiet skip: no balances / openOrders / place — cool-down already recorded.
-        mrs2OversizeSkipReason = cooldownGate.reason;
-      } else {
-        try {
-          const px = await getLatestMarketClose(apiKeyName, mergedStrategy.base_symbol);
-          const plan = await buildSingleQtyPlan(
-            apiKeyName,
-            mergedStrategy.base_symbol,
-            px,
-            // Use strategy lot% of equity — same sizing path as entries; totalNotional
-            // is computed later for entries, so approximate from balances here.
-            await (async () => {
-              const equity = extractUsdtBalance(await getBalances(apiKeyName));
-              const lot = Math.max(0.1, Number(mergedStrategy.lot_long_percent || 6));
-              return Math.max(5, equity * (lot / 100));
-            })(),
-          );
-          // Same hard ceiling as market entries: never rest a limit order whose lot is
-          // already >1.5x the target (coarse qty step / minOrderQty on the symbol) —
-          // cool-down so we do not re-scan / re-place every cycle for permanently-too-small accounts.
-          const oversizeGate = decideEntryOversizeGate({
-            coolingDown: false,
-            oversize: plan.oversize,
-            maxOversizeFraction: MAX_ENTRY_OVERSIZE_FRACTION,
-          });
-          if (oversizeGate.action === 'block_oversize') {
-            const blocked = markEntryOversizeBlocked(apiKeyName, strategyId, {
-              oversize: plan.oversize,
-              targetNotional: plan.targetNotional,
-              actualNotional: plan.notional,
-              detail: (
-                `MRS2 resting skip: min-lot ${(plan.oversize * 100).toFixed(1)}% above target `
-                + `(target=${plan.targetNotional.toFixed(2)}, actual=${plan.notional.toFixed(2)})`
-              ),
-            });
-            mrs2OversizeSkipReason = blocked.reason;
-            if (shouldLogEntryOversizeBlock(apiKeyName, strategyId)) {
-              logger.warn(
-                `[position-cap] MRS2 resting-limit sync BLOCKED for strategy ${strategyId} (${apiKeyName}): `
-                + `${blocked.reason} — cool-down ${Math.round(ENTRY_OVERSIZE_COOLDOWN_MS / 60_000)}min `
-                + `(${ENTRY_OVERSIZE_SKIP_ACTION})`
-              );
-              try {
-                const { db } = await import('../utils/database');
-                await db.run(
-                  `INSERT INTO strategy_runtime_events
-                   (api_key_name, strategy_id, strategy_name, event_type, message, details_json, resolved_at, created_at)
-                   VALUES (?, ?, ?, 'entry_oversize_blocked', ?, ?, 0, ?)`,
-                  [
-                    apiKeyName,
-                    strategyId,
-                    mergedStrategy.name || mergedStrategy.base_symbol,
-                    blocked.reason,
-                    JSON.stringify({
-                      oversizePercent: (plan.oversize * 100).toFixed(2),
-                      targetNotional: plan.targetNotional,
-                      actualNotional: plan.notional,
-                      path: 'mrs2_resting_sync',
-                      action: ENTRY_OVERSIZE_SKIP_ACTION,
-                    }),
-                    Date.now(),
-                  ]
-                );
-              } catch (eventErr) {
-                logger.warn(`Failed to record MRS2 entry_oversize_blocked event: ${(eventErr as Error).message}`);
-              }
-            }
-          } else {
-            const synced = await syncMrs2RestingEntryLimits({
-              apiKeyName,
-              symbol: String(mergedStrategy.base_symbol || ''),
-              pendingLevels: parseMrs2PendingLimits(mergedStrategy.mrs2_pending_json),
-              pendingRaw: mergedStrategy.mrs2_pending_json,
-              qty: plan.qty,
-            });
-            if (synced !== (mergedStrategy.mrs2_pending_json || '{}')) {
-              await updateStrategy(apiKeyName, strategyId, { mrs2_pending_json: synced });
-              mergedStrategy.mrs2_pending_json = synced;
-            }
-          }
-        } catch (e) {
-          logger.warn(`MRS2 resting-limit sync failed for ${strategyId}: ${(e as Error).message}`);
-        }
-      }
-    }
 
     const updated = await updateStrategy(apiKeyName, strategyId, {
       ...executionBindingPatch,
@@ -1302,19 +1191,13 @@ export const executeStrategy = async (
           }
         : {}),
       last_signal: 'none',
-      last_action: mrs2OversizeSkipReason
-        ? `${ENTRY_OVERSIZE_SKIP_ACTION}@${currentRatio}`
-        : noSignalAction,
-      last_error: mrs2OversizeSkipReason,
+      last_action: noSignalAction,
+      last_error: null,
     });
 
     return returnWithProcessedBar({
-      result: closedResult || (mrs2OversizeSkipReason
-        ? `MRS2 resting skipped: ${mrs2OversizeSkipReason}`
-        : noSignalResult),
-      action: mrs2OversizeSkipReason
-        ? ENTRY_OVERSIZE_SKIP_ACTION
-        : (closedAction ? `${closedAction}_no_signal` : 'no_signal'),
+      result: closedResult || noSignalResult,
+      action: closedAction ? `${closedAction}_no_signal` : 'no_signal',
       strategy: updated,
       currentRatio,
       donchianHigh,

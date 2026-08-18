@@ -16,6 +16,7 @@ import {
   normalizePairLabel,
   type AlgofundRoleBookMember,
 } from '../bot/strategy/cycle/algofundSync';
+import { knobsForRecipeBook } from './hamfiveRecipeKnobs';
 
 type CandleRow = [number, number, number, number, number, number?];
 
@@ -430,6 +431,7 @@ const applySnapshotsToDb = async (snapsPath: string, recipePath: string): Promis
     if (!row?.id) continue;
     let meta: Record<string, unknown> = {};
     try { meta = JSON.parse(String(row.metadata_json || '{}')); } catch { meta = {}; }
+    meta.books = (pf.books || []).map((book: any) => knobsForRecipeBook(recipes, book));
     meta.bt = {
       ret: snap.ret,
       dd: snap.dd,
@@ -448,6 +450,21 @@ const applySnapshotsToDb = async (snapsPath: string, recipePath: string): Promis
        WHERE id = ?`,
       [JSON.stringify(snap), JSON.stringify(meta), now, row.id],
     );
+    const cardCode = `CARD::${String(pf.setKey).toUpperCase()}`;
+    const card = await db.get(
+      'SELECT id, metadata_json FROM master_cards WHERE code = ?',
+      [cardCode],
+    ) as { id?: number; metadata_json?: string } | undefined;
+    if (card?.id) {
+      let cardMeta: Record<string, unknown> = {};
+      try { cardMeta = JSON.parse(String(card.metadata_json || '{}')); } catch { cardMeta = {}; }
+      cardMeta.books = meta.books;
+      cardMeta.pack = cardMeta.pack || meta.pack || 'hamfive_aug2026';
+      await db.run(
+        `UPDATE master_cards SET metadata_json = ?, updated_at = ? WHERE id = ?`,
+        [JSON.stringify(cardMeta), now, card.id],
+      );
+    }
     n += 1;
   }
   return n;
@@ -594,35 +611,32 @@ const stampPortfolios = async (opts: {
     const maxOpenPositionsByBook: Record<string, number> = {};
     const bookKeyByStrategyId: Record<string, string> = {};
     const lotPercentMultiplierByStrategyId: Record<string, number> = {};
-    let maxRi = 0;
+    const reinvestPercentByStrategyId: Record<string, number> = {};
+    let anyReinvest = false;
     let deposit = 0;
 
-    for (const book of (pf.books || []).filter((b: any) => b.key !== 'stocks')) {
+    for (const book of (pf.books || [])) {
+      const knobs = knobsForRecipeBook(recipes, book);
       let bookIds: number[] = [];
-      let lot = book.lot;
-      let op = book.op;
-      let ri = book.ri || 0;
       if (book.key === 'b3') {
         bookIds = b3Ids;
-        lot = recipes.sharedB3.lot;
-        op = recipes.sharedB3.op;
-        ri = recipes.sharedB3.ri;
       } else if (book.universe) {
         bookIds = uniCache[book.universe] || [];
       }
       if (!bookIds.length) continue;
-      maxRi = Math.max(maxRi, ri || 0);
+      if (knobs.ri > 0) anyReinvest = true;
       deposit += Number(book.initial || 0);
-      if (op > 0) maxOpenPositionsByBook[book.key] = op;
+      if (knobs.op > 0) maxOpenPositionsByBook[book.key] = knobs.op;
       for (const sid of bookIds) {
         ids.push(sid);
         bookKeyByStrategyId[String(sid)] = book.key;
-        if (lot > 0) lotPercentMultiplierByStrategyId[String(sid)] = lot / 2;
+        if (knobs.lot > 0) lotPercentMultiplierByStrategyId[String(sid)] = knobs.lot;
+        reinvestPercentByStrategyId[String(sid)] = knobs.ri;
       }
     }
 
     const uniqIds = [...new Set(ids)];
-    logger.info(`[nightlyStorefrontRoll] BT ${pf.id} n=${uniqIds.length} dep=${deposit} ri=${maxRi}`);
+    logger.info(`[nightlyStorefrontRoll] BT ${pf.id} n=${uniqIds.length} dep=${deposit} books=${Object.keys(maxOpenPositionsByBook).join(',') || '-'}`);
     if (!uniqIds.length || deposit <= 0) continue;
 
     const r = await runBacktest({
@@ -640,11 +654,11 @@ const stampPortfolios = async (opts: {
       maxOpenPositions: 0,
       maxOpenPositionsByBook,
       bookKeyByStrategyId,
-      lotPercentOverride: 2,
+      lotPercentOverride: 1,
       lotPercentMultiplierByStrategyId,
       enablePairLock: true,
-      maxDepositOverride: maxRi > 0 ? deposit * 50 : 0,
-      reinvestPercentOverride: maxRi,
+      maxDepositOverride: anyReinvest ? deposit * 50 : 0,
+      reinvestPercentByStrategyId,
       portfolioCircuitBreaker: tierCb as any,
       researchLotSchedule: fearBoost as any,
     } as any);
@@ -661,7 +675,7 @@ const stampPortfolios = async (opts: {
       pf: +Number(s.profitFactor || prev.pf || 0).toFixed(3),
       trades: +((s as any).tradesCount || (s as any).totalTrades || prev.trades || 0),
       capital: deposit,
-      method: 'hamfive_cb_fear_union_ri100',
+      method: 'hamfive_card_books_lot_ri',
       dateFrom: opts.dateFrom,
       dateTo: opts.dateTo,
       liveWindow,
@@ -671,15 +685,15 @@ const stampPortfolios = async (opts: {
     if (COPY_FAIR_IDS.has(String(pf.id))) {
       const copyKey = COPY_FAIR_API_KEY[String(pf.id)];
       const fixFrom = liveFixFrom();
-      const lotByRole: Record<string, number> = { b3: Number(recipes.sharedB3?.lot || 0) };
-      const opByRole: Record<string, number> = { b3: Number(recipes.sharedB3?.op || 0) };
-      const riByRole: Record<string, number> = { b3: Number(recipes.sharedB3?.ri || 0) };
+      const lotByRole: Record<string, number> = {};
+      const opByRole: Record<string, number> = {};
+      const riByRole: Record<string, number> = {};
       for (const book of (pf.books || [])) {
-        const role = String(book?.key || '');
-        if (!role || role === 'b3') continue;
-        if (Number(book.lot) > 0) lotByRole[role] = Number(book.lot);
-        if (Number(book.op) > 0) opByRole[role] = Number(book.op);
-        if (Number(book.ri) >= 0) riByRole[role] = Number(book.ri || 0);
+        const knobs = knobsForRecipeBook(recipes, book);
+        if (!knobs.key) continue;
+        if (knobs.lot > 0) lotByRole[knobs.key] = knobs.lot;
+        if (knobs.op > 0) opByRole[knobs.key] = knobs.op;
+        riByRole[knobs.key] = knobs.ri;
       }
 
       const liveMembers = copyKey
@@ -689,16 +703,19 @@ const stampPortfolios = async (opts: {
       const idToPair = new Map<number, string>();
       const fairBookKeyByStrategyId: Record<string, string> = {};
       const fairLotMultByStrategyId: Record<string, number> = {};
+      const fairRiByStrategyId: Record<string, number> = {};
       const fairMaxOpenByBook: Record<string, number> = {};
-      let fairMaxRi = 0;
+      let fairAnyReinvest = false;
       for (const m of liveMembers) {
         idToPair.set(m.strategyId, pairLabelFromMember(m));
         fairBookKeyByStrategyId[String(m.strategyId)] = m.role;
         const lot = Number(lotByRole[m.role] || 0);
-        if (lot > 0) fairLotMultByStrategyId[String(m.strategyId)] = lot / 2;
+        if (lot > 0) fairLotMultByStrategyId[String(m.strategyId)] = lot;
         const op = Number(opByRole[m.role] || 0);
         if (op > 0) fairMaxOpenByBook[m.role] = op;
-        fairMaxRi = Math.max(fairMaxRi, Number(riByRole[m.role] || 0));
+        const ri = Number(riByRole[m.role] || 0);
+        fairRiByStrategyId[String(m.strategyId)] = ri;
+        if (ri > 0) fairAnyReinvest = true;
       }
 
       const missingCandles: string[] = [];
@@ -749,7 +766,7 @@ const stampPortfolios = async (opts: {
         if (!fairIds.length) {
           logger.error(
             `[nightlyStorefrontRoll] fair ${pf.id} 0 live strategy IDs on ${copyKey} `
-            + '(expected ALGOFUND::{slug}::{b3,ham,five} books). Not a missing-candle issue.',
+            + '(expected ALGOFUND::{slug}::{b3,ham,five,stocks} books). Not a missing-candle issue.',
           );
           return packFailedFair(fromDate, opts.dateTo, `no live book IDs for ${copyKey}`);
         }
@@ -769,11 +786,11 @@ const stampPortfolios = async (opts: {
             maxOpenPositions: 0,
             maxOpenPositionsByBook: fairMaxOpenByBook,
             bookKeyByStrategyId: fairBookKeyByStrategyId,
-            lotPercentOverride: 2,
+            lotPercentOverride: 1,
             lotPercentMultiplierByStrategyId: fairLotMultByStrategyId,
             enablePairLock: true,
-            maxDepositOverride: fairMaxRi > 0 ? FAIR_COPY_CAPITAL * 50 : 0,
-            reinvestPercentOverride: fairMaxRi,
+            maxDepositOverride: fairAnyReinvest ? FAIR_COPY_CAPITAL * 50 : 0,
+            reinvestPercentByStrategyId: fairRiByStrategyId,
             portfolioCircuitBreaker: tierCb as any,
             researchLotSchedule: fearBoost as any,
           } as any);

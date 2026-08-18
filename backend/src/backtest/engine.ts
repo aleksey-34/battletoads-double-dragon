@@ -61,6 +61,9 @@ export type { OrderBlockEntryGate };
 
 export type BacktestMode = 'single' | 'portfolio';
 
+/** Recipe book lots are 8–18%; admin shared-margin uses override=1 × lot. */
+export const LOT_PERCENT_MULTIPLIER_MAX = 500;
+
 type DetectionSource = 'wick' | 'close';
 type Signal = 'long' | 'short' | 'none';
 type PositionState = 'flat' | 'long' | 'short';
@@ -181,7 +184,7 @@ export type BacktestRunRequest = {
    * Per-strategy multiplier applied to lot_long_percent / lot_short_percent
    * (or to lotPercentOverride when set). Used by trading-system backtests to
    * apply per-member weights from the storefront card. Missing entries default
-   * to 1.0 (no change). Values are clamped to [0, 10].
+   * to 1.0 (no change). Values are clamped to [0, LOT_PERCENT_MULTIPLIER_MAX] so recipe book lots (12/15/16) survive override=1 × lot.
    */
   lotPercentMultiplierByStrategyId?: Record<string | number, number>;
   /** Override reinvest_percent on all strategies (0..100). Use -1 / undefined to keep per-strategy DB value. */
@@ -2596,7 +2599,7 @@ const normalizeRequest = (raw: BacktestRunRequest): NormalizedBacktestRequest =>
           const sid = Number(key);
           const mul = Number(value);
           if (Number.isFinite(sid) && sid > 0 && Number.isFinite(mul)) {
-            map.set(sid, Math.max(0, Math.min(10, mul)));
+            map.set(sid, Math.max(0, Math.min(LOT_PERCENT_MULTIPLIER_MAX, mul)));
           }
         }
       }

@@ -1,6 +1,8 @@
 /**
- * Live resting limit sync for mono MRS2 (hamster sticky post_only entries).
- * Synthetic MRS2 must NOT use this path — only market legs.
+ * MRS2 exchange-order helpers.
+ * Live BT-parity: sticky bands live in mrs2_pending_json; do not rest intra-bar
+ * limits on the book (`clearMrs2ExchangeRestingLimits`). `syncMrs2RestingEntryLimits`
+ * is the old hamster place/replace path — not used by executeStrategy.
  */
 import logger from '../utils/logger';
 import {
@@ -146,6 +148,61 @@ export const cancelMrs2RestingLimits = async (
   if (!pending) return;
   await safeCancel(apiKeyName, symbol, pending.longOrderId);
   await safeCancel(apiKeyName, symbol, pending.shortOrderId);
+};
+
+/**
+ * BT parity for live MRS: never rest exchange limits intra-bar.
+ * Sticky bands stay in `mrs2_pending_json`; fills happen only when
+ * `evaluateMrs2Bar` sees a closed-bar wick touch (then market-after-touch).
+ * Cancels tracked ids and any leftover matching limits at those prices.
+ */
+export const clearMrs2ExchangeRestingLimits = async (args: {
+  apiKeyName: string;
+  symbol: string;
+  pendingLevels: Mrs2PendingLimits | null;
+  pendingRaw: unknown;
+}): Promise<string> => {
+  const { apiKeyName, symbol, pendingLevels } = args;
+  const prev = parseMrs2PendingWithOrders(args.pendingRaw);
+  await safeCancel(apiKeyName, symbol, prev?.longOrderId);
+  await safeCancel(apiKeyName, symbol, prev?.shortOrderId);
+
+  const next: Mrs2PendingWithOrders = {
+    long: pendingLevels?.long ?? null,
+    short: pendingLevels?.short ?? null,
+    longOrderId: null,
+    shortOrderId: null,
+  };
+
+  try {
+    const openOrders = normalizeOpenOrders(await getOpenOrders(apiKeyName, symbol));
+    const longPrices = [prev?.long, next.long].filter((px): px is number => Number(px) > 0);
+    const shortPrices = [prev?.short, next.short].filter((px): px is number => Number(px) > 0);
+    const seen = new Set<string>();
+    for (const px of longPrices) {
+      for (const o of findMatchingRestingOrders(openOrders, 'Buy', px)) {
+        if (seen.has(o.id)) continue;
+        seen.add(o.id);
+        logger.info(`[mrs2-limits] BT-parity cancel resting BUY ${symbol} id=${o.id} @ ${o.price}`);
+        await safeCancel(apiKeyName, symbol, o.id);
+      }
+    }
+    for (const px of shortPrices) {
+      for (const o of findMatchingRestingOrders(openOrders, 'Sell', px)) {
+        if (seen.has(o.id)) continue;
+        seen.add(o.id);
+        logger.info(`[mrs2-limits] BT-parity cancel resting SELL ${symbol} id=${o.id} @ ${o.price}`);
+        await safeCancel(apiKeyName, symbol, o.id);
+      }
+    }
+  } catch (e) {
+    logger.warn(`[mrs2-limits] BT-parity getOpenOrders ${symbol}: ${(e as Error).message}`);
+  }
+
+  if (next.long == null && next.short == null) {
+    return serializeMrs2PendingLimits(null);
+  }
+  return serializeMrs2PendingWithOrders(next);
 };
 
 /**
