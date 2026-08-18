@@ -840,6 +840,80 @@ const buildAumBreakdownLines = (statsRows: HealthRow[], periodHours: number): st
   return lines;
 };
 
+const COPY_BT_COMPARE: Array<{ setKey: string; short: string; apiKeyName: string }> = [
+  { setKey: 'portfolio-conservative-jul2026', short: 'P1 cons', apiKeyName: 'Copy_Alex1' },
+  { setKey: 'portfolio-balanced-jul2026', short: 'P2 bal', apiKeyName: 'icopy1-api' },
+  { setKey: 'portfolio-aggressive-jul2026', short: 'P3 aggr', apiKeyName: 'arcopy1' },
+  { setKey: 'portfolio-whale-personal-jul2026', short: 'P6 whale', apiKeyName: 'BTDD_D1' },
+];
+
+const equityOnDate = async (apiKeyName: string, day: string, edge: 'start' | 'end'): Promise<number | null> => {
+  const row = await db.get(
+    edge === 'start'
+      ? `SELECT m.equity_usd AS eq
+         FROM monitoring_snapshots m
+         JOIN api_keys a ON a.id = m.api_key_id
+         WHERE a.name = ? AND date(m.recorded_at) = date(?)
+         ORDER BY datetime(m.recorded_at) ASC LIMIT 1`
+      : `SELECT m.equity_usd AS eq
+         FROM monitoring_snapshots m
+         JOIN api_keys a ON a.id = m.api_key_id
+         WHERE a.name = ? AND date(m.recorded_at) = date(?)
+         ORDER BY datetime(m.recorded_at) DESC LIMIT 1`,
+    [apiKeyName, day],
+  ) as { eq?: number } | undefined;
+  const n = toFinite(row?.eq, NaN);
+  return Number.isFinite(n) && n > 0 ? n : null;
+};
+
+const buildBtVsLiveLines = async (): Promise<string[]> => {
+  const lines: string[] = [];
+  let windowLabel = '';
+  for (const item of COPY_BT_COMPARE) {
+    const row = await db.get(
+      `SELECT snapshot_json, metadata_json FROM algofund_portfolios WHERE set_key = ?`,
+      [item.setKey],
+    ) as { snapshot_json?: string; metadata_json?: string } | undefined;
+    let liveWindow: { dateFrom?: string; dateTo?: string; ret?: number } | null = null;
+    try {
+      const snap = JSON.parse(String(row?.snapshot_json || '{}'));
+      liveWindow = snap?.liveWindow || null;
+    } catch {
+      liveWindow = null;
+    }
+    if (!liveWindow) {
+      try {
+        const meta = JSON.parse(String(row?.metadata_json || '{}'));
+        liveWindow = (meta?.bt && meta.bt.liveWindow) || null;
+      } catch {
+        liveWindow = null;
+      }
+    }
+    const dateFrom = String(liveWindow?.dateFrom || '').slice(0, 10);
+    const dateTo = String(liveWindow?.dateTo || '').slice(0, 10);
+    const btRet = liveWindow && Number.isFinite(Number(liveWindow.ret)) ? Number(liveWindow.ret) : null;
+    if (!dateFrom || !dateTo || btRet == null) continue;
+    if (!windowLabel) windowLabel = `${dateFrom}→${dateTo}`;
+    const startEq = await equityOnDate(item.apiKeyName, dateFrom, 'start');
+    const endEq = await equityOnDate(item.apiKeyName, dateTo, 'end');
+    if (!startEq || !endEq) {
+      lines.push(`  ${item.short}: BT ${formatSignedPlain(btRet)}% · live нет снимков ${escapeHtml(item.apiKeyName)}`);
+      continue;
+    }
+    const liveRet = (endEq / startEq - 1) * 100;
+    const gap = liveRet - btRet;
+    lines.push(
+      `  ${item.short}: BT ${formatSignedPlain(btRet)}% · live ${formatSignedPlain(liveRet)}% · gap ${formatSignedPlain(gap)} п.п.`,
+    );
+  }
+  if (lines.length === 0) return [];
+  return [
+    GROUP_RULE,
+    `<b>BT vs live</b> (${escapeHtml(windowLabel)}) — ночной штамп hamfive, без stocks`,
+    ...lines,
+  ];
+};
+
 const isEmergencyHealthAlert = (text: string): boolean => {
   const t = String(text || '');
   if (/desync|CT churn|momentum-only|Momentum fleet|snapshot устарел/i.test(t)) {
@@ -1210,9 +1284,11 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
   const deltaSign = sumEquityDelta >= 0 ? '+' : '';
   const upnlSign = sumUpnl >= 0 ? '+' : '';
   const aumLines = buildAumBreakdownLines(statsRows, periodHours);
+  const btLiveLines = await buildBtVsLiveLines();
   const stats = [
     `Всего: ${enabledCount}${disabledCount > 0 ? ` (+${disabledCount} выкл назначенных)` : ''} · equity: $${sumEquity.toFixed(0)} · Δ${periodHours}h: ${deltaSign}$${sumEquityDelta.toFixed(2)} · uPnL: ${upnlSign}${sumUpnl.toFixed(2)}`,
     ...aumLines,
+    ...btLiveLines,
     GROUP_RULE,
     `Сделок (fill) за ${periodHours}ч: ${fillsTotal} · ср. на портфель: ${formatAvgFills(fillsTotal, statsRows.length)} · объем: ${formatUsdCompact(volumeTotal)} · worst DD: ${worstDd.dd.toFixed(1)}% (${escapeHtml(worstDd.display_name || worstDd.api_key_name || '')})`,
   ].join('\n');
