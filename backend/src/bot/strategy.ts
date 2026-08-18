@@ -930,6 +930,26 @@ export const executeStrategy = async (
     };
   }
 
+  if (dedupeClosedBar) {
+    try {
+      await persistProcessedClosedBar(strategyId, evaluatedBarTimeMs);
+      rememberProcessedClosedBar(processedBarCacheKey, evaluatedBarTimeMs);
+    } catch (error) {
+      logger.warn(
+        `Closed-bar persist failed for strategy ${strategyId} (${apiKeyName}): ${(error as Error).message} — skip bar ${evaluatedBarIso}`,
+      );
+      return {
+        result: `Bar ${evaluatedBarIso} skipped (persist failed)`,
+        action: 'bar_persist_failed',
+        executionSource,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      };
+    }
+  }
+
   const strategyType = String(mergedStrategy.strategy_type || '');
   if (!closedAction && (state === 'long' || state === 'short')
     && strategyType !== 'dca'

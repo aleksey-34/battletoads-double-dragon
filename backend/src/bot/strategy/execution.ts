@@ -36,7 +36,9 @@ export const persistProcessedClosedBar = async (strategyId: number, barTimeMs: n
       [n, id, n],
     );
   } catch (error) {
-    logger.warn(`persistProcessedClosedBar failed for ${id}: ${(error as Error).message}`);
+    const message = (error as Error).message;
+    logger.warn(`persistProcessedClosedBar failed for ${id}: ${message}`);
+    throw error;
   }
 };
 
@@ -142,6 +144,7 @@ export const resolveExecutionCandleContext = (
   const latest = candles[closedIndex];
   const latestClosesAt = latest.timeMs + intervalMs;
 
+  // Forming bar: open + interval is still in the future (no 1h default for 4H).
   if (latestClosesAt > Date.now() + BAR_CLOSE_FRESHNESS_MS) {
     closedIndex -= 1;
   }

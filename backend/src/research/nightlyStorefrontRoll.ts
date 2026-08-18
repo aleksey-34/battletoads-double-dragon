@@ -174,8 +174,16 @@ const summarizeBtTrades = (
 };
 
 const fetchLiveEntryStats = async (apiKeyName: string, fromDate: string, toDate: string) => {
+  // Count strategy_signal per strategy (synth = 1), not per-leg exchange_fill.
   const rows = await db.all(
-    `SELECT UPPER(REPLACE(REPLACE(COALESCE(lte.source_symbol, s.base_symbol, ''), '/', ''), '-', '')) AS sym,
+    `SELECT s.id AS strategy_id,
+            CASE
+              WHEN LOWER(COALESCE(s.market_mode, '')) IN ('synthetic', 'synth')
+                   AND TRIM(COALESCE(s.quote_symbol, '')) != ''
+              THEN UPPER(REPLACE(REPLACE(s.base_symbol, '/', ''), '-', ''))
+                   || '/' || UPPER(REPLACE(REPLACE(s.quote_symbol, '/', ''), '-', ''))
+              ELSE UPPER(REPLACE(REPLACE(COALESCE(s.base_symbol, ''), '/', ''), '-', ''))
+            END AS sym,
             COUNT(*) AS n,
             SUM(ABS(COALESCE(lte.actual_price, 0) * COALESCE(lte.position_size, 0))) AS vol
      FROM live_trade_events lte
@@ -183,12 +191,17 @@ const fetchLiveEntryStats = async (apiKeyName: string, fromDate: string, toDate:
      JOIN api_keys a ON a.id = s.api_key_id
      WHERE a.name = ?
        AND COALESCE(lte.trade_type, '') = 'entry'
-       AND COALESCE(lte.event_origin, 'exchange_fill') = 'exchange_fill'
+       AND COALESCE(lte.event_origin, 'strategy_signal') = 'strategy_signal'
+       AND (
+         LOWER(COALESCE(s.market_mode, '')) NOT IN ('synthetic', 'synth')
+         OR UPPER(REPLACE(REPLACE(COALESCE(lte.source_symbol, s.base_symbol, ''), '/', ''), '-', ''))
+            = UPPER(REPLACE(REPLACE(COALESCE(s.base_symbol, ''), '/', ''), '-', ''))
+       )
        AND lte.actual_time >= (strftime('%s', ?) * 1000)
        AND lte.actual_time <  (strftime('%s', ?) * 1000)
-     GROUP BY 1`,
+     GROUP BY s.id`,
     [apiKeyName, `${fromDate} 00:00:00`, `${toDate} 23:59:59`],
-  ) as Array<{ sym?: string; n?: number; vol?: number }>;
+  ) as Array<{ strategy_id?: number; sym?: string; n?: number; vol?: number }>;
   const bySym: Record<string, { n: number; vol: number }> = {};
   let n = 0;
   let vol = 0;
@@ -196,7 +209,8 @@ const fetchLiveEntryStats = async (apiKeyName: string, fromDate: string, toDate:
     const sym = String(r.sym || '?').toUpperCase();
     const cn = Math.max(0, Math.floor(Number(r.n || 0)));
     const cv = Math.max(0, Number(r.vol || 0));
-    bySym[sym] = { n: cn, vol: cv };
+    const prev = bySym[sym] || { n: 0, vol: 0 };
+    bySym[sym] = { n: prev.n + cn, vol: prev.vol + cv };
     n += cn;
     vol += cv;
   }
@@ -633,7 +647,7 @@ const stampPortfolios = async (opts: {
         dateTo: opts.dateTo,
         bars: 4000,
         warmupBars: 120,
-        skipMissingSymbols: true,
+        skipMissingSymbols: false,
         initialBalance: FAIR_COPY_CAPITAL,
         commissionPercent: 0.1,
         slippagePercent: 0.05,

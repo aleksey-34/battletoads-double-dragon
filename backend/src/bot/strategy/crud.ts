@@ -121,9 +121,13 @@ export const computeSignalTotalNotional = (
 
   const baselineFromOpts = Number(options?.sizingBaseline);
   const maxDeposit = Number(strategy.max_deposit);
+  // max_deposit on copy rows is often a 5k/250k research ceiling, not the wallet.
+  // Size from real equity; only trust max_deposit as baseline when it is in the same scale as the wallet.
+  const ceilingLooksLikeWallet = Number.isFinite(maxDeposit) && maxDeposit > 0
+    && maxDeposit <= Math.max(walletEquity * 1.5, walletEquity + 250);
   const baseline = Number.isFinite(baselineFromOpts) && baselineFromOpts > 0
     ? baselineFromOpts
-    : (Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : walletEquity);
+    : (ceilingLooksLikeWallet ? maxDeposit : walletEquity);
 
   let equityBase: number;
   if (strategy.fixed_lot) {

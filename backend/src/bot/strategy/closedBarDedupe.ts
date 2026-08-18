@@ -29,5 +29,5 @@ export const rememberProcessedClosedBar = (key: string, barTimeMs: number): void
 export const isClosedBarAlreadyProcessed = (key: string, barTimeMs: number): boolean => {
   const n = Number(barTimeMs) || 0;
   if (n <= 0 || !key) return false;
-  return Number(processedClosedBarByStrategy.get(key) || 0) === n;
+  return Number(processedClosedBarByStrategy.get(key) || 0) >= n;
 };

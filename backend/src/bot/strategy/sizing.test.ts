@@ -26,6 +26,17 @@ describe('compound reinvest sizing (live ↔ BT)', () => {
     assert.equal(n, 500);
   });
 
+  it('when max_deposit is a 250k ceiling, sizes off wallet not the ceiling', () => {
+    const n = computeSignalTotalNotional(
+      { ...base, reinvest_percent: 82, max_deposit: 250_000, lot_long_percent: 10 },
+      800,
+      'long',
+      1,
+      { walletEquity: 900 },
+    );
+    assert.equal(n, 90);
+  });
+
   it('when max_deposit ≫ equity, sizes off equity (not max_deposit)', () => {
     const n = computeSignalTotalNotional(
       { ...base, reinvest_percent: 82, max_deposit: 5000 },

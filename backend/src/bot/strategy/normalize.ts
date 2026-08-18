@@ -189,8 +189,13 @@ export const normalizeCoef = (value: any): number => {
 };
 
 export const intervalToMs = (interval: string): number => {
-  const value = String(interval || '').trim();
+  const raw = String(interval || '').trim();
+  const value = raw.toLowerCase();
 
+  if (value.endsWith('m') && value !== '1m' && /^\d+m$/.test(value)) {
+    const minutes = Number.parseInt(value.replace('m', ''), 10);
+    return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 * 1000 : 60 * 1000;
+  }
   if (value.endsWith('m')) {
     const minutes = Number.parseInt(value.replace('m', ''), 10);
     return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 * 1000 : 60 * 1000;
@@ -201,15 +206,16 @@ export const intervalToMs = (interval: string): number => {
     return Number.isFinite(hours) && hours > 0 ? hours * 60 * 60 * 1000 : 60 * 60 * 1000;
   }
 
-  if (value === '1d') {
+  if (value === '1d' || value === 'd' || value === '1day') {
     return 24 * 60 * 60 * 1000;
   }
 
-  if (value === '1w') {
+  if (value === '1w' || value === '1week') {
     return 7 * 24 * 60 * 60 * 1000;
   }
 
-  if (value === '1M') {
+  // Month stays case-sensitive in exchanges as 1M; accept both after lowercasing would collide with minutes.
+  if (raw === '1M') {
     return 30 * 24 * 60 * 60 * 1000;
   }
 

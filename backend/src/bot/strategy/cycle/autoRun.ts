@@ -227,7 +227,8 @@ export const runAutoStrategiesCycle = async () => {
       return true;
     }
     const sid = extractSourceSid(String(row?.strategy_name || ''));
-    const ok = !!sid && expected.has(sid);
+    const cloneId = String(Number(row?.strategy_id || 0));
+    const ok = (cloneId !== '0' && expected.has(cloneId)) || (!!sid && expected.has(sid));
     if (!ok) {
       syncMismatchRows.push(row);
     }
