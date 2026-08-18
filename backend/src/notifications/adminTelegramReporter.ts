@@ -871,6 +871,35 @@ const retBetween = (start: number | null, end: number | null): number | null => 
   return (end / start - 1) * 100;
 };
 
+const formatFairLine = (
+  item: { short: string },
+  label: string,
+  fair: any,
+  liveRet: number | null,
+  liveStats: { n?: number } | undefined,
+  drift: any,
+): string[] => {
+  const dateFrom = String(fair?.dateFrom || '').slice(0, 10);
+  const dateTo = String(fair?.dateTo || '').slice(0, 10);
+  const btRet = fair && Number.isFinite(Number(fair.ret)) ? Number(fair.ret) : null;
+  const gap = btRet != null && liveRet != null ? liveRet - btRet : null;
+  const freq = drift?.freqX != null ? Number(drift.freqX) : null;
+  const over = freq != null && freq > 2.5;
+  const err = String(fair?.error || '').trim();
+  const lines: string[] = [
+    `  ${item.short} ${label} ${escapeHtml(dateFrom || '?')}→${escapeHtml(dateTo || '?')}: `
+    + `BT ${btRet == null ? (err ? 'fail' : 'n/a') : `${formatSignedPlain(btRet)}% / ${fair.trades}tr`} · `
+    + `live ${liveRet == null ? 'n/a' : `${formatSignedPlain(liveRet)}% / ${liveStats?.n ?? '?'}ent`}`
+    + (gap == null ? '' : ` · gap ${formatSignedPlain(gap)} п.п.`)
+    + (freq == null ? '' : ` · freq ${freq.toFixed(1)}×${over ? ' ⚠' : ''}`),
+  ];
+  const hot = Array.isArray(drift?.hot) ? drift.hot.slice(0, 3) : [];
+  if (hot.length) {
+    lines.push(`    лишние входы: ${hot.map((h: any) => `${h.sym} live ${h.live}/BT ${h.bt}`).join(', ')}`);
+  }
+  return lines;
+};
+
 const buildBtVsLiveLines = async (): Promise<string[]> => {
   const lines: string[] = [];
   for (const item of COPY_BT_COMPARE) {
@@ -880,36 +909,40 @@ const buildBtVsLiveLines = async (): Promise<string[]> => {
     ) as { snapshot_json?: string } | undefined;
     let snap: any = {};
     try { snap = JSON.parse(String(row?.snapshot_json || '{}')); } catch { snap = {}; }
-    const fair = snap.fairSinceFix || snap.fairLive;
-    const drift = snap.tradeDrift?.sinceFix || snap.tradeDrift?.full;
-    const liveStats = snap.tradeDrift?.liveSinceFix || snap.tradeDrift?.liveFull;
-    const dateFrom = String(fair?.dateFrom || LIVE_FIX_DAY).slice(0, 10);
-    const dateTo = String(fair?.dateTo || '').slice(0, 10);
+    const fairLive = snap.fairLive;
+    const fairFix = snap.fairSinceFix;
+    const dateFrom = String(fairLive?.dateFrom || '2026-07-30').slice(0, 10);
+    const dateTo = String(fairLive?.dateTo || fairFix?.dateTo || '').slice(0, 10);
     const startEq = await equityOnDate(item.apiKeyName, dateFrom, 'start');
     const endEq = dateTo ? await equityOnDate(item.apiKeyName, dateTo, 'end') : null;
+    const fixStartEq = await equityOnDate(item.apiKeyName, LIVE_FIX_DAY, 'start');
     const preEnd = await equityOnDate(item.apiKeyName, '2026-08-09', 'end');
     const preStart = await equityOnDate(item.apiKeyName, '2026-07-30', 'start')
       || await equityOnDate(item.apiKeyName, '2026-07-31', 'start');
     const liveRet = retBetween(startEq, endEq);
+    const liveFixRet = retBetween(fixStartEq, endEq);
     const preRet = retBetween(preStart, preEnd);
-    const btRet = fair && Number.isFinite(Number(fair.ret)) ? Number(fair.ret) : null;
-    if (btRet == null && liveRet == null) continue;
-    const gap = btRet != null && liveRet != null ? liveRet - btRet : null;
-    const freq = drift?.freqX != null ? Number(drift.freqX) : null;
-    const hot = Array.isArray(drift?.hot) ? drift.hot.slice(0, 3) : [];
-    const over = freq != null && freq > 2.5;
-    lines.push(
-      `  ${item.short} $1k ${escapeHtml(dateFrom)}→${escapeHtml(dateTo || '?')}: `
-      + `BT ${btRet == null ? 'n/a' : `${formatSignedPlain(btRet)}% / ${fair.trades}tr`} · `
-      + `live ${liveRet == null ? 'n/a' : `${formatSignedPlain(liveRet)}% / ${liveStats?.n ?? '?'}ent`}`
-      + (gap == null ? '' : ` · gap ${formatSignedPlain(gap)} п.п.`)
-      + (freq == null ? '' : ` · freq ${freq.toFixed(1)}×${over ? ' ⚠' : ''}`),
-    );
+    if (fairLive == null && fairFix == null && liveRet == null) continue;
+    lines.push(...formatFairLine(
+      item,
+      '$1k',
+      fairLive || fairFix,
+      liveRet,
+      snap.tradeDrift?.liveFull || snap.tradeDrift?.liveSinceFix,
+      snap.tradeDrift?.full || snap.tradeDrift?.sinceFix,
+    ));
+    if (fairFix && fairLive) {
+      lines.push(...formatFairLine(
+        item,
+        'с 10.08',
+        fairFix,
+        liveFixRet,
+        snap.tradeDrift?.liveSinceFix,
+        snap.tradeDrift?.sinceFix,
+      ));
+    }
     if (preRet != null) {
       lines.push(`    до фикса 10.08: live ${formatSignedPlain(preRet)}% (лоты от max_deposit)`);
-    }
-    if (hot.length) {
-      lines.push(`    лишние входы: ${hot.map((h: any) => `${h.sym} live ${h.live}/BT ${h.bt}`).join(', ')}`);
     }
   }
   if (lines.length === 0) return [];

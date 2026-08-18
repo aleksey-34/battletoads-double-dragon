@@ -18,7 +18,9 @@ Feature: Cold-start guard — skip first bar after strategy materialization
       | 5m       | 300000     |
       | 15m      | 900000     |
       | 1h       | 3600000    |
+      | 1H       | 3600000    |
       | 4h       | 14400000   |
+      | 4H       | 14400000   |
       | 1d       | 86400000   |
       | 1w       | 604800000  |
 

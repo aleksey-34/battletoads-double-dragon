@@ -188,34 +188,29 @@ export const normalizeCoef = (value: any): number => {
   return Number.isFinite(numeric) ? numeric : 0;
 };
 
-export const intervalToMs = (interval: string): number => {
+/** Canonical interval token. Keep `1M` (month); lowercase everything else (`4H` → `4h`). */
+export const canonicalizeInterval = (interval: string): string => {
   const raw = String(interval || '').trim();
-  const value = raw.toLowerCase();
+  if (raw === '1M') return '1M';
+  return raw.toLowerCase();
+};
 
-  if (value.endsWith('m') && value !== '1m' && /^\d+m$/.test(value)) {
-    const minutes = Number.parseInt(value.replace('m', ''), 10);
-    return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 * 1000 : 60 * 1000;
-  }
-  if (value.endsWith('m')) {
-    const minutes = Number.parseInt(value.replace('m', ''), 10);
-    return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 * 1000 : 60 * 1000;
-  }
+export const intervalToMs = (interval: string): number => {
+  const value = canonicalizeInterval(interval);
 
-  if (value.endsWith('h')) {
-    const hours = Number.parseInt(value.replace('h', ''), 10);
-    return Number.isFinite(hours) && hours > 0 ? hours * 60 * 60 * 1000 : 60 * 60 * 1000;
-  }
-
-  if (value === '1d' || value === 'd' || value === '1day') {
-    return 24 * 60 * 60 * 1000;
-  }
-
-  if (value === '1w' || value === '1week') {
-    return 7 * 24 * 60 * 60 * 1000;
+  const match = value.match(/^(\d+)(m|h|d|w)$/);
+  if (match) {
+    const n = Number.parseInt(match[1], 10);
+    if (!Number.isFinite(n) || n <= 0) {
+      return 60 * 60 * 1000;
+    }
+    if (match[2] === 'm') return n * 60 * 1000;
+    if (match[2] === 'h') return n * 60 * 60 * 1000;
+    if (match[2] === 'd') return n * 24 * 60 * 60 * 1000;
+    return n * 7 * 24 * 60 * 60 * 1000;
   }
 
-  // Month stays case-sensitive in exchanges as 1M; accept both after lowercasing would collide with minutes.
-  if (raw === '1M') {
+  if (value === '1M') {
     return 30 * 24 * 60 * 60 * 1000;
   }
 

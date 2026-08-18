@@ -13,27 +13,7 @@ let strategyInterval = '4h';
 let coldStartBarsEnv = 1;
 let testStrategyId = 0;
 
-// ─── Helper: intervalToMs (mirrors strategy.ts logic, exported for test use) ─
-
-const intervalToMs = (interval: string): number => {
-  const value = String(interval || '').trim();
-
-  if (value.endsWith('m')) {
-    const minutes = Number.parseInt(value.replace('m', ''), 10);
-    return Number.isFinite(minutes) && minutes > 0 ? minutes * 60 * 1000 : 60 * 1000;
-  }
-
-  if (value.endsWith('h')) {
-    const hours = Number.parseInt(value.replace('h', ''), 10);
-    return Number.isFinite(hours) && hours > 0 ? hours * 60 * 60 * 1000 : 60 * 60 * 1000;
-  }
-
-  if (value === '1d') return 24 * 60 * 60 * 1000;
-  if (value === '1w') return 7 * 24 * 60 * 60 * 1000;
-  if (value === '1M') return 30 * 24 * 60 * 60 * 1000;
-
-  return 60 * 60 * 1000;
-};
+import { intervalToMs } from '../../../src/bot/strategy/normalize';
 
 // ─── Helper: pure cold-start condition check ─────────────────────────────────
 

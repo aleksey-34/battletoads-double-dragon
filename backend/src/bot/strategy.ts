@@ -400,18 +400,18 @@ export const executeStrategy = async (
     );
   }
 
-  const markProcessedBar = (): void => {
+  const returnWithProcessedBar = async <T>(payload: T): Promise<T> => {
     if (!dedupeClosedBar) {
-      return;
+      return payload;
+    }
+    const persisted = await persistProcessedClosedBar(strategyId, evaluatedBarTimeMs);
+    if (!persisted) {
+      logger.warn(
+        `closed-bar persist failed for strategy ${strategyId} bar ${evaluatedBarIso}; fail-closed (do not remember this bar)`,
+      );
+      return payload;
     }
     rememberProcessedClosedBar(processedBarCacheKey, evaluatedBarTimeMs);
-  };
-
-  const returnWithProcessedBar = async <T>(payload: T): Promise<T> => {
-    markProcessedBar();
-    if (dedupeClosedBar) {
-      await persistProcessedClosedBar(strategyId, evaluatedBarTimeMs);
-    }
     return payload;
   };
 
@@ -931,15 +931,13 @@ export const executeStrategy = async (
   }
 
   if (dedupeClosedBar) {
-    try {
-      await persistProcessedClosedBar(strategyId, evaluatedBarTimeMs);
-      rememberProcessedClosedBar(processedBarCacheKey, evaluatedBarTimeMs);
-    } catch (error) {
+    const claimed = await persistProcessedClosedBar(strategyId, evaluatedBarTimeMs);
+    if (!claimed) {
       logger.warn(
-        `Closed-bar persist failed for strategy ${strategyId} (${apiKeyName}): ${(error as Error).message} — skip bar ${evaluatedBarIso}`,
+        `closed-bar persist failed for strategy ${strategyId} (${apiKeyName}) bar ${evaluatedBarIso}; skip trade (fail-closed)`,
       );
       return {
-        result: `Bar ${evaluatedBarIso} skipped (persist failed)`,
+        result: `Bar ${evaluatedBarIso} persist failed (fail-closed)`,
         action: 'bar_persist_failed',
         executionSource,
         currentRatio,
@@ -948,6 +946,7 @@ export const executeStrategy = async (
         donchianCenter,
       };
     }
+    rememberProcessedClosedBar(processedBarCacheKey, evaluatedBarTimeMs);
   }
 
   const strategyType = String(mergedStrategy.strategy_type || '');

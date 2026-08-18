@@ -49,6 +49,30 @@ describe('compound reinvest sizing (live ↔ BT)', () => {
     assert.equal(n, 90);
   });
 
+  it('copy 250k max_deposit is never the live deposit — wallet × recipe lot%', () => {
+    const n = computeSignalTotalNotional(
+      { ...base, reinvest_percent: 100, max_deposit: 250_000, lot_long_percent: 10 },
+      5_000,
+      'long',
+      1,
+      { walletEquity: 900 },
+    );
+    // 10% of $900 wallet, not 10% of 250k. Free margin 5k must not lift size above wallet.
+    assert.equal(n, 90);
+  });
+
+  it('hard-caps notional by wallet even when free margin is larger', () => {
+    const n = computeSignalTotalNotional(
+      { ...base, reinvest_percent: 100, max_deposit: 250_000, lot_long_percent: 82 },
+      8_000,
+      'long',
+      1,
+      { walletEquity: 900 },
+    );
+    // Leftover lot% of wallet, but never above wallet (740-class size is lot metadata, not 250k).
+    assert.equal(n, 738);
+  });
+
   it('ri=100 compounds off wallet equity, capped by free margin', () => {
     const n = computeSignalTotalNotional(
       { ...base, reinvest_percent: 100 },

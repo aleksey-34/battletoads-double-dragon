@@ -7,7 +7,6 @@ import {
   isClosedBarAlreadyProcessed,
   rememberProcessedClosedBar,
 } from './closedBarDedupe';
-import { intervalToMs } from './normalize';
 
 describe('closed-bar dedupe memory (restart watermark)', () => {
   beforeEach(() => {
@@ -29,8 +28,16 @@ describe('closed-bar dedupe memory (restart watermark)', () => {
     rememberProcessedClosedBar(key, 2_000);
     hydrateProcessedClosedBarMemory(key, 1_000);
     assert.equal(isClosedBarAlreadyProcessed(key, 2_000), true);
-    // watermark is >= : a stale older bar must not re-fire
+    // Watermark is >= : older bars must not re-fire after a later bar was processed.
     assert.equal(isClosedBarAlreadyProcessed(key, 1_000), true);
+  });
+
+  it('skips any bar at or before the watermark (>=, not ===)', () => {
+    const key = closedBarDedupeKey('Copy_Alex1', 7);
+    rememberProcessedClosedBar(key, 5_000);
+    assert.equal(isClosedBarAlreadyProcessed(key, 5_000), true);
+    assert.equal(isClosedBarAlreadyProcessed(key, 4_000), true);
+    assert.equal(isClosedBarAlreadyProcessed(key, 6_000), false);
   });
 
   it('remember is monotonic', () => {
@@ -40,13 +47,5 @@ describe('closed-bar dedupe memory (restart watermark)', () => {
     assert.equal(isClosedBarAlreadyProcessed(key, 5_000), true);
     rememberProcessedClosedBar(key, 6_000);
     assert.equal(isClosedBarAlreadyProcessed(key, 6_000), true);
-  });
-});
-
-describe('intervalToMs canonical hours', () => {
-  it('treats 4H / 4h as four hours, not one', () => {
-    assert.equal(intervalToMs('4h'), 4 * 3600_000);
-    assert.equal(intervalToMs('4H'), 4 * 3600_000);
-    assert.equal(intervalToMs('1h'), 3600_000);
   });
 });

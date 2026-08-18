@@ -227,8 +227,9 @@ export const runAutoStrategiesCycle = async () => {
       return true;
     }
     const sid = extractSourceSid(String(row?.strategy_name || ''));
-    const cloneId = String(Number(row?.strategy_id || 0));
-    const ok = (cloneId !== '0' && expected.has(cloneId)) || (!!sid && expected.has(sid));
+    const liveId = String(Number(row?.strategy_id || 0));
+    // Book members are OK by source SID (::SID{n}) or by live strategy id.
+    const ok = (!!sid && expected.has(sid)) || (liveId !== '0' && expected.has(liveId));
     if (!ok) {
       syncMismatchRows.push(row);
     }
@@ -247,7 +248,7 @@ export const runAutoStrategiesCycle = async () => {
                is_archived = 1,
                auto_update = 0,
                last_action = 'ts_sync_mismatch_archived',
-               last_error = 'strict TS-sync: strategy SID not present in published system members',
+               last_error = 'strict TS-sync: strategy not in ALGOFUND role books (b3/ham/five/stocks)',
                updated_at = CURRENT_TIMESTAMP
            WHERE id = ?`,
           [strategyId],
@@ -256,7 +257,7 @@ export const runAutoStrategiesCycle = async () => {
         logger.warn(`TS-sync archive failed for strategy ${strategyId} (${apiKeyName}): ${(e as Error).message}`);
       }
     }
-    logger.warn(`Auto-cycle TS-sync: archived ${syncMismatchRows.length} strategies not in published TS members`);
+    logger.warn(`Auto-cycle TS-sync: archived ${syncMismatchRows.length} strategies not in ALGOFUND role books`);
   }
 
   const sidDedupedJobs: any[] = [];
