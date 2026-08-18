@@ -400,18 +400,18 @@ export const executeStrategy = async (
     );
   }
 
-  const markProcessedBar = (): void => {
+  const returnWithProcessedBar = async <T>(payload: T): Promise<T> => {
     if (!dedupeClosedBar) {
-      return;
+      return payload;
+    }
+    const persisted = await persistProcessedClosedBar(strategyId, evaluatedBarTimeMs);
+    if (!persisted) {
+      logger.warn(
+        `closed-bar persist failed for strategy ${strategyId} bar ${evaluatedBarIso}; fail-closed (do not remember this bar)`,
+      );
+      return payload;
     }
     rememberProcessedClosedBar(processedBarCacheKey, evaluatedBarTimeMs);
-  };
-
-  const returnWithProcessedBar = async <T>(payload: T): Promise<T> => {
-    markProcessedBar();
-    if (dedupeClosedBar) {
-      await persistProcessedClosedBar(strategyId, evaluatedBarTimeMs);
-    }
     return payload;
   };
 
@@ -928,6 +928,25 @@ export const executeStrategy = async (
       donchianLow,
       donchianCenter,
     };
+  }
+
+  if (dedupeClosedBar) {
+    const claimed = await persistProcessedClosedBar(strategyId, evaluatedBarTimeMs);
+    if (!claimed) {
+      logger.warn(
+        `closed-bar persist failed for strategy ${strategyId} (${apiKeyName}) bar ${evaluatedBarIso}; skip trade (fail-closed)`,
+      );
+      return {
+        result: `Bar ${evaluatedBarIso} persist failed (fail-closed)`,
+        action: 'bar_persist_failed',
+        executionSource,
+        currentRatio,
+        donchianHigh,
+        donchianLow,
+        donchianCenter,
+      };
+    }
+    rememberProcessedClosedBar(processedBarCacheKey, evaluatedBarTimeMs);
   }
 
   const strategyType = String(mergedStrategy.strategy_type || '');

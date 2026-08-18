@@ -11,6 +11,11 @@ import { runBacktest } from '../backtest/engine';
 import { ensureExchangeClientInitialized, getMarketData } from '../bot/exchange';
 import { mergeHybridCandles, getHybridCandleDir } from '../bot/hybridCandleStore';
 import { refreshOfferStoreSnapshotsFromSweep } from '../saas/service';
+import {
+  loadAlgofundRoleBookMembers,
+  normalizePairLabel,
+  type AlgofundRoleBookMember,
+} from '../bot/strategy/cycle/algofundSync';
 
 type CandleRow = [number, number, number, number, number, number?];
 
@@ -150,16 +155,40 @@ const COPY_FAIR_API_KEY: Record<string, string> = {
 };
 const liveFixFrom = (): string => process.env.LIVE_FIX_FROM || '2026-08-10';
 const FAIR_COPY_CAPITAL = 1000;
+const FAIR_BOOK_ROLES = new Set(['b3', 'ham', 'five', 'stocks']);
+
+const pairLabelFromMember = (m: Pick<AlgofundRoleBookMember, 'baseSymbol' | 'quoteSymbol' | 'marketMode'>): string =>
+  normalizePairLabel(m.baseSymbol, m.quoteSymbol, m.marketMode);
+
+const selectFairCopyMembers = (members: AlgofundRoleBookMember[]): AlgofundRoleBookMember[] => {
+  const liveRoles = new Set(
+    members
+      .filter((m) => !m.isArchived && m.isActive && m.autoUpdate && FAIR_BOOK_ROLES.has(m.role))
+      .map((m) => m.role),
+  );
+  const includeStocks = liveRoles.has('stocks');
+  const seen = new Set<number>();
+  const out: AlgofundRoleBookMember[] = [];
+  for (const m of members) {
+    if (m.isArchived) continue;
+    if (!FAIR_BOOK_ROLES.has(m.role)) continue;
+    if (m.role === 'stocks' && !includeStocks) continue;
+    if (seen.has(m.strategyId)) continue;
+    seen.add(m.strategyId);
+    out.push(m);
+  }
+  return out;
+};
 
 const summarizeBtTrades = (
   trades: Array<{ strategyId?: number; netPnl?: number; notional?: number }>,
-  idToSym: Map<number, string>,
+  idToPair: Map<number, string>,
 ): { n: number; avgNotional: number; bySym: Record<string, { n: number; pnl: number; vol: number }> } => {
   const bySym: Record<string, { n: number; pnl: number; vol: number }> = {};
   let vol = 0;
   for (const t of trades || []) {
     const sid = Number(t.strategyId || 0);
-    const sym = idToSym.get(sid) || '?';
+    const sym = idToPair.get(sid) || '?';
     const ntl = Math.abs(Number(t.notional || 0));
     const pnl = Number(t.netPnl || 0);
     vol += ntl;
@@ -174,29 +203,48 @@ const summarizeBtTrades = (
 };
 
 const fetchLiveEntryStats = async (apiKeyName: string, fromDate: string, toDate: string) => {
+  // Honest count: one strategy_signal entry per strategy_id (synth BCH/APE = 1, not two fills).
   const rows = await db.all(
-    `SELECT UPPER(REPLACE(REPLACE(COALESCE(lte.source_symbol, s.base_symbol, ''), '/', ''), '-', '')) AS sym,
-            COUNT(*) AS n,
-            SUM(ABS(COALESCE(lte.actual_price, 0) * COALESCE(lte.position_size, 0))) AS vol
+    `SELECT
+        lte.strategy_id AS sid,
+        COALESCE(s.base_symbol, '') AS base_symbol,
+        COALESCE(s.quote_symbol, '') AS quote_symbol,
+        COALESCE(s.market_mode, '') AS market_mode,
+        COUNT(*) AS n,
+        SUM(ABS(COALESCE(lte.actual_price, 0) * COALESCE(lte.position_size, 0))) AS vol
      FROM live_trade_events lte
      JOIN strategies s ON s.id = lte.strategy_id
      JOIN api_keys a ON a.id = s.api_key_id
      WHERE a.name = ?
        AND COALESCE(lte.trade_type, '') = 'entry'
-       AND COALESCE(lte.event_origin, 'exchange_fill') = 'exchange_fill'
+       AND COALESCE(lte.event_origin, 'strategy_signal') = 'strategy_signal'
        AND lte.actual_time >= (strftime('%s', ?) * 1000)
        AND lte.actual_time <  (strftime('%s', ?) * 1000)
-     GROUP BY 1`,
+     GROUP BY lte.strategy_id`,
     [apiKeyName, `${fromDate} 00:00:00`, `${toDate} 23:59:59`],
-  ) as Array<{ sym?: string; n?: number; vol?: number }>;
+  ) as Array<{
+    sid?: number;
+    base_symbol?: string;
+    quote_symbol?: string;
+    market_mode?: string;
+    n?: number;
+    vol?: number;
+  }>;
   const bySym: Record<string, { n: number; vol: number }> = {};
   let n = 0;
   let vol = 0;
   for (const r of rows || []) {
-    const sym = String(r.sym || '?').toUpperCase();
+    const pair = normalizePairLabel(
+      String(r.base_symbol || ''),
+      String(r.quote_symbol || ''),
+      String(r.market_mode || ''),
+    );
     const cn = Math.max(0, Math.floor(Number(r.n || 0)));
     const cv = Math.max(0, Number(r.vol || 0));
-    bySym[sym] = { n: cn, vol: cv };
+    const cur = bySym[pair] || { n: 0, vol: 0 };
+    cur.n += cn;
+    cur.vol += cv;
+    bySym[pair] = cur;
     n += cn;
     vol += cv;
   }
@@ -621,40 +669,133 @@ const stampPortfolios = async (opts: {
     };
 
     if (COPY_FAIR_IDS.has(String(pf.id))) {
-      const idToSym = new Map<number, string>();
-      for (const sid of uniqIds) {
-        const row = await db.get('SELECT base_symbol FROM strategies WHERE id = ?', [sid]) as { base_symbol?: string } | undefined;
-        idToSym.set(sid, String(row?.base_symbol || '').replace('/', '').replace('-', '').toUpperCase());
-      }
-      const fairCommon = {
-        apiKeyName: opts.apiKeyName,
-        mode: 'portfolio' as const,
-        strategyIds: uniqIds,
-        dateTo: opts.dateTo,
-        bars: 4000,
-        warmupBars: 120,
-        skipMissingSymbols: true,
-        initialBalance: FAIR_COPY_CAPITAL,
-        commissionPercent: 0.1,
-        slippagePercent: 0.05,
-        maxOpenPositions: 0,
-        maxOpenPositionsByBook,
-        bookKeyByStrategyId,
-        lotPercentOverride: 2,
-        lotPercentMultiplierByStrategyId,
-        enablePairLock: true,
-        maxDepositOverride: maxRi > 0 ? FAIR_COPY_CAPITAL * 50 : 0,
-        reinvestPercentOverride: maxRi,
-        portfolioCircuitBreaker: tierCb as any,
-        researchLotSchedule: fearBoost as any,
-      };
       const copyKey = COPY_FAIR_API_KEY[String(pf.id)];
       const fixFrom = liveFixFrom();
-      logger.info(`[nightlyStorefrontRoll] fair BT ${pf.id} $1000 ${opts.liveFrom}..${opts.dateTo} + since ${fixFrom}`);
-      const fairFull = await runBacktest({ ...fairCommon, dateFrom: opts.liveFrom } as any);
-      const fairFix = await runBacktest({ ...fairCommon, dateFrom: fixFrom } as any);
-      const fairLive = packFairRun(fairFull, opts.liveFrom, opts.dateTo, FAIR_COPY_CAPITAL, idToSym);
-      const fairSinceFix = packFairRun(fairFix, fixFrom, opts.dateTo, FAIR_COPY_CAPITAL, idToSym);
+      const lotByRole: Record<string, number> = { b3: Number(recipes.sharedB3?.lot || 0) };
+      const opByRole: Record<string, number> = { b3: Number(recipes.sharedB3?.op || 0) };
+      const riByRole: Record<string, number> = { b3: Number(recipes.sharedB3?.ri || 0) };
+      for (const book of (pf.books || [])) {
+        const role = String(book?.key || '');
+        if (!role || role === 'b3') continue;
+        if (Number(book.lot) > 0) lotByRole[role] = Number(book.lot);
+        if (Number(book.op) > 0) opByRole[role] = Number(book.op);
+        if (Number(book.ri) >= 0) riByRole[role] = Number(book.ri || 0);
+      }
+
+      const liveMembers = copyKey
+        ? selectFairCopyMembers(await loadAlgofundRoleBookMembers(copyKey))
+        : [];
+      const fairIds = liveMembers.map((m) => m.strategyId);
+      const idToPair = new Map<number, string>();
+      const fairBookKeyByStrategyId: Record<string, string> = {};
+      const fairLotMultByStrategyId: Record<string, number> = {};
+      const fairMaxOpenByBook: Record<string, number> = {};
+      let fairMaxRi = 0;
+      for (const m of liveMembers) {
+        idToPair.set(m.strategyId, pairLabelFromMember(m));
+        fairBookKeyByStrategyId[String(m.strategyId)] = m.role;
+        const lot = Number(lotByRole[m.role] || 0);
+        if (lot > 0) fairLotMultByStrategyId[String(m.strategyId)] = lot / 2;
+        const op = Number(opByRole[m.role] || 0);
+        if (op > 0) fairMaxOpenByBook[m.role] = op;
+        fairMaxRi = Math.max(fairMaxRi, Number(riByRole[m.role] || 0));
+      }
+
+      const missingCandles: string[] = [];
+      for (const m of liveMembers) {
+        const iv = String(m.interval || '').trim();
+        const base = String(m.baseSymbol || '').replace(/[/-]/g, '').toUpperCase();
+        const quote = String(m.quoteSymbol || '').replace(/[/-]/g, '').toUpperCase();
+        if (!base || !hasCandle(iv, base)) {
+          missingCandles.push(`#${m.strategyId} ${pairLabelFromMember(m)} ${iv || '?'} base`);
+        }
+        if (String(m.marketMode || '').toLowerCase() !== 'mono' && quote && quote !== base && !hasCandle(iv, quote)) {
+          missingCandles.push(`#${m.strategyId} ${pairLabelFromMember(m)} ${iv || '?'} quote=${quote}`);
+        }
+      }
+      const synthPairs = liveMembers
+        .filter((m) => String(m.marketMode || '').toLowerCase() !== 'mono' && m.quoteSymbol)
+        .map((m) => pairLabelFromMember(m));
+      logger.info(
+        `[nightlyStorefrontRoll] fair BT ${pf.id} copy=${copyKey || '-'} `
+        + `liveIds=${fairIds.length} roles=${[...new Set(liveMembers.map((m) => m.role))].join(',') || '-'} `
+        + `synth=${synthPairs.join(',') || 'none'} missingCandles=${missingCandles.length}`,
+      );
+      if (missingCandles.length) {
+        logger.error(
+          `[nightlyStorefrontRoll] fair ${pf.id} missing hybrid candles `
+          + `(not silent skip): ${missingCandles.slice(0, 24).join('; ')}`,
+        );
+      }
+
+      const packFailedFair = (fromDate: string, toDate: string, error: string) => ({
+        dateFrom: fromDate,
+        dateTo: toDate,
+        capital: FAIR_COPY_CAPITAL,
+        ret: null as number | null,
+        dd: null as number | null,
+        trades: 0,
+        avgNotional: 0,
+        skippedOp: 0,
+        skippedPair: 0,
+        bySym: {} as Record<string, { n: number; pnl: number; vol: number }>,
+        error,
+      });
+
+      const runFair = async (fromDate: string) => {
+        if (!copyKey) {
+          return packFailedFair(fromDate, opts.dateTo, 'no copy api key');
+        }
+        if (!fairIds.length) {
+          logger.error(
+            `[nightlyStorefrontRoll] fair ${pf.id} 0 live strategy IDs on ${copyKey} `
+            + '(expected ALGOFUND::{slug}::{b3,ham,five} books). Not a missing-candle issue.',
+          );
+          return packFailedFair(fromDate, opts.dateTo, `no live book IDs for ${copyKey}`);
+        }
+        try {
+          const result = await runBacktest({
+            apiKeyName: copyKey,
+            mode: 'portfolio',
+            strategyIds: fairIds,
+            dateFrom: fromDate,
+            dateTo: opts.dateTo,
+            bars: 4000,
+            warmupBars: 120,
+            skipMissingSymbols: false,
+            initialBalance: FAIR_COPY_CAPITAL,
+            commissionPercent: 0.1,
+            slippagePercent: 0.05,
+            maxOpenPositions: 0,
+            maxOpenPositionsByBook: fairMaxOpenByBook,
+            bookKeyByStrategyId: fairBookKeyByStrategyId,
+            lotPercentOverride: 2,
+            lotPercentMultiplierByStrategyId: fairLotMultByStrategyId,
+            enablePairLock: true,
+            maxDepositOverride: fairMaxRi > 0 ? FAIR_COPY_CAPITAL * 50 : 0,
+            reinvestPercentOverride: fairMaxRi,
+            portfolioCircuitBreaker: tierCb as any,
+            researchLotSchedule: fearBoost as any,
+          } as any);
+          const packed = packFairRun(result, fromDate, opts.dateTo, FAIR_COPY_CAPITAL, idToPair);
+          if (packed.trades === 0) {
+            logger.warn(
+              `[nightlyStorefrontRoll] fair ${pf.id} ${fromDate}..${opts.dateTo} produced 0 trades `
+              + `on ${fairIds.length} live IDs (copy=${copyKey}). Check skip/ID mapping, not hybrid files `
+              + `if BCHUSDT/APEUSDT 4h exist. missingCandles=${missingCandles.length}`,
+            );
+          }
+          return packed;
+        } catch (err) {
+          const msg = (err as Error).message || String(err);
+          logger.error(`[nightlyStorefrontRoll] fair ${pf.id} ${fromDate}..${opts.dateTo} FAILED: ${msg}`);
+          return packFailedFair(fromDate, opts.dateTo, msg);
+        }
+      };
+
+      logger.info(`[nightlyStorefrontRoll] fair BT ${pf.id} $1000 ${opts.liveFrom}..${opts.dateTo} + since ${fixFrom} (live books, skipMissing=false)`);
+      const fairLive = await runFair(opts.liveFrom);
+      const fairSinceFix = await runFair(fixFrom);
       next.fairLive = fairLive;
       next.fairSinceFix = fairSinceFix;
       if (copyKey) {

@@ -94,11 +94,11 @@ export const extractUsdtBalance = (balances: any[]): number => (
 /**
  * Live sizing aligned with backtest compound semantics:
  *   base = baseline + max(0, equity − baseline) × (reinvest%/100)
- *   notional = base × lot% × risk, then capped by free margin
+ *   notional = base × lot% × risk, then capped by free margin AND wallet
  *
- * `max_deposit` is the compound baseline (and soft ceiling when reinvest=0).
- * Growth above baseline is allowed when reinvest>0; free margin is the hard cap.
- * Legacy `×(1+reinvest%)` multiplier is removed — it double-counted vs BT.
+ * Live compound start is wallet equity (or `sizingBaseline` / deposit_base).
+ * `max_deposit` is a research/plan CEILING only — never the live deposit.
+ * Copy keys still carry max_deposit=250000; sizing must use ~$800–1000 wallet.
  */
 export const computeSignalTotalNotional = (
   strategy: Pick<Strategy, 'max_deposit' | 'fixed_lot' | 'reinvest_percent' | 'lot_long_percent' | 'lot_short_percent' | 'leverage'>,
@@ -121,31 +121,39 @@ export const computeSignalTotalNotional = (
 
   const baselineFromOpts = Number(options?.sizingBaseline);
   const maxDeposit = Number(strategy.max_deposit);
+  const hasWallet = Number.isFinite(walletEquity) && walletEquity > 0;
+  // Live: wallet (or explicit deposit_base) is the compound start. max_deposit is a ceiling.
   const baseline = Number.isFinite(baselineFromOpts) && baselineFromOpts > 0
     ? baselineFromOpts
-    : (Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : walletEquity);
+    : (hasWallet
+      ? walletEquity
+      : (Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : walletEquity));
 
   let equityBase: number;
   if (strategy.fixed_lot) {
-    equityBase = Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : freeMargin;
+    equityBase = hasWallet
+      ? walletEquity
+      : (Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : freeMargin);
   } else {
     // Match BT: initial + max(0, equity − initial) × reinvestShare
     equityBase = baseline + Math.max(0, walletEquity - baseline) * reinvestShare;
     // Live safety: never invent capital above wallet equity.
-    // max_deposit is often a soft research ceiling (5k/250k), NOT the client deposit;
-    // without this clamp, lot% of max_deposit blows up accounts whose equity ≪ max_deposit.
     equityBase = Math.min(equityBase, walletEquity);
   }
 
   let baseCapital = equityBase;
-  // Soft ceiling: max_deposit caps the compound base. Free margin remains the exchange accept cap.
-  if (!strategy.fixed_lot && Number.isFinite(maxDeposit) && maxDeposit > 0) {
+  // Soft ceiling: max_deposit caps the compound base when it is a real plan cap,
+  // not a leftover 5k/250k research ceiling sitting above the wallet.
+  if (!strategy.fixed_lot && Number.isFinite(maxDeposit) && maxDeposit > 0 && maxDeposit <= walletEquity) {
     baseCapital = Math.min(baseCapital, maxDeposit);
   }
 
   let totalNotional = baseCapital * lotFraction * safeRiskMultiplier;
   if (freeMargin > 0) {
     totalNotional = Math.min(totalNotional, freeMargin);
+  }
+  if (hasWallet) {
+    totalNotional = Math.min(totalNotional, walletEquity);
   }
 
   if (

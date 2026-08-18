@@ -21,11 +21,11 @@ export {
   isClosedBarAlreadyProcessed,
 } from './closedBarDedupe';
 
-/** Monotonic persist — never rewind if a newer bar was already stored. */
-export const persistProcessedClosedBar = async (strategyId: number, barTimeMs: number): Promise<void> => {
+/** Monotonic persist — never rewind if a newer bar was already stored. false = fail-closed (do not trade). */
+export const persistProcessedClosedBar = async (strategyId: number, barTimeMs: number): Promise<boolean> => {
   const id = Number(strategyId);
   const n = Number(barTimeMs) || 0;
-  if (!Number.isFinite(id) || id <= 0 || n <= 0) return;
+  if (!Number.isFinite(id) || id <= 0 || n <= 0) return false;
   try {
     const { db } = await import('../../utils/database');
     await db.run(
@@ -35,8 +35,10 @@ export const persistProcessedClosedBar = async (strategyId: number, barTimeMs: n
          AND COALESCE(last_processed_bar_ms, 0) < ?`,
       [n, id, n],
     );
+    return true;
   } catch (error) {
     logger.warn(`persistProcessedClosedBar failed for ${id}: ${(error as Error).message}`);
+    return false;
   }
 };
 
@@ -137,12 +139,18 @@ export const resolveExecutionCandleContext = (
     };
   }
 
-  const intervalMs = Math.max(60 * 1000, intervalToMs(interval));
+  const intervalMs = intervalToMs(interval);
+  if (!Number.isFinite(intervalMs) || intervalMs < 60 * 1000) {
+    throw new Error(`Invalid strategy interval for closed-bar execution: ${interval}`);
+  }
+  const now = Date.now();
   let closedIndex = candles.length - 1;
-  const latest = candles[closedIndex];
-  const latestClosesAt = latest.timeMs + intervalMs;
-
-  if (latestClosesAt > Date.now() + BAR_CLOSE_FRESHNESS_MS) {
+  while (closedIndex >= 0) {
+    const barOpen = Number(candles[closedIndex].timeMs) || 0;
+    // Require now >= barOpen + intervalMs. Do not treat a forming 4h bar as closed after 1h.
+    if (now >= barOpen + intervalMs) {
+      break;
+    }
     closedIndex -= 1;
   }
 

@@ -65,26 +65,34 @@ export function computeSignalTotalNotional(
     : Math.max(0, Math.min(1, Math.max(0, strategy.reinvest_percent) / 100));
   const baselineFromOpts = Number(options?.sizingBaseline);
   const maxDeposit = Number(strategy.max_deposit);
+  const hasWallet = Number.isFinite(walletEquity) && walletEquity > 0;
   const baseline = Number.isFinite(baselineFromOpts) && baselineFromOpts > 0
     ? baselineFromOpts
-    : (Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : walletEquity);
+    : (hasWallet
+      ? walletEquity
+      : (Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : walletEquity));
 
   let equityBase: number;
   if (strategy.fixed_lot) {
-    equityBase = Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : freeMargin;
+    equityBase = hasWallet
+      ? walletEquity
+      : (Number.isFinite(maxDeposit) && maxDeposit > 0 ? maxDeposit : freeMargin);
   } else {
     equityBase = baseline + Math.max(0, walletEquity - baseline) * reinvestShare;
     equityBase = Math.min(equityBase, walletEquity);
   }
 
   let baseCapital = equityBase;
-  if (!strategy.fixed_lot && Number.isFinite(maxDeposit) && maxDeposit > 0) {
+  if (!strategy.fixed_lot && Number.isFinite(maxDeposit) && maxDeposit > 0 && maxDeposit <= walletEquity) {
     baseCapital = Math.min(baseCapital, maxDeposit);
   }
 
   let totalNotional = baseCapital * lotFraction * safeRiskMultiplier;
   if (freeMargin > 0) {
     totalNotional = Math.min(totalNotional, freeMargin);
+  }
+  if (hasWallet) {
+    totalNotional = Math.min(totalNotional, walletEquity);
   }
 
   if (
