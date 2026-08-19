@@ -134,7 +134,12 @@ const safeCancel = async (apiKeyName: string, symbol: string, orderId: string | 
   try {
     await cancelOrderById(apiKeyName, symbol, orderId);
   } catch (e) {
-    logger.warn(`[mrs2-limits] cancel ${symbol} ${orderId} failed: ${(e as Error).message}`);
+    const message = (e as Error).message || String(e);
+    if (message.includes('FAILED_ORDER_NOT_FOUND')) {
+      logger.info(`[mrs2-limits] cancel ${symbol} ${orderId}: already gone`);
+      return;
+    }
+    logger.warn(`[mrs2-limits] cancel ${symbol} ${orderId} failed: ${message}`);
   }
 };
 

@@ -1664,8 +1664,7 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
   // Anti-spam for alert summary: store last sent alert-set hash + ts.
   const alertState: { lastHash: string; lastSentMs: number } = { lastHash: '', lastSentMs: 0 };
   const partnerDigestState: { lastSentMs: number } = { lastSentMs: 0 };
-  const PARTNER_DIGEST_HOURS = Math.max(1, Math.floor(Number(process.env.TELEGRAM_PARTNER_TRADES_HOURS || 6) || 6));
-  const PARTNER_DIGEST_MS = PARTNER_DIGEST_HOURS * 3_600_000;
+  const PARTNER_DIGEST_HOURS = Math.max(1, Math.floor(Number(process.env.TELEGRAM_PARTNER_TRADES_HOURS || 8) || 8));
   const ALERT_REPEAT_MS = 60 * 60_000; // повторяем тот же набор алертов не чаще раза в час
 
   const hashAlertText = (text: string): string => {
@@ -1684,6 +1683,7 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
       const intervalMinutes = await getReportIntervalMinutesFromDb();
       const intervalMs = intervalMinutes * 60_000;
       const heartbeatDue = state.lastReportAtMs === 0 || nowMs - state.lastReportAtMs >= intervalMs;
+      const partnerDigestMs = Math.max(intervalMs, PARTNER_DIGEST_HOURS * 3_600_000);
 
       // Считаем health summary каждый тик.
       const summary = await buildHealthSummary(reportHours);
@@ -1709,7 +1709,7 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
       // Watchdog: rate-limit / low-lot / failed cycles (отдельный канал, свой cooldown).
       await sendWatchdogAlertIfNeeded();
 
-      if (nowMs - partnerDigestState.lastSentMs >= PARTNER_DIGEST_MS) {
+      if (nowMs - partnerDigestState.lastSentMs >= partnerDigestMs) {
         try {
           const { buildPartnerTradesTelegramDigest } = await import('../saas/partnerService');
           const digest = await buildPartnerTradesTelegramDigest(PARTNER_DIGEST_HOURS);
@@ -1729,5 +1729,5 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
     void runTick();
   }, pollMinutes * 60_000);
 
-  logger.info(`[tg-admin] Started: heartbeat=DB-flag (default 24h), poll=${pollMinutes}m, emergencies=immediate (cooldown 60m, stable key)`);
+  logger.info(`[tg-admin] Started: heartbeat=DB-flag (default 24h), partnerDigest=max(heartbeat, ${PARTNER_DIGEST_HOURS}h), poll=${pollMinutes}m, emergencies=immediate (cooldown 60m, stable key)`);
 };
