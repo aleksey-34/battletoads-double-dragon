@@ -953,12 +953,27 @@ const buildBtVsLiveLines = async (): Promise<string[]> => {
   ];
 };
 
+/** Only true runtime breakages — not DD/margin/desync noise (those go to scheduled heartbeat). */
 const isEmergencyHealthAlert = (text: string): boolean => {
   const t = String(text || '');
-  if (/desync|CT churn|momentum-only|Momentum fleet|snapshot устарел/i.test(t)) {
+  if (/desync|CT churn|momentum-only|Momentum fleet|snapshot устарел|загрузка маржи|просадка |дублей SID/i.test(t)) {
     return false;
   }
-  return /🛑|загрузка маржи|просадка |нет ни одного snapshot|дублей SID|agreement|Permission denied|нет свободного баланса|BingX execution/i.test(t);
+  return /🛑|нет ни одного snapshot|agreement|Permission denied|нет свободного баланса|BingX execution/i.test(t);
+};
+
+/** Stable dedupe key: alert kind + client label, ignore floating $/%/мин. */
+const stableAlertKeyFromLine = (line: string): string => {
+  const plain = line.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const client = (line.match(/<b>([^<]+)<\/b>/)?.[1] || plain.slice(0, 40)).trim();
+  if (/нет ни одного snapshot/i.test(plain)) return `no_snapshot:${client}`;
+  if (/Permission denied/i.test(plain)) return `weex_perm:${client}`;
+  if (/нет свободного баланса/i.test(plain)) return `no_balance:${client}`;
+  if (/agreement/i.test(plain)) return `bybit_agreement:${client}`;
+  if (/BingX execution/i.test(plain)) return `bingx_exec:${client}`;
+  if (/0 exchange_fill/i.test(plain)) return `zero_fill:${client}`;
+  if (/🛑/.test(line)) return `critical:${client}`;
+  return plain.replace(/[0-9]+(\.[0-9]+)?/g, '#').slice(0, 120);
 };
 
 const HEALTH_THRESHOLDS = {
@@ -1339,14 +1354,15 @@ const buildHealthSummary = async (periodHours: number): Promise<{ ok: boolean; t
 
   if (emergencyAlerts.length === 0) {
     const noiseNote = alerts.length > 0
-      ? `\n<i>шум ${alerts.length} (desync/stale/churn) — в heartbeat, не каждые 10 мин</i>`
+      ? `\n<i>шум ${alerts.length} (dd/margin/desync/stale/churn) — в heartbeat ${await getReportIntervalMinutesFromDb()} мин, не poll 10 мин</i>`
       : '';
     return { ok: true, text: `${headerOk}\n${stats}${noiseNote}`, alertKey: 'ok' };
   }
+  const alertKey = [...new Set(shown.map(stableAlertKeyFromLine))].sort().join('|');
   return {
     ok: false,
     text: `${headerBad}\n${stats}\n\n${shown.join('\n')}${more}`,
-    alertKey: shown.map((line) => line.replace(/[0-9]+(\.[0-9]+)?/g, '#')).join('|'),
+    alertKey,
   };
 };
 
@@ -1663,7 +1679,7 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
 
   // Anti-spam for alert summary: store last sent alert-set hash + ts.
   const alertState: { lastHash: string; lastSentMs: number } = { lastHash: '', lastSentMs: 0 };
-  const partnerDigestState: { lastSentMs: number } = { lastSentMs: 0 };
+  const partnerDigestState: { lastSentMs: number } = { lastSentMs: Date.now() };
   const PARTNER_DIGEST_HOURS = Math.max(1, Math.floor(Number(process.env.TELEGRAM_PARTNER_TRADES_HOURS || 8) || 8));
   const ALERT_REPEAT_MS = 60 * 60_000; // повторяем тот же набор алертов не чаще раза в час
 
@@ -1698,12 +1714,14 @@ export const startAdminTelegramReporter = async (): Promise<void> => {
           alertState.lastHash = hash;
           alertState.lastSentMs = nowMs;
           state.lastReportAtMs = nowMs;
+          logger.info(`[tg-admin] Emergency sent (alerts=${hash.slice(0, 80)})`);
         }
       } else if (heartbeatDue) {
         // Всё ОК — короткий heartbeat по расписанию.
         await sendTelegramMessage(trimTelegramText(summary.text));
         state.lastReportAtMs = nowMs;
         alertState.lastHash = '';
+        logger.info(`[tg-admin] Heartbeat sent (interval=${intervalMinutes}m)`);
       }
 
       // Watchdog: rate-limit / low-lot / failed cycles (отдельный канал, свой cooldown).
