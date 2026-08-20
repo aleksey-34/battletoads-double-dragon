@@ -255,6 +255,7 @@ const countFleetMultiplier = async (db, sourceSid, strategyType) => {
 };
 
 const pickStrategies = async (db) => {
+  // Legacy hardcoded probes (may miss on Copy_/WEEX if those SIDs are absent).
   const specs = [
     {
       label: 'momentum_scalp_tv',
@@ -310,9 +311,44 @@ const pickStrategies = async (db) => {
     },
   ];
   const out = [];
+  const seen = new Set();
   for (const spec of specs) {
     const row = await db.get(spec.query, spec.args);
-    if (row) out.push({ ...spec, ...row });
+    if (row && !seen.has(row.id)) {
+      seen.add(row.id);
+      out.push({ ...spec, ...row });
+    }
+  }
+
+  // Auto top-N by live signal entries in window (covers ZZ_Fast / synth churners on Copy_).
+  const TOP_N = Math.max(0, Number(process.env.COMPARE_TOP_N || 8) || 8);
+  if (TOP_N > 0) {
+    const top = await db.all(
+      `SELECT s.id, s.name, a.name AS api_key, s.strategy_type AS type, COUNT(*) AS n
+       FROM live_trade_events lte
+       JOIN strategies s ON s.id = lte.strategy_id
+       JOIN api_keys a ON a.id = s.api_key_id
+       WHERE a.name = ?
+         AND COALESCE(lte.trade_type,'') = 'entry'
+         AND COALESCE(lte.event_origin,'strategy_signal') = 'strategy_signal'
+         AND lte.actual_time >= ? AND lte.actual_time < ?
+       GROUP BY s.id
+       ORDER BY n DESC
+       LIMIT ?`,
+      [API_KEY, FROM_MS, TO_MS, TOP_N],
+    );
+    for (const row of top || []) {
+      if (seen.has(row.id)) continue;
+      seen.add(row.id);
+      const type = String(row.type || 'unknown');
+      out.push({
+        label: `top_${type}_${row.id}`,
+        type: type === 'ZZ_Fast' || type === 'ZZ_Instance' ? 'zz_breakout' : type,
+        id: row.id,
+        name: row.name,
+        api_key: row.api_key,
+      });
+    }
   }
   return out;
 };
