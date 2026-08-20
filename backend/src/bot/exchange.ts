@@ -2942,12 +2942,14 @@ export const closePosition = async (
 
     // WEEX: close via v3 REST + apiTradingSymbols gate (same as placeOrder).
     // ccxt close hits pairs that are listed but not API-tradable → -1058 spam.
+    // IMPORTANT: never silent-return here — callers (closeAndRecordExit) would
+    // persist DB flat while the exchange position remains open → desync churn.
     if (entry.exchange === 'weex') {
       if (isWeexDelistBlockingSymbolSync(symbol)) {
         if (shouldLogWeexDelistSkip(symbol)) {
           logger.warn(`WEEX close skipped — API-delist blocked: ${apiKeyName}/${symbol}`);
         }
-        return;
+        throw new Error(`WEEX close skipped — API-delist blocked: ${apiKeyName}/${symbol}`);
       }
       if (isOfflineSymbolCached(apiKeyName, symbol)) {
         const apiOkCached = await isWeexApiTradableSymbol(symbol).catch(() => false);
@@ -2957,7 +2959,9 @@ export const closePosition = async (
           logger.warn(
             `WEEX close skipped — symbol offline (not API-tradable): ${apiKeyName}/${symbol}`
           );
-          return;
+          throw new Error(
+            `WEEX close skipped — symbol offline (not API-tradable): ${apiKeyName}/${symbol}`
+          );
         }
       }
       const apiOk = await isWeexApiTradableSymbol(symbol).catch(() => false);
@@ -2968,7 +2972,9 @@ export const closePosition = async (
             `WEEX close skipped — missing from apiTradingSymbols: ${apiKeyName}/${symbol}`
           );
         }
-        return;
+        throw new Error(
+          `WEEX close skipped — missing from apiTradingSymbols: ${apiKeyName}/${symbol}`
+        );
       }
       try {
         const row = await db.get('SELECT * FROM api_keys WHERE name = ?', [apiKeyName]);

@@ -396,6 +396,11 @@ export const executeStrategy = async (
     if (!dedupeClosedBar) {
       return payload;
     }
+    // Early claim already wrote last_processed_bar_ms; a second UPDATE is a no-op
+    // (changes=0). That is success, not failure — only warn on true persist errors.
+    if (isClosedBarAlreadyProcessed(processedBarCacheKey, evaluatedBarTimeMs)) {
+      return payload;
+    }
     const persisted = await persistProcessedClosedBar(strategyId, evaluatedBarTimeMs);
     if (!persisted) {
       logger.warn(
@@ -900,6 +905,18 @@ export const executeStrategy = async (
           logger.warn(`State resynced to flat for strategy ${strategyId} (${apiKeyName}): was ${previousState}, entry_ratio=${previousEntryRatio}, current_ratio=${currentRatio} (CONFIRMED after ${RESYNC_CONFIRM_MS / 1000}s)`);
           await recordRuntimeTradeEvent('exit', previousState, currentRatio, 0, undefined, mergedStrategy.base_symbol, previousEntryRatio ?? undefined);
         }
+
+        // Do not fall through into entry on the same closed bar — that recreated
+        // BCH/APE-style same-entry_time churn after desync flats.
+        return returnWithProcessedBar({
+          result: `State resynced to flat (was ${previousState}); entry deferred to next closed bar`,
+          action: 'state_resynced_flat',
+          executionSource,
+          currentRatio,
+          donchianHigh,
+          donchianLow,
+          donchianCenter,
+        });
       }
       }
     }

@@ -21,21 +21,24 @@ export {
   isClosedBarAlreadyProcessed,
 } from './closedBarDedupe';
 
-/** Monotonic persist — never rewind if a newer bar was already stored. false = fail-closed (do not trade). */
+/** Monotonic persist — never rewind if a newer bar was already stored.
+ * Success = exclusive claim (`changes > 0`). If another worker already claimed
+ * this bar (or a newer one), return false so callers fail-closed and skip trade.
+ */
 export const persistProcessedClosedBar = async (strategyId: number, barTimeMs: number): Promise<boolean> => {
   const id = Number(strategyId);
   const n = Number(barTimeMs) || 0;
   if (!Number.isFinite(id) || id <= 0 || n <= 0) return false;
   try {
     const { db } = await import('../../utils/database');
-    await db.run(
+    const result = await db.run(
       `UPDATE strategies
        SET last_processed_bar_ms = ?
        WHERE id = ?
          AND COALESCE(last_processed_bar_ms, 0) < ?`,
       [n, id, n],
     );
-    return true;
+    return Number((result as { changes?: number })?.changes || 0) > 0;
   } catch (error) {
     logger.warn(`persistProcessedClosedBar failed for ${id}: ${(error as Error).message}`);
     return false;
