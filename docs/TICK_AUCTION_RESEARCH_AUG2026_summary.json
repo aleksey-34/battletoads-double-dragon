@@ -1,0 +1,655 @@
+{
+  "generatedAt": "2026-08-20T12:04:46Z",
+  "capitalUsd": 1000.0,
+  "lotPctDefault": 15.0,
+  "pairLockScope": "symbol",
+  "candleSource": "bitget_usdtm_public",
+  "recipePriority": {
+    "source": "scripts/hybrid/portfolio_six_data_jul2026/recipes_hamfive_aug2026.json",
+    "priorityOrder": [
+      "b3",
+      "ham",
+      "five",
+      "stocks"
+    ],
+    "scores": {
+      "b3": 400,
+      "ham": 300,
+      "five": 200,
+      "stocks": 100
+    },
+    "rationale": "Storefront recipes always lead with sharedB3 (core sleeve), then HAM ZZ, then FIVE MRS, then stocks ZZ as optional overlay (initial often 0 on stamps). Explicit numeric table used for auction A.",
+    "P1_books": [
+      {
+        "key": "b3",
+        "ref": "sharedB3",
+        "initial": 10000
+      },
+      {
+        "key": "ham",
+        "universe": "ham_zz_weex4",
+        "op": 8,
+        "lot": 10,
+        "ri": 100,
+        "initial": 5000,
+        "tsTag": "ham-ham_zz_weex4-op8-lot10"
+      },
+      {
+        "key": "five",
+        "universe": "five_weex4",
+        "op": 6,
+        "lot": 8,
+        "ri": 100,
+        "initial": 5000,
+        "tsTag": "five-five_weex4-op6-lot8"
+      },
+      {
+        "key": "stocks",
+        "universe": "stocks_zz_4h_l30",
+        "op": 6,
+        "lot": 15,
+        "ri": 100,
+        "initial": 0,
+        "tsTag": "stocks-zz-4h-l30"
+      }
+    ],
+    "P1_snapshot": {
+      "ret": 5804.29,
+      "dd": 31.43,
+      "pf": 1.359,
+      "trades": 4387,
+      "window": "2024-03-17..2026-08-13"
+    }
+  },
+  "soloExpectancy": {
+    "b3_mono_donch1h_INJUSDT": {
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "INJUSDT"
+      ],
+      "ret": 9.13,
+      "dd": 15.26,
+      "pf": 1.112,
+      "trades": 189,
+      "retOverDd": 0.598,
+      "candles": 21158
+    },
+    "b3_mono_donch1h_SUIUSDT": {
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "SUIUSDT"
+      ],
+      "ret": 25.49,
+      "dd": 14.18,
+      "pf": 1.276,
+      "trades": 183,
+      "retOverDd": 1.797,
+      "candles": 21158
+    },
+    "b3_mono_donch1h_WLDUSDT": {
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "WLDUSDT"
+      ],
+      "ret": 26.55,
+      "dd": 15.59,
+      "pf": 1.244,
+      "trades": 187,
+      "retOverDd": 1.702,
+      "candles": 21158
+    },
+    "b3_mono_donch1h_ORDIUSDT": {
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "ORDIUSDT"
+      ],
+      "ret": -18.65,
+      "dd": 31.38,
+      "pf": 0.825,
+      "trades": 195,
+      "retOverDd": -0.594,
+      "candles": 21158
+    },
+    "b3_mono_donch1h_NEARUSDT": {
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "NEARUSDT"
+      ],
+      "ret": 1.81,
+      "dd": 18.5,
+      "pf": 1.02,
+      "trades": 210,
+      "retOverDd": 0.098,
+      "candles": 21158
+    },
+    "b3_mono_donch1h_ARBUSDT": {
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "ARBUSDT"
+      ],
+      "ret": 15.87,
+      "dd": 19.34,
+      "pf": 1.205,
+      "trades": 185,
+      "retOverDd": 0.821,
+      "candles": 21158
+    },
+    "b3_synth_zz4h_INJUSDT_TIAUSDT": {
+      "book": "b3",
+      "mode": "synth",
+      "symbols": [
+        "INJUSDT",
+        "TIAUSDT"
+      ],
+      "ret": -31.58,
+      "dd": 45.37,
+      "pf": 0.557,
+      "trades": 118,
+      "retOverDd": -0.696,
+      "candles": 5289
+    },
+    "b3_synth_zz4h_SUIUSDT_SEIUSDT": {
+      "book": "b3",
+      "mode": "synth",
+      "symbols": [
+        "SEIUSDT",
+        "SUIUSDT"
+      ],
+      "ret": -4.45,
+      "dd": 35.57,
+      "pf": 0.92,
+      "trades": 88,
+      "retOverDd": -0.125,
+      "candles": 5289
+    },
+    "b3_synth_zz4h_WLDUSDT_JUPUSDT": {
+      "book": "b3",
+      "mode": "synth",
+      "symbols": [
+        "JUPUSDT",
+        "WLDUSDT"
+      ],
+      "ret": -18.39,
+      "dd": 37.77,
+      "pf": 0.795,
+      "trades": 139,
+      "retOverDd": -0.487,
+      "candles": 5289
+    },
+    "b3_synth_zz4h_BCHUSDT_APEUSDT": {
+      "book": "b3",
+      "mode": "synth",
+      "symbols": [
+        "APEUSDT",
+        "BCHUSDT"
+      ],
+      "ret": 1.38,
+      "dd": 23.7,
+      "pf": 1.013,
+      "trades": 210,
+      "retOverDd": 0.058,
+      "candles": 5289
+    },
+    "b3_synth_zz4h_ZENUSDT_ALGOUSDT": {
+      "book": "b3",
+      "mode": "synth",
+      "symbols": [
+        "ALGOUSDT",
+        "ZENUSDT"
+      ],
+      "ret": 2.72,
+      "dd": 20.43,
+      "pf": 1.038,
+      "trades": 110,
+      "retOverDd": 0.133,
+      "candles": 3526
+    },
+    "b3_mono_mom4h_ORDIUSDT": {
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "ORDIUSDT"
+      ],
+      "ret": -18.12,
+      "dd": 26.35,
+      "pf": 0.753,
+      "trades": 126,
+      "retOverDd": -0.688,
+      "candles": 5289
+    },
+    "five_mrs_255460": {
+      "book": "five",
+      "mode": "mono",
+      "symbols": [
+        "JUPUSDT"
+      ],
+      "ret": 5.35,
+      "dd": 14.42,
+      "pf": 1.058,
+      "trades": 431,
+      "retOverDd": 0.371,
+      "candles": 5289
+    },
+    "ham_zz_254962": {
+      "book": "ham",
+      "mode": "mono",
+      "symbols": [
+        "ENAUSDT"
+      ],
+      "ret": -79.0,
+      "dd": 86.94,
+      "pf": 0.815,
+      "trades": 1027,
+      "retOverDd": -0.909,
+      "candles": 10363
+    }
+  },
+  "universe": [
+    {
+      "id": "b3_mono_donch1h_INJUSDT",
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "INJUSDT"
+      ],
+      "interval": "1h",
+      "kind": "donch",
+      "length": 55
+    },
+    {
+      "id": "b3_mono_donch1h_SUIUSDT",
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "SUIUSDT"
+      ],
+      "interval": "1h",
+      "kind": "donch",
+      "length": 55
+    },
+    {
+      "id": "b3_mono_donch1h_WLDUSDT",
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "WLDUSDT"
+      ],
+      "interval": "1h",
+      "kind": "donch",
+      "length": 55
+    },
+    {
+      "id": "b3_mono_donch1h_ORDIUSDT",
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "ORDIUSDT"
+      ],
+      "interval": "1h",
+      "kind": "donch",
+      "length": 55
+    },
+    {
+      "id": "b3_mono_donch1h_NEARUSDT",
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "NEARUSDT"
+      ],
+      "interval": "1h",
+      "kind": "donch",
+      "length": 55
+    },
+    {
+      "id": "b3_mono_donch1h_ARBUSDT",
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "ARBUSDT"
+      ],
+      "interval": "1h",
+      "kind": "donch",
+      "length": 55
+    },
+    {
+      "id": "b3_synth_zz4h_INJUSDT_TIAUSDT",
+      "book": "b3",
+      "mode": "synth",
+      "symbols": [
+        "INJUSDT",
+        "TIAUSDT"
+      ],
+      "interval": "4h",
+      "kind": "zz",
+      "length": 3
+    },
+    {
+      "id": "b3_synth_zz4h_SUIUSDT_SEIUSDT",
+      "book": "b3",
+      "mode": "synth",
+      "symbols": [
+        "SEIUSDT",
+        "SUIUSDT"
+      ],
+      "interval": "4h",
+      "kind": "zz",
+      "length": 3
+    },
+    {
+      "id": "b3_synth_zz4h_WLDUSDT_JUPUSDT",
+      "book": "b3",
+      "mode": "synth",
+      "symbols": [
+        "JUPUSDT",
+        "WLDUSDT"
+      ],
+      "interval": "4h",
+      "kind": "zz",
+      "length": 3
+    },
+    {
+      "id": "b3_synth_zz4h_BCHUSDT_APEUSDT",
+      "book": "b3",
+      "mode": "synth",
+      "symbols": [
+        "APEUSDT",
+        "BCHUSDT"
+      ],
+      "interval": "4h",
+      "kind": "zz",
+      "length": 3
+    },
+    {
+      "id": "b3_synth_zz4h_ZENUSDT_ALGOUSDT",
+      "book": "b3",
+      "mode": "synth",
+      "symbols": [
+        "ALGOUSDT",
+        "ZENUSDT"
+      ],
+      "interval": "4h",
+      "kind": "zz",
+      "length": 3
+    },
+    {
+      "id": "b3_mono_mom4h_ORDIUSDT",
+      "book": "b3",
+      "mode": "mono",
+      "symbols": [
+        "ORDIUSDT"
+      ],
+      "interval": "4h",
+      "kind": "donch",
+      "length": 20
+    },
+    {
+      "id": "five_mrs_255460",
+      "book": "five",
+      "mode": "mono",
+      "symbols": [
+        "JUPUSDT"
+      ],
+      "interval": "4h",
+      "kind": "donch",
+      "length": 4
+    },
+    {
+      "id": "ham_zz_254962",
+      "book": "ham",
+      "mode": "mono",
+      "symbols": [
+        "ENAUSDT"
+      ],
+      "interval": "2h",
+      "kind": "zz",
+      "length": 3
+    }
+  ],
+  "windows": {
+    "short": {
+      "dateFrom": "2026-07-30",
+      "dateTo": "2026-08-19",
+      "variants": [
+        {
+          "mode": "first_wins",
+          "dateFrom": "2026-07-30",
+          "dateTo": "2026-08-19",
+          "initialBalance": 1000.0,
+          "finalEquity": 938.98,
+          "totalReturnPercent": -6.1,
+          "maxDrawdownPercent": 71.84,
+          "profitFactor": 0.545,
+          "trades": 88,
+          "winRatePercent": 27.3,
+          "skippedByPairLock": 69,
+          "conflictResolutions": 7,
+          "auctionWinsInConflicts": 7,
+          "tradesByBook": {
+            "ham": 27,
+            "b3": 53,
+            "five": 8
+          },
+          "equityPoints": 1
+        },
+        {
+          "mode": "auction_A",
+          "dateFrom": "2026-07-30",
+          "dateTo": "2026-08-19",
+          "initialBalance": 1000.0,
+          "finalEquity": 944.76,
+          "totalReturnPercent": -5.52,
+          "maxDrawdownPercent": 71.84,
+          "profitFactor": 0.585,
+          "trades": 89,
+          "winRatePercent": 28.1,
+          "skippedByPairLock": 58,
+          "conflictResolutions": 7,
+          "auctionWinsInConflicts": 7,
+          "tradesByBook": {
+            "ham": 27,
+            "b3": 54,
+            "five": 8
+          },
+          "equityPoints": 1
+        },
+        {
+          "mode": "auction_B",
+          "dateFrom": "2026-07-30",
+          "dateTo": "2026-08-19",
+          "initialBalance": 1000.0,
+          "finalEquity": 942.72,
+          "totalReturnPercent": -5.73,
+          "maxDrawdownPercent": 71.96,
+          "profitFactor": 0.571,
+          "trades": 89,
+          "winRatePercent": 28.1,
+          "skippedByPairLock": 58,
+          "conflictResolutions": 7,
+          "auctionWinsInConflicts": 7,
+          "tradesByBook": {
+            "ham": 27,
+            "b3": 54,
+            "five": 8
+          },
+          "equityPoints": 1
+        },
+        {
+          "mode": "auction_C_synth",
+          "dateFrom": "2026-07-30",
+          "dateTo": "2026-08-19",
+          "initialBalance": 1000.0,
+          "finalEquity": 941.35,
+          "totalReturnPercent": -5.86,
+          "maxDrawdownPercent": 71.83,
+          "profitFactor": 0.556,
+          "trades": 89,
+          "winRatePercent": 28.1,
+          "skippedByPairLock": 64,
+          "conflictResolutions": 7,
+          "auctionWinsInConflicts": 7,
+          "tradesByBook": {
+            "ham": 27,
+            "b3": 54,
+            "five": 8
+          },
+          "equityPoints": 1
+        },
+        {
+          "mode": "auction_C_mono",
+          "dateFrom": "2026-07-30",
+          "dateTo": "2026-08-19",
+          "initialBalance": 1000.0,
+          "finalEquity": 944.19,
+          "totalReturnPercent": -5.58,
+          "maxDrawdownPercent": 71.84,
+          "profitFactor": 0.585,
+          "trades": 89,
+          "winRatePercent": 28.1,
+          "skippedByPairLock": 58,
+          "conflictResolutions": 7,
+          "auctionWinsInConflicts": 7,
+          "tradesByBook": {
+            "ham": 27,
+            "b3": 54,
+            "five": 8
+          },
+          "equityPoints": 1
+        }
+      ]
+    },
+    "full": {
+      "dateFrom": "2024-03-17",
+      "dateTo": "2026-08-19",
+      "variants": [
+        {
+          "mode": "first_wins",
+          "dateFrom": "2024-03-17",
+          "dateTo": "2026-08-19",
+          "initialBalance": 1000.0,
+          "finalEquity": 486.11,
+          "totalReturnPercent": -51.39,
+          "maxDrawdownPercent": 84.51,
+          "profitFactor": 0.905,
+          "trades": 2737,
+          "winRatePercent": 36.9,
+          "skippedByPairLock": 2940,
+          "conflictResolutions": 104,
+          "auctionWinsInConflicts": 104,
+          "tradesByBook": {
+            "b3": 1318,
+            "ham": 1027,
+            "five": 392
+          },
+          "equityPoints": 1
+        },
+        {
+          "mode": "auction_A",
+          "dateFrom": "2024-03-17",
+          "dateTo": "2026-08-19",
+          "initialBalance": 1000.0,
+          "finalEquity": 533.19,
+          "totalReturnPercent": -46.68,
+          "maxDrawdownPercent": 82.38,
+          "profitFactor": 0.924,
+          "trades": 2897,
+          "winRatePercent": 37.0,
+          "skippedByPairLock": 1487,
+          "conflictResolutions": 101,
+          "auctionWinsInConflicts": 101,
+          "tradesByBook": {
+            "b3": 1464,
+            "ham": 1027,
+            "five": 406
+          },
+          "equityPoints": 1
+        },
+        {
+          "mode": "auction_B",
+          "dateFrom": "2024-03-17",
+          "dateTo": "2026-08-19",
+          "initialBalance": 1000.0,
+          "finalEquity": 565.26,
+          "totalReturnPercent": -43.47,
+          "maxDrawdownPercent": 81.36,
+          "profitFactor": 0.932,
+          "trades": 2921,
+          "winRatePercent": 37.1,
+          "skippedByPairLock": 1383,
+          "conflictResolutions": 100,
+          "auctionWinsInConflicts": 100,
+          "tradesByBook": {
+            "b3": 1463,
+            "five": 431,
+            "ham": 1027
+          },
+          "equityPoints": 1
+        },
+        {
+          "mode": "auction_C_synth",
+          "dateFrom": "2024-03-17",
+          "dateTo": "2026-08-19",
+          "initialBalance": 1000.0,
+          "finalEquity": 344.52,
+          "totalReturnPercent": -65.55,
+          "maxDrawdownPercent": 89.05,
+          "profitFactor": 0.844,
+          "trades": 2282,
+          "winRatePercent": 36.4,
+          "skippedByPairLock": 5354,
+          "conflictResolutions": 116,
+          "auctionWinsInConflicts": 116,
+          "tradesByBook": {
+            "b3": 1255,
+            "ham": 1027
+          },
+          "equityPoints": 1
+        },
+        {
+          "mode": "auction_C_mono",
+          "dateFrom": "2024-03-17",
+          "dateTo": "2026-08-19",
+          "initialBalance": 1000.0,
+          "finalEquity": 542.86,
+          "totalReturnPercent": -45.71,
+          "maxDrawdownPercent": 82.44,
+          "profitFactor": 0.927,
+          "trades": 2921,
+          "winRatePercent": 37.1,
+          "skippedByPairLock": 1383,
+          "conflictResolutions": 100,
+          "auctionWinsInConflicts": 100,
+          "tradesByBook": {
+            "b3": 1463,
+            "five": 431,
+            "ham": 1027
+          },
+          "equityPoints": 1
+        }
+      ]
+    }
+  },
+  "codePaths": {
+    "liveLock": "backend/src/bot/strategy.ts",
+    "liveConcurrency": "backend/src/bot/strategy/cycle/autoRun.ts",
+    "btLock": "backend/src/backtest/engine.ts#isPairLocked",
+    "btTieBreak": "backend/src/backtest/engine.ts#buildEvents",
+    "exchangeSymbols": "backend/src/bot/strategy/normalize.ts#getStrategyExchangeSymbols"
+  },
+  "limitations": [
+    "No hybrid candle packs / DB on cloud VM \u2014 conflict sleeve proxies only",
+    "Bitget candles \u2260 WEEX hybrid packs used in nightlyStorefrontRoll",
+    "momentum_scalp_tv replaced by Donchian proxy",
+    "Auction B uses same-window-family solo scores (in-sample)",
+    "Absolute returns not comparable to stamped P1 $20k snapshots"
+  ],
+  "winners": {
+    "short": "auction_A",
+    "full": "auction_B"
+  }
+}
