@@ -658,11 +658,17 @@ export const getMonitoringTradeStats = async (apiKeyName: string) => {
   const key = await getApiKeyRow(apiKeyName);
   const since24h = Date.now() - 86_400_000;
   const stats = await db.get<{
-    trades_count?: number;
+    events_count?: number;
+    entries_count?: number;
     last_trade_at?: number;
   }>(
     `SELECT
-       COUNT(*) AS trades_count,
+       COUNT(*) AS events_count,
+       SUM(CASE
+         WHEN COALESCE(lte.trade_type, '') = 'entry'
+          AND COALESCE(lte.event_origin, 'strategy_signal') = 'strategy_signal'
+         THEN 1 ELSE 0
+       END) AS entries_count,
        MAX(lte.actual_time) AS last_trade_at
      FROM live_trade_events lte
      JOIN strategies s ON s.id = lte.strategy_id
@@ -671,8 +677,14 @@ export const getMonitoringTradeStats = async (apiKeyName: string) => {
     [key.id, since24h],
   ).catch(() => null);
 
+  const entries24h = Math.max(0, toFiniteNumber(stats?.entries_count, 0));
+  const events24h = Math.max(0, toFiniteNumber(stats?.events_count, 0));
+
   return {
-    trades24h: Math.max(0, toFiniteNumber(stats?.trades_count, 0)),
+    // Honest entry count (matches fair BT / tradeDrift); not fills+exits noise.
+    trades24h: entries24h,
+    entries24h,
+    events24h,
     lastTradeAt: stats?.last_trade_at
       ? new Date(toFiniteNumber(stats.last_trade_at)).toISOString()
       : null,

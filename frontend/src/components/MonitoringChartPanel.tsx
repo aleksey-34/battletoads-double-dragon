@@ -311,7 +311,7 @@ const MonitoringChartPanel: React.FC<MonitoringChartPanelProps> = ({
       <Space wrap style={{ justifyContent: 'space-between', width: '100%' }}>
         <Space wrap size={[8, 8]}>
           <Typography.Text strong style={{ fontSize: 16 }}>
-            Сделок за 24ч: {trades24h}
+            Входов (signal) за 24ч: {trades24h}
           </Typography.Text>
           <Typography.Text type="secondary">
             Последняя: {lastTradeAt

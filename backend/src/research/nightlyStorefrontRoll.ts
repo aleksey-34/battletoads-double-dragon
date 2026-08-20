@@ -271,6 +271,7 @@ const packFairRun = (
     avgNotional: +trades.avgNotional.toFixed(2),
     skippedOp: Number(s.skippedByPositionLimit || 0),
     skippedPair: Number(s.skippedByPairLock || 0),
+    skippedSymbols: Number(s.skippedStrategies || 0),
     bySym: trades.bySym,
   };
 };
@@ -773,13 +774,16 @@ const stampPortfolios = async (opts: {
         try {
           const result = await runBacktest({
             apiKeyName: copyKey,
+            // Copy keys are WEEX; hybrid candles + Bybit history live on BTDD_D1.
+            dataApiKeyName: opts.apiKeyName,
             mode: 'portfolio',
             strategyIds: fairIds,
             dateFrom: fromDate,
             dateTo: opts.dateTo,
             bars: 4000,
             warmupBars: 120,
-            skipMissingSymbols: false,
+            // Skip legs with short history instead of failing whole fair run (freqX).
+            skipMissingSymbols: true,
             initialBalance: FAIR_COPY_CAPITAL,
             commissionPercent: 0.1,
             slippagePercent: 0.05,
