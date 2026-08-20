@@ -852,6 +852,11 @@ const stampPortfolios = async (opts: {
   return { stamped: cards.length, cards };
 };
 
+/** Ops: stamp-only / A/B without going through the scheduler wrapper. */
+export const stampStorefrontPortfolios = stampPortfolios;
+export const applyStorefrontSnapshots = applySnapshotsToDb;
+export const getStorefrontRollPaths = resolvePaths;
+
 export const runNightlyStorefrontRoll = async (): Promise<{
   status: 'done' | 'failed';
   details: Record<string, unknown>;
@@ -861,6 +866,7 @@ export const runNightlyStorefrontRoll = async (): Promise<{
   const dateFrom = process.env.DATE_FROM || '2024-03-17';
   const apiKeyName = process.env.STOREFRONT_BT_KEY || 'BTDD_D1';
   const paths = resolvePaths();
+  const skipAppend = String(process.env.SKIP_CANDLE_APPEND || '').trim() === '1';
 
   if (!fs.existsSync(paths.cryptoBundle) && !fs.existsSync(paths.stocksBundle)) {
     throw new Error(
@@ -874,14 +880,18 @@ export const runNightlyStorefrontRoll = async (): Promise<{
   const recipe = JSON.parse(fs.readFileSync(paths.recipe, 'utf8'));
   const symbols = collectHamfiveSymbols(recipe);
 
-  logger.info(`[nightlyStorefrontRoll] start dateTo=${dateTo} symbols=${symbols.size}`);
-  const append = await appendCandlesThrough({
-    dateTo,
-    cryptoBundle: paths.cryptoBundle,
-    stocksBundle: paths.stocksBundle,
-    symbols,
-  });
-  refreshMerged(paths.cryptoBundle, paths.stocksBundle, paths.mergedBundle);
+  logger.info(`[nightlyStorefrontRoll] start dateTo=${dateTo} symbols=${symbols.size} skipAppend=${skipAppend ? 1 : 0}`);
+  const append = skipAppend
+    ? { series: 0, ok: 0, fail: 0, added: 0 }
+    : await appendCandlesThrough({
+      dateTo,
+      cryptoBundle: paths.cryptoBundle,
+      stocksBundle: paths.stocksBundle,
+      symbols,
+    });
+  if (!skipAppend) {
+    refreshMerged(paths.cryptoBundle, paths.stocksBundle, paths.mergedBundle);
+  }
 
   const stamp = await stampPortfolios({
     dateTo,
