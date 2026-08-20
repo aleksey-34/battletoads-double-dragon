@@ -740,10 +740,17 @@ const stampPortfolios = async (opts: {
         + `synth=${synthPairs.join(',') || 'none'} missingCandles=${missingCandles.length}`,
       );
       if (missingCandles.length) {
-        logger.error(
-          `[nightlyStorefrontRoll] fair ${pf.id} missing hybrid candles `
-          + `(not silent skip): ${missingCandles.slice(0, 24).join('; ')}`,
+        logger.warn(
+          `[nightlyStorefrontRoll] fair ${pf.id} hybrid candle gaps (skipMissingSymbols=true): `
+          + `${missingCandles.slice(0, 12).join('; ')}`,
         );
+      }
+
+      try {
+        await ensureExchangeClientInitialized(opts.apiKeyName);
+        if (copyKey) await ensureExchangeClientInitialized(copyKey);
+      } catch (initErr) {
+        logger.warn(`[nightlyStorefrontRoll] fair ${pf.id} exchange init: ${(initErr as Error).message}`);
       }
 
       const packFailedFair = (fromDate: string, toDate: string, error: string) => ({
