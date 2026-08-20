@@ -6,16 +6,19 @@
  *   SKIP_CANDLE_APPEND=1 DATE_FROM=2024-03-17 DATE_TO=2026-08-19 \
  *     node scripts/hybrid/ab_stamp_symbol_lock_all_portfolios.mjs
  */
-const path = require('path');
-const fs = require('fs');
+import fs from 'fs';
+import path from 'path';
+import { createRequire } from 'module';
+import { fileURLToPath } from 'url';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..', '..');
 const backend = path.join(root, 'backend');
+const require = createRequire(import.meta.url);
+
 process.chdir(backend);
 
-const {
-  initDB,
-} = require(path.join(backend, 'dist/utils/database.js'));
+const { initDB } = require(path.join(backend, 'dist/utils/database.js'));
 const {
   stampStorefrontPortfolios,
   applyStorefrontSnapshots,
@@ -36,7 +39,7 @@ const packCards = (cards) => {
   return byId;
 };
 
-(async () => {
+try {
   await initDB();
   await ensureExchangeClientInitialized(apiKeyName);
   const paths = getStorefrontRollPaths();
@@ -55,17 +58,17 @@ const packCards = (cards) => {
 
   console.error('BEFORE pair-lock stamp', dateFrom, '..', dateTo);
   process.env.PAIR_LOCK_SCOPE = 'pair';
-  const before = await stampStorefrontPortfolios({ ...common, snapsPath: snapsBefore });
+  const beforeStamp = await stampStorefrontPortfolios({ ...common, snapsPath: snapsBefore });
 
   console.error('AFTER symbol-lock stamp', dateFrom, '..', dateTo);
   delete process.env.PAIR_LOCK_SCOPE;
-  const after = await stampStorefrontPortfolios({ ...common, snapsPath: snapsAfter });
+  const afterStamp = await stampStorefrontPortfolios({ ...common, snapsPath: snapsAfter });
 
   console.error('apply AFTER snaps to DB', snapsAfter);
   const applied = await applyStorefrontSnapshots(snapsAfter, paths.recipe);
 
-  const b = packCards(before.cards);
-  const a = packCards(after.cards);
+  const b = packCards(beforeStamp.cards);
+  const a = packCards(afterStamp.cards);
   const ids = [...new Set([...Object.keys(b), ...Object.keys(a)])].sort();
   const rows = ids.map((id) => {
     const bb = b[id] || {};
@@ -84,8 +87,8 @@ const packCards = (cards) => {
   const out = {
     window: `${dateFrom}..${dateTo}`,
     liveFrom,
-    stampedBefore: before.stamped,
-    stampedAfter: after.stamped,
+    stampedBefore: beforeStamp.stamped,
+    stampedAfter: afterStamp.stamped,
     portfoliosUpdated: applied,
     snapsBefore,
     snapsAfter,
@@ -94,7 +97,7 @@ const packCards = (cards) => {
   fs.mkdirSync(path.dirname(outJson), { recursive: true });
   fs.writeFileSync(outJson, JSON.stringify(out, null, 2));
   console.log(JSON.stringify(out, null, 2));
-})().catch((e) => {
+} catch (e) {
   console.error(e);
   process.exit(1);
-});
+}
