@@ -1039,7 +1039,7 @@ const Positions: React.FC = () => {
       ),
     },
     {
-      title: 'Сделки 24ч',
+      title: 'Входы 24ч',
       render: (_: unknown, row: MonitoringAccountGroupRow) => (
         <Space direction="vertical" size={0}>
           <span>{row.trades24h}</span>
