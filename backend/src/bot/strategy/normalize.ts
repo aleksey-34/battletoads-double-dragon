@@ -383,3 +383,21 @@ export const getStrategyPairKey = (strategy: Pick<Strategy, 'market_mode' | 'bas
   return mode === 'mono' ? `mono:${base}` : `synthetic:${base}/${quote}`;
 };
 
+/**
+ * Exchange-level symbol set: all symbols a strategy will trade on the exchange.
+ * Used for symbol-lock: if ANY of these symbols is held by another strategy,
+ * entry is blocked regardless of mono/synth mode difference.
+ * mono INJUSDT → {'INJUSDT'}; synth INJUSDT/TIAUSDT → {'INJUSDT','TIAUSDT'}.
+ */
+export const getStrategyExchangeSymbols = (strategy: Pick<Strategy, 'market_mode' | 'base_symbol' | 'quote_symbol'>): Set<string> => {
+  const out = new Set<string>();
+  const base = normalizeSymbol(String(strategy.base_symbol || ''));
+  if (base) out.add(base);
+  const mode = normalizeMarketMode(strategy.market_mode);
+  if (mode !== 'mono') {
+    const quote = normalizeSymbol(String(strategy.quote_symbol || ''));
+    if (quote && quote !== base) out.add(quote);
+  }
+  return out;
+};
+

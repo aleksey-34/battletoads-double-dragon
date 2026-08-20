@@ -82,6 +82,7 @@ import {
   DEFAULT_STRATEGY,
   getStrategySymbols,
   getStrategyPairKey,
+  getStrategyExchangeSymbols,
   safeNumber,
   safeBoolean,
 } from './strategy/normalize';
@@ -1408,15 +1409,26 @@ export const executeStrategy = async (
   {
     const { db } = await import('../utils/database');
 
-    // Acquire cross-TS pair lock FIRST (before any OP checks). This serializes
+    // Acquire cross-TS pair/symbol lock FIRST (before any OP checks). This serializes
     // ALL strategies on the same (api_key, pair) regardless of which TS they
     // belong to. Without this, two strategies in different TSs of one api_key
     // would race past their per-TS OP checks and end up pyramiding / thrashing
     // the shared exchange position.
+    // With symbol-lock (default): also lock each exchange symbol so mono↔synth
+    // on the same underlying cannot race past each other.
     const myPairKey = getStrategyPairKey(mergedStrategy);
-    if (myPairKey) {
-      releasePairLock = await acquireApiKeyPairEntryLock(apiKeyName, myPairKey);
+    const useSymbolLock = process.env.PAIR_LOCK_SCOPE !== 'pair';
+    const myExchangeSymbols = useSymbolLock ? getStrategyExchangeSymbols(mergedStrategy) : new Set<string>();
+    const lockKeys = useSymbolLock && myExchangeSymbols.size > 0
+      ? [...myExchangeSymbols].sort().map((sym) => `sym:${sym}`)
+      : (myPairKey ? [myPairKey] : []);
+    const releaseLocks: Array<() => void> = [];
+    for (const lockKey of lockKeys) {
+      releaseLocks.push(await acquireApiKeyPairEntryLock(apiKeyName, lockKey));
     }
+    releasePairLock = () => {
+      for (const rel of releaseLocks.reverse()) rel();
+    };
 
     // Cross-TS pair conflict check: if ANY active strategy on the same api_key
     // and same pair (in any TS, including this one) is already in long/short,
@@ -1433,10 +1445,22 @@ export const executeStrategy = async (
            WHERE s.api_key_id = ? AND s.is_active = 1 AND s.state != 'flat' AND s.id != ?`,
           [apiKeyId, strategyId]
         );
-        const crossConflicting = crossOpenRows.find((row) => getStrategyPairKey(row as any) === myPairKey);
+        // Symbol-lock: block entry if ANY other strategy holds a position on any of our exchange symbols.
+        // This covers mono↔synth overlap (e.g. mono:INJUSDT vs synth:INJUSDT/TIAUSDT share INJUSDT).
+        // PAIR_LOCK_SCOPE=pair restores legacy pairKey-only behavior.
+        const crossConflicting = crossOpenRows.find((row) => {
+          if (useSymbolLock) {
+            const otherSyms = getStrategyExchangeSymbols(row as any);
+            for (const sym of myExchangeSymbols) {
+              if (otherSyms.has(sym)) return true;
+            }
+            return false;
+          }
+          return getStrategyPairKey(row as any) === myPairKey;
+        });
         if (crossConflicting) {
           logger.info(
-            `ОП cross-TS pair lock: strategy ${strategyId} waits for pair ${myPairKey} on api_key=${apiKeyName}; `
+            `ОП cross-TS symbol lock: strategy ${strategyId} blocked for symbols [${[...myExchangeSymbols].join(',')}] on api_key=${apiKeyName}; `
             + `held by strategy ${crossConflicting.id} (${crossConflicting.name}, state=${crossConflicting.state})`
           );
 

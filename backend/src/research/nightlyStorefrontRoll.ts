@@ -204,14 +204,15 @@ const summarizeBtTrades = (
 };
 
 const fetchLiveEntryStats = async (apiKeyName: string, fromDate: string, toDate: string) => {
-  // Honest count: one strategy_signal entry per strategy_id (synth BCH/APE = 1, not two fills).
+  // Deduplicated count: for synthetic strategies, both legs fire within the same second.
+  // We count DISTINCT (strategy_id, second) as one cycle, so synth doesn't double-count.
   const rows = await db.all(
     `SELECT
         lte.strategy_id AS sid,
         COALESCE(s.base_symbol, '') AS base_symbol,
         COALESCE(s.quote_symbol, '') AS quote_symbol,
         COALESCE(s.market_mode, '') AS market_mode,
-        COUNT(*) AS n,
+        COUNT(DISTINCT CAST(lte.actual_time / 1000 AS INTEGER)) AS n,
         SUM(ABS(COALESCE(lte.actual_price, 0) * COALESCE(lte.position_size, 0))) AS vol
      FROM live_trade_events lte
      JOIN strategies s ON s.id = lte.strategy_id

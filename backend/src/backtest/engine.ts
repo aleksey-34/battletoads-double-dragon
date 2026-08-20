@@ -2178,8 +2178,6 @@ const createSeededRng = (seed: number): (() => number) => {
  * Pair key matching runtime `getStrategyPairKey` in bot/strategy.ts.
  * Two strategies sharing the same key cannot be open simultaneously
  * (one position per pair at a time, even if OP allows more total positions).
- * NOTE: mono `BTCUSDT` and synthetic `BTCUSDT/ETHUSDT` produce DIFFERENT keys
- * — same as runtime, mono and synth on overlapping base symbols are NOT mutually locked.
  */
 const getBacktestPairKey = (strategy: { market_mode?: any; base_symbol?: any; quote_symbol?: any }): string => {
   const mode = normalizeMarketMode(strategy.market_mode);
@@ -2189,6 +2187,17 @@ const getBacktestPairKey = (strategy: { market_mode?: any; base_symbol?: any; qu
   const quote = String(strategy.quote_symbol || '').trim().toUpperCase();
   if (!quote) return '';
   return `synthetic:${base}/${quote}`;
+};
+
+/** Exchange symbols for symbol-lock (mirrors getStrategyExchangeSymbols). PAIR_LOCK_SCOPE=pair disables. */
+const getBacktestExchangeSymbols = (strategy: { market_mode?: any; base_symbol?: any; quote_symbol?: any }): string[] => {
+  const base = String(strategy.base_symbol || '').trim().toUpperCase();
+  if (!base) return [];
+  const mode = normalizeMarketMode(strategy.market_mode);
+  if (mode === 'mono') return [base];
+  const quote = String(strategy.quote_symbol || '').trim().toUpperCase();
+  if (!quote || quote === base) return [base];
+  return [base, quote];
 };
 
 const normalizeZscoreEntry = (value: any): number => {
@@ -2866,6 +2875,9 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
   // Precompute pair keys per runtime so we can do O(N) pair-lock check per signal.
   // Mirrors runtime `getStrategyPairKey` in bot/strategy.ts so backtest matches live behavior.
   const pairKeyByRuntimeIndex: string[] = runtimes.map((rt) => getBacktestPairKey(rt.strategy));
+  // Symbol-lock: exchange symbols per runtime for mono↔synth overlap (PAIR_LOCK_SCOPE=pair → old behavior).
+  const useSymbolLock = process.env.PAIR_LOCK_SCOPE !== 'pair';
+  const exchangeSymsByRuntimeIndex: string[][] = runtimes.map((rt) => getBacktestExchangeSymbols(rt.strategy));
 
   /** Classic DCA grids use fixed base USDT sizing — they do not consume TS max-open-position slots. */
   const countsTowardOpLimit = (rt: RuntimeStrategy): boolean => !rt.dcaState?.enabled;
@@ -2900,6 +2912,19 @@ export const runBacktest = async (rawRequest: BacktestRunRequest): Promise<Backt
 
   const isPairLocked = (selfIndex: number, pairKey: string): boolean => {
     if (!pairKey) return false;
+    if (useSymbolLock) {
+      const mySyms = exchangeSymsByRuntimeIndex[selfIndex];
+      if (mySyms.length === 0) return false;
+      for (let i = 0; i < runtimes.length; i++) {
+        if (i === selfIndex) continue;
+        if (runtimes[i].state === 'flat') continue;
+        const otherSyms = exchangeSymsByRuntimeIndex[i];
+        for (const sym of mySyms) {
+          if (otherSyms.includes(sym)) return true;
+        }
+      }
+      return false;
+    }
     for (let i = 0; i < runtimes.length; i++) {
       if (i === selfIndex) continue;
       if (runtimes[i].state === 'flat') continue;

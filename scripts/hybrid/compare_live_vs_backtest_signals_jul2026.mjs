@@ -32,6 +32,9 @@ const DATE_FROM = process.env.DATE_FROM || '2026-07-04';
 const DATE_TO = process.env.DATE_TO || '2026-07-07';
 const BT_DATE_FROM = process.env.BT_DATE_FROM || '2026-05-01';
 const API_KEY = process.env.API_KEY || 'artursk-6323499563-api';
+// Candle source for BT/raw signals. WEEX copy keys often lack history — default to BTDD_D1 (BingX).
+const DATA_API_KEY = process.env.DATA_API_KEY
+  || ( /^Copy_/i.test(API_KEY) || /weex/i.test(API_KEY) ? 'BTDD_D1' : API_KEY );
 const OUT_JSON = process.env.OUT_JSON || path.join(root, 'tmp', 'live_vs_backtest_signals_jul2026.json');
 const LIVE_EVENT_ORIGIN = process.env.LIVE_EVENT_ORIGIN || 'exchange_fill';
 
@@ -319,6 +322,9 @@ const analyzeStrategy = async (db, spec) => {
   if (!strategy) return null;
   const apiKey = spec.api_key || API_KEY;
   await ensureExchangeClientInitialized(apiKey);
+  if (DATA_API_KEY && DATA_API_KEY !== apiKey) {
+    await ensureExchangeClientInitialized(DATA_API_KEY);
+  }
 
   const liveEntriesRaw = await fetchLiveEntries(db, spec.id);
   const liveEntries = String(strategy.market_mode || '') === 'synthetic'
@@ -333,12 +339,14 @@ const analyzeStrategy = async (db, spec) => {
 
   const bt = await runBacktest({
     apiKeyName: apiKey,
+    dataApiKeyName: DATA_API_KEY,
     mode: 'single',
     strategyId: spec.id,
     dateFrom: BT_DATE_FROM,
     dateTo: DATE_TO,
     bars: 2500,
     warmupBars: 0,
+    skipMissingSymbols: true,
     initialBalance: 10000,
     commissionPercent: 0.1,
     slippagePercent: 0.05,
@@ -360,19 +368,23 @@ const analyzeStrategy = async (db, spec) => {
 
   let candles = [];
   try {
-    const loaded = await loadStrategyCandles(strategy, apiKey, { minBars: 300 });
+    const loaded = await loadStrategyCandles(strategy, DATA_API_KEY, { minBars: 300 });
     candles = (loaded?.candles || []).filter((c) => c.timeMs >= FROM_MS - 7 * 86400_000 && c.timeMs < TO_MS);
   } catch (err) {
-    const sym = strategy.market_mode === 'synthetic'
-      ? null
-      : String(strategy.base_symbol || '').toUpperCase();
+    const base = String(strategy.base_symbol || '').toUpperCase();
+    const quote = String(strategy.quote_symbol || '').toUpperCase();
+    const mode = String(strategy.market_mode || '').toLowerCase();
+    // For mono: one symbol. For synth: skip wick mono fallback (needs ratio series).
+    const sym = mode === 'synthetic' ? '' : base;
     if (sym) {
-      const raw = await wickData.fetchMonoCandles(apiKey, sym, strategy.interval || '15m', {
+      const raw = await wickData.fetchMonoCandles(DATA_API_KEY, sym, strategy.interval || '15m', {
         startMs: FROM_MS - 7 * 86400_000,
         endMs: TO_MS,
         limit: 8000,
       });
       candles = raw.map((c) => ({ open: c.open, high: c.high, low: c.low, close: c.close, timeMs: c.timeMs }));
+    } else {
+      console.warn(`candle load failed for ${spec.id} (${base}/${quote}): ${err.message}`);
     }
   }
 
@@ -512,12 +524,13 @@ await database.initDB();
 const { db } = database;
 
 const specs = await pickStrategies(db);
-console.log(`Window ${DATE_FROM}..${DATE_TO} | API ${API_KEY} | legs ${specs.length}`);
+console.log(`Window ${DATE_FROM}..${DATE_TO} | API ${API_KEY} | candles ${DATA_API_KEY} | legs ${specs.length}`);
 
 const report = {
   generatedAt: new Date().toISOString(),
   window: { from: DATE_FROM, to: DATE_TO },
   apiKey: API_KEY,
+  dataApiKey: DATA_API_KEY,
   legs: [],
   recommendations: [],
 };
